@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: volume-sandwich-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: volume-sandwich-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: volume-sandwich-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: volume-sandwich-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: volume-sandwich
+          image: ghcr.io/abhinav-jain09/options-edge-volume-sandwich:dev
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: {}

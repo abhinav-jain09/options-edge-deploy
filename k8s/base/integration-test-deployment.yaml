@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: options-edge-integration-test
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: options-edge-integration-test
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: options-edge-integration-test
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: options-edge-integration-test
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: integration-test
+          image: ghcr.io/abhinav-jain09/options-edge-integration-test:dev
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi

@@ -1,1 +1,8 @@
-images: {}
+images:
+  raw-to-display-service: ghcr.io/abhinav-jain09/options-edge-raw-to-display:dev
+  volume-pace-service: ghcr.io/abhinav-jain09/options-edge-volume-pace:dev
+  directional-pressure-service: ghcr.io/abhinav-jain09/options-edge-directional-pressure:dev
+  volume-sandwich-service: ghcr.io/abhinav-jain09/options-edge-volume-sandwich:dev
+  raw-postgres-writer: ghcr.io/abhinav-jain09/options-edge-raw-postgres-writer:dev
+  pressure-postgres-writer: ghcr.io/abhinav-jain09/options-edge-pressure-postgres-writer:dev
+  options-edge-integration-test: ghcr.io/abhinav-jain09/options-edge-integration-test:dev

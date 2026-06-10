@@ -1,3 +1,17 @@
 resources:
   - namespace.yaml
   - configmap.yaml
+  - directional-pressure-deployment.yaml
+  - directional-pressure-service.yaml
+  - integration-test-deployment.yaml
+  - integration-test-service.yaml
+  - pressure-postgres-writer-deployment.yaml
+  - pressure-postgres-writer-service.yaml
+  - raw-to-display-deployment.yaml
+  - raw-to-display-service.yaml
+  - raw-postgres-writer-deployment.yaml
+  - raw-postgres-writer-service.yaml
+  - volume-pace-deployment.yaml
+  - volume-pace-service.yaml
+  - volume-sandwich-deployment.yaml
+  - volume-sandwich-service.yaml

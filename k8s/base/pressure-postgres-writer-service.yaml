@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pressure-postgres-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: pressure-postgres-writer
+    app.kubernetes.io/part-of: options-edge
+spec:
+  selector:
+    app.kubernetes.io/name: pressure-postgres-writer
+  ports:
+    - name: health
+      port: 8080
+      targetPort: health

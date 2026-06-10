@@ -2,14 +2,64 @@ pipeline {
   agent any
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '/home/options-edge/config/kubeconfig', description: 'Kubeconfig path on Jenkins agent')
+    string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
+    string(name: 'VOLUME_PACE_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-volume-pace:dev', description: 'Volume-pace image')
+    string(name: 'DIRECTIONAL_PRESSURE_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-directional-pressure:dev', description: 'Directional-pressure image')
+    string(name: 'VOLUME_SANDWICH_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-volume-sandwich:dev', description: 'Volume-sandwich image')
+    string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-raw-postgres-writer:dev', description: 'Raw Postgres writer image')
+    string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-pressure-postgres-writer:dev', description: 'Pressure Postgres writer image')
+    string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-integration-test:dev', description: 'Integration-test image')
     booleanParam(name: 'KAFKA_CLEANUP_TOPICS', defaultValue: false, description: 'Clean Kafka topics before deployment')
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
   }
+  environment {
+    KUBECONFIG = "${params.KUBECONFIG_FILE}"
+  }
   stages {
-    stage('Render') { steps { sh 'kubectl kustomize k8s/overlays/${ENVIRONMENT}' } }
-    stage('Kafka Topics') { steps { echo 'Run scripts/kafka/apply-topics.sh from a Jenkins agent with Kafka CLI access.' } }
-    stage('Deploy') { steps { echo 'Apply Kubernetes manifests and wait for rollouts.' } }
-    stage('Smoke') { steps { echo 'Run smoke tests and integration gate.' } }
+    stage('Render') {
+      steps {
+        sh 'kubectl kustomize k8s/overlays/${ENVIRONMENT} >/tmp/options-edge-${ENVIRONMENT}.yaml'
+      }
+    }
+    stage('Kafka Topics') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          export KAFKA_TOPIC_REPLICATION_FACTOR=1
+          export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
+          export KAFKA_TOPIC_RETENTION_MS=86400000
+          scripts/kafka/apply-topics.sh
+        '''
+      }
+    }
+    stage('Deploy') {
+      steps {
+        sh '''
+          set -euo pipefail
+          kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
+          kubectl -n options-edge set image deployment/raw-to-display-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
+          kubectl -n options-edge set image deployment/volume-pace-service volume-pace="$VOLUME_PACE_IMAGE"
+          kubectl -n options-edge set image deployment/directional-pressure-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
+          kubectl -n options-edge set image deployment/volume-sandwich-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
+          kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
+          kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
+          kubectl -n options-edge set image deployment/options-edge-integration-test integration-test="$INTEGRATION_TEST_IMAGE"
+          kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/volume-sandwich-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=180s
+          kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=180s
+        '''
+      }
+    }
+    stage('Smoke') {
+      steps {
+        sh 'scripts/smoke/check-k8s-services.sh'
+      }
+    }
   }
 }

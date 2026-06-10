@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: volume-sandwich-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: volume-sandwich-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  selector:
+    app.kubernetes.io/name: volume-sandwich-service
+  ports:
+    - name: health
+      port: 8080
+      targetPort: health
