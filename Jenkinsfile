@@ -55,6 +55,20 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          /home/abhinav/ci/bin/app-control.sh options-edge stop || true
+          for i in $(seq 1 30); do
+            if ! ss -ltnp 2>/dev/null | grep -q ':8090'; then
+              echo "options-edge Tomcat port 8090 is stopped."
+              break
+            fi
+            echo "Waiting for options-edge Tomcat port 8090 to stop."
+            sleep 2
+          done
+          if ss -ltnp 2>/dev/null | grep -q ':8090'; then
+            echo "Timed out waiting for options-edge Tomcat port 8090 to stop before Kafka cleanup." >&2
+            ss -ltnp 2>/dev/null | grep ':8090' || true
+            exit 1
+          fi
           /home/abhinav/ci/bin/app-control.sh databento-feed stop || true
           kubectl -n options-edge scale deployment --all --replicas=0 || true
           for i in $(seq 1 60); do
@@ -105,7 +119,7 @@ pipeline {
         '''
       }
     }
-    stage('Resume Databento Feed') {
+    stage('Resume Remote Apps') {
       when {
         expression { return params.KAFKA_CLEANUP_TOPICS }
       }
@@ -113,6 +127,7 @@ pipeline {
         sh '''
           set -euo pipefail
           /home/abhinav/ci/bin/app-control.sh databento-feed start
+          /home/abhinav/ci/bin/app-control.sh options-edge start
         '''
       }
     }
