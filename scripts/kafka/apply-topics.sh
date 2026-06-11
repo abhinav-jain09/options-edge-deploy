@@ -121,6 +121,17 @@ topic_cleanup_policy() {
   echo "$CLEANUP_POLICY"
 }
 
+kafka_config_value() {
+  local value="$1"
+  if [[ "$value" == \[*\] ]]; then
+    echo "$value"
+  elif [[ "$value" == *,* ]]; then
+    echo "[$value]"
+  else
+    echo "$value"
+  fi
+}
+
 for entry in $OPTIONS_EDGE_TOPICS; do
   topic="${entry%%:*}"
   partitions="${entry##*:}"
@@ -166,5 +177,5 @@ for entry in $OPTIONS_EDGE_TOPICS; do
 
   kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --entity-type topics --entity-name "$topic" --alter \
-    --add-config "retention.ms=$RETENTION_MS,cleanup.policy=$cleanup_policy,min.insync.replicas=$MIN_ISR"
+    --add-config "retention.ms=$RETENTION_MS,cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR"
 done
