@@ -14,6 +14,13 @@ describe_topic() {
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$1" 2>/dev/null | sed -n '/^Topic:/p' || true
 }
 
+broker_ids() {
+  kafka-broker-api-versions --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" 2>/dev/null \
+    | sed -n 's/.*(id: \([0-9][0-9]*\).*/\1/p' \
+    | sort -n \
+    | uniq
+}
+
 wait_for_topic_absent() {
   local topic="$1"
   local attempts="${KAFKA_TOPIC_DELETE_WAIT_SECONDS:-90}"
@@ -28,6 +35,63 @@ wait_for_topic_absent() {
   echo "Timed out waiting for deleted topic to disappear: $topic" >&2
   describe_topic "$topic"
   return 1
+}
+
+wait_for_topic_shape() {
+  local topic="$1"
+  local expected_partitions="$2"
+  local expected_replication_factor="$3"
+  local attempts="${KAFKA_TOPIC_REPAIR_WAIT_SECONDS:-90}"
+
+  for ((i = 1; i <= attempts; i++)); do
+    description="$(describe_topic "$topic")"
+    current_partitions="$(echo "$description" | head -1 | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p')"
+    current_replication_factor="$(echo "$description" | head -1 | sed -n 's/.*ReplicationFactor: \([0-9]*\).*/\1/p')"
+    if [[ "$current_partitions" == "$expected_partitions" && "$current_replication_factor" == "$expected_replication_factor" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Timed out waiting for topic $topic to become partitions=$expected_partitions replicationFactor=$expected_replication_factor" >&2
+  describe_topic "$topic"
+  return 1
+}
+
+reassign_topic_replication_factor() {
+  local topic="$1"
+  local partitions="$2"
+  local tmp
+  mapfile -t brokers < <(broker_ids)
+
+  if (( ${#brokers[@]} < REPLICATION_FACTOR )); then
+    echo "Cannot assign replication factor $REPLICATION_FACTOR with only ${#brokers[@]} brokers" >&2
+    exit 1
+  fi
+
+  tmp="$(mktemp)"
+  {
+    printf '{"version":1,"partitions":['
+    for ((partition = 0; partition < partitions; partition++)); do
+      if (( partition > 0 )); then
+        printf ','
+      fi
+      printf '{"topic":"%s","partition":%d,"replicas":[' "$topic" "$partition"
+      for ((replica = 0; replica < REPLICATION_FACTOR; replica++)); do
+        if (( replica > 0 )); then
+          printf ','
+        fi
+        printf '%s' "${brokers[$(((partition + replica) % ${#brokers[@]}))]}"
+      done
+      printf ']}'
+    done
+    printf ']}\n'
+  } > "$tmp"
+
+  kafka-reassign-partitions --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+    --reassignment-json-file "$tmp" \
+    --execute
+  rm -f "$tmp"
 }
 
 create_topic() {
@@ -59,10 +123,26 @@ for entry in $OPTIONS_EDGE_TOPICS; do
         exit 1
       fi
 
-      echo "Recreating mismatched topic $topic: partitions=$current_partitions replicationFactor=$current_replication_factor -> partitions=$partitions replicationFactor=$REPLICATION_FACTOR"
-      kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$topic" || true
-      wait_for_topic_absent "$topic"
-      create_topic "$topic" "$partitions"
+      echo "Repairing mismatched topic $topic: partitions=$current_partitions replicationFactor=$current_replication_factor -> partitions=$partitions replicationFactor=$REPLICATION_FACTOR"
+      if [[ -z "$current_partitions" || -z "$current_replication_factor" ]]; then
+        echo "Cannot parse current topic shape for $topic" >&2
+        echo "$description" >&2
+        exit 1
+      fi
+      if (( current_partitions > partitions )); then
+        echo "Cannot reduce topic $topic partitions from $current_partitions to $partitions" >&2
+        exit 1
+      fi
+      if (( current_partitions < partitions )); then
+        kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+          --alter \
+          --topic "$topic" \
+          --partitions "$partitions"
+      fi
+      if [[ "$current_replication_factor" != "$REPLICATION_FACTOR" ]]; then
+        reassign_topic_replication_factor "$topic" "$partitions"
+      fi
+      wait_for_topic_shape "$topic" "$partitions" "$REPLICATION_FACTOR"
     else
       echo "Topic $topic already exists with expected partitions=$partitions replicationFactor=$REPLICATION_FACTOR"
     fi
