@@ -55,8 +55,21 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          kubectl -n options-edge scale deployment --all --replicas=0 || true
           /home/abhinav/ci/bin/app-control.sh databento-feed stop || true
+          kubectl -n options-edge scale deployment --all --replicas=0 || true
+          for i in $(seq 1 60); do
+            pod_count="$(kubectl -n options-edge get pods --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+            if [ "$pod_count" = "0" ]; then
+              echo "All options-edge pods are stopped."
+              exit 0
+            fi
+            echo "Waiting for options-edge pods to stop; remaining=$pod_count"
+            kubectl -n options-edge get pods || true
+            sleep 3
+          done
+          echo "Timed out waiting for options-edge pods to stop before Kafka cleanup." >&2
+          kubectl -n options-edge get pods || true
+          exit 1
         '''
       }
     }

@@ -17,19 +17,34 @@ approved_file="$(mktemp)"
 trap 'rm -f "$approved_file"' EXIT
 for entry in $OPTIONS_EDGE_TOPICS; do echo "${entry%%:*}" >> "$approved_file"; done
 
+describe_topic() {
+  kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$1" 2>/dev/null || true
+}
+
+topic_id_from_description() {
+  echo "$1" | head -1 | sed -n 's/.*TopicId: \([^[:space:]]*\).*/\1/p'
+}
+
 wait_for_topic_absent() {
   local topic="$1"
+  local previous_topic_id="${2:-}"
   local attempts="${KAFKA_TOPIC_DELETE_WAIT_SECONDS:-90}"
 
   for ((i = 1; i <= attempts; i++)); do
-    if ! kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$topic" >/dev/null 2>&1; then
+    description="$(describe_topic "$topic")"
+    if [[ -z "$description" ]]; then
+      return 0
+    fi
+    current_topic_id="$(topic_id_from_description "$description")"
+    if [[ -n "$previous_topic_id" && -n "$current_topic_id" && "$current_topic_id" != "$previous_topic_id" ]]; then
+      echo "Topic $topic was recreated while waiting for deletion; cleanup will let apply-topics validate/recreate it."
       return 0
     fi
     sleep 1
   done
 
   echo "Timed out waiting for deleted topic to disappear: $topic" >&2
-  kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$topic" || true
+  describe_topic "$topic"
   return 1
 }
 
@@ -41,19 +56,24 @@ if [[ "${KAFKA_DELETE_UNWANTED_TOPICS:-false}" == "true" ]]; then
       echo "Keeping approved topic: $topic"
     else
       echo "Deleting unwanted topic: $topic"
+      previous_topic_id="$(topic_id_from_description "$(describe_topic "$topic")")"
       kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$topic"
-      wait_for_topic_absent "$topic"
+      wait_for_topic_absent "$topic" "$previous_topic_id"
     fi
   done
 fi
 if [[ "${KAFKA_CLEANUP_MODE:-retention}" == "delete-recreate" ]]; then
+  declare -A previous_topic_ids
+  while read -r topic; do
+    previous_topic_ids["$topic"]="$(topic_id_from_description "$(describe_topic "$topic")")"
+  done < "$approved_file"
   while read -r topic; do
     echo "Deleting approved app topic: $topic"
     kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$topic" || true
   done < "$approved_file"
   while read -r topic; do
     echo "Waiting for deleted approved app topic to disappear: $topic"
-    wait_for_topic_absent "$topic"
+    wait_for_topic_absent "$topic" "${previous_topic_ids[$topic]:-}"
   done < "$approved_file"
 else
   while read -r topic; do
