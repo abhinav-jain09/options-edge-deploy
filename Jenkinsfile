@@ -14,7 +14,7 @@ pipeline {
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-ibkr-feed:dev', description: 'IBKR feed image')
     choice(name: 'MARKET_DATA_SOURCE', choices: ['DATABENTO', 'IBKR'], description: 'Runtime raw market-data source for processors')
     string(name: 'RAW_TOPIC', defaultValue: '', description: 'Override raw topic. Empty uses source default.')
-    string(name: 'IB_HOST', defaultValue: '192.168.100.252', description: 'IB Gateway/TWS host reachable from Kubernetes pods')
+    string(name: 'IB_HOST', defaultValue: '127.0.0.1', description: 'IB Gateway/TWS host. IBKR feed uses hostNetwork, so localhost is the remote host.')
     string(name: 'IB_PORT', defaultValue: '4001', description: 'IB Gateway/TWS API port')
     string(name: 'IB_CLIENT_ID', defaultValue: '212', description: 'IBKR feed API client id')
     string(name: 'IB_EXPIRY', defaultValue: '20260611', description: 'IBKR option expiry/date')
@@ -38,7 +38,7 @@ pipeline {
     IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: '192.168.100.252:5000/options-edge-ibkr-feed:dev'}"
     MARKET_DATA_SOURCE = "${params.MARKET_DATA_SOURCE ?: 'DATABENTO'}"
     RAW_TOPIC = "${params.RAW_TOPIC ?: ''}"
-    IB_HOST = "${params.IB_HOST ?: '192.168.100.252'}"
+    IB_HOST = "${params.IB_HOST ?: '127.0.0.1'}"
     IB_PORT = "${params.IB_PORT ?: '4001'}"
     IB_CLIENT_ID = "${params.IB_CLIENT_ID ?: '212'}"
     IB_EXPIRY = "${params.IB_EXPIRY ?: '20260611'}"

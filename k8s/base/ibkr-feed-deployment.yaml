@@ -8,6 +8,8 @@ metadata:
     app.kubernetes.io/part-of: options-edge
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: ibkr-feed-service
@@ -17,6 +19,8 @@ spec:
         app.kubernetes.io/name: ibkr-feed-service
         app.kubernetes.io/part-of: options-edge
     spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: ibkr-feed
           image: 192.168.100.252:5000/options-edge-ibkr-feed:dev
