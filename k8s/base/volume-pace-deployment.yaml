@@ -68,6 +68,4 @@ spec:
               memory: 2Gi
       volumes:
         - name: kafka-streams-state
-          hostPath:
-            path: /home/options-edge/data/kafka-streams/volume-pace
-            type: DirectoryOrCreate
+          emptyDir: {}
