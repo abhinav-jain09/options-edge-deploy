@@ -19,7 +19,7 @@ pipeline {
     string(name: 'IB_HOST', defaultValue: '127.0.0.1', description: 'IB Gateway/TWS host. IBKR feed uses hostNetwork, so localhost is the remote host.')
     string(name: 'IB_PORT', defaultValue: '4001', description: 'IB Gateway/TWS API port')
     string(name: 'IB_CLIENT_ID', defaultValue: '212', description: 'IBKR feed API client id')
-    string(name: 'IB_EXPIRY', defaultValue: '20260611', description: 'IBKR option expiry/date')
+    string(name: 'IB_EXPIRY', defaultValue: '20260612', description: 'IBKR option expiry/date')
     string(name: 'IB_MAX_STRIKES', defaultValue: '43', description: 'Max strikes around spot for IBKR feed')
     booleanParam(name: 'KAFKA_CLEANUP_TOPICS', defaultValue: false, description: 'Clean Kafka topics before deployment')
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
@@ -44,7 +44,7 @@ pipeline {
     IB_HOST = "${params.IB_HOST ?: '127.0.0.1'}"
     IB_PORT = "${params.IB_PORT ?: '4001'}"
     IB_CLIENT_ID = "${params.IB_CLIENT_ID ?: '212'}"
-    IB_EXPIRY = "${params.IB_EXPIRY ?: '20260611'}"
+    IB_EXPIRY = "${params.IB_EXPIRY ?: '20260612'}"
     IB_MAX_STRIKES = "${params.IB_MAX_STRIKES ?: '43'}"
     KAFKA_CLEANUP_TOPICS = "${params.KAFKA_CLEANUP_TOPICS ?: false}"
     KAFKA_DELETE_UNWANTED_TOPICS = "${params.KAFKA_DELETE_UNWANTED_TOPICS ?: false}"
@@ -178,7 +178,7 @@ pipeline {
               effective_raw_topic="options.databento.raw"
             fi
           fi
-          python3 - "$market_data_source" "$effective_raw_topic" "${IB_HOST:-127.0.0.1}" "${IB_PORT:-4001}" "${IB_CLIENT_ID:-212}" "${IB_EXPIRY:-20260611}" "${IB_MAX_STRIKES:-43}" "${IB_EXPIRY:-20260611}" >"$REMOTE_APP_HOME/tmp/options-edge-runtime-config-patch.json" <<'PY'
+          python3 - "$market_data_source" "$effective_raw_topic" "${IB_HOST:-127.0.0.1}" "${IB_PORT:-4001}" "${IB_CLIENT_ID:-212}" "${IB_EXPIRY:-20260612}" "${IB_MAX_STRIKES:-43}" "${IB_EXPIRY:-20260612}" >"$REMOTE_APP_HOME/tmp/options-edge-runtime-config-patch.json" <<'PY'
 import json
 import sys
 
