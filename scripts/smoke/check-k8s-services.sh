@@ -118,6 +118,7 @@ check_deployment raw-to-display-service 18080
 check_deployment volume-pace-service 18081
 check_deployment directional-pressure-service 18084
 check_deployment volume-sandwich-service 18083
+check_deployment unusual-whales-gex-service 18088
 check_deployment raw-postgres-writer 18085
 check_deployment pressure-postgres-writer 18086
 check_ibkr_feed

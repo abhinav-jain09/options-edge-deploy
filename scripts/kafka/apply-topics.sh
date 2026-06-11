@@ -97,6 +97,8 @@ reassign_topic_replication_factor() {
 create_topic() {
   local topic="$1"
   local partitions="$2"
+  local cleanup_policy
+  cleanup_policy="$(topic_cleanup_policy "$topic")"
 
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --create \
@@ -104,13 +106,25 @@ create_topic() {
     --partitions "$partitions" \
     --replication-factor "$REPLICATION_FACTOR" \
     --config "retention.ms=$RETENTION_MS" \
-    --config "cleanup.policy=$CLEANUP_POLICY" \
+    --config "cleanup.policy=$cleanup_policy" \
     --config "min.insync.replicas=$MIN_ISR"
+}
+
+topic_cleanup_policy() {
+  local topic="$1"
+  for compacted_topic in ${OPTIONS_EDGE_COMPACTED_TOPICS:-}; do
+    if [[ "$topic" == "$compacted_topic" ]]; then
+      echo "${KAFKA_COMPACTED_TOPIC_CLEANUP_POLICY:-compact,delete}"
+      return
+    fi
+  done
+  echo "$CLEANUP_POLICY"
 }
 
 for entry in $OPTIONS_EDGE_TOPICS; do
   topic="${entry%%:*}"
   partitions="${entry##*:}"
+  cleanup_policy="$(topic_cleanup_policy "$topic")"
   description="$(describe_topic "$topic")"
   if [[ -n "$description" ]]; then
     current_partitions="$(echo "$description" | head -1 | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p')"
@@ -152,5 +166,5 @@ for entry in $OPTIONS_EDGE_TOPICS; do
 
   kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --entity-type topics --entity-name "$topic" --alter \
-    --add-config "retention.ms=$RETENTION_MS,cleanup.policy=$CLEANUP_POLICY,min.insync.replicas=$MIN_ISR"
+    --add-config "retention.ms=$RETENTION_MS,cleanup.policy=$cleanup_policy,min.insync.replicas=$MIN_ISR"
 done

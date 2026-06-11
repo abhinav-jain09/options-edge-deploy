@@ -24,6 +24,13 @@ spec:
           envFrom:
             - configMapRef:
                 name: options-edge-config
+          env:
+            - name: APP_MARKET_DATA_SOURCE
+              value: IBKR
+            - name: KAFKA_RAW_TOPIC
+              value: options.ibkr.raw
+            - name: KAFKA_RAW_IBKR_TOPIC
+              value: options.ibkr.raw
           ports:
             - name: health
               containerPort: 8080

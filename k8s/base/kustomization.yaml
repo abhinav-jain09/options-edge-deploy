@@ -19,3 +19,5 @@ resources:
   - volume-pace-service.yaml
   - volume-sandwich-deployment.yaml
   - volume-sandwich-service.yaml
+  - unusual-whales-gex-deployment.yaml
+  - unusual-whales-gex-service.yaml

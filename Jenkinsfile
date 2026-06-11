@@ -7,12 +7,14 @@ pipeline {
     string(name: 'VOLUME_PACE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-volume-pace:dev', description: 'Volume-pace image')
     string(name: 'DIRECTIONAL_PRESSURE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-directional-pressure:dev', description: 'Directional-pressure image')
     string(name: 'VOLUME_SANDWICH_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-volume-sandwich:dev', description: 'Volume-sandwich image')
+    string(name: 'UNUSUAL_WHALES_GEX_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-unusual-whales-gex:dev', description: 'Unusual Whales GEX image')
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-postgres-writer:dev', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-pressure-postgres-writer:dev', description: 'Pressure Postgres writer image')
     string(name: 'FEED_GATEWAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-feed-gateway:dev', description: 'Feed gateway image')
     string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-integration-test:dev', description: 'Integration-test image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-ibkr-feed:dev', description: 'IBKR feed image')
-    choice(name: 'MARKET_DATA_SOURCE', choices: ['DATABENTO', 'IBKR'], description: 'Runtime raw market-data source for processors')
+    string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
+    choice(name: 'MARKET_DATA_SOURCE', choices: ['IBKR', 'DATABENTO'], description: 'Runtime raw market-data source for processors')
     string(name: 'RAW_TOPIC', defaultValue: '', description: 'Override raw topic. Empty uses source default.')
     string(name: 'IB_HOST', defaultValue: '127.0.0.1', description: 'IB Gateway/TWS host. IBKR feed uses hostNetwork, so localhost is the remote host.')
     string(name: 'IB_PORT', defaultValue: '4001', description: 'IB Gateway/TWS API port')
@@ -31,12 +33,13 @@ pipeline {
     VOLUME_PACE_IMAGE = "${params.VOLUME_PACE_IMAGE ?: '192.168.100.252:5000/options-edge-volume-pace:dev'}"
     DIRECTIONAL_PRESSURE_IMAGE = "${params.DIRECTIONAL_PRESSURE_IMAGE ?: '192.168.100.252:5000/options-edge-directional-pressure:dev'}"
     VOLUME_SANDWICH_IMAGE = "${params.VOLUME_SANDWICH_IMAGE ?: '192.168.100.252:5000/options-edge-volume-sandwich:dev'}"
+    UNUSUAL_WHALES_GEX_IMAGE = "${params.UNUSUAL_WHALES_GEX_IMAGE ?: '192.168.100.252:5000/options-edge-unusual-whales-gex:dev'}"
     RAW_POSTGRES_WRITER_IMAGE = "${params.RAW_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-raw-postgres-writer:dev'}"
     PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-pressure-postgres-writer:dev'}"
     FEED_GATEWAY_IMAGE = "${params.FEED_GATEWAY_IMAGE ?: '192.168.100.252:5000/options-edge-feed-gateway:dev'}"
     INTEGRATION_TEST_IMAGE = "${params.INTEGRATION_TEST_IMAGE ?: '192.168.100.252:5000/options-edge-integration-test:dev'}"
     IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: '192.168.100.252:5000/options-edge-ibkr-feed:dev'}"
-    MARKET_DATA_SOURCE = "${params.MARKET_DATA_SOURCE ?: 'DATABENTO'}"
+    MARKET_DATA_SOURCE = "${params.MARKET_DATA_SOURCE ?: 'IBKR'}"
     RAW_TOPIC = "${params.RAW_TOPIC ?: ''}"
     IB_HOST = "${params.IB_HOST ?: '127.0.0.1'}"
     IB_PORT = "${params.IB_PORT ?: '4001'}"
@@ -147,6 +150,20 @@ pipeline {
         '''
       }
     }
+    stage('Unusual Whales Secret') {
+      steps {
+        withCredentials([string(credentialsId: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID, variable: 'UNUSUAL_WHALES_API_KEY')]) {
+          sh '''
+            set -euo pipefail
+            test -n "$UNUSUAL_WHALES_API_KEY"
+            kubectl create namespace options-edge --dry-run=client -o yaml | kubectl apply -f -
+            kubectl -n options-edge create secret generic options-edge-secrets \
+              --from-literal=unusual-whales-api-key="$UNUSUAL_WHALES_API_KEY" \
+              --dry-run=client -o yaml | kubectl apply -f -
+          '''
+        }
+      }
+    }
     stage('Deploy') {
       steps {
         sh '''
@@ -160,7 +177,7 @@ pipeline {
               effective_raw_topic="options.databento.raw"
             fi
           fi
-          python3 - "$MARKET_DATA_SOURCE" "$effective_raw_topic" "$IB_HOST" "$IB_PORT" "$IB_CLIENT_ID" "$IB_EXPIRY" "$IB_MAX_STRIKES" >"$REMOTE_APP_HOME/tmp/options-edge-runtime-config-patch.json" <<'PY'
+          python3 - "$MARKET_DATA_SOURCE" "$effective_raw_topic" "$IB_HOST" "$IB_PORT" "$IB_CLIENT_ID" "$IB_EXPIRY" "$IB_MAX_STRIKES" "$IB_EXPIRY" >"$REMOTE_APP_HOME/tmp/options-edge-runtime-config-patch.json" <<'PY'
 import json
 import sys
 
@@ -169,9 +186,10 @@ keys = [
     "KAFKA_RAW_TOPIC",
     "IB_HOST",
     "IB_PORT",
-    "IB_CLIENT_ID",
-    "IB_EXPIRY",
-    "IB_MAX_STRIKES",
+            "IB_CLIENT_ID",
+            "IB_EXPIRY",
+            "IB_MAX_STRIKES",
+            "UNUSUAL_WHALES_EXPIRY",
 ]
 print(json.dumps({"data": dict(zip(keys, sys.argv[1:]))}))
 PY
@@ -182,6 +200,7 @@ PY
           kubectl -n options-edge set image deployment/volume-pace-service volume-pace="$VOLUME_PACE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/volume-sandwich-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
+          kubectl -n options-edge set image deployment/unusual-whales-gex-service unusual-whales-gex="$UNUSUAL_WHALES_GEX_IMAGE"
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/feed-gateway-service feed-gateway="$FEED_GATEWAY_IMAGE"
@@ -191,6 +210,7 @@ PY
           kubectl -n options-edge rollout restart deployment/volume-pace-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-service
           kubectl -n options-edge rollout restart deployment/volume-sandwich-service
+          kubectl -n options-edge rollout restart deployment/unusual-whales-gex-service
           kubectl -n options-edge rollout restart deployment/raw-postgres-writer
           kubectl -n options-edge rollout restart deployment/pressure-postgres-writer
           kubectl -n options-edge rollout restart deployment/feed-gateway-service
@@ -200,6 +220,7 @@ PY
           kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=180s
           kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=180s
           kubectl -n options-edge rollout status deployment/volume-sandwich-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/unusual-whales-gex-service --timeout=180s
           kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=180s
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=180s
           kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=180s

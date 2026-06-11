@@ -8,6 +8,8 @@ metadata:
     app.kubernetes.io/part-of: options-edge
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: volume-pace-service
@@ -20,10 +22,25 @@ spec:
       containers:
         - name: volume-pace
           image: 192.168.100.252:5000/options-edge-volume-pace:dev
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           envFrom:
             - configMapRef:
                 name: options-edge-config
+          env:
+            - name: APP_MARKET_DATA_SOURCE
+              value: IBKR
+            - name: KAFKA_RAW_TOPIC
+              value: options.ibkr.raw
+            - name: KAFKA_RAW_IBKR_TOPIC
+              value: options.ibkr.raw
+            - name: KAFKA_PACE_STREAMS_APP_ID
+              value: options-flow-pace-streams-v2
+            - name: KAFKA_PACE_STREAMS_NUM_THREADS
+              value: "2"
+            - name: KAFKA_PACE_STREAMS_CACHE_MAX_BYTES_BUFFERING
+              value: "1048576"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xmx1536m"
           ports:
             - name: health
               containerPort: 8080
@@ -51,4 +68,6 @@ spec:
               memory: 2Gi
       volumes:
         - name: kafka-streams-state
-          emptyDir: {}
+          hostPath:
+            path: /home/options-edge/data/kafka-streams/volume-pace
+            type: DirectoryOrCreate

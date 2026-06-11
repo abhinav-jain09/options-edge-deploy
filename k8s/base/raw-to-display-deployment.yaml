@@ -20,10 +20,25 @@ spec:
       containers:
         - name: raw-to-display
           image: 192.168.100.252:5000/options-edge-raw-to-display:dev
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           envFrom:
             - configMapRef:
                 name: options-edge-config
+          env:
+            - name: APP_MARKET_DATA_SOURCE
+              value: IBKR
+            - name: KAFKA_RAW_TOPIC
+              value: options.ibkr.raw
+            - name: KAFKA_RAW_IBKR_TOPIC
+              value: options.ibkr.raw
+            - name: KAFKA_DISPLAY_STREAMS_APP_ID
+              value: options-flow-display-streams-v8
+            - name: KAFKA_DISPLAY_STREAMS_NUM_THREADS
+              value: "2"
+            - name: KAFKA_DISPLAY_STREAMS_CACHE_MAX_BYTES_BUFFERING
+              value: "0"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xmx1536m"
           ports:
             - name: health
               containerPort: 8080
