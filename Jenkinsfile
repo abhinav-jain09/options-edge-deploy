@@ -169,15 +169,16 @@ pipeline {
         sh '''
           set -euo pipefail
           kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
-          effective_raw_topic="$RAW_TOPIC"
+          market_data_source="${MARKET_DATA_SOURCE:-IBKR}"
+          effective_raw_topic="${RAW_TOPIC:-}"
           if [ -z "$effective_raw_topic" ]; then
-            if [ "$MARKET_DATA_SOURCE" = "IBKR" ]; then
+            if [ "$market_data_source" = "IBKR" ]; then
               effective_raw_topic="options.ibkr.raw"
             else
               effective_raw_topic="options.databento.raw"
             fi
           fi
-          python3 - "$MARKET_DATA_SOURCE" "$effective_raw_topic" "$IB_HOST" "$IB_PORT" "$IB_CLIENT_ID" "$IB_EXPIRY" "$IB_MAX_STRIKES" "$IB_EXPIRY" >"$REMOTE_APP_HOME/tmp/options-edge-runtime-config-patch.json" <<'PY'
+          python3 - "$market_data_source" "$effective_raw_topic" "${IB_HOST:-127.0.0.1}" "${IB_PORT:-4001}" "${IB_CLIENT_ID:-212}" "${IB_EXPIRY:-20260611}" "${IB_MAX_STRIKES:-43}" "${IB_EXPIRY:-20260611}" >"$REMOTE_APP_HOME/tmp/options-edge-runtime-config-patch.json" <<'PY'
 import json
 import sys
 
