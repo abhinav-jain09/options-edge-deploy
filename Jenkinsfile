@@ -18,7 +18,7 @@ pipeline {
     string(name: 'IB_PORT', defaultValue: '4001', description: 'IB Gateway/TWS API port')
     string(name: 'IB_CLIENT_ID', defaultValue: '212', description: 'IBKR feed API client id')
     string(name: 'IB_EXPIRY', defaultValue: '20260611', description: 'IBKR option expiry/date')
-    string(name: 'IB_MAX_STRIKES', defaultValue: '60', description: 'Max strikes around spot for IBKR feed')
+    string(name: 'IB_MAX_STRIKES', defaultValue: '43', description: 'Max strikes around spot for IBKR feed')
     booleanParam(name: 'KAFKA_CLEANUP_TOPICS', defaultValue: false, description: 'Clean Kafka topics before deployment')
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
@@ -42,7 +42,7 @@ pipeline {
     IB_PORT = "${params.IB_PORT ?: '4001'}"
     IB_CLIENT_ID = "${params.IB_CLIENT_ID ?: '212'}"
     IB_EXPIRY = "${params.IB_EXPIRY ?: '20260611'}"
-    IB_MAX_STRIKES = "${params.IB_MAX_STRIKES ?: '60'}"
+    IB_MAX_STRIKES = "${params.IB_MAX_STRIKES ?: '43'}"
     KAFKA_CLEANUP_TOPICS = "${params.KAFKA_CLEANUP_TOPICS ?: false}"
     KAFKA_DELETE_UNWANTED_TOPICS = "${params.KAFKA_DELETE_UNWANTED_TOPICS ?: false}"
     ALLOW_PROD_KAFKA_CLEANUP = "${params.ALLOW_PROD_KAFKA_CLEANUP ?: false}"

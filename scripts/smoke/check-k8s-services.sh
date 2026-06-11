@@ -102,7 +102,7 @@ print(urlencode({
     "expiry": config.get("expiry", ""),
     "port": str(config.get("port", 4001)),
     "clientId": str(config.get("clientId", 112)),
-    "maxStrikes": str(config.get("maxStrikes", 49)),
+    "maxStrikes": str(config.get("maxStrikes", 43)),
     "delayed": str(config.get("delayed", True)).lower(),
 }))
 PY
