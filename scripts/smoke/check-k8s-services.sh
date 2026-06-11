@@ -6,6 +6,8 @@ REMOTE_APP_HOME="${REMOTE_APP_HOME:-/home/options-edge}"
 TMP_DIR="$REMOTE_APP_HOME/tmp"
 WEB_BASE_URL="${WEB_BASE_URL:-http://192.168.100.252:8090}"
 DATA_SEED_WAIT_SECONDS="${DATA_SEED_WAIT_SECONDS:-8}"
+SYNTHETIC_CHECK_ATTEMPTS="${SYNTHETIC_CHECK_ATTEMPTS:-12}"
+SYNTHETIC_CHECK_SLEEP_SECONDS="${SYNTHETIC_CHECK_SLEEP_SECONDS:-10}"
 mkdir -p "$TMP_DIR"
 
 check_deployment() {
@@ -71,10 +73,23 @@ check_integration_test() {
   curl -fsS "http://127.0.0.1:${local_port}/health/live"
   echo
   echo "Running final UI/data-path synthetic check"
-  curl -fsS "http://127.0.0.1:${local_port}/api/check/once"
-  echo
+  for attempt in $(seq 1 "$SYNTHETIC_CHECK_ATTEMPTS"); do
+    if curl -fsS "http://127.0.0.1:${local_port}/api/check/once"; then
+      echo
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      return
+    fi
+    echo
+    if [ "$attempt" -lt "$SYNTHETIC_CHECK_ATTEMPTS" ]; then
+      echo "Synthetic check failed on attempt $attempt/$SYNTHETIC_CHECK_ATTEMPTS; retrying in ${SYNTHETIC_CHECK_SLEEP_SECONDS}s"
+      sleep "$SYNTHETIC_CHECK_SLEEP_SECONDS"
+    fi
+  done
+  echo "Synthetic check failed after $SYNTHETIC_CHECK_ATTEMPTS attempts" >&2
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  return 1
 }
 
 request_selected_contract() {
@@ -119,6 +134,7 @@ check_deployment volume-pace-service 18081
 check_deployment directional-pressure-service 18084
 check_deployment volume-sandwich-service 18083
 check_deployment unusual-whales-gex-service 18088
+check_deployment unusual-whales-gex-history-service 18089
 check_deployment raw-postgres-writer 18085
 check_deployment pressure-postgres-writer 18086
 check_ibkr_feed
