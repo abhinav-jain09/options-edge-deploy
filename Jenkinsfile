@@ -48,6 +48,18 @@ pipeline {
         sh 'kubectl kustomize k8s/overlays/${ENVIRONMENT} >"$REMOTE_APP_HOME/tmp/options-edge-${ENVIRONMENT}.yaml"'
       }
     }
+    stage('Pause Runtime For Kafka Cleanup') {
+      when {
+        expression { return params.KAFKA_CLEANUP_TOPICS }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          kubectl -n options-edge scale deployment --all --replicas=0 || true
+          /home/abhinav/ci/bin/app-control.sh databento-feed stop || true
+        '''
+      }
+    }
     stage('Kafka Cleanup') {
       when {
         expression { return params.KAFKA_CLEANUP_TOPICS }
@@ -75,6 +87,18 @@ pipeline {
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           export KAFKA_TOPIC_RETENTION_MS=86400000
           scripts/kafka/apply-topics.sh
+          scripts/kafka/verify-topics.sh
+        '''
+      }
+    }
+    stage('Resume Databento Feed') {
+      when {
+        expression { return params.KAFKA_CLEANUP_TOPICS }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          /home/abhinav/ci/bin/app-control.sh databento-feed start
         '''
       }
     }

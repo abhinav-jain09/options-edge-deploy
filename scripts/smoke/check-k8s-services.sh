@@ -4,6 +4,8 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-options-edge}"
 REMOTE_APP_HOME="${REMOTE_APP_HOME:-/home/options-edge}"
 TMP_DIR="$REMOTE_APP_HOME/tmp"
+WEB_BASE_URL="${WEB_BASE_URL:-http://192.168.100.252:8090}"
+DATA_SEED_WAIT_SECONDS="${DATA_SEED_WAIT_SECONDS:-8}"
 mkdir -p "$TMP_DIR"
 
 check_deployment() {
@@ -59,6 +61,37 @@ check_integration_test() {
   wait "$pid" 2>/dev/null || true
 }
 
+request_selected_contract() {
+  local config_file="$TMP_DIR/options-edge-web-config.json"
+  local form_file="$TMP_DIR/options-edge-web-connect-form.txt"
+  echo "Requesting selected contract seed through $WEB_BASE_URL/api/connect"
+  curl -fsS "$WEB_BASE_URL/api/config" >"$config_file"
+  python3 - "$config_file" >"$form_file" <<'PY'
+import json
+import sys
+from urllib.parse import urlencode
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    config = json.load(fh)
+
+print(urlencode({
+    "provider": config.get("provider", "IB"),
+    "symbol": config.get("symbol", "SPX"),
+    "expiry": config.get("expiry", ""),
+    "port": str(config.get("port", 4001)),
+    "clientId": str(config.get("clientId", 112)),
+    "maxStrikes": str(config.get("maxStrikes", 49)),
+    "delayed": str(config.get("delayed", True)).lower(),
+}))
+PY
+  curl -fsS -X POST \
+    -H 'Content-Type: application/x-www-form-urlencoded' \
+    --data-binary "@$form_file" \
+    "$WEB_BASE_URL/api/connect"
+  echo
+  sleep "$DATA_SEED_WAIT_SECONDS"
+}
+
 check_deployment raw-to-display-service 18080
 check_deployment volume-pace-service 18081
 check_deployment directional-pressure-service 18084
@@ -66,4 +99,5 @@ check_deployment volume-sandwich-service 18083
 check_deployment raw-postgres-writer 18085
 check_deployment pressure-postgres-writer 18086
 check_feed_gateway
+request_selected_contract
 check_integration_test
