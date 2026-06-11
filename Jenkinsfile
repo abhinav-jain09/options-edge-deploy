@@ -155,6 +155,19 @@ pipeline {
         '''
       }
     }
+    stage('Prometheus Scrapes') {
+      steps {
+        withCredentials([string(credentialsId: 'options-edge-remote-become-password', variable: 'BECOME_PASSWORD')]) {
+          sh '''
+            set -euo pipefail
+            export NAMESPACE=options-edge
+            export KUBECONFIG="${KUBECONFIG}"
+            export REMOTE_APP_HOME="${REMOTE_APP_HOME}"
+            scripts/monitoring/apply-prometheus-scrapes.sh
+          '''
+        }
+      }
+    }
     stage('Smoke') {
       steps {
         sh 'scripts/smoke/check-k8s-services.sh'
