@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: feed-gateway
-          image: ghcr.io/abhinav-jain09/options-edge-feed-gateway:dev
+          image: 192.168.100.252:5000/options-edge-feed-gateway:dev
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

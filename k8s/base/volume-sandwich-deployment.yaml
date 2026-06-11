@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: volume-sandwich
-          image: ghcr.io/abhinav-jain09/options-edge-volume-sandwich:dev
+          image: 192.168.100.252:5000/options-edge-volume-sandwich:dev
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: integration-test
-          image: ghcr.io/abhinav-jain09/options-edge-integration-test:dev
+          image: 192.168.100.252:5000/options-edge-integration-test:dev
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

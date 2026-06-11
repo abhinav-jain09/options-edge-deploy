@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: volume-pace
-          image: ghcr.io/abhinav-jain09/options-edge-volume-pace:dev
+          image: 192.168.100.252:5000/options-edge-volume-pace:dev
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:

@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: pressure-postgres-writer
-          image: ghcr.io/abhinav-jain09/options-edge-pressure-postgres-writer:dev
+          image: 192.168.100.252:5000/options-edge-pressure-postgres-writer:dev
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
