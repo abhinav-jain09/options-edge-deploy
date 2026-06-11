@@ -86,6 +86,7 @@ pipeline {
           export KAFKA_TOPIC_REPLICATION_FACTOR=1
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           export KAFKA_TOPIC_RETENTION_MS=86400000
+          export KAFKA_RECREATE_MISMATCHED_TOPICS="${KAFKA_CLEANUP_TOPICS}"
           scripts/kafka/apply-topics.sh
           scripts/kafka/verify-topics.sh
         '''
