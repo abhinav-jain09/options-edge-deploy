@@ -1,6 +1,8 @@
 resources:
   - namespace.yaml
   - configmap.yaml
+  - ibkr-feed-deployment.yaml
+  - ibkr-feed-service.yaml
   - feed-gateway-deployment.yaml
   - feed-gateway-service.yaml
   - directional-pressure-deployment.yaml

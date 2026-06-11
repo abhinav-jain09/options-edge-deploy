@@ -42,6 +42,22 @@ check_feed_gateway() {
   wait "$pid" 2>/dev/null || true
 }
 
+check_ibkr_feed() {
+  local deployment="ibkr-feed-service"
+  local local_port="18087"
+  echo "Checking live health for $deployment"
+  kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=240s
+  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8080" >"$TMP_DIR/$deployment-port-forward.log" 2>&1 &
+  local pid=$!
+  trap 'kill "$pid" 2>/dev/null || true' RETURN
+  sleep 3
+  curl -fsS "http://127.0.0.1:${local_port}/health/live"
+  echo
+  curl -fsS "http://127.0.0.1:${local_port}/metrics" | grep -q 'options_edge_ibkr_feed_ready'
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 check_integration_test() {
   local deployment="options-edge-integration-test"
   local local_port="18082"
@@ -62,6 +78,12 @@ check_integration_test() {
 }
 
 request_selected_contract() {
+  local source_mode="${APP_MARKET_DATA_SOURCE:-${MARKET_DATA_SOURCE:-DATABENTO}}"
+  if [[ "$source_mode" == "IBKR" ]]; then
+    echo "Skipping Databento /api/connect seed because MARKET_DATA_SOURCE=IBKR; waiting for IBKR feed records."
+    sleep "$DATA_SEED_WAIT_SECONDS"
+    return
+  fi
   local config_file="$TMP_DIR/options-edge-web-config.json"
   local form_file="$TMP_DIR/options-edge-web-connect-form.txt"
   echo "Requesting selected contract seed through $WEB_BASE_URL/api/connect"
@@ -98,6 +120,7 @@ check_deployment directional-pressure-service 18084
 check_deployment volume-sandwich-service 18083
 check_deployment raw-postgres-writer 18085
 check_deployment pressure-postgres-writer 18086
+check_ibkr_feed
 check_feed_gateway
 request_selected_contract
 check_integration_test

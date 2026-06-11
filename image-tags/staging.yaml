@@ -7,3 +7,4 @@ images:
   pressure-postgres-writer: ghcr.io/abhinav-jain09/options-edge-pressure-postgres-writer:staging
   feed-gateway-service: ghcr.io/abhinav-jain09/options-edge-feed-gateway:staging
   options-edge-integration-test: ghcr.io/abhinav-jain09/options-edge-integration-test:staging
+  ibkr-feed-service: ghcr.io/abhinav-jain09/options-edge-ibkr-feed:staging
