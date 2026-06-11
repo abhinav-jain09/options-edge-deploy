@@ -9,6 +9,7 @@ pipeline {
     string(name: 'VOLUME_SANDWICH_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-volume-sandwich:dev', description: 'Volume-sandwich image')
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-raw-postgres-writer:dev', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-pressure-postgres-writer:dev', description: 'Pressure Postgres writer image')
+    string(name: 'FEED_GATEWAY_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-feed-gateway:dev', description: 'Feed gateway image')
     string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: 'ghcr.io/abhinav-jain09/options-edge-integration-test:dev', description: 'Integration-test image')
     booleanParam(name: 'KAFKA_CLEANUP_TOPICS', defaultValue: false, description: 'Clean Kafka topics before deployment')
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
@@ -16,11 +17,39 @@ pipeline {
   }
   environment {
     KUBECONFIG = "${params.KUBECONFIG_FILE}"
+    REMOTE_APP_HOME = '/home/options-edge'
   }
   stages {
+    stage('Validate') {
+      steps {
+        sh '''
+          set -euo pipefail
+          test "$REMOTE_APP_HOME" = "/home/options-edge"
+          test ! -d /root/options-edge
+          test ! -d /options-edge
+          mkdir -p "$REMOTE_APP_HOME/tmp"
+        '''
+      }
+    }
     stage('Render') {
       steps {
-        sh 'kubectl kustomize k8s/overlays/${ENVIRONMENT} >/tmp/options-edge-${ENVIRONMENT}.yaml'
+        sh 'kubectl kustomize k8s/overlays/${ENVIRONMENT} >"$REMOTE_APP_HOME/tmp/options-edge-${ENVIRONMENT}.yaml"'
+      }
+    }
+    stage('Kafka Cleanup') {
+      when {
+        expression { return params.KAFKA_CLEANUP_TOPICS }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          export KAFKA_CLEANUP_TOPICS="${KAFKA_CLEANUP_TOPICS}"
+          export KAFKA_DELETE_UNWANTED_TOPICS="${KAFKA_DELETE_UNWANTED_TOPICS}"
+          export ALLOW_PROD_KAFKA_CLEANUP="${ALLOW_PROD_KAFKA_CLEANUP}"
+          export KAFKA_CLEANUP_MODE="${KAFKA_CLEANUP_MODE:-delete-recreate}"
+          scripts/kafka/cleanup-topics.sh
+        '''
       }
     }
     stage('Kafka Topics') {
@@ -46,6 +75,7 @@ pipeline {
           kubectl -n options-edge set image deployment/volume-sandwich-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
+          kubectl -n options-edge set image deployment/feed-gateway-service feed-gateway="$FEED_GATEWAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-integration-test integration-test="$INTEGRATION_TEST_IMAGE"
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=180s
           kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=180s
@@ -53,6 +83,8 @@ pipeline {
           kubectl -n options-edge rollout status deployment/volume-sandwich-service --timeout=180s
           kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=180s
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=180s
+          kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/options-edge-integration-test --timeout=180s
         '''
       }
     }

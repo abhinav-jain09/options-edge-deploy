@@ -5,4 +5,5 @@ images:
   volume-sandwich-service: ghcr.io/abhinav-jain09/options-edge-volume-sandwich:dev
   raw-postgres-writer: ghcr.io/abhinav-jain09/options-edge-raw-postgres-writer:dev
   pressure-postgres-writer: ghcr.io/abhinav-jain09/options-edge-pressure-postgres-writer:dev
+  feed-gateway-service: ghcr.io/abhinav-jain09/options-edge-feed-gateway:dev
   options-edge-integration-test: ghcr.io/abhinav-jain09/options-edge-integration-test:dev

@@ -1,6 +1,8 @@
 resources:
   - namespace.yaml
   - configmap.yaml
+  - feed-gateway-deployment.yaml
+  - feed-gateway-service.yaml
   - directional-pressure-deployment.yaml
   - directional-pressure-service.yaml
   - integration-test-deployment.yaml

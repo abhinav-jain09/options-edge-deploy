@@ -6,6 +6,10 @@ metadata:
   labels:
     app.kubernetes.io/name: raw-postgres-writer
     app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8080"
 spec:
   selector:
     app.kubernetes.io/name: raw-postgres-writer
