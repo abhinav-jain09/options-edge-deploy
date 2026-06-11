@@ -208,6 +208,23 @@ PY
         '''
       }
     }
+    stage('Kafka Internal Topics') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
+          export KAFKA_TOPIC_RETENTION_MS=86400000
+          export KAFKA_STREAMS_INTERNAL_RETENTION_MS="${KAFKA_STREAMS_INTERNAL_RETENTION_MS:-86400000}"
+          export KAFKA_STREAMS_INTERNAL_SEGMENT_MS="${KAFKA_STREAMS_INTERNAL_SEGMENT_MS:-3600000}"
+          export KAFKA_CHANGELOG_RETENTION_MS="${KAFKA_CHANGELOG_RETENTION_MS:-86400000}"
+          export KAFKA_CHANGELOG_DELETE_RETENTION_MS="${KAFKA_CHANGELOG_DELETE_RETENTION_MS:-3600000}"
+          export KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO="${KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO:-0.01}"
+          scripts/kafka/apply-internal-topic-configs.sh
+        '''
+      }
+    }
     stage('Prometheus Scrapes') {
       steps {
         withCredentials([string(credentialsId: 'options-edge-remote-become-password', variable: 'BECOME_PASSWORD')]) {
