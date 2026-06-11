@@ -30,6 +30,11 @@ wait_for_topic_absent() {
   local previous_topic_id="${2:-}"
   local attempts="${KAFKA_TOPIC_DELETE_WAIT_SECONDS:-90}"
 
+  if [[ -z "$previous_topic_id" ]]; then
+    echo "Topic $topic was absent before cleanup; no delete wait needed."
+    return 0
+  fi
+
   for ((i = 1; i <= attempts; i++)); do
     description="$(describe_topic "$topic")"
     if [[ -z "$description" ]]; then
@@ -68,6 +73,10 @@ if [[ "${KAFKA_CLEANUP_MODE:-retention}" == "delete-recreate" ]]; then
     previous_topic_ids["$topic"]="$(topic_id_from_description "$(describe_topic "$topic")")"
   done < "$approved_file"
   while read -r topic; do
+    if [[ -z "${previous_topic_ids[$topic]:-}" ]]; then
+      echo "Approved app topic absent before cleanup: $topic"
+      continue
+    fi
     echo "Deleting approved app topic: $topic"
     kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$topic" || true
   done < "$approved_file"
