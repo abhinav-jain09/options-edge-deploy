@@ -8,6 +8,7 @@ pipeline {
     string(name: 'DIRECTIONAL_PRESSURE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-directional-pressure:dev', description: 'Directional-pressure image')
     string(name: 'VOLUME_SANDWICH_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-volume-sandwich:dev', description: 'Volume-sandwich image')
     string(name: 'UNUSUAL_WHALES_GEX_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-unusual-whales-gex:dev', description: 'Unusual Whales GEX image')
+    string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-unusual-whales-gex-history:dev', description: 'Unusual Whales GEX history image')
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-postgres-writer:dev', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-pressure-postgres-writer:dev', description: 'Pressure Postgres writer image')
     string(name: 'FEED_GATEWAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-feed-gateway:dev', description: 'Feed gateway image')
@@ -34,6 +35,7 @@ pipeline {
     DIRECTIONAL_PRESSURE_IMAGE = "${params.DIRECTIONAL_PRESSURE_IMAGE ?: '192.168.100.252:5000/options-edge-directional-pressure:dev'}"
     VOLUME_SANDWICH_IMAGE = "${params.VOLUME_SANDWICH_IMAGE ?: '192.168.100.252:5000/options-edge-volume-sandwich:dev'}"
     UNUSUAL_WHALES_GEX_IMAGE = "${params.UNUSUAL_WHALES_GEX_IMAGE ?: '192.168.100.252:5000/options-edge-unusual-whales-gex:dev'}"
+    UNUSUAL_WHALES_GEX_HISTORY_IMAGE = "${params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE ?: '192.168.100.252:5000/options-edge-unusual-whales-gex-history:dev'}"
     RAW_POSTGRES_WRITER_IMAGE = "${params.RAW_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-raw-postgres-writer:dev'}"
     PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-pressure-postgres-writer:dev'}"
     FEED_GATEWAY_IMAGE = "${params.FEED_GATEWAY_IMAGE ?: '192.168.100.252:5000/options-edge-feed-gateway:dev'}"
@@ -202,6 +204,7 @@ PY
           kubectl -n options-edge set image deployment/directional-pressure-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/volume-sandwich-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
           kubectl -n options-edge set image deployment/unusual-whales-gex-service unusual-whales-gex="$UNUSUAL_WHALES_GEX_IMAGE"
+          kubectl -n options-edge set image deployment/unusual-whales-gex-history-service unusual-whales-gex-history="$UNUSUAL_WHALES_GEX_HISTORY_IMAGE"
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/feed-gateway-service feed-gateway="$FEED_GATEWAY_IMAGE"
@@ -212,6 +215,7 @@ PY
           kubectl -n options-edge rollout restart deployment/directional-pressure-service
           kubectl -n options-edge rollout restart deployment/volume-sandwich-service
           kubectl -n options-edge rollout restart deployment/unusual-whales-gex-service
+          kubectl -n options-edge rollout restart deployment/unusual-whales-gex-history-service
           kubectl -n options-edge rollout restart deployment/raw-postgres-writer
           kubectl -n options-edge rollout restart deployment/pressure-postgres-writer
           kubectl -n options-edge rollout restart deployment/feed-gateway-service
@@ -222,6 +226,7 @@ PY
           kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=180s
           kubectl -n options-edge rollout status deployment/volume-sandwich-service --timeout=180s
           kubectl -n options-edge rollout status deployment/unusual-whales-gex-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/unusual-whales-gex-history-service --timeout=180s
           kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=180s
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=180s
           kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=180s

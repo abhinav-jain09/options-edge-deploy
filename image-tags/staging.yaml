@@ -4,6 +4,7 @@ images:
   directional-pressure-service: ghcr.io/abhinav-jain09/options-edge-directional-pressure:staging
   volume-sandwich-service: ghcr.io/abhinav-jain09/options-edge-volume-sandwich:staging
   unusual-whales-gex-service: ghcr.io/abhinav-jain09/options-edge-unusual-whales-gex:staging
+  unusual-whales-gex-history-service: ghcr.io/abhinav-jain09/options-edge-unusual-whales-gex-history:staging
   raw-postgres-writer: ghcr.io/abhinav-jain09/options-edge-raw-postgres-writer:staging
   pressure-postgres-writer: ghcr.io/abhinav-jain09/options-edge-pressure-postgres-writer:staging
   feed-gateway-service: ghcr.io/abhinav-jain09/options-edge-feed-gateway:staging

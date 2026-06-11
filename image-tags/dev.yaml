@@ -4,6 +4,7 @@ images:
   directional-pressure-service: 192.168.100.252:5000/options-edge-directional-pressure:dev
   volume-sandwich-service: 192.168.100.252:5000/options-edge-volume-sandwich:dev
   unusual-whales-gex-service: 192.168.100.252:5000/options-edge-unusual-whales-gex:dev
+  unusual-whales-gex-history-service: 192.168.100.252:5000/options-edge-unusual-whales-gex-history:dev
   raw-postgres-writer: 192.168.100.252:5000/options-edge-raw-postgres-writer:dev
   pressure-postgres-writer: 192.168.100.252:5000/options-edge-pressure-postgres-writer:dev
   feed-gateway-service: 192.168.100.252:5000/options-edge-feed-gateway:dev
