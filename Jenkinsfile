@@ -43,6 +43,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
           export KAFKA_CLEANUP_TOPICS="${KAFKA_CLEANUP_TOPICS}"
           export KAFKA_DELETE_UNWANTED_TOPICS="${KAFKA_DELETE_UNWANTED_TOPICS}"
@@ -56,6 +57,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
           export KAFKA_TOPIC_REPLICATION_FACTOR=1
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
