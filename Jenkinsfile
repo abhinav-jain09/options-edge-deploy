@@ -3,6 +3,8 @@ pipeline {
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
     string(name: 'KUBECONFIG_FILE', defaultValue: '/home/options-edge/config/kubeconfig', description: 'Kubeconfig path on Jenkins agent')
+    string(name: 'IMAGE_REGISTRY', defaultValue: '192.168.100.252:5000', description: 'Docker registry namespace used when IMAGE_TAG is set')
+    string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev', description: 'Databento volume aggregator image')
     string(name: 'VOLUME_PACE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-volume-pace:dev', description: 'Volume-pace image')
@@ -31,6 +33,8 @@ pipeline {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
     KUBECONFIG = "${params.KUBECONFIG_FILE ?: '/home/options-edge/config/kubeconfig'}"
     REMOTE_APP_HOME = '/home/options-edge'
+    IMAGE_REGISTRY = "${params.IMAGE_REGISTRY ?: '192.168.100.252:5000'}"
+    IMAGE_TAG = "${params.IMAGE_TAG ?: ''}"
     RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: '192.168.100.252:5000/options-edge-raw-to-display:dev'}"
     DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev'}"
     VOLUME_PACE_IMAGE = "${params.VOLUME_PACE_IMAGE ?: '192.168.100.252:5000/options-edge-volume-pace:dev'}"
@@ -168,10 +172,54 @@ pipeline {
         }
       }
     }
+    stage('Resolve Images') {
+      steps {
+        sh '''
+          set -euo pipefail
+          mkdir -p "$REMOTE_APP_HOME/tmp"
+          image_tag="${IMAGE_TAG:-}"
+          registry="${IMAGE_REGISTRY:-192.168.100.252:5000}"
+          if [ -n "$image_tag" ]; then
+            cat >"$REMOTE_APP_HOME/tmp/options-edge-images.env" <<EOF
+RAW_TO_DISPLAY_IMAGE=$registry/options-edge-raw-to-display:$image_tag
+DATABENTO_VOLUME_AGGREGATOR_IMAGE=$registry/options-edge-databento-volume-aggregator:$image_tag
+VOLUME_PACE_IMAGE=$registry/options-edge-volume-pace:$image_tag
+DIRECTIONAL_PRESSURE_IMAGE=$registry/options-edge-directional-pressure:$image_tag
+VOLUME_SANDWICH_IMAGE=$registry/options-edge-volume-sandwich:$image_tag
+UNUSUAL_WHALES_GEX_IMAGE=$registry/options-edge-unusual-whales-gex:$image_tag
+UNUSUAL_WHALES_GEX_HISTORY_IMAGE=$registry/options-edge-unusual-whales-gex-history:$image_tag
+RAW_POSTGRES_WRITER_IMAGE=$registry/options-edge-raw-postgres-writer:$image_tag
+PRESSURE_POSTGRES_WRITER_IMAGE=$registry/options-edge-pressure-postgres-writer:$image_tag
+FEED_GATEWAY_IMAGE=$registry/options-edge-feed-gateway:$image_tag
+INTEGRATION_TEST_IMAGE=$registry/options-edge-integration-test:$image_tag
+IBKR_FEED_IMAGE=$registry/options-edge-ibkr-feed:$image_tag
+EOF
+          else
+            cat >"$REMOTE_APP_HOME/tmp/options-edge-images.env" <<EOF
+RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
+DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
+VOLUME_PACE_IMAGE=$VOLUME_PACE_IMAGE
+DIRECTIONAL_PRESSURE_IMAGE=$DIRECTIONAL_PRESSURE_IMAGE
+VOLUME_SANDWICH_IMAGE=$VOLUME_SANDWICH_IMAGE
+UNUSUAL_WHALES_GEX_IMAGE=$UNUSUAL_WHALES_GEX_IMAGE
+UNUSUAL_WHALES_GEX_HISTORY_IMAGE=$UNUSUAL_WHALES_GEX_HISTORY_IMAGE
+RAW_POSTGRES_WRITER_IMAGE=$RAW_POSTGRES_WRITER_IMAGE
+PRESSURE_POSTGRES_WRITER_IMAGE=$PRESSURE_POSTGRES_WRITER_IMAGE
+FEED_GATEWAY_IMAGE=$FEED_GATEWAY_IMAGE
+INTEGRATION_TEST_IMAGE=$INTEGRATION_TEST_IMAGE
+IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
+EOF
+          fi
+          echo "Resolved deployment images:"
+          sed 's/^/  /' "$REMOTE_APP_HOME/tmp/options-edge-images.env"
+        '''
+      }
+    }
     stage('Image Preflight') {
       steps {
         sh '''
           set -euo pipefail
+          . "$REMOTE_APP_HOME/tmp/options-edge-images.env"
           images="
             RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
             DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
@@ -241,6 +289,7 @@ EOF
       steps {
         sh '''
           set -euo pipefail
+          . "$REMOTE_APP_HOME/tmp/options-edge-images.env"
           kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
           market_data_source="${MARKET_DATA_SOURCE:-IBKR}"
           effective_raw_topic="${RAW_TOPIC:-}"
