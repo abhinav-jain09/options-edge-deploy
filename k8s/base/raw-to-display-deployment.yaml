@@ -31,6 +31,12 @@ spec:
               value: options.ibkr.raw
             - name: KAFKA_RAW_IBKR_TOPIC
               value: options.ibkr.raw
+            - name: KAFKA_DISPLAY_TOPIC
+              value: options.ibkr.display
+            - name: KAFKA_DISPLAY_VOLUME_TOPIC
+              value: options.ibkr.display.volume.current
+            - name: KAFKA_GAMMA_HISTORY_TOPIC
+              value: options.ibkr.display.gamma.history
             - name: KAFKA_DISPLAY_STREAMS_APP_ID
               value: options-flow-display-streams-v8
             - name: KAFKA_DISPLAY_STREAMS_NUM_THREADS

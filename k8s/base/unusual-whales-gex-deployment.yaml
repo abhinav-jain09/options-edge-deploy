@@ -31,6 +31,10 @@ spec:
                   name: options-edge-secrets
                   key: unusual-whales-api-key
                   optional: true
+            - name: KAFKA_MARKET_DATA_SELECTION_TOPIC
+              value: options.marketdata.selection
+            - name: KAFKA_UNUSUAL_WHALES_GEX_TOPIC
+              value: options.ibkr.unusualwhales.gex.strike
           ports:
             - name: health
               containerPort: 8080

@@ -24,6 +24,13 @@ spec:
           envFrom:
             - configMapRef:
                 name: options-edge-config
+          env:
+            - name: KAFKA_UNUSUAL_WHALES_GEX_TOPIC
+              value: options.ibkr.unusualwhales.gex.strike
+            - name: KAFKA_UNUSUAL_WHALES_GEX_HISTORY_TOPIC
+              value: options.ibkr.unusualwhales.gex.strike.history
+            - name: KAFKA_UNUSUAL_WHALES_GEX_HISTORY_STREAMS_APP_ID
+              value: options-flow-uw-gex-history-streams-v1
           ports:
             - name: health
               containerPort: 8080

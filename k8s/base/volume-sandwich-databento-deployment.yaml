@@ -1,20 +1,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: volume-sandwich-service
+  name: volume-sandwich-databento-service
   namespace: options-edge
   labels:
-    app.kubernetes.io/name: volume-sandwich-service
+    app.kubernetes.io/name: volume-sandwich-databento-service
     app.kubernetes.io/part-of: options-edge
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: volume-sandwich-service
+      app.kubernetes.io/name: volume-sandwich-databento-service
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: volume-sandwich-service
+        app.kubernetes.io/name: volume-sandwich-databento-service
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
@@ -26,15 +26,15 @@ spec:
                 name: options-edge-config
           env:
             - name: APP_MARKET_DATA_SOURCE
-              value: IBKR
+              value: DATABENTO
             - name: KAFKA_DISPLAY_VOLUME_TOPIC
-              value: options.ibkr.display.volume.current
+              value: options.databento.display.volume.current
             - name: KAFKA_VOLUME_SANDWICH_CURRENT_TOPIC
-              value: options.ibkr.volume-sandwich.current
+              value: options.databento.volume-sandwich.current
             - name: KAFKA_VOLUME_SANDWICH_ALERTS_TOPIC
-              value: options.ibkr.volume-sandwich.alerts
+              value: options.databento.volume-sandwich.alerts
             - name: KAFKA_VOLUME_SANDWICH_STREAMS_APP_ID
-              value: options-flow-volume-sandwich-streams-v2
+              value: options-flow-volume-sandwich-streams-v2-databento
           ports:
             - name: health
               containerPort: 8080

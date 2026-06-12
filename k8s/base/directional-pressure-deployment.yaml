@@ -31,6 +31,10 @@ spec:
               value: options.ibkr.raw
             - name: KAFKA_RAW_IBKR_TOPIC
               value: options.ibkr.raw
+            - name: KAFKA_DIRECTIONAL_PRESSURE_TOPIC
+              value: options.ibkr.directional-pressure
+            - name: KAFKA_DIRECTIONAL_PRESSURE_STREAMS_APP_ID
+              value: options-flow-directional-pressure-streams-v4
           ports:
             - name: health
               containerPort: 8080

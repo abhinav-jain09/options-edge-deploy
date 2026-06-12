@@ -36,15 +36,33 @@ data:
   KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO: "0.01"
   KAFKA_STREAMS_STORE_TYPE: memory
   KAFKA_CONTROL_TOPIC_PARTITIONS: "1"
+  KAFKA_MARKET_DATA_SELECTION_TOPIC: options.marketdata.selection
+  KAFKA_DATABENTO_CONTROL_TOPIC: options.databento.control
   KAFKA_RAW_TOPIC: options.ibkr.raw
   KAFKA_RAW_IBKR_TOPIC: options.ibkr.raw
-  KAFKA_DISPLAY_TOPIC: display
-  KAFKA_DISPLAY_VOLUME_TOPIC: display.volume.current
-  KAFKA_GAMMA_HISTORY_TOPIC: display.gamma.history
+  KAFKA_DISPLAY_TOPIC: options.ibkr.display
+  KAFKA_DISPLAY_VOLUME_TOPIC: options.ibkr.display.volume.current
+  KAFKA_GAMMA_HISTORY_TOPIC: options.ibkr.display.gamma.history
   KAFKA_PACE_TOPIC: options.ibkr.pace
   KAFKA_DIRECTIONAL_PRESSURE_TOPIC: options.ibkr.directional-pressure
-  KAFKA_UNUSUAL_WHALES_GEX_TOPIC: options.unusualwhales.gex.strike
-  KAFKA_UNUSUAL_WHALES_GEX_HISTORY_TOPIC: options.unusualwhales.gex.strike.history
+  KAFKA_VOLUME_SANDWICH_CURRENT_TOPIC: options.ibkr.volume-sandwich.current
+  KAFKA_VOLUME_SANDWICH_ALERTS_TOPIC: options.ibkr.volume-sandwich.alerts
+  KAFKA_IBKR_DISPLAY_TOPIC: options.ibkr.display
+  KAFKA_IBKR_DISPLAY_VOLUME_TOPIC: options.ibkr.display.volume.current
+  KAFKA_IBKR_PACE_TOPIC: options.ibkr.pace
+  KAFKA_IBKR_DIRECTIONAL_PRESSURE_TOPIC: options.ibkr.directional-pressure
+  KAFKA_IBKR_VOLUME_SANDWICH_CURRENT_TOPIC: options.ibkr.volume-sandwich.current
+  KAFKA_IBKR_VOLUME_SANDWICH_ALERTS_TOPIC: options.ibkr.volume-sandwich.alerts
+  KAFKA_DATABENTO_DISPLAY_TOPIC: options.databento.display
+  KAFKA_DATABENTO_DISPLAY_VOLUME_TOPIC: options.databento.display.volume.current
+  KAFKA_DATABENTO_PACE_TOPIC: options.databento.pace
+  KAFKA_DATABENTO_DIRECTIONAL_PRESSURE_TOPIC: options.databento.directional-pressure
+  KAFKA_DATABENTO_VOLUME_SANDWICH_CURRENT_TOPIC: options.databento.volume-sandwich.current
+  KAFKA_DATABENTO_VOLUME_SANDWICH_ALERTS_TOPIC: options.databento.volume-sandwich.alerts
+  KAFKA_UNUSUAL_WHALES_GEX_TOPIC: options.ibkr.unusualwhales.gex.strike
+  KAFKA_UNUSUAL_WHALES_GEX_HISTORY_TOPIC: options.ibkr.unusualwhales.gex.strike.history
+  KAFKA_IBKR_UNUSUAL_WHALES_GEX_TOPIC: options.ibkr.unusualwhales.gex.strike
+  KAFKA_IBKR_UNUSUAL_WHALES_GEX_HISTORY_TOPIC: options.ibkr.unusualwhales.gex.strike.history
   KAFKA_UNUSUAL_WHALES_GEX_HISTORY_STREAMS_APP_ID: options-flow-uw-gex-history-streams-v1
   KAFKA_UNUSUAL_WHALES_GEX_HISTORY_STREAMS_NUM_THREADS: "1"
   KAFKA_STREAMS_STATE_DIR: /var/lib/options-edge/kafka-streams
@@ -70,6 +88,8 @@ data:
   WEB_BASE_URL: http://192.168.100.252:8090
   GATEWAY_WS_URL: ws://192.168.100.252:30097/ws/events
   GATEWAY_CACHE_TTL_MS: "21600000"
+  CHECK_MARKET_DATA_SOURCES: IBKR,DATABENTO
+  EXPECTED_MAX_STRIKES: "43"
   MIN_OPTION_ROWS: "1"
   MONITOR_INTERVAL_MS: "30000"
   WEBSOCKET_WAIT_MS: "20000"

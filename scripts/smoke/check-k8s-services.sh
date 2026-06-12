@@ -113,6 +113,7 @@ with open(sys.argv[1], encoding="utf-8") as fh:
 
 print(urlencode({
     "provider": config.get("provider", "IB"),
+    "marketDataSource": config.get("marketDataSource", "DATABENTO"),
     "symbol": config.get("symbol", "SPX"),
     "expiry": config.get("expiry", ""),
     "port": str(config.get("port", 4001)),
@@ -130,9 +131,13 @@ PY
 }
 
 check_deployment raw-to-display-service 18080
+check_deployment raw-to-display-databento-service 18090
 check_deployment volume-pace-service 18081
+check_deployment volume-pace-databento-service 18091
 check_deployment directional-pressure-service 18084
+check_deployment directional-pressure-databento-service 18092
 check_deployment volume-sandwich-service 18083
+check_deployment volume-sandwich-databento-service 18093
 check_deployment unusual-whales-gex-service 18088
 check_deployment unusual-whales-gex-history-service 18089
 check_deployment raw-postgres-writer 18085

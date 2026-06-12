@@ -33,6 +33,8 @@ spec:
               value: options.ibkr.raw
             - name: KAFKA_RAW_IBKR_TOPIC
               value: options.ibkr.raw
+            - name: KAFKA_PACE_TOPIC
+              value: options.ibkr.pace
             - name: KAFKA_PACE_STREAMS_APP_ID
               value: options-flow-pace-streams-v2
             - name: KAFKA_PACE_STREAMS_NUM_THREADS

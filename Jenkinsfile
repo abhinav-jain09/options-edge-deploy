@@ -200,9 +200,13 @@ PY
             --type merge \
             --patch "$(cat "$REMOTE_APP_HOME/tmp/options-edge-runtime-config-patch.json")"
           kubectl -n options-edge set image deployment/raw-to-display-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
+          kubectl -n options-edge set image deployment/raw-to-display-databento-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
           kubectl -n options-edge set image deployment/volume-pace-service volume-pace="$VOLUME_PACE_IMAGE"
+          kubectl -n options-edge set image deployment/volume-pace-databento-service volume-pace="$VOLUME_PACE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
+          kubectl -n options-edge set image deployment/directional-pressure-databento-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/volume-sandwich-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
+          kubectl -n options-edge set image deployment/volume-sandwich-databento-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
           kubectl -n options-edge set image deployment/unusual-whales-gex-service unusual-whales-gex="$UNUSUAL_WHALES_GEX_IMAGE"
           kubectl -n options-edge set image deployment/unusual-whales-gex-history-service unusual-whales-gex-history="$UNUSUAL_WHALES_GEX_HISTORY_IMAGE"
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
@@ -211,9 +215,13 @@ PY
           kubectl -n options-edge set image deployment/options-edge-integration-test integration-test="$INTEGRATION_TEST_IMAGE"
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
+          kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
           kubectl -n options-edge rollout restart deployment/volume-pace-service
+          kubectl -n options-edge rollout restart deployment/volume-pace-databento-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-service
+          kubectl -n options-edge rollout restart deployment/directional-pressure-databento-service
           kubectl -n options-edge rollout restart deployment/volume-sandwich-service
+          kubectl -n options-edge rollout restart deployment/volume-sandwich-databento-service
           kubectl -n options-edge rollout restart deployment/unusual-whales-gex-service
           kubectl -n options-edge rollout restart deployment/unusual-whales-gex-history-service
           kubectl -n options-edge rollout restart deployment/raw-postgres-writer
@@ -222,9 +230,13 @@ PY
           kubectl -n options-edge rollout restart deployment/options-edge-integration-test
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/directional-pressure-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/volume-sandwich-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/volume-sandwich-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/unusual-whales-gex-service --timeout=180s
           kubectl -n options-edge rollout status deployment/unusual-whales-gex-history-service --timeout=180s
           kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=180s
