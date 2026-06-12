@@ -40,7 +40,7 @@ spec:
             - name: KAFKA_PACE_STREAMS_CACHE_MAX_BYTES_BUFFERING
               value: "1048576"
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xmx1536m"
+              value: "-Xms10g -Xmx20g"
           ports:
             - name: health
               containerPort: 8080
@@ -62,10 +62,10 @@ spec:
           resources:
             requests:
               cpu: 250m
-              memory: 512Mi
+              memory: 10Gi
             limits:
               cpu: "2"
-              memory: 2Gi
+              memory: 24Gi
       volumes:
         - name: kafka-streams-state
           emptyDir: {}
