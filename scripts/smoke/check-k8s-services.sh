@@ -123,16 +123,11 @@ check_integration_test() {
 
 request_selected_contract() {
   local source_mode="${APP_MARKET_DATA_SOURCE:-${MARKET_DATA_SOURCE:-DATABENTO}}"
-  if [[ "$source_mode" == "IBKR" ]]; then
-    echo "Skipping Databento /api/connect seed because MARKET_DATA_SOURCE=IBKR; waiting for IBKR feed records."
-    sleep "$DATA_SEED_WAIT_SECONDS"
-    return
-  fi
   local config_file="$TMP_DIR/options-edge-web-config.json"
   local form_file="$TMP_DIR/options-edge-web-connect-form.txt"
-  echo "Requesting selected contract seed through $WEB_BASE_URL/api/connect"
+  echo "Requesting selected $source_mode contract through $WEB_BASE_URL/api/connect"
   curl -fsS "$WEB_BASE_URL/api/config" >"$config_file"
-  python3 - "$config_file" >"$form_file" <<'PY'
+  python3 - "$config_file" "$source_mode" >"$form_file" <<'PY'
 import json
 import sys
 from urllib.parse import urlencode
@@ -140,9 +135,13 @@ from urllib.parse import urlencode
 with open(sys.argv[1], encoding="utf-8") as fh:
     config = json.load(fh)
 
+source = (sys.argv[2] or config.get("marketDataSource") or "DATABENTO").upper()
+if source == "IB":
+    source = "IBKR"
+
 print(urlencode({
     "provider": config.get("provider", "IB"),
-    "marketDataSource": config.get("marketDataSource", "DATABENTO"),
+    "marketDataSource": source,
     "symbol": config.get("symbol", "SPX"),
     "expiry": config.get("expiry", ""),
     "port": str(config.get("port", 4001)),
