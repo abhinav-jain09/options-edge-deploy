@@ -168,6 +168,51 @@ pipeline {
         }
       }
     }
+    stage('Image Preflight') {
+      steps {
+        sh '''
+          set -euo pipefail
+          images="
+            RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
+            DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
+            VOLUME_PACE_IMAGE=$VOLUME_PACE_IMAGE
+            DIRECTIONAL_PRESSURE_IMAGE=$DIRECTIONAL_PRESSURE_IMAGE
+            VOLUME_SANDWICH_IMAGE=$VOLUME_SANDWICH_IMAGE
+            UNUSUAL_WHALES_GEX_IMAGE=$UNUSUAL_WHALES_GEX_IMAGE
+            UNUSUAL_WHALES_GEX_HISTORY_IMAGE=$UNUSUAL_WHALES_GEX_HISTORY_IMAGE
+            RAW_POSTGRES_WRITER_IMAGE=$RAW_POSTGRES_WRITER_IMAGE
+            PRESSURE_POSTGRES_WRITER_IMAGE=$PRESSURE_POSTGRES_WRITER_IMAGE
+            FEED_GATEWAY_IMAGE=$FEED_GATEWAY_IMAGE
+            INTEGRATION_TEST_IMAGE=$INTEGRATION_TEST_IMAGE
+            IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
+          "
+
+          missing=0
+          while IFS='=' read -r name image; do
+            name="$(echo "$name" | xargs)"
+            image="$(echo "$image" | xargs)"
+            [ -n "$name" ] || continue
+            if [ -z "$image" ]; then
+              echo "Missing image parameter: $name" >&2
+              missing=1
+              continue
+            fi
+            echo "Checking image manifest: $name=$image"
+            if ! docker manifest inspect "$image" >/dev/null 2>&1; then
+              echo "Missing image manifest: $name=$image" >&2
+              missing=1
+            fi
+          done <<EOF
+$images
+EOF
+
+          if [ "$missing" != "0" ]; then
+            echo "One or more requested images are missing; refusing to restart pods." >&2
+            exit 1
+          fi
+        '''
+      }
+    }
     stage('Deploy') {
       steps {
         sh '''
