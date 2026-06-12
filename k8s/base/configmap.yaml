@@ -38,6 +38,9 @@ data:
   KAFKA_CONTROL_TOPIC_PARTITIONS: "1"
   KAFKA_MARKET_DATA_SELECTION_TOPIC: options.marketdata.selection
   KAFKA_DATABENTO_CONTROL_TOPIC: options.databento.control
+  KAFKA_DATABENTO_EVENTS_TOPIC: options.databento.events.raw
+  KAFKA_DATABENTO_SNAPSHOT_TOPIC: options.databento.raw
+  KAFKA_DATABENTO_NORMALIZED_TOPIC: options.databento.normalized
   KAFKA_RAW_TOPIC: options.ibkr.raw
   KAFKA_RAW_IBKR_TOPIC: options.ibkr.raw
   KAFKA_DISPLAY_TOPIC: options.ibkr.display
@@ -59,6 +62,7 @@ data:
   KAFKA_DATABENTO_DIRECTIONAL_PRESSURE_TOPIC: options.databento.directional-pressure
   KAFKA_DATABENTO_VOLUME_SANDWICH_CURRENT_TOPIC: options.databento.volume-sandwich.current
   KAFKA_DATABENTO_VOLUME_SANDWICH_ALERTS_TOPIC: options.databento.volume-sandwich.alerts
+  KAFKA_DATABENTO_VOLUME_AGGREGATOR_APP_ID: options-flow-databento-volume-aggregator-v1
   KAFKA_UNUSUAL_WHALES_GEX_TOPIC: options.ibkr.unusualwhales.gex.strike
   KAFKA_UNUSUAL_WHALES_GEX_HISTORY_TOPIC: options.ibkr.unusualwhales.gex.strike.history
   KAFKA_IBKR_UNUSUAL_WHALES_GEX_TOPIC: options.ibkr.unusualwhales.gex.strike

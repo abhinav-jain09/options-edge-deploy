@@ -161,6 +161,7 @@ PY
 
 check_deployment raw-to-display-service 18080
 check_deployment raw-to-display-databento-service 18090
+check_deployment databento-volume-aggregator 18094
 check_deployment volume-pace-service 18081
 check_deployment volume-pace-databento-service 18091
 check_deployment directional-pressure-service 18084

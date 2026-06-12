@@ -5,6 +5,8 @@ resources:
   - ibkr-feed-service.yaml
   - feed-gateway-deployment.yaml
   - feed-gateway-service.yaml
+  - databento-volume-aggregator-deployment.yaml
+  - databento-volume-aggregator-service.yaml
   - directional-pressure-databento-deployment.yaml
   - directional-pressure-deployment.yaml
   - directional-pressure-service.yaml
