@@ -83,7 +83,7 @@ check_ibkr_feed() {
   wait_for_port_forward "$deployment" "$pid" "$local_port" "/health/live" "$log_file"
   curl -fsS "http://127.0.0.1:${local_port}/health/live"
   echo
-  curl -fsS "http://127.0.0.1:${local_port}/metrics" | grep -q 'options_edge_ibkr_feed_ready'
+  curl -fsS "http://127.0.0.1:${local_port}/metrics" | grep -q 'options_edge_ibkr_feed_live'
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }
