@@ -20,7 +20,7 @@ spec:
       containers:
         - name: unusual-whales-gex-history
           image: 192.168.100.252:5000/options-edge-unusual-whales-gex-history:dev
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           envFrom:
             - configMapRef:
                 name: options-edge-config
