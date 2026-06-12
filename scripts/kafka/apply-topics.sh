@@ -132,6 +132,24 @@ kafka_config_value() {
   fi
 }
 
+alter_topic_config() {
+  local topic="$1"
+  local cleanup_policy="$2"
+  local attempts="${KAFKA_TOPIC_CONFIG_RETRY_ATTEMPTS:-10}"
+
+  for ((i = 1; i <= attempts; i++)); do
+    if kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+      --entity-type topics --entity-name "$topic" --alter \
+      --add-config "retention.ms=$RETENTION_MS,cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  echo "Timed out updating config for topic $topic" >&2
+  return 1
+}
+
 for entry in $OPTIONS_EDGE_TOPICS; do
   topic="${entry%%:*}"
   partitions="${entry##*:}"
@@ -173,9 +191,8 @@ for entry in $OPTIONS_EDGE_TOPICS; do
     fi
   else
     create_topic "$topic" "$partitions"
+    wait_for_topic_shape "$topic" "$partitions" "$REPLICATION_FACTOR"
   fi
 
-  kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
-    --entity-type topics --entity-name "$topic" --alter \
-    --add-config "retention.ms=$RETENTION_MS,cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR"
+  alter_topic_config "$topic" "$cleanup_policy"
 done
