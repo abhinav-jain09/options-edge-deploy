@@ -187,6 +187,30 @@ pipeline {
             IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
           "
 
+          image_exists() {
+            local image="$1"
+            local registry remainder repository tag
+            registry="${image%%/*}"
+            remainder="${image#*/}"
+            if [ "$registry" = "$image" ] || [ "$remainder" = "$image" ] || [[ "$remainder" != *:* ]]; then
+              docker pull "$image" >/dev/null 2>&1
+              return $?
+            fi
+
+            repository="${remainder%:*}"
+            tag="${remainder##*:}"
+            for scheme in http https; do
+              if curl -fsSI \
+                -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+                -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+                "$scheme://$registry/v2/$repository/manifests/$tag" >/dev/null 2>&1; then
+                return 0
+              fi
+            done
+
+            docker pull "$image" >/dev/null 2>&1
+          }
+
           missing=0
           while IFS='=' read -r name image; do
             name="$(echo "$name" | xargs)"
@@ -198,7 +222,7 @@ pipeline {
               continue
             fi
             echo "Checking image manifest: $name=$image"
-            if ! docker manifest inspect "$image" >/dev/null 2>&1; then
+            if ! image_exists "$image"; then
               echo "Missing image manifest: $name=$image" >&2
               missing=1
             fi
