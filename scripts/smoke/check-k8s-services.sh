@@ -10,17 +10,43 @@ SYNTHETIC_CHECK_ATTEMPTS="${SYNTHETIC_CHECK_ATTEMPTS:-12}"
 SYNTHETIC_CHECK_SLEEP_SECONDS="${SYNTHETIC_CHECK_SLEEP_SECONDS:-10}"
 mkdir -p "$TMP_DIR"
 
+wait_for_port_forward() {
+  local name="$1"
+  local pid="$2"
+  local local_port="$3"
+  local path="$4"
+  local log_file="$5"
+  local attempts="${PORT_FORWARD_WAIT_ATTEMPTS:-20}"
+
+  for attempt in $(seq 1 "$attempts"); do
+    if curl -fsS --max-time 2 "http://127.0.0.1:${local_port}${path}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "Port-forward for $name exited before ${path} became reachable." >&2
+      cat "$log_file" >&2 || true
+      return 1
+    fi
+    sleep 1
+  done
+
+  echo "Timed out waiting for $name port-forward on 127.0.0.1:${local_port}${path}" >&2
+  cat "$log_file" >&2 || true
+  return 1
+}
+
 check_deployment() {
   local deployment="$1"
   local local_port="$2"
+  local log_file="$TMP_DIR/$deployment-port-forward.log"
   echo "Checking rollout for $deployment"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
 
   echo "Checking live health for $deployment"
-  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8080" >"$TMP_DIR/$deployment-port-forward.log" 2>&1 &
+  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8080" >"$log_file" 2>&1 &
   local pid=$!
   trap 'kill "$pid" 2>/dev/null || true' RETURN
-  sleep 3
+  wait_for_port_forward "$deployment" "$pid" "$local_port" "/health/live" "$log_file"
   curl -fsS "http://127.0.0.1:${local_port}/health/live"
   echo
   curl -fsS "http://127.0.0.1:${local_port}/metrics" | grep -q 'options_edge_processing_service_ready'
@@ -31,12 +57,13 @@ check_deployment() {
 check_feed_gateway() {
   local deployment="feed-gateway-service"
   local local_port="19091"
+  local log_file="$TMP_DIR/$deployment-port-forward.log"
   echo "Checking live health for $deployment"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
-  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8091" >"$TMP_DIR/$deployment-port-forward.log" 2>&1 &
+  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8091" >"$log_file" 2>&1 &
   local pid=$!
   trap 'kill "$pid" 2>/dev/null || true' RETURN
-  sleep 3
+  wait_for_port_forward "$deployment" "$pid" "$local_port" "/health" "$log_file"
   curl -fsS "http://127.0.0.1:${local_port}/health"
   echo
   curl -fsS "http://127.0.0.1:${local_port}/metrics" | grep -q 'options_edge_feed_gateway_running'
@@ -47,12 +74,13 @@ check_feed_gateway() {
 check_ibkr_feed() {
   local deployment="ibkr-feed-service"
   local local_port="18087"
+  local log_file="$TMP_DIR/$deployment-port-forward.log"
   echo "Checking live health for $deployment"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=240s
-  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8080" >"$TMP_DIR/$deployment-port-forward.log" 2>&1 &
+  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8080" >"$log_file" 2>&1 &
   local pid=$!
   trap 'kill "$pid" 2>/dev/null || true' RETURN
-  sleep 3
+  wait_for_port_forward "$deployment" "$pid" "$local_port" "/health/live" "$log_file"
   curl -fsS "http://127.0.0.1:${local_port}/health/live"
   echo
   curl -fsS "http://127.0.0.1:${local_port}/metrics" | grep -q 'options_edge_ibkr_feed_ready'
@@ -63,13 +91,14 @@ check_ibkr_feed() {
 check_integration_test() {
   local deployment="options-edge-integration-test"
   local local_port="18082"
+  local log_file="$TMP_DIR/$deployment-port-forward.log"
   echo "Checking live health for $deployment"
   local pod
   pod="$(kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/name="$deployment" -o jsonpath='{.items[0].metadata.name}')"
-  kubectl -n "$NAMESPACE" port-forward "pod/$pod" "${local_port}:8080" >"$TMP_DIR/$deployment-port-forward.log" 2>&1 &
+  kubectl -n "$NAMESPACE" port-forward "pod/$pod" "${local_port}:8080" >"$log_file" 2>&1 &
   local pid=$!
   trap 'kill "$pid" 2>/dev/null || true' RETURN
-  sleep 3
+  wait_for_port_forward "$deployment" "$pid" "$local_port" "/health/live" "$log_file"
   curl -fsS "http://127.0.0.1:${local_port}/health/live"
   echo
   echo "Running final UI/data-path synthetic check"
