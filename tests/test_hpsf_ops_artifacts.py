@@ -113,10 +113,12 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "Validate Ops Files",
             "Kustomize Render",
             "Topic Verification",
+            "Deploy HPSF Manifests",
             "Remote HPSF Smoke",
             "Rollback Info",
             "scripts/smoke/check-hpsf-deployment.sh",
             "scripts/kafka/verify-hpsf-topics.sh",
+            "kubectl apply -f k8s/base/hpsf-stage-a-deployment.yaml",
         ]:
             self.assertIn(text, pipeline)
 
