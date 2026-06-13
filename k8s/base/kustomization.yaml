@@ -12,6 +12,10 @@ resources:
   - directional-pressure-service.yaml
   - integration-test-deployment.yaml
   - integration-test-service.yaml
+  - hpsf-stage-a-deployment.yaml
+  - hpsf-stage-b-deployment.yaml
+  - hpsf-postgres-writer-deployment.yaml
+  - hpsf-postgres-writer-service.yaml
   - pressure-postgres-writer-deployment.yaml
   - pressure-postgres-writer-service.yaml
   - raw-to-display-databento-deployment.yaml
