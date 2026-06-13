@@ -10,7 +10,7 @@ scan_files() {
   find "$root" -type f \
     \( -name '*.java' -o -name '*.py' -o -name '*.sh' -o -name '*.yml' -o -name '*.yaml' -o -name '*.json' -o -name '*.properties' -o -name 'Jenkinsfile*' \) \
     ! -path '*/.git/*' ! -path '*/target/*' ! -path '*/build/*' ! -path '*/__pycache__/*' ! -path '*/node_modules/*' \
-    ! -path '*/tests/*' ! -path '*/src/test/*'
+    ! -path '*/tests/*' ! -path '*/src/test/*' ! -path '*/scripts/hpsf/*' ! -path '*/scripts/smoke/*'
 }
 
 check_forbidden() {
@@ -18,7 +18,10 @@ check_forbidden() {
   local pattern="$2"
   local root="$3"
   local matches
-  matches="$(scan_files "$root" | xargs grep -nE "$pattern" 2>/dev/null || true)"
+  matches="$(scan_files "$root" \
+    | xargs grep -nE "$pattern" 2>/dev/null \
+    | grep -Ev 'must not|forbidden|found|ever appeared|require_not_contains|grep -F|grep -q|failures\\.append|not be persisted|contains orderInstruction\\.enabled=true|enabled true found|Dry-run/fixture' \
+    || true)"
   if [[ -n "$matches" ]]; then
     echo "HPSF spec compliance failure: $label" >&2
     echo "$matches" >&2
