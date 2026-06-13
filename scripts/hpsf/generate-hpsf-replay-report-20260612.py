@@ -36,9 +36,13 @@ def read_evidence(path: Path) -> dict[str, Any]:
 
 
 def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
+    jenkins = evidence.get("jenkins", {})
+    replay = evidence.get("replay", {})
+    evidence_mode = str(evidence.get("evidenceMode", "REAL")).upper()
     counts = evidence.get("counts", {})
     es_selection = evidence.get("esSelection", {})
     samples = evidence.get("samples", {})
+    key_validation = evidence.get("keyValidation", {})
     action_counts = Counter(evidence.get("actionCounts", {}))
     gate_reason_counts = Counter(evidence.get("gateReasonCounts", {}))
     top_execution = evidence.get("topExecutionStrikes", [])
@@ -49,8 +53,24 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     topic_configs = evidence.get("topicConfigs", {})
 
     failures: list[str] = []
+    if evidence_mode in {"FIXTURE", "DRY_RUN"}:
+        failures.append(f"{evidence_mode} evidence cannot close HPSF-82A/HPSF-83")
+    if not str(jenkins.get("buildUrl", "")).strip():
+        failures.append("Jenkins build URL missing")
+    if not str(jenkins.get("commitSha", "")).strip():
+        failures.append("commit SHA missing")
+    if not str(es_selection.get("selectedSymbol", "")).strip():
+        failures.append("selected ES symbol missing")
+    if not str(es_selection.get("resolvedInstrumentId", "")).strip():
+        failures.append("selected ES instrument_id missing")
     if int(counts.get("esTradesRead", 0)) <= 0:
         failures.append("ES trades read = 0")
+    if int(counts.get("opraTcbboRecordsRead", 0)) <= 0:
+        failures.append("OPRA records read = 0")
+    if int(counts.get("strikeFlowRecordsEmitted", 0)) <= 0:
+        failures.append("strike-flow topic is empty")
+    if int(counts.get("underlyingStateRecordsEmitted", 0)) <= 0:
+        failures.append("underlying-state topic is empty")
     if int(counts.get("signalRecordsEmitted", 0)) <= 0:
         failures.append("signal topic is empty")
     if int(counts.get("latestSignalRecordsEmitted", 0)) <= 0:
@@ -63,21 +83,42 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
         failures.append("Stage A startup evidence missing")
     if not stage_b.get("started", False):
         failures.append("Stage B startup evidence missing")
+    if int(counts.get("stageAEmittedFinalSignalCount", 0)) > 0:
+        failures.append("Stage A emitted final signal")
+    if key_validation.get("signalKeyValid") is not True:
+        failures.append("signal key validation failed")
+    if key_validation.get("latestSignalKeyValid") is not True:
+        failures.append("latest-signal key validation failed")
+    if key_validation.get("auditKeyValid") is not True:
+        failures.append("audit key validation failed")
+    for sample_key in ["signal", "latestSignal", "audit"]:
+        if not samples.get(sample_key):
+            failures.append(f"sample {sample_key} JSON missing")
 
     passed = not failures
     lines: list[str] = []
     lines.append("# HPSF Replay Report 2026-06-12")
     lines.append("")
     lines.append(f"Final result: {'PASS' if passed else 'FAIL'}")
+    lines.append(f"Evidence mode: {evidence_mode}")
+    lines.append("")
+    lines.append("## Jenkins")
+    lines.append(f"- Build URL: {jenkins.get('buildUrl', '')}")
+    lines.append(f"- Build number: {jenkins.get('buildNumber', '')}")
+    lines.append(f"- Commit SHA: {jenkins.get('commitSha', '')}")
+    lines.append(f"- Job name: {jenkins.get('jobName', '')}")
     if failures:
         lines.append("")
         lines.append("Failures:")
         lines.extend(f"- {failure}" for failure in failures)
     lines.append("")
     lines.append("## Databento Request")
-    lines.append(f"- Date range requested: {START} to {END}")
-    lines.append("- OPRA dataset/schema: OPRA.PILLAR / tcbbo")
-    lines.append("- ES dataset/schema: GLBX.MDP3 / trades")
+    lines.append(f"- Replay date: {replay.get('date', REPLAY_DATE)}")
+    lines.append(f"- Date range requested: {replay.get('start', START)} to {replay.get('end', END)}")
+    lines.append(f"- Replay topic namespace: {replay.get('topicPrefix', 'options.replay.20260612')}")
+    lines.append(f"- OPRA dataset/schema: {replay.get('opraDataset', 'OPRA.PILLAR')} / {replay.get('opraSchema', 'tcbbo')}")
+    lines.append(f"- ES dataset/schema: {replay.get('esDataset', 'GLBX.MDP3')} / {replay.get('esSchema', 'trades')}")
+    lines.append(f"- SPX spot source: {replay.get('spxSpotSource', counts.get('spxSpotSource', ''))}")
     lines.append(f"- ES reference mode: {es_selection.get('referenceMode', 'UNKNOWN')}")
     lines.append(f"- Requested ES symbol: {es_selection.get('requestedSymbol', 'UNKNOWN')}")
     lines.append(f"- Requested ES stype_in: {es_selection.get('requestedStypeIn', 'UNKNOWN')}")
@@ -105,8 +146,13 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
         lines.append(f"- {key}: {counts.get(key, 0)}")
     lines.append("")
     lines.append("## HPSF Output Counts")
-    for key in ["spxSpotRecordsProduced", "strikeFlowRecordsEmitted", "marketFlowRecordsEmitted", "strikeScoreRecordsEmitted", "signalRecordsEmitted", "latestSignalRecordsEmitted", "auditRecordsEmitted"]:
+    for key in ["spxSpotRecordsProduced", "strikeFlowRecordsEmitted", "underlyingStateRecordsEmitted", "marketFlowRecordsEmitted", "strikeScoreRecordsEmitted", "signalRecordsEmitted", "latestSignalRecordsEmitted", "auditRecordsEmitted", "stageAEmittedFinalSignalCount"]:
         lines.append(f"- {key}: {counts.get(key, 0)}")
+    lines.append("")
+    lines.append("## Kafka Key Validation")
+    lines.append(f"- signal key = tradeDate|expiry|evaluationId: {key_validation.get('signalKeyValid', False)}")
+    lines.append(f"- latest-signal key = tradeDate|expiry: {key_validation.get('latestSignalKeyValid', False)}")
+    lines.append(f"- audit key = tradeDate|expiry|evaluationId: {key_validation.get('auditKeyValid', False)}")
     lines.append("")
     lines.append("## Startup Evidence")
     lines.append(f"- Stage A startup log evidence: {stage_a.get('startupLog', '')}")

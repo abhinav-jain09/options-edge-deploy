@@ -12,78 +12,65 @@ for arg in "$@"; do
 done
 
 BUILD_DIR="${HPSF_REPLAY_BUILD_DIR:-build/hpsf-replay-20260612}"
-REPORT="${HPSF_REPLAY_REPORT:-hpsf-replay-report-20260612.md}"
-mkdir -p "$BUILD_DIR"
+ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
+REPORT="${HPSF_REPLAY_REPORT:-$ARTIFACT_DIR/hpsf-replay-report-20260612.md}"
+EVIDENCE="$BUILD_DIR/evidence.json"
+mkdir -p "$BUILD_DIR" "$ARTIFACT_DIR" "$BUILD_DIR/logs" "$ARTIFACT_DIR/logs"
 
-scripts/hpsf/create-replay-topics-20260612.sh ${DRY_RUN:+--dry-run} >"$BUILD_DIR/create-replay-topics.log"
-
-if [[ "$DRY_RUN" == "true" || "$FIXTURE_MODE" == "true" ]]; then
-  cat >"$BUILD_DIR/evidence.json" <<'JSON'
+write_fail_report() {
+  local reason="$1"
+  cat > "$EVIDENCE" <<JSON
 {
-  "counts": {
-    "esTradesRead": 2,
-    "esTradesPublished": 2,
-    "esTotalSize": 10,
-    "esFirstEventTime": "2026-06-12T14:31:04.000Z",
-    "esLastEventTime": "2026-06-12T14:31:05.000Z",
-    "esVwapFirst": 6030.25,
-    "esVwapLast": 6036.10,
-    "opraTcbboRecordsRead": 2,
-    "opraTcbboRecordsNormalized": 2,
-    "unknownInstrumentCount": 0,
-    "dlqCount": 0,
-    "spxSpotRecordsProduced": 1,
-    "strikeFlowRecordsEmitted": 2,
-    "marketFlowRecordsEmitted": 1,
-    "strikeScoreRecordsEmitted": 1,
-    "signalRecordsEmitted": 1,
-    "latestSignalRecordsEmitted": 1,
-    "auditRecordsEmitted": 1
+  "evidenceMode": "${FIXTURE_MODE:+FIXTURE}${DRY_RUN:+DRY_RUN}",
+  "jenkins": {
+    "buildUrl": "${BUILD_URL:-}",
+    "buildNumber": "${BUILD_NUMBER:-}",
+    "commitSha": "${GIT_COMMIT:-${CODE_GIT_SHA:-}}",
+    "jobName": "${JOB_NAME:-}"
   },
-  "esSelection": {
-    "referenceMode": "PINNED_RAW_CONTRACT",
-    "requestedSymbol": "ESM6",
-    "requestedStypeIn": "raw_symbol",
-    "selectedSymbol": "ESM6",
-    "selectedStypeIn": "raw_symbol",
-    "resolvedRawSymbol": "ESM6",
-    "resolvedInstrumentId": "42140864",
-    "selectionReason": "PINNED_RAW_CONTRACT selected ESM6",
-    "resolution": {
-      "resolvedIntervals": [
-        {"rawSymbol": "ESM6", "instrumentId": "42140864", "startTime": "2026-06-12T13:30:00Z", "endTime": "2026-06-12T20:00:00Z", "source": "DATABENTO_SYMBOLOGY"}
-      ]
-    },
-    "candidates": [
-      {"symbol": "ESM6", "selected": true, "reason": "PINNED_RAW_CONTRACT selected ESM6", "stats": {"tradeCount": 2, "totalSize": 10}},
-      {"symbol": "ESU6", "selected": false, "reason": "NEXT_CONTRACT_VOLUME_COMPARISON", "stats": {"tradeCount": 1, "totalSize": 4}}
-    ]
+  "replay": {
+    "date": "${REPLAY_DATE:-2026-06-12}",
+    "start": "${REPLAY_START:-2026-06-12T13:30:00Z}",
+    "end": "${REPLAY_END:-2026-06-12T20:00:00Z}",
+    "topicPrefix": "${TOPIC_PREFIX:-options.replay.20260612}",
+    "opraDataset": "${OPRA_DATASET:-OPRA.PILLAR}",
+    "opraSchema": "${OPRA_SCHEMA:-tcbbo}",
+    "esDataset": "${ES_DATASET:-GLBX.MDP3}",
+    "esSchema": "${ES_SCHEMA:-trades}",
+    "spxSpotSource": "${SPX_SPOT_SOURCE:-}"
   },
-  "stageA": {"started": true, "startupLog": "HPSF Stage A topology enabled; HPSF Stage A consuming options.replay.20260612.opra.tcbbo; HPSF Stage A producing options.replay.20260612.hpsf.strike-flow"},
-  "stageB": {"started": true, "startupLog": "HPSF Stage B topology enabled; HPSF Stage B consuming options.replay.20260612.hpsf.strike-flow; HPSF Stage B consuming options.replay.20260612.hpsf.underlying-state; HPSF Stage B producing options.replay.20260612.hpsf.signal"},
-  "topicConfigs": {
-    "options.replay.20260612.hpsf.signal": "cleanup.policy=delete,retention.ms=2592000000,min.insync.replicas=1,compression.type=lz4",
-    "options.replay.20260612.hpsf.latest-signal": "cleanup.policy=compact,delete,retention.ms=2592000000,min.insync.replicas=1,compression.type=lz4"
-  },
-  "samples": {
-    "signal": {"evaluationId": "SPX-20260612-143110100", "tradeDate": "2026-06-12", "expiry": "2026-06-12", "action": "NO_TRADE", "setup": "VWAP_RECLAIM", "orderInstruction": {"enabled": false}},
-    "latestSignal": {"evaluationId": "SPX-20260612-143110100", "tradeDate": "2026-06-12", "expiry": "2026-06-12", "orderInstruction": {"enabled": false}},
-    "audit": {"evaluationId": "SPX-20260612-143110100", "tradeDate": "2026-06-12", "expiry": "2026-06-12", "selectedAction": "NO_TRADE"}
-  },
-  "actionCounts": {"NO_TRADE": 1},
-  "gateReasonCounts": {"MARKET_SCORE_BELOW_THRESHOLD": 1},
-  "topExecutionStrikes": ["6005 CALL count=1"],
-  "topFlowAnchors": ["6005 CALL count=1"],
-  "missingScenarioNotes": ["Fixture-mode report validates replay gate mechanics; live Databento historical pull requires configured Databento credentials."],
+  "counts": {},
+  "esSelection": {},
+  "stageA": {"started": false, "startupLog": ""},
+  "stageB": {"started": false, "startupLog": ""},
+  "keyValidation": {"signalKeyValid": false, "latestSignalKeyValid": false, "auditKeyValid": false},
+  "samples": {},
+  "missingScenarioNotes": ["$reason"],
   "orderInstructionEnabledTrueFound": false
 }
 JSON
-else
-  : "${HPSF_REPLAY_EVIDENCE_JSON:?HPSF_REPLAY_EVIDENCE_JSON is required outside --dry-run/--fixture-mode}"
-  cp "$HPSF_REPLAY_EVIDENCE_JSON" "$BUILD_DIR/evidence.json"
+  scripts/hpsf/generate-hpsf-replay-report-20260612.py --input "$EVIDENCE" --output "$REPORT" >/dev/null || true
+  cp "$EVIDENCE" "$ARTIFACT_DIR/hpsf-replay-summary.json"
+}
+
+if [[ "$DRY_RUN" == "true" || "$FIXTURE_MODE" == "true" ]]; then
+  write_fail_report "Dry-run/fixture replay is not valid HPSF-82A release evidence. Run Jenkins with real Databento replay evidence."
+  echo "HPSF replay gate failed closed; report=$REPORT" >&2
+  exit 1
 fi
 
-scripts/hpsf/generate-hpsf-replay-report-20260612.py --input "$BUILD_DIR/evidence.json" --output "$REPORT"
+if [[ -n "${HPSF_REPLAY_EVIDENCE_JSON:-}" ]]; then
+  scripts/hpsf/validate-replay-output.sh
+  scripts/hpsf/generate-replay-report.sh
+else
+  scripts/hpsf/create-replay-topics-20260612.sh > "$BUILD_DIR/create-replay-topics.log"
+  scripts/hpsf/download-databento-history.sh
+  scripts/hpsf/publish-historical-replay.sh
+  scripts/hpsf/validate-replay-output.sh --final
+  scripts/hpsf/generate-replay-report.sh
+fi
+
+cp -R "$BUILD_DIR/logs/." "$ARTIFACT_DIR/logs/" 2>/dev/null || true
 
 grep -F 'Final PASS/FAIL: PASS' "$REPORT" >/dev/null
 grep -F 'orderInstruction.enabled=true ever appeared: NO' "$REPORT" >/dev/null

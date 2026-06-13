@@ -1,66 +1,362 @@
 pipeline {
   agent any
+  options {
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+  }
 
   parameters {
     string(name: 'REPLAY_DATE', defaultValue: '2026-06-12', description: 'Historical replay date')
-    booleanParam(name: 'FIXTURE_MODE', defaultValue: true, description: 'Use deterministic fixture evidence when Databento credentials are unavailable')
-    booleanParam(name: 'DRY_RUN', defaultValue: false, description: 'Validate scripts without Kafka writes')
+    string(name: 'REPLAY_START', defaultValue: '2026-06-12T13:30:00Z', description: 'Replay start UTC')
+    string(name: 'REPLAY_END', defaultValue: '2026-06-12T20:00:00Z', description: 'Replay end UTC')
+    string(name: 'OPRA_DATASET', defaultValue: 'OPRA.PILLAR', description: 'Databento OPRA dataset')
+    string(name: 'OPRA_SCHEMA', defaultValue: 'tcbbo', description: 'Databento OPRA schema')
+    string(name: 'ES_DATASET', defaultValue: 'GLBX.MDP3', description: 'Databento ES dataset')
+    string(name: 'ES_SCHEMA', defaultValue: 'trades', description: 'Databento ES schema')
+    choice(name: 'ES_REFERENCE_MODE', choices: ['PINNED_RAW_CONTRACT', 'CONTINUOUS_FRONT', 'AUTO_LIQUIDITY_SELECT'], description: 'ES reference mode')
+    string(name: 'ES_SYMBOL', defaultValue: 'ESM6', description: 'Selected ES symbol for pinned replay')
+    string(name: 'ES_STYPE_IN', defaultValue: 'raw_symbol', description: 'Databento stype_in for selected ES symbol')
+    booleanParam(name: 'COMPARE_NEXT_CONTRACT_VOLUME', defaultValue: true, description: 'Record ESM6 vs ESU6 comparison')
+    string(name: 'NEXT_CONTRACT_SYMBOL', defaultValue: 'ESU6', description: 'Next ES contract for comparison')
+    string(name: 'TOPIC_PREFIX', defaultValue: 'options.replay.20260612', description: 'Replay topic prefix')
+    choice(name: 'REPLAY_SPEED', choices: ['FAST', 'REALTIME'], description: 'Replay publishing speed')
+    string(name: 'HPSF_MODE', defaultValue: 'REPLAY', description: 'HPSF mode')
+    string(name: 'HPSF_STATE_DIR', defaultValue: '/home/options-edge/data/kafka-streams/hpsf-replay-20260612', description: 'Remote HPSF replay state dir')
+    string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-processing:dev', description: 'HPSF processing image')
+    string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '/home/options-edge/data/hpsf-replay/20260612', description: 'Prepared Databento JSONL replay files on Jenkins/remote')
+    string(name: 'HPSF_REPLAY_EVIDENCE_JSON', defaultValue: '', description: 'Optional prebuilt real replay evidence JSON from a completed replay run')
+    string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret text credential for Databento API key')
+    string(name: 'BUGZILLA_URL', defaultValue: 'http://192.168.100.252:8092', description: 'Bugzilla base URL')
+    string(name: 'BUGZILLA_USER', defaultValue: 'admin@options-edge.local', description: 'Bugzilla user')
+    password(name: 'BUGZILLA_PASSWORD', defaultValue: '', description: 'Bugzilla password/token for replay comment')
   }
 
   environment {
+    PATH = "/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
     KAFKA_TOPIC_REPLICATION_FACTOR = '1'
     KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
+    KAFKA_SCHEMA_REGISTRY_URL = "${env.KAFKA_SCHEMA_REGISTRY_URL ?: 'http://192.168.100.252:8082'}"
+    NAMESPACE = "${env.NAMESPACE ?: 'options-edge'}"
+    HPSF_REPLAY_BUILD_DIR = 'build/hpsf-replay-20260612'
+    HPSF_REPLAY_ARTIFACT_DIR = 'artifacts'
+    HPSF_REPLAY_REPORT = 'artifacts/hpsf-replay-report-20260612.md'
   }
 
   stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh '''
+          set -euo pipefail
+          git rev-parse HEAD > build-git-sha.txt
+          mkdir -p artifacts/logs build/hpsf-replay-20260612/logs .replay
+        '''
+      }
+    }
+
     stage('Checkout repos') {
-      steps { checkout scm }
+      steps {
+        sh '''
+          set -euo pipefail
+          rm -rf .replay
+          mkdir -p .replay
+          git clone --depth 1 git@github.com:abhinav-jain09/options-edge.git .replay/options-edge
+          git clone --depth 1 git@github.com:abhinav-jain09/options-edge-contracts.git .replay/options-edge-contracts
+          git clone --depth 1 git@github.com:abhinav-jain09/options-edge-databento-feed.git .replay/options-edge-databento-feed
+          git clone --depth 1 git@github.com:abhinav-jain09/options-edge-processing.git .replay/options-edge-processing
+          git clone --depth 1 git@github.com:abhinav-jain09/options-edge-integration-test.git .replay/options-edge-integration-test
+          git clone --depth 1 git@github.com:abhinav-jain09/option-edge-feed-gateway.git .replay/option-edge-feed-gateway || true
+        '''
+      }
     }
-    stage('Build contracts') {
-      steps { sh 'echo Build contracts stage delegated to upstream multirepo checkout' }
+
+    stage('Build') {
+      steps {
+        sh '''
+          set -euo pipefail
+          (cd .replay/options-edge-contracts && mvn -B test package)
+          (cd .replay/options-edge-databento-feed && python3 -m compileall src && python3 -m unittest discover -s tests -p 'test*.py')
+          (cd .replay/options-edge-processing && mvn -B -pl hpsf-processing-service -am test package)
+          (cd .replay/options-edge-integration-test && mvn -B test package)
+        '''
+      }
     }
-    stage('Build Databento feed replay tooling') {
-      steps { sh 'echo Build Databento feed replay tooling' }
+
+    stage('Static safety check') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export HPSF_REPO_ROOTS="$PWD:$PWD/.replay/options-edge:$PWD/.replay/options-edge-databento-feed:$PWD/.replay/options-edge-processing:$PWD/.replay/options-edge-integration-test"
+          scripts/hpsf/validate-hpsf-spec-compliance.sh
+        '''
+      }
     }
-    stage('Build HPSF processing') {
-      steps { sh 'echo Build HPSF processing' }
-    }
+
     stage('Create replay topics') {
-      steps { sh 'scripts/hpsf/create-replay-topics-20260612.sh ${DRY_RUN:+--dry-run}' }
+      steps {
+        sh '''
+          set -euo pipefail
+          scripts/hpsf/create-replay-topics-20260612.sh | tee artifacts/logs/create-replay-topics.log
+        '''
+      }
     }
-    stage('Download/read Databento historical data') {
-      steps { sh 'echo Resolve ES reference and read Databento historical OPRA/ES/SPX data' }
+
+    stage('Resolve ES reference') {
+      steps {
+        withCredentials([string(credentialsId: params.DATABENTO_API_KEY_CREDENTIAL_ID, variable: 'DATABENTO_API_KEY')]) {
+          sh '''
+            set -euo pipefail
+            export REPLAY_DATE="${REPLAY_DATE}"
+            export REPLAY_START="${REPLAY_START}"
+            export REPLAY_END="${REPLAY_END}"
+            export OPRA_DATASET="${OPRA_DATASET}"
+            export OPRA_SCHEMA="${OPRA_SCHEMA}"
+            export ES_DATASET="${ES_DATASET}"
+            export ES_SCHEMA="${ES_SCHEMA}"
+            export ES_REFERENCE_MODE="${ES_REFERENCE_MODE}"
+            export ES_SYMBOL="${ES_SYMBOL}"
+            export ES_STYPE_IN="${ES_STYPE_IN}"
+            export COMPARE_NEXT_CONTRACT_VOLUME="${COMPARE_NEXT_CONTRACT_VOLUME}"
+            export NEXT_CONTRACT_SYMBOL="${NEXT_CONTRACT_SYMBOL}"
+            export HPSF_REPLAY_SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR}"
+            scripts/hpsf/download-databento-history.sh | tee artifacts/logs/resolve-es-reference.log
+          '''
+        }
+      }
     }
-    stage('Publish replay OPRA ES SPX records') {
-      steps { sh 'echo Publish replay records preserving eventTime' }
+
+    stage('Download / load historical Databento data') {
+      steps {
+        sh '''
+          set -euo pipefail
+          test -s build/hpsf-replay-20260612/download-summary.json
+          cp build/hpsf-replay-20260612/download-summary.json artifacts/hpsf-download-summary.json
+        '''
+      }
     }
+
+    stage('Publish replay input records') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export REPLAY_DATE="${REPLAY_DATE}"
+          export REPLAY_START="${REPLAY_START}"
+          export REPLAY_END="${REPLAY_END}"
+          export OPRA_DATASET="${OPRA_DATASET}"
+          export OPRA_SCHEMA="${OPRA_SCHEMA}"
+          export ES_DATASET="${ES_DATASET}"
+          export ES_SCHEMA="${ES_SCHEMA}"
+          export ES_REFERENCE_MODE="${ES_REFERENCE_MODE}"
+          export ES_SYMBOL="${ES_SYMBOL}"
+          export ES_STYPE_IN="${ES_STYPE_IN}"
+          export COMPARE_NEXT_CONTRACT_VOLUME="${COMPARE_NEXT_CONTRACT_VOLUME}"
+          export NEXT_CONTRACT_SYMBOL="${NEXT_CONTRACT_SYMBOL}"
+          export TOPIC_PREFIX="${TOPIC_PREFIX}"
+          export REPLAY_SPEED="${REPLAY_SPEED}"
+          export HPSF_REPLAY_SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR}"
+          export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"
+          scripts/hpsf/publish-historical-replay.sh | tee artifacts/logs/publish-historical-replay.log
+        '''
+      }
+    }
+
     stage('Run Stage A replay') {
-      steps { sh 'echo Run Stage A replay with options.replay.20260612.opra.tcbbo' }
+      steps {
+        sh '''
+          set -euo pipefail
+          pod="hpsf-stage-a-replay-20260612"
+          kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --restart=Never \
+            --env=APP_MARKET_DATA_SOURCE=DATABENTO \
+            --env=HPSF_MODE="$HPSF_MODE" \
+            --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
+            --env=HPSF_ENABLED=true \
+            --env=HPSF_TOPOLOGY_ENABLED=true \
+            --env=HPSF_STAGE_A_ENABLED=true \
+            --env=HPSF_STAGE_B_ENABLED=false \
+            --env=HPSF_UNDERLYING_STATE_ENABLED=false \
+            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-a-replay-20260612 \
+            --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-a" \
+            --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
+            --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
+            --env=KAFKA_SCHEMA_REGISTRY_URL="$KAFKA_SCHEMA_REGISTRY_URL" \
+            --env=HPSF_TOPIC_OPRA_TCBBO="$TOPIC_PREFIX.opra.tcbbo" \
+            --env=HPSF_TOPIC_STRIKE_FLOW="$TOPIC_PREFIX.hpsf.strike-flow" \
+            --env=HPSF_TOPIC_SIGNAL="$TOPIC_PREFIX.hpsf.signal" \
+            --env=HPSF_TOPIC_DLQ="$TOPIC_PREFIX.hpsf.dlq" \
+            --env=HPSF_ORDER_PLACEMENT_ENABLED=false \
+            --env=ORDER_PLACEMENT_ENABLED=false
+          kubectl -n "$NAMESPACE" wait --for=condition=Ready pod/"$pod" --timeout=180s
+          sleep 20
+          kubectl -n "$NAMESPACE" logs "$pod" --tail=300 > artifacts/logs/stage-a.log || true
+          grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing' artifacts/logs/stage-a.log
+        '''
+      }
     }
-    stage('Run underlying replay') {
-      steps { sh 'echo Run underlying replay and produce options.replay.20260612.hpsf.underlying-state' }
+
+    stage('Validate Stage A replay') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export REPLAY_DATE="${REPLAY_DATE}"
+          export TOPIC_PREFIX="${TOPIC_PREFIX}"
+          scripts/hpsf/validate-replay-output.sh --stage-a-only | tee artifacts/logs/validate-stage-a.log
+        '''
+      }
     }
+
+    stage('Run underlying replay processor') {
+      steps {
+        sh '''
+          set -euo pipefail
+          pod="hpsf-underlying-replay-20260612"
+          kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --restart=Never \
+            --env=APP_MARKET_DATA_SOURCE=DATABENTO \
+            --env=HPSF_MODE="$HPSF_MODE" \
+            --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
+            --env=HPSF_ENABLED=true \
+            --env=HPSF_TOPOLOGY_ENABLED=true \
+            --env=HPSF_STAGE_A_ENABLED=false \
+            --env=HPSF_STAGE_B_ENABLED=false \
+            --env=HPSF_UNDERLYING_STATE_ENABLED=true \
+            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-underlying-replay-20260612 \
+            --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/underlying" \
+            --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
+            --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
+            --env=KAFKA_SCHEMA_REGISTRY_URL="$KAFKA_SCHEMA_REGISTRY_URL" \
+            --env=HPSF_TOPIC_UNDERLYING_ES_TRADES="underlying.replay.20260612.es.trades" \
+            --env=HPSF_TOPIC_UNDERLYING_SPX_PRICE="underlying.replay.20260612.spx.price" \
+            --env=HPSF_TOPIC_UNDERLYING_STATE="$TOPIC_PREFIX.hpsf.underlying-state" \
+            --env=HPSF_ORDER_PLACEMENT_ENABLED=false \
+            --env=ORDER_PLACEMENT_ENABLED=false
+          kubectl -n "$NAMESPACE" wait --for=condition=Ready pod/"$pod" --timeout=180s
+          sleep 20
+          kubectl -n "$NAMESPACE" logs "$pod" --tail=300 > artifacts/logs/underlying.log || true
+          grep -E 'HPSF underlying replay topology enabled|underlying replay consuming|underlying replay producing' artifacts/logs/underlying.log
+        '''
+      }
+    }
+
     stage('Run Stage B replay') {
-      steps { sh 'echo Run Stage B replay with HPSF_STAGE_B_ENABLED=true' }
+      steps {
+        sh '''
+          set -euo pipefail
+          pod="hpsf-stage-b-replay-20260612"
+          kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --restart=Never \
+            --env=APP_MARKET_DATA_SOURCE=DATABENTO \
+            --env=HPSF_MODE="$HPSF_MODE" \
+            --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
+            --env=HPSF_ENABLED=true \
+            --env=HPSF_TOPOLOGY_ENABLED=true \
+            --env=HPSF_STAGE_A_ENABLED=false \
+            --env=HPSF_STAGE_B_ENABLED=true \
+            --env=HPSF_UNDERLYING_STATE_ENABLED=false \
+            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-replay-20260612 \
+            --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-b" \
+            --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
+            --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
+            --env=KAFKA_SCHEMA_REGISTRY_URL="$KAFKA_SCHEMA_REGISTRY_URL" \
+            --env=HPSF_TOPIC_STRIKE_FLOW="$TOPIC_PREFIX.hpsf.strike-flow" \
+            --env=HPSF_TOPIC_UNDERLYING_STATE="$TOPIC_PREFIX.hpsf.underlying-state" \
+            --env=HPSF_TOPIC_MARKET_FLOW="$TOPIC_PREFIX.hpsf.market-flow" \
+            --env=HPSF_TOPIC_STRIKE_SCORE="$TOPIC_PREFIX.hpsf.strike-score" \
+            --env=HPSF_TOPIC_SIGNAL="$TOPIC_PREFIX.hpsf.signal" \
+            --env=HPSF_TOPIC_LATEST_SIGNAL="$TOPIC_PREFIX.hpsf.latest-signal" \
+            --env=HPSF_TOPIC_AUDIT="$TOPIC_PREFIX.hpsf.audit" \
+            --env=HPSF_TOPIC_DLQ="$TOPIC_PREFIX.hpsf.dlq" \
+            --env=HPSF_ORDER_PLACEMENT_ENABLED=false \
+            --env=ORDER_PLACEMENT_ENABLED=false
+          kubectl -n "$NAMESPACE" wait --for=condition=Ready pod/"$pod" --timeout=180s
+          sleep 30
+          kubectl -n "$NAMESPACE" logs "$pod" --tail=300 > artifacts/logs/stage-b.log || true
+          grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b.log
+        '''
+      }
     }
-    stage('Consume replay latest-signal and audit') {
-      steps { sh 'echo Consume replay latest-signal and audit topics' }
+
+    stage('Validate replay outputs') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export REPLAY_DATE="${REPLAY_DATE}"
+          export REPLAY_START="${REPLAY_START}"
+          export REPLAY_END="${REPLAY_END}"
+          export OPRA_DATASET="${OPRA_DATASET}"
+          export OPRA_SCHEMA="${OPRA_SCHEMA}"
+          export ES_DATASET="${ES_DATASET}"
+          export ES_SCHEMA="${ES_SCHEMA}"
+          export TOPIC_PREFIX="${TOPIC_PREFIX}"
+          scripts/hpsf/validate-replay-output.sh --final | tee artifacts/logs/validate-replay-output.log
+        '''
+      }
     }
+
     stage('Generate replay report') {
       steps {
         sh '''
-          args=""
-          if [ "${DRY_RUN}" = "true" ]; then args="$args --dry-run"; fi
-          if [ "${FIXTURE_MODE}" = "true" ]; then args="$args --fixture-mode"; fi
-          scripts/hpsf/run-hpsf-replay-20260612.sh $args
+          set -euo pipefail
+          export REPLAY_DATE="${REPLAY_DATE}"
+          export REPLAY_START="${REPLAY_START}"
+          export REPLAY_END="${REPLAY_END}"
+          export OPRA_DATASET="${OPRA_DATASET}"
+          export OPRA_SCHEMA="${OPRA_SCHEMA}"
+          export ES_DATASET="${ES_DATASET}"
+          export ES_SCHEMA="${ES_SCHEMA}"
+          export TOPIC_PREFIX="${TOPIC_PREFIX}"
+          scripts/hpsf/generate-replay-report.sh | tee artifacts/logs/generate-replay-report.log
+          grep -F 'Final PASS/FAIL: PASS' artifacts/hpsf-replay-report-20260612.md
+          grep -F 'orderInstruction.enabled=true ever appeared: NO' artifacts/hpsf-replay-report-20260612.md
         '''
       }
-      post {
-        always { archiveArtifacts artifacts: 'hpsf-replay-report-20260612.md,build/hpsf-replay-20260612/**', fingerprint: true }
+    }
+
+    stage('Archive artifacts') {
+      steps {
+        archiveArtifacts artifacts: 'artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/hpsf-sample-signal.json,artifacts/hpsf-sample-latest-signal.json,artifacts/hpsf-sample-audit.json,artifacts/logs/**', fingerprint: true, allowEmptyArchive: false
       }
     }
-    stage('Comment Bugzilla with replay result') {
-      steps { sh 'echo Bugzilla comment includes build URL, commit SHA, replay date, selected ES symbol, ES trades read, signal/latest/audit counts, PASS/FAIL' }
+
+    stage('Bugzilla update') {
+      steps {
+        sh '''
+          set -euo pipefail
+          report_url="${BUILD_URL:-}artifact/artifacts/hpsf-replay-report-20260612.md"
+          summary="HPSF-82A replay PASS. Build: ${BUILD_URL:-unknown}. Report: ${report_url}. Selected ES: ${ES_SYMBOL}/${ES_STYPE_IN}. See archived hpsf-replay-summary.json for counts and samples."
+          echo "$summary" > artifacts/logs/bugzilla-comment.txt
+          if [ -n "${BUGZILLA_PASSWORD:-}" ]; then
+            curl -fsS -X POST "${BUGZILLA_URL}/rest/bug/74/comment" \
+              -H 'Content-Type: application/json' \
+              -d "$(python3 -c 'import json,os; print(json.dumps({"comment": open("artifacts/logs/bugzilla-comment.txt").read()}))')" \
+              -u "${BUGZILLA_USER}:${BUGZILLA_PASSWORD}" || true
+          else
+            echo 'BUGZILLA_PASSWORD not provided; archived Bugzilla comment text only.'
+          fi
+        '''
+      }
+    }
+  }
+
+  post {
+    unsuccessful {
+      sh '''
+        set +e
+        mkdir -p artifacts/logs build/hpsf-replay-20260612/logs
+        if [ ! -s artifacts/hpsf-replay-report-20260612.md ]; then
+          scripts/hpsf/run-hpsf-replay-20260612.sh --dry-run || true
+        fi
+      '''
+      archiveArtifacts artifacts: 'artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/logs/**,build/hpsf-replay-20260612/**', fingerprint: true, allowEmptyArchive: false
+    }
+    always {
+      sh '''
+        set +e
+        kubectl -n "${NAMESPACE:-options-edge}" delete pod hpsf-stage-a-replay-20260612 --ignore-not-found=true
+        kubectl -n "${NAMESPACE:-options-edge}" delete pod hpsf-underlying-replay-20260612 --ignore-not-found=true
+        kubectl -n "${NAMESPACE:-options-edge}" delete pod hpsf-stage-b-replay-20260612 --ignore-not-found=true
+      '''
     }
   }
 }
