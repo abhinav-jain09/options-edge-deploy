@@ -84,7 +84,12 @@ pipeline {
           (cd .replay/options-edge-contracts && mvn -B test package)
           (
             cd .replay/options-edge-databento-feed
-            python3 -m venv .venv
+            FEED_PYTHON="$(command -v python3.13 || command -v python3.12 || command -v python3.11 || true)"
+            if [ -z "$FEED_PYTHON" ]; then
+              echo "Python 3.11+ is required for options-edge-databento-feed historical replay" >&2
+              exit 1
+            fi
+            "$FEED_PYTHON" -m venv .venv
             .venv/bin/python -m pip install --upgrade pip
             .venv/bin/python -m pip install -e .
             .venv/bin/python -m compileall src
