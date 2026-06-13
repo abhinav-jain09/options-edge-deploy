@@ -16,6 +16,8 @@ DOWNLOAD_SCRIPT = ROOT / "scripts" / "hpsf" / "download-databento-history.sh"
 PUBLISH_SCRIPT = ROOT / "scripts" / "hpsf" / "publish-historical-replay.sh"
 VALIDATE_OUTPUT_SCRIPT = ROOT / "scripts" / "hpsf" / "validate-replay-output.sh"
 GENERATE_REPORT_SCRIPT = ROOT / "scripts" / "hpsf" / "generate-replay-report.sh"
+MERGE_STAGE_B_METRICS_SCRIPT = ROOT / "scripts" / "hpsf" / "merge-stage-b-performance-metrics.py"
+MERGE_STAGE_B_METRICS_TEST = ROOT / "scripts" / "hpsf" / "test_merge_stage_b_performance_metrics.py"
 
 
 class HpsfReplayReportGateTest(unittest.TestCase):
@@ -39,6 +41,15 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("signalRecordsEmitted: 1", report)
         self.assertIn("Stage A startup log evidence", report)
         self.assertIn("Stage B startup log evidence", report)
+
+    def test_ReplayReportIncludesStageBUnderlyingHealthTest(self) -> None:
+        report = generate_report(evidence())
+
+        self.assertIn("## Stage B Underlying-State Health", report)
+        self.assertIn("underlyingStateRecordsReceived: 10", report)
+        self.assertIn("underlyingStateLookupHitCount: 8", report)
+        self.assertIn("Stage B underlying join healthy: true", report)
+        self.assertIn("Stage B VWAP usable: true", report)
 
     def test_ReplayReportFailsWhenNoSignalTest(self) -> None:
         data = evidence()
@@ -74,6 +85,15 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("underlying-state topic is empty", report)
 
+    def test_ReplayReportFailsWhenStageBUnderlyingLookupHitZeroTest(self) -> None:
+        data = evidence()
+        data["stageBPerformance"]["underlyingStateLookupHitCount"] = 0
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Stage B underlying join unhealthy", report)
+        self.assertIn("underlyingStateLookupHitCount: 0", report)
+
     def test_ReplayReportFailsWhenKeysInvalidTest(self) -> None:
         data = evidence()
         data["keyValidation"]["latestSignalKeyValid"] = False
@@ -85,6 +105,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
     def test_JenkinsReplayScriptCreatesTopicsTest(self) -> None:
         for script in [RUN_SCRIPT, VALIDATE_SPEC, DOWNLOAD_SCRIPT, PUBLISH_SCRIPT, VALIDATE_OUTPUT_SCRIPT, GENERATE_REPORT_SCRIPT]:
             subprocess.run(["bash", "-n", str(script)], check=True)
+        subprocess.run(["python3", str(MERGE_STAGE_B_METRICS_TEST)], check=True)
         text = RUN_SCRIPT.read_text()
 
         self.assertIn("create-replay-topics-20260612.sh", text)
@@ -129,6 +150,12 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("artifacts/logs/stage-b-startup.log", pipeline)
         self.assertIn("artifacts/logs/stage-b-runtime.log", pipeline)
         self.assertIn("cat artifacts/logs/stage-b-startup.log artifacts/logs/stage-b-runtime.log > artifacts/logs/stage-b.log", pipeline)
+        self.assertIn("python3 scripts/hpsf/test_merge_stage_b_performance_metrics.py", pipeline)
+        self.assertIn("Merge Stage B Metrics Into Replay Summary", pipeline)
+        self.assertIn("python3 scripts/hpsf/merge-stage-b-performance-metrics.py", pipeline)
+        self.assertIn("--stage-b-log artifacts/logs/stage-b.log", pipeline)
+        self.assertIn("--summary artifacts/hpsf-replay-summary.json", pipeline)
+        self.assertIn("scripts/hpsf/validate-replay-output.sh --final --summary-only", pipeline)
         self.assertIn("options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
@@ -145,12 +172,17 @@ class HpsfReplayReportGateTest(unittest.TestCase):
             "Validate Stage A replay",
             "Run underlying replay processor",
             "Run Stage B replay",
+            "Collect replay outputs",
+            "Merge Stage B Metrics Into Replay Summary",
             "Validate replay outputs",
             "Generate replay report",
             "Archive artifacts",
             "Bugzilla update",
         ]:
             self.assertIn(stage, pipeline)
+        self.assertLess(pipeline.index("Run Stage B replay"), pipeline.index("Merge Stage B Metrics Into Replay Summary"))
+        self.assertLess(pipeline.index("Merge Stage B Metrics Into Replay Summary"), pipeline.index("Validate replay outputs"))
+        self.assertLess(pipeline.index("Merge Stage B Metrics Into Replay Summary"), pipeline.index("Generate replay report"))
 
     def test_download_script_prepares_missing_databento_jsonl(self) -> None:
         text = DOWNLOAD_SCRIPT.read_text()
@@ -253,6 +285,23 @@ esac
             build_dir = root / "build"
             artifact_dir = root / "artifacts"
             build_dir.mkdir()
+            artifact_dir.mkdir()
+            (artifact_dir / "hpsf-replay-summary.json").write_text(
+                json.dumps(
+                    {
+                        "stageBPerformance": {
+                            "underlyingStateRecordsReceived": 10,
+                            "underlyingStateRecordsStored": 10,
+                            "underlyingStateLookupHitCount": 9,
+                            "underlyingStateLookupMissCount": 0,
+                            "underlyingStateNullVwapCount": 0,
+                            "underlyingStateNullDistanceCount": 0,
+                            "healthyUnderlyingStateCount": 10,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
             (root / "build-git-sha.txt").write_text("cafebabe\n", encoding="utf-8")
             (build_dir / "download-summary.json").write_text(
                 json.dumps(
@@ -321,6 +370,7 @@ esac
             evidence_data = json.loads((build_dir / "evidence.json").read_text(encoding="utf-8"))
             self.assertEqual("cafebabe", evidence_data["jenkins"]["commitSha"])
             self.assertTrue(evidence_data["keyValidation"]["signalKeyValid"])
+            self.assertEqual(9, evidence_data["stageBPerformance"]["underlyingStateLookupHitCount"])
             self.assertTrue((artifact_dir / "hpsf-sample-signal.json").exists())
 
     def test_run_script_fixture_mode_fails_closed_with_report(self) -> None:
@@ -468,6 +518,15 @@ def evidence() -> dict:
         },
         "stageA": {"started": True, "startupLog": "HPSF Stage A topology enabled"},
         "stageB": {"started": True, "startupLog": "HPSF Stage B topology enabled"},
+        "stageBPerformance": {
+            "underlyingStateRecordsReceived": 10,
+            "underlyingStateRecordsStored": 10,
+            "underlyingStateLookupHitCount": 8,
+            "underlyingStateLookupMissCount": 0,
+            "underlyingStateNullVwapCount": 0,
+            "underlyingStateNullDistanceCount": 0,
+            "healthyUnderlyingStateCount": 10,
+        },
         "keyValidation": {"signalKeyValid": True, "latestSignalKeyValid": True, "auditKeyValid": True},
         "topicConfigs": {"options.replay.20260612.hpsf.signal": "cleanup.policy=delete"},
         "samples": {

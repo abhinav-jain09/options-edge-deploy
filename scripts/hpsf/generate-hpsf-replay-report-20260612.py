@@ -50,7 +50,46 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     order_enabled = bool(evidence.get("orderInstructionEnabledTrueFound", False))
     stage_a = evidence.get("stageA", {})
     stage_b = evidence.get("stageB", {})
+    stage_b_performance = evidence.get("stageBPerformance", {}) or {}
     topic_configs = evidence.get("topicConfigs", {})
+    stage_b_required = [
+        "underlyingStateRecordsReceived",
+        "underlyingStateRecordsStored",
+        "underlyingStateLookupHitCount",
+        "underlyingStateLookupMissCount",
+        "underlyingStateNullVwapCount",
+        "underlyingStateNullDistanceCount",
+        "healthyUnderlyingStateCount",
+    ]
+
+    def stage_b_counter(name: str) -> int | None:
+        value = stage_b_performance.get(name, counts.get(name))
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    missing_stage_b_counters = [name for name in stage_b_required if stage_b_counter(name) is None]
+    received = stage_b_counter("underlyingStateRecordsReceived")
+    stored = stage_b_counter("underlyingStateRecordsStored")
+    hits = stage_b_counter("underlyingStateLookupHitCount")
+    misses = stage_b_counter("underlyingStateLookupMissCount")
+    null_vwap = stage_b_counter("underlyingStateNullVwapCount")
+    null_distance = stage_b_counter("underlyingStateNullDistanceCount")
+    healthy = stage_b_counter("healthyUnderlyingStateCount")
+    stage_b_join_healthy = (
+        not missing_stage_b_counters
+        and (received or 0) > 0
+        and (stored or 0) > 0
+        and (hits or 0) > 0
+        and (healthy or 0) > 0
+    )
+    stage_b_vwap_usable = (
+        not missing_stage_b_counters
+        and (healthy or 0) > 0
+        and (null_vwap or 0) == 0
+        and (null_distance or 0) == 0
+    )
 
     failures: list[str] = []
     if "FIXTURE" in evidence_mode or "DRY_RUN" in evidence_mode:
@@ -77,6 +116,12 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
         failures.append("latest-signal topic is empty")
     if int(counts.get("auditRecordsEmitted", 0)) <= 0:
         failures.append("audit topic is empty")
+    if missing_stage_b_counters:
+        failures.append(f"Stage B underlying-state counters missing: {missing_stage_b_counters}")
+    if not stage_b_join_healthy:
+        failures.append("Stage B underlying join unhealthy")
+    if not stage_b_vwap_usable:
+        failures.append("Stage B VWAP unusable")
     if order_enabled:
         failures.append("orderInstruction.enabled=true appeared")
     if not stage_a.get("started", False):
@@ -148,6 +193,13 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     lines.append("## HPSF Output Counts")
     for key in ["spxSpotRecordsProduced", "strikeFlowRecordsEmitted", "underlyingStateRecordsEmitted", "marketFlowRecordsEmitted", "strikeScoreRecordsEmitted", "signalRecordsEmitted", "latestSignalRecordsEmitted", "auditRecordsEmitted", "stageAEmittedFinalSignalCount"]:
         lines.append(f"- {key}: {counts.get(key, 0)}")
+    lines.append("")
+    lines.append("## Stage B Underlying-State Health")
+    for key in stage_b_required:
+        value = stage_b_counter(key)
+        lines.append(f"- {key}: {'' if value is None else value}")
+    lines.append(f"- Stage B underlying join healthy: {str(stage_b_join_healthy).lower()}")
+    lines.append(f"- Stage B VWAP usable: {str(stage_b_vwap_usable).lower()}")
     lines.append("")
     lines.append("## Kafka Key Validation")
     lines.append(f"- signal key = tradeDate|expiry|evaluationId: {key_validation.get('signalKeyValid', False)}")

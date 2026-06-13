@@ -99,6 +99,7 @@ pipeline {
           docker build -t "$HPSF_PROCESSING_IMAGE" -f .replay/options-edge-processing/hpsf-processing-service/Dockerfile .replay/options-edge-processing/hpsf-processing-service
           docker push "$HPSF_PROCESSING_IMAGE"
           (cd .replay/options-edge-integration-test && mvn -B test package)
+          python3 scripts/hpsf/test_merge_stage_b_performance_metrics.py
         '''
       }
     }
@@ -311,6 +312,72 @@ pipeline {
       }
     }
 
+    stage('Collect replay outputs') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export REPLAY_DATE="${REPLAY_DATE}"
+          export REPLAY_START="${REPLAY_START}"
+          export REPLAY_END="${REPLAY_END}"
+          export OPRA_DATASET="${OPRA_DATASET}"
+          export OPRA_SCHEMA="${OPRA_SCHEMA}"
+          export ES_DATASET="${ES_DATASET}"
+          export ES_SCHEMA="${ES_SCHEMA}"
+          export TOPIC_PREFIX="${TOPIC_PREFIX}"
+          scripts/hpsf/validate-replay-output.sh --final --collect-only | tee artifacts/logs/collect-replay-output.log
+        '''
+      }
+    }
+
+    stage('Merge Stage B Metrics Into Replay Summary') {
+      steps {
+        sh '''
+          set -euo pipefail
+
+          echo "Merging Stage B performance and underlying-state counters into replay summary"
+
+          test -f artifacts/logs/stage-b.log
+          test -f artifacts/hpsf-replay-summary.json
+          test -f scripts/hpsf/merge-stage-b-performance-metrics.py
+
+          python3 scripts/hpsf/merge-stage-b-performance-metrics.py \
+            --stage-b-log artifacts/logs/stage-b.log \
+            --summary artifacts/hpsf-replay-summary.json
+
+          cp artifacts/hpsf-replay-summary.json build/hpsf-replay-20260612/evidence.json
+
+          echo "Stage B metrics merged into artifacts/hpsf-replay-summary.json"
+
+          python3 - <<'PY'
+import json
+from pathlib import Path
+
+summary_path = Path("artifacts/hpsf-replay-summary.json")
+summary = json.loads(summary_path.read_text())
+
+stage_b = summary.get("stageBPerformance", {})
+counts = summary.get("counts", {})
+
+required = [
+    "underlyingStateRecordsReceived",
+    "underlyingStateRecordsStored",
+    "underlyingStateLookupHitCount",
+    "underlyingStateLookupMissCount",
+    "underlyingStateNullVwapCount",
+    "underlyingStateNullDistanceCount",
+    "healthyUnderlyingStateCount",
+]
+
+missing = [key for key in required if key not in counts and key not in stage_b]
+if missing:
+    raise SystemExit(f"Missing Stage B replay counters after merge: {missing}")
+
+print("Stage B metric merge validation passed")
+PY
+        '''
+      }
+    }
+
     stage('Validate replay outputs') {
       steps {
         sh '''
@@ -323,7 +390,7 @@ pipeline {
           export ES_DATASET="${ES_DATASET}"
           export ES_SCHEMA="${ES_SCHEMA}"
           export TOPIC_PREFIX="${TOPIC_PREFIX}"
-          scripts/hpsf/validate-replay-output.sh --final | tee artifacts/logs/validate-replay-output.log
+          scripts/hpsf/validate-replay-output.sh --final --summary-only | tee artifacts/logs/validate-replay-output.log
         '''
       }
     }
@@ -349,7 +416,7 @@ pipeline {
 
     stage('Archive artifacts') {
       steps {
-        archiveArtifacts artifacts: 'artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/hpsf-sample-signal.json,artifacts/hpsf-sample-latest-signal.json,artifacts/hpsf-sample-audit.json,artifacts/logs/**', fingerprint: true, allowEmptyArchive: false
+        archiveArtifacts artifacts: 'artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/replay-validation-result.json,artifacts/hpsf-sample-signal.json,artifacts/hpsf-sample-latest-signal.json,artifacts/hpsf-sample-audit.json,artifacts/logs/stage-b.log,artifacts/logs/validate-replay-output.log,artifacts/logs/generate-replay-report.log,artifacts/logs/**', fingerprint: true, allowEmptyArchive: false
       }
     }
 
