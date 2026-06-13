@@ -96,6 +96,8 @@ pipeline {
             PYTHONPATH=src .venv/bin/python -m unittest tests.test_hpsf_replay_es_reference tests.test_hpsf_historical_replay tests.test_hpsf_mapping
           )
           (cd .replay/options-edge-processing && mvn -B -pl hpsf-processing-service -am test package)
+          docker build -t "$HPSF_PROCESSING_IMAGE" -f .replay/options-edge-processing/hpsf-processing-service/Dockerfile .replay/options-edge-processing/hpsf-processing-service
+          docker push "$HPSF_PROCESSING_IMAGE"
           (cd .replay/options-edge-integration-test && mvn -B test package)
         '''
       }
@@ -190,7 +192,7 @@ pipeline {
           set -euo pipefail
           pod="hpsf-stage-a-replay-20260612"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --restart=Never \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
@@ -235,7 +237,7 @@ pipeline {
           set -euo pipefail
           pod="hpsf-underlying-replay-20260612"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --restart=Never \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
@@ -268,7 +270,7 @@ pipeline {
           set -euo pipefail
           pod="hpsf-stage-b-replay-20260612"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --restart=Never \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
