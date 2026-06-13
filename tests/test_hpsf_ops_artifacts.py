@@ -99,6 +99,17 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         self.assertNotIn("ibkr-feed-service", text)
         self.assertNotIn("options.ibkr.raw", text)
 
+    def test_stage_b_internal_topic_reset_is_scoped_to_repartition_topics(self) -> None:
+        script = ROOT / "scripts/kafka/reset-hpsf-stage-b-internal-topics.sh"
+        subprocess.run(["bash", "-n", str(script)], check=True)
+        text = script.read_text()
+        self.assertIn("options-edge-hpsf-stage-b-v2-1", text)
+        self.assertIn("-repartition", text)
+        self.assertIn("Refusing to delete unexpected topic name", text)
+        self.assertNotIn("options.hpsf.signal", text)
+        self.assertNotIn("options.hpsf.latest-signal", text)
+        self.assertNotIn("options.ibkr.raw", text)
+
     def test_monitoring_rules_and_scrape_cover_hpsf(self) -> None:
         rules = self.read("scripts/monitoring/hpsf-alert-rules.yaml")
         scrape = self.read("scripts/monitoring/apply-prometheus-scrapes.sh")
@@ -162,6 +173,9 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "HPSF_POSTGRES_WRITER_IMAGE",
             "scripts/kafka/create-hpsf-topics.sh",
             "scripts/kafka/verify-hpsf-topics.sh",
+            "stage('Reset HPSF Stage B Internal Topics')",
+            "scale deployment/hpsf-stage-b-service --replicas=0",
+            "scripts/kafka/reset-hpsf-stage-b-internal-topics.sh",
             "set image deployment/hpsf-stage-a-service",
             "set image deployment/hpsf-stage-b-service",
             "set image deployment/hpsf-postgres-writer-service",

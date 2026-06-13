@@ -152,6 +152,35 @@ pipeline {
         '''
       }
     }
+    stage('Reset HPSF Stage B Internal Topics') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          export HPSF_STAGE_B_STREAMS_APPLICATION_ID="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b-v2-1}"
+
+          kubectl -n options-edge scale deployment/hpsf-stage-b-service --replicas=0 || true
+          for i in $(seq 1 60); do
+            pod_count="$(kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+            if [ "$pod_count" = "0" ]; then
+              echo "hpsf-stage-b-service pods are stopped."
+              break
+            fi
+            echo "Waiting for hpsf-stage-b-service pods to stop; remaining=$pod_count"
+            kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service || true
+            sleep 2
+          done
+          if [ "$pod_count" != "0" ]; then
+            echo "Timed out waiting for hpsf-stage-b-service pods to stop before internal topic reset." >&2
+            kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service || true
+            exit 1
+          fi
+
+          scripts/kafka/reset-hpsf-stage-b-internal-topics.sh
+        '''
+      }
+    }
     stage('Resume Remote Apps') {
       when {
         expression { return params.KAFKA_CLEANUP_TOPICS }
