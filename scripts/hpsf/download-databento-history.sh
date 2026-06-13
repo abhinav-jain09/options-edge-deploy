@@ -16,6 +16,7 @@ SPX_SPOT_SOURCE="${SPX_SPOT_SOURCE:-ES_BASIS_PROXY}"
 SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR:-}"
 DATABENTO_FEED_REPO="${DATABENTO_FEED_REPO:-../options-edge-databento-feed}"
 DATABENTO_FEED_PYTHON="${DATABENTO_FEED_PYTHON:-}"
+REFRESH_SOURCE="${HPSF_REPLAY_REFRESH_SOURCE:-false}"
 BUILD_DIR="${HPSF_REPLAY_BUILD_DIR:-build/hpsf-replay-20260612}"
 ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
 SUMMARY="$BUILD_DIR/download-summary.json"
@@ -59,6 +60,11 @@ fi
 
 mkdir -p "$SOURCE_DIR"
 missing_source=false
+if [[ "$REFRESH_SOURCE" == "true" ]]; then
+  echo "Refreshing Databento replay JSONL files in $SOURCE_DIR"
+  rm -f "$SOURCE_DIR"/opra-definitions.jsonl "$SOURCE_DIR"/opra-tcbbo.jsonl "$SOURCE_DIR"/es-trades.jsonl "$SOURCE_DIR"/spx-price.jsonl
+  missing_source=true
+fi
 for file in opra-definitions.jsonl opra-tcbbo.jsonl es-trades.jsonl spx-price.jsonl; do
   if [[ ! -s "$SOURCE_DIR/$file" ]]; then
     missing_source=true

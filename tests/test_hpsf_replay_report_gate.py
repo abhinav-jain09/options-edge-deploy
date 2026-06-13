@@ -122,6 +122,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn('export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"', pipeline)
         self.assertIn('export DATABENTO_FEED_PYTHON="$PWD/.replay/options-edge-databento-feed/.venv/bin/python"', pipeline)
         self.assertIn("export HPSF_REPLAY_RESET_TOPICS=true", pipeline)
+        self.assertIn("export HPSF_REPLAY_REFRESH_SOURCE=true", pipeline)
+        self.assertIn('kubectl -n "$NAMESPACE" logs "$pod" > artifacts/logs/stage-b.log', pipeline)
         self.assertIn("options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
@@ -154,6 +156,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("DATABENTO_FEED_REPO", text)
         self.assertIn("DATABENTO_FEED_PYTHON", text)
         self.assertIn("import databento", text)
+        self.assertIn("HPSF_REPLAY_REFRESH_SOURCE", text)
+        self.assertIn("Refreshing Databento replay JSONL files", text)
         self.assertIn("Missing or empty replay file after Databento preparation", text)
 
     def test_publish_script_uses_feed_python_with_kafka_dependency(self) -> None:
