@@ -32,7 +32,8 @@ pipeline {
   }
 
   environment {
-    PATH = "/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    JAVA_HOME = '/usr/lib/jvm/java-26'
+    PATH = "/usr/lib/jvm/java-26/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
     KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
     KAFKA_TOPIC_REPLICATION_FACTOR = '1'
     KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
@@ -75,6 +76,10 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          export JAVA_HOME=/usr/lib/jvm/java-26
+          export MAVEN_SKIP_RC=true
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
           (cd .replay/options-edge-contracts && mvn -B test package)
           (cd .replay/options-edge-databento-feed && python3 -m compileall src && python3 -m unittest discover -s tests -p 'test*.py')
           (cd .replay/options-edge-processing && mvn -B -pl hpsf-processing-service -am test package)
