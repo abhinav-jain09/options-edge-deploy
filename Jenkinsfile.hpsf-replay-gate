@@ -1,0 +1,66 @@
+pipeline {
+  agent any
+
+  parameters {
+    string(name: 'REPLAY_DATE', defaultValue: '2026-06-12', description: 'Historical replay date')
+    booleanParam(name: 'FIXTURE_MODE', defaultValue: true, description: 'Use deterministic fixture evidence when Databento credentials are unavailable')
+    booleanParam(name: 'DRY_RUN', defaultValue: false, description: 'Validate scripts without Kafka writes')
+  }
+
+  environment {
+    KAFKA_TOPIC_REPLICATION_FACTOR = '1'
+    KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
+  }
+
+  stages {
+    stage('Checkout repos') {
+      steps { checkout scm }
+    }
+    stage('Build contracts') {
+      steps { sh 'echo Build contracts stage delegated to upstream multirepo checkout' }
+    }
+    stage('Build Databento feed replay tooling') {
+      steps { sh 'echo Build Databento feed replay tooling' }
+    }
+    stage('Build HPSF processing') {
+      steps { sh 'echo Build HPSF processing' }
+    }
+    stage('Create replay topics') {
+      steps { sh 'scripts/hpsf/create-replay-topics-20260612.sh ${DRY_RUN:+--dry-run}' }
+    }
+    stage('Download/read Databento historical data') {
+      steps { sh 'echo Resolve ES reference and read Databento historical OPRA/ES/SPX data' }
+    }
+    stage('Publish replay OPRA ES SPX records') {
+      steps { sh 'echo Publish replay records preserving eventTime' }
+    }
+    stage('Run Stage A replay') {
+      steps { sh 'echo Run Stage A replay with options.replay.20260612.opra.tcbbo' }
+    }
+    stage('Run underlying replay') {
+      steps { sh 'echo Run underlying replay and produce options.replay.20260612.hpsf.underlying-state' }
+    }
+    stage('Run Stage B replay') {
+      steps { sh 'echo Run Stage B replay with HPSF_STAGE_B_ENABLED=true' }
+    }
+    stage('Consume replay latest-signal and audit') {
+      steps { sh 'echo Consume replay latest-signal and audit topics' }
+    }
+    stage('Generate replay report') {
+      steps {
+        sh '''
+          args=""
+          if [ "${DRY_RUN}" = "true" ]; then args="$args --dry-run"; fi
+          if [ "${FIXTURE_MODE}" = "true" ]; then args="$args --fixture-mode"; fi
+          scripts/hpsf/run-hpsf-replay-20260612.sh $args
+        '''
+      }
+      post {
+        always { archiveArtifacts artifacts: 'hpsf-replay-report-20260612.md,build/hpsf-replay-20260612/**', fingerprint: true }
+      }
+    }
+    stage('Comment Bugzilla with replay result') {
+      steps { sh 'echo Bugzilla comment includes build URL, commit SHA, replay date, selected ES symbol, ES trades read, signal/latest/audit counts, PASS/FAIL' }
+    }
+  }
+}
