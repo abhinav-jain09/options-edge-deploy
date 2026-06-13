@@ -120,6 +120,10 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn(".venv/bin/python -m pip install -e .", pipeline)
         self.assertIn('export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"', pipeline)
         self.assertIn('export DATABENTO_FEED_PYTHON="$PWD/.replay/options-edge-databento-feed/.venv/bin/python"', pipeline)
+        self.assertIn("export HPSF_REPLAY_RESET_TOPICS=true", pipeline)
+        self.assertIn("options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
+        self.assertIn("options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
+        self.assertIn("options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         for stage in [
             "Checkout",
             "Checkout repos",

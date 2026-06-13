@@ -12,6 +12,7 @@ done
 REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
 BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-}"
+RESET_TOPICS="${HPSF_REPLAY_RESET_TOPICS:-false}"
 
 if [[ "$REPLICATION_FACTOR" != "1" ]]; then
   echo "HPSF replay RF=1 cluster rule violated: KAFKA_TOPIC_REPLICATION_FACTOR=$REPLICATION_FACTOR" >&2
@@ -93,6 +94,40 @@ wait_for_topic() {
   return 1
 }
 
+wait_for_topic_deleted() {
+  local topic="$1"
+  local attempt
+  for attempt in $(seq 1 60); do
+    if [[ -z "$(describe_topic_header "$topic")" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Timed out waiting for Kafka topic deletion: $topic" >&2
+  return 1
+}
+
+reset_replay_topics() {
+  local spec topic
+  if [[ "$RESET_TOPICS" != "true" ]]; then
+    return 0
+  fi
+  echo "Resetting HPSF replay topics before replay run"
+  for spec in "${REPLAY_TOPIC_SPECS[@]}"; do
+    IFS='|' read -r topic _ <<<"$spec"
+    if [[ "$DRY_RUN" == "true" || -n "$(describe_topic_header "$topic")" ]]; then
+      run_cmd kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --delete --topic "$topic"
+    fi
+  done
+  if [[ "$DRY_RUN" == "true" ]]; then
+    return 0
+  fi
+  for spec in "${REPLAY_TOPIC_SPECS[@]}"; do
+    IFS='|' read -r topic _ <<<"$spec"
+    wait_for_topic_deleted "$topic"
+  done
+}
+
 alter_topic_configs() {
   local topic="$1"
   local configs="$2"
@@ -137,6 +172,7 @@ create_topic_if_needed() {
 }
 
 echo "Creating HPSF replay topics for 2026-06-12 with replication.factor=1, min.insync.replicas=1, compression.type=lz4"
+reset_replay_topics
 for spec in "${REPLAY_TOPIC_SPECS[@]}"; do
   IFS='|' read -r topic partitions cleanup_policy retention_ms segment_ms segment_bytes extra <<<"$spec"
   create_topic_if_needed "$topic" "$partitions" "$cleanup_policy" "$retention_ms" "$segment_ms" "$segment_bytes" "$extra"

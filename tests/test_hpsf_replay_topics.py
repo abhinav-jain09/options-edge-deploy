@@ -49,6 +49,15 @@ class HpsfReplayTopicScriptTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("RF=1 cluster rule violated", result.stderr)
 
+    def test_replay_topic_script_can_reset_replay_topics(self) -> None:
+        env = os.environ.copy()
+        env["HPSF_REPLAY_RESET_TOPICS"] = "true"
+        output = subprocess.check_output([str(CREATE_REPLAY_TOPICS), "--dry-run"], text=True, cwd=ROOT, env=env)
+
+        self.assertIn("Resetting HPSF replay topics before replay run", output)
+        self.assertIn("kafka-topics --bootstrap-server DRY_RUN_BOOTSTRAP --delete --topic options.replay.20260612.hpsf.signal", output)
+        self.assertIn("kafka-topics --bootstrap-server DRY_RUN_BOOTSTRAP --delete --topic underlying.replay.20260612.es.trades", output)
+
 
 if __name__ == "__main__":
     unittest.main()
