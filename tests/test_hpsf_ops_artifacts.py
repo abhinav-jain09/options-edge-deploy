@@ -72,6 +72,8 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         self.assertIn("verify-hpsf-topics.sh", text)
         self.assertIn("hpsf-stage-a-service", text)
         self.assertIn("hpsf-postgres-writer-service", text)
+        self.assertIn("print_k8s_diagnostics", text)
+        self.assertIn("describe pods", text)
         self.assertNotIn("ibkr-feed-service", text)
         self.assertNotIn("options.ibkr.raw", text)
 

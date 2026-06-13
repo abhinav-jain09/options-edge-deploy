@@ -70,7 +70,10 @@ check_k8s() {
   fi
   for deployment in hpsf-stage-a-service hpsf-stage-b-service hpsf-postgres-writer-service feed-gateway-service; do
     log "checking rollout for $deployment"
-    run_or_echo "${KUBECTL[@]}" rollout status deployment/"$deployment" --timeout=180s
+    if ! run_or_echo "${KUBECTL[@]}" rollout status deployment/"$deployment" --timeout=180s; then
+      print_k8s_diagnostics "$deployment"
+      return 1
+    fi
   done
   log "checking HPSF ConfigMap signal-only flags"
   if [[ "$DRY_RUN" == "false" ]]; then
@@ -82,6 +85,20 @@ check_k8s() {
       exit 1
     fi
   fi
+}
+
+print_k8s_diagnostics() {
+  local deployment="$1"
+  if [[ "$DRY_RUN" == "true" || "$SKIP_K8S" == "true" ]]; then
+    return 0
+  fi
+  log "diagnostics for $deployment"
+  "${KUBECTL[@]}" get deployment "$deployment" -o wide || true
+  "${KUBECTL[@]}" describe deployment "$deployment" || true
+  "${KUBECTL[@]}" get pods -l "app.kubernetes.io/name=$deployment" -o wide || true
+  "${KUBECTL[@]}" describe pods -l "app.kubernetes.io/name=$deployment" || true
+  "${KUBECTL[@]}" logs -l "app.kubernetes.io/name=$deployment" --tail=120 --all-containers=true || true
+  "${KUBECTL[@]}" get events --sort-by=.lastTimestamp | tail -80 || true
 }
 
 check_topics() {
