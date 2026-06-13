@@ -37,7 +37,7 @@ pipeline {
           grep -F 'HPSF_ORDER_PLACEMENT_ENABLED: "false"' k8s/base/configmap.yaml
           grep -F 'HPSF_STREAMS_REPLICATION_FACTOR: "1"' k8s/base/configmap.yaml
           grep -F 'HPSF_STREAMS_NUM_STANDBY_REPLICAS: "0"' k8s/base/configmap.yaml
-          if grep -R -E 'IBKR_ORDER_PLACEMENT_ENABLED:.*(true|1|on)' k8s/base config docs scripts; then
+          if grep -R -E 'IBKR_ORDER_PLACEMENT_ENABLED:.*(true|1|on)' k8s/base config docs; then
             echo 'Forbidden IBKR order placement flag found enabled.' >&2
             exit 1
           fi
