@@ -8,7 +8,38 @@ WEB_BASE_URL="${WEB_BASE_URL:-http://192.168.100.252:8090}"
 DATA_SEED_WAIT_SECONDS="${DATA_SEED_WAIT_SECONDS:-8}"
 SYNTHETIC_CHECK_ATTEMPTS="${SYNTHETIC_CHECK_ATTEMPTS:-12}"
 SYNTHETIC_CHECK_SLEEP_SECONDS="${SYNTHETIC_CHECK_SLEEP_SECONDS:-10}"
+LIVE_UI_MARKET_HOURS_ZONE="${LIVE_UI_MARKET_HOURS_ZONE:-America/New_York}"
+LIVE_UI_MARKET_OPEN="${LIVE_UI_MARKET_OPEN:-09:30}"
+LIVE_UI_MARKET_CLOSE="${LIVE_UI_MARKET_CLOSE:-16:00}"
 mkdir -p "$TMP_DIR"
+
+live_ui_market_open() {
+  python3 - "$LIVE_UI_MARKET_HOURS_ZONE" "$LIVE_UI_MARKET_OPEN" "$LIVE_UI_MARKET_CLOSE" <<'PY'
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+import sys
+
+zone_name, open_text, close_text = sys.argv[1:4]
+now = datetime.now(ZoneInfo(zone_name))
+opened = time.fromisoformat(open_text)
+closed = time.fromisoformat(close_text)
+is_regular_weekday = now.weekday() < 5
+is_regular_hours = opened <= now.time() <= closed
+print("OPEN" if is_regular_weekday and is_regular_hours else "CLOSED")
+PY
+}
+
+skip_live_ui_check_outside_market_hours() {
+  local state
+  state="$(live_ui_market_open)"
+  if [ "$state" = "OPEN" ]; then
+    return 1
+  fi
+  echo "SKIPPED - outside market hours."
+  echo "Market hours for live UI/card/stream synthetic checks: Monday-Friday ${LIVE_UI_MARKET_OPEN}-${LIVE_UI_MARKET_CLOSE} ${LIVE_UI_MARKET_HOURS_ZONE}, excluding full market holidays and official early closes."
+  echo "A skipped live-market check is not proof that live streams work."
+  return 0
+}
 
 wait_for_port_forward() {
   local name="$1"
@@ -173,5 +204,8 @@ check_deployment raw-postgres-writer 18085
 check_deployment pressure-postgres-writer 18086
 check_ibkr_feed
 check_feed_gateway
+if skip_live_ui_check_outside_market_hours; then
+  exit 0
+fi
 request_selected_contract
 check_integration_test

@@ -168,6 +168,22 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         ]:
             self.assertIn(text, pipeline)
 
+    def test_main_smoke_skips_live_ui_checks_outside_market_hours(self) -> None:
+        script = self.read("scripts/smoke/check-k8s-services.sh")
+        for text in [
+            "LIVE_UI_MARKET_HOURS_ZONE",
+            "America/New_York",
+            "LIVE_UI_MARKET_OPEN",
+            "09:30",
+            "LIVE_UI_MARKET_CLOSE",
+            "16:00",
+            "SKIPPED - outside market hours",
+            "A skipped live-market check is not proof that live streams work",
+            "request_selected_contract",
+            "check_integration_test",
+        ]:
+            self.assertIn(text, script)
+
 
 if __name__ == "__main__":
     unittest.main()
