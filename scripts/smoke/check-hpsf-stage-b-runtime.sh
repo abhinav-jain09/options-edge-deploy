@@ -85,8 +85,8 @@ wait_for_stage_b_log_contains() {
 read_expected_record() {
   local topic="$1"
   local expected="$2"
-  local output_file="$4"
-  local error_file="$5"
+  local output_file="$3"
+  local error_file="$4"
   local deadline=$((SECONDS + ${HPSF_STAGE_B_OUTPUT_SCAN_SECONDS:-120}))
   while (( SECONDS < deadline )); do
     : >"$output_file"
