@@ -25,8 +25,19 @@ require_cmd() {
 
 latest_offset() {
   local topic="$1"
-  kafka-run-class kafka.tools.GetOffsetShell --broker-list "$KAFKA_BOOTSTRAP_SERVERS" --topic "$topic" --time -1 2>/dev/null \
-    | awk -F: '{sum += $3} END {print sum + 0}'
+  local output
+  local status=0
+  output="$(kafka-run-class kafka.tools.GetOffsetShell --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --topic "$topic" --time -1 2>&1)" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    status=0
+    output="$(kafka-run-class kafka.tools.GetOffsetShell --broker-list "$KAFKA_BOOTSTRAP_SERVERS" --topic "$topic" --time -1 2>&1)" || status=$?
+  fi
+  if [[ "$status" -ne 0 ]]; then
+    echo "Unable to read latest offset for $topic" >&2
+    echo "$output" >&2
+    exit 1
+  fi
+  awk -F: '{sum += $3} END {print sum + 0}' <<<"$output"
 }
 
 produce_keyed_json() {
