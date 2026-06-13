@@ -39,6 +39,28 @@ print_stage_b_logs() {
   "${KUBECTL[@]}" logs deployment/hpsf-stage-b-service --tail=500 --all-containers=true >&2 || true
 }
 
+wait_for_stage_b_running() {
+  local timeout_seconds="${HPSF_STAGE_B_RUNNING_TIMEOUT_SECONDS:-240}"
+  local deadline=$((SECONDS + timeout_seconds))
+  while (( SECONDS < deadline )); do
+    local logs
+    logs="$("${KUBECTL[@]}" logs deployment/hpsf-stage-b-service --tail=500 --all-containers=true || true)"
+    if grep -E 'HPSF stage-b stream state transition .* -> RUNNING' <<<"$logs" >/dev/null; then
+      log "Stage B Kafka Streams state is RUNNING"
+      return 0
+    fi
+    if grep -E 'stream uncaught exception|ERROR|Exception' <<<"$logs" >/dev/null; then
+      echo "Stage B logs contain an exception before RUNNING:" >&2
+      echo "$logs" >&2
+      exit 1
+    fi
+    sleep 5
+  done
+  echo "Stage B did not reach Kafka Streams RUNNING within ${timeout_seconds}s" >&2
+  print_stage_b_logs
+  exit 1
+}
+
 start_latest_partition_consumer() {
   local topic="$1"
   local output_file="$2"
@@ -103,6 +125,7 @@ for pattern in \
     exit 1
   fi
 done
+wait_for_stage_b_running
 
 trade_date="$(TZ=America/New_York date +%F)"
 expiry="$trade_date"
