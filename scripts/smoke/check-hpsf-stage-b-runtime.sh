@@ -45,7 +45,9 @@ wait_for_stage_b_running() {
   while (( SECONDS < deadline )); do
     local logs
     logs="$("${KUBECTL[@]}" logs deployment/hpsf-stage-b-service --tail=500 --all-containers=true || true)"
-    if grep -E 'HPSF stage-b stream state transition .* -> RUNNING' <<<"$logs" >/dev/null; then
+    local latest_transition
+    latest_transition="$(grep -F 'HPSF stage-b stream state transition' <<<"$logs" | tail -n 1 || true)"
+    if grep -F -- '-> RUNNING' <<<"$latest_transition" >/dev/null; then
       log "Stage B Kafka Streams state is RUNNING"
       return 0
     fi
@@ -57,6 +59,25 @@ wait_for_stage_b_running() {
     sleep 5
   done
   echo "Stage B did not reach Kafka Streams RUNNING within ${timeout_seconds}s" >&2
+  print_stage_b_logs
+  exit 1
+}
+
+wait_for_stage_b_log_contains() {
+  local expected="$1"
+  local description="$2"
+  local timeout_seconds="${HPSF_STAGE_B_LOG_TIMEOUT_SECONDS:-120}"
+  local deadline=$((SECONDS + timeout_seconds))
+  while (( SECONDS < deadline )); do
+    local logs
+    logs="$("${KUBECTL[@]}" logs deployment/hpsf-stage-b-service --tail=500 --all-containers=true || true)"
+    if grep -F "$expected" <<<"$logs" >/dev/null; then
+      log "observed Stage B log for $description"
+      return 0
+    fi
+    sleep 5
+  done
+  echo "Stage B did not log $description within ${timeout_seconds}s" >&2
   print_stage_b_logs
   exit 1
 }
@@ -138,6 +159,8 @@ log "priming Stage B underlying state with SPX spot and ES trade"
 produce_keyed_json underlying.spx.price SPX "$spx_json"
 produce_keyed_json underlying.es.trades "ES.v.0|$trade_date|1" "$es_json"
 sleep "${HPSF_STAGE_B_UNDERLYING_PRIME_SECONDS:-10}"
+wait_for_stage_b_log_contains "HPSF Stage B received ES trade chainKey=$trade_date|$expiry eventTime=$underlying_event_time" "ES underlying state $underlying_event_time"
+wait_for_stage_b_running
 
 event_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fixture_id="hpsf65-${event_time//[:TZ-]/}"
