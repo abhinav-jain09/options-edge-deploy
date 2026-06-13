@@ -142,6 +142,8 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "scripts/smoke/check-hpsf-deployment.sh",
             "scripts/kafka/verify-hpsf-topics.sh",
             "kubectl apply -f k8s/base/hpsf-stage-a-deployment.yaml",
+            "options-edge-hpsf-stage-b-v2-1-smoke-${BUILD_NUMBER:-manual}",
+            "set env deployment/hpsf-stage-b-service HPSF_STREAMS_APPLICATION_ID",
             'kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-stage-b-service',
         ]:
             self.assertIn(text, pipeline)
