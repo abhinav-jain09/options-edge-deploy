@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -161,6 +162,55 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("DATABENTO_FEED_PYTHON", text)
         self.assertIn("import confluent_kafka", text)
         self.assertIn('\"$DATABENTO_FEED_PYTHON\" -m options_edge_databento_feed.hpsf_replay_cli', text)
+
+    def test_validate_stage_a_ignores_kafka_cli_warning_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            consumer = fake_bin / "kafka-console-consumer"
+            consumer.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+topic=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --topic) topic="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+if [[ "$topic" == *".hpsf.strike-flow" ]]; then
+  printf '2026-06-12|2026-06-12|6000|CALL\\t{"eventId":"strike-flow-1"}\\n'
+elif [[ "$topic" == *".hpsf.signal" ]]; then
+  printf 'Option --property is deprecated and will be removed in a future version. Use --formatter-property instead.\\n'
+fi
+""",
+                encoding="utf-8",
+            )
+            consumer.chmod(0o755)
+            build_dir = root / "build"
+            artifact_dir = root / "artifacts"
+
+            result = subprocess.run(
+                [str(VALIDATE_OUTPUT_SCRIPT), "--stage-a-only"],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "KAFKA_BOOTSTRAP_SERVERS": "localhost:9092",
+                    "HPSF_REPLAY_BUILD_DIR": str(build_dir),
+                    "HPSF_REPLAY_ARTIFACT_DIR": str(artifact_dir),
+                    "TOPIC_PREFIX": "options.replay.20260612",
+                },
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+            self.assertEqual("0", (build_dir / "stage-a-signal-count.txt").read_text(encoding="utf-8").strip())
+            validate_script = VALIDATE_OUTPUT_SCRIPT.read_text(encoding="utf-8")
+            self.assertIn("--formatter-property print.key=true", validate_script)
+            self.assertNotIn("--property print.key=true", validate_script)
 
     def test_run_script_fixture_mode_fails_closed_with_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

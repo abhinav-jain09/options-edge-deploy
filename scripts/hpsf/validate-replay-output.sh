@@ -45,12 +45,32 @@ consume_topic() {
     --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --topic "$topic" \
     --from-beginning \
-    --property print.key=true \
-    --property key.separator=$'\t' \
+    --formatter-property print.key=true \
+    --formatter-property key.separator=$'\t' \
     --max-messages "$max_messages" \
     --timeout-ms "$timeout_ms" \
     > "$output" 2> "$BUILD_DIR/logs/${name}.consumer.log" || true
-  sed '/^$/d' "$output" | wc -l | tr -d ' '
+  record_count "$output"
+}
+
+record_count() {
+  local file="$1"
+  python3 - "$file" <<'PY'
+import sys
+from pathlib import Path
+
+count = 0
+for raw in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    line = raw.strip()
+    if not line:
+        continue
+    if line.startswith("Option --property is deprecated"):
+        continue
+    if line.startswith("Processed a total of "):
+        continue
+    count += 1
+print(count)
+PY
 }
 
 count_signal_topic_without_stage_b() {
@@ -86,7 +106,14 @@ sample_value() {
 import json
 import sys
 from pathlib import Path
-records = [line.rstrip('\n') for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines() if line.strip()]
+records = []
+for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
+    stripped = line.strip()
+    if not stripped:
+        continue
+    if stripped.startswith('Option --property is deprecated') or stripped.startswith('Processed a total of '):
+        continue
+    records.append(line.rstrip('\n'))
 if not records:
     Path(sys.argv[2]).write_text('{}\n', encoding='utf-8')
     raise SystemExit(0)
@@ -106,7 +133,14 @@ key_valid() {
   python3 - "$file" "$expected_pipes" <<'PY'
 import sys
 from pathlib import Path
-records = [line.rstrip('\n') for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines() if line.strip()]
+records = []
+for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
+    stripped = line.strip()
+    if not stripped:
+        continue
+    if stripped.startswith('Option --property is deprecated') or stripped.startswith('Processed a total of '):
+        continue
+    records.append(line.rstrip('\n'))
 expected = int(sys.argv[2])
 if not records:
     print('false')
@@ -169,7 +203,17 @@ def read_json(path, default):
 
 def count_file(name):
     path = build / f'{name}.records'
-    return len([line for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]) if path.exists() else 0
+    if not path.exists():
+        return 0
+    count = 0
+    for raw in path.read_text(encoding='utf-8').splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith('Option --property is deprecated') or line.startswith('Processed a total of '):
+            continue
+        count += 1
+    return count
 
 def sample(path):
     if not path.exists():
