@@ -1,0 +1,49 @@
+pipeline {
+  agent any
+  options {
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+  }
+  environment {
+    PATH = "/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
+    KAFKA_TOPIC_REPLICATION_FACTOR = '1'
+    KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
+  }
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh 'git rev-parse --short HEAD'
+      }
+    }
+    stage('Validate Scripts') {
+      steps {
+        sh '''
+          set -euo pipefail
+          bash -n scripts/kafka/create-hpsf-topics.sh
+          bash -n scripts/kafka/verify-hpsf-topics.sh
+          scripts/kafka/create-hpsf-topics.sh --dry-run >/tmp/hpsf-topics-dry-run.txt
+          grep -F 'options.hpsf.writer-dlq' /tmp/hpsf-topics-dry-run.txt
+          grep -F 'replication.factor=1' /tmp/hpsf-topics-dry-run.txt
+          grep -F 'min.insync.replicas=1' /tmp/hpsf-topics-dry-run.txt
+          grep -F 'compression.type=lz4' /tmp/hpsf-topics-dry-run.txt
+          if grep -E 'replication-factor[ =]3|min.insync.replicas=2|num.standby.replicas=1' /tmp/hpsf-topics-dry-run.txt; then
+            echo 'Forbidden Kafka durability config found in HPSF topic dry run.' >&2
+            exit 1
+          fi
+        '''
+      }
+    }
+    stage('Apply HPSF Topics') {
+      steps {
+        sh 'scripts/kafka/create-hpsf-topics.sh'
+      }
+    }
+    stage('Verify HPSF Topics') {
+      steps {
+        sh 'scripts/kafka/verify-hpsf-topics.sh'
+      }
+    }
+  }
+}
