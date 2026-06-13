@@ -80,7 +80,9 @@ check_deployment() {
   wait_for_port_forward "$deployment" "$pid" "$local_port" "/health/live" "$log_file"
   curl -fsS "http://127.0.0.1:${local_port}/health/live"
   echo
-  curl -fsS "http://127.0.0.1:${local_port}/metrics" | grep -q 'options_edge_processing_service_ready'
+  local metrics
+  metrics="$(curl -fsS "http://127.0.0.1:${local_port}/metrics")"
+  grep -q 'options_edge_processing_service_ready' <<<"$metrics"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }
@@ -97,7 +99,9 @@ check_feed_gateway() {
   wait_for_port_forward "$deployment" "$pid" "$local_port" "/health" "$log_file"
   curl -fsS "http://127.0.0.1:${local_port}/health"
   echo
-  curl -fsS "http://127.0.0.1:${local_port}/metrics" | grep -q 'options_edge_feed_gateway_running'
+  local metrics
+  metrics="$(curl -fsS "http://127.0.0.1:${local_port}/metrics")"
+  grep -q 'options_edge_feed_gateway_running' <<<"$metrics"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }
@@ -114,7 +118,9 @@ check_ibkr_feed() {
   wait_for_port_forward "$deployment" "$pid" "$local_port" "/health/live" "$log_file"
   curl -fsS "http://127.0.0.1:${local_port}/health/live"
   echo
-  curl -fsS "http://127.0.0.1:${local_port}/metrics" | grep -q 'options_edge_ibkr_feed_live'
+  local metrics
+  metrics="$(curl -fsS "http://127.0.0.1:${local_port}/metrics")"
+  grep -q 'options_edge_ibkr_feed_live' <<<"$metrics"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }

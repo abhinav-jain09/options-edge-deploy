@@ -20,7 +20,7 @@ pipeline {
     string(name: 'HPSF_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev', description: 'HPSF Postgres writer image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-ibkr-feed:dev', description: 'IBKR feed image')
     string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
-    choice(name: 'MARKET_DATA_SOURCE', choices: ['IBKR', 'DATABENTO'], description: 'Runtime raw market-data source for processors')
+    choice(name: 'MARKET_DATA_SOURCE', choices: ['DATABENTO', 'IBKR'], description: 'Runtime raw market-data source for processors')
     string(name: 'RAW_TOPIC', defaultValue: '', description: 'Override raw topic. Empty uses source default.')
     string(name: 'IB_HOST', defaultValue: '127.0.0.1', description: 'IB Gateway/TWS host. IBKR feed uses hostNetwork, so localhost is the remote host.')
     string(name: 'IB_PORT', defaultValue: '4001', description: 'IB Gateway/TWS API port')
@@ -51,7 +51,7 @@ pipeline {
     HPSF_PROCESSING_IMAGE = "${params.HPSF_PROCESSING_IMAGE ?: '192.168.100.252:5000/options-edge-hpsf-processing:dev'}"
     HPSF_POSTGRES_WRITER_IMAGE = "${params.HPSF_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev'}"
     IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: '192.168.100.252:5000/options-edge-ibkr-feed:dev'}"
-    MARKET_DATA_SOURCE = "${params.MARKET_DATA_SOURCE ?: 'IBKR'}"
+    MARKET_DATA_SOURCE = "${params.MARKET_DATA_SOURCE ?: 'DATABENTO'}"
     RAW_TOPIC = "${params.RAW_TOPIC ?: ''}"
     IB_HOST = "${params.IB_HOST ?: '127.0.0.1'}"
     IB_PORT = "${params.IB_PORT ?: '4001'}"
@@ -303,7 +303,7 @@ EOF
           set -euo pipefail
           . "$REMOTE_APP_HOME/tmp/options-edge-images.env"
           kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
-          market_data_source="${MARKET_DATA_SOURCE:-IBKR}"
+          market_data_source="${MARKET_DATA_SOURCE:-DATABENTO}"
           effective_raw_topic="${RAW_TOPIC:-}"
           if [ -z "$effective_raw_topic" ]; then
             if [ "$market_data_source" = "IBKR" ]; then

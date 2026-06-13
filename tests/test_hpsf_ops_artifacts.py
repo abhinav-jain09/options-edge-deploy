@@ -152,6 +152,12 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
     def test_main_deploy_pipeline_rolls_out_hpsf_services(self) -> None:
         pipeline = self.read("Jenkinsfile")
         for text in [
+            "choices: ['DATABENTO', 'IBKR']",
+            "MARKET_DATA_SOURCE = \"${params.MARKET_DATA_SOURCE ?: 'DATABENTO'}\"",
+            "market_data_source=\"${MARKET_DATA_SOURCE:-DATABENTO}\"",
+        ]:
+            self.assertIn(text, pipeline)
+        for text in [
             "HPSF_PROCESSING_IMAGE",
             "HPSF_POSTGRES_WRITER_IMAGE",
             "scripts/kafka/create-hpsf-topics.sh",
@@ -183,6 +189,8 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "check_integration_test",
         ]:
             self.assertIn(text, script)
+        self.assertIn('metrics="$(curl -fsS "http://127.0.0.1:${local_port}/metrics")"', script)
+        self.assertNotIn("curl -fsS \"http://127.0.0.1:${local_port}/metrics\" | grep -q", script)
 
 
 if __name__ == "__main__":
