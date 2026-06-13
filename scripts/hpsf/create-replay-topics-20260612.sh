@@ -80,6 +80,34 @@ describe_topic_header() {
   kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --describe --topic "$topic" 2>/dev/null | sed -n '/^Topic:/p' || true
 }
 
+wait_for_topic() {
+  local topic="$1"
+  local attempt
+  for attempt in $(seq 1 30); do
+    if [[ -n "$(describe_topic_header "$topic")" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Timed out waiting for Kafka topic metadata: $topic" >&2
+  return 1
+}
+
+alter_topic_configs() {
+  local topic="$1"
+  local configs="$2"
+  local attempt
+  for attempt in $(seq 1 10); do
+    if run_cmd kafka-configs --bootstrap-server "$BOOTSTRAP_SERVERS" --entity-type topics --entity-name "$topic" --alter --add-config "$configs"; then
+      return 0
+    fi
+    echo "Retrying Kafka topic config update for $topic after metadata propagation delay ($attempt/10)" >&2
+    sleep 2
+  done
+  echo "Failed to update Kafka topic configs for $topic" >&2
+  return 1
+}
+
 create_topic_if_needed() {
   local topic="$1"
   local partitions="$2"
@@ -103,7 +131,8 @@ create_topic_if_needed() {
   else
     run_cmd kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --create --topic "$topic" --partitions "$partitions" --replication-factor "$REPLICATION_FACTOR" --config "cleanup.policy=$cleanup_policy" --config "retention.ms=$retention_ms" --config "min.insync.replicas=$MIN_ISR" --config 'compression.type=lz4' --config "segment.ms=$segment_ms" --config "segment.bytes=$segment_bytes"
   fi
-  run_cmd kafka-configs --bootstrap-server "$BOOTSTRAP_SERVERS" --entity-type topics --entity-name "$topic" --alter --add-config "$configs"
+  wait_for_topic "$topic"
+  alter_topic_configs "$topic" "$configs"
   run_cmd kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --describe --topic "$topic"
 }
 
