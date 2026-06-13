@@ -221,6 +221,108 @@ fi
             self.assertIn("--formatter-property print.key=true", validate_script)
             self.assertNotIn("--property print.key=true", validate_script)
 
+    def test_validate_final_uses_build_git_sha_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            consumer = fake_bin / "kafka-console-consumer"
+            consumer.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+topic=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --topic) topic="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$topic" in
+  *.hpsf.strike-flow) printf '2026-06-12|2026-06-12|6000|CALL\\t{"eventId":"strike-flow-1"}\\n' ;;
+  *.hpsf.underlying-state) printf '2026-06-12|2026-06-12\\t{"esVwap":6030.25,"spxEquivalentVwap":6030.25,"distanceToVwap":1.25}\\n' ;;
+  *.hpsf.market-flow) printf '2026-06-12|2026-06-12\\t{"marketBias":"NEUTRAL"}\\n' ;;
+  *.hpsf.strike-score) printf '2026-06-12|2026-06-12|6000|CALL|EXECUTION\\t{"score":1.0}\\n' ;;
+  *.hpsf.signal) printf '2026-06-12|2026-06-12|eval-1\\t{"evaluationId":"eval-1","action":"NO_TRADE","orderInstruction":{"enabled":false}}\\n' ;;
+  *.hpsf.latest-signal) printf '2026-06-12|2026-06-12\\t{"evaluationId":"eval-1","orderInstruction":{"enabled":false}}\\n' ;;
+  *.hpsf.audit) printf '2026-06-12|2026-06-12|eval-1\\t{"evaluationId":"eval-1","selectedAction":"NO_TRADE"}\\n' ;;
+esac
+""",
+                encoding="utf-8",
+            )
+            consumer.chmod(0o755)
+            build_dir = root / "build"
+            artifact_dir = root / "artifacts"
+            build_dir.mkdir()
+            (root / "build-git-sha.txt").write_text("cafebabe\n", encoding="utf-8")
+            (build_dir / "download-summary.json").write_text(
+                json.dumps(
+                    {
+                        "opraTcbboRecordsRead": 10,
+                        "esTradesRead": 20,
+                        "esTotalSize": 30,
+                        "spxSpotRecordsProduced": 20,
+                        "resolvedInstrumentId": "42140864",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (build_dir / "publish-summary.json").write_text(
+                json.dumps(
+                    {
+                        "counts": {
+                            "opraTcbboRecordsNormalized": 9,
+                            "unknownInstrumentCount": 0,
+                            "dlqCount": 1,
+                            "esTradesPublished": 20,
+                        },
+                        "esSelection": {
+                            "referenceMode": "PINNED_RAW_CONTRACT",
+                            "requestedSymbol": "ESM6",
+                            "requestedStypeIn": "raw_symbol",
+                            "selectedSymbol": "ESM6",
+                            "selectedStypeIn": "raw_symbol",
+                            "resolvedRawSymbol": "ESM6",
+                            "resolvedInstrumentId": "42140864",
+                            "selectionReason": "PINNED_RAW_CONTRACT selected ESM6",
+                            "resolution": {"resolvedIntervals": []},
+                            "candidates": [],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (build_dir / "stage-a-validation.json").write_text(
+                json.dumps({"stageAEmittedFinalSignalCount": 0}),
+                encoding="utf-8",
+            )
+            env = {k: v for k, v in os.environ.items() if k not in {"CODE_GIT_SHA", "GIT_COMMIT"}}
+            env.update(
+                {
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "KAFKA_BOOTSTRAP_SERVERS": "localhost:9092",
+                    "HPSF_REPLAY_BUILD_DIR": str(build_dir),
+                    "HPSF_REPLAY_ARTIFACT_DIR": str(artifact_dir),
+                    "TOPIC_PREFIX": "options.replay.20260612",
+                    "BUILD_URL": "http://jenkins.example/job/hpsf-historical-replay-20260612/16/",
+                    "BUILD_NUMBER": "16",
+                    "JOB_NAME": "hpsf-historical-replay-20260612",
+                }
+            )
+
+            result = subprocess.run(
+                [str(VALIDATE_OUTPUT_SCRIPT), "--final"],
+                cwd=root,
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+            evidence_data = json.loads((build_dir / "evidence.json").read_text(encoding="utf-8"))
+            self.assertEqual("cafebabe", evidence_data["jenkins"]["commitSha"])
+            self.assertTrue(evidence_data["keyValidation"]["signalKeyValid"])
+            self.assertTrue((artifact_dir / "hpsf-sample-signal.json").exists())
+
     def test_run_script_fixture_mode_fails_closed_with_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "hpsf-replay-report-20260612.md"

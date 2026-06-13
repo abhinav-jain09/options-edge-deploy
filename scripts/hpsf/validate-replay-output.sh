@@ -201,6 +201,15 @@ artifacts = Path(sys.argv[2])
 def read_json(path, default):
     return json.loads(path.read_text(encoding='utf-8')) if path.exists() else default
 
+def read_text(path):
+    return path.read_text(encoding='utf-8').strip() if path.exists() else ''
+
+def commit_sha():
+    for value in [os.environ.get('CODE_GIT_SHA', ''), os.environ.get('GIT_COMMIT', '')]:
+        if value.strip():
+            return value.strip()
+    return read_text(Path('build-git-sha.txt'))
+
 def count_file(name):
     path = build / f'{name}.records'
     if not path.exists():
@@ -276,7 +285,7 @@ evidence = {
     'jenkins': {
         'buildUrl': jenkins_build_url(),
         'buildNumber': os.environ.get('BUILD_NUMBER', ''),
-        'commitSha': os.environ.get('GIT_COMMIT', os.environ.get('CODE_GIT_SHA', '')),
+        'commitSha': commit_sha(),
         'jobName': os.environ.get('JOB_NAME', ''),
     },
     'replay': {
