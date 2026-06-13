@@ -88,9 +88,11 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         self.assertIn("options.hpsf.latest-signal", text)
         self.assertIn("underlying.es.trades", text)
         self.assertIn("underlying.spx.price", text)
-        self.assertIn("signal_offset_before", text)
+        self.assertIn("start_latest_consumer", text)
+        self.assertIn("hpsf65-signal-", text)
         self.assertIn("--bootstrap-server", text)
         self.assertIn("Stage B runtime smoke passed", text)
+        self.assertNotIn("kafka-run-class", text)
         self.assertNotIn("ibkr-feed-service", text)
         self.assertNotIn("options.ibkr.raw", text)
 
