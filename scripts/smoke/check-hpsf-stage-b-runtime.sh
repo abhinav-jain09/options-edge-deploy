@@ -71,7 +71,7 @@ start_latest_partition_consumer() {
     --partition 0 \
     --offset latest \
     --max-messages 1 \
-    --timeout-ms 45000 >"$output_file" 2>"$error_file" &
+    --timeout-ms "${HPSF_STAGE_B_OUTPUT_TIMEOUT_MS:-120000}" >"$output_file" 2>"$error_file" &
   CONSUMER_PID="$!"
 }
 
