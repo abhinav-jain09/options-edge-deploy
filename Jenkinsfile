@@ -466,7 +466,24 @@ PY
           export KUBECONFIG="${KUBECONFIG}"
           export NAMESPACE=options-edge
           export REQUIRE_LATEST_SIGNAL=false
+          restore_stage_b_release_runtime() {
+            kubectl -n "$NAMESPACE" set env deployment/hpsf-stage-b-service \
+              HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-v2-1 \
+              HPSF_STAGE_B_EVALUATION_MODE- \
+              HPSF_ALLOW_DEBUG_EVALUATION_IN_LIVE- || true
+            kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-stage-b-service || true
+            kubectl -n "$NAMESPACE" rollout status deployment/hpsf-stage-b-service --timeout=240s || true
+          }
+          trap 'rc=$?; restore_stage_b_release_runtime; exit $rc' EXIT
           scripts/smoke/check-hpsf-deployment.sh
+          stage_b_smoke_app_id="options-edge-hpsf-stage-b-v2-1-smoke-${BUILD_NUMBER:-manual}"
+          echo "Using isolated Stage B Kafka Streams application id for deploy smoke: ${stage_b_smoke_app_id}"
+          kubectl -n "$NAMESPACE" set env deployment/hpsf-stage-b-service \
+            HPSF_STREAMS_APPLICATION_ID="${stage_b_smoke_app_id}" \
+            HPSF_STAGE_B_EVALUATION_MODE=INPUT_DRIVEN_DEBUG_ONLY \
+            HPSF_ALLOW_DEBUG_EVALUATION_IN_LIVE=true
+          kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-stage-b-service
+          kubectl -n "$NAMESPACE" rollout status deployment/hpsf-stage-b-service --timeout=240s
           scripts/smoke/check-hpsf-stage-b-runtime.sh
         '''
       }

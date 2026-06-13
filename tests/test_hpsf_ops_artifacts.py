@@ -201,6 +201,11 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "rollout status deployment/hpsf-stage-b-service",
             "stage('HPSF Smoke')",
             "scripts/smoke/check-hpsf-deployment.sh",
+            "restore_stage_b_release_runtime",
+            "HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-v2-1",
+            "options-edge-hpsf-stage-b-v2-1-smoke-${BUILD_NUMBER:-manual}",
+            "HPSF_STAGE_B_EVALUATION_MODE=INPUT_DRIVEN_DEBUG_ONLY",
+            "HPSF_ALLOW_DEBUG_EVALUATION_IN_LIVE=true",
             "scripts/smoke/check-hpsf-stage-b-runtime.sh",
         ]:
             self.assertIn(text, pipeline)
