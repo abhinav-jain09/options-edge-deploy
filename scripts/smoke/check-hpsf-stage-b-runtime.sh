@@ -146,7 +146,7 @@ wait_for_stage_b_running
 trade_date="$(TZ=America/New_York date +%F)"
 expiry="$trade_date"
 underlying_event_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-underlying_state_json="{\"schemaVersion\":2,\"eventTime\":\"$underlying_event_time\",\"tradeDate\":\"$trade_date\",\"underlying\":\"SPX\",\"spot\":6005.0,\"spotEventTime\":\"$underlying_event_time\",\"esSymbol\":\"ESM6\",\"esLast\":6030.0,\"esLastEventTime\":\"$underlying_event_time\",\"esVwap\":6030.0,\"esVwapEventTime\":\"$underlying_event_time\",\"rollingBasis\":25.0,\"spxEquivalentVwap\":6005.0,\"distanceToVwap\":0.0,\"vwapSource\":\"ES_FUTURES_BASIS_ADJUSTED\",\"referenceSymbol\":\"ESM6\",\"basisUpdatedAt\":\"$underlying_event_time\",\"expectedMove15m\":15.0,\"esMomentum1m\":3.0,\"esMomentum5m\":5.0}"
+underlying_state_json="{\"schemaVersion\":2,\"eventTime\":\"$underlying_event_time\",\"tradeDate\":\"$trade_date\",\"underlying\":\"SPX\",\"spot\":6005.0,\"spotTime\":\"$underlying_event_time\",\"esSymbol\":\"ESM6\",\"esLast\":6030.0,\"esLastTime\":\"$underlying_event_time\",\"esVwap\":6030.0,\"esVwapTime\":\"$underlying_event_time\",\"rollingBasis\":25.0,\"spxEquivalentVwap\":6005.0,\"distanceToVwap\":0.0,\"vwapSource\":\"ES_FUTURES_BASIS_ADJUSTED\",\"referenceSymbol\":\"ESM6\",\"basisTime\":\"$underlying_event_time\",\"expectedMove15m\":15.0,\"momentum1m\":3.0,\"momentum5m\":5.0}"
 
 log "priming Stage B with underlying-state key $trade_date|SPX"
 produce_keyed_json options.hpsf.underlying-state "$trade_date|SPX" "$underlying_state_json"
