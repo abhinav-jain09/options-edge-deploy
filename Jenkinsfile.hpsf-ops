@@ -1,0 +1,131 @@
+pipeline {
+  agent any
+  options {
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+  }
+  environment {
+    PATH = "/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
+    NAMESPACE = "${env.NAMESPACE ?: 'options-edge'}"
+    KAFKA_TOPIC_REPLICATION_FACTOR = '1'
+    KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
+    SKIP_K8S = "${env.SKIP_K8S ?: 'false'}"
+    REQUIRE_LATEST_SIGNAL = "${env.REQUIRE_LATEST_SIGNAL ?: 'false'}"
+  }
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh 'git rev-parse --short HEAD'
+      }
+    }
+    stage('Validate Ops Files') {
+      steps {
+        sh '''
+          set -euo pipefail
+          bash -n scripts/kafka/create-hpsf-topics.sh
+          bash -n scripts/kafka/verify-hpsf-topics.sh
+          bash -n scripts/smoke/check-hpsf-deployment.sh
+          bash -n scripts/smoke/check-hpsf-stage-b-runtime.sh
+          bash -n scripts/monitoring/apply-prometheus-scrapes.sh
+          python3 -m unittest discover -s tests -p 'test*.py'
+          scripts/kafka/create-hpsf-topics.sh --dry-run >/tmp/hpsf-topics-dry-run.txt
+          scripts/smoke/check-hpsf-deployment.sh --dry-run >/tmp/hpsf-smoke-dry-run.txt
+          scripts/smoke/check-hpsf-stage-b-runtime.sh --dry-run >/tmp/hpsf-stage-b-smoke-dry-run.txt
+          grep -F 'hpsf-stage-a-deployment.yaml' k8s/base/kustomization.yaml
+          grep -F 'hpsf-stage-b-deployment.yaml' k8s/base/kustomization.yaml
+          grep -F 'hpsf-postgres-writer-deployment.yaml' k8s/base/kustomization.yaml
+          grep -F 'options.hpsf.latest-signal' k8s/base/configmap.yaml
+          grep -F 'HPSF_ORDER_PLACEMENT_ENABLED: "false"' k8s/base/configmap.yaml
+          grep -F 'HPSF_STREAMS_REPLICATION_FACTOR: "1"' k8s/base/configmap.yaml
+          grep -F 'HPSF_STREAMS_NUM_STANDBY_REPLICAS: "0"' k8s/base/configmap.yaml
+          if grep -R -E 'IBKR_ORDER_PLACEMENT_ENABLED:.*(true|1|on)' k8s/base config docs; then
+            echo 'Forbidden IBKR order placement flag found enabled.' >&2
+            exit 1
+          fi
+          if grep -R '"enabled"[[:space:]]*:[[:space:]]*true' k8s/base config docs; then
+            echo 'Forbidden HPSF JSON order enabled flag found.' >&2
+            exit 1
+          fi
+        '''
+      }
+    }
+    stage('Kustomize Render') {
+      steps {
+        sh '''
+          set -euo pipefail
+          if command -v kubectl >/dev/null 2>&1; then
+            kubectl kustomize k8s/overlays/dev >/tmp/options-edge-hpsf-dev.yaml
+            grep -F 'hpsf-stage-a-service' /tmp/options-edge-hpsf-dev.yaml
+            grep -F 'hpsf-postgres-writer-service' /tmp/options-edge-hpsf-dev.yaml
+          else
+            echo 'kubectl not installed on agent; static manifest tests covered kustomization references.'
+          fi
+        '''
+      }
+    }
+    stage('Topic Verification') {
+      steps {
+        sh '''
+          set -euo pipefail
+          scripts/kafka/verify-hpsf-topics.sh
+        '''
+      }
+    }
+    stage('Deploy HPSF Manifests') {
+      steps {
+        sh '''
+          set -euo pipefail
+          if ! command -v kubectl >/dev/null 2>&1; then
+            echo 'kubectl is required for HPSF remote deployment.' >&2
+            exit 1
+          fi
+          kubectl apply -f k8s/base/configmap.yaml
+          kubectl apply -f k8s/base/hpsf-stage-a-deployment.yaml
+          kubectl apply -f k8s/base/hpsf-stage-b-deployment.yaml
+          kubectl apply -f k8s/base/hpsf-postgres-writer-deployment.yaml
+          kubectl apply -f k8s/base/hpsf-postgres-writer-service.yaml
+          stage_b_smoke_app_id="options-edge-hpsf-stage-b-v2-1-smoke-${BUILD_NUMBER:-manual}"
+          echo "Using isolated Stage B Kafka Streams application id for remote smoke: ${stage_b_smoke_app_id}"
+          kubectl -n "$NAMESPACE" set env deployment/hpsf-stage-b-service HPSF_STREAMS_APPLICATION_ID="${stage_b_smoke_app_id}"
+          kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-stage-a-service
+          kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-stage-b-service
+          kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-postgres-writer-service
+        '''
+      }
+    }
+    stage('Remote HPSF Smoke') {
+      steps {
+        sh '''
+          set -euo pipefail
+          scripts/smoke/check-hpsf-deployment.sh
+          scripts/smoke/check-hpsf-stage-b-runtime.sh
+        '''
+      }
+    }
+    stage('Rollback Info') {
+      steps {
+        sh '''
+          set -euo pipefail
+          mkdir -p build
+          previous_processing_image="${PREVIOUS_HPSF_PROCESSING_IMAGE:-unknown}"
+          previous_writer_image="${PREVIOUS_HPSF_WRITER_IMAGE:-unknown}"
+          cat > build/hpsf-rollback-info.txt <<INFO
+previous_git_sha=${PREVIOUS_GIT_SHA:-unknown}
+new_git_sha=$(git rev-parse HEAD)
+previous_processing_image=${previous_processing_image}
+new_processing_image=192.168.100.252:5000/options-edge-hpsf-processing:dev
+previous_writer_image=${previous_writer_image}
+new_writer_image=192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev
+config_version=hpsf-v2.1-dev
+rollback_processing=kubectl -n options-edge set image deployment/hpsf-stage-a-service hpsf-stage-a=${previous_processing_image}
+rollback_writer=kubectl -n options-edge set image deployment/hpsf-postgres-writer-service hpsf-postgres-writer=${previous_writer_image}
+INFO
+          cat build/hpsf-rollback-info.txt
+        '''
+        archiveArtifacts artifacts: 'build/hpsf-rollback-info.txt', fingerprint: true
+      }
+    }
+  }
+}

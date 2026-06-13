@@ -1,0 +1,94 @@
+groups:
+  - name: optionedge-hpsf-v2-1
+    interval: 30s
+    rules:
+      - alert: HpsfKafkaDiskAbove75Percent
+        expr: kafka_log_dir_used_percent > 75
+        for: 5m
+        labels:
+          severity: warning
+          service: hpsf
+        annotations:
+          summary: "Kafka disk pressure may affect HPSF topics"
+          description: "Kafka disk usage must stay below 75 percent for the RF=1 HPSF cluster. Check broker storage before data loss occurs."
+      - alert: HpsfOpraLagTooHigh
+        expr: hpsf_kafka_lag{source="opra"} > 2000
+        for: 1m
+        labels:
+          severity: critical
+          service: hpsf
+        annotations:
+          summary: "OPRA lag too high"
+          description: "HPSF must force NO_TRADE while OPRA input lag is above threshold."
+      - alert: HpsfUnderlyingLagTooHigh
+        expr: hpsf_kafka_lag{source="underlying"} > 2000
+        for: 1m
+        labels:
+          severity: critical
+          service: hpsf
+        annotations:
+          summary: "Underlying lag too high"
+          description: "ES/SPX source lag is above threshold. HPSF must not emit BUY signals."
+      - alert: HpsfEvaluationDurationTooHigh
+        expr: hpsf_evaluation_duration_ms > 1000
+        for: 2m
+        labels:
+          severity: warning
+          service: hpsf
+        annotations:
+          summary: "HPSF evaluation duration exceeds interval"
+          description: "Stage B evaluation is slower than the expected evaluation cadence."
+      - alert: HpsfDlqIncreasingFast
+        expr: increase(hpsf_dlq_count[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: hpsf
+        annotations:
+          summary: "HPSF DLQ is increasing"
+          description: "Mapping, validation, stale-source, or schema errors are entering options.hpsf.dlq."
+      - alert: HpsfWriterDlqNonZero
+        expr: hpsf_writer_dlq_count > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: hpsf-postgres-writer
+        annotations:
+          summary: "HPSF writer DLQ has records"
+          description: "The HPSF Postgres writer rejected or failed to persist one or more HPSF records."
+      - alert: HpsfPostgresWriterUnhealthy
+        expr: up{job="options-edge-hpsf-postgres-writer-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: hpsf-postgres-writer
+        annotations:
+          summary: "HPSF Postgres writer scrape is down"
+          description: "Writer health or metrics endpoint is unavailable."
+      - alert: HpsfChangelogRestoreSlow
+        expr: hpsf_changelog_restore_duration_ms > 60000
+        for: 1m
+        labels:
+          severity: warning
+          service: hpsf
+        annotations:
+          summary: "HPSF changelog restore is slow"
+          description: "Critical state-store restore exceeded 60 seconds."
+      - alert: HpsfStaleDataGateActiveTooLong
+        expr: increase(hpsf_signals_no_trade_count{reason=~".*STALE.*|.*LAG.*"}[10m]) > 0
+        for: 10m
+        labels:
+          severity: critical
+          service: hpsf
+        annotations:
+          summary: "HPSF stale-data gate active too long"
+          description: "Freshness or lag gates have suppressed signals for at least 10 minutes."
+      - alert: HpsfOldBucketKeysNotDeleted
+        expr: increase(hpsf_state_old_bucket_keys_deleted_count[30m]) == 0 and hpsf_state_strike_bucket_keys > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: hpsf
+        annotations:
+          summary: "HPSF old bucket cleanup may not be running"
+          description: "strike-bucket-state-store keys are present but no old bucket keys were deleted recently."

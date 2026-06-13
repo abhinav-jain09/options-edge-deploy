@@ -36,6 +36,44 @@ data:
   KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO: "0.01"
   KAFKA_STREAMS_STORE_TYPE: memory
   KAFKA_CONTROL_TOPIC_PARTITIONS: "1"
+  HPSF_ENABLED: "true"
+  HPSF_TOPOLOGY_ENABLED: "false"
+  HPSF_MODE: LIVE_SIGNAL_ONLY
+  HPSF_SCHEMA_VERSION: "2"
+  HPSF_ALGORITHM_VERSION: HPSF_V2.1
+  HPSF_CONFIG_VERSION: hpsf-v2.1-dev
+  HPSF_STREAMS_REPLICATION_FACTOR: "1"
+  HPSF_STREAMS_NUM_STANDBY_REPLICAS: "0"
+  HPSF_STREAMS_STATE_DIR: /home/options-edge/data/kafka-streams/hpsf
+  HPSF_STREAMS_AUTO_OFFSET_RESET: latest
+  HPSF_STATE_STORE_TYPE: memory
+  HPSF_STATE_CHANGELOG_ENABLED: "true"
+  HPSF_STATE_STRIKE_CURRENT_STORE_NAME: strike-current-state-store
+  HPSF_STATE_STRIKE_BUCKET_STORE_NAME: strike-bucket-state-store
+  HPSF_STATE_ACTIVE_STRIKES_STORE_NAME: active-strikes-store
+  HPSF_STATE_CHAIN_SNAPSHOT_STORE_NAME: hpsf-chain-snapshot-store
+  HPSF_STATE_BUCKET_MAX_AGE_MS: "1200000"
+  HPSF_TOPIC_OPRA_TCBBO: options.opra.tcbbo
+  HPSF_TOPIC_OPRA_TRADES: options.opra.trades
+  HPSF_TOPIC_OPRA_QUOTES: options.opra.quotes
+  HPSF_TOPIC_UNDERLYING_ES_TRADES: underlying.es.trades
+  HPSF_TOPIC_UNDERLYING_SPX_PRICE: underlying.spx.price
+  HPSF_TOPIC_UNDERLYING_STATE: options.hpsf.underlying-state
+  HPSF_TOPIC_MARKET_FLOW: options.hpsf.market-flow
+  HPSF_TOPIC_STRIKE_FLOW: options.hpsf.strike-flow
+  HPSF_TOPIC_STRIKE_SCORE: options.hpsf.strike-score
+  HPSF_TOPIC_LATEST_SIGNAL: options.hpsf.latest-signal
+  HPSF_TOPIC_SIGNAL: options.hpsf.signal
+  HPSF_TOPIC_AUDIT: options.hpsf.audit
+  HPSF_TOPIC_DLQ: options.hpsf.dlq
+  HPSF_TOPIC_WRITER_DLQ: options.hpsf.writer-dlq
+  HPSF_TOPIC_EXIT_SIGNAL: options.hpsf.exit-signal
+  HPSF_POSTGRES_WRITER_ENABLED: "true"
+  HPSF_POSTGRES_WRITER_GROUP_ID: options-hpsf-postgres-writer-v1
+  HPSF_POSTGRES_WRITER_AUTO_OFFSET_RESET: earliest
+  HPSF_POSTGRES_WRITER_TOPICS: options.hpsf.signal,options.hpsf.latest-signal,options.hpsf.audit,options.hpsf.market-flow,options.hpsf.strike-score,options.hpsf.dlq,options.hpsf.writer-dlq,options.hpsf.exit-signal
+  HPSF_ORDER_PLACEMENT_ENABLED: "false"
+  ORDER_PLACEMENT_ENABLED: "false"
   KAFKA_MARKET_DATA_SELECTION_TOPIC: options.marketdata.selection
   KAFKA_DATABENTO_CONTROL_TOPIC: options.databento.control
   KAFKA_DATABENTO_EVENTS_TOPIC: options.databento.events.raw

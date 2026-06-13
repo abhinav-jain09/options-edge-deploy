@@ -1,0 +1,78 @@
+pipeline {
+  agent any
+  options {
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+  }
+  environment {
+    PATH = "/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
+    SKIP_REMOTE = "${env.SKIP_REMOTE ?: 'false'}"
+  }
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+        sh 'git rev-parse --short HEAD'
+      }
+    }
+    stage('Checkout Source Specs') {
+      steps {
+        sh '''
+          set -euo pipefail
+          rm -rf .release
+          mkdir -p .release
+          git clone git@github.com:abhinav-jain09/options-edge.git .release/options-edge
+          git -C .release/options-edge checkout feature/hpsf-v2.1-bugzilla-40-64
+        '''
+      }
+    }
+    stage('Static Release Gate') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export HPSF_SOURCE_ROOT="$PWD/.release/options-edge"
+          bash -n scripts/smoke/check-hpsf-deployment.sh
+          bash -n scripts/smoke/check-hpsf-stage-b-runtime.sh
+          bash -n scripts/smoke/check-hpsf-release-gate.sh
+          bash -n scripts/monitoring/apply-prometheus-scrapes.sh
+          python3 -m unittest discover -s tests -p 'test*.py'
+          scripts/smoke/check-hpsf-stage-b-runtime.sh --dry-run
+          scripts/smoke/check-hpsf-release-gate.sh --dry-run
+        '''
+      }
+    }
+    stage('Remote Release Gate') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export HPSF_SOURCE_ROOT="$PWD/.release/options-edge"
+          scripts/kafka/verify-hpsf-topics.sh
+          scripts/smoke/check-hpsf-stage-b-runtime.sh
+          scripts/smoke/check-hpsf-release-gate.sh
+        '''
+      }
+    }
+    stage('Archive Release Evidence') {
+      steps {
+        sh '''
+          set -euo pipefail
+          mkdir -p build
+          cat > build/hpsf-v2-release-gate-evidence.txt <<INFO
+release_gate_git_sha=$(git rev-parse HEAD)
+release_gate_time_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+hpsf_signal_only=true
+hpsf_databento_only=true
+hpsf_rf=1
+hpsf_min_insync_replicas=1
+hpsf_latest_signal_topic=options.hpsf.latest-signal
+hpsf_processing_image=192.168.100.252:5000/options-edge-hpsf-processing:dev
+hpsf_writer_image=192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev
+INFO
+          cat build/hpsf-v2-release-gate-evidence.txt
+        '''
+        archiveArtifacts artifacts: 'build/hpsf-v2-release-gate-evidence.txt,docs/hpsf-v2-release-notes.md,docs/hpsf-v2-runbook.md', fingerprint: true
+      }
+    }
+  }
+}

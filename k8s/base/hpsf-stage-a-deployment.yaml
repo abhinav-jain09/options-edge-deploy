@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpsf-stage-a-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: hpsf-stage-a-service
+    app.kubernetes.io/component: hpsf-stage-a
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: hpsf-stage-a-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hpsf-stage-a-service
+        app.kubernetes.io/component: hpsf-stage-a
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: hpsf-stage-a
+          image: 192.168.100.252:5000/options-edge-hpsf-processing:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          env:
+            - name: APP_MARKET_DATA_SOURCE
+              value: DATABENTO
+            - name: HPSF_STAGE_ROLE
+              value: STAGE_A
+            - name: HPSF_STAGE_A_ENABLED
+              value: "true"
+            - name: HPSF_STAGE_B_ENABLED
+              value: "false"
+            - name: HPSF_ENABLED
+              value: "true"
+            - name: HPSF_TOPOLOGY_ENABLED
+              value: "true"
+            - name: HPSF_MODE
+              value: LIVE_SIGNAL_ONLY
+            - name: HPSF_STREAMS_APPLICATION_ID
+              value: options-edge-hpsf-stage-a-v2-1
+            - name: HPSF_STREAMS_REPLICATION_FACTOR
+              value: "1"
+            - name: HPSF_STREAMS_NUM_STANDBY_REPLICAS
+              value: "0"
+            - name: HPSF_STREAMS_STATE_DIR
+              value: /home/options-edge/data/kafka-streams/hpsf/stage-a
+            - name: HPSF_STATE_STORE_TYPE
+              value: memory
+            - name: HPSF_STATE_CHANGELOG_ENABLED
+              value: "true"
+            - name: HPSF_ORDER_PLACEMENT_ENABLED
+              value: "false"
+            - name: ORDER_PLACEMENT_ENABLED
+              value: "false"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xmx4g"
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pgrep -f 'app.jar|options-edge-hpsf-processing' >/dev/null"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pgrep -f 'app.jar|options-edge-hpsf-processing' >/dev/null"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: hpsf-kafka-streams-state
+              mountPath: /home/options-edge/data/kafka-streams/hpsf
+          resources:
+            requests:
+              cpu: 500m
+              memory: 4Gi
+            limits:
+              cpu: "3"
+              memory: 6Gi
+      volumes:
+        - name: hpsf-kafka-streams-state
+          emptyDir: {}
