@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +53,17 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     stage_b = evidence.get("stageB", {})
     stage_b_performance = evidence.get("stageBPerformance", {}) or {}
     topic_configs = evidence.get("topicConfigs", {})
+    stage_b_scheduler_required = [
+        "stageB.chainSnapshot.update.count",
+        "activeChainStorePutCount",
+        "activeChainRegisteredCount",
+        "stageB.activeChains.count.max",
+        "stageB.punctuation.fire.count",
+        "activeChainsEvaluatedCount",
+        "stageB.evaluation.count",
+    ]
     stage_b_required = [
+        *stage_b_scheduler_required,
         "underlyingStateRecordsReceived",
         "underlyingStateRecordsStored",
         "underlyingStateLookupHitCount",
@@ -70,6 +81,12 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
             return None
 
     missing_stage_b_counters = [name for name in stage_b_required if stage_b_counter(name) is None]
+    chain_updates = stage_b_counter("stageB.chainSnapshot.update.count")
+    active_puts = stage_b_counter("activeChainStorePutCount")
+    active_max = stage_b_counter("stageB.activeChains.count.max")
+    punctuation = stage_b_counter("stageB.punctuation.fire.count")
+    active_evaluated = stage_b_counter("activeChainsEvaluatedCount")
+    evaluations = stage_b_counter("stageB.evaluation.count")
     received = stage_b_counter("underlyingStateRecordsReceived")
     stored = stage_b_counter("underlyingStateRecordsStored")
     hits = stage_b_counter("underlyingStateLookupHitCount")
@@ -118,10 +135,41 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
         failures.append("audit topic is empty")
     if missing_stage_b_counters:
         failures.append(f"Stage B underlying-state counters missing: {missing_stage_b_counters}")
+    if (chain_updates or 0) <= 0:
+        failures.append("STAGE_B_CHAIN_SNAPSHOT_UPDATE_COUNT_ZERO")
+    if (chain_updates or 0) > 0 and (active_puts or 0) <= 0:
+        failures.append("STAGE_B_ACTIVE_CHAIN_NOT_REGISTERED")
+    if (active_puts or 0) > 0 and (punctuation or 0) <= 0:
+        failures.append("STAGE_B_SCHEDULED_PUNCTUATION_DID_NOT_FIRE")
+    if (punctuation or 0) > 0 and (evaluations or 0) <= 0 and (active_max or 0) <= 0:
+        failures.append("STAGE_B_NO_ACTIVE_CHAINS_AT_PUNCTUATION")
+    if (punctuation or 0) > 0 and (active_max or 0) > 0 and (evaluations or 0) <= 0:
+        failures.append("STAGE_B_ACTIVE_CHAINS_NOT_EVALUATED")
+    if (active_evaluated or 0) <= 0:
+        failures.append("STAGE_B_ACTIVE_CHAINS_EVALUATED_COUNT_ZERO")
     if not stage_b_join_healthy:
         failures.append("Stage B underlying join unhealthy")
     if not stage_b_vwap_usable:
         failures.append("Stage B VWAP unusable")
+    signal_sample = samples.get("signal") if isinstance(samples.get("signal"), dict) else {}
+    audit_sample = samples.get("audit") if isinstance(samples.get("audit"), dict) else {}
+    if signal_sample.get("vwap") is None:
+        failures.append("STAGE_B_SAMPLE_SIGNAL_VWAP_MISSING")
+    if signal_sample.get("distanceToVwap") is None:
+        failures.append("STAGE_B_SAMPLE_SIGNAL_DISTANCE_TO_VWAP_MISSING")
+    if signal_sample.get("internalVwapState") == "VWAP_UNAVAILABLE":
+        failures.append("STAGE_B_SAMPLE_SIGNAL_VWAP_UNAVAILABLE")
+    if not isinstance(audit_sample.get("gateDiagnostics"), dict) or not audit_sample.get("gateDiagnostics"):
+        failures.append("STAGE_B_AUDIT_GATE_DIAGNOSTICS_EMPTY")
+    if not isinstance(audit_sample.get("chainCoverageDiagnostics"), dict) or not audit_sample.get("chainCoverageDiagnostics"):
+        failures.append("STAGE_B_AUDIT_CHAIN_COVERAGE_DIAGNOSTICS_EMPTY")
+    sample_time = parse_time(signal_sample.get("eventTime"))
+    replay_start = parse_time(replay.get("start", START))
+    replay_end = parse_time(replay.get("end", END))
+    if sample_time is None:
+        failures.append("STAGE_B_SAMPLE_SIGNAL_EVENT_TIME_MISSING")
+    elif replay_start and replay_end and not (replay_start <= sample_time <= replay_end):
+        failures.append("STAGE_B_SAMPLE_SIGNAL_EVENT_TIME_OUTSIDE_REPLAY_WINDOW")
     if order_enabled:
         failures.append("orderInstruction.enabled=true appeared")
     if not stage_a.get("started", False):
@@ -194,8 +242,15 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     for key in ["spxSpotRecordsProduced", "strikeFlowRecordsEmitted", "underlyingStateRecordsEmitted", "marketFlowRecordsEmitted", "strikeScoreRecordsEmitted", "signalRecordsEmitted", "latestSignalRecordsEmitted", "auditRecordsEmitted", "stageAEmittedFinalSignalCount"]:
         lines.append(f"- {key}: {counts.get(key, 0)}")
     lines.append("")
+    lines.append("## Stage B Scheduled Evaluation Health")
+    for key in stage_b_scheduler_required:
+        value = stage_b_counter(key)
+        lines.append(f"- {key}: {'' if value is None else value}")
+    lines.append("")
     lines.append("## Stage B Underlying-State Health")
     for key in stage_b_required:
+        if key in stage_b_scheduler_required:
+            continue
         value = stage_b_counter(key)
         lines.append(f"- {key}: {'' if value is None else value}")
     lines.append(f"- Stage B underlying join healthy: {str(stage_b_join_healthy).lower()}")
@@ -245,6 +300,12 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     lines.append(f"Final PASS/FAIL: {'PASS' if passed else 'FAIL'}")
     lines.append("")
     return "\n".join(lines), passed
+
+
+def parse_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
 if __name__ == "__main__":

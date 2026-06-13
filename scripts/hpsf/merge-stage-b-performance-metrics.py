@@ -10,6 +10,13 @@ from typing import Any
 
 PREFIX = "HPSF_STAGE_B_PERFORMANCE_METRICS_JSON="
 REQUIRED_COUNTERS = [
+    "stageB.chainSnapshot.update.count",
+    "activeChainStorePutCount",
+    "activeChainRegisteredCount",
+    "stageB.activeChains.count.max",
+    "stageB.punctuation.fire.count",
+    "activeChainsEvaluatedCount",
+    "stageB.evaluation.count",
     "underlyingStateRecordsReceived",
     "underlyingStateRecordsStored",
     "underlyingStateLookupHitCount",

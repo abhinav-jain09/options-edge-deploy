@@ -45,6 +45,9 @@ class HpsfReplayReportGateTest(unittest.TestCase):
     def test_ReplayReportIncludesStageBUnderlyingHealthTest(self) -> None:
         report = generate_report(evidence())
 
+        self.assertIn("## Stage B Scheduled Evaluation Health", report)
+        self.assertIn("stageB.punctuation.fire.count: 3", report)
+        self.assertIn("activeChainsEvaluatedCount: 3", report)
         self.assertIn("## Stage B Underlying-State Health", report)
         self.assertIn("underlyingStateRecordsReceived: 10", report)
         self.assertIn("underlyingStateLookupHitCount: 8", report)
@@ -156,6 +159,10 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("--stage-b-log artifacts/logs/stage-b.log", pipeline)
         self.assertIn("--summary artifacts/hpsf-replay-summary.json", pipeline)
         self.assertIn("scripts/hpsf/validate-replay-output.sh --final --summary-only", pipeline)
+        self.assertIn("replay-validation-result.json", pipeline)
+        self.assertIn("Bugzilla PASS comment blocked because validation result is not PASS", pipeline)
+        self.assertIn("activeChainsMax=", pipeline)
+        self.assertIn("stageB.punctuation.fire.count", pipeline)
         self.assertIn("options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
@@ -274,9 +281,9 @@ case "$topic" in
   *.hpsf.underlying-state) printf '2026-06-12|2026-06-12\\t{"esVwap":6030.25,"spxEquivalentVwap":6030.25,"distanceToVwap":1.25}\\n' ;;
   *.hpsf.market-flow) printf '2026-06-12|2026-06-12\\t{"marketBias":"NEUTRAL"}\\n' ;;
   *.hpsf.strike-score) printf '2026-06-12|2026-06-12|6000|CALL|EXECUTION\\t{"score":1.0}\\n' ;;
-  *.hpsf.signal) printf '2026-06-12|2026-06-12|eval-1\\t{"evaluationId":"eval-1","action":"NO_TRADE","orderInstruction":{"enabled":false}}\\n' ;;
+  *.hpsf.signal) printf '2026-06-12|2026-06-12|eval-1\\t{"evaluationId":"eval-1","eventTime":"2026-06-12T14:31:17Z","action":"NO_TRADE","internalVwapState":"VWAP_RECLAIM_CONFIRMED","vwap":6000.0,"distanceToVwap":5.0,"orderInstruction":{"enabled":false}}\\n' ;;
   *.hpsf.latest-signal) printf '2026-06-12|2026-06-12\\t{"evaluationId":"eval-1","orderInstruction":{"enabled":false}}\\n' ;;
-  *.hpsf.audit) printf '2026-06-12|2026-06-12|eval-1\\t{"evaluationId":"eval-1","selectedAction":"NO_TRADE"}\\n' ;;
+  *.hpsf.audit) printf '2026-06-12|2026-06-12|eval-1\\t{"evaluationId":"eval-1","selectedAction":"NO_TRADE","gateDiagnostics":{"evaluationTime":"2026-06-12T14:31:17Z"},"chainCoverageDiagnostics":{"coverageRatio":1.0}}\\n' ;;
 esac
 """,
                 encoding="utf-8",
@@ -290,6 +297,13 @@ esac
                 json.dumps(
                     {
                         "stageBPerformance": {
+                            "stageB.chainSnapshot.update.count": 12,
+                            "activeChainStorePutCount": 2,
+                            "activeChainRegisteredCount": 2,
+                            "stageB.activeChains.count.max": 1,
+                            "stageB.punctuation.fire.count": 3,
+                            "activeChainsEvaluatedCount": 3,
+                            "stageB.evaluation.count": 3,
                             "underlyingStateRecordsReceived": 10,
                             "underlyingStateRecordsStored": 10,
                             "underlyingStateLookupHitCount": 9,
@@ -519,6 +533,13 @@ def evidence() -> dict:
         "stageA": {"started": True, "startupLog": "HPSF Stage A topology enabled"},
         "stageB": {"started": True, "startupLog": "HPSF Stage B topology enabled"},
         "stageBPerformance": {
+            "stageB.chainSnapshot.update.count": 12,
+            "activeChainStorePutCount": 2,
+            "activeChainRegisteredCount": 2,
+            "stageB.activeChains.count.max": 1,
+            "stageB.punctuation.fire.count": 3,
+            "activeChainsEvaluatedCount": 3,
+            "stageB.evaluation.count": 3,
             "underlyingStateRecordsReceived": 10,
             "underlyingStateRecordsStored": 10,
             "underlyingStateLookupHitCount": 8,
@@ -530,9 +551,20 @@ def evidence() -> dict:
         "keyValidation": {"signalKeyValid": True, "latestSignalKeyValid": True, "auditKeyValid": True},
         "topicConfigs": {"options.replay.20260612.hpsf.signal": "cleanup.policy=delete"},
         "samples": {
-            "signal": {"action": "NO_TRADE", "orderInstruction": {"enabled": False}},
+            "signal": {
+                "action": "NO_TRADE",
+                "eventTime": "2026-06-12T14:31:17Z",
+                "internalVwapState": "VWAP_RECLAIM_CONFIRMED",
+                "vwap": 6000.0,
+                "distanceToVwap": 5.0,
+                "orderInstruction": {"enabled": False},
+            },
             "latestSignal": {"orderInstruction": {"enabled": False}},
-            "audit": {"selectedAction": "NO_TRADE"},
+            "audit": {
+                "selectedAction": "NO_TRADE",
+                "gateDiagnostics": {"evaluationTime": "2026-06-12T14:31:17Z"},
+                "chainCoverageDiagnostics": {"coverageRatio": 1.0},
+            },
         },
         "actionCounts": {"NO_TRADE": 1},
         "gateReasonCounts": {"MARKET_SCORE_BELOW_THRESHOLD": 1},

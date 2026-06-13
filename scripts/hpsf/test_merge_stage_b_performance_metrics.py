@@ -22,7 +22,7 @@ class MergeStageBPerformanceMetricsTest(unittest.TestCase):
             log = root / "stage-b.log"
             summary = root / "hpsf-replay-summary.json"
             log.write_text(
-                'noise\nHPSF_STAGE_B_PERFORMANCE_METRICS_JSON={"stageB.evaluation.count":3,"underlyingStateRecordsReceived":10,"underlyingStateRecordsStored":9,"underlyingStateLookupHitCount":8,"underlyingStateLookupMissCount":1,"underlyingStateNullVwapCount":0,"underlyingStateNullDistanceCount":0,"healthyUnderlyingStateCount":9}\n',
+                'noise\nHPSF_STAGE_B_PERFORMANCE_METRICS_JSON={"stageB.chainSnapshot.update.count":12,"activeChainStorePutCount":2,"activeChainRegisteredCount":2,"stageB.activeChains.count.max":1,"stageB.punctuation.fire.count":3,"activeChainsEvaluatedCount":3,"stageB.evaluation.count":3,"underlyingStateRecordsReceived":10,"underlyingStateRecordsStored":9,"underlyingStateLookupHitCount":8,"underlyingStateLookupMissCount":1,"underlyingStateNullVwapCount":0,"underlyingStateNullDistanceCount":0,"healthyUnderlyingStateCount":9}\n',
                 encoding="utf-8",
             )
             summary.write_text(json.dumps({"counts": {"signalRecordsEmitted": 1}}), encoding="utf-8")
@@ -31,6 +31,8 @@ class MergeStageBPerformanceMetricsTest(unittest.TestCase):
 
             data = json.loads(summary.read_text(encoding="utf-8"))
             self.assertEqual(10, data["stageBPerformance"]["underlyingStateRecordsReceived"])
+            self.assertEqual(2, data["stageBPerformance"]["activeChainStorePutCount"])
+            self.assertEqual(3, data["stageBPerformance"]["stageB.punctuation.fire.count"])
             self.assertEqual(8, data["stageBPerformance"]["underlyingStateLookupHitCount"])
             self.assertEqual(9, data["counts"]["healthyUnderlyingStateCount"])
 

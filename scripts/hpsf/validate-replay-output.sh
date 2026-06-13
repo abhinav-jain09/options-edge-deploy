@@ -109,6 +109,7 @@ sample_value() {
   python3 - "$file" "$output" <<'PY'
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 records = []
 for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
@@ -299,8 +300,7 @@ counts.update({
 stage_b_performance = existing_summary.get('stageBPerformance', {})
 if isinstance(stage_b_performance, dict):
     for key, value in stage_b_performance.items():
-        if key.startswith('underlyingState') or key == 'healthyUnderlyingStateCount':
-            counts[key] = value
+        counts[key] = value
 selection = publish.get('esSelection', {})
 if not selection:
     selection = {
@@ -362,6 +362,7 @@ validate_replay_summary() {
   python3 - "$ARTIFACT_DIR/hpsf-replay-summary.json" <<'PY'
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 summary_path = Path(sys.argv[1])
@@ -372,6 +373,8 @@ counts = summary.get("counts") or {}
 stage_b = summary.get("stageBPerformance") or {}
 key_validation = summary.get("keyValidation") or {}
 profile = str(summary.get("validationProfile") or "FULL_RTH_RELEASE").upper()
+samples = summary.get("samples") or {}
+replay = summary.get("replay") or {}
 
 def as_int(name):
     if name in stage_b:
@@ -403,6 +406,13 @@ if profile == "FULL_RTH_RELEASE":
             failures.append(message)
 
 required_stage_b = [
+    "stageB.chainSnapshot.update.count",
+    "activeChainStorePutCount",
+    "activeChainRegisteredCount",
+    "stageB.activeChains.count.max",
+    "stageB.punctuation.fire.count",
+    "activeChainsEvaluatedCount",
+    "stageB.evaluation.count",
     "underlyingStateRecordsReceived",
     "underlyingStateRecordsStored",
     "underlyingStateLookupHitCount",
@@ -416,6 +426,13 @@ if profile == "FULL_RTH_RELEASE":
     if missing:
         failures.append(f"Missing Stage B replay counters after merge: {missing}")
     else:
+        chain_updates = as_int("stageB.chainSnapshot.update.count") or 0
+        active_puts = as_int("activeChainStorePutCount") or 0
+        active_registered = as_int("activeChainRegisteredCount") or 0
+        active_max = as_int("stageB.activeChains.count.max") or 0
+        punctuation = as_int("stageB.punctuation.fire.count") or 0
+        active_evaluated = as_int("activeChainsEvaluatedCount") or 0
+        evaluations = as_int("stageB.evaluation.count") or 0
         received = as_int("underlyingStateRecordsReceived") or 0
         stored = as_int("underlyingStateRecordsStored") or 0
         hits = as_int("underlyingStateLookupHitCount") or 0
@@ -423,6 +440,24 @@ if profile == "FULL_RTH_RELEASE":
         null_vwap = as_int("underlyingStateNullVwapCount") or 0
         null_distance = as_int("underlyingStateNullDistanceCount") or 0
         healthy = as_int("healthyUnderlyingStateCount") or 0
+        if chain_updates <= 0:
+            failures.append("STAGE_B_CHAIN_SNAPSHOT_UPDATE_COUNT_ZERO")
+        if chain_updates > 0 and active_puts <= 0:
+            failures.append("STAGE_B_ACTIVE_CHAIN_NOT_REGISTERED")
+        if active_registered <= 0:
+            failures.append("STAGE_B_ACTIVE_CHAIN_REGISTERED_COUNT_ZERO")
+        if active_puts > 0 and punctuation <= 0:
+            failures.append("STAGE_B_SCHEDULED_PUNCTUATION_DID_NOT_FIRE")
+        if punctuation > 0 and evaluations <= 0 and active_max <= 0:
+            failures.append("STAGE_B_NO_ACTIVE_CHAINS_AT_PUNCTUATION")
+        if punctuation > 0 and active_max > 0 and evaluations <= 0:
+            failures.append("STAGE_B_ACTIVE_CHAINS_NOT_EVALUATED")
+        if active_evaluated <= 0:
+            failures.append("STAGE_B_ACTIVE_CHAINS_EVALUATED_COUNT_ZERO")
+        if evaluations <= 0:
+            failures.append("stageB.evaluation.count <= 0")
+        if active_max <= 0:
+            failures.append("stageB.activeChains.count.max <= 0")
         if received <= 0:
             failures.append("underlyingStateRecordsReceived <= 0")
         if stored <= 0:
@@ -438,6 +473,49 @@ if profile == "FULL_RTH_RELEASE":
         if null_distance > 0:
             failures.append("underlyingStateNullDistanceCount > 0")
 
+if profile == "FULL_RTH_RELEASE":
+    zero_outputs = [
+        key for key in [
+            "marketFlowRecordsEmitted",
+            "strikeScoreRecordsEmitted",
+            "signalRecordsEmitted",
+            "latestSignalRecordsEmitted",
+            "auditRecordsEmitted",
+        ]
+        if int(counts.get(key, 0) or 0) <= 0
+    ]
+    if zero_outputs:
+        failures.append("STAGE_B_ZERO_FINAL_OUTPUTS: " + ",".join(zero_outputs))
+
+if profile == "FULL_RTH_RELEASE":
+    signal_sample = samples.get("signal") if isinstance(samples.get("signal"), dict) else {}
+    audit_sample = samples.get("audit") if isinstance(samples.get("audit"), dict) else {}
+    if signal_sample.get("vwap") is None:
+        failures.append("STAGE_B_SAMPLE_SIGNAL_VWAP_MISSING")
+    if signal_sample.get("distanceToVwap") is None:
+        failures.append("STAGE_B_SAMPLE_SIGNAL_DISTANCE_TO_VWAP_MISSING")
+    if signal_sample.get("internalVwapState") == "VWAP_UNAVAILABLE":
+        failures.append("STAGE_B_SAMPLE_SIGNAL_VWAP_UNAVAILABLE")
+    gate_diagnostics = audit_sample.get("gateDiagnostics")
+    coverage_diagnostics = audit_sample.get("chainCoverageDiagnostics")
+    if not isinstance(gate_diagnostics, dict) or not gate_diagnostics:
+        failures.append("STAGE_B_AUDIT_GATE_DIAGNOSTICS_EMPTY")
+    if not isinstance(coverage_diagnostics, dict) or not coverage_diagnostics:
+        failures.append("STAGE_B_AUDIT_CHAIN_COVERAGE_DIAGNOSTICS_EMPTY")
+
+    def parse_time(value):
+        if not value:
+            return None
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+
+    start = parse_time(replay.get("start"))
+    end = parse_time(replay.get("end"))
+    sample_time = parse_time(signal_sample.get("eventTime"))
+    if start and end and sample_time and not (start <= sample_time <= end):
+        failures.append("STAGE_B_SAMPLE_SIGNAL_EVENT_TIME_OUTSIDE_REPLAY_WINDOW")
+    if start and end and not sample_time:
+        failures.append("STAGE_B_SAMPLE_SIGNAL_EVENT_TIME_MISSING")
+
 if summary.get("orderInstructionEnabledTrueFound"):
     failures.append("orderInstruction.enabled=true found in replay outputs")
 if not (key_validation.get("signalKeyValid") and key_validation.get("latestSignalKeyValid") and key_validation.get("auditKeyValid")):
@@ -450,7 +528,13 @@ if failures:
         "result": "FAIL",
         "validationResult": "FAIL",
         "validationProfile": profile,
-        "validationFailures": [{"code": "REPLAY_VALIDATION_FAILED", "detail": failure} for failure in failures],
+        "validationFailures": [
+            {
+                "code": failure.split(":", 1)[0] if failure.startswith("STAGE_B_") else "REPLAY_VALIDATION_FAILED",
+                "detail": failure,
+            }
+            for failure in failures
+        ],
     }
 else:
     validation = {
@@ -460,6 +544,8 @@ else:
         "validationFailures": [],
     }
 summary["validationProfile"] = profile
+summary["validationResult"] = validation["validationResult"]
+summary["validationFailures"] = validation["validationFailures"]
 summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 (summary_path.parent / "replay-validation-result.json").write_text(json.dumps(validation, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 raise SystemExit(1 if failures else 0)

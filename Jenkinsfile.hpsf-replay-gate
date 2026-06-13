@@ -359,6 +359,13 @@ stage_b = summary.get("stageBPerformance", {})
 counts = summary.get("counts", {})
 
 required = [
+    "stageB.chainSnapshot.update.count",
+    "activeChainStorePutCount",
+    "activeChainRegisteredCount",
+    "stageB.activeChains.count.max",
+    "stageB.punctuation.fire.count",
+    "activeChainsEvaluatedCount",
+    "stageB.evaluation.count",
     "underlyingStateRecordsReceived",
     "underlyingStateRecordsStored",
     "underlyingStateLookupHitCount",
@@ -427,8 +434,28 @@ PY
           job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
           build_url="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
           report_url="${build_url}artifact/artifacts/hpsf-replay-report-20260612.md"
-          summary="HPSF-82A replay PASS. Build: ${build_url}. Report: ${report_url}. Selected ES: ${ES_SYMBOL}/${ES_STYPE_IN}. See archived hpsf-replay-summary.json for counts and samples."
-          echo "$summary" > artifacts/logs/bugzilla-comment.txt
+          python3 - <<PY
+import json
+from pathlib import Path
+
+summary = json.loads(Path("artifacts/hpsf-replay-summary.json").read_text())
+validation = json.loads(Path("artifacts/replay-validation-result.json").read_text())
+if validation.get("validationResult") != "PASS" or summary.get("validationResult") != "PASS":
+    raise SystemExit("Bugzilla PASS comment blocked because validation result is not PASS")
+counts = summary.get("counts", {})
+stage_b = summary.get("stageBPerformance", {})
+comment = (
+    "HPSF-82A replay PASS. "
+    "Build: ${build_url}. "
+    "Report: ${report_url}. "
+    "Selected ES: ${ES_SYMBOL}/${ES_STYPE_IN}. "
+    f"StageB evaluations={stage_b.get('stageB.evaluation.count', counts.get('stageB.evaluation.count'))}, "
+    f"activeChainsMax={stage_b.get('stageB.activeChains.count.max', counts.get('stageB.activeChains.count.max'))}, "
+    f"signals={counts.get('signalRecordsEmitted')}, latest={counts.get('latestSignalRecordsEmitted')}, audit={counts.get('auditRecordsEmitted')}. "
+    "See archived hpsf-replay-summary.json and replay-validation-result.json for canonical evidence."
+)
+Path("artifacts/logs/bugzilla-comment.txt").write_text(comment + "\\n")
+PY
           if [ -n "${BUGZILLA_PASSWORD:-}" ]; then
             curl -fsS -X POST "${BUGZILLA_URL}/rest/bug/74/comment" \
               -H 'Content-Type: application/json' \
