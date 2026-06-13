@@ -146,15 +146,11 @@ wait_for_stage_b_running
 trade_date="$(TZ=America/New_York date +%F)"
 expiry="$trade_date"
 underlying_event_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+underlying_state_json="{\"schemaVersion\":2,\"eventTime\":\"$underlying_event_time\",\"tradeDate\":\"$trade_date\",\"underlying\":\"SPX\",\"spot\":6005.0,\"spotEventTime\":\"$underlying_event_time\",\"esSymbol\":\"ESM6\",\"esLast\":6030.0,\"esLastEventTime\":\"$underlying_event_time\",\"esVwap\":6030.0,\"esVwapEventTime\":\"$underlying_event_time\",\"rollingBasis\":25.0,\"spxEquivalentVwap\":6005.0,\"distanceToVwap\":0.0,\"vwapSource\":\"ES_FUTURES_BASIS_ADJUSTED\",\"referenceSymbol\":\"ESM6\",\"basisUpdatedAt\":\"$underlying_event_time\",\"expectedMove15m\":15.0,\"esMomentum1m\":3.0,\"esMomentum5m\":5.0}"
 
-spx_json="{\"schemaVersion\":1,\"symbol\":\"SPX\",\"eventTime\":\"$underlying_event_time\",\"price\":6005.0,\"size\":null,\"source\":\"SYNTHETIC_OPTION_SPOT\",\"quality\":\"LIVE\"}"
-es_json="{\"schemaVersion\":1,\"source\":\"DATABENTO\",\"dataset\":\"GLBX.MDP3\",\"sourceSchema\":\"trades\",\"symbol\":\"ES.v.0\",\"eventTime\":\"$underlying_event_time\",\"receiveTime\":\"$underlying_event_time\",\"sessionDate\":\"$trade_date\",\"instrumentId\":\"42140864\",\"price\":6030.0,\"size\":10,\"side\":\"B\",\"flags\":0,\"sequence\":1}"
-
-log "priming Stage B underlying state with SPX spot and ES trade"
-produce_keyed_json underlying.spx.price SPX "$spx_json"
-produce_keyed_json underlying.es.trades "ES.v.0|$trade_date|1" "$es_json"
+log "priming Stage B with underlying-state key $trade_date|SPX"
+produce_keyed_json options.hpsf.underlying-state "$trade_date|SPX" "$underlying_state_json"
 sleep "${HPSF_STAGE_B_UNDERLYING_PRIME_SECONDS:-10}"
-wait_for_stage_b_log_contains "HPSF Stage B received ES trade chainKey=$trade_date|$expiry eventTime=$underlying_event_time" "ES underlying state $underlying_event_time"
 wait_for_stage_b_running
 
 event_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -175,7 +171,6 @@ latest_error_file="$tmp_dir/latest.err"
 
 log "producing deterministic Stage B fixture $fixture_id expecting $expected_eval_id"
 produce_keyed_json options.hpsf.strike-flow "$trade_date|$expiry|6005|CALL" "$flow_json"
-wait_for_stage_b_log_contains "HPSF Stage B emitting options.hpsf.signal evaluationId=$expected_eval_id" "signal emission $expected_eval_id"
 
 signal_output="$(read_expected_record options.hpsf.signal "$expected_eval_id" "$signal_output_file" "$signal_error_file")"
 latest_output="$(read_expected_record options.hpsf.latest-signal "$expected_eval_id" "$latest_output_file" "$latest_error_file")"
