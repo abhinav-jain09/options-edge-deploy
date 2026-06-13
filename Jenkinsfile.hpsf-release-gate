@@ -33,9 +33,11 @@ pipeline {
           set -euo pipefail
           export HPSF_SOURCE_ROOT="$PWD/.release/options-edge"
           bash -n scripts/smoke/check-hpsf-deployment.sh
+          bash -n scripts/smoke/check-hpsf-stage-b-runtime.sh
           bash -n scripts/smoke/check-hpsf-release-gate.sh
           bash -n scripts/monitoring/apply-prometheus-scrapes.sh
           python3 -m unittest discover -s tests -p 'test*.py'
+          scripts/smoke/check-hpsf-stage-b-runtime.sh --dry-run
           scripts/smoke/check-hpsf-release-gate.sh --dry-run
         '''
       }
@@ -46,6 +48,7 @@ pipeline {
           set -euo pipefail
           export HPSF_SOURCE_ROOT="$PWD/.release/options-edge"
           scripts/kafka/verify-hpsf-topics.sh
+          scripts/smoke/check-hpsf-stage-b-runtime.sh
           scripts/smoke/check-hpsf-release-gate.sh
         '''
       }

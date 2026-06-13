@@ -67,7 +67,19 @@ log "checking Stage B rollout"
 
 log "checking Stage B startup logs"
 stage_b_logs="$(${KUBECTL[@]} logs deployment/hpsf-stage-b-service --tail=400 --all-containers=true || true)"
-grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming options.hpsf.strike-flow|HPSF Stage B producing options.hpsf.signal|HPSF Stage B producing options.hpsf.latest-signal|HPSF Stage B producing options.hpsf.audit' <<<"$stage_b_logs" >/dev/null
+for pattern in \
+  "HPSF Stage B topology enabled" \
+  "HPSF Stage B consuming options.hpsf.strike-flow" \
+  "HPSF Stage B producing options.hpsf.signal" \
+  "HPSF Stage B producing options.hpsf.latest-signal" \
+  "HPSF Stage B producing options.hpsf.audit"; do
+  if ! grep -F "$pattern" <<<"$stage_b_logs" >/dev/null; then
+    echo "Missing Stage B startup log: $pattern" >&2
+    echo "Recent hpsf-stage-b-service logs:" >&2
+    echo "$stage_b_logs" >&2
+    exit 1
+  fi
+done
 
 signal_offset_before="$(latest_offset options.hpsf.signal)"
 latest_offset_before="$(latest_offset options.hpsf.latest-signal)"

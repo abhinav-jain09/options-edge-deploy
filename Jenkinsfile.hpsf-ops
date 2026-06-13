@@ -7,6 +7,7 @@ pipeline {
   environment {
     PATH = "/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
     KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
+    NAMESPACE = "${env.NAMESPACE ?: 'options-edge'}"
     KAFKA_TOPIC_REPLICATION_FACTOR = '1'
     KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
     SKIP_K8S = "${env.SKIP_K8S ?: 'false'}"
@@ -85,6 +86,9 @@ pipeline {
           kubectl apply -f k8s/base/hpsf-stage-b-deployment.yaml
           kubectl apply -f k8s/base/hpsf-postgres-writer-deployment.yaml
           kubectl apply -f k8s/base/hpsf-postgres-writer-service.yaml
+          kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-stage-a-service
+          kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-stage-b-service
+          kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-postgres-writer-service
         '''
       }
     }
