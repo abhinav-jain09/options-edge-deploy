@@ -82,41 +82,36 @@ wait_for_stage_b_log_contains() {
   exit 1
 }
 
-start_latest_partition_consumer() {
-  local topic="$1"
-  local output_file="$2"
-  local error_file="$3"
-  kafka-console-consumer \
-    --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
-    --topic "$topic" \
-    --partition 0 \
-    --offset latest \
-    --max-messages 1 \
-    --timeout-ms "${HPSF_STAGE_B_OUTPUT_TIMEOUT_MS:-120000}" >"$output_file" 2>"$error_file" &
-  CONSUMER_PID="$!"
-}
-
-wait_for_expected_record() {
+read_expected_record() {
   local topic="$1"
   local expected="$2"
-  local pid="$3"
   local output_file="$4"
   local error_file="$5"
-  local status=0
-  wait "$pid" || status=$?
-  local matches
-  matches="$(grep -F "$expected" "$output_file" || true)"
-  if [[ -z "$matches" ]]; then
-    echo "Stage B did not emit $topic containing $expected after fixture" >&2
-    echo "Kafka consumer exit status for $topic: $status" >&2
-    if [[ -s "$error_file" ]]; then
-      echo "Consumer diagnostics for $topic:" >&2
-      cat "$error_file" >&2
+  local deadline=$((SECONDS + ${HPSF_STAGE_B_OUTPUT_SCAN_SECONDS:-120}))
+  while (( SECONDS < deadline )); do
+    : >"$output_file"
+    : >"$error_file"
+    kafka-console-consumer \
+      --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+      --topic "$topic" \
+      --from-beginning \
+      --max-messages "${HPSF_STAGE_B_OUTPUT_SCAN_MAX_MESSAGES:-200}" \
+      --timeout-ms 10000 >"$output_file" 2>"$error_file" || true
+    local matches
+    matches="$(grep -F "$expected" "$output_file" || true)"
+    if [[ -n "$matches" ]]; then
+      tail -n 1 <<<"$matches"
+      return 0
     fi
-    print_stage_b_logs
-    exit 1
+    sleep 5
+  done
+  echo "Stage B did not emit $topic containing $expected after fixture" >&2
+  if [[ -s "$error_file" ]]; then
+    echo "Consumer diagnostics for $topic:" >&2
+    cat "$error_file" >&2
   fi
-  tail -n 1 <<<"$matches"
+  print_stage_b_logs
+  exit 1
 }
 
 if [[ "$DRY_RUN" == "true" ]]; then
@@ -169,9 +164,6 @@ flow_json="{\"schemaVersion\":2,\"algorithmVersion\":\"HPSF_V2.1\",\"configVersi
 
 tmp_dir="$(mktemp -d)"
 cleanup() {
-  for pid in "${consumer_pids[@]:-}"; do
-    kill "$pid" 2>/dev/null || true
-  done
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
@@ -181,20 +173,12 @@ signal_error_file="$tmp_dir/signal.err"
 latest_output_file="$tmp_dir/latest.out"
 latest_error_file="$tmp_dir/latest.err"
 
-consumer_pids=()
-log "starting latest-offset consumers for Stage B outputs"
-start_latest_partition_consumer options.hpsf.signal "$signal_output_file" "$signal_error_file"
-signal_pid="$CONSUMER_PID"
-start_latest_partition_consumer options.hpsf.latest-signal "$latest_output_file" "$latest_error_file"
-latest_pid="$CONSUMER_PID"
-consumer_pids=("$signal_pid" "$latest_pid")
-sleep 5
-
 log "producing deterministic Stage B fixture $fixture_id expecting $expected_eval_id"
 produce_keyed_json options.hpsf.strike-flow "$trade_date|$expiry|6005|CALL" "$flow_json"
+wait_for_stage_b_log_contains "HPSF Stage B emitting options.hpsf.signal evaluationId=$expected_eval_id" "signal emission $expected_eval_id"
 
-signal_output="$(wait_for_expected_record options.hpsf.signal "$expected_eval_id" "$signal_pid" "$signal_output_file" "$signal_error_file")"
-latest_output="$(wait_for_expected_record options.hpsf.latest-signal "$expected_eval_id" "$latest_pid" "$latest_output_file" "$latest_error_file")"
+signal_output="$(read_expected_record options.hpsf.signal "$expected_eval_id" "$signal_output_file" "$signal_error_file")"
+latest_output="$(read_expected_record options.hpsf.latest-signal "$expected_eval_id" "$latest_output_file" "$latest_error_file")"
 
 if [[ -z "$signal_output" ]]; then
   echo "Stage B did not emit options.hpsf.signal after fixture" >&2
