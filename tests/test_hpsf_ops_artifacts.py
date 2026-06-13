@@ -105,6 +105,8 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         text = script.read_text()
         self.assertIn("options-edge-hpsf-stage-b-v2-1", text)
         self.assertIn("-repartition", text)
+        self.assertIn("-changelog", text)
+        self.assertIn('"^" prefix "smoke-"', text)
         self.assertIn("Refusing to delete unexpected topic name", text)
         self.assertNotIn("options.hpsf.signal", text)
         self.assertNotIn("options.hpsf.latest-signal", text)

@@ -29,31 +29,38 @@ run_cmd() {
   fi
 }
 
-list_repartition_topics() {
+list_internal_topics() {
   kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --list \
-    | awk -v prefix="${APP_ID}-" '$0 ~ ("^" prefix) && $0 ~ /-repartition$/ { print }' \
+    | awk -v prefix="${APP_ID}-" '
+        $0 ~ ("^" prefix) &&
+        $0 !~ ("^" prefix "smoke-") &&
+        ($0 ~ /-repartition$/ || $0 ~ /-changelog$/) {
+          print
+        }
+      ' \
     | sort
 }
 
 if [[ "$DRY_RUN" == "true" ]]; then
-  echo "DRY RUN reset Stage B internal repartition topics for app.id=$APP_ID"
+  echo "DRY RUN reset Stage B internal Kafka Streams topics for app.id=$APP_ID"
   run_cmd kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --list
   run_cmd kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --delete --topic "${APP_ID}-hpsf-stage-b-strike-flow-by-chain-repartition"
+  run_cmd kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --delete --topic "${APP_ID}-hpsf-chain-snapshot-store-changelog"
   exit 0
 fi
 
-mapfile -t topics < <(list_repartition_topics)
+mapfile -t topics < <(list_internal_topics)
 if [[ "${#topics[@]}" -eq 0 ]]; then
-  echo "No HPSF Stage B repartition topics found for app.id=$APP_ID"
+  echo "No HPSF Stage B internal Kafka Streams topics found for app.id=$APP_ID"
   exit 0
 fi
 
 for topic in "${topics[@]}"; do
-  if [[ "$topic" != "$APP_ID"-* || "$topic" != *-repartition ]]; then
+  if [[ "$topic" != "$APP_ID"-* || "$topic" == "$APP_ID"-smoke-* || ( "$topic" != *-repartition && "$topic" != *-changelog ) ]]; then
     echo "Refusing to delete unexpected topic name: $topic" >&2
     exit 1
   fi
-  echo "Deleting stale HPSF Stage B internal repartition topic: $topic"
+  echo "Deleting stale HPSF Stage B internal Kafka Streams topic: $topic"
   run_cmd kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --delete --topic "$topic" || true
 done
 
