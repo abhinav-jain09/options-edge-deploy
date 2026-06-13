@@ -17,6 +17,16 @@ REPORT="${HPSF_REPLAY_REPORT:-$ARTIFACT_DIR/hpsf-replay-report-20260612.md}"
 EVIDENCE="$BUILD_DIR/evidence.json"
 mkdir -p "$BUILD_DIR" "$ARTIFACT_DIR" "$BUILD_DIR/logs" "$ARTIFACT_DIR/logs"
 
+jenkins_build_url() {
+  local build_url="${BUILD_URL:-}"
+  if [[ -z "$build_url" && -n "${JENKINS_PUBLIC_URL:-}" && -n "${JOB_NAME:-}" && -n "${BUILD_NUMBER:-}" ]]; then
+    local job_path
+    job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
+    build_url="${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/"
+  fi
+  echo "$build_url"
+}
+
 write_fail_report() {
   local reason="$1"
   local evidence_mode="REAL"
@@ -33,7 +43,7 @@ write_fail_report() {
 {
   "evidenceMode": "$evidence_mode",
   "jenkins": {
-    "buildUrl": "${BUILD_URL:-}",
+    "buildUrl": "$(jenkins_build_url)",
     "buildNumber": "${BUILD_NUMBER:-}",
     "commitSha": "${GIT_COMMIT:-${CODE_GIT_SHA:-}}",
     "jobName": "${JOB_NAME:-}"

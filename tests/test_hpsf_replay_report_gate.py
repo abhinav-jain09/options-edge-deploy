@@ -113,6 +113,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("allowEmptyArchive: false", pipeline)
         self.assertIn("rm -f artifacts/hpsf-replay-report-20260612.md", pipeline)
         self.assertIn("HPSF_REPLAY_FAILURE_REASON", pipeline)
+        self.assertIn("JENKINS_PUBLIC_URL", pipeline)
+        self.assertIn("sed 's#/#/job/#g'", pipeline)
         for stage in [
             "Checkout",
             "Checkout repos",
@@ -180,6 +182,31 @@ class HpsfReplayReportGateTest(unittest.TestCase):
             self.assertIn("Missing Jenkins credential options-edge-databento-api-key", text)
             self.assertIn("Build number: 9", text)
             self.assertIn("Commit SHA: deadbeef", text)
+
+    def test_run_script_uses_jenkins_url_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "hpsf-replay-report-20260612.md"
+            artifacts = Path(tmp) / "artifacts"
+            result = subprocess.run(
+                [str(RUN_SCRIPT), "--dry-run"],
+                cwd=ROOT,
+                env={
+                    "PATH": "/bin:/usr/bin:/usr/local/bin",
+                    "HPSF_REPLAY_REPORT": str(report),
+                    "HPSF_REPLAY_ARTIFACT_DIR": str(artifacts),
+                    "JENKINS_PUBLIC_URL": "http://jenkins.example",
+                    "JOB_NAME": "folder/hpsf-historical-replay-20260612",
+                    "BUILD_NUMBER": "10",
+                    "CODE_GIT_SHA": "feedface",
+                },
+                text=True,
+                capture_output=True,
+            )
+
+            text = report.read_text()
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Build URL: http://jenkins.example/job/folder/job/hpsf-historical-replay-20260612/10/", text)
+            self.assertIn("Build number: 10", text)
 
 
 def generate_report(data: dict) -> str:

@@ -38,6 +38,7 @@ pipeline {
     KAFKA_TOPIC_REPLICATION_FACTOR = '1'
     KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
     KAFKA_SCHEMA_REGISTRY_URL = "${env.KAFKA_SCHEMA_REGISTRY_URL ?: 'http://192.168.100.252:8082'}"
+    JENKINS_PUBLIC_URL = "${env.JENKINS_PUBLIC_URL ?: 'http://192.168.100.252:8085'}"
     NAMESPACE = "${env.NAMESPACE ?: 'options-edge'}"
     HPSF_REPLAY_BUILD_DIR = 'build/hpsf-replay-20260612'
     HPSF_REPLAY_ARTIFACT_DIR = 'artifacts'
@@ -328,8 +329,10 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          report_url="${BUILD_URL:-}artifact/artifacts/hpsf-replay-report-20260612.md"
-          summary="HPSF-82A replay PASS. Build: ${BUILD_URL:-unknown}. Report: ${report_url}. Selected ES: ${ES_SYMBOL}/${ES_STYPE_IN}. See archived hpsf-replay-summary.json for counts and samples."
+          job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
+          build_url="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
+          report_url="${build_url}artifact/artifacts/hpsf-replay-report-20260612.md"
+          summary="HPSF-82A replay PASS. Build: ${build_url}. Report: ${report_url}. Selected ES: ${ES_SYMBOL}/${ES_STYPE_IN}. See archived hpsf-replay-summary.json for counts and samples."
           echo "$summary" > artifacts/logs/bugzilla-comment.txt
           if [ -n "${BUGZILLA_PASSWORD:-}" ]; then
             curl -fsS -X POST "${BUGZILLA_URL}/rest/bug/74/comment" \
@@ -351,6 +354,8 @@ pipeline {
         mkdir -p artifacts/logs build/hpsf-replay-20260612/logs
         rm -f artifacts/hpsf-replay-report-20260612.md artifacts/hpsf-replay-summary.json build/hpsf-replay-20260612/evidence.json
         export CODE_GIT_SHA="$(cat build-git-sha.txt 2>/dev/null || true)"
+        job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
+        export BUILD_URL="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
         export HPSF_REPLAY_FAILURE_REASON="Jenkins failed before a valid PASS replay report was generated. Verify required credentials including DATABENTO_API_KEY_CREDENTIAL_ID=${DATABENTO_API_KEY_CREDENTIAL_ID:-options-edge-databento-api-key}, prepared replay source data, Kafka, Kubernetes, and Databento access in the console log."
         scripts/hpsf/run-hpsf-replay-20260612.sh --dry-run || true
       '''

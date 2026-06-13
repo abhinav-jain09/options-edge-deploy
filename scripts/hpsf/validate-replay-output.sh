@@ -159,6 +159,7 @@ validate_final() {
 import json
 import os
 import sys
+from urllib.parse import quote
 from pathlib import Path
 build = Path(sys.argv[1])
 artifacts = Path(sys.argv[2])
@@ -180,6 +181,18 @@ def sample(path):
         return json.loads(text)
     except json.JSONDecodeError:
         return {"raw": text}
+
+def jenkins_build_url():
+    build_url = os.environ.get('BUILD_URL', '').strip()
+    if build_url:
+        return build_url
+    base = (os.environ.get('JENKINS_PUBLIC_URL') or os.environ.get('JENKINS_URL') or '').strip().rstrip('/')
+    job_name = os.environ.get('JOB_NAME', '').strip()
+    build_number = os.environ.get('BUILD_NUMBER', '').strip()
+    if base and job_name and build_number:
+        job_path = '/job/'.join(quote(part, safe='') for part in job_name.split('/'))
+        return f"{base}/job/{job_path}/{build_number}/"
+    return ''
 
 download = read_json(build / 'download-summary.json', {})
 publish = read_json(build / 'publish-summary.json', {})
@@ -217,7 +230,7 @@ if not selection:
 evidence = {
     'evidenceMode': 'REAL',
     'jenkins': {
-        'buildUrl': os.environ.get('BUILD_URL', ''),
+        'buildUrl': jenkins_build_url(),
         'buildNumber': os.environ.get('BUILD_NUMBER', ''),
         'commitSha': os.environ.get('GIT_COMMIT', os.environ.get('CODE_GIT_SHA', '')),
         'jobName': os.environ.get('JOB_NAME', ''),
