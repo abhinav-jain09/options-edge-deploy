@@ -55,6 +55,6 @@ HPSF V2.1 is signal-only. BUY_CALL_* and BUY_PUT_* are informational outputs, no
 - Do not modify or depend on IBKR feed/services for this release.
 - UI current state must come from `options.hpsf.latest-signal`, not historical `options.hpsf.signal`.
 
-## Known Operational Constraint
+## Stage B Runtime
 
-`hpsf-stage-b-service` is deployed as an explicit runtime slot with topology disabled until a dedicated Stage B runtime entrypoint is wired. This avoids duplicate Stage A consumption while preserving the deployment target and release checklist. Do not treat this as live Stage B stream processing until the entrypoint is enabled in a later release.
+`hpsf-stage-b-service` runs the dedicated Stage B Kafka Streams topology. It consumes `options.hpsf.strike-flow`, Databento ES trades, and SPX spot reference data, then emits `options.hpsf.signal`, `options.hpsf.latest-signal`, `options.hpsf.market-flow`, `options.hpsf.strike-score`, and `options.hpsf.audit`. Do not deploy Stage B with topology disabled in a release profile.

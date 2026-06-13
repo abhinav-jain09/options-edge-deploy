@@ -56,6 +56,12 @@ validate_static_config() {
   require_file_contains "$ROOT_DIR/k8s/base/configmap.yaml" "HPSF_ORDER_PLACEMENT_ENABLED: \"false\""
   require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-a-deployment.yaml" "APP_MARKET_DATA_SOURCE"
   require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-a-deployment.yaml" "DATABENTO"
+  require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-a-deployment.yaml" "HPSF_STAGE_A_ENABLED"
+  require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-a-deployment.yaml" "HPSF_STAGE_B_ENABLED"
+  require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-b-deployment.yaml" "HPSF_STAGE_A_ENABLED"
+  require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-b-deployment.yaml" "HPSF_STAGE_B_ENABLED"
+  require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-b-deployment.yaml" "HPSF_TOPOLOGY_ENABLED"
+  require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-b-deployment.yaml" "value: \"true\""
   require_file_contains "$ROOT_DIR/k8s/base/hpsf-postgres-writer-deployment.yaml" "/health/ready"
 }
 

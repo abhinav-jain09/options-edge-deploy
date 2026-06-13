@@ -57,12 +57,14 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         self.assertIn("/health/ready", writer)
         self.assertIn("options.hpsf.writer-dlq", writer)
 
-    def test_stage_b_does_not_start_duplicate_stage_a_topology(self) -> None:
+    def test_stage_b_starts_real_stage_b_topology_without_duplicate_stage_a(self) -> None:
         stage_b = self.read("k8s/base/hpsf-stage-b-deployment.yaml")
         self.assertIn("HPSF_STAGE_ROLE", stage_b)
         self.assertIn("STAGE_B", stage_b)
+        self.assertIn("HPSF_STAGE_A_ENABLED", stage_b)
+        self.assertIn("HPSF_STAGE_B_ENABLED", stage_b)
         self.assertIn("HPSF_TOPOLOGY_ENABLED", stage_b)
-        self.assertIn("value: \"false\"", stage_b)
+        self.assertIn("value: \"true\"", stage_b)
 
     def test_hpsf_smoke_script_is_hpsf_only_and_parses(self) -> None:
         script = ROOT / "scripts/smoke/check-hpsf-deployment.sh"

@@ -18,7 +18,7 @@ Use the New York exchange calendar.
 ## Deployment Components
 
 - `hpsf-stage-a-service`: Databento OPRA per-strike classification and strike-flow state.
-- `hpsf-stage-b-service`: central market evaluator runtime placeholder. Keep topology disabled until the Stage B entrypoint is wired so it cannot run a duplicate Stage A topology.
+- `hpsf-stage-b-service`: central market evaluator runtime. It must run with `HPSF_STAGE_A_ENABLED=false`, `HPSF_STAGE_B_ENABLED=true`, and `HPSF_TOPOLOGY_ENABLED=true`.
 - `hpsf-postgres-writer-service`: persists HPSF signal/audit/validation records and rejects any order instruction with `enabled` set to true.
 - `feed-gateway-service`: publishes HPSF latest-signal UI view models.
 - OptionsEdge web UI: renders the HPSF dashboard above the option chain.

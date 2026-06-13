@@ -57,6 +57,10 @@ static_gate() {
   require_file_contains "$ROOT_DIR/k8s/base/configmap.yaml" "HPSF_ORDER_PLACEMENT_ENABLED: \"false\""
   require_file_contains "$ROOT_DIR/k8s/base/configmap.yaml" "HPSF_STREAMS_REPLICATION_FACTOR: \"1\""
   require_file_contains "$ROOT_DIR/k8s/base/configmap.yaml" "HPSF_STREAMS_NUM_STANDBY_REPLICAS: \"0\""
+  require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-b-deployment.yaml" "HPSF_STAGE_A_ENABLED"
+  require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-b-deployment.yaml" "HPSF_STAGE_B_ENABLED"
+  require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-b-deployment.yaml" "HPSF_TOPOLOGY_ENABLED"
+  require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-b-deployment.yaml" "value: \"true\""
   require_file_contains "$ROOT_DIR/scripts/monitoring/hpsf-alert-rules.yaml" "HpsfOpraLagTooHigh"
   require_file_contains "$ROOT_DIR/scripts/smoke/check-hpsf-deployment.sh" "options.hpsf.latest-signal"
 

@@ -31,10 +31,14 @@ spec:
               value: DATABENTO
             - name: HPSF_STAGE_ROLE
               value: STAGE_B
+            - name: HPSF_STAGE_A_ENABLED
+              value: "false"
+            - name: HPSF_STAGE_B_ENABLED
+              value: "true"
             - name: HPSF_ENABLED
               value: "true"
             - name: HPSF_TOPOLOGY_ENABLED
-              value: "false"
+              value: "true"
             - name: HPSF_MODE
               value: LIVE_SIGNAL_ONLY
             - name: HPSF_STREAMS_APPLICATION_ID
