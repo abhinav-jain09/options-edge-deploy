@@ -14,6 +14,7 @@ ES_STYPE_IN="${ES_STYPE_IN:-raw_symbol}"
 NEXT_CONTRACT_SYMBOL="${NEXT_CONTRACT_SYMBOL:-ESU6}"
 SPX_SPOT_SOURCE="${SPX_SPOT_SOURCE:-ES_BASIS_PROXY}"
 SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR:-}"
+DATABENTO_FEED_REPO="${DATABENTO_FEED_REPO:-../options-edge-databento-feed}"
 BUILD_DIR="${HPSF_REPLAY_BUILD_DIR:-build/hpsf-replay-20260612}"
 ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
 SUMMARY="$BUILD_DIR/download-summary.json"
@@ -31,14 +32,49 @@ if [[ -z "${DATABENTO_API_KEY:-}" ]]; then
   echo "DATABENTO_API_KEY is required for HPSF historical replay." >&2
   exit 1
 fi
-if [[ -z "$SOURCE_DIR" || ! -d "$SOURCE_DIR" ]]; then
-  echo "HPSF_REPLAY_SOURCE_DIR must point to prepared Databento JSONL replay files." >&2
-  echo "Required files: opra-definitions.jsonl opra-tcbbo.jsonl es-trades.jsonl spx-price.jsonl" >&2
+if [[ -z "$SOURCE_DIR" ]]; then
+  echo "HPSF_REPLAY_SOURCE_DIR is required for HPSF historical replay JSONL files." >&2
   exit 1
 fi
+if [[ ! -d "$DATABENTO_FEED_REPO/src/options_edge_databento_feed" ]]; then
+  echo "DATABENTO_FEED_REPO does not point to options-edge-databento-feed: $DATABENTO_FEED_REPO" >&2
+  exit 1
+fi
+
+mkdir -p "$SOURCE_DIR"
+missing_source=false
 for file in opra-definitions.jsonl opra-tcbbo.jsonl es-trades.jsonl spx-price.jsonl; do
   if [[ ! -s "$SOURCE_DIR/$file" ]]; then
-    echo "Missing or empty replay file: $SOURCE_DIR/$file" >&2
+    missing_source=true
+  fi
+done
+if [[ "$missing_source" == "true" ]]; then
+  echo "Preparing Databento replay JSONL files in $SOURCE_DIR"
+  PYTHONPATH="$DATABENTO_FEED_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
+  python3 -m options_edge_databento_feed.hpsf_replay_cli \
+    --date "$REPLAY_DATE" \
+    --start "$REPLAY_START" \
+    --end "$REPLAY_END" \
+    --opra-dataset "$OPRA_DATASET" \
+    --opra-schema "$OPRA_SCHEMA" \
+    --es-dataset "$ES_DATASET" \
+    --es-schema "$ES_SCHEMA" \
+    --es-reference-mode "$ES_REFERENCE_MODE" \
+    --es-symbol "$ES_SYMBOL" \
+    --es-stype-in "$ES_STYPE_IN" \
+    --compare-next-contract-volume "${COMPARE_NEXT_CONTRACT_VOLUME:-true}" \
+    --next-contract-symbol "$NEXT_CONTRACT_SYMBOL" \
+    --databento-api-key "$DATABENTO_API_KEY" \
+    --download-dir "$SOURCE_DIR" \
+    --prepare-jsonl-only \
+    > "$BUILD_DIR/databento-prepare-summary.json"
+else
+  echo "Using existing prepared Databento replay JSONL files in $SOURCE_DIR"
+fi
+
+for file in opra-definitions.jsonl opra-tcbbo.jsonl es-trades.jsonl spx-price.jsonl; do
+  if [[ ! -s "$SOURCE_DIR/$file" ]]; then
+    echo "Missing or empty replay file after Databento preparation: $SOURCE_DIR/$file" >&2
     exit 1
   fi
 done

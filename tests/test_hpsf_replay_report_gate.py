@@ -115,6 +115,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("HPSF_REPLAY_FAILURE_REASON", pipeline)
         self.assertIn("JENKINS_PUBLIC_URL", pipeline)
         self.assertIn("sed 's#/#/job/#g'", pipeline)
+        self.assertIn('export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"', pipeline)
         for stage in [
             "Checkout",
             "Checkout repos",
@@ -134,6 +135,15 @@ class HpsfReplayReportGateTest(unittest.TestCase):
             "Bugzilla update",
         ]:
             self.assertIn(stage, pipeline)
+
+    def test_download_script_prepares_missing_databento_jsonl(self) -> None:
+        text = DOWNLOAD_SCRIPT.read_text()
+
+        self.assertIn("Preparing Databento replay JSONL files", text)
+        self.assertIn("--prepare-jsonl-only", text)
+        self.assertIn("--download-dir \"$SOURCE_DIR\"", text)
+        self.assertIn("DATABENTO_FEED_REPO", text)
+        self.assertIn("Missing or empty replay file after Databento preparation", text)
 
     def test_run_script_fixture_mode_fails_closed_with_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -126,6 +126,7 @@ pipeline {
             export COMPARE_NEXT_CONTRACT_VOLUME="${COMPARE_NEXT_CONTRACT_VOLUME}"
             export NEXT_CONTRACT_SYMBOL="${NEXT_CONTRACT_SYMBOL}"
             export HPSF_REPLAY_SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR}"
+            export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"
             scripts/hpsf/download-databento-history.sh | tee artifacts/logs/resolve-es-reference.log
           '''
         }
