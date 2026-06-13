@@ -15,6 +15,7 @@ NEXT_CONTRACT_SYMBOL="${NEXT_CONTRACT_SYMBOL:-ESU6}"
 SPX_SPOT_SOURCE="${SPX_SPOT_SOURCE:-ES_BASIS_PROXY}"
 SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR:-}"
 DATABENTO_FEED_REPO="${DATABENTO_FEED_REPO:-../options-edge-databento-feed}"
+DATABENTO_FEED_PYTHON="${DATABENTO_FEED_PYTHON:-}"
 BUILD_DIR="${HPSF_REPLAY_BUILD_DIR:-build/hpsf-replay-20260612}"
 ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
 SUMMARY="$BUILD_DIR/download-summary.json"
@@ -40,6 +41,21 @@ if [[ ! -d "$DATABENTO_FEED_REPO/src/options_edge_databento_feed" ]]; then
   echo "DATABENTO_FEED_REPO does not point to options-edge-databento-feed: $DATABENTO_FEED_REPO" >&2
   exit 1
 fi
+if [[ -z "$DATABENTO_FEED_PYTHON" ]]; then
+  if [[ -x "$DATABENTO_FEED_REPO/.venv/bin/python" ]]; then
+    DATABENTO_FEED_PYTHON="$DATABENTO_FEED_REPO/.venv/bin/python"
+  else
+    DATABENTO_FEED_PYTHON="python3"
+  fi
+fi
+if ! "$DATABENTO_FEED_PYTHON" - <<'PY' >/dev/null 2>&1
+import databento
+PY
+then
+  echo "DATABENTO_FEED_PYTHON cannot import databento: $DATABENTO_FEED_PYTHON" >&2
+  echo "Run the Jenkins Build stage dependency install for options-edge-databento-feed before replay download." >&2
+  exit 1
+fi
 
 mkdir -p "$SOURCE_DIR"
 missing_source=false
@@ -51,7 +67,7 @@ done
 if [[ "$missing_source" == "true" ]]; then
   echo "Preparing Databento replay JSONL files in $SOURCE_DIR"
   PYTHONPATH="$DATABENTO_FEED_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
-  python3 -m options_edge_databento_feed.hpsf_replay_cli \
+  "$DATABENTO_FEED_PYTHON" -m options_edge_databento_feed.hpsf_replay_cli \
     --date "$REPLAY_DATE" \
     --start "$REPLAY_START" \
     --end "$REPLAY_END" \

@@ -115,7 +115,10 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("HPSF_REPLAY_FAILURE_REASON", pipeline)
         self.assertIn("JENKINS_PUBLIC_URL", pipeline)
         self.assertIn("sed 's#/#/job/#g'", pipeline)
+        self.assertIn("python3 -m venv .venv", pipeline)
+        self.assertIn(".venv/bin/python -m pip install -e .", pipeline)
         self.assertIn('export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"', pipeline)
+        self.assertIn('export DATABENTO_FEED_PYTHON="$PWD/.replay/options-edge-databento-feed/.venv/bin/python"', pipeline)
         for stage in [
             "Checkout",
             "Checkout repos",
@@ -143,7 +146,16 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("--prepare-jsonl-only", text)
         self.assertIn("--download-dir \"$SOURCE_DIR\"", text)
         self.assertIn("DATABENTO_FEED_REPO", text)
+        self.assertIn("DATABENTO_FEED_PYTHON", text)
+        self.assertIn("import databento", text)
         self.assertIn("Missing or empty replay file after Databento preparation", text)
+
+    def test_publish_script_uses_feed_python_with_kafka_dependency(self) -> None:
+        text = PUBLISH_SCRIPT.read_text()
+
+        self.assertIn("DATABENTO_FEED_PYTHON", text)
+        self.assertIn("import confluent_kafka", text)
+        self.assertIn('\"$DATABENTO_FEED_PYTHON\" -m options_edge_databento_feed.hpsf_replay_cli', text)
 
     def test_run_script_fixture_mode_fails_closed_with_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

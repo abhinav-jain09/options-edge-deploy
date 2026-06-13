@@ -82,7 +82,14 @@ pipeline {
           export PATH="$JAVA_HOME/bin:$PATH"
           java -version
           (cd .replay/options-edge-contracts && mvn -B test package)
-          (cd .replay/options-edge-databento-feed && python3 -m compileall src && PYTHONPATH=src python3 -m unittest tests.test_hpsf_replay_es_reference tests.test_hpsf_historical_replay tests.test_hpsf_mapping)
+          (
+            cd .replay/options-edge-databento-feed
+            python3 -m venv .venv
+            .venv/bin/python -m pip install --upgrade pip
+            .venv/bin/python -m pip install -e .
+            .venv/bin/python -m compileall src
+            PYTHONPATH=src .venv/bin/python -m unittest tests.test_hpsf_replay_es_reference tests.test_hpsf_historical_replay tests.test_hpsf_mapping
+          )
           (cd .replay/options-edge-processing && mvn -B -pl hpsf-processing-service -am test package)
           (cd .replay/options-edge-integration-test && mvn -B test package)
         '''
@@ -127,6 +134,7 @@ pipeline {
             export NEXT_CONTRACT_SYMBOL="${NEXT_CONTRACT_SYMBOL}"
             export HPSF_REPLAY_SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR}"
             export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"
+            export DATABENTO_FEED_PYTHON="$PWD/.replay/options-edge-databento-feed/.venv/bin/python"
             scripts/hpsf/download-databento-history.sh | tee artifacts/logs/resolve-es-reference.log
           '''
         }
@@ -163,6 +171,7 @@ pipeline {
           export REPLAY_SPEED="${REPLAY_SPEED}"
           export HPSF_REPLAY_SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR}"
           export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"
+          export DATABENTO_FEED_PYTHON="$PWD/.replay/options-edge-databento-feed/.venv/bin/python"
           scripts/hpsf/publish-historical-replay.sh | tee artifacts/logs/publish-historical-replay.log
         '''
       }
