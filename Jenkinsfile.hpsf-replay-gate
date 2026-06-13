@@ -295,9 +295,18 @@ pipeline {
             --env=HPSF_ORDER_PLACEMENT_ENABLED=false \
             --env=ORDER_PLACEMENT_ENABLED=false
           kubectl -n "$NAMESPACE" wait --for=condition=Ready pod/"$pod" --timeout=180s
+          : > artifacts/logs/stage-b-startup.log
+          for attempt in $(seq 1 30); do
+            kubectl -n "$NAMESPACE" logs "$pod" --tail=200 > artifacts/logs/stage-b-startup.log || true
+            if grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b-startup.log; then
+              break
+            fi
+            sleep 1
+          done
+          grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b-startup.log
           sleep 30
-          kubectl -n "$NAMESPACE" logs "$pod" > artifacts/logs/stage-b.log || true
-          grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b.log
+          kubectl -n "$NAMESPACE" logs "$pod" --tail=2000 > artifacts/logs/stage-b-runtime.log || true
+          cat artifacts/logs/stage-b-startup.log artifacts/logs/stage-b-runtime.log > artifacts/logs/stage-b.log
         '''
       }
     }
