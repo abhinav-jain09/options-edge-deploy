@@ -105,13 +105,20 @@ for pattern in \
 done
 
 trade_date="$(TZ=America/New_York date +%F)"
+expiry="$trade_date"
+underlying_event_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+spx_json="{\"schemaVersion\":1,\"symbol\":\"SPX\",\"eventTime\":\"$underlying_event_time\",\"price\":6005.0,\"size\":null,\"source\":\"SYNTHETIC_OPTION_SPOT\",\"quality\":\"LIVE\"}"
+es_json="{\"schemaVersion\":1,\"source\":\"DATABENTO\",\"dataset\":\"GLBX.MDP3\",\"sourceSchema\":\"trades\",\"symbol\":\"ES.v.0\",\"eventTime\":\"$underlying_event_time\",\"receiveTime\":\"$underlying_event_time\",\"sessionDate\":\"$trade_date\",\"instrumentId\":\"42140864\",\"price\":6030.0,\"size\":10,\"side\":\"B\",\"flags\":0,\"sequence\":1}"
+
+log "priming Stage B underlying state with SPX spot and ES trade"
+produce_keyed_json underlying.spx.price SPX "$spx_json"
+produce_keyed_json underlying.es.trades "ES.v.0|$trade_date|1" "$es_json"
+sleep "${HPSF_STAGE_B_UNDERLYING_PRIME_SECONDS:-10}"
+
 event_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fixture_id="hpsf65-${event_time//[:TZ-]/}"
-expiry="$trade_date"
 expected_eval_id="SPX-$(date -u -d "$event_time" +%Y%m%d-%H%M%S)000"
-
-spx_json="{\"schemaVersion\":1,\"symbol\":\"SPX\",\"eventTime\":\"$event_time\",\"price\":6005.0,\"size\":null,\"source\":\"SYNTHETIC_OPTION_SPOT\",\"quality\":\"LIVE\"}"
-es_json="{\"schemaVersion\":1,\"source\":\"DATABENTO\",\"dataset\":\"GLBX.MDP3\",\"sourceSchema\":\"trades\",\"symbol\":\"ES.v.0\",\"eventTime\":\"$event_time\",\"receiveTime\":\"$event_time\",\"sessionDate\":\"$trade_date\",\"instrumentId\":\"42140864\",\"price\":6030.0,\"size\":10,\"side\":\"B\",\"flags\":0,\"sequence\":1}"
 flow_json="{\"schemaVersion\":2,\"algorithmVersion\":\"HPSF_V2.1\",\"configVersion\":\"hpsf65-smoke\",\"codeGitSha\":\"$fixture_id\",\"eventTime\":\"$event_time\",\"tradeDate\":\"$trade_date\",\"underlying\":\"SPX\",\"expiry\":\"$expiry\",\"strike\":6005.0,\"optionType\":\"CALL\",\"spot\":6005.0,\"bid\":8.90,\"ask\":9.40,\"mid\":9.15,\"spread\":0.50,\"spreadPct\":0.0546,\"totalVolume1m\":100,\"askVolume1m\":80,\"bidVolume1m\":10,\"midVolume1m\":10,\"askRatio1m\":0.80,\"askPremium1m\":1000000.0,\"bidPremium1m\":0.0,\"netBuyPremium1m\":1000000.0,\"totalVolume5m\":300,\"askVolume5m\":250,\"bidVolume5m\":25,\"midVolume5m\":25,\"askRatio5m\":0.83,\"askPremium5m\":2000000.0,\"bidPremium5m\":0.0,\"netBuyPremium5m\":2000000.0,\"volumeSpeed\":4.0,\"tradeCount1m\":20,\"liquidityOk\":true,\"candidateDistanceOk\":true}"
 
 tmp_dir="$(mktemp -d)"
@@ -138,8 +145,6 @@ consumer_pids=("$signal_pid" "$latest_pid")
 sleep 5
 
 log "producing deterministic Stage B fixture $fixture_id expecting $expected_eval_id"
-produce_keyed_json underlying.spx.price SPX "$spx_json"
-produce_keyed_json underlying.es.trades "ES.v.0|$trade_date|1" "$es_json"
 produce_keyed_json options.hpsf.strike-flow "$trade_date|$expiry|6005|CALL" "$flow_json"
 
 signal_output="$(wait_for_expected_record options.hpsf.signal "$expected_eval_id" "$signal_pid" "$signal_output_file" "$signal_error_file")"
