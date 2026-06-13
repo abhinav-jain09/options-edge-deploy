@@ -19,9 +19,19 @@ mkdir -p "$BUILD_DIR" "$ARTIFACT_DIR" "$BUILD_DIR/logs" "$ARTIFACT_DIR/logs"
 
 write_fail_report() {
   local reason="$1"
+  local evidence_mode="REAL"
+  local json_reason
+  if [[ "$FIXTURE_MODE" == "true" && "$DRY_RUN" == "true" ]]; then
+    evidence_mode="FIXTURE_DRY_RUN"
+  elif [[ "$FIXTURE_MODE" == "true" ]]; then
+    evidence_mode="FIXTURE"
+  elif [[ "$DRY_RUN" == "true" ]]; then
+    evidence_mode="DRY_RUN"
+  fi
+  json_reason="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$reason")"
   cat > "$EVIDENCE" <<JSON
 {
-  "evidenceMode": "${FIXTURE_MODE:+FIXTURE}${DRY_RUN:+DRY_RUN}",
+  "evidenceMode": "$evidence_mode",
   "jenkins": {
     "buildUrl": "${BUILD_URL:-}",
     "buildNumber": "${BUILD_NUMBER:-}",
@@ -45,7 +55,7 @@ write_fail_report() {
   "stageB": {"started": false, "startupLog": ""},
   "keyValidation": {"signalKeyValid": false, "latestSignalKeyValid": false, "auditKeyValid": false},
   "samples": {},
-  "missingScenarioNotes": ["$reason"],
+  "missingScenarioNotes": [$json_reason],
   "orderInstructionEnabledTrueFound": false
 }
 JSON
@@ -54,7 +64,7 @@ JSON
 }
 
 if [[ "$DRY_RUN" == "true" || "$FIXTURE_MODE" == "true" ]]; then
-  write_fail_report "Dry-run/fixture replay is not valid HPSF-82A release evidence. Run Jenkins with real Databento replay evidence."
+  write_fail_report "${HPSF_REPLAY_FAILURE_REASON:-Dry-run/fixture replay is not valid HPSF-82A release evidence. Run Jenkins with real Databento replay evidence.}"
   echo "HPSF replay gate failed closed; report=$REPORT" >&2
   exit 1
 fi

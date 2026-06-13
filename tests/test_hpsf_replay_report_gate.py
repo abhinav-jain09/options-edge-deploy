@@ -111,6 +111,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("archiveArtifacts", pipeline)
         self.assertIn("artifacts/hpsf-replay-report-20260612.md", pipeline)
         self.assertIn("allowEmptyArchive: false", pipeline)
+        self.assertIn("rm -f artifacts/hpsf-replay-report-20260612.md", pipeline)
+        self.assertIn("HPSF_REPLAY_FAILURE_REASON", pipeline)
         for stage in [
             "Checkout",
             "Checkout repos",
@@ -150,6 +152,34 @@ class HpsfReplayReportGateTest(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertIn("Final PASS/FAIL: FAIL", report.read_text())
             self.assertIn("Dry-run/fixture replay is not valid", report.read_text())
+            self.assertIn("FIXTURE_DRY_RUN evidence cannot close HPSF-82A/HPSF-83", report.read_text())
+
+    def test_run_script_custom_failure_reason_is_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "hpsf-replay-report-20260612.md"
+            artifacts = Path(tmp) / "artifacts"
+            result = subprocess.run(
+                [str(RUN_SCRIPT), "--dry-run"],
+                cwd=ROOT,
+                env={
+                    "PATH": "/bin:/usr/bin:/usr/local/bin",
+                    "HPSF_REPLAY_REPORT": str(report),
+                    "HPSF_REPLAY_ARTIFACT_DIR": str(artifacts),
+                    "HPSF_REPLAY_FAILURE_REASON": "Missing Jenkins credential options-edge-databento-api-key",
+                    "BUILD_URL": "http://jenkins.example/job/hpsf-historical-replay-20260612/9/",
+                    "BUILD_NUMBER": "9",
+                    "CODE_GIT_SHA": "deadbeef",
+                    "JOB_NAME": "hpsf-historical-replay-20260612",
+                },
+                text=True,
+                capture_output=True,
+            )
+
+            text = report.read_text()
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("Missing Jenkins credential options-edge-databento-api-key", text)
+            self.assertIn("Build number: 9", text)
+            self.assertIn("Commit SHA: deadbeef", text)
 
 
 def generate_report(data: dict) -> str:

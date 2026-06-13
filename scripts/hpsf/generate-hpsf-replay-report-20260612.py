@@ -53,7 +53,7 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     topic_configs = evidence.get("topicConfigs", {})
 
     failures: list[str] = []
-    if evidence_mode in {"FIXTURE", "DRY_RUN"}:
+    if "FIXTURE" in evidence_mode or "DRY_RUN" in evidence_mode:
         failures.append(f"{evidence_mode} evidence cannot close HPSF-82A/HPSF-83")
     if not str(jenkins.get("buildUrl", "")).strip():
         failures.append("Jenkins build URL missing")

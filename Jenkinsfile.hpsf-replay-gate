@@ -349,9 +349,10 @@ pipeline {
       sh '''
         set +e
         mkdir -p artifacts/logs build/hpsf-replay-20260612/logs
-        if [ ! -s artifacts/hpsf-replay-report-20260612.md ]; then
-          scripts/hpsf/run-hpsf-replay-20260612.sh --dry-run || true
-        fi
+        rm -f artifacts/hpsf-replay-report-20260612.md artifacts/hpsf-replay-summary.json build/hpsf-replay-20260612/evidence.json
+        export CODE_GIT_SHA="$(cat build-git-sha.txt 2>/dev/null || true)"
+        export HPSF_REPLAY_FAILURE_REASON="Jenkins failed before a valid PASS replay report was generated. Verify required credentials including DATABENTO_API_KEY_CREDENTIAL_ID=${DATABENTO_API_KEY_CREDENTIAL_ID:-options-edge-databento-api-key}, prepared replay source data, Kafka, Kubernetes, and Databento access in the console log."
+        scripts/hpsf/run-hpsf-replay-20260612.sh --dry-run || true
       '''
       archiveArtifacts artifacts: 'artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/logs/**,build/hpsf-replay-20260612/**', fingerprint: true, allowEmptyArchive: false
     }
