@@ -4,7 +4,7 @@
 
 HPSF V2.1 is a Databento-based, signal-only pipeline. It consumes OPRA TCBBO, ES trades, and SPX spot inputs, then emits signal, latest-signal, audit, strike-score, market-flow, DLQ, writer-DLQ, and exit-intent topics.
 
-HPSF must never place orders, call IBKR order placement, or emit `orderInstruction.enabled=true`.
+HPSF must never place orders, call IBKR order placement, or emit an order instruction with `enabled` set to true.
 
 ## Market Hours
 
@@ -19,7 +19,7 @@ Use the New York exchange calendar.
 
 - `hpsf-stage-a-service`: Databento OPRA per-strike classification and strike-flow state.
 - `hpsf-stage-b-service`: central market evaluator runtime placeholder. Keep topology disabled until the Stage B entrypoint is wired so it cannot run a duplicate Stage A topology.
-- `hpsf-postgres-writer-service`: persists HPSF signal/audit/validation records and rejects any `orderInstruction.enabled=true` payload.
+- `hpsf-postgres-writer-service`: persists HPSF signal/audit/validation records and rejects any order instruction with `enabled` set to true.
 - `feed-gateway-service`: publishes HPSF latest-signal UI view models.
 - OptionsEdge web UI: renders the HPSF dashboard above the option chain.
 
