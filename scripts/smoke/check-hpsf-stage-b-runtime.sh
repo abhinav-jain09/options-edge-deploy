@@ -39,18 +39,28 @@ print_stage_b_logs() {
   "${KUBECTL[@]}" logs deployment/hpsf-stage-b-service --tail=500 --all-containers=true >&2 || true
 }
 
-consume_expected_record() {
+start_latest_partition_consumer() {
   local topic="$1"
-  local expected="$2"
-  local output_file="$3"
-  local error_file="$4"
-  local status=0
+  local output_file="$2"
+  local error_file="$3"
   kafka-console-consumer \
     --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --topic "$topic" \
-    --from-beginning \
-    --max-messages "${HPSF_STAGE_B_SMOKE_MAX_MESSAGES:-20000}" \
-    --timeout-ms 45000 >"$output_file" 2>"$error_file" || status=$?
+    --partition 0 \
+    --offset latest \
+    --max-messages 1 \
+    --timeout-ms 45000 >"$output_file" 2>"$error_file" &
+  CONSUMER_PID="$!"
+}
+
+wait_for_expected_record() {
+  local topic="$1"
+  local expected="$2"
+  local pid="$3"
+  local output_file="$4"
+  local error_file="$5"
+  local status=0
+  wait "$pid" || status=$?
   local matches
   matches="$(grep -F "$expected" "$output_file" || true)"
   if [[ -z "$matches" ]]; then
@@ -106,6 +116,9 @@ flow_json="{\"schemaVersion\":2,\"algorithmVersion\":\"HPSF_V2.1\",\"configVersi
 
 tmp_dir="$(mktemp -d)"
 cleanup() {
+  for pid in "${consumer_pids[@]:-}"; do
+    kill "$pid" 2>/dev/null || true
+  done
   rm -rf "$tmp_dir"
 }
 trap cleanup EXIT
@@ -115,14 +128,22 @@ signal_error_file="$tmp_dir/signal.err"
 latest_output_file="$tmp_dir/latest.out"
 latest_error_file="$tmp_dir/latest.err"
 
+consumer_pids=()
+log "starting latest-offset consumers for Stage B outputs"
+start_latest_partition_consumer options.hpsf.signal "$signal_output_file" "$signal_error_file"
+signal_pid="$CONSUMER_PID"
+start_latest_partition_consumer options.hpsf.latest-signal "$latest_output_file" "$latest_error_file"
+latest_pid="$CONSUMER_PID"
+consumer_pids=("$signal_pid" "$latest_pid")
+sleep 5
+
 log "producing deterministic Stage B fixture $fixture_id expecting $expected_eval_id"
 produce_keyed_json underlying.spx.price SPX "$spx_json"
 produce_keyed_json underlying.es.trades "ES.v.0|$trade_date|1" "$es_json"
 produce_keyed_json options.hpsf.strike-flow "$trade_date|$expiry|6005|CALL" "$flow_json"
-sleep 15
 
-signal_output="$(consume_expected_record options.hpsf.signal "$expected_eval_id" "$signal_output_file" "$signal_error_file")"
-latest_output="$(consume_expected_record options.hpsf.latest-signal "$expected_eval_id" "$latest_output_file" "$latest_error_file")"
+signal_output="$(wait_for_expected_record options.hpsf.signal "$expected_eval_id" "$signal_pid" "$signal_output_file" "$signal_error_file")"
+latest_output="$(wait_for_expected_record options.hpsf.latest-signal "$expected_eval_id" "$latest_pid" "$latest_output_file" "$latest_error_file")"
 
 if [[ -z "$signal_output" ]]; then
   echo "Stage B did not emit options.hpsf.signal after fixture" >&2
