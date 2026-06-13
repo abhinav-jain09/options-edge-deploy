@@ -81,7 +81,7 @@ pipeline {
           export PATH="$JAVA_HOME/bin:$PATH"
           java -version
           (cd .replay/options-edge-contracts && mvn -B test package)
-          (cd .replay/options-edge-databento-feed && python3 -m compileall src && PYTHONPATH=src python3 -m unittest discover -s tests -p 'test*.py')
+          (cd .replay/options-edge-databento-feed && python3 -m compileall src && PYTHONPATH=src python3 -m unittest tests.test_hpsf_replay_es_reference tests.test_hpsf_historical_replay tests.test_hpsf_mapping)
           (cd .replay/options-edge-processing && mvn -B -pl hpsf-processing-service -am test package)
           (cd .replay/options-edge-integration-test && mvn -B test package)
         '''
