@@ -98,6 +98,7 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         self.assertIn("distanceToVwap", text)
         self.assertIn("read_expected_record", text)
         self.assertIn("--from-beginning", text)
+        self.assertIn("HPSF_STAGE_B_OUTPUT_SCAN_MAX_MESSAGES:-5000", text)
         self.assertIn("expected_eval_id", text)
         self.assertIn("Recent hpsf-stage-b-service logs", text)
         self.assertIn("--bootstrap-server", text)

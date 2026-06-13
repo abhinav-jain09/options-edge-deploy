@@ -95,7 +95,7 @@ read_expected_record() {
       --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
       --topic "$topic" \
       --from-beginning \
-      --max-messages "${HPSF_STAGE_B_OUTPUT_SCAN_MAX_MESSAGES:-200}" \
+      --max-messages "${HPSF_STAGE_B_OUTPUT_SCAN_MAX_MESSAGES:-5000}" \
       --timeout-ms 10000 >"$output_file" 2>"$error_file" || true
     local matches
     matches="$(grep -F "$expected" "$output_file" || true)"
