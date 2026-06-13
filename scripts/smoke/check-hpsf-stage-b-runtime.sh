@@ -45,7 +45,7 @@ start_latest_consumer() {
     --group "$group" \
     --max-messages 1 \
     --timeout-ms 45000 >"$output_file" 2>"$error_file" &
-  echo "$!"
+  CONSUMER_PID="$!"
 }
 
 wait_for_consumer_output() {
@@ -118,8 +118,10 @@ signal_error_file="$tmp_dir/signal.err"
 latest_output_file="$tmp_dir/latest.out"
 latest_error_file="$tmp_dir/latest.err"
 log "starting fresh latest consumers for Stage B outputs"
-signal_pid="$(start_latest_consumer options.hpsf.signal "hpsf65-signal-$fixture_id" "$signal_output_file" "$signal_error_file")"
-latest_pid="$(start_latest_consumer options.hpsf.latest-signal "hpsf65-latest-$fixture_id" "$latest_output_file" "$latest_error_file")"
+start_latest_consumer options.hpsf.signal "hpsf65-signal-$fixture_id" "$signal_output_file" "$signal_error_file"
+signal_pid="$CONSUMER_PID"
+start_latest_consumer options.hpsf.latest-signal "hpsf65-latest-$fixture_id" "$latest_output_file" "$latest_error_file"
+latest_pid="$CONSUMER_PID"
 consumer_pids=("$signal_pid" "$latest_pid")
 sleep 5
 
