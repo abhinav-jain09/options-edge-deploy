@@ -16,6 +16,8 @@ pipeline {
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-pressure-postgres-writer:dev', description: 'Pressure Postgres writer image')
     string(name: 'FEED_GATEWAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-feed-gateway:dev', description: 'Feed gateway image')
     string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-integration-test:dev', description: 'Integration-test image')
+    string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-processing:dev', description: 'HPSF Stage A/B processing image')
+    string(name: 'HPSF_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev', description: 'HPSF Postgres writer image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-ibkr-feed:dev', description: 'IBKR feed image')
     string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
     choice(name: 'MARKET_DATA_SOURCE', choices: ['IBKR', 'DATABENTO'], description: 'Runtime raw market-data source for processors')
@@ -46,6 +48,8 @@ pipeline {
     PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-pressure-postgres-writer:dev'}"
     FEED_GATEWAY_IMAGE = "${params.FEED_GATEWAY_IMAGE ?: '192.168.100.252:5000/options-edge-feed-gateway:dev'}"
     INTEGRATION_TEST_IMAGE = "${params.INTEGRATION_TEST_IMAGE ?: '192.168.100.252:5000/options-edge-integration-test:dev'}"
+    HPSF_PROCESSING_IMAGE = "${params.HPSF_PROCESSING_IMAGE ?: '192.168.100.252:5000/options-edge-hpsf-processing:dev'}"
+    HPSF_POSTGRES_WRITER_IMAGE = "${params.HPSF_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev'}"
     IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: '192.168.100.252:5000/options-edge-ibkr-feed:dev'}"
     MARKET_DATA_SOURCE = "${params.MARKET_DATA_SOURCE ?: 'IBKR'}"
     RAW_TOPIC = "${params.RAW_TOPIC ?: ''}"
@@ -143,6 +147,8 @@ pipeline {
           export KAFKA_RECREATE_MISMATCHED_TOPICS="${KAFKA_CLEANUP_TOPICS}"
           scripts/kafka/apply-topics.sh
           scripts/kafka/verify-topics.sh
+          scripts/kafka/create-hpsf-topics.sh
+          scripts/kafka/verify-hpsf-topics.sh
         '''
       }
     }
@@ -192,6 +198,8 @@ RAW_POSTGRES_WRITER_IMAGE=$registry/options-edge-raw-postgres-writer:$image_tag
 PRESSURE_POSTGRES_WRITER_IMAGE=$registry/options-edge-pressure-postgres-writer:$image_tag
 FEED_GATEWAY_IMAGE=$registry/options-edge-feed-gateway:$image_tag
 INTEGRATION_TEST_IMAGE=$registry/options-edge-integration-test:$image_tag
+HPSF_PROCESSING_IMAGE=$registry/options-edge-hpsf-processing:$image_tag
+HPSF_POSTGRES_WRITER_IMAGE=$registry/options-edge-hpsf-postgres-writer:$image_tag
 IBKR_FEED_IMAGE=$registry/options-edge-ibkr-feed:$image_tag
 EOF
           else
@@ -207,6 +215,8 @@ RAW_POSTGRES_WRITER_IMAGE=$RAW_POSTGRES_WRITER_IMAGE
 PRESSURE_POSTGRES_WRITER_IMAGE=$PRESSURE_POSTGRES_WRITER_IMAGE
 FEED_GATEWAY_IMAGE=$FEED_GATEWAY_IMAGE
 INTEGRATION_TEST_IMAGE=$INTEGRATION_TEST_IMAGE
+HPSF_PROCESSING_IMAGE=$HPSF_PROCESSING_IMAGE
+HPSF_POSTGRES_WRITER_IMAGE=$HPSF_POSTGRES_WRITER_IMAGE
 IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
 EOF
           fi
@@ -232,6 +242,8 @@ EOF
             PRESSURE_POSTGRES_WRITER_IMAGE=$PRESSURE_POSTGRES_WRITER_IMAGE
             FEED_GATEWAY_IMAGE=$FEED_GATEWAY_IMAGE
             INTEGRATION_TEST_IMAGE=$INTEGRATION_TEST_IMAGE
+            HPSF_PROCESSING_IMAGE=$HPSF_PROCESSING_IMAGE
+            HPSF_POSTGRES_WRITER_IMAGE=$HPSF_POSTGRES_WRITER_IMAGE
             IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
           "
 
@@ -334,6 +346,9 @@ PY
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/feed-gateway-service feed-gateway="$FEED_GATEWAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-integration-test integration-test="$INTEGRATION_TEST_IMAGE"
+          kubectl -n options-edge set image deployment/hpsf-stage-a-service hpsf-stage-a="$HPSF_PROCESSING_IMAGE"
+          kubectl -n options-edge set image deployment/hpsf-stage-b-service hpsf-stage-b="$HPSF_PROCESSING_IMAGE"
+          kubectl -n options-edge set image deployment/hpsf-postgres-writer-service hpsf-postgres-writer="$HPSF_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
           kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
@@ -350,6 +365,9 @@ PY
           kubectl -n options-edge rollout restart deployment/pressure-postgres-writer
           kubectl -n options-edge rollout restart deployment/feed-gateway-service
           kubectl -n options-edge rollout restart deployment/options-edge-integration-test
+          kubectl -n options-edge rollout restart deployment/hpsf-stage-a-service
+          kubectl -n options-edge rollout restart deployment/hpsf-stage-b-service
+          kubectl -n options-edge rollout restart deployment/hpsf-postgres-writer-service
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=180s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=180s
@@ -366,6 +384,9 @@ PY
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=180s
           kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=180s
           kubectl -n options-edge rollout status deployment/options-edge-integration-test --timeout=180s
+          kubectl -n options-edge rollout status deployment/hpsf-stage-a-service --timeout=240s
+          kubectl -n options-edge rollout status deployment/hpsf-stage-b-service --timeout=240s
+          kubectl -n options-edge rollout status deployment/hpsf-postgres-writer-service --timeout=180s
           kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=240s
         '''
       }
@@ -403,6 +424,22 @@ PY
     stage('Smoke') {
       steps {
         sh 'scripts/smoke/check-k8s-services.sh'
+      }
+    }
+    stage('HPSF Smoke') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          export KAFKA_TOPIC_REPLICATION_FACTOR=1
+          export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
+          export KUBECONFIG="${KUBECONFIG}"
+          export NAMESPACE=options-edge
+          export REQUIRE_LATEST_SIGNAL=false
+          scripts/smoke/check-hpsf-deployment.sh
+          scripts/smoke/check-hpsf-stage-b-runtime.sh
+        '''
       }
     }
   }

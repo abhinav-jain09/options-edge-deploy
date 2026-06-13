@@ -149,6 +149,25 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         ]:
             self.assertIn(text, pipeline)
 
+    def test_main_deploy_pipeline_rolls_out_hpsf_services(self) -> None:
+        pipeline = self.read("Jenkinsfile")
+        for text in [
+            "HPSF_PROCESSING_IMAGE",
+            "HPSF_POSTGRES_WRITER_IMAGE",
+            "scripts/kafka/create-hpsf-topics.sh",
+            "scripts/kafka/verify-hpsf-topics.sh",
+            "set image deployment/hpsf-stage-a-service",
+            "set image deployment/hpsf-stage-b-service",
+            "set image deployment/hpsf-postgres-writer-service",
+            "rollout restart deployment/hpsf-stage-a-service",
+            "rollout restart deployment/hpsf-stage-b-service",
+            "rollout status deployment/hpsf-stage-b-service",
+            "stage('HPSF Smoke')",
+            "scripts/smoke/check-hpsf-deployment.sh",
+            "scripts/smoke/check-hpsf-stage-b-runtime.sh",
+        ]:
+            self.assertIn(text, pipeline)
+
 
 if __name__ == "__main__":
     unittest.main()
