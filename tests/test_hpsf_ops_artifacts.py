@@ -79,6 +79,20 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         self.assertNotIn("ibkr-feed-service", text)
         self.assertNotIn("options.ibkr.raw", text)
 
+    def test_stage_b_runtime_smoke_produces_fixture_and_requires_fresh_outputs(self) -> None:
+        script = ROOT / "scripts/smoke/check-hpsf-stage-b-runtime.sh"
+        subprocess.run(["bash", "-n", str(script)], check=True)
+        text = script.read_text()
+        self.assertIn("options.hpsf.strike-flow", text)
+        self.assertIn("options.hpsf.signal", text)
+        self.assertIn("options.hpsf.latest-signal", text)
+        self.assertIn("underlying.es.trades", text)
+        self.assertIn("underlying.spx.price", text)
+        self.assertIn("signal_offset_before", text)
+        self.assertIn("Stage B runtime smoke passed", text)
+        self.assertNotIn("ibkr-feed-service", text)
+        self.assertNotIn("options.ibkr.raw", text)
+
     def test_monitoring_rules_and_scrape_cover_hpsf(self) -> None:
         rules = self.read("scripts/monitoring/hpsf-alert-rules.yaml")
         scrape = self.read("scripts/monitoring/apply-prometheus-scrapes.sh")

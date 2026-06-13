@@ -26,10 +26,12 @@ pipeline {
           bash -n scripts/kafka/create-hpsf-topics.sh
           bash -n scripts/kafka/verify-hpsf-topics.sh
           bash -n scripts/smoke/check-hpsf-deployment.sh
+          bash -n scripts/smoke/check-hpsf-stage-b-runtime.sh
           bash -n scripts/monitoring/apply-prometheus-scrapes.sh
           python3 -m unittest discover -s tests -p 'test*.py'
           scripts/kafka/create-hpsf-topics.sh --dry-run >/tmp/hpsf-topics-dry-run.txt
           scripts/smoke/check-hpsf-deployment.sh --dry-run >/tmp/hpsf-smoke-dry-run.txt
+          scripts/smoke/check-hpsf-stage-b-runtime.sh --dry-run >/tmp/hpsf-stage-b-smoke-dry-run.txt
           grep -F 'hpsf-stage-a-deployment.yaml' k8s/base/kustomization.yaml
           grep -F 'hpsf-stage-b-deployment.yaml' k8s/base/kustomization.yaml
           grep -F 'hpsf-postgres-writer-deployment.yaml' k8s/base/kustomization.yaml
@@ -91,6 +93,7 @@ pipeline {
         sh '''
           set -euo pipefail
           scripts/smoke/check-hpsf-deployment.sh
+          scripts/smoke/check-hpsf-stage-b-runtime.sh
         '''
       }
     }
