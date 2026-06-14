@@ -406,7 +406,9 @@ pipeline {
           done
           grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b-startup.log
           grep -E 'HPSF stage-b stream state transition .* -> RUNNING|state=stage-b=RUNNING' artifacts/logs/stage-b-startup.log
-          sleep 30
+          scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
+            "options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}" \
+            artifacts/logs/stage-b-consumer-group-catchup.log
           kubectl -n "$NAMESPACE" logs "$pod" --tail=2000 > artifacts/logs/stage-b-runtime.log || true
           cat artifacts/logs/stage-b-startup.log artifacts/logs/stage-b-runtime.log > artifacts/logs/stage-b.log
         '''

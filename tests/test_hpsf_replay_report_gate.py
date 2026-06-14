@@ -363,7 +363,12 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("--image-pull-policy=Always", pipeline)
         self.assertIn('HPSF_REPLAY_POD_OVERRIDES = \'{"spec":{"hostNetwork":true,"dnsPolicy":"ClusterFirstWithHostNet"}}\'', pipeline)
         self.assertEqual(3, pipeline.count('--overrides="$HPSF_REPLAY_POD_OVERRIDES"'))
-        self.assertEqual(2, pipeline.count("scripts/hpsf/wait-kafka-consumer-group-caught-up.sh"))
+        self.assertEqual(3, pipeline.count("scripts/hpsf/wait-kafka-consumer-group-caught-up.sh"))
+        self.assertIn(
+            '"options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}"',
+            pipeline,
+        )
+        self.assertIn("artifacts/logs/stage-b-consumer-group-catchup.log", pipeline)
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_ALLOW_INCOMPLETE=true"))
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_MIN_HOLIDAYS_PER_YEAR=0"))
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_REQUIRE_EARLY_CLOSES=false"))
@@ -719,6 +724,31 @@ esac
             self.assertEqual({"MARKET_SCORE_BELOW_THRESHOLD": 1}, evidence_data["gateReasonCounts"])
             self.assertEqual(["6000 CALL count=1"], evidence_data["topExecutionStrikes"])
             self.assertTrue((artifact_dir / "hpsf-sample-signal.json").exists())
+
+    def test_replay_report_root_cause_names_stage_b_underlying_not_materialized(self) -> None:
+        data = evidence()
+        data["validationResult"] = "FAIL"
+        data["validationFailures"] = [
+            "REPLAY_VALIDATION_FAILED: underlyingStateRecordsReceived <= 0",
+            "REPLAY_VALIDATION_FAILED: ALL_NO_TRADE_FALLBACK_OUTPUT",
+        ]
+        data["counts"]["underlyingStateRecordsEmitted"] = 100
+        data["stageBPerformance"].update(
+            {
+                "underlyingStateRecordsReceived": 0,
+                "underlyingStateRecordsStored": 0,
+                "underlyingStateLookupHitCount": 0,
+                "underlyingStateLookupMissCount": 4,
+                "healthyUnderlyingStateCount": 0,
+            }
+        )
+
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Stage B did not materialize", report)
+        self.assertIn("Underlying-state records emitted: 100", report)
+        self.assertIn("received=0, stored=0, lookupHits=0, lookupMisses=4", report)
 
     def test_run_script_fixture_mode_fails_closed_with_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

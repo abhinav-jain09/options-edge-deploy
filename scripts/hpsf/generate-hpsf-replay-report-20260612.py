@@ -460,6 +460,7 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
 
 def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) -> list[str]:
     counts = evidence.get("counts", {}) or {}
+    stage_b_performance = evidence.get("stageBPerformance", {}) or {}
     diagnostics = evidence.get("rootCauseDiagnostics", {}) or {}
     publish_summary = evidence.get("publishSummary", {}) or {}
     download_summary = evidence.get("downloadSummary", {}) or {}
@@ -486,13 +487,23 @@ def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) ->
     signal_count = as_int(counts.get("signalRecordsEmitted"))
     latest_count = as_int(counts.get("latestSignalRecordsEmitted"))
     audit_count = as_int(counts.get("auditRecordsEmitted"))
+    underlying_emitted = as_int(counts.get("underlyingStateRecordsEmitted"))
+    def stage_b_runtime_counter(name: str) -> int:
+        if name in stage_b_performance:
+            return as_int(stage_b_performance.get(name))
+        return as_int(counts.get(name))
+
+    underlying_received = stage_b_runtime_counter("underlyingStateRecordsReceived")
+    underlying_stored = stage_b_runtime_counter("underlyingStateRecordsStored")
+    underlying_hits = stage_b_runtime_counter("underlyingStateLookupHitCount")
+    underlying_misses = stage_b_runtime_counter("underlyingStateLookupMissCount")
     stage_a_state = str(stage_a.get("streamState") or infer_stream_state(stage_a.get("logTail", "")) or "")
     stage_b_state = str(stage_b.get("streamState") or infer_stream_state(stage_b.get("logTail", "")) or "")
     group_exists = stage_a_group.get("exists")
     internal_count = as_int(stage_a_internal.get("count"))
 
     root_cause = "Replay failed, but available artifacts were not sufficient to isolate one service or Kafka layer automatically."
-    if opra_input <= 0 and es_input <= 0:
+    if opra_input <= 0 and es_input <= 0 and strike_flow <= 0:
         root_cause = "Replay input was not loaded or published; Kafka output validation failed downstream because there were no source records to process."
     elif strike_flow <= 0 and "REBALANCING" in stage_a_state and "RUNNING" not in stage_a_state:
         root_cause = "Stage A Kafka Streams did not become operational; it remained in REBALANCING, so real replay input was not processed into strike-flow."
@@ -504,6 +515,8 @@ def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) ->
         root_cause = "Stage A produced zero strike-flow records even though replay input existed; inspect Stage A service logs and DLQ for processor-level rejection or startup failure."
     elif signal_count <= 0 or latest_count <= 0 or audit_count <= 0:
         root_cause = "Stage A produced strike-flow, but downstream Stage B outputs were empty or incomplete; inspect Stage B service state, scheduler counters, and underlying-state join health."
+    elif underlying_emitted > 0 and (underlying_received <= 0 or underlying_stored <= 0 or underlying_hits <= 0):
+        root_cause = "Underlying-state records were produced, but Stage B did not materialize them before validation; wait for the Stage B replay consumer group to catch up and inspect the underlying-state join if received/stored/hit counters remain zero."
 
     lines = [
         f"- Primary root cause: {root_cause}",
@@ -515,6 +528,13 @@ def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) ->
         lines.append(f"- Stage A stream state: {stage_a_state}")
     if stage_b_state:
         lines.append(f"- Stage B stream state: {stage_b_state}")
+    if underlying_emitted > 0:
+        lines.append(f"- Underlying-state records emitted: {underlying_emitted}")
+        lines.append(
+            "- Stage B underlying-state counters: "
+            f"received={underlying_received}, stored={underlying_stored}, "
+            f"lookupHits={underlying_hits}, lookupMisses={underlying_misses}"
+        )
     if group_exists is not None:
         lines.append(f"- Stage A replay consumer group exists: {str(bool(group_exists)).lower()}")
     if "count" in stage_a_internal:
