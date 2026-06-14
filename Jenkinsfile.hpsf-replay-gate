@@ -477,10 +477,13 @@ Path("artifacts/logs/bugzilla-comment.txt").write_text(comment + "\\n")
 PY
             bugzilla_password="${BUGZILLA_PASSWORD_FROM_CREDENTIAL:-${BUGZILLA_PASSWORD:-}}"
             if [ -n "$bugzilla_password" ]; then
+              bugzilla_token="$(curl -fsS --get \
+                --data-urlencode "login=${BUGZILLA_USER}" \
+                --data-urlencode "password=${bugzilla_password}" \
+                "${BUGZILLA_URL}/rest/login" | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
             curl -fsS -X POST "${BUGZILLA_URL}/rest/bug/74/comment" \
               -H 'Content-Type: application/json' \
-              -d "$(python3 -c 'import json,os; print(json.dumps({"comment": open("artifacts/logs/bugzilla-comment.txt").read()}))')" \
-              -u "${BUGZILLA_USER}:${bugzilla_password}" || true
+              -d "$(BUGZILLA_TOKEN="$bugzilla_token" python3 -c 'import json,os; print(json.dumps({"Bugzilla_token": os.environ["BUGZILLA_TOKEN"], "comment": open("artifacts/logs/bugzilla-comment.txt").read()}))')"
             else
               echo 'BUGZILLA_PASSWORD not provided; archived Bugzilla comment text only.'
             fi
