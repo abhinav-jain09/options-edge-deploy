@@ -458,7 +458,7 @@ comment = (
 )
 Path("artifacts/logs/bugzilla-comment.txt").write_text(comment + "\\n")
 PY
-            bugzilla_password="${BUGZILLA_PASSWORD:-${BUGZILLA_PASSWORD_FROM_CREDENTIAL:-}}"
+            bugzilla_password="${BUGZILLA_PASSWORD_FROM_CREDENTIAL:-${BUGZILLA_PASSWORD:-}}"
             if [ -n "$bugzilla_password" ]; then
             curl -fsS -X POST "${BUGZILLA_URL}/rest/bug/74/comment" \
               -H 'Content-Type: application/json' \
