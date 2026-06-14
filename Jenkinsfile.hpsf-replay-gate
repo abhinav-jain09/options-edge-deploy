@@ -209,6 +209,10 @@ pipeline {
             --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual} \
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-a-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
+            --env=HPSF_STREAMS_PROCESSING_GUARANTEE=at_least_once \
+            --env=HPSF_STREAMS_NUM_STREAM_THREADS=1 \
+            --env=HPSF_STREAMS_CACHE_MAX_BYTES_BUFFERING=0 \
+            --env=HPSF_STREAMS_CONSUMER_ISOLATION_LEVEL=read_uncommitted \
             --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
             --env=KAFKA_SCHEMA_REGISTRY_URL="$KAFKA_SCHEMA_REGISTRY_URL" \
             --env=HPSF_TOPIC_OPRA_TCBBO="$TOPIC_PREFIX.opra.tcbbo" \
@@ -270,6 +274,10 @@ pipeline {
             --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual} \
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/underlying-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
+            --env=HPSF_STREAMS_PROCESSING_GUARANTEE=at_least_once \
+            --env=HPSF_STREAMS_NUM_STREAM_THREADS=1 \
+            --env=HPSF_STREAMS_CACHE_MAX_BYTES_BUFFERING=0 \
+            --env=HPSF_STREAMS_CONSUMER_ISOLATION_LEVEL=read_uncommitted \
             --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
             --env=KAFKA_SCHEMA_REGISTRY_URL="$KAFKA_SCHEMA_REGISTRY_URL" \
             --env=HPSF_TOPIC_UNDERLYING_ES_TRADES="underlying.replay.20260612.es.trades" \
@@ -319,6 +327,10 @@ pipeline {
             --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual} \
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-b-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
+            --env=HPSF_STREAMS_PROCESSING_GUARANTEE=at_least_once \
+            --env=HPSF_STREAMS_NUM_STREAM_THREADS=1 \
+            --env=HPSF_STREAMS_CACHE_MAX_BYTES_BUFFERING=0 \
+            --env=HPSF_STREAMS_CONSUMER_ISOLATION_LEVEL=read_uncommitted \
             --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
             --env=KAFKA_SCHEMA_REGISTRY_URL="$KAFKA_SCHEMA_REGISTRY_URL" \
             --env=HPSF_TOPIC_STRIKE_FLOW="$TOPIC_PREFIX.hpsf.strike-flow" \
