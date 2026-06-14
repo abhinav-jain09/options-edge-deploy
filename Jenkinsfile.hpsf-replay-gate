@@ -253,6 +253,9 @@ pipeline {
           kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/stage-a.log || true
           grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing' artifacts/logs/stage-a.log
           grep -E 'HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING' artifacts/logs/stage-a.log
+          scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
+            "options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual}" \
+            artifacts/logs/stage-a-consumer-group-catchup.log
         '''
       }
     }
@@ -330,6 +333,9 @@ pipeline {
           kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/underlying.log || true
           grep -E 'HPSF underlying replay topology enabled|underlying replay consuming|underlying replay producing' artifacts/logs/underlying.log
           grep -E 'HPSF underlying-replay stream state transition .* -> RUNNING|state=underlying-replay=RUNNING' artifacts/logs/underlying.log
+          scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
+            "options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual}" \
+            artifacts/logs/underlying-consumer-group-catchup.log
         '''
       }
     }

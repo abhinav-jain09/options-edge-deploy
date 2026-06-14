@@ -283,7 +283,14 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
         "MIXED_FLOW",
         "COMPLEX_FLOW_DOMINANT",
     }
+    fallback_reasons = {
+        "MARKET_EVALUATOR_NOT_READY",
+        "UNDERLYING_STATE_UNAVAILABLE",
+        "VWAP",
+    }
     if action_counts.get("NO_TRADE", 0) == int(counts.get("signalRecordsEmitted", 0) or 0):
+        if sampled_reason_codes & fallback_reasons:
+            failures.append("all NO_TRADE outputs are fallback because underlying/VWAP context is unavailable")
         if sampled_reason_codes & data_failure_reasons and not sampled_reason_codes & strategy_valid_reasons:
             failures.append("all NO_TRADE outputs are explained only by data-health gates")
     if not isinstance(audit_sample.get("gateDiagnostics"), dict) or not audit_sample.get("gateDiagnostics"):

@@ -647,7 +647,14 @@ if profile == "FULL_RTH_RELEASE":
         "MIXED_FLOW",
         "COMPLEX_FLOW_DOMINANT",
     }
+    fallback_reasons = {
+        "MARKET_EVALUATOR_NOT_READY",
+        "UNDERLYING_STATE_UNAVAILABLE",
+        "VWAP",
+    }
     if action_counts.get("NO_TRADE", 0) == int(counts.get("signalRecordsEmitted", 0) or 0):
+        if sampled_reason_codes & fallback_reasons:
+            failures.append("ALL_NO_TRADE_FALLBACK_OUTPUT")
         if sampled_reason_codes & data_failure_reasons and not sampled_reason_codes & strategy_valid_reasons:
             failures.append("ALL_NO_TRADE_DATA_FAILURE")
     gate_diagnostics = audit_sample.get("gateDiagnostics")

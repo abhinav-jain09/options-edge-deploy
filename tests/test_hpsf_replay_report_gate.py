@@ -20,6 +20,7 @@ GENERATE_REPORT_SCRIPT = ROOT / "scripts" / "hpsf" / "generate-replay-report.sh"
 MERGE_STAGE_B_METRICS_SCRIPT = ROOT / "scripts" / "hpsf" / "merge-stage-b-performance-metrics.py"
 MERGE_STAGE_B_METRICS_TEST = ROOT / "scripts" / "hpsf" / "test_merge_stage_b_performance_metrics.py"
 ARCHIVE_EVIDENCE_SCRIPT = ROOT / "scripts" / "hpsf" / "archive-replay-evidence-report.sh"
+WAIT_GROUP_CATCHUP_SCRIPT = ROOT / "scripts" / "hpsf" / "wait-kafka-consumer-group-caught-up.sh"
 
 
 class HpsfReplayReportGateTest(unittest.TestCase):
@@ -111,6 +112,31 @@ class HpsfReplayReportGateTest(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("all NO_TRADE outputs are explained only by data-health gates", report)
+
+    def test_ReplayReportFailsFallbackOnlyNoTradeTest(self) -> None:
+        data = evidence()
+        data["actionCounts"] = {"NO_TRADE": 1}
+        data["gateReasonCounts"] = {
+            "MARKET_EVALUATOR_NOT_READY": 1,
+            "UNDERLYING_STATE_UNAVAILABLE": 1,
+            "VWAP unavailable": 1,
+        }
+        data["samples"]["signal"]["internalVwapState"] = "VWAP_UNAVAILABLE"
+        data["samples"]["signal"]["reasons"] = [
+            "MARKET_EVALUATOR_NOT_READY",
+            "UNDERLYING_STATE_UNAVAILABLE",
+            "VWAP unavailable",
+        ]
+        data["samples"]["audit"]["noTradeGates"] = [
+            "MARKET_EVALUATOR_NOT_READY",
+            "UNDERLYING_STATE_UNAVAILABLE",
+            "VWAP unavailable",
+        ]
+
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("all NO_TRADE outputs are fallback because underlying/VWAP context is unavailable", report)
 
     def test_ReplayReportAllowsAllNoTradeWhenAggregateAuditHasStrategyGateTest(self) -> None:
         data = evidence()
@@ -274,7 +300,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("latest-signal key validation failed", report)
 
     def test_JenkinsReplayScriptCreatesTopicsTest(self) -> None:
-        for script in [RUN_SCRIPT, VALIDATE_SPEC, DOWNLOAD_SCRIPT, PUBLISH_SCRIPT, VALIDATE_OUTPUT_SCRIPT, GENERATE_REPORT_SCRIPT]:
+        for script in [RUN_SCRIPT, VALIDATE_SPEC, DOWNLOAD_SCRIPT, PUBLISH_SCRIPT, VALIDATE_OUTPUT_SCRIPT, GENERATE_REPORT_SCRIPT, WAIT_GROUP_CATCHUP_SCRIPT]:
             subprocess.run(["bash", "-n", str(script)], check=True)
         subprocess.run(["python3", str(MERGE_STAGE_B_METRICS_TEST)], check=True)
         text = RUN_SCRIPT.read_text()
@@ -337,6 +363,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("--image-pull-policy=Always", pipeline)
         self.assertIn('HPSF_REPLAY_POD_OVERRIDES = \'{"spec":{"hostNetwork":true,"dnsPolicy":"ClusterFirstWithHostNet"}}\'', pipeline)
         self.assertEqual(3, pipeline.count('--overrides="$HPSF_REPLAY_POD_OVERRIDES"'))
+        self.assertEqual(2, pipeline.count("scripts/hpsf/wait-kafka-consumer-group-caught-up.sh"))
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_ALLOW_INCOMPLETE=true"))
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_MIN_HOLIDAYS_PER_YEAR=0"))
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_REQUIRE_EARLY_CLOSES=false"))
