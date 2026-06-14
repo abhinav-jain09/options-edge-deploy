@@ -106,6 +106,17 @@ validate_stage_a() {
   done
   echo "$strike_count" > "$BUILD_DIR/strike-flow-count.txt"
   if [[ "$strike_count" == "0" ]]; then
+    cat > "$BUILD_DIR/stage-a-validation.json" <<JSON
+{"strikeFlowRecordsEmitted": 0, "stageAEmittedFinalSignalCount": 0, "validationResult": "FAIL", "failureReasons": ["STAGE_A_STRIKE_FLOW_EMPTY"]}
+JSON
+    cp "$BUILD_DIR/stage-a-validation.json" "$ARTIFACT_DIR/hpsf-stage-a-validation.json"
+    cat > "$ARTIFACT_DIR/replay-validation-result.json" <<JSON
+{
+  "validationResult": "FAIL",
+  "failureReasons": ["STAGE_A_STRIKE_FLOW_EMPTY"],
+  "details": ["Stage A replay did not emit strike-flow records from $TOPIC_PREFIX.opra.tcbbo into $TOPIC_PREFIX.hpsf.strike-flow after $attempts attempts."]
+}
+JSON
     echo "strike-flow count = 0" >&2
     exit 1
   fi

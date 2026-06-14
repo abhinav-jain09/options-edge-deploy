@@ -53,6 +53,7 @@ pipeline {
         sh '''
           set -euo pipefail
           git rev-parse HEAD > build-git-sha.txt
+          rm -rf artifacts build/hpsf-replay-20260612 artifact-manifest.json
           mkdir -p artifacts/logs build/hpsf-replay-20260612/logs .replay
         '''
       }
@@ -601,12 +602,23 @@ PY
         job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
         export BUILD_URL="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
         export HPSF_REPLAY_FAILURE_REASON="Jenkins failed before a valid PASS replay report was generated. Verify required credentials including DATABENTO_API_KEY_CREDENTIAL_ID=${DATABENTO_API_KEY_CREDENTIAL_ID:-options-edge-databento-api-key}, prepared replay source data, Kafka, Kubernetes, and Databento access in the console log."
+        export HPSF_REPLAY_FAILURE_CODE="JENKINS_REPLAY_PIPELINE_FAILED"
+        if grep -F "strike-flow count = 0" artifacts/logs/validate-stage-a.log >/dev/null 2>&1; then
+          export HPSF_REPLAY_FAILURE_CODE="STAGE_A_STRIKE_FLOW_EMPTY"
+          export HPSF_REPLAY_FAILURE_REASON="Stage A replay started but emitted zero strike-flow records from ${TOPIC_PREFIX:-options.replay.20260612}.opra.tcbbo into ${TOPIC_PREFIX:-options.replay.20260612}.hpsf.strike-flow during validation."
+        fi
         current_report_matches_build=false
         if [ -s artifacts/hpsf-replay-report-20260612.md ] && grep -F "Build number: ${BUILD_NUMBER:-}" artifacts/hpsf-replay-report-20260612.md >/dev/null 2>&1; then
           current_report_matches_build=true
         fi
         if [ "$current_report_matches_build" != "true" ] || [ ! -s artifacts/hpsf-replay-summary.json ] || [ ! -s artifacts/replay-validation-result.json ]; then
-          rm -f artifacts/hpsf-replay-report-20260612.md artifacts/hpsf-replay-summary.json artifacts/replay-validation-result.json build/hpsf-replay-20260612/evidence.json
+          rm -f \
+            artifacts/hpsf-replay-report-20260612.md \
+            artifacts/hpsf-replay-summary.json \
+            artifacts/replay-validation-result.json \
+            artifacts/hpsf-stage-a-validation.json \
+            build/hpsf-replay-20260612/evidence.json \
+            build/hpsf-replay-20260612/stage-a-validation.json
           export HPSF_REPLAY_REPORT_ALLOW_FAIL=true
           scripts/hpsf/run-hpsf-replay-20260612.sh --dry-run || true
         fi

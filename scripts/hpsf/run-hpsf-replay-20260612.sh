@@ -29,8 +29,10 @@ jenkins_build_url() {
 
 write_fail_report() {
   local reason="$1"
+  local failure_code="${HPSF_REPLAY_FAILURE_CODE:-JENKINS_REPLAY_PIPELINE_FAILED}"
   local evidence_mode="REAL"
   local json_reason
+  local json_failure_code
   if [[ "$FIXTURE_MODE" == "true" && "$DRY_RUN" == "true" ]]; then
     evidence_mode="FIXTURE_DRY_RUN"
   elif [[ "$FIXTURE_MODE" == "true" ]]; then
@@ -39,6 +41,7 @@ write_fail_report() {
     evidence_mode="DRY_RUN"
   fi
   json_reason="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$reason")"
+  json_failure_code="$(python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$failure_code")"
   cat > "$EVIDENCE" <<JSON
 {
   "evidenceMode": "$evidence_mode",
@@ -65,6 +68,8 @@ write_fail_report() {
   "stageB": {"started": false, "startupLog": ""},
   "keyValidation": {"signalKeyValid": false, "latestSignalKeyValid": false, "auditKeyValid": false},
   "samples": {},
+  "validationResult": "FAIL",
+  "validationFailures": [{"code": $json_failure_code, "detail": $json_reason}],
   "missingScenarioNotes": [$json_reason],
   "orderInstructionEnabledTrueFound": false
 }
@@ -74,7 +79,7 @@ JSON
   cat > "$ARTIFACT_DIR/replay-validation-result.json" <<JSON
 {
   "validationResult": "FAIL",
-  "failureReasons": ["JENKINS_REPLAY_PIPELINE_FAILED"],
+  "failureReasons": [$json_failure_code],
   "details": [$json_reason]
 }
 JSON

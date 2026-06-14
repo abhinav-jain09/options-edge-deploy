@@ -226,8 +226,11 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("allowEmptyArchive: false", pipeline)
         self.assertIn("current_report_matches_build=false", pipeline)
         self.assertIn('grep -F "Build number: ${BUILD_NUMBER:-}" artifacts/hpsf-replay-report-20260612.md', pipeline)
-        self.assertIn("rm -f artifacts/hpsf-replay-report-20260612.md artifacts/hpsf-replay-summary.json artifacts/replay-validation-result.json", pipeline)
+        self.assertIn("rm -rf artifacts build/hpsf-replay-20260612 artifact-manifest.json", pipeline)
+        self.assertIn("artifacts/hpsf-stage-a-validation.json", pipeline)
+        self.assertIn("build/hpsf-replay-20260612/stage-a-validation.json", pipeline)
         self.assertIn("HPSF_REPLAY_FAILURE_REASON", pipeline)
+        self.assertIn('HPSF_REPLAY_FAILURE_CODE="STAGE_A_STRIKE_FLOW_EMPTY"', pipeline)
         self.assertIn("JENKINS_PUBLIC_URL", pipeline)
         self.assertIn("sed 's#/#/job/#g'", pipeline)
         self.assertIn("command -v python3.11", pipeline)
@@ -407,6 +410,46 @@ fi
             self.assertNotIn("--property print.key=true", validate_script)
             self.assertIn("HPSF_STAGE_A_VALIDATION_ATTEMPTS", validate_script)
             self.assertIn("strike-flow count = 0 on attempt", validate_script)
+
+    def test_validate_stage_a_writes_failure_result_when_strike_flow_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            consumer = fake_bin / "kafka-console-consumer"
+            consumer.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+printf 'Processed a total of 0 messages\\n' >&2
+""",
+                encoding="utf-8",
+            )
+            consumer.chmod(0o755)
+            build_dir = root / "build"
+            artifact_dir = root / "artifacts"
+
+            result = subprocess.run(
+                [str(VALIDATE_OUTPUT_SCRIPT), "--stage-a-only"],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "KAFKA_BOOTSTRAP_SERVERS": "localhost:9092",
+                    "HPSF_REPLAY_BUILD_DIR": str(build_dir),
+                    "HPSF_REPLAY_ARTIFACT_DIR": str(artifact_dir),
+                    "HPSF_STAGE_A_VALIDATION_ATTEMPTS": "1",
+                    "HPSF_STAGE_A_VALIDATION_TIMEOUT_MS": "1",
+                    "TOPIC_PREFIX": "options.replay.20260612",
+                },
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            validation = json.loads((artifact_dir / "replay-validation-result.json").read_text(encoding="utf-8"))
+            stage_a = json.loads((artifact_dir / "hpsf-stage-a-validation.json").read_text(encoding="utf-8"))
+            self.assertEqual(["STAGE_A_STRIKE_FLOW_EMPTY"], validation["failureReasons"])
+            self.assertEqual(0, stage_a["strikeFlowRecordsEmitted"])
 
     def test_validate_final_uses_build_git_sha_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
