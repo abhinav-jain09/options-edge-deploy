@@ -71,6 +71,13 @@ write_fail_report() {
 JSON
   scripts/hpsf/generate-hpsf-replay-report-20260612.py --input "$EVIDENCE" --output "$REPORT" >/dev/null || true
   cp "$EVIDENCE" "$ARTIFACT_DIR/hpsf-replay-summary.json"
+  cat > "$ARTIFACT_DIR/replay-validation-result.json" <<JSON
+{
+  "validationResult": "FAIL",
+  "failureReasons": ["JENKINS_REPLAY_PIPELINE_FAILED"],
+  "details": [$json_reason]
+}
+JSON
 }
 
 if [[ "$DRY_RUN" == "true" || "$FIXTURE_MODE" == "true" ]]; then

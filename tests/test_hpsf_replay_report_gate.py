@@ -224,7 +224,9 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("artifacts/logs/archive-replay-evidence-report.log", pipeline)
         self.assertIn("artifacts/hpsf-replay-report-20260612.md", pipeline)
         self.assertIn("allowEmptyArchive: false", pipeline)
-        self.assertIn("if [ ! -s artifacts/hpsf-replay-report-20260612.md ] || [ ! -s artifacts/hpsf-replay-summary.json ]; then", pipeline)
+        self.assertIn("current_report_matches_build=false", pipeline)
+        self.assertIn('grep -F "Build number: ${BUILD_NUMBER:-}" artifacts/hpsf-replay-report-20260612.md', pipeline)
+        self.assertIn("rm -f artifacts/hpsf-replay-report-20260612.md artifacts/hpsf-replay-summary.json artifacts/replay-validation-result.json", pipeline)
         self.assertIn("HPSF_REPLAY_FAILURE_REASON", pipeline)
         self.assertIn("JENKINS_PUBLIC_URL", pipeline)
         self.assertIn("sed 's#/#/job/#g'", pipeline)
@@ -257,8 +259,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
+        self.assertNotIn("--for=condition=Ready", pipeline)
         self.assertIn("Replay report was archived, but validation failed", pipeline)
-        self.assertNotIn("rm -f artifacts/hpsf-replay-report-20260612.md artifacts/hpsf-replay-summary.json", pipeline)
         for stage in [
             "Checkout",
             "Checkout repos",
@@ -574,6 +576,10 @@ esac
             self.assertIn("Missing Jenkins credential options-edge-databento-api-key", text)
             self.assertIn("Build number: 9", text)
             self.assertIn("Commit SHA: deadbeef", text)
+            validation = json.loads((artifacts / "replay-validation-result.json").read_text(encoding="utf-8"))
+            self.assertEqual("FAIL", validation["validationResult"])
+            self.assertEqual(["JENKINS_REPLAY_PIPELINE_FAILED"], validation["failureReasons"])
+            self.assertIn("Missing Jenkins credential options-edge-databento-api-key", validation["details"])
 
     def test_run_script_uses_jenkins_url_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
