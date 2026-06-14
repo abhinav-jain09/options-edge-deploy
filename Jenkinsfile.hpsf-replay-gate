@@ -198,6 +198,9 @@ pipeline {
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
+            --env=HPSF_MARKET_CALENDAR_ALLOW_INCOMPLETE=true \
+            --env=HPSF_MARKET_CALENDAR_MIN_HOLIDAYS_PER_YEAR=0 \
+            --env=HPSF_MARKET_CALENDAR_REQUIRE_EARLY_CLOSES=false \
             --env=HPSF_ENABLED=true \
             --env=HPSF_TOPOLOGY_ENABLED=true \
             --env=HPSF_STAGE_A_ENABLED=true \
@@ -256,6 +259,9 @@ pipeline {
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
+            --env=HPSF_MARKET_CALENDAR_ALLOW_INCOMPLETE=true \
+            --env=HPSF_MARKET_CALENDAR_MIN_HOLIDAYS_PER_YEAR=0 \
+            --env=HPSF_MARKET_CALENDAR_REQUIRE_EARLY_CLOSES=false \
             --env=HPSF_ENABLED=true \
             --env=HPSF_TOPOLOGY_ENABLED=true \
             --env=HPSF_STAGE_A_ENABLED=false \
@@ -302,6 +308,9 @@ pipeline {
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
+            --env=HPSF_MARKET_CALENDAR_ALLOW_INCOMPLETE=true \
+            --env=HPSF_MARKET_CALENDAR_MIN_HOLIDAYS_PER_YEAR=0 \
+            --env=HPSF_MARKET_CALENDAR_REQUIRE_EARLY_CLOSES=false \
             --env=HPSF_ENABLED=true \
             --env=HPSF_TOPOLOGY_ENABLED=true \
             --env=HPSF_STAGE_A_ENABLED=false \
