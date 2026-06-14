@@ -25,12 +25,15 @@ spec:
         - name: feed-gateway
           image: 192.168.100.252:5000/options-edge-feed-gateway:dev
           imagePullPolicy: Always
+          env:
+            - name: APP_WEB_PORT
+              value: "18091"
           envFrom:
             - configMapRef:
                 name: options-edge-config
           ports:
             - name: http
-              containerPort: 8091
+              containerPort: 18091
           livenessProbe:
             httpGet:
               path: /health
