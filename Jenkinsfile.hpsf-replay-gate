@@ -523,7 +523,7 @@ PY
 
     stage('Archive artifacts') {
       steps {
-        archiveArtifacts artifacts: '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md,.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.json,artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/replay-validation-result.json,artifacts/hpsf-sample-signal.json,artifacts/hpsf-sample-latest-signal.json,artifacts/hpsf-sample-audit.json,artifacts/logs/stage-b.log,artifacts/logs/validate-replay-output.log,artifacts/logs/validate-replay-output.exit-code,artifacts/logs/generate-replay-report.log,artifacts/logs/generate-replay-report.exit-code,artifacts/logs/archive-replay-evidence-report.log,artifacts/logs/**', fingerprint: true, allowEmptyArchive: false
+        archiveArtifacts artifacts: '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md', fingerprint: true, allowEmptyArchive: false
       }
     }
 
@@ -552,7 +552,7 @@ PY
             set -euo pipefail
             job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
             build_url="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
-            report_url="${build_url}artifact/artifacts/hpsf-replay-report-20260612.md"
+            report_url="${build_url}artifact/.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/"
             python3 - <<PY
 import json
 from pathlib import Path
@@ -571,7 +571,7 @@ comment = (
     f"StageB evaluations={stage_b.get('stageB.evaluation.count', counts.get('stageB.evaluation.count'))}, "
     f"activeChainsMax={stage_b.get('stageB.activeChains.count.max', counts.get('stageB.activeChains.count.max'))}, "
     f"signals={counts.get('signalRecordsEmitted')}, latest={counts.get('latestSignalRecordsEmitted')}, audit={counts.get('auditRecordsEmitted')}. "
-    "See archived hpsf-replay-summary.json and replay-validation-result.json for canonical evidence."
+    "See the archived one-file Markdown replay evidence report for canonical evidence."
 )
 Path("artifacts/logs/bugzilla-comment.txt").write_text(comment + "\\n")
 PY
@@ -624,7 +624,7 @@ PY
         fi
         scripts/hpsf/archive-replay-evidence-report.sh | tee artifacts/logs/archive-replay-evidence-report.log || true
       '''
-      archiveArtifacts artifacts: '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md,.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.json,artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/replay-validation-result.json,artifacts/logs/**,build/hpsf-replay-20260612/**', fingerprint: true, allowEmptyArchive: false
+      archiveArtifacts artifacts: '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md', fingerprint: true, allowEmptyArchive: false
     }
     always {
       sh '''

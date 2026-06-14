@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -220,10 +221,20 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("Create replay evidence report", pipeline)
         self.assertIn("scripts/hpsf/archive-replay-evidence-report.sh", pipeline)
         self.assertIn(".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md", pipeline)
-        self.assertIn(".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.json", pipeline)
-        self.assertIn("artifacts/logs/archive-replay-evidence-report.log", pipeline)
         self.assertIn("artifacts/hpsf-replay-report-20260612.md", pipeline)
         self.assertIn("allowEmptyArchive: false", pipeline)
+        archive_lines = re.findall(r"archiveArtifacts artifacts: '([^']+)'", pipeline)
+        self.assertEqual(
+            [
+                ".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md",
+                ".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md",
+            ],
+            archive_lines,
+        )
+        for archived in archive_lines:
+            self.assertNotIn("*.json", archived)
+            self.assertNotIn("artifacts/logs", archived)
+            self.assertNotIn("artifacts/hpsf-replay-report-20260612.md", archived)
         self.assertIn("current_report_matches_build=false", pipeline)
         self.assertIn('grep -F "Build number: ${BUILD_NUMBER:-}" artifacts/hpsf-replay-report-20260612.md', pipeline)
         self.assertIn("rm -rf artifacts build/hpsf-replay-20260612 artifact-manifest.json", pipeline)
