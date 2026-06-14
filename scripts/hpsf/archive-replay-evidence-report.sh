@@ -2,13 +2,34 @@
 set -euo pipefail
 
 ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
-EVIDENCE_DIR="${HPSF_REPLAY_EVIDENCE_DIR:-evidence-report}"
+default_project_evidence_dir() {
+  local build_number="${BUILD_NUMBER:-manual}"
+  if [[ -d ".replay/options-edge" ]]; then
+    printf '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/%s\n' "$build_number"
+  elif [[ -d "../options-edge" ]]; then
+    printf '../options-edge/evidence-report/hpsf-historical-replay-20260612/%s\n' "$build_number"
+  else
+    printf 'evidence-report/hpsf-historical-replay-20260612/%s\n' "$build_number"
+  fi
+}
+EVIDENCE_DIR="${HPSF_REPLAY_EVIDENCE_DIR:-$(default_project_evidence_dir)}"
 MANIFEST="${HPSF_REPLAY_ARTIFACT_MANIFEST:-artifact-manifest.json}"
 ARCHIVER=".replay/options-edge/scripts/hpsf/archive_replay_evidence.py"
 VALIDATION_FILE="$ARTIFACT_DIR/replay-validation-result.json"
 
 mkdir -p "$ARTIFACT_DIR/logs" "$EVIDENCE_DIR"
 rm -f "$EVIDENCE_DIR"/*.md
+
+copy_canonical_artifacts_to_evidence_dir() {
+  for artifact in \
+    "$ARTIFACT_DIR/hpsf-replay-report-20260612.md" \
+    "$ARTIFACT_DIR/hpsf-replay-summary.json" \
+    "$ARTIFACT_DIR/replay-validation-result.json"; do
+    if [[ -s "$artifact" ]]; then
+      cp "$artifact" "$EVIDENCE_DIR/"
+    fi
+  done
+}
 
 python3 - <<'PY'
 import json
@@ -65,8 +86,10 @@ Final result: FAIL
 - Evidence bucket: \`FAIL\`
 - Validation failure reasons: \`MISSING_OPTIONS_EDGE_ARCHIVER\`
 EOF
+  copy_canonical_artifacts_to_evidence_dir
   echo "Replay evidence report generated without archiver: $EVIDENCE_DIR"
   exit 1
 fi
 
 python3 "$ARCHIVER" . "$MANIFEST" "$VALIDATION_FILE" "$EVIDENCE_DIR"
+copy_canonical_artifacts_to_evidence_dir

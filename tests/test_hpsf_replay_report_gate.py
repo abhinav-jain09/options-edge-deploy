@@ -219,7 +219,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("archiveArtifacts", pipeline)
         self.assertIn("Create replay evidence report", pipeline)
         self.assertIn("scripts/hpsf/archive-replay-evidence-report.sh", pipeline)
-        self.assertIn("evidence-report/*.md", pipeline)
+        self.assertIn(".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md", pipeline)
+        self.assertIn(".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.json", pipeline)
         self.assertIn("artifacts/logs/archive-replay-evidence-report.log", pipeline)
         self.assertIn("artifacts/hpsf-replay-report-20260612.md", pipeline)
         self.assertIn("allowEmptyArchive: false", pipeline)
@@ -290,6 +291,42 @@ class HpsfReplayReportGateTest(unittest.TestCase):
     def test_ReplayEvidenceArchiveScriptExistsAndIsExecutable(self) -> None:
         self.assertTrue(ARCHIVE_EVIDENCE_SCRIPT.exists())
         self.assertTrue(os.access(ARCHIVE_EVIDENCE_SCRIPT, os.X_OK))
+
+    def test_archive_script_defaults_to_options_edge_project_evidence_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            deploy = root / "options-edge-deploy"
+            options_edge = root / "options-edge"
+            deploy.mkdir()
+            options_edge.mkdir()
+            (deploy / "scripts" / "hpsf").mkdir(parents=True)
+            local_script = deploy / "scripts" / "hpsf" / "archive-replay-evidence-report.sh"
+            local_script.write_text(ARCHIVE_EVIDENCE_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+            local_script.chmod(0o755)
+            artifact_dir = deploy / "artifacts"
+            artifact_dir.mkdir()
+            (artifact_dir / "hpsf-replay-report-20260612.md").write_text("# report\nFinal PASS/FAIL: FAIL\n", encoding="utf-8")
+            (artifact_dir / "hpsf-replay-summary.json").write_text(json.dumps({"validationResult": "FAIL"}), encoding="utf-8")
+            (artifact_dir / "replay-validation-result.json").write_text(json.dumps({"validationResult": "FAIL"}), encoding="utf-8")
+
+            result = subprocess.run(
+                [str(local_script)],
+                cwd=deploy,
+                env={
+                    **os.environ,
+                    "BUILD_NUMBER": "manual-test",
+                    "REPLAY_DATE": "2026-06-12",
+                    "HPSF_REPLAY_ARTIFACT_DIR": "artifacts",
+                },
+                text=True,
+                capture_output=True,
+            )
+
+            project_folder = options_edge / "evidence-report" / "hpsf-historical-replay-20260612" / "manual-test"
+            self.assertNotEqual(0, result.returncode)
+            self.assertTrue((project_folder / "hpsf-replay-report-20260612.md").exists(), result.stderr + result.stdout)
+            self.assertTrue((project_folder / "hpsf-replay-summary.json").exists())
+            self.assertTrue((project_folder / "replay-validation-result.json").exists())
 
     def test_download_script_prepares_missing_databento_jsonl(self) -> None:
         text = DOWNLOAD_SCRIPT.read_text()
