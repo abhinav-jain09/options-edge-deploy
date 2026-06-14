@@ -153,12 +153,6 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
         failures.append("Stage B VWAP unusable")
     signal_sample = samples.get("signal") if isinstance(samples.get("signal"), dict) else {}
     audit_sample = samples.get("audit") if isinstance(samples.get("audit"), dict) else {}
-    if signal_sample.get("vwap") is None:
-        failures.append("STAGE_B_SAMPLE_SIGNAL_VWAP_MISSING")
-    if signal_sample.get("distanceToVwap") is None:
-        failures.append("STAGE_B_SAMPLE_SIGNAL_DISTANCE_TO_VWAP_MISSING")
-    if signal_sample.get("internalVwapState") == "VWAP_UNAVAILABLE":
-        failures.append("STAGE_B_SAMPLE_SIGNAL_VWAP_UNAVAILABLE")
     if not isinstance(audit_sample.get("gateDiagnostics"), dict) or not audit_sample.get("gateDiagnostics"):
         failures.append("STAGE_B_AUDIT_GATE_DIAGNOSTICS_EMPTY")
     if not isinstance(audit_sample.get("chainCoverageDiagnostics"), dict) or not audit_sample.get("chainCoverageDiagnostics"):

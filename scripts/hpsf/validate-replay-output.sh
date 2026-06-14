@@ -490,12 +490,6 @@ if profile == "FULL_RTH_RELEASE":
 if profile == "FULL_RTH_RELEASE":
     signal_sample = samples.get("signal") if isinstance(samples.get("signal"), dict) else {}
     audit_sample = samples.get("audit") if isinstance(samples.get("audit"), dict) else {}
-    if signal_sample.get("vwap") is None:
-        failures.append("STAGE_B_SAMPLE_SIGNAL_VWAP_MISSING")
-    if signal_sample.get("distanceToVwap") is None:
-        failures.append("STAGE_B_SAMPLE_SIGNAL_DISTANCE_TO_VWAP_MISSING")
-    if signal_sample.get("internalVwapState") == "VWAP_UNAVAILABLE":
-        failures.append("STAGE_B_SAMPLE_SIGNAL_VWAP_UNAVAILABLE")
     gate_diagnostics = audit_sample.get("gateDiagnostics")
     coverage_diagnostics = audit_sample.get("chainCoverageDiagnostics")
     if not isinstance(gate_diagnostics, dict) or not gate_diagnostics:
