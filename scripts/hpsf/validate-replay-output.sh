@@ -90,7 +90,20 @@ count_signal_topic_without_stage_b() {
 
 validate_stage_a() {
   local strike_count
-  strike_count="$(consume_topic "$TOPIC_PREFIX.hpsf.strike-flow" strike-flow 100 30000)"
+  local attempts="${HPSF_STAGE_A_VALIDATION_ATTEMPTS:-6}"
+  local timeout_ms="${HPSF_STAGE_A_VALIDATION_TIMEOUT_MS:-30000}"
+  local sleep_seconds="${HPSF_STAGE_A_VALIDATION_SLEEP_SECONDS:-5}"
+  strike_count="0"
+  for attempt in $(seq 1 "$attempts"); do
+    strike_count="$(consume_topic "$TOPIC_PREFIX.hpsf.strike-flow" strike-flow 100 "$timeout_ms")"
+    if [[ "$strike_count" != "0" ]]; then
+      break
+    fi
+    echo "strike-flow count = 0 on attempt $attempt/$attempts" >&2
+    if [[ "$attempt" != "$attempts" ]]; then
+      sleep "$sleep_seconds"
+    fi
+  done
   echo "$strike_count" > "$BUILD_DIR/strike-flow-count.txt"
   if [[ "$strike_count" == "0" ]]; then
     echo "strike-flow count = 0" >&2

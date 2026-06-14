@@ -401,6 +401,8 @@ fi
             validate_script = VALIDATE_OUTPUT_SCRIPT.read_text(encoding="utf-8")
             self.assertIn("--formatter-property print.key=true", validate_script)
             self.assertNotIn("--property print.key=true", validate_script)
+            self.assertIn("HPSF_STAGE_A_VALIDATION_ATTEMPTS", validate_script)
+            self.assertIn("strike-flow count = 0 on attempt", validate_script)
 
     def test_validate_final_uses_build_git_sha_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
