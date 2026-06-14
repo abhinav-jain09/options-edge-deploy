@@ -10,3 +10,9 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Generated replay evidence
+/evidence-report/
+/evidance-report/
+/.replay/**/evidence-report/
+/.replay/**/evidance-report/
