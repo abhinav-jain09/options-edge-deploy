@@ -476,6 +476,7 @@ PY
           export ES_SCHEMA="${ES_SCHEMA}"
           export TOPIC_PREFIX="${TOPIC_PREFIX}"
           export HPSF_REPLAY_REPORT_ALLOW_FAIL=true
+          scripts/hpsf/collect-replay-root-cause-diagnostics.sh || true
           previous_summary=""
           if [ -n "${JENKINS_HOME:-}" ] && [ -n "${JOB_NAME:-}" ] && [ -n "${BUILD_NUMBER:-}" ]; then
             previous_summary="$(python3 - <<'PY'
@@ -607,6 +608,7 @@ PY
           export HPSF_REPLAY_FAILURE_CODE="STAGE_A_STRIKE_FLOW_EMPTY"
           export HPSF_REPLAY_FAILURE_REASON="Stage A replay started but emitted zero strike-flow records from ${TOPIC_PREFIX:-options.replay.20260612}.opra.tcbbo into ${TOPIC_PREFIX:-options.replay.20260612}.hpsf.strike-flow during validation."
         fi
+        scripts/hpsf/collect-replay-root-cause-diagnostics.sh || true
         current_report_matches_build=false
         if [ -s artifacts/hpsf-replay-report-20260612.md ] && grep -F "Build number: ${BUILD_NUMBER:-}" artifacts/hpsf-replay-report-20260612.md >/dev/null 2>&1; then
           current_report_matches_build=true

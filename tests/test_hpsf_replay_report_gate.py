@@ -126,6 +126,44 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("## Failure Detail", report)
         self.assertIn("Final PASS/FAIL: FAIL", report)
 
+    def test_ReplayReportIncludesRootCauseForStageARebalancingTest(self) -> None:
+        data = evidence()
+        data["evidenceMode"] = "DRY_RUN"
+        data["counts"]["strikeFlowRecordsEmitted"] = 0
+        data["counts"]["signalRecordsEmitted"] = 0
+        data["counts"]["latestSignalRecordsEmitted"] = 0
+        data["counts"]["auditRecordsEmitted"] = 0
+        data["publishSummary"] = {
+            "publish": {
+                "dryRun": False,
+                "topicCounts": {
+                    "options.replay.20260612.opra.tcbbo": 282265,
+                },
+            },
+        }
+        data["rootCauseDiagnostics"] = {
+            "services": {
+                "stageA": {
+                    "streamState": "REBALANCING",
+                    "logTail": "HPSF stage-a stream state transition CREATED -> REBALANCING",
+                },
+            },
+            "kafka": {
+                "stageAConsumerGroup": {"exists": False},
+                "stageAInternalTopics": {"count": 0, "topics": []},
+            },
+            "logging": {"slf4jNoopDetected": True},
+        }
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("## Root Cause Analysis", report)
+        self.assertIn("Stage A Kafka Streams did not become operational", report)
+        self.assertIn("Replay input health: OPRA records=282265", report)
+        self.assertIn("Stage A stream state: REBALANCING", report)
+        self.assertIn("Stage A replay consumer group exists: false", report)
+        self.assertIn("Evidence-mode note: report metadata says DRY_RUN", report)
+
     def test_ReplayReportIncludesPreviousBuildComparisonTest(self) -> None:
         previous = evidence()
         previous["jenkins"]["buildNumber"] = "22"
@@ -220,6 +258,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("archiveArtifacts", pipeline)
         self.assertIn("Create replay evidence report", pipeline)
         self.assertIn("scripts/hpsf/archive-replay-evidence-report.sh", pipeline)
+        self.assertIn("scripts/hpsf/collect-replay-root-cause-diagnostics.sh || true", pipeline)
         self.assertIn(".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md", pipeline)
         self.assertIn("artifacts/hpsf-replay-report-20260612.md", pipeline)
         self.assertIn("allowEmptyArchive: false", pipeline)
@@ -315,6 +354,13 @@ class HpsfReplayReportGateTest(unittest.TestCase):
     def test_ReplayEvidenceArchiveScriptExistsAndIsExecutable(self) -> None:
         self.assertTrue(ARCHIVE_EVIDENCE_SCRIPT.exists())
         self.assertTrue(os.access(ARCHIVE_EVIDENCE_SCRIPT, os.X_OK))
+
+    def test_ReplayRootCauseDiagnosticScriptExistsAndIsExecutable(self) -> None:
+        script = ROOT / "scripts" / "hpsf" / "collect-replay-root-cause-diagnostics.sh"
+
+        self.assertTrue(script.exists())
+        self.assertTrue(os.access(script, os.X_OK))
+        subprocess.run(["bash", "-n", str(script)], check=True)
 
     def test_archive_script_defaults_to_options_edge_project_evidence_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

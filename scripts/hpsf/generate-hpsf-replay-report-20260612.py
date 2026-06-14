@@ -35,7 +35,32 @@ def main() -> int:
 def read_evidence(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise SystemExit(f"Evidence file not found: {path}")
-    return json.loads(path.read_text(encoding="utf-8"))
+    evidence = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(evidence, dict):
+        enrich_evidence_with_local_diagnostics(evidence, path)
+    return evidence
+
+
+def enrich_evidence_with_local_diagnostics(evidence: dict[str, Any], input_path: Path) -> None:
+    artifact_dir = input_path.parent if input_path.parent.name == "artifacts" else Path("artifacts")
+    build_dir = Path("build/hpsf-replay-20260612")
+    diagnostics_path = artifact_dir / "logs" / "root-cause-diagnostics.json"
+    if diagnostics_path.exists() and "rootCauseDiagnostics" not in evidence:
+        evidence["rootCauseDiagnostics"] = read_optional_json(diagnostics_path)
+    download_summary = build_dir / "download-summary.json"
+    if download_summary.exists() and "downloadSummary" not in evidence:
+        evidence["downloadSummary"] = read_optional_json(download_summary)
+    publish_summary = build_dir / "publish-summary.json"
+    if publish_summary.exists() and "publishSummary" not in evidence:
+        evidence["publishSummary"] = read_optional_json(publish_summary)
+
+
+def read_optional_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def read_optional_evidence(path_value: str) -> dict[str, Any] | None:
@@ -279,6 +304,9 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
         lines.append("Failures:")
         lines.extend(f"- {failure}" for failure in failures)
         lines.append("")
+        lines.append("## Root Cause Analysis")
+        lines.extend(format_root_cause_analysis(evidence, failures))
+        lines.append("")
         lines.append("## Failure Detail")
         if validation_failures:
             lines.extend(f"- validationFailure: {format_validation_failure(failure)}" for failure in validation_failures)
@@ -389,6 +417,94 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
     lines.append(f"Final PASS/FAIL: {'PASS' if passed else 'FAIL'}")
     lines.append("")
     return "\n".join(lines), passed
+
+
+def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) -> list[str]:
+    counts = evidence.get("counts", {}) or {}
+    diagnostics = evidence.get("rootCauseDiagnostics", {}) or {}
+    publish_summary = evidence.get("publishSummary", {}) or {}
+    download_summary = evidence.get("downloadSummary", {}) or {}
+    evidence_mode = str(evidence.get("evidenceMode", "REAL")).upper()
+    stage_a = diagnostics.get("services", {}).get("stageA", {}) if isinstance(diagnostics.get("services"), dict) else {}
+    stage_b = diagnostics.get("services", {}).get("stageB", {}) if isinstance(diagnostics.get("services"), dict) else {}
+    kafka = diagnostics.get("kafka", {}) if isinstance(diagnostics.get("kafka"), dict) else {}
+    stage_a_group = kafka.get("stageAConsumerGroup", {}) if isinstance(kafka.get("stageAConsumerGroup"), dict) else {}
+    stage_a_internal = kafka.get("stageAInternalTopics", {}) if isinstance(kafka.get("stageAInternalTopics"), dict) else {}
+
+    opra_input = max(
+        as_int(counts.get("opraTcbboRecordsRead")),
+        as_int(counts.get("opraTcbboRecordsPublished")),
+        topic_count((publish_summary.get("publish", {}) or {}).get("topicCounts", {}) or {}, ".opra.tcbbo"),
+        as_int((download_summary.get("counts", {}) or {}).get("opraTcbboRecordsRead")),
+        as_int(download_summary.get("opraTcbboRecordsRead")),
+    )
+    es_input = max(
+        as_int(counts.get("esTradesRead")),
+        as_int(counts.get("esTradesPublished")),
+        as_int(download_summary.get("esTradesRead")),
+    )
+    strike_flow = as_int(counts.get("strikeFlowRecordsEmitted"))
+    signal_count = as_int(counts.get("signalRecordsEmitted"))
+    latest_count = as_int(counts.get("latestSignalRecordsEmitted"))
+    audit_count = as_int(counts.get("auditRecordsEmitted"))
+    stage_a_state = str(stage_a.get("streamState") or infer_stream_state(stage_a.get("logTail", "")) or "")
+    stage_b_state = str(stage_b.get("streamState") or infer_stream_state(stage_b.get("logTail", "")) or "")
+    group_exists = stage_a_group.get("exists")
+    internal_count = as_int(stage_a_internal.get("count"))
+
+    root_cause = "Replay failed, but available artifacts were not sufficient to isolate one service or Kafka layer automatically."
+    if opra_input <= 0 and es_input <= 0:
+        root_cause = "Replay input was not loaded or published; Kafka output validation failed downstream because there were no source records to process."
+    elif strike_flow <= 0 and "REBALANCING" in stage_a_state and "RUNNING" not in stage_a_state:
+        root_cause = "Stage A Kafka Streams did not become operational; it remained in REBALANCING, so real replay input was not processed into strike-flow."
+    elif strike_flow <= 0 and group_exists is False:
+        root_cause = "Stage A did not establish its replay Kafka consumer group, so it could not consume the OPRA replay topic."
+    elif strike_flow <= 0 and "count" in stage_a_internal and internal_count == 0:
+        root_cause = "Stage A did not create Kafka Streams internal topics for this replay application id, indicating startup or group-assignment failed before processing."
+    elif strike_flow <= 0:
+        root_cause = "Stage A produced zero strike-flow records even though replay input existed; inspect Stage A service logs and DLQ for processor-level rejection or startup failure."
+    elif signal_count <= 0 or latest_count <= 0 or audit_count <= 0:
+        root_cause = "Stage A produced strike-flow, but downstream Stage B outputs were empty or incomplete; inspect Stage B service state, scheduler counters, and underlying-state join health."
+
+    lines = [
+        f"- Primary root cause: {root_cause}",
+        f"- Replay input health: OPRA records={opra_input}, ES records={es_input}",
+        f"- Stage A output health: strike-flow records={strike_flow}",
+        f"- Stage B output health: signal={signal_count}, latest-signal={latest_count}, audit={audit_count}",
+    ]
+    if stage_a_state:
+        lines.append(f"- Stage A stream state: {stage_a_state}")
+    if stage_b_state:
+        lines.append(f"- Stage B stream state: {stage_b_state}")
+    if group_exists is not None:
+        lines.append(f"- Stage A replay consumer group exists: {str(bool(group_exists)).lower()}")
+    if "count" in stage_a_internal:
+        lines.append(f"- Stage A Kafka Streams internal topics found: {internal_count}")
+    if diagnostics.get("logging", {}).get("slf4jNoopDetected"):
+        lines.append("- Diagnostic limitation: SLF4J NOP logging was detected, so Kafka Streams may have hidden the low-level exception.")
+    if "DRY_RUN" in evidence_mode and (opra_input > 0 or es_input > 0):
+        lines.append("- Evidence-mode note: report metadata says DRY_RUN, but collected replay summaries show real input existed; this is a fallback-report marker, not the primary replay root cause.")
+    if failures:
+        lines.append("- Validation symptoms: " + "; ".join(failures[:8]))
+    return lines
+
+
+def infer_stream_state(text: Any) -> str:
+    value = str(text or "")
+    if "RUNNING" in value:
+        return "RUNNING"
+    if "REBALANCING" in value:
+        return "REBALANCING"
+    if "CREATED" in value:
+        return "CREATED"
+    return ""
+
+
+def topic_count(topic_counts: dict[str, Any], suffix: str) -> int:
+    for topic, count in topic_counts.items():
+        if str(topic).endswith(suffix):
+            return as_int(count)
+    return 0
 
 
 def format_validation_failure(failure: Any) -> str:
