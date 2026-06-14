@@ -289,6 +289,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn('docker build -t "$HPSF_PROCESSING_IMAGE"', pipeline)
         self.assertIn('docker push "$HPSF_PROCESSING_IMAGE"', pipeline)
         self.assertIn("--image-pull-policy=Always", pipeline)
+        self.assertIn('HPSF_REPLAY_POD_OVERRIDES = \'{"spec":{"hostNetwork":true,"dnsPolicy":"ClusterFirstWithHostNet"}}\'', pipeline)
+        self.assertEqual(3, pipeline.count('--overrides="$HPSF_REPLAY_POD_OVERRIDES"'))
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_ALLOW_INCOMPLETE=true"))
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_MIN_HOLIDAYS_PER_YEAR=0"))
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_REQUIRE_EARLY_CLOSES=false"))
@@ -320,6 +322,9 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
+        self.assertIn("state=stage-a=RUNNING", pipeline)
+        self.assertIn("state=underlying-replay=RUNNING", pipeline)
+        self.assertIn("state=stage-b=RUNNING", pipeline)
         self.assertNotIn("--for=condition=Ready", pipeline)
         self.assertIn("Replay report was archived, but validation failed", pipeline)
         for stage in [

@@ -41,6 +41,7 @@ pipeline {
     KAFKA_SCHEMA_REGISTRY_URL = "${env.KAFKA_SCHEMA_REGISTRY_URL ?: 'http://192.168.100.252:8082'}"
     JENKINS_PUBLIC_URL = "${env.JENKINS_PUBLIC_URL ?: 'http://192.168.100.252:8085'}"
     NAMESPACE = "${env.NAMESPACE ?: 'options-edge'}"
+    HPSF_REPLAY_POD_OVERRIDES = '{"spec":{"hostNetwork":true,"dnsPolicy":"ClusterFirstWithHostNet"}}'
     HPSF_REPLAY_BUILD_DIR = 'build/hpsf-replay-20260612'
     HPSF_REPLAY_ARTIFACT_DIR = 'artifacts'
     HPSF_REPLAY_REPORT = 'artifacts/hpsf-replay-report-20260612.md'
@@ -195,7 +196,7 @@ pipeline {
           set -euo pipefail
           pod="hpsf-stage-a-replay-20260612"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
@@ -236,9 +237,22 @@ pipeline {
             fi
             sleep 1
           done
-          sleep 20
-          kubectl -n "$NAMESPACE" logs "$pod" --tail=300 > artifacts/logs/stage-a.log || true
+          for attempt in $(seq 1 180); do
+            phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+            kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/stage-a.log 2>/dev/null || true
+            if grep -E 'HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING' artifacts/logs/stage-a.log; then
+              break
+            fi
+            if [ "$phase" = "Failed" ] || [ "$phase" = "Succeeded" ]; then
+              kubectl -n "$NAMESPACE" describe pod "$pod" > artifacts/logs/stage-a-describe.log 2>/dev/null || true
+              cat artifacts/logs/stage-a.log
+              exit 1
+            fi
+            sleep 1
+          done
+          kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/stage-a.log || true
           grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing' artifacts/logs/stage-a.log
+          grep -E 'HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING' artifacts/logs/stage-a.log
         '''
       }
     }
@@ -260,7 +274,7 @@ pipeline {
           set -euo pipefail
           pod="hpsf-underlying-replay-20260612"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
@@ -300,9 +314,22 @@ pipeline {
             fi
             sleep 1
           done
-          sleep 20
-          kubectl -n "$NAMESPACE" logs "$pod" --tail=300 > artifacts/logs/underlying.log || true
+          for attempt in $(seq 1 180); do
+            phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+            kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/underlying.log 2>/dev/null || true
+            if grep -E 'HPSF underlying-replay stream state transition .* -> RUNNING|state=underlying-replay=RUNNING' artifacts/logs/underlying.log; then
+              break
+            fi
+            if [ "$phase" = "Failed" ] || [ "$phase" = "Succeeded" ]; then
+              kubectl -n "$NAMESPACE" describe pod "$pod" > artifacts/logs/underlying-describe.log 2>/dev/null || true
+              cat artifacts/logs/underlying.log
+              exit 1
+            fi
+            sleep 1
+          done
+          kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/underlying.log || true
           grep -E 'HPSF underlying replay topology enabled|underlying replay consuming|underlying replay producing' artifacts/logs/underlying.log
+          grep -E 'HPSF underlying-replay stream state transition .* -> RUNNING|state=underlying-replay=RUNNING' artifacts/logs/underlying.log
         '''
       }
     }
@@ -313,7 +340,7 @@ pipeline {
           set -euo pipefail
           pod="hpsf-stage-b-replay-20260612"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
@@ -358,7 +385,21 @@ pipeline {
             fi
             sleep 1
           done
+          for attempt in $(seq 1 180); do
+            phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+            kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/stage-b-startup.log 2>/dev/null || true
+            if grep -E 'HPSF stage-b stream state transition .* -> RUNNING|state=stage-b=RUNNING' artifacts/logs/stage-b-startup.log; then
+              break
+            fi
+            if [ "$phase" = "Failed" ] || [ "$phase" = "Succeeded" ]; then
+              kubectl -n "$NAMESPACE" describe pod "$pod" > artifacts/logs/stage-b-describe.log 2>/dev/null || true
+              cat artifacts/logs/stage-b-startup.log
+              exit 1
+            fi
+            sleep 1
+          done
           grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b-startup.log
+          grep -E 'HPSF stage-b stream state transition .* -> RUNNING|state=stage-b=RUNNING' artifacts/logs/stage-b-startup.log
           sleep 30
           kubectl -n "$NAMESPACE" logs "$pod" --tail=2000 > artifacts/logs/stage-b-runtime.log || true
           cat artifacts/logs/stage-b-startup.log artifacts/logs/stage-b-runtime.log > artifacts/logs/stage-b.log
