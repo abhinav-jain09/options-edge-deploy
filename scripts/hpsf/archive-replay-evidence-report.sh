@@ -91,5 +91,9 @@ EOF
   exit 1
 fi
 
+set +e
 python3 "$ARCHIVER" . "$MANIFEST" "$VALIDATION_FILE" "$EVIDENCE_DIR"
+archive_status=$?
+set -e
 copy_canonical_artifacts_to_evidence_dir
+exit "$archive_status"
