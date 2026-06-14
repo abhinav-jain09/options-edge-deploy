@@ -249,7 +249,7 @@ pipeline {
           set -euo pipefail
           export REPLAY_DATE="${REPLAY_DATE}"
           export TOPIC_PREFIX="${TOPIC_PREFIX}"
-          scripts/hpsf/validate-replay-output.sh --stage-a-only | tee artifacts/logs/validate-stage-a.log
+          scripts/hpsf/validate-replay-output.sh --stage-a-only 2>&1 | tee artifacts/logs/validate-stage-a.log
         '''
       }
     }

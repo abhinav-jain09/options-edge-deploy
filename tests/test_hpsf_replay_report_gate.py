@@ -260,6 +260,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("--summary artifacts/hpsf-replay-summary.json", pipeline)
         self.assertIn("scripts/hpsf/validate-replay-output.sh --final --summary-only", pipeline)
         self.assertIn("Replay validation failed with status", pipeline)
+        self.assertIn("scripts/hpsf/validate-replay-output.sh --stage-a-only 2>&1 | tee artifacts/logs/validate-stage-a.log", pipeline)
         self.assertIn("HPSF_REPLAY_REPORT_ALLOW_FAIL=true", pipeline)
         self.assertIn("HPSF_PREVIOUS_REPLAY_SUMMARY", pipeline)
         self.assertIn("replay-validation-result.json", pipeline)
