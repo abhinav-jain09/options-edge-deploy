@@ -30,7 +30,13 @@ collect_service() {
 
   kubectl -n "$NAMESPACE" get pod "$pod" -o json > "$LOG_DIR/${label}-pod.json" 2>/dev/null || true
   kubectl -n "$NAMESPACE" describe pod "$pod" > "$LOG_DIR/${label}-describe.log" 2>/dev/null || true
-  kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > "$LOG_DIR/${log_name}" 2>/dev/null || true
+  local fresh_log="$LOG_DIR/${log_name}.fresh"
+  kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > "$fresh_log" 2>/dev/null || true
+  if [[ -s "$fresh_log" || ! -s "$LOG_DIR/${log_name}" ]]; then
+    mv "$fresh_log" "$LOG_DIR/${log_name}"
+  else
+    rm -f "$fresh_log"
+  fi
   run_capture "$LOG_DIR/${label}-consumer-group.log" kafka-consumer-groups --bootstrap-server "$BOOTSTRAP" --describe --group "$app_id"
   set +e
   kafka-topics --bootstrap-server "$BOOTSTRAP" --list > "$LOG_DIR/all-kafka-topics.log" 2>&1

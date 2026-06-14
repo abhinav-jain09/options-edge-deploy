@@ -360,6 +360,9 @@ class HpsfReplayReportGateTest(unittest.TestCase):
 
         self.assertTrue(script.exists())
         self.assertTrue(os.access(script, os.X_OK))
+        text = script.read_text(encoding="utf-8")
+        self.assertIn('fresh_log="$LOG_DIR/${log_name}.fresh"', text)
+        self.assertIn('[[ -s "$fresh_log" || ! -s "$LOG_DIR/${log_name}" ]]', text)
         subprocess.run(["bash", "-n", str(script)], check=True)
 
     def test_archive_script_defaults_to_options_edge_project_evidence_folder(self) -> None:
