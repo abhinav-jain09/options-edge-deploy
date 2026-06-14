@@ -21,6 +21,14 @@ VALIDATION_FILE="$ARTIFACT_DIR/replay-validation-result.json"
 mkdir -p "$ARTIFACT_DIR/logs" "$EVIDENCE_DIR"
 rm -f "$EVIDENCE_DIR"/*.md "$EVIDENCE_DIR"/*.json
 
+local_evidence_mirror_dir() {
+  local root="${HPSF_REPLAY_EVIDENCE_LOCAL_ROOT:-}"
+  local build_number="${BUILD_NUMBER:-manual}"
+  if [[ -n "$root" ]]; then
+    printf '%s/hpsf-historical-replay-20260612/%s\n' "${root%/}" "$build_number"
+  fi
+}
+
 copy_canonical_artifacts_to_evidence_dir() {
   for artifact in \
     "$ARTIFACT_DIR/hpsf-replay-report-20260612.md" \
@@ -34,15 +42,18 @@ copy_canonical_artifacts_to_evidence_dir() {
 
 mirror_evidence_dir() {
   local target
-  for target in "$JENKINS_ARCHIVE_EVIDENCE_DIR" "${HPSF_REPLAY_EVIDENCE_MIRROR_DIR:-}"; do
+  for target in "$JENKINS_ARCHIVE_EVIDENCE_DIR" "${HPSF_REPLAY_EVIDENCE_MIRROR_DIR:-}" "$(local_evidence_mirror_dir)"; do
     if [[ -z "$target" || "$target" == "$EVIDENCE_DIR" ]]; then
       continue
     fi
     if [[ "$target" == "$JENKINS_ARCHIVE_EVIDENCE_DIR" && ! -d ".replay/options-edge" ]]; then
       continue
     fi
-    mkdir -p "$target"
-    rm -f "$target"/*.md "$target"/*.json
+    if ! mkdir -p "$target" 2>/dev/null; then
+      echo "Skipping replay evidence mirror; cannot create target: $target"
+      continue
+    fi
+    rm -f "$target"/*.md "$target"/*.json 2>/dev/null || true
     cp "$EVIDENCE_DIR"/*.md "$EVIDENCE_DIR"/*.json "$target"/ 2>/dev/null || true
     echo "Mirrored replay evidence report to: $target"
   done

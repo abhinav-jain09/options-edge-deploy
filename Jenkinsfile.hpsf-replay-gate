@@ -45,6 +45,7 @@ pipeline {
     HPSF_REPLAY_BUILD_DIR = 'build/hpsf-replay-20260612'
     HPSF_REPLAY_ARTIFACT_DIR = 'artifacts'
     HPSF_REPLAY_REPORT = 'artifacts/hpsf-replay-report-20260612.md'
+    HPSF_REPLAY_EVIDENCE_LOCAL_ROOT = "${env.HPSF_REPLAY_EVIDENCE_LOCAL_ROOT ?: '/Users/abhinav/development/workspace/options-edge/evidence-report'}"
   }
 
   stages {
