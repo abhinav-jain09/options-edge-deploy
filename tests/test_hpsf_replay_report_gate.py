@@ -112,6 +112,29 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("all NO_TRADE outputs are explained only by data-health gates", report)
 
+    def test_ReplayReportAllowsAllNoTradeWhenAggregateAuditHasStrategyGateTest(self) -> None:
+        data = evidence()
+        data["actionCounts"] = {"NO_TRADE": 1}
+        data["gateReasonCounts"] = {
+            "ATM_STRIKE_MISSING: atmStrike=7400.0": 1,
+            "NO_LIQUID_EXECUTION_CANDIDATE": 1,
+            "MIXED_FLOW": 1,
+        }
+        data["samples"]["signal"]["reasons"] = [
+            "ATM_STRIKE_MISSING: atmStrike=7400.0",
+            "NO_LIQUID_EXECUTION_CANDIDATE",
+        ]
+        data["samples"]["audit"]["noTradeGates"] = [
+            "ATM_STRIKE_MISSING: atmStrike=7400.0",
+            "NO_LIQUID_EXECUTION_CANDIDATE",
+        ]
+
+        result, report = generate_report_result(data)
+
+        self.assertEqual(0, result.returncode)
+        self.assertIn("Final PASS/FAIL: PASS", report)
+        self.assertNotIn("all NO_TRADE outputs are explained only by data-health gates", report)
+
     def test_ReplayReportPopulatesEsLineageFromSelectedStatsTest(self) -> None:
         data = evidence()
         for key in ["esFirstEventTime", "esLastEventTime", "esVwapFirst", "esVwapLast"]:

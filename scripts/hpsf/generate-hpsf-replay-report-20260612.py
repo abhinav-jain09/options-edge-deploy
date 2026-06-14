@@ -246,13 +246,31 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
         failures.append("Stage B VWAP unusable")
     signal_sample = samples.get("signal") if isinstance(samples.get("signal"), dict) else {}
     audit_sample = samples.get("audit") if isinstance(samples.get("audit"), dict) else {}
+    def reason_code(reason: Any) -> str:
+        if not isinstance(reason, str):
+            return ""
+        text = reason.strip()
+        if not text:
+            return ""
+        return text.replace("=", " ").replace(":", " ").split()[0]
+
+    def reason_codes(values: set[Any]) -> set[str]:
+        return {code for code in (reason_code(value) for value in values) if code}
+
     sample_reasons = set(signal_sample.get("reasons") or [])
     sample_reasons.update(audit_sample.get("noTradeGates") or [])
+    sampled_reason_codes = reason_codes(sample_reasons)
+    sampled_reason_codes.update(
+        reason_code(reason)
+        for reason, count in gate_reason_counts.items()
+        if as_int(count) > 0 and reason_code(reason)
+    )
     data_failure_reasons = {
         "SPX_SPOT_STALE",
         "ES_TRADE_STALE",
         "VWAP_STALE",
         "BASIS_STALE",
+        "OPRA_FLOW_STALE",
         "INSUFFICIENT_CHAIN_COVERAGE",
         "INSUFFICIENT_CALL_COVERAGE",
         "INSUFFICIENT_PUT_COVERAGE",
@@ -266,7 +284,7 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
         "COMPLEX_FLOW_DOMINANT",
     }
     if action_counts.get("NO_TRADE", 0) == int(counts.get("signalRecordsEmitted", 0) or 0):
-        if sample_reasons & data_failure_reasons and not sample_reasons & strategy_valid_reasons:
+        if sampled_reason_codes & data_failure_reasons and not sampled_reason_codes & strategy_valid_reasons:
             failures.append("all NO_TRADE outputs are explained only by data-health gates")
     if not isinstance(audit_sample.get("gateDiagnostics"), dict) or not audit_sample.get("gateDiagnostics"):
         failures.append("STAGE_B_AUDIT_GATE_DIAGNOSTICS_EMPTY")
