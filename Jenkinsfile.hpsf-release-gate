@@ -13,7 +13,11 @@ pipeline {
     stage('Checkout') {
       steps {
         checkout scm
-        sh 'git rev-parse --short HEAD'
+        sh '''
+          set -euo pipefail
+          scripts/jenkins/enforce-main-branch.sh
+          git rev-parse --short HEAD
+        '''
       }
     }
     stage('Checkout Source Specs') {
@@ -22,8 +26,7 @@ pipeline {
           set -euo pipefail
           rm -rf .release
           mkdir -p .release
-          git clone git@github.com:abhinav-jain09/options-edge.git .release/options-edge
-          git -C .release/options-edge checkout feature/hpsf-v2.1-bugzilla-40-64
+          git clone --branch main --single-branch git@github.com:abhinav-jain09/options-edge.git .release/options-edge
         '''
       }
     }

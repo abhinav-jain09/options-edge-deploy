@@ -17,7 +17,11 @@ pipeline {
     stage('Checkout') {
       steps {
         checkout scm
-        sh 'git rev-parse --short HEAD'
+        sh '''
+          set -euo pipefail
+          scripts/jenkins/enforce-main-branch.sh
+          git rev-parse --short HEAD
+        '''
       }
     }
     stage('Validate Ops Files') {

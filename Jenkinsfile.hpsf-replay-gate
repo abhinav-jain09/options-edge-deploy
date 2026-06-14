@@ -53,6 +53,7 @@ pipeline {
         checkout scm
         sh '''
           set -euo pipefail
+          scripts/jenkins/enforce-main-branch.sh
           git rev-parse HEAD > build-git-sha.txt
           rm -rf artifacts build/hpsf-replay-20260612 artifact-manifest.json
           mkdir -p artifacts/logs build/hpsf-replay-20260612/logs .replay

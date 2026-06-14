@@ -67,6 +67,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          scripts/jenkins/enforce-main-branch.sh
           test "$REMOTE_APP_HOME" = "/home/options-edge"
           test ! -d /root/options-edge
           test ! -d /options-edge
