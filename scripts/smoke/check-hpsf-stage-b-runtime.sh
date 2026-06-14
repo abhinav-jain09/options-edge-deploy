@@ -82,6 +82,21 @@ wait_for_stage_b_log_contains() {
   exit 1
 }
 
+start_topic_capture() {
+  local topic="$1"
+  local output_file="$2"
+  local error_file="$3"
+  local scan_seconds="${HPSF_STAGE_B_OUTPUT_SCAN_SECONDS:-120}"
+  local scan_ms=$((scan_seconds * 1000))
+  : >"$output_file"
+  : >"$error_file"
+  timeout "${scan_seconds}s" kafka-console-consumer \
+    --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+    --topic "$topic" \
+    --timeout-ms "$scan_ms" >"$output_file" 2>"$error_file" &
+  echo "$!"
+}
+
 read_expected_record() {
   local topic="$1"
   local expected="$2"
@@ -89,14 +104,6 @@ read_expected_record() {
   local error_file="$4"
   local deadline=$((SECONDS + ${HPSF_STAGE_B_OUTPUT_SCAN_SECONDS:-120}))
   while (( SECONDS < deadline )); do
-    : >"$output_file"
-    : >"$error_file"
-    kafka-console-consumer \
-      --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
-      --topic "$topic" \
-      --from-beginning \
-      --max-messages "${HPSF_STAGE_B_OUTPUT_SCAN_MAX_MESSAGES:-5000}" \
-      --timeout-ms 10000 >"$output_file" 2>"$error_file" || true
     local matches
     matches="$(grep -F "$expected" "$output_file" || true)"
     if [[ -n "$matches" ]]; then
@@ -159,17 +166,25 @@ expected_eval_id="SPX-$(date -u -d "$event_time" +%Y%m%d-%H%M%S)000"
 flow_json="{\"schemaVersion\":2,\"algorithmVersion\":\"HPSF_V2.1\",\"configVersion\":\"hpsf65-smoke\",\"codeGitSha\":\"$fixture_id\",\"eventTime\":\"$event_time\",\"tradeDate\":\"$trade_date\",\"underlying\":\"SPX\",\"expiry\":\"$expiry\",\"strike\":6005.0,\"optionType\":\"CALL\",\"spot\":6005.0,\"bid\":8.90,\"ask\":9.40,\"mid\":9.15,\"spread\":0.50,\"spreadPct\":0.0546,\"totalVolume1m\":100,\"askVolume1m\":80,\"bidVolume1m\":10,\"midVolume1m\":10,\"askRatio1m\":0.80,\"askPremium1m\":1000000.0,\"bidPremium1m\":0.0,\"netBuyPremium1m\":1000000.0,\"totalVolume5m\":300,\"askVolume5m\":250,\"bidVolume5m\":25,\"midVolume5m\":25,\"askRatio5m\":0.83,\"askPremium5m\":2000000.0,\"bidPremium5m\":0.0,\"netBuyPremium5m\":2000000.0,\"volumeSpeed\":4.0,\"tradeCount1m\":20,\"liquidityOk\":true,\"candidateDistanceOk\":true}"
 
 tmp_dir="$(mktemp -d)"
-cleanup() {
-  rm -rf "$tmp_dir"
-}
-trap cleanup EXIT
-
 signal_output_file="$tmp_dir/signal.out"
 signal_error_file="$tmp_dir/signal.err"
 latest_output_file="$tmp_dir/latest.out"
 latest_error_file="$tmp_dir/latest.err"
+signal_capture_pid=""
+latest_capture_pid=""
+
+cleanup() {
+  if [[ -n "$signal_capture_pid" || -n "$latest_capture_pid" ]]; then
+    kill "$signal_capture_pid" "$latest_capture_pid" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
 
 log "producing deterministic Stage B fixture $fixture_id expecting $expected_eval_id"
+signal_capture_pid="$(start_topic_capture options.hpsf.signal "$signal_output_file" "$signal_error_file")"
+latest_capture_pid="$(start_topic_capture options.hpsf.latest-signal "$latest_output_file" "$latest_error_file")"
+sleep "${HPSF_STAGE_B_CONSUMER_READY_SECONDS:-3}"
 produce_keyed_json options.hpsf.strike-flow "$trade_date|$expiry|6005|CALL" "$flow_json"
 
 signal_output="$(read_expected_record options.hpsf.signal "$expected_eval_id" "$signal_output_file" "$signal_error_file")"
