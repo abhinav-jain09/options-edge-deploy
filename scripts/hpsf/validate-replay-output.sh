@@ -254,6 +254,24 @@ def count_file(name):
         count += 1
     return count
 
+def read_records(name):
+    path = build / f'{name}.records'
+    if not path.exists():
+        return []
+    records = []
+    for raw in path.read_text(encoding='utf-8').splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith('Option --property is deprecated') or line.startswith('Processed a total of '):
+            continue
+        value = line.split('\t', 1)[1] if '\t' in line else line
+        try:
+            records.append(json.loads(value))
+        except json.JSONDecodeError:
+            continue
+    return records
+
 def sample(path):
     if not path.exists():
         return {}
@@ -264,6 +282,62 @@ def sample(path):
         return json.loads(text)
     except json.JSONDecodeError:
         return {"raw": text}
+
+def count_actions(records):
+    counts = {}
+    for record in records:
+        action = record.get('action') or record.get('selectedAction')
+        if isinstance(action, str) and action.strip():
+            counts[action] = counts.get(action, 0) + 1
+    return counts
+
+def count_gate_reasons(records):
+    counts = {}
+    for record in records:
+        reasons = record.get('noTradeGates') or record.get('reasons') or []
+        if isinstance(reasons, str):
+            reasons = [reasons]
+        for reason in reasons:
+            if isinstance(reason, str) and reason.strip():
+                counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+def top_values(records, *keys, limit=10):
+    counts = {}
+    for record in records:
+        parts = []
+        for key in keys:
+            value = record.get(key)
+            if value is None or value == '':
+                parts = []
+                break
+            parts.append(str(value))
+        if not parts:
+            continue
+        label = ' '.join(parts)
+        counts[label] = counts.get(label, 0) + 1
+    return [f'{label} count={count}' for label, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:limit]]
+
+def normalize_event_time(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds = int(value) // 1_000_000_000
+        micros = (int(value) % 1_000_000_000) // 1000
+        from datetime import datetime, timezone
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).replace(microsecond=micros).isoformat().replace('+00:00', 'Z')
+    text = str(value).strip()
+    return text or None
+
+def hydrate_es_lineage(counts, selection):
+    selected = selection.get('selectedStats') if isinstance(selection.get('selectedStats'), dict) else {}
+    counts.setdefault('esFirstEventTime', normalize_event_time(selected.get('firstEventTime')))
+    counts.setdefault('esLastEventTime', normalize_event_time(selected.get('lastEventTime')))
+    counts.setdefault('esVwapFirst', selected.get('esVwapFirst'))
+    counts.setdefault('esVwapLast', selected.get('esVwapLast'))
+    for key in ['esFirstEventTime', 'esLastEventTime', 'esVwapFirst', 'esVwapLast']:
+        if counts.get(key) is None:
+            counts[key] = ''
 
 def jenkins_build_url():
     build_url = os.environ.get('BUILD_URL', '').strip()
@@ -315,6 +389,10 @@ if not selection:
         'resolution': {'resolvedIntervals': []},
         'candidates': [],
     }
+hydrate_es_lineage(counts, selection)
+signal_records = read_records('signal')
+audit_records = read_records('audit')
+strike_score_records = read_records('strike-score')
 evidence = {
     'evidenceMode': 'REAL',
     'jenkins': {
@@ -346,10 +424,10 @@ evidence = {
         'latestSignal': sample(artifacts / 'hpsf-sample-latest-signal.json'),
         'audit': sample(artifacts / 'hpsf-sample-audit.json'),
     },
-    'actionCounts': {},
-    'gateReasonCounts': {},
-    'topExecutionStrikes': [],
-    'topFlowAnchors': [],
+    'actionCounts': count_actions(signal_records),
+    'gateReasonCounts': count_gate_reasons(audit_records),
+    'topExecutionStrikes': top_values(strike_score_records, 'executionStrike', 'optionType'),
+    'topFlowAnchors': top_values(strike_score_records, 'flowAnchorStrike', 'optionType'),
     'orderInstructionEnabledTrueFound': order_instruction_enabled,
 }
 (build / 'validation-summary.json').write_text(json.dumps({'counts': counts, 'keyValidation': evidence['keyValidation']}, indent=2, sort_keys=True), encoding='utf-8')
@@ -375,6 +453,8 @@ key_validation = summary.get("keyValidation") or {}
 profile = str(summary.get("validationProfile") or "FULL_RTH_RELEASE").upper()
 samples = summary.get("samples") or {}
 replay = summary.get("replay") or {}
+action_counts = summary.get("actionCounts") or {}
+gate_reason_counts = summary.get("gateReasonCounts") or {}
 
 def as_int(name):
     if name in stage_b:
@@ -486,10 +566,48 @@ if profile == "FULL_RTH_RELEASE":
     ]
     if zero_outputs:
         failures.append("STAGE_B_ZERO_FINAL_OUTPUTS: " + ",".join(zero_outputs))
+    try:
+        signal_count = int(counts.get("signalRecordsEmitted", 0) or 0)
+    except (TypeError, ValueError):
+        signal_count = 0
+    try:
+        audit_count = int(counts.get("auditRecordsEmitted", 0) or 0)
+    except (TypeError, ValueError):
+        audit_count = 0
+    if signal_count > 0 and not action_counts:
+        failures.append("ACTION_COUNTS_EMPTY_WITH_SIGNALS")
+    if audit_count > 0 and not gate_reason_counts:
+        failures.append("GATE_REASON_COUNTS_EMPTY_WITH_AUDITS")
+    if action_counts:
+        action_sum = sum(int(value or 0) for value in action_counts.values())
+        if action_sum != signal_count:
+            failures.append(f"ACTION_COUNT_MISMATCH: sum(actionCounts)={action_sum}, signalRecordsEmitted={signal_count}")
 
 if profile == "FULL_RTH_RELEASE":
     signal_sample = samples.get("signal") if isinstance(samples.get("signal"), dict) else {}
     audit_sample = samples.get("audit") if isinstance(samples.get("audit"), dict) else {}
+    sample_reasons = set(signal_sample.get("reasons") or [])
+    sample_reasons.update(audit_sample.get("noTradeGates") or [])
+    data_failure_reasons = {
+        "SPX_SPOT_STALE",
+        "ES_TRADE_STALE",
+        "VWAP_STALE",
+        "BASIS_STALE",
+        "INSUFFICIENT_CHAIN_COVERAGE",
+        "INSUFFICIENT_CALL_COVERAGE",
+        "INSUFFICIENT_PUT_COVERAGE",
+        "NO_LIQUID_EXECUTION_CANDIDATE",
+        "EXECUTION_CANDIDATE_TOO_FAR",
+    }
+    strategy_valid_reasons = {
+        "NO_ACTIVE_VWAP_SETUP",
+        "MARKET_SCORE_BELOW_THRESHOLD",
+        "MIXED_FLOW",
+        "COMPLEX_FLOW_DOMINANT",
+    }
+    if action_counts.get("NO_TRADE", 0) == int(counts.get("signalRecordsEmitted", 0) or 0):
+        if sample_reasons & data_failure_reasons and not sample_reasons & strategy_valid_reasons:
+            failures.append("ALL_NO_TRADE_DATA_FAILURE")
     gate_diagnostics = audit_sample.get("gateDiagnostics")
     coverage_diagnostics = audit_sample.get("chainCoverageDiagnostics")
     if not isinstance(gate_diagnostics, dict) or not gate_diagnostics:

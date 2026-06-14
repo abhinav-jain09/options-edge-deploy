@@ -34,6 +34,32 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("ESM6: trade count=2 total size=10", report)
         self.assertIn("ESU6: trade count=1 total size=4", report)
 
+    def test_ReplayReportFailsCopiedEsm6Esu6ComparisonTest(self) -> None:
+        data = evidence()
+        copied = {
+            "tradeCount": 2,
+            "totalSize": 10,
+            "firstEventTime": "2026-06-12T14:31:04Z",
+            "lastEventTime": "2026-06-12T14:31:05Z",
+        }
+        data["esSelection"]["candidates"][0]["stats"] = dict(copied)
+        data["esSelection"]["candidates"][1]["stats"] = dict(copied)
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("ESM6/ESU6 candidate stats look copied", report)
+
+    def test_ReplayReportAllowsUnavailableEsu6ComparisonTest(self) -> None:
+        data = evidence()
+        data["esSelection"]["candidates"][1] = {
+            "symbol": "ESU6",
+            "comparisonStatus": "NOT_AVAILABLE",
+            "reason": "ESU6 candidate stats were not fetched",
+        }
+        report = generate_report(data)
+
+        self.assertIn("ESU6: comparisonStatus=NOT_AVAILABLE", report)
+
     def test_ReplayReportIncludesStageAStageBCountsTest(self) -> None:
         report = generate_report(evidence())
 
@@ -42,6 +68,40 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("signalRecordsEmitted: 1", report)
         self.assertIn("Stage A startup log evidence", report)
         self.assertIn("Stage B startup log evidence", report)
+
+    def test_ReplayReportFailsEmptyActionCountsWithSignalsTest(self) -> None:
+        data = evidence()
+        data["actionCounts"] = {}
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("actionCounts empty while signal records exist", report)
+
+    def test_ReplayReportFailsAllNoTradeDataHealthOnlyTest(self) -> None:
+        data = evidence()
+        data["actionCounts"] = {"NO_TRADE": 1}
+        data["gateReasonCounts"] = {"SPX_SPOT_STALE": 1}
+        data["samples"]["signal"]["reasons"] = ["SPX_SPOT_STALE"]
+        data["samples"]["audit"]["noTradeGates"] = ["SPX_SPOT_STALE"]
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("all NO_TRADE outputs are explained only by data-health gates", report)
+
+    def test_ReplayReportPopulatesEsLineageFromSelectedStatsTest(self) -> None:
+        data = evidence()
+        for key in ["esFirstEventTime", "esLastEventTime", "esVwapFirst", "esVwapLast"]:
+            data["counts"].pop(key)
+        data["esSelection"]["selectedStats"] = {
+            "firstEventTime": "2026-06-12T14:31:04Z",
+            "lastEventTime": "2026-06-12T14:31:05Z",
+            "esVwapFirst": 6030.25,
+            "esVwapLast": 6036.10,
+        }
+        report = generate_report(data)
+
+        self.assertIn("esFirstEventTime: 2026-06-12T14:31:04Z", report)
+        self.assertIn("esVwapLast: 6036.1", report)
 
     def test_ReplayReportIncludesStageBUnderlyingHealthTest(self) -> None:
         report = generate_report(evidence())
@@ -291,10 +351,10 @@ case "$topic" in
   *.hpsf.strike-flow) printf '2026-06-12|2026-06-12|6000|CALL\\t{"eventId":"strike-flow-1"}\\n' ;;
   *.hpsf.underlying-state) printf '2026-06-12|2026-06-12\\t{"esVwap":6030.25,"spxEquivalentVwap":6030.25,"distanceToVwap":1.25}\\n' ;;
   *.hpsf.market-flow) printf '2026-06-12|2026-06-12\\t{"marketBias":"NEUTRAL"}\\n' ;;
-  *.hpsf.strike-score) printf '2026-06-12|2026-06-12|6000|CALL|EXECUTION\\t{"score":1.0}\\n' ;;
-  *.hpsf.signal) printf '2026-06-12|2026-06-12|eval-1\\t{"evaluationId":"eval-1","eventTime":"2026-06-12T14:31:17Z","action":"NO_TRADE","internalVwapState":"VWAP_RECLAIM_CONFIRMED","vwap":6000.0,"distanceToVwap":5.0,"orderInstruction":{"enabled":false}}\\n' ;;
+  *.hpsf.strike-score) printf '2026-06-12|2026-06-12|6000|CALL|EXECUTION\\t{"score":1.0,"executionStrike":6000,"flowAnchorStrike":6000,"optionType":"CALL"}\\n' ;;
+  *.hpsf.signal) printf '2026-06-12|2026-06-12|eval-1\\t{"evaluationId":"eval-1","eventTime":"2026-06-12T14:31:17Z","action":"NO_TRADE","reasons":["MARKET_SCORE_BELOW_THRESHOLD"],"internalVwapState":"VWAP_RECLAIM_CONFIRMED","vwap":6000.0,"distanceToVwap":5.0,"orderInstruction":{"enabled":false}}\\n' ;;
   *.hpsf.latest-signal) printf '2026-06-12|2026-06-12\\t{"evaluationId":"eval-1","orderInstruction":{"enabled":false}}\\n' ;;
-  *.hpsf.audit) printf '2026-06-12|2026-06-12|eval-1\\t{"evaluationId":"eval-1","selectedAction":"NO_TRADE","gateDiagnostics":{"evaluationTime":"2026-06-12T14:31:17Z"},"chainCoverageDiagnostics":{"coverageRatio":1.0}}\\n' ;;
+  *.hpsf.audit) printf '2026-06-12|2026-06-12|eval-1\\t{"evaluationId":"eval-1","selectedAction":"NO_TRADE","noTradeGates":["MARKET_SCORE_BELOW_THRESHOLD"],"gateDiagnostics":{"evaluationTime":"2026-06-12T14:31:17Z"},"chainCoverageDiagnostics":{"coverageRatio":1.0}}\\n' ;;
 esac
 """,
                 encoding="utf-8",
@@ -396,6 +456,9 @@ esac
             self.assertEqual("cafebabe", evidence_data["jenkins"]["commitSha"])
             self.assertTrue(evidence_data["keyValidation"]["signalKeyValid"])
             self.assertEqual(9, evidence_data["stageBPerformance"]["underlyingStateLookupHitCount"])
+            self.assertEqual({"NO_TRADE": 1}, evidence_data["actionCounts"])
+            self.assertEqual({"MARKET_SCORE_BELOW_THRESHOLD": 1}, evidence_data["gateReasonCounts"])
+            self.assertEqual(["6000 CALL count=1"], evidence_data["topExecutionStrikes"])
             self.assertTrue((artifact_dir / "hpsf-sample-signal.json").exists())
 
     def test_run_script_fixture_mode_fails_closed_with_report(self) -> None:

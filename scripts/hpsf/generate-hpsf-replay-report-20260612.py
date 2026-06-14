@@ -80,6 +80,34 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
         except (TypeError, ValueError):
             return None
 
+    def selected_stats() -> dict[str, Any]:
+        stats = es_selection.get("selectedStats")
+        return stats if isinstance(stats, dict) else {}
+
+    def es_count(name: str) -> Any:
+        if counts.get(name) not in (None, ""):
+            return counts.get(name)
+        field = {
+            "esFirstEventTime": "firstEventTime",
+            "esLastEventTime": "lastEventTime",
+            "esVwapFirst": "esVwapFirst",
+            "esVwapLast": "esVwapLast",
+        }.get(name)
+        return selected_stats().get(field, "") if field else ""
+
+    def suspicious_candidate_copy() -> bool:
+        candidates = es_selection.get("candidates", [])
+        if len(candidates) < 2:
+            return False
+        first, second = candidates[0] or {}, candidates[1] or {}
+        if second.get("comparisonStatus") == "NOT_AVAILABLE":
+            return False
+        a = first.get("stats", {}) or {}
+        b = second.get("stats", {}) or {}
+        independent_marker = any(first.get(key) or second.get(key) for key in ["verificationHash", "queryId", "sourceQueryId"])
+        compared = ["tradeCount", "totalSize", "firstEventTime", "lastEventTime"]
+        return bool(a and b and not independent_marker and all(a.get(key) == b.get(key) for key in compared))
+
     missing_stage_b_counters = [name for name in stage_b_required if stage_b_counter(name) is None]
     chain_updates = stage_b_counter("stageB.chainSnapshot.update.count")
     active_puts = stage_b_counter("activeChainStorePutCount")
@@ -133,6 +161,15 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
         failures.append("latest-signal topic is empty")
     if int(counts.get("auditRecordsEmitted", 0)) <= 0:
         failures.append("audit topic is empty")
+    if int(counts.get("signalRecordsEmitted", 0)) > 0 and not action_counts:
+        failures.append("actionCounts empty while signal records exist")
+    if int(counts.get("auditRecordsEmitted", 0)) > 0 and not gate_reason_counts:
+        failures.append("gateReasonCounts empty while audit records exist")
+    if suspicious_candidate_copy():
+        failures.append("ESM6/ESU6 candidate stats look copied; independent query evidence missing")
+    for key in ["esFirstEventTime", "esLastEventTime", "esVwapFirst", "esVwapLast"]:
+        if es_count(key) in (None, ""):
+            failures.append(f"{key} missing")
     if missing_stage_b_counters:
         failures.append(f"Stage B underlying-state counters missing: {missing_stage_b_counters}")
     if (chain_updates or 0) <= 0:
@@ -153,6 +190,28 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
         failures.append("Stage B VWAP unusable")
     signal_sample = samples.get("signal") if isinstance(samples.get("signal"), dict) else {}
     audit_sample = samples.get("audit") if isinstance(samples.get("audit"), dict) else {}
+    sample_reasons = set(signal_sample.get("reasons") or [])
+    sample_reasons.update(audit_sample.get("noTradeGates") or [])
+    data_failure_reasons = {
+        "SPX_SPOT_STALE",
+        "ES_TRADE_STALE",
+        "VWAP_STALE",
+        "BASIS_STALE",
+        "INSUFFICIENT_CHAIN_COVERAGE",
+        "INSUFFICIENT_CALL_COVERAGE",
+        "INSUFFICIENT_PUT_COVERAGE",
+        "NO_LIQUID_EXECUTION_CANDIDATE",
+        "EXECUTION_CANDIDATE_TOO_FAR",
+    }
+    strategy_valid_reasons = {
+        "NO_ACTIVE_VWAP_SETUP",
+        "MARKET_SCORE_BELOW_THRESHOLD",
+        "MIXED_FLOW",
+        "COMPLEX_FLOW_DOMINANT",
+    }
+    if action_counts.get("NO_TRADE", 0) == int(counts.get("signalRecordsEmitted", 0) or 0):
+        if sample_reasons & data_failure_reasons and not sample_reasons & strategy_valid_reasons:
+            failures.append("all NO_TRADE outputs are explained only by data-health gates")
     if not isinstance(audit_sample.get("gateDiagnostics"), dict) or not audit_sample.get("gateDiagnostics"):
         failures.append("STAGE_B_AUDIT_GATE_DIAGNOSTICS_EMPTY")
     if not isinstance(audit_sample.get("chainCoverageDiagnostics"), dict) or not audit_sample.get("chainCoverageDiagnostics"):
@@ -220,13 +279,16 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     lines.append("## ESM6 vs ESU6 Comparison")
     for candidate in es_selection.get("candidates", []):
         stats = candidate.get("stats", {})
-        lines.append(f"- {candidate.get('symbol')}: trade count={stats.get('tradeCount', 0)} total size={stats.get('totalSize', 0)} selected={candidate.get('selected', False)} reason={candidate.get('reason', '')}")
+        if candidate.get("comparisonStatus") == "NOT_AVAILABLE":
+            lines.append(f"- {candidate.get('symbol')}: comparisonStatus=NOT_AVAILABLE reason={candidate.get('reason', '')}")
+        else:
+            lines.append(f"- {candidate.get('symbol')}: trade count={stats.get('tradeCount', 0)} total size={stats.get('totalSize', 0)} selected={candidate.get('selected', False)} reason={candidate.get('reason', '')}")
     lines.append(f"- selected contract: {es_selection.get('selectedSymbol', '')}")
     lines.append(f"- selection reason: {es_selection.get('selectionReason', '')}")
     lines.append("")
     lines.append("## ES Replay Counts")
     for key in ["esTradesRead", "esTradesPublished", "esTotalSize", "esFirstEventTime", "esLastEventTime", "esVwapFirst", "esVwapLast"]:
-        lines.append(f"- {key}: {counts.get(key, '')}")
+        lines.append(f"- {key}: {es_count(key)}")
     lines.append("")
     lines.append("## OPRA Counts")
     for key in ["opraTcbboRecordsRead", "opraTcbboRecordsNormalized", "unknownInstrumentCount", "dlqCount"]:
