@@ -456,6 +456,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
             deploy.mkdir()
             options_edge.mkdir()
             (deploy / "scripts" / "hpsf").mkdir(parents=True)
+            (deploy / ".replay" / "options-edge").mkdir(parents=True)
             local_script = deploy / "scripts" / "hpsf" / "archive-replay-evidence-report.sh"
             local_script.write_text(ARCHIVE_EVIDENCE_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
             local_script.chmod(0o755)
@@ -479,10 +480,20 @@ class HpsfReplayReportGateTest(unittest.TestCase):
             )
 
             project_folder = options_edge / "evidence-report" / "hpsf-historical-replay-20260612" / "manual-test"
+            jenkins_archive_folder = (
+                deploy
+                / ".replay"
+                / "options-edge"
+                / "evidence-report"
+                / "hpsf-historical-replay-20260612"
+                / "manual-test"
+            )
             self.assertNotEqual(0, result.returncode)
             self.assertTrue((project_folder / "hpsf-replay-report-20260612.md").exists(), result.stderr + result.stdout)
             self.assertTrue((project_folder / "hpsf-replay-summary.json").exists())
             self.assertTrue((project_folder / "replay-validation-result.json").exists())
+            self.assertTrue((jenkins_archive_folder / "hpsf-replay-report-20260612.md").exists(), result.stderr + result.stdout)
+            self.assertIn("Mirrored replay evidence report to: .replay/options-edge/evidence-report", result.stdout)
 
     def test_download_script_prepares_missing_databento_jsonl(self) -> None:
         text = DOWNLOAD_SCRIPT.read_text()

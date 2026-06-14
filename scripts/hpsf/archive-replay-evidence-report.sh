@@ -4,21 +4,22 @@ set -euo pipefail
 ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
 default_project_evidence_dir() {
   local build_number="${BUILD_NUMBER:-manual}"
-  if [[ -d ".replay/options-edge" ]]; then
-    printf '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/%s\n' "$build_number"
-  elif [[ -d "../options-edge" ]]; then
+  if [[ -d "../options-edge" ]]; then
     printf '../options-edge/evidence-report/hpsf-historical-replay-20260612/%s\n' "$build_number"
+  elif [[ -d ".replay/options-edge" ]]; then
+    printf '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/%s\n' "$build_number"
   else
     printf 'evidence-report/hpsf-historical-replay-20260612/%s\n' "$build_number"
   fi
 }
 EVIDENCE_DIR="${HPSF_REPLAY_EVIDENCE_DIR:-$(default_project_evidence_dir)}"
+JENKINS_ARCHIVE_EVIDENCE_DIR=".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/${BUILD_NUMBER:-manual}"
 MANIFEST="${HPSF_REPLAY_ARTIFACT_MANIFEST:-artifact-manifest.json}"
 ARCHIVER=".replay/options-edge/scripts/hpsf/archive_replay_evidence.py"
 VALIDATION_FILE="$ARTIFACT_DIR/replay-validation-result.json"
 
 mkdir -p "$ARTIFACT_DIR/logs" "$EVIDENCE_DIR"
-rm -f "$EVIDENCE_DIR"/*.md
+rm -f "$EVIDENCE_DIR"/*.md "$EVIDENCE_DIR"/*.json
 
 copy_canonical_artifacts_to_evidence_dir() {
   for artifact in \
@@ -28,6 +29,22 @@ copy_canonical_artifacts_to_evidence_dir() {
     if [[ -s "$artifact" ]]; then
       cp "$artifact" "$EVIDENCE_DIR/"
     fi
+  done
+}
+
+mirror_evidence_dir() {
+  local target
+  for target in "$JENKINS_ARCHIVE_EVIDENCE_DIR" "${HPSF_REPLAY_EVIDENCE_MIRROR_DIR:-}"; do
+    if [[ -z "$target" || "$target" == "$EVIDENCE_DIR" ]]; then
+      continue
+    fi
+    if [[ "$target" == "$JENKINS_ARCHIVE_EVIDENCE_DIR" && ! -d ".replay/options-edge" ]]; then
+      continue
+    fi
+    mkdir -p "$target"
+    rm -f "$target"/*.md "$target"/*.json
+    cp "$EVIDENCE_DIR"/*.md "$EVIDENCE_DIR"/*.json "$target"/ 2>/dev/null || true
+    echo "Mirrored replay evidence report to: $target"
   done
 }
 
@@ -87,6 +104,7 @@ Final result: FAIL
 - Validation failure reasons: \`MISSING_OPTIONS_EDGE_ARCHIVER\`
 EOF
   copy_canonical_artifacts_to_evidence_dir
+  mirror_evidence_dir
   echo "Replay evidence report generated without archiver: $EVIDENCE_DIR"
   exit 1
 fi
@@ -96,4 +114,5 @@ python3 "$ARCHIVER" . "$MANIFEST" "$VALIDATION_FILE" "$EVIDENCE_DIR"
 archive_status=$?
 set -e
 copy_canonical_artifacts_to_evidence_dir
+mirror_evidence_dir
 exit "$archive_status"
