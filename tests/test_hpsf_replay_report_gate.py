@@ -122,7 +122,29 @@ class HpsfReplayReportGateTest(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("signal topic is empty", report)
+        self.assertIn("## Failure Detail", report)
         self.assertIn("Final PASS/FAIL: FAIL", report)
+
+    def test_ReplayReportIncludesPreviousBuildComparisonTest(self) -> None:
+        previous = evidence()
+        previous["jenkins"]["buildNumber"] = "22"
+        previous["validationResult"] = "FAIL"
+        previous["validationFailures"] = [{"code": "REPLAY_VALIDATION_FAILED", "detail": "ALL_NO_TRADE_DATA_FAILURE"}]
+        previous["counts"]["dlqCount"] = 5
+        previous["counts"]["underlyingStateLookupHitCount"] = 1
+        current = evidence()
+        current["jenkins"]["buildNumber"] = "23"
+        current["validationResult"] = "PASS"
+        current["counts"]["underlyingStateLookupHitCount"] = 8
+
+        report = generate_report(current, previous)
+
+        self.assertIn("## Previous Build Comparison", report)
+        self.assertIn("Previous build: 22", report)
+        self.assertIn("Current build: 23", report)
+        self.assertIn("validationResult: current=PASS previous=FAIL", report)
+        self.assertIn("validation failures reduced from 1 to 0", report)
+        self.assertIn("underlying-state lookup hits increased", report)
 
     def test_ReplayReportFailsWhenOrderInstructionEnabledTest(self) -> None:
         data = evidence()
@@ -224,6 +246,9 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("--stage-b-log artifacts/logs/stage-b.log", pipeline)
         self.assertIn("--summary artifacts/hpsf-replay-summary.json", pipeline)
         self.assertIn("scripts/hpsf/validate-replay-output.sh --final --summary-only", pipeline)
+        self.assertIn("Replay validation failed with status", pipeline)
+        self.assertIn("HPSF_REPLAY_REPORT_ALLOW_FAIL=true", pipeline)
+        self.assertIn("HPSF_PREVIOUS_REPLAY_SUMMARY", pipeline)
         self.assertIn("replay-validation-result.json", pipeline)
         self.assertIn("Bugzilla PASS comment blocked because validation result is not PASS", pipeline)
         self.assertIn("activeChainsMax=", pipeline)
@@ -231,6 +256,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
+        self.assertIn("Replay report was archived, but validation failed", pipeline)
+        self.assertNotIn("rm -f artifacts/hpsf-replay-report-20260612.md artifacts/hpsf-replay-summary.json", pipeline)
         for stage in [
             "Checkout",
             "Checkout repos",
@@ -257,6 +284,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertLess(pipeline.index("Run Stage B replay"), pipeline.index("Merge Stage B Metrics Into Replay Summary"))
         self.assertLess(pipeline.index("Merge Stage B Metrics Into Replay Summary"), pipeline.index("Validate replay outputs"))
         self.assertLess(pipeline.index("Merge Stage B Metrics Into Replay Summary"), pipeline.index("Generate replay report"))
+        self.assertLess(pipeline.index("Create replay evidence report"), pipeline.index("Archive artifacts"))
+        self.assertLess(pipeline.index("Archive artifacts"), pipeline.index("Validate replay report PASS"))
 
     def test_ReplayEvidenceArchiveScriptExistsAndIsExecutable(self) -> None:
         self.assertTrue(ARCHIVE_EVIDENCE_SCRIPT.exists())
@@ -535,19 +564,24 @@ esac
             self.assertIn("Build number: 10", text)
 
 
-def generate_report(data: dict) -> str:
-    result, report = generate_report_result(data)
+def generate_report(data: dict, previous: dict | None = None) -> str:
+    result, report = generate_report_result(data, previous)
     if result.returncode != 0:
         raise AssertionError(result.stderr + report)
     return report
 
 
-def generate_report_result(data: dict):
+def generate_report_result(data: dict, previous: dict | None = None):
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "evidence.json"
         report = Path(tmp) / "report.md"
         path.write_text(json.dumps(data), encoding="utf-8")
-        result = subprocess.run([str(REPORT_SCRIPT), "--input", str(path), "--output", str(report)], text=True, capture_output=True)
+        cmd = [str(REPORT_SCRIPT), "--input", str(path), "--output", str(report)]
+        if previous is not None:
+            previous_path = Path(tmp) / "previous.json"
+            previous_path.write_text(json.dumps(previous), encoding="utf-8")
+            cmd.extend(["--previous", str(previous_path)])
+        result = subprocess.run(cmd, text=True, capture_output=True)
         return result, report.read_text(encoding="utf-8") if report.exists() else result.stderr
 
 

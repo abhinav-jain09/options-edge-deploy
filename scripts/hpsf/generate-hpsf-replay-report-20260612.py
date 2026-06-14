@@ -18,13 +18,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate HPSF replay report for 2026-06-12")
     parser.add_argument("--input", default="build/hpsf-replay-20260612/evidence.json")
     parser.add_argument("--output", default=REPORT_NAME)
+    parser.add_argument("--previous", default="", help="Optional previous replay summary JSON for build-to-build comparison")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     evidence = read_evidence(Path(args.input))
-    report, passed = build_report(evidence)
+    previous = read_optional_evidence(args.previous)
+    report, passed = build_report(evidence, previous)
     Path(args.output).write_text(report, encoding="utf-8")
     print(args.output)
     return 0 if passed else 1
@@ -36,7 +38,18 @@ def read_evidence(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
+def read_optional_evidence(path_value: str) -> dict[str, Any] | None:
+    if not path_value:
+        return None
+    path = Path(path_value)
+    if not path.exists():
+        return {
+            "_comparisonError": f"Previous replay summary not found: {path}",
+        }
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = None) -> tuple[str, bool]:
     jenkins = evidence.get("jenkins", {})
     replay = evidence.get("replay", {})
     evidence_mode = str(evidence.get("evidenceMode", "REAL")).upper()
@@ -53,6 +66,7 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     stage_b = evidence.get("stageB", {})
     stage_b_performance = evidence.get("stageBPerformance", {}) or {}
     topic_configs = evidence.get("topicConfigs", {})
+    validation_failures = evidence.get("validationFailures") or []
     stage_b_scheduler_required = [
         "stageB.chainSnapshot.update.count",
         "activeChainStorePutCount",
@@ -139,6 +153,13 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     failures: list[str] = []
     if "FIXTURE" in evidence_mode or "DRY_RUN" in evidence_mode:
         failures.append(f"{evidence_mode} evidence cannot close HPSF-82A/HPSF-83")
+    for failure in validation_failures:
+        if isinstance(failure, dict):
+            code = failure.get("code", "VALIDATION_FAILURE")
+            detail = failure.get("detail", "")
+            failures.append(f"{code}: {detail}".strip(": "))
+        elif failure:
+            failures.append(str(failure))
     if not str(jenkins.get("buildUrl", "")).strip():
         failures.append("Jenkins build URL missing")
     if not str(jenkins.get("commitSha", "")).strip():
@@ -257,6 +278,18 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
         lines.append("")
         lines.append("Failures:")
         lines.extend(f"- {failure}" for failure in failures)
+        lines.append("")
+        lines.append("## Failure Detail")
+        if validation_failures:
+            lines.extend(f"- validationFailure: {format_validation_failure(failure)}" for failure in validation_failures)
+        else:
+            lines.append("- validationFailure: none recorded")
+        lines.append(f"- dominantAction: {dominant_counter(action_counts)}")
+        lines.append(f"- topGateReason: {dominant_counter(gate_reason_counts)}")
+        lines.extend(format_sample_failure_context(signal_sample, audit_sample))
+    lines.append("")
+    lines.append("## Previous Build Comparison")
+    lines.extend(format_previous_comparison(evidence, previous, passed))
     lines.append("")
     lines.append("## Databento Request")
     lines.append(f"- Replay date: {replay.get('date', REPLAY_DATE)}")
@@ -356,6 +389,125 @@ def build_report(evidence: dict[str, Any]) -> tuple[str, bool]:
     lines.append(f"Final PASS/FAIL: {'PASS' if passed else 'FAIL'}")
     lines.append("")
     return "\n".join(lines), passed
+
+
+def format_validation_failure(failure: Any) -> str:
+    if isinstance(failure, dict):
+        code = failure.get("code", "VALIDATION_FAILURE")
+        detail = failure.get("detail", "")
+        return f"{code} - {detail}" if detail else str(code)
+    return str(failure)
+
+
+def dominant_counter(counter: Counter) -> str:
+    if not counter:
+        return "none"
+    item, count = counter.most_common(1)[0]
+    return f"{item} ({count})"
+
+
+def format_sample_failure_context(signal_sample: dict[str, Any], audit_sample: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    if signal_sample:
+        for key in ["action", "spot", "executionStrike", "flowAnchorStrike", "internalVwapState", "vwap", "distanceToVwap"]:
+            if key in signal_sample:
+                lines.append(f"- sampleSignal.{key}: {signal_sample.get(key)}")
+    diagnostics = audit_sample.get("chainCoverageDiagnostics") if isinstance(audit_sample, dict) else None
+    if isinstance(diagnostics, dict):
+        for key in ["atmStrike", "atmStrikePresent", "activeStrikeCount", "validQuoteStrikeCount", "coverageRatio", "requiredRangeAroundSpotPoints", "strikeStep"]:
+            if key in diagnostics:
+                lines.append(f"- chainCoverage.{key}: {diagnostics.get(key)}")
+    gate_diagnostics = audit_sample.get("gateDiagnostics") if isinstance(audit_sample, dict) else None
+    if isinstance(gate_diagnostics, dict):
+        for key in ["marketScoringWarmupActive", "marketScoringSampleCount", "marketScoringMinSamples", "esTradeAgeMs", "vwapAgeMs", "basisAgeMs", "spxSpotAgeMs"]:
+            if key in gate_diagnostics:
+                lines.append(f"- gateDiagnostics.{key}: {gate_diagnostics.get(key)}")
+    return lines or ["- sample context unavailable"]
+
+
+def format_previous_comparison(current: dict[str, Any], previous: dict[str, Any] | None, passed: bool) -> list[str]:
+    if not previous:
+        return ["- Previous replay summary: unavailable"]
+    if previous.get("_comparisonError"):
+        return [f"- Previous replay summary: {previous.get('_comparisonError')}"]
+
+    current_counts = current.get("counts", {}) or {}
+    previous_counts = previous.get("counts", {}) or {}
+    current_actions = Counter(current.get("actionCounts", {}) or {})
+    previous_actions = Counter(previous.get("actionCounts", {}) or {})
+    current_failures = current.get("validationFailures") or []
+    previous_failures = previous.get("validationFailures") or []
+
+    comparisons = [
+        ("validationResult", current.get("validationResult", "UNKNOWN"), previous.get("validationResult", "UNKNOWN")),
+        ("validationFailureCount", len(current_failures), len(previous_failures)),
+        ("signalRecordsEmitted", as_int(current_counts.get("signalRecordsEmitted")), as_int(previous_counts.get("signalRecordsEmitted"))),
+        ("latestSignalRecordsEmitted", as_int(current_counts.get("latestSignalRecordsEmitted")), as_int(previous_counts.get("latestSignalRecordsEmitted"))),
+        ("auditRecordsEmitted", as_int(current_counts.get("auditRecordsEmitted")), as_int(previous_counts.get("auditRecordsEmitted"))),
+        ("nonNoTradeActions", non_no_trade_count(current_actions), non_no_trade_count(previous_actions)),
+        ("noTradeActions", current_actions.get("NO_TRADE", 0), previous_actions.get("NO_TRADE", 0)),
+        ("dlqCount", as_int(current_counts.get("dlqCount")), as_int(previous_counts.get("dlqCount"))),
+        ("stageB.evaluation.count", as_int(current_counts.get("stageB.evaluation.count")), as_int(previous_counts.get("stageB.evaluation.count"))),
+        ("underlyingStateLookupHitCount", as_int(current_counts.get("underlyingStateLookupHitCount")), as_int(previous_counts.get("underlyingStateLookupHitCount"))),
+    ]
+
+    lines = [
+        f"- Previous build: {previous.get('jenkins', {}).get('buildNumber', '')}",
+        f"- Current build: {current.get('jenkins', {}).get('buildNumber', '')}",
+    ]
+    for name, current_value, previous_value in comparisons:
+        lines.append(f"- {name}: current={current_value} previous={previous_value} delta={delta_text(current_value, previous_value)}")
+
+    improvements = improvement_notes(current, previous)
+    if passed:
+        if improvements:
+            lines.append("- Success improvement summary: " + "; ".join(improvements))
+        else:
+            lines.append("- Success improvement summary: PASS retained; no numeric improvement detected against previous summary")
+    else:
+        lines.append("- Success improvement summary: not applicable because current replay did not pass")
+    return lines
+
+
+def as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def non_no_trade_count(actions: Counter) -> int:
+    return sum(count for action, count in actions.items() if action != "NO_TRADE")
+
+
+def delta_text(current: Any, previous: Any) -> str:
+    if isinstance(current, int) and isinstance(previous, int):
+        delta = current - previous
+        return f"{delta:+d}"
+    return "changed" if current != previous else "unchanged"
+
+
+def improvement_notes(current: dict[str, Any], previous: dict[str, Any]) -> list[str]:
+    notes: list[str] = []
+    current_result = current.get("validationResult")
+    previous_result = previous.get("validationResult")
+    if current_result == "PASS" and previous_result != "PASS":
+        notes.append(f"validation improved from {previous_result or 'UNKNOWN'} to PASS")
+    current_failures = len(current.get("validationFailures") or [])
+    previous_failures = len(previous.get("validationFailures") or [])
+    if current_failures < previous_failures:
+        notes.append(f"validation failures reduced from {previous_failures} to {current_failures}")
+    current_actions = Counter(current.get("actionCounts", {}) or {})
+    previous_actions = Counter(previous.get("actionCounts", {}) or {})
+    if non_no_trade_count(current_actions) > non_no_trade_count(previous_actions):
+        notes.append("non-NO_TRADE actions increased")
+    current_counts = current.get("counts", {}) or {}
+    previous_counts = previous.get("counts", {}) or {}
+    if as_int(current_counts.get("underlyingStateLookupHitCount")) > as_int(previous_counts.get("underlyingStateLookupHitCount")):
+        notes.append("underlying-state lookup hits increased")
+    if as_int(current_counts.get("dlqCount")) < as_int(previous_counts.get("dlqCount")):
+        notes.append("DLQ count decreased")
+    return notes
 
 
 def parse_time(value: Any) -> datetime | None:

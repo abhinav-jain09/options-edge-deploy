@@ -398,7 +398,14 @@ PY
           export ES_DATASET="${ES_DATASET}"
           export ES_SCHEMA="${ES_SCHEMA}"
           export TOPIC_PREFIX="${TOPIC_PREFIX}"
+          set +e
           scripts/hpsf/validate-replay-output.sh --final --summary-only | tee artifacts/logs/validate-replay-output.log
+          validation_status=$?
+          set -e
+          echo "$validation_status" > artifacts/logs/validate-replay-output.exit-code
+          if [ "$validation_status" -ne 0 ]; then
+            echo "Replay validation failed with status $validation_status; continuing to generate and archive the failure report."
+          fi
         '''
       }
     }
@@ -415,6 +422,38 @@ PY
           export ES_DATASET="${ES_DATASET}"
           export ES_SCHEMA="${ES_SCHEMA}"
           export TOPIC_PREFIX="${TOPIC_PREFIX}"
+          export HPSF_REPLAY_REPORT_ALLOW_FAIL=true
+          previous_summary=""
+          if [ -n "${JENKINS_HOME:-}" ] && [ -n "${JOB_NAME:-}" ] && [ -n "${BUILD_NUMBER:-}" ]; then
+            previous_summary="$(python3 - <<'PY'
+import os
+from pathlib import Path
+
+jenkins_home = Path(os.environ["JENKINS_HOME"])
+job_name = os.environ["JOB_NAME"]
+current = int(os.environ.get("BUILD_NUMBER", "0") or "0")
+builds_dir = jenkins_home / "jobs" / job_name / "builds"
+best = None
+if builds_dir.exists():
+    for child in builds_dir.iterdir():
+        if not child.name.isdigit():
+            continue
+        number = int(child.name)
+        if number >= current:
+            continue
+        candidate = child / "archive" / "artifacts" / "hpsf-replay-summary.json"
+        if candidate.exists() and (best is None or number > best[0]):
+            best = (number, candidate)
+print(best[1] if best else "")
+PY
+)"
+          fi
+          if [ -n "$previous_summary" ]; then
+            export HPSF_PREVIOUS_REPLAY_SUMMARY="$previous_summary"
+            echo "Previous replay summary for comparison: $previous_summary"
+          else
+            echo "Previous replay summary for comparison: unavailable"
+          fi
           scripts/hpsf/generate-replay-report.sh | tee artifacts/logs/generate-replay-report.log
         '''
       }
@@ -429,19 +468,27 @@ PY
       }
     }
 
+    stage('Archive artifacts') {
+      steps {
+        archiveArtifacts artifacts: 'evidence-report/*.md,artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/replay-validation-result.json,artifacts/hpsf-sample-signal.json,artifacts/hpsf-sample-latest-signal.json,artifacts/hpsf-sample-audit.json,artifacts/logs/stage-b.log,artifacts/logs/validate-replay-output.log,artifacts/logs/validate-replay-output.exit-code,artifacts/logs/generate-replay-report.log,artifacts/logs/generate-replay-report.exit-code,artifacts/logs/archive-replay-evidence-report.log,artifacts/logs/**', fingerprint: true, allowEmptyArchive: false
+      }
+    }
+
     stage('Validate replay report PASS') {
       steps {
         sh '''
           set -euo pipefail
           grep -F 'Final PASS/FAIL: PASS' artifacts/hpsf-replay-report-20260612.md
           grep -F 'orderInstruction.enabled=true ever appeared: NO' artifacts/hpsf-replay-report-20260612.md
+          if [ -s artifacts/logs/validate-replay-output.exit-code ] && [ "$(cat artifacts/logs/validate-replay-output.exit-code)" -ne 0 ]; then
+            echo "Replay report was archived, but validation failed; failing build after evidence archival."
+            exit 1
+          fi
+          if [ -s artifacts/logs/generate-replay-report.exit-code ] && [ "$(cat artifacts/logs/generate-replay-report.exit-code)" -ne 0 ]; then
+            echo "Replay report was archived, but report gate failed; failing build after evidence archival."
+            exit 1
+          fi
         '''
-      }
-    }
-
-    stage('Archive artifacts') {
-      steps {
-        archiveArtifacts artifacts: 'evidence-report/*.md,artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/replay-validation-result.json,artifacts/hpsf-sample-signal.json,artifacts/hpsf-sample-latest-signal.json,artifacts/hpsf-sample-audit.json,artifacts/logs/stage-b.log,artifacts/logs/validate-replay-output.log,artifacts/logs/generate-replay-report.log,artifacts/logs/archive-replay-evidence-report.log,artifacts/logs/**', fingerprint: true, allowEmptyArchive: false
       }
     }
 
@@ -498,12 +545,12 @@ PY
       sh '''
         set +e
         mkdir -p artifacts/logs build/hpsf-replay-20260612/logs
-        rm -f artifacts/hpsf-replay-report-20260612.md artifacts/hpsf-replay-summary.json build/hpsf-replay-20260612/evidence.json
         export CODE_GIT_SHA="$(cat build-git-sha.txt 2>/dev/null || true)"
         job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
         export BUILD_URL="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
         export HPSF_REPLAY_FAILURE_REASON="Jenkins failed before a valid PASS replay report was generated. Verify required credentials including DATABENTO_API_KEY_CREDENTIAL_ID=${DATABENTO_API_KEY_CREDENTIAL_ID:-options-edge-databento-api-key}, prepared replay source data, Kafka, Kubernetes, and Databento access in the console log."
         if [ ! -s artifacts/hpsf-replay-report-20260612.md ] || [ ! -s artifacts/hpsf-replay-summary.json ]; then
+          export HPSF_REPLAY_REPORT_ALLOW_FAIL=true
           scripts/hpsf/run-hpsf-replay-20260612.sh --dry-run || true
         fi
         scripts/hpsf/archive-replay-evidence-report.sh | tee artifacts/logs/archive-replay-evidence-report.log || true
