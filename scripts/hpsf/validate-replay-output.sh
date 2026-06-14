@@ -146,7 +146,26 @@ for line in Path(sys.argv[1]).read_text(encoding='utf-8').splitlines():
 if not records:
     Path(sys.argv[2]).write_text('{}\n', encoding='utf-8')
     raise SystemExit(0)
-line = records[0]
+def parsed_record(raw):
+    value = raw.split('\t', 1)[1] if '\t' in raw else raw
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+def event_time_key(record):
+    value = record.get('eventTime') if isinstance(record, dict) else None
+    if not value:
+        return ''
+    return str(value)
+
+parsed_records = [(event_time_key(parsed), raw, parsed) for raw in records if (parsed := parsed_record(raw)) is not None]
+if parsed_records:
+    _, line, parsed = sorted(parsed_records, key=lambda item: item[0])[-1]
+    Path(sys.argv[2]).write_text(json.dumps(parsed, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    raise SystemExit(0)
+
+line = records[-1]
 value = line.split('\t', 1)[1] if '\t' in line else line
 try:
     parsed = json.loads(value)
@@ -623,8 +642,9 @@ if profile == "FULL_RTH_RELEASE":
 
     sample_reasons = set(signal_sample.get("reasons") or [])
     sample_reasons.update(audit_sample.get("noTradeGates") or [])
-    sampled_reason_codes = reason_codes(sample_reasons)
-    sampled_reason_codes.update(
+    sample_reason_codes = reason_codes(sample_reasons)
+    aggregate_reason_codes = set(sample_reason_codes)
+    aggregate_reason_codes.update(
         reason_code(reason)
         for reason, count in gate_reason_counts.items()
         if int(count or 0) > 0 and reason_code(reason)
@@ -653,9 +673,14 @@ if profile == "FULL_RTH_RELEASE":
         "VWAP",
     }
     if action_counts.get("NO_TRADE", 0) == int(counts.get("signalRecordsEmitted", 0) or 0):
-        if sampled_reason_codes & fallback_reasons:
+        sample_vwap_available = (
+            signal_sample.get("vwap") is not None
+            and signal_sample.get("distanceToVwap") is not None
+            and str(signal_sample.get("internalVwapState") or "").upper() not in {"", "VWAP_UNAVAILABLE"}
+        )
+        if sample_reason_codes & fallback_reasons and not sample_vwap_available:
             failures.append("ALL_NO_TRADE_FALLBACK_OUTPUT")
-        if sampled_reason_codes & data_failure_reasons and not sampled_reason_codes & strategy_valid_reasons:
+        if aggregate_reason_codes & data_failure_reasons and not aggregate_reason_codes & strategy_valid_reasons:
             failures.append("ALL_NO_TRADE_DATA_FAILURE")
     gate_diagnostics = audit_sample.get("gateDiagnostics")
     coverage_diagnostics = audit_sample.get("chainCoverageDiagnostics")

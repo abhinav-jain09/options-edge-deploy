@@ -259,8 +259,9 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
 
     sample_reasons = set(signal_sample.get("reasons") or [])
     sample_reasons.update(audit_sample.get("noTradeGates") or [])
-    sampled_reason_codes = reason_codes(sample_reasons)
-    sampled_reason_codes.update(
+    sample_reason_codes = reason_codes(sample_reasons)
+    aggregate_reason_codes = set(sample_reason_codes)
+    aggregate_reason_codes.update(
         reason_code(reason)
         for reason, count in gate_reason_counts.items()
         if as_int(count) > 0 and reason_code(reason)
@@ -289,9 +290,14 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
         "VWAP",
     }
     if action_counts.get("NO_TRADE", 0) == int(counts.get("signalRecordsEmitted", 0) or 0):
-        if sampled_reason_codes & fallback_reasons:
+        sample_vwap_available = (
+            signal_sample.get("vwap") is not None
+            and signal_sample.get("distanceToVwap") is not None
+            and str(signal_sample.get("internalVwapState") or "").upper() not in {"", "VWAP_UNAVAILABLE"}
+        )
+        if sample_reason_codes & fallback_reasons and not sample_vwap_available:
             failures.append("all NO_TRADE outputs are fallback because underlying/VWAP context is unavailable")
-        if sampled_reason_codes & data_failure_reasons and not sampled_reason_codes & strategy_valid_reasons:
+        if aggregate_reason_codes & data_failure_reasons and not aggregate_reason_codes & strategy_valid_reasons:
             failures.append("all NO_TRADE outputs are explained only by data-health gates")
     if not isinstance(audit_sample.get("gateDiagnostics"), dict) or not audit_sample.get("gateDiagnostics"):
         failures.append("STAGE_B_AUDIT_GATE_DIAGNOSTICS_EMPTY")
@@ -517,6 +523,8 @@ def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) ->
         root_cause = "Stage A produced strike-flow, but downstream Stage B outputs were empty or incomplete; inspect Stage B service state, scheduler counters, and underlying-state join health."
     elif underlying_emitted > 0 and (underlying_received <= 0 or underlying_stored <= 0 or underlying_hits <= 0):
         root_cause = "Underlying-state records were produced, but Stage B did not materialize them before validation; wait for the Stage B replay consumer group to catch up and inspect the underlying-state join if received/stored/hit counters remain zero."
+    elif any("ALL_NO_TRADE_DATA_FAILURE" in failure for failure in failures):
+        root_cause = "Stage B consumed underlying-state and produced signals, but every final action remained NO_TRADE because option-chain coverage, liquid execution-candidate, or market-scoring warmup gates blocked candidate selection."
 
     lines = [
         f"- Primary root cause: {root_cause}",
