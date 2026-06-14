@@ -65,6 +65,19 @@ class HpsfReplayTopicScriptTest(unittest.TestCase):
         self.assertIn("kafka-topics --bootstrap-server DRY_RUN_BOOTSTRAP --delete --topic options.replay.20260612.hpsf.signal", output)
         self.assertIn("kafka-topics --bootstrap-server DRY_RUN_BOOTSTRAP --delete --topic underlying.replay.20260612.es.trades", output)
 
+    def test_replay_topic_script_uses_replay_date_topic_prefix(self) -> None:
+        env = os.environ.copy()
+        env["REPLAY_DATE"] = "2026-06-11"
+        env["TOPIC_PREFIX"] = "options.replay.20260611"
+        output = subprocess.check_output([str(CREATE_REPLAY_TOPICS), "--dry-run"], text=True, cwd=ROOT, env=env)
+
+        self.assertIn("Creating HPSF replay topics for 2026-06-11", output)
+        self.assertIn("DRY RUN topic=options.replay.20260611.opra.tcbbo", output)
+        self.assertIn("DRY RUN topic=underlying.replay.20260611.es.trades", output)
+        self.assertIn("DRY RUN topic=options.replay.20260611.hpsf.signal", output)
+        self.assertNotIn("options.replay.20260612", output)
+        self.assertNotIn("underlying.replay.20260612", output)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,10 @@ REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
 BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-}"
 RESET_TOPICS="${HPSF_REPLAY_RESET_TOPICS:-false}"
+REPLAY_DATE="${REPLAY_DATE:-2026-06-12}"
+COMPACT_DATE="${REPLAY_DATE//-/}"
+TOPIC_PREFIX="${TOPIC_PREFIX:-options.replay.$COMPACT_DATE}"
+UNDERLYING_TOPIC_PREFIX="${UNDERLYING_TOPIC_PREFIX:-underlying.replay.$COMPACT_DATE}"
 
 if [[ "$REPLICATION_FACTOR" != "1" ]]; then
   echo "HPSF replay RF=1 cluster rule violated: KAFKA_TOPIC_REPLICATION_FACTOR=$REPLICATION_FACTOR" >&2
@@ -31,17 +35,17 @@ BOOTSTRAP_SERVERS="${BOOTSTRAP_SERVERS:-DRY_RUN_BOOTSTRAP}"
 
 # topic|partitions|cleanup.policy|retention.ms|segment.ms|segment.bytes|extra-config-csv
 REPLAY_TOPIC_SPECS=(
-  'options.replay.20260612.opra.tcbbo|6|delete|2592000000|900000|536870912|'
-  'underlying.replay.20260612.es.trades|2|delete|2592000000|1800000|268435456|'
-  'underlying.replay.20260612.spx.price|1|delete|2592000000|1800000|134217728|'
-  'options.replay.20260612.hpsf.underlying-state|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
-  'options.replay.20260612.hpsf.strike-flow|6|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
-  'options.replay.20260612.hpsf.market-flow|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
-  'options.replay.20260612.hpsf.strike-score|6|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
-  'options.replay.20260612.hpsf.signal|1|delete|2592000000|1800000|134217728|'
-  'options.replay.20260612.hpsf.latest-signal|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
-  'options.replay.20260612.hpsf.audit|2|delete|2592000000|1800000|134217728|'
-  'options.replay.20260612.hpsf.dlq|1|delete|2592000000|1800000|134217728|'
+  "$TOPIC_PREFIX.opra.tcbbo|6|delete|2592000000|900000|536870912|"
+  "$UNDERLYING_TOPIC_PREFIX.es.trades|2|delete|2592000000|1800000|268435456|"
+  "$UNDERLYING_TOPIC_PREFIX.spx.price|1|delete|2592000000|1800000|134217728|"
+  "$TOPIC_PREFIX.hpsf.underlying-state|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10"
+  "$TOPIC_PREFIX.hpsf.strike-flow|6|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000"
+  "$TOPIC_PREFIX.hpsf.market-flow|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10"
+  "$TOPIC_PREFIX.hpsf.strike-score|6|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000"
+  "$TOPIC_PREFIX.hpsf.signal|1|delete|2592000000|1800000|134217728|"
+  "$TOPIC_PREFIX.hpsf.latest-signal|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10"
+  "$TOPIC_PREFIX.hpsf.audit|2|delete|2592000000|1800000|134217728|"
+  "$TOPIC_PREFIX.hpsf.dlq|1|delete|2592000000|1800000|134217728|"
 )
 
 cleanup_for_config_add() {
@@ -171,7 +175,7 @@ create_topic_if_needed() {
   run_cmd kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --describe --topic "$topic"
 }
 
-echo "Creating HPSF replay topics for 2026-06-12 with replication.factor=1, min.insync.replicas=1, compression.type=lz4"
+echo "Creating HPSF replay topics for $REPLAY_DATE with replication.factor=1, min.insync.replicas=1, compression.type=lz4"
 reset_replay_topics
 for spec in "${REPLAY_TOPIC_SPECS[@]}"; do
   IFS='|' read -r topic partitions cleanup_policy retention_ms segment_ms segment_bytes extra <<<"$spec"
