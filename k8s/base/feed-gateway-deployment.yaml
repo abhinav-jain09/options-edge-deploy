@@ -17,6 +17,8 @@ spec:
         app.kubernetes.io/name: feed-gateway-service
         app.kubernetes.io/part-of: options-edge
     spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: feed-gateway
           image: 192.168.100.252:5000/options-edge-feed-gateway:dev
