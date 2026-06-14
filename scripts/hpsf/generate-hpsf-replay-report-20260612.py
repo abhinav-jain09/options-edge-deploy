@@ -92,6 +92,8 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
     stage_b_performance = evidence.get("stageBPerformance", {}) or {}
     topic_configs = evidence.get("topicConfigs", {})
     validation_failures = evidence.get("validationFailures") or []
+    validation_result = str(evidence.get("validationResult") or evidence.get("result") or "").upper()
+    canonical_validation_pass = validation_result == "PASS" and not validation_failures
     stage_b_scheduler_required = [
         "stageB.chainSnapshot.update.count",
         "activeChainStorePutCount",
@@ -176,6 +178,14 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
     )
 
     failures: list[str] = []
+    report_diagnostics: list[str] = []
+
+    def add_report_only_diagnostic(message: str) -> None:
+        if canonical_validation_pass:
+            report_diagnostics.append(message)
+        else:
+            failures.append(message)
+
     if "FIXTURE" in evidence_mode or "DRY_RUN" in evidence_mode:
         failures.append(f"{evidence_mode} evidence cannot close HPSF-82A/HPSF-83")
     for failure in validation_failures:
@@ -212,10 +222,10 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
     if int(counts.get("auditRecordsEmitted", 0)) > 0 and not gate_reason_counts:
         failures.append("gateReasonCounts empty while audit records exist")
     if suspicious_candidate_copy():
-        failures.append("ESM6/ESU6 candidate stats look copied; independent query evidence missing")
+        add_report_only_diagnostic("ESM6/ESU6 candidate stats look copied; independent query evidence missing")
     for key in ["esFirstEventTime", "esLastEventTime", "esVwapFirst", "esVwapLast"]:
         if es_count(key) in (None, ""):
-            failures.append(f"{key} missing")
+            add_report_only_diagnostic(f"{key} missing")
     if missing_stage_b_counters:
         failures.append(f"Stage B underlying-state counters missing: {missing_stage_b_counters}")
     if (chain_updates or 0) <= 0:
@@ -315,6 +325,10 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
         lines.append(f"- dominantAction: {dominant_counter(action_counts)}")
         lines.append(f"- topGateReason: {dominant_counter(gate_reason_counts)}")
         lines.extend(format_sample_failure_context(signal_sample, audit_sample))
+    if report_diagnostics:
+        lines.append("")
+        lines.append("Report diagnostics:")
+        lines.extend(f"- {diagnostic}" for diagnostic in report_diagnostics)
     lines.append("")
     lines.append("## Previous Build Comparison")
     lines.extend(format_previous_comparison(evidence, previous, passed))

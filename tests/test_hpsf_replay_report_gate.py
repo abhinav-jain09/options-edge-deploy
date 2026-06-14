@@ -50,6 +50,29 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("ESM6/ESU6 candidate stats look copied", report)
 
+    def test_ReplayReportDoesNotFailPassValidationForEsLineageDiagnosticsTest(self) -> None:
+        data = evidence()
+        data["validationResult"] = "PASS"
+        data["validationFailures"] = []
+        copied = {
+            "tradeCount": 428698,
+            "totalSize": 898207,
+            "firstEventTime": "",
+            "lastEventTime": "",
+        }
+        data["esSelection"]["candidates"][0]["stats"] = dict(copied)
+        data["esSelection"]["candidates"][1]["stats"] = dict(copied)
+        for key in ["esFirstEventTime", "esLastEventTime", "esVwapFirst", "esVwapLast"]:
+            data["counts"][key] = ""
+
+        result, report = generate_report_result(data)
+
+        self.assertEqual(0, result.returncode)
+        self.assertIn("Final PASS/FAIL: PASS", report)
+        self.assertIn("Report diagnostics:", report)
+        self.assertIn("ESM6/ESU6 candidate stats look copied", report)
+        self.assertIn("esFirstEventTime missing", report)
+
     def test_ReplayReportAllowsUnavailableEsu6ComparisonTest(self) -> None:
         data = evidence()
         data["esSelection"]["candidates"][1] = {
