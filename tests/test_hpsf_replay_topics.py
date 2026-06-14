@@ -39,6 +39,13 @@ class HpsfReplayTopicScriptTest(unittest.TestCase):
         self.assertIn("cleanup.policy=compact,delete", output)
         self.assertIn("options.replay.20260612.hpsf.signal partitions=1", output)
         self.assertIn("cleanup.policy=delete", output)
+        for replay_input_topic in [
+            "options.replay.20260612.opra.tcbbo",
+            "underlying.replay.20260612.es.trades",
+            "underlying.replay.20260612.spx.price",
+        ]:
+            self.assertIn(f"DRY RUN topic={replay_input_topic}", output)
+        self.assertNotIn("retention.ms=86400000", output)
         self.assertIn("retention.ms=2592000000", output)
 
     def test_replay_topic_script_rejects_non_rf1(self) -> None:

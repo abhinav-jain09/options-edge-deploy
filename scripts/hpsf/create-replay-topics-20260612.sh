@@ -31,9 +31,9 @@ BOOTSTRAP_SERVERS="${BOOTSTRAP_SERVERS:-DRY_RUN_BOOTSTRAP}"
 
 # topic|partitions|cleanup.policy|retention.ms|segment.ms|segment.bytes|extra-config-csv
 REPLAY_TOPIC_SPECS=(
-  'options.replay.20260612.opra.tcbbo|6|delete|86400000|900000|536870912|'
-  'underlying.replay.20260612.es.trades|2|delete|86400000|1800000|268435456|'
-  'underlying.replay.20260612.spx.price|1|delete|86400000|1800000|134217728|'
+  'options.replay.20260612.opra.tcbbo|6|delete|2592000000|900000|536870912|'
+  'underlying.replay.20260612.es.trades|2|delete|2592000000|1800000|268435456|'
+  'underlying.replay.20260612.spx.price|1|delete|2592000000|1800000|134217728|'
   'options.replay.20260612.hpsf.underlying-state|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
   'options.replay.20260612.hpsf.strike-flow|6|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
   'options.replay.20260612.hpsf.market-flow|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
