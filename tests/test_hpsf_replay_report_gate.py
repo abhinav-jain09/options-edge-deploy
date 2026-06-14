@@ -18,6 +18,7 @@ VALIDATE_OUTPUT_SCRIPT = ROOT / "scripts" / "hpsf" / "validate-replay-output.sh"
 GENERATE_REPORT_SCRIPT = ROOT / "scripts" / "hpsf" / "generate-replay-report.sh"
 MERGE_STAGE_B_METRICS_SCRIPT = ROOT / "scripts" / "hpsf" / "merge-stage-b-performance-metrics.py"
 MERGE_STAGE_B_METRICS_TEST = ROOT / "scripts" / "hpsf" / "test_merge_stage_b_performance_metrics.py"
+ARCHIVE_EVIDENCE_SCRIPT = ROOT / "scripts" / "hpsf" / "archive-replay-evidence-report.sh"
 
 
 class HpsfReplayReportGateTest(unittest.TestCase):
@@ -134,9 +135,13 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         pipeline = JENKINSFILE.read_text()
 
         self.assertIn("archiveArtifacts", pipeline)
+        self.assertIn("Create replay evidence report", pipeline)
+        self.assertIn("scripts/hpsf/archive-replay-evidence-report.sh", pipeline)
+        self.assertIn("evidence-report/*.md", pipeline)
+        self.assertIn("artifacts/logs/archive-replay-evidence-report.log", pipeline)
         self.assertIn("artifacts/hpsf-replay-report-20260612.md", pipeline)
         self.assertIn("allowEmptyArchive: false", pipeline)
-        self.assertIn("rm -f artifacts/hpsf-replay-report-20260612.md", pipeline)
+        self.assertIn("if [ ! -s artifacts/hpsf-replay-report-20260612.md ] || [ ! -s artifacts/hpsf-replay-summary.json ]; then", pipeline)
         self.assertIn("HPSF_REPLAY_FAILURE_REASON", pipeline)
         self.assertIn("JENKINS_PUBLIC_URL", pipeline)
         self.assertIn("sed 's#/#/job/#g'", pipeline)
@@ -183,6 +188,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
             "Merge Stage B Metrics Into Replay Summary",
             "Validate replay outputs",
             "Generate replay report",
+            "Create replay evidence report",
+            "Validate replay report PASS",
             "Archive artifacts",
             "Bugzilla update",
         ]:
@@ -190,6 +197,10 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertLess(pipeline.index("Run Stage B replay"), pipeline.index("Merge Stage B Metrics Into Replay Summary"))
         self.assertLess(pipeline.index("Merge Stage B Metrics Into Replay Summary"), pipeline.index("Validate replay outputs"))
         self.assertLess(pipeline.index("Merge Stage B Metrics Into Replay Summary"), pipeline.index("Generate replay report"))
+
+    def test_ReplayEvidenceArchiveScriptExistsAndIsExecutable(self) -> None:
+        self.assertTrue(ARCHIVE_EVIDENCE_SCRIPT.exists())
+        self.assertTrue(os.access(ARCHIVE_EVIDENCE_SCRIPT, os.X_OK))
 
     def test_download_script_prepares_missing_databento_jsonl(self) -> None:
         text = DOWNLOAD_SCRIPT.read_text()

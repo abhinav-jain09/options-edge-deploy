@@ -416,6 +416,23 @@ PY
           export ES_SCHEMA="${ES_SCHEMA}"
           export TOPIC_PREFIX="${TOPIC_PREFIX}"
           scripts/hpsf/generate-replay-report.sh | tee artifacts/logs/generate-replay-report.log
+        '''
+      }
+    }
+
+    stage('Create replay evidence report') {
+      steps {
+        sh '''
+          set -euo pipefail
+          scripts/hpsf/archive-replay-evidence-report.sh | tee artifacts/logs/archive-replay-evidence-report.log
+        '''
+      }
+    }
+
+    stage('Validate replay report PASS') {
+      steps {
+        sh '''
+          set -euo pipefail
           grep -F 'Final PASS/FAIL: PASS' artifacts/hpsf-replay-report-20260612.md
           grep -F 'orderInstruction.enabled=true ever appeared: NO' artifacts/hpsf-replay-report-20260612.md
         '''
@@ -424,7 +441,7 @@ PY
 
     stage('Archive artifacts') {
       steps {
-        archiveArtifacts artifacts: 'artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/replay-validation-result.json,artifacts/hpsf-sample-signal.json,artifacts/hpsf-sample-latest-signal.json,artifacts/hpsf-sample-audit.json,artifacts/logs/stage-b.log,artifacts/logs/validate-replay-output.log,artifacts/logs/generate-replay-report.log,artifacts/logs/**', fingerprint: true, allowEmptyArchive: false
+        archiveArtifacts artifacts: 'evidence-report/*.md,artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/replay-validation-result.json,artifacts/hpsf-sample-signal.json,artifacts/hpsf-sample-latest-signal.json,artifacts/hpsf-sample-audit.json,artifacts/logs/stage-b.log,artifacts/logs/validate-replay-output.log,artifacts/logs/generate-replay-report.log,artifacts/logs/archive-replay-evidence-report.log,artifacts/logs/**', fingerprint: true, allowEmptyArchive: false
       }
     }
 
@@ -483,9 +500,12 @@ PY
         job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
         export BUILD_URL="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
         export HPSF_REPLAY_FAILURE_REASON="Jenkins failed before a valid PASS replay report was generated. Verify required credentials including DATABENTO_API_KEY_CREDENTIAL_ID=${DATABENTO_API_KEY_CREDENTIAL_ID:-options-edge-databento-api-key}, prepared replay source data, Kafka, Kubernetes, and Databento access in the console log."
-        scripts/hpsf/run-hpsf-replay-20260612.sh --dry-run || true
+        if [ ! -s artifacts/hpsf-replay-report-20260612.md ] || [ ! -s artifacts/hpsf-replay-summary.json ]; then
+          scripts/hpsf/run-hpsf-replay-20260612.sh --dry-run || true
+        fi
+        scripts/hpsf/archive-replay-evidence-report.sh | tee artifacts/logs/archive-replay-evidence-report.log || true
       '''
-      archiveArtifacts artifacts: 'artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/logs/**,build/hpsf-replay-20260612/**', fingerprint: true, allowEmptyArchive: false
+      archiveArtifacts artifacts: 'evidence-report/*.md,artifacts/hpsf-replay-report-20260612.md,artifacts/hpsf-replay-summary.json,artifacts/replay-validation-result.json,artifacts/logs/**,build/hpsf-replay-20260612/**', fingerprint: true, allowEmptyArchive: false
     }
     always {
       sh '''
