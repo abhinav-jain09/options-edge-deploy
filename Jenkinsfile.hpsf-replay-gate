@@ -28,6 +28,7 @@ pipeline {
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret text credential for Databento API key')
     string(name: 'BUGZILLA_URL', defaultValue: 'http://192.168.100.252:8092', description: 'Bugzilla base URL')
     string(name: 'BUGZILLA_USER', defaultValue: 'admin@options-edge.local', description: 'Bugzilla user')
+    string(name: 'BUGZILLA_PASSWORD_CREDENTIAL_ID', defaultValue: 'options-edge-bugzilla-password', description: 'Jenkins secret text credential for Bugzilla password/token')
     password(name: 'BUGZILLA_PASSWORD', defaultValue: '', description: 'Bugzilla password/token for replay comment')
   }
 
@@ -429,12 +430,13 @@ PY
 
     stage('Bugzilla update') {
       steps {
-        sh '''
-          set -euo pipefail
-          job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
-          build_url="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
-          report_url="${build_url}artifact/artifacts/hpsf-replay-report-20260612.md"
-          python3 - <<PY
+        withCredentials([string(credentialsId: "${params.BUGZILLA_PASSWORD_CREDENTIAL_ID}", variable: 'BUGZILLA_PASSWORD_FROM_CREDENTIAL')]) {
+          sh '''
+            set -euo pipefail
+            job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
+            build_url="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
+            report_url="${build_url}artifact/artifacts/hpsf-replay-report-20260612.md"
+            python3 - <<PY
 import json
 from pathlib import Path
 
@@ -456,15 +458,17 @@ comment = (
 )
 Path("artifacts/logs/bugzilla-comment.txt").write_text(comment + "\\n")
 PY
-          if [ -n "${BUGZILLA_PASSWORD:-}" ]; then
+            bugzilla_password="${BUGZILLA_PASSWORD:-${BUGZILLA_PASSWORD_FROM_CREDENTIAL:-}}"
+            if [ -n "$bugzilla_password" ]; then
             curl -fsS -X POST "${BUGZILLA_URL}/rest/bug/74/comment" \
               -H 'Content-Type: application/json' \
               -d "$(python3 -c 'import json,os; print(json.dumps({"comment": open("artifacts/logs/bugzilla-comment.txt").read()}))')" \
-              -u "${BUGZILLA_USER}:${BUGZILLA_PASSWORD}" || true
-          else
-            echo 'BUGZILLA_PASSWORD not provided; archived Bugzilla comment text only.'
-          fi
-        '''
+              -u "${BUGZILLA_USER}:${bugzilla_password}" || true
+            else
+              echo 'BUGZILLA_PASSWORD not provided; archived Bugzilla comment text only.'
+            fi
+          '''
+        }
       }
     }
   }
