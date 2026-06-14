@@ -454,6 +454,39 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn('[[ -s "$fresh_log" || ! -s "$LOG_DIR/${log_name}" ]]', text)
         subprocess.run(["bash", "-n", str(script)], check=True)
 
+    def test_consumer_group_catchup_treats_empty_internal_topics_as_caught_up(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            consumer_groups = fake_bin / "kafka-consumer-groups"
+            consumer_groups.write_text(
+                """#!/usr/bin/env bash
+cat <<'OUT'
+GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID HOST CLIENT-ID
+group app-hpsf-by-strike-repartition 0 - 0 - consumer host client
+group options.replay.20260611.opra.tcbbo 0 - 0 - consumer host client
+OUT
+""",
+                encoding="utf-8",
+            )
+            consumer_groups.chmod(0o755)
+            result = subprocess.run(
+                [str(WAIT_GROUP_CATCHUP_SCRIPT), "group", str(root / "catchup.log")],
+                cwd=ROOT,
+                env={
+                    **os.environ,
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+                    "KAFKA_BOOTSTRAP_SERVERS": "localhost:9092",
+                    "HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS": "1",
+                },
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+            self.assertIn("caught up", result.stdout)
+
     def test_archive_script_defaults_to_options_edge_project_evidence_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
