@@ -8,6 +8,7 @@ SEGMENT_MS="${KAFKA_STREAMS_INTERNAL_SEGMENT_MS:-3600000}"
 DELETE_RETENTION_MS="${KAFKA_CHANGELOG_DELETE_RETENTION_MS:-3600000}"
 MIN_CLEANABLE_DIRTY_RATIO="${KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO:-0.01}"
 MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
+APPLY_SMOKE_INTERNAL_TOPICS="${KAFKA_APPLY_SMOKE_INTERNAL_TOPICS:-false}"
 
 apply_changelog_config() {
   local topic="$1"
@@ -32,6 +33,10 @@ apply_repartition_config() {
 found=false
 while read -r topic; do
   [[ -n "$topic" ]] || continue
+  if [[ "$APPLY_SMOKE_INTERNAL_TOPICS" != "true" && "$topic" == *-smoke-* ]]; then
+    echo "Skipping smoke internal topic: $topic"
+    continue
+  fi
   case "$topic" in
     *-changelog)
       found=true
