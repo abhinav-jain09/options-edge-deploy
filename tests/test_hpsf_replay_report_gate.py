@@ -161,6 +161,20 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("Final PASS/FAIL: PASS", report)
         self.assertNotIn("all NO_TRADE outputs are explained only by data-health gates", report)
 
+    def test_ReplayReportFailsSameDayExpiryMismatchTest(self) -> None:
+        data = evidence()
+        data["replay"]["date"] = "2026-06-11"
+        for sample in data["samples"].values():
+            sample["tradeDate"] = "2026-06-11"
+            sample["expiry"] = "2026-06-12"
+        data["gateReasonCounts"] = {"NO_VALID_TODAY_EXPIRY: tradeDate=2026-06-11 expiry=2026-06-12": 1}
+
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("SAME_DAY_EXPIRY_MISMATCH", report)
+        self.assertIn("NO_VALID_TODAY_EXPIRY observed in replay outputs", report)
+
     def test_ReplayReportPopulatesEsLineageFromSelectedStatsTest(self) -> None:
         data = evidence()
         for key in ["esFirstEventTime", "esLastEventTime", "esVwapFirst", "esVwapLast"]:
@@ -539,6 +553,9 @@ OUT
 
         self.assertIn("Preparing Databento replay JSONL files", text)
         self.assertIn("--prepare-jsonl-only", text)
+        self.assertIn("HPSF_REPLAY_OPRA_SYMBOLS", text)
+        self.assertIn("--opra-symbols", text)
+        self.assertIn("OPRA definition expiry mismatch", text)
         self.assertIn("--download-dir \"$SOURCE_DIR\"", text)
         self.assertIn("DATABENTO_FEED_REPO", text)
         self.assertIn("DATABENTO_FEED_PYTHON", text)
@@ -553,6 +570,12 @@ OUT
         self.assertIn("DATABENTO_FEED_PYTHON", text)
         self.assertIn("import confluent_kafka", text)
         self.assertIn('\"$DATABENTO_FEED_PYTHON\" -m options_edge_databento_feed.hpsf_replay_cli', text)
+
+    def test_validate_script_fails_same_day_expiry_mismatch(self) -> None:
+        text = VALIDATE_OUTPUT_SCRIPT.read_text()
+
+        self.assertIn("SAME_DAY_EXPIRY_MISMATCH", text)
+        self.assertIn("NO_VALID_TODAY_EXPIRY observed in replay outputs", text)
 
     def test_validate_stage_a_ignores_kafka_cli_warning_lines(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

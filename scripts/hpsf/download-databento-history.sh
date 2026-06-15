@@ -13,6 +13,7 @@ ES_SYMBOL="${ES_SYMBOL:-ESM6}"
 ES_STYPE_IN="${ES_STYPE_IN:-raw_symbol}"
 NEXT_CONTRACT_SYMBOL="${NEXT_CONTRACT_SYMBOL:-ESU6}"
 SPX_SPOT_SOURCE="${SPX_SPOT_SOURCE:-ES_BASIS_PROXY}"
+HPSF_REPLAY_OPRA_SYMBOLS="${HPSF_REPLAY_OPRA_SYMBOLS:-}"
 SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR:-}"
 DATABENTO_FEED_REPO="${DATABENTO_FEED_REPO:-../options-edge-databento-feed}"
 DATABENTO_FEED_PYTHON="${DATABENTO_FEED_PYTHON:-}"
@@ -72,6 +73,10 @@ for file in opra-definitions.jsonl opra-tcbbo.jsonl es-trades.jsonl spx-price.js
 done
 if [[ "$missing_source" == "true" ]]; then
   echo "Preparing Databento replay JSONL files in $SOURCE_DIR"
+  opra_symbol_args=()
+  if [[ -n "$HPSF_REPLAY_OPRA_SYMBOLS" ]]; then
+    opra_symbol_args+=(--opra-symbols "$HPSF_REPLAY_OPRA_SYMBOLS")
+  fi
   PYTHONPATH="$DATABENTO_FEED_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
   "$DATABENTO_FEED_PYTHON" -m options_edge_databento_feed.hpsf_replay_cli \
     --date "$REPLAY_DATE" \
@@ -86,6 +91,7 @@ if [[ "$missing_source" == "true" ]]; then
     --es-stype-in "$ES_STYPE_IN" \
     --compare-next-contract-volume "${COMPARE_NEXT_CONTRACT_VOLUME:-true}" \
     --next-contract-symbol "$NEXT_CONTRACT_SYMBOL" \
+    "${opra_symbol_args[@]}" \
     --databento-api-key "$DATABENTO_API_KEY" \
     --download-dir "$SOURCE_DIR" \
     --prepare-jsonl-only \
@@ -101,12 +107,13 @@ for file in opra-definitions.jsonl opra-tcbbo.jsonl es-trades.jsonl spx-price.js
   fi
 done
 
-python3 - "$SOURCE_DIR" "$SUMMARY" <<'PY'
+python3 - "$SOURCE_DIR" "$SUMMARY" "$REPLAY_DATE" <<'PY'
 import json
 import sys
 from pathlib import Path
 source = Path(sys.argv[1])
 summary_path = Path(sys.argv[2])
+replay_date = sys.argv[3]
 
 def read_jsonl(name):
     rows = []
@@ -141,6 +148,12 @@ if not opra:
     raise SystemExit("OPRA records read = 0")
 if not es:
     raise SystemExit("ES trades read = 0")
+definition_expiries = sorted({str(row.get("expiry") or "") for row in definitions if row.get("expiry")})
+if not definition_expiries:
+    raise SystemExit("OPRA definition expiry missing")
+invalid_expiries = [expiry for expiry in definition_expiries if expiry != replay_date]
+if invalid_expiries:
+    raise SystemExit(f"OPRA definition expiry mismatch for replay date {replay_date}: {invalid_expiries}")
 summary = {
     "opraTcbboRecordsRead": len(opra),
     "opraDefinitionsRead": len(definitions),
@@ -150,6 +163,7 @@ summary = {
     "resolvedInstrumentId": instrument_id(es),
     "esFirstEventTime": (es[0].get("ts_event") or es[0].get("eventTime") or ""),
     "esLastEventTime": (es[-1].get("ts_event") or es[-1].get("eventTime") or ""),
+    "opraDefinitionExpiries": definition_expiries,
 }
 if not summary["resolvedInstrumentId"]:
     raise SystemExit("Selected ES instrument_id missing")
@@ -170,6 +184,7 @@ cat > "$BUILD_DIR/replay-request.json" <<JSON
   "esSymbol": "$ES_SYMBOL",
   "esStypeIn": "$ES_STYPE_IN",
   "nextContractSymbol": "$NEXT_CONTRACT_SYMBOL",
+  "opraSymbols": "$HPSF_REPLAY_OPRA_SYMBOLS",
   "spxSpotSource": "$SPX_SPOT_SOURCE",
   "sourceDir": "$SOURCE_DIR"
 }

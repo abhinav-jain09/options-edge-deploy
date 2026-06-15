@@ -245,6 +245,7 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
     if not stage_b_vwap_usable:
         failures.append("Stage B VWAP unusable")
     signal_sample = samples.get("signal") if isinstance(samples.get("signal"), dict) else {}
+    latest_signal_sample = samples.get("latestSignal") if isinstance(samples.get("latestSignal"), dict) else {}
     audit_sample = samples.get("audit") if isinstance(samples.get("audit"), dict) else {}
     def reason_code(reason: Any) -> str:
         if not isinstance(reason, str):
@@ -266,6 +267,20 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
         for reason, count in gate_reason_counts.items()
         if as_int(count) > 0 and reason_code(reason)
     )
+    expected_trade_date = str(replay.get("date") or "")
+    for label, sample_payload in [
+        ("signal", signal_sample),
+        ("latestSignal", latest_signal_sample),
+        ("audit", audit_sample),
+    ]:
+        trade_date = str(sample_payload.get("tradeDate") or "")
+        expiry = str(sample_payload.get("expiry") or "")
+        if trade_date and expiry and trade_date != expiry:
+            failures.append(f"SAME_DAY_EXPIRY_MISMATCH: {label}.tradeDate={trade_date} {label}.expiry={expiry}")
+        if expected_trade_date and expiry and expiry != expected_trade_date:
+            failures.append(f"REPLAY_EXPIRY_DOES_NOT_MATCH_REPLAY_DATE: {label}.expiry={expiry}, replayDate={expected_trade_date}")
+    if "NO_VALID_TODAY_EXPIRY" in aggregate_reason_codes:
+        failures.append("NO_VALID_TODAY_EXPIRY observed in replay outputs")
     data_failure_reasons = {
         "SPX_SPOT_STALE",
         "ES_TRADE_STALE",
