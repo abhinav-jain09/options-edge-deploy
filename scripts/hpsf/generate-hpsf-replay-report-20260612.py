@@ -326,6 +326,7 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
             failures.append("all NO_TRADE outputs are explained only by data-health gates")
     if not isinstance(audit_sample.get("gateDiagnostics"), dict) or not audit_sample.get("gateDiagnostics"):
         failures.append("STAGE_B_AUDIT_GATE_DIAGNOSTICS_EMPTY")
+    failures.extend(feed_sync_metric_consistency_failures(evidence))
     if not isinstance(audit_sample.get("chainCoverageDiagnostics"), dict) or not audit_sample.get("chainCoverageDiagnostics"):
         failures.append("STAGE_B_AUDIT_CHAIN_COVERAGE_DIAGNOSTICS_EMPTY")
     sample_time = parse_time(signal_sample.get("eventTime"))
@@ -683,6 +684,31 @@ def as_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def feed_sync_metric_consistency_failures(evidence: dict[str, Any]) -> list[str]:
+    samples = evidence.get("samples") if isinstance(evidence.get("samples"), dict) else {}
+    audit_sample = samples.get("audit") if isinstance(samples.get("audit"), dict) else {}
+    gate_diagnostics = audit_sample.get("gateDiagnostics") if isinstance(audit_sample.get("gateDiagnostics"), dict) else {}
+    trigger = str(gate_diagnostics.get("stageBEvaluationTrigger") or "")
+    feed_synchronized = gate_diagnostics.get("feedSynchronized") is True or str(gate_diagnostics.get("feedSynchronized")).lower() == "true"
+    if trigger != "SYNCHRONIZED_CATCHUP" or not feed_synchronized:
+        return []
+    stage_b_performance = evidence.get("stageBPerformance") if isinstance(evidence.get("stageBPerformance"), dict) else {}
+    counts = evidence.get("counts") if isinstance(evidence.get("counts"), dict) else {}
+    allowed_count = as_int(stage_b_performance.get("stageB.feedSync.catchup.allowed.count", counts.get("stageB.feedSync.catchup.allowed.count")))
+    if allowed_count > 0:
+        return []
+    consistency = evidence.get("feedSyncMetricConsistency") if isinstance(evidence.get("feedSyncMetricConsistency"), dict) else {}
+    metrics_source = consistency.get("metricsSource") or "stageBPerformance merged from HPSF_STAGE_B_PERFORMANCE_METRICS_JSON in artifacts/logs/stage-b.log"
+    audit_source = consistency.get("auditSource") or "artifacts/hpsf-sample-audit.json"
+    return [
+        "STAGE_B_FEED_SYNC_METRIC_AUDIT_MISMATCH: "
+        "sample audit has stageBEvaluationTrigger=SYNCHRONIZED_CATCHUP and feedSynchronized=true, "
+        "but stageB.feedSync.catchup.allowed.count is 0. "
+        f"auditSource={audit_source}; metricsSource={metrics_source}; "
+        "metrics may be stale or from a different pod/instance."
+    ]
 
 
 def non_no_trade_count(actions: Counter) -> int:

@@ -701,6 +701,28 @@ if profile == "FULL_RTH_RELEASE":
     coverage_diagnostics = audit_sample.get("chainCoverageDiagnostics")
     if not isinstance(gate_diagnostics, dict) or not gate_diagnostics:
         failures.append("STAGE_B_AUDIT_GATE_DIAGNOSTICS_EMPTY")
+    else:
+        trigger = str(gate_diagnostics.get("stageBEvaluationTrigger") or "")
+        feed_synchronized = gate_diagnostics.get("feedSynchronized") is True or str(gate_diagnostics.get("feedSynchronized")).lower() == "true"
+        allowed_count = as_int("stageB.feedSync.catchup.allowed.count") or 0
+        sync_catchup_audit = trigger == "SYNCHRONIZED_CATCHUP" and feed_synchronized
+        consistency = {
+            "result": "PASS",
+            "auditSource": "artifacts/hpsf-sample-audit.json",
+            "metricsSource": "stageBPerformance merged from HPSF_STAGE_B_PERFORMANCE_METRICS_JSON in artifacts/logs/stage-b.log",
+            "stageBEvaluationTrigger": trigger,
+            "feedSynchronized": feed_synchronized,
+            "allowedCatchupCount": allowed_count,
+        }
+        if sync_catchup_audit and allowed_count <= 0:
+            consistency["result"] = "FAIL"
+            consistency["message"] = (
+                "Sample audit proves a synchronized catch-up evaluation, but merged Stage B performance metrics "
+                "show stageB.feedSync.catchup.allowed.count=0. Metrics may be stale or from a different pod/instance; "
+                "this replay report cannot treat feed-sync evidence as internally consistent."
+            )
+            failures.append("STAGE_B_FEED_SYNC_METRIC_AUDIT_MISMATCH: " + consistency["message"])
+        summary["feedSyncMetricConsistency"] = consistency
     if not isinstance(coverage_diagnostics, dict) or not coverage_diagnostics:
         failures.append("STAGE_B_AUDIT_CHAIN_COVERAGE_DIAGNOSTICS_EMPTY")
 
