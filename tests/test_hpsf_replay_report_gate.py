@@ -202,6 +202,23 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("Stage B underlying join healthy: true", report)
         self.assertIn("Stage B VWAP usable: true", report)
 
+    def test_ReplayReportFailsSynchronizedCatchupAuditWithoutAllowedMetricTest(self) -> None:
+        data = evidence()
+        data["samples"]["audit"]["gateDiagnostics"] = {
+            "evaluationTime": "2026-06-12T14:31:17Z",
+            "stageBEvaluationTrigger": "SYNCHRONIZED_CATCHUP",
+            "feedSynchronized": True,
+        }
+        data["stageBPerformance"]["stageB.feedSync.catchup.allowed.count"] = 0
+        data["stageBPerformance"]["stageB.feedSync.catchup.skipped.count"] = 4
+
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("STAGE_B_FEED_SYNC_METRIC_AUDIT_MISMATCH", report)
+        self.assertIn("stageB.feedSync.catchup.allowed.count is 0", report)
+        self.assertIn("metrics may be stale or from a different pod/instance", report)
+
     def test_ReplayReportFailsWhenNoSignalTest(self) -> None:
         data = evidence()
         data["counts"]["signalRecordsEmitted"] = 0
