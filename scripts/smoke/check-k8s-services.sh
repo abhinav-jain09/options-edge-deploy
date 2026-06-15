@@ -66,9 +66,24 @@ wait_for_port_forward() {
   return 1
 }
 
+choose_local_port() {
+  local requested_port="$1"
+  local port="$requested_port"
+
+  while ss -ltn "sport = :$port" 2>/dev/null | grep -q LISTEN; do
+    port=$((port + 100))
+  done
+
+  if [ "$port" != "$requested_port" ]; then
+    echo "Local port $requested_port is already in use; using $port for port-forward." >&2
+  fi
+  echo "$port"
+}
+
 check_deployment() {
   local deployment="$1"
-  local local_port="$2"
+  local local_port
+  local_port="$(choose_local_port "$2")"
   local log_file="$TMP_DIR/$deployment-port-forward.log"
   echo "Checking rollout for $deployment"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
@@ -89,7 +104,8 @@ check_deployment() {
 
 check_feed_gateway() {
   local deployment="feed-gateway-service"
-  local local_port="19091"
+  local local_port
+  local_port="$(choose_local_port 19091)"
   local log_file="$TMP_DIR/$deployment-port-forward.log"
   echo "Checking live health for $deployment"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
@@ -108,7 +124,8 @@ check_feed_gateway() {
 
 check_ibkr_feed() {
   local deployment="ibkr-feed-service"
-  local local_port="18087"
+  local local_port
+  local_port="$(choose_local_port 18087)"
   local log_file="$TMP_DIR/$deployment-port-forward.log"
   echo "Checking live health for $deployment"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=240s
@@ -127,7 +144,8 @@ check_ibkr_feed() {
 
 check_integration_test() {
   local deployment="options-edge-integration-test"
-  local local_port="18082"
+  local local_port
+  local_port="$(choose_local_port 18082)"
   local log_file="$TMP_DIR/$deployment-port-forward.log"
   echo "Checking live health for $deployment"
   local pod
