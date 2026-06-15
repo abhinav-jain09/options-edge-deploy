@@ -37,7 +37,6 @@ pipeline {
     string(name: 'BUGZILLA_URL', defaultValue: 'http://192.168.100.252:8092', description: 'Bugzilla base URL')
     string(name: 'BUGZILLA_USER', defaultValue: 'admin@options-edge.local', description: 'Bugzilla user')
     string(name: 'BUGZILLA_PASSWORD_CREDENTIAL_ID', defaultValue: 'options-edge-bugzilla-password', description: 'Jenkins secret text credential for Bugzilla password/token')
-    password(name: 'BUGZILLA_PASSWORD', defaultValue: '', description: 'Bugzilla password/token for replay comment')
   }
 
   environment {
@@ -714,7 +713,7 @@ comment = (
 )
 Path("artifacts/logs/bugzilla-comment.txt").write_text(comment + "\\n")
 PY
-            bugzilla_password="${BUGZILLA_PASSWORD_FROM_CREDENTIAL:-${BUGZILLA_PASSWORD:-}}"
+            bugzilla_password="${BUGZILLA_PASSWORD_FROM_CREDENTIAL:-}"
             if [ -n "$bugzilla_password" ]; then
               bugzilla_token="$(curl -fsS --get \
                 --data-urlencode "login=${BUGZILLA_USER}" \
@@ -724,7 +723,7 @@ PY
               -H 'Content-Type: application/json' \
               -d "$(BUGZILLA_TOKEN="$bugzilla_token" python3 -c 'import json,os; print(json.dumps({"Bugzilla_token": os.environ["BUGZILLA_TOKEN"], "comment": open("artifacts/logs/bugzilla-comment.txt").read()}))')"
             else
-              echo 'BUGZILLA_PASSWORD not provided; archived Bugzilla comment text only.'
+              echo 'Bugzilla credential not provided; archived Bugzilla comment text only.'
             fi
           '''
         }
