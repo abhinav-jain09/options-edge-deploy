@@ -521,6 +521,15 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn('replay_topic_prefix="${TOPIC_PREFIX:-options.replay.${HPSF_REPLAY_DATE_ID:-${REPLAY_DATE//-/}}}"', pipeline)
         self.assertNotIn("${TOPIC_PREFIX:-options.replay.20260612}", pipeline)
 
+    def test_JenkinsReplayGateUsesCredentialIdInsteadOfPasswordParameter(self) -> None:
+        pipeline = JENKINSFILE.read_text()
+
+        self.assertIn("string(name: 'BUGZILLA_PASSWORD_CREDENTIAL_ID'", pipeline)
+        self.assertIn('withCredentials([string(credentialsId: "${params.BUGZILLA_PASSWORD_CREDENTIAL_ID}"', pipeline)
+        self.assertIn('bugzilla_password="${BUGZILLA_PASSWORD_FROM_CREDENTIAL:-}"', pipeline)
+        self.assertNotIn("password(name: 'BUGZILLA_PASSWORD'", pipeline)
+        self.assertNotIn("${BUGZILLA_PASSWORD:-}", pipeline)
+
     def test_archive_manifest_fallback_job_name_is_date_neutral(self) -> None:
         archiver = (ROOT / "scripts" / "hpsf" / "archive-replay-evidence-report.sh").read_text()
 
