@@ -530,6 +530,15 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertNotIn("password(name: 'BUGZILLA_PASSWORD'", pipeline)
         self.assertNotIn("${BUGZILLA_PASSWORD:-}", pipeline)
 
+    def test_JenkinsReplayGateUsesReplaySpecificProcessingImageTag(self) -> None:
+        pipeline = JENKINSFILE.read_text()
+
+        self.assertIn("string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: ''", pipeline)
+        self.assertIn("options-edge-hpsf-processing:replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}", pipeline)
+        self.assertIn("def blockedReplayTags = ['dev', 'latest', 'main', 'prod', 'production', 'stable']", pipeline)
+        self.assertIn("HPSF_PROCESSING_IMAGE must be replay-specific", pipeline)
+        self.assertNotIn("defaultValue: '192.168.100.252:5000/options-edge-hpsf-processing:dev'", pipeline)
+
     def test_archive_manifest_fallback_job_name_is_date_neutral(self) -> None:
         archiver = (ROOT / "scripts" / "hpsf" / "archive-replay-evidence-report.sh").read_text()
 
