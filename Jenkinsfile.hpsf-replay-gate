@@ -382,7 +382,7 @@ pipeline {
           for attempt in $(seq 1 180); do
             phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
             kubectl -n "$NAMESPACE" logs "$pod" --tail=300 > artifacts/logs/underlying.log 2>/dev/null || true
-            if grep -E 'HPSF underlying replay topology enabled|underlying replay consuming|underlying replay producing' artifacts/logs/underlying.log; then
+            if grep -E 'HPSF underlying replay topology enabled|underlying replay consuming|underlying replay producing|HPSF underlying-replay stream state transition .* -> RUNNING|state=underlying-replay=RUNNING' artifacts/logs/underlying.log; then
               break
             fi
             if [ "$phase" = "Failed" ] || [ "$phase" = "Succeeded" ]; then
@@ -406,7 +406,7 @@ pipeline {
             sleep 1
           done
           kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/underlying.log || true
-          grep -E 'HPSF underlying replay topology enabled|underlying replay consuming|underlying replay producing' artifacts/logs/underlying.log
+          grep -E 'HPSF underlying replay topology enabled|underlying replay consuming|underlying replay producing' artifacts/logs/underlying.log || echo "Underlying legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate."
           grep -E 'HPSF underlying-replay stream state transition .* -> RUNNING|state=underlying-replay=RUNNING' artifacts/logs/underlying.log
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
             "options-edge-hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
@@ -456,7 +456,7 @@ pipeline {
           for attempt in $(seq 1 180); do
             phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
             kubectl -n "$NAMESPACE" logs "$pod" --tail=200 > artifacts/logs/stage-b-startup.log 2>/dev/null || true
-            if grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b-startup.log; then
+            if grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing|HPSF stage-b stream state transition .* -> RUNNING|state=stage-b=RUNNING' artifacts/logs/stage-b-startup.log; then
               break
             fi
             if [ "$phase" = "Failed" ] || [ "$phase" = "Succeeded" ]; then
@@ -479,7 +479,7 @@ pipeline {
             fi
             sleep 1
           done
-          grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b-startup.log
+          grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b-startup.log || echo "Stage B legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate."
           grep -E 'HPSF stage-b stream state transition .* -> RUNNING|state=stage-b=RUNNING' artifacts/logs/stage-b-startup.log
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
             "options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
