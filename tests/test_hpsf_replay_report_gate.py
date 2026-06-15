@@ -345,19 +345,22 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("Create replay evidence report", pipeline)
         self.assertIn("scripts/hpsf/archive-replay-evidence-report.sh", pipeline)
         self.assertIn("scripts/hpsf/collect-replay-root-cause-diagnostics.sh || true", pipeline)
-        self.assertIn(".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md", pipeline)
-        self.assertIn("artifacts/hpsf-replay-report-20260612.md", pipeline)
+        self.assertIn("HPSF_REPLAY_RUN_NAME", pipeline)
+        self.assertIn("hpsf-historical-replay-${replayDateId}", pipeline)
+        self.assertIn("artifacts/hpsf-replay-report-${replayDateId}.md", pipeline)
+        self.assertIn(".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md", pipeline)
+        self.assertIn("$HPSF_REPLAY_REPORT", pipeline)
         self.assertIn("allowEmptyArchive: false", pipeline)
-        archive_lines = re.findall(r"archiveArtifacts artifacts: '([^']+)'", pipeline)
+        archive_lines = re.findall(r"""archiveArtifacts artifacts: ["']([^"']+)["']""", pipeline)
         evidence_archive_lines = [
             archived
             for archived in archive_lines
-            if archived == ".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md"
+            if archived == ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md"
         ]
         self.assertEqual(
             [
-                ".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md",
-                ".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md",
+                ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md",
+                ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md",
             ],
             evidence_archive_lines,
         )
@@ -387,10 +390,10 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("artifacts/case2-diagnostic-validation-result.json", pipeline)
         self.assertIn("artifacts/case2-diagnostic-validation-report.md", pipeline)
         self.assertIn("current_report_matches_build=false", pipeline)
-        self.assertIn('grep -F "Build number: ${BUILD_NUMBER:-}" artifacts/hpsf-replay-report-20260612.md', pipeline)
-        self.assertIn("rm -rf artifacts build/hpsf-replay-20260612 artifact-manifest.json", pipeline)
+        self.assertIn('grep -F "Build number: ${BUILD_NUMBER:-}" "$HPSF_REPLAY_REPORT"', pipeline)
+        self.assertIn('rm -rf artifacts "$HPSF_REPLAY_BUILD_DIR" artifact-manifest.json', pipeline)
         self.assertIn("artifacts/hpsf-stage-a-validation.json", pipeline)
-        self.assertIn("build/hpsf-replay-20260612/stage-a-validation.json", pipeline)
+        self.assertIn('"$HPSF_REPLAY_BUILD_DIR/stage-a-validation.json"', pipeline)
         self.assertIn("HPSF_REPLAY_FAILURE_REASON", pipeline)
         self.assertIn('HPSF_REPLAY_FAILURE_CODE="STAGE_A_STRIKE_FLOW_EMPTY"', pipeline)
         self.assertIn("JENKINS_PUBLIC_URL", pipeline)
@@ -405,7 +408,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertEqual(3, pipeline.count('--overrides="$HPSF_REPLAY_POD_OVERRIDES"'))
         self.assertEqual(3, pipeline.count("scripts/hpsf/wait-kafka-consumer-group-caught-up.sh"))
         self.assertIn(
-            '"options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}"',
+            '"options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}"',
             pipeline,
         )
         self.assertIn("artifacts/logs/stage-b-consumer-group-catchup.log", pipeline)
@@ -443,9 +446,9 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("Bugzilla PASS comment blocked because validation result is not PASS", pipeline)
         self.assertIn("activeChainsMax=", pipeline)
         self.assertIn("stageB.punctuation.fire.count", pipeline)
-        self.assertIn("options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
-        self.assertIn("options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
-        self.assertIn("options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}", pipeline)
+        self.assertIn("options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}", pipeline)
+        self.assertIn("options-edge-hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}", pipeline)
+        self.assertIn("options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("state=stage-a=RUNNING", pipeline)
         self.assertIn("state=underlying-replay=RUNNING", pipeline)
         self.assertIn("state=stage-b=RUNNING", pipeline)
@@ -559,7 +562,7 @@ OUT
             local_script.chmod(0o755)
             artifact_dir = deploy / "artifacts"
             artifact_dir.mkdir()
-            (artifact_dir / "hpsf-replay-report-20260612.md").write_text("# report\nFinal PASS/FAIL: FAIL\n", encoding="utf-8")
+            (artifact_dir / "hpsf-replay-report-20260611.md").write_text("# report\nFinal PASS/FAIL: FAIL\n", encoding="utf-8")
             (artifact_dir / "hpsf-replay-summary.json").write_text(json.dumps({"validationResult": "FAIL"}), encoding="utf-8")
             (artifact_dir / "replay-validation-result.json").write_text(json.dumps({"validationResult": "FAIL"}), encoding="utf-8")
 
@@ -569,27 +572,27 @@ OUT
                 env={
                     **os.environ,
                     "BUILD_NUMBER": "manual-test",
-                    "REPLAY_DATE": "2026-06-12",
+                    "REPLAY_DATE": "2026-06-11",
                     "HPSF_REPLAY_ARTIFACT_DIR": "artifacts",
                 },
                 text=True,
                 capture_output=True,
             )
 
-            project_folder = options_edge / "evidence-report" / "hpsf-historical-replay-20260612" / "manual-test"
+            project_folder = options_edge / "evidence-report" / "hpsf-historical-replay-20260611" / "manual-test"
             jenkins_archive_folder = (
                 deploy
                 / ".replay"
                 / "options-edge"
                 / "evidence-report"
-                / "hpsf-historical-replay-20260612"
+                / "hpsf-historical-replay-20260611"
                 / "manual-test"
             )
             self.assertNotEqual(0, result.returncode)
-            self.assertTrue((project_folder / "hpsf-replay-report-20260612.md").exists(), result.stderr + result.stdout)
+            self.assertTrue((project_folder / "hpsf-replay-report-20260611.md").exists(), result.stderr + result.stdout)
             self.assertTrue((project_folder / "hpsf-replay-summary.json").exists())
             self.assertTrue((project_folder / "replay-validation-result.json").exists())
-            self.assertTrue((jenkins_archive_folder / "hpsf-replay-report-20260612.md").exists(), result.stderr + result.stdout)
+            self.assertTrue((jenkins_archive_folder / "hpsf-replay-report-20260611.md").exists(), result.stderr + result.stdout)
             self.assertIn("Mirrored replay evidence report to: .replay/options-edge/evidence-report", result.stdout)
 
     def test_download_script_prepares_missing_databento_jsonl(self) -> None:

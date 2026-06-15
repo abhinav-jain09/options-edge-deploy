@@ -2,18 +2,21 @@
 set -euo pipefail
 
 ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
+REPLAY_DATE="${REPLAY_DATE:-2026-06-12}"
+COMPACT_DATE="${REPLAY_DATE//-/}"
+REPLAY_RUN_NAME="${HPSF_REPLAY_RUN_NAME:-hpsf-historical-replay-$COMPACT_DATE}"
 default_project_evidence_dir() {
   local build_number="${BUILD_NUMBER:-manual}"
   if [[ -d "../options-edge" ]]; then
-    printf '../options-edge/evidence-report/hpsf-historical-replay-20260612/%s\n' "$build_number"
+    printf '../options-edge/evidence-report/%s/%s\n' "$REPLAY_RUN_NAME" "$build_number"
   elif [[ -d ".replay/options-edge" ]]; then
-    printf '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/%s\n' "$build_number"
+    printf '.replay/options-edge/evidence-report/%s/%s\n' "$REPLAY_RUN_NAME" "$build_number"
   else
-    printf 'evidence-report/hpsf-historical-replay-20260612/%s\n' "$build_number"
+    printf 'evidence-report/%s/%s\n' "$REPLAY_RUN_NAME" "$build_number"
   fi
 }
 EVIDENCE_DIR="${HPSF_REPLAY_EVIDENCE_DIR:-$(default_project_evidence_dir)}"
-JENKINS_ARCHIVE_EVIDENCE_DIR=".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/${BUILD_NUMBER:-manual}"
+JENKINS_ARCHIVE_EVIDENCE_DIR=".replay/options-edge/evidence-report/${REPLAY_RUN_NAME}/${BUILD_NUMBER:-manual}"
 MANIFEST="${HPSF_REPLAY_ARTIFACT_MANIFEST:-artifact-manifest.json}"
 ARCHIVER=".replay/options-edge/scripts/hpsf/archive_replay_evidence.py"
 VALIDATION_FILE="$ARTIFACT_DIR/replay-validation-result.json"
@@ -25,13 +28,13 @@ local_evidence_mirror_dir() {
   local root="${HPSF_REPLAY_EVIDENCE_LOCAL_ROOT:-}"
   local build_number="${BUILD_NUMBER:-manual}"
   if [[ -n "$root" ]]; then
-    printf '%s/hpsf-historical-replay-20260612/%s\n' "${root%/}" "$build_number"
+    printf '%s/%s/%s\n' "${root%/}" "$REPLAY_RUN_NAME" "$build_number"
   fi
 }
 
 copy_canonical_artifacts_to_evidence_dir() {
   for artifact in \
-    "$ARTIFACT_DIR/hpsf-replay-report-20260612.md" \
+    "${HPSF_REPLAY_REPORT:-$ARTIFACT_DIR/hpsf-replay-report-$COMPACT_DATE.md}" \
     "$ARTIFACT_DIR/hpsf-replay-summary.json" \
     "$ARTIFACT_DIR/replay-validation-result.json"; do
     if [[ -s "$artifact" ]]; then
@@ -76,6 +79,9 @@ if artifact_dir.exists():
             })
 
 job_name = os.environ.get("JOB_NAME", "hpsf-historical-replay-20260612")
+replay_date = os.environ.get("REPLAY_DATE", "2026-06-12")
+compact_date = replay_date.replace("-", "")
+replay_run_name = os.environ.get("HPSF_REPLAY_RUN_NAME", f"hpsf-historical-replay-{compact_date}")
 build_number = os.environ.get("BUILD_NUMBER", "manual")
 jenkins_public_url = os.environ.get("JENKINS_PUBLIC_URL", "http://192.168.100.252:8085").rstrip("/")
 job_path = job_name.replace("/", "/job/")
@@ -90,8 +96,10 @@ manifest = {
         "buildUrl": build_url,
         "commitSha": commit_sha or "unknown",
         "jobName": job_name,
+        "replayRunName": replay_run_name,
     },
-    "replayDate": os.environ.get("REPLAY_DATE", "2026-06-12"),
+    "replayDate": replay_date,
+    "replayRunName": replay_run_name,
     "artifacts": artifacts,
 }
 manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")

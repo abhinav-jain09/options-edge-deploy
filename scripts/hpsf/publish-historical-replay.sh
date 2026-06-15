@@ -2,12 +2,13 @@
 set -euo pipefail
 
 REPLAY_DATE="${REPLAY_DATE:-2026-06-12}"
+COMPACT_DATE="${REPLAY_DATE//-/}"
 REPLAY_START="${REPLAY_START:-2026-06-12T13:30:00Z}"
 REPLAY_END="${REPLAY_END:-2026-06-12T20:00:00Z}"
 SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR:?HPSF_REPLAY_SOURCE_DIR is required}"
 DATABENTO_FEED_REPO="${DATABENTO_FEED_REPO:-../options-edge-databento-feed}"
 DATABENTO_FEED_PYTHON="${DATABENTO_FEED_PYTHON:-}"
-BUILD_DIR="${HPSF_REPLAY_BUILD_DIR:-build/hpsf-replay-20260612}"
+BUILD_DIR="${HPSF_REPLAY_BUILD_DIR:-build/hpsf-replay-$COMPACT_DATE}"
 ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
 SUMMARY="$BUILD_DIR/publish-summary.json"
 mkdir -p "$BUILD_DIR" "$ARTIFACT_DIR" "$BUILD_DIR/logs"
@@ -50,7 +51,7 @@ PYTHONPATH="$DATABENTO_FEED_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
   --es-stype-in "${ES_STYPE_IN:-raw_symbol}" \
   --compare-next-contract-volume "${COMPARE_NEXT_CONTRACT_VOLUME:-true}" \
   --next-contract-symbol "${NEXT_CONTRACT_SYMBOL:-ESU6}" \
-  --topic-prefix "${TOPIC_PREFIX:-options.replay.20260612}" \
+  --topic-prefix "${TOPIC_PREFIX:-options.replay.$COMPACT_DATE}" \
   --speed-mode "${REPLAY_SPEED:-FAST}" \
   --fixture-dir "$SOURCE_DIR" \
   --kafka-bootstrap-servers "$KAFKA_BOOTSTRAP_SERVERS" \

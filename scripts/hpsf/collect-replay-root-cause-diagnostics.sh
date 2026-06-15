@@ -8,7 +8,15 @@ mkdir -p "$LOG_DIR"
 BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
 NAMESPACE="${NAMESPACE:-options-edge}"
 BUILD="${BUILD_NUMBER:-manual}"
-TOPIC_PREFIX="${TOPIC_PREFIX:-options.replay.20260612}"
+REPLAY_DATE="${REPLAY_DATE:-2026-06-12}"
+COMPACT_DATE="${REPLAY_DATE//-/}"
+TOPIC_PREFIX="${TOPIC_PREFIX:-options.replay.$COMPACT_DATE}"
+STAGE_A_POD="hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID:-$COMPACT_DATE}"
+UNDERLYING_POD="hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID:-$COMPACT_DATE}"
+STAGE_B_POD="hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID:-$COMPACT_DATE}"
+STAGE_A_APP_ID="options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID:-$COMPACT_DATE}-${BUILD}"
+UNDERLYING_APP_ID="options-edge-hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID:-$COMPACT_DATE}-${BUILD}"
+STAGE_B_APP_ID="options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID:-$COMPACT_DATE}-${BUILD}"
 PATH="/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 
 run_capture() {
@@ -44,9 +52,9 @@ collect_service() {
   grep -E "^${app_id//./\\.}-" "$LOG_DIR/all-kafka-topics.log" > "$LOG_DIR/${label}-internal-topics.log" 2>/dev/null || true
 }
 
-collect_service stage-a hpsf-stage-a-replay-20260612 "options-edge-hpsf-stage-a-replay-20260612-${BUILD}" stage-a.log
-collect_service underlying hpsf-underlying-replay-20260612 "options-edge-hpsf-underlying-replay-20260612-${BUILD}" underlying.log
-collect_service stage-b hpsf-stage-b-replay-20260612 "options-edge-hpsf-stage-b-replay-20260612-${BUILD}" stage-b.log
+collect_service stage-a "$STAGE_A_POD" "$STAGE_A_APP_ID" stage-a.log
+collect_service underlying "$UNDERLYING_POD" "$UNDERLYING_APP_ID" underlying.log
+collect_service stage-b "$STAGE_B_POD" "$STAGE_B_APP_ID" stage-b.log
 
 run_capture "$LOG_DIR/replay-source-topic.log" kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$TOPIC_PREFIX.opra.tcbbo"
 run_capture "$LOG_DIR/replay-strike-flow-topic.log" kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$TOPIC_PREFIX.hpsf.strike-flow"
@@ -60,7 +68,16 @@ from pathlib import Path
 
 log_dir = Path(os.environ.get("HPSF_REPLAY_ARTIFACT_DIR", "artifacts")) / "logs"
 build = os.environ.get("BUILD_NUMBER", "manual")
-topic_prefix = os.environ.get("TOPIC_PREFIX", "options.replay.20260612")
+replay_date = os.environ.get("REPLAY_DATE", "2026-06-12")
+compact_date = replay_date.replace("-", "")
+date_id = os.environ.get("HPSF_REPLAY_DATE_ID", compact_date)
+topic_prefix = os.environ.get("TOPIC_PREFIX", f"options.replay.{compact_date}")
+stage_a_pod = f"hpsf-stage-a-replay-{date_id}"
+underlying_pod = f"hpsf-underlying-replay-{date_id}"
+stage_b_pod = f"hpsf-stage-b-replay-{date_id}"
+stage_a_app_id = f"options-edge-hpsf-stage-a-replay-{date_id}-{build}"
+underlying_app_id = f"options-edge-hpsf-underlying-replay-{date_id}-{build}"
+stage_b_app_id = f"options-edge-hpsf-stage-b-replay-{date_id}-{build}"
 
 
 def read(path: Path, limit: int = 12000) -> str:
@@ -121,19 +138,19 @@ payload = {
     "topicPrefix": topic_prefix,
     "services": {
         "stageA": {
-            "pod": "hpsf-stage-a-replay-20260612",
+            "pod": stage_a_pod,
             "phase": pod_phase("stage-a"),
             "streamState": stream_state(stage_a_log),
             "logTail": stage_a_log,
         },
         "underlying": {
-            "pod": "hpsf-underlying-replay-20260612",
+            "pod": underlying_pod,
             "phase": pod_phase("underlying"),
             "streamState": stream_state(underlying_log),
             "logTail": underlying_log,
         },
         "stageB": {
-            "pod": "hpsf-stage-b-replay-20260612",
+            "pod": stage_b_pod,
             "phase": pod_phase("stage-b"),
             "streamState": stream_state(stage_b_log),
             "logTail": stage_b_log,
@@ -141,15 +158,15 @@ payload = {
     },
     "kafka": {
         "stageAConsumerGroup": {
-            "groupId": f"options-edge-hpsf-stage-a-replay-20260612-{build}",
+            "groupId": stage_a_app_id,
             "exists": group_exists("stage-a"),
         },
         "underlyingConsumerGroup": {
-            "groupId": f"options-edge-hpsf-underlying-replay-20260612-{build}",
+            "groupId": underlying_app_id,
             "exists": group_exists("underlying"),
         },
         "stageBConsumerGroup": {
-            "groupId": f"options-edge-hpsf-stage-b-replay-20260612-{build}",
+            "groupId": stage_b_app_id,
             "exists": group_exists("stage-b"),
         },
         "stageAInternalTopics": {

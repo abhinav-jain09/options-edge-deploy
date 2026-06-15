@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,13 +12,12 @@ from typing import Any
 REPLAY_DATE = "2026-06-12"
 START = "2026-06-12T13:30:00Z"
 END = "2026-06-12T20:00:00Z"
-REPORT_NAME = "hpsf-replay-report-20260612.md"
-
-
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate HPSF replay report for 2026-06-12")
-    parser.add_argument("--input", default="build/hpsf-replay-20260612/evidence.json")
-    parser.add_argument("--output", default=REPORT_NAME)
+    replay_date = os.environ.get("REPLAY_DATE", REPLAY_DATE)
+    compact_date = "".join(ch for ch in replay_date if ch.isdigit()) or "20260612"
+    parser = argparse.ArgumentParser(description="Generate HPSF replay report")
+    parser.add_argument("--input", default=f"build/hpsf-replay-{compact_date}/evidence.json")
+    parser.add_argument("--output", default=f"hpsf-replay-report-{compact_date}.md")
     parser.add_argument("--previous", default="", help="Optional previous replay summary JSON for build-to-build comparison")
     return parser.parse_args()
 
@@ -43,7 +43,10 @@ def read_evidence(path: Path) -> dict[str, Any]:
 
 def enrich_evidence_with_local_diagnostics(evidence: dict[str, Any], input_path: Path) -> None:
     artifact_dir = input_path.parent if input_path.parent.name == "artifacts" else Path("artifacts")
-    build_dir = Path("build/hpsf-replay-20260612")
+    replay = evidence.get("replay") if isinstance(evidence.get("replay"), dict) else {}
+    replay_date = str(replay.get("date") or REPLAY_DATE)
+    compact_date = "".join(ch for ch in replay_date if ch.isdigit()) or "20260612"
+    build_dir = Path(f"build/hpsf-replay-{compact_date}")
     diagnostics_path = artifact_dir / "logs" / "root-cause-diagnostics.json"
     if diagnostics_path.exists() and "rootCauseDiagnostics" not in evidence:
         evidence["rootCauseDiagnostics"] = read_optional_json(diagnostics_path)
@@ -92,6 +95,13 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
     stage_b_performance = evidence.get("stageBPerformance", {}) or {}
     topic_configs = evidence.get("topicConfigs", {})
     validation_failures = evidence.get("validationFailures") or []
+    replay_date = str(replay.get("date") or REPLAY_DATE)
+    compact_date = "".join(ch for ch in replay_date if ch.isdigit()) or "20260612"
+    replay_run_name = str(
+        jenkins.get("replayRunName")
+        or replay.get("runName")
+        or f"hpsf-historical-replay-{compact_date}"
+    )
     validation_result = str(evidence.get("validationResult") or evidence.get("result") or "").upper()
     canonical_validation_pass = validation_result == "PASS" and not validation_failures
     stage_b_scheduler_required = [
@@ -345,7 +355,7 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
 
     passed = not failures
     lines: list[str] = []
-    lines.append("# HPSF Replay Report 2026-06-12")
+    lines.append(f"# HPSF Replay Report {replay_date}")
     lines.append("")
     lines.append(f"Final result: {'PASS' if passed else 'FAIL'}")
     lines.append(f"Evidence mode: {evidence_mode}")
@@ -355,6 +365,7 @@ def build_report(evidence: dict[str, Any], previous: dict[str, Any] | None = Non
     lines.append(f"- Build number: {jenkins.get('buildNumber', '')}")
     lines.append(f"- Commit SHA: {jenkins.get('commitSha', '')}")
     lines.append(f"- Job name: {jenkins.get('jobName', '')}")
+    lines.append(f"- Replay run name: {replay_run_name}")
     if failures:
         lines.append("")
         lines.append("Failures:")

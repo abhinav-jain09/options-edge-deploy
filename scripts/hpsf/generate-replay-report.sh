@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BUILD_DIR="${HPSF_REPLAY_BUILD_DIR:-build/hpsf-replay-20260612}"
+REPLAY_DATE="${REPLAY_DATE:-2026-06-12}"
+COMPACT_DATE="${REPLAY_DATE//-/}"
+BUILD_DIR="${HPSF_REPLAY_BUILD_DIR:-build/hpsf-replay-$COMPACT_DATE}"
 ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
 CANONICAL_SUMMARY="$ARTIFACT_DIR/hpsf-replay-summary.json"
 if [[ -n "${HPSF_REPLAY_EVIDENCE:-}" ]]; then
@@ -11,7 +13,7 @@ elif [[ -f "$CANONICAL_SUMMARY" ]]; then
 else
   EVIDENCE="$BUILD_DIR/evidence.json"
 fi
-REPORT="${HPSF_REPLAY_REPORT:-$ARTIFACT_DIR/hpsf-replay-report-20260612.md}"
+REPORT="${HPSF_REPLAY_REPORT:-$ARTIFACT_DIR/hpsf-replay-report-$COMPACT_DATE.md}"
 mkdir -p "$BUILD_DIR" "$ARTIFACT_DIR" "$ARTIFACT_DIR/logs"
 
 args=(--input "$EVIDENCE" --output "$REPORT")
