@@ -50,9 +50,7 @@ pipeline {
     JENKINS_PUBLIC_URL = "${env.JENKINS_PUBLIC_URL ?: 'http://192.168.100.252:8085'}"
     NAMESPACE = "${env.NAMESPACE ?: 'options-edge'}"
     HPSF_REPLAY_POD_OVERRIDES = '{"spec":{"hostNetwork":true,"dnsPolicy":"ClusterFirstWithHostNet"}}'
-    HPSF_REPLAY_BUILD_DIR = 'build/hpsf-replay-20260612'
     HPSF_REPLAY_ARTIFACT_DIR = 'artifacts'
-    HPSF_REPLAY_REPORT = 'artifacts/hpsf-replay-report-20260612.md'
     HPSF_REPLAY_EVIDENCE_LOCAL_ROOT = "${env.HPSF_REPLAY_EVIDENCE_LOCAL_ROOT ?: '/Users/abhinav/development/workspace/options-edge/evidence-report'}"
   }
 
@@ -60,13 +58,35 @@ pipeline {
     stage('Checkout') {
       steps {
         checkout scm
+        script {
+          def replayDate = params.REPLAY_DATE ?: '2026-06-12'
+          def replayDateId = replayDate.replaceAll('[^0-9]', '')
+          if (replayDateId.length() != 8) {
+            error("REPLAY_DATE must produce an 8 digit replay date id, got '${replayDate}'")
+          }
+          env.HPSF_REPLAY_DATE_ID = replayDateId
+          env.HPSF_REPLAY_RUN_NAME = "hpsf-historical-replay-${replayDateId}"
+          env.HPSF_REPLAY_BUILD_DIR = "build/hpsf-replay-${replayDateId}"
+          env.HPSF_REPLAY_REPORT = "artifacts/hpsf-replay-report-${replayDateId}.md"
+          if (!params.TOPIC_PREFIX || params.TOPIC_PREFIX == 'options.replay.20260612') {
+            env.TOPIC_PREFIX = "options.replay.${replayDateId}"
+          }
+          if (!params.HPSF_STATE_DIR || params.HPSF_STATE_DIR == '/home/options-edge/data/kafka-streams/hpsf-replay-20260612') {
+            env.HPSF_STATE_DIR = "/home/options-edge/data/kafka-streams/hpsf-replay-${replayDateId}"
+          }
+          if (!params.HPSF_REPLAY_SOURCE_DIR || params.HPSF_REPLAY_SOURCE_DIR == '/home/options-edge/data/hpsf-replay/20260612') {
+            env.HPSF_REPLAY_SOURCE_DIR = "/home/options-edge/data/hpsf-replay/${replayDateId}"
+          }
+          currentBuild.displayName = "#${env.BUILD_NUMBER} ${env.HPSF_REPLAY_RUN_NAME}"
+          currentBuild.description = "Replay date ${replayDate}; topics ${env.TOPIC_PREFIX ?: params.TOPIC_PREFIX}; processing ${params.PROCESSING_BRANCH ?: 'main'}"
+        }
         sh '''
           set -euo pipefail
           export JENKINS_ALLOWED_DEPLOY_BRANCH="${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}"
           scripts/jenkins/enforce-main-branch.sh
           git rev-parse HEAD > build-git-sha.txt
-          rm -rf artifacts build/hpsf-replay-20260612 artifact-manifest.json
-          mkdir -p artifacts/logs build/hpsf-replay-20260612/logs .replay
+          rm -rf artifacts "$HPSF_REPLAY_BUILD_DIR" artifact-manifest.json
+          mkdir -p artifacts/logs "$HPSF_REPLAY_BUILD_DIR/logs" .replay
         '''
       }
     }
@@ -181,8 +201,8 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          test -s build/hpsf-replay-20260612/download-summary.json
-          cp build/hpsf-replay-20260612/download-summary.json artifacts/hpsf-download-summary.json
+          test -s "$HPSF_REPLAY_BUILD_DIR/download-summary.json"
+          cp "$HPSF_REPLAY_BUILD_DIR/download-summary.json" artifacts/hpsf-download-summary.json
         '''
       }
     }
@@ -217,7 +237,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          pod="hpsf-stage-a-replay-20260612"
+          pod="hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
           kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
@@ -231,7 +251,7 @@ pipeline {
             --env=HPSF_STAGE_A_ENABLED=true \
             --env=HPSF_STAGE_B_ENABLED=false \
             --env=HPSF_UNDERLYING_STATE_ENABLED=false \
-            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual} \
+            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual} \
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-a-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
             --env=HPSF_STREAMS_PROCESSING_GUARANTEE=at_least_once \
@@ -277,7 +297,7 @@ pipeline {
           grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing' artifacts/logs/stage-a.log
           grep -E 'HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING' artifacts/logs/stage-a.log
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
-            "options-edge-hpsf-stage-a-replay-20260612-${BUILD_NUMBER:-manual}" \
+            "options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
             artifacts/logs/stage-a-consumer-group-catchup.log
         '''
       }
@@ -300,7 +320,7 @@ pipeline {
           set -euo pipefail
           compact_date="${REPLAY_DATE//-/}"
           underlying_topic_prefix="${UNDERLYING_TOPIC_PREFIX:-underlying.replay.${compact_date}}"
-          pod="hpsf-underlying-replay-20260612"
+          pod="hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
           kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
@@ -314,7 +334,7 @@ pipeline {
             --env=HPSF_STAGE_A_ENABLED=false \
             --env=HPSF_STAGE_B_ENABLED=false \
             --env=HPSF_UNDERLYING_STATE_ENABLED=true \
-            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual} \
+            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual} \
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/underlying-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
             --env=HPSF_STREAMS_PROCESSING_GUARANTEE=at_least_once \
@@ -359,7 +379,7 @@ pipeline {
           grep -E 'HPSF underlying replay topology enabled|underlying replay consuming|underlying replay producing' artifacts/logs/underlying.log
           grep -E 'HPSF underlying-replay stream state transition .* -> RUNNING|state=underlying-replay=RUNNING' artifacts/logs/underlying.log
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
-            "options-edge-hpsf-underlying-replay-20260612-${BUILD_NUMBER:-manual}" \
+            "options-edge-hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
             artifacts/logs/underlying-consumer-group-catchup.log
         '''
       }
@@ -369,7 +389,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          pod="hpsf-stage-b-replay-20260612"
+          pod="hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
           kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
@@ -383,7 +403,7 @@ pipeline {
             --env=HPSF_STAGE_A_ENABLED=false \
             --env=HPSF_STAGE_B_ENABLED=true \
             --env=HPSF_UNDERLYING_STATE_ENABLED=false \
-            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual} \
+            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual} \
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-b-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
             --env=HPSF_STREAMS_PROCESSING_GUARANTEE=at_least_once \
@@ -432,7 +452,7 @@ pipeline {
           grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b-startup.log
           grep -E 'HPSF stage-b stream state transition .* -> RUNNING|state=stage-b=RUNNING' artifacts/logs/stage-b-startup.log
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
-            "options-edge-hpsf-stage-b-replay-20260612-${BUILD_NUMBER:-manual}" \
+            "options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
             artifacts/logs/stage-b-consumer-group-catchup.log
           kubectl -n "$NAMESPACE" logs "$pod" --tail=2000 > artifacts/logs/stage-b-runtime.log || true
           cat artifacts/logs/stage-b-startup.log artifacts/logs/stage-b-runtime.log > artifacts/logs/stage-b.log
@@ -472,7 +492,7 @@ pipeline {
             --stage-b-log artifacts/logs/stage-b.log \
             --summary artifacts/hpsf-replay-summary.json
 
-          cp artifacts/hpsf-replay-summary.json build/hpsf-replay-20260612/evidence.json
+          cp artifacts/hpsf-replay-summary.json "$HPSF_REPLAY_BUILD_DIR/evidence.json"
 
           echo "Stage B metrics merged into artifacts/hpsf-replay-summary.json"
 
@@ -626,7 +646,7 @@ PY
 
     stage('Archive artifacts') {
       steps {
-        archiveArtifacts artifacts: '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md', fingerprint: true, allowEmptyArchive: false
+        archiveArtifacts artifacts: ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md", fingerprint: true, allowEmptyArchive: false
         archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: false
         archiveArtifacts artifacts: 'artifacts/case2-diagnostic-validation-result.json,artifacts/case2-diagnostic-validation-report.md', fingerprint: true, allowEmptyArchive: true
       }
@@ -636,8 +656,8 @@ PY
       steps {
         sh '''
           set -euo pipefail
-          grep -F 'Final PASS/FAIL: PASS' artifacts/hpsf-replay-report-20260612.md
-          grep -F 'orderInstruction.enabled=true ever appeared: NO' artifacts/hpsf-replay-report-20260612.md
+          grep -F 'Final PASS/FAIL: PASS' "$HPSF_REPLAY_REPORT"
+          grep -F 'orderInstruction.enabled=true ever appeared: NO' "$HPSF_REPLAY_REPORT"
           if [ -s artifacts/logs/validate-replay-output.exit-code ] && [ "$(cat artifacts/logs/validate-replay-output.exit-code)" -ne 0 ]; then
             echo "Replay report was archived, but validation failed; failing build after evidence archival."
             exit 1
@@ -661,7 +681,7 @@ PY
             set -euo pipefail
             job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
             build_url="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
-            report_url="${build_url}artifact/.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/"
+            report_url="${build_url}artifact/.replay/options-edge/evidence-report/${HPSF_REPLAY_RUN_NAME}/"
             python3 - <<PY
 import json
 from pathlib import Path
@@ -706,7 +726,7 @@ PY
     unsuccessful {
       sh '''
         set +e
-        mkdir -p artifacts/logs build/hpsf-replay-20260612/logs
+        mkdir -p artifacts/logs "$HPSF_REPLAY_BUILD_DIR/logs"
         export CODE_GIT_SHA="$(cat build-git-sha.txt 2>/dev/null || true)"
         job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
         export BUILD_URL="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
@@ -718,32 +738,33 @@ PY
         fi
         scripts/hpsf/collect-replay-root-cause-diagnostics.sh || true
         current_report_matches_build=false
-        if [ -s artifacts/hpsf-replay-report-20260612.md ] && grep -F "Build number: ${BUILD_NUMBER:-}" artifacts/hpsf-replay-report-20260612.md >/dev/null 2>&1; then
+        if [ -s "$HPSF_REPLAY_REPORT" ] && grep -F "Build number: ${BUILD_NUMBER:-}" "$HPSF_REPLAY_REPORT" >/dev/null 2>&1; then
           current_report_matches_build=true
         fi
         if [ "$current_report_matches_build" != "true" ] || [ ! -s artifacts/hpsf-replay-summary.json ] || [ ! -s artifacts/replay-validation-result.json ]; then
           rm -f \
-            artifacts/hpsf-replay-report-20260612.md \
+            "$HPSF_REPLAY_REPORT" \
             artifacts/hpsf-replay-summary.json \
             artifacts/replay-validation-result.json \
             artifacts/hpsf-stage-a-validation.json \
-            build/hpsf-replay-20260612/evidence.json \
-            build/hpsf-replay-20260612/stage-a-validation.json
+            "$HPSF_REPLAY_BUILD_DIR/evidence.json" \
+            "$HPSF_REPLAY_BUILD_DIR/stage-a-validation.json"
           export HPSF_REPLAY_REPORT_ALLOW_FAIL=true
           scripts/hpsf/run-hpsf-replay-20260612.sh --dry-run || true
         fi
         scripts/hpsf/archive-replay-evidence-report.sh | tee artifacts/logs/archive-replay-evidence-report.log || true
       '''
-      archiveArtifacts artifacts: '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md', fingerprint: true, allowEmptyArchive: false
+      archiveArtifacts artifacts: ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md", fingerprint: true, allowEmptyArchive: false
       archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: true
       archiveArtifacts artifacts: 'artifacts/case2-diagnostic-validation-result.json,artifacts/case2-diagnostic-validation-report.md', fingerprint: true, allowEmptyArchive: true
     }
     always {
       sh '''
         set +e
-        kubectl -n "${NAMESPACE:-options-edge}" delete pod hpsf-stage-a-replay-20260612 --ignore-not-found=true
-        kubectl -n "${NAMESPACE:-options-edge}" delete pod hpsf-underlying-replay-20260612 --ignore-not-found=true
-        kubectl -n "${NAMESPACE:-options-edge}" delete pod hpsf-stage-b-replay-20260612 --ignore-not-found=true
+        replay_date_id="${HPSF_REPLAY_DATE_ID:-${REPLAY_DATE//-/}}"
+        kubectl -n "${NAMESPACE:-options-edge}" delete pod "hpsf-stage-a-replay-${replay_date_id}" --ignore-not-found=true
+        kubectl -n "${NAMESPACE:-options-edge}" delete pod "hpsf-underlying-replay-${replay_date_id}" --ignore-not-found=true
+        kubectl -n "${NAMESPACE:-options-edge}" delete pod "hpsf-stage-b-replay-${replay_date_id}" --ignore-not-found=true
       '''
     }
   }

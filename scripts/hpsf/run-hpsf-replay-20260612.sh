@@ -11,9 +11,11 @@ for arg in "$@"; do
   esac
 done
 
-BUILD_DIR="${HPSF_REPLAY_BUILD_DIR:-build/hpsf-replay-20260612}"
+REPLAY_DATE="${REPLAY_DATE:-2026-06-12}"
+COMPACT_DATE="${REPLAY_DATE//-/}"
+BUILD_DIR="${HPSF_REPLAY_BUILD_DIR:-build/hpsf-replay-$COMPACT_DATE}"
 ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
-REPORT="${HPSF_REPLAY_REPORT:-$ARTIFACT_DIR/hpsf-replay-report-20260612.md}"
+REPORT="${HPSF_REPLAY_REPORT:-$ARTIFACT_DIR/hpsf-replay-report-$COMPACT_DATE.md}"
 EVIDENCE="$BUILD_DIR/evidence.json"
 mkdir -p "$BUILD_DIR" "$ARTIFACT_DIR" "$BUILD_DIR/logs" "$ARTIFACT_DIR/logs"
 
@@ -49,13 +51,15 @@ write_fail_report() {
     "buildUrl": "$(jenkins_build_url)",
     "buildNumber": "${BUILD_NUMBER:-}",
     "commitSha": "${GIT_COMMIT:-${CODE_GIT_SHA:-}}",
-    "jobName": "${JOB_NAME:-}"
+    "jobName": "${JOB_NAME:-}",
+    "replayRunName": "${HPSF_REPLAY_RUN_NAME:-hpsf-historical-replay-$COMPACT_DATE}"
   },
   "replay": {
-    "date": "${REPLAY_DATE:-2026-06-12}",
+    "date": "$REPLAY_DATE",
+    "runName": "${HPSF_REPLAY_RUN_NAME:-hpsf-historical-replay-$COMPACT_DATE}",
     "start": "${REPLAY_START:-2026-06-12T13:30:00Z}",
     "end": "${REPLAY_END:-2026-06-12T20:00:00Z}",
-    "topicPrefix": "${TOPIC_PREFIX:-options.replay.20260612}",
+    "topicPrefix": "${TOPIC_PREFIX:-options.replay.$COMPACT_DATE}",
     "opraDataset": "${OPRA_DATASET:-OPRA.PILLAR}",
     "opraSchema": "${OPRA_SCHEMA:-tcbbo}",
     "esDataset": "${ES_DATASET:-GLBX.MDP3}",
