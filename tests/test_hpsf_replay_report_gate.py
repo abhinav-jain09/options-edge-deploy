@@ -454,6 +454,20 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertLess(pipeline.index("Create replay evidence report"), pipeline.index("Archive artifacts"))
         self.assertLess(pipeline.index("Archive artifacts"), pipeline.index("Validate replay report PASS"))
 
+    def test_JenkinsReplayGateAllowsBranchSelectedProcessingBuildTest(self) -> None:
+        pipeline = JENKINSFILE.read_text()
+
+        self.assertIn("JENKINS_ALLOWED_DEPLOY_BRANCH", pipeline)
+        self.assertIn('export JENKINS_ALLOWED_DEPLOY_BRANCH="${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}"', pipeline)
+        self.assertIn("PROCESSING_BRANCH", pipeline)
+        self.assertIn('git clone --depth 1 --branch "$branch"', pipeline)
+        self.assertIn(
+            'clone_branch git@github.com:abhinav-jain09/options-edge-processing.git "${PROCESSING_BRANCH:-main}" .replay/options-edge-processing',
+            pipeline,
+        )
+        self.assertIn("artifacts/hpsf-processing-source-sha.txt", pipeline)
+        self.assertIn("artifacts/hpsf-processing-source-branch.txt", pipeline)
+
     def test_ReplayEvidenceArchiveScriptExistsAndIsExecutable(self) -> None:
         self.assertTrue(ARCHIVE_EVIDENCE_SCRIPT.exists())
         self.assertTrue(os.access(ARCHIVE_EVIDENCE_SCRIPT, os.X_OK))

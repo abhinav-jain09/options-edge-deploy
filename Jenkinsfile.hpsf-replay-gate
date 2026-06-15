@@ -6,6 +6,13 @@ pipeline {
   }
 
   parameters {
+    string(name: 'JENKINS_ALLOWED_DEPLOY_BRANCH', defaultValue: 'main', description: 'Allowed branch for this deploy/replay Jenkinsfile checkout guard')
+    string(name: 'OPTIONS_EDGE_BRANCH', defaultValue: 'main', description: 'options-edge branch used by replay validation helpers')
+    string(name: 'CONTRACTS_BRANCH', defaultValue: 'main', description: 'options-edge-contracts branch used by replay')
+    string(name: 'DATABENTO_FEED_BRANCH', defaultValue: 'main', description: 'options-edge-databento-feed branch used by replay')
+    string(name: 'PROCESSING_BRANCH', defaultValue: 'main', description: 'options-edge-processing branch used to build HPSF replay image')
+    string(name: 'INTEGRATION_TEST_BRANCH', defaultValue: 'main', description: 'options-edge-integration-test branch used by replay')
+    string(name: 'FEED_GATEWAY_BRANCH', defaultValue: 'main', description: 'option-edge-feed-gateway branch used by replay')
     string(name: 'REPLAY_DATE', defaultValue: '2026-06-12', description: 'Historical replay date')
     string(name: 'REPLAY_START', defaultValue: '2026-06-12T13:30:00Z', description: 'Replay start UTC')
     string(name: 'REPLAY_END', defaultValue: '2026-06-12T20:00:00Z', description: 'Replay end UTC')
@@ -54,6 +61,7 @@ pipeline {
         checkout scm
         sh '''
           set -euo pipefail
+          export JENKINS_ALLOWED_DEPLOY_BRANCH="${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}"
           scripts/jenkins/enforce-main-branch.sh
           git rev-parse HEAD > build-git-sha.txt
           rm -rf artifacts build/hpsf-replay-20260612 artifact-manifest.json
@@ -68,12 +76,20 @@ pipeline {
           set -euo pipefail
           rm -rf .replay
           mkdir -p .replay
-          git clone --depth 1 git@github.com:abhinav-jain09/options-edge.git .replay/options-edge
-          git clone --depth 1 git@github.com:abhinav-jain09/options-edge-contracts.git .replay/options-edge-contracts
-          git clone --depth 1 git@github.com:abhinav-jain09/options-edge-databento-feed.git .replay/options-edge-databento-feed
-          git clone --depth 1 git@github.com:abhinav-jain09/options-edge-processing.git .replay/options-edge-processing
-          git clone --depth 1 git@github.com:abhinav-jain09/options-edge-integration-test.git .replay/options-edge-integration-test
-          git clone --depth 1 git@github.com:abhinav-jain09/option-edge-feed-gateway.git .replay/option-edge-feed-gateway || true
+          clone_branch() {
+            repo="$1"
+            branch="$2"
+            target="$3"
+            git clone --depth 1 --branch "$branch" "$repo" "$target"
+          }
+          clone_branch git@github.com:abhinav-jain09/options-edge.git "${OPTIONS_EDGE_BRANCH:-main}" .replay/options-edge
+          clone_branch git@github.com:abhinav-jain09/options-edge-contracts.git "${CONTRACTS_BRANCH:-main}" .replay/options-edge-contracts
+          clone_branch git@github.com:abhinav-jain09/options-edge-databento-feed.git "${DATABENTO_FEED_BRANCH:-main}" .replay/options-edge-databento-feed
+          clone_branch git@github.com:abhinav-jain09/options-edge-processing.git "${PROCESSING_BRANCH:-main}" .replay/options-edge-processing
+          clone_branch git@github.com:abhinav-jain09/options-edge-integration-test.git "${INTEGRATION_TEST_BRANCH:-main}" .replay/options-edge-integration-test
+          clone_branch git@github.com:abhinav-jain09/option-edge-feed-gateway.git "${FEED_GATEWAY_BRANCH:-main}" .replay/option-edge-feed-gateway || true
+          git -C .replay/options-edge-processing rev-parse HEAD > artifacts/hpsf-processing-source-sha.txt
+          git -C .replay/options-edge-processing branch --show-current > artifacts/hpsf-processing-source-branch.txt
         '''
       }
     }
