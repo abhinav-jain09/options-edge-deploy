@@ -9,6 +9,7 @@ DELETE_RETENTION_MS="${KAFKA_CHANGELOG_DELETE_RETENTION_MS:-3600000}"
 MIN_CLEANABLE_DIRTY_RATIO="${KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO:-0.01}"
 MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
 APPLY_SMOKE_INTERNAL_TOPICS="${KAFKA_APPLY_SMOKE_INTERNAL_TOPICS:-false}"
+APPLY_REPLAY_INTERNAL_TOPICS="${KAFKA_APPLY_REPLAY_INTERNAL_TOPICS:-false}"
 
 apply_changelog_config() {
   local topic="$1"
@@ -35,6 +36,10 @@ while read -r topic; do
   [[ -n "$topic" ]] || continue
   if [[ "$APPLY_SMOKE_INTERNAL_TOPICS" != "true" && "$topic" == *-smoke-* ]]; then
     echo "Skipping smoke internal topic: $topic"
+    continue
+  fi
+  if [[ "$APPLY_REPLAY_INTERNAL_TOPICS" != "true" && "$topic" == *-replay-* ]]; then
+    echo "Skipping replay internal topic: $topic"
     continue
   fi
   case "$topic" in
