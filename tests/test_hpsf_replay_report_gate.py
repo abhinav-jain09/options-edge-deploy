@@ -446,6 +446,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn('--env=HPSF_STREAMS_CACHE_MAX_BYTES_BUFFERING="${HPSF_STAGE_A_REPLAY_CACHE_MAX_BYTES_BUFFERING:-134217728}"', pipeline)
         self.assertIn('--env=HPSF_STREAMS_COMMIT_INTERVAL_MS="${HPSF_STAGE_A_REPLAY_COMMIT_INTERVAL_MS:-5000}"', pipeline)
         self.assertIn('--env=HPSF_STREAMS_PRODUCER_COMPRESSION_TYPE="${HPSF_STAGE_A_REPLAY_PRODUCER_COMPRESSION_TYPE:-lz4}"', pipeline)
+        self.assertIn("HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing|HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING", pipeline)
+        self.assertIn("Stage A legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate.", pipeline)
         self.assertEqual(3, pipeline.count("--env=HPSF_STREAMS_CONSUMER_ISOLATION_LEVEL=read_uncommitted"))
         self.assertIn('export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"', pipeline)
         self.assertIn('export DATABENTO_FEED_PYTHON="$PWD/.replay/options-edge-databento-feed/.venv/bin/python"', pipeline)

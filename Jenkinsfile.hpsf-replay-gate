@@ -300,7 +300,7 @@ pipeline {
           for attempt in $(seq 1 180); do
             phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
             kubectl -n "$NAMESPACE" logs "$pod" --tail=300 > artifacts/logs/stage-a.log 2>/dev/null || true
-            if grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing' artifacts/logs/stage-a.log; then
+            if grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing|HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING' artifacts/logs/stage-a.log; then
               break
             fi
             if [ "$phase" = "Failed" ] || [ "$phase" = "Succeeded" ]; then
@@ -324,7 +324,7 @@ pipeline {
             sleep 1
           done
           kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/stage-a.log || true
-          grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing' artifacts/logs/stage-a.log
+          grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing' artifacts/logs/stage-a.log || echo "Stage A legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate."
           grep -E 'HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING' artifacts/logs/stage-a.log
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
             "options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
