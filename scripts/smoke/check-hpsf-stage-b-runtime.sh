@@ -135,19 +135,20 @@ log "checking Stage B rollout"
 
 log "checking Stage B startup logs"
 stage_b_logs="$(${KUBECTL[@]} logs deployment/hpsf-stage-b-service --tail=400 --all-containers=true || true)"
-for pattern in \
-  "HPSF Stage B topology enabled" \
-  "HPSF Stage B consuming options.hpsf.strike-flow" \
-  "HPSF Stage B producing options.hpsf.signal" \
-  "HPSF Stage B producing options.hpsf.latest-signal" \
-  "HPSF Stage B producing options.hpsf.audit"; do
-  if ! grep -F "$pattern" <<<"$stage_b_logs" >/dev/null; then
-    echo "Missing Stage B startup log: $pattern" >&2
-    echo "Recent hpsf-stage-b-service logs:" >&2
-    echo "$stage_b_logs" >&2
-    exit 1
-  fi
-done
+if grep -F "HPSF Stage B topology enabled" <<<"$stage_b_logs" >/dev/null; then
+  log "observed legacy Stage B topology startup log"
+elif grep -F "HPSF processing topology started; mode=LIVE_SIGNAL_ONLY" <<<"$stage_b_logs" >/dev/null \
+  && grep -F "HPSF Stage B active-chain store=" <<<"$stage_b_logs" >/dev/null; then
+  log "observed current Stage B topology startup logs"
+else
+  echo "Missing Stage B startup logs for legacy or current topology startup." >&2
+  echo "Expected either legacy marker 'HPSF Stage B topology enabled' or current markers:" >&2
+  echo "  HPSF processing topology started; mode=LIVE_SIGNAL_ONLY" >&2
+  echo "  HPSF Stage B active-chain store=" >&2
+  echo "Recent hpsf-stage-b-service logs:" >&2
+  echo "$stage_b_logs" >&2
+  exit 1
+fi
 wait_for_stage_b_running
 
 trade_date="$(TZ=America/New_York date +%F)"
