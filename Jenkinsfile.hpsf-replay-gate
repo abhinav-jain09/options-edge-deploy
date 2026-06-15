@@ -40,6 +40,13 @@ pipeline {
     string(name: 'HPSF_STAGE_A_REPLAY_COMMIT_INTERVAL_MS', defaultValue: '5000', description: 'Stage A replay Kafka Streams commit interval')
     string(name: 'HPSF_STAGE_A_REPLAY_PROCESSING_GUARANTEE', defaultValue: 'at_least_once', description: 'Stage A replay Kafka Streams processing guarantee')
     string(name: 'HPSF_STAGE_A_REPLAY_PRODUCER_COMPRESSION_TYPE', defaultValue: 'lz4', description: 'Stage A replay Kafka Streams producer compression')
+    string(name: 'HPSF_STAGE_A_REPLAY_CPU_REQUEST', defaultValue: '4', description: 'Stage A replay pod CPU request')
+    string(name: 'HPSF_STAGE_A_REPLAY_CPU_LIMIT', defaultValue: '8', description: 'Stage A replay pod CPU limit')
+    string(name: 'HPSF_STAGE_A_REPLAY_MEMORY_REQUEST', defaultValue: '8Gi', description: 'Stage A replay pod memory request')
+    string(name: 'HPSF_STAGE_A_REPLAY_MEMORY_LIMIT', defaultValue: '12Gi', description: 'Stage A replay pod memory limit')
+    string(name: 'HPSF_STAGE_A_REPLAY_EPHEMERAL_STORAGE_REQUEST', defaultValue: '10Gi', description: 'Stage A replay pod ephemeral-storage request')
+    string(name: 'HPSF_STAGE_A_REPLAY_EPHEMERAL_STORAGE_LIMIT', defaultValue: '20Gi', description: 'Stage A replay pod ephemeral-storage limit')
+    string(name: 'HPSF_STAGE_A_REPLAY_JAVA_TOOL_OPTIONS', defaultValue: '-Xms3g -Xmx8g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ExitOnOutOfMemoryError', description: 'Stage A replay JVM options')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret text credential for Databento API key')
     string(name: 'BUGZILLA_URL', defaultValue: 'http://192.168.100.252:8092', description: 'Bugzilla base URL')
     string(name: 'BUGZILLA_USER', defaultValue: 'admin@options-edge.local', description: 'Bugzilla user')
@@ -266,9 +273,11 @@ pipeline {
         sh '''
           set -euo pipefail
           pod="hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}"
+          stage_a_java_tool_options="${HPSF_STAGE_A_REPLAY_JAVA_TOOL_OPTIONS:--Xms3g -Xmx8g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ExitOnOutOfMemoryError}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
           kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
+            --env=JAVA_TOOL_OPTIONS="$stage_a_java_tool_options" \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
             --env=HPSF_MARKET_CALENDAR_ALLOW_INCOMPLETE=true \
@@ -295,7 +304,31 @@ pipeline {
             --env=HPSF_TOPIC_SIGNAL="$TOPIC_PREFIX.hpsf.signal" \
             --env=HPSF_TOPIC_DLQ="$TOPIC_PREFIX.hpsf.dlq" \
             --env=HPSF_ORDER_PLACEMENT_ENABLED=false \
-            --env=ORDER_PLACEMENT_ENABLED=false
+            --env=ORDER_PLACEMENT_ENABLED=false \
+            --dry-run=client -o json > artifacts/stage-a-pod.json
+          python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path("artifacts/stage-a-pod.json")
+pod = json.loads(path.read_text(encoding="utf-8"))
+container = pod["spec"]["containers"][0]
+container["resources"] = {
+    "requests": {
+        "cpu": os.environ.get("HPSF_STAGE_A_REPLAY_CPU_REQUEST", "4"),
+        "memory": os.environ.get("HPSF_STAGE_A_REPLAY_MEMORY_REQUEST", "8Gi"),
+        "ephemeral-storage": os.environ.get("HPSF_STAGE_A_REPLAY_EPHEMERAL_STORAGE_REQUEST", "10Gi"),
+    },
+    "limits": {
+        "cpu": os.environ.get("HPSF_STAGE_A_REPLAY_CPU_LIMIT", "8"),
+        "memory": os.environ.get("HPSF_STAGE_A_REPLAY_MEMORY_LIMIT", "12Gi"),
+        "ephemeral-storage": os.environ.get("HPSF_STAGE_A_REPLAY_EPHEMERAL_STORAGE_LIMIT", "20Gi"),
+    },
+}
+path.write_text(json.dumps(pod, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+          kubectl -n "$NAMESPACE" create -f artifacts/stage-a-pod.json
           : > artifacts/logs/stage-a.log
           for attempt in $(seq 1 180); do
             phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
