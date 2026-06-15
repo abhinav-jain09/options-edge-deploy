@@ -32,6 +32,7 @@ pipeline {
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-processing:dev', description: 'HPSF processing image')
     string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '/home/options-edge/data/hpsf-replay/20260612', description: 'Prepared Databento JSONL replay files on Jenkins/remote')
     string(name: 'HPSF_REPLAY_EVIDENCE_JSON', defaultValue: '', description: 'Optional prebuilt real replay evidence JSON from a completed replay run')
+    string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '240', description: 'Kafka consumer-group catch-up polling attempts for replay processors')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret text credential for Databento API key')
     string(name: 'BUGZILLA_URL', defaultValue: 'http://192.168.100.252:8092', description: 'Bugzilla base URL')
     string(name: 'BUGZILLA_USER', defaultValue: 'admin@options-edge.local', description: 'Bugzilla user')

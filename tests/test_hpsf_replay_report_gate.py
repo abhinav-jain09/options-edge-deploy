@@ -460,6 +460,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("JENKINS_ALLOWED_DEPLOY_BRANCH", pipeline)
         self.assertIn('export JENKINS_ALLOWED_DEPLOY_BRANCH="${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}"', pipeline)
         self.assertIn("PROCESSING_BRANCH", pipeline)
+        self.assertIn("HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS", pipeline)
         self.assertIn('git clone --depth 1 --branch "$branch"', pipeline)
         self.assertIn(
             'clone_branch git@github.com:abhinav-jain09/options-edge-processing.git "${PROCESSING_BRANCH:-main}" .replay/options-edge-processing',
