@@ -27,6 +27,7 @@ pipeline {
     string(name: 'NEXT_CONTRACT_SYMBOL', defaultValue: 'ESU6', description: 'Next ES contract for comparison')
     string(name: 'TOPIC_PREFIX', defaultValue: '', description: 'Replay topic prefix. Empty derives options.replay.<REPLAY_DATE> from REPLAY_DATE.')
     choice(name: 'REPLAY_SPEED', choices: ['FAST', 'REALTIME'], description: 'Replay publishing speed')
+    string(name: 'HPSF_REPLAY_TICK_BY_TICK', defaultValue: 'false', description: 'Replay publish sampling. yes/true publishes every tick; false publishes one record per topic/key/second.')
     string(name: 'HPSF_MODE', defaultValue: 'REPLAY', description: 'HPSF mode')
     string(name: 'HPSF_STATE_DIR', defaultValue: '', description: 'Remote HPSF replay state dir. Empty derives /home/options-edge/data/kafka-streams/hpsf-replay-<REPLAY_DATE>.')
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'Replay-only HPSF processing image. Empty derives a unique replay tag; shared deploy tags such as dev/latest/main/prod are rejected.')
@@ -244,6 +245,7 @@ pipeline {
           export NEXT_CONTRACT_SYMBOL="${NEXT_CONTRACT_SYMBOL}"
           export TOPIC_PREFIX="${TOPIC_PREFIX}"
           export REPLAY_SPEED="${REPLAY_SPEED}"
+          export HPSF_REPLAY_TICK_BY_TICK="${HPSF_REPLAY_TICK_BY_TICK}"
           export HPSF_REPLAY_SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR}"
           export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"
           export DATABENTO_FEED_PYTHON="$PWD/.replay/options-edge-databento-feed/.venv/bin/python"

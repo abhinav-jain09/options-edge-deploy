@@ -510,6 +510,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("string(name: 'REPLAY_START', defaultValue: ''", pipeline)
         self.assertIn("string(name: 'REPLAY_END', defaultValue: ''", pipeline)
         self.assertIn("string(name: 'TOPIC_PREFIX', defaultValue: ''", pipeline)
+        self.assertIn("string(name: 'HPSF_REPLAY_TICK_BY_TICK', defaultValue: 'false'", pipeline)
         self.assertIn("string(name: 'HPSF_STATE_DIR', defaultValue: ''", pipeline)
         self.assertIn("string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: ''", pipeline)
         self.assertIn('error("REPLAY_DATE is required, for example 2026-06-11")', pipeline)
@@ -519,7 +520,13 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertNotIn("params.HPSF_STATE_DIR == '/home/options-edge/data/kafka-streams/hpsf-replay-20260612'", pipeline)
         self.assertNotIn("params.HPSF_REPLAY_SOURCE_DIR == '/home/options-edge/data/hpsf-replay/20260612'", pipeline)
         self.assertIn('replay_topic_prefix="${TOPIC_PREFIX:-options.replay.${HPSF_REPLAY_DATE_ID:-${REPLAY_DATE//-/}}}"', pipeline)
+        self.assertIn('export HPSF_REPLAY_TICK_BY_TICK="${HPSF_REPLAY_TICK_BY_TICK}"', pipeline)
         self.assertNotIn("${TOPIC_PREFIX:-options.replay.20260612}", pipeline)
+
+    def test_PublishReplayScriptPassesTickByTickSamplingFlag(self) -> None:
+        script = PUBLISH_SCRIPT.read_text()
+
+        self.assertIn('--tick-by-tick "${HPSF_REPLAY_TICK_BY_TICK:-false}"', script)
 
     def test_JenkinsReplayGateUsesCredentialIdInsteadOfPasswordParameter(self) -> None:
         pipeline = JENKINSFILE.read_text()

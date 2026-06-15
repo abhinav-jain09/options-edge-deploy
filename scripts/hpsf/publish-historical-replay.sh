@@ -53,6 +53,7 @@ PYTHONPATH="$DATABENTO_FEED_REPO/src${PYTHONPATH:+:$PYTHONPATH}" \
   --next-contract-symbol "${NEXT_CONTRACT_SYMBOL:-ESU6}" \
   --topic-prefix "${TOPIC_PREFIX:-options.replay.$COMPACT_DATE}" \
   --speed-mode "${REPLAY_SPEED:-FAST}" \
+  --tick-by-tick "${HPSF_REPLAY_TICK_BY_TICK:-false}" \
   --fixture-dir "$SOURCE_DIR" \
   --kafka-bootstrap-servers "$KAFKA_BOOTSTRAP_SERVERS" \
   > "$SUMMARY"
