@@ -101,7 +101,6 @@ pipeline {
             ss -ltnp 2>/dev/null | grep ':8090' || true
             exit 1
           fi
-          /home/abhinav/ci/bin/app-control.sh databento-feed stop || true
           kubectl -n options-edge scale deployment --all --replicas=0 || true
           for i in $(seq 1 60); do
             pod_count="$(kubectl -n options-edge get pods --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
@@ -189,7 +188,8 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          /home/abhinav/ci/bin/app-control.sh databento-feed start
+          kubectl -n options-edge scale deployment/options-edge-databento-feed --replicas=1 || true
+          kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=240s || true
           /home/abhinav/ci/bin/app-control.sh options-edge start
         '''
       }
