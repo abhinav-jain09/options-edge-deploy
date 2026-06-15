@@ -339,7 +339,7 @@ EOF
             if [ "$market_data_source" = "IBKR" ]; then
               effective_raw_topic="options.ibkr.raw"
             else
-              effective_raw_topic="options.databento.normalized"
+              effective_raw_topic="options.databento.raw"
             fi
           fi
           python3 - "$market_data_source" "$effective_raw_topic" "${IB_HOST:-127.0.0.1}" "${IB_PORT:-4001}" "${IB_CLIENT_ID:-212}" "${IB_EXPIRY:-20260615}" "${IB_MAX_STRIKES:-43}" "${IB_EXPIRY:-20260615}" >"$REMOTE_APP_HOME/tmp/options-edge-runtime-config-patch.json" <<'PY'

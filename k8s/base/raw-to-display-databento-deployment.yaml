@@ -28,7 +28,7 @@ spec:
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: KAFKA_RAW_TOPIC
-              value: options.databento.normalized
+              value: options.databento.raw
             - name: KAFKA_DISPLAY_TOPIC
               value: options.databento.display
             - name: KAFKA_DISPLAY_VOLUME_TOPIC
