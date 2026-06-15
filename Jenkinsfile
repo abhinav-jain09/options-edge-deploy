@@ -410,7 +410,7 @@ PY
           kubectl -n options-edge rollout status deployment/volume-sandwich-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/unusual-whales-gex-service --timeout=180s
           kubectl -n options-edge rollout status deployment/unusual-whales-gex-history-service --timeout=180s
-          kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=180s
+          kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=900s
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=180s
           kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=180s
           kubectl -n options-edge rollout status deployment/options-edge-integration-test --timeout=180s
