@@ -29,7 +29,7 @@ pipeline {
     choice(name: 'REPLAY_SPEED', choices: ['FAST', 'REALTIME'], description: 'Replay publishing speed')
     string(name: 'HPSF_MODE', defaultValue: 'REPLAY', description: 'HPSF mode')
     string(name: 'HPSF_STATE_DIR', defaultValue: '', description: 'Remote HPSF replay state dir. Empty derives /home/options-edge/data/kafka-streams/hpsf-replay-<REPLAY_DATE>.')
-    string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-processing:dev', description: 'HPSF processing image')
+    string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'Replay-only HPSF processing image. Empty derives a unique replay tag; shared deploy tags such as dev/latest/main/prod are rejected.')
     string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '', description: 'Prepared Databento JSONL replay files on Jenkins/remote. Empty derives /home/options-edge/data/hpsf-replay/<REPLAY_DATE>.')
     string(name: 'HPSF_REPLAY_EVIDENCE_JSON', defaultValue: '', description: 'Optional prebuilt real replay evidence JSON from a completed replay run')
     string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '240', description: 'Kafka consumer-group catch-up polling attempts for replay processors')
@@ -86,6 +86,16 @@ pipeline {
           if (!params.HPSF_REPLAY_SOURCE_DIR?.trim()) {
             env.HPSF_REPLAY_SOURCE_DIR = "/home/options-edge/data/hpsf-replay/${replayDateId}"
           }
+          def replayImage = params.HPSF_PROCESSING_IMAGE?.trim()
+          if (!replayImage) {
+            replayImage = "192.168.100.252:5000/options-edge-hpsf-processing:replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
+          }
+          def imageTag = replayImage.contains(':') ? replayImage.substring(replayImage.lastIndexOf(':') + 1) : ''
+          def blockedReplayTags = ['dev', 'latest', 'main', 'prod', 'production', 'stable']
+          if (blockedReplayTags.contains(imageTag)) {
+            error("HPSF_PROCESSING_IMAGE must be replay-specific, not shared deploy tag '${imageTag}': ${replayImage}")
+          }
+          env.HPSF_PROCESSING_IMAGE = replayImage
           currentBuild.displayName = "#${env.BUILD_NUMBER} ${env.HPSF_REPLAY_RUN_NAME}"
           currentBuild.description = "Replay date ${replayDate}; topics ${env.TOPIC_PREFIX ?: params.TOPIC_PREFIX}; processing ${params.PROCESSING_BRANCH ?: 'main'}"
         }
