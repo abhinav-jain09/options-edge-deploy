@@ -326,7 +326,7 @@ container["resources"] = {
         "ephemeral-storage": os.environ.get("HPSF_STAGE_A_REPLAY_EPHEMERAL_STORAGE_LIMIT", "20Gi"),
     },
 }
-path.write_text(json.dumps(pod, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+path.write_text(json.dumps(pod, indent=2, sort_keys=True), encoding="utf-8")
 PY
           kubectl -n "$NAMESPACE" create -f artifacts/stage-a-pod.json
           : > artifacts/logs/stage-a.log
