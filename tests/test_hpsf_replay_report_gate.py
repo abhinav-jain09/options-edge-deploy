@@ -520,7 +520,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertNotIn("params.HPSF_STATE_DIR == '/home/options-edge/data/kafka-streams/hpsf-replay-20260612'", pipeline)
         self.assertNotIn("params.HPSF_REPLAY_SOURCE_DIR == '/home/options-edge/data/hpsf-replay/20260612'", pipeline)
         self.assertIn('replay_topic_prefix="${TOPIC_PREFIX:-options.replay.${HPSF_REPLAY_DATE_ID:-${REPLAY_DATE//-/}}}"', pipeline)
-        self.assertIn('export HPSF_REPLAY_TICK_BY_TICK="${HPSF_REPLAY_TICK_BY_TICK}"', pipeline)
+        self.assertIn('export HPSF_REPLAY_TICK_BY_TICK="${HPSF_REPLAY_TICK_BY_TICK:-false}"', pipeline)
         self.assertNotIn("${TOPIC_PREFIX:-options.replay.20260612}", pipeline)
 
     def test_PublishReplayScriptPassesTickByTickSamplingFlag(self) -> None:

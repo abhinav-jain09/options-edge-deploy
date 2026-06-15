@@ -245,7 +245,7 @@ pipeline {
           export NEXT_CONTRACT_SYMBOL="${NEXT_CONTRACT_SYMBOL}"
           export TOPIC_PREFIX="${TOPIC_PREFIX}"
           export REPLAY_SPEED="${REPLAY_SPEED}"
-          export HPSF_REPLAY_TICK_BY_TICK="${HPSF_REPLAY_TICK_BY_TICK}"
+          export HPSF_REPLAY_TICK_BY_TICK="${HPSF_REPLAY_TICK_BY_TICK:-false}"
           export HPSF_REPLAY_SOURCE_DIR="${HPSF_REPLAY_SOURCE_DIR}"
           export DATABENTO_FEED_REPO="$PWD/.replay/options-edge-databento-feed"
           export DATABENTO_FEED_PYTHON="$PWD/.replay/options-edge-databento-feed/.venv/bin/python"
