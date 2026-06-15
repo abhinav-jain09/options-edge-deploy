@@ -37,6 +37,10 @@ class HpsfReplayTopicScriptTest(unittest.TestCase):
     def test_ReplayTopicCreationCompactDeleteTest(self) -> None:
         output = subprocess.check_output([str(CREATE_REPLAY_TOPICS), "--dry-run"], text=True, cwd=ROOT)
 
+        self.assertIn("options.replay.20260612.opra.tcbbo partitions=12", output)
+        self.assertIn("options.replay.20260612.hpsf.strike-flow partitions=12", output)
+        self.assertIn("options.replay.20260612.hpsf.strike-score partitions=12", output)
+        self.assertIn("options.replay.20260612.hpsf.dlq partitions=12", output)
         self.assertIn("options.replay.20260612.hpsf.latest-signal partitions=1", output)
         self.assertIn("cleanup.policy=compact,delete", output)
         self.assertIn("options.replay.20260612.hpsf.signal partitions=1", output)
@@ -49,6 +53,16 @@ class HpsfReplayTopicScriptTest(unittest.TestCase):
             self.assertIn(f"DRY RUN topic={replay_input_topic}", output)
         self.assertNotIn("retention.ms=86400000", output)
         self.assertIn("retention.ms=2592000000", output)
+
+    def test_replay_topic_script_allows_partition_override(self) -> None:
+        env = os.environ.copy()
+        env["REPLAY_TOPIC_PARTITIONS"] = "4"
+        output = subprocess.check_output([str(CREATE_REPLAY_TOPICS), "--dry-run"], text=True, cwd=ROOT, env=env)
+
+        self.assertIn("options.replay.20260612.opra.tcbbo partitions=4", output)
+        self.assertIn("options.replay.20260612.hpsf.strike-flow partitions=4", output)
+        self.assertIn("options.replay.20260612.hpsf.dlq partitions=4", output)
+        self.assertIn("underlying.replay.20260612.es.trades partitions=2", output)
 
     def test_replay_topic_script_rejects_non_rf1(self) -> None:
         env = os.environ.copy()

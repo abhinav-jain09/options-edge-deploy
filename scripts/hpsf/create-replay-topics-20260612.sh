@@ -19,6 +19,7 @@ TOPIC_PREFIX="${TOPIC_PREFIX:-options.replay.$COMPACT_DATE}"
 UNDERLYING_TOPIC_PREFIX="${UNDERLYING_TOPIC_PREFIX:-underlying.replay.$COMPACT_DATE}"
 TOPIC_METADATA_RETRIES="${HPSF_REPLAY_TOPIC_METADATA_RETRIES:-60}"
 TOPIC_METADATA_RETRY_SLEEP_SECONDS="${HPSF_REPLAY_TOPIC_METADATA_RETRY_SLEEP_SECONDS:-2}"
+REPLAY_TOPIC_PARTITIONS="${REPLAY_TOPIC_PARTITIONS:-12}"
 
 if [[ "$REPLICATION_FACTOR" != "1" ]]; then
   echo "HPSF replay RF=1 cluster rule violated: KAFKA_TOPIC_REPLICATION_FACTOR=$REPLICATION_FACTOR" >&2
@@ -37,17 +38,17 @@ BOOTSTRAP_SERVERS="${BOOTSTRAP_SERVERS:-DRY_RUN_BOOTSTRAP}"
 
 # topic|partitions|cleanup.policy|retention.ms|segment.ms|segment.bytes|extra-config-csv
 REPLAY_TOPIC_SPECS=(
-  "$TOPIC_PREFIX.opra.tcbbo|6|delete|2592000000|900000|536870912|"
+  "$TOPIC_PREFIX.opra.tcbbo|$REPLAY_TOPIC_PARTITIONS|delete|2592000000|900000|536870912|"
   "$UNDERLYING_TOPIC_PREFIX.es.trades|2|delete|2592000000|1800000|268435456|"
   "$UNDERLYING_TOPIC_PREFIX.spx.price|1|delete|2592000000|1800000|134217728|"
   "$TOPIC_PREFIX.hpsf.underlying-state|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10"
-  "$TOPIC_PREFIX.hpsf.strike-flow|6|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000"
+  "$TOPIC_PREFIX.hpsf.strike-flow|$REPLAY_TOPIC_PARTITIONS|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000"
   "$TOPIC_PREFIX.hpsf.market-flow|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10"
-  "$TOPIC_PREFIX.hpsf.strike-score|6|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000"
+  "$TOPIC_PREFIX.hpsf.strike-score|$REPLAY_TOPIC_PARTITIONS|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000"
   "$TOPIC_PREFIX.hpsf.signal|1|delete|2592000000|1800000|134217728|"
   "$TOPIC_PREFIX.hpsf.latest-signal|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10"
   "$TOPIC_PREFIX.hpsf.audit|2|delete|2592000000|1800000|134217728|"
-  "$TOPIC_PREFIX.hpsf.dlq|1|delete|2592000000|1800000|134217728|"
+  "$TOPIC_PREFIX.hpsf.dlq|$REPLAY_TOPIC_PARTITIONS|delete|2592000000|1800000|134217728|"
 )
 
 cleanup_for_config_add() {

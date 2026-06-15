@@ -34,6 +34,12 @@ pipeline {
     string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '', description: 'Prepared Databento JSONL replay files on Jenkins/remote. Empty derives /home/options-edge/data/hpsf-replay/<REPLAY_DATE>.')
     string(name: 'HPSF_REPLAY_EVIDENCE_JSON', defaultValue: '', description: 'Optional prebuilt real replay evidence JSON from a completed replay run')
     string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '240', description: 'Kafka consumer-group catch-up polling attempts for replay processors')
+    string(name: 'REPLAY_TOPIC_PARTITIONS', defaultValue: '12', description: 'Replay OPRA, Stage A strike-flow, strike-score, and DLQ topic partitions')
+    string(name: 'HPSF_STAGE_A_REPLAY_STREAM_THREADS', defaultValue: '4', description: 'Stage A replay Kafka Streams processing threads')
+    string(name: 'HPSF_STAGE_A_REPLAY_CACHE_MAX_BYTES_BUFFERING', defaultValue: '134217728', description: 'Stage A replay Kafka Streams cache bytes')
+    string(name: 'HPSF_STAGE_A_REPLAY_COMMIT_INTERVAL_MS', defaultValue: '5000', description: 'Stage A replay Kafka Streams commit interval')
+    string(name: 'HPSF_STAGE_A_REPLAY_PROCESSING_GUARANTEE', defaultValue: 'at_least_once', description: 'Stage A replay Kafka Streams processing guarantee')
+    string(name: 'HPSF_STAGE_A_REPLAY_PRODUCER_COMPRESSION_TYPE', defaultValue: 'lz4', description: 'Stage A replay Kafka Streams producer compression')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret text credential for Databento API key')
     string(name: 'BUGZILLA_URL', defaultValue: 'http://192.168.100.252:8092', description: 'Bugzilla base URL')
     string(name: 'BUGZILLA_USER', defaultValue: 'admin@options-edge.local', description: 'Bugzilla user')
@@ -183,6 +189,7 @@ pipeline {
           export HPSF_REPLAY_RESET_TOPICS=true
           export REPLAY_DATE="${REPLAY_DATE}"
           export TOPIC_PREFIX="${TOPIC_PREFIX}"
+          export REPLAY_TOPIC_PARTITIONS="${REPLAY_TOPIC_PARTITIONS:-12}"
           compact_date="${REPLAY_DATE//-/}"
           export UNDERLYING_TOPIC_PREFIX="${UNDERLYING_TOPIC_PREFIX:-underlying.replay.${compact_date}}"
           scripts/hpsf/create-replay-topics-20260612.sh | tee artifacts/logs/create-replay-topics.log
@@ -275,9 +282,11 @@ pipeline {
             --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual} \
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-a-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
-            --env=HPSF_STREAMS_PROCESSING_GUARANTEE=at_least_once \
-            --env=HPSF_STREAMS_NUM_STREAM_THREADS=1 \
-            --env=HPSF_STREAMS_CACHE_MAX_BYTES_BUFFERING=0 \
+            --env=HPSF_STREAMS_PROCESSING_GUARANTEE="${HPSF_STAGE_A_REPLAY_PROCESSING_GUARANTEE:-at_least_once}" \
+            --env=HPSF_STREAMS_NUM_STREAM_THREADS="${HPSF_STAGE_A_REPLAY_STREAM_THREADS:-4}" \
+            --env=HPSF_STREAMS_CACHE_MAX_BYTES_BUFFERING="${HPSF_STAGE_A_REPLAY_CACHE_MAX_BYTES_BUFFERING:-134217728}" \
+            --env=HPSF_STREAMS_COMMIT_INTERVAL_MS="${HPSF_STAGE_A_REPLAY_COMMIT_INTERVAL_MS:-5000}" \
+            --env=HPSF_STREAMS_PRODUCER_COMPRESSION_TYPE="${HPSF_STAGE_A_REPLAY_PRODUCER_COMPRESSION_TYPE:-lz4}" \
             --env=HPSF_STREAMS_CONSUMER_ISOLATION_LEVEL=read_uncommitted \
             --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
             --env=KAFKA_SCHEMA_REGISTRY_URL="$KAFKA_SCHEMA_REGISTRY_URL" \
