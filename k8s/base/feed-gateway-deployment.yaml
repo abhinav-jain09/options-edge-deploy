@@ -28,6 +28,16 @@ spec:
           env:
             - name: APP_WEB_PORT
               value: "18091"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx1536m"
+            - name: GATEWAY_KAFKA_MAX_POLL_RECORDS
+              value: "100"
+            - name: GATEWAY_KAFKA_FETCH_MAX_BYTES
+              value: "4194304"
+            - name: GATEWAY_KAFKA_MAX_PARTITION_FETCH_BYTES
+              value: "524288"
+            - name: GATEWAY_KAFKA_RECEIVE_BUFFER_BYTES
+              value: "524288"
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -49,7 +59,7 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 384Mi
+              memory: 512Mi
             limits:
               cpu: "1"
-              memory: 1Gi
+              memory: 2Gi
