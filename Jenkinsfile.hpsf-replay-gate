@@ -13,9 +13,9 @@ pipeline {
     string(name: 'PROCESSING_BRANCH', defaultValue: 'main', description: 'options-edge-processing branch used to build HPSF replay image')
     string(name: 'INTEGRATION_TEST_BRANCH', defaultValue: 'main', description: 'options-edge-integration-test branch used by replay')
     string(name: 'FEED_GATEWAY_BRANCH', defaultValue: 'main', description: 'option-edge-feed-gateway branch used by replay')
-    string(name: 'REPLAY_DATE', defaultValue: '2026-06-12', description: 'Historical replay date')
-    string(name: 'REPLAY_START', defaultValue: '2026-06-12T13:30:00Z', description: 'Replay start UTC')
-    string(name: 'REPLAY_END', defaultValue: '2026-06-12T20:00:00Z', description: 'Replay end UTC')
+    string(name: 'REPLAY_DATE', defaultValue: '', description: 'Historical replay date, for example 2026-06-11. Required.')
+    string(name: 'REPLAY_START', defaultValue: '', description: 'Replay start UTC. Empty derives <REPLAY_DATE>T13:30:00Z.')
+    string(name: 'REPLAY_END', defaultValue: '', description: 'Replay end UTC. Empty derives <REPLAY_DATE>T20:00:00Z.')
     string(name: 'OPRA_DATASET', defaultValue: 'OPRA.PILLAR', description: 'Databento OPRA dataset')
     string(name: 'OPRA_SCHEMA', defaultValue: 'tcbbo', description: 'Databento OPRA schema')
     string(name: 'ES_DATASET', defaultValue: 'GLBX.MDP3', description: 'Databento ES dataset')
@@ -25,12 +25,12 @@ pipeline {
     string(name: 'ES_STYPE_IN', defaultValue: 'raw_symbol', description: 'Databento stype_in for selected ES symbol')
     booleanParam(name: 'COMPARE_NEXT_CONTRACT_VOLUME', defaultValue: true, description: 'Record ESM6 vs ESU6 comparison')
     string(name: 'NEXT_CONTRACT_SYMBOL', defaultValue: 'ESU6', description: 'Next ES contract for comparison')
-    string(name: 'TOPIC_PREFIX', defaultValue: 'options.replay.20260612', description: 'Replay topic prefix')
+    string(name: 'TOPIC_PREFIX', defaultValue: '', description: 'Replay topic prefix. Empty derives options.replay.<REPLAY_DATE> from REPLAY_DATE.')
     choice(name: 'REPLAY_SPEED', choices: ['FAST', 'REALTIME'], description: 'Replay publishing speed')
     string(name: 'HPSF_MODE', defaultValue: 'REPLAY', description: 'HPSF mode')
-    string(name: 'HPSF_STATE_DIR', defaultValue: '/home/options-edge/data/kafka-streams/hpsf-replay-20260612', description: 'Remote HPSF replay state dir')
+    string(name: 'HPSF_STATE_DIR', defaultValue: '', description: 'Remote HPSF replay state dir. Empty derives /home/options-edge/data/kafka-streams/hpsf-replay-<REPLAY_DATE>.')
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-processing:dev', description: 'HPSF processing image')
-    string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '/home/options-edge/data/hpsf-replay/20260612', description: 'Prepared Databento JSONL replay files on Jenkins/remote')
+    string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '', description: 'Prepared Databento JSONL replay files on Jenkins/remote. Empty derives /home/options-edge/data/hpsf-replay/<REPLAY_DATE>.')
     string(name: 'HPSF_REPLAY_EVIDENCE_JSON', defaultValue: '', description: 'Optional prebuilt real replay evidence JSON from a completed replay run')
     string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '240', description: 'Kafka consumer-group catch-up polling attempts for replay processors')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret text credential for Databento API key')
@@ -59,22 +59,32 @@ pipeline {
       steps {
         checkout scm
         script {
-          def replayDate = params.REPLAY_DATE ?: '2026-06-12'
+          def replayDate = params.REPLAY_DATE?.trim()
+          if (!replayDate) {
+            error("REPLAY_DATE is required, for example 2026-06-11")
+          }
           def replayDateId = replayDate.replaceAll('[^0-9]', '')
           if (replayDateId.length() != 8) {
             error("REPLAY_DATE must produce an 8 digit replay date id, got '${replayDate}'")
+          }
+          env.REPLAY_DATE = replayDate
+          if (!params.REPLAY_START?.trim()) {
+            env.REPLAY_START = "${replayDate}T13:30:00Z"
+          }
+          if (!params.REPLAY_END?.trim()) {
+            env.REPLAY_END = "${replayDate}T20:00:00Z"
           }
           env.HPSF_REPLAY_DATE_ID = replayDateId
           env.HPSF_REPLAY_RUN_NAME = "hpsf-historical-replay-${replayDateId}"
           env.HPSF_REPLAY_BUILD_DIR = "build/hpsf-replay-${replayDateId}"
           env.HPSF_REPLAY_REPORT = "artifacts/hpsf-replay-report-${replayDateId}.md"
-          if (!params.TOPIC_PREFIX || params.TOPIC_PREFIX == 'options.replay.20260612') {
+          if (!params.TOPIC_PREFIX?.trim()) {
             env.TOPIC_PREFIX = "options.replay.${replayDateId}"
           }
-          if (!params.HPSF_STATE_DIR || params.HPSF_STATE_DIR == '/home/options-edge/data/kafka-streams/hpsf-replay-20260612') {
+          if (!params.HPSF_STATE_DIR?.trim()) {
             env.HPSF_STATE_DIR = "/home/options-edge/data/kafka-streams/hpsf-replay-${replayDateId}"
           }
-          if (!params.HPSF_REPLAY_SOURCE_DIR || params.HPSF_REPLAY_SOURCE_DIR == '/home/options-edge/data/hpsf-replay/20260612') {
+          if (!params.HPSF_REPLAY_SOURCE_DIR?.trim()) {
             env.HPSF_REPLAY_SOURCE_DIR = "/home/options-edge/data/hpsf-replay/${replayDateId}"
           }
           currentBuild.displayName = "#${env.BUILD_NUMBER} ${env.HPSF_REPLAY_RUN_NAME}"
@@ -730,11 +740,12 @@ PY
         export CODE_GIT_SHA="$(cat build-git-sha.txt 2>/dev/null || true)"
         job_path="$(printf '%s' "$JOB_NAME" | sed 's#/#/job/#g')"
         export BUILD_URL="${BUILD_URL:-${JENKINS_PUBLIC_URL%/}/job/${job_path}/${BUILD_NUMBER}/}"
+        replay_topic_prefix="${TOPIC_PREFIX:-options.replay.${HPSF_REPLAY_DATE_ID:-${REPLAY_DATE//-/}}}"
         export HPSF_REPLAY_FAILURE_REASON="Jenkins failed before a valid PASS replay report was generated. Verify required credentials including DATABENTO_API_KEY_CREDENTIAL_ID=${DATABENTO_API_KEY_CREDENTIAL_ID:-options-edge-databento-api-key}, prepared replay source data, Kafka, Kubernetes, and Databento access in the console log."
         export HPSF_REPLAY_FAILURE_CODE="JENKINS_REPLAY_PIPELINE_FAILED"
         if grep -F "strike-flow count = 0" artifacts/logs/validate-stage-a.log >/dev/null 2>&1; then
           export HPSF_REPLAY_FAILURE_CODE="STAGE_A_STRIKE_FLOW_EMPTY"
-          export HPSF_REPLAY_FAILURE_REASON="Stage A replay started but emitted zero strike-flow records from ${TOPIC_PREFIX:-options.replay.20260612}.opra.tcbbo into ${TOPIC_PREFIX:-options.replay.20260612}.hpsf.strike-flow during validation."
+          export HPSF_REPLAY_FAILURE_REASON="Stage A replay started but emitted zero strike-flow records from ${replay_topic_prefix}.opra.tcbbo into ${replay_topic_prefix}.hpsf.strike-flow during validation."
         fi
         scripts/hpsf/collect-replay-root-cause-diagnostics.sh || true
         current_report_matches_build=false
