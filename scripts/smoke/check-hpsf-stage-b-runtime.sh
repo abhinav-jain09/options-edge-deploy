@@ -82,6 +82,31 @@ wait_for_stage_b_log_contains() {
   exit 1
 }
 
+wait_for_stage_b_startup_logs() {
+  local timeout_seconds="${HPSF_STAGE_B_STARTUP_LOG_TIMEOUT_SECONDS:-120}"
+  local deadline=$((SECONDS + timeout_seconds))
+  while (( SECONDS < deadline )); do
+    local logs
+    logs="$("${KUBECTL[@]}" logs deployment/hpsf-stage-b-service --tail=500 --all-containers=true || true)"
+    if grep -F "HPSF Stage B topology enabled" <<<"$logs" >/dev/null; then
+      log "observed legacy Stage B topology startup log"
+      return 0
+    fi
+    if grep -F "HPSF processing topology started; mode=LIVE_SIGNAL_ONLY" <<<"$logs" >/dev/null \
+      && grep -F "HPSF Stage B active-chain store=" <<<"$logs" >/dev/null; then
+      log "observed current Stage B topology startup logs"
+      return 0
+    fi
+    sleep 5
+  done
+  echo "Missing Stage B startup logs for legacy or current topology startup." >&2
+  echo "Expected either legacy marker 'HPSF Stage B topology enabled' or current markers:" >&2
+  echo "  HPSF processing topology started; mode=LIVE_SIGNAL_ONLY" >&2
+  echo "  HPSF Stage B active-chain store=" >&2
+  print_stage_b_logs
+  exit 1
+}
+
 start_topic_capture() {
   local topic="$1"
   local output_file="$2"
@@ -134,21 +159,7 @@ log "checking Stage B rollout"
 "${KUBECTL[@]}" rollout status deployment/hpsf-stage-b-service --timeout=180s
 
 log "checking Stage B startup logs"
-stage_b_logs="$(${KUBECTL[@]} logs deployment/hpsf-stage-b-service --tail=400 --all-containers=true || true)"
-if grep -F "HPSF Stage B topology enabled" <<<"$stage_b_logs" >/dev/null; then
-  log "observed legacy Stage B topology startup log"
-elif grep -F "HPSF processing topology started; mode=LIVE_SIGNAL_ONLY" <<<"$stage_b_logs" >/dev/null \
-  && grep -F "HPSF Stage B active-chain store=" <<<"$stage_b_logs" >/dev/null; then
-  log "observed current Stage B topology startup logs"
-else
-  echo "Missing Stage B startup logs for legacy or current topology startup." >&2
-  echo "Expected either legacy marker 'HPSF Stage B topology enabled' or current markers:" >&2
-  echo "  HPSF processing topology started; mode=LIVE_SIGNAL_ONLY" >&2
-  echo "  HPSF Stage B active-chain store=" >&2
-  echo "Recent hpsf-stage-b-service logs:" >&2
-  echo "$stage_b_logs" >&2
-  exit 1
-fi
+wait_for_stage_b_startup_logs
 wait_for_stage_b_running
 
 trade_date="$(TZ=America/New_York date +%F)"
