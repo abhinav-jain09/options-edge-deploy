@@ -349,17 +349,43 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("artifacts/hpsf-replay-report-20260612.md", pipeline)
         self.assertIn("allowEmptyArchive: false", pipeline)
         archive_lines = re.findall(r"archiveArtifacts artifacts: '([^']+)'", pipeline)
+        evidence_archive_lines = [
+            archived
+            for archived in archive_lines
+            if archived == ".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md"
+        ]
         self.assertEqual(
             [
                 ".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md",
                 ".replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md",
             ],
-            archive_lines,
+            evidence_archive_lines,
         )
-        for archived in archive_lines:
+        for archived in evidence_archive_lines:
             self.assertNotIn("*.json", archived)
             self.assertNotIn("artifacts/logs", archived)
             self.assertNotIn("artifacts/hpsf-replay-report-20260612.md", archived)
+        self.assertIn("Run HPSF black-box replay validation", pipeline)
+        self.assertIn(".replay/options-edge-processing/scripts/hpsf/run_blackbox_replay_validation.sh", pipeline)
+        self.assertIn("scripts/hpsf/run_blackbox_replay_validation.sh", pipeline)
+        self.assertIn("ARTIFACTS_DIR=\"$workspace/artifacts\"", pipeline)
+        self.assertIn("HPSF_REPLAY_VALIDATION_PROFILE=FULL_RTH_RELEASE", pipeline)
+        self.assertIn("HPSF_0DTE_DATA_QUALITY_REQUIRED=true", pipeline)
+        self.assertIn("HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=true", pipeline)
+        self.assertIn("HPSF_CASE2_DIAGNOSTIC_REQUIRED=false", pipeline)
+        self.assertIn("hpsf-blackbox-replay-validation.exit-code", pipeline)
+        self.assertIn("Replay report was archived, but HPSF black-box replay validation failed", pipeline)
+        for artifact in [
+            "artifacts/hpsf-0dte-data-quality-validation-result.json",
+            "artifacts/hpsf-0dte-data-quality-validation-report.md",
+            "artifacts/hpsf-chain-coverage-drill-result.json",
+            "artifacts/hpsf-chain-coverage-drill-report.md",
+            "artifacts/hpsf-blackbox-validation-result.json",
+            "artifacts/hpsf-blackbox-validation-report.md",
+        ]:
+            self.assertIn(artifact, pipeline)
+        self.assertIn("artifacts/case2-diagnostic-validation-result.json", pipeline)
+        self.assertIn("artifacts/case2-diagnostic-validation-report.md", pipeline)
         self.assertIn("current_report_matches_build=false", pipeline)
         self.assertIn('grep -F "Build number: ${BUILD_NUMBER:-}" artifacts/hpsf-replay-report-20260612.md', pipeline)
         self.assertIn("rm -rf artifacts build/hpsf-replay-20260612 artifact-manifest.json", pipeline)
@@ -441,6 +467,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
             "Collect replay outputs",
             "Merge Stage B Metrics Into Replay Summary",
             "Validate replay outputs",
+            "Run HPSF black-box replay validation",
             "Generate replay report",
             "Create replay evidence report",
             "Validate replay report PASS",
@@ -450,6 +477,8 @@ class HpsfReplayReportGateTest(unittest.TestCase):
             self.assertIn(stage, pipeline)
         self.assertLess(pipeline.index("Run Stage B replay"), pipeline.index("Merge Stage B Metrics Into Replay Summary"))
         self.assertLess(pipeline.index("Merge Stage B Metrics Into Replay Summary"), pipeline.index("Validate replay outputs"))
+        self.assertLess(pipeline.index("Validate replay outputs"), pipeline.index("Run HPSF black-box replay validation"))
+        self.assertLess(pipeline.index("Run HPSF black-box replay validation"), pipeline.index("Generate replay report"))
         self.assertLess(pipeline.index("Merge Stage B Metrics Into Replay Summary"), pipeline.index("Generate replay report"))
         self.assertLess(pipeline.index("Create replay evidence report"), pipeline.index("Archive artifacts"))
         self.assertLess(pipeline.index("Archive artifacts"), pipeline.index("Validate replay report PASS"))

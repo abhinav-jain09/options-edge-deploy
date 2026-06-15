@@ -537,6 +537,34 @@ PY
       }
     }
 
+    stage('Run HPSF black-box replay validation') {
+      steps {
+        sh '''
+          set -euo pipefail
+          workspace="$PWD"
+          mkdir -p artifacts/logs
+          test -x .replay/options-edge-processing/scripts/hpsf/run_blackbox_replay_validation.sh
+          export ARTIFACTS_DIR="$workspace/artifacts"
+          export HPSF_REPLAY_VALIDATION_PROFILE=FULL_RTH_RELEASE
+          export HPSF_0DTE_DATA_QUALITY_REQUIRED=true
+          export HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=true
+          export HPSF_CASE2_DIAGNOSTIC_REQUIRED=false
+          set +e
+          (
+            cd .replay/options-edge-processing
+            scripts/hpsf/run_blackbox_replay_validation.sh
+          ) > artifacts/logs/hpsf-blackbox-replay-validation.log 2>&1
+          blackbox_status=$?
+          set -e
+          cat artifacts/logs/hpsf-blackbox-replay-validation.log
+          echo "$blackbox_status" > artifacts/logs/hpsf-blackbox-replay-validation.exit-code
+          if [ "$blackbox_status" -ne 0 ]; then
+            echo "HPSF black-box replay validation failed with status $blackbox_status; continuing to generate and archive the failure report."
+          fi
+        '''
+      }
+    }
+
     stage('Generate replay report') {
       steps {
         sh '''
@@ -599,6 +627,8 @@ PY
     stage('Archive artifacts') {
       steps {
         archiveArtifacts artifacts: '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md', fingerprint: true, allowEmptyArchive: false
+        archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: false
+        archiveArtifacts artifacts: 'artifacts/case2-diagnostic-validation-result.json,artifacts/case2-diagnostic-validation-report.md', fingerprint: true, allowEmptyArchive: true
       }
     }
 
@@ -610,6 +640,10 @@ PY
           grep -F 'orderInstruction.enabled=true ever appeared: NO' artifacts/hpsf-replay-report-20260612.md
           if [ -s artifacts/logs/validate-replay-output.exit-code ] && [ "$(cat artifacts/logs/validate-replay-output.exit-code)" -ne 0 ]; then
             echo "Replay report was archived, but validation failed; failing build after evidence archival."
+            exit 1
+          fi
+          if [ -s artifacts/logs/hpsf-blackbox-replay-validation.exit-code ] && [ "$(cat artifacts/logs/hpsf-blackbox-replay-validation.exit-code)" -ne 0 ]; then
+            echo "Replay report was archived, but HPSF black-box replay validation failed; failing build after evidence archival."
             exit 1
           fi
           if [ -s artifacts/logs/generate-replay-report.exit-code ] && [ "$(cat artifacts/logs/generate-replay-report.exit-code)" -ne 0 ]; then
@@ -701,6 +735,8 @@ PY
         scripts/hpsf/archive-replay-evidence-report.sh | tee artifacts/logs/archive-replay-evidence-report.log || true
       '''
       archiveArtifacts artifacts: '.replay/options-edge/evidence-report/hpsf-historical-replay-20260612/**/*.md', fingerprint: true, allowEmptyArchive: false
+      archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: true
+      archiveArtifacts artifacts: 'artifacts/case2-diagnostic-validation-result.json,artifacts/case2-diagnostic-validation-report.md', fingerprint: true, allowEmptyArchive: true
     }
     always {
       sh '''
