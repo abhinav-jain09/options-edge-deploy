@@ -2,7 +2,13 @@
 set -euo pipefail
 
 ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
-REPLAY_DATE="${REPLAY_DATE:-2026-06-12}"
+if [[ -z "${REPLAY_DATE:-}" ]]; then
+  if [[ "${HPSF_REPLAY_DATE_ID:-}" =~ ^[0-9]{8}$ ]]; then
+    REPLAY_DATE="${HPSF_REPLAY_DATE_ID:0:4}-${HPSF_REPLAY_DATE_ID:4:2}-${HPSF_REPLAY_DATE_ID:6:2}"
+  else
+    REPLAY_DATE="unknown"
+  fi
+fi
 COMPACT_DATE="${REPLAY_DATE//-/}"
 REPLAY_RUN_NAME="${HPSF_REPLAY_RUN_NAME:-hpsf-historical-replay-$COMPACT_DATE}"
 default_project_evidence_dir() {
@@ -78,8 +84,14 @@ if artifact_dir.exists():
                 "relativePath": str(path),
             })
 
-job_name = os.environ.get("JOB_NAME", "hpsf-historical-replay-20260612")
-replay_date = os.environ.get("REPLAY_DATE", "2026-06-12")
+job_name = os.environ.get("JOB_NAME", "hpsf-historical-replay")
+replay_date = os.environ.get("REPLAY_DATE")
+if not replay_date:
+    replay_date_id = os.environ.get("HPSF_REPLAY_DATE_ID", "")
+    if len(replay_date_id) == 8 and replay_date_id.isdigit():
+        replay_date = f"{replay_date_id[0:4]}-{replay_date_id[4:6]}-{replay_date_id[6:8]}"
+    else:
+        replay_date = "unknown"
 compact_date = replay_date.replace("-", "")
 replay_run_name = os.environ.get("HPSF_REPLAY_RUN_NAME", f"hpsf-historical-replay-{compact_date}")
 build_number = os.environ.get("BUILD_NUMBER", "manual")

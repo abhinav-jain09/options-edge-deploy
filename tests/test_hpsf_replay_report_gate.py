@@ -503,6 +503,34 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertLess(pipeline.index("Create replay evidence report"), pipeline.index("Archive artifacts"))
         self.assertLess(pipeline.index("Archive artifacts"), pipeline.index("Validate replay report PASS"))
 
+    def test_JenkinsReplayJobInputsAreDateNeutralTest(self) -> None:
+        pipeline = JENKINSFILE.read_text()
+
+        self.assertIn("string(name: 'REPLAY_DATE', defaultValue: ''", pipeline)
+        self.assertIn("string(name: 'REPLAY_START', defaultValue: ''", pipeline)
+        self.assertIn("string(name: 'REPLAY_END', defaultValue: ''", pipeline)
+        self.assertIn("string(name: 'TOPIC_PREFIX', defaultValue: ''", pipeline)
+        self.assertIn("string(name: 'HPSF_STATE_DIR', defaultValue: ''", pipeline)
+        self.assertIn("string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: ''", pipeline)
+        self.assertIn('error("REPLAY_DATE is required, for example 2026-06-11")', pipeline)
+        self.assertIn('env.REPLAY_START = "${replayDate}T13:30:00Z"', pipeline)
+        self.assertIn('env.REPLAY_END = "${replayDate}T20:00:00Z"', pipeline)
+        self.assertNotIn("params.TOPIC_PREFIX == 'options.replay.20260612'", pipeline)
+        self.assertNotIn("params.HPSF_STATE_DIR == '/home/options-edge/data/kafka-streams/hpsf-replay-20260612'", pipeline)
+        self.assertNotIn("params.HPSF_REPLAY_SOURCE_DIR == '/home/options-edge/data/hpsf-replay/20260612'", pipeline)
+        self.assertIn('replay_topic_prefix="${TOPIC_PREFIX:-options.replay.${HPSF_REPLAY_DATE_ID:-${REPLAY_DATE//-/}}}"', pipeline)
+        self.assertNotIn("${TOPIC_PREFIX:-options.replay.20260612}", pipeline)
+
+    def test_archive_manifest_fallback_job_name_is_date_neutral(self) -> None:
+        archiver = (ROOT / "scripts" / "hpsf" / "archive-replay-evidence-report.sh").read_text()
+
+        self.assertIn('os.environ.get("JOB_NAME", "hpsf-historical-replay")', archiver)
+        self.assertNotIn('os.environ.get("JOB_NAME", "hpsf-historical-replay-20260612")', archiver)
+        self.assertIn('REPLAY_DATE="unknown"', archiver)
+        self.assertIn('replay_date = "unknown"', archiver)
+        self.assertNotIn('REPLAY_DATE="${REPLAY_DATE:-2026-06-12}"', archiver)
+        self.assertNotIn('os.environ.get("REPLAY_DATE", "2026-06-12")', archiver)
+
     def test_JenkinsReplayGateAllowsBranchSelectedProcessingBuildTest(self) -> None:
         pipeline = JENKINSFILE.read_text()
 
