@@ -484,8 +484,12 @@ pipeline {
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
             "options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
             artifacts/logs/stage-b-consumer-group-catchup.log
-          kubectl -n "$NAMESPACE" logs "$pod" --tail=2000 > artifacts/logs/stage-b-runtime.log || true
-          cat artifacts/logs/stage-b-startup.log artifacts/logs/stage-b-runtime.log > artifacts/logs/stage-b.log
+          stage_b_full_log="$(mktemp)"
+          kubectl -n "$NAMESPACE" logs "$pod" > "$stage_b_full_log" || true
+          grep 'HPSF_STAGE_B_PERFORMANCE_METRICS_JSON=' "$stage_b_full_log" > artifacts/logs/stage-b-metrics.log || true
+          tail -2000 "$stage_b_full_log" > artifacts/logs/stage-b-runtime.log || true
+          rm -f "$stage_b_full_log"
+          cat artifacts/logs/stage-b-startup.log artifacts/logs/stage-b-metrics.log artifacts/logs/stage-b-runtime.log > artifacts/logs/stage-b.log
         '''
       }
     }
