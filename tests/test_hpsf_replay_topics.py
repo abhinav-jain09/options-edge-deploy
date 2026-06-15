@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -77,6 +79,114 @@ class HpsfReplayTopicScriptTest(unittest.TestCase):
         self.assertIn("DRY RUN topic=options.replay.20260611.hpsf.signal", output)
         self.assertNotIn("options.replay.20260612", output)
         self.assertNotIn("underlying.replay.20260612", output)
+
+    def test_replay_topic_script_retries_post_alter_metadata_race(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bin_dir = tmp_path / "bin"
+            state_dir = tmp_path / "state"
+            bin_dir.mkdir()
+            state_dir.mkdir()
+
+            kafka_topics = bin_dir / "kafka-topics"
+            kafka_topics.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    state="${FAKE_KAFKA_STATE:?}"
+                    cmd=""
+                    topic=""
+                    while [[ $# -gt 0 ]]; do
+                      case "$1" in
+                        --create|--describe|--delete) cmd="${1#--}"; shift ;;
+                        --topic) topic="$2"; shift 2 ;;
+                        --bootstrap-server|--partitions|--replication-factor|--config) shift 2 ;;
+                        *) shift ;;
+                      esac
+                    done
+                    case "$cmd" in
+                      create)
+                        touch "$state/topic.$topic"
+                        echo "Created topic $topic."
+                        ;;
+                      describe)
+                        if [[ ! -f "$state/topic.$topic" ]]; then
+                          echo "Topic '$topic' does not exist as expected" >&2
+                          exit 1
+                        fi
+                        if [[ -f "$state/config.$topic" && ! -f "$state/final-describe-failed.$topic" ]]; then
+                          touch "$state/final-describe-failed.$topic"
+                          echo "Topic '$topic' does not exist as expected" >&2
+                          exit 1
+                        fi
+                        echo "Topic: $topic PartitionCount: 1 ReplicationFactor: 1 Configs: compression.type=lz4"
+                        ;;
+                      delete)
+                        rm -f "$state/topic.$topic" "$state/config.$topic" "$state/final-describe-failed.$topic"
+                        ;;
+                      *)
+                        echo "unsupported kafka-topics command: $cmd" >&2
+                        exit 2
+                        ;;
+                    esac
+                    """
+                )
+            )
+            kafka_topics.chmod(0o755)
+
+            kafka_configs = bin_dir / "kafka-configs"
+            kafka_configs.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env bash
+                    set -euo pipefail
+                    state="${FAKE_KAFKA_STATE:?}"
+                    cmd=""
+                    topic=""
+                    while [[ $# -gt 0 ]]; do
+                      case "$1" in
+                        --alter|--describe) cmd="${1#--}"; shift ;;
+                        --entity-name) topic="$2"; shift 2 ;;
+                        --bootstrap-server|--entity-type|--add-config) shift 2 ;;
+                        *) shift ;;
+                      esac
+                    done
+                    case "$cmd" in
+                      alter)
+                        touch "$state/config.$topic"
+                        echo "Completed updating config for topic $topic."
+                        ;;
+                      describe)
+                        if [[ ! -f "$state/config.$topic" ]]; then
+                          echo "Configs for topic '$topic' are not visible yet" >&2
+                          exit 1
+                        fi
+                        echo "Dynamic configs for topic $topic are: compression.type=lz4"
+                        ;;
+                      *)
+                        echo "unsupported kafka-configs command: $cmd" >&2
+                        exit 2
+                        ;;
+                    esac
+                    """
+                )
+            )
+            kafka_configs.chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            env["FAKE_KAFKA_STATE"] = str(state_dir)
+            env["KAFKA_BOOTSTRAP_SERVERS"] = "fake:9092"
+            env["HPSF_REPLAY_TOPIC_METADATA_RETRIES"] = "3"
+            env["HPSF_REPLAY_TOPIC_METADATA_RETRY_SLEEP_SECONDS"] = "0"
+
+            result = subprocess.run([str(CREATE_REPLAY_TOPICS)], cwd=ROOT, env=env, text=True, capture_output=True)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("Waiting for Kafka topic metadata for options.replay.20260612.opra.tcbbo", result.stderr)
+            self.assertIn("Topic: options.replay.20260612.opra.tcbbo", result.stdout)
+            self.assertIn("Dynamic configs for topic options.replay.20260612.opra.tcbbo", result.stdout)
 
 
 if __name__ == "__main__":

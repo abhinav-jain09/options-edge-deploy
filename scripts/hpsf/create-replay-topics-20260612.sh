@@ -17,6 +17,8 @@ REPLAY_DATE="${REPLAY_DATE:-2026-06-12}"
 COMPACT_DATE="${REPLAY_DATE//-/}"
 TOPIC_PREFIX="${TOPIC_PREFIX:-options.replay.$COMPACT_DATE}"
 UNDERLYING_TOPIC_PREFIX="${UNDERLYING_TOPIC_PREFIX:-underlying.replay.$COMPACT_DATE}"
+TOPIC_METADATA_RETRIES="${HPSF_REPLAY_TOPIC_METADATA_RETRIES:-60}"
+TOPIC_METADATA_RETRY_SLEEP_SECONDS="${HPSF_REPLAY_TOPIC_METADATA_RETRY_SLEEP_SECONDS:-2}"
 
 if [[ "$REPLICATION_FACTOR" != "1" ]]; then
   echo "HPSF replay RF=1 cluster rule violated: KAFKA_TOPIC_REPLICATION_FACTOR=$REPLICATION_FACTOR" >&2
@@ -88,11 +90,11 @@ describe_topic_header() {
 wait_for_topic() {
   local topic="$1"
   local attempt
-  for attempt in $(seq 1 30); do
+  for attempt in $(seq 1 "$TOPIC_METADATA_RETRIES"); do
     if [[ -n "$(describe_topic_header "$topic")" ]]; then
       return 0
     fi
-    sleep 1
+    sleep "$TOPIC_METADATA_RETRY_SLEEP_SECONDS"
   done
   echo "Timed out waiting for Kafka topic metadata: $topic" >&2
   return 1
@@ -147,6 +149,43 @@ alter_topic_configs() {
   return 1
 }
 
+verify_topic_ready() {
+  local topic="$1"
+  local attempt
+  local describe_out
+  local describe_err
+  local configs_out
+  local configs_err
+
+  describe_out="$(mktemp)"
+  describe_err="$(mktemp)"
+  configs_out="$(mktemp)"
+  configs_err="$(mktemp)"
+
+  for attempt in $(seq 1 "$TOPIC_METADATA_RETRIES"); do
+    if kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --describe --topic "$topic" >"$describe_out" 2>"$describe_err"; then
+      if kafka-configs --bootstrap-server "$BOOTSTRAP_SERVERS" --entity-type topics --entity-name "$topic" --describe >"$configs_out" 2>"$configs_err"; then
+        cat "$describe_out"
+        cat "$configs_out"
+        rm -f "$describe_out" "$describe_err" "$configs_out" "$configs_err"
+        return 0
+      fi
+      echo "Waiting for Kafka topic config metadata for $topic after create/config alter ($attempt/$TOPIC_METADATA_RETRIES)" >&2
+    else
+      echo "Waiting for Kafka topic metadata for $topic after create/config alter ($attempt/$TOPIC_METADATA_RETRIES)" >&2
+    fi
+    sleep "$TOPIC_METADATA_RETRY_SLEEP_SECONDS"
+  done
+
+  echo "Timed out verifying Kafka topic after create/config alter: $topic" >&2
+  echo "Last kafka-topics --describe error:" >&2
+  cat "$describe_err" >&2 || true
+  echo "Last kafka-configs --describe error:" >&2
+  cat "$configs_err" >&2 || true
+  rm -f "$describe_out" "$describe_err" "$configs_out" "$configs_err"
+  return 1
+}
+
 create_topic_if_needed() {
   local topic="$1"
   local partitions="$2"
@@ -172,7 +211,7 @@ create_topic_if_needed() {
   fi
   wait_for_topic "$topic"
   alter_topic_configs "$topic" "$configs"
-  run_cmd kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" --describe --topic "$topic"
+  verify_topic_ready "$topic"
 }
 
 echo "Creating HPSF replay topics for $REPLAY_DATE with replication.factor=1, min.insync.replicas=1, compression.type=lz4"
