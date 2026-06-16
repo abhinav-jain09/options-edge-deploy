@@ -100,6 +100,7 @@ check_deployment() {
   grep -q 'options_edge_processing_service_ready' <<<"$metrics"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  trap - RETURN
 }
 
 check_feed_gateway() {
@@ -121,6 +122,7 @@ check_feed_gateway() {
   grep -Eq 'options_edge_feed_gateway_running|jvm_info|process_uptime_seconds' <<<"$metrics"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  trap - RETURN
 }
 
 check_ibkr_feed() {
@@ -141,6 +143,7 @@ check_ibkr_feed() {
   grep -q 'options_edge_ibkr_feed_live' <<<"$metrics"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  trap - RETURN
 }
 
 check_strike_flow_classifier() {
@@ -166,6 +169,7 @@ check_strike_flow_classifier_deployment() {
   grep -q 'options_edge_processing_service_ready{service="strike-flow-classifier-service"}' <<<"$metrics"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  trap - RETURN
 }
 
 check_spx_mission_control() {
@@ -188,6 +192,7 @@ check_spx_mission_control() {
   curl -fsS "http://127.0.0.1:${local_port}/api/mission-control/latest" | grep -Eq 'spx-mission-control|NO_DATA'
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  trap - RETURN
 }
 
 check_integration_test() {
@@ -210,6 +215,7 @@ check_integration_test() {
       echo
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
+      trap - RETURN
       return
     fi
     echo
@@ -221,6 +227,7 @@ check_integration_test() {
   echo "Synthetic check failed after $SYNTHETIC_CHECK_ATTEMPTS attempts" >&2
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
+  trap - RETURN
   return 1
 }
 
