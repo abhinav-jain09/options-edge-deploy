@@ -1,5 +1,6 @@
 images:
   raw-to-display-service: ghcr.io/abhinav-jain09/options-edge-raw-to-display:staging
+  databento-mission-pressure-service: ghcr.io/abhinav-jain09/options-edge-databento-mission-pressure:staging
   volume-pace-service: ghcr.io/abhinav-jain09/options-edge-volume-pace:staging
   directional-pressure-service: ghcr.io/abhinav-jain09/options-edge-directional-pressure:staging
   volume-sandwich-service: ghcr.io/abhinav-jain09/options-edge-volume-sandwich:staging
