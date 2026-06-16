@@ -32,9 +32,9 @@ spec:
             - name: KAFKA_SPX_MISSION_STRIKE_FLOW_TOPIC
               value: options.databento.strike-flow
             - name: KAFKA_SPX_MISSION_PACE_TOPIC
-              value: options.ibkr.pace
+              value: options.databento.pace
             - name: KAFKA_SPX_MISSION_DIRECTIONAL_PRESSURE_TOPIC
-              value: options.ibkr.directional-pressure
+              value: options.databento.directional-pressure
             - name: KAFKA_SPX_MISSION_SANDWICH_CURRENT_TOPIC
               value: display.volume.sandwich.current
             - name: KAFKA_SPX_MISSION_SANDWICH_ALERTS_TOPIC

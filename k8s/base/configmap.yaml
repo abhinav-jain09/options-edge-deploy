@@ -80,8 +80,8 @@ data:
   HPSF_ORDER_PLACEMENT_ENABLED: "false"
   ORDER_PLACEMENT_ENABLED: "false"
   KAFKA_SPX_MISSION_STRIKE_FLOW_TOPIC: options.databento.strike-flow
-  KAFKA_SPX_MISSION_PACE_TOPIC: options.ibkr.pace
-  KAFKA_SPX_MISSION_DIRECTIONAL_PRESSURE_TOPIC: options.ibkr.directional-pressure
+  KAFKA_SPX_MISSION_PACE_TOPIC: options.databento.pace
+  KAFKA_SPX_MISSION_DIRECTIONAL_PRESSURE_TOPIC: options.databento.directional-pressure
   KAFKA_SPX_MISSION_SANDWICH_CURRENT_TOPIC: display.volume.sandwich.current
   KAFKA_SPX_MISSION_SANDWICH_ALERTS_TOPIC: display.volume.sandwich.alerts
   KAFKA_SPX_MISSION_PARTICIPANT_FLOW_TOPIC: options.spx.participant-flow

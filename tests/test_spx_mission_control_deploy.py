@@ -17,6 +17,10 @@ class SpxMissionControlDeployTest(unittest.TestCase):
         self.assertIn("containerPort: 8096", deployment)
         self.assertIn("KAFKA_SPX_MISSION_OUTPUT_TOPIC", deployment)
         self.assertIn("options.spx.mission-control.current", deployment)
+        self.assertIn("options.databento.pace", deployment)
+        self.assertIn("options.databento.directional-pressure", deployment)
+        self.assertNotIn("options.ibkr.pace", deployment)
+        self.assertNotIn("options.ibkr.directional-pressure", deployment)
         self.assertIn("path: /health/live", deployment)
         self.assertIn("path: /health/ready", deployment)
 
