@@ -18,6 +18,7 @@ pipeline {
     string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-integration-test:dev', description: 'Integration-test image')
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-processing:dev', description: 'HPSF Stage A/B processing image')
     string(name: 'HPSF_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev', description: 'HPSF Postgres writer image')
+    string(name: 'SPX_MISSION_CONTROL_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-spx-mission-control:dev', description: 'SPX mission control image')
     string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-strike-flow-classifier:dev', description: 'Strike flow classifier image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-ibkr-feed:dev', description: 'IBKR feed image')
     string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
@@ -51,6 +52,7 @@ pipeline {
     INTEGRATION_TEST_IMAGE = "${params.INTEGRATION_TEST_IMAGE ?: '192.168.100.252:5000/options-edge-integration-test:dev'}"
     HPSF_PROCESSING_IMAGE = "${params.HPSF_PROCESSING_IMAGE ?: '192.168.100.252:5000/options-edge-hpsf-processing:dev'}"
     HPSF_POSTGRES_WRITER_IMAGE = "${params.HPSF_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev'}"
+    SPX_MISSION_CONTROL_IMAGE = "${params.SPX_MISSION_CONTROL_IMAGE ?: '192.168.100.252:5000/options-edge-spx-mission-control:dev'}"
     STRIKE_FLOW_CLASSIFIER_IMAGE = "${params.STRIKE_FLOW_CLASSIFIER_IMAGE ?: '192.168.100.252:5000/options-edge-strike-flow-classifier:dev'}"
     IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: '192.168.100.252:5000/options-edge-ibkr-feed:dev'}"
     MARKET_DATA_SOURCE = "${params.MARKET_DATA_SOURCE ?: 'DATABENTO'}"
@@ -232,6 +234,7 @@ FEED_GATEWAY_IMAGE=$registry/options-edge-feed-gateway:$image_tag
 INTEGRATION_TEST_IMAGE=$registry/options-edge-integration-test:$image_tag
 HPSF_PROCESSING_IMAGE=$registry/options-edge-hpsf-processing:$image_tag
 HPSF_POSTGRES_WRITER_IMAGE=$registry/options-edge-hpsf-postgres-writer:$image_tag
+SPX_MISSION_CONTROL_IMAGE=$registry/options-edge-spx-mission-control:$image_tag
 STRIKE_FLOW_CLASSIFIER_IMAGE=$registry/options-edge-strike-flow-classifier:$image_tag
 IBKR_FEED_IMAGE=$registry/options-edge-ibkr-feed:$image_tag
 EOF
@@ -250,6 +253,7 @@ FEED_GATEWAY_IMAGE=$FEED_GATEWAY_IMAGE
 INTEGRATION_TEST_IMAGE=$INTEGRATION_TEST_IMAGE
 HPSF_PROCESSING_IMAGE=$HPSF_PROCESSING_IMAGE
 HPSF_POSTGRES_WRITER_IMAGE=$HPSF_POSTGRES_WRITER_IMAGE
+SPX_MISSION_CONTROL_IMAGE=$SPX_MISSION_CONTROL_IMAGE
 STRIKE_FLOW_CLASSIFIER_IMAGE=$STRIKE_FLOW_CLASSIFIER_IMAGE
 IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
 EOF
@@ -278,6 +282,7 @@ EOF
             INTEGRATION_TEST_IMAGE=$INTEGRATION_TEST_IMAGE
             HPSF_PROCESSING_IMAGE=$HPSF_PROCESSING_IMAGE
             HPSF_POSTGRES_WRITER_IMAGE=$HPSF_POSTGRES_WRITER_IMAGE
+            SPX_MISSION_CONTROL_IMAGE=$SPX_MISSION_CONTROL_IMAGE
             STRIKE_FLOW_CLASSIFIER_IMAGE=$STRIKE_FLOW_CLASSIFIER_IMAGE
             IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
           "
@@ -385,6 +390,7 @@ PY
           kubectl -n options-edge set image deployment/hpsf-stage-b-service hpsf-stage-b="$HPSF_PROCESSING_IMAGE"
           kubectl -n options-edge set image deployment/hpsf-postgres-writer-service hpsf-postgres-writer="$HPSF_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-classifier-service strike-flow-classifier="$STRIKE_FLOW_CLASSIFIER_IMAGE"
+          kubectl -n options-edge set image deployment/spx-mission-control-service spx-mission-control="$SPX_MISSION_CONTROL_IMAGE"
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
           kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
@@ -405,6 +411,7 @@ PY
           kubectl -n options-edge rollout restart deployment/hpsf-stage-b-service
           kubectl -n options-edge rollout restart deployment/hpsf-postgres-writer-service
           kubectl -n options-edge rollout restart deployment/strike-flow-classifier-service
+          kubectl -n options-edge rollout restart deployment/spx-mission-control-service
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=180s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=180s
@@ -425,6 +432,7 @@ PY
           kubectl -n options-edge rollout status deployment/hpsf-stage-b-service --timeout=240s
           kubectl -n options-edge rollout status deployment/hpsf-postgres-writer-service --timeout=180s
           kubectl -n options-edge rollout status deployment/strike-flow-classifier-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/spx-mission-control-service --timeout=180s
           kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=240s
         '''
       }

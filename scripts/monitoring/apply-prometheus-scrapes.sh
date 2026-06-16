@@ -70,6 +70,7 @@ add_service_scrape unusual-whales-gex-service 8080
 add_service_scrape raw-postgres-writer 8080
 add_service_scrape pressure-postgres-writer 8080
 add_service_scrape hpsf-postgres-writer-service 8080
+add_service_scrape spx-mission-control-service 8096
 add_service_scrape ibkr-feed-service 8080
 add_service_scrape feed-gateway-service 8091
 add_service_scrape options-edge-integration-test 8080
@@ -126,7 +127,7 @@ prometheus_query_is_one() {
   python3 -c 'import json, sys; data = json.load(sys.stdin); sys.exit(0 if any(str(row.get("value", ["", "0"])[1]) == "1" for row in data.get("data", {}).get("result", [])) else 1)' <<<"$body" 2>/dev/null
 }
 
-for service_name in raw-to-display-service databento-volume-aggregator volume-pace-service directional-pressure-service volume-sandwich-service unusual-whales-gex-service raw-postgres-writer pressure-postgres-writer hpsf-postgres-writer-service ibkr-feed-service feed-gateway-service options-edge-integration-test; do
+for service_name in raw-to-display-service databento-volume-aggregator volume-pace-service directional-pressure-service volume-sandwich-service unusual-whales-gex-service raw-postgres-writer pressure-postgres-writer hpsf-postgres-writer-service spx-mission-control-service ibkr-feed-service feed-gateway-service options-edge-integration-test; do
   if [[ "$service_name" == options-edge-* ]]; then
     job_name="$service_name"
   else

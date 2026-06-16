@@ -11,3 +11,4 @@ images:
   options-edge-integration-test: ghcr.io/abhinav-jain09/options-edge-integration-test:staging
   ibkr-feed-service: ghcr.io/abhinav-jain09/options-edge-ibkr-feed:staging
   strike-flow-classifier-service: ghcr.io/abhinav-jain09/options-edge-strike-flow-classifier:staging
+  spx-mission-control-service: ghcr.io/abhinav-jain09/options-edge-spx-mission-control:staging

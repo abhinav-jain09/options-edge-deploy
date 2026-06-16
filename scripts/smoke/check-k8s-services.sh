@@ -163,6 +163,28 @@ check_strike_flow_classifier() {
   wait "$pid" 2>/dev/null || true
 }
 
+check_spx_mission_control() {
+  local deployment="spx-mission-control-service"
+  local local_port
+  local_port="$(choose_local_port 18096)"
+  local log_file="$TMP_DIR/$deployment-port-forward.log"
+  echo "Checking live health for $deployment"
+  kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
+  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8096" >"$log_file" 2>&1 &
+  local pid=$!
+  trap 'kill "$pid" 2>/dev/null || true' RETURN
+  wait_for_port_forward "$deployment" "$pid" "$local_port" "/health/live" "$log_file"
+  curl -fsS "http://127.0.0.1:${local_port}/health/live"
+  echo
+  local metrics
+  metrics="$(curl -fsS "http://127.0.0.1:${local_port}/metrics")"
+  grep -q 'options_edge_processing_service_ready{service="spx-mission-control-service"}' <<<"$metrics"
+  curl -fsS "http://127.0.0.1:${local_port}/mission-control" | grep -q 'SPX Mission Control'
+  curl -fsS "http://127.0.0.1:${local_port}/api/mission-control/latest" | grep -Eq 'spx-mission-control|NO_DATA'
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 check_integration_test() {
   local deployment="options-edge-integration-test"
   local local_port
@@ -247,6 +269,7 @@ check_deployment unusual-whales-gex-service 18088
 check_deployment unusual-whales-gex-history-service 18089
 check_deployment raw-postgres-writer 18085
 check_deployment pressure-postgres-writer 18086
+check_spx_mission_control
 check_strike_flow_classifier
 check_ibkr_feed
 check_feed_gateway
