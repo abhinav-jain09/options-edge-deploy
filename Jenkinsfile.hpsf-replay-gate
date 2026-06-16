@@ -55,6 +55,12 @@ pipeline {
     string(name: 'HPSF_STAGE_B_REPLAY_EPHEMERAL_STORAGE_REQUEST', defaultValue: '10Gi', description: 'Stage B replay pod ephemeral-storage request')
     string(name: 'HPSF_STAGE_B_REPLAY_EPHEMERAL_STORAGE_LIMIT', defaultValue: '20Gi', description: 'Stage B replay pod ephemeral-storage limit')
     string(name: 'HPSF_STAGE_B_STRIKE_FLOW_CONSUMED_LOG_ENABLED', defaultValue: 'false', description: 'Enable per-record Stage B strike-flow consumed JSON logs during replay')
+    string(name: 'HPSF_STAGE_B_CHAIN_SHARDING_ENABLED', defaultValue: 'true', description: 'Enable Stage B sharded chain assembly shadow/evaluation path during replay')
+    string(name: 'HPSF_STAGE_B_CHAIN_SHARDS', defaultValue: '12', description: 'Stage B chain shard count for replay')
+    string(name: 'HPSF_STAGE_B_CHAIN_SHARD_SHADOW_MODE', defaultValue: 'true', description: 'Run sharded chain assembly in shadow mode before Phase 6 cutover')
+    string(name: 'HPSF_STAGE_B_CHAIN_SHARD_EVALUATION_ENABLED', defaultValue: 'false', description: 'Use sharded assembled chain for evaluation only after parity passes')
+    string(name: 'HPSF_STAGE_B_RAW_CHAIN_REPARTITION_FALLBACK_ENABLED', defaultValue: 'true', description: 'Allow raw by-chain fallback during sharded-chain rollout')
+    string(name: 'HPSF_STAGE_B_CHAIN_SHARD_PARITY_REQUIRED', defaultValue: 'true', description: 'Require Stage B sharded-chain parity evidence in black-box validation')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret text credential for Databento API key')
     string(name: 'BUGZILLA_URL', defaultValue: 'http://192.168.100.252:8092', description: 'Bugzilla base URL')
     string(name: 'BUGZILLA_USER', defaultValue: 'admin@options-edge.local', description: 'Bugzilla user')
@@ -499,6 +505,11 @@ PY
             --env=HPSF_MEAN_REVERSION_ENABLED="$HPSF_CASE2_REPLAY_BRANCH" \
             --env=HPSF_HTF_TREND_ENABLED=false \
             --env=HPSF_STAGE_B_STRIKE_FLOW_CONSUMED_LOG_ENABLED="${HPSF_STAGE_B_STRIKE_FLOW_CONSUMED_LOG_ENABLED:-false}" \
+            --env=HPSF_STAGE_B_CHAIN_SHARDING_ENABLED="${HPSF_STAGE_B_CHAIN_SHARDING_ENABLED:-true}" \
+            --env=HPSF_STAGE_B_CHAIN_SHARDS="${HPSF_STAGE_B_CHAIN_SHARDS:-12}" \
+            --env=HPSF_STAGE_B_CHAIN_SHARD_SHADOW_MODE="${HPSF_STAGE_B_CHAIN_SHARD_SHADOW_MODE:-true}" \
+            --env=HPSF_STAGE_B_CHAIN_SHARD_EVALUATION_ENABLED="${HPSF_STAGE_B_CHAIN_SHARD_EVALUATION_ENABLED:-false}" \
+            --env=HPSF_STAGE_B_RAW_CHAIN_REPARTITION_FALLBACK_ENABLED="${HPSF_STAGE_B_RAW_CHAIN_REPARTITION_FALLBACK_ENABLED:-true}" \
             --env=HPSF_ORDER_PLACEMENT_ENABLED=false \
             --env=ORDER_PLACEMENT_ENABLED=false \
             --dry-run=client -o json > artifacts/stage-b-pod.json
@@ -694,6 +705,7 @@ PY
           export HPSF_VOL_REGIME_ENABLED="$HPSF_CASE2_REPLAY_BRANCH"
           export HPSF_VOL_REGIME_REQUIRE_VIX_FOR_MEAN_REVERSION=false
           export HPSF_MEAN_REVERSION_ENABLED="$HPSF_CASE2_REPLAY_BRANCH"
+          export HPSF_STAGE_B_CHAIN_SHARD_PARITY_REQUIRED="${HPSF_STAGE_B_CHAIN_SHARD_PARITY_REQUIRED:-true}"
           set +e
           (
             cd .replay/options-edge-processing
@@ -772,7 +784,7 @@ PY
     stage('Archive artifacts') {
       steps {
         archiveArtifacts artifacts: ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md", fingerprint: true, allowEmptyArchive: false
-        archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-near-spot-quote-drill-result.json,artifacts/hpsf-near-spot-quote-drill-report.md,artifacts/hpsf-dlq-impact-result.json,artifacts/hpsf-dlq-impact-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: false
+        archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-near-spot-quote-drill-result.json,artifacts/hpsf-near-spot-quote-drill-report.md,artifacts/hpsf-dlq-impact-result.json,artifacts/hpsf-dlq-impact-report.md,artifacts/hpsf-stage-b-hot-partition-result.json,artifacts/hpsf-stage-b-hot-partition-report.md,artifacts/hpsf-stage-b-chain-shard-parity-result.json,artifacts/hpsf-stage-b-chain-shard-parity-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: false
         archiveArtifacts artifacts: 'artifacts/case2-diagnostic-validation-result.json,artifacts/case2-diagnostic-validation-report.md', fingerprint: true, allowEmptyArchive: true
       }
     }
@@ -881,7 +893,7 @@ PY
         scripts/hpsf/archive-replay-evidence-report.sh | tee artifacts/logs/archive-replay-evidence-report.log || true
       '''
       archiveArtifacts artifacts: ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md", fingerprint: true, allowEmptyArchive: false
-      archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-near-spot-quote-drill-result.json,artifacts/hpsf-near-spot-quote-drill-report.md,artifacts/hpsf-dlq-impact-result.json,artifacts/hpsf-dlq-impact-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: true
+      archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-near-spot-quote-drill-result.json,artifacts/hpsf-near-spot-quote-drill-report.md,artifacts/hpsf-dlq-impact-result.json,artifacts/hpsf-dlq-impact-report.md,artifacts/hpsf-stage-b-hot-partition-result.json,artifacts/hpsf-stage-b-hot-partition-report.md,artifacts/hpsf-stage-b-chain-shard-parity-result.json,artifacts/hpsf-stage-b-chain-shard-parity-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: true
       archiveArtifacts artifacts: 'artifacts/case2-diagnostic-validation-result.json,artifacts/case2-diagnostic-validation-report.md', fingerprint: true, allowEmptyArchive: true
     }
     always {
