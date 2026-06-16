@@ -71,8 +71,8 @@ pipeline {
   }
 
   environment {
-    JAVA_HOME = '/usr/lib/jvm/java-26'
-    PATH = "/usr/lib/jvm/java-26/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    JAVA_HOME = "${env.JAVA_HOME ?: '/usr/lib/jvm/java-26'}"
+    PATH = "${env.JAVA_HOME ?: '/usr/lib/jvm/java-26'}/bin:/opt/homebrew/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
     KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
     KAFKA_TOPIC_REPLICATION_FACTOR = '1'
     KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
