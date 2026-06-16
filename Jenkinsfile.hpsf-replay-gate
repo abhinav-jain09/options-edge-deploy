@@ -47,6 +47,14 @@ pipeline {
     string(name: 'HPSF_STAGE_A_REPLAY_EPHEMERAL_STORAGE_REQUEST', defaultValue: '10Gi', description: 'Stage A replay pod ephemeral-storage request')
     string(name: 'HPSF_STAGE_A_REPLAY_EPHEMERAL_STORAGE_LIMIT', defaultValue: '20Gi', description: 'Stage A replay pod ephemeral-storage limit')
     string(name: 'HPSF_STAGE_A_REPLAY_JAVA_TOOL_OPTIONS', defaultValue: '-Xms3g -Xmx8g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ExitOnOutOfMemoryError', description: 'Stage A replay JVM options')
+    string(name: 'HPSF_STAGE_B_REPLAY_STREAM_THREADS', defaultValue: '6', description: 'Stage B replay Kafka Streams processing threads')
+    string(name: 'HPSF_STAGE_B_REPLAY_CPU_REQUEST', defaultValue: '6', description: 'Stage B replay pod CPU request')
+    string(name: 'HPSF_STAGE_B_REPLAY_CPU_LIMIT', defaultValue: '10', description: 'Stage B replay pod CPU limit')
+    string(name: 'HPSF_STAGE_B_REPLAY_MEMORY_REQUEST', defaultValue: '12Gi', description: 'Stage B replay pod memory request')
+    string(name: 'HPSF_STAGE_B_REPLAY_MEMORY_LIMIT', defaultValue: '16Gi', description: 'Stage B replay pod memory limit')
+    string(name: 'HPSF_STAGE_B_REPLAY_EPHEMERAL_STORAGE_REQUEST', defaultValue: '10Gi', description: 'Stage B replay pod ephemeral-storage request')
+    string(name: 'HPSF_STAGE_B_REPLAY_EPHEMERAL_STORAGE_LIMIT', defaultValue: '20Gi', description: 'Stage B replay pod ephemeral-storage limit')
+    string(name: 'HPSF_STAGE_B_STRIKE_FLOW_CONSUMED_LOG_ENABLED', defaultValue: 'false', description: 'Enable per-record Stage B strike-flow consumed JSON logs during replay')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret text credential for Databento API key')
     string(name: 'BUGZILLA_URL', defaultValue: 'http://192.168.100.252:8092', description: 'Bugzilla base URL')
     string(name: 'BUGZILLA_USER', defaultValue: 'admin@options-edge.local', description: 'Bugzilla user')
@@ -473,7 +481,7 @@ PY
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-b-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
             --env=HPSF_STREAMS_PROCESSING_GUARANTEE=at_least_once \
-            --env=HPSF_STREAMS_NUM_STREAM_THREADS=1 \
+            --env=HPSF_STREAMS_NUM_STREAM_THREADS="${HPSF_STAGE_B_REPLAY_STREAM_THREADS:-6}" \
             --env=HPSF_STREAMS_CACHE_MAX_BYTES_BUFFERING=0 \
             --env=HPSF_STREAMS_CONSUMER_ISOLATION_LEVEL=read_uncommitted \
             --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
@@ -490,8 +498,33 @@ PY
             --env=HPSF_VOL_REGIME_REQUIRE_VIX_FOR_MEAN_REVERSION=false \
             --env=HPSF_MEAN_REVERSION_ENABLED="$HPSF_CASE2_REPLAY_BRANCH" \
             --env=HPSF_HTF_TREND_ENABLED=false \
+            --env=HPSF_STAGE_B_STRIKE_FLOW_CONSUMED_LOG_ENABLED="${HPSF_STAGE_B_STRIKE_FLOW_CONSUMED_LOG_ENABLED:-false}" \
             --env=HPSF_ORDER_PLACEMENT_ENABLED=false \
-            --env=ORDER_PLACEMENT_ENABLED=false
+            --env=ORDER_PLACEMENT_ENABLED=false \
+            --dry-run=client -o json > artifacts/stage-b-pod.json
+          python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+
+path = Path("artifacts/stage-b-pod.json")
+pod = json.loads(path.read_text(encoding="utf-8"))
+container = pod["spec"]["containers"][0]
+container["resources"] = {
+    "requests": {
+        "cpu": os.environ.get("HPSF_STAGE_B_REPLAY_CPU_REQUEST", "6"),
+        "memory": os.environ.get("HPSF_STAGE_B_REPLAY_MEMORY_REQUEST", "12Gi"),
+        "ephemeral-storage": os.environ.get("HPSF_STAGE_B_REPLAY_EPHEMERAL_STORAGE_REQUEST", "10Gi"),
+    },
+    "limits": {
+        "cpu": os.environ.get("HPSF_STAGE_B_REPLAY_CPU_LIMIT", "10"),
+        "memory": os.environ.get("HPSF_STAGE_B_REPLAY_MEMORY_LIMIT", "16Gi"),
+        "ephemeral-storage": os.environ.get("HPSF_STAGE_B_REPLAY_EPHEMERAL_STORAGE_LIMIT", "20Gi"),
+    },
+}
+path.write_text(json.dumps(pod, indent=2, sort_keys=True), encoding="utf-8")
+PY
+          kubectl -n "$NAMESPACE" create -f artifacts/stage-b-pod.json
           : > artifacts/logs/stage-b-startup.log
           for attempt in $(seq 1 180); do
             phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
