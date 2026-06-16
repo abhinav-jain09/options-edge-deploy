@@ -58,6 +58,16 @@ class HpsfTopicScriptTest(unittest.TestCase):
         self.assertNotIn("options.databento.strike-flow", topics_env)
         self.assertNotIn("options.ibkr.strike-flow", topics_env)
 
+    def test_jenkins_refreshes_hpsf_topics_after_service_startup(self) -> None:
+        jenkinsfile = (ROOT / "Jenkinsfile").read_text()
+        hpsf_smoke_stage = jenkinsfile.split("stage('HPSF Smoke')", 1)[1]
+
+        self.assertIn("scripts/kafka/create-hpsf-topics.sh", hpsf_smoke_stage)
+        self.assertLess(
+            hpsf_smoke_stage.index("scripts/kafka/create-hpsf-topics.sh"),
+            hpsf_smoke_stage.index("scripts/smoke/check-hpsf-deployment.sh"),
+        )
+
     def test_script_rejects_non_rf1_config(self) -> None:
         env = os.environ.copy()
         env["KAFKA_TOPIC_REPLICATION_FACTOR"] = "3"

@@ -18,11 +18,11 @@ class StrikeFlowIbkrDeployTest(unittest.TestCase):
         self.assertIn("STRIKE_FLOW_SOURCE", deployment)
         self.assertIn("value: DATABENTO", deployment)
         self.assertIn("value: IBKR", deployment)
-        self.assertIn("value: options.databento.raw", deployment)
+        self.assertIn("value: options.opra.tcbbo", deployment)
         self.assertIn("value: options.ibkr.raw", deployment)
         self.assertIn("value: options.databento.strike-flow", deployment)
         self.assertIn("value: options.ibkr.strike-flow", deployment)
-        self.assertIn("value: options-edge-databento-strike-flow-classifier-v1", deployment)
+        self.assertIn("value: options-edge-databento-strike-flow-classifier-v2", deployment)
         self.assertIn("value: options-edge-ibkr-strike-flow-classifier-v1", deployment)
 
     def test_jenkins_rolls_both_classifier_deployments(self) -> None:
