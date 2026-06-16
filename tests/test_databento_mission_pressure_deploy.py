@@ -46,6 +46,7 @@ class DatabentoMissionPressureDeployTest(unittest.TestCase):
 
         self.assertIn("options.databento.pace.mission:32", topics)
         self.assertIn("options.databento.market-pressure.mission:32", topics)
+        self.assertIn("options.databento.sandwich.mission:32", topics)
         self.assertIn("options.databento.pace.mission", topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1])
         self.assertIn("options.databento.market-pressure.mission", topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1])
 

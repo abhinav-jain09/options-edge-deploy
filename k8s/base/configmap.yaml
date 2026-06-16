@@ -80,13 +80,15 @@ data:
   HPSF_ORDER_PLACEMENT_ENABLED: "false"
   ORDER_PLACEMENT_ENABLED: "false"
   KAFKA_SPX_MISSION_STRIKE_FLOW_TOPIC: options.databento.strike-flow
-  KAFKA_SPX_MISSION_PACE_TOPIC: options.databento.pace
-  KAFKA_SPX_MISSION_DIRECTIONAL_PRESSURE_TOPIC: options.databento.directional-pressure
-  KAFKA_SPX_MISSION_SANDWICH_CURRENT_TOPIC: display.volume.sandwich.current
-  KAFKA_SPX_MISSION_SANDWICH_ALERTS_TOPIC: display.volume.sandwich.alerts
+  KAFKA_SPX_MISSION_PACE_TOPIC: options.databento.pace.mission
+  KAFKA_SPX_MISSION_PRESSURE_TOPIC: options.databento.market-pressure.mission
+  KAFKA_SPX_MISSION_SANDWICH_TOPIC: options.databento.sandwich.mission
   KAFKA_SPX_MISSION_PARTICIPANT_FLOW_TOPIC: options.spx.participant-flow
   KAFKA_SPX_MISSION_OUTPUT_TOPIC: options.spx.mission-control.current
-  KAFKA_SPX_MISSION_STREAMS_APP_ID: options-edge-spx-mission-control-v1
+  KAFKA_SPX_MISSION_STREAMS_APP_ID: options-edge-spx-mission-control-v2
+  SPX_MISSION_ALLOW_LEGACY_PACE: "false"
+  SPX_MISSION_ALLOW_LEGACY_PRESSURE: "false"
+  SPX_MISSION_ALLOW_LEGACY_SANDWICH: "false"
   SPX_MISSION_OUTPUT_INTERVAL_MS: "1000"
   SPX_MISSION_STALE_AFTER_MS: "15000"
   SPX_MISSION_ATM_DISTANCE_POINTS: "5.0"

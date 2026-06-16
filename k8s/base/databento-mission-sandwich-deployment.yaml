@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-mission-sandwich-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: databento-mission-sandwich-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: databento-mission-sandwich-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: databento-mission-sandwich-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: databento-mission-sandwich
+          image: 192.168.100.252:5000/options-edge-databento-mission-sandwich:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          env:
+            - name: APP_MARKET_DATA_SOURCE
+              value: DATABENTO
+            - name: HEALTH_PORT
+              value: "8099"
+            - name: KAFKA_MISSION_SANDWICH_VOLUME_TOPIC
+              value: display.volume.current
+            - name: KAFKA_MISSION_SANDWICH_PACE_TOPIC
+              value: options.databento.pace.mission
+            - name: KAFKA_MISSION_SANDWICH_PRESSURE_TOPIC
+              value: options.databento.market-pressure.mission
+            - name: KAFKA_MISSION_SANDWICH_OUTPUT_TOPIC
+              value: options.databento.sandwich.mission
+            - name: KAFKA_MISSION_SANDWICH_STREAMS_APP_ID
+              value: options-edge-databento-mission-sandwich-v1
+            - name: KAFKA_MISSION_SANDWICH_STREAMS_NUM_THREADS
+              value: "4"
+            - name: KAFKA_MISSION_SANDWICH_OUTPUT_INTERVAL_MS
+              value: "1000"
+            - name: KAFKA_MISSION_SANDWICH_STALE_AFTER_MS
+              value: "15000"
+            - name: MISSION_SANDWICH_REQUIRE_DATABENTO_SOURCE
+              value: "true"
+            - name: MISSION_SANDWICH_ENABLE_PACE
+              value: "true"
+            - name: MISSION_SANDWICH_ENABLE_PRESSURE
+              value: "true"
+            - name: MISSION_SANDWICH_ENABLE_GEX
+              value: "false"
+            - name: MISSION_SANDWICH_ENABLE_PARTICIPANT_FLOW
+              value: "false"
+            - name: MISSION_SANDWICH_STRIKE_WIDTH_POINTS
+              value: "5.0"
+            - name: MISSION_SANDWICH_DYNAMIC_STRIKE_WIDTH
+              value: "true"
+            - name: MISSION_SANDWICH_MIN_SIDE_VOLUME
+              value: "100"
+            - name: MISSION_SANDWICH_MIN_MID_VOLUME
+              value: "10"
+            - name: MISSION_SANDWICH_MIN_VOLUME_STRENGTH
+              value: "1.25"
+            - name: MISSION_SANDWICH_MAX_RANKED_ZONES
+              value: "50"
+            - name: MISSION_SANDWICH_ATM_DISTANCE_POINTS
+              value: "5.0"
+            - name: MISSION_SANDWICH_NEAR_ATM_DISTANCE_POINTS
+              value: "15.0"
+            - name: MISSION_SANDWICH_BREAKOUT_DISTANCE_POINTS
+              value: "2.0"
+            - name: MISSION_SANDWICH_COMPRESSION_MIN_SECONDS
+              value: "30"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms1g -Xmx4g"
+          ports:
+            - name: health
+              containerPort: 8099
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 5Gi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: {}

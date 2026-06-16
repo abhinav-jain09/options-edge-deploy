@@ -1,6 +1,7 @@
 images:
   raw-to-display-service: ghcr.io/abhinav-jain09/options-edge-raw-to-display:production
   databento-mission-pressure-service: ghcr.io/abhinav-jain09/options-edge-databento-mission-pressure:production
+  databento-mission-sandwich-service: ghcr.io/abhinav-jain09/options-edge-databento-mission-sandwich:production
   volume-pace-service: ghcr.io/abhinav-jain09/options-edge-volume-pace:production
   directional-pressure-service: ghcr.io/abhinav-jain09/options-edge-directional-pressure:production
   volume-sandwich-service: ghcr.io/abhinav-jain09/options-edge-volume-sandwich:production
