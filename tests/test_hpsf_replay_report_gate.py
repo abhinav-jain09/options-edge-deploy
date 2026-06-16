@@ -392,7 +392,11 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("HPSF_REPLAY_VALIDATION_PROFILE=FULL_RTH_RELEASE", pipeline)
         self.assertIn("HPSF_0DTE_DATA_QUALITY_REQUIRED=true", pipeline)
         self.assertIn("HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=true", pipeline)
-        self.assertIn("HPSF_CASE2_DIAGNOSTIC_REQUIRED=false", pipeline)
+        self.assertIn("HPSF_CASE2_REPLAY_BRANCH", pipeline)
+        self.assertIn('HPSF_CASE2_DIAGNOSTIC_REQUIRED="$HPSF_CASE2_REPLAY_BRANCH"', pipeline)
+        self.assertIn("HPSF_NEAR_SPOT_QUOTE_DRILL_REQUIRED=true", pipeline)
+        self.assertIn("HPSF_DLQ_IMPACT_CLASSIFICATION_REQUIRED=true", pipeline)
+        self.assertIn("HPSF_CASE2_EXPECTED_SCENARIO=fallback_any", pipeline)
         self.assertIn("hpsf-blackbox-replay-validation.exit-code", pipeline)
         self.assertIn("Replay report was archived, but HPSF black-box replay validation failed", pipeline)
         for artifact in [
@@ -400,6 +404,10 @@ class HpsfReplayReportGateTest(unittest.TestCase):
             "artifacts/hpsf-0dte-data-quality-validation-report.md",
             "artifacts/hpsf-chain-coverage-drill-result.json",
             "artifacts/hpsf-chain-coverage-drill-report.md",
+            "artifacts/hpsf-near-spot-quote-drill-result.json",
+            "artifacts/hpsf-near-spot-quote-drill-report.md",
+            "artifacts/hpsf-dlq-impact-result.json",
+            "artifacts/hpsf-dlq-impact-report.md",
             "artifacts/hpsf-blackbox-validation-result.json",
             "artifacts/hpsf-blackbox-validation-report.md",
         ]:
@@ -603,6 +611,9 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("JENKINS_ALLOWED_DEPLOY_BRANCH", pipeline)
         self.assertIn('export JENKINS_ALLOWED_DEPLOY_BRANCH="${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}"', pipeline)
         self.assertIn("PROCESSING_BRANCH", pipeline)
+        self.assertIn("feature/hpsf-vix-mean-reversion-case2", pipeline)
+        self.assertIn("feature/hpsf-case2-blackbox-coverage-diagnostics", pipeline)
+        self.assertIn('case2 ${env.HPSF_CASE2_REPLAY_BRANCH}', pipeline)
         self.assertIn("HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS", pipeline)
         self.assertIn('git clone --depth 1 --branch "$branch"', pipeline)
         self.assertIn(

@@ -100,6 +100,9 @@ pipeline {
           if (!params.HPSF_REPLAY_SOURCE_DIR?.trim()) {
             env.HPSF_REPLAY_SOURCE_DIR = "/home/options-edge/data/hpsf-replay/${replayDateId}"
           }
+          def processingBranch = params.PROCESSING_BRANCH?.trim() ?: 'main'
+          def case2Branches = ['feature/hpsf-vix-mean-reversion-case2', 'feature/hpsf-case2-blackbox-coverage-diagnostics']
+          env.HPSF_CASE2_REPLAY_BRANCH = case2Branches.contains(processingBranch) ? 'true' : 'false'
           def replayImage = params.HPSF_PROCESSING_IMAGE?.trim()
           if (!replayImage) {
             replayImage = "192.168.100.252:5000/options-edge-hpsf-processing:replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
@@ -111,7 +114,7 @@ pipeline {
           }
           env.HPSF_PROCESSING_IMAGE = replayImage
           currentBuild.displayName = "#${env.BUILD_NUMBER} ${env.HPSF_REPLAY_RUN_NAME}"
-          currentBuild.description = "Replay date ${replayDate}; topics ${env.TOPIC_PREFIX ?: params.TOPIC_PREFIX}; processing ${params.PROCESSING_BRANCH ?: 'main'}"
+          currentBuild.description = "Replay date ${replayDate}; topics ${env.TOPIC_PREFIX ?: params.TOPIC_PREFIX}; processing ${processingBranch}; case2 ${env.HPSF_CASE2_REPLAY_BRANCH}"
         }
         sh '''
           set -euo pipefail
@@ -483,6 +486,10 @@ PY
             --env=HPSF_TOPIC_LATEST_SIGNAL="$TOPIC_PREFIX.hpsf.latest-signal" \
             --env=HPSF_TOPIC_AUDIT="$TOPIC_PREFIX.hpsf.audit" \
             --env=HPSF_TOPIC_DLQ="$TOPIC_PREFIX.hpsf.dlq" \
+            --env=HPSF_VOL_REGIME_ENABLED="$HPSF_CASE2_REPLAY_BRANCH" \
+            --env=HPSF_VOL_REGIME_REQUIRE_VIX_FOR_MEAN_REVERSION=false \
+            --env=HPSF_MEAN_REVERSION_ENABLED="$HPSF_CASE2_REPLAY_BRANCH" \
+            --env=HPSF_HTF_TREND_ENABLED=false \
             --env=HPSF_ORDER_PLACEMENT_ENABLED=false \
             --env=ORDER_PLACEMENT_ENABLED=false
           : > artifacts/logs/stage-b-startup.log
@@ -647,7 +654,13 @@ PY
           export HPSF_REPLAY_VALIDATION_PROFILE=FULL_RTH_RELEASE
           export HPSF_0DTE_DATA_QUALITY_REQUIRED=true
           export HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=true
-          export HPSF_CASE2_DIAGNOSTIC_REQUIRED=false
+          export HPSF_NEAR_SPOT_QUOTE_DRILL_REQUIRED=true
+          export HPSF_DLQ_IMPACT_CLASSIFICATION_REQUIRED=true
+          export HPSF_CASE2_DIAGNOSTIC_REQUIRED="$HPSF_CASE2_REPLAY_BRANCH"
+          export HPSF_CASE2_EXPECTED_SCENARIO=fallback_any
+          export HPSF_VOL_REGIME_ENABLED="$HPSF_CASE2_REPLAY_BRANCH"
+          export HPSF_VOL_REGIME_REQUIRE_VIX_FOR_MEAN_REVERSION=false
+          export HPSF_MEAN_REVERSION_ENABLED="$HPSF_CASE2_REPLAY_BRANCH"
           set +e
           (
             cd .replay/options-edge-processing
@@ -726,7 +739,7 @@ PY
     stage('Archive artifacts') {
       steps {
         archiveArtifacts artifacts: ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md", fingerprint: true, allowEmptyArchive: false
-        archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: false
+        archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-near-spot-quote-drill-result.json,artifacts/hpsf-near-spot-quote-drill-report.md,artifacts/hpsf-dlq-impact-result.json,artifacts/hpsf-dlq-impact-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: false
         archiveArtifacts artifacts: 'artifacts/case2-diagnostic-validation-result.json,artifacts/case2-diagnostic-validation-report.md', fingerprint: true, allowEmptyArchive: true
       }
     }
@@ -835,7 +848,7 @@ PY
         scripts/hpsf/archive-replay-evidence-report.sh | tee artifacts/logs/archive-replay-evidence-report.log || true
       '''
       archiveArtifacts artifacts: ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md", fingerprint: true, allowEmptyArchive: false
-      archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: true
+      archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-near-spot-quote-drill-result.json,artifacts/hpsf-near-spot-quote-drill-report.md,artifacts/hpsf-dlq-impact-result.json,artifacts/hpsf-dlq-impact-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: true
       archiveArtifacts artifacts: 'artifacts/case2-diagnostic-validation-result.json,artifacts/case2-diagnostic-validation-report.md', fingerprint: true, allowEmptyArchive: true
     }
     always {
