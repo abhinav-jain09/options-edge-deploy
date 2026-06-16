@@ -35,6 +35,7 @@ pipeline {
     booleanParam(name: 'KAFKA_CLEANUP_TOPICS', defaultValue: false, description: 'Clean Kafka topics before deployment')
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
+    booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', defaultValue: false, description: 'Internal guard used by the manual production promotion build')
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
@@ -71,6 +72,7 @@ pipeline {
     KAFKA_CLEANUP_TOPICS = "${params.KAFKA_CLEANUP_TOPICS ?: false}"
     KAFKA_DELETE_UNWANTED_TOPICS = "${params.KAFKA_DELETE_UNWANTED_TOPICS ?: false}"
     ALLOW_PROD_KAFKA_CLEANUP = "${params.ALLOW_PROD_KAFKA_CLEANUP ?: false}"
+    SKIP_PRODUCTION_PROMOTION = "${params.SKIP_PRODUCTION_PROMOTION ?: false}"
   }
   stages {
     stage('Validate') {
@@ -83,6 +85,16 @@ pipeline {
           test ! -d /options-edge
           mkdir -p "$REMOTE_APP_HOME/tmp"
         '''
+      }
+    }
+    stage('Manual Production Approval') {
+      when {
+        expression { return env.ENVIRONMENT == 'production' && !params.SKIP_PRODUCTION_PROMOTION }
+      }
+      steps {
+        timeout(time: 30, unit: 'MINUTES') {
+          input message: 'Deploy OptionsEdge to PRODUCTION?', ok: 'Deploy to production'
+        }
       }
     }
     stage('Render') {
@@ -562,6 +574,67 @@ PY
           kubectl -n "$NAMESPACE" rollout status deployment/hpsf-stage-b-service --timeout=240s
           scripts/smoke/check-hpsf-stage-b-runtime.sh
         '''
+      }
+    }
+    stage('Deploy To Production') {
+      when {
+        expression { return env.ENVIRONMENT != 'production' && !params.SKIP_PRODUCTION_PROMOTION }
+      }
+      steps {
+        script {
+          def promoteToProduction = false
+          try {
+            timeout(time: 30, unit: 'MINUTES') {
+              input message: 'Dev deployment and smoke checks completed. Deploy the same build to PRODUCTION?', ok: 'Deploy to production'
+            }
+            promoteToProduction = true
+          } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException ignored) {
+            echo 'Production promotion was not approved; dev deployment remains complete.'
+          }
+          if (!promoteToProduction) {
+            return
+          }
+          build job: env.JOB_NAME,
+            wait: false,
+            propagate: false,
+            parameters: [
+              string(name: 'ENVIRONMENT', value: 'production'),
+              string(name: 'KUBECONFIG_FILE', value: params.KUBECONFIG_FILE),
+              string(name: 'IMAGE_REGISTRY', value: params.IMAGE_REGISTRY),
+              string(name: 'IMAGE_TAG', value: params.IMAGE_TAG),
+              string(name: 'RAW_TO_DISPLAY_IMAGE', value: params.RAW_TO_DISPLAY_IMAGE),
+              string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
+              string(name: 'DATABENTO_MISSION_PACE_IMAGE', value: params.DATABENTO_MISSION_PACE_IMAGE),
+              string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', value: params.DATABENTO_MISSION_PRESSURE_IMAGE),
+              string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', value: params.DATABENTO_MISSION_SANDWICH_IMAGE),
+              string(name: 'VOLUME_PACE_IMAGE', value: params.VOLUME_PACE_IMAGE),
+              string(name: 'DIRECTIONAL_PRESSURE_IMAGE', value: params.DIRECTIONAL_PRESSURE_IMAGE),
+              string(name: 'VOLUME_SANDWICH_IMAGE', value: params.VOLUME_SANDWICH_IMAGE),
+              string(name: 'UNUSUAL_WHALES_GEX_IMAGE', value: params.UNUSUAL_WHALES_GEX_IMAGE),
+              string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', value: params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE),
+              string(name: 'RAW_POSTGRES_WRITER_IMAGE', value: params.RAW_POSTGRES_WRITER_IMAGE),
+              string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', value: params.PRESSURE_POSTGRES_WRITER_IMAGE),
+              string(name: 'FEED_GATEWAY_IMAGE', value: params.FEED_GATEWAY_IMAGE),
+              string(name: 'INTEGRATION_TEST_IMAGE', value: params.INTEGRATION_TEST_IMAGE),
+              string(name: 'HPSF_PROCESSING_IMAGE', value: params.HPSF_PROCESSING_IMAGE),
+              string(name: 'HPSF_POSTGRES_WRITER_IMAGE', value: params.HPSF_POSTGRES_WRITER_IMAGE),
+              string(name: 'SPX_MISSION_CONTROL_IMAGE', value: params.SPX_MISSION_CONTROL_IMAGE),
+              string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', value: params.STRIKE_FLOW_CLASSIFIER_IMAGE),
+              string(name: 'IBKR_FEED_IMAGE', value: params.IBKR_FEED_IMAGE),
+              string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', value: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID),
+              string(name: 'MARKET_DATA_SOURCE', value: params.MARKET_DATA_SOURCE),
+              string(name: 'RAW_TOPIC', value: params.RAW_TOPIC),
+              string(name: 'IB_HOST', value: params.IB_HOST),
+              string(name: 'IB_PORT', value: params.IB_PORT),
+              string(name: 'IB_CLIENT_ID', value: params.IB_CLIENT_ID),
+              string(name: 'IB_EXPIRY', value: params.IB_EXPIRY),
+              string(name: 'IB_MAX_STRIKES', value: params.IB_MAX_STRIKES),
+              booleanParam(name: 'KAFKA_CLEANUP_TOPICS', value: false),
+              booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', value: false),
+              booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', value: false),
+              booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true)
+            ]
+        }
       }
     }
   }
