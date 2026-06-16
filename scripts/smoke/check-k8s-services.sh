@@ -144,7 +144,12 @@ check_ibkr_feed() {
 }
 
 check_strike_flow_classifier() {
-  local deployment="strike-flow-classifier-service"
+  check_strike_flow_classifier_deployment "strike-flow-classifier-databento"
+  check_strike_flow_classifier_deployment "strike-flow-classifier-ibkr"
+}
+
+check_strike_flow_classifier_deployment() {
+  local deployment="$1"
   local local_port
   local_port="$(choose_local_port 18098)"
   local log_file="$TMP_DIR/$deployment-port-forward.log"
