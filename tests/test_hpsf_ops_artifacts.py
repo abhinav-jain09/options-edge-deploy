@@ -243,6 +243,13 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         self.assertIn('metrics="$(curl -fsS "http://127.0.0.1:${local_port}/metrics")"', script)
         self.assertNotIn("curl -fsS \"http://127.0.0.1:${local_port}/metrics\" | grep -q", script)
 
+    def test_feed_gateway_smoke_uses_gateway_health_contract(self) -> None:
+        script = self.read("scripts/smoke/check-k8s-services.sh")
+        self.assertIn('local health_path="/health"', script)
+        self.assertIn('grep -q \'"running":true\'', script)
+        self.assertNotIn('local health_path="/actuator/health"', script)
+        self.assertNotIn("/actuator/prometheus", script)
+
 
 if __name__ == "__main__":
     unittest.main()
