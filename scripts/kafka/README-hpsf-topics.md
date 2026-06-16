@@ -37,7 +37,7 @@ The verification script checks partition count, replication factor, `cleanup.pol
 Critical retention rules:
 
 - `options.opra.tcbbo`, `options.opra.trades`, `options.opra.quotes`: 1 day.
-- OPRA input topics use 32 partitions to match the live market-data topic layout. The topic scripts must not attempt to reduce existing OPRA topic partitions.
+- `options.opra.tcbbo` uses 32 partitions to match the live TCBBO market-data topic. `options.opra.trades` and `options.opra.quotes` remain at 6 partitions.
 - `options.hpsf.strike-flow`, `options.hpsf.strike-score`: 2 days, compacted plus delete.
 - `options.hpsf.signal`: 30 days, delete-only, not compacted.
 - `options.hpsf.latest-signal`: 30 days, compacted plus delete.

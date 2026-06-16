@@ -10,8 +10,8 @@ fi
 
 TOPICS=(
   'options.opra.tcbbo|32|delete|86400000'
-  'options.opra.trades|32|delete|86400000'
-  'options.opra.quotes|32|delete|86400000'
+  'options.opra.trades|6|delete|86400000'
+  'options.opra.quotes|6|delete|86400000'
   'underlying.es.trades|2|delete|86400000'
   'underlying.spx.price|1|compact,delete|86400000'
   'options.hpsf.underlying-state|1|compact,delete|604800000'

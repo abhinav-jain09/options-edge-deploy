@@ -42,6 +42,8 @@ class HpsfTopicScriptTest(unittest.TestCase):
         self.assertIn("min.insync.replicas=1", output)
         self.assertIn("compression.type=lz4", output)
         self.assertIn("options.opra.tcbbo partitions=32", output)
+        self.assertIn("options.opra.trades partitions=6", output)
+        self.assertIn("options.opra.quotes partitions=6", output)
         self.assertIn("options.hpsf.strike-flow partitions=6", output)
         self.assertIn("retention.ms=172800000", output)
         self.assertIn("options.hpsf.signal partitions=1", output)
