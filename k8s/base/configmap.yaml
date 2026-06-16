@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  name: options-edge-config
+  namespace: options-edge
+data:
   APP_PROFILE: prod
   TOPIC_PREFIX: ""
   KAFKA_APPLICATION_ID_SUFFIX: -prod
   SCHEMA_REGISTRY_URL: http://192.168.100.252:8082
-  name: options-edge-config
-  namespace: options-edge
-data:
   APP_MARKET_DATA_SOURCE: DATABENTO
   APP_FEED_GATEWAY_ENABLED: "true"
   APP_FEED_GATEWAY_WS_URL: ws://192.168.100.252:30097/ws/events
