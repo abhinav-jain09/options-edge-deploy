@@ -71,7 +71,7 @@ pipeline {
   }
 
   environment {
-    PATH = "/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    PATH = "/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/bin:/Users/abhinav/development/confluent-7.3.1/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
     KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
     KAFKA_TOPIC_REPLICATION_FACTOR = '1'
     KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
