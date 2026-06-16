@@ -34,11 +34,11 @@ spec:
             - name: STRIKE_FLOW_ENABLED
               value: "true"
             - name: KAFKA_STRIKE_FLOW_INPUT_TOPIC
-              value: options.databento.raw
+              value: options.opra.tcbbo
             - name: KAFKA_STRIKE_FLOW_OUTPUT_TOPIC
               value: options.databento.strike-flow
             - name: KAFKA_STRIKE_FLOW_STREAMS_APP_ID
-              value: options-edge-databento-strike-flow-classifier-v1
+              value: options-edge-databento-strike-flow-classifier-v2
             - name: STRIKE_FLOW_SYMBOL
               value: SPX
             - name: STRIKE_FLOW_OUTPUT_INTERVAL_MS
