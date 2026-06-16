@@ -34,6 +34,8 @@ class HpsfTopicScriptTest(unittest.TestCase):
             "options.hpsf.dlq",
             "options.hpsf.writer-dlq",
             "options.hpsf.exit-signal",
+            "options.databento.strike-flow",
+            "options.ibkr.strike-flow",
         ]:
             self.assertIn(topic, output)
         self.assertIn("replication.factor=1", output)
@@ -45,6 +47,13 @@ class HpsfTopicScriptTest(unittest.TestCase):
         self.assertIn("cleanup.policy=delete", output)
         self.assertIn("options.hpsf.latest-signal partitions=1", output)
         self.assertIn("cleanup.policy=compact,delete", output)
+        self.assertIn("options.ibkr.strike-flow partitions=32", output)
+
+    def test_generic_topic_list_does_not_own_strike_flow_topics(self) -> None:
+        topics_env = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
+
+        self.assertNotIn("options.databento.strike-flow", topics_env)
+        self.assertNotIn("options.ibkr.strike-flow", topics_env)
 
     def test_script_rejects_non_rf1_config(self) -> None:
         env = os.environ.copy()

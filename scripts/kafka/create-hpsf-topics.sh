@@ -51,6 +51,7 @@ HPSF_TOPIC_SPECS=(
   'options.hpsf.writer-dlq|1|delete|2592000000|1800000|134217728|'
   'options.hpsf.exit-signal|1|delete|2592000000|1800000|134217728|'
   'options.databento.strike-flow|32|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
+  'options.ibkr.strike-flow|32|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
 )
 
 rf1_warning() {
