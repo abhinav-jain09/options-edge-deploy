@@ -24,7 +24,7 @@ TOPICS=(
   'options.hpsf.dlq|1|delete|2592000000'
   'options.hpsf.writer-dlq|1|delete|2592000000'
   'options.hpsf.exit-signal|1|delete|2592000000'
-  'options.databento.strike-flow|6|compact,delete|172800000'
+  'options.databento.strike-flow|32|compact,delete|172800000'
 )
 
 for spec in "${TOPICS[@]}"; do
