@@ -7,6 +7,8 @@ resources:
   - feed-gateway-service.yaml
   - databento-volume-aggregator-deployment.yaml
   - databento-volume-aggregator-service.yaml
+  - databento-mission-pressure-deployment.yaml
+  - databento-mission-pressure-service.yaml
   - directional-pressure-databento-deployment.yaml
   - directional-pressure-deployment.yaml
   - directional-pressure-service.yaml

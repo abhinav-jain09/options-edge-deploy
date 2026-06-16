@@ -154,7 +154,7 @@ check_strike_flow_classifier() {
 check_strike_flow_classifier_deployment() {
   local deployment="$1"
   local local_port
-  local_port="$(choose_local_port 18098)"
+  local_port="$(choose_local_port 18108)"
   local log_file="$TMP_DIR/$deployment-port-forward.log"
   echo "Checking live health for $deployment"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
@@ -190,6 +190,27 @@ check_spx_mission_control() {
   grep -q 'options_edge_processing_service_ready{service="spx-mission-control-service"}' <<<"$metrics"
   curl -fsS "http://127.0.0.1:${local_port}/mission-control" | grep -q 'SPX Mission Control'
   curl -fsS "http://127.0.0.1:${local_port}/api/mission-control/latest" | grep -Eq 'spx-mission-control|NO_DATA'
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  trap - RETURN
+}
+
+check_databento_mission_pressure() {
+  local deployment="databento-mission-pressure-service"
+  local local_port
+  local_port="$(choose_local_port 18098)"
+  local log_file="$TMP_DIR/$deployment-port-forward.log"
+  echo "Checking live health for $deployment"
+  kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=240s
+  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8098" >"$log_file" 2>&1 &
+  local pid=$!
+  trap 'kill "$pid" 2>/dev/null || true' RETURN
+  wait_for_port_forward "$deployment" "$pid" "$local_port" "/health/live" "$log_file"
+  curl -fsS "http://127.0.0.1:${local_port}/health/live"
+  echo
+  local metrics
+  metrics="$(curl -fsS "http://127.0.0.1:${local_port}/metrics")"
+  grep -q 'options_edge_processing_service_ready{service="databento-mission-pressure-service"}' <<<"$metrics"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   trap - RETURN
@@ -271,6 +292,7 @@ PY
 check_deployment raw-to-display-service 18080
 check_deployment raw-to-display-databento-service 18090
 check_deployment databento-volume-aggregator 18094
+check_databento_mission_pressure
 check_deployment volume-pace-service 18081
 check_deployment volume-pace-databento-service 18091
 check_deployment directional-pressure-service 18084
