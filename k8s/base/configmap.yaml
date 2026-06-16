@@ -79,6 +79,18 @@ data:
   HPSF_POSTGRES_WRITER_TOPICS: options.hpsf.signal,options.hpsf.latest-signal,options.hpsf.audit,options.hpsf.market-flow,options.hpsf.strike-score,options.hpsf.dlq,options.hpsf.writer-dlq,options.hpsf.exit-signal
   HPSF_ORDER_PLACEMENT_ENABLED: "false"
   ORDER_PLACEMENT_ENABLED: "false"
+  KAFKA_STRIKE_FLOW_INPUT_TOPIC: options.databento.raw
+  KAFKA_STRIKE_FLOW_OUTPUT_TOPIC: options.databento.strike-flow
+  KAFKA_STRIKE_FLOW_STREAMS_APP_ID: options-edge-strike-flow-classifier-v1
+  STRIKE_FLOW_ENABLED: "true"
+  STRIKE_FLOW_SYMBOL: SPX
+  STRIKE_FLOW_EXPIRY: ""
+  STRIKE_FLOW_OUTPUT_INTERVAL_MS: "500"
+  STRIKE_FLOW_STATE_TTL_MS: "86400000"
+  STRIKE_FLOW_PRICE_EPSILON: "0.0001"
+  STRIKE_FLOW_BIAS_RATIO: "1.20"
+  STRIKE_FLOW_TOP_N: "3"
+  STRIKE_FLOW_CONTRACT_MULTIPLIER: "100.0"
   KAFKA_MARKET_DATA_SELECTION_TOPIC: options.marketdata.selection
   KAFKA_DATABENTO_CONTROL_TOPIC: options.databento.control
   KAFKA_DATABENTO_EVENTS_TOPIC: options.databento.events.raw

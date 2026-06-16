@@ -10,3 +10,4 @@ images:
   feed-gateway-service: 192.168.100.252:5000/options-edge-feed-gateway:dev
   options-edge-integration-test: 192.168.100.252:5000/options-edge-integration-test:dev
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:dev
+  strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:dev

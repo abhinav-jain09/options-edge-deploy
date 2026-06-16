@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: strike-flow-classifier-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: strike-flow-classifier-service
+    app.kubernetes.io/component: strike-flow-classifier
+    app.kubernetes.io/part-of: options-edge
+spec:
+  selector:
+    app.kubernetes.io/name: strike-flow-classifier-service
+  ports:
+    - name: http
+      port: 8097
+      targetPort: http
