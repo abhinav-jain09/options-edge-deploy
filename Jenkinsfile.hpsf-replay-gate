@@ -35,7 +35,7 @@ pipeline {
     string(name: 'HPSF_REPLAY_EVIDENCE_JSON', defaultValue: '', description: 'Optional prebuilt real replay evidence JSON from a completed replay run')
     string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '240', description: 'Kafka consumer-group catch-up polling attempts for replay processors')
     string(name: 'REPLAY_TOPIC_PARTITIONS', defaultValue: '12', description: 'Replay OPRA, Stage A strike-flow, strike-score, and DLQ topic partitions')
-    string(name: 'HPSF_STAGE_A_REPLAY_STREAM_THREADS', defaultValue: '4', description: 'Stage A replay Kafka Streams processing threads')
+    string(name: 'HPSF_STAGE_A_REPLAY_STREAM_THREADS', defaultValue: '6', description: 'Stage A replay Kafka Streams processing threads')
     string(name: 'HPSF_STAGE_A_REPLAY_CACHE_MAX_BYTES_BUFFERING', defaultValue: '134217728', description: 'Stage A replay Kafka Streams cache bytes')
     string(name: 'HPSF_STAGE_A_REPLAY_COMMIT_INTERVAL_MS', defaultValue: '5000', description: 'Stage A replay Kafka Streams commit interval')
     string(name: 'HPSF_STAGE_A_REPLAY_PROCESSING_GUARANTEE', defaultValue: 'at_least_once', description: 'Stage A replay Kafka Streams processing guarantee')
@@ -292,7 +292,7 @@ pipeline {
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-a-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
             --env=HPSF_STREAMS_PROCESSING_GUARANTEE="${HPSF_STAGE_A_REPLAY_PROCESSING_GUARANTEE:-at_least_once}" \
-            --env=HPSF_STREAMS_NUM_STREAM_THREADS="${HPSF_STAGE_A_REPLAY_STREAM_THREADS:-4}" \
+            --env=HPSF_STREAMS_NUM_STREAM_THREADS="${HPSF_STAGE_A_REPLAY_STREAM_THREADS:-6}" \
             --env=HPSF_STREAMS_CACHE_MAX_BYTES_BUFFERING="${HPSF_STAGE_A_REPLAY_CACHE_MAX_BYTES_BUFFERING:-134217728}" \
             --env=HPSF_STREAMS_COMMIT_INTERVAL_MS="${HPSF_STAGE_A_REPLAY_COMMIT_INTERVAL_MS:-5000}" \
             --env=HPSF_STREAMS_PRODUCER_COMPRESSION_TYPE="${HPSF_STAGE_A_REPLAY_PRODUCER_COMPRESSION_TYPE:-lz4}" \
