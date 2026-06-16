@@ -30,7 +30,13 @@ class StrikeFlowIbkrDeployTest(unittest.TestCase):
 
         self.assertIn("deployment/strike-flow-classifier-databento", jenkinsfile)
         self.assertIn("deployment/strike-flow-classifier-ibkr", jenkinsfile)
-        self.assertNotIn("deployment/strike-flow-classifier-service", jenkinsfile)
+        self.assertIn(
+            "delete deployment/strike-flow-classifier-service service/strike-flow-classifier-service --ignore-not-found=true",
+            jenkinsfile,
+        )
+        self.assertNotIn("set image deployment/strike-flow-classifier-service", jenkinsfile)
+        self.assertNotIn("rollout restart deployment/strike-flow-classifier-service", jenkinsfile)
+        self.assertNotIn("rollout status deployment/strike-flow-classifier-service", jenkinsfile)
 
 
 if __name__ == "__main__":

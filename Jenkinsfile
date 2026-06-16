@@ -342,6 +342,7 @@ EOF
         sh '''
           set -euo pipefail
           . "$REMOTE_APP_HOME/tmp/options-edge-images.env"
+          kubectl -n options-edge delete deployment/strike-flow-classifier-service service/strike-flow-classifier-service --ignore-not-found=true
           kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
           market_data_source="${MARKET_DATA_SOURCE:-DATABENTO}"
           effective_raw_topic="${RAW_TOPIC:-}"
