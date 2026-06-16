@@ -97,8 +97,9 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         self.assertIn("spxEquivalentVwap", text)
         self.assertIn("distanceToVwap", text)
         self.assertIn("read_expected_record", text)
-        self.assertIn("--from-beginning", text)
-        self.assertIn("HPSF_STAGE_B_OUTPUT_SCAN_MAX_MESSAGES:-5000", text)
+        self.assertIn("start_topic_capture", text)
+        self.assertIn("timeout \"${scan_seconds}s\" kafka-console-consumer", text)
+        self.assertIn("HPSF_STAGE_B_OUTPUT_SCAN_SECONDS:-120", text)
         self.assertIn("expected_eval_id", text)
         self.assertIn("Recent hpsf-stage-b-service logs", text)
         self.assertIn("--bootstrap-server", text)
@@ -184,8 +185,14 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "choices: ['DATABENTO', 'IBKR']",
             "MARKET_DATA_SOURCE = \"${params.MARKET_DATA_SOURCE ?: 'DATABENTO'}\"",
             "market_data_source=\"${MARKET_DATA_SOURCE:-DATABENTO}\"",
+            "default_weekday_expiry()",
+            "effective_expiry=\"${IB_EXPIRY:-$(default_weekday_expiry)}\"",
+            "options-edge-databento-feed-config",
+            "DATABENTO_EXPIRY",
         ]:
             self.assertIn(text, pipeline)
+        self.assertNotIn("IB_EXPIRY = \"${params.IB_EXPIRY ?: '20260615'}\"", pipeline)
+        self.assertNotIn("${IB_EXPIRY:-20260615}", pipeline)
         for text in [
             "HPSF_PROCESSING_IMAGE",
             "HPSF_POSTGRES_WRITER_IMAGE",
@@ -205,11 +212,18 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "restore_stage_b_release_runtime",
             "HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-v2-1",
             "options-edge-hpsf-stage-b-v2-1-smoke-${BUILD_NUMBER:-manual}",
-            "HPSF_STAGE_B_EVALUATION_MODE=INPUT_DRIVEN_DEBUG_ONLY",
-            "HPSF_ALLOW_DEBUG_EVALUATION_IN_LIVE=true",
+            "HPSF_STAGE_B_EVALUATION_MODE=SCHEDULED",
+            "HPSF_STAGE_B_PUNCTUATION_TYPE=WALL_CLOCK_TIME",
             "scripts/smoke/check-hpsf-stage-b-runtime.sh",
         ]:
             self.assertIn(text, pipeline)
+
+    def test_base_configmap_does_not_pin_expired_option_date(self) -> None:
+        config = self.read("k8s/base/configmap.yaml")
+        self.assertIn('IB_EXPIRY: ""', config)
+        self.assertIn('UNUSUAL_WHALES_EXPIRY: ""', config)
+        self.assertNotIn('IB_EXPIRY: "20260615"', config)
+        self.assertNotIn('UNUSUAL_WHALES_EXPIRY: "20260615"', config)
 
     def test_main_smoke_skips_live_ui_checks_outside_market_hours(self) -> None:
         script = self.read("scripts/smoke/check-k8s-services.sh")
