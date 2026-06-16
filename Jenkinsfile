@@ -540,6 +540,7 @@ PY
             kubectl -n "$NAMESPACE" rollout status deployment/hpsf-stage-b-service --timeout=240s || true
           }
           trap 'rc=$?; restore_stage_b_release_runtime; exit $rc' EXIT
+          scripts/kafka/create-hpsf-topics.sh
           scripts/smoke/check-hpsf-deployment.sh
           stage_b_smoke_app_id="options-edge-hpsf-stage-b-v2-1-smoke-${BUILD_NUMBER:-manual}"
           echo "Using isolated Stage B Kafka Streams application id for deploy smoke: ${stage_b_smoke_app_id}"
