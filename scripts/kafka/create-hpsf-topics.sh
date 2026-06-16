@@ -36,8 +36,8 @@ MAX_COMPACTION_LAG_MS=3600000
 # topic|partitions|cleanup.policy|retention.ms|segment.ms|segment.bytes|extra-config-csv
 HPSF_TOPIC_SPECS=(
   'options.opra.tcbbo|32|delete|86400000|900000|536870912|'
-  'options.opra.trades|32|delete|86400000|900000|536870912|'
-  'options.opra.quotes|32|delete|86400000|900000|536870912|'
+  'options.opra.trades|6|delete|86400000|900000|536870912|'
+  'options.opra.quotes|6|delete|86400000|900000|536870912|'
   'underlying.es.trades|2|delete|86400000|1800000|268435456|'
   'underlying.spx.price|1|compact,delete|86400000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
   'options.hpsf.underlying-state|1|compact,delete|604800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
