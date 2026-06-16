@@ -517,8 +517,20 @@ PY
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
             "options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
             artifacts/logs/stage-b-consumer-group-catchup.log
+          kubectl -n "$NAMESPACE" exec "$pod" -- sh -c 'kill -TERM 1' >/dev/null 2>&1 || true
+          for attempt in $(seq 1 60); do
+            phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+            kubectl -n "$NAMESPACE" logs "$pod" > artifacts/logs/stage-b-full.log 2>/dev/null || true
+            if grep -q 'HPSF_STAGE_B_PERFORMANCE_METRICS_JSON=' artifacts/logs/stage-b-full.log; then
+              break
+            fi
+            if [ "$phase" = "Failed" ] || [ "$phase" = "Succeeded" ]; then
+              break
+            fi
+            sleep 1
+          done
           stage_b_full_log="$(mktemp)"
-          kubectl -n "$NAMESPACE" logs "$pod" > "$stage_b_full_log" || true
+          kubectl -n "$NAMESPACE" logs "$pod" > "$stage_b_full_log" || cp artifacts/logs/stage-b-full.log "$stage_b_full_log" || true
           grep 'HPSF_STAGE_B_PERFORMANCE_METRICS_JSON=' "$stage_b_full_log" > artifacts/logs/stage-b-metrics.log || true
           tail -2000 "$stage_b_full_log" > artifacts/logs/stage-b-runtime.log || true
           rm -f "$stage_b_full_log"
