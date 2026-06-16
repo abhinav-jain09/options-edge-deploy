@@ -17,7 +17,7 @@ STAGE_B_POD="hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID:-$COMPACT_DATE}"
 STAGE_A_APP_ID="options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID:-$COMPACT_DATE}-${BUILD}"
 UNDERLYING_APP_ID="options-edge-hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID:-$COMPACT_DATE}-${BUILD}"
 STAGE_B_APP_ID="options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID:-$COMPACT_DATE}-${BUILD}"
-PATH="/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
+PATH="/Users/abhinav/development/confluent-7.3.1/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 
 run_capture() {
   local output="$1"
