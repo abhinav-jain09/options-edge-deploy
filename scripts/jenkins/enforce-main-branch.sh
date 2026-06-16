@@ -1,7 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-allowed_branch="${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}"
+job_name="${JOB_NAME:-}"
+replay_job_name="${JENKINS_REPLAY_JOB_NAME:-hpsf-historical-replay}"
+
+if [[ -z "${JENKINS_URL:-}" || -z "${BUILD_NUMBER:-}" || -z "$job_name" ]]; then
+  echo "Jenkins deployment blocked: Kubernetes deploys must run from Jenkins. Manual kubectl/script deploys are banned." >&2
+  exit 1
+fi
+
+if [[ "$job_name" == "$replay_job_name" ]]; then
+  allowed_branch="${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}"
+else
+  if [[ "${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}" != "main" ]]; then
+    echo "Jenkins deployment blocked: only the replay job may override JENKINS_ALLOWED_DEPLOY_BRANCH." >&2
+    exit 1
+  fi
+  allowed_branch="main"
+fi
+
 reported_branch="${BRANCH_NAME:-${GIT_BRANCH:-}}"
 
 if [[ -n "$reported_branch" ]]; then
@@ -28,4 +45,4 @@ if ! git branch -r --contains "$head_sha" | sed 's/^[[:space:]]*//' | grep -Fx "
   exit 1
 fi
 
-echo "Jenkins main-branch deployment guard passed: commit $head_sha is contained in origin/$allowed_branch."
+echo "Jenkins deployment guard passed: job '$job_name' is allowed to deploy commit $head_sha from origin/$allowed_branch."
