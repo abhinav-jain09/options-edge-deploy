@@ -355,6 +355,12 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Stage B startup evidence missing", report)
 
+    def test_JenkinsReplayJobRequiresReplayCapableAgentTest(self) -> None:
+        pipeline = JENKINSFILE.read_text()
+
+        self.assertNotIn("agent any", pipeline)
+        self.assertIn("label 'hpsf-replay-agent'", pipeline)
+
     def test_JenkinsReplayScriptArchivesReportTest(self) -> None:
         pipeline = JENKINSFILE.read_text()
 

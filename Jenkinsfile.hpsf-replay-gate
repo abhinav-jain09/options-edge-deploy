@@ -1,5 +1,7 @@
 pipeline {
-  agent any
+  agent {
+    label 'hpsf-replay-agent'
+  }
   options {
     disableConcurrentBuilds()
     skipDefaultCheckout(true)
