@@ -475,8 +475,6 @@ PY
           export KUBECONFIG="${KUBECONFIG}"
           export NAMESPACE=options-edge
           export REQUIRE_LATEST_SIGNAL=false
-          scripts/kafka/create-hpsf-topics.sh
-          scripts/kafka/verify-hpsf-topics.sh
           restore_stage_b_release_runtime() {
             kubectl -n "$NAMESPACE" set env deployment/hpsf-stage-b-service \
               HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-v2-1 \
