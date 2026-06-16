@@ -193,6 +193,20 @@ pipeline {
           fi
           export MAVEN_SKIP_RC=true
           export PATH="$JAVA_HOME/bin:$PATH"
+          unset HPSF_STAGE_B_CHAIN_SHARDING_ENABLED \
+            HPSF_STAGE_B_CHAIN_SHARDS \
+            HPSF_STAGE_B_CHAIN_SHARD_SHADOW_MODE \
+            HPSF_STAGE_B_CHAIN_SHARD_EVALUATION_ENABLED \
+            HPSF_STAGE_B_RAW_CHAIN_REPARTITION_FALLBACK_ENABLED \
+            HPSF_STAGE_B_CHAIN_SHARD_PARITY_REQUIRED \
+            HPSF_STAGE_B_STRIKE_FLOW_CONSUMED_LOG_ENABLED \
+            HPSF_STAGE_B_REPLAY_STREAM_THREADS \
+            HPSF_VOL_REGIME_ENABLED \
+            HPSF_VOL_REGIME_REQUIRE_VIX_FOR_MEAN_REVERSION \
+            HPSF_MEAN_REVERSION_ENABLED \
+            HPSF_HTF_TREND_ENABLED \
+            HPSF_CASE2_DIAGNOSTIC_REQUIRED \
+            HPSF_CASE2_EXPECTED_SCENARIO
           java -version
           (cd .replay/options-edge-contracts && mvn -B test package)
           (
