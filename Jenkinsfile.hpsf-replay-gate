@@ -71,8 +71,7 @@ pipeline {
   }
 
   environment {
-    JAVA_HOME = "${env.JAVA_HOME ?: '/usr/lib/jvm/java-26'}"
-    PATH = "${env.JAVA_HOME ?: '/usr/lib/jvm/java-26'}/bin:/opt/homebrew/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    PATH = "/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
     KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
     KAFKA_TOPIC_REPLICATION_FACTOR = '1'
     KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
@@ -177,7 +176,21 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          export JAVA_HOME=/usr/lib/jvm/java-26
+          if [ -n "${JAVA_HOME:-}" ] && [ ! -x "${JAVA_HOME}/bin/java" ]; then
+            unset JAVA_HOME
+          fi
+          if [ -z "${JAVA_HOME:-}" ]; then
+            for candidate in /opt/homebrew/opt/openjdk@21 /usr/lib/jvm/java-26 /usr/lib/jvm/java-21; do
+              if [ -x "$candidate/bin/java" ]; then
+                export JAVA_HOME="$candidate"
+                break
+              fi
+            done
+          fi
+          if [ -z "${JAVA_HOME:-}" ] || [ ! -x "${JAVA_HOME}/bin/java" ]; then
+            echo "No valid JAVA_HOME found for Maven replay build" >&2
+            exit 1
+          fi
           export MAVEN_SKIP_RC=true
           export PATH="$JAVA_HOME/bin:$PATH"
           java -version
