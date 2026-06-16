@@ -33,7 +33,7 @@ pipeline {
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'Replay-only HPSF processing image. Empty derives a unique replay tag; shared deploy tags such as dev/latest/main/prod are rejected.')
     string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '', description: 'Prepared Databento JSONL replay files on Jenkins/remote. Empty derives /home/options-edge/data/hpsf-replay/<REPLAY_DATE>.')
     string(name: 'HPSF_REPLAY_EVIDENCE_JSON', defaultValue: '', description: 'Optional prebuilt real replay evidence JSON from a completed replay run')
-    string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '240', description: 'Kafka consumer-group catch-up polling attempts for replay processors')
+    string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '2000', description: 'Kafka consumer-group catch-up polling attempts for replay processors')
     string(name: 'REPLAY_TOPIC_PARTITIONS', defaultValue: '12', description: 'Replay OPRA, Stage A strike-flow, strike-score, and DLQ topic partitions. Keep at 12 for the Stage A replay tuning ladder.')
     string(name: 'HPSF_STAGE_A_REPLAY_STREAM_THREADS', defaultValue: '6', description: 'Stage A replay Kafka Streams processing threads. With 12 partitions use 6 as the starting point; try 8 only if lag remains high and CPU is not saturated; use 12 only if CPU/GC remain healthy.')
     string(name: 'HPSF_STAGE_A_REPLAY_CACHE_MAX_BYTES_BUFFERING', defaultValue: '134217728', description: 'Stage A replay Kafka Streams cache bytes')

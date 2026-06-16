@@ -614,7 +614,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("feature/hpsf-vix-mean-reversion-case2", pipeline)
         self.assertIn("feature/hpsf-case2-blackbox-coverage-diagnostics", pipeline)
         self.assertIn('case2 ${env.HPSF_CASE2_REPLAY_BRANCH}', pipeline)
-        self.assertIn("HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS", pipeline)
+        self.assertIn("string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '2000'", pipeline)
         self.assertIn('git clone --depth 1 --branch "$branch"', pipeline)
         self.assertIn(
             'clone_branch git@github.com:abhinav-jain09/options-edge-processing.git "${PROCESSING_BRANCH:-main}" .replay/options-edge-processing',
