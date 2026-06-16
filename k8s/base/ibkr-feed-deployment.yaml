@@ -28,6 +28,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
           ports:
             - name: health
               containerPort: 8080

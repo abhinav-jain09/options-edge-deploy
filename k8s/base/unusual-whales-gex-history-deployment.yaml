@@ -24,6 +24,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
           env:
             - name: KAFKA_UNUSUAL_WHALES_GEX_TOPIC
               value: options.ibkr.unusualwhales.gex.strike

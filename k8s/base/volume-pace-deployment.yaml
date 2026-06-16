@@ -26,6 +26,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
           env:
             - name: APP_MARKET_DATA_SOURCE
               value: IBKR
