@@ -198,6 +198,14 @@ pipeline {
         '''
       }
     }
+    stage('Verify OptionsEdge Web App') {
+      steps {
+        sh '''
+          set -euo pipefail
+          scripts/smoke/check-options-edge-web.sh
+        '''
+      }
+    }
     stage('Unusual Whales Secret') {
       steps {
         withCredentials([string(credentialsId: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID, variable: 'UNUSUAL_WHALES_API_KEY')]) {
