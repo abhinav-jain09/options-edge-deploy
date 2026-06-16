@@ -32,13 +32,11 @@ spec:
             - name: KAFKA_SPX_MISSION_STRIKE_FLOW_TOPIC
               value: options.databento.strike-flow
             - name: KAFKA_SPX_MISSION_PACE_TOPIC
-              value: options.databento.pace
-            - name: KAFKA_SPX_MISSION_DIRECTIONAL_PRESSURE_TOPIC
-              value: options.databento.directional-pressure
-            - name: KAFKA_SPX_MISSION_SANDWICH_CURRENT_TOPIC
-              value: display.volume.sandwich.current
-            - name: KAFKA_SPX_MISSION_SANDWICH_ALERTS_TOPIC
-              value: display.volume.sandwich.alerts
+              value: options.databento.pace.mission
+            - name: KAFKA_SPX_MISSION_PRESSURE_TOPIC
+              value: options.databento.market-pressure.mission
+            - name: KAFKA_SPX_MISSION_SANDWICH_TOPIC
+              value: options.databento.sandwich.mission
             - name: KAFKA_SPX_MISSION_PARTICIPANT_FLOW_TOPIC
               value: options.spx.participant-flow
             - name: KAFKA_SPX_MISSION_OUTPUT_TOPIC
@@ -50,9 +48,15 @@ spec:
             - name: SPX_MISSION_ATM_DISTANCE_POINTS
               value: "5.0"
             - name: KAFKA_SPX_MISSION_STREAMS_APP_ID
-              value: options-edge-spx-mission-control-v1
+              value: options-edge-spx-mission-control-v2
             - name: KAFKA_SPX_MISSION_STREAMS_NUM_THREADS
               value: "4"
+            - name: SPX_MISSION_ALLOW_LEGACY_PACE
+              value: "false"
+            - name: SPX_MISSION_ALLOW_LEGACY_PRESSURE
+              value: "false"
+            - name: SPX_MISSION_ALLOW_LEGACY_SANDWICH
+              value: "false"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xmx1536m"
           ports:

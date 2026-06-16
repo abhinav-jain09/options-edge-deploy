@@ -216,6 +216,27 @@ check_databento_mission_pressure() {
   trap - RETURN
 }
 
+check_databento_mission_sandwich() {
+  local deployment="databento-mission-sandwich-service"
+  local local_port
+  local_port="$(choose_local_port 18099)"
+  local log_file="$TMP_DIR/$deployment-port-forward.log"
+  echo "Checking live health for $deployment"
+  kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=240s
+  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8099" >"$log_file" 2>&1 &
+  local pid=$!
+  trap 'kill "$pid" 2>/dev/null || true' RETURN
+  wait_for_port_forward "$deployment" "$pid" "$local_port" "/health/live" "$log_file"
+  curl -fsS "http://127.0.0.1:${local_port}/health/live"
+  echo
+  local metrics
+  metrics="$(curl -fsS "http://127.0.0.1:${local_port}/metrics")"
+  grep -q 'options_edge_processing_service_ready{service="databento-mission-sandwich-service"}' <<<"$metrics"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  trap - RETURN
+}
+
 check_integration_test() {
   local deployment="options-edge-integration-test"
   local local_port
@@ -293,6 +314,7 @@ check_deployment raw-to-display-service 18080
 check_deployment raw-to-display-databento-service 18090
 check_deployment databento-volume-aggregator 18094
 check_databento_mission_pressure
+check_databento_mission_sandwich
 check_deployment volume-pace-service 18081
 check_deployment volume-pace-databento-service 18091
 check_deployment directional-pressure-service 18084

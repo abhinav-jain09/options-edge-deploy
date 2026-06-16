@@ -9,6 +9,8 @@ resources:
   - databento-volume-aggregator-service.yaml
   - databento-mission-pressure-deployment.yaml
   - databento-mission-pressure-service.yaml
+  - databento-mission-sandwich-deployment.yaml
+  - databento-mission-sandwich-service.yaml
   - directional-pressure-databento-deployment.yaml
   - directional-pressure-deployment.yaml
   - directional-pressure-service.yaml

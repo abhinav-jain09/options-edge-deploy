@@ -1,6 +1,7 @@
 images:
   raw-to-display-service: 192.168.100.252:5000/options-edge-raw-to-display:dev
   databento-mission-pressure-service: 192.168.100.252:5000/options-edge-databento-mission-pressure:dev
+  databento-mission-sandwich-service: 192.168.100.252:5000/options-edge-databento-mission-sandwich:dev
   volume-pace-service: 192.168.100.252:5000/options-edge-volume-pace:dev
   directional-pressure-service: 192.168.100.252:5000/options-edge-directional-pressure:dev
   volume-sandwich-service: 192.168.100.252:5000/options-edge-volume-sandwich:dev
