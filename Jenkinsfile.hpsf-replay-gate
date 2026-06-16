@@ -34,7 +34,7 @@ pipeline {
     string(name: 'HPSF_STATE_DIR', defaultValue: '', description: 'Remote HPSF replay state dir. Empty derives /home/options-edge/data/kafka-streams/hpsf-replay-<REPLAY_DATE>.')
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'Replay-only HPSF processing image. Empty derives a unique replay tag; shared deploy tags such as dev/latest/main/prod are rejected.')
     string(name: 'BUILD_PLATFORM', defaultValue: 'linux/amd64', description: 'Docker buildx target platform for the replay image. Jenkins runs on Mac ARM; replay pods run on CentOS amd64 Kubernetes nodes.')
-    string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '', description: 'Prepared Databento JSONL replay files on Jenkins/remote. Empty derives /home/options-edge/data/hpsf-replay/<REPLAY_DATE>.')
+    string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '', description: 'Prepared Databento JSONL replay files on the Jenkins agent. Empty derives .replay/data/hpsf-replay/<REPLAY_DATE> under the workspace.')
     string(name: 'HPSF_REPLAY_EVIDENCE_JSON', defaultValue: '', description: 'Optional prebuilt real replay evidence JSON from a completed replay run')
     string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '2000', description: 'Kafka consumer-group catch-up polling attempts for replay processors')
     string(name: 'REPLAY_TOPIC_PARTITIONS', defaultValue: '12', description: 'Replay OPRA, Stage A strike-flow, strike-score, and DLQ topic partitions. Keep at 12 for the Stage A replay tuning ladder.')
@@ -114,7 +114,7 @@ pipeline {
             env.HPSF_STATE_DIR = "/home/options-edge/data/kafka-streams/hpsf-replay-${replayDateId}"
           }
           if (!params.HPSF_REPLAY_SOURCE_DIR?.trim()) {
-            env.HPSF_REPLAY_SOURCE_DIR = "/home/options-edge/data/hpsf-replay/${replayDateId}"
+            env.HPSF_REPLAY_SOURCE_DIR = "${env.WORKSPACE}/.replay/data/hpsf-replay/${replayDateId}"
           }
           def processingBranch = params.PROCESSING_BRANCH?.trim() ?: 'main'
           def case2Branches = ['feature/hpsf-vix-mean-reversion-case2', 'feature/hpsf-case2-blackbox-coverage-diagnostics']
