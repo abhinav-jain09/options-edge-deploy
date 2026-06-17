@@ -35,6 +35,16 @@ The remote server values are production values and must not become the dev defau
 
 Build `#264` failed because the Jenkinsfile drifted back to `/home/options-edge/config/kubeconfig`, which does not exist in local Jenkins. The `scripts/jenkins/enforce-local-dev-defaults.sh` rule now runs in the Jenkins `Validate` stage and blocks this kind of drift before any deploy, Kafka topic, or smoke-test step runs.
 
+## Kafka Topic Namespace
+
+The dev overlay intentionally leaves `TOPIC_PREFIX` empty. Databento live feed
+services publish and consume the shared remote topics such as
+`options.databento.raw`, `options.databento.display`, and
+`options.databento.strike-flow`. Jenkins topic creation and smoke checks must
+validate those same unprefixed topics; do not add a dev-only fallback that
+rewrites them to `dev.options.*` unless the live feed and gateway are migrated
+at the same time.
+
 ## Jenkins Deployment Flow
 
 The deployment Jenkins job is designed for a dev-first, manual-production flow:
