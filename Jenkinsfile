@@ -1,5 +1,5 @@
 pipeline {
-  agent any
+  agent { label 'built-in' }
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
     string(name: 'KUBECONFIG_FILE', defaultValue: '/var/jenkins_home/config/kubeconfig', description: 'Kubeconfig path on Jenkins agent')
