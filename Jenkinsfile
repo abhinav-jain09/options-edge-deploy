@@ -8,6 +8,7 @@ pipeline {
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
     string(name: 'BUILD_PLATFORM', defaultValue: '', description: 'Image platform. Empty defaults to linux/arm64 for dev and linux/amd64 for staging/production; staging/production always deploy linux/amd64.')
     string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses host.docker.internal:9092 for dev and remote Kafka for staging/production.')
+    string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses http://192.168.100.252:8090.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev', description: 'Databento volume aggregator image')
     string(name: 'DATABENTO_MISSION_PACE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-pace:dev', description: 'Databento mission pace image')
@@ -53,6 +54,7 @@ pipeline {
     IMAGE_TAG = "${params.IMAGE_TAG ?: ''}"
     BUILD_PLATFORM = "${params.BUILD_PLATFORM ?: ''}"
     KAFKA_BOOTSTRAP_SERVERS = "${params.KAFKA_BOOTSTRAP_SERVERS ?: ''}"
+    WEB_PUBLIC_URL = "${params.WEB_PUBLIC_URL ?: ''}"
     RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: '192.168.100.252:5000/options-edge-raw-to-display:dev'}"
     DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev'}"
     DATABENTO_MISSION_PACE_IMAGE = "${params.DATABENTO_MISSION_PACE_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-pace:dev'}"
@@ -159,7 +161,7 @@ pipeline {
     }
     stage('Pause Runtime For Kafka Cleanup') {
       when {
-        expression { return params.KAFKA_CLEANUP_TOPICS }
+        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -197,7 +199,7 @@ pipeline {
     }
     stage('Kafka Cleanup') {
       when {
-        expression { return params.KAFKA_CLEANUP_TOPICS }
+        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -220,6 +222,9 @@ pipeline {
       }
     }
     stage('Kafka Topics') {
+      when {
+        expression { return !params.DEPLOY_DRY_RUN }
+      }
       steps {
         sh '''
           set -euo pipefail
@@ -244,6 +249,9 @@ pipeline {
       }
     }
     stage('Reset HPSF Stage B Internal Topics') {
+      when {
+        expression { return !params.DEPLOY_DRY_RUN }
+      }
       steps {
         sh '''
           set -euo pipefail
@@ -281,7 +289,7 @@ pipeline {
     }
     stage('Resume Remote Apps') {
       when {
-        expression { return params.KAFKA_CLEANUP_TOPICS }
+        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -297,7 +305,7 @@ pipeline {
         sh '''
           set -euo pipefail
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://host.docker.internal:8090}"
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://192.168.100.252:8090}"
             curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
             curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
             echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
@@ -624,6 +632,9 @@ EOF
       }
     }
     stage('Kafka Internal Topics') {
+      when {
+        expression { return !params.DEPLOY_DRY_RUN }
+      }
       steps {
         sh '''
           set -euo pipefail
@@ -649,7 +660,7 @@ EOF
     }
     stage('Prometheus Scrapes') {
       when {
-        expression { return env.ENVIRONMENT != 'dev' }
+        expression { return env.ENVIRONMENT != 'dev' && !params.DEPLOY_DRY_RUN }
       }
       steps {
         withCredentials([string(credentialsId: 'options-edge-remote-become-password', variable: 'BECOME_PASSWORD')]) {
@@ -670,6 +681,9 @@ EOF
       }
     }
     stage('HPSF Smoke') {
+      when {
+        expression { return !params.DEPLOY_DRY_RUN }
+      }
       steps {
         sh '''
           set -euo pipefail
@@ -742,6 +756,7 @@ EOF
               string(name: 'IMAGE_TAG', value: params.IMAGE_TAG),
               string(name: 'BUILD_PLATFORM', value: 'linux/amd64'),
               string(name: 'KAFKA_BOOTSTRAP_SERVERS', value: ''),
+              string(name: 'WEB_PUBLIC_URL', value: params.WEB_PUBLIC_URL),
               string(name: 'RAW_TO_DISPLAY_IMAGE', value: params.RAW_TO_DISPLAY_IMAGE),
               string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
               string(name: 'DATABENTO_MISSION_PACE_IMAGE', value: params.DATABENTO_MISSION_PACE_IMAGE),
