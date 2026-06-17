@@ -56,7 +56,6 @@ reject_text "$jenkinsfile" "input message: 'Deploy OptionsEdge to DEV?'" \
 expected_stages=$(cat <<'EOF'
 Validate
 Bootstrap Jenkins Kubernetes Guard
-Manual Production Approval
 Render
 Unusual Whales Secret
 Resolve Images

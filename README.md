@@ -52,12 +52,12 @@ The deployment Jenkins job is designed for a dev-first, manual-production flow:
 1. Start the job with `ENVIRONMENT=dev` for the normal path.
 2. Jenkins renders and deploys the dev Kubernetes overlay automatically. Dev deployment must not require a manual approval button.
 3. Jenkins runs the smoke checks against the dev deployment.
-4. The final `Deploy To Production` stage pauses with a manual `Deploy to production` button.
+4. The final `Promote To Production` stage pauses with a manual `Deploy to production` button.
 5. Pressing that button starts a separate production deployment build with the same image and runtime parameters.
 
 The production promotion build sets `ENVIRONMENT=production` and `SKIP_PRODUCTION_PROMOTION=true`, so it deploys production directly after the normal preflight checks and does not create another promotion loop.
 
-Direct production runs are also protected: if a job is started with `ENVIRONMENT=production` manually, Jenkins pauses at `Manual Production Approval` and requires the `Deploy to production` button before applying the production overlay.
+Direct production runs are blocked. Production must be promoted from a successful dev deployment.
 
 Production promotion intentionally disables Kafka cleanup flags in the triggered production build:
 
@@ -85,6 +85,6 @@ Expected dev stage order:
 14. `Verify OptionsEdge Web App`
 15. `Smoke`
 16. `HPSF Smoke`
-17. `Promote To Production`, manual button only
+17. `Promote To Production`, the only production manual button
 
-`Manual Production Approval` appears only for direct `ENVIRONMENT=production` runs. It must not block dev.
+Direct `ENVIRONMENT=production` runs are blocked. Production deployment must start from a successful dev run through the final `Promote To Production` button, so production approval never appears before dev deployment.

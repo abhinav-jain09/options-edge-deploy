@@ -94,6 +94,10 @@ pipeline {
           set -euo pipefail
           scripts/jenkins/enforce-main-branch.sh
           scripts/jenkins/enforce-local-dev-defaults.sh
+          if [ "${ENVIRONMENT:-dev}" = "production" ] && [ "${SKIP_PRODUCTION_PROMOTION:-false}" != "true" ]; then
+            echo "Direct production runs are disabled. Run ENVIRONMENT=dev and use the final Promote To Production button after dev smoke passes." >&2
+            exit 1
+          fi
           test "$REMOTE_APP_HOME" = "/home/options-edge"
           test ! -d /root/options-edge
           test ! -d /options-edge
@@ -133,16 +137,6 @@ pipeline {
           set -euo pipefail
           scripts/jenkins/bootstrap-kubernetes-deploy-guard.sh
         '''
-      }
-    }
-    stage('Manual Production Approval') {
-      when {
-        expression { return env.ENVIRONMENT == 'production' && !params.SKIP_PRODUCTION_PROMOTION }
-      }
-      steps {
-        timeout(time: 30, unit: 'MINUTES') {
-          input message: 'Deploy OptionsEdge to PRODUCTION?', ok: 'Deploy to production'
-        }
       }
     }
     stage('Render') {
