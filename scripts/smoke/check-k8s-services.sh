@@ -115,7 +115,7 @@ check_feed_gateway() {
   local health_path="/health"
   echo "Checking live health for $deployment"
   kubectl -n "$NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
-  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:8091" >"$log_file" 2>&1 &
+  kubectl -n "$NAMESPACE" port-forward "deployment/$deployment" "${local_port}:18091" >"$log_file" 2>&1 &
   local pid=$!
   trap 'kill "$pid" 2>/dev/null || true' RETURN
   wait_for_port_forward "$deployment" "$pid" "$local_port" "$health_path" "$log_file"
