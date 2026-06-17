@@ -132,6 +132,7 @@ sample_value() {
   local output="$2"
   python3 - "$file" "$output" <<'PY'
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -482,6 +483,7 @@ PY
 validate_replay_summary() {
   python3 - "$ARTIFACT_DIR/hpsf-replay-summary.json" <<'PY'
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -493,7 +495,7 @@ summary = json.loads(summary_path.read_text(encoding="utf-8"))
 counts = summary.get("counts") or {}
 stage_b = summary.get("stageBPerformance") or {}
 key_validation = summary.get("keyValidation") or {}
-profile = str(summary.get("validationProfile") or "FULL_RTH_RELEASE").upper()
+profile = str(os.environ.get("HPSF_REPLAY_VALIDATION_PROFILE") or summary.get("validationProfile") or "FULL_RTH_RELEASE").upper()
 samples = summary.get("samples") or {}
 replay = summary.get("replay") or {}
 action_counts = summary.get("actionCounts") or {}

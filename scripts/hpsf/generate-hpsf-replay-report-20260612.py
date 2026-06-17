@@ -503,6 +503,7 @@ def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) ->
     kafka = diagnostics.get("kafka", {}) if isinstance(diagnostics.get("kafka"), dict) else {}
     stage_a_group = kafka.get("stageAConsumerGroup", {}) if isinstance(kafka.get("stageAConsumerGroup"), dict) else {}
     stage_a_internal = kafka.get("stageAInternalTopics", {}) if isinstance(kafka.get("stageAInternalTopics"), dict) else {}
+    source_health = kafka.get("sourceHealthBeforeStageA", {}) if isinstance(kafka.get("sourceHealthBeforeStageA"), dict) else {}
 
     opra_input = max(
         as_int(counts.get("opraTcbboRecordsRead")),
@@ -515,7 +516,10 @@ def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) ->
         as_int(counts.get("esTradesRead")),
         as_int(counts.get("esTradesPublished")),
         as_int(download_summary.get("esTradesRead")),
+        as_int(source_health.get("underlyingPublishedOrDownloaded")),
     )
+    opra_input = max(opra_input, as_int(source_health.get("opraPublishedOrDownloaded")))
+    source_offset_sum = as_int(source_health.get("sourceTopicOffsetSum"))
     strike_flow = as_int(counts.get("strikeFlowRecordsEmitted"))
     signal_count = as_int(counts.get("signalRecordsEmitted"))
     latest_count = as_int(counts.get("latestSignalRecordsEmitted"))
@@ -535,27 +539,38 @@ def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) ->
     group_exists = stage_a_group.get("exists")
     internal_count = as_int(stage_a_internal.get("count"))
 
+    input_existed = opra_input > 0 or es_input > 0 or source_offset_sum > 0
+    root_cause_category = "UNCLASSIFIED_REPLAY_FAILURE"
     root_cause = "Replay failed, but available artifacts were not sufficient to isolate one service or Kafka layer automatically."
-    if opra_input <= 0 and es_input <= 0 and strike_flow <= 0:
-        root_cause = "Replay input was not loaded or published; Kafka output validation failed downstream because there were no source records to process."
-    elif strike_flow <= 0 and "REBALANCING" in stage_a_state and "RUNNING" not in stage_a_state:
+    if input_existed and strike_flow <= 0 and group_exists is False:
+        root_cause_category = "STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED"
+        root_cause = "Replay input existed, but Stage A did not establish its Kafka Streams consumer group."
+    elif input_existed and strike_flow <= 0 and "REBALANCING" in stage_a_state and "RUNNING" not in stage_a_state:
+        root_cause_category = "STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED"
         root_cause = "Stage A Kafka Streams did not become operational; it remained in REBALANCING, so real replay input was not processed into strike-flow."
-    elif strike_flow <= 0 and group_exists is False:
-        root_cause = "Stage A did not establish its replay Kafka consumer group, so it could not consume the OPRA replay topic."
-    elif strike_flow <= 0 and "count" in stage_a_internal and internal_count == 0:
+    elif input_existed and strike_flow <= 0 and "count" in stage_a_internal and internal_count == 0:
+        root_cause_category = "STAGE_A_INTERNAL_TOPICS_MISSING"
         root_cause = "Stage A did not create Kafka Streams internal topics for this replay application id, indicating startup or group-assignment failed before processing."
-    elif strike_flow <= 0:
+    elif input_existed and strike_flow <= 0:
+        root_cause_category = "STAGE_A_STRIKE_FLOW_EMPTY"
         root_cause = "Stage A produced zero strike-flow records even though replay input existed; inspect Stage A service logs and DLQ for processor-level rejection or startup failure."
+    elif not input_existed and strike_flow <= 0:
+        root_cause_category = "REPLAY_INPUT_EMPTY"
+        root_cause = "Replay input was not loaded or published; Kafka output validation failed downstream because there were no source records to process."
     elif signal_count <= 0 or latest_count <= 0 or audit_count <= 0:
+        root_cause_category = "STAGE_B_NOT_STARTED_OR_NO_OUTPUT"
         root_cause = "Stage A produced strike-flow, but downstream Stage B outputs were empty or incomplete; inspect Stage B service state, scheduler counters, and underlying-state join health."
     elif underlying_emitted > 0 and (underlying_received <= 0 or underlying_stored <= 0 or underlying_hits <= 0):
+        root_cause_category = "STAGE_B_UNDERLYING_JOIN_NOT_READY"
         root_cause = "Underlying-state records were produced, but Stage B did not materialize them before validation; wait for the Stage B replay consumer group to catch up and inspect the underlying-state join if received/stored/hit counters remain zero."
     elif any("ALL_NO_TRADE_DATA_FAILURE" in failure for failure in failures):
+        root_cause_category = "ALL_NO_TRADE_DATA_FAILURE"
         root_cause = "Stage B consumed underlying-state and produced signals, but every final action remained NO_TRADE because option-chain coverage, liquid execution-candidate, or market-scoring warmup gates blocked candidate selection."
 
     lines = [
+        f"- Root cause category: {root_cause_category}",
         f"- Primary root cause: {root_cause}",
-        f"- Replay input health: OPRA records={opra_input}, ES records={es_input}",
+        f"- Replay input health: OPRA records={opra_input}, ES/underlying records={es_input}, source topic end-offset sum={source_offset_sum}",
         f"- Stage A output health: strike-flow records={strike_flow}",
         f"- Stage B output health: signal={signal_count}, latest-signal={latest_count}, audit={audit_count}",
     ]

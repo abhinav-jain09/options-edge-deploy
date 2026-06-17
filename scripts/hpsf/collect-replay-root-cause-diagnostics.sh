@@ -5,7 +5,7 @@ ARTIFACT_DIR="${HPSF_REPLAY_ARTIFACT_DIR:-artifacts}"
 LOG_DIR="$ARTIFACT_DIR/logs"
 mkdir -p "$LOG_DIR"
 
-BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-}"
 NAMESPACE="${NAMESPACE:-options-edge}"
 BUILD="${BUILD_NUMBER:-manual}"
 REPLAY_DATE="${REPLAY_DATE:-2026-06-12}"
@@ -38,6 +38,7 @@ collect_service() {
 
   kubectl -n "$NAMESPACE" get pod "$pod" -o json > "$LOG_DIR/${label}-pod.json" 2>/dev/null || true
   kubectl -n "$NAMESPACE" describe pod "$pod" > "$LOG_DIR/${label}-describe.log" 2>/dev/null || true
+  kubectl -n "$NAMESPACE" logs "$pod" --previous --all-containers=true > "$LOG_DIR/${label}-previous.log" 2>/dev/null || true
   local fresh_log="$LOG_DIR/${log_name}.fresh"
   kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > "$fresh_log" 2>/dev/null || true
   if [[ -s "$fresh_log" || ! -s "$LOG_DIR/${log_name}" ]]; then
@@ -45,20 +46,29 @@ collect_service() {
   else
     rm -f "$fresh_log"
   fi
-  run_capture "$LOG_DIR/${label}-consumer-group.log" kafka-consumer-groups --bootstrap-server "$BOOTSTRAP" --describe --group "$app_id"
-  set +e
-  kafka-topics --bootstrap-server "$BOOTSTRAP" --list > "$LOG_DIR/all-kafka-topics.log" 2>&1
-  set -e
-  grep -E "^${app_id//./\\.}-" "$LOG_DIR/all-kafka-topics.log" > "$LOG_DIR/${label}-internal-topics.log" 2>/dev/null || true
+  if [[ -n "$BOOTSTRAP" ]]; then
+    run_capture "$LOG_DIR/${label}-consumer-group.log" kafka-consumer-groups --bootstrap-server "$BOOTSTRAP" --describe --group "$app_id"
+    set +e
+    kafka-topics --bootstrap-server "$BOOTSTRAP" --list > "$LOG_DIR/all-kafka-topics.log" 2>&1
+    set -e
+    grep -E "^${app_id//./\\.}-" "$LOG_DIR/all-kafka-topics.log" > "$LOG_DIR/${label}-internal-topics.log" 2>/dev/null || true
+  else
+    echo "KAFKA_BOOTSTRAP_SERVERS is empty" > "$LOG_DIR/${label}-consumer-group.log"
+    : > "$LOG_DIR/${label}-internal-topics.log"
+  fi
 }
+
+kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp > "$LOG_DIR/stage-a-events.log" 2>/dev/null || true
 
 collect_service stage-a "$STAGE_A_POD" "$STAGE_A_APP_ID" stage-a.log
 collect_service underlying "$UNDERLYING_POD" "$UNDERLYING_APP_ID" underlying.log
 collect_service stage-b "$STAGE_B_POD" "$STAGE_B_APP_ID" stage-b.log
 
-run_capture "$LOG_DIR/replay-source-topic.log" kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$TOPIC_PREFIX.opra.tcbbo"
-run_capture "$LOG_DIR/replay-strike-flow-topic.log" kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$TOPIC_PREFIX.hpsf.strike-flow"
-run_capture "$LOG_DIR/replay-dlq-topic.log" kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$TOPIC_PREFIX.hpsf.dlq"
+if [[ -n "$BOOTSTRAP" ]]; then
+  run_capture "$LOG_DIR/replay-source-topic.log" kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$TOPIC_PREFIX.opra.tcbbo"
+  run_capture "$LOG_DIR/replay-strike-flow-topic.log" kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$TOPIC_PREFIX.hpsf.strike-flow"
+  run_capture "$LOG_DIR/replay-dlq-topic.log" kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$TOPIC_PREFIX.hpsf.dlq"
+fi
 
 python3 - <<'PY'
 import json
@@ -132,6 +142,10 @@ underlying_log = read(log_dir / "underlying.log")
 stage_a_internal = internal_topics("stage-a")
 stage_b_internal = internal_topics("stage-b")
 underlying_internal = internal_topics("underlying")
+artifact_dir = Path(os.environ.get("HPSF_REPLAY_ARTIFACT_DIR", "artifacts"))
+publish_summary = read_json(artifact_dir / "hpsf-publish-summary.json")
+download_summary = read_json(artifact_dir / "hpsf-download-summary.json")
+source_health = read_json(log_dir / "replay-source-health-before-stage-a.json")
 
 payload = {
     "build": build,
@@ -157,6 +171,7 @@ payload = {
         },
     },
     "kafka": {
+        "sourceHealthBeforeStageA": source_health,
         "stageAConsumerGroup": {
             "groupId": stage_a_app_id,
             "exists": group_exists("stage-a"),
@@ -185,6 +200,8 @@ payload = {
     "logging": {
         "slf4jNoopDetected": "SLF4J: Defaulting to no-operation" in "\n".join([stage_a_log, stage_b_log, underlying_log]),
     },
+    "publishSummary": publish_summary,
+    "downloadSummary": download_summary,
 }
 (log_dir / "root-cause-diagnostics.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 (log_dir / "root-cause-diagnostics.log").write_text(
