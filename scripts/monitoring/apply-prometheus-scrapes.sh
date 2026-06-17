@@ -15,8 +15,9 @@ if [[ "$REMOTE_APP_HOME" != "/home/options-edge" ]]; then
   exit 1
 fi
 
-mkdir -p "$REMOTE_APP_HOME/tmp"
-work_dir="$(mktemp -d "$REMOTE_APP_HOME/tmp/prometheus-scrapes.XXXXXX")"
+tmp_root="${JENKINS_WORK_DIR:-$REMOTE_APP_HOME/tmp}"
+mkdir -p "$tmp_root"
+work_dir="$(mktemp -d "$tmp_root/prometheus-scrapes.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
 
 base_config="$work_dir/prometheus.base.yml"
