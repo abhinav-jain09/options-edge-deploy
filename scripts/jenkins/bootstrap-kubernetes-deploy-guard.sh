@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-admin_kubeconfig="${KUBECONFIG_ADMIN_FILE:-/home/options-edge/config/kubeconfig}"
-jenkins_kubeconfig="${KUBECONFIG_FILE:-/home/options-edge/config/jenkins-deployer.kubeconfig}"
+admin_kubeconfig="${KUBECONFIG_ADMIN_FILE:-/var/jenkins_home/config/kubeconfig}"
+jenkins_kubeconfig="${KUBECONFIG_FILE:-/var/jenkins_home/config/jenkins-deployer.kubeconfig}"
 namespace="${K8S_NAMESPACE:-options-edge}"
 service_account="${JENKINS_K8S_SERVICE_ACCOUNT:-jenkins-deployer}"
 token_secret="${JENKINS_K8S_TOKEN_SECRET:-jenkins-deployer-token}"
