@@ -20,3 +20,13 @@ data:
   WEB_BASE_URL: http://host.docker.internal:8090
   GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
   CHECK_MARKET_DATA_SOURCES: DATABENTO
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-databento-feed-config
+  namespace: options-edge
+data:
+  APP_PROFILE: dev
+  KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092
+  KAFKA_SCHEMA_REGISTRY_URL: http://host.docker.internal:8082

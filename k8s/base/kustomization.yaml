@@ -1,6 +1,9 @@
 resources:
   - namespace.yaml
   - configmap.yaml
+  - databento-feed-configmap.yaml
+  - databento-feed-deployment.yaml
+  - databento-feed-service.yaml
   - ibkr-feed-deployment.yaml
   - ibkr-feed-service.yaml
   - feed-gateway-deployment.yaml
