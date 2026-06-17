@@ -142,12 +142,22 @@ create_topic_if_needed() {
   if [[ -n "$description" ]]; then
     current_partitions="$(echo "$description" | head -1 | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p')"
     current_replication_factor="$(echo "$description" | head -1 | sed -n 's/.*ReplicationFactor: \([0-9]*\).*/\1/p')"
-    if [[ "$current_partitions" != "$partitions" || "$current_replication_factor" != "$REPLICATION_FACTOR" ]]; then
-      echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected partitions=$partitions replicationFactor=$REPLICATION_FACTOR" >&2
+    if [[ -z "$current_partitions" || -z "$current_replication_factor" ]]; then
+      echo "Cannot parse current topic shape for $topic" >&2
+      echo "$description" >&2
+      exit 1
+    fi
+    if (( current_partitions < partitions )); then
+      echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least partitions=$partitions replicationFactor=$REPLICATION_FACTOR" >&2
+      echo "Refusing topic repair in HPSF topic script. Increase partitions manually if this is intentional." >&2
+      exit 1
+    fi
+    if [[ "$current_replication_factor" != "$REPLICATION_FACTOR" ]]; then
+      echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected replicationFactor=$REPLICATION_FACTOR" >&2
       echo "Refusing destructive topic repair in HPSF topic script. Fix manually if this is intentional." >&2
       exit 1
     fi
-    echo "Topic $topic already exists with expected partitions=$partitions replicationFactor=$REPLICATION_FACTOR"
+    echo "Topic $topic already exists with compatible partitions=$current_partitions expectedMinimum=$partitions replicationFactor=$REPLICATION_FACTOR"
   else
     run_cmd kafka-topics --bootstrap-server "$BOOTSTRAP_SERVERS" \
       --create \
