@@ -533,8 +533,9 @@ EOF
           effective_expiry="${IB_EXPIRY:-$(default_weekday_expiry)}"
           kafka_bootstrap_servers="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
           kafka_schema_registry_url="${KAFKA_SCHEMA_REGISTRY_URL:-http://192.168.100.252:8082}"
+          postgres_jdbc_url="${POSTGRES_JDBC_URL:-jdbc:postgresql://192.168.100.252:5432/options_flow_dev}"
           cat >"$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json" <<EOF
-{"data":{"APP_MARKET_DATA_SOURCE":"$market_data_source","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","KAFKA_RAW_TOPIC":"$effective_raw_topic","IB_HOST":"${IB_HOST:-127.0.0.1}","IB_PORT":"${IB_PORT:-4001}","IB_CLIENT_ID":"${IB_CLIENT_ID:-212}","IB_EXPIRY":"$effective_expiry","IB_MAX_STRIKES":"${IB_MAX_STRIKES:-43}","UNUSUAL_WHALES_EXPIRY":"$effective_expiry"}}
+{"data":{"APP_MARKET_DATA_SOURCE":"$market_data_source","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","POSTGRES_JDBC_URL":"$postgres_jdbc_url","KAFKA_RAW_TOPIC":"$effective_raw_topic","IB_HOST":"${IB_HOST:-127.0.0.1}","IB_PORT":"${IB_PORT:-4001}","IB_CLIENT_ID":"${IB_CLIENT_ID:-212}","IB_EXPIRY":"$effective_expiry","IB_MAX_STRIKES":"${IB_MAX_STRIKES:-43}","UNUSUAL_WHALES_EXPIRY":"$effective_expiry"}}
 EOF
           kubectl -n options-edge patch configmap options-edge-config \
             --type merge \
