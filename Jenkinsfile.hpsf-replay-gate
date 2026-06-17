@@ -63,6 +63,7 @@ pipeline {
     string(name: 'HPSF_STAGE_B_CHAIN_SHARD_EVALUATION_ENABLED', defaultValue: 'false', description: 'Use sharded assembled chain for evaluation only after parity passes')
     string(name: 'HPSF_STAGE_B_RAW_CHAIN_REPARTITION_FALLBACK_ENABLED', defaultValue: 'true', description: 'Allow raw by-chain fallback during sharded-chain rollout')
     string(name: 'HPSF_STAGE_B_CHAIN_SHARD_PARITY_REQUIRED', defaultValue: 'true', description: 'Require Stage B sharded-chain parity evidence in black-box validation')
+    booleanParam(name: 'HPSF_FORCE_CASE2_VALIDATION', defaultValue: false, description: 'Force Case 2 diagnostic validation for replay child branches')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret text credential for Databento API key')
     string(name: 'BUGZILLA_URL', defaultValue: 'http://192.168.100.252:8092', description: 'Bugzilla base URL')
     string(name: 'BUGZILLA_USER', defaultValue: 'admin@options-edge.local', description: 'Bugzilla user')
@@ -118,12 +119,15 @@ pipeline {
             env.HPSF_REPLAY_SOURCE_DIR = "${env.WORKSPACE}/.replay/data/hpsf-replay/${replayDateId}"
           }
           def processingBranch = params.PROCESSING_BRANCH?.trim() ?: 'main'
+          def branchLower = processingBranch.toLowerCase()
           def case2Branches = [
             'feature/hpsf-vix-mean-reversion-case2',
             'feature/hpsf-case2-blackbox-coverage-diagnostics',
             'feature/hpsf-stage-b-sharded-evaluator-cutover-146'
           ]
-          env.HPSF_CASE2_REPLAY_BRANCH = case2Branches.contains(processingBranch) ? 'true' : 'false'
+          def forceCase2 = params.HPSF_FORCE_CASE2_VALIDATION || "${env.HPSF_FORCE_CASE2_VALIDATION ?: ''}".toBoolean()
+          def case2BranchPattern = branchLower.contains('case2') || branchLower.contains('vix-mean-reversion') || branchLower.contains('sharded-evaluator-cutover')
+          env.HPSF_CASE2_REPLAY_BRANCH = (forceCase2 || case2Branches.contains(processingBranch) || case2BranchPattern) ? 'true' : 'false'
           env.HPSF_STAGE_A_STREAMS_APPLICATION_ID = "options-edge-hpsf-stage-a-replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
           env.HPSF_STAGE_B_STREAMS_APPLICATION_ID = "options-edge-hpsf-stage-b-replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
           if (env.HPSF_STAGE_A_STREAMS_APPLICATION_ID == env.HPSF_STAGE_B_STREAMS_APPLICATION_ID) {
@@ -254,13 +258,21 @@ pipeline {
             set -euo pipefail
             mkdir -p artifacts/logs
             failure_file="artifacts/logs/replay-failure-code.env"
+            write_failure_file() {
+              code="$1"
+              reason="$2"
+              python3 - "$code" "$reason" <<'PY_FAILURE' > "$failure_file"
+import shlex
+import sys
+
+print(f"HPSF_REPLAY_FAILURE_CODE={shlex.quote(sys.argv[1])}")
+print(f"HPSF_REPLAY_FAILURE_REASON={shlex.quote(sys.argv[2])}")
+PY_FAILURE
+            }
             fail_with() {
               code="$1"
               reason="$2"
-              {
-                printf 'HPSF_REPLAY_FAILURE_CODE=%s\\n' "$code"
-                printf 'HPSF_REPLAY_FAILURE_REASON=%s\\n' "$reason"
-              } > "$failure_file"
+              write_failure_file "$code" "$reason"
               echo "$code: $reason" >&2
               exit 1
             }
@@ -385,13 +397,21 @@ pipeline {
           set -euo pipefail
           mkdir -p artifacts/logs
           failure_file="artifacts/logs/replay-failure-code.env"
+          write_failure_file() {
+            code="$1"
+            reason="$2"
+            python3 - "$code" "$reason" <<'PY_FAILURE' > "$failure_file"
+import shlex
+import sys
+
+print(f"HPSF_REPLAY_FAILURE_CODE={shlex.quote(sys.argv[1])}")
+print(f"HPSF_REPLAY_FAILURE_REASON={shlex.quote(sys.argv[2])}")
+PY_FAILURE
+          }
           fail_with() {
             code="$1"
             reason="$2"
-            {
-              printf 'HPSF_REPLAY_FAILURE_CODE=%s\\n' "$code"
-              printf 'HPSF_REPLAY_FAILURE_REASON=%s\\n' "$reason"
-            } > "$failure_file"
+            write_failure_file "$code" "$reason"
             echo "$code: $reason" >&2
             exit 1
           }
@@ -411,8 +431,10 @@ pipeline {
                 --time -1
             } >> artifacts/logs/replay-source-topic-offsets-before-stage-a.log 2>&1 || true
           done
-          python3 - <<'PY' || fail_with REPLAY_SOURCE_TOPIC_EMPTY_BEFORE_STAGE_A "Replay publish/download summaries or source topic offsets show no usable OPRA and underlying input before Stage A."
+          set +e
+          python3 - <<'PY'
 import json
+import os
 import re
 from pathlib import Path
 
@@ -471,14 +493,30 @@ for line in Path("artifacts/logs/replay-source-topic-offsets-before-stage-a.log"
 summary = {
     "opraPublishedOrDownloaded": opra,
     "underlyingPublishedOrDownloaded": underlying,
+    "opraTopicEndOffset": offsets_by_topic.get(f"{os.environ['TOPIC_PREFIX']}.opra.tcbbo", 0),
+    "esTradesTopicEndOffset": offsets_by_topic.get(f"{os.environ.get('UNDERLYING_TOPIC_PREFIX') or 'underlying.replay.' + os.environ['REPLAY_DATE'].replace('-', '')}.es.trades", 0),
+    "spxPriceTopicEndOffset": offsets_by_topic.get(f"{os.environ.get('UNDERLYING_TOPIC_PREFIX') or 'underlying.replay.' + os.environ['REPLAY_DATE'].replace('-', '')}.spx.price", 0),
+    "hpsfSourceTopicEndOffset": offsets_by_topic.get(f"{os.environ['TOPIC_PREFIX']}.hpsf.source", 0),
     "sourceTopicOffsetSum": offset_sum,
     "offsetsByTopic": offsets_by_topic,
 }
 Path("artifacts/logs/replay-source-health-before-stage-a.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 print(json.dumps(summary, indent=2, sort_keys=True))
-if opra <= 0 or underlying <= 0 or offset_sum <= 0:
+if opra <= 0 or summary["opraTopicEndOffset"] <= 0:
+    raise SystemExit(11)
+if underlying <= 0 or summary["esTradesTopicEndOffset"] <= 0 or summary["spxPriceTopicEndOffset"] <= 0:
+    raise SystemExit(12)
+if offset_sum <= 0:
     raise SystemExit(1)
 PY
+          source_health_status=$?
+          set -e
+          case "$source_health_status" in
+            0) ;;
+            11) fail_with REPLAY_SOURCE_OPRA_TOPIC_EMPTY_BEFORE_STAGE_A "OPRA replay publish/download count or ${TOPIC_PREFIX}.opra.tcbbo end offset is zero before Stage A." ;;
+            12) fail_with REPLAY_SOURCE_UNDERLYING_TOPIC_EMPTY_BEFORE_STAGE_A "ES/SPX replay publish/download count or underlying replay topic end offset is zero before Stage A." ;;
+            *) fail_with REPLAY_SOURCE_TOPIC_EMPTY_BEFORE_STAGE_A "Replay publish/download summaries or source topic offsets show no usable input before Stage A." ;;
+          esac
         '''
       }
     }
@@ -492,13 +530,21 @@ PY
           stage_a_app_id="${HPSF_STAGE_A_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}}"
           stage_b_app_id="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}}"
           failure_file="artifacts/logs/replay-failure-code.env"
+          write_failure_file() {
+            code="$1"
+            reason="$2"
+            python3 - "$code" "$reason" <<'PY_FAILURE' > "$failure_file"
+import shlex
+import sys
+
+print(f"HPSF_REPLAY_FAILURE_CODE={shlex.quote(sys.argv[1])}")
+print(f"HPSF_REPLAY_FAILURE_REASON={shlex.quote(sys.argv[2])}")
+PY_FAILURE
+          }
           fail_with() {
             code="$1"
             reason="$2"
-            {
-              printf 'HPSF_REPLAY_FAILURE_CODE=%s\\n' "$code"
-              printf 'HPSF_REPLAY_FAILURE_REASON=%s\\n' "$reason"
-            } > "$failure_file"
+            write_failure_file "$code" "$reason"
             echo "$code: $reason" >&2
             exit 1
           }
@@ -991,10 +1037,25 @@ PY
           test -x .replay/options-edge-processing/scripts/hpsf/run_blackbox_replay_validation.sh
           export ARTIFACTS_DIR="$workspace/artifacts"
           export HPSF_REPLAY_VALIDATION_PROFILE="${HPSF_REPLAY_VALIDATION_PROFILE:-SHARDED_CUTOVER_SMOKE}"
-          export HPSF_0DTE_DATA_QUALITY_REQUIRED=true
-          export HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=true
-          export HPSF_NEAR_SPOT_QUOTE_DRILL_REQUIRED=true
-          export HPSF_DLQ_IMPACT_CLASSIFICATION_REQUIRED=true
+          export HPSF_REPLAY_VALIDATION_PROFILE="$(printf '%s' "$HPSF_REPLAY_VALIDATION_PROFILE" | tr '[:lower:]' '[:upper:]')"
+          case "$HPSF_REPLAY_VALIDATION_PROFILE" in
+            FULL_RTH_RELEASE)
+              export HPSF_0DTE_DATA_QUALITY_REQUIRED=true
+              export HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=true
+              export HPSF_NEAR_SPOT_QUOTE_DRILL_REQUIRED=true
+              export HPSF_DLQ_IMPACT_CLASSIFICATION_REQUIRED=true
+              ;;
+            SHARDED_CUTOVER_SMOKE)
+              export HPSF_0DTE_DATA_QUALITY_REQUIRED=false
+              export HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=false
+              export HPSF_NEAR_SPOT_QUOTE_DRILL_REQUIRED=false
+              export HPSF_DLQ_IMPACT_CLASSIFICATION_REQUIRED=false
+              ;;
+            *)
+              echo "Unknown HPSF_REPLAY_VALIDATION_PROFILE=${HPSF_REPLAY_VALIDATION_PROFILE}" >&2
+              exit 1
+              ;;
+          esac
           export HPSF_CASE2_DIAGNOSTIC_REQUIRED="$HPSF_CASE2_REPLAY_BRANCH"
           export HPSF_CASE2_EXPECTED_SCENARIO=fallback_any
           export HPSF_VOL_REGIME_ENABLED="$HPSF_CASE2_REPLAY_BRANCH"

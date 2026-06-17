@@ -362,6 +362,47 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertNotIn("agent any", pipeline)
         self.assertIn("label 'hpsf-replay-agent'", pipeline)
 
+    def test_ReplayFailureFileShellQuotesReasonWithSpacesTest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            failure_file = Path(tmp) / "replay-failure-code.env"
+            reason = "Replay input existed, but Stage A did not establish its Kafka Streams consumer group."
+            writer = subprocess.run(
+                [
+                    "python3",
+                    "-",
+                    "STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED",
+                    reason,
+                ],
+                input=(
+                    "import shlex\n"
+                    "import sys\n"
+                    "from pathlib import Path\n"
+                    f"path = Path({str(failure_file)!r})\n"
+                    "path.write_text("
+                    "f'HPSF_REPLAY_FAILURE_CODE={shlex.quote(sys.argv[1])}\\n'"
+                    "f'HPSF_REPLAY_FAILURE_REASON={shlex.quote(sys.argv[2])}\\n',"
+                    " encoding='utf-8')\n"
+                ),
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(0, writer.returncode, writer.stderr)
+
+            reader = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f". {failure_file}; printf '%s\\n%s\\n' \"$HPSF_REPLAY_FAILURE_CODE\" \"$HPSF_REPLAY_FAILURE_REASON\"",
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(0, reader.returncode, reader.stderr)
+            self.assertEqual(
+                ["STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED", reason],
+                reader.stdout.strip().splitlines(),
+            )
+
     def test_JenkinsReplayScriptArchivesReportTest(self) -> None:
         pipeline = JENKINSFILE.read_text()
 
@@ -397,12 +438,26 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("scripts/hpsf/run_blackbox_replay_validation.sh", pipeline)
         self.assertIn("ARTIFACTS_DIR=\"$workspace/artifacts\"", pipeline)
         self.assertIn('HPSF_REPLAY_VALIDATION_PROFILE="${HPSF_REPLAY_VALIDATION_PROFILE:-SHARDED_CUTOVER_SMOKE}"', pipeline)
+        self.assertIn("FULL_RTH_RELEASE)", pipeline)
+        self.assertIn("SHARDED_CUTOVER_SMOKE)", pipeline)
+        self.assertIn("HPSF_0DTE_DATA_QUALITY_REQUIRED=false", pipeline)
+        self.assertIn("HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=false", pipeline)
         self.assertIn("HPSF_0DTE_DATA_QUALITY_REQUIRED=true", pipeline)
         self.assertIn("HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=true", pipeline)
         self.assertIn("HPSF_CASE2_REPLAY_BRANCH", pipeline)
         self.assertIn('HPSF_CASE2_DIAGNOSTIC_REQUIRED="$HPSF_CASE2_REPLAY_BRANCH"', pipeline)
+        self.assertIn("HPSF_FORCE_CASE2_VALIDATION", pipeline)
+        self.assertIn("branchLower.contains('case2')", pipeline)
+        self.assertIn("branchLower.contains('vix-mean-reversion')", pipeline)
+        self.assertIn("branchLower.contains('sharded-evaluator-cutover')", pipeline)
+        self.assertIn("feature/hpsf-stage-b-sharded-evaluator-cutover-146", pipeline)
+        self.assertIn("write_failure_file", pipeline)
+        self.assertIn("shlex.quote", pipeline)
+        self.assertIn("HPSF_REPLAY_FAILURE_REASON={shlex.quote(sys.argv[2])}", pipeline)
         self.assertIn("HPSF_NEAR_SPOT_QUOTE_DRILL_REQUIRED=true", pipeline)
+        self.assertIn("HPSF_NEAR_SPOT_QUOTE_DRILL_REQUIRED=false", pipeline)
         self.assertIn("HPSF_DLQ_IMPACT_CLASSIFICATION_REQUIRED=true", pipeline)
+        self.assertIn("HPSF_DLQ_IMPACT_CLASSIFICATION_REQUIRED=false", pipeline)
         self.assertIn("HPSF_CASE2_EXPECTED_SCENARIO=fallback_any", pipeline)
         self.assertIn("hpsf-blackbox-replay-validation.exit-code", pipeline)
         self.assertIn("Replay report was archived, but HPSF black-box replay validation failed", pipeline)
@@ -428,6 +483,12 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn('"$HPSF_REPLAY_BUILD_DIR/stage-a-validation.json"', pipeline)
         self.assertIn("HPSF_REPLAY_FAILURE_REASON", pipeline)
         self.assertIn('HPSF_REPLAY_FAILURE_CODE="STAGE_A_STRIKE_FLOW_EMPTY"', pipeline)
+        self.assertIn("opraTopicEndOffset", pipeline)
+        self.assertIn("esTradesTopicEndOffset", pipeline)
+        self.assertIn("spxPriceTopicEndOffset", pipeline)
+        self.assertIn("hpsfSourceTopicEndOffset", pipeline)
+        self.assertIn("REPLAY_SOURCE_OPRA_TOPIC_EMPTY_BEFORE_STAGE_A", pipeline)
+        self.assertIn("REPLAY_SOURCE_UNDERLYING_TOPIC_EMPTY_BEFORE_STAGE_A", pipeline)
         self.assertIn("JENKINS_PUBLIC_URL", pipeline)
         self.assertIn("sed 's#/#/job/#g'", pipeline)
         self.assertIn("command -v python3.11", pipeline)
