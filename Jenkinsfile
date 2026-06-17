@@ -11,6 +11,7 @@ pipeline {
     string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses http://host.docker.internal:8090 for dev and http://192.168.100.252:8090 for prod.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev', description: 'Databento volume aggregator image')
+    string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-feed:dev', description: 'Databento feed image')
     string(name: 'DATABENTO_MISSION_PACE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-pace:dev', description: 'Databento mission pace image')
     string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-pressure:dev', description: 'Databento mission pressure image')
     string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-sandwich:dev', description: 'Databento mission sandwich image')
@@ -29,6 +30,7 @@ pipeline {
     string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-strike-flow-classifier:dev', description: 'Strike flow classifier image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-ibkr-feed:dev', description: 'IBKR feed image')
     string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
+    string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
     choice(name: 'MARKET_DATA_SOURCE', choices: ['DATABENTO', 'IBKR'], description: 'Runtime raw market-data source for processors')
     string(name: 'RAW_TOPIC', defaultValue: '', description: 'Override raw topic. Empty uses source default.')
     string(name: 'IB_HOST', defaultValue: '127.0.0.1', description: 'IB Gateway/TWS host. IBKR feed uses hostNetwork, so localhost is the remote host.')
@@ -57,6 +59,7 @@ pipeline {
     WEB_PUBLIC_URL = "${params.WEB_PUBLIC_URL ?: ''}"
     RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: '192.168.100.252:5000/options-edge-raw-to-display:dev'}"
     DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev'}"
+    DATABENTO_FEED_IMAGE = "${params.DATABENTO_FEED_IMAGE ?: '192.168.100.252:5000/options-edge-databento-feed:dev'}"
     DATABENTO_MISSION_PACE_IMAGE = "${params.DATABENTO_MISSION_PACE_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-pace:dev'}"
     DATABENTO_MISSION_PRESSURE_IMAGE = "${params.DATABENTO_MISSION_PRESSURE_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-pressure:dev'}"
     DATABENTO_MISSION_SANDWICH_IMAGE = "${params.DATABENTO_MISSION_SANDWICH_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-sandwich:dev'}"
@@ -146,10 +149,14 @@ pipeline {
     }
     stage('Unusual Whales Secret') {
       steps {
-        withCredentials([string(credentialsId: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID, variable: 'UNUSUAL_WHALES_API_KEY')]) {
+        withCredentials([
+          string(credentialsId: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID, variable: 'UNUSUAL_WHALES_API_KEY'),
+          string(credentialsId: params.DATABENTO_API_KEY_CREDENTIAL_ID, variable: 'DATABENTO_API_KEY')
+        ]) {
           sh '''
             set -euo pipefail
             test -n "$UNUSUAL_WHALES_API_KEY"
+            test -n "$DATABENTO_API_KEY"
             apply_args=""
             if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
               apply_args="--dry-run=server"
@@ -162,6 +169,9 @@ pipeline {
             kubectl -n options-edge create secret generic options-edge-runtime-secrets \
               --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-Options#100}" \
               --from-literal=UNUSUAL_WHALES_API_KEY="$UNUSUAL_WHALES_API_KEY" \
+              --dry-run=client -o yaml | kubectl apply $apply_args -f -
+            kubectl -n options-edge create secret generic options-edge-databento-feed-env \
+              --from-literal=DATABENTO_API_KEY="$DATABENTO_API_KEY" \
               --dry-run=client -o yaml | kubectl apply $apply_args -f -
           '''
         }
@@ -189,6 +199,7 @@ pipeline {
             cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$registry/options-edge-raw-to-display:$image_tag
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$registry/options-edge-databento-volume-aggregator:$image_tag
+DATABENTO_FEED_IMAGE=$registry/options-edge-databento-feed:$image_tag
 DATABENTO_MISSION_PACE_IMAGE=$registry/options-edge-databento-mission-pace:$image_tag
 DATABENTO_MISSION_PRESSURE_IMAGE=$registry/options-edge-databento-mission-pressure:$image_tag
 DATABENTO_MISSION_SANDWICH_IMAGE=$registry/options-edge-databento-mission-sandwich:$image_tag
@@ -211,6 +222,7 @@ EOF
             cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
+DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
 DATABENTO_MISSION_PACE_IMAGE=$DATABENTO_MISSION_PACE_IMAGE
 DATABENTO_MISSION_PRESSURE_IMAGE=$DATABENTO_MISSION_PRESSURE_IMAGE
 DATABENTO_MISSION_SANDWICH_IMAGE=$DATABENTO_MISSION_SANDWICH_IMAGE
@@ -244,6 +256,7 @@ EOF
           images="
             RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
             DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
+            DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
             DATABENTO_MISSION_PACE_IMAGE=$DATABENTO_MISSION_PACE_IMAGE
             DATABENTO_MISSION_PRESSURE_IMAGE=$DATABENTO_MISSION_PRESSURE_IMAGE
             DATABENTO_MISSION_SANDWICH_IMAGE=$DATABENTO_MISSION_SANDWICH_IMAGE
@@ -588,8 +601,27 @@ EOF
             fi
           fi
           kafka_bootstrap_servers="$KAFKA_BOOTSTRAP_SERVERS"
-          kafka_schema_registry_url="${KAFKA_SCHEMA_REGISTRY_URL:-http://192.168.100.252:8082}"
-          postgres_jdbc_url="${POSTGRES_JDBC_URL:-jdbc:postgresql://192.168.100.252:5432/options_flow_dev}"
+          if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            databento_feed_profile=dev
+          else
+            databento_feed_profile=prod
+          fi
+          if [ -z "${KAFKA_SCHEMA_REGISTRY_URL:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_SCHEMA_REGISTRY_URL=http://host.docker.internal:8082
+            else
+              KAFKA_SCHEMA_REGISTRY_URL=http://192.168.100.252:8082
+            fi
+          fi
+          if [ -z "${POSTGRES_JDBC_URL:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              POSTGRES_JDBC_URL=jdbc:postgresql://host.docker.internal:5432/options_flow_dev
+            else
+              POSTGRES_JDBC_URL=jdbc:postgresql://192.168.100.252:5432/options_flow
+            fi
+          fi
+          kafka_schema_registry_url="$KAFKA_SCHEMA_REGISTRY_URL"
+          postgres_jdbc_url="$POSTGRES_JDBC_URL"
           cat >"$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json" <<EOF
 {"data":{"APP_MARKET_DATA_SOURCE":"$market_data_source","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","POSTGRES_JDBC_URL":"$postgres_jdbc_url","KAFKA_RAW_TOPIC":"$effective_raw_topic","IB_HOST":"${IB_HOST:-127.0.0.1}","IB_PORT":"${IB_PORT:-4001}","IB_CLIENT_ID":"${IB_CLIENT_ID:-212}","IB_EXPIRY":"$effective_expiry","IB_MAX_STRIKES":"${IB_MAX_STRIKES:-43}","UNUSUAL_WHALES_EXPIRY":"$effective_expiry"}}
 EOF
@@ -598,7 +630,7 @@ EOF
             --patch "$(cat "$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json")"
           if kubectl -n options-edge get configmap options-edge-databento-feed-config >/dev/null 2>&1; then
             cat >"$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json" <<EOF
-{"data":{"DATABENTO_EXPIRY":"$effective_expiry"}}
+{"data":{"APP_PROFILE":"$databento_feed_profile","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","DATABENTO_EXPIRY":"$effective_expiry"}}
 EOF
             kubectl -n options-edge patch configmap options-edge-databento-feed-config \
               --type merge \
@@ -606,6 +638,7 @@ EOF
           fi
           kubectl -n options-edge set image deployment/raw-to-display-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
           kubectl -n options-edge set image deployment/raw-to-display-databento-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
+          kubectl -n options-edge set image deployment/options-edge-databento-feed databento-feed="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pace-service databento-mission-pace="$DATABENTO_MISSION_PACE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pressure-service databento-mission-pressure="$DATABENTO_MISSION_PRESSURE_IMAGE"
@@ -631,6 +664,7 @@ EOF
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
           kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
+          kubectl -n options-edge rollout restart deployment/options-edge-databento-feed
           kubectl -n options-edge rollout restart deployment/databento-volume-aggregator
           kubectl -n options-edge rollout restart deployment/databento-mission-pace-service
           kubectl -n options-edge rollout restart deployment/databento-mission-pressure-service
@@ -656,6 +690,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=180s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-volume-aggregator --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-mission-pace-service --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-mission-pressure-service --timeout=240s
