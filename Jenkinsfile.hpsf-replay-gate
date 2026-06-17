@@ -31,6 +31,7 @@ pipeline {
     string(name: 'HPSF_MODE', defaultValue: 'REPLAY', description: 'HPSF mode')
     string(name: 'HPSF_STATE_DIR', defaultValue: '', description: 'Remote HPSF replay state dir. Empty derives /home/options-edge/data/kafka-streams/hpsf-replay-<REPLAY_DATE>.')
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'Replay-only HPSF processing image. Empty derives a unique replay tag; shared deploy tags such as dev/latest/main/prod are rejected.')
+    string(name: 'BUILD_PLATFORM', defaultValue: 'linux/amd64', description: 'Docker buildx target platform for the replay image. Jenkins runs on Mac ARM; replay pods run on CentOS amd64 Kubernetes nodes.')
     string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '', description: 'Prepared Databento JSONL replay files on Jenkins/remote. Empty derives /home/options-edge/data/hpsf-replay/<REPLAY_DATE>.')
     string(name: 'HPSF_REPLAY_EVIDENCE_JSON', defaultValue: '', description: 'Optional prebuilt real replay evidence JSON from a completed replay run')
     string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '2000', description: 'Kafka consumer-group catch-up polling attempts for replay processors')
@@ -127,6 +128,11 @@ pipeline {
             error("HPSF_PROCESSING_IMAGE must be replay-specific, not shared deploy tag '${imageTag}': ${replayImage}")
           }
           env.HPSF_PROCESSING_IMAGE = replayImage
+          def effectiveBuildPlatform = params.BUILD_PLATFORM?.trim() ?: 'linux/amd64'
+          if (!['linux/amd64', 'linux/arm64'].contains(effectiveBuildPlatform)) {
+            error("Unsupported BUILD_PLATFORM '${effectiveBuildPlatform}'. Use linux/amd64 or linux/arm64.")
+          }
+          env.EFFECTIVE_BUILD_PLATFORM = effectiveBuildPlatform
           currentBuild.displayName = "#${env.BUILD_NUMBER} ${env.HPSF_REPLAY_RUN_NAME}"
           currentBuild.description = "Replay date ${replayDate}; topics ${env.TOPIC_PREFIX ?: params.TOPIC_PREFIX}; processing ${processingBranch}; case2 ${env.HPSF_CASE2_REPLAY_BRANCH}"
         }
@@ -188,8 +194,16 @@ pipeline {
             PYTHONPATH=src .venv/bin/python -m unittest tests.test_hpsf_replay_es_reference tests.test_hpsf_historical_replay tests.test_hpsf_mapping
           )
           (cd .replay/options-edge-processing && mvn -B -pl hpsf-processing-service -am test package)
-          docker build -t "$HPSF_PROCESSING_IMAGE" -f .replay/options-edge-processing/hpsf-processing-service/Dockerfile .replay/options-edge-processing/hpsf-processing-service
-          docker push "$HPSF_PROCESSING_IMAGE"
+          docker buildx inspect options-edge-builder >/dev/null 2>&1 || docker buildx create --name options-edge-builder --use
+          docker buildx use options-edge-builder
+          docker buildx build \
+            --platform "$EFFECTIVE_BUILD_PLATFORM" \
+            -t "$HPSF_PROCESSING_IMAGE" \
+            --push \
+            -f .replay/options-edge-processing/hpsf-processing-service/Dockerfile \
+            .replay/options-edge-processing/hpsf-processing-service
+          docker buildx imagetools inspect "$HPSF_PROCESSING_IMAGE" | tee artifacts/hpsf-processing-image-imagetools.txt
+          grep -Eq "Platform:[[:space:]]*$EFFECTIVE_BUILD_PLATFORM($|[[:space:]])|$EFFECTIVE_BUILD_PLATFORM" artifacts/hpsf-processing-image-imagetools.txt
           (cd .replay/options-edge-integration-test && mvn -B test package)
           python3 scripts/hpsf/test_merge_stage_b_performance_metrics.py
         '''
