@@ -285,11 +285,44 @@ pipeline {
             --push \
             -f .replay/options-edge-processing/hpsf-processing-service/Dockerfile \
             .replay/options-edge-processing/hpsf-processing-service
-          docker buildx imagetools inspect "$HPSF_PROCESSING_IMAGE" | tee artifacts/logs/replay-image-manifest.txt
-          if ! grep -E "Platform:[[:space:]]+${HPSF_REPLAY_BUILD_PLATFORM}$" artifacts/logs/replay-image-manifest.txt >/dev/null; then
-            echo "Replay image manifest missing expected platform ${HPSF_REPLAY_BUILD_PLATFORM}: ${HPSF_PROCESSING_IMAGE}" >&2
-            exit 1
+          if ! docker buildx imagetools inspect "$HPSF_PROCESSING_IMAGE" > artifacts/logs/replay-image-manifest.txt; then
+            echo "docker buildx imagetools inspect failed; retrying with docker manifest inspect --insecure for HTTP registry ${HPSF_PROCESSING_IMAGE}" >&2
+            docker manifest inspect --insecure -v "$HPSF_PROCESSING_IMAGE" > artifacts/logs/replay-image-manifest.txt
           fi
+          cat artifacts/logs/replay-image-manifest.txt
+          python3 - "$HPSF_REPLAY_BUILD_PLATFORM" artifacts/logs/replay-image-manifest.txt <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+expected = sys.argv[1]
+manifest_path = Path(sys.argv[2])
+text = manifest_path.read_text(encoding="utf-8")
+expected_os, expected_arch = expected.split("/", 1)
+
+if re.search(rf"Platform:\s+{re.escape(expected)}(?:\s|$)", text):
+    raise SystemExit(0)
+
+try:
+    data = json.loads(text)
+except json.JSONDecodeError:
+    data = None
+
+def platform_matches(platform):
+    return platform.get("os") == expected_os and platform.get("architecture") == expected_arch
+
+if isinstance(data, dict):
+    descriptor_platform = ((data.get("Descriptor") or {}).get("platform") or {})
+    if platform_matches(descriptor_platform):
+        raise SystemExit(0)
+    for manifest in data.get("manifests") or []:
+        if platform_matches(manifest.get("platform") or {}):
+            raise SystemExit(0)
+
+print(f"Replay image manifest missing expected platform {expected}: {manifest_path}", file=sys.stderr)
+raise SystemExit(1)
+PY
           (cd .replay/options-edge-integration-test && mvn -B test package)
           python3 scripts/hpsf/test_merge_stage_b_performance_metrics.py
         '''
