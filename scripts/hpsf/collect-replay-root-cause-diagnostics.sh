@@ -30,15 +30,34 @@ run_capture() {
   return 0
 }
 
+capture_if_available() {
+  local output="$1"
+  shift
+  local tmp="${output}.tmp"
+  set +e
+  "$@" > "$tmp" 2>&1
+  local status=$?
+  set -e
+  if [[ "$status" -eq 0 && -s "$tmp" ]]; then
+    mv "$tmp" "$output"
+  else
+    rm -f "$tmp"
+    if [[ ! -e "$output" ]]; then
+      : > "$output"
+    fi
+  fi
+  return 0
+}
+
 collect_service() {
   local label="$1"
   local pod="$2"
   local app_id="$3"
   local log_name="$4"
 
-  kubectl -n "$NAMESPACE" get pod "$pod" -o json > "$LOG_DIR/${label}-pod.json" 2>/dev/null || true
-  kubectl -n "$NAMESPACE" describe pod "$pod" > "$LOG_DIR/${label}-describe.log" 2>/dev/null || true
-  kubectl -n "$NAMESPACE" logs "$pod" --previous --all-containers=true > "$LOG_DIR/${label}-previous.log" 2>/dev/null || true
+  capture_if_available "$LOG_DIR/${label}-pod.json" kubectl -n "$NAMESPACE" get pod "$pod" -o json
+  capture_if_available "$LOG_DIR/${label}-describe.log" kubectl -n "$NAMESPACE" describe pod "$pod"
+  capture_if_available "$LOG_DIR/${label}-previous.log" kubectl -n "$NAMESPACE" logs "$pod" --previous --all-containers=true
   local fresh_log="$LOG_DIR/${log_name}.fresh"
   kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > "$fresh_log" 2>/dev/null || true
   if [[ -s "$fresh_log" || ! -s "$LOG_DIR/${log_name}" ]]; then
