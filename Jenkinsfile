@@ -4,7 +4,7 @@ pipeline {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
     string(name: 'KUBECONFIG_FILE', defaultValue: '/home/options-edge/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
     string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/home/options-edge/config/kubeconfig', description: 'Admin kubeconfig used only to bootstrap the Jenkins-only Kubernetes deploy guard')
-    string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses host.docker.internal:5001 for dev and 192.168.100.252:5000 for staging/production.')
+    string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses 192.168.100.252:5000 for all environments.')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
     string(name: 'BUILD_PLATFORM', defaultValue: '', description: 'Image platform. Empty defaults to linux/arm64 for dev and linux/amd64 for staging/production; staging/production always deploy linux/amd64.')
     string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses remote Kafka at 192.168.100.252:9092,9094,9096.')
@@ -328,8 +328,6 @@ pipeline {
           image_tag="${IMAGE_TAG:-}"
           if [ -n "${IMAGE_REGISTRY:-}" ]; then
             registry="$IMAGE_REGISTRY"
-          elif [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            registry=host.docker.internal:5001
           else
             registry=192.168.100.252:5000
           fi

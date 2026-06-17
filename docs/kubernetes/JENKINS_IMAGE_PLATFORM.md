@@ -63,3 +63,10 @@ Jenkins also runs against the remote Kafka brokers by default:
 `192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096`. Do not use
 `host.docker.internal` defaults in this remote Jenkins pipeline because the
 CentOS Jenkins host cannot resolve that Mac Docker hostname.
+
+## Image Registry Default
+
+All deploy environments default to the remote registry
+`192.168.100.252:5000`. Jenkins should not resolve deploy images through
+`host.docker.internal:5001`; that hostname is local to Docker Desktop and is not
+reachable from the remote CentOS Jenkins host.
