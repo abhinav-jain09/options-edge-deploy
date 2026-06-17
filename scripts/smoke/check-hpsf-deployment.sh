@@ -4,6 +4,10 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-options-edge}"
 KUBECONFIG="${KUBECONFIG:-}"
 KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+TOPIC_PREFIX="${TOPIC_PREFIX:-}"
+if [[ -z "$TOPIC_PREFIX" && "${ENVIRONMENT:-}" == "dev" ]]; then
+  TOPIC_PREFIX="dev."
+fi
 REQUIRE_LATEST_SIGNAL="${REQUIRE_LATEST_SIGNAL:-false}"
 SKIP_K8S="${SKIP_K8S:-false}"
 DRY_RUN=false
@@ -21,6 +25,10 @@ fi
 
 log() {
   printf '[hpsf-smoke] %s\n' "$*"
+}
+
+topic_name() {
+  printf '%s%s' "$TOPIC_PREFIX" "$1"
 }
 
 run_or_echo() {
@@ -113,7 +121,7 @@ check_topics() {
     if [[ "$DRY_RUN" == "true" ]]; then
       run_or_echo "$ROOT_DIR/scripts/kafka/verify-hpsf-topics.sh"
     else
-      KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" "$ROOT_DIR/scripts/kafka/verify-hpsf-topics.sh"
+      TOPIC_PREFIX="$TOPIC_PREFIX" KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" "$ROOT_DIR/scripts/kafka/verify-hpsf-topics.sh"
     fi
   else
     echo "Missing scripts/kafka/verify-hpsf-topics.sh" >&2
@@ -128,9 +136,11 @@ check_latest_signal() {
   fi
   local output
   local status=0
-  log "checking options.hpsf.latest-signal readability"
+  local latest_signal_topic
+  latest_signal_topic="$(topic_name options.hpsf.latest-signal)"
+  log "checking $latest_signal_topic readability"
   set +e
-  output="$(kafka-console-consumer --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --topic options.hpsf.latest-signal --from-beginning --max-messages 1 --timeout-ms 10000 2>&1)"
+  output="$(kafka-console-consumer --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --topic "$latest_signal_topic" --from-beginning --max-messages 1 --timeout-ms 10000 2>&1)"
   status=$?
   set -e
   if [[ $status -ne 0 && "$REQUIRE_LATEST_SIGNAL" == "true" ]]; then

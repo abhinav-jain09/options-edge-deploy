@@ -12,6 +12,10 @@ done
 REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
 BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-}"
+TOPIC_PREFIX="${TOPIC_PREFIX:-}"
+if [[ -z "$TOPIC_PREFIX" && "${ENVIRONMENT:-}" == "dev" ]]; then
+  TOPIC_PREFIX="dev."
+fi
 
 if [[ "$REPLICATION_FACTOR" != "1" ]]; then
   echo "HPSF RF=1 cluster rule violated: KAFKA_TOPIC_REPLICATION_FACTOR=$REPLICATION_FACTOR" >&2
@@ -32,6 +36,10 @@ MIN_CLEANABLE_DIRTY_RATIO=0.10
 COMPACTED_SEGMENT_MS=1800000
 COMPACTED_SEGMENT_BYTES=134217728
 MAX_COMPACTION_LAG_MS=3600000
+
+topic_name() {
+  printf '%s%s' "$TOPIC_PREFIX" "$1"
+}
 
 # topic|partitions|cleanup.policy|retention.ms|segment.ms|segment.bytes|extra-config-csv
 HPSF_TOPIC_SPECS=(
@@ -181,5 +189,6 @@ create_topic_if_needed() {
 rf1_warning
 for spec in "${HPSF_TOPIC_SPECS[@]}"; do
   IFS='|' read -r topic partitions cleanup_policy retention_ms segment_ms segment_bytes extra <<<"$spec"
+  topic="$(topic_name "$topic")"
   create_topic_if_needed "$topic" "$partitions" "$cleanup_policy" "$retention_ms" "$segment_ms" "$segment_bytes" "$extra"
 done

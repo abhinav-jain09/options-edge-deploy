@@ -205,8 +205,18 @@ pipeline {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
+          fi
           export KAFKA_BOOTSTRAP_SERVERS
+          export TOPIC_PREFIX
           export KAFKA_CLEANUP_TOPICS="${KAFKA_CLEANUP_TOPICS}"
           export KAFKA_DELETE_UNWANTED_TOPICS="${KAFKA_DELETE_UNWANTED_TOPICS}"
           export ALLOW_PROD_KAFKA_CLEANUP="${ALLOW_PROD_KAFKA_CLEANUP}"
@@ -223,8 +233,18 @@ pipeline {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
+          fi
           export KAFKA_BOOTSTRAP_SERVERS
+          export TOPIC_PREFIX
           export KAFKA_TOPIC_REPLICATION_FACTOR=1
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           export KAFKA_TOPIC_RETENTION_MS=86400000
@@ -244,8 +264,18 @@ pipeline {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
+          fi
           export KAFKA_BOOTSTRAP_SERVERS
+          export TOPIC_PREFIX
           export HPSF_STAGE_B_STREAMS_APPLICATION_ID="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b-v2-1}"
 
           kubectl -n options-edge scale deployment/hpsf-stage-b-service --replicas=0 || true
@@ -287,7 +317,7 @@ pipeline {
         sh '''
           set -euo pipefail
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://192.168.100.252:8090}"
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://host.docker.internal:8090}"
             curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
             curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
             echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
@@ -619,7 +649,13 @@ EOF
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
           export KAFKA_BOOTSTRAP_SERVERS
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           export KAFKA_TOPIC_RETENTION_MS=86400000
@@ -651,7 +687,18 @@ EOF
     }
     stage('Smoke') {
       steps {
-        sh 'scripts/smoke/check-k8s-services.sh'
+        sh '''
+          set -euo pipefail
+          if [ -z "${WEB_BASE_URL:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              WEB_BASE_URL=http://host.docker.internal:8090
+            else
+              WEB_BASE_URL=http://192.168.100.252:8090
+            fi
+          fi
+          export WEB_BASE_URL
+          scripts/smoke/check-k8s-services.sh
+        '''
       }
     }
     stage('HPSF Smoke') {
@@ -662,8 +709,18 @@ EOF
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
+          fi
           export KAFKA_BOOTSTRAP_SERVERS
+          export TOPIC_PREFIX
           export KAFKA_TOPIC_REPLICATION_FACTOR=1
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           export KUBECONFIG="${KUBECONFIG}"

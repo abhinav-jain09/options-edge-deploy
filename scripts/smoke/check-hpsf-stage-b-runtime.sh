@@ -4,6 +4,10 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-options-edge}"
 KUBECONFIG="${KUBECONFIG:-}"
 KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+TOPIC_PREFIX="${TOPIC_PREFIX:-}"
+if [[ -z "$TOPIC_PREFIX" && "${ENVIRONMENT:-}" == "dev" ]]; then
+  TOPIC_PREFIX="dev."
+fi
 DRY_RUN=false
 if [[ "${1:-}" == "--dry-run" ]]; then
   DRY_RUN=true
@@ -15,6 +19,10 @@ if [[ -n "$KUBECONFIG" ]]; then
 fi
 
 log() { printf '[hpsf-stage-b-smoke] %s\n' "$*"; }
+
+topic_name() {
+  printf '%s%s' "$TOPIC_PREFIX" "$1"
+}
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -167,8 +175,13 @@ expiry="$trade_date"
 underlying_event_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 underlying_state_json="{\"schemaVersion\":2,\"eventTime\":\"$underlying_event_time\",\"tradeDate\":\"$trade_date\",\"underlying\":\"SPX\",\"spot\":6005.0,\"spotTime\":\"$underlying_event_time\",\"esSymbol\":\"ESM6\",\"esLast\":6030.0,\"esLastTime\":\"$underlying_event_time\",\"esVwap\":6030.0,\"esVwapTime\":\"$underlying_event_time\",\"rollingBasis\":25.0,\"spxEquivalentVwap\":6005.0,\"distanceToVwap\":0.0,\"vwapSource\":\"ES_FUTURES_BASIS_ADJUSTED\",\"referenceSymbol\":\"ESM6\",\"basisTime\":\"$underlying_event_time\",\"expectedMove15m\":15.0,\"momentum1m\":3.0,\"momentum5m\":5.0}"
 
-log "priming Stage B with underlying-state key $trade_date|SPX"
-produce_keyed_json options.hpsf.underlying-state "$trade_date|SPX" "$underlying_state_json"
+underlying_state_topic="$(topic_name options.hpsf.underlying-state)"
+strike_flow_topic="$(topic_name options.hpsf.strike-flow)"
+signal_topic="$(topic_name options.hpsf.signal)"
+latest_signal_topic="$(topic_name options.hpsf.latest-signal)"
+
+log "priming Stage B with underlying-state key $trade_date|SPX on $underlying_state_topic"
+produce_keyed_json "$underlying_state_topic" "$trade_date|SPX" "$underlying_state_json"
 sleep "${HPSF_STAGE_B_UNDERLYING_PRIME_SECONDS:-10}"
 wait_for_stage_b_running
 
@@ -195,20 +208,20 @@ cleanup() {
 trap cleanup EXIT
 
 log "producing deterministic Stage B fixture $fixture_id expecting live signal marker $expected_signal_marker; fixture event id would be $expected_eval_id"
-signal_capture_pid="$(start_topic_capture options.hpsf.signal "$signal_output_file" "$signal_error_file")"
-latest_capture_pid="$(start_topic_capture options.hpsf.latest-signal "$latest_output_file" "$latest_error_file")"
+signal_capture_pid="$(start_topic_capture "$signal_topic" "$signal_output_file" "$signal_error_file")"
+latest_capture_pid="$(start_topic_capture "$latest_signal_topic" "$latest_output_file" "$latest_error_file")"
 sleep "${HPSF_STAGE_B_CONSUMER_READY_SECONDS:-3}"
-produce_keyed_json options.hpsf.strike-flow "$trade_date|$expiry|6005|CALL" "$flow_json"
+produce_keyed_json "$strike_flow_topic" "$trade_date|$expiry|6005|CALL" "$flow_json"
 
-signal_output="$(read_expected_record options.hpsf.signal "$expected_signal_marker" "$signal_output_file" "$signal_error_file")"
-latest_output="$(read_expected_record options.hpsf.latest-signal "$expected_signal_marker" "$latest_output_file" "$latest_error_file")"
+signal_output="$(read_expected_record "$signal_topic" "$expected_signal_marker" "$signal_output_file" "$signal_error_file")"
+latest_output="$(read_expected_record "$latest_signal_topic" "$expected_signal_marker" "$latest_output_file" "$latest_error_file")"
 
 if [[ -z "$signal_output" ]]; then
-  echo "Stage B did not emit options.hpsf.signal after fixture" >&2
+  echo "Stage B did not emit $signal_topic after fixture" >&2
   exit 1
 fi
 if [[ -z "$latest_output" ]]; then
-  echo "Stage B did not emit options.hpsf.latest-signal after fixture" >&2
+  echo "Stage B did not emit $latest_signal_topic after fixture" >&2
   exit 1
 fi
 if grep -F '"enabled":true' <<<"$signal_output$latest_output" >/dev/null; then
