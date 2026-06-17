@@ -18,6 +18,15 @@ if [[ ! -f "$admin_kubeconfig" ]]; then
   exit 1
 fi
 
+apply_jenkins_deployer_rbac() {
+  kubectl --kubeconfig "$admin_kubeconfig" apply -f k8s/security/jenkins-deployer-rbac.yaml
+}
+
+verify_jenkins_deployer_access() {
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i patch deployment >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i create pods --subresource=portforward >/dev/null
+}
+
 write_jenkins_deployer_kubeconfig() {
   mkdir -p "$(dirname "$jenkins_kubeconfig")"
 
@@ -65,14 +74,17 @@ EOF
 }
 
 if [[ "$break_glass_recreate_kubeconfig" == "true" ]]; then
+  apply_jenkins_deployer_rbac
   write_jenkins_deployer_kubeconfig
-  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i patch deployment >/dev/null
+  verify_jenkins_deployer_access
   echo "Break-glass repair complete: recreated Jenkins deployer kubeconfig at $jenkins_kubeconfig."
   exit 0
 fi
 
+apply_jenkins_deployer_rbac
+
 if kubectl --kubeconfig "$admin_kubeconfig" get validatingadmissionpolicy options-edge-jenkins-only-workloads >/dev/null 2>&1; then
-  if [[ -f "$jenkins_kubeconfig" ]] && kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i patch deployment >/dev/null 2>&1; then
+  if [[ -f "$jenkins_kubeconfig" ]] && verify_jenkins_deployer_access >/dev/null 2>&1; then
     echo "Kubernetes deploy guard is already active and Jenkins deployer kubeconfig is usable."
     exit 0
   fi
@@ -83,11 +95,10 @@ fi
 
 mkdir -p "$(dirname "$jenkins_kubeconfig")"
 
-kubectl --kubeconfig "$admin_kubeconfig" apply -f k8s/security/jenkins-deployer-rbac.yaml
 kubectl --kubeconfig "$admin_kubeconfig" -n "$namespace" label namespace "$namespace" options-edge/deploy-guard=jenkins-only --overwrite
 
 write_jenkins_deployer_kubeconfig
-kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i patch deployment >/dev/null
+verify_jenkins_deployer_access
 kubectl --kubeconfig "$admin_kubeconfig" apply -f k8s/security/jenkins-only-workload-admission.yaml
 
 echo "Kubernetes deploy guard is active: workload mutations in $namespace require $namespace/$service_account."
