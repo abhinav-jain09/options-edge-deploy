@@ -4,9 +4,6 @@ set -euo pipefail
 EXPECTED_REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 EXPECTED_MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
 TOPIC_PREFIX="${TOPIC_PREFIX:-}"
-if [[ -z "$TOPIC_PREFIX" && "${ENVIRONMENT:-}" == "dev" ]]; then
-  TOPIC_PREFIX="dev."
-fi
 if [[ "$EXPECTED_REPLICATION_FACTOR" != "1" || "$EXPECTED_MIN_ISR" != "1" ]]; then
   echo "HPSF verification only supports RF=1/min.insync.replicas=1 for the current cluster" >&2
   exit 1

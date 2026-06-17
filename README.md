@@ -34,7 +34,7 @@ Do not change these defaults without intentionally migrating Jenkins and updatin
 - Dev Jenkins admin kubeconfig: `/var/jenkins_home/config/kubeconfig`
 - Dev image registry: `host.docker.internal:5001`
 - Dev Kafka: `host.docker.internal:9092`
-- Dev Kafka topic prefix: `dev.`
+- Dev Kafka topic prefix: empty/unprefixed
 - Dev OptionsEdge web smoke URL inside Jenkins: `http://host.docker.internal:8090`
 - Dev OptionsEdge web app from the Mac browser: `http://localhost:8090`
 
@@ -54,10 +54,11 @@ Build `#264` failed because the Jenkinsfile drifted back to `/home/options-edge/
 ## Kafka Topic Namespace
 
 Kafka topic namespace changes must follow the environment boundary above.
-Local Mac dev uses `TOPIC_PREFIX=dev.` and validates topics such as
-`dev.options.databento.raw`. Remote production uses an empty topic prefix and
-validates topics such as `options.databento.raw`. Do not fix a remote
-production topic issue by changing the local Mac dev namespace.
+Local Mac dev and remote production both use unprefixed topic names such as
+`options.databento.raw`. They are separated by Kafka bootstrap servers, not by a
+topic prefix: local dev uses `host.docker.internal:9092`; production uses
+`192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096`. Do not fix a
+remote production topic issue by changing the local Mac dev namespace.
 
 ## Jenkins Deployment Flow
 

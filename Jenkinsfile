@@ -156,6 +156,37 @@ pipeline {
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
             KAFKA_BOOTSTRAP_SERVERS=localhost:9092
           fi
+          echo "Pausing local dev runtime before one-time Databento Kafka cleanup."
+          /home/abhinav/ci/bin/app-control.sh options-edge stop || true
+          for i in $(seq 1 30); do
+            if ! ss -ltnp 2>/dev/null | grep -q ':8090'; then
+              echo "options-edge Tomcat port 8090 is stopped."
+              break
+            fi
+            echo "Waiting for options-edge Tomcat port 8090 to stop."
+            sleep 2
+          done
+          if ss -ltnp 2>/dev/null | grep -q ':8090'; then
+            echo "Timed out waiting for options-edge Tomcat port 8090 to stop before one-time Kafka cleanup." >&2
+            ss -ltnp 2>/dev/null | grep ':8090' || true
+            exit 1
+          fi
+          kubectl -n options-edge scale deployment --all --replicas=0 || true
+          for i in $(seq 1 60); do
+            pod_count="$(kubectl -n options-edge get pods --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+            if [ "$pod_count" = "0" ]; then
+              echo "All options-edge pods are stopped."
+              break
+            fi
+            echo "Waiting for options-edge pods to stop before one-time Kafka cleanup; remaining=$pod_count"
+            kubectl -n options-edge get pods || true
+            sleep 3
+          done
+          if [ "${pod_count:-0}" != "0" ]; then
+            echo "Timed out waiting for options-edge pods to stop before one-time Kafka cleanup." >&2
+            kubectl -n options-edge get pods || true
+            exit 1
+          fi
           export APP_PROFILE=dev
           export ENVIRONMENT=dev
           export KAFKA_BOOTSTRAP_SERVERS
@@ -479,9 +510,6 @@ EOF
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
           fi
-          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            TOPIC_PREFIX=dev.
-          fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX
           export KAFKA_CLEANUP_TOPICS="${KAFKA_CLEANUP_TOPICS}"
@@ -506,9 +534,6 @@ EOF
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
-          fi
-          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            TOPIC_PREFIX=dev.
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX
@@ -537,9 +562,6 @@ EOF
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
-          fi
-          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            TOPIC_PREFIX=dev.
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX
@@ -802,9 +824,6 @@ EOF
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
-          fi
-          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            TOPIC_PREFIX=dev.
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX
