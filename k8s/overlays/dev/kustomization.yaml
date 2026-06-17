@@ -1,2 +1,62 @@
 resources:
   - ../../base
+patches:
+  - path: configmap-dev-local-patch.yaml
+images:
+  - name: 192.168.100.252:5000/options-edge-raw-to-display
+    newName: host.docker.internal:5001/options-edge-raw-to-display
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-volume-aggregator
+    newName: host.docker.internal:5001/options-edge-databento-volume-aggregator
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-mission-pace
+    newName: host.docker.internal:5001/options-edge-databento-mission-pace
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-mission-pressure
+    newName: host.docker.internal:5001/options-edge-databento-mission-pressure
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-mission-sandwich
+    newName: host.docker.internal:5001/options-edge-databento-mission-sandwich
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-volume-pace
+    newName: host.docker.internal:5001/options-edge-volume-pace
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-directional-pressure
+    newName: host.docker.internal:5001/options-edge-directional-pressure
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-volume-sandwich
+    newName: host.docker.internal:5001/options-edge-volume-sandwich
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-unusual-whales-gex
+    newName: host.docker.internal:5001/options-edge-unusual-whales-gex
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-unusual-whales-gex-history
+    newName: host.docker.internal:5001/options-edge-unusual-whales-gex-history
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-raw-postgres-writer
+    newName: host.docker.internal:5001/options-edge-raw-postgres-writer
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-pressure-postgres-writer
+    newName: host.docker.internal:5001/options-edge-pressure-postgres-writer
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-feed-gateway
+    newName: host.docker.internal:5001/options-edge-feed-gateway
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-integration-test
+    newName: host.docker.internal:5001/options-edge-integration-test
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-hpsf-processing
+    newName: host.docker.internal:5001/options-edge-hpsf-processing
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-hpsf-postgres-writer
+    newName: host.docker.internal:5001/options-edge-hpsf-postgres-writer
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-spx-mission-control
+    newName: host.docker.internal:5001/options-edge-spx-mission-control
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-strike-flow-classifier
+    newName: host.docker.internal:5001/options-edge-strike-flow-classifier
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-ibkr-feed
+    newName: host.docker.internal:5001/options-edge-ibkr-feed
+    newTag: dev

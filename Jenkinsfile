@@ -3,8 +3,9 @@ pipeline {
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
     string(name: 'KUBECONFIG_FILE', defaultValue: '/var/jenkins_home/config/kubeconfig', description: 'Kubeconfig path on Jenkins agent')
-    string(name: 'IMAGE_REGISTRY', defaultValue: '192.168.100.252:5000', description: 'Docker registry namespace used when IMAGE_TAG is set')
+    string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses host.docker.internal:5001 for dev and 192.168.100.252:5000 for staging/production.')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
+    string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses host.docker.internal:9092 for dev and remote Kafka for staging/production.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev', description: 'Databento volume aggregator image')
     string(name: 'DATABENTO_MISSION_PACE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-pace:dev', description: 'Databento mission pace image')
@@ -43,8 +44,9 @@ pipeline {
     REMOTE_APP_HOME = '/home/options-edge'
     JENKINS_WORK_DIR = '.jenkins-tmp'
     PATH = "/var/jenkins_home/bin:${env.PATH}"
-    IMAGE_REGISTRY = "${params.IMAGE_REGISTRY ?: '192.168.100.252:5000'}"
+    IMAGE_REGISTRY = "${params.IMAGE_REGISTRY ?: ''}"
     IMAGE_TAG = "${params.IMAGE_TAG ?: ''}"
+    KAFKA_BOOTSTRAP_SERVERS = "${params.KAFKA_BOOTSTRAP_SERVERS ?: ''}"
     RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: '192.168.100.252:5000/options-edge-raw-to-display:dev'}"
     DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev'}"
     DATABENTO_MISSION_PACE_IMAGE = "${params.DATABENTO_MISSION_PACE_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-pace:dev'}"
@@ -151,7 +153,14 @@ pipeline {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          export KAFKA_BOOTSTRAP_SERVERS
           export KAFKA_CLEANUP_TOPICS="${KAFKA_CLEANUP_TOPICS}"
           export KAFKA_DELETE_UNWANTED_TOPICS="${KAFKA_DELETE_UNWANTED_TOPICS}"
           export ALLOW_PROD_KAFKA_CLEANUP="${ALLOW_PROD_KAFKA_CLEANUP}"
@@ -165,7 +174,14 @@ pipeline {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          export KAFKA_BOOTSTRAP_SERVERS
           export KAFKA_TOPIC_REPLICATION_FACTOR=1
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           export KAFKA_TOPIC_RETENTION_MS=86400000
@@ -182,7 +198,14 @@ pipeline {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          export KAFKA_BOOTSTRAP_SERVERS
           export HPSF_STAGE_B_STREAMS_APPLICATION_ID="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b-v2-1}"
 
           kubectl -n options-edge scale deployment/hpsf-stage-b-service --replicas=0 || true
@@ -223,7 +246,14 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          scripts/smoke/check-options-edge-web.sh
+          if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://host.docker.internal:8090}"
+            curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
+            curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
+            echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
+          else
+            scripts/smoke/check-options-edge-web.sh
+          fi
         '''
       }
     }
@@ -247,7 +277,13 @@ pipeline {
           set -euo pipefail
           mkdir -p "$JENKINS_WORK_DIR"
           image_tag="${IMAGE_TAG:-}"
-          registry="${IMAGE_REGISTRY:-192.168.100.252:5000}"
+          if [ -n "${IMAGE_REGISTRY:-}" ]; then
+            registry="$IMAGE_REGISTRY"
+          elif [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            registry=host.docker.internal:5001
+          else
+            registry=192.168.100.252:5000
+          fi
           if [ -n "$image_tag" ]; then
             cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$registry/options-edge-raw-to-display:$image_tag
@@ -512,7 +548,14 @@ PY
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          export KAFKA_BOOTSTRAP_SERVERS
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           export KAFKA_TOPIC_RETENTION_MS=86400000
           export KAFKA_STREAMS_INTERNAL_RETENTION_MS="${KAFKA_STREAMS_INTERNAL_RETENTION_MS:-86400000}"
@@ -525,6 +568,9 @@ PY
       }
     }
     stage('Prometheus Scrapes') {
+      when {
+        expression { return env.ENVIRONMENT != 'dev' }
+      }
       steps {
         withCredentials([string(credentialsId: 'options-edge-remote-become-password', variable: 'BECOME_PASSWORD')]) {
           sh '''
@@ -548,7 +594,14 @@ PY
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          export KAFKA_BOOTSTRAP_SERVERS
           export KAFKA_TOPIC_REPLICATION_FACTOR=1
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           export KUBECONFIG="${KUBECONFIG}"
@@ -606,6 +659,7 @@ PY
               string(name: 'KUBECONFIG_FILE', value: params.KUBECONFIG_FILE),
               string(name: 'IMAGE_REGISTRY', value: params.IMAGE_REGISTRY),
               string(name: 'IMAGE_TAG', value: params.IMAGE_TAG),
+              string(name: 'KAFKA_BOOTSTRAP_SERVERS', value: ''),
               string(name: 'RAW_TO_DISPLAY_IMAGE', value: params.RAW_TO_DISPLAY_IMAGE),
               string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
               string(name: 'DATABENTO_MISSION_PACE_IMAGE', value: params.DATABENTO_MISSION_PACE_IMAGE),
