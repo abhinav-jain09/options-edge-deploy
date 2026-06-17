@@ -295,6 +295,9 @@ pipeline {
       }
     }
     stage('Verify OptionsEdge Web App') {
+      when {
+        expression { return !params.DEPLOY_DRY_RUN }
+      }
       steps {
         sh '''
           set -euo pipefail
