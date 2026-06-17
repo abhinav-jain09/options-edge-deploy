@@ -451,18 +451,70 @@ EOF
             docker pull "$image" >/dev/null 2>&1
           }
 
+          buildx_builder_name=""
+          cleanup_buildx_builder() {
+            if [ -n "$buildx_builder_name" ]; then
+              docker buildx rm "$buildx_builder_name" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_buildx_builder EXIT
+
+          buildx_builder_arg=""
+          if grep -q '=192[.]168[.]100[.]252:5000/' "$JENKINS_WORK_DIR/options-edge-images.env"; then
+            cat >"$JENKINS_WORK_DIR/buildkitd-insecure-registry.toml" <<'EOF'
+[registry."192.168.100.252:5000"]
+  http = true
+  insecure = true
+EOF
+            buildx_builder_name="options-edge-preflight-${BUILD_NUMBER:-$$}"
+            docker buildx rm "$buildx_builder_name" >/dev/null 2>&1 || true
+            docker buildx create --name "$buildx_builder_name" --config "$JENKINS_WORK_DIR/buildkitd-insecure-registry.toml" >/dev/null
+            buildx_builder_arg="--builder $buildx_builder_name"
+          fi
+
           inspect_image_platform() {
             local name="$1"
             local image="$2"
             local expected_platform="$3"
-            local inspect_file
+            local inspect_file inspect_json
             inspect_file="$JENKINS_WORK_DIR/imagetools-${name}.txt"
-            if ! docker buildx imagetools inspect "$image" >"$inspect_file"; then
+            inspect_json="$JENKINS_WORK_DIR/imagetools-${name}.json"
+            if ! docker buildx imagetools inspect $buildx_builder_arg "$image" >"$inspect_file"; then
               echo "Unable to inspect image manifest with docker buildx imagetools: $name=$image" >&2
               return 1
             fi
+            if ! docker buildx imagetools inspect $buildx_builder_arg --format '{{json .}}' "$image" >"$inspect_json"; then
+              echo "Unable to inspect image manifest JSON with docker buildx imagetools: $name=$image" >&2
+              return 1
+            fi
             sed "s/^/  $name imagetools: /" "$inspect_file"
-            if ! grep -Eq "Platform:[[:space:]]*$expected_platform($|[[:space:]])|$expected_platform" "$inspect_file"; then
+            if ! python3 - "$inspect_json" "$expected_platform" <<'PY'
+import json
+import sys
+
+path, expected = sys.argv[1], sys.argv[2]
+expected_os, expected_arch = expected.split("/", 1)
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+def platform_matches(platform):
+    return (
+        platform.get("os") == expected_os
+        and platform.get("architecture") == expected_arch
+    )
+
+manifest = data.get("manifest") or {}
+for child in manifest.get("manifests") or []:
+    if platform_matches(child.get("platform") or {}):
+        sys.exit(0)
+
+image = data.get("image") or {}
+if image.get("os") == expected_os and image.get("architecture") == expected_arch:
+    sys.exit(0)
+
+sys.exit(1)
+PY
+            then
               echo "Image architecture mismatch for $name: expected manifest platform $expected_platform ($image)" >&2
               return 1
             fi
