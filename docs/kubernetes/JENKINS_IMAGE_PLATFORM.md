@@ -56,3 +56,10 @@ updates, and HPSF smoke state changes.
 Jenkins runs from the remote host, so `WEB_PUBLIC_URL` defaults to
 `http://192.168.100.252:8090`. Override the parameter only when testing a
 different reachable OptionsEdge web endpoint.
+
+## Kafka Bootstrap Default
+
+Jenkins also runs against the remote Kafka brokers by default:
+`192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096`. Do not use
+`host.docker.internal` defaults in this remote Jenkins pipeline because the
+CentOS Jenkins host cannot resolve that Mac Docker hostname.
