@@ -2,8 +2,8 @@ pipeline {
   agent { label 'built-in' }
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
-    string(name: 'KUBECONFIG_FILE', defaultValue: '/var/jenkins_home/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
-    string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/var/jenkins_home/config/kubeconfig', description: 'Admin kubeconfig used only to bootstrap the Jenkins-only Kubernetes deploy guard')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '/home/options-edge/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
+    string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/home/options-edge/config/kubeconfig', description: 'Admin kubeconfig used only to bootstrap the Jenkins-only Kubernetes deploy guard')
     string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses host.docker.internal:5001 for dev and 192.168.100.252:5000 for staging/production.')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
     string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses host.docker.internal:9092 for dev and remote Kafka for staging/production.')
@@ -41,8 +41,8 @@ pipeline {
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
-    KUBECONFIG = "${params.KUBECONFIG_FILE ?: '/var/jenkins_home/config/jenkins-deployer.kubeconfig'}"
-    KUBECONFIG_ADMIN_FILE = "${params.KUBECONFIG_ADMIN_FILE ?: '/var/jenkins_home/config/kubeconfig'}"
+    KUBECONFIG = "${params.KUBECONFIG_FILE ?: '/home/options-edge/config/jenkins-deployer.kubeconfig'}"
+    KUBECONFIG_ADMIN_FILE = "${params.KUBECONFIG_ADMIN_FILE ?: '/home/options-edge/config/kubeconfig'}"
     REMOTE_APP_HOME = '/home/options-edge'
     JENKINS_WORK_DIR = '.jenkins-tmp'
     PATH = "/var/jenkins_home/bin:${env.PATH}"
