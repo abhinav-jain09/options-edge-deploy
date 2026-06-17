@@ -135,7 +135,7 @@ pipeline {
         '''
       }
     }
-    stage('Deploy to PRODUCTION') {
+    stage('Manual Production Approval') {
       when {
         expression { return env.ENVIRONMENT == 'production' && !params.SKIP_PRODUCTION_PROMOTION }
       }
@@ -148,177 +148,6 @@ pipeline {
     stage('Render') {
       steps {
         sh 'kubectl kustomize k8s/overlays/${ENVIRONMENT} >"$JENKINS_WORK_DIR/options-edge-${ENVIRONMENT}.yaml"'
-      }
-    }
-    stage('Pause Runtime For Kafka Cleanup') {
-      when {
-        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
-      }
-      steps {
-        sh '''
-          set -euo pipefail
-          /home/abhinav/ci/bin/app-control.sh options-edge stop || true
-          for i in $(seq 1 30); do
-            if ! ss -ltnp 2>/dev/null | grep -q ':8090'; then
-              echo "options-edge Tomcat port 8090 is stopped."
-              break
-            fi
-            echo "Waiting for options-edge Tomcat port 8090 to stop."
-            sleep 2
-          done
-          if ss -ltnp 2>/dev/null | grep -q ':8090'; then
-            echo "Timed out waiting for options-edge Tomcat port 8090 to stop before Kafka cleanup." >&2
-            ss -ltnp 2>/dev/null | grep ':8090' || true
-            exit 1
-          fi
-          kubectl -n options-edge scale deployment --all --replicas=0 || true
-          for i in $(seq 1 60); do
-            pod_count="$(kubectl -n options-edge get pods --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
-            if [ "$pod_count" = "0" ]; then
-              echo "All options-edge pods are stopped."
-              exit 0
-            fi
-            echo "Waiting for options-edge pods to stop; remaining=$pod_count"
-            kubectl -n options-edge get pods || true
-            sleep 3
-          done
-          echo "Timed out waiting for options-edge pods to stop before Kafka cleanup." >&2
-          kubectl -n options-edge get pods || true
-          exit 1
-        '''
-      }
-    }
-    stage('Kafka Cleanup') {
-      when {
-        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
-      }
-      steps {
-        sh '''
-          set -euo pipefail
-          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-            else
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-            fi
-          fi
-          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            TOPIC_PREFIX=dev.
-          fi
-          export KAFKA_BOOTSTRAP_SERVERS
-          export TOPIC_PREFIX
-          export KAFKA_CLEANUP_TOPICS="${KAFKA_CLEANUP_TOPICS}"
-          export KAFKA_DELETE_UNWANTED_TOPICS="${KAFKA_DELETE_UNWANTED_TOPICS}"
-          export ALLOW_PROD_KAFKA_CLEANUP="${ALLOW_PROD_KAFKA_CLEANUP}"
-          export KAFKA_CLEANUP_MODE="${KAFKA_CLEANUP_MODE:-delete-recreate}"
-          scripts/kafka/cleanup-topics.sh
-        '''
-      }
-    }
-    stage('Kafka Topics') {
-      when {
-        expression { return !params.DEPLOY_DRY_RUN }
-      }
-      steps {
-        sh '''
-          set -euo pipefail
-          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-            else
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-            fi
-          fi
-          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            TOPIC_PREFIX=dev.
-          fi
-          export KAFKA_BOOTSTRAP_SERVERS
-          export TOPIC_PREFIX
-          export KAFKA_TOPIC_REPLICATION_FACTOR=1
-          export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
-          export KAFKA_TOPIC_RETENTION_MS=86400000
-          export KAFKA_RECREATE_MISMATCHED_TOPICS="${KAFKA_CLEANUP_TOPICS}"
-          scripts/kafka/apply-topics.sh
-          scripts/kafka/verify-topics.sh
-          scripts/kafka/create-hpsf-topics.sh
-          scripts/kafka/verify-hpsf-topics.sh
-        '''
-      }
-    }
-    stage('Reset HPSF Stage B Internal Topics') {
-      when {
-        expression { return !params.DEPLOY_DRY_RUN }
-      }
-      steps {
-        sh '''
-          set -euo pipefail
-          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-            else
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-            fi
-          fi
-          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            TOPIC_PREFIX=dev.
-          fi
-          export KAFKA_BOOTSTRAP_SERVERS
-          export TOPIC_PREFIX
-          export HPSF_STAGE_B_STREAMS_APPLICATION_ID="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b-v2-1}"
-
-          kubectl -n options-edge scale deployment/hpsf-stage-b-service --replicas=0 || true
-          for i in $(seq 1 60); do
-            pod_count="$(kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
-            if [ "$pod_count" = "0" ]; then
-              echo "hpsf-stage-b-service pods are stopped."
-              break
-            fi
-            echo "Waiting for hpsf-stage-b-service pods to stop; remaining=$pod_count"
-            kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service || true
-            sleep 2
-          done
-          if [ "$pod_count" != "0" ]; then
-            echo "Timed out waiting for hpsf-stage-b-service pods to stop before internal topic reset." >&2
-            kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service || true
-            exit 1
-          fi
-
-          scripts/kafka/reset-hpsf-stage-b-internal-topics.sh
-        '''
-      }
-    }
-    stage('Resume Remote Apps') {
-      when {
-        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
-      }
-      steps {
-        sh '''
-          set -euo pipefail
-          kubectl -n options-edge scale deployment/options-edge-databento-feed --replicas=1 || true
-          kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=240s || true
-          /home/abhinav/ci/bin/app-control.sh options-edge start
-        '''
-      }
-    }
-    stage('Verify OptionsEdge Web App') {
-      when {
-        expression { return !params.DEPLOY_DRY_RUN }
-      }
-      steps {
-        sh '''
-          set -euo pipefail
-          if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://host.docker.internal:8090}"
-            curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
-            curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
-            echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
-          else
-            scripts/smoke/check-options-edge-web.sh
-          fi
-        '''
       }
     }
     stage('Unusual Whales Secret') {
@@ -570,6 +399,173 @@ EOF
         '''
       }
     }
+    stage('Pause Runtime For Kafka Cleanup') {
+      when {
+        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          /home/abhinav/ci/bin/app-control.sh options-edge stop || true
+          for i in $(seq 1 30); do
+            if ! ss -ltnp 2>/dev/null | grep -q ':8090'; then
+              echo "options-edge Tomcat port 8090 is stopped."
+              break
+            fi
+            echo "Waiting for options-edge Tomcat port 8090 to stop."
+            sleep 2
+          done
+          if ss -ltnp 2>/dev/null | grep -q ':8090'; then
+            echo "Timed out waiting for options-edge Tomcat port 8090 to stop before Kafka cleanup." >&2
+            ss -ltnp 2>/dev/null | grep ':8090' || true
+            exit 1
+          fi
+          kubectl -n options-edge scale deployment --all --replicas=0 || true
+          for i in $(seq 1 60); do
+            pod_count="$(kubectl -n options-edge get pods --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+            if [ "$pod_count" = "0" ]; then
+              echo "All options-edge pods are stopped."
+              exit 0
+            fi
+            echo "Waiting for options-edge pods to stop; remaining=$pod_count"
+            kubectl -n options-edge get pods || true
+            sleep 3
+          done
+          echo "Timed out waiting for options-edge pods to stop before Kafka cleanup." >&2
+          kubectl -n options-edge get pods || true
+          exit 1
+        '''
+      }
+    }
+    stage('Kafka Cleanup') {
+      when {
+        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
+          fi
+          export KAFKA_BOOTSTRAP_SERVERS
+          export TOPIC_PREFIX
+          export KAFKA_CLEANUP_TOPICS="${KAFKA_CLEANUP_TOPICS}"
+          export KAFKA_DELETE_UNWANTED_TOPICS="${KAFKA_DELETE_UNWANTED_TOPICS}"
+          export ALLOW_PROD_KAFKA_CLEANUP="${ALLOW_PROD_KAFKA_CLEANUP}"
+          export KAFKA_CLEANUP_MODE="${KAFKA_CLEANUP_MODE:-delete-recreate}"
+          scripts/kafka/cleanup-topics.sh
+        '''
+      }
+    }
+    stage('Kafka Topics') {
+      when {
+        expression { return !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
+          fi
+          export KAFKA_BOOTSTRAP_SERVERS
+          export TOPIC_PREFIX
+          export KAFKA_TOPIC_REPLICATION_FACTOR=1
+          export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
+          export KAFKA_TOPIC_RETENTION_MS=86400000
+          export KAFKA_RECREATE_MISMATCHED_TOPICS="${KAFKA_CLEANUP_TOPICS}"
+          scripts/kafka/apply-topics.sh
+          scripts/kafka/verify-topics.sh
+          scripts/kafka/create-hpsf-topics.sh
+          scripts/kafka/verify-hpsf-topics.sh
+        '''
+      }
+    }
+    stage('Reset HPSF Stage B Internal Topics') {
+      when {
+        expression { return !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
+          fi
+          export KAFKA_BOOTSTRAP_SERVERS
+          export TOPIC_PREFIX
+          export HPSF_STAGE_B_STREAMS_APPLICATION_ID="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b-v2-1}"
+
+          kubectl -n options-edge scale deployment/hpsf-stage-b-service --replicas=0 || true
+          for i in $(seq 1 60); do
+            pod_count="$(kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+            if [ "$pod_count" = "0" ]; then
+              echo "hpsf-stage-b-service pods are stopped."
+              break
+            fi
+            echo "Waiting for hpsf-stage-b-service pods to stop; remaining=$pod_count"
+            kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service || true
+            sleep 2
+          done
+          if [ "$pod_count" != "0" ]; then
+            echo "Timed out waiting for hpsf-stage-b-service pods to stop before internal topic reset." >&2
+            kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service || true
+            exit 1
+          fi
+
+          scripts/kafka/reset-hpsf-stage-b-internal-topics.sh
+        '''
+      }
+    }
+    stage('Kafka Internal Topics') {
+      when {
+        expression { return !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
+          export KAFKA_BOOTSTRAP_SERVERS
+          export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
+          export KAFKA_TOPIC_RETENTION_MS=86400000
+          export KAFKA_STREAMS_INTERNAL_RETENTION_MS="${KAFKA_STREAMS_INTERNAL_RETENTION_MS:-86400000}"
+          export KAFKA_STREAMS_INTERNAL_SEGMENT_MS="${KAFKA_STREAMS_INTERNAL_SEGMENT_MS:-3600000}"
+          export KAFKA_CHANGELOG_RETENTION_MS="${KAFKA_CHANGELOG_RETENTION_MS:-86400000}"
+          export KAFKA_CHANGELOG_DELETE_RETENTION_MS="${KAFKA_CHANGELOG_DELETE_RETENTION_MS:-3600000}"
+          export KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO="${KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO:-0.01}"
+          scripts/kafka/apply-internal-topic-configs.sh
+        '''
+      }
+    }
     stage('Deploy') {
       steps {
         sh '''
@@ -701,30 +697,16 @@ EOF
         '''
       }
     }
-    stage('Kafka Internal Topics') {
+    stage('Resume Remote Apps') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN }
+        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
           set -euo pipefail
-          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-            else
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-            fi
-          fi
-          export KAFKA_BOOTSTRAP_SERVERS
-          export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
-          export KAFKA_TOPIC_RETENTION_MS=86400000
-          export KAFKA_STREAMS_INTERNAL_RETENTION_MS="${KAFKA_STREAMS_INTERNAL_RETENTION_MS:-86400000}"
-          export KAFKA_STREAMS_INTERNAL_SEGMENT_MS="${KAFKA_STREAMS_INTERNAL_SEGMENT_MS:-3600000}"
-          export KAFKA_CHANGELOG_RETENTION_MS="${KAFKA_CHANGELOG_RETENTION_MS:-86400000}"
-          export KAFKA_CHANGELOG_DELETE_RETENTION_MS="${KAFKA_CHANGELOG_DELETE_RETENTION_MS:-3600000}"
-          export KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO="${KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO:-0.01}"
-          scripts/kafka/apply-internal-topic-configs.sh
+          kubectl -n options-edge scale deployment/options-edge-databento-feed --replicas=1 || true
+          kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=240s || true
+          /home/abhinav/ci/bin/app-control.sh options-edge start
         '''
       }
     }
@@ -743,6 +725,24 @@ EOF
             scripts/monitoring/apply-prometheus-scrapes.sh
           '''
         }
+      }
+    }
+    stage('Verify OptionsEdge Web App') {
+      when {
+        expression { return !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://host.docker.internal:8090}"
+            curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
+            curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
+            echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
+          else
+            scripts/smoke/check-options-edge-web.sh
+          fi
+        '''
       }
     }
     stage('Smoke') {
@@ -812,7 +812,7 @@ EOF
         '''
       }
     }
-    stage('Deploy To Production') {
+    stage('Promote To Production') {
       when {
         expression { return env.ENVIRONMENT != 'production' && !params.SKIP_PRODUCTION_PROMOTION }
       }

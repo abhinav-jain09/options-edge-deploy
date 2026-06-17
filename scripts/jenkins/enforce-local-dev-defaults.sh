@@ -53,4 +53,40 @@ reject_text "$bootstrap_script" 'jenkins_kubeconfig="${KUBECONFIG_FILE:-/home/op
 reject_text "$jenkinsfile" "input message: 'Deploy OptionsEdge to DEV?'" \
   "dev deploy must run automatically; only production deployment may require manual approval."
 
+expected_stages=$(cat <<'EOF'
+Validate
+Bootstrap Jenkins Kubernetes Guard
+Manual Production Approval
+Render
+Unusual Whales Secret
+Resolve Images
+Image Preflight
+Pause Runtime For Kafka Cleanup
+Kafka Cleanup
+Kafka Topics
+Reset HPSF Stage B Internal Topics
+Kafka Internal Topics
+Deploy
+Resume Remote Apps
+Prometheus Scrapes
+Verify OptionsEdge Web App
+Smoke
+HPSF Smoke
+Promote To Production
+EOF
+)
+
+actual_stages="$(
+  sed -n "s/^    stage('\([^']*\)').*/\1/p" "$jenkinsfile"
+)"
+
+if [[ "$actual_stages" != "$expected_stages" ]]; then
+  echo "Local dev deploy guard failed: Jenkins stages are not in the approved logical order." >&2
+  echo "Expected:" >&2
+  printf '%s\n' "$expected_stages" >&2
+  echo "Actual:" >&2
+  printf '%s\n' "$actual_stages" >&2
+  exit 1
+fi
+
 echo "Local dev deploy defaults guard passed."

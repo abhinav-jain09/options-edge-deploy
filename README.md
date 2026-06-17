@@ -56,3 +56,25 @@ Production promotion intentionally disables Kafka cleanup flags in the triggered
 - `ALLOW_PROD_KAFKA_CLEANUP=false`
 
 If production Kafka cleanup is ever needed, run that as a separate, explicit maintenance operation.
+
+Expected dev stage order:
+
+1. `Validate`
+2. `Bootstrap Jenkins Kubernetes Guard`
+3. `Render`
+4. `Unusual Whales Secret`
+5. `Resolve Images`
+6. `Image Preflight`
+7. Optional Kafka cleanup stages, only when cleanup flags are enabled
+8. `Kafka Topics`
+9. `Reset HPSF Stage B Internal Topics`
+10. `Kafka Internal Topics`
+11. `Deploy`
+12. Optional `Resume Remote Apps`, only when cleanup flags are enabled
+13. Optional `Prometheus Scrapes`, skipped in dev
+14. `Verify OptionsEdge Web App`
+15. `Smoke`
+16. `HPSF Smoke`
+17. `Promote To Production`, manual button only
+
+`Manual Production Approval` appears only for direct `ENVIRONMENT=production` runs. It must not block dev.
