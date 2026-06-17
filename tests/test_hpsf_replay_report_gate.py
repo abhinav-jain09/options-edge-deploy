@@ -487,7 +487,7 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("esTradesTopicEndOffset", pipeline)
         self.assertIn("spxPriceTopicEndOffset", pipeline)
         self.assertIn("hpsfSourceTopicEndOffset", pipeline)
-        self.assertIn('re.search(r":(\\\\d+)$"', pipeline)
+        self.assertEqual(2, pipeline.count('re.search(r":(\\\\d+)$"'))
         self.assertIn("REPLAY_SOURCE_OPRA_TOPIC_EMPTY_BEFORE_STAGE_A", pipeline)
         self.assertIn("REPLAY_SOURCE_UNDERLYING_TOPIC_EMPTY_BEFORE_STAGE_A", pipeline)
         self.assertIn("JENKINS_PUBLIC_URL", pipeline)

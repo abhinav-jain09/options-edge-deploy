@@ -710,7 +710,7 @@ from pathlib import Path
 import re
 total = 0
 for line in Path("artifacts/logs/replay-strike-flow-topic-offsets-before-stage-b.log").read_text(encoding="utf-8", errors="replace").splitlines():
-    match = re.search(r":(\d+)$", line.strip())
+    match = re.search(r":(\\d+)$", line.strip())
     if match:
         total += int(match.group(1))
 print(total)
