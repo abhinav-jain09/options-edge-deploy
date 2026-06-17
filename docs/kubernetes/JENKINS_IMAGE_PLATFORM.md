@@ -48,3 +48,11 @@ if `linux/amd64` is not present.
 Use `DEPLOY_DRY_RUN=true` for staging or production validation. Jenkins still
 renders manifests, resolves images, validates image manifests, and runs
 server-side Kubernetes dry-run apply, but it does not mutate runtime resources.
+Dry-run builds skip Kafka topic mutations, runtime scaling, Prometheus scrape
+updates, and HPSF smoke state changes.
+
+## Web Smoke URL
+
+Jenkins runs from the remote host, so `WEB_PUBLIC_URL` defaults to
+`http://192.168.100.252:8090`. Override the parameter only when testing a
+different reachable OptionsEdge web endpoint.
