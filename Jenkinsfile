@@ -267,6 +267,10 @@ pipeline {
             kubectl -n options-edge create secret generic options-edge-secrets \
               --from-literal=unusual-whales-api-key="$UNUSUAL_WHALES_API_KEY" \
               --dry-run=client -o yaml | kubectl apply -f -
+            kubectl -n options-edge create secret generic options-edge-runtime-secrets \
+              --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-Options#100}" \
+              --from-literal=UNUSUAL_WHALES_API_KEY="$UNUSUAL_WHALES_API_KEY" \
+              --dry-run=client -o yaml | kubectl apply -f -
           '''
         }
       }
