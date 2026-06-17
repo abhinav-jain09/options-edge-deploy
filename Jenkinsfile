@@ -173,7 +173,7 @@ pipeline {
           fi
           kubectl -n options-edge scale deployment --all --replicas=0 || true
           for i in $(seq 1 60); do
-            pod_count="$(kubectl -n options-edge get pods --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+            pod_count="$(kubectl -n options-edge get pods --no-headers 2>/dev/null | awk '$3 !~ /^(Completed|Succeeded|Error|Failed)$/ { print }' | wc -l | tr -d ' ')"
             if [ "$pod_count" = "0" ]; then
               echo "All options-edge pods are stopped."
               break
@@ -480,7 +480,7 @@ EOF
           fi
           kubectl -n options-edge scale deployment --all --replicas=0 || true
           for i in $(seq 1 60); do
-            pod_count="$(kubectl -n options-edge get pods --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
+            pod_count="$(kubectl -n options-edge get pods --no-headers 2>/dev/null | awk '$3 !~ /^(Completed|Succeeded|Error|Failed)$/ { print }' | wc -l | tr -d ' ')"
             if [ "$pod_count" = "0" ]; then
               echo "All options-edge pods are stopped."
               exit 0
