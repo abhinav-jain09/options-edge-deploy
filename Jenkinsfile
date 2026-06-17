@@ -43,6 +43,7 @@ pipeline {
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
+    KUBECONFIG_FILE = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/var/jenkins_home/config/jenkins-deployer.kubeconfig') ? '/home/options-edge/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
     KUBECONFIG = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/var/jenkins_home/config/jenkins-deployer.kubeconfig') ? '/home/options-edge/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
     KUBECONFIG_ADMIN_FILE = "${(!params.KUBECONFIG_ADMIN_FILE || params.KUBECONFIG_ADMIN_FILE == '/var/jenkins_home/config/kubeconfig') ? '/home/options-edge/config/kubeconfig' : params.KUBECONFIG_ADMIN_FILE}"
     REMOTE_APP_HOME = '/home/options-edge'
