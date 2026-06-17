@@ -55,7 +55,6 @@ reject_text "$jenkinsfile" "input message: 'Deploy OptionsEdge to DEV?'" \
 
 expected_stages=$(cat <<'EOF'
 Validate
-One-Time Local Dev Databento Kafka Cleanup
 Bootstrap Jenkins Kubernetes Guard
 Render
 Unusual Whales Secret

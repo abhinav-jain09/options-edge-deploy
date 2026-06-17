@@ -41,8 +41,6 @@ pipeline {
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
     booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', defaultValue: false, description: 'Internal guard used by the manual production promotion build')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false, description: 'Validate render, image preflight, and server-side Kubernetes apply without mutating runtime resources.')
-    booleanParam(name: 'RUN_ONE_TIME_LOCAL_DEV_DATABENTO_CLEANUP', defaultValue: false, description: 'ONE TIME ONLY: clean mixed local dev Databento Kafka topics before deploy')
-    string(name: 'CONFIRM_LOCAL_DEV_KAFKA_CLEANUP', defaultValue: '', description: 'Required exact phrase for one-time local dev cleanup: DELETE_LOCAL_DEV_DATABENTO_TOPICS')
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
@@ -88,8 +86,6 @@ pipeline {
     ALLOW_PROD_KAFKA_CLEANUP = "${params.ALLOW_PROD_KAFKA_CLEANUP ?: false}"
     SKIP_PRODUCTION_PROMOTION = "${params.SKIP_PRODUCTION_PROMOTION ?: false}"
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN ?: false}"
-    RUN_ONE_TIME_LOCAL_DEV_DATABENTO_CLEANUP = "${params.RUN_ONE_TIME_LOCAL_DEV_DATABENTO_CLEANUP ?: false}"
-    CONFIRM_LOCAL_DEV_KAFKA_CLEANUP = "${params.CONFIRM_LOCAL_DEV_KAFKA_CLEANUP ?: ''}"
   }
   stages {
     stage('Validate') {
@@ -132,66 +128,6 @@ pipeline {
           esac
           printf 'EFFECTIVE_BUILD_PLATFORM=%s\n' "$effective_build_platform" >"$JENKINS_WORK_DIR/options-edge-build.env"
           echo "Effective build/deploy image platform: $effective_build_platform"
-        '''
-      }
-    }
-    stage('One-Time Local Dev Databento Kafka Cleanup') {
-      when {
-        allOf {
-          expression { return params.ENVIRONMENT == 'dev' }
-          expression { return params.RUN_ONE_TIME_LOCAL_DEV_DATABENTO_CLEANUP && !params.DEPLOY_DRY_RUN }
-        }
-      }
-      steps {
-        sh '''
-          set -euo pipefail
-          if [ "${ENVIRONMENT:-dev}" != "dev" ]; then
-            echo "One-time local dev Databento cleanup is only allowed for ENVIRONMENT=dev." >&2
-            exit 1
-          fi
-          if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
-            echo "One-time local dev Databento cleanup does not run during DEPLOY_DRY_RUN." >&2
-            exit 1
-          fi
-          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            KAFKA_BOOTSTRAP_SERVERS=localhost:9092
-          fi
-          echo "Pausing local dev runtime before one-time Databento Kafka cleanup."
-          /home/abhinav/ci/bin/app-control.sh options-edge stop || true
-          for i in $(seq 1 30); do
-            if ! ss -ltnp 2>/dev/null | grep -q ':8090'; then
-              echo "options-edge Tomcat port 8090 is stopped."
-              break
-            fi
-            echo "Waiting for options-edge Tomcat port 8090 to stop."
-            sleep 2
-          done
-          if ss -ltnp 2>/dev/null | grep -q ':8090'; then
-            echo "Timed out waiting for options-edge Tomcat port 8090 to stop before one-time Kafka cleanup." >&2
-            ss -ltnp 2>/dev/null | grep ':8090' || true
-            exit 1
-          fi
-          kubectl -n options-edge scale deployment --all --replicas=0 || true
-          for i in $(seq 1 60); do
-            pod_count="$(kubectl -n options-edge get pods --no-headers 2>/dev/null | awk '$3 !~ /^(Completed|Succeeded|Error|Failed)$/ { print }' | wc -l | tr -d ' ')"
-            if [ "$pod_count" = "0" ]; then
-              echo "All options-edge pods are stopped."
-              break
-            fi
-            echo "Waiting for options-edge pods to stop before one-time Kafka cleanup; remaining=$pod_count"
-            kubectl -n options-edge get pods || true
-            sleep 3
-          done
-          if [ "${pod_count:-0}" != "0" ]; then
-            echo "Timed out waiting for options-edge pods to stop before one-time Kafka cleanup." >&2
-            kubectl -n options-edge get pods || true
-            exit 1
-          fi
-          export APP_PROFILE=dev
-          export ENVIRONMENT=dev
-          export KAFKA_BOOTSTRAP_SERVERS
-          export CONFIRM_LOCAL_DEV_KAFKA_CLEANUP
-          scripts/kafka/cleanup-local-dev-databento-mixed-topics.sh --apply
         '''
       }
     }

@@ -215,13 +215,6 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "HPSF_STAGE_B_EVALUATION_MODE=SCHEDULED",
             "HPSF_STAGE_B_PUNCTUATION_TYPE=WALL_CLOCK_TIME",
             "scripts/smoke/check-hpsf-stage-b-runtime.sh",
-            "RUN_ONE_TIME_LOCAL_DEV_DATABENTO_CLEANUP",
-            "CONFIRM_LOCAL_DEV_KAFKA_CLEANUP",
-            "DELETE_LOCAL_DEV_DATABENTO_TOPICS",
-            "stage('One-Time Local Dev Databento Kafka Cleanup')",
-            "params.ENVIRONMENT == 'dev'",
-            "params.RUN_ONE_TIME_LOCAL_DEV_DATABENTO_CLEANUP && !params.DEPLOY_DRY_RUN",
-            "scripts/kafka/cleanup-local-dev-databento-mixed-topics.sh --apply",
         ]:
             self.assertIn(text, pipeline)
 
