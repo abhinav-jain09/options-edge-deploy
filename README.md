@@ -12,9 +12,19 @@ Owns:
 
 This repo deploys applications after `options-edge-infra` has prepared Docker/Kubernetes on the remote server.
 
-## Local Jenkins Dev Invariants
+## Environment Boundary
 
-The normal dev deployment runs from the MacBook Jenkins instance, not from the remote production server.
+The local Mac is the dev environment. The remote machine
+`192.168.100.252` is the production environment.
+
+Do not treat a remote `APP_PROFILE=dev`, image tag `:dev`, or Jenkins
+parameter default as permission to change local dev behavior for a production
+issue. If the problem is observed on `192.168.100.252`, scope the fix,
+validation, and deployment path as production/remote work.
+
+## Local Mac Dev Invariants
+
+The normal dev deployment runs on the local Mac, not on the remote production server.
 
 Do not change these defaults without intentionally migrating Jenkins and updating the guard script in the same tested change:
 
@@ -24,12 +34,18 @@ Do not change these defaults without intentionally migrating Jenkins and updatin
 - Dev Jenkins admin kubeconfig: `/var/jenkins_home/config/kubeconfig`
 - Dev image registry: `host.docker.internal:5001`
 - Dev Kafka: `host.docker.internal:9092`
+- Dev Kafka topic prefix: `dev.`
 - Dev OptionsEdge web smoke URL inside Jenkins: `http://host.docker.internal:8090`
-- Same dev OptionsEdge web app from the Mac browser: `http://localhost:8090`
+- Dev OptionsEdge web app from the Mac browser: `http://localhost:8090`
 
-The remote server values are production values and must not become the dev defaults:
+## Remote Production Invariants
+
+The remote server values are production values and must not become local dev
+defaults. Changes for `192.168.100.252` must be treated as production changes:
 
 - Production registry: `192.168.100.252:5000`
+- Production Kafka: `192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096`
+- Production Kafka topic prefix: empty/unprefixed
 - Production web app: `http://192.168.100.252:8090`
 - Production/remote kubeconfig path: `/home/options-edge/config/...`
 
@@ -37,13 +53,11 @@ Build `#264` failed because the Jenkinsfile drifted back to `/home/options-edge/
 
 ## Kafka Topic Namespace
 
-The dev overlay intentionally leaves `TOPIC_PREFIX` empty. Databento live feed
-services publish and consume the shared remote topics such as
-`options.databento.raw`, `options.databento.display`, and
-`options.databento.strike-flow`. Jenkins topic creation and smoke checks must
-validate those same unprefixed topics; do not add a dev-only fallback that
-rewrites them to `dev.options.*` unless the live feed and gateway are migrated
-at the same time.
+Kafka topic namespace changes must follow the environment boundary above.
+Local Mac dev uses `TOPIC_PREFIX=dev.` and validates topics such as
+`dev.options.databento.raw`. Remote production uses an empty topic prefix and
+validates topics such as `options.databento.raw`. Do not fix a remote
+production topic issue by changing the local Mac dev namespace.
 
 ## Jenkins Deployment Flow
 

@@ -5,18 +5,18 @@ metadata:
   namespace: options-edge
 data:
   APP_PROFILE: dev
-  TOPIC_PREFIX: ""
+  TOPIC_PREFIX: dev.
   KAFKA_APPLICATION_ID_SUFFIX: -dev
-  SCHEMA_REGISTRY_URL: http://192.168.100.252:8082
-  KAFKA_BOOTSTRAP_SERVERS: 192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-  KAFKA_SCHEMA_REGISTRY_URL: http://192.168.100.252:8082
+  SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
+  KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092
+  KAFKA_SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
   KAFKA_BROKER_COUNT: "1"
   KAFKA_TOPIC_REPLICATION_FACTOR: "1"
   KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS: "1"
-  POSTGRES_JDBC_URL: jdbc:postgresql://192.168.100.252:5432/options_flow_dev
+  POSTGRES_JDBC_URL: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
   POSTGRES_USER: options_flow
   POSTGRES_PASSWORD: Options#100
   APP_FEED_GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
-  WEB_BASE_URL: http://192.168.100.252:8090
+  WEB_BASE_URL: http://host.docker.internal:8090
   GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
   CHECK_MARKET_DATA_SOURCES: DATABENTO
