@@ -1,5 +1,5 @@
 pipeline {
-  agent { label 'hpsf-replay-mac' }
+  agent { label 'built-in' }
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
     string(name: 'KUBECONFIG_FILE', defaultValue: '/var/jenkins_home/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
