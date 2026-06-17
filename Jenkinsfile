@@ -435,32 +435,16 @@ EOF
             printf '%s\n' "$value"
           }
           effective_expiry="${IB_EXPIRY:-$(default_weekday_expiry)}"
-          python3 - "$market_data_source" "$effective_raw_topic" "${IB_HOST:-127.0.0.1}" "${IB_PORT:-4001}" "${IB_CLIENT_ID:-212}" "$effective_expiry" "${IB_MAX_STRIKES:-43}" "$effective_expiry" >"$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json" <<'PY'
-import json
-import sys
-
-keys = [
-    "APP_MARKET_DATA_SOURCE",
-    "KAFKA_RAW_TOPIC",
-    "IB_HOST",
-    "IB_PORT",
-            "IB_CLIENT_ID",
-            "IB_EXPIRY",
-            "IB_MAX_STRIKES",
-            "UNUSUAL_WHALES_EXPIRY",
-]
-print(json.dumps({"data": dict(zip(keys, sys.argv[1:]))}))
-PY
+          cat >"$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json" <<EOF
+{"data":{"APP_MARKET_DATA_SOURCE":"$market_data_source","KAFKA_RAW_TOPIC":"$effective_raw_topic","IB_HOST":"${IB_HOST:-127.0.0.1}","IB_PORT":"${IB_PORT:-4001}","IB_CLIENT_ID":"${IB_CLIENT_ID:-212}","IB_EXPIRY":"$effective_expiry","IB_MAX_STRIKES":"${IB_MAX_STRIKES:-43}","UNUSUAL_WHALES_EXPIRY":"$effective_expiry"}}
+EOF
           kubectl -n options-edge patch configmap options-edge-config \
             --type merge \
             --patch "$(cat "$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json")"
           if kubectl -n options-edge get configmap options-edge-databento-feed-config >/dev/null 2>&1; then
-            python3 - "$effective_expiry" >"$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json" <<'PY'
-import json
-import sys
-
-print(json.dumps({"data": {"DATABENTO_EXPIRY": sys.argv[1]}}))
-PY
+            cat >"$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json" <<EOF
+{"data":{"DATABENTO_EXPIRY":"$effective_expiry"}}
+EOF
             kubectl -n options-edge patch configmap options-edge-databento-feed-config \
               --type merge \
               --patch "$(cat "$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json")"

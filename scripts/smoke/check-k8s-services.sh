@@ -14,6 +14,10 @@ LIVE_UI_MARKET_CLOSE="${LIVE_UI_MARKET_CLOSE:-16:00}"
 mkdir -p "$TMP_DIR"
 
 live_ui_market_open() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "CLOSED"
+    return 0
+  fi
   python3 - "$LIVE_UI_MARKET_HOURS_ZONE" "$LIVE_UI_MARKET_OPEN" "$LIVE_UI_MARKET_CLOSE" <<'PY'
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
