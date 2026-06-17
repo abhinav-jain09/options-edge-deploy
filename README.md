@@ -12,6 +12,29 @@ Owns:
 
 This repo deploys applications after `options-edge-infra` has prepared Docker/Kubernetes on the remote server.
 
+## Local Jenkins Dev Invariants
+
+The normal dev deployment runs from the MacBook Jenkins instance, not from the remote production server.
+
+Do not change these defaults without intentionally migrating Jenkins and updating the guard script in the same tested change:
+
+- Jenkins URL: `http://localhost:8085`
+- Dev Kubernetes: local Docker Desktop Kubernetes
+- Dev Jenkins kubeconfig: `/var/jenkins_home/config/jenkins-deployer.kubeconfig`
+- Dev Jenkins admin kubeconfig: `/var/jenkins_home/config/kubeconfig`
+- Dev image registry: `host.docker.internal:5001`
+- Dev Kafka: `host.docker.internal:9092`
+- Dev OptionsEdge web smoke URL inside Jenkins: `http://host.docker.internal:8090`
+- Same dev OptionsEdge web app from the Mac browser: `http://localhost:8090`
+
+The remote server values are production values and must not become the dev defaults:
+
+- Production registry: `192.168.100.252:5000`
+- Production web app: `http://192.168.100.252:8090`
+- Production/remote kubeconfig path: `/home/options-edge/config/...`
+
+Build `#264` failed because the Jenkinsfile drifted back to `/home/options-edge/config/kubeconfig`, which does not exist in local Jenkins. The `scripts/jenkins/enforce-local-dev-defaults.sh` rule now runs in the Jenkins `Validate` stage and blocks this kind of drift before any deploy, Kafka topic, or smoke-test step runs.
+
 ## Jenkins Deployment Flow
 
 The deployment Jenkins job is designed for a dev-first, manual-production flow:
