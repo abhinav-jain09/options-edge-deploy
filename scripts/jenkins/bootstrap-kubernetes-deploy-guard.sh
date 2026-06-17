@@ -21,11 +21,14 @@ fi
 write_jenkins_deployer_kubeconfig() {
   mkdir -p "$(dirname "$jenkins_kubeconfig")"
 
-  for _ in $(seq 1 30); do
+  for attempt in $(seq 1 120); do
     token="$(kubectl --kubeconfig "$admin_kubeconfig" -n "$namespace" get secret "$token_secret" -o jsonpath='{.data.token}' 2>/dev/null || true)"
     ca_data="$(kubectl --kubeconfig "$admin_kubeconfig" -n "$namespace" get secret "$token_secret" -o jsonpath='{.data.ca\\.crt}' 2>/dev/null || true)"
     if [[ -n "$token" && -n "$ca_data" ]]; then
       break
+    fi
+    if (( attempt % 10 == 0 )); then
+      echo "Waiting for Jenkins deployer service-account token secret data; attempt=$attempt/120"
     fi
     sleep 1
   done
