@@ -3,11 +3,7 @@ set -euo pipefail
 
 WEB_LOCAL_URL="${WEB_LOCAL_URL:-http://127.0.0.1:8090}"
 if [[ -z "${WEB_PUBLIC_URL:-}" ]]; then
-  if [[ "${ENVIRONMENT:-dev}" == "dev" ]]; then
-    WEB_PUBLIC_URL="http://host.docker.internal:8090"
-  else
-    WEB_PUBLIC_URL="http://192.168.100.252:8090"
-  fi
+  WEB_PUBLIC_URL="http://192.168.100.252:8090"
 fi
 TOMCAT_PID_FILE="${TOMCAT_PID_FILE:-/home/abhinav/ci/tomcat/tomcat.pid}"
 TOMCAT_LOG_FILE="${TOMCAT_LOG_FILE:-/home/abhinav/ci/tomcat/current/logs/catalina.out}"

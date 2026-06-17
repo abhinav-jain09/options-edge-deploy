@@ -5,11 +5,7 @@ NAMESPACE="${NAMESPACE:-options-edge}"
 REMOTE_APP_HOME="${REMOTE_APP_HOME:-/home/options-edge}"
 TMP_DIR="${JENKINS_WORK_DIR:-$REMOTE_APP_HOME/tmp}"
 if [[ -z "${WEB_BASE_URL:-}" ]]; then
-  if [[ "${ENVIRONMENT:-dev}" == "dev" ]]; then
-    WEB_BASE_URL="http://host.docker.internal:8090"
-  else
-    WEB_BASE_URL="http://192.168.100.252:8090"
-  fi
+  WEB_BASE_URL="http://192.168.100.252:8090"
 fi
 DATA_SEED_WAIT_SECONDS="${DATA_SEED_WAIT_SECONDS:-8}"
 SYNTHETIC_CHECK_ATTEMPTS="${SYNTHETIC_CHECK_ATTEMPTS:-12}"
