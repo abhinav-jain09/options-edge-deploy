@@ -2,7 +2,7 @@ pipeline {
   agent any
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
-    string(name: 'KUBECONFIG_FILE', defaultValue: '/home/options-edge/config/kubeconfig', description: 'Kubeconfig path on Jenkins agent')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '/var/jenkins_home/config/kubeconfig', description: 'Kubeconfig path on Jenkins agent')
     string(name: 'IMAGE_REGISTRY', defaultValue: '192.168.100.252:5000', description: 'Docker registry namespace used when IMAGE_TAG is set')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
@@ -39,9 +39,10 @@ pipeline {
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
-    KUBECONFIG = "${params.KUBECONFIG_FILE ?: '/home/options-edge/config/kubeconfig'}"
+    KUBECONFIG = "${params.KUBECONFIG_FILE ?: '/var/jenkins_home/config/kubeconfig'}"
     REMOTE_APP_HOME = '/home/options-edge'
     JENKINS_WORK_DIR = '.jenkins-tmp'
+    PATH = "/var/jenkins_home/bin:${env.PATH}"
     IMAGE_REGISTRY = "${params.IMAGE_REGISTRY ?: '192.168.100.252:5000'}"
     IMAGE_TAG = "${params.IMAGE_TAG ?: ''}"
     RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: '192.168.100.252:5000/options-edge-raw-to-display:dev'}"
