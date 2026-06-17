@@ -23,7 +23,7 @@ write_jenkins_deployer_kubeconfig() {
 
   for attempt in $(seq 1 120); do
     token="$(kubectl --kubeconfig "$admin_kubeconfig" -n "$namespace" get secret "$token_secret" -o jsonpath='{.data.token}' 2>/dev/null || true)"
-    ca_data="$(kubectl --kubeconfig "$admin_kubeconfig" -n "$namespace" get secret "$token_secret" -o jsonpath='{.data.ca\\.crt}' 2>/dev/null || true)"
+    ca_data="$(kubectl --kubeconfig "$admin_kubeconfig" -n "$namespace" get secret "$token_secret" -o go-template='{{ index .data "ca.crt" }}' 2>/dev/null || true)"
     if [[ -n "$token" && -n "$ca_data" ]]; then
       break
     fi
