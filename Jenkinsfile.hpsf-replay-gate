@@ -123,7 +123,7 @@ pipeline {
           env.HPSF_CASE2_REPLAY_BRANCH = case2Branches.contains(processingBranch) ? 'true' : 'false'
           def replayImage = params.HPSF_PROCESSING_IMAGE?.trim()
           if (!replayImage) {
-            replayImage = "192.168.100.252:5000/options-edge-hpsf-processing:replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
+            replayImage = "localhost:5000/options-edge-hpsf-processing:replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
           }
           def imageTag = replayImage.contains(':') ? replayImage.substring(replayImage.lastIndexOf(':') + 1) : ''
           def blockedReplayTags = ['dev', 'latest', 'main', 'prod', 'production', 'stable']
