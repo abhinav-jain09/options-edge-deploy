@@ -119,8 +119,18 @@ pipeline {
             env.HPSF_REPLAY_SOURCE_DIR = "${env.WORKSPACE}/.replay/data/hpsf-replay/${replayDateId}"
           }
           def processingBranch = params.PROCESSING_BRANCH?.trim() ?: 'main'
-          def case2Branches = ['feature/hpsf-vix-mean-reversion-case2', 'feature/hpsf-case2-blackbox-coverage-diagnostics']
+          def case2Branches = [
+            'feature/hpsf-vix-mean-reversion-case2',
+            'feature/hpsf-case2-blackbox-coverage-diagnostics',
+            'feature/hpsf-stage-b-sharded-evaluator-cutover-146'
+          ]
           env.HPSF_CASE2_REPLAY_BRANCH = case2Branches.contains(processingBranch) ? 'true' : 'false'
+          env.HPSF_STAGE_A_STREAMS_APPLICATION_ID = "options-edge-hpsf-stage-a-replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
+          env.HPSF_STAGE_B_STREAMS_APPLICATION_ID = "options-edge-hpsf-stage-b-replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
+          if (env.HPSF_STAGE_A_STREAMS_APPLICATION_ID == env.HPSF_STAGE_B_STREAMS_APPLICATION_ID) {
+            error("Stage A and Stage B replay Kafka Streams application ids must be unique")
+          }
+          env.HPSF_REPLAY_VALIDATION_PROFILE = env.HPSF_REPLAY_VALIDATION_PROFILE ?: 'SHARDED_CUTOVER_SMOKE'
           def replayImage = params.HPSF_PROCESSING_IMAGE?.trim()
           if (!replayImage) {
             replayImage = "localhost:5001/options-edge-hpsf-processing:replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
@@ -251,6 +261,59 @@ pipeline {
       }
     }
 
+    stage('Replay agent preflight') {
+      steps {
+        withCredentials([string(credentialsId: params.DATABENTO_API_KEY_CREDENTIAL_ID, variable: 'DATABENTO_API_KEY_PREFLIGHT')]) {
+          sh '''
+            set -euo pipefail
+            mkdir -p artifacts/logs
+            failure_file="artifacts/logs/replay-failure-code.env"
+            fail_with() {
+              code="$1"
+              reason="$2"
+              {
+                printf 'HPSF_REPLAY_FAILURE_CODE=%s\\n' "$code"
+                printf 'HPSF_REPLAY_FAILURE_REASON=%s\\n' "$reason"
+              } > "$failure_file"
+              echo "$code: $reason" >&2
+              exit 1
+            }
+            {
+              echo "hostname=$(hostname)"
+              echo "pwd=$PWD"
+              echo "whoami=$(whoami)"
+              echo "dateUtc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+              echo "deployGitBranch=$(git branch --show-current || true)"
+              echo "deployGitCommit=$(git rev-parse HEAD || true)"
+              echo "processingBranch=${PROCESSING_BRANCH:-}"
+              echo "processingCommit=$(git -C .replay/options-edge-processing rev-parse HEAD 2>/dev/null || true)"
+              echo "KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS:-}"
+              echo "NAMESPACE=${NAMESPACE:-}"
+              echo "DATABENTO_API_KEY_CREDENTIAL_ID=${DATABENTO_API_KEY_CREDENTIAL_ID:-}"
+            } | tee artifacts/logs/replay-agent-preflight.log
+            [ -n "${KAFKA_BOOTSTRAP_SERVERS:-}" ] || fail_with HPSF_REPLAY_AGENT_PREFLIGHT_FAILED "KAFKA_BOOTSTRAP_SERVERS is empty on replay agent."
+            [ -n "${DATABENTO_API_KEY_CREDENTIAL_ID:-}" ] || fail_with HPSF_REPLAY_DATABENTO_CREDENTIAL_MISSING "DATABENTO_API_KEY_CREDENTIAL_ID is not set for real replay."
+            [ -n "${DATABENTO_API_KEY_PREFLIGHT:-}" ] || fail_with HPSF_REPLAY_DATABENTO_CREDENTIAL_MISSING "Databento Jenkins credential '${DATABENTO_API_KEY_CREDENTIAL_ID:-}' resolved empty."
+            {
+              echo "--- kubectl context ---"
+              kubectl config current-context
+              echo "--- namespace ---"
+              kubectl get namespace "$NAMESPACE"
+              echo "--- auth ---"
+              kubectl -n "$NAMESPACE" auth can-i get pods
+              kubectl -n "$NAMESPACE" auth can-i create pods
+              kubectl -n "$NAMESPACE" auth can-i create jobs
+              kubectl -n "$NAMESPACE" auth can-i create deployments
+            } >> artifacts/logs/replay-agent-preflight.log 2>&1 || fail_with HPSF_REPLAY_KUBERNETES_UNREACHABLE "kubectl preflight failed for namespace ${NAMESPACE:-}."
+            {
+              echo "--- kafka topics ---"
+              kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list
+            } >> artifacts/logs/replay-agent-preflight.log 2>&1 || fail_with HPSF_REPLAY_KAFKA_UNREACHABLE "Kafka topic list failed for ${KAFKA_BOOTSTRAP_SERVERS:-}."
+          '''
+        }
+      }
+    }
+
     stage('Create replay topics') {
       steps {
         sh '''
@@ -330,11 +393,142 @@ pipeline {
       }
     }
 
+    stage('Verify replay source before Stage A') {
+      steps {
+        sh '''
+          set -euo pipefail
+          mkdir -p artifacts/logs
+          failure_file="artifacts/logs/replay-failure-code.env"
+          fail_with() {
+            code="$1"
+            reason="$2"
+            {
+              printf 'HPSF_REPLAY_FAILURE_CODE=%s\\n' "$code"
+              printf 'HPSF_REPLAY_FAILURE_REASON=%s\\n' "$reason"
+            } > "$failure_file"
+            echo "$code: $reason" >&2
+            exit 1
+          }
+          compact_date="${REPLAY_DATE//-/}"
+          underlying_topic_prefix="${UNDERLYING_TOPIC_PREFIX:-underlying.replay.${compact_date}}"
+          : > artifacts/logs/replay-source-topic-offsets-before-stage-a.log
+          for topic in \
+            "$TOPIC_PREFIX.opra.tcbbo" \
+            "$underlying_topic_prefix.es.trades" \
+            "$underlying_topic_prefix.spx.price" \
+            "$TOPIC_PREFIX.hpsf.source"; do
+            {
+              echo "### $topic"
+              kafka-run-class kafka.tools.GetOffsetShell \
+                --broker-list "$KAFKA_BOOTSTRAP_SERVERS" \
+                --topic "$topic" \
+                --time -1
+            } >> artifacts/logs/replay-source-topic-offsets-before-stage-a.log 2>&1 || true
+          done
+          python3 - <<'PY' || fail_with REPLAY_SOURCE_TOPIC_EMPTY_BEFORE_STAGE_A "Replay publish/download summaries or source topic offsets show no usable OPRA and underlying input before Stage A."
+import json
+import re
+from pathlib import Path
+
+def read_json(path: str) -> dict:
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+def walk(value, path=""):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield from walk(child, f"{path}.{key}" if path else str(key))
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            yield from walk(child, f"{path}[{idx}]")
+    else:
+        yield path, value
+
+def numeric(value) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return 0
+
+publish = read_json("artifacts/hpsf-publish-summary.json")
+download = read_json("artifacts/hpsf-download-summary.json")
+opra = 0
+underlying = 0
+for doc in [publish, download]:
+    for path, value in walk(doc):
+        low = path.lower()
+        count = numeric(value)
+        if count <= 0:
+            continue
+        if "opra" in low or "tcbbo" in low:
+            opra += count
+        if "underlying" in low or ".es" in low or "estrades" in low or "es_trades" in low or "spx" in low:
+            underlying += count
+
+offset_sum = 0
+offsets_by_topic = {}
+current_topic = None
+for line in Path("artifacts/logs/replay-source-topic-offsets-before-stage-a.log").read_text(encoding="utf-8", errors="replace").splitlines():
+    if line.startswith("### "):
+        current_topic = line[4:].strip()
+        offsets_by_topic.setdefault(current_topic, 0)
+        continue
+    match = re.search(r":(\d+)$", line.strip())
+    if match and current_topic:
+        value = int(match.group(1))
+        offsets_by_topic[current_topic] = offsets_by_topic.get(current_topic, 0) + value
+        offset_sum += value
+
+summary = {
+    "opraPublishedOrDownloaded": opra,
+    "underlyingPublishedOrDownloaded": underlying,
+    "sourceTopicOffsetSum": offset_sum,
+    "offsetsByTopic": offsets_by_topic,
+}
+Path("artifacts/logs/replay-source-health-before-stage-a.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+print(json.dumps(summary, indent=2, sort_keys=True))
+if opra <= 0 or underlying <= 0 or offset_sum <= 0:
+    raise SystemExit(1)
+PY
+        '''
+      }
+    }
+
     stage('Run Stage A replay') {
       steps {
         sh '''
           set -euo pipefail
           pod="hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}"
+          stage_a_label="$pod"
+          stage_a_app_id="${HPSF_STAGE_A_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}}"
+          stage_b_app_id="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}}"
+          failure_file="artifacts/logs/replay-failure-code.env"
+          fail_with() {
+            code="$1"
+            reason="$2"
+            {
+              printf 'HPSF_REPLAY_FAILURE_CODE=%s\\n' "$code"
+              printf 'HPSF_REPLAY_FAILURE_REASON=%s\\n' "$reason"
+            } > "$failure_file"
+            echo "$code: $reason" >&2
+            exit 1
+          }
+          collect_stage_a_failure_artifacts() {
+            kubectl -n "$NAMESPACE" get pod "$pod" -o json > artifacts/logs/stage-a-pod.json 2>/dev/null || true
+            kubectl -n "$NAMESPACE" describe pod "$pod" > artifacts/logs/stage-a-describe.log 2>/dev/null || true
+            kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp > artifacts/logs/stage-a-events.log 2>/dev/null || true
+            kubectl -n "$NAMESPACE" logs "$pod" --previous --all-containers=true > artifacts/logs/stage-a-previous.log 2>/dev/null || true
+            kubectl -n "$NAMESPACE" logs "$pod" --tail=1000 > artifacts/logs/stage-a.log 2>/dev/null || true
+            kubectl -n "$NAMESPACE" get pod "$pod" -o json 2>/dev/null | python3 -c 'import json,re,sys; p=json.load(sys.stdin); s=re.compile("(password|token|secret|key|credential)", re.I); [print("container="+c.get("name","")) or [print(e.get("name","")+"="+("<redacted>" if s.search(e.get("name","")) else ("<valueFrom>" if "valueFrom" in e else e.get("value","")))) for e in (c.get("env") or [])] for c in ((p.get("spec") or {}).get("containers") or [])]' > artifacts/logs/stage-a-env-redacted.log 2>/dev/null || true
+          }
+          case "$stage_a_app_id" in
+            *"$HPSF_REPLAY_DATE_ID"*"$BUILD_NUMBER"*) ;;
+            *) fail_with STAGE_A_REPLAY_APPLICATION_ID_INVALID "Stage A application id '$stage_a_app_id' must include replay date and build number." ;;
+          esac
+          [ "$stage_a_app_id" != "$stage_b_app_id" ] || fail_with STAGE_A_REPLAY_APPLICATION_ID_INVALID "Stage A and Stage B application ids are identical."
           stage_a_java_tool_options="${HPSF_STAGE_A_REPLAY_JAVA_TOOL_OPTIONS:--Xms3g -Xmx8g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ExitOnOutOfMemoryError}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
           kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=IfNotPresent --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
@@ -350,7 +544,7 @@ pipeline {
             --env=HPSF_STAGE_A_ENABLED=true \
             --env=HPSF_STAGE_B_ENABLED=false \
             --env=HPSF_UNDERLYING_STATE_ENABLED=false \
-            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual} \
+            --env=HPSF_STREAMS_APPLICATION_ID="$stage_a_app_id" \
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-a-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
             --env=HPSF_STREAMS_PROCESSING_GUARANTEE="${HPSF_STAGE_A_REPLAY_PROCESSING_GUARANTEE:-at_least_once}" \
@@ -375,6 +569,11 @@ from pathlib import Path
 
 path = Path("artifacts/stage-a-pod.json")
 pod = json.loads(path.read_text(encoding="utf-8"))
+metadata = pod.setdefault("metadata", {})
+labels = metadata.setdefault("labels", {})
+labels["app"] = f"hpsf-stage-a-replay-{os.environ.get('HPSF_REPLAY_DATE_ID', '')}"
+labels["hpsf-replay-date"] = os.environ.get("HPSF_REPLAY_DATE_ID", "")
+labels["hpsf-replay-role"] = "stage-a"
 container = pod["spec"]["containers"][0]
 container["resources"] = {
     "requests": {
@@ -390,40 +589,96 @@ container["resources"] = {
 }
 path.write_text(json.dumps(pod, indent=2, sort_keys=True), encoding="utf-8")
 PY
-          kubectl -n "$NAMESPACE" create -f artifacts/stage-a-pod.json
+          cp artifacts/stage-a-pod.json artifacts/logs/stage-a-pod.json
+          kubectl -n "$NAMESPACE" create -f artifacts/stage-a-pod.json || fail_with STAGE_A_POD_NOT_CREATED "Stage A replay pod was not created."
+          kubectl -n "$NAMESPACE" get pods -l "app=$stage_a_label" -o wide | tee artifacts/logs/stage-a-pods.log
+          kubectl -n "$NAMESPACE" wait --for=condition=Ready pod -l "app=$stage_a_label" --timeout=300s || {
+            collect_stage_a_failure_artifacts
+            fail_with STAGE_A_POD_NOT_READY "Stage A replay pod did not become Ready within 300 seconds."
+          }
+          kubectl -n "$NAMESPACE" get pod "$pod" -o json > artifacts/logs/stage-a-pod.json
+          python3 - <<'PY' || {
+            collect_stage_a_failure_artifacts
+            fail_with STAGE_A_POD_CRASH_LOOP "Stage A replay pod is not running cleanly or has restarted."
+          }
+import json
+from pathlib import Path
+
+pod = json.loads(Path("artifacts/logs/stage-a-pod.json").read_text(encoding="utf-8"))
+containers = (pod.get("status") or {}).get("containerStatuses") or []
+if not containers:
+    raise SystemExit("container status missing")
+for container in containers:
+    if int(container.get("restartCount") or 0) > 0:
+        raise SystemExit(f"restartCount > 0 for {container.get('name')}")
+    state = container.get("state") or {}
+    if "running" not in state:
+        raise SystemExit(f"container not running: {state}")
+PY
           : > artifacts/logs/stage-a.log
-          for attempt in $(seq 1 180); do
-            phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-            kubectl -n "$NAMESPACE" logs "$pod" --tail=300 > artifacts/logs/stage-a.log 2>/dev/null || true
-            if grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing|HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING' artifacts/logs/stage-a.log; then
-              break
-            fi
-            if [ "$phase" = "Failed" ] || [ "$phase" = "Succeeded" ]; then
-              kubectl -n "$NAMESPACE" describe pod "$pod" > artifacts/logs/stage-a-describe.log 2>/dev/null || true
-              cat artifacts/logs/stage-a.log
-              exit 1
-            fi
-            sleep 1
-          done
-          for attempt in $(seq 1 180); do
+          ready_timeout="${HPSF_REPLAY_STAGE_A_READY_TIMEOUT_SECONDS:-600}"
+          for attempt in $(seq 1 "$ready_timeout"); do
             phase="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
             kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/stage-a.log 2>/dev/null || true
-            if grep -E 'HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING' artifacts/logs/stage-a.log; then
+            if grep -F 'HPSF Stage A topology enabled' artifacts/logs/stage-a.log >/dev/null 2>&1; then
               break
             fi
             if [ "$phase" = "Failed" ] || [ "$phase" = "Succeeded" ]; then
-              kubectl -n "$NAMESPACE" describe pod "$pod" > artifacts/logs/stage-a-describe.log 2>/dev/null || true
-              cat artifacts/logs/stage-a.log
-              exit 1
+              collect_stage_a_failure_artifacts
+              fail_with STAGE_A_STARTUP_EVIDENCE_MISSING "Stage A replay pod exited before startup evidence was observed."
             fi
             sleep 1
           done
-          kubectl -n "$NAMESPACE" logs "$pod" --tail=600 > artifacts/logs/stage-a.log || true
-          grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing' artifacts/logs/stage-a.log || echo "Stage A legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate."
-          grep -E 'HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING' artifacts/logs/stage-a.log
-          scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
-            "options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
-            artifacts/logs/stage-a-consumer-group-catchup.log
+          grep -F 'HPSF Stage A topology enabled' artifacts/logs/stage-a.log >/dev/null 2>&1 || {
+            collect_stage_a_failure_artifacts
+            fail_with STAGE_A_STARTUP_EVIDENCE_MISSING "Stage A startup evidence marker was not found in logs."
+          }
+          for attempt in $(seq 1 "$ready_timeout"); do
+            kafka-consumer-groups --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --group "$stage_a_app_id" > artifacts/logs/stage-a-consumer-group.log 2>&1 || true
+            if [ -s artifacts/logs/stage-a-consumer-group.log ] && ! grep -E 'GroupIdNotFoundException|does not exist|Error:' artifacts/logs/stage-a-consumer-group.log >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+          if grep -E 'GroupIdNotFoundException|does not exist|Error:' artifacts/logs/stage-a-consumer-group.log >/dev/null 2>&1 || [ ! -s artifacts/logs/stage-a-consumer-group.log ]; then
+            collect_stage_a_failure_artifacts
+            fail_with STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED "Replay input existed, but Stage A did not establish its Kafka Streams consumer group."
+          fi
+          kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list | grep -E "^${stage_a_app_id//./\\.}-" > artifacts/logs/stage-a-internal-topics.log || true
+          [ -s artifacts/logs/stage-a-internal-topics.log ] || {
+            collect_stage_a_failure_artifacts
+            fail_with STAGE_A_INTERNAL_TOPICS_MISSING "Stage A Kafka Streams internal topics were not created for $stage_a_app_id."
+          }
+          scripts/hpsf/wait-kafka-consumer-group-caught-up.sh "$stage_a_app_id" artifacts/logs/stage-a-consumer-group-catchup.log
+          catchup_timeout="${HPSF_REPLAY_STAGE_A_CATCHUP_TIMEOUT_SECONDS:-900}"
+          if [ "${REPLAY_SPEED:-FAST}" = "REALTIME" ]; then
+            catchup_timeout="${HPSF_REPLAY_STAGE_A_CATCHUP_TIMEOUT_SECONDS:-5400}"
+          fi
+          for attempt in $(seq 1 "$catchup_timeout"); do
+            kafka-run-class kafka.tools.GetOffsetShell \
+              --broker-list "$KAFKA_BOOTSTRAP_SERVERS" \
+              --topic "$TOPIC_PREFIX.hpsf.strike-flow" \
+              --time -1 > artifacts/logs/replay-strike-flow-topic-offsets-before-stage-b.log 2>&1 || true
+            strike_flow_offset="$(python3 - <<'PY'
+from pathlib import Path
+import re
+total = 0
+for line in Path("artifacts/logs/replay-strike-flow-topic-offsets-before-stage-b.log").read_text(encoding="utf-8", errors="replace").splitlines():
+    match = re.search(r":(\d+)$", line.strip())
+    if match:
+        total += int(match.group(1))
+print(total)
+PY
+)"
+            if [ "$strike_flow_offset" -gt 0 ]; then
+              break
+            fi
+            sleep 1
+          done
+          [ "${strike_flow_offset:-0}" -gt 0 ] || {
+            collect_stage_a_failure_artifacts
+            fail_with STAGE_A_ZERO_STRIKE_FLOW_OUTPUT "Stage A started and established its group but produced zero strike-flow records before Stage B."
+          }
         '''
       }
     }
@@ -515,6 +770,9 @@ PY
         sh '''
           set -euo pipefail
           pod="hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}"
+          stage_b_app_id="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}}"
+          stage_a_app_id="${HPSF_STAGE_A_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}}"
+          [ "$stage_b_app_id" != "$stage_a_app_id" ]
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
           kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=IfNotPresent --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
@@ -528,7 +786,7 @@ PY
             --env=HPSF_STAGE_A_ENABLED=false \
             --env=HPSF_STAGE_B_ENABLED=true \
             --env=HPSF_UNDERLYING_STATE_ENABLED=false \
-            --env=HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual} \
+            --env=HPSF_STREAMS_APPLICATION_ID="$stage_b_app_id" \
             --env=HPSF_STREAMS_STATE_DIR="$HPSF_STATE_DIR/stage-b-${BUILD_NUMBER:-manual}" \
             --env=HPSF_STREAMS_AUTO_OFFSET_RESET=earliest \
             --env=HPSF_STREAMS_PROCESSING_GUARANTEE=at_least_once \
@@ -565,6 +823,11 @@ from pathlib import Path
 
 path = Path("artifacts/stage-b-pod.json")
 pod = json.loads(path.read_text(encoding="utf-8"))
+metadata = pod.setdefault("metadata", {})
+labels = metadata.setdefault("labels", {})
+labels["app"] = f"hpsf-stage-b-replay-{os.environ.get('HPSF_REPLAY_DATE_ID', '')}"
+labels["hpsf-replay-date"] = os.environ.get("HPSF_REPLAY_DATE_ID", "")
+labels["hpsf-replay-role"] = "stage-b"
 container = pod["spec"]["containers"][0]
 container["resources"] = {
     "requests": {
@@ -580,6 +843,7 @@ container["resources"] = {
 }
 path.write_text(json.dumps(pod, indent=2, sort_keys=True), encoding="utf-8")
 PY
+          cp artifacts/stage-b-pod.json artifacts/logs/stage-b-pod.json
           kubectl -n "$NAMESPACE" create -f artifacts/stage-b-pod.json
           : > artifacts/logs/stage-b-startup.log
           for attempt in $(seq 1 180); do
@@ -611,7 +875,7 @@ PY
           grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b-startup.log || echo "Stage B legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate."
           grep -E 'HPSF stage-b stream state transition .* -> RUNNING|state=stage-b=RUNNING' artifacts/logs/stage-b-startup.log
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
-            "options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
+            "$stage_b_app_id" \
             artifacts/logs/stage-b-consumer-group-catchup.log
           kubectl -n "$NAMESPACE" exec "$pod" -- sh -c 'kill -TERM 1' >/dev/null 2>&1 || true
           for attempt in $(seq 1 60); do
@@ -740,7 +1004,7 @@ PY
           mkdir -p artifacts/logs
           test -x .replay/options-edge-processing/scripts/hpsf/run_blackbox_replay_validation.sh
           export ARTIFACTS_DIR="$workspace/artifacts"
-          export HPSF_REPLAY_VALIDATION_PROFILE=FULL_RTH_RELEASE
+          export HPSF_REPLAY_VALIDATION_PROFILE="${HPSF_REPLAY_VALIDATION_PROFILE:-SHARDED_CUTOVER_SMOKE}"
           export HPSF_0DTE_DATA_QUALITY_REQUIRED=true
           export HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=true
           export HPSF_NEAR_SPOT_QUOTE_DRILL_REQUIRED=true
@@ -829,6 +1093,7 @@ PY
     stage('Archive artifacts') {
       steps {
         archiveArtifacts artifacts: ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md", fingerprint: true, allowEmptyArchive: false
+        archiveArtifacts artifacts: 'artifacts/logs/replay-agent-preflight.log,artifacts/hpsf-download-summary.json,artifacts/hpsf-publish-summary.json,artifacts/logs/replay-source-topic-offsets-before-stage-a.log,artifacts/logs/replay-source-health-before-stage-a.json,artifacts/logs/stage-a-pod.json,artifacts/logs/stage-a-describe.log,artifacts/logs/stage-a-events.log,artifacts/logs/stage-a-previous.log,artifacts/logs/stage-a-env-redacted.log,artifacts/logs/stage-a.log,artifacts/logs/stage-a-consumer-group.log,artifacts/logs/stage-a-consumer-group-catchup.log,artifacts/logs/stage-a-internal-topics.log,artifacts/logs/replay-strike-flow-topic-offsets-before-stage-b.log,artifacts/logs/stage-b-pod.json,artifacts/logs/stage-b.log,artifacts/hpsf-replay-summary.json,artifacts/replay-validation-result.json', fingerprint: true, allowEmptyArchive: true
         archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-near-spot-quote-drill-result.json,artifacts/hpsf-near-spot-quote-drill-report.md,artifacts/hpsf-dlq-impact-result.json,artifacts/hpsf-dlq-impact-report.md,artifacts/hpsf-stage-b-hot-partition-result.json,artifacts/hpsf-stage-b-hot-partition-report.md,artifacts/hpsf-stage-b-chain-shard-parity-result.json,artifacts/hpsf-stage-b-chain-shard-parity-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: false
         archiveArtifacts artifacts: 'artifacts/case2-diagnostic-validation-result.json,artifacts/case2-diagnostic-validation-report.md', fingerprint: true, allowEmptyArchive: true
       }
@@ -915,6 +1180,11 @@ PY
         replay_topic_prefix="${TOPIC_PREFIX:-options.replay.${HPSF_REPLAY_DATE_ID:-${REPLAY_DATE//-/}}}"
         export HPSF_REPLAY_FAILURE_REASON="Jenkins failed before a valid PASS replay report was generated. Verify required credentials including DATABENTO_API_KEY_CREDENTIAL_ID=${DATABENTO_API_KEY_CREDENTIAL_ID:-options-edge-databento-api-key}, prepared replay source data, Kafka, Kubernetes, and Databento access in the console log."
         export HPSF_REPLAY_FAILURE_CODE="JENKINS_REPLAY_PIPELINE_FAILED"
+        if [ -s artifacts/logs/replay-failure-code.env ]; then
+          . artifacts/logs/replay-failure-code.env
+          export HPSF_REPLAY_FAILURE_CODE
+          export HPSF_REPLAY_FAILURE_REASON
+        fi
         if grep -F "strike-flow count = 0" artifacts/logs/validate-stage-a.log >/dev/null 2>&1; then
           export HPSF_REPLAY_FAILURE_CODE="STAGE_A_STRIKE_FLOW_EMPTY"
           export HPSF_REPLAY_FAILURE_REASON="Stage A replay started but emitted zero strike-flow records from ${replay_topic_prefix}.opra.tcbbo into ${replay_topic_prefix}.hpsf.strike-flow during validation."
@@ -938,6 +1208,7 @@ PY
         scripts/hpsf/archive-replay-evidence-report.sh | tee artifacts/logs/archive-replay-evidence-report.log || true
       '''
       archiveArtifacts artifacts: ".replay/options-edge/evidence-report/${env.HPSF_REPLAY_RUN_NAME}/**/*.md", fingerprint: true, allowEmptyArchive: false
+      archiveArtifacts artifacts: 'artifacts/logs/replay-agent-preflight.log,artifacts/hpsf-download-summary.json,artifacts/hpsf-publish-summary.json,artifacts/logs/replay-source-topic-offsets-before-stage-a.log,artifacts/logs/replay-source-health-before-stage-a.json,artifacts/logs/stage-a-pod.json,artifacts/logs/stage-a-describe.log,artifacts/logs/stage-a-events.log,artifacts/logs/stage-a-previous.log,artifacts/logs/stage-a-env-redacted.log,artifacts/logs/stage-a.log,artifacts/logs/stage-a-consumer-group.log,artifacts/logs/stage-a-consumer-group-catchup.log,artifacts/logs/stage-a-internal-topics.log,artifacts/logs/replay-strike-flow-topic-offsets-before-stage-b.log,artifacts/logs/stage-b-pod.json,artifacts/logs/stage-b.log,artifacts/hpsf-replay-summary.json,artifacts/replay-validation-result.json', fingerprint: true, allowEmptyArchive: true
       archiveArtifacts artifacts: 'artifacts/hpsf-0dte-data-quality-validation-result.json,artifacts/hpsf-0dte-data-quality-validation-report.md,artifacts/hpsf-chain-coverage-drill-result.json,artifacts/hpsf-chain-coverage-drill-report.md,artifacts/hpsf-near-spot-quote-drill-result.json,artifacts/hpsf-near-spot-quote-drill-report.md,artifacts/hpsf-dlq-impact-result.json,artifacts/hpsf-dlq-impact-report.md,artifacts/hpsf-stage-b-hot-partition-result.json,artifacts/hpsf-stage-b-hot-partition-report.md,artifacts/hpsf-stage-b-chain-shard-parity-result.json,artifacts/hpsf-stage-b-chain-shard-parity-report.md,artifacts/hpsf-blackbox-validation-result.json,artifacts/hpsf-blackbox-validation-report.md,artifacts/logs/hpsf-blackbox-replay-validation.log,artifacts/logs/hpsf-blackbox-replay-validation.exit-code', fingerprint: true, allowEmptyArchive: true
       archiveArtifacts artifacts: 'artifacts/case2-diagnostic-validation-result.json,artifacts/case2-diagnostic-validation-report.md', fingerprint: true, allowEmptyArchive: true
     }
