@@ -308,7 +308,10 @@ pipeline {
           else
             registry=192.168.100.252:5000
           fi
-          if [ -n "$image_tag" ]; then
+          if [ -n "$image_tag" ] || [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            if [ -z "$image_tag" ]; then
+              image_tag=dev
+            fi
             cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$registry/options-edge-raw-to-display:$image_tag
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$registry/options-edge-databento-volume-aggregator:$image_tag
