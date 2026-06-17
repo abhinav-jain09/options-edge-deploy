@@ -123,7 +123,7 @@ pipeline {
           env.HPSF_CASE2_REPLAY_BRANCH = case2Branches.contains(processingBranch) ? 'true' : 'false'
           def replayImage = params.HPSF_PROCESSING_IMAGE?.trim()
           if (!replayImage) {
-            replayImage = "localhost:5000/options-edge-hpsf-processing:replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
+            replayImage = "localhost:5001/options-edge-hpsf-processing:replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
           }
           def imageTag = replayImage.contains(':') ? replayImage.substring(replayImage.lastIndexOf(':') + 1) : ''
           def blockedReplayTags = ['dev', 'latest', 'main', 'prod', 'production', 'stable']
@@ -337,7 +337,7 @@ pipeline {
           pod="hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}"
           stage_a_java_tool_options="${HPSF_STAGE_A_REPLAY_JAVA_TOOL_OPTIONS:--Xms3g -Xmx8g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ExitOnOutOfMemoryError}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=IfNotPresent --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=JAVA_TOOL_OPTIONS="$stage_a_java_tool_options" \
             --env=HPSF_MODE="$HPSF_MODE" \
@@ -447,7 +447,7 @@ PY
           underlying_topic_prefix="${UNDERLYING_TOPIC_PREFIX:-underlying.replay.${compact_date}}"
           pod="hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=IfNotPresent --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
@@ -516,7 +516,7 @@ PY
           set -euo pipefail
           pod="hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Always --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=IfNotPresent --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
