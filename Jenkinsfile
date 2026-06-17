@@ -135,16 +135,6 @@ pipeline {
         '''
       }
     }
-    stage('Deploy to DEV') {
-      when {
-        expression { return env.ENVIRONMENT == 'dev' }
-      }
-      steps {
-        timeout(time: 30, unit: 'MINUTES') {
-          input message: 'Deploy OptionsEdge to DEV?', ok: 'Deploy to dev'
-        }
-      }
-    }
     stage('Deploy to PRODUCTION') {
       when {
         expression { return env.ENVIRONMENT == 'production' && !params.SKIP_PRODUCTION_PROMOTION }

@@ -40,7 +40,7 @@ Build `#264` failed because the Jenkinsfile drifted back to `/home/options-edge/
 The deployment Jenkins job is designed for a dev-first, manual-production flow:
 
 1. Start the job with `ENVIRONMENT=dev` for the normal path.
-2. Jenkins renders and deploys the dev Kubernetes overlay automatically.
+2. Jenkins renders and deploys the dev Kubernetes overlay automatically. Dev deployment must not require a manual approval button.
 3. Jenkins runs the smoke checks against the dev deployment.
 4. The final `Deploy To Production` stage pauses with a manual `Deploy to production` button.
 5. Pressing that button starts a separate production deployment build with the same image and runtime parameters.

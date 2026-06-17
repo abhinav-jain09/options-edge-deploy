@@ -50,5 +50,7 @@ reject_text "$bootstrap_script" 'admin_kubeconfig="${KUBECONFIG_ADMIN_FILE:-/hom
   "do not point the local Jenkins bootstrap guard at the remote server kubeconfig path."
 reject_text "$bootstrap_script" 'jenkins_kubeconfig="${KUBECONFIG_FILE:-/home/options-edge/config/jenkins-deployer.kubeconfig}"' \
   "do not point the local Jenkins bootstrap guard at the remote server kubeconfig path."
+reject_text "$jenkinsfile" "input message: 'Deploy OptionsEdge to DEV?'" \
+  "dev deploy must run automatically; only production deployment may require manual approval."
 
 echo "Local dev deploy defaults guard passed."
