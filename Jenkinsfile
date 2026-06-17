@@ -41,8 +41,8 @@ pipeline {
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
-    KUBECONFIG = "${params.KUBECONFIG_FILE ?: '/home/options-edge/config/jenkins-deployer.kubeconfig'}"
-    KUBECONFIG_ADMIN_FILE = "${params.KUBECONFIG_ADMIN_FILE ?: '/home/options-edge/config/kubeconfig'}"
+    KUBECONFIG = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/var/jenkins_home/config/jenkins-deployer.kubeconfig') ? '/home/options-edge/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
+    KUBECONFIG_ADMIN_FILE = "${(!params.KUBECONFIG_ADMIN_FILE || params.KUBECONFIG_ADMIN_FILE == '/var/jenkins_home/config/kubeconfig') ? '/home/options-edge/config/kubeconfig' : params.KUBECONFIG_ADMIN_FILE}"
     REMOTE_APP_HOME = '/home/options-edge'
     JENKINS_WORK_DIR = '.jenkins-tmp'
     PATH = "/var/jenkins_home/bin:${env.PATH}"
@@ -667,7 +667,8 @@ EOF
             propagate: false,
             parameters: [
               string(name: 'ENVIRONMENT', value: 'production'),
-              string(name: 'KUBECONFIG_FILE', value: params.KUBECONFIG_FILE),
+              string(name: 'KUBECONFIG_FILE', value: env.KUBECONFIG),
+              string(name: 'KUBECONFIG_ADMIN_FILE', value: env.KUBECONFIG_ADMIN_FILE),
               string(name: 'IMAGE_REGISTRY', value: params.IMAGE_REGISTRY),
               string(name: 'IMAGE_TAG', value: params.IMAGE_TAG),
               string(name: 'KAFKA_BOOTSTRAP_SERVERS', value: ''),
