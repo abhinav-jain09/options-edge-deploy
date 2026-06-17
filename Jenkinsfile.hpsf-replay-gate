@@ -292,7 +292,6 @@ pipeline {
           cat artifacts/logs/replay-image-manifest.txt
           python3 - "$HPSF_REPLAY_BUILD_PLATFORM" artifacts/logs/replay-image-manifest.txt <<'PY'
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -301,7 +300,7 @@ manifest_path = Path(sys.argv[2])
 text = manifest_path.read_text(encoding="utf-8")
 expected_os, expected_arch = expected.split("/", 1)
 
-if re.search(rf"Platform:\s+{re.escape(expected)}(?:\s|$)", text):
+if f"Platform: {expected}" in text:
     raise SystemExit(0)
 
 try:
