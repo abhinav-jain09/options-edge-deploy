@@ -7,7 +7,7 @@ pipeline {
     string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses host.docker.internal:5001 for dev and 192.168.100.252:5000 for staging/production.')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
     string(name: 'BUILD_PLATFORM', defaultValue: '', description: 'Image platform. Empty defaults to linux/arm64 for dev and linux/amd64 for staging/production; staging/production always deploy linux/amd64.')
-    string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses remote Kafka at 192.168.100.252:9092,9094,9096.')
+    string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses host.docker.internal:9092 for dev and 192.168.100.252:9092,9094,9096 for staging/production.')
     string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses http://host.docker.internal:8090 for dev and http://192.168.100.252:8090 for prod.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev', description: 'Databento volume aggregator image')
@@ -205,7 +205,13 @@ pipeline {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
           if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
             TOPIC_PREFIX=dev.
           fi
@@ -227,7 +233,13 @@ pipeline {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
           if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
             TOPIC_PREFIX=dev.
           fi
@@ -252,7 +264,13 @@ pipeline {
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
           if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
             TOPIC_PREFIX=dev.
           fi
@@ -633,7 +651,13 @@ EOF
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
           export KAFKA_BOOTSTRAP_SERVERS
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           export KAFKA_TOPIC_RETENTION_MS=86400000
@@ -687,7 +711,13 @@ EOF
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
+            else
+              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+            fi
+          fi
           if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
             TOPIC_PREFIX=dev.
           fi
