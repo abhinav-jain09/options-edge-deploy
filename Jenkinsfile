@@ -41,6 +41,8 @@ pipeline {
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
     booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', defaultValue: false, description: 'Internal guard used by the manual production promotion build')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false, description: 'Validate render, image preflight, and server-side Kubernetes apply without mutating runtime resources.')
+    booleanParam(name: 'RUN_ONE_TIME_LOCAL_DEV_DATABENTO_CLEANUP', defaultValue: false, description: 'ONE TIME ONLY: clean mixed local dev Databento Kafka topics before deploy')
+    string(name: 'CONFIRM_LOCAL_DEV_KAFKA_CLEANUP', defaultValue: '', description: 'Required exact phrase for one-time local dev cleanup: DELETE_LOCAL_DEV_DATABENTO_TOPICS')
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
@@ -86,6 +88,8 @@ pipeline {
     ALLOW_PROD_KAFKA_CLEANUP = "${params.ALLOW_PROD_KAFKA_CLEANUP ?: false}"
     SKIP_PRODUCTION_PROMOTION = "${params.SKIP_PRODUCTION_PROMOTION ?: false}"
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN ?: false}"
+    RUN_ONE_TIME_LOCAL_DEV_DATABENTO_CLEANUP = "${params.RUN_ONE_TIME_LOCAL_DEV_DATABENTO_CLEANUP ?: false}"
+    CONFIRM_LOCAL_DEV_KAFKA_CLEANUP = "${params.CONFIRM_LOCAL_DEV_KAFKA_CLEANUP ?: ''}"
   }
   stages {
     stage('Validate') {
@@ -128,6 +132,35 @@ pipeline {
           esac
           printf 'EFFECTIVE_BUILD_PLATFORM=%s\n' "$effective_build_platform" >"$JENKINS_WORK_DIR/options-edge-build.env"
           echo "Effective build/deploy image platform: $effective_build_platform"
+        '''
+      }
+    }
+    stage('One-Time Local Dev Databento Kafka Cleanup') {
+      when {
+        allOf {
+          expression { return params.ENVIRONMENT == 'dev' }
+          expression { return params.RUN_ONE_TIME_LOCAL_DEV_DATABENTO_CLEANUP && !params.DEPLOY_DRY_RUN }
+        }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          if [ "${ENVIRONMENT:-dev}" != "dev" ]; then
+            echo "One-time local dev Databento cleanup is only allowed for ENVIRONMENT=dev." >&2
+            exit 1
+          fi
+          if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+            echo "One-time local dev Databento cleanup does not run during DEPLOY_DRY_RUN." >&2
+            exit 1
+          fi
+          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
+            KAFKA_BOOTSTRAP_SERVERS=localhost:9092
+          fi
+          export APP_PROFILE=dev
+          export ENVIRONMENT=dev
+          export KAFKA_BOOTSTRAP_SERVERS
+          export CONFIRM_LOCAL_DEV_KAFKA_CLEANUP
+          scripts/kafka/cleanup-local-dev-databento-mixed-topics.sh --apply
         '''
       }
     }
