@@ -2,10 +2,11 @@ pipeline {
   agent { label 'built-in' }
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
-    string(name: 'KUBECONFIG_FILE', defaultValue: '/var/jenkins_home/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
-    string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/var/jenkins_home/config/kubeconfig', description: 'Admin kubeconfig used only to bootstrap the Jenkins-only Kubernetes deploy guard')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '/home/options-edge/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
+    string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/home/options-edge/config/kubeconfig', description: 'Admin kubeconfig used only to bootstrap the Jenkins-only Kubernetes deploy guard')
     string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses host.docker.internal:5001 for dev and 192.168.100.252:5000 for staging/production.')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
+    string(name: 'BUILD_PLATFORM', defaultValue: '', description: 'Image platform. Empty defaults to linux/arm64 for dev and linux/amd64 for staging/production; staging/production always deploy linux/amd64.')
     string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses host.docker.internal:9092 for dev and remote Kafka for staging/production.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev', description: 'Databento volume aggregator image')
@@ -38,16 +39,18 @@ pipeline {
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
     booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', defaultValue: false, description: 'Internal guard used by the manual production promotion build')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false, description: 'Validate render, image preflight, and server-side Kubernetes apply without mutating runtime resources.')
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
-    KUBECONFIG = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/home/options-edge/config/jenkins-deployer.kubeconfig') ? '/var/jenkins_home/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
-    KUBECONFIG_ADMIN_FILE = "${(!params.KUBECONFIG_ADMIN_FILE || params.KUBECONFIG_ADMIN_FILE == '/home/options-edge/config/kubeconfig') ? '/var/jenkins_home/config/kubeconfig' : params.KUBECONFIG_ADMIN_FILE}"
+    KUBECONFIG = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/var/jenkins_home/config/jenkins-deployer.kubeconfig') ? '/home/options-edge/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
+    KUBECONFIG_ADMIN_FILE = "${(!params.KUBECONFIG_ADMIN_FILE || params.KUBECONFIG_ADMIN_FILE == '/var/jenkins_home/config/kubeconfig') ? '/home/options-edge/config/kubeconfig' : params.KUBECONFIG_ADMIN_FILE}"
     REMOTE_APP_HOME = '/home/options-edge'
     JENKINS_WORK_DIR = '.jenkins-tmp'
     PATH = "/var/jenkins_home/bin:${env.PATH}"
     IMAGE_REGISTRY = "${params.IMAGE_REGISTRY ?: ''}"
     IMAGE_TAG = "${params.IMAGE_TAG ?: ''}"
+    BUILD_PLATFORM = "${params.BUILD_PLATFORM ?: ''}"
     KAFKA_BOOTSTRAP_SERVERS = "${params.KAFKA_BOOTSTRAP_SERVERS ?: ''}"
     RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: '192.168.100.252:5000/options-edge-raw-to-display:dev'}"
     DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev'}"
@@ -79,6 +82,7 @@ pipeline {
     KAFKA_DELETE_UNWANTED_TOPICS = "${params.KAFKA_DELETE_UNWANTED_TOPICS ?: false}"
     ALLOW_PROD_KAFKA_CLEANUP = "${params.ALLOW_PROD_KAFKA_CLEANUP ?: false}"
     SKIP_PRODUCTION_PROMOTION = "${params.SKIP_PRODUCTION_PROMOTION ?: false}"
+    DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN ?: false}"
   }
   stages {
     stage('Validate') {
@@ -91,6 +95,31 @@ pipeline {
           test ! -d /options-edge
           mkdir -p "$JENKINS_WORK_DIR"
           test -w "$JENKINS_WORK_DIR"
+          case "${ENVIRONMENT:-dev}" in
+            dev)
+              effective_build_platform="${BUILD_PLATFORM:-linux/arm64}"
+              ;;
+            staging|production)
+              effective_build_platform="linux/amd64"
+              if [ -n "${BUILD_PLATFORM:-}" ] && [ "$BUILD_PLATFORM" != "linux/amd64" ]; then
+                echo "BUILD_PLATFORM=$BUILD_PLATFORM is not allowed for ${ENVIRONMENT}; production Kubernetes nodes are CentOS amd64 and require linux/amd64." >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported ENVIRONMENT for BUILD_PLATFORM resolution: ${ENVIRONMENT:-}" >&2
+              exit 1
+              ;;
+          esac
+          case "$effective_build_platform" in
+            linux/arm64|linux/amd64) ;;
+            *)
+              echo "Unsupported BUILD_PLATFORM: $effective_build_platform" >&2
+              exit 1
+              ;;
+          esac
+          printf 'EFFECTIVE_BUILD_PLATFORM=%s\n' "$effective_build_platform" >"$JENKINS_WORK_DIR/options-edge-build.env"
+          echo "Effective build/deploy image platform: $effective_build_platform"
         '''
       }
     }
@@ -283,14 +312,19 @@ pipeline {
           sh '''
             set -euo pipefail
             test -n "$UNUSUAL_WHALES_API_KEY"
-            kubectl create namespace options-edge --dry-run=client -o yaml | kubectl apply -f -
+            apply_args=""
+            if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+              apply_args="--dry-run=server"
+              echo "DEPLOY_DRY_RUN=true: validating secret manifests without changing Kubernetes."
+            fi
+            kubectl create namespace options-edge --dry-run=client -o yaml | kubectl apply $apply_args -f -
             kubectl -n options-edge create secret generic options-edge-secrets \
               --from-literal=unusual-whales-api-key="$UNUSUAL_WHALES_API_KEY" \
-              --dry-run=client -o yaml | kubectl apply -f -
+              --dry-run=client -o yaml | kubectl apply $apply_args -f -
             kubectl -n options-edge create secret generic options-edge-runtime-secrets \
               --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-Options#100}" \
               --from-literal=UNUSUAL_WHALES_API_KEY="$UNUSUAL_WHALES_API_KEY" \
-              --dry-run=client -o yaml | kubectl apply -f -
+              --dry-run=client -o yaml | kubectl apply $apply_args -f -
           '''
         }
       }
@@ -366,6 +400,7 @@ EOF
         sh '''
           set -euo pipefail
           . "$JENKINS_WORK_DIR/options-edge-images.env"
+          . "$JENKINS_WORK_DIR/options-edge-build.env"
           images="
             RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
             DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
@@ -412,7 +447,25 @@ EOF
             docker pull "$image" >/dev/null 2>&1
           }
 
+          inspect_image_platform() {
+            local name="$1"
+            local image="$2"
+            local expected_platform="$3"
+            local inspect_file
+            inspect_file="$JENKINS_WORK_DIR/imagetools-${name}.txt"
+            if ! docker buildx imagetools inspect "$image" >"$inspect_file"; then
+              echo "Unable to inspect image manifest with docker buildx imagetools: $name=$image" >&2
+              return 1
+            fi
+            sed "s/^/  $name imagetools: /" "$inspect_file"
+            if ! grep -Eq "Platform:[[:space:]]*$expected_platform($|[[:space:]])|$expected_platform" "$inspect_file"; then
+              echo "Image architecture mismatch for $name: expected manifest platform $expected_platform ($image)" >&2
+              return 1
+            fi
+          }
+
           missing=0
+          platform_mismatch=0
           while IFS='=' read -r name image; do
             name="$(echo "$name" | xargs)"
             image="$(echo "$image" | xargs)"
@@ -426,6 +479,12 @@ EOF
             if ! image_exists "$image"; then
               echo "Missing image manifest: $name=$image" >&2
               missing=1
+              continue
+            fi
+            if [ "${ENVIRONMENT:-dev}" = "production" ] || [ "${ENVIRONMENT:-dev}" = "staging" ]; then
+              if ! inspect_image_platform "$name" "$image" "linux/amd64"; then
+                platform_mismatch=1
+              fi
             fi
           done <<EOF
 $images
@@ -433,6 +492,10 @@ EOF
 
           if [ "$missing" != "0" ]; then
             echo "One or more requested images are missing; refusing to restart pods." >&2
+            exit 1
+          fi
+          if [ "$platform_mismatch" != "0" ]; then
+            echo "One or more staging/production images are not linux/amd64; refusing to deploy to CentOS amd64 Kubernetes nodes." >&2
             exit 1
           fi
         '''
@@ -443,6 +506,11 @@ EOF
         sh '''
           set -euo pipefail
           . "$JENKINS_WORK_DIR/options-edge-images.env"
+          if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+            echo "DEPLOY_DRY_RUN=true: validating Kubernetes apply without changing runtime resources."
+            kubectl apply --dry-run=server -k "k8s/overlays/${ENVIRONMENT}"
+            exit 0
+          fi
           kubectl -n options-edge delete deployment/strike-flow-classifier-service service/strike-flow-classifier-service --ignore-not-found=true
           kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
           market_data_source="${MARKET_DATA_SOURCE:-DATABENTO}"
@@ -671,6 +739,7 @@ EOF
               string(name: 'KUBECONFIG_ADMIN_FILE', value: env.KUBECONFIG_ADMIN_FILE),
               string(name: 'IMAGE_REGISTRY', value: params.IMAGE_REGISTRY),
               string(name: 'IMAGE_TAG', value: params.IMAGE_TAG),
+              string(name: 'BUILD_PLATFORM', value: 'linux/amd64'),
               string(name: 'KAFKA_BOOTSTRAP_SERVERS', value: ''),
               string(name: 'RAW_TO_DISPLAY_IMAGE', value: params.RAW_TO_DISPLAY_IMAGE),
               string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
@@ -702,7 +771,8 @@ EOF
               booleanParam(name: 'KAFKA_CLEANUP_TOPICS', value: false),
               booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', value: false),
               booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', value: false),
-              booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true)
+              booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true),
+              booleanParam(name: 'DEPLOY_DRY_RUN', value: params.DEPLOY_DRY_RUN)
             ]
         }
       }
