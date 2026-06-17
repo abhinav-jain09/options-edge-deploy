@@ -21,13 +21,13 @@ GitHub main -> Jenkins options-edge-deploy -> Kubernetes
 The cluster-admin kubeconfig must be stored on the Jenkins host at:
 
 ```text
-/var/jenkins_home/config/kubeconfig
+/home/options-edge/config/kubeconfig
 ```
 
 This file is break-glass/admin-only. Normal Jenkins deploys must use:
 
 ```text
-/var/jenkins_home/config/jenkins-deployer.kubeconfig
+/home/options-edge/config/jenkins-deployer.kubeconfig
 ```
 
 ## Normal Jenkins Deploy Verification
@@ -35,7 +35,7 @@ This file is break-glass/admin-only. Normal Jenkins deploys must use:
 After the guard is enabled, verify Jenkins deploy access with:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/jenkins-deployer.kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/jenkins-deployer.kubeconfig \
   -n options-edge auth can-i patch deployment
 ```
 
@@ -61,21 +61,21 @@ recovered by an operator with the admin kubeconfig.
 Remove the namespace label that binds the policy to `options-edge`:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/kubeconfig \
   label namespace options-edge options-edge/deploy-guard-
 ```
 
 Verify the label is gone:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/kubeconfig \
   get namespace options-edge --show-labels
 ```
 
 Re-enable namespace enforcement after recovery:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/kubeconfig \
   label namespace options-edge options-edge/deploy-guard=jenkins-only --overwrite
 ```
 
@@ -85,14 +85,14 @@ Delete the policy binding to stop enforcement while leaving the policy object
 available for later re-apply:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/kubeconfig \
   delete validatingadmissionpolicybinding options-edge-jenkins-only-workloads
 ```
 
 Or change the binding to audit-only mode:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/kubeconfig \
   patch validatingadmissionpolicybinding options-edge-jenkins-only-workloads \
   --type merge \
   --patch '{"spec":{"validationActions":["Audit"]}}'
@@ -101,14 +101,14 @@ kubectl --kubeconfig /var/jenkins_home/config/kubeconfig \
 Restore deny enforcement:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/kubeconfig \
   apply -f k8s/security/jenkins-only-workload-admission.yaml
 ```
 
 After restoring enforcement, verify Jenkins deploy access again:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/jenkins-deployer.kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/jenkins-deployer.kubeconfig \
   -n options-edge auth can-i patch deployment
 ```
 
@@ -123,15 +123,15 @@ stage and rollout checks complete without admission denials.
 
 ## Break-Glass: Recreate Jenkins Deployer Kubeconfig
 
-If `/var/jenkins_home/config/jenkins-deployer.kubeconfig` is missing or
+If `/home/options-edge/config/jenkins-deployer.kubeconfig` is missing or
 corrupt, recreate it from the Jenkins deployer token Secret:
 
 ```bash
-cd /var/jenkins_home/workspace/options-edge-deploy
+cd /home/abhinav/ci/jenkins/home/jobs/options-edge-deploy/workspace
 
 BREAK_GLASS_RECREATE_JENKINS_DEPLOYER_KUBECONFIG=true \
-KUBECONFIG_ADMIN_FILE=/var/jenkins_home/config/kubeconfig \
-KUBECONFIG_FILE=/var/jenkins_home/config/jenkins-deployer.kubeconfig \
+KUBECONFIG_ADMIN_FILE=/home/options-edge/config/kubeconfig \
+KUBECONFIG_FILE=/home/options-edge/config/jenkins-deployer.kubeconfig \
 bash scripts/jenkins/bootstrap-kubernetes-deploy-guard.sh
 ```
 
@@ -141,7 +141,7 @@ If the Jenkins workspace path differs, run the same command from the checked-out
 Verify the recreated kubeconfig:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/jenkins-deployer.kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/jenkins-deployer.kubeconfig \
   -n options-edge auth can-i patch deployment
 ```
 
@@ -156,7 +156,7 @@ yes
 Confirm a non-Jenkins user cannot patch a Deployment:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/kubeconfig \
   -n options-edge patch deployment raw-to-display-service \
   --type merge \
   --patch '{"metadata":{"annotations":{"manual-deploy-test":"blocked"}}}'
@@ -171,7 +171,7 @@ ValidatingAdmissionPolicy 'options-edge-jenkins-only-workloads' ... denied reque
 Confirm a non-Jenkins user cannot modify a Secret:
 
 ```bash
-kubectl --kubeconfig /var/jenkins_home/config/kubeconfig \
+kubectl --kubeconfig /home/options-edge/config/kubeconfig \
   -n options-edge patch secret options-edge-secrets \
   --type merge \
   --patch '{"metadata":{"annotations":{"manual-secret-test":"blocked"}}}'
