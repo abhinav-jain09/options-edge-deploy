@@ -127,13 +127,16 @@ If `/var/jenkins_home/config/jenkins-deployer.kubeconfig` is missing or
 corrupt, recreate it from the Jenkins deployer token Secret:
 
 ```bash
-cd /home/abhinav/ci/jenkins/home/jobs/options-edge-deploy/workspace
+cd /var/jenkins_home/workspace/options-edge-deploy
 
 BREAK_GLASS_RECREATE_JENKINS_DEPLOYER_KUBECONFIG=true \
 KUBECONFIG_ADMIN_FILE=/var/jenkins_home/config/kubeconfig \
 KUBECONFIG_FILE=/var/jenkins_home/config/jenkins-deployer.kubeconfig \
 bash scripts/jenkins/bootstrap-kubernetes-deploy-guard.sh
 ```
+
+If the Jenkins workspace path differs, run the same command from the checked-out
+`options-edge-deploy` workspace that contains `scripts/jenkins/bootstrap-kubernetes-deploy-guard.sh`.
 
 Verify the recreated kubeconfig:
 
