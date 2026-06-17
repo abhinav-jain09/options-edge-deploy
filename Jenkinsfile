@@ -41,6 +41,7 @@ pipeline {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
     KUBECONFIG = "${params.KUBECONFIG_FILE ?: '/home/options-edge/config/kubeconfig'}"
     REMOTE_APP_HOME = '/home/options-edge'
+    JENKINS_WORK_DIR = '.jenkins-tmp'
     IMAGE_REGISTRY = "${params.IMAGE_REGISTRY ?: '192.168.100.252:5000'}"
     IMAGE_TAG = "${params.IMAGE_TAG ?: ''}"
     RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: '192.168.100.252:5000/options-edge-raw-to-display:dev'}"
@@ -83,7 +84,8 @@ pipeline {
           test "$REMOTE_APP_HOME" = "/home/options-edge"
           test ! -d /root/options-edge
           test ! -d /options-edge
-          mkdir -p "$REMOTE_APP_HOME/tmp"
+          mkdir -p "$JENKINS_WORK_DIR"
+          test -w "$JENKINS_WORK_DIR"
         '''
       }
     }
@@ -99,7 +101,7 @@ pipeline {
     }
     stage('Render') {
       steps {
-        sh 'kubectl kustomize k8s/overlays/${ENVIRONMENT} >"$REMOTE_APP_HOME/tmp/options-edge-${ENVIRONMENT}.yaml"'
+        sh 'kubectl kustomize k8s/overlays/${ENVIRONMENT} >"$JENKINS_WORK_DIR/options-edge-${ENVIRONMENT}.yaml"'
       }
     }
     stage('Pause Runtime For Kafka Cleanup') {
@@ -242,11 +244,11 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          mkdir -p "$REMOTE_APP_HOME/tmp"
+          mkdir -p "$JENKINS_WORK_DIR"
           image_tag="${IMAGE_TAG:-}"
           registry="${IMAGE_REGISTRY:-192.168.100.252:5000}"
           if [ -n "$image_tag" ]; then
-            cat >"$REMOTE_APP_HOME/tmp/options-edge-images.env" <<EOF
+            cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$registry/options-edge-raw-to-display:$image_tag
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$registry/options-edge-databento-volume-aggregator:$image_tag
 DATABENTO_MISSION_PACE_IMAGE=$registry/options-edge-databento-mission-pace:$image_tag
@@ -268,7 +270,7 @@ STRIKE_FLOW_CLASSIFIER_IMAGE=$registry/options-edge-strike-flow-classifier:$imag
 IBKR_FEED_IMAGE=$registry/options-edge-ibkr-feed:$image_tag
 EOF
           else
-            cat >"$REMOTE_APP_HOME/tmp/options-edge-images.env" <<EOF
+            cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
 DATABENTO_MISSION_PACE_IMAGE=$DATABENTO_MISSION_PACE_IMAGE
@@ -291,7 +293,7 @@ IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
 EOF
           fi
           echo "Resolved deployment images:"
-          sed 's/^/  /' "$REMOTE_APP_HOME/tmp/options-edge-images.env"
+          sed 's/^/  /' "$JENKINS_WORK_DIR/options-edge-images.env"
         '''
       }
     }
@@ -299,7 +301,7 @@ EOF
       steps {
         sh '''
           set -euo pipefail
-          . "$REMOTE_APP_HOME/tmp/options-edge-images.env"
+          . "$JENKINS_WORK_DIR/options-edge-images.env"
           images="
             RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
             DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
@@ -376,7 +378,7 @@ EOF
       steps {
         sh '''
           set -euo pipefail
-          . "$REMOTE_APP_HOME/tmp/options-edge-images.env"
+          . "$JENKINS_WORK_DIR/options-edge-images.env"
           kubectl -n options-edge delete deployment/strike-flow-classifier-service service/strike-flow-classifier-service --ignore-not-found=true
           kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
           market_data_source="${MARKET_DATA_SOURCE:-DATABENTO}"
@@ -396,7 +398,7 @@ EOF
             printf '%s\n' "$value"
           }
           effective_expiry="${IB_EXPIRY:-$(default_weekday_expiry)}"
-          python3 - "$market_data_source" "$effective_raw_topic" "${IB_HOST:-127.0.0.1}" "${IB_PORT:-4001}" "${IB_CLIENT_ID:-212}" "$effective_expiry" "${IB_MAX_STRIKES:-43}" "$effective_expiry" >"$REMOTE_APP_HOME/tmp/options-edge-runtime-config-patch.json" <<'PY'
+          python3 - "$market_data_source" "$effective_raw_topic" "${IB_HOST:-127.0.0.1}" "${IB_PORT:-4001}" "${IB_CLIENT_ID:-212}" "$effective_expiry" "${IB_MAX_STRIKES:-43}" "$effective_expiry" >"$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json" <<'PY'
 import json
 import sys
 
@@ -414,9 +416,9 @@ print(json.dumps({"data": dict(zip(keys, sys.argv[1:]))}))
 PY
           kubectl -n options-edge patch configmap options-edge-config \
             --type merge \
-            --patch "$(cat "$REMOTE_APP_HOME/tmp/options-edge-runtime-config-patch.json")"
+            --patch "$(cat "$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json")"
           if kubectl -n options-edge get configmap options-edge-databento-feed-config >/dev/null 2>&1; then
-            python3 - "$effective_expiry" >"$REMOTE_APP_HOME/tmp/options-edge-databento-feed-config-patch.json" <<'PY'
+            python3 - "$effective_expiry" >"$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json" <<'PY'
 import json
 import sys
 
@@ -424,7 +426,7 @@ print(json.dumps({"data": {"DATABENTO_EXPIRY": sys.argv[1]}}))
 PY
             kubectl -n options-edge patch configmap options-edge-databento-feed-config \
               --type merge \
-              --patch "$(cat "$REMOTE_APP_HOME/tmp/options-edge-databento-feed-config-patch.json")"
+              --patch "$(cat "$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json")"
           fi
           kubectl -n options-edge set image deployment/raw-to-display-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
           kubectl -n options-edge set image deployment/raw-to-display-databento-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
@@ -529,6 +531,7 @@ PY
             export NAMESPACE=options-edge
             export KUBECONFIG="${KUBECONFIG}"
             export REMOTE_APP_HOME="${REMOTE_APP_HOME}"
+            export JENKINS_WORK_DIR="${JENKINS_WORK_DIR}"
             scripts/monitoring/apply-prometheus-scrapes.sh
           '''
         }

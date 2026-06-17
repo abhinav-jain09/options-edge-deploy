@@ -7,6 +7,7 @@ build/
 *.log
 __pycache__/
 *.pyc
+.jenkins-tmp/
 .env
 .env.*
 !.env.example
