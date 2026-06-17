@@ -268,6 +268,44 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("Stage A replay consumer group exists: false", report)
         self.assertIn("Evidence-mode note: report metadata says DRY_RUN", report)
 
+    def test_ReplayReportPrioritizesExplicitStageAPodNotReadyFailureTest(self) -> None:
+        data = evidence()
+        data["evidenceMode"] = "DRY_RUN"
+        data["counts"]["strikeFlowRecordsEmitted"] = 0
+        data["counts"]["signalRecordsEmitted"] = 0
+        data["counts"]["latestSignalRecordsEmitted"] = 0
+        data["counts"]["auditRecordsEmitted"] = 0
+        data["validationFailures"] = [
+            {
+                "code": "STAGE_A_POD_NOT_READY",
+                "detail": "Stage A replay pod did not become Ready within 300 seconds.",
+            }
+        ]
+        data["rootCauseDiagnostics"] = {
+            "services": {
+                "stageA": {
+                    "streamState": "",
+                    "logTail": "",
+                },
+            },
+            "kafka": {
+                "sourceHealthBeforeStageA": {
+                    "opraPublishedOrDownloaded": 70264,
+                    "underlyingPublishedOrDownloaded": 296084,
+                    "sourceTopicOffsetSum": 9278,
+                },
+                "stageAConsumerGroup": {"exists": False},
+                "stageAInternalTopics": {"count": 0, "topics": []},
+            },
+        }
+
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Root cause category: STAGE_A_POD_NOT_READY", report)
+        self.assertIn("the Stage A replay pod did not become Ready", report)
+        self.assertNotIn("Root cause category: STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED", report)
+
     def test_ReplayReportIncludesPreviousBuildComparisonTest(self) -> None:
         previous = evidence()
         previous["jenkins"]["buildNumber"] = "22"

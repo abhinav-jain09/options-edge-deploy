@@ -495,6 +495,7 @@ def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) ->
     counts = evidence.get("counts", {}) or {}
     stage_b_performance = evidence.get("stageBPerformance", {}) or {}
     diagnostics = evidence.get("rootCauseDiagnostics", {}) or {}
+    validation_failures = evidence.get("validationFailures") or []
     publish_summary = evidence.get("publishSummary", {}) or {}
     download_summary = evidence.get("downloadSummary", {}) or {}
     evidence_mode = str(evidence.get("evidenceMode", "REAL")).upper()
@@ -542,7 +543,24 @@ def format_root_cause_analysis(evidence: dict[str, Any], failures: list[str]) ->
     input_existed = opra_input > 0 or es_input > 0 or source_offset_sum > 0
     root_cause_category = "UNCLASSIFIED_REPLAY_FAILURE"
     root_cause = "Replay failed, but available artifacts were not sufficient to isolate one service or Kafka layer automatically."
-    if input_existed and strike_flow <= 0 and group_exists is False:
+
+    explicit_failure_codes = set()
+    for failure in validation_failures:
+        if isinstance(failure, dict) and failure.get("code"):
+            explicit_failure_codes.add(str(failure.get("code")))
+        elif failure:
+            explicit_failure_codes.add(str(failure).split(":", 1)[0].strip())
+
+    if "STAGE_A_POD_NOT_READY" in explicit_failure_codes:
+        root_cause_category = "STAGE_A_POD_NOT_READY"
+        root_cause = "Replay input existed, but the Stage A replay pod did not become Ready; inspect pod scheduling, image pull, container startup, and Kubernetes events before consumer-group diagnostics."
+    elif "STAGE_A_POD_NOT_CREATED" in explicit_failure_codes:
+        root_cause_category = "STAGE_A_POD_NOT_CREATED"
+        root_cause = "Replay input existed, but Jenkins could not create the Stage A replay pod."
+    elif "STAGE_A_REPLAY_APPLICATION_ID_INVALID" in explicit_failure_codes:
+        root_cause_category = "STAGE_A_REPLAY_APPLICATION_ID_INVALID"
+        root_cause = "Stage A replay was blocked before startup because the Kafka Streams application id did not satisfy replay safety rules."
+    elif input_existed and strike_flow <= 0 and group_exists is False:
         root_cause_category = "STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED"
         root_cause = "Replay input existed, but Stage A did not establish its Kafka Streams consumer group."
     elif input_existed and strike_flow <= 0 and "REBALANCING" in stage_a_state and "RUNNING" not in stage_a_state:
