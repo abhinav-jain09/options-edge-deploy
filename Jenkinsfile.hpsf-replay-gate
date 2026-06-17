@@ -498,7 +498,7 @@ for line in Path("artifacts/logs/replay-source-topic-offsets-before-stage-a.log"
         current_topic = line[4:].strip()
         offsets_by_topic.setdefault(current_topic, 0)
         continue
-    match = re.search(r":(\d+)$", line.strip())
+    match = re.search(r":(\\d+)$", line.strip())
     if match and current_topic:
         value = int(match.group(1))
         offsets_by_topic[current_topic] = offsets_by_topic.get(current_topic, 0) + value
