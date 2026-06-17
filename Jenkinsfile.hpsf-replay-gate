@@ -32,8 +32,14 @@ pipeline {
     string(name: 'HPSF_REPLAY_TICK_BY_TICK', defaultValue: 'false', description: 'Replay publish sampling. yes/true publishes every tick; false publishes one record per topic/key/second.')
     string(name: 'HPSF_MODE', defaultValue: 'REPLAY', description: 'HPSF mode')
     string(name: 'HPSF_STATE_DIR', defaultValue: '', description: 'Remote HPSF replay state dir. Empty derives /home/options-edge/data/kafka-streams/hpsf-replay-<REPLAY_DATE>.')
-    string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'Replay-only HPSF processing image. Empty derives a unique replay tag; shared deploy tags such as dev/latest/main/prod are rejected.')
-    string(name: 'BUILD_PLATFORM', defaultValue: 'linux/amd64', description: 'Docker buildx target platform for the replay image. Jenkins runs on Mac ARM; replay pods run on CentOS amd64 Kubernetes nodes.')
+    choice(name: 'HPSF_REPLAY_ENVIRONMENT', choices: ['local', 'dev', 'staging', 'prod'], description: 'Replay target environment. local/dev default to linux/arm64; staging/prod use linux/amd64. Default registry is 192.168.100.252:5000.')
+    string(name: 'HPSF_REPLAY_BUILD_PLATFORM', defaultValue: '', description: 'Replay image build platform. Empty derives linux/arm64 for local/dev and linux/amd64 for staging/prod.')
+    string(name: 'HPSF_REPLAY_IMAGE_REGISTRY', defaultValue: '', description: 'Registry used by Jenkins docker buildx push. Empty uses 192.168.100.252:5000.')
+    string(name: 'HPSF_REPLAY_POD_IMAGE_REGISTRY', defaultValue: '', description: 'Kubernetes-visible registry for replay pods. Empty uses 192.168.100.252:5000.')
+    string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'Optional replay-only HPSF processing build image. Empty derives a unique replay tag; shared deploy tags such as dev/latest/main/prod are rejected.')
+    string(name: 'HPSF_REPLAY_POD_IMAGE', defaultValue: '', description: 'Optional Kubernetes pod image. Empty derives a unique replay tag from HPSF_REPLAY_POD_IMAGE_REGISTRY.')
+    choice(name: 'HPSF_REPLAY_IMAGE_PULL_POLICY', choices: ['IfNotPresent', 'Always', 'Never'], description: 'Kubernetes image pull policy for replay pods.')
+    booleanParam(name: 'HPSF_REPLAY_ALLOW_LOCALHOST_POD_IMAGE', defaultValue: false, description: 'Allow localhost/127.0.0.1 pod images only after proving the Kubernetes node can pull them.')
     string(name: 'HPSF_REPLAY_SOURCE_DIR', defaultValue: '', description: 'Prepared Databento JSONL replay files on the Jenkins agent. Empty derives .replay/data/hpsf-replay/<REPLAY_DATE> under the workspace.')
     string(name: 'HPSF_REPLAY_EVIDENCE_JSON', defaultValue: '', description: 'Optional prebuilt real replay evidence JSON from a completed replay run')
     string(name: 'HPSF_REPLAY_GROUP_CATCHUP_ATTEMPTS', defaultValue: '2000', description: 'Kafka consumer-group catch-up polling attempts for replay processors')
@@ -135,23 +141,55 @@ pipeline {
             error("Stage A and Stage B replay Kafka Streams application ids must be unique")
           }
           env.HPSF_REPLAY_VALIDATION_PROFILE = env.HPSF_REPLAY_VALIDATION_PROFILE ?: 'SHARDED_CUTOVER_SMOKE'
-          def replayImage = params.HPSF_PROCESSING_IMAGE?.trim()
-          if (!replayImage) {
-            replayImage = "localhost:5001/options-edge-hpsf-processing:replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
+          def replayEnvironment = params.HPSF_REPLAY_ENVIRONMENT?.trim()?.toLowerCase() ?: 'local'
+          if (!['local', 'dev', 'staging', 'prod'].contains(replayEnvironment)) {
+            error("HPSF_REPLAY_ENVIRONMENT must be one of local, dev, staging, prod; got '${replayEnvironment}'")
           }
-          def imageTag = replayImage.contains(':') ? replayImage.substring(replayImage.lastIndexOf(':') + 1) : ''
+          def remoteReplay = ['staging', 'prod'].contains(replayEnvironment)
+          def replayBuildPlatform = params.HPSF_REPLAY_BUILD_PLATFORM?.trim()
+          if (!replayBuildPlatform) {
+            replayBuildPlatform = remoteReplay ? 'linux/amd64' : 'linux/arm64'
+          }
+          if (!['linux/amd64', 'linux/arm64'].contains(replayBuildPlatform)) {
+            error("HPSF_REPLAY_BUILD_PLATFORM must be linux/amd64 or linux/arm64; got '${replayBuildPlatform}'")
+          }
+          if (remoteReplay && replayBuildPlatform != 'linux/amd64') {
+            error("Remote replay (${replayEnvironment}) must build linux/amd64, got '${replayBuildPlatform}'")
+          }
+          def defaultBuildRegistry = '192.168.100.252:5000'
+          def buildRegistry = params.HPSF_REPLAY_IMAGE_REGISTRY?.trim() ?: defaultBuildRegistry
+          def defaultPodRegistry = buildRegistry
+          def podRegistry = params.HPSF_REPLAY_POD_IMAGE_REGISTRY?.trim() ?: defaultPodRegistry
+          def replayTag = "replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}"
+          def replayBuildImage = params.HPSF_PROCESSING_IMAGE?.trim()
+          if (!replayBuildImage) {
+            replayBuildImage = "${buildRegistry}/options-edge-hpsf-processing:${replayTag}"
+          }
+          def replayPodImage = params.HPSF_REPLAY_POD_IMAGE?.trim()
+          if (!replayPodImage) {
+            replayPodImage = params.HPSF_PROCESSING_IMAGE?.trim() ? replayBuildImage : "${podRegistry}/options-edge-hpsf-processing:${replayTag}"
+          }
+          def localhostPodImage = replayPodImage.startsWith('localhost:') || replayPodImage.startsWith('127.0.0.1:')
+          if (localhostPodImage && !params.HPSF_REPLAY_ALLOW_LOCALHOST_POD_IMAGE) {
+            error("HPSF_REPLAY_POD_IMAGE must not use localhost unless HPSF_REPLAY_ALLOW_LOCALHOST_POD_IMAGE=true and the Kubernetes node can pull it: ${replayPodImage}")
+          }
+          if (remoteReplay && (!replayBuildImage.startsWith('192.168.100.252:5000/') || !replayPodImage.startsWith('192.168.100.252:5000/'))) {
+            error("Remote replay (${replayEnvironment}) must use registry 192.168.100.252:5000 for build and pod images. build=${replayBuildImage}; pod=${replayPodImage}")
+          }
+          def imageTag = replayBuildImage.contains(':') ? replayBuildImage.substring(replayBuildImage.lastIndexOf(':') + 1) : ''
+          def podImageTag = replayPodImage.contains(':') ? replayPodImage.substring(replayPodImage.lastIndexOf(':') + 1) : ''
           def blockedReplayTags = ['dev', 'latest', 'main', 'prod', 'production', 'stable']
-          if (blockedReplayTags.contains(imageTag)) {
-            error("HPSF_PROCESSING_IMAGE must be replay-specific, not shared deploy tag '${imageTag}': ${replayImage}")
+          if (blockedReplayTags.contains(imageTag) || blockedReplayTags.contains(podImageTag)) {
+            error("HPSF_PROCESSING_IMAGE and HPSF_REPLAY_POD_IMAGE must be replay-specific, not shared deploy tags. build=${replayBuildImage}; pod=${replayPodImage}")
           }
-          env.HPSF_PROCESSING_IMAGE = replayImage
-          def effectiveBuildPlatform = params.BUILD_PLATFORM?.trim() ?: 'linux/amd64'
-          if (!['linux/amd64', 'linux/arm64'].contains(effectiveBuildPlatform)) {
-            error("Unsupported BUILD_PLATFORM '${effectiveBuildPlatform}'. Use linux/amd64 or linux/arm64.")
-          }
-          env.EFFECTIVE_BUILD_PLATFORM = effectiveBuildPlatform
+          env.HPSF_REPLAY_ENVIRONMENT = replayEnvironment
+          env.HPSF_REPLAY_BUILD_PLATFORM = replayBuildPlatform
+          env.HPSF_REPLAY_BUILD_IMAGE = replayBuildImage
+          env.HPSF_PROCESSING_IMAGE = replayBuildImage
+          env.HPSF_REPLAY_POD_IMAGE = replayPodImage
+          env.HPSF_REPLAY_IMAGE_PULL_POLICY = params.HPSF_REPLAY_IMAGE_PULL_POLICY ?: 'IfNotPresent'
           currentBuild.displayName = "#${env.BUILD_NUMBER} ${env.HPSF_REPLAY_RUN_NAME}"
-          currentBuild.description = "Replay date ${replayDate}; topics ${env.TOPIC_PREFIX ?: params.TOPIC_PREFIX}; processing ${processingBranch}; case2 ${env.HPSF_CASE2_REPLAY_BRANCH}"
+          currentBuild.description = "Replay date ${replayDate}; topics ${env.TOPIC_PREFIX ?: params.TOPIC_PREFIX}; processing ${processingBranch}; case2 ${env.HPSF_CASE2_REPLAY_BRANCH}; build image ${env.HPSF_PROCESSING_IMAGE}; pod image ${env.HPSF_REPLAY_POD_IMAGE}; platform ${env.HPSF_REPLAY_BUILD_PLATFORM}"
         }
         sh '''
           set -euo pipefail
@@ -242,13 +280,16 @@ pipeline {
           docker buildx inspect options-edge-builder >/dev/null 2>&1 || docker buildx create --name options-edge-builder --use
           docker buildx use options-edge-builder
           docker buildx build \
-            --platform "$EFFECTIVE_BUILD_PLATFORM" \
+            --platform "$HPSF_REPLAY_BUILD_PLATFORM" \
             -t "$HPSF_PROCESSING_IMAGE" \
             --push \
             -f .replay/options-edge-processing/hpsf-processing-service/Dockerfile \
             .replay/options-edge-processing/hpsf-processing-service
-          docker buildx imagetools inspect "$HPSF_PROCESSING_IMAGE" | tee artifacts/hpsf-processing-image-imagetools.txt
-          grep -Eq "Platform:[[:space:]]*$EFFECTIVE_BUILD_PLATFORM($|[[:space:]])|$EFFECTIVE_BUILD_PLATFORM" artifacts/hpsf-processing-image-imagetools.txt
+          docker buildx imagetools inspect "$HPSF_PROCESSING_IMAGE" | tee artifacts/logs/replay-image-manifest.txt
+          if ! grep -E "Platform:[[:space:]]+${HPSF_REPLAY_BUILD_PLATFORM}$" artifacts/logs/replay-image-manifest.txt >/dev/null; then
+            echo "Replay image manifest missing expected platform ${HPSF_REPLAY_BUILD_PLATFORM}: ${HPSF_PROCESSING_IMAGE}" >&2
+            exit 1
+          fi
           (cd .replay/options-edge-integration-test && mvn -B test package)
           python3 scripts/hpsf/test_merge_stage_b_performance_metrics.py
         '''
@@ -577,7 +618,7 @@ PY_FAILURE
           [ "$stage_a_app_id" != "$stage_b_app_id" ] || fail_with STAGE_A_REPLAY_APPLICATION_ID_INVALID "Stage A and Stage B application ids are identical."
           stage_a_java_tool_options="${HPSF_STAGE_A_REPLAY_JAVA_TOOL_OPTIONS:--Xms3g -Xmx8g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ExitOnOutOfMemoryError}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=IfNotPresent --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_REPLAY_POD_IMAGE" --image-pull-policy="${HPSF_REPLAY_IMAGE_PULL_POLICY:-IfNotPresent}" --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=JAVA_TOOL_OPTIONS="$stage_a_java_tool_options" \
             --env=HPSF_MODE="$HPSF_MODE" \
@@ -748,7 +789,7 @@ PY
           underlying_topic_prefix="${UNDERLYING_TOPIC_PREFIX:-underlying.replay.${compact_date}}"
           pod="hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=IfNotPresent --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_REPLAY_POD_IMAGE" --image-pull-policy="${HPSF_REPLAY_IMAGE_PULL_POLICY:-IfNotPresent}" --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
@@ -820,7 +861,7 @@ PY
           stage_a_app_id="${HPSF_STAGE_A_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}}"
           [ "$stage_b_app_id" != "$stage_a_app_id" ]
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
-          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=IfNotPresent --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
+          kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_REPLAY_POD_IMAGE" --image-pull-policy="${HPSF_REPLAY_IMAGE_PULL_POLICY:-IfNotPresent}" --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
             --env=APP_MARKET_DATA_SOURCE=DATABENTO \
             --env=HPSF_MODE="$HPSF_MODE" \
             --env=HPSF_REPLAY_DATE="$REPLAY_DATE" \
