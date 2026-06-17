@@ -446,6 +446,9 @@ EOF
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
           fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
+          fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX
           export KAFKA_CLEANUP_TOPICS="${KAFKA_CLEANUP_TOPICS}"
@@ -470,6 +473,9 @@ EOF
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
+          fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX
@@ -498,6 +504,9 @@ EOF
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
+          fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX
@@ -760,6 +769,9 @@ EOF
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
+          fi
+          if [ -z "${TOPIC_PREFIX:-}" ] && [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            TOPIC_PREFIX=dev.
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX

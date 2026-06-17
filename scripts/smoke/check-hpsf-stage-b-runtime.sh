@@ -5,6 +5,9 @@ NAMESPACE="${NAMESPACE:-options-edge}"
 KUBECONFIG="${KUBECONFIG:-}"
 KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
 TOPIC_PREFIX="${TOPIC_PREFIX:-}"
+if [[ -z "$TOPIC_PREFIX" && "${ENVIRONMENT:-}" == "dev" ]]; then
+  TOPIC_PREFIX="dev."
+fi
 DRY_RUN=false
 if [[ "${1:-}" == "--dry-run" ]]; then
   DRY_RUN=true
