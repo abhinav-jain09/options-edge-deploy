@@ -103,3 +103,13 @@ Expected dev stage order:
 17. `Promote To Production`, the only production manual button
 
 Direct `ENVIRONMENT=production` runs are blocked. Production deployment must start from a successful dev run through the final `Promote To Production` button, so production approval never appears before dev deployment.
+
+## Replay Backend Plane
+
+Historical replay can run as a separate Kubernetes backend plane using the
+Ansible playbook in `ansible/replay-stack.yml`. It deploys `*-replay` services
+into a replay namespace with replay-prefixed Kafka topics and replay-suffixed
+Kafka Streams application IDs.
+
+See `ansible/README.md` for dry-run, deploy, rollback, and Jenkins release
+stage examples.
