@@ -2,13 +2,13 @@ pipeline {
   agent { label 'built-in' }
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
-    string(name: 'KUBECONFIG_FILE', defaultValue: '/home/options-edge/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
-    string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/home/options-edge/config/kubeconfig', description: 'Admin kubeconfig used only to bootstrap the Jenkins-only Kubernetes deploy guard')
-    string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses 192.168.100.252:5000 for all environments.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '/var/jenkins_home/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
+    string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/var/jenkins_home/config/kubeconfig', description: 'Admin kubeconfig used only to bootstrap the Jenkins-only Kubernetes deploy guard')
+    string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses host.docker.internal:5001 for dev and 192.168.100.252:5000 for staging/production.')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
     string(name: 'BUILD_PLATFORM', defaultValue: '', description: 'Image platform. Empty defaults to linux/arm64 for dev and linux/amd64 for staging/production; staging/production always deploy linux/amd64.')
     string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses remote Kafka at 192.168.100.252:9092,9094,9096.')
-    string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses http://192.168.100.252:8090.')
+    string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses http://host.docker.internal:8090 for dev and http://192.168.100.252:8090 for prod.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev', description: 'Databento volume aggregator image')
     string(name: 'DATABENTO_MISSION_PACE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-pace:dev', description: 'Databento mission pace image')
@@ -44,9 +44,9 @@ pipeline {
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
-    KUBECONFIG_FILE = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/var/jenkins_home/config/jenkins-deployer.kubeconfig') ? '/home/options-edge/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
-    KUBECONFIG = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/var/jenkins_home/config/jenkins-deployer.kubeconfig') ? '/home/options-edge/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
-    KUBECONFIG_ADMIN_FILE = "${(!params.KUBECONFIG_ADMIN_FILE || params.KUBECONFIG_ADMIN_FILE == '/var/jenkins_home/config/kubeconfig') ? '/home/options-edge/config/kubeconfig' : params.KUBECONFIG_ADMIN_FILE}"
+    KUBECONFIG_FILE = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/home/options-edge/config/jenkins-deployer.kubeconfig') ? '/var/jenkins_home/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
+    KUBECONFIG = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/home/options-edge/config/jenkins-deployer.kubeconfig') ? '/var/jenkins_home/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
+    KUBECONFIG_ADMIN_FILE = "${(!params.KUBECONFIG_ADMIN_FILE || params.KUBECONFIG_ADMIN_FILE == '/home/options-edge/config/kubeconfig') ? '/var/jenkins_home/config/kubeconfig' : params.KUBECONFIG_ADMIN_FILE}"
     REMOTE_APP_HOME = '/home/options-edge'
     JENKINS_WORK_DIR = '.jenkins-tmp'
     PATH = "/var/jenkins_home/bin:${env.PATH}"
@@ -299,7 +299,7 @@ pipeline {
         sh '''
           set -euo pipefail
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://192.168.100.252:8090}"
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://host.docker.internal:8090}"
             curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
             curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
             echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
@@ -340,6 +340,8 @@ pipeline {
           image_tag="${IMAGE_TAG:-}"
           if [ -n "${IMAGE_REGISTRY:-}" ]; then
             registry="$IMAGE_REGISTRY"
+          elif [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            registry=host.docker.internal:5001
           else
             registry=192.168.100.252:5000
           fi
@@ -666,7 +668,11 @@ EOF
         sh '''
           set -euo pipefail
           if [ -z "${WEB_BASE_URL:-}" ]; then
-            WEB_BASE_URL=http://192.168.100.252:8090
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              WEB_BASE_URL=http://host.docker.internal:8090
+            else
+              WEB_BASE_URL=http://192.168.100.252:8090
+            fi
           fi
           export WEB_BASE_URL
           scripts/smoke/check-k8s-services.sh
