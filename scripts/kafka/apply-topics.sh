@@ -159,23 +159,26 @@ for entry in $OPTIONS_EDGE_TOPICS; do
     current_partitions="$(echo "$description" | head -1 | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p')"
     current_replication_factor="$(echo "$description" | head -1 | sed -n 's/.*ReplicationFactor: \([0-9]*\).*/\1/p')"
 
-    if [[ "$current_partitions" != "$partitions" || "$current_replication_factor" != "$REPLICATION_FACTOR" ]]; then
+    if [[ -z "$current_partitions" || -z "$current_replication_factor" ]]; then
+      echo "Cannot parse current topic shape for $topic" >&2
+      echo "$description" >&2
+      exit 1
+    fi
+
+    if (( current_partitions < partitions )) || [[ "$current_replication_factor" != "$REPLICATION_FACTOR" ]]; then
       if [[ "$RECREATE_MISMATCHED" != "true" ]]; then
-        echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected partitions=$partitions replicationFactor=$REPLICATION_FACTOR" >&2
+        if (( current_partitions < partitions )); then
+          echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least partitions=$partitions replicationFactor=$REPLICATION_FACTOR" >&2
+          echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
+          exit 1
+        fi
+        echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected replicationFactor=$REPLICATION_FACTOR" >&2
         echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
         exit 1
       fi
 
       echo "Repairing mismatched topic $topic: partitions=$current_partitions replicationFactor=$current_replication_factor -> partitions=$partitions replicationFactor=$REPLICATION_FACTOR"
-      if [[ -z "$current_partitions" || -z "$current_replication_factor" ]]; then
-        echo "Cannot parse current topic shape for $topic" >&2
-        echo "$description" >&2
-        exit 1
-      fi
-      if (( current_partitions > partitions )); then
-        echo "Cannot reduce topic $topic partitions from $current_partitions to $partitions" >&2
-        exit 1
-      fi
+      desired_partitions="$(printf '%s\n' "$current_partitions" "$partitions" | sort -n | tail -1)"
       if (( current_partitions < partitions )); then
         kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
           --alter \
@@ -183,11 +186,11 @@ for entry in $OPTIONS_EDGE_TOPICS; do
           --partitions "$partitions"
       fi
       if [[ "$current_replication_factor" != "$REPLICATION_FACTOR" ]]; then
-        reassign_topic_replication_factor "$topic" "$partitions"
+        reassign_topic_replication_factor "$topic" "$desired_partitions"
       fi
-      wait_for_topic_shape "$topic" "$partitions" "$REPLICATION_FACTOR"
+      wait_for_topic_shape "$topic" "$desired_partitions" "$REPLICATION_FACTOR"
     else
-      echo "Topic $topic already exists with expected partitions=$partitions replicationFactor=$REPLICATION_FACTOR"
+      echo "Topic $topic already exists with compatible partitions=$current_partitions expectedMinimum=$partitions replicationFactor=$REPLICATION_FACTOR"
     fi
   else
     create_topic "$topic" "$partitions"

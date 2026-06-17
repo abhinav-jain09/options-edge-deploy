@@ -35,9 +35,12 @@ for spec in "${TOPICS[@]}"; do
   echo "$description"
   partitions="$(echo "$description" | head -1 | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p')"
   replication_factor="$(echo "$description" | head -1 | sed -n 's/.*ReplicationFactor: \([0-9]*\).*/\1/p')"
-  if [[ "$partitions" != "$expected_partitions" ]]; then
-    echo "Topic $topic partitions=$partitions expected=$expected_partitions" >&2
+  if (( partitions < expected_partitions )); then
+    echo "Topic $topic partitions=$partitions expectedAtLeast=$expected_partitions" >&2
     exit 1
+  fi
+  if (( partitions > expected_partitions )); then
+    echo "Topic $topic partitions=$partitions expectedMinimum=$expected_partitions; accepting existing larger partition count."
   fi
   if [[ "$replication_factor" != "$EXPECTED_REPLICATION_FACTOR" ]]; then
     echo "Topic $topic replicationFactor=$replication_factor expected=$EXPECTED_REPLICATION_FACTOR" >&2
