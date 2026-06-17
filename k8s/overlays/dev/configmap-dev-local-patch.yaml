@@ -5,7 +5,7 @@ metadata:
   namespace: options-edge
 data:
   APP_PROFILE: dev
-  TOPIC_PREFIX: dev.
+  TOPIC_PREFIX: ""
   KAFKA_APPLICATION_ID_SUFFIX: -dev
   SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
   KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092
