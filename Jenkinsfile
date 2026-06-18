@@ -278,7 +278,7 @@ EOF
             IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
           "
 
-          image_exists() {
+          image_exists_once() {
             local image="$1"
             local registry remainder repository tag
             registry="${image%%/*}"
@@ -300,6 +300,20 @@ EOF
             done
 
             docker pull "$image" >/dev/null 2>&1
+          }
+
+          # Registry checks run from the deploy agent over the network to the
+          # remote registry, which intermittently blips. Retry so a single
+          # transient failure does not flag an existing image as "missing".
+          image_exists() {
+            local image="$1" attempt
+            for attempt in 1 2 3 4 5 6; do
+              if image_exists_once "$image"; then
+                return 0
+              fi
+              sleep 3
+            done
+            return 1
           }
 
           buildx_builder_name=""
@@ -330,14 +344,17 @@ EOF
             local inspect_file inspect_json
             inspect_file="$JENKINS_WORK_DIR/imagetools-${name}.txt"
             inspect_json="$JENKINS_WORK_DIR/imagetools-${name}.json"
-            if ! docker buildx imagetools inspect $buildx_builder_arg "$image" >"$inspect_file"; then
-              echo "Unable to inspect image manifest with docker buildx imagetools: $name=$image" >&2
-              return 1
-            fi
-            if ! docker buildx imagetools inspect $buildx_builder_arg --format '{{json .}}' "$image" >"$inspect_json"; then
-              echo "Unable to inspect image manifest JSON with docker buildx imagetools: $name=$image" >&2
-              return 1
-            fi
+            local attempt
+            for attempt in 1 2 3 4 5 6; do
+              docker buildx imagetools inspect $buildx_builder_arg "$image" >"$inspect_file" 2>/dev/null && break
+              [ "$attempt" = "6" ] && { echo "Unable to inspect image manifest with docker buildx imagetools: $name=$image" >&2; return 1; }
+              sleep 3
+            done
+            for attempt in 1 2 3 4 5 6; do
+              docker buildx imagetools inspect $buildx_builder_arg --format '{{json .}}' "$image" >"$inspect_json" 2>/dev/null && break
+              [ "$attempt" = "6" ] && { echo "Unable to inspect image manifest JSON with docker buildx imagetools: $name=$image" >&2; return 1; }
+              sleep 3
+            done
             sed "s/^/  $name imagetools: /" "$inspect_file"
             if ! python3 - "$inspect_json" "$expected_platform" <<'PY'
 import json
