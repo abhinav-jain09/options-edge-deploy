@@ -291,15 +291,22 @@ EOF
             repository="${remainder%:*}"
             tag="${remainder##*:}"
             for scheme in http https; do
+              # Accept must include the multi-arch index/list media types, otherwise
+              # the registry cannot content-negotiate a HEAD for an index-tagged image
+              # and returns 404 even though the image exists.
               if curl -fsSI \
                 -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+                -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
                 -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+                -H 'Accept: application/vnd.oci.image.index.v1+json' \
                 "$scheme://$registry/v2/$repository/manifests/$tag" >/dev/null 2>&1; then
                 return 0
               fi
             done
 
-            docker pull "$image" >/dev/null 2>&1
+            # Fallback: amd64-only images cannot be pulled on an arm64 agent without
+            # forcing the platform, so request linux/amd64 explicitly.
+            docker pull --platform linux/amd64 "$image" >/dev/null 2>&1
           }
 
           # Registry checks run from the deploy agent over the network to the
