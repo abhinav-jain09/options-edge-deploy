@@ -1,2 +1,15 @@
 resources:
   - ../../base
+
+# Prod-only: the node already has the images cached, so re-pulling all ~26 at
+# once on every rollout trips the kubelet image-pull QPS limit ("pull QPS
+# exceeded" -> ImagePullBackOff), making rollouts flaky. IfNotPresent reuses the
+# cached image (no pull, no throttle). Dev keeps Always so it always picks up a
+# freshly-built :dev image.
+patches:
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
