@@ -798,12 +798,14 @@ EOF
         sh '''
           set -euo pipefail
           if [ -z "${WEB_BASE_URL:-}" ]; then
-            if [ -n "${WEB_PUBLIC_URL:-}" ]; then
-              # Honor the explicit web URL passed for smoke checks so the Smoke
-              # stage targets the same endpoint as 'Verify OptionsEdge Web App'.
-              # The smoke runs on the native (Mac) Jenkins agent, where the
-              # docker-only DNS name host.docker.internal does not resolve, so
+            if [ "${ENVIRONMENT:-dev}" = "dev" ] && [ -n "${WEB_PUBLIC_URL:-}" ]; then
+              # Dev only: honor the explicit web URL passed for smoke checks so
+              # the Smoke stage targets the same endpoint as 'Verify OptionsEdge
+              # Web App'. The smoke runs on the native (Mac) Jenkins agent, where
+              # the docker-only DNS name host.docker.internal does not resolve, so
               # dev runs pass WEB_PUBLIC_URL=http://localhost:8090.
+              # Production must NOT honor an inherited dev WEB_PUBLIC_URL (the
+              # promote step forwards the dev value); it always targets prod.
               WEB_BASE_URL="$WEB_PUBLIC_URL"
             elif [ "${ENVIRONMENT:-dev}" = "dev" ]; then
               WEB_BASE_URL=http://host.docker.internal:8090
