@@ -92,7 +92,7 @@ if [[ "$missing_source" == "true" ]]; then
     --es-stype-in "$ES_STYPE_IN" \
     --compare-next-contract-volume "${COMPARE_NEXT_CONTRACT_VOLUME:-true}" \
     --next-contract-symbol "$NEXT_CONTRACT_SYMBOL" \
-    "${opra_symbol_args[@]}" \
+    ${opra_symbol_args[@]+"${opra_symbol_args[@]}"} \
     --databento-api-key "$DATABENTO_API_KEY" \
     --download-dir "$SOURCE_DIR" \
     --prepare-jsonl-only \

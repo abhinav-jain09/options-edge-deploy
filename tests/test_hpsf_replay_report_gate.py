@@ -261,11 +261,50 @@ class HpsfReplayReportGateTest(unittest.TestCase):
 
         self.assertNotEqual(0, result.returncode)
         self.assertIn("## Root Cause Analysis", report)
-        self.assertIn("Stage A Kafka Streams did not become operational", report)
+        self.assertIn("Root cause category: STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED", report)
+        self.assertIn("Replay input existed, but Stage A did not establish its Kafka Streams consumer group.", report)
         self.assertIn("Replay input health: OPRA records=282265", report)
         self.assertIn("Stage A stream state: REBALANCING", report)
         self.assertIn("Stage A replay consumer group exists: false", report)
         self.assertIn("Evidence-mode note: report metadata says DRY_RUN", report)
+
+    def test_ReplayReportPrioritizesExplicitStageAPodNotReadyFailureTest(self) -> None:
+        data = evidence()
+        data["evidenceMode"] = "DRY_RUN"
+        data["counts"]["strikeFlowRecordsEmitted"] = 0
+        data["counts"]["signalRecordsEmitted"] = 0
+        data["counts"]["latestSignalRecordsEmitted"] = 0
+        data["counts"]["auditRecordsEmitted"] = 0
+        data["validationFailures"] = [
+            {
+                "code": "STAGE_A_POD_NOT_READY",
+                "detail": "Stage A replay pod did not become Ready within 300 seconds.",
+            }
+        ]
+        data["rootCauseDiagnostics"] = {
+            "services": {
+                "stageA": {
+                    "streamState": "",
+                    "logTail": "",
+                },
+            },
+            "kafka": {
+                "sourceHealthBeforeStageA": {
+                    "opraPublishedOrDownloaded": 70264,
+                    "underlyingPublishedOrDownloaded": 296084,
+                    "sourceTopicOffsetSum": 9278,
+                },
+                "stageAConsumerGroup": {"exists": False},
+                "stageAInternalTopics": {"count": 0, "topics": []},
+            },
+        }
+
+        result, report = generate_report_result(data)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Root cause category: STAGE_A_POD_NOT_READY", report)
+        self.assertIn("the Stage A replay pod did not become Ready", report)
+        self.assertNotIn("Root cause category: STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED", report)
 
     def test_ReplayReportIncludesPreviousBuildComparisonTest(self) -> None:
         previous = evidence()
@@ -355,6 +394,53 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("Stage B startup evidence missing", report)
 
+    def test_JenkinsReplayJobRequiresReplayCapableAgentTest(self) -> None:
+        pipeline = JENKINSFILE.read_text()
+
+        self.assertNotIn("agent any", pipeline)
+        self.assertIn("label 'hpsf-replay-agent'", pipeline)
+
+    def test_ReplayFailureFileShellQuotesReasonWithSpacesTest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            failure_file = Path(tmp) / "replay-failure-code.env"
+            reason = "Replay input existed, but Stage A did not establish its Kafka Streams consumer group."
+            writer = subprocess.run(
+                [
+                    "python3",
+                    "-",
+                    "STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED",
+                    reason,
+                ],
+                input=(
+                    "import shlex\n"
+                    "import sys\n"
+                    "from pathlib import Path\n"
+                    f"path = Path({str(failure_file)!r})\n"
+                    "path.write_text("
+                    "f'HPSF_REPLAY_FAILURE_CODE={shlex.quote(sys.argv[1])}\\n'"
+                    "f'HPSF_REPLAY_FAILURE_REASON={shlex.quote(sys.argv[2])}\\n',"
+                    " encoding='utf-8')\n"
+                ),
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(0, writer.returncode, writer.stderr)
+
+            reader = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f". {failure_file}; printf '%s\\n%s\\n' \"$HPSF_REPLAY_FAILURE_CODE\" \"$HPSF_REPLAY_FAILURE_REASON\"",
+                ],
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(0, reader.returncode, reader.stderr)
+            self.assertEqual(
+                ["STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED", reason],
+                reader.stdout.strip().splitlines(),
+            )
+
     def test_JenkinsReplayScriptArchivesReportTest(self) -> None:
         pipeline = JENKINSFILE.read_text()
 
@@ -389,13 +475,27 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn(".replay/options-edge-processing/scripts/hpsf/run_blackbox_replay_validation.sh", pipeline)
         self.assertIn("scripts/hpsf/run_blackbox_replay_validation.sh", pipeline)
         self.assertIn("ARTIFACTS_DIR=\"$workspace/artifacts\"", pipeline)
-        self.assertIn("HPSF_REPLAY_VALIDATION_PROFILE=FULL_RTH_RELEASE", pipeline)
+        self.assertIn('HPSF_REPLAY_VALIDATION_PROFILE="${HPSF_REPLAY_VALIDATION_PROFILE:-SHARDED_CUTOVER_SMOKE}"', pipeline)
+        self.assertIn("FULL_RTH_RELEASE)", pipeline)
+        self.assertIn("SHARDED_CUTOVER_SMOKE)", pipeline)
+        self.assertIn("HPSF_0DTE_DATA_QUALITY_REQUIRED=false", pipeline)
+        self.assertIn("HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=false", pipeline)
         self.assertIn("HPSF_0DTE_DATA_QUALITY_REQUIRED=true", pipeline)
         self.assertIn("HPSF_CHAIN_COVERAGE_DRILL_REQUIRED=true", pipeline)
         self.assertIn("HPSF_CASE2_REPLAY_BRANCH", pipeline)
         self.assertIn('HPSF_CASE2_DIAGNOSTIC_REQUIRED="$HPSF_CASE2_REPLAY_BRANCH"', pipeline)
+        self.assertIn("HPSF_FORCE_CASE2_VALIDATION", pipeline)
+        self.assertIn("branchLower.contains('case2')", pipeline)
+        self.assertIn("branchLower.contains('vix-mean-reversion')", pipeline)
+        self.assertIn("branchLower.contains('sharded-evaluator-cutover')", pipeline)
+        self.assertIn("feature/hpsf-stage-b-sharded-evaluator-cutover-146", pipeline)
+        self.assertIn("write_failure_file", pipeline)
+        self.assertIn("shlex.quote", pipeline)
+        self.assertIn("HPSF_REPLAY_FAILURE_REASON={shlex.quote(sys.argv[2])}", pipeline)
         self.assertIn("HPSF_NEAR_SPOT_QUOTE_DRILL_REQUIRED=true", pipeline)
+        self.assertIn("HPSF_NEAR_SPOT_QUOTE_DRILL_REQUIRED=false", pipeline)
         self.assertIn("HPSF_DLQ_IMPACT_CLASSIFICATION_REQUIRED=true", pipeline)
+        self.assertIn("HPSF_DLQ_IMPACT_CLASSIFICATION_REQUIRED=false", pipeline)
         self.assertIn("HPSF_CASE2_EXPECTED_SCENARIO=fallback_any", pipeline)
         self.assertIn("hpsf-blackbox-replay-validation.exit-code", pipeline)
         self.assertIn("Replay report was archived, but HPSF black-box replay validation failed", pipeline)
@@ -421,23 +521,34 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn('"$HPSF_REPLAY_BUILD_DIR/stage-a-validation.json"', pipeline)
         self.assertIn("HPSF_REPLAY_FAILURE_REASON", pipeline)
         self.assertIn('HPSF_REPLAY_FAILURE_CODE="STAGE_A_STRIKE_FLOW_EMPTY"', pipeline)
+        self.assertIn("opraTopicEndOffset", pipeline)
+        self.assertIn("esTradesTopicEndOffset", pipeline)
+        self.assertIn("spxPriceTopicEndOffset", pipeline)
+        self.assertIn("hpsfSourceTopicEndOffset", pipeline)
+        self.assertEqual(2, pipeline.count('re.search(r":(\\\\d+)$"'))
+        self.assertIn("REPLAY_SOURCE_OPRA_TOPIC_EMPTY_BEFORE_STAGE_A", pipeline)
+        self.assertIn("REPLAY_SOURCE_UNDERLYING_TOPIC_EMPTY_BEFORE_STAGE_A", pipeline)
         self.assertIn("JENKINS_PUBLIC_URL", pipeline)
         self.assertIn("sed 's#/#/job/#g'", pipeline)
         self.assertIn("command -v python3.11", pipeline)
         self.assertIn("\"$FEED_PYTHON\" -m venv .venv", pipeline)
         self.assertIn(".venv/bin/python -m pip install -e .", pipeline)
         self.assertIn('docker buildx build', pipeline)
-        self.assertIn('--platform "$EFFECTIVE_BUILD_PLATFORM"', pipeline)
+        self.assertIn("docker buildx inspect options-edge-builder", pipeline)
+        self.assertIn("docker buildx use options-edge-builder", pipeline)
+        self.assertIn('--platform "$HPSF_REPLAY_BUILD_PLATFORM"', pipeline)
         self.assertIn('-t "$HPSF_PROCESSING_IMAGE"', pipeline)
         self.assertIn("--push", pipeline)
-        self.assertIn("--image-pull-policy=Always", pipeline)
+        self.assertIn("docker buildx imagetools inspect \"$HPSF_PROCESSING_IMAGE\"", pipeline)
+        self.assertIn("docker manifest inspect --insecure -v \"$HPSF_PROCESSING_IMAGE\"", pipeline)
+        self.assertIn("replay-image-manifest.txt", pipeline)
+        self.assertIn("Replay image manifest missing expected platform {expected}", pipeline)
+        self.assertIn("platform_matches", pipeline)
+        self.assertIn('--image-pull-policy="${HPSF_REPLAY_IMAGE_PULL_POLICY:-IfNotPresent}"', pipeline)
         self.assertIn('HPSF_REPLAY_POD_OVERRIDES = \'{"spec":{"hostNetwork":true,"dnsPolicy":"ClusterFirstWithHostNet"}}\'', pipeline)
         self.assertEqual(3, pipeline.count('--overrides="$HPSF_REPLAY_POD_OVERRIDES"'))
         self.assertEqual(3, pipeline.count("scripts/hpsf/wait-kafka-consumer-group-caught-up.sh"))
-        self.assertIn(
-            '"options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}"',
-            pipeline,
-        )
+        self.assertIn('stage_b_app_id="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}}"', pipeline)
         self.assertIn("artifacts/logs/stage-b-consumer-group-catchup.log", pipeline)
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_ALLOW_INCOMPLETE=true"))
         self.assertEqual(3, pipeline.count("--env=HPSF_MARKET_CALENDAR_MIN_HOLIDAYS_PER_YEAR=0"))
@@ -491,8 +602,9 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn('"memory": os.environ.get("HPSF_STAGE_B_REPLAY_MEMORY_REQUEST", "12Gi")', pipeline)
         self.assertIn('"memory": os.environ.get("HPSF_STAGE_B_REPLAY_MEMORY_LIMIT", "16Gi")', pipeline)
         self.assertIn('kubectl -n "$NAMESPACE" create -f artifacts/stage-b-pod.json', pipeline)
-        self.assertIn("HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing|HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING", pipeline)
-        self.assertIn("Stage A legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate.", pipeline)
+        self.assertIn("grep -F 'HPSF Stage A topology enabled'", pipeline)
+        self.assertIn("STAGE_A_CONSUMER_GROUP_NOT_ESTABLISHED", pipeline)
+        self.assertIn("STAGE_A_ZERO_STRIKE_FLOW_OUTPUT", pipeline)
         self.assertIn("HPSF underlying replay topology enabled|underlying replay consuming|underlying replay producing|HPSF underlying-replay stream state transition .* -> RUNNING|state=underlying-replay=RUNNING", pipeline)
         self.assertIn("Underlying legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate.", pipeline)
         self.assertIn("HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing|HPSF stage-b stream state transition .* -> RUNNING|state=stage-b=RUNNING", pipeline)
@@ -531,10 +643,10 @@ class HpsfReplayReportGateTest(unittest.TestCase):
         self.assertIn("options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}", pipeline)
         self.assertIn("options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}", pipeline)
-        self.assertIn("state=stage-a=RUNNING", pipeline)
+        self.assertIn("STAGE_A_STARTUP_EVIDENCE_MISSING", pipeline)
         self.assertIn("state=underlying-replay=RUNNING", pipeline)
         self.assertIn("state=stage-b=RUNNING", pipeline)
-        self.assertNotIn("--for=condition=Ready", pipeline)
+        self.assertIn("--for=condition=Ready", pipeline)
         self.assertIn("Replay report was archived, but validation failed", pipeline)
         for stage in [
             "Checkout",
@@ -605,10 +717,28 @@ class HpsfReplayReportGateTest(unittest.TestCase):
     def test_JenkinsReplayGateUsesReplaySpecificProcessingImageTag(self) -> None:
         pipeline = JENKINSFILE.read_text()
 
+        self.assertIn("choice(name: 'HPSF_REPLAY_ENVIRONMENT', choices: ['local', 'dev', 'staging', 'prod']", pipeline)
+        self.assertIn("Default registry is 192.168.100.252:5000", pipeline)
+        self.assertIn("string(name: 'HPSF_REPLAY_BUILD_PLATFORM', defaultValue: ''", pipeline)
+        self.assertIn("string(name: 'HPSF_REPLAY_IMAGE_REGISTRY', defaultValue: ''", pipeline)
+        self.assertIn("string(name: 'HPSF_REPLAY_POD_IMAGE_REGISTRY', defaultValue: ''", pipeline)
         self.assertIn("string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: ''", pipeline)
-        self.assertIn("options-edge-hpsf-processing:replay-${replayDateId}-${env.BUILD_NUMBER ?: 'manual'}", pipeline)
+        self.assertIn("string(name: 'HPSF_REPLAY_POD_IMAGE', defaultValue: ''", pipeline)
+        self.assertIn("choice(name: 'HPSF_REPLAY_IMAGE_PULL_POLICY', choices: ['IfNotPresent', 'Always', 'Never']", pipeline)
+        self.assertIn("booleanParam(name: 'HPSF_REPLAY_ALLOW_LOCALHOST_POD_IMAGE', defaultValue: false", pipeline)
+        self.assertIn("def replayBuildPlatform = params.HPSF_REPLAY_BUILD_PLATFORM?.trim()", pipeline)
+        self.assertIn("replayBuildPlatform = remoteReplay ? 'linux/amd64' : 'linux/arm64'", pipeline)
+        self.assertIn("Remote replay (${replayEnvironment}) must build linux/amd64", pipeline)
+        self.assertIn("def defaultBuildRegistry = '192.168.100.252:5000'", pipeline)
+        self.assertIn("def defaultPodRegistry = buildRegistry", pipeline)
+        self.assertIn("options-edge-hpsf-processing:${replayTag}", pipeline)
+        self.assertIn("HPSF_REPLAY_POD_IMAGE must not use localhost", pipeline)
+        self.assertIn("Remote replay (${replayEnvironment}) must use registry 192.168.100.252:5000", pipeline)
+        self.assertIn("env.HPSF_REPLAY_BUILD_IMAGE = replayBuildImage", pipeline)
+        self.assertIn("env.HPSF_PROCESSING_IMAGE = replayBuildImage", pipeline)
+        self.assertIn("env.HPSF_REPLAY_POD_IMAGE = replayPodImage", pipeline)
         self.assertIn("def blockedReplayTags = ['dev', 'latest', 'main', 'prod', 'production', 'stable']", pipeline)
-        self.assertIn("HPSF_PROCESSING_IMAGE must be replay-specific", pipeline)
+        self.assertIn("HPSF_PROCESSING_IMAGE and HPSF_REPLAY_POD_IMAGE must be replay-specific", pipeline)
         self.assertNotIn("defaultValue: '192.168.100.252:5000/options-edge-hpsf-processing:dev'", pipeline)
 
     def test_archive_manifest_fallback_job_name_is_date_neutral(self) -> None:
