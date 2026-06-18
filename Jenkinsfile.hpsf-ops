@@ -6,13 +6,12 @@ pipeline {
   }
   environment {
     PATH = "/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
-    KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
     NAMESPACE = "${env.NAMESPACE ?: 'options-edge'}"
-    KAFKA_TOPIC_REPLICATION_FACTOR = '1'
-    KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
     SKIP_K8S = "${env.SKIP_K8S ?: 'false'}"
     REQUIRE_LATEST_SIGNAL = "${env.REQUIRE_LATEST_SIGNAL ?: 'false'}"
   }
+  // Kafka bootstrap + RF/minISR are derived from the rendered configmap via
+  // scripts/kafka/load-kafka-settings.sh in the stages that touch Kafka.
   stages {
     stage('Checkout') {
       steps {
@@ -28,6 +27,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          . scripts/kafka/load-kafka-settings.sh
           bash -n scripts/kafka/create-hpsf-topics.sh
           bash -n scripts/kafka/verify-hpsf-topics.sh
           bash -n scripts/smoke/check-hpsf-deployment.sh
@@ -42,7 +42,7 @@ pipeline {
           grep -F 'hpsf-postgres-writer-deployment.yaml' k8s/base/kustomization.yaml
           grep -F 'options.hpsf.latest-signal' k8s/base/configmap.yaml
           grep -F 'HPSF_ORDER_PLACEMENT_ENABLED: "false"' k8s/base/configmap.yaml
-          grep -F 'HPSF_STREAMS_REPLICATION_FACTOR: "1"' k8s/base/configmap.yaml
+          grep -E 'HPSF_STREAMS_REPLICATION_FACTOR:' k8s/base/configmap.yaml
           grep -F 'HPSF_STREAMS_NUM_STANDBY_REPLICAS: "0"' k8s/base/configmap.yaml
           if grep -R -E 'IBKR_ORDER_PLACEMENT_ENABLED:.*(true|1|on)' k8s/base config docs; then
             echo 'Forbidden IBKR order placement flag found enabled.' >&2
@@ -73,6 +73,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          . scripts/kafka/load-kafka-settings.sh
           scripts/kafka/verify-hpsf-topics.sh
         '''
       }
@@ -103,6 +104,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          . scripts/kafka/load-kafka-settings.sh
           scripts/smoke/check-hpsf-deployment.sh
           scripts/smoke/check-hpsf-stage-b-runtime.sh
         '''
