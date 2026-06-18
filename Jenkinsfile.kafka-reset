@@ -1,0 +1,55 @@
+// Daily 0DTE clean-slate Kafka/Streams reset for OptionsEdge prod.
+//
+// Runs the committed scripts/ops/daily-kafka-reset.sh ON the prod host (over SSH
+// from the Jenkins agent), so all kubectl + kafka admin operations execute
+// locally next to the brokers and the API — avoiding the flaky agent->prod link.
+//
+// SAFE BY DEFAULT: scheduled runs are DRY_RUN=true (they only log what they
+// would reset). Flip DRY_RUN=false to actually wipe Streams state + prune junk.
+//
+// NOTE: the reset uses scale-to-0; a supervised run showed the single-node k3s
+// API can drop under the churn of scaling all apps at once. Review the
+// rollout-restart alternative before enabling unattended live runs.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    booleanParam(name: 'DRY_RUN', defaultValue: true,
+      description: 'Dry-run: log what would be reset/deleted without changing anything. Uncheck to run live.')
+    string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
+      description: 'SSH target where the reset runs locally (Kafka + k3s are local there).')
+  }
+  triggers {
+    // 22:30 prod time (after US 0DTE close). Scheduled runs use default params (DRY_RUN=true).
+    cron('30 22 * * *')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 30, unit: 'MINUTES')
+  }
+  stages {
+    stage('Sync script to prod') {
+      steps {
+        sh '''
+          set -euo pipefail
+          scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            scripts/ops/daily-kafka-reset.sh "${PROD_HOST}:/home/abhinav/daily-kafka-reset.sh"
+          ssh -o BatchMode=yes "${PROD_HOST}" 'chmod +x ~/daily-kafka-reset.sh'
+        '''
+      }
+    }
+    stage('Run reset on prod') {
+      steps {
+        sh '''
+          set -euo pipefail
+          echo "Running daily-kafka-reset on ${PROD_HOST} (DRY_RUN=${DRY_RUN})"
+          ssh -o BatchMode=yes "${PROD_HOST}" "DRY_RUN=${DRY_RUN} ~/daily-kafka-reset.sh"
+        '''
+      }
+    }
+  }
+  post {
+    failure {
+      echo 'Daily Kafka reset failed. If this was a live run, verify prod app replicas are restored: kubectl -n options-edge get deploy'
+    }
+  }
+}
