@@ -782,7 +782,15 @@ EOF
             curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
             echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
           else
-            scripts/smoke/check-options-edge-web.sh
+            # The prod web app (Tomcat) runs on the prod host (192.168.100.252),
+            # not the Jenkins agent, so the local-Tomcat check script does not
+            # apply here. Verify the deployed prod web app remotely over HTTP.
+            # Note: do NOT reuse WEB_PUBLIC_URL -- the promote step forwards the
+            # dev value (localhost) into the production build.
+            PROD_WEB_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8090}"
+            curl -fsS --connect-timeout 5 --max-time 20 "$PROD_WEB_URL/api/config" | grep -q '"provider"'
+            curl -fsS --connect-timeout 5 --max-time 20 -o /dev/null "$PROD_WEB_URL/"
+            echo "OptionsEdge prod web app is healthy at $PROD_WEB_URL/"
           fi
         '''
       }
