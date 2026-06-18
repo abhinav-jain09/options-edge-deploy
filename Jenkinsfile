@@ -304,9 +304,11 @@ EOF
               fi
             done
 
-            # Fallback: amd64-only images cannot be pulled on an arm64 agent without
-            # forcing the platform, so request linux/amd64 explicitly.
-            docker pull --platform linux/amd64 "$image" >/dev/null 2>&1
+            # Fallback (only reached if the registry HEAD check above could not run,
+            # e.g. dev's host.docker.internal registry which the agent can't resolve
+            # by curl). Use a plain pull so it matches the agent's own platform —
+            # dev images are arm64, prod images are validated via the HEAD check.
+            docker pull "$image" >/dev/null 2>&1
           }
 
           # Registry checks run from the deploy agent over the network to the
