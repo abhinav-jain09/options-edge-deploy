@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS is required}"
-REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
+# RF must be provided explicitly (Jenkins sources scripts/kafka/load-kafka-settings.sh,
+# which derives it from the rendered per-environment configmap). No silent default.
+REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:?KAFKA_TOPIC_REPLICATION_FACTOR must be set (source scripts/kafka/load-kafka-settings.sh)}"
 RETENTION_MS="${KAFKA_TOPIC_RETENTION_MS:-86400000}"
 CLEANUP_POLICY="${KAFKA_TOPIC_CLEANUP_POLICY:-delete}"
 MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"

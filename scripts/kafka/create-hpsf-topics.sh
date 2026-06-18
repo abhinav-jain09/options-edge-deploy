@@ -9,18 +9,20 @@ for arg in "$@"; do
   esac
 done
 
-REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
-MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
+# RF/minISR must be provided explicitly (Jenkins sources
+# scripts/kafka/load-kafka-settings.sh, which derives them from the rendered
+# per-environment configmap). No silent defaults, no hard-coded cluster size.
+REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:?KAFKA_TOPIC_REPLICATION_FACTOR must be set (source scripts/kafka/load-kafka-settings.sh)}"
+MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:?KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS must be set}"
 BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-}"
 TOPIC_PREFIX="${TOPIC_PREFIX:-}"
 
-if [[ "$REPLICATION_FACTOR" != "1" && "$REPLICATION_FACTOR" != "2" ]]; then
-  echo "Unsupported KAFKA_TOPIC_REPLICATION_FACTOR=$REPLICATION_FACTOR (expected 1 or 2 for the two-node cluster)" >&2
+if ! [[ "$REPLICATION_FACTOR" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid KAFKA_TOPIC_REPLICATION_FACTOR=$REPLICATION_FACTOR (must be a positive integer)" >&2
   exit 1
 fi
-if [[ "$MIN_ISR" != "1" ]]; then
-  # min.insync.replicas stays 1 on the two-node cluster (stay-online: survive one broker down).
-  echo "Unsupported KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=$MIN_ISR (expected 1 on the two-node cluster)" >&2
+if ! [[ "$MIN_ISR" =~ ^[1-9][0-9]*$ ]] || (( MIN_ISR > REPLICATION_FACTOR )); then
+  echo "Invalid KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=$MIN_ISR (must be a positive integer <= replication factor $REPLICATION_FACTOR)" >&2
   exit 1
 fi
 if [[ "$DRY_RUN" != "true" && -z "$BOOTSTRAP_SERVERS" ]]; then
@@ -61,10 +63,10 @@ HPSF_TOPIC_SPECS=(
 )
 
 rf1_warning() {
-  cat <<'MSG'
-WARNING: Creating HPSF topics with replication.factor=1 and min.insync.replicas=1 for Abhinav's current 2-broker Kafka limit.
-This has no broker-failure durability. Do not claim high availability until the cluster supports RF>=3.
-MSG
+  echo "Creating HPSF topics with replication.factor=${REPLICATION_FACTOR} and min.insync.replicas=${MIN_ISR}."
+  if (( REPLICATION_FACTOR < 3 || MIN_ISR < 2 )); then
+    echo "NOTE: this does not provide broker-failure-proof durability (needs RF>=3 and min.insync.replicas>=2). Do not claim full automatic HA on this cluster."
+  fi
 }
 
 run_cmd() {

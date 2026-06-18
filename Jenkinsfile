@@ -506,18 +506,11 @@ EOF
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-            else
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-            fi
-          fi
-          export KAFKA_BOOTSTRAP_SERVERS
+          # Single source of truth: derive bootstrap + RF/minISR/retention from the
+          # rendered per-environment configmap (k8s/overlays/${ENVIRONMENT}), so topic
+          # creation always matches what is deployed (no hard-coded RF to drift).
+          . scripts/kafka/load-kafka-settings.sh
           export TOPIC_PREFIX
-          export KAFKA_TOPIC_REPLICATION_FACTOR=1
-          export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
-          export KAFKA_TOPIC_RETENTION_MS=86400000
           export KAFKA_RECREATE_MISMATCHED_TOPICS="${KAFKA_CLEANUP_TOPICS}"
           scripts/kafka/apply-topics.sh
           scripts/kafka/verify-topics.sh
@@ -827,17 +820,10 @@ EOF
         sh '''
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-            else
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-            fi
-          fi
-          export KAFKA_BOOTSTRAP_SERVERS
+          # Single source of truth: derive bootstrap + RF/minISR from the rendered
+          # per-environment configmap (k8s/overlays/${ENVIRONMENT}).
+          . scripts/kafka/load-kafka-settings.sh
           export TOPIC_PREFIX
-          export KAFKA_TOPIC_REPLICATION_FACTOR=1
-          export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
           export KUBECONFIG="${KUBECONFIG}"
           export NAMESPACE=options-edge
           export REQUIRE_LATEST_SIGNAL=false
