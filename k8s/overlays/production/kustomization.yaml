@@ -13,3 +13,14 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
+  # Exception: the integration-test image carries the deploy smoke checks and is
+  # rebuilt under the mutable :dev tag, so it must always re-pull to run the
+  # latest checks. It is a single deployment, so this does not reintroduce the
+  # all-at-once pull-QPS throttle that IfNotPresent avoids for the other ~25.
+  - target:
+      kind: Deployment
+      name: options-edge-integration-test
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
