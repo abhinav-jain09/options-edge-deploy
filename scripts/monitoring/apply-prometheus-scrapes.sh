@@ -15,6 +15,15 @@ if [[ "$REMOTE_APP_HOME" != "/home/options-edge" ]]; then
   exit 1
 fi
 
+# Prometheus scrape wiring is optional observability config and is applied where
+# Prometheus actually runs. When this stage runs on an agent without a local
+# Prometheus config (e.g. the Mac deploy agent), skip gracefully instead of
+# failing the whole deploy — the workloads are already rolled out by this point.
+if [[ ! -f "$PROMETHEUS_CONFIG_FILE" ]]; then
+  echo "Prometheus config $PROMETHEUS_CONFIG_FILE not present on this agent; skipping scrape configuration (non-fatal)."
+  exit 0
+fi
+
 tmp_root="${JENKINS_WORK_DIR:-$REMOTE_APP_HOME/tmp}"
 mkdir -p "$tmp_root"
 work_dir="$(mktemp -d "$tmp_root/prometheus-scrapes.XXXXXX")"
