@@ -9,8 +9,8 @@ pipeline {
     string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses host.docker.internal:5001 for dev and 192.168.100.252:5000 for staging/production.')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
     string(name: 'BUILD_PLATFORM', defaultValue: '', description: 'Image platform. Empty defaults to linux/arm64 for dev and linux/amd64 for staging/production; staging/production always deploy linux/amd64.')
-    string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses 192.168.100.102:9092 for dev and remote Kafka at 192.168.100.252:9092,9094,9096 for staging/production.')
-    string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses http://localhost:8090 for dev and http://192.168.100.252:8090 for prod.')
+    string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses host.docker.internal:9092 for dev and remote Kafka at 192.168.100.252:9092,9094,9096 for staging/production.')
+    string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses http://host.docker.internal:8090 for dev and http://192.168.100.252:8090 for prod.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev', description: 'Databento volume aggregator image')
     string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-feed:dev', description: 'Databento feed image')
@@ -482,7 +482,7 @@ EOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.102:9092
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
@@ -507,7 +507,7 @@ EOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.102:9092
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
@@ -535,7 +535,7 @@ EOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.102:9092
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
@@ -575,7 +575,7 @@ EOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.102:9092
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
@@ -623,7 +623,7 @@ EOF
           effective_expiry="${IB_EXPIRY:-$(default_weekday_expiry)}"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.102:9092
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
@@ -783,10 +783,7 @@ EOF
         sh '''
           set -euo pipefail
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            # The smoke runs on the native (Mac) Jenkins agent, where the
-            # docker-only DNS name host.docker.internal does NOT resolve.
-            # The dev web app listens on the host at :8090, reachable via localhost.
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8090}"
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://host.docker.internal:8090}"
             curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
             curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
             echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
@@ -804,11 +801,12 @@ EOF
             if [ -n "${WEB_PUBLIC_URL:-}" ]; then
               # Honor the explicit web URL passed for smoke checks so the Smoke
               # stage targets the same endpoint as 'Verify OptionsEdge Web App'.
+              # The smoke runs on the native (Mac) Jenkins agent, where the
+              # docker-only DNS name host.docker.internal does not resolve, so
+              # dev runs pass WEB_PUBLIC_URL=http://localhost:8090.
               WEB_BASE_URL="$WEB_PUBLIC_URL"
             elif [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              # Native (Mac) agent cannot resolve host.docker.internal; the dev
-              # web app is reachable on the host via localhost:8090.
-              WEB_BASE_URL=http://localhost:8090
+              WEB_BASE_URL=http://host.docker.internal:8090
             else
               WEB_BASE_URL=http://192.168.100.252:8090
             fi
@@ -828,7 +826,7 @@ EOF
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
             if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.102:9092
+              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
             else
               KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
             fi
