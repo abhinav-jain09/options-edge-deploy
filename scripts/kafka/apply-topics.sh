@@ -165,14 +165,14 @@ for entry in $OPTIONS_EDGE_TOPICS; do
       exit 1
     fi
 
-    if (( current_partitions < partitions )) || [[ "$current_replication_factor" != "$REPLICATION_FACTOR" ]]; then
+    if (( current_partitions < partitions )) || (( current_replication_factor < REPLICATION_FACTOR )); then
       if [[ "$RECREATE_MISMATCHED" != "true" ]]; then
         if (( current_partitions < partitions )); then
           echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least partitions=$partitions replicationFactor=$REPLICATION_FACTOR" >&2
           echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
           exit 1
         fi
-        echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected replicationFactor=$REPLICATION_FACTOR" >&2
+        echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least replicationFactor=$REPLICATION_FACTOR" >&2
         echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
         exit 1
       fi
