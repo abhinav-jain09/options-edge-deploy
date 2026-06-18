@@ -158,8 +158,8 @@ create_topic_if_needed() {
       echo "Refusing topic repair in HPSF topic script. Increase partitions manually if this is intentional." >&2
       exit 1
     fi
-    if [[ "$current_replication_factor" != "$REPLICATION_FACTOR" ]]; then
-      echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected replicationFactor=$REPLICATION_FACTOR" >&2
+    if (( current_replication_factor < REPLICATION_FACTOR )); then
+      echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least replicationFactor=$REPLICATION_FACTOR" >&2
       echo "Refusing destructive topic repair in HPSF topic script. Fix manually if this is intentional." >&2
       exit 1
     fi
