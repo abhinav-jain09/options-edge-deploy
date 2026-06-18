@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Daily 0DTE clean-slate reset for OptionsEdge prod Kafka + Streams apps.
 #
-# Runs on the prod host (cron, user abhinav). Because OptionsEdge trades 0DTE
-# and there is no market data after close, all Kafka Streams state from the
-# session is disposable. Each night this:
-#   1) scales the options-edge app deployments to 0 (release topic ownership),
-#   2) deletes disposable topics: every *-changelog / *-repartition (Streams
+# Runs on the prod host (Jenkins job options-edge-kafka-reset, or cron). Because
+# OptionsEdge trades 0DTE and there is no market data after close, all Kafka
+# Streams state from the session is disposable. Each night this:
+#   1) deletes disposable topics: every *-changelog / *-repartition (Streams
 #      state), plus any *replay* / *smoke* / dev.* leftovers,
-#   3) scales the apps back to their original replica counts; they recreate
-#      their internal topics fresh on startup.
+#   2) rolling-restarts the options-edge app deployments so they recreate their
+#      internal topics fresh on startup.
 #
-# SAFETY: this NEVER deletes system topics (__consumer_offsets, _schemas,
-# __transaction_state) or real data topics (options.*, underlying.*, etc.).
-# It only deletes topics matching the explicit disposable patterns below.
-#
-# Dry-run by default. Set DRY_RUN=false to actually mutate.
+# SAFETY:
+#   * NEVER deletes system topics (__consumer_offsets, _schemas,
+#     __transaction_state) or real data topics (options.*, underlying.*, etc.).
+#   * Uses `kubectl rollout restart` (rolling) — it NEVER drops a deployment to
+#     0 replicas, so a transient k8s API blip cannot leave prod down.
+#   * Dry-run by default. Set DRY_RUN=false to actually mutate.
 set -uo pipefail
 
 # ---- config (override via env) ----
@@ -24,14 +24,14 @@ export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 NS="${K8S_NAMESPACE:-options-edge}"
 SELECTOR="${APP_SELECTOR:-app.kubernetes.io/part-of=options-edge}"
 DRY_RUN="${DRY_RUN:-true}"
-SCALE_WAIT="${SCALE_WAIT:-90}"
+ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-180}"
 KT="$KAFKA_BIN/kafka-topics.sh"
 
 ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
 log() { echo "[$(ts)] $*"; }
 
-# never-delete: system topics + anything that is NOT clearly disposable.
 # disposable = ends in -changelog/-repartition, OR contains replay/smoke, OR starts with dev.
+# system topics (__*, _schemas) and real data topics (options.*, underlying.*) are always kept.
 is_disposable() {
   local t="$1"
   case "$t" in
@@ -63,51 +63,14 @@ TOTAL=$(wc -l </tmp/dkr-topics.txt | tr -d ' ')
 DELELIGIBLE=$(while read -r t; do is_disposable "$t" && echo "$t"; done </tmp/dkr-topics.txt | wc -l | tr -d ' ')
 log "topics total=$TOTAL  disposable=$DELELIGIBLE  keep=$((TOTAL-DELELIGIBLE))"
 
-# ---- capture current replicas so we can always restore ----
-REPLICA_BAK="/tmp/dkr-replicas.txt"
-kubectl -n "$NS" get deploy -l "$SELECTOR" \
-  -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.replicas}{"\n"}{end}' > "$REPLICA_BAK" 2>/dev/null
-APPS=$(wc -l <"$REPLICA_BAK" | tr -d ' ')
-log "captured replicas for $APPS deployments -> $REPLICA_BAK"
-
-# ---- always attempt to restore replicas on exit (even on error) ----
-restore_replicas() {
-  log "restoring replica counts..."
-  while read -r name rep; do
-    [ -n "$name" ] || continue
-    [ "${rep:-0}" -gt 0 ] 2>/dev/null || rep=0
-    if [ "$DRY_RUN" = "true" ]; then
-      log "  [dry-run] would scale deploy/$name -> $rep"; continue
-    fi
-    ok=false
-    for attempt in 1 2 3 4 5 6; do
-      if kubectl -n "$NS" scale deploy "$name" --replicas="$rep" >/dev/null 2>&1; then ok=true; break; fi
-      sleep 3
-    done
-    if [ "$ok" = "true" ]; then log "  scaled deploy/$name -> $rep"; else log "  WARN failed to scale deploy/$name -> $rep after retries"; fi
-  done < "$REPLICA_BAK"
-}
-trap restore_replicas EXIT
-
 if [ "$DRY_RUN" = "true" ]; then
-  log "DRY-RUN: would scale $APPS deployments to 0, then delete $DELELIGIBLE topics:"
+  log "DRY-RUN: would delete $DELELIGIBLE topics, then rolling-restart apps ($SELECTOR):"
   while read -r t; do is_disposable "$t" && echo "    DEL $t"; done </tmp/dkr-topics.txt | head -40
   log "(showing up to 40; total $DELELIGIBLE). No changes made."
   exit 0
 fi
 
-# ---- 1) scale apps down ----
-log "scaling $APPS deployments to 0..."
-kubectl -n "$NS" scale deploy -l "$SELECTOR" --replicas=0 >/dev/null 2>&1
-# wait for pods to terminate
-for ((i=0;i<SCALE_WAIT;i++)); do
-  running=$(kubectl -n "$NS" get pods -l "$SELECTOR" --no-headers 2>/dev/null | grep -vcE 'Terminating|Completed' )
-  [ "${running:-0}" -eq 0 ] && break
-  sleep 2
-done
-log "apps scaled down (waited up to ${SCALE_WAIT}s)"
-
-# ---- 2) delete disposable topics (with one retry each) ----
+# ---- 1) delete disposable topics (one retry each) ----
 deleted=0; failed=0
 while read -r t; do
   is_disposable "$t" || continue
@@ -120,5 +83,21 @@ while read -r t; do
 done </tmp/dkr-topics.txt
 log "topic deletion done: deleted=$deleted failed=$failed"
 
-# ---- 3) restore replicas (via trap on EXIT) ----
-log "=== daily kafka reset complete; apps scaling back up ==="
+# ---- 2) rolling restart so apps recreate internal topics fresh ----
+# rollout restart keeps replicas >= (desired - maxUnavailable); it never scales to 0,
+# so a mid-run API blip cannot leave prod down. 0-replica deployments are a no-op.
+log "rolling-restart of deployments matching $SELECTOR ..."
+if ! kubectl -n "$NS" rollout restart deploy -l "$SELECTOR" >/dev/null 2>&1; then
+  log "  WARN 'rollout restart' returned errors (some deployments may not have been triggered)"
+fi
+
+# ---- 3) wait for rollouts (best-effort; do not hard-fail on a slow one) ----
+for d in $(kubectl -n "$NS" get deploy -l "$SELECTOR" -o name 2>/dev/null); do
+  if kubectl -n "$NS" rollout status "$d" --timeout="${ROLLOUT_TIMEOUT}s" >/dev/null 2>&1; then
+    log "  rolled out: $d"
+  else
+    log "  WARN rollout slow/incomplete: $d"
+  fi
+done
+
+log "=== daily kafka reset complete ==="
