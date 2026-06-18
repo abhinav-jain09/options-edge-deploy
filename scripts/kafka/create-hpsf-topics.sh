@@ -14,12 +14,13 @@ MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
 BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-}"
 TOPIC_PREFIX="${TOPIC_PREFIX:-}"
 
-if [[ "$REPLICATION_FACTOR" != "1" ]]; then
-  echo "HPSF RF=1 cluster rule violated: KAFKA_TOPIC_REPLICATION_FACTOR=$REPLICATION_FACTOR" >&2
+if [[ "$REPLICATION_FACTOR" != "1" && "$REPLICATION_FACTOR" != "2" ]]; then
+  echo "Unsupported KAFKA_TOPIC_REPLICATION_FACTOR=$REPLICATION_FACTOR (expected 1 or 2 for the two-node cluster)" >&2
   exit 1
 fi
 if [[ "$MIN_ISR" != "1" ]]; then
-  echo "HPSF RF=1 cluster rule violated: KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=$MIN_ISR" >&2
+  # min.insync.replicas stays 1 on the two-node cluster (stay-online: survive one broker down).
+  echo "Unsupported KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=$MIN_ISR (expected 1 on the two-node cluster)" >&2
   exit 1
 fi
 if [[ "$DRY_RUN" != "true" && -z "$BOOTSTRAP_SERVERS" ]]; then
