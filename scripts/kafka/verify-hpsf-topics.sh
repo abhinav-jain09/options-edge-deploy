@@ -4,8 +4,14 @@ set -euo pipefail
 EXPECTED_REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 EXPECTED_MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
 TOPIC_PREFIX="${TOPIC_PREFIX:-}"
-if [[ "$EXPECTED_REPLICATION_FACTOR" != "1" || "$EXPECTED_MIN_ISR" != "1" ]]; then
-  echo "HPSF verification only supports RF=1/min.insync.replicas=1 for the current cluster" >&2
+# RF/minISR are derived per-environment from the configmap (load-kafka-settings.sh):
+# dev RF=1, prod RF=2. Accept any positive integers (minISR <= RF).
+if ! [[ "$EXPECTED_REPLICATION_FACTOR" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Invalid KAFKA_TOPIC_REPLICATION_FACTOR=$EXPECTED_REPLICATION_FACTOR (must be a positive integer)" >&2
+  exit 1
+fi
+if ! [[ "$EXPECTED_MIN_ISR" =~ ^[1-9][0-9]*$ ]] || (( EXPECTED_MIN_ISR > EXPECTED_REPLICATION_FACTOR )); then
+  echo "Invalid KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=$EXPECTED_MIN_ISR (must be a positive integer <= replication factor $EXPECTED_REPLICATION_FACTOR)" >&2
   exit 1
 fi
 
@@ -48,8 +54,8 @@ for spec in "${TOPICS[@]}"; do
   if (( partitions > expected_partitions )); then
     echo "Topic $topic partitions=$partitions expectedMinimum=$expected_partitions; accepting existing larger partition count."
   fi
-  if [[ "$replication_factor" != "$EXPECTED_REPLICATION_FACTOR" ]]; then
-    echo "Topic $topic replicationFactor=$replication_factor expected=$EXPECTED_REPLICATION_FACTOR" >&2
+  if (( replication_factor < EXPECTED_REPLICATION_FACTOR )); then
+    echo "Topic $topic replicationFactor=$replication_factor expected at least=$EXPECTED_REPLICATION_FACTOR" >&2
     exit 1
   fi
   configs="$(kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --entity-type topics --entity-name "$topic" --describe)"

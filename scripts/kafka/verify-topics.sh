@@ -20,8 +20,8 @@ for entry in $OPTIONS_EDGE_TOPICS; do
   if (( partitions > expected_partitions )); then
     echo "Topic $topic has partition count $partitions, expected minimum $expected_partitions; accepting existing larger partition count."
   fi
-  if [[ "$replication_factor" != "$EXPECTED_REPLICATION_FACTOR" ]]; then
-    echo "Topic $topic has replication factor $replication_factor, expected $EXPECTED_REPLICATION_FACTOR" >&2
+  if (( replication_factor < EXPECTED_REPLICATION_FACTOR )); then
+    echo "Topic $topic has replication factor $replication_factor, expected at least $EXPECTED_REPLICATION_FACTOR" >&2
     exit 1
   fi
   kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --entity-type topics --entity-name "$topic" --describe
