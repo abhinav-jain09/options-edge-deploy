@@ -7,9 +7,8 @@
 // SAFE BY DEFAULT: scheduled runs are DRY_RUN=true (they only log what they
 // would reset). Flip DRY_RUN=false to actually wipe Streams state + prune junk.
 //
-// NOTE: the reset uses scale-to-0; a supervised run showed the single-node k3s
-// API can drop under the churn of scaling all apps at once. Review the
-// rollout-restart alternative before enabling unattended live runs.
+// The reset uses `kubectl rollout restart` (rolling) — it never scales a
+// deployment to 0 replicas, so a transient k8s API blip cannot leave prod down.
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
