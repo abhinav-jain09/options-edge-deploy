@@ -4,6 +4,8 @@ pipeline {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
     string(name: 'KUBECONFIG_FILE', defaultValue: '/var/jenkins_home/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
     string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/var/jenkins_home/config/kubeconfig', description: 'Admin kubeconfig used only to bootstrap the Jenkins-only Kubernetes deploy guard')
+    string(name: 'PROD_KUBECONFIG_FILE', defaultValue: '/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig', description: 'Deployer kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button (prod is a separate cluster from dev).')
+    string(name: 'PROD_KUBECONFIG_ADMIN_FILE', defaultValue: '/Users/abhinav/.kube/prod-k3s.yaml', description: 'Admin kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button.')
     string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses host.docker.internal:5001 for dev and 192.168.100.252:5000 for staging/production.')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
     string(name: 'BUILD_PLATFORM', defaultValue: '', description: 'Image platform. Empty defaults to linux/arm64 for dev and linux/amd64 for staging/production; staging/production always deploy linux/amd64.')
@@ -852,8 +854,8 @@ EOF
             propagate: false,
             parameters: [
               string(name: 'ENVIRONMENT', value: 'production'),
-              string(name: 'KUBECONFIG_FILE', value: env.KUBECONFIG),
-              string(name: 'KUBECONFIG_ADMIN_FILE', value: env.KUBECONFIG_ADMIN_FILE),
+              string(name: 'KUBECONFIG_FILE', value: params.PROD_KUBECONFIG_FILE),
+              string(name: 'KUBECONFIG_ADMIN_FILE', value: params.PROD_KUBECONFIG_ADMIN_FILE),
               string(name: 'IMAGE_REGISTRY', value: params.IMAGE_REGISTRY),
               string(name: 'IMAGE_TAG', value: params.IMAGE_TAG),
               string(name: 'BUILD_PLATFORM', value: 'linux/amd64'),
