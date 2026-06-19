@@ -535,6 +535,11 @@ PY
       steps {
         sh '''
           set -euo pipefail
+          stage_a_pod="hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}"
+          underlying_pod="hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}"
+          kubectl -n "$NAMESPACE" logs "$stage_a_pod" --tail=1000 > artifacts/logs/stage-a-final.log 2>/dev/null || true
+          kubectl -n "$NAMESPACE" logs "$underlying_pod" --tail=1000 > artifacts/logs/underlying-final.log 2>/dev/null || true
+          kubectl -n "$NAMESPACE" delete pod "$stage_a_pod" "$underlying_pod" --ignore-not-found=true
           pod="hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}"
           kubectl -n "$NAMESPACE" delete pod "$pod" --ignore-not-found=true
           kubectl -n "$NAMESPACE" run "$pod" --image="$HPSF_PROCESSING_IMAGE" --image-pull-policy=Never --restart=Never --overrides="$HPSF_REPLAY_POD_OVERRIDES" \
