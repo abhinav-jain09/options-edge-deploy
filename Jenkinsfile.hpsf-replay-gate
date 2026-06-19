@@ -206,7 +206,7 @@ pipeline {
             .venv/bin/python -m compileall src
             PYTHONPATH=src .venv/bin/python -m unittest tests.test_hpsf_replay_es_reference tests.test_hpsf_historical_replay tests.test_hpsf_mapping
           )
-          (cd .replay/options-edge-processing && mvn -B -pl hpsf-processing-service -am test package)
+          (cd .replay/options-edge-processing && env -u TOPIC_PREFIX mvn -B -pl hpsf-processing-service -am test package)
           docker buildx inspect options-edge-builder >/dev/null 2>&1 || docker buildx create --name options-edge-builder --use
           docker buildx use options-edge-builder
           docker buildx build \
