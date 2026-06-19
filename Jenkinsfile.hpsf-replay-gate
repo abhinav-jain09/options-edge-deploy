@@ -443,7 +443,7 @@ PY
           grep -E 'HPSF Stage A topology enabled|HPSF Stage A consuming|HPSF Stage A producing' artifacts/logs/stage-a.log || echo "Stage A legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate."
           grep -E 'HPSF stage-a stream state transition .* -> RUNNING|state=stage-a=RUNNING' artifacts/logs/stage-a.log
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
-            "options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
+            "options-edge-hpsf-stage-a-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}${APP_PROFILE:+-${APP_PROFILE}}" \
             artifacts/logs/stage-a-consumer-group-catchup.log
         '''
       }
@@ -525,7 +525,7 @@ PY
           grep -E 'HPSF underlying replay topology enabled|underlying replay consuming|underlying replay producing' artifacts/logs/underlying.log || echo "Underlying legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate."
           grep -E 'HPSF underlying-replay stream state transition .* -> RUNNING|state=underlying-replay=RUNNING' artifacts/logs/underlying.log
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
-            "options-edge-hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
+            "options-edge-hpsf-underlying-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}${APP_PROFILE:+-${APP_PROFILE}}" \
             artifacts/logs/underlying-consumer-group-catchup.log
         '''
       }
@@ -632,7 +632,7 @@ PY
           grep -E 'HPSF Stage B topology enabled|HPSF Stage B consuming|HPSF Stage B producing' artifacts/logs/stage-b-startup.log || echo "Stage B legacy startup markers not present in recent logs; RUNNING state marker is the readiness gate."
           grep -E 'HPSF stage-b stream state transition .* -> RUNNING|state=stage-b=RUNNING' artifacts/logs/stage-b-startup.log
           scripts/hpsf/wait-kafka-consumer-group-caught-up.sh \
-            "options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}" \
+            "options-edge-hpsf-stage-b-replay-${HPSF_REPLAY_DATE_ID}-${BUILD_NUMBER:-manual}${APP_PROFILE:+-${APP_PROFILE}}" \
             artifacts/logs/stage-b-consumer-group-catchup.log
           kubectl -n "$NAMESPACE" exec "$pod" -- sh -c 'kill -TERM 1' >/dev/null 2>&1 || true
           for attempt in $(seq 1 60); do
