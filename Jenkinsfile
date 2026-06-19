@@ -2,6 +2,7 @@ pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
+    string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. Any branch is allowed for ENVIRONMENT=dev; staging/production are locked to main. The job SCM checks out this branch.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '/var/jenkins_home/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
     string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/var/jenkins_home/config/kubeconfig', description: 'Admin kubeconfig used only to bootstrap the Jenkins-only Kubernetes deploy guard')
     string(name: 'PROD_KUBECONFIG_FILE', defaultValue: '/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig', description: 'Deployer kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button (prod is a separate cluster from dev).')
