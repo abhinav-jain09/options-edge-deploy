@@ -71,6 +71,7 @@ pipeline {
   environment {
     PATH = "/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
     KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
+    APP_PROFILE = 'dev'
     KAFKA_TOPIC_REPLICATION_FACTOR = '1'
     KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
     KAFKA_SCHEMA_REGISTRY_URL = "${env.KAFKA_SCHEMA_REGISTRY_URL ?: 'http://192.168.100.252:8082'}"
@@ -206,7 +207,7 @@ pipeline {
             .venv/bin/python -m compileall src
             PYTHONPATH=src .venv/bin/python -m unittest tests.test_hpsf_replay_es_reference tests.test_hpsf_historical_replay tests.test_hpsf_mapping
           )
-          (cd .replay/options-edge-processing && env -u TOPIC_PREFIX mvn -B -pl hpsf-processing-service -am test package)
+          (cd .replay/options-edge-processing && env -u TOPIC_PREFIX -u APP_PROFILE -u KAFKA_TOPIC_REPLICATION_FACTOR -u KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS mvn -B -pl hpsf-processing-service -am test package)
           docker buildx inspect options-edge-builder >/dev/null 2>&1 || docker buildx create --name options-edge-builder --use
           docker buildx use options-edge-builder
           docker buildx build \
