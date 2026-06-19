@@ -207,7 +207,21 @@ pipeline {
             .venv/bin/python -m compileall src
             PYTHONPATH=src .venv/bin/python -m unittest tests.test_hpsf_replay_es_reference tests.test_hpsf_historical_replay tests.test_hpsf_mapping
           )
-          (cd .replay/options-edge-processing && env -u TOPIC_PREFIX -u APP_PROFILE -u KAFKA_TOPIC_REPLICATION_FACTOR -u KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS mvn -B -pl hpsf-processing-service -am test package)
+          (cd .replay/options-edge-processing && env \
+            -u TOPIC_PREFIX \
+            -u APP_PROFILE \
+            -u KAFKA_TOPIC_REPLICATION_FACTOR \
+            -u KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS \
+            -u HPSF_STAGE_B_CHAIN_SHARDING_ENABLED \
+            -u HPSF_STAGE_B_CHAIN_SHARDS \
+            -u HPSF_STAGE_B_CHAIN_SHARD_SHADOW_MODE \
+            -u HPSF_STAGE_B_CHAIN_SHARD_EVALUATION_ENABLED \
+            -u HPSF_STAGE_B_CHAIN_SHARD_PARITY_REQUIRED \
+            -u HPSF_VOL_REGIME_ENABLED \
+            -u HPSF_VOL_REGIME_REQUIRE_VIX_FOR_MEAN_REVERSION \
+            -u HPSF_MEAN_REVERSION_ENABLED \
+            -u HPSF_HTF_TREND_ENABLED \
+            mvn -B -pl hpsf-processing-service -am test package)
           docker buildx inspect options-edge-builder >/dev/null 2>&1 || docker buildx create --name options-edge-builder --use
           docker buildx use options-edge-builder
           docker buildx build \
