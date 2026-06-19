@@ -75,6 +75,8 @@ pipeline {
     KAFKA_TOPIC_REPLICATION_FACTOR = '1'
     KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS = '1'
     KAFKA_SCHEMA_REGISTRY_URL = 'http://localhost:8082'
+    HPSF_REPLAY_POD_KAFKA_BOOTSTRAP_SERVERS = 'host.docker.internal:9092'
+    HPSF_REPLAY_POD_SCHEMA_REGISTRY_URL = 'http://host.docker.internal:8082'
     JENKINS_PUBLIC_URL = 'http://localhost:8085'
     NAMESPACE = "${env.NAMESPACE ?: 'options-edge'}"
     HPSF_REPLAY_POD_OVERRIDES = '{"spec":{"hostNetwork":true,"dnsPolicy":"ClusterFirstWithHostNet"}}'
@@ -243,6 +245,9 @@ actual = image.get("Architecture", "")
 if actual != expected:
     raise SystemExit(f"image architecture mismatch: expected {expected}, got {actual}")
 PY
+          docker exec desktop-control-plane ctr -n k8s.io images ls >/dev/null
+          docker save "$HPSF_PROCESSING_IMAGE" | docker exec -i desktop-control-plane ctr -n k8s.io images import -
+          docker exec desktop-control-plane ctr -n k8s.io images ls | grep -F "$HPSF_PROCESSING_IMAGE"
           (cd .replay/options-edge-integration-test && mvn -B test package)
           python3 scripts/hpsf/test_merge_stage_b_performance_metrics.py
         '''
@@ -367,8 +372,8 @@ PY
             --env=HPSF_STREAMS_COMMIT_INTERVAL_MS="${HPSF_STAGE_A_REPLAY_COMMIT_INTERVAL_MS:-5000}" \
             --env=HPSF_STREAMS_PRODUCER_COMPRESSION_TYPE="${HPSF_STAGE_A_REPLAY_PRODUCER_COMPRESSION_TYPE:-lz4}" \
             --env=HPSF_STREAMS_CONSUMER_ISOLATION_LEVEL=read_uncommitted \
-            --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
-            --env=KAFKA_SCHEMA_REGISTRY_URL="$KAFKA_SCHEMA_REGISTRY_URL" \
+            --env=KAFKA_BOOTSTRAP_SERVERS="${HPSF_REPLAY_POD_KAFKA_BOOTSTRAP_SERVERS:-$KAFKA_BOOTSTRAP_SERVERS}" \
+            --env=KAFKA_SCHEMA_REGISTRY_URL="${HPSF_REPLAY_POD_SCHEMA_REGISTRY_URL:-$KAFKA_SCHEMA_REGISTRY_URL}" \
             --env=HPSF_TOPIC_OPRA_TCBBO="$TOPIC_PREFIX.opra.tcbbo" \
             --env=HPSF_TOPIC_STRIKE_FLOW="$TOPIC_PREFIX.hpsf.strike-flow" \
             --env=HPSF_TOPIC_SIGNAL="$TOPIC_PREFIX.hpsf.signal" \
@@ -474,8 +479,8 @@ PY
             --env=HPSF_STREAMS_NUM_STREAM_THREADS=1 \
             --env=HPSF_STREAMS_CACHE_MAX_BYTES_BUFFERING=0 \
             --env=HPSF_STREAMS_CONSUMER_ISOLATION_LEVEL=read_uncommitted \
-            --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
-            --env=KAFKA_SCHEMA_REGISTRY_URL="$KAFKA_SCHEMA_REGISTRY_URL" \
+            --env=KAFKA_BOOTSTRAP_SERVERS="${HPSF_REPLAY_POD_KAFKA_BOOTSTRAP_SERVERS:-$KAFKA_BOOTSTRAP_SERVERS}" \
+            --env=KAFKA_SCHEMA_REGISTRY_URL="${HPSF_REPLAY_POD_SCHEMA_REGISTRY_URL:-$KAFKA_SCHEMA_REGISTRY_URL}" \
             --env=HPSF_TOPIC_UNDERLYING_ES_TRADES="$underlying_topic_prefix.es.trades" \
             --env=HPSF_TOPIC_UNDERLYING_SPX_PRICE="$underlying_topic_prefix.spx.price" \
             --env=HPSF_TOPIC_UNDERLYING_STATE="$TOPIC_PREFIX.hpsf.underlying-state" \
@@ -543,8 +548,8 @@ PY
             --env=HPSF_STREAMS_NUM_STREAM_THREADS="${HPSF_STAGE_B_REPLAY_STREAM_THREADS:-6}" \
             --env=HPSF_STREAMS_CACHE_MAX_BYTES_BUFFERING=0 \
             --env=HPSF_STREAMS_CONSUMER_ISOLATION_LEVEL=read_uncommitted \
-            --env=KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
-            --env=KAFKA_SCHEMA_REGISTRY_URL="$KAFKA_SCHEMA_REGISTRY_URL" \
+            --env=KAFKA_BOOTSTRAP_SERVERS="${HPSF_REPLAY_POD_KAFKA_BOOTSTRAP_SERVERS:-$KAFKA_BOOTSTRAP_SERVERS}" \
+            --env=KAFKA_SCHEMA_REGISTRY_URL="${HPSF_REPLAY_POD_SCHEMA_REGISTRY_URL:-$KAFKA_SCHEMA_REGISTRY_URL}" \
             --env=HPSF_TOPIC_STRIKE_FLOW="$TOPIC_PREFIX.hpsf.strike-flow" \
             --env=HPSF_TOPIC_UNDERLYING_STATE="$TOPIC_PREFIX.hpsf.underlying-state" \
             --env=HPSF_TOPIC_MARKET_FLOW="$TOPIC_PREFIX.hpsf.market-flow" \
