@@ -69,7 +69,7 @@ pipeline {
   }
 
   environment {
-    PATH = "/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
+    PATH = "${env.WORKSPACE}/.jenkins-kafka-bin:/opt/homebrew/opt/openjdk@21/bin:/opt/homebrew/bin:/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
     KAFKA_BOOTSTRAP_SERVERS = 'localhost:9092'
     APP_PROFILE = 'dev'
     KAFKA_TOPIC_REPLICATION_FACTOR = '1'
@@ -144,7 +144,11 @@ pipeline {
           scripts/jenkins/enforce-main-branch.sh
           git rev-parse HEAD > build-git-sha.txt
           rm -rf artifacts "$HPSF_REPLAY_BUILD_DIR" artifact-manifest.json
-          mkdir -p artifacts/logs "$HPSF_REPLAY_BUILD_DIR/logs" .replay
+          mkdir -p artifacts/logs "$HPSF_REPLAY_BUILD_DIR/logs" .replay .jenkins-kafka-bin
+          for tool in kafka-topics kafka-configs kafka-consumer-groups kafka-console-consumer kafka-console-producer kafka-broker-api-versions kafka-reassign-partitions; do
+            ln -sf "/Users/abhinav/development/kafka-options-edge/current/bin/${tool}.sh" ".jenkins-kafka-bin/${tool}"
+          done
+          kafka-topics --version
         '''
       }
     }
