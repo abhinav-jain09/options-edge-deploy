@@ -146,7 +146,11 @@ pipeline {
           rm -rf artifacts "$HPSF_REPLAY_BUILD_DIR" artifact-manifest.json
           mkdir -p artifacts/logs "$HPSF_REPLAY_BUILD_DIR/logs" .replay .jenkins-kafka-bin
           for tool in kafka-topics kafka-configs kafka-consumer-groups kafka-console-consumer kafka-console-producer kafka-broker-api-versions kafka-reassign-partitions; do
-            ln -sf "/Users/abhinav/development/kafka-options-edge/current/bin/${tool}.sh" ".jenkins-kafka-bin/${tool}"
+            cat > ".jenkins-kafka-bin/${tool}" <<EOF
+#!/usr/bin/env bash
+exec "/Users/abhinav/development/kafka-options-edge/current/bin/${tool}.sh" "\\$@"
+EOF
+            chmod +x ".jenkins-kafka-bin/${tool}"
           done
           kafka-topics --version
         '''
