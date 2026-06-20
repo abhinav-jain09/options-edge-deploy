@@ -33,11 +33,22 @@ pipeline {
                  description: 'If true, keep going when a child job fails (otherwise abort the bring-up).')
   }
 
+  environment {
+    // Image platform follows the deploy target:
+    //   dev  -> local Mac docker-desktop (Apple Silicon)  -> linux/arm64
+    //   prod -> remote Linux k3s on A/B (CentOS x86_64)   -> linux/amd64
+    // Passed to every child so each builds the correct arch — an arm64 image built on the
+    // Mac fails with "exec format error" on the amd64 remotes. Child build jobs must honor
+    // this via `docker buildx build --platform "$BUILD_PLATFORM"` (see option-edge-feed-gateway
+    // for the reference implementation) and push prod images to the remote registry.
+    BUILD_PLATFORM = "${params.PROFILE == 'prod' ? 'linux/amd64' : 'linux/arm64'}"
+  }
+
   stages {
     stage('Auth + DB') {                       // must come up first
       steps {
         build job: 'keycloak-postgres-deploy',          // TO-VERIFY
-              parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+              parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
               wait: true, propagate: !params.CONTINUE_ON_FAILURE
       }
     }
@@ -45,7 +56,7 @@ pipeline {
     stage('Processing / streams') {            // Kafka-coupled stream apps -> k8s
       steps {
         build job: 'options-edge-deploy',               // TO-VERIFY
-              parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+              parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
               wait: true, propagate: !params.CONTINUE_ON_FAILURE
       }
     }
@@ -56,7 +67,7 @@ pipeline {
           when { expression { params.FEEDS } }
           steps {
             build job: 'options-edge-databento-feed',    // TO-VERIFY
-                  parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+                  parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
@@ -64,21 +75,21 @@ pipeline {
           when { expression { params.FEEDS } }
           steps {
             build job: 'options-edge-ibkr-feed',         // TO-VERIFY
-                  parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+                  parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
         stage('Feed-gateway') {
           steps {
             build job: 'option-edge-feed-gateway',       // TO-VERIFY
-                  parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+                  parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
         stage('Replay orchestrator') {
           steps {
             build job: 'replay-orchestrator',            // TO-VERIFY
-                  parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+                  parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
@@ -89,7 +100,7 @@ pipeline {
       when { expression { params.WEB_UI } }
       steps {
         build job: 'options-edge-web-deploy',            // confirmed
-              parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+              parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
               wait: true, propagate: !params.CONTINUE_ON_FAILURE
       }
     }

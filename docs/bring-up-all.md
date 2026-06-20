@@ -64,6 +64,28 @@ Run it: **Jenkins → `options-edge-bring-up-all` → Build with Parameters → 
 
 ---
 
+## Image architecture — local Mac (arm64) vs remote Linux (amd64)
+
+The Jenkins build agent is the **Mac (Apple Silicon, `arm64`)**, but the **remote cluster
+(A/B) is `amd64`** (CentOS x86_64). An arm64 image deployed to the amd64 remotes fails at
+runtime with **`exec format error`**. So the image platform must follow the deploy target —
+the umbrella derives `BUILD_PLATFORM` from `PROFILE` and passes it to every child:
+
+| `PROFILE` | Deploy target | `BUILD_PLATFORM` | Image registry |
+|---|---|---|---|
+| `dev` | local Mac docker-desktop (arm64) | `linux/arm64` (native, fast) | local docker-desktop |
+| `prod` | remote Linux k3s on A/B (amd64) | `linux/amd64` (buildx cross-build on the Mac) | A's registry `192.168.100.252:5000` |
+
+Each child **build** job must honor it via `docker buildx build --platform "$BUILD_PLATFORM"`.
+
+- **Reference implementation:** `option-edge-feed-gateway` already does this — a `BUILD_PLATFORM`
+  param (default `linux/arm64`, prod forces `linux/amd64`) built with buildx.
+- **Gap to close:** `options-edge-processing` and `options-edge-databento-feed` currently use a
+  plain `docker build` (native arm64) — they must adopt the same buildx pattern before a `prod`
+  bring-up produces runnable images.
+
+---
+
 ## How dev vs prod differ
 
 The umbrella only **forwards** `PROFILE`. The actual difference lives in each child job,
@@ -93,17 +115,26 @@ configmap / Kafka bootstrap) when wiring up their `PROFILE` parameter.
 
 ## Prerequisites (before enabling)
 
-This pipeline is a scaffold. Two things must be done first — both require the Jenkins
-controller (Machine A), so they are deferred until it is online:
+This pipeline is a scaffold. A few things must be finished first.
+> Jenkins is the **local `docker-desktop` pod `jenkins-0`** (up at `localhost:8085`) — **not**
+> a service on Machine A — so this work does **not** depend on the remote boxes being powered on.
 
-1. **Verify child job names.** Every name marked `// TO-VERIFY` in `Jenkinsfile.bring-up-all`
-   is a placeholder. Only `options-edge-web-deploy` is confirmed. Replace the rest with the
-   real job names from the controller.
-2. **Parameterize each child for dev/prod.** The `PROFILE` pass-through only takes effect
-   once each child job declares a `PROFILE` string parameter and branches its env on it.
-   Today they don't (e.g. `options-edge-web-deploy` hardcodes `APP_PROFILE=dev`).
+1. **Confirm child job names.** From the live controller, confirmed jobs:
+   `options-edge-web-deploy`, `option-edge-feed-gateway`, `options-edge-databento-feed-deploy`,
+   `options-edge-ibkr-feed`. Still to decide: **processing** (`options-edge-deploy` vs
+   `options-edge-processing`) and **replay** (`hpsf-historical-replay`?). Replace the
+   `// TO-VERIFY` placeholders accordingly.
+2. **Auth + DB has no job.** Keycloak + Postgres run as Docker containers (`oe-keycloak-dev`,
+   `oe-keycloak-postgres`), not a Jenkins job — so the "Auth + DB" stage needs a small wrapper
+   job (`docker start …` / `compose up`) or an inline docker step. *(Decision pending.)*
+3. **Parameterize each child for dev/prod** — declare a `PROFILE` param and branch its env on it
+   (today `options-edge-web-deploy` hardcodes `APP_PROFILE=dev`).
+4. **Build the right arch per `BUILD_PLATFORM`** — each child *build* job must use
+   `docker buildx build --platform "$BUILD_PLATFORM"`. `option-edge-feed-gateway` already does;
+   `options-edge-processing` and `options-edge-databento-feed` still use plain `docker build`
+   (native arm64) and will produce images that fail on the amd64 remotes.
 
-Until both are done, a run fails at the first stage (no such job / no such parameter).
+Until these are done, a run fails at the first stage (no such job / no such parameter / wrong-arch image).
 
 ---
 
