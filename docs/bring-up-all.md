@@ -14,12 +14,14 @@ You run **one** job; it orchestrates the rest with the native `build job:` step
 
 ## Flow
 
+> **Prerequisite (one-time, not a stage):** Keycloak + Postgres run as standalone Docker
+> containers (`oe-keycloak-dev`, `oe-keycloak-postgres`) and stay up across deploys. They are a
+> one-time setup — the umbrella does **not** manage them and assumes they're already running.
+
 ```mermaid
 flowchart TD
-    Start([Build with Parameters<br/>PROFILE = dev or prod]) --> Auth
-
-    Auth["Auth + DB<br/>keycloak-postgres-deploy"] --> Proc
-    Proc["Processing / streams<br/>options-edge-deploy"] --> Feeds
+    Start([Build with Parameters<br/>PROFILE = dev or prod]) --> Proc
+    Proc["Processing / streams<br/>options-edge-processing"] --> Feeds
 
     subgraph Feeds ["Feeds + services — run in PARALLEL"]
         direction LR
@@ -34,20 +36,19 @@ flowchart TD
 
     classDef seq fill:#1f6feb,stroke:#0b3a8c,color:#fff
     classDef par fill:#238636,stroke:#0f5323,color:#fff
-    class Auth,Proc,Web seq
+    class Proc,Web seq
     class DB,IB,GW,RP par
 ```
 
-**Order & why**
+**Order & why** (Keycloak/Postgres are a one-time prerequisite, above — not part of the pipeline)
 
 | Stage | Job(s) | Mode | Depends on |
 |---|---|---|---|
-| 1. Auth + DB | `keycloak-postgres-deploy` | sequential | — (must be first) |
-| 2. Processing / streams | `options-edge-deploy` | sequential | Kafka up |
-| 3. Feeds + services | `databento-feed`, `ibkr-feed`, `feed-gateway`, `replay-orchestrator` | **parallel** | Kafka + processing |
-| 4. Web UI | `options-edge-web-deploy` | sequential | auth + backend |
+| 1. Processing / streams | `options-edge-processing` | sequential | Kafka + Keycloak/Postgres up |
+| 2. Feeds + services | `databento-feed-deploy`, `ibkr-feed`, `feed-gateway`, replay | **parallel** | Kafka + processing |
+| 3. Web UI | `options-edge-web-deploy` | sequential | auth + backend |
 
-The parallel stage finishes when the **slowest** of its four jobs completes (not the sum).
+The parallel stage finishes when the **slowest** of its jobs completes (not the sum).
 
 ---
 

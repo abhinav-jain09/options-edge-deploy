@@ -56,18 +56,11 @@ pipeline {
     WEB_IMAGE      = "${params.PROFILE == 'prod' ? '192.168.100.252:5000/options-edge-web:prod' : 'options-edge-web:dev'}"
   }
 
-  stages {
-    stage('Auth + DB') {                       // must come up first
-      steps {
-        // NOTE: there is NO Jenkins job for Keycloak/Postgres — they run as Docker containers
-        // (oe-keycloak-dev, oe-keycloak-postgres). This stage needs a small wrapper job
-        // (`docker start …` / `compose up`) or an inline docker step — TODO, does not exist yet.
-        build job: 'keycloak-postgres-deploy',          // TODO: create this wrapper job
-              parameters: [string(name: 'PROFILE', value: params.PROFILE)],
-              wait: true, propagate: !params.CONTINUE_ON_FAILURE
-      }
-    }
+  // PREREQUISITE (not a stage): Keycloak + Postgres are a ONE-TIME setup, run as standalone
+  // Docker containers (oe-keycloak-dev, oe-keycloak-postgres). They stay up across deploys, so
+  // this pipeline does NOT manage them — it assumes they are already running before a bring-up.
 
+  stages {
     stage('Processing / streams') {            // Kafka-coupled stream apps -> k8s
       steps {
         build job: 'options-edge-processing',           // TO-VERIFY (image build; 'options-edge-deploy' applies the k8s manifests — confirm which/both the bring-up needs)
