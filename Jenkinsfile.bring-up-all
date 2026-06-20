@@ -1,0 +1,102 @@
+// =============================================================================
+// Jenkinsfile.bring-up-all  —  one job to deploy the whole OptionsEdge platform.
+//
+// Triggers every component's existing Jenkins job in dependency order, for a
+// chosen environment (dev | prod). Sequential where there is a dependency,
+// parallel where the jobs are independent.
+//
+//   build job: '<child>', parameters: [string(name:'PROFILE', value: PROFILE)],
+//             wait: true, propagate: true
+//
+// *** DRAFT / SCAFFOLD ***
+// The child job names marked TO-VERIFY are placeholders — they must be confirmed
+// against the live Jenkins controller (on Machine A) before this job is enabled.
+// Also: for the PROFILE pass-through to work, each child job must declare a
+// `PROFILE` string parameter and branch its env on it (dev vs prod). Today
+// options-edge-web-deploy hardcodes APP_PROFILE=dev, so that (and the others)
+// still need a PROFILE parameter added. See the PR description.
+// =============================================================================
+pipeline {
+  agent { label 'local-mac' }
+
+  options {
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+  }
+
+  parameters {
+    choice(name: 'PROFILE', choices: ['dev', 'prod'],
+           description: 'Environment to bring up (passed to every child job).')
+    booleanParam(name: 'FEEDS',  defaultValue: true,  description: 'Include the Databento/IBKR market feeds.')
+    booleanParam(name: 'WEB_UI', defaultValue: true,  description: 'Include the web UI (options-edge-web-deploy).')
+    booleanParam(name: 'CONTINUE_ON_FAILURE', defaultValue: false,
+                 description: 'If true, keep going when a child job fails (otherwise abort the bring-up).')
+  }
+
+  stages {
+    stage('Auth + DB') {                       // must come up first
+      steps {
+        build job: 'keycloak-postgres-deploy',          // TO-VERIFY
+              parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+              wait: true, propagate: !params.CONTINUE_ON_FAILURE
+      }
+    }
+
+    stage('Processing / streams') {            // Kafka-coupled stream apps -> k8s
+      steps {
+        build job: 'options-edge-deploy',               // TO-VERIFY
+              parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+              wait: true, propagate: !params.CONTINUE_ON_FAILURE
+      }
+    }
+
+    stage('Feeds + services') {                // independent -> run in parallel
+      parallel {
+        stage('Databento feed') {
+          when { expression { params.FEEDS } }
+          steps {
+            build job: 'options-edge-databento-feed',    // TO-VERIFY
+                  parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
+        stage('IBKR feed') {
+          when { expression { params.FEEDS } }
+          steps {
+            build job: 'options-edge-ibkr-feed',         // TO-VERIFY
+                  parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
+        stage('Feed-gateway') {
+          steps {
+            build job: 'option-edge-feed-gateway',       // TO-VERIFY
+                  parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
+        stage('Replay orchestrator') {
+          steps {
+            build job: 'replay-orchestrator',            // TO-VERIFY
+                  parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
+      }
+    }
+
+    stage('Web UI') {                          // needs auth + backend up
+      when { expression { params.WEB_UI } }
+      steps {
+        build job: 'options-edge-web-deploy',            // confirmed
+              parameters: [string(name: 'PROFILE', value: params.PROFILE)],
+              wait: true, propagate: !params.CONTINUE_ON_FAILURE
+      }
+    }
+  }
+
+  post {
+    success { echo "OptionsEdge platform bring-up complete (PROFILE=${params.PROFILE})." }
+    failure { echo "Bring-up failed (PROFILE=${params.PROFILE}) — see the failed downstream stage above." }
+  }
+}
