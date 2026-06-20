@@ -41,22 +41,37 @@ pipeline {
     // Mac fails with "exec format error" on the amd64 remotes. Child build jobs must honor
     // this via `docker buildx build --platform "$BUILD_PLATFORM"` (see option-edge-feed-gateway
     // for the reference implementation) and push prod images to the remote registry.
+    //
+    // The umbrella derives the dev/prod knobs once from PROFILE and passes each child the
+    // parameters IT actually declares (the children do NOT share a single PROFILE param):
+    //   - web (options-edge):            PROFILE, BUILD_PLATFORM, PUSH_IMAGE, RUN_LOCAL, IMAGE
+    //   - processing/ibkr/feed-gateway:  BUILD_PLATFORM, PUSH_IMAGE(S), IMAGE_REGISTRY
+    //   - databento-feed:                ENVIRONMENT, IMAGE_REGISTRY, PUSH_IMAGE
     BUILD_PLATFORM = "${params.PROFILE == 'prod' ? 'linux/amd64' : 'linux/arm64'}"
+    IS_PROD        = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
+    PUSH_IMAGE     = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
+    RUN_LOCAL      = "${params.PROFILE == 'prod' ? 'false' : 'true'}"
+    ENVIRONMENT    = "${params.PROFILE}"
+    IMAGE_REGISTRY = "${params.PROFILE == 'prod' ? '192.168.100.252:5000' : ''}"
+    WEB_IMAGE      = "${params.PROFILE == 'prod' ? '192.168.100.252:5000/options-edge-web:prod' : 'options-edge-web:dev'}"
   }
 
   stages {
     stage('Auth + DB') {                       // must come up first
       steps {
-        build job: 'keycloak-postgres-deploy',          // TO-VERIFY
-              parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
+        // NOTE: there is NO Jenkins job for Keycloak/Postgres — they run as Docker containers
+        // (oe-keycloak-dev, oe-keycloak-postgres). This stage needs a small wrapper job
+        // (`docker start …` / `compose up`) or an inline docker step — TODO, does not exist yet.
+        build job: 'keycloak-postgres-deploy',          // TODO: create this wrapper job
+              parameters: [string(name: 'PROFILE', value: params.PROFILE)],
               wait: true, propagate: !params.CONTINUE_ON_FAILURE
       }
     }
 
     stage('Processing / streams') {            // Kafka-coupled stream apps -> k8s
       steps {
-        build job: 'options-edge-deploy',               // TO-VERIFY
-              parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
+        build job: 'options-edge-processing',           // TO-VERIFY (image build; 'options-edge-deploy' applies the k8s manifests — confirm which/both the bring-up needs)
+              parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGES', value: env.PUSH_IMAGE == 'true')],
               wait: true, propagate: !params.CONTINUE_ON_FAILURE
       }
     }
@@ -66,30 +81,30 @@ pipeline {
         stage('Databento feed') {
           when { expression { params.FEEDS } }
           steps {
-            build job: 'options-edge-databento-feed',    // TO-VERIFY
-                  parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
+            build job: 'options-edge-databento-feed-deploy',  // confirmed
+                  parameters: [string(name: 'ENVIRONMENT', value: params.PROFILE), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'), booleanParam(name: 'DEPLOY_TO_KUBERNETES', value: env.IS_PROD == 'true')],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
         stage('IBKR feed') {
           when { expression { params.FEEDS } }
           steps {
-            build job: 'options-edge-ibkr-feed',         // TO-VERIFY
-                  parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
+            build job: 'options-edge-ibkr-feed',         // confirmed
+                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
         stage('Feed-gateway') {
           steps {
-            build job: 'option-edge-feed-gateway',       // TO-VERIFY
-                  parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
+            build job: 'option-edge-feed-gateway',       // confirmed
+                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
         stage('Replay orchestrator') {
           steps {
-            build job: 'replay-orchestrator',            // TO-VERIFY
-                  parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
+            build job: 'hpsf-historical-replay',         // TO-VERIFY (name + params)
+                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
@@ -99,8 +114,16 @@ pipeline {
     stage('Web UI') {                          // needs auth + backend up
       when { expression { params.WEB_UI } }
       steps {
-        build job: 'options-edge-web-deploy',            // confirmed
-              parameters: [string(name: 'PROFILE', value: params.PROFILE), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM)],
+        build job: 'options-edge-web-deploy',            // confirmed (params: see options-edge#45)
+              parameters: [
+                string(name: 'PROFILE',        value: params.PROFILE),
+                string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM),
+                booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'),
+                booleanParam(name: 'RUN_LOCAL',  value: env.RUN_LOCAL == 'true'),
+                string(name: 'IMAGE',          value: env.WEB_IMAGE)
+                // prod also needs the prod URLs/issuer overridden (VITE_AUTH_ISSUER, VITE_API_BASE_URL, …)
+                // once those endpoints are defined — see options-edge#45 parameter list.
+              ],
               wait: true, propagate: !params.CONTINUE_ON_FAILURE
       }
     }
