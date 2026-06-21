@@ -34,6 +34,12 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          # Defaults so `set -u` is safe even if a parameter env var is missing.
+          DEPLOY_ENVIRONMENT="${DEPLOY_ENVIRONMENT:-prod}"
+          LOKI_NAMESPACE="${LOKI_NAMESPACE:-loki}"
+          LOKI_RETENTION_HOURS="${LOKI_RETENTION_HOURS:-168}"
+          CONFIRM_DEPLOY="${CONFIRM_DEPLOY:-false}"
+          KUBECONFIG_FILE="${KUBECONFIG_FILE:-}"
           if [ -n "${KUBECONFIG_FILE}" ]; then export KUBECONFIG="${KUBECONFIG_FILE}"; fi
           echo "Target: env=${DEPLOY_ENVIRONMENT} ns=${LOKI_NAMESPACE} confirm=${CONFIRM_DEPLOY}"
           ansible-playbook ansible/loki-stack.yml \
@@ -46,7 +52,7 @@ pipeline {
     }
   }
   post {
-    success { echo "Loki/Promtail: ${CONFIRM_DEPLOY == 'true' ? 'deployed' : 'validated (plan only)'} to ${DEPLOY_ENVIRONMENT}." }
-    failure { echo "Loki/Promtail deploy failed for ${DEPLOY_ENVIRONMENT} — see the Ansible output above." }
+    success { echo "Loki/Promtail: ${params.CONFIRM_DEPLOY ? 'deployed' : 'validated (plan only)'} to ${params.DEPLOY_ENVIRONMENT}." }
+    failure { echo "Loki/Promtail deploy failed for ${params.DEPLOY_ENVIRONMENT} — see the Ansible output above." }
   }
 }
