@@ -61,46 +61,50 @@ pipeline {
   // this pipeline does NOT manage them — it assumes they are already running before a bring-up.
 
   stages {
-    stage('Processing / streams') {            // Kafka-coupled stream apps -> k8s
-      steps {
-        build job: 'options-edge-processing',           // TO-VERIFY (image build; 'options-edge-deploy' applies the k8s manifests — confirm which/both the bring-up needs)
-              parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGES', value: env.PUSH_IMAGE == 'true')],
-              wait: true, propagate: !params.CONTINUE_ON_FAILURE
-      }
-    }
-
-    stage('Feeds + services') {                // independent -> run in parallel
+    // 1) Build every service image and push it to the registry (independent -> parallel).
+    //    These jobs only build/push; the single Deploy stage below applies ALL the k8s manifests.
+    stage('Build images') {
       parallel {
+        stage('Processing / streams') {
+          steps {
+            build job: 'options-edge-processing',
+                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGES', value: env.PUSH_IMAGE == 'true')],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
         stage('Databento feed') {
           when { expression { params.FEEDS } }
           steps {
-            build job: 'options-edge-databento-feed-deploy',  // confirmed
-                  parameters: [string(name: 'ENVIRONMENT', value: params.PROFILE), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'), booleanParam(name: 'DEPLOY_TO_KUBERNETES', value: env.IS_PROD == 'true')],
+            build job: 'options-edge-databento-feed-deploy',  // build+push only; the Deploy stage applies it
+                  parameters: [string(name: 'ENVIRONMENT', value: params.PROFILE), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'), booleanParam(name: 'DEPLOY_TO_KUBERNETES', value: false)],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
         stage('IBKR feed') {
           when { expression { params.FEEDS } }
           steps {
-            build job: 'options-edge-ibkr-feed',         // confirmed
+            build job: 'options-edge-ibkr-feed',
                   parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
         stage('Feed-gateway') {
           steps {
-            build job: 'option-edge-feed-gateway',       // confirmed
+            build job: 'option-edge-feed-gateway',
                   parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
-        stage('Replay orchestrator') {
-          steps {
-            build job: 'hpsf-historical-replay',         // TO-VERIFY (name + params)
-                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
-                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
-          }
-        }
+      }
+    }
+
+    // 2) ONE deploy applies the ENTIRE options-edge namespace (feeds + all stream apps) via
+    //    `kubectl kustomize k8s/overlays/<env> | kubectl apply`. Images above must already be pushed.
+    stage('Deploy to Kubernetes') {
+      steps {
+        build job: 'options-edge-deploy',
+              parameters: [string(name: 'ENVIRONMENT', value: params.PROFILE)],
+              wait: true, propagate: !params.CONTINUE_ON_FAILURE
       }
     }
 
@@ -117,6 +121,15 @@ pipeline {
                 // prod also needs the prod URLs/issuer overridden (VITE_AUTH_ISSUER, VITE_API_BASE_URL, …)
                 // once those endpoints are defined — see options-edge#45 parameter list.
               ],
+              wait: true, propagate: !params.CONTINUE_ON_FAILURE
+      }
+    }
+
+    // 4) Replay orchestrator — separate (not in the k8s namespace; a host process).
+    stage('Replay orchestrator') {
+      steps {
+        build job: 'hpsf-historical-replay',         // TO-VERIFY (name + params)
+              parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
               wait: true, propagate: !params.CONTINUE_ON_FAILURE
       }
     }

@@ -20,35 +20,38 @@ You run **one** job; it orchestrates the rest with the native `build job:` step
 
 ```mermaid
 flowchart TD
-    Start([Build with Parameters<br/>PROFILE = dev or prod]) --> Proc
-    Proc["Processing / streams<br/>options-edge-processing"] --> Feeds
+    Start([Build with Parameters<br/>PROFILE = dev or prod]) --> Build
 
-    subgraph Feeds ["Feeds + services — run in PARALLEL"]
+    subgraph Build ["1) Build images — run in PARALLEL (build + push to registry)"]
         direction LR
-        DB["Databento feed"]
+        PR["processing / streams"]
+        DB["databento feed"]
         IB["IBKR feed"]
         GW["feed-gateway"]
-        RP["replay orchestrator"]
     end
 
-    Feeds --> Web["Web UI<br/>options-edge-web-deploy"]
-    Web --> Done([Platform up])
+    Build --> Deploy["2) Deploy to Kubernetes<br/>options-edge-deploy — applies the WHOLE namespace"]
+    Deploy --> Web["3) Web UI<br/>options-edge-web-deploy"]
+    Web --> Replay["4) Replay orchestrator<br/>hpsf-historical-replay"]
+    Replay --> Done([Platform up])
 
     classDef seq fill:#1f6feb,stroke:#0b3a8c,color:#fff
     classDef par fill:#238636,stroke:#0f5323,color:#fff
-    class Proc,Web seq
-    class DB,IB,GW,RP par
+    class Deploy,Web,Replay seq
+    class PR,DB,IB,GW par
 ```
 
 **Order & why** (Keycloak/Postgres are a one-time prerequisite, above — not part of the pipeline)
 
-| Stage | Job(s) | Mode | Depends on |
+| Stage | Job(s) | Mode | Notes |
 |---|---|---|---|
-| 1. Processing / streams | `options-edge-processing` | sequential | Kafka + Keycloak/Postgres up |
-| 2. Feeds + services | `databento-feed-deploy`, `ibkr-feed`, `feed-gateway`, replay | **parallel** | Kafka + processing |
-| 3. Web UI | `options-edge-web-deploy` | sequential | auth + backend |
+| 1. Build images | `options-edge-processing`, `databento-feed-deploy` (build-only), `ibkr-feed`, `feed-gateway` | **parallel** | Build + push every service image; no k8s changes here |
+| 2. Deploy to Kubernetes | `options-edge-deploy` | sequential | **One** `kubectl kustomize \| apply` deploys the entire `options-edge` namespace (feeds + all stream apps) |
+| 3. Web UI | `options-edge-web-deploy` | sequential | Docker container (not in k8s) |
+| 4. Replay orchestrator | `hpsf-historical-replay` | sequential | Separate (host process), not in the k8s namespace |
 
-The parallel stage finishes when the **slowest** of its jobs completes (not the sum).
+Build is the only parallel stage; it finishes when the **slowest** image build completes. The single
+Deploy step is why per-feed deploy stages were dropped — `options-edge-deploy` already applies them all.
 
 ---
 
