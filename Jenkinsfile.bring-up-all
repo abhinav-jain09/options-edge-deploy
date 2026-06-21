@@ -1,0 +1,134 @@
+// =============================================================================
+// Jenkinsfile.bring-up-all  —  one job to deploy the whole OptionsEdge platform.
+//
+// Triggers every component's existing Jenkins job in dependency order, for a
+// chosen environment (dev | prod). Sequential where there is a dependency,
+// parallel where the jobs are independent.
+//
+//   build job: '<child>', parameters: [string(name:'PROFILE', value: PROFILE)],
+//             wait: true, propagate: true
+//
+// *** DRAFT / SCAFFOLD ***
+// The child job names marked TO-VERIFY are placeholders — they must be confirmed
+// against the live Jenkins controller (on Machine A) before this job is enabled.
+// Also: for the PROFILE pass-through to work, each child job must declare a
+// `PROFILE` string parameter and branch its env on it (dev vs prod). Today
+// options-edge-web-deploy hardcodes APP_PROFILE=dev, so that (and the others)
+// still need a PROFILE parameter added. See the PR description.
+// =============================================================================
+pipeline {
+  agent { label 'local-mac' }
+
+  options {
+    disableConcurrentBuilds()
+    skipDefaultCheckout(true)
+  }
+
+  parameters {
+    choice(name: 'PROFILE', choices: ['dev', 'prod'],
+           description: 'Environment to bring up (passed to every child job).')
+    booleanParam(name: 'FEEDS',  defaultValue: true,  description: 'Include the Databento/IBKR market feeds.')
+    booleanParam(name: 'WEB_UI', defaultValue: true,  description: 'Include the web UI (options-edge-web-deploy).')
+    booleanParam(name: 'CONTINUE_ON_FAILURE', defaultValue: false,
+                 description: 'If true, keep going when a child job fails (otherwise abort the bring-up).')
+  }
+
+  environment {
+    // Image platform follows the deploy target:
+    //   dev  -> local Mac docker-desktop (Apple Silicon)  -> linux/arm64
+    //   prod -> remote Linux k3s on A/B (CentOS x86_64)   -> linux/amd64
+    // Passed to every child so each builds the correct arch — an arm64 image built on the
+    // Mac fails with "exec format error" on the amd64 remotes. Child build jobs must honor
+    // this via `docker buildx build --platform "$BUILD_PLATFORM"` (see option-edge-feed-gateway
+    // for the reference implementation) and push prod images to the remote registry.
+    //
+    // The umbrella derives the dev/prod knobs once from PROFILE and passes each child the
+    // parameters IT actually declares (the children do NOT share a single PROFILE param):
+    //   - web (options-edge):            PROFILE, BUILD_PLATFORM, PUSH_IMAGE, RUN_LOCAL, IMAGE
+    //   - processing/ibkr/feed-gateway:  BUILD_PLATFORM, PUSH_IMAGE(S), IMAGE_REGISTRY
+    //   - databento-feed:                ENVIRONMENT, IMAGE_REGISTRY, PUSH_IMAGE
+    BUILD_PLATFORM = "${params.PROFILE == 'prod' ? 'linux/amd64' : 'linux/arm64'}"
+    IS_PROD        = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
+    PUSH_IMAGE     = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
+    RUN_LOCAL      = "${params.PROFILE == 'prod' ? 'false' : 'true'}"
+    ENVIRONMENT    = "${params.PROFILE}"
+    IMAGE_REGISTRY = "${params.PROFILE == 'prod' ? '192.168.100.252:5000' : ''}"
+    WEB_IMAGE      = "${params.PROFILE == 'prod' ? '192.168.100.252:5000/options-edge-web:prod' : 'options-edge-web:dev'}"
+  }
+
+  // PREREQUISITE (not a stage): Keycloak + Postgres are a ONE-TIME setup, run as standalone
+  // Docker containers (oe-keycloak-dev, oe-keycloak-postgres). They stay up across deploys, so
+  // this pipeline does NOT manage them — it assumes they are already running before a bring-up.
+
+  stages {
+    // 1) Build every service image and push it to the registry (independent -> parallel).
+    //    These jobs only build/push; the single Deploy stage below applies ALL the k8s manifests.
+    stage('Build images') {
+      parallel {
+        stage('Processing / streams') {
+          steps {
+            build job: 'options-edge-processing',
+                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGES', value: env.PUSH_IMAGE == 'true')],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
+        stage('Databento feed') {
+          when { expression { params.FEEDS } }
+          steps {
+            build job: 'options-edge-databento-feed-deploy',  // build+push only; the Deploy stage applies it
+                  parameters: [string(name: 'ENVIRONMENT', value: params.PROFILE), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'), booleanParam(name: 'DEPLOY_TO_KUBERNETES', value: false)],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
+        stage('IBKR feed') {
+          when { expression { params.FEEDS } }
+          steps {
+            build job: 'options-edge-ibkr-feed',
+                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
+        stage('Feed-gateway') {
+          steps {
+            build job: 'option-edge-feed-gateway',
+                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
+      }
+    }
+
+    // 2) ONE deploy applies the ENTIRE options-edge namespace (feeds + all stream apps) via
+    //    `kubectl kustomize k8s/overlays/<env> | kubectl apply`. Images above must already be pushed.
+    stage('Deploy to Kubernetes') {
+      steps {
+        build job: 'options-edge-deploy',
+              parameters: [string(name: 'ENVIRONMENT', value: params.PROFILE)],
+              wait: true, propagate: !params.CONTINUE_ON_FAILURE
+      }
+    }
+
+    stage('Web UI') {                          // needs auth + backend up
+      when { expression { params.WEB_UI } }
+      steps {
+        build job: 'options-edge-web-deploy',            // confirmed (params: see options-edge#45)
+              parameters: [
+                string(name: 'PROFILE',        value: params.PROFILE),
+                string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM),
+                booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'),
+                booleanParam(name: 'RUN_LOCAL',  value: env.RUN_LOCAL == 'true'),
+                string(name: 'IMAGE',          value: env.WEB_IMAGE)
+                // prod also needs the prod URLs/issuer overridden (VITE_AUTH_ISSUER, VITE_API_BASE_URL, …)
+                // once those endpoints are defined — see options-edge#45 parameter list.
+              ],
+              wait: true, propagate: !params.CONTINUE_ON_FAILURE
+      }
+    }
+    // NOTE: hpsf-historical-replay is intentionally NOT part of this bring-up (run it on its own).
+  }
+
+  post {
+    success { echo "OptionsEdge platform bring-up complete (PROFILE=${params.PROFILE})." }
+    failure { echo "Bring-up failed (PROFILE=${params.PROFILE}) — see the failed downstream stage above." }
+  }
+}
