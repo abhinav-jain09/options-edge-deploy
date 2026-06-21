@@ -3,8 +3,8 @@ pipeline {
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
     string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. Any branch is allowed for ENVIRONMENT=dev; staging/production are locked to main. The job SCM checks out this branch.')
-    string(name: 'KUBECONFIG_FILE', defaultValue: '/var/jenkins_home/config/jenkins-deployer.kubeconfig', description: 'Jenkins deployer kubeconfig path on Jenkins agent')
-    string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/var/jenkins_home/config/kubeconfig', description: 'Admin kubeconfig used only to bootstrap the Jenkins-only Kubernetes deploy guard')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '/Users/abhinav/.kube/jenkins-deployer-dev.kubeconfig', description: 'Dev deployer kubeconfig path on the Jenkins agent (Mac, ~/.kube — like prod). Bootstrap generates it from the admin kubeconfig.')
+    string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/Users/abhinav/.kube/dd-admin.yaml', description: 'Dev admin (docker-desktop cluster-admin) kubeconfig used only to bootstrap the Jenkins-only deploy guard. Lives in ~/.kube so it survives Jenkins reinstalls (the old /var/jenkins_home path did not).')
     string(name: 'PROD_KUBECONFIG_FILE', defaultValue: '/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig', description: 'Deployer kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button (prod is a separate cluster from dev).')
     string(name: 'PROD_KUBECONFIG_ADMIN_FILE', defaultValue: '/Users/abhinav/.kube/prod-k3s.yaml', description: 'Admin kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button.')
     string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses host.docker.internal:5001 for dev and 192.168.100.252:5000 for staging/production.')
@@ -50,9 +50,9 @@ pipeline {
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
-    KUBECONFIG_FILE = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/home/options-edge/config/jenkins-deployer.kubeconfig') ? '/var/jenkins_home/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
-    KUBECONFIG = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/home/options-edge/config/jenkins-deployer.kubeconfig') ? '/var/jenkins_home/config/jenkins-deployer.kubeconfig' : params.KUBECONFIG_FILE}"
-    KUBECONFIG_ADMIN_FILE = "${(!params.KUBECONFIG_ADMIN_FILE || params.KUBECONFIG_ADMIN_FILE == '/home/options-edge/config/kubeconfig') ? '/var/jenkins_home/config/kubeconfig' : params.KUBECONFIG_ADMIN_FILE}"
+    KUBECONFIG_FILE = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/home/options-edge/config/jenkins-deployer.kubeconfig') ? '/Users/abhinav/.kube/jenkins-deployer-dev.kubeconfig' : params.KUBECONFIG_FILE}"
+    KUBECONFIG = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/home/options-edge/config/jenkins-deployer.kubeconfig') ? '/Users/abhinav/.kube/jenkins-deployer-dev.kubeconfig' : params.KUBECONFIG_FILE}"
+    KUBECONFIG_ADMIN_FILE = "${(!params.KUBECONFIG_ADMIN_FILE || params.KUBECONFIG_ADMIN_FILE == '/home/options-edge/config/kubeconfig') ? '/Users/abhinav/.kube/dd-admin.yaml' : params.KUBECONFIG_ADMIN_FILE}"
     REMOTE_APP_HOME = '/home/options-edge'
     JENKINS_WORK_DIR = '.jenkins-tmp'
     PATH = "/var/jenkins_home/bin:${env.PATH}"
