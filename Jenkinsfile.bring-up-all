@@ -124,15 +124,7 @@ pipeline {
               wait: true, propagate: !params.CONTINUE_ON_FAILURE
       }
     }
-
-    // 4) Replay orchestrator — separate (not in the k8s namespace; a host process).
-    stage('Replay orchestrator') {
-      steps {
-        build job: 'hpsf-historical-replay',         // TO-VERIFY (name + params)
-              parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
-              wait: true, propagate: !params.CONTINUE_ON_FAILURE
-      }
-    }
+    // NOTE: hpsf-historical-replay is intentionally NOT part of this bring-up (run it on its own).
   }
 
   post {

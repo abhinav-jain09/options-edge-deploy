@@ -32,12 +32,11 @@ flowchart TD
 
     Build --> Deploy["2) Deploy to Kubernetes<br/>options-edge-deploy — applies the WHOLE namespace"]
     Deploy --> Web["3) Web UI<br/>options-edge-web-deploy"]
-    Web --> Replay["4) Replay orchestrator<br/>hpsf-historical-replay"]
-    Replay --> Done([Platform up])
+    Web --> Done([Platform up])
 
     classDef seq fill:#1f6feb,stroke:#0b3a8c,color:#fff
     classDef par fill:#238636,stroke:#0f5323,color:#fff
-    class Deploy,Web,Replay seq
+    class Deploy,Web seq
     class PR,DB,IB,GW par
 ```
 
@@ -48,7 +47,8 @@ flowchart TD
 | 1. Build images | `options-edge-processing`, `databento-feed-deploy` (build-only), `ibkr-feed`, `feed-gateway` | **parallel** | Build + push every service image; no k8s changes here |
 | 2. Deploy to Kubernetes | `options-edge-deploy` | sequential | **One** `kubectl kustomize \| apply` deploys the entire `options-edge` namespace (feeds + all stream apps) |
 | 3. Web UI | `options-edge-web-deploy` | sequential | Docker container (not in k8s) |
-| 4. Replay orchestrator | `hpsf-historical-replay` | sequential | Separate (host process), not in the k8s namespace |
+
+> `hpsf-historical-replay` is intentionally **not** part of this bring-up — run it on its own when needed.
 
 Build is the only parallel stage; it finishes when the **slowest** image build completes. The single
 Deploy step is why per-feed deploy stages were dropped — `options-edge-deploy` already applies them all.
