@@ -1,0 +1,118 @@
+---
+# Deploy Loki + Promtail (central pod-log collection) to an OptionsEdge cluster.
+# Intended to run from Jenkins (Jenkinsfile.loki) — NOT applied to prod by hand.
+# Mirrors replay-stack.yml conventions: hosts=localhost / connection=local, KUBECONFIG-driven,
+# validate-and-render first, apply only when confirm_loki_deploy=true.
+#
+#   ansible-playbook ansible/loki-stack.yml -e @/secure/loki-stack.yml            # validate/plan only
+#   ansible-playbook ansible/loki-stack.yml -e @/secure/loki-stack.yml -e confirm_loki_deploy=true
+#
+# Loki lives in its OWN namespace (default 'loki'), intentionally NOT labeled
+# options-edge/deploy-guard=jenkins-only, so the jenkins-only admission policy does not block it.
+- name: Deploy Loki + Promtail log stack
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    deploy_environment: "{{ deploy_environment | default('prod') }}"
+    loki_namespace: "{{ loki_namespace | default('loki') }}"
+    live_namespace: "{{ live_namespace | default('options-edge') }}"
+    helm_release: "{{ helm_release | default('loki') }}"
+    helm_repo_name: grafana
+    helm_repo_url: https://grafana.github.io/helm-charts
+    helm_chart: "{{ helm_chart | default('grafana/loki-stack') }}"
+    helm_chart_version: "{{ helm_chart_version | default('2.10.2') }}"
+    loki_retention_hours: "{{ loki_retention_hours | default(168) }}"
+    loki_pvc_size: "{{ loki_pvc_size | default('10Gi') }}"
+    rollout_timeout: "{{ rollout_timeout | default('300s') }}"
+    confirm_loki_deploy: "{{ confirm_loki_deploy | default(false) }}"
+    rendered_values_path: "{{ playbook_dir }}/.ansible-rendered/loki-values-{{ deploy_environment }}.yaml"
+    kubeconfig: "{{ kubeconfig | default(lookup('env', 'KUBECONFIG'), true) | default('', true) }}"
+    kube_env: "{{ {'KUBECONFIG': kubeconfig} if (kubeconfig | length > 0) else {} }}"
+
+  tasks:
+    - name: Validate inputs
+      ansible.builtin.assert:
+        that:
+          - loki_namespace | length > 0
+          - loki_namespace != live_namespace
+          - deploy_environment in ['dev', 'staging', 'prod']
+        fail_msg: >
+          loki_namespace must be set and must differ from live_namespace ({{ live_namespace }});
+          deploy_environment must be one of dev/staging/prod.
+
+    - name: Check kubectl is available
+      ansible.builtin.command: kubectl version --client=true
+      changed_when: false
+
+    - name: Check helm is available
+      ansible.builtin.command: helm version --short
+      changed_when: false
+
+    - name: Add grafana helm repo
+      ansible.builtin.command: "helm repo add {{ helm_repo_name }} {{ helm_repo_url }} --force-update"
+      register: repo_add
+      changed_when: "'has been added' in repo_add.stdout or 'has been updated' in repo_add.stdout"
+
+    - name: Update helm repo
+      ansible.builtin.command: "helm repo update {{ helm_repo_name }}"
+      changed_when: false
+
+    - name: Create render directory
+      ansible.builtin.file:
+        path: "{{ rendered_values_path | dirname }}"
+        state: directory
+        mode: "0700"
+
+    - name: Render Helm values from template
+      ansible.builtin.template:
+        src: loki-values.yaml.j2
+        dest: "{{ rendered_values_path }}"
+        mode: "0600"
+
+    - name: Render the chart for validation (helm template)
+      ansible.builtin.command: >
+        helm template {{ helm_release }} {{ helm_chart }}
+        --version {{ helm_chart_version }}
+        --namespace {{ loki_namespace }}
+        --values {{ rendered_values_path }}
+      environment: "{{ kube_env }}"
+      changed_when: false
+      register: helm_rendered
+
+    - name: Confirm rendered chart is non-empty
+      ansible.builtin.assert:
+        that:
+          - helm_rendered.stdout | length > 0
+        fail_msg: "helm template produced no output — check chart/version/values."
+
+    - name: Plan only (no apply) unless confirm_loki_deploy=true
+      ansible.builtin.debug:
+        msg: >
+          VALIDATED. Rendered values: {{ rendered_values_path }}.
+          Re-run with -e confirm_loki_deploy=true to apply.
+      when: not (confirm_loki_deploy | bool)
+
+    - name: Apply — helm upgrade --install
+      ansible.builtin.command: >
+        helm upgrade --install {{ helm_release }} {{ helm_chart }}
+        --version {{ helm_chart_version }}
+        --namespace {{ loki_namespace }} --create-namespace
+        --values {{ rendered_values_path }}
+        --wait --timeout {{ rollout_timeout }}
+      environment: "{{ kube_env }}"
+      when: confirm_loki_deploy | bool
+      register: helm_apply
+
+    - name: Show pods
+      ansible.builtin.command: "kubectl -n {{ loki_namespace }} get pods -o wide"
+      environment: "{{ kube_env }}"
+      changed_when: false
+      when: confirm_loki_deploy | bool
+      register: loki_pods
+
+    - name: Result
+      ansible.builtin.debug:
+        var: loki_pods.stdout_lines
+      when: confirm_loki_deploy | bool
