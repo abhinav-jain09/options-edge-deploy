@@ -1,0 +1,52 @@
+// Deploy Loki + Promtail to a cluster via the Ansible playbook (ansible/loki-stack.yml).
+// Production changes go through THIS job (Jenkins + Ansible), never kubectl/helm by hand.
+//
+// CONFIRM_DEPLOY=false  -> validate + render + helm-template only (a dry plan, applies nothing)
+// CONFIRM_DEPLOY=true   -> helm upgrade --install into the target cluster
+pipeline {
+  agent { label 'local-mac' }
+  options { disableConcurrentBuilds(); skipDefaultCheckout(false) }
+
+  parameters {
+    choice(name: 'DEPLOY_ENVIRONMENT', choices: ['prod', 'staging', 'dev'],
+           description: 'Target cluster/environment.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+           description: 'Path (on the agent) or credential to the TARGET cluster kubeconfig — the prod k3s on A/B for prod.')
+    string(name: 'LOKI_NAMESPACE', defaultValue: 'loki',
+           description: 'Namespace for Loki/Promtail (must differ from the live namespace).')
+    string(name: 'LOKI_RETENTION_HOURS', defaultValue: '168', description: 'Log retention in hours (default 7d).')
+    booleanParam(name: 'CONFIRM_DEPLOY', defaultValue: false,
+           description: 'OFF = validate/plan only. ON = helm upgrade --install (actually deploys).')
+  }
+
+  stages {
+    stage('Validate tooling') {
+      steps {
+        sh '''
+          set -euo pipefail
+          ansible-playbook --version | head -1
+          helm version --short
+          kubectl version --client=true | head -1
+        '''
+      }
+    }
+    stage('Deploy Loki/Promtail (Ansible)') {
+      steps {
+        sh '''
+          set -euo pipefail
+          if [ -n "${KUBECONFIG_FILE}" ]; then export KUBECONFIG="${KUBECONFIG_FILE}"; fi
+          echo "Target: env=${DEPLOY_ENVIRONMENT} ns=${LOKI_NAMESPACE} confirm=${CONFIRM_DEPLOY}"
+          ansible-playbook ansible/loki-stack.yml \
+            -e deploy_environment="${DEPLOY_ENVIRONMENT}" \
+            -e loki_namespace="${LOKI_NAMESPACE}" \
+            -e loki_retention_hours="${LOKI_RETENTION_HOURS}" \
+            -e confirm_loki_deploy="${CONFIRM_DEPLOY}"
+        '''
+      }
+    }
+  }
+  post {
+    success { echo "Loki/Promtail: ${CONFIRM_DEPLOY == 'true' ? 'deployed' : 'validated (plan only)'} to ${DEPLOY_ENVIRONMENT}." }
+    failure { echo "Loki/Promtail deploy failed for ${DEPLOY_ENVIRONMENT} — see the Ansible output above." }
+  }
+}

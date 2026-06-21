@@ -1,0 +1,22 @@
+---
+# Copy to a private vars file, then pass it with:
+#   ansible-playbook ansible/loki-stack.yml -e @/secure/loki-stack.yml -e confirm_loki_deploy=true
+#
+# (Jenkinsfile.loki passes these as -e flags + KUBECONFIG; this file documents the knobs.)
+
+deploy_environment: prod          # dev | staging | prod
+loki_namespace: loki              # own namespace; MUST differ from the live (guarded) namespace
+live_namespace: options-edge
+
+helm_chart: grafana/loki-stack
+helm_chart_version: "2.10.2"
+loki_retention_hours: 168         # 7 days
+loki_pvc_size: 10Gi
+rollout_timeout: 300s
+
+# KUBECONFIG for the TARGET cluster (the prod k3s on A/B). Provide via the KUBECONFIG
+# env (Jenkins credential) or set an explicit path here.
+kubeconfig: "{{ lookup('env', 'KUBECONFIG') | default('', true) }}"
+
+# Safety: nothing applies unless this is true (Jenkins CONFIRM_DEPLOY param).
+confirm_loki_deploy: false
