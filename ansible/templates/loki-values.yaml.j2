@@ -1,15 +1,15 @@
-# Helm values for grafana/loki-stack — rendered by ansible/loki-stack.yml (env={{ deploy_environment }}).
+# Helm values for grafana/loki-stack — rendered by ansible/loki-stack.yml (env={{ oe_env }}).
 # Single-binary Loki + Promtail DaemonSet. Promtail ships EVERY namespace's pod logs into Loki.
 # Grafana/Prometheus from this chart are disabled (the platform has its own).
 loki:
   isDefault: false
   persistence:
     enabled: true
-    size: {{ loki_pvc_size }}
+    size: {{ oe_pvc_size }}
   config:
     table_manager:
       retention_deletes_enabled: true
-      retention_period: {{ loki_retention_hours }}h
+      retention_period: {{ oe_retention_hours }}h
 
 promtail:
   enabled: true
