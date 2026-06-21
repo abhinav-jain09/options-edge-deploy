@@ -4,6 +4,11 @@ metadata:
   name: strike-flow-classifier-databento
   namespace: options-edge
   labels:
+    oe.replay/include: "true"
+    oe.replay/side-effects: "false"
+    oe.replay/topic-remap: "required"
+    oe.replay/state: "ephemeral"
+    oe.replay/determinism: "event-time"
     app.kubernetes.io/name: strike-flow-classifier-databento
     app.kubernetes.io/component: strike-flow-classifier
     app.kubernetes.io/part-of: options-edge

@@ -4,6 +4,11 @@ metadata:
   name: databento-mission-pace-service
   namespace: options-edge
   labels:
+    oe.replay/include: "true"
+    oe.replay/side-effects: "false"
+    oe.replay/topic-remap: "required"
+    oe.replay/state: "ephemeral"
+    oe.replay/determinism: "event-time"
     app.kubernetes.io/name: databento-mission-pace-service
     app.kubernetes.io/part-of: options-edge
 spec:
