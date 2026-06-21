@@ -40,6 +40,20 @@ spec:
               value: DATABENTO
             - name: STRIKE_FLOW_ENABLED
               value: "true"
+            # Institutional canary (databento only). Each flag is independent; kill-switch = "false".
+            # DELTA_OVERLAY intentionally left OFF until databento-feed/GEX topic is healthy.
+            - name: STRIKE_FLOW_INSTITUTIONAL_ENABLED
+              value: "true"
+            - name: STRIKE_FLOW_INSTITUTIONAL_TICK_EPSILON
+              value: "0.0"
+            - name: STRIKE_FLOW_INSTITUTIONAL_FRESHNESS_MS
+              value: "1000"
+            - name: STRIKE_FLOW_WINDOWS_ENABLED
+              value: "true"
+            - name: STRIKE_FLOW_SWEEP_ENABLED
+              value: "true"
+            - name: STRIKE_FLOW_QUALITY_ENABLED
+              value: "true"
             - name: KAFKA_STRIKE_FLOW_INPUT_TOPIC
               value: options.opra.tcbbo
             - name: KAFKA_STRIKE_FLOW_OUTPUT_TOPIC
