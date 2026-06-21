@@ -10,6 +10,8 @@ resources:
   - feed-gateway-service.yaml
   - databento-volume-aggregator-deployment.yaml
   - databento-volume-aggregator-service.yaml
+  - databento-gex-deployment.yaml
+  - databento-gex-service.yaml
   - databento-mission-pace-deployment.yaml
   - databento-mission-pace-service.yaml
   - databento-mission-pressure-deployment.yaml

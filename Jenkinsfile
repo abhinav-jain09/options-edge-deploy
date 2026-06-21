@@ -15,6 +15,7 @@ pipeline {
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev', description: 'Databento volume aggregator image')
     string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-feed:dev', description: 'Databento feed image')
+    string(name: 'DATABENTO_GEX_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-gex:dev', description: 'Databento per-strike GEX image')
     string(name: 'DATABENTO_MISSION_PACE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-pace:dev', description: 'Databento mission pace image')
     string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-pressure:dev', description: 'Databento mission pressure image')
     string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-sandwich:dev', description: 'Databento mission sandwich image')
@@ -64,6 +65,7 @@ pipeline {
     RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: '192.168.100.252:5000/options-edge-raw-to-display:dev'}"
     DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev'}"
     DATABENTO_FEED_IMAGE = "${params.DATABENTO_FEED_IMAGE ?: '192.168.100.252:5000/options-edge-databento-feed:dev'}"
+    DATABENTO_GEX_IMAGE = "${params.DATABENTO_GEX_IMAGE ?: '192.168.100.252:5000/options-edge-databento-gex:dev'}"
     DATABENTO_MISSION_PACE_IMAGE = "${params.DATABENTO_MISSION_PACE_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-pace:dev'}"
     DATABENTO_MISSION_PRESSURE_IMAGE = "${params.DATABENTO_MISSION_PRESSURE_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-pressure:dev'}"
     DATABENTO_MISSION_SANDWICH_IMAGE = "${params.DATABENTO_MISSION_SANDWICH_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-sandwich:dev'}"
@@ -204,6 +206,7 @@ pipeline {
 RAW_TO_DISPLAY_IMAGE=$registry/options-edge-raw-to-display:$image_tag
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$registry/options-edge-databento-volume-aggregator:$image_tag
 DATABENTO_FEED_IMAGE=$registry/options-edge-databento-feed:$image_tag
+DATABENTO_GEX_IMAGE=$registry/options-edge-databento-gex:$image_tag
 DATABENTO_MISSION_PACE_IMAGE=$registry/options-edge-databento-mission-pace:$image_tag
 DATABENTO_MISSION_PRESSURE_IMAGE=$registry/options-edge-databento-mission-pressure:$image_tag
 DATABENTO_MISSION_SANDWICH_IMAGE=$registry/options-edge-databento-mission-sandwich:$image_tag
@@ -227,6 +230,7 @@ EOF
 RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
 DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
+DATABENTO_GEX_IMAGE=$DATABENTO_GEX_IMAGE
 DATABENTO_MISSION_PACE_IMAGE=$DATABENTO_MISSION_PACE_IMAGE
 DATABENTO_MISSION_PRESSURE_IMAGE=$DATABENTO_MISSION_PRESSURE_IMAGE
 DATABENTO_MISSION_SANDWICH_IMAGE=$DATABENTO_MISSION_SANDWICH_IMAGE
@@ -261,6 +265,7 @@ EOF
             RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
             DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
             DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
+            DATABENTO_GEX_IMAGE=$DATABENTO_GEX_IMAGE
             DATABENTO_MISSION_PACE_IMAGE=$DATABENTO_MISSION_PACE_IMAGE
             DATABENTO_MISSION_PRESSURE_IMAGE=$DATABENTO_MISSION_PRESSURE_IMAGE
             DATABENTO_MISSION_SANDWICH_IMAGE=$DATABENTO_MISSION_SANDWICH_IMAGE
@@ -663,6 +668,7 @@ EOF
           kubectl -n options-edge set image deployment/raw-to-display-databento-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-databento-feed databento-feed="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
+          kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pace-service databento-mission-pace="$DATABENTO_MISSION_PACE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pressure-service databento-mission-pressure="$DATABENTO_MISSION_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-sandwich-service databento-mission-sandwich="$DATABENTO_MISSION_SANDWICH_IMAGE"
@@ -894,6 +900,7 @@ EOF
               string(name: 'WEB_PUBLIC_URL', value: params.WEB_PUBLIC_URL),
               string(name: 'RAW_TO_DISPLAY_IMAGE', value: params.RAW_TO_DISPLAY_IMAGE),
               string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
+              string(name: 'DATABENTO_GEX_IMAGE', value: params.DATABENTO_GEX_IMAGE),
               string(name: 'DATABENTO_MISSION_PACE_IMAGE', value: params.DATABENTO_MISSION_PACE_IMAGE),
               string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', value: params.DATABENTO_MISSION_PRESSURE_IMAGE),
               string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', value: params.DATABENTO_MISSION_SANDWICH_IMAGE),
