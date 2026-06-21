@@ -698,6 +698,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/databento-mission-pace-service
           kubectl -n options-edge rollout restart deployment/databento-mission-pressure-service
           kubectl -n options-edge rollout restart deployment/databento-mission-sandwich-service
+          kubectl -n options-edge rollout restart deployment/databento-gex-service
           kubectl -n options-edge rollout restart deployment/volume-pace-service
           kubectl -n options-edge rollout restart deployment/volume-pace-databento-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-service
@@ -724,6 +725,7 @@ EOF
           kubectl -n options-edge rollout status deployment/databento-mission-pace-service --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-mission-pressure-service --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-mission-sandwich-service --timeout=240s
+          kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=240s
           kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=180s
           kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=180s
