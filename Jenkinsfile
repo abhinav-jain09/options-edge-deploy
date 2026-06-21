@@ -597,6 +597,65 @@ EOF
         sh '''
           set -euo pipefail
           . "$JENKINS_WORK_DIR/options-edge-images.env"
+          # --- Deploy by immutable @sha256 digest (image-freshness / clobber-immunity / traceability) ---
+          # Resolve EVERY service image to its registry digest and pin it INTO the kustomize overlay's
+          # images: block BEFORE the first kubectl mutation, so `kubectl apply -k` itself publishes a
+          # digest-pinned Deployment spec -- no mutable :tag is ever applied to the API. This makes the
+          # deploy clobber-immune (a stale/hand-pushed :dev can never reach a pod) and atomic on failure:
+          # if any image is unresolvable we abort here, before delete/apply/patch, having mutated nothing.
+          # The overlay file is the ephemeral per-build workspace copy (git-checked-out, never committed).
+          # The unchanged `set image` block below re-applies the same resolved digests (idempotent).
+          # Runs in DEPLOY_DRY_RUN too, so dry-run validates the resolver and renders the pinned spec.
+          # Platform mirrors the build (dev=BUILD_PLATFORM arm64; non-dev amd64).
+          if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            export DEPLOY_PLATFORM="${BUILD_PLATFORM:-linux/arm64}"
+          else
+            export DEPLOY_PLATFORM="linux/amd64"
+          fi
+          export REGISTRY_SCHEME="${REGISTRY_SCHEME:-http}"
+          command -v yq >/dev/null 2>&1 || { echo "FATAL: yq is required to digest-pin the kustomize overlay; aborting before any kubectl mutation." >&2; exit 1; }
+          . scripts/deploy/pin-image.sh
+          _overlay_kustomization="k8s/overlays/${ENVIRONMENT}/kustomization.yaml"
+          # The kustomize images: 'name' match key is the image as it appears in the base manifests, i.e.
+          # the base registry/repo (same across all overlays). Derive the base registry from the rendered
+          # base so we do not hard-code it.
+          _base_images="$(kubectl kustomize k8s/base | yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[].image')"
+          _base_registry="${_base_images%%$'\n'*}"; _base_registry="${_base_registry%%/*}"
+          [ -n "$_base_registry" ] || { echo "FATAL: could not determine base image registry; aborting before any kubectl mutation." >&2; exit 1; }
+          # Rebuild the overlay images: block as a digest-pinned list we fully control (one entry per
+          # service: match the base name, remap to the resolved repo, pin the digest). This works for ANY
+          # overlay -- dev (which has its own images: block) and staging/production (which have none).
+          yq -i '.images = []' "$_overlay_kustomization"
+          for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE DATABENTO_MISSION_PACE_IMAGE \
+            DATABENTO_MISSION_PRESSURE_IMAGE DATABENTO_MISSION_SANDWICH_IMAGE DATABENTO_VOLUME_AGGREGATOR_IMAGE \
+            DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
+            IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
+            RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE \
+            UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE; do
+            _pinned="$(pin_ref "${!_img_var}")" || {
+              echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
+              exit 1
+            }
+            printf -v "$_img_var" '%s' "$_pinned"
+            _repo="${_pinned%@*}"; _repo="${_repo%:*}"; _pdigest="${_pinned#*@}"; _pbase="${_repo##*/}"
+            _pname="$_base_registry/$_pbase"
+            _pname="$_pname" _pnewname="$_repo" _pdigest="$_pdigest" \
+              yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
+            echo "pinned ${_img_var} -> ${_pinned}"
+          done
+          # Authoritative fail-closed gate: render the overlay and require EVERY options-edge service image
+          # that apply -k would publish to be digest-pinned (@sha256) BEFORE any kubectl mutation. This is
+          # checked on the rendered manifest (not just the images: list), so it catches any environment or
+          # any base Deployment whose image was not pinned above.
+          _unpinned_rendered="$(kubectl kustomize "k8s/overlays/${ENVIRONMENT}" \
+            | yq -r 'select(.kind=="Deployment") | (.spec.template.spec.containers[].image), (.spec.template.spec.initContainers[]?.image)' \
+            | { grep '/options-edge-' || true; } | { grep -v '@sha256:' || true; })"
+          if [ -n "$_unpinned_rendered" ]; then
+            echo "FATAL: rendered Deployment images are not digest-pinned before apply:" >&2
+            printf '%s\n' "$_unpinned_rendered" >&2
+            echo "aborting before any kubectl mutation." >&2
+            exit 1
+          fi
           if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
             echo "DEPLOY_DRY_RUN=true: validating Kubernetes apply without changing runtime resources."
             kubectl apply --dry-run=server -k "k8s/overlays/${ENVIRONMENT}"
