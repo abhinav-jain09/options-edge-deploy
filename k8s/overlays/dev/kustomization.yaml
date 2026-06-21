@@ -18,6 +18,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-databento-feed
     newName: host.docker.internal:5001/options-edge-databento-feed
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-gex
+    newName: host.docker.internal:5001/options-edge-databento-gex
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-mission-pace
     newName: host.docker.internal:5001/options-edge-databento-mission-pace
     newTag: dev
