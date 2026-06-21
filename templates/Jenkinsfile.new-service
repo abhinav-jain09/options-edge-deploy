@@ -1,0 +1,66 @@
+// ============================================================================
+// Jenkinsfile TEMPLATE for a NEW OptionsEdge service that needs a build job.
+//
+// HOW TO USE:
+//   1. Copy this file into the new service's repo as `Jenkinsfile`.
+//   2. Set SERVICE_NAME's defaultValue below (e.g. options-edge-foo).
+//   3. Create the Jenkins job: scripts/jenkins/create-service-job.sh
+//        (or clone an existing job in the UI and point scriptPath at this file).
+//   4. Add the service's k8s manifests to options-edge-deploy/k8s/base/ + kustomization.yaml
+//        so `options-edge-deploy` applies it. (This job only BUILDS the image.)
+//
+// dev  = docker-desktop on the Mac  -> linux/arm64, load locally, no registry
+// prod = k3s on A(192.168.100.252)+B(192.168.100.4) -> linux/amd64, push to 192.168.100.252:5000
+// An arm64 image will NOT run on the amd64 prod nodes — always match BUILD_PLATFORM.
+// ============================================================================
+pipeline {
+  agent { label 'local-mac' }                 // Jenkins build agent = the Mac
+  options { disableConcurrentBuilds() }
+
+  parameters {
+    string(name: 'SERVICE_NAME', defaultValue: 'CHANGE-ME',
+           description: 'Image/service name, e.g. options-edge-foo')
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'prod'],
+           description: 'dev = arm64/local ; prod = amd64/registry')
+    // The defaults below are the DEV defaults. A prod run overrides them (see the doc / job params).
+    string(name: 'BUILD_PLATFORM', defaultValue: 'linux/arm64',
+           description: 'dev=linux/arm64 (Mac), prod=linux/amd64 (Linux nodes)')
+    string(name: 'IMAGE_REGISTRY', defaultValue: '',
+           description: 'prod: 192.168.100.252:5000 ; dev: empty (local docker)')
+    string(name: 'IMAGE_TAG', defaultValue: 'dev', description: 'Image tag (e.g. prod, build number)')
+    booleanParam(name: 'PUSH_IMAGE', defaultValue: false,
+           description: 'prod: true (push to registry) ; dev: false (load into local docker)')
+    string(name: 'DOCKERFILE', defaultValue: 'Dockerfile', description: 'Path to the Dockerfile')
+    string(name: 'BUILD_CONTEXT', defaultValue: '.', description: 'Docker build context dir')
+  }
+
+  stages {
+    stage('Build') {
+      steps {
+        sh 'mvn -B clean package -DskipTests || echo "no maven build (skipping)"'   // drop/edit if not Java
+      }
+    }
+    stage('Image') {
+      steps {
+        sh '''
+          set -euo pipefail
+          [ "$SERVICE_NAME" != "CHANGE-ME" ] || { echo "Set SERVICE_NAME" >&2; exit 1; }
+          if [ -n "$IMAGE_REGISTRY" ]; then IMAGE="$IMAGE_REGISTRY/$SERVICE_NAME:$IMAGE_TAG"
+          else IMAGE="$SERVICE_NAME:$IMAGE_TAG"; fi
+          echo "Building $IMAGE  (platform=$BUILD_PLATFORM, env=$ENVIRONMENT)"
+          if [ "$PUSH_IMAGE" = "true" ]; then
+            docker buildx build --platform "$BUILD_PLATFORM" -t "$IMAGE" -f "$DOCKERFILE" --push "$BUILD_CONTEXT"
+            echo "Pushed $IMAGE"
+          else
+            docker buildx build --platform "$BUILD_PLATFORM" -t "$IMAGE" -f "$DOCKERFILE" --load "$BUILD_CONTEXT"
+            echo "Loaded $IMAGE into local docker"
+          fi
+        '''
+      }
+    }
+  }
+  post {
+    success { echo "${params.SERVICE_NAME}: image built (${params.ENVIRONMENT} / ${params.BUILD_PLATFORM})." }
+    failure { echo "${params.SERVICE_NAME}: build FAILED." }
+  }
+}
