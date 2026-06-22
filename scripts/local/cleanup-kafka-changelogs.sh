@@ -178,22 +178,57 @@ EOF
   ' &
 DOCKER_PID=$!
 
-# Watchdog: enforce $TIMEOUT_SECS hard ceiling. If the docker run is
-# still alive after the timeout, send SIGTERM (graceful stop, allowing
-# Kafka client cleanup) and then SIGKILL the container if it doesn't
-# exit within 30s. `docker stop` does both for us.
+# Tear-down helper: stop the container if it exists, kill the docker
+# parent process tree (covers the "stuck during image pull / daemon
+# unreachable / container not yet created" cases where `docker stop`
+# alone is a no-op), and kill the watchdog. Idempotent.
+DOCKER_TEARDOWN_DONE=0
+tear_down_docker() {
+  [ "$DOCKER_TEARDOWN_DONE" = "1" ] && return 0
+  DOCKER_TEARDOWN_DONE=1
+  # 1. Graceful container stop (no-op if container doesn't exist yet).
+  docker stop -t 30 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  # 2. SIGTERM the docker CLI parent — covers image-pull / daemon
+  #    stuck phases where the container doesn't yet exist for `docker
+  #    stop` to act on.
+  if kill -0 "$DOCKER_PID" 2>/dev/null; then
+    kill -TERM "$DOCKER_PID" 2>/dev/null || true
+    # Give the CLI a grace period, then SIGKILL if it still won't die.
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$DOCKER_PID" 2>/dev/null || break
+      sleep 1
+    done
+    if kill -0 "$DOCKER_PID" 2>/dev/null; then
+      kill -KILL "$DOCKER_PID" 2>/dev/null || true
+    fi
+  fi
+  # 3. Kill the watchdog so it doesn't outlive us.
+  if [ -n "${WATCHDOG_PID:-}" ] && kill -0 "$WATCHDOG_PID" 2>/dev/null; then
+    kill -KILL "$WATCHDOG_PID" 2>/dev/null || true
+  fi
+}
+
+# External-signal handler: SIGINT/SIGTERM from launchd or the shell.
+on_signal() {
+  echo "[host] received signal, tearing down" >&2
+  tear_down_docker
+  exit 130
+}
+trap on_signal INT TERM
+
+# Watchdog: enforce $TIMEOUT_SECS hard ceiling. Calls the SAME tear-down
+# helper as the signal handler — so image-pull-stuck and
+# daemon-unreachable cases are handled identically to a runaway
+# in-container script.
 (
-  # Subshell sleeps without holding the main shell's wait().
   sleep "$TIMEOUT_SECS"
   if kill -0 "$DOCKER_PID" 2>/dev/null; then
-    echo "[host] WATCHDOG: ${TIMEOUT_SECS}s timeout reached, stopping container $CONTAINER_NAME" >&2
-    docker stop -t 30 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    echo "[host] WATCHDOG: ${TIMEOUT_SECS}s timeout reached, tearing down" >&2
+    tear_down_docker
   fi
 ) &
 WATCHDOG_PID=$!
-# Disown the watchdog so it doesn't block trap propagation if the
-# script is signalled externally.
-disown "$WATCHDOG_PID" 2>/dev/null || true
 
 # Wait for the docker run to finish (either naturally or via watchdog).
 set +e
@@ -202,8 +237,11 @@ RC=$?
 set -e
 
 # Tear down the watchdog if it's still sleeping (i.e. cleanup finished
-# in time). Suppress errors — the watchdog may have already exited.
-kill "$WATCHDOG_PID" 2>/dev/null || true
+# in time). Don't go through tear_down_docker — it would needlessly try
+# to kill the already-completed DOCKER_PID.
+if kill -0 "$WATCHDOG_PID" 2>/dev/null; then
+  kill "$WATCHDOG_PID" 2>/dev/null || true
+fi
 wait "$WATCHDOG_PID" 2>/dev/null || true
 
 echo "[host] exit code      : $RC"

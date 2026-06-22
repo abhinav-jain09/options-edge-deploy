@@ -29,13 +29,26 @@ cp "$SRC_SCRIPT" "$DEST_SCRIPT"
 chmod +x "$DEST_SCRIPT"
 
 echo "[install] rendering plist -> $DEST_PLIST"
-# Use bash parameter expansion (${var//pattern/replacement}) rather
-# than sed or awk gsub — both of those interpret `&` and `\` in the
-# replacement string as special, which would corrupt a script path
-# that happens to contain them. Parameter expansion treats the
-# replacement as a literal string.
-PLIST_CONTENT=$(<"$SRC_PLIST")
-printf '%s\n' "${PLIST_CONTENT//__SCRIPT__/$DEST_SCRIPT}" > "$DEST_PLIST"
+# Use Python's plistlib to set the ProgramArguments value. This is
+# XML-safe (handles `&`, `<`, `>` in paths by emitting `&amp;` etc.),
+# whereas string-template approaches (sed, awk, bash parameter
+# expansion) all produce invalid plist XML if the path contains those
+# characters. plistlib also re-emits a normalized, plutil-cleanable
+# document.
+SRC_PLIST="$SRC_PLIST" DEST_PLIST="$DEST_PLIST" DEST_SCRIPT="$DEST_SCRIPT" \
+python3 - <<'PYEOF'
+import os, plistlib
+with open(os.environ['SRC_PLIST'], 'rb') as f:
+    p = plistlib.load(f)
+# Replace the entire ProgramArguments array: invoking bash with the
+# script path as a separate argv element, NOT via shell parsing.
+p['ProgramArguments'] = ['/bin/bash', os.environ['DEST_SCRIPT']]
+with open(os.environ['DEST_PLIST'], 'wb') as f:
+    plistlib.dump(p, f)
+PYEOF
+
+# Validate the rendered plist before launchctl ever sees it.
+plutil -lint "$DEST_PLIST" >/dev/null
 
 # Unload first if already present (safe even if not loaded).
 if launchctl list | grep -q "$LABEL"; then

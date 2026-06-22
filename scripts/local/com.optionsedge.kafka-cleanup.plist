@@ -14,17 +14,15 @@
   nothing the second time (the watermark is already at the trim line).
 
   INSTALL:
-    cp scripts/local/cleanup-kafka-changelogs.sh ~/bin/oe-kafka-cleanup.sh
-    chmod +x ~/bin/oe-kafka-cleanup.sh
-    sed -i "" "s|__SCRIPT__|$HOME/bin/oe-kafka-cleanup.sh|" \
-      scripts/local/com.optionsedge.kafka-cleanup.plist
-    cp scripts/local/com.optionsedge.kafka-cleanup.plist \
-       ~/Library/LaunchAgents/
-    launchctl load -w ~/Library/LaunchAgents/com.optionsedge.kafka-cleanup.plist
+    ./scripts/local/install-launchd.sh
+      (idempotent: copies script to ~/bin, renders the plist via
+       python3 plistlib to handle XML-special chars correctly,
+       then launchctl load -w)
 
   UNINSTALL:
     launchctl unload -w ~/Library/LaunchAgents/com.optionsedge.kafka-cleanup.plist
     rm ~/Library/LaunchAgents/com.optionsedge.kafka-cleanup.plist
+    rm ~/bin/oe-kafka-cleanup.sh
 
   AD-HOC RUN (no wait for midnight):
     launchctl start com.optionsedge.kafka-cleanup
