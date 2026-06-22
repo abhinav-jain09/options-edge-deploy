@@ -1,3 +1,5 @@
+@Library('oe') _
+
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
@@ -97,6 +99,28 @@ pipeline {
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN ?: false}"
   }
   stages {
+    stage('Resolve profile') {
+      // Observability-only: echo the canonical deploy profile from the single source
+      // of truth (@Library('oe') deploy-profiles.yaml). This stage does NOT override
+      // any param defaults — the existing params already match the profile (kubeconfig
+      // and registry defaults were aligned in PR #80/#83). When the policy guard later
+      // flips fail-closed, this @Library import is what proves this job is on-policy.
+      // If the profile ever drifts from the params, this stage logs it loudly.
+      steps {
+        script {
+          def p = oeProfile(params.ENVIRONMENT)
+          echo "oeProfile(${params.ENVIRONMENT}): registry=${p.registry} kubeconfigDeployer=${p.kubeconfigDeployer} kubeconfigAdmin=${p.kubeconfigAdmin} kafka=${p.kafkaBootstrap} ns=${p.namespace} platform=${p.platform}"
+          def deployerActual = params.KUBECONFIG_FILE ?: ''
+          def adminActual    = params.KUBECONFIG_ADMIN_FILE ?: ''
+          if (deployerActual && deployerActual != p.kubeconfigDeployer) {
+            echo "WARN: KUBECONFIG_FILE param (${deployerActual}) differs from oeProfile (${p.kubeconfigDeployer})"
+          }
+          if (adminActual && adminActual != p.kubeconfigAdmin) {
+            echo "WARN: KUBECONFIG_ADMIN_FILE param (${adminActual}) differs from oeProfile (${p.kubeconfigAdmin})"
+          }
+        }
+      }
+    }
     stage('Validate') {
       steps {
         sh '''
