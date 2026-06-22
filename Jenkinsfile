@@ -5,36 +5,36 @@ pipeline {
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
     string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. Any branch is allowed for ENVIRONMENT=dev; staging/production are locked to main. The job SCM checks out this branch.')
-    string(name: 'KUBECONFIG_FILE', defaultValue: '/Users/abhinav/.kube/jenkins-deployer-dev.kubeconfig', description: 'Dev deployer kubeconfig path on the Jenkins agent (Mac, ~/.kube — like prod). Bootstrap generates it from the admin kubeconfig.')
-    string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '/Users/abhinav/.kube/dd-admin.yaml', description: 'Dev admin (docker-desktop cluster-admin) kubeconfig used only to bootstrap the Jenkins-only deploy guard. Lives in ~/.kube so it survives Jenkins reinstalls (the old /var/jenkins_home path did not).')
-    string(name: 'PROD_KUBECONFIG_FILE', defaultValue: '/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig', description: 'Deployer kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button (prod is a separate cluster from dev).')
-    string(name: 'PROD_KUBECONFIG_ADMIN_FILE', defaultValue: '/Users/abhinav/.kube/prod-k3s.yaml', description: 'Admin kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button.')
-    string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty uses host.docker.internal:5001 for dev and 192.168.100.252:5000 for staging/production.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '', description: 'Dev deployer kubeconfig path on the Jenkins agent (Mac, ~/.kube — like prod). Bootstrap generates it from the admin kubeconfig.')
+    string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '', description: 'Dev admin (docker-desktop cluster-admin) kubeconfig used only to bootstrap the Jenkins-only deploy guard. Empty = derive from oeProfile(ENVIRONMENT).kubeconfigAdmin.')
+    string(name: 'PROD_KUBECONFIG_FILE', defaultValue: '', description: 'Deployer kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button (prod is a separate cluster from dev).')
+    string(name: 'PROD_KUBECONFIG_ADMIN_FILE', defaultValue: '', description: 'Admin kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button.')
+    string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty derives from oeProfile(ENVIRONMENT).registry.')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
-    string(name: 'BUILD_PLATFORM', defaultValue: '', description: 'Image platform. Empty defaults to linux/arm64 for dev and linux/amd64 for staging/production; staging/production always deploy linux/amd64.')
-    string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty uses host.docker.internal:9092 for dev and remote Kafka at 192.168.100.252:9092,9094,9096 for staging/production.')
-    string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses http://host.docker.internal:8090 for dev and http://192.168.100.252:8090 for prod.')
-    string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-to-display:dev', description: 'Raw-to-display image')
-    string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev', description: 'Databento volume aggregator image')
-    string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-feed:dev', description: 'Databento feed image')
-    string(name: 'DATABENTO_GEX_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-gex:dev', description: 'Databento per-strike GEX image')
-    string(name: 'DATABENTO_MISSION_PACE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-pace:dev', description: 'Databento mission pace image')
-    string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-pressure:dev', description: 'Databento mission pressure image')
-    string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-databento-mission-sandwich:dev', description: 'Databento mission sandwich image')
-    string(name: 'VOLUME_PACE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-volume-pace:dev', description: 'Volume-pace image')
-    string(name: 'DIRECTIONAL_PRESSURE_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-directional-pressure:dev', description: 'Directional-pressure image')
-    string(name: 'VOLUME_SANDWICH_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-volume-sandwich:dev', description: 'Volume-sandwich image')
-    string(name: 'UNUSUAL_WHALES_GEX_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-unusual-whales-gex:dev', description: 'Unusual Whales GEX image')
-    string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-unusual-whales-gex-history:dev', description: 'Unusual Whales GEX history image')
-    string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-raw-postgres-writer:dev', description: 'Raw Postgres writer image')
-    string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-pressure-postgres-writer:dev', description: 'Pressure Postgres writer image')
-    string(name: 'FEED_GATEWAY_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-feed-gateway:dev', description: 'Feed gateway image')
-    string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-integration-test:dev', description: 'Integration-test image')
-    string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-processing:dev', description: 'HPSF Stage A/B processing image')
-    string(name: 'HPSF_POSTGRES_WRITER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev', description: 'HPSF Postgres writer image')
-    string(name: 'SPX_MISSION_CONTROL_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-spx-mission-control:dev', description: 'SPX mission control image')
-    string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-strike-flow-classifier:dev', description: 'Strike flow classifier image')
-    string(name: 'IBKR_FEED_IMAGE', defaultValue: '192.168.100.252:5000/options-edge-ibkr-feed:dev', description: 'IBKR feed image')
+    string(name: 'BUILD_PLATFORM', defaultValue: '', description: 'Image platform. Empty derives from oeProfile(ENVIRONMENT).platform.')
+    string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty derives from oeProfile(ENVIRONMENT).kafkaBootstrap.')
+    string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses the per-environment dev/prod default.')
+    string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '', description: 'Raw-to-display image')
+    string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '', description: 'Databento volume aggregator image')
+    string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '', description: 'Databento feed image')
+    string(name: 'DATABENTO_GEX_IMAGE', defaultValue: '', description: 'Databento per-strike GEX image')
+    string(name: 'DATABENTO_MISSION_PACE_IMAGE', defaultValue: '', description: 'Databento mission pace image')
+    string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', defaultValue: '', description: 'Databento mission pressure image')
+    string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', defaultValue: '', description: 'Databento mission sandwich image')
+    string(name: 'VOLUME_PACE_IMAGE', defaultValue: '', description: 'Volume-pace image')
+    string(name: 'DIRECTIONAL_PRESSURE_IMAGE', defaultValue: '', description: 'Directional-pressure image')
+    string(name: 'VOLUME_SANDWICH_IMAGE', defaultValue: '', description: 'Volume-sandwich image')
+    string(name: 'UNUSUAL_WHALES_GEX_IMAGE', defaultValue: '', description: 'Unusual Whales GEX image')
+    string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Unusual Whales GEX history image')
+    string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Raw Postgres writer image')
+    string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pressure Postgres writer image')
+    string(name: 'FEED_GATEWAY_IMAGE', defaultValue: '', description: 'Feed gateway image')
+    string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: '', description: 'Integration-test image')
+    string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'HPSF Stage A/B processing image')
+    string(name: 'HPSF_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'HPSF Postgres writer image')
+    string(name: 'SPX_MISSION_CONTROL_IMAGE', defaultValue: '', description: 'SPX mission control image')
+    string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', defaultValue: '', description: 'Strike flow classifier image')
+    string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
     string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
     choice(name: 'MARKET_DATA_SOURCE', choices: ['DATABENTO', 'IBKR'], description: 'Runtime raw market-data source for processors')
@@ -53,38 +53,42 @@ pipeline {
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
-    KUBECONFIG_FILE = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/home/options-edge/config/jenkins-deployer.kubeconfig') ? '/Users/abhinav/.kube/jenkins-deployer-dev.kubeconfig' : params.KUBECONFIG_FILE}"
-    KUBECONFIG = "${(!params.KUBECONFIG_FILE || params.KUBECONFIG_FILE == '/home/options-edge/config/jenkins-deployer.kubeconfig') ? '/Users/abhinav/.kube/jenkins-deployer-dev.kubeconfig' : params.KUBECONFIG_FILE}"
-    KUBECONFIG_ADMIN_FILE = "${(!params.KUBECONFIG_ADMIN_FILE || params.KUBECONFIG_ADMIN_FILE == '/home/options-edge/config/kubeconfig') ? '/Users/abhinav/.kube/dd-admin.yaml' : params.KUBECONFIG_ADMIN_FILE}"
-    REMOTE_APP_HOME = '/home/options-edge'
+    // KUBECONFIG / KUBECONFIG_ADMIN_FILE / REMOTE_APP_HOME come from oeProfile (single
+    // source of truth). An explicit non-empty operator override is honored; empty derives
+    // from the profile.
+    KUBECONFIG_FILE       = "${params.KUBECONFIG_FILE       ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    KUBECONFIG            = "${params.KUBECONFIG_FILE       ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    KUBECONFIG_ADMIN_FILE = "${params.KUBECONFIG_ADMIN_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigAdmin}"
+    REMOTE_APP_HOME = "${oeProfile(params.ENVIRONMENT).remoteAppHome}"
     JENKINS_WORK_DIR = '.jenkins-tmp'
-    PATH = "/var/jenkins_home/bin:${env.PATH}"
+    // PATH inherited from the Jenkins agent (the prior CentOS-controller-only PATH
+    // prefix was removed; it pointed at a directory that does not exist on local-mac).
     IMAGE_REGISTRY = "${params.IMAGE_REGISTRY ?: ''}"
     IMAGE_TAG = "${params.IMAGE_TAG ?: ''}"
     BUILD_PLATFORM = "${params.BUILD_PLATFORM ?: ''}"
     KAFKA_BOOTSTRAP_SERVERS = "${params.KAFKA_BOOTSTRAP_SERVERS ?: ''}"
     WEB_PUBLIC_URL = "${params.WEB_PUBLIC_URL ?: ''}"
-    RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: '192.168.100.252:5000/options-edge-raw-to-display:dev'}"
-    DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: '192.168.100.252:5000/options-edge-databento-volume-aggregator:dev'}"
-    DATABENTO_FEED_IMAGE = "${params.DATABENTO_FEED_IMAGE ?: '192.168.100.252:5000/options-edge-databento-feed:dev'}"
-    DATABENTO_GEX_IMAGE = "${params.DATABENTO_GEX_IMAGE ?: '192.168.100.252:5000/options-edge-databento-gex:dev'}"
-    DATABENTO_MISSION_PACE_IMAGE = "${params.DATABENTO_MISSION_PACE_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-pace:dev'}"
-    DATABENTO_MISSION_PRESSURE_IMAGE = "${params.DATABENTO_MISSION_PRESSURE_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-pressure:dev'}"
-    DATABENTO_MISSION_SANDWICH_IMAGE = "${params.DATABENTO_MISSION_SANDWICH_IMAGE ?: '192.168.100.252:5000/options-edge-databento-mission-sandwich:dev'}"
-    VOLUME_PACE_IMAGE = "${params.VOLUME_PACE_IMAGE ?: '192.168.100.252:5000/options-edge-volume-pace:dev'}"
-    DIRECTIONAL_PRESSURE_IMAGE = "${params.DIRECTIONAL_PRESSURE_IMAGE ?: '192.168.100.252:5000/options-edge-directional-pressure:dev'}"
-    VOLUME_SANDWICH_IMAGE = "${params.VOLUME_SANDWICH_IMAGE ?: '192.168.100.252:5000/options-edge-volume-sandwich:dev'}"
-    UNUSUAL_WHALES_GEX_IMAGE = "${params.UNUSUAL_WHALES_GEX_IMAGE ?: '192.168.100.252:5000/options-edge-unusual-whales-gex:dev'}"
-    UNUSUAL_WHALES_GEX_HISTORY_IMAGE = "${params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE ?: '192.168.100.252:5000/options-edge-unusual-whales-gex-history:dev'}"
-    RAW_POSTGRES_WRITER_IMAGE = "${params.RAW_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-raw-postgres-writer:dev'}"
-    PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-pressure-postgres-writer:dev'}"
-    FEED_GATEWAY_IMAGE = "${params.FEED_GATEWAY_IMAGE ?: '192.168.100.252:5000/options-edge-feed-gateway:dev'}"
-    INTEGRATION_TEST_IMAGE = "${params.INTEGRATION_TEST_IMAGE ?: '192.168.100.252:5000/options-edge-integration-test:dev'}"
-    HPSF_PROCESSING_IMAGE = "${params.HPSF_PROCESSING_IMAGE ?: '192.168.100.252:5000/options-edge-hpsf-processing:dev'}"
-    HPSF_POSTGRES_WRITER_IMAGE = "${params.HPSF_POSTGRES_WRITER_IMAGE ?: '192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev'}"
-    SPX_MISSION_CONTROL_IMAGE = "${params.SPX_MISSION_CONTROL_IMAGE ?: '192.168.100.252:5000/options-edge-spx-mission-control:dev'}"
-    STRIKE_FLOW_CLASSIFIER_IMAGE = "${params.STRIKE_FLOW_CLASSIFIER_IMAGE ?: '192.168.100.252:5000/options-edge-strike-flow-classifier:dev'}"
-    IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: '192.168.100.252:5000/options-edge-ibkr-feed:dev'}"
+    RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: oeProfile.image('raw-to-display', 'production', 'dev')}"
+    DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: oeProfile.image('databento-volume-aggregator', 'production', 'dev')}"
+    DATABENTO_FEED_IMAGE = "${params.DATABENTO_FEED_IMAGE ?: oeProfile.image('databento-feed', 'production', 'dev')}"
+    DATABENTO_GEX_IMAGE = "${params.DATABENTO_GEX_IMAGE ?: oeProfile.image('databento-gex', 'production', 'dev')}"
+    DATABENTO_MISSION_PACE_IMAGE = "${params.DATABENTO_MISSION_PACE_IMAGE ?: oeProfile.image('databento-mission-pace', 'production', 'dev')}"
+    DATABENTO_MISSION_PRESSURE_IMAGE = "${params.DATABENTO_MISSION_PRESSURE_IMAGE ?: oeProfile.image('databento-mission-pressure', 'production', 'dev')}"
+    DATABENTO_MISSION_SANDWICH_IMAGE = "${params.DATABENTO_MISSION_SANDWICH_IMAGE ?: oeProfile.image('databento-mission-sandwich', 'production', 'dev')}"
+    VOLUME_PACE_IMAGE = "${params.VOLUME_PACE_IMAGE ?: oeProfile.image('volume-pace', 'production', 'dev')}"
+    DIRECTIONAL_PRESSURE_IMAGE = "${params.DIRECTIONAL_PRESSURE_IMAGE ?: oeProfile.image('directional-pressure', 'production', 'dev')}"
+    VOLUME_SANDWICH_IMAGE = "${params.VOLUME_SANDWICH_IMAGE ?: oeProfile.image('volume-sandwich', 'production', 'dev')}"
+    UNUSUAL_WHALES_GEX_IMAGE = "${params.UNUSUAL_WHALES_GEX_IMAGE ?: oeProfile.image('unusual-whales-gex', 'production', 'dev')}"
+    UNUSUAL_WHALES_GEX_HISTORY_IMAGE = "${params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE ?: oeProfile.image('unusual-whales-gex-history', 'production', 'dev')}"
+    RAW_POSTGRES_WRITER_IMAGE = "${params.RAW_POSTGRES_WRITER_IMAGE ?: oeProfile.image('raw-postgres-writer', 'production', 'dev')}"
+    PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pressure-postgres-writer', 'production', 'dev')}"
+    FEED_GATEWAY_IMAGE = "${params.FEED_GATEWAY_IMAGE ?: oeProfile.image('feed-gateway', 'production', 'dev')}"
+    INTEGRATION_TEST_IMAGE = "${params.INTEGRATION_TEST_IMAGE ?: oeProfile.image('integration-test', 'production', 'dev')}"
+    HPSF_PROCESSING_IMAGE = "${params.HPSF_PROCESSING_IMAGE ?: oeProfile.image('hpsf-processing', 'production', 'dev')}"
+    HPSF_POSTGRES_WRITER_IMAGE = "${params.HPSF_POSTGRES_WRITER_IMAGE ?: oeProfile.image('hpsf-postgres-writer', 'production', 'dev')}"
+    SPX_MISSION_CONTROL_IMAGE = "${params.SPX_MISSION_CONTROL_IMAGE ?: oeProfile.image('spx-mission-control', 'production', 'dev')}"
+    STRIKE_FLOW_CLASSIFIER_IMAGE = "${params.STRIKE_FLOW_CLASSIFIER_IMAGE ?: oeProfile.image('strike-flow-classifier', 'production', 'dev')}"
+    IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: oeProfile.image('ibkr-feed', 'production', 'dev')}"
     MARKET_DATA_SOURCE = "${params.MARKET_DATA_SOURCE ?: 'DATABENTO'}"
     RAW_TOPIC = "${params.RAW_TOPIC ?: ''}"
     IB_HOST = "${params.IB_HOST ?: '127.0.0.1'}"
@@ -108,15 +112,48 @@ pipeline {
       // If the profile ever drifts from the params, this stage logs it loudly.
       steps {
         script {
+          // Single source of truth for EVERY environment-specific value in this job.
+          // Each derived env.* is validated nonblank before assignment, so a future
+          // profile weakening can never silently propagate a null/empty into the build.
           def p = oeProfile(params.ENVIRONMENT)
-          echo "oeProfile(${params.ENVIRONMENT}): registry=${p.registry} kubeconfigDeployer=${p.kubeconfigDeployer} kubeconfigAdmin=${p.kubeconfigAdmin} kafka=${p.kafkaBootstrap} ns=${p.namespace} platform=${p.platform}"
+          def required = [
+            registry:           p.registry,
+            kafkaBootstrap:     p.kafkaBootstrap,
+            kubeconfigDeployer: p.kubeconfigDeployer,
+            kubeconfigAdmin:    p.kubeconfigAdmin,
+            remoteAppHome:      p.remoteAppHome,
+          ]
+          required.each { k, v ->
+            if (!(v?.toString()?.trim())) {
+              error("Resolve profile: oeProfile(${params.ENVIRONMENT}).${k} is empty — check deploy-profiles.yaml")
+            }
+          }
+          // Export as env.* (validated local values; Jenkins coerces null to 'null' otherwise).
+          env.OE_REGISTRY           = required.registry.toString().trim()
+          env.OE_KAFKA_BOOTSTRAP    = required.kafkaBootstrap.toString().trim()
+          env.OE_KUBECONFIG_FILE    = required.kubeconfigDeployer.toString().trim()
+          env.OE_KUBECONFIG_ADMIN   = required.kubeconfigAdmin.toString().trim()
+          env.OE_REMOTE_APP_HOME    = required.remoteAppHome.toString().trim()
+          // Dev + prod registries from the profile (used by buildkit insecure-config and
+          // the prod-with-dev-registry safety check). Validated locally before env assign.
+          def devReg  = oeProfile('dev').registry?.toString()?.trim()
+          def prodReg = oeProfile('production').registry?.toString()?.trim()
+          if (!devReg)  { error("Resolve profile: oeProfile('dev').registry is empty — check deploy-profiles.yaml") }
+          if (!prodReg) { error("Resolve profile: oeProfile('production').registry is empty — check deploy-profiles.yaml") }
+          env.OE_DEV_REGISTRY  = devReg
+          env.OE_PROD_REGISTRY = prodReg
+
+          echo "oeProfile(${params.ENVIRONMENT}): registry=${env.OE_REGISTRY} kafka=${env.OE_KAFKA_BOOTSTRAP} kubeconfigDeployer=${env.OE_KUBECONFIG_FILE} kubeconfigAdmin=${env.OE_KUBECONFIG_ADMIN} remoteAppHome=${env.OE_REMOTE_APP_HOME} ns=${p.namespace} platform=${p.platform} (devRegistry=${env.OE_DEV_REGISTRY})"
+
+          // Drift warnings: if the operator passed a kubeconfig param that diverges from
+          // the profile, log it (the build still uses the profile-derived value below).
           def deployerActual = params.KUBECONFIG_FILE ?: ''
           def adminActual    = params.KUBECONFIG_ADMIN_FILE ?: ''
-          if (deployerActual && deployerActual != p.kubeconfigDeployer) {
-            echo "WARN: KUBECONFIG_FILE param (${deployerActual}) differs from oeProfile (${p.kubeconfigDeployer})"
+          if (deployerActual && deployerActual != env.OE_KUBECONFIG_FILE) {
+            echo "WARN: KUBECONFIG_FILE param (${deployerActual}) differs from oeProfile (${env.OE_KUBECONFIG_FILE})"
           }
-          if (adminActual && adminActual != p.kubeconfigAdmin) {
-            echo "WARN: KUBECONFIG_ADMIN_FILE param (${adminActual}) differs from oeProfile (${p.kubeconfigAdmin})"
+          if (adminActual && adminActual != env.OE_KUBECONFIG_ADMIN) {
+            echo "WARN: KUBECONFIG_ADMIN_FILE param (${adminActual}) differs from oeProfile (${env.OE_KUBECONFIG_ADMIN})"
           }
         }
       }
@@ -131,7 +168,7 @@ pipeline {
             echo "Direct production runs are disabled. Run ENVIRONMENT=dev and use the final Promote To Production button after dev smoke passes." >&2
             exit 1
           fi
-          test "$REMOTE_APP_HOME" = "/home/options-edge"
+          test "$REMOTE_APP_HOME" = "$OE_REMOTE_APP_HOME"
           test ! -d /root/options-edge
           test ! -d /options-edge
           mkdir -p "$JENKINS_WORK_DIR"
@@ -216,11 +253,8 @@ pipeline {
           if [ -n "${IMAGE_REGISTRY:-}" ]; then
             registry="$IMAGE_REGISTRY"
           else
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              registry=host.docker.internal:5001
-            else
-              registry=192.168.100.252:5000
-            fi
+            : "${OE_REGISTRY:?OE_REGISTRY must be set by the Resolve profile stage (oeProfile single source of truth)}"
+            registry="$OE_REGISTRY"
           fi
           if [ -n "$image_tag" ] || [ "${ENVIRONMENT:-dev}" = "dev" ]; then
             if [ -z "$image_tag" ]; then
@@ -365,9 +399,14 @@ EOF
           trap cleanup_buildx_builder EXIT
 
           buildx_builder_arg=""
-          if grep -q '=192[.]168[.]100[.]252:5000/' "$JENKINS_WORK_DIR/options-edge-images.env"; then
-            cat >"$JENKINS_WORK_DIR/buildkitd-insecure-registry.toml" <<'EOF'
-[registry."192.168.100.252:5000"]
+          # Trigger insecure buildkit config when the rendered images.env points at the
+          # prod (or any) insecure registry from oeProfile. The registry host is derived
+          # (single source of truth: oeProfile('production').registry, surfaced as
+          # $OE_PROD_REGISTRY) — never literal.
+          : "${OE_PROD_REGISTRY:?OE_PROD_REGISTRY must be set by the Resolve profile stage}"
+          if grep -qF "=${OE_PROD_REGISTRY}/" "$JENKINS_WORK_DIR/options-edge-images.env"; then
+            cat >"$JENKINS_WORK_DIR/buildkitd-insecure-registry.toml" <<EOF
+[registry."${OE_PROD_REGISTRY}"]
   http = true
   insecure = true
 EOF
@@ -512,11 +551,8 @@ EOF
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-            else
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-            fi
+            : "${OE_KAFKA_BOOTSTRAP:?OE_KAFKA_BOOTSTRAP must be set by the Resolve profile stage (oeProfile single source of truth)}"
+            KAFKA_BOOTSTRAP_SERVERS="$OE_KAFKA_BOOTSTRAP"
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX
@@ -558,11 +594,8 @@ EOF
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-            else
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-            fi
+            : "${OE_KAFKA_BOOTSTRAP:?OE_KAFKA_BOOTSTRAP must be set by the Resolve profile stage (oeProfile single source of truth)}"
+            KAFKA_BOOTSTRAP_SERVERS="$OE_KAFKA_BOOTSTRAP"
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX
@@ -598,11 +631,8 @@ EOF
           set -euo pipefail
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-            else
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-            fi
+            : "${OE_KAFKA_BOOTSTRAP:?OE_KAFKA_BOOTSTRAP must be set by the Resolve profile stage (oeProfile single source of truth)}"
+            KAFKA_BOOTSTRAP_SERVERS="$OE_KAFKA_BOOTSTRAP"
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
@@ -705,11 +735,8 @@ EOF
           }
           effective_expiry="${IB_EXPIRY:-$(default_weekday_expiry)}"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092
-            else
-              KAFKA_BOOTSTRAP_SERVERS=192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
-            fi
+            : "${OE_KAFKA_BOOTSTRAP:?OE_KAFKA_BOOTSTRAP must be set by the Resolve profile stage (oeProfile single source of truth)}"
+            KAFKA_BOOTSTRAP_SERVERS="$OE_KAFKA_BOOTSTRAP"
           fi
           kafka_bootstrap_servers="$KAFKA_BOOTSTRAP_SERVERS"
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
