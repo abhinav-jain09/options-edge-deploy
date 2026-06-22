@@ -1,0 +1,166 @@
+# Production Keycloak — runs in PRODUCTION mode (`start`), backed by the durable in-cluster Postgres above.
+# Exposure model (hardened per the prod-Keycloak design review):
+#   - Service is ClusterIP publishing ONLY http :8080. The management port :9000 (health/metrics, admin
+#     bootstrap surface) is a containerPort used by the probes IN-CLUSTER and is NEVER published.
+#   - Public reach is via the Cloudflare tunnel -> traefik Ingress (keycloak-ingress.yaml), Host
+#     auth.fullfunding.nl. TLS terminates at Cloudflare's edge; KC runs HTTP behind it and trusts
+#     X-Forwarded-* (KC_PROXY_HEADERS=xforwarded). KC is NOT exposed on a LAN host port (no LoadBalancer),
+#     so a LAN client cannot bypass the edge and spoof X-Forwarded-* headers.
+#   - The admin console (/admin) + master realm are blocked at the Cloudflare edge (see docs/keycloak-prod.md);
+#     admin is performed in-cluster (kubectl port-forward) or behind Cloudflare Access.
+# Realm imported from the oe-keycloak-realm ConfigMap (restricted client, no test user). Import is
+# idempotent: an existing realm is skipped on later boots.
+apiVersion: v1
+kind: Service
+metadata:
+  name: oe-keycloak
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oe-keycloak
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: auth
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: oe-keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+# Headless service for Infinispan cache discovery (JGroups DNS_PING) when scaling to >1 replica. Unused at
+# replicas: 1, but present so HA is a one-line change (raise replicas + uncomment KC_CACHE_* below).
+apiVersion: v1
+kind: Service
+metadata:
+  name: oe-keycloak-headless
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oe-keycloak
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: auth
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: oe-keycloak
+  ports:
+    - name: jgroups
+      port: 7800
+      targetPort: 7800
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oe-keycloak
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oe-keycloak
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: auth
+spec:
+  # replicas: 1 is durable (state is in Postgres). For HA, raise to >=2 AND uncomment KC_CACHE_* below so
+  # the replicas form one Infinispan cluster (shared login/session caches) via oe-keycloak-headless.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oe-keycloak
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oe-keycloak
+        app.kubernetes.io/part-of: options-edge
+        app.kubernetes.io/component: auth
+    spec:
+      containers:
+        - name: keycloak
+          # Pinned to the tag's current manifest-list digest for reproducibility (arch-independent index;
+          # the amd64 prod node resolves the right layer). Bump tag+digest together to upgrade.
+          image: quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
+          imagePullPolicy: IfNotPresent
+          args: ["start", "--import-realm"]
+          env:
+            # --- Database (durable Postgres) ---
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: jdbc:postgresql://oe-keycloak-postgres.options-edge.svc:5432/keycloak
+            - name: KC_DB_USERNAME
+              value: keycloak
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oe-keycloak-secrets
+                  # Single source of truth: Keycloak's JDBC password and Postgres' POSTGRES_PASSWORD read
+                  # the SAME secret key, so the two can never drift (a mismatch would make KC fail to boot
+                  # once Postgres has initialized its account).
+                  key: POSTGRES_PASSWORD
+            # --- Hostname / TLS (terminated at the Cloudflare edge; traefik forwards X-Forwarded-*) ---
+            - name: KC_HOSTNAME
+              value: "https://auth.fullfunding.nl"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            # --- Health/metrics on the management port (9000), never published by the Service ---
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_METRICS_ENABLED
+              value: "true"
+            # --- Initial admin (bootstrap once, then create a real admin and rotate this out) ---
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: admin
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oe-keycloak-secrets
+                  key: KC_BOOTSTRAP_ADMIN_PASSWORD
+            # --- HA cache clustering (only needed when replicas > 1) ---
+            # - name: KC_CACHE
+            #   value: ispn
+            # - name: KC_CACHE_STACK
+            #   value: kubernetes
+            # - name: JAVA_OPTS_APPEND
+            #   value: "-Djgroups.dns.query=oe-keycloak-headless.options-edge.svc.cluster.local"
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+            - name: jgroups
+              containerPort: 7800
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: 9000
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 9000
+            periodSeconds: 20
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 768Mi
+            limits:
+              memory: 1536Mi
+      volumes:
+        - name: realm-import
+          configMap:
+            name: oe-keycloak-realm

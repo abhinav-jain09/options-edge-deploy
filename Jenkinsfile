@@ -38,6 +38,8 @@ pipeline {
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
     string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
+    string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-db-password', description: 'Jenkins secret-text credential with the prod Keycloak DB password (oe-keycloak-secrets POSTGRES_PASSWORD)')
+    string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-admin-password', description: 'Jenkins secret-text credential with the prod Keycloak bootstrap admin password')
     choice(name: 'MARKET_DATA_SOURCE', choices: ['DATABENTO', 'IBKR'], description: 'Runtime raw market-data source for processors')
     string(name: 'RAW_TOPIC', defaultValue: '', description: 'Override raw topic. Empty uses source default.')
     string(name: 'IB_HOST', defaultValue: '127.0.0.1', description: 'IB Gateway/TWS host. IBKR feed uses hostNetwork, so localhost is the remote host.')
@@ -266,6 +268,40 @@ pipeline {
               --dry-run=client -o yaml | kubectl apply $apply_args -f -
             kubectl -n options-edge create secret generic options-edge-databento-feed-env \
               --from-literal=DATABENTO_API_KEY="$DATABENTO_API_KEY" \
+              --dry-run=client -o yaml | kubectl apply $apply_args -f -
+          '''
+        }
+      }
+    }
+    // Production identity provider (Keycloak) secret — created the same deployer-SA way (the admission
+    // policy blocks any other principal from writing secrets, verified even system:admin is denied).
+    // PRODUCTION ONLY: the KC manifests live only in the production overlay, so dev has no consumer — and
+    // the KC credentials are bound in THIS stage's withCredentials, so dev runs never resolve them.
+    stage('Keycloak Secret') {
+      when { expression { (env.ENVIRONMENT ?: 'dev') == 'production' } }
+      steps {
+        withCredentials([
+          string(credentialsId: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID, variable: 'KEYCLOAK_DB_PASSWORD'),
+          string(credentialsId: params.KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID, variable: 'KEYCLOAK_ADMIN_PASSWORD')
+        ]) {
+          sh '''
+            set -euo pipefail
+            test -n "$KEYCLOAK_DB_PASSWORD"
+            test -n "$KEYCLOAK_ADMIN_PASSWORD"
+            apply_args=""
+            if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+              apply_args="--dry-run=server"
+              echo "DEPLOY_DRY_RUN=true: validating the Keycloak secret without changing Kubernetes."
+            fi
+            # Feed secret material via a 0600 temp env-file (trap-cleaned), not --from-literal, so the
+            # values never appear in the kubectl process argv on the Jenkins agent. Two keys:
+            # POSTGRES_PASSWORD is the single source of truth for both Postgres AND Keycloak's JDBC pw.
+            umask 077
+            envfile="$(mktemp)"; trap 'rm -f "$envfile"' EXIT
+            printf 'POSTGRES_PASSWORD=%s\\nKC_BOOTSTRAP_ADMIN_PASSWORD=%s\\n' \
+              "$KEYCLOAK_DB_PASSWORD" "$KEYCLOAK_ADMIN_PASSWORD" > "$envfile"
+            kubectl -n options-edge create secret generic oe-keycloak-secrets \
+              --from-env-file="$envfile" \
               --dry-run=client -o yaml | kubectl apply $apply_args -f -
           '''
         }
@@ -1066,6 +1102,8 @@ EOF
               string(name: 'IBKR_FEED_IMAGE', value: params.IBKR_FEED_IMAGE),
               string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', value: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID),
               string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
+              string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID),
+              string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID),
               string(name: 'MARKET_DATA_SOURCE', value: params.MARKET_DATA_SOURCE),
               string(name: 'RAW_TOPIC', value: params.RAW_TOPIC),
               string(name: 'IB_HOST', value: params.IB_HOST),
