@@ -17,7 +17,7 @@
 @Library('oe') _
 
 pipeline {
-  agent { label 'local-mac' }                  // Jenkins build agent = the Mac
+  agent { label 'local-mac' }                  // REQUIRED infra: the Mac build agent (docker+buildx+kubectl)
   options { disableConcurrentBuilds() }
   // No SCM polling / triggers block: builds + deploys are manual (explicit) only,
   // per UNIFORM-DEPLOY-POLICY.md. Do not add an SCM poll trigger here.
@@ -49,14 +49,25 @@ pipeline {
           def p = oeProfile(params.ENVIRONMENT)
           env.IMAGE_REGISTRY = params.IMAGE_REGISTRY?.trim() ? params.IMAGE_REGISTRY : p.registry
           env.BUILD_PLATFORM = params.BUILD_PLATFORM?.trim() ? params.BUILD_PLATFORM : p.platform
-          echo "resolved (env=${params.ENVIRONMENT}): registry=${env.IMAGE_REGISTRY} platform=${env.BUILD_PLATFORM}"
+          // Registry TLS posture comes from the profile (default false = treat as TLS/secure).
+          env.INSECURE_REGISTRY = (p.insecureRegistry == null ? false : p.insecureRegistry).toString()
+          echo "resolved (env=${params.ENVIRONMENT}): registry=${env.IMAGE_REGISTRY} platform=${env.BUILD_PLATFORM} insecure=${env.INSECURE_REGISTRY}"
         }
       }
     }
 
     stage('Build') {
       steps {
-        sh 'mvn -B clean package -DskipTests || echo "no maven build (skipping)"'   // drop/edit if not Java
+        // Build only if this is a Maven project; a real build failure FAILS the job
+        // (no masking) so a broken service never produces/pushes an image.
+        sh '''
+          set -euo pipefail
+          if [ -f pom.xml ]; then
+            mvn -B clean package -DskipTests
+          else
+            echo "no pom.xml — skipping language build; edit this stage for your build tool"
+          fi
+        '''
       }
     }
 
@@ -68,13 +79,18 @@ pipeline {
           TAG="${IMAGE_TAG:-$(git rev-parse --short=12 HEAD)}"
           IMAGE="$IMAGE_REGISTRY/$SERVICE_NAME:$TAG"
 
-          # buildkit must be told the (oeProfile-resolved) registry is insecure http to push to it.
-          BKCFG="$(mktemp)"
-          printf '[registry."%s"]\n  http = true\n  insecure = true\n' "$IMAGE_REGISTRY" > "$BKCFG"
+          # Only mark the registry insecure (plain http) when the profile says so
+          # (INSECURE_REGISTRY); a TLS/HTTPS registry is used as-is.
+          BKCFG=""; CFG_ARG=""
+          if [ "${INSECURE_REGISTRY:-false}" = "true" ]; then
+            BKCFG="$(mktemp)"
+            printf '[registry."%s"]\n  http = true\n  insecure = true\n' "$IMAGE_REGISTRY" > "$BKCFG"
+            CFG_ARG="--config $BKCFG"
+          fi
           BUILDER="oe-newsvc-${BUILD_NUMBER:-local}"
           docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
-          docker buildx create --name "$BUILDER" --driver docker-container --config "$BKCFG" --use >/dev/null
-          cleanup() { docker buildx rm "$BUILDER" >/dev/null 2>&1 || true; rm -f "$BKCFG"; }
+          docker buildx create --name "$BUILDER" --driver docker-container $CFG_ARG --use >/dev/null
+          cleanup() { docker buildx rm "$BUILDER" >/dev/null 2>&1 || true; [ -n "$BKCFG" ] && rm -f "$BKCFG"; }
           trap cleanup EXIT
 
           TAGS="-t $IMAGE"

@@ -29,6 +29,10 @@ tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
 echo "Cloning config from template job '$TEMPLATE_JOB' ..."
 curl -fsS -u "$JUSER:$JPASS" "$JENKINS_URL/job/$TEMPLATE_JOB/config.xml" -o "$tmp"
 
+# NOTE: these are targeted string edits against the KNOWN single-SCM job-config shape
+# (one <url>, one <scriptPath>, simple <triggers>). If the template job's config grows
+# multiple SCMs/URLs, switch to an XML-aware edit. After creation, eyeball the new job's
+# Configure page (or run enforce-deploy-policy.sh) to confirm repo/branch/triggers are right.
 python3 - "$tmp" "$REPO" "$SCRIPT_PATH" <<'PY'
 import sys, re
 f, repo, script = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -48,4 +52,4 @@ code="$(curl -s -o /dev/null -w '%{http_code}' -u "$JUSER:$JPASS" -H "$crumb" \
 [ "$code" = "200" ] || { echo "createItem failed (HTTP $code) — does the job already exist?" >&2; exit 1; }
 
 echo "Created: $JENKINS_URL/job/$JOB/"
-echo "Next: open it -> Build with Parameters (set SERVICE_NAME; dev defaults, or prod overrides)."
+echo "Next: open it -> Build with Parameters (set SERVICE_NAME; ENVIRONMENT=dev, or =production)."

@@ -75,4 +75,4 @@ from `oeProfile(ENVIRONMENT)` (leave them empty). They remain as overrides for c
 ## Files this provides
 - `templates/Jenkinsfile.new-service` — the parameterized build pipeline (copy into the new repo).
 - `scripts/jenkins/create-service-job.sh` — clones a working job to create the new one via the Jenkins API.
-- `docs/jenkins-jobs.md` — the full dev/prod + per-job reference.
+- `docs/jenkins-jobs.md` — the full dev/production + per-job reference.
