@@ -278,7 +278,7 @@ pipeline {
     // PRODUCTION ONLY: the KC manifests live only in the production overlay, so dev has no consumer — and
     // the KC credentials are bound in THIS stage's withCredentials, so dev runs never resolve them.
     stage('Keycloak Secret') {
-      when { expression { (env.ENVIRONMENT ?: 'dev') == 'production' } }
+      when { expression { return params.ENVIRONMENT == 'production' } }
       steps {
         withCredentials([
           string(credentialsId: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID, variable: 'KEYCLOAK_DB_PASSWORD'),
