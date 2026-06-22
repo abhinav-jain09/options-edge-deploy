@@ -178,23 +178,23 @@ EOF
   ' &
 DOCKER_PID=$!
 
-# Tear-down helper: stop the container if it exists, kill the docker
-# parent process tree (covers the "stuck during image pull / daemon
-# unreachable / container not yet created" cases where `docker stop`
-# alone is a no-op), and kill the watchdog. Idempotent.
+# Tear-down helper. Order matters here: the docker CLI is killed FIRST
+# (local, daemon-independent, always succeeds), THEN container cleanup
+# is dispatched as fire-and-forget so a wedged Docker daemon cannot
+# extend our deadline. Without that ordering, a hung daemon would
+# block `docker stop` indefinitely and the watchdog would never reach
+# the kill stage. Idempotent.
 DOCKER_TEARDOWN_DONE=0
 tear_down_docker() {
   [ "$DOCKER_TEARDOWN_DONE" = "1" ] && return 0
   DOCKER_TEARDOWN_DONE=1
-  # 1. Graceful container stop (no-op if container doesn't exist yet).
-  docker stop -t 30 "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  # 2. SIGTERM the docker CLI parent — covers image-pull / daemon
-  #    stuck phases where the container doesn't yet exist for `docker
-  #    stop` to act on.
+
+  # STEP 1: kill the docker CLI parent. SIGTERM with grace, then SIGKILL.
+  # This step is purely local — it does NOT call into Docker, so it
+  # completes even when the daemon is wedged. This is what makes the
+  # watchdog a true hard ceiling.
   if kill -0 "$DOCKER_PID" 2>/dev/null; then
     kill -TERM "$DOCKER_PID" 2>/dev/null || true
-    # Give the CLI a grace period, then SIGKILL if it still won't die.
     for _ in 1 2 3 4 5 6 7 8 9 10; do
       kill -0 "$DOCKER_PID" 2>/dev/null || break
       sleep 1
@@ -203,7 +203,19 @@ tear_down_docker() {
       kill -KILL "$DOCKER_PID" 2>/dev/null || true
     fi
   fi
-  # 3. Kill the watchdog so it doesn't outlive us.
+
+  # STEP 2: best-effort container cleanup as a DETACHED background
+  # process. Either call could block indefinitely if the Docker daemon
+  # is wedged; backgrounding + disown lets us move on regardless. The
+  # container name is unique-per-PID so the next nightly run does not
+  # collide with a residual cleanup process still trying to run.
+  (
+    docker stop -t 10 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  ) &
+  disown "$!" 2>/dev/null || true
+
+  # STEP 3: kill the watchdog so it doesn't outlive us.
   if [ -n "${WATCHDOG_PID:-}" ] && kill -0 "$WATCHDOG_PID" 2>/dev/null; then
     kill -KILL "$WATCHDOG_PID" 2>/dev/null || true
   fi
