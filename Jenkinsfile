@@ -15,6 +15,7 @@ pipeline {
     string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty derives from oeProfile(ENVIRONMENT).kafkaBootstrap.')
     string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses the per-environment dev/prod default.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '', description: 'Raw-to-display image')
+    string(name: 'WEB_IMAGE', defaultValue: '', description: 'OptionsEdge web image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '', description: 'Databento volume aggregator image')
     string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '', description: 'Databento feed image')
     string(name: 'DATABENTO_GEX_IMAGE', defaultValue: '', description: 'Databento per-strike GEX image')
@@ -73,6 +74,7 @@ pipeline {
     KAFKA_BOOTSTRAP_SERVERS = "${params.KAFKA_BOOTSTRAP_SERVERS ?: ''}"
     WEB_PUBLIC_URL = "${params.WEB_PUBLIC_URL ?: ''}"
     RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: oeProfile.image('raw-to-display', 'production', 'dev')}"
+    WEB_IMAGE = "${params.WEB_IMAGE ?: oeProfile.image('web', 'production', 'dev')}"
     DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: oeProfile.image('databento-volume-aggregator', 'production', 'dev')}"
     DATABENTO_FEED_IMAGE = "${params.DATABENTO_FEED_IMAGE ?: oeProfile.image('databento-feed', 'production', 'dev')}"
     DATABENTO_GEX_IMAGE = "${params.DATABENTO_GEX_IMAGE ?: oeProfile.image('databento-gex', 'production', 'dev')}"
@@ -325,6 +327,7 @@ pipeline {
             fi
             cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$registry/options-edge-raw-to-display:$image_tag
+WEB_IMAGE=$registry/options-edge-web:$image_tag
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$registry/options-edge-databento-volume-aggregator:$image_tag
 DATABENTO_FEED_IMAGE=$registry/options-edge-databento-feed:$image_tag
 DATABENTO_GEX_IMAGE=$registry/options-edge-databento-gex:$image_tag
@@ -350,6 +353,7 @@ EOF
           else
             cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
+WEB_IMAGE=$WEB_IMAGE
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
 DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
 DATABENTO_GEX_IMAGE=$DATABENTO_GEX_IMAGE
@@ -386,6 +390,7 @@ EOF
           . "$JENKINS_WORK_DIR/options-edge-build.env"
           images="
             RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
+            WEB_IMAGE=$WEB_IMAGE
             DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
             DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
             DATABENTO_GEX_IMAGE=$DATABENTO_GEX_IMAGE
@@ -750,7 +755,7 @@ EOF
             DATABENTO_MISSION_PRESSURE_IMAGE DATABENTO_MISSION_SANDWICH_IMAGE DATABENTO_VOLUME_AGGREGATOR_IMAGE \
             DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
             IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
-            RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE \
+            RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
@@ -841,6 +846,7 @@ EOF
               --patch "$(cat "$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json")"
           fi
           kubectl -n options-edge set image deployment/raw-to-display-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
+          kubectl -n options-edge set image deployment/options-edge-web web="$WEB_IMAGE"
           kubectl -n options-edge set image deployment/raw-to-display-databento-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-databento-feed databento-feed="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
@@ -897,6 +903,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/spx-mission-control-service
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/options-edge-web --timeout=240s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-volume-aggregator --timeout=240s
@@ -975,7 +982,7 @@ EOF
             # apply here. Verify the deployed prod web app remotely over HTTP.
             # Note: do NOT reuse WEB_PUBLIC_URL -- the promote step forwards the
             # dev value (localhost) into the production build.
-            PROD_WEB_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8090}"
+            PROD_WEB_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8094}"
             curl -fsS --connect-timeout 5 --max-time 20 "$PROD_WEB_URL/api/config" | grep -q '"provider"'
             curl -fsS --connect-timeout 5 --max-time 20 -o /dev/null "$PROD_WEB_URL/"
             echo "OptionsEdge prod web app is healthy at $PROD_WEB_URL/"
@@ -1000,7 +1007,7 @@ EOF
             elif [ "${ENVIRONMENT:-dev}" = "dev" ]; then
               WEB_BASE_URL=http://host.docker.internal:8090
             else
-              WEB_BASE_URL=http://192.168.100.252:8090
+              WEB_BASE_URL=http://192.168.100.252:8094
             fi
           fi
           export WEB_BASE_URL
@@ -1080,6 +1087,7 @@ EOF
               string(name: 'KAFKA_BOOTSTRAP_SERVERS', value: ''),
               string(name: 'WEB_PUBLIC_URL', value: params.WEB_PUBLIC_URL),
               string(name: 'RAW_TO_DISPLAY_IMAGE', value: params.RAW_TO_DISPLAY_IMAGE),
+              string(name: 'WEB_IMAGE', value: params.WEB_IMAGE),
               string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
               string(name: 'DATABENTO_GEX_IMAGE', value: params.DATABENTO_GEX_IMAGE),
               string(name: 'DATABENTO_MAXPAIN_IMAGE', value: params.DATABENTO_MAXPAIN_IMAGE),

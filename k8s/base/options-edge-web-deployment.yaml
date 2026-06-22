@@ -1,0 +1,94 @@
+# OptionsEdge web app (option-chain UI + /api backend), Spring Boot jar served at "/" on :8080.
+# Replaces the legacy off-cluster Tomcat instance on the host :8090. Auth is MANDATORY in prod: the app
+# fails to start unless VITE_AUTH_ISSUER (non-loopback HTTPS) + AUTH_AUDIENCE are set (RuntimeProfileConfig),
+# and the front-end force-login gate points at the prod Keycloak. Market-chain data reaches the BROWSER via
+# the feed-gateway WS (wss://fullfunding.nl/ws/events); this backend only serves the page + /api and needs
+# Kafka (egress to the host broker) — so no hostNetwork required (it dials Kafka by host IP like the other
+# processor pods; pod->ClusterIP/host egress works on this cluster, only pod->pod-IP does not).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: options-edge-web
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: options-edge-web
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: options-edge-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: options-edge-web
+        app.kubernetes.io/component: web
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: web
+          image: 192.168.100.252:5000/options-edge-web:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: APP_PROFILE
+              value: "prod"
+            - name: APP_WEB_PORT
+              value: "8080"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms512m -Xmx2g"
+            # --- Auth (mandatory in prod; runtime-injected into the page + JWT validation) ---
+            - name: VITE_AUTH_ENABLED
+              value: "true"
+            - name: VITE_AUTH_ISSUER
+              value: "https://auth.fullfunding.nl/realms/optionsedge"
+            - name: VITE_AUTH_CLIENT_ID
+              value: "options-edge-web"
+            - name: VITE_AUTH_AUDIENCE
+              value: "options-edge-web"
+            - name: AUTH_AUDIENCE
+              value: "options-edge-web"
+            # --- Feed-gateway WS (the browser connects here for chain data) + UI URLs (public edge) ---
+            - name: APP_FEED_GATEWAY_WS_URL
+              value: "wss://fullfunding.nl/ws/events"
+            - name: VITE_WS_URL
+              value: "wss://fullfunding.nl/ws/events"
+            - name: VITE_API_BASE_URL
+              value: "https://fullfunding.nl"
+            - name: VITE_MISSION_CONTROL_URL
+              value: "https://fullfunding.nl"
+            - name: VITE_REPLAY_ORCHESTRATOR_URL
+              value: "https://fullfunding.nl"
+            - name: APP_MARKET_DATA_SOURCE
+              value: "DATABENTO"
+            # Postgres not required for the option-chain page; keep it disabled so prod start-up does not
+            # demand POSTGRES_JDBC_URL/USER/PASSWORD (RuntimeProfileConfig gates those on POSTGRES_ENABLED).
+            - name: POSTGRES_ENABLED
+              value: "false"
+          envFrom:
+            # Provides KAFKA_BOOTSTRAP_SERVERS (required, non-loopback) + schema registry.
+            - configMapRef:
+                name: options-edge-config
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 200m
+              memory: 768Mi
+            limits:
+              memory: 2560Mi
