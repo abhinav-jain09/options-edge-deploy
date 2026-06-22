@@ -1,0 +1,247 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hpsf-stage-a-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hpsf-stage-b-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: databento-volume-aggregator-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: databento-maxpain-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: databento-mission-pace-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: databento-mission-pressure-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: databento-mission-sandwich-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: directional-pressure-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: directional-pressure-databento-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: raw-to-display-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: raw-to-display-databento-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spx-mission-control-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: strike-flow-classifier-databento-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: strike-flow-classifier-ibkr-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: unusual-whales-gex-history-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: volume-pace-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: volume-pace-databento-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: volume-sandwich-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: volume-sandwich-databento-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi

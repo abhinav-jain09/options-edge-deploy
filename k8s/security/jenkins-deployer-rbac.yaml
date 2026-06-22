@@ -29,6 +29,10 @@ rules:
       - configmaps
       - secrets
       - services
+      # persistentvolumeclaims required for the Kafka-Streams disk-backed state
+      # PVCs (RocksDB persistent stores) the deploy applies — without this,
+      # `apply -k` fails on the first PVC with a forbidden error.
+      - persistentvolumeclaims
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources:

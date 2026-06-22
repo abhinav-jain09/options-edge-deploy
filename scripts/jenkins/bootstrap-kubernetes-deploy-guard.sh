@@ -83,6 +83,13 @@ fi
 
 apply_jenkins_deployer_rbac
 
+# Reconcile the admission policy on EVERY run (apply is idempotent). Previously
+# this was applied only on first bootstrap, so subsequent edits to the policy
+# YAML (e.g. adding new gated resources like persistentvolumeclaims) silently
+# never landed on already-bootstrapped clusters. Apply it before the early-exit
+# so the cluster's policy always matches the YAML in git.
+kubectl --kubeconfig "$admin_kubeconfig" apply -f k8s/security/jenkins-only-workload-admission.yaml
+
 if kubectl --kubeconfig "$admin_kubeconfig" get validatingadmissionpolicy options-edge-jenkins-only-workloads >/dev/null 2>&1; then
   if [[ -f "$jenkins_kubeconfig" ]] && verify_jenkins_deployer_access >/dev/null 2>&1; then
     echo "Kubernetes deploy guard is already active and Jenkins deployer kubeconfig is usable."
@@ -99,6 +106,7 @@ kubectl --kubeconfig "$admin_kubeconfig" -n "$namespace" label namespace "$names
 
 write_jenkins_deployer_kubeconfig
 verify_jenkins_deployer_access
-kubectl --kubeconfig "$admin_kubeconfig" apply -f k8s/security/jenkins-only-workload-admission.yaml
+# (admission policy was already applied above, before the early-exit; no
+# need to re-apply here on the first-bootstrap path)
 
 echo "Kubernetes deploy guard is active: workload mutations in $namespace require $namespace/$service_account."

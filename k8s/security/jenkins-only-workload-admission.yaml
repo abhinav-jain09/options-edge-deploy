@@ -14,6 +14,10 @@ spec:
           - secrets
           - serviceaccounts
           - services
+          # PVCs back the Kafka-Streams disk-backed state stores (RocksDB
+          # SST files). Gated same as the other workload resources: only
+          # the jenkins-deployer SA may CREATE/UPDATE/DELETE them.
+          - persistentvolumeclaims
       - apiGroups: ["apps"]
         apiVersions: ["v1"]
         operations: ["CREATE", "UPDATE", "DELETE"]

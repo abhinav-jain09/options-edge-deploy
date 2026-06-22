@@ -50,3 +50,7 @@ resources:
   - unusual-whales-gex-service.yaml
   - unusual-whales-gex-history-deployment.yaml
   - unusual-whales-gex-history-service.yaml
+  - kafka-streams-state-pvcs.yaml
+
+patches:
+  - path: kafka-streams-state-patches.yaml
