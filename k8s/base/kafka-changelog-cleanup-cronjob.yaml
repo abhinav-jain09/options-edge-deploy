@@ -122,11 +122,24 @@ spec:
                     #
                     # Both lookups must succeed for us to proceed. If either errors, SKIP the
                     # topic rather than guess — guessing here could trim a topic to its end.
+                    # Strict-parse helper: every non-blank stdout line MUST be `topic:part:offset`.
+                    # If any non-blank line fails to match, we cannot trust the output -> SKIP.
+                    # This prevents log4j/INFO noise on stdout from being silently filtered, which
+                    # would make a partial parse look like "this partition is absent" and cause us
+                    # to fall back to latest end offsets for partitions that actually had timestamp
+                    # offsets we just failed to parse.
+                    BAD_OUT=""  # set per-call below
+
                     LATEST_ERR=$(mktemp); LATEST_OUT=$(mktemp)
                     if ! kafka-run-class kafka.tools.GetOffsetShell \
                                           --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
                                           --topic "$T" --time -1 >"$LATEST_OUT" 2>"$LATEST_ERR"; then
                       echo "[cleanup] SKIP $T (GetOffsetShell --time -1 failed: $(cat "$LATEST_ERR"))" >&2
+                      SKIPPED=$((SKIPPED+1)); rm -f "$LATEST_OUT" "$LATEST_ERR"; continue
+                    fi
+                    BAD_OUT=$(grep -vE '^[^[:space:]]+:[0-9]+:[0-9]+$' "$LATEST_OUT" | grep -vE '^[[:space:]]*$' || true)
+                    if [ -n "$BAD_OUT" ]; then
+                      echo "[cleanup] SKIP $T (unparseable --time -1 stdout: $(printf '%s' "$BAD_OUT" | head -3 | tr '\n' '|'))" >&2
                       SKIPPED=$((SKIPPED+1)); rm -f "$LATEST_OUT" "$LATEST_ERR"; continue
                     fi
                     LATEST=$(grep -E '^[^[:space:]]+:[0-9]+:[0-9]+$' "$LATEST_OUT" || true)
@@ -142,6 +155,11 @@ spec:
                                           --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
                                           --topic "$T" --time "$TS_MS" >"$TS_OUT" 2>"$TS_ERR"; then
                       echo "[cleanup] SKIP $T (GetOffsetShell --time $TS_MS failed: $(cat "$TS_ERR"))" >&2
+                      SKIPPED=$((SKIPPED+1)); rm -f "$TS_OUT" "$TS_ERR"; continue
+                    fi
+                    BAD_OUT=$(grep -vE '^[^[:space:]]+:[0-9]+:[0-9]+$' "$TS_OUT" | grep -vE '^[[:space:]]*$' || true)
+                    if [ -n "$BAD_OUT" ]; then
+                      echo "[cleanup] SKIP $T (unparseable --time $TS_MS stdout: $(printf '%s' "$BAD_OUT" | head -3 | tr '\n' '|'))" >&2
                       SKIPPED=$((SKIPPED+1)); rm -f "$TS_OUT" "$TS_ERR"; continue
                     fi
                     TS_OFFSETS=$(grep -E '^[^[:space:]]+:[0-9]+:[0-9]+$' "$TS_OUT" || true)
