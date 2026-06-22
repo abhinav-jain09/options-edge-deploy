@@ -76,6 +76,7 @@ reject_text "$bootstrap_script" 'jenkins_kubeconfig="${KUBECONFIG_FILE:-/home/op
 expected_stages=$(cat <<'EOF'
 Resolve profile
 Validate
+Resolve Databento Expiry
 Bootstrap Jenkins Kubernetes Guard
 Render
 Unusual Whales Secret
