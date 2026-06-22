@@ -1,6 +1,8 @@
 resources:
   - namespace.yaml
   - configmap.yaml
+  - options-edge-web-deployment.yaml
+  - options-edge-web-service.yaml
   - databento-feed-configmap.yaml
   - databento-feed-deployment.yaml
   - databento-feed-service.yaml
