@@ -80,6 +80,7 @@ Resolve Databento Expiry
 Bootstrap Jenkins Kubernetes Guard
 Render
 Unusual Whales Secret
+Keycloak Secret
 Resolve Images
 Image Preflight
 Pause Runtime For Kafka Cleanup
