@@ -95,8 +95,11 @@ spec:
             # --- Database (durable Postgres) ---
             - name: KC_DB
               value: postgres
+            # Connect via the ClusterIP Service (oe-keycloak-postgres-db), NOT the headless one — this
+            # cluster's overlay does not route direct pod-IP traffic, so the headless Service's pod-IP DNS
+            # answer is unreachable; the ClusterIP uses the working kube-proxy path. See keycloak-postgres.yaml.
             - name: KC_DB_URL
-              value: jdbc:postgresql://oe-keycloak-postgres.options-edge.svc:5432/keycloak
+              value: jdbc:postgresql://oe-keycloak-postgres-db.options-edge.svc:5432/keycloak
             - name: KC_DB_USERNAME
               value: keycloak
             - name: KC_DB_PASSWORD

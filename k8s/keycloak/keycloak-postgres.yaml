@@ -16,7 +16,30 @@ metadata:
     app.kubernetes.io/part-of: options-edge
     app.kubernetes.io/component: auth
 spec:
-  clusterIP: None            # headless — stable DNS oe-keycloak-postgres.options-edge.svc
+  clusterIP: None            # headless — governing Service for the StatefulSet (stable pod identity)
+  selector:
+    app.kubernetes.io/name: oe-keycloak-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+# Dedicated ClusterIP Service that Keycloak connects to. This cluster's overlay does NOT route direct
+# pod-IP-to-pod-IP traffic (verified: pod->ClusterIP works via kube-proxy, but pod->pod-IP fails; this is
+# why feed-gateway runs hostNetwork). A headless Service hands clients the raw pod IP (the broken path), so
+# Keycloak must reach Postgres through a ClusterIP (the kube-proxy DNAT path that works). KC_DB_URL targets
+# this Service. See docs/keycloak-prod.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: oe-keycloak-postgres-db
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oe-keycloak-postgres
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: auth
+spec:
+  type: ClusterIP
   selector:
     app.kubernetes.io/name: oe-keycloak-postgres
   ports:
