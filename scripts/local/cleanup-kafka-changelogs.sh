@@ -7,8 +7,10 @@
 # one-shot `confluentinc/cp-kafka` container. The only host dependency
 # is Docker — no host-side Kafka CLI install needed.
 #
-# Discovers `^options-(edge|flow)-.*-(changelog|repartition)$` topics
-# and trims records older than RETENTION_MS via kafka-delete-records.
+# Discovers `^options-.*-(changelog|repartition)$` topics (covers every
+# Kafka Streams app-id prefix we use — options-edge-*, options-flow-*, AND
+# options-databento-* such as the maxpain streams app) and trims records
+# older than RETENTION_MS via kafka-delete-records.
 #
 # USAGE
 #   ./cleanup-kafka-changelogs.sh                 # uses defaults
@@ -41,11 +43,18 @@ CONTAINER_NAME="oe-kafka-cleanup-$$"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/$(date +%Y%m%d-%H%M%S).log"
 
+# Portable ISO-8601 timestamp. We deliberately avoid `date -Iseconds`
+# because that is a GNU/newer-Darwin extension and is NOT supported by
+# older macOS / stock BSD `date`; this format string works on every
+# BSD and GNU date. (The in-container `date -u -d @epoch` calls below
+# are fine — they run inside the GNU-coreutils cp-kafka image.)
+host_ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
+
 # Tee everything to a per-run log. launchd's stdout/stderr go to its own
 # files; this tee captures both into one place keyed by start time.
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-echo "[host] start          : $(date -Iseconds)"
+echo "[host] start          : $(host_ts)"
 echo "[host] bootstrap      : $KAFKA_BOOTSTRAP_SERVERS"
 echo "[host] retention_ms   : $RETENTION_MS"
 echo "[host] image          : $KAFKA_IMAGE"
@@ -56,9 +65,13 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
-# The script body below is byte-identical (modulo indentation) to the
-# inline args in k8s/base/kafka-changelog-cleanup-cronjob.yaml. Keep
-# them in sync. If you change one, change the other.
+# The script body below is FUNCTIONALLY EQUIVALENT to the inline args in
+# k8s/base/kafka-changelog-cleanup-cronjob.yaml — same discovery regex,
+# same fail-closed policy/offset/parse logic, same per-partition merge and
+# delete-records spec. It is NOT byte-identical: quoting differs (this copy
+# is wrapped in a single-quoted `docker run bash -c '...'`, so it uses
+# double quotes internally), and comments/log strings differ. Keep the
+# LOGIC in sync — if you change the trim behaviour in one, change both.
 #
 # Networking note: we DO NOT use `--network host` here. Docker Desktop
 # Mac only supports host networking on 4.34+ as an opt-in feature, and
@@ -78,11 +91,15 @@ docker run --rm --name "$CONTAINER_NAME" \
       "$(date -u -d "@$((TS_MS/1000))" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo unknown)"
 
     ALL=$(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list)
+    # Match ALL options-* Kafka Streams internal topics. The app-id prefix
+    # varies by service: options-edge-*, options-flow-*, and options-databento-*
+    # (e.g. the maxpain streams app). A narrower options-(edge|flow)- pattern
+    # silently excluded the maxpain changelog/repartition topics.
     CANDIDATES=$(printf "%s\n" "$ALL" \
-      | grep -E "^options-(edge|flow)-.*-(changelog|repartition)$" || true)
+      | grep -E "^options-.*-(changelog|repartition)$" || true)
 
     if [ -z "$CANDIDATES" ]; then
-      echo "[cleanup] FATAL: no candidate topics matched options-(edge|flow)-*-(changelog|repartition)" >&2
+      echo "[cleanup] FATAL: no candidate topics matched options-*-(changelog|repartition)" >&2
       echo "[cleanup] zero-discovery is treated as a fail-closed signal (likely misconfig)" >&2
       exit 1
     fi
@@ -257,7 +274,7 @@ fi
 wait "$WATCHDOG_PID" 2>/dev/null || true
 
 echo "[host] exit code      : $RC"
-echo "[host] end            : $(date -Iseconds)"
+echo "[host] end            : $(host_ts)"
 
 # Prune logs older than 30 days so $LOG_DIR doesn't grow forever.
 find "$LOG_DIR" -type f -name "*.log" -mtime +30 -delete 2>/dev/null || true

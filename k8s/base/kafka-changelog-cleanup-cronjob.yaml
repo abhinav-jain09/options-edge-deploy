@@ -8,7 +8,9 @@
 # aligns the cluster's effective state lookback with the configured 24h
 # changelog retention (see configmap.yaml KAFKA_CHANGELOG_RETENTION_MS).
 #
-# WHAT: discover topics matching `options-(edge|flow)-*-(changelog|repartition)`,
+# WHAT: discover topics matching `options-*-(changelog|repartition)` (covers
+# every Kafka Streams app-id prefix we use — options-edge-*, options-flow-*,
+# AND options-databento-* such as the maxpain streams app — NOT just edge/flow),
 # skip compact-only policies, then for each topic look up the per-partition
 # offset at (now - 24h) and call kafka-delete-records to trim records older
 # than that watermark. The operation is fully idempotent — running twice does
@@ -84,11 +86,16 @@ spec:
                     "$(date -u -d "@$((TS_MS/1000))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
 
                   ALL=$(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list)
+                  # Match ALL options-* Kafka Streams internal topics. The app-id
+                  # prefix varies by service: options-edge-*, options-flow-*, and
+                  # options-databento-* (e.g. the maxpain streams app). A narrower
+                  # options-(edge|flow)- pattern silently excluded the maxpain
+                  # changelog/repartition topics, leaving them to grow unbounded.
                   CANDIDATES=$(printf '%s\n' "$ALL" \
-                    | grep -E '^options-(edge|flow)-.*-(changelog|repartition)$' || true)
+                    | grep -E '^options-.*-(changelog|repartition)$' || true)
 
                   if [ -z "$CANDIDATES" ]; then
-                    echo "[cleanup] FATAL: no candidate topics matched options-(edge|flow)-*-(changelog|repartition)" >&2
+                    echo "[cleanup] FATAL: no candidate topics matched options-*-(changelog|repartition)" >&2
                     echo "[cleanup] zero-discovery is treated as a fail-closed signal (likely misconfig)" >&2
                     exit 1
                   fi
