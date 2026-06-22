@@ -1,0 +1,203 @@
+# Daily Kafka Streams changelog/repartition topic cleanup.
+#
+# WHY: each stateful Kafka Streams service produces internal changelog and
+# repartition topics whose age-old records grow unbounded between broker-side
+# compaction passes. After the disk-backed state-store change, those topics
+# are also the recovery source on PVC loss — but only within retention.
+# A daily trim (idempotent, by-timestamp) keeps Kafka disk usage bounded and
+# aligns the cluster's effective state lookback with the configured 24h
+# changelog retention (see configmap.yaml KAFKA_CHANGELOG_RETENTION_MS).
+#
+# WHAT: discover topics matching `options-(edge|flow)-*-(changelog|repartition)`,
+# skip compact-only policies, then for each topic look up the per-partition
+# offset at (now - 24h) and call kafka-delete-records to trim records older
+# than that watermark. The operation is fully idempotent — running twice does
+# nothing the second time (the watermark is already at the trim line).
+#
+# WHEN: 00:00 Europe/Amsterdam every day (operator-local midnight).
+#
+# RETRY: backoffLimit=3 retries within a single firing on pod failure.
+# concurrencyPolicy=Forbid + startingDeadlineSeconds=600 means a missed run
+# (cluster down at the scheduled time) is SKIPPED, and the next day's run
+# proceeds normally. This avoids cleanup firing unexpectedly during US
+# market hours when the cluster comes back from a multi-hour outage.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kafka-changelog-cleanup
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: kafka-changelog-cleanup
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: maintenance
+spec:
+  schedule: "0 0 * * *"
+  timeZone: Europe/Amsterdam
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600          # skip if can't start within 10 min; next day catches up
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3                   # retry the pod up to 3 times within a firing
+      activeDeadlineSeconds: 1800       # 30 min cap per firing
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: kafka-changelog-cleanup
+        spec:
+          restartPolicy: OnFailure
+          automountServiceAccountToken: false   # the job only talks to Kafka, not the k8s API
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: cleanup
+              image: confluentinc/cp-kafka:7.6.0
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: KAFKA_BOOTSTRAP_SERVERS
+                  valueFrom:
+                    configMapKeyRef:
+                      name: options-edge-config
+                      key: KAFKA_BOOTSTRAP_SERVERS
+                - name: RETENTION_MS
+                  value: "86400000"     # 24h — matches KAFKA_CHANGELOG_RETENTION_MS
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              command: ["bash", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  TS_MS=$(( $(date +%s) * 1000 - RETENTION_MS ))
+                  printf '[cleanup] bootstrap=%s\n' "$KAFKA_BOOTSTRAP_SERVERS"
+                  printf '[cleanup] cutoff_ts_ms=%s (utc=%s)\n' "$TS_MS" \
+                    "$(date -u -d "@$((TS_MS/1000))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
+
+                  ALL=$(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list)
+                  CANDIDATES=$(printf '%s\n' "$ALL" \
+                    | grep -E '^options-(edge|flow)-.*-(changelog|repartition)$' || true)
+
+                  if [ -z "$CANDIDATES" ]; then
+                    echo "[cleanup] FATAL: no candidate topics matched options-(edge|flow)-*-(changelog|repartition)" >&2
+                    echo "[cleanup] zero-discovery is treated as a fail-closed signal (likely misconfig)" >&2
+                    exit 1
+                  fi
+
+                  N=$(printf '%s\n' "$CANDIDATES" | wc -l | tr -d ' ')
+                  printf '[cleanup] candidates (%s):\n' "$N"
+                  printf '%s\n' "$CANDIDATES" | sed 's/^/  - /'
+
+                  TRIMMED=0; SKIPPED=0; FAILED=0
+                  for T in $CANDIDATES; do
+                    # FAIL-CLOSED on policy lookup: a describe error means we cannot tell whether
+                    # this topic is compact-only -> SKIP it rather than risk trimming a compact-only.
+                    if ! DESCRIBE=$(kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+                                                   --entity-type topics --entity-name "$T" --describe 2>&1); then
+                      echo "[cleanup] SKIP $T (kafka-configs describe failed: $DESCRIBE)" >&2
+                      SKIPPED=$((SKIPPED+1)); continue
+                    fi
+                    POLICY=$(printf '%s' "$DESCRIBE" | grep -oE 'cleanup\.policy=[a-z,]+' | head -1 || true)
+                    POLICY=${POLICY:-cleanup.policy=delete}   # unset/empty -> broker default (delete)
+                    if [ "$POLICY" = "cleanup.policy=compact" ]; then
+                      echo "[cleanup] SKIP $T (compact-only)"
+                      SKIPPED=$((SKIPPED+1)); continue
+                    fi
+
+                    # Per-partition offset resolution. GetOffsetShell --time <ts> returns the
+                    # earliest offset with timestamp >= ts. CRUCIALLY, it OMITS partitions where
+                    # NO record has ts >= ts (i.e. all records in that partition are older than
+                    # cutoff). To handle that, we query LATEST end offsets per partition and
+                    # MERGE: prefer the timestamp offset where present, else fall back to the
+                    # latest end offset (= trim all records in that partition).
+                    #
+                    # Both lookups must succeed for us to proceed. If either errors, SKIP the
+                    # topic rather than guess — guessing here could trim a topic to its end.
+                    # Strict-parse helper: every non-blank stdout line MUST be `topic:part:offset`.
+                    # If any non-blank line fails to match, we cannot trust the output -> SKIP.
+                    # This prevents log4j/INFO noise on stdout from being silently filtered, which
+                    # would make a partial parse look like "this partition is absent" and cause us
+                    # to fall back to latest end offsets for partitions that actually had timestamp
+                    # offsets we just failed to parse.
+                    BAD_OUT=""  # set per-call below
+
+                    LATEST_ERR=$(mktemp); LATEST_OUT=$(mktemp)
+                    if ! kafka-run-class kafka.tools.GetOffsetShell \
+                                          --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+                                          --topic "$T" --time -1 >"$LATEST_OUT" 2>"$LATEST_ERR"; then
+                      echo "[cleanup] SKIP $T (GetOffsetShell --time -1 failed: $(cat "$LATEST_ERR"))" >&2
+                      SKIPPED=$((SKIPPED+1)); rm -f "$LATEST_OUT" "$LATEST_ERR"; continue
+                    fi
+                    BAD_OUT=$(grep -vE '^[^[:space:]]+:[0-9]+:[0-9]+$' "$LATEST_OUT" | grep -vE '^[[:space:]]*$' || true)
+                    if [ -n "$BAD_OUT" ]; then
+                      echo "[cleanup] SKIP $T (unparseable --time -1 stdout: $(printf '%s' "$BAD_OUT" | head -3 | tr '\n' '|'))" >&2
+                      SKIPPED=$((SKIPPED+1)); rm -f "$LATEST_OUT" "$LATEST_ERR"; continue
+                    fi
+                    LATEST=$(grep -E '^[^[:space:]]+:[0-9]+:[0-9]+$' "$LATEST_OUT" || true)
+                    rm -f "$LATEST_OUT" "$LATEST_ERR"
+                    if [ -z "$LATEST" ]; then
+                      # No partitions / empty topic — nothing to trim.
+                      echo "[cleanup] SKIP $T (no end offsets — empty topic)"
+                      SKIPPED=$((SKIPPED+1)); continue
+                    fi
+
+                    TS_ERR=$(mktemp); TS_OUT=$(mktemp)
+                    if ! kafka-run-class kafka.tools.GetOffsetShell \
+                                          --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+                                          --topic "$T" --time "$TS_MS" >"$TS_OUT" 2>"$TS_ERR"; then
+                      echo "[cleanup] SKIP $T (GetOffsetShell --time $TS_MS failed: $(cat "$TS_ERR"))" >&2
+                      SKIPPED=$((SKIPPED+1)); rm -f "$TS_OUT" "$TS_ERR"; continue
+                    fi
+                    BAD_OUT=$(grep -vE '^[^[:space:]]+:[0-9]+:[0-9]+$' "$TS_OUT" | grep -vE '^[[:space:]]*$' || true)
+                    if [ -n "$BAD_OUT" ]; then
+                      echo "[cleanup] SKIP $T (unparseable --time $TS_MS stdout: $(printf '%s' "$BAD_OUT" | head -3 | tr '\n' '|'))" >&2
+                      SKIPPED=$((SKIPPED+1)); rm -f "$TS_OUT" "$TS_ERR"; continue
+                    fi
+                    TS_OFFSETS=$(grep -E '^[^[:space:]]+:[0-9]+:[0-9]+$' "$TS_OUT" || true)
+                    rm -f "$TS_OUT" "$TS_ERR"
+
+                    # Merge: timestamp wins, latest fills gaps. Output `topic:part:offset`.
+                    OFFSETS=$(awk -F: '
+                      NR==FNR { ts[$1 FS $2] = $3; next }
+                      { key=$1 FS $2; if (key in ts) print $1":"$2":"ts[key]; else print $0 }
+                    ' <(printf '%s\n' "$TS_OFFSETS") <(printf '%s\n' "$LATEST"))
+
+                    # Build the kafka-delete-records JSON spec from `TOPIC:PARTITION:OFFSET` lines.
+                    SPEC=$(mktemp)
+                    {
+                      printf '{"partitions":['
+                      first=1
+                      while IFS=: read -r topic part off; do
+                        [ -z "$topic" ] && continue
+                        [ $first -eq 0 ] && printf ','
+                        printf '{"topic":"%s","partition":%s,"offset":%s}' "$topic" "$part" "$off"
+                        first=0
+                      done <<EOF
+                  $OFFSETS
+                  EOF
+                      printf '],"version":1}'
+                    } >"$SPEC"
+
+                    if kafka-delete-records --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+                                            --offset-json-file "$SPEC" >/dev/null 2>&1; then
+                      echo "[cleanup] TRIMMED $T -> $(printf '%s' "$OFFSETS" | tr '\n' ' ')"
+                      TRIMMED=$((TRIMMED+1))
+                    else
+                      echo "[cleanup] FAILED to trim $T (will be retried by backoffLimit)" >&2
+                      FAILED=$((FAILED+1))
+                    fi
+                    rm -f "$SPEC"
+                  done
+
+                  printf '[cleanup] summary: trimmed=%s skipped=%s failed=%s of %s candidates\n' \
+                    "$TRIMMED" "$SKIPPED" "$FAILED" "$N"
+                  [ "$FAILED" -eq 0 ]
