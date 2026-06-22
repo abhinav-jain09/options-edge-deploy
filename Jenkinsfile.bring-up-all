@@ -8,14 +8,14 @@
 //   build job: '<child>', parameters: [string(name:'PROFILE', value: PROFILE)],
 //             wait: true, propagate: true
 //
-// *** DRAFT / SCAFFOLD ***
-// The child job names marked TO-VERIFY are placeholders — they must be confirmed
-// against the live Jenkins controller (on Machine A) before this job is enabled.
-// Also: for the PROFILE pass-through to work, each child job must declare a
-// `PROFILE` string parameter and branch its env on it (dev vs prod). Today
-// options-edge-web-deploy hardcodes APP_PROFILE=dev, so that (and the others)
-// still need a PROFILE parameter added. See the PR description.
+// Children consume the canonical ENVIRONMENT contract from @Library('oe') oeProfile
+// (values: 'dev' | 'staging' | 'production'). This file's PROFILE param stays
+// 'dev'/'prod' for operator UI back-compat and is mapped to canonical ENVIRONMENT
+// internally (see env block). The web job (options-edge-web-deploy) still takes
+// the legacy PROFILE input — kept as-is until it migrates.
 // =============================================================================
+@Library('oe') _
+
 pipeline {
   agent { label 'local-mac' }
 
@@ -34,26 +34,24 @@ pipeline {
   }
 
   environment {
-    // Image platform follows the deploy target:
-    //   dev  -> local Mac docker-desktop (Apple Silicon)  -> linux/arm64
-    //   prod -> remote Linux k3s on A/B (CentOS x86_64)   -> linux/amd64
-    // Passed to every child so each builds the correct arch — an arm64 image built on the
-    // Mac fails with "exec format error" on the amd64 remotes. Child build jobs must honor
-    // this via `docker buildx build --platform "$BUILD_PLATFORM"` (see option-edge-feed-gateway
-    // for the reference implementation) and push prod images to the remote registry.
-    //
-    // The umbrella derives the dev/prod knobs once from PROFILE and passes each child the
-    // parameters IT actually declares (the children do NOT share a single PROFILE param):
+    // The umbrella derives the dev/prod knobs once from PROFILE and passes each child
+    // the parameters IT actually declares (children do NOT share a single PROFILE param):
     //   - web (options-edge):            PROFILE, BUILD_PLATFORM, PUSH_IMAGE, RUN_LOCAL, IMAGE
-    //   - processing/ibkr/feed-gateway:  BUILD_PLATFORM, PUSH_IMAGE(S), IMAGE_REGISTRY
+    //   - processing/ibkr/feed-gateway:  ENVIRONMENT, BUILD_PLATFORM, PUSH_IMAGE(S), IMAGE_REGISTRY
     //   - databento-feed:                ENVIRONMENT, IMAGE_REGISTRY, PUSH_IMAGE
-    BUILD_PLATFORM = "${params.PROFILE == 'prod' ? 'linux/amd64' : 'linux/arm64'}"
-    IS_PROD        = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
+    //
+    // Non-env-derived knobs (operator behavior):
     PUSH_IMAGE     = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
     RUN_LOCAL      = "${params.PROFILE == 'prod' ? 'false' : 'true'}"
-    ENVIRONMENT    = "${params.PROFILE}"
-    IMAGE_REGISTRY = "${params.PROFILE == 'prod' ? '192.168.100.252:5000' : ''}"
-    WEB_IMAGE      = "${params.PROFILE == 'prod' ? '192.168.100.252:5000/options-edge-web:prod' : 'options-edge-web:dev'}"
+    IS_PROD        = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
+    // Canonical ENVIRONMENT for child jobs (every child now uses @Library('oe') oeProfile
+    // which accepts ONLY ['dev','staging','production']). UI param PROFILE stays 'dev'/'prod'
+    // for operator back-compat; we map 'prod' -> 'production' for the canonical value.
+    ENVIRONMENT    = "${params.PROFILE == 'prod' ? 'production' : params.PROFILE}"
+    // BUILD_PLATFORM, IMAGE_REGISTRY and WEB_IMAGE are all derived from oeProfile in the
+    // 'Resolve profile' stage below (single source of truth — no hardcoded registries/arches
+    // in this umbrella). Children that don't yet require ENVIRONMENT still accept these as
+    // explicit overrides, so the contract is unchanged.
   }
 
   // PREREQUISITE (not a stage): Keycloak + Postgres are a ONE-TIME setup, run as standalone
@@ -61,6 +59,20 @@ pipeline {
   // this pipeline does NOT manage them — it assumes they are already running before a bring-up.
 
   stages {
+    stage('Resolve profile') {
+      steps {
+        script {
+          // Derive registry + platform + web image from the single source of truth
+          // (oeProfile / deploy-profiles.yaml). oeProfile() fails loudly on an unknown env.
+          def p = oeProfile(env.ENVIRONMENT)
+          env.IMAGE_REGISTRY = p.registry
+          env.BUILD_PLATFORM = p.platform
+          env.WEB_IMAGE      = oeProfile.image('web', env.ENVIRONMENT, params.PROFILE == 'prod' ? 'prod' : 'dev')
+          echo "umbrella resolved (env=${env.ENVIRONMENT}): registry=${env.IMAGE_REGISTRY} platform=${env.BUILD_PLATFORM} web=${env.WEB_IMAGE}"
+        }
+      }
+    }
+
     // 1) Build every service image and push it to the registry (independent -> parallel).
     //    These jobs only build/push; the single Deploy stage below applies ALL the k8s manifests.
     stage('Build images') {
@@ -75,8 +87,8 @@ pipeline {
         stage('Databento feed') {
           when { expression { params.FEEDS } }
           steps {
-            build job: 'options-edge-databento-feed-deploy',  // build+push only; the Deploy stage applies it
-                  parameters: [string(name: 'ENVIRONMENT', value: params.PROFILE), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'), booleanParam(name: 'DEPLOY_TO_KUBERNETES', value: false)],
+            build job: 'options-edge-databento-feed-deploy',  // build+push only (Deploy stage was removed; options-edge-deploy is the sole deployer)
+                  parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
@@ -103,7 +115,7 @@ pipeline {
     stage('Deploy to Kubernetes') {
       steps {
         build job: 'options-edge-deploy',
-              parameters: [string(name: 'ENVIRONMENT', value: params.PROFILE)],
+              parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT)],
               wait: true, propagate: !params.CONTINUE_ON_FAILURE
       }
     }
