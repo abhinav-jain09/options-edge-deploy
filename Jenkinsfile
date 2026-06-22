@@ -3,8 +3,8 @@
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
-    choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'], description: 'Target environment')
-    string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. Any branch is allowed for ENVIRONMENT=dev; staging/production are locked to main. The job SCM checks out this branch.')
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'production'], description: 'Target environment')
+    string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. Any branch is allowed for ENVIRONMENT=dev; production is locked to main. The job SCM checks out this branch.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '', description: 'Dev deployer kubeconfig path on the Jenkins agent (Mac, ~/.kube — like prod). Bootstrap generates it from the admin kubeconfig.')
     string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '', description: 'Dev admin (docker-desktop cluster-admin) kubeconfig used only to bootstrap the Jenkins-only deploy guard. Empty = derive from oeProfile(ENVIRONMENT).kubeconfigAdmin.')
     string(name: 'PROD_KUBECONFIG_FILE', defaultValue: '', description: 'Deployer kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button (prod is a separate cluster from dev).')
@@ -179,7 +179,7 @@ pipeline {
             dev)
               effective_build_platform="${BUILD_PLATFORM:-linux/arm64}"
               ;;
-            staging|production)
+            production)
               effective_build_platform="linux/amd64"
               if [ -n "${BUILD_PLATFORM:-}" ] && [ "$BUILD_PLATFORM" != "linux/amd64" ]; then
                 echo "BUILD_PLATFORM=$BUILD_PLATFORM is not allowed for ${ENVIRONMENT}; production Kubernetes nodes are CentOS amd64 and require linux/amd64." >&2
@@ -489,7 +489,7 @@ PY
               missing=1
               continue
             fi
-            if [ "${ENVIRONMENT:-dev}" = "production" ] || [ "${ENVIRONMENT:-dev}" = "staging" ]; then
+            if [ "${ENVIRONMENT:-dev}" = "production" ]; then
               if ! inspect_image_platform "$name" "$image" "linux/amd64"; then
                 platform_mismatch=1
               fi
@@ -503,7 +503,7 @@ EOF
             exit 1
           fi
           if [ "$platform_mismatch" != "0" ]; then
-            echo "One or more staging/production images are not linux/amd64; refusing to deploy to CentOS amd64 Kubernetes nodes." >&2
+            echo "One or more production images are not linux/amd64; refusing to deploy to CentOS amd64 Kubernetes nodes." >&2
             exit 1
           fi
         '''
@@ -683,7 +683,7 @@ EOF
           [ -n "$_base_registry" ] || { echo "FATAL: could not determine base image registry; aborting before any kubectl mutation." >&2; exit 1; }
           # Rebuild the overlay images: block as a digest-pinned list we fully control (one entry per
           # service: match the base name, remap to the resolved repo, pin the digest). This works for ANY
-          # overlay -- dev (which has its own images: block) and staging/production (which have none).
+          # overlay -- dev (which has its own images: block) and production (which have none).
           yq -i '.images = []' "$_overlay_kustomization"
           for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE DATABENTO_MAXPAIN_IMAGE DATABENTO_MISSION_PACE_IMAGE \
             DATABENTO_MISSION_PRESSURE_IMAGE DATABENTO_MISSION_SANDWICH_IMAGE DATABENTO_VOLUME_AGGREGATOR_IMAGE \

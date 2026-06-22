@@ -1,8 +1,8 @@
 # Jenkins Image Platform Policy
 
-Jenkins runs on Mac ARM, but the remote staging and production Kubernetes nodes
-run CentOS amd64. Images deployed to staging or production must therefore be
-published with a `linux/amd64` manifest.
+Jenkins runs on Mac ARM, but the remote production Kubernetes nodes run CentOS
+amd64. Images deployed to production must therefore be published with a
+`linux/amd64` manifest.
 
 ## Defaults
 
@@ -10,11 +10,10 @@ The main `options-edge-deploy` pipeline resolves `BUILD_PLATFORM` into
 `EFFECTIVE_BUILD_PLATFORM` by environment:
 
 - `dev`: `linux/arm64`
-- `staging`: `linux/amd64`
 - `production`: `linux/amd64`
 
-For staging and production, Jenkins sets `EFFECTIVE_BUILD_PLATFORM` to
-`linux/amd64`; an ARM platform request fails before any deploy step runs.
+For production, Jenkins sets `EFFECTIVE_BUILD_PLATFORM` to `linux/amd64`; an
+ARM platform request fails before any deploy step runs.
 
 The HPSF replay gate defaults `BUILD_PLATFORM` to `linux/amd64` because replay
 pods run on the remote Kubernetes nodes.
@@ -39,13 +38,13 @@ After pushing an image, validate the remote manifest with:
 docker buildx imagetools inspect "$IMAGE"
 ```
 
-Before staging or production deployment, Jenkins runs `docker buildx imagetools
+Before production deployment, Jenkins runs `docker buildx imagetools
 inspect` for every requested runtime image and fails before Kubernetes changes
 if `linux/amd64` is not present.
 
 ## Dry Deploy Validation
 
-Use `DEPLOY_DRY_RUN=true` for staging or production validation. Jenkins still
+Use `DEPLOY_DRY_RUN=true` for production validation. Jenkins still
 renders manifests, resolves images, validates image manifests, and runs
 server-side Kubernetes dry-run apply, but it does not mutate runtime resources.
 Dry-run builds skip Kafka topic mutations, runtime scaling, Prometheus scrape

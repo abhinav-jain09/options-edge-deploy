@@ -9,7 +9,7 @@
 //             wait: true, propagate: true
 //
 // Children consume the canonical ENVIRONMENT contract from @Library('oe') oeProfile
-// (values: 'dev' | 'staging' | 'production'). This file's PROFILE param stays
+// (values: 'dev' | 'production'). This file's PROFILE param stays
 // 'dev'/'prod' for operator UI back-compat and is mapped to canonical ENVIRONMENT
 // internally (see env block). The web job (options-edge-web-deploy) still takes
 // the legacy PROFILE input — kept as-is until it migrates.
@@ -45,7 +45,7 @@ pipeline {
     RUN_LOCAL      = "${params.PROFILE == 'prod' ? 'false' : 'true'}"
     IS_PROD        = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
     // Canonical ENVIRONMENT for child jobs (every child now uses @Library('oe') oeProfile
-    // which accepts ONLY ['dev','staging','production']). UI param PROFILE stays 'dev'/'prod'
+    // which accepts ONLY ['dev','production']). UI param PROFILE stays 'dev'/'prod'
     // for operator back-compat; we map 'prod' -> 'production' for the canonical value.
     ENVIRONMENT    = "${params.PROFILE == 'prod' ? 'production' : params.PROFILE}"
     // BUILD_PLATFORM, IMAGE_REGISTRY and WEB_IMAGE are all derived from oeProfile in the

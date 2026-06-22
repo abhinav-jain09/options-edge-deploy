@@ -10,8 +10,8 @@
 //      options-edge-deploy references them. (This job only BUILDS + PUSHES the image.)
 //
 // Registry + build platform come from oeProfile(ENVIRONMENT) — NEVER hardcode them:
-//   dev                 -> local dev registry + linux/arm64
-//   staging|production  -> remote registry  + linux/amd64
+//   dev         -> local dev registry + linux/arm64
+//   production  -> remote registry + linux/amd64
 // The profile keeps registry/platform in sync, so an arm64 image never lands on amd64 nodes.
 // ============================================================================
 @Library('oe') _
@@ -25,7 +25,7 @@ pipeline {
   parameters {
     string(name: 'SERVICE_NAME', defaultValue: 'CHANGE-ME',
            description: 'Image/service name, e.g. options-edge-foo')
-    choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'],
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
            description: 'Drives registry + build platform from oeProfile (single source of truth)')
     string(name: 'IMAGE_REGISTRY', defaultValue: '',
            description: 'Override registry. Empty = derive from oeProfile(ENVIRONMENT). Kept for back-compat callers (e.g. bring-up-all).')
