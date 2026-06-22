@@ -1,0 +1,78 @@
+# Production realm import for Keycloak (mounted at /opt/keycloak/data/import; consumed by `start --import-realm`).
+# Hardened vs the dev import: no test user (users are admin-provisioned), the web client has NO direct-access
+# grant, registration disabled, and redirect URIs / web origins are pinned to the real prod option-chain
+# origin (https://fullfunding.nl). Import is idempotent: an already-present realm is skipped on later boots,
+# so realm drift must be reconciled out-of-band (kcadm) — see docs/keycloak-prod.md.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: oe-keycloak-realm
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oe-keycloak
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: auth
+data:
+  optionsedge-realm.json: |
+    {
+      "realm": "optionsedge",
+      "enabled": true,
+      "sslRequired": "external",
+      "registrationAllowed": false,
+      "resetPasswordAllowed": true,
+      "loginWithEmailAllowed": true,
+      "bruteForceProtected": true,
+      "accessTokenLifespan": 300,
+      "ssoSessionIdleTimeout": 1800,
+      "ssoSessionMaxLifespan": 36000,
+      "roles": {
+        "realm": [
+          { "name": "replay:read", "description": "List/get replay runs, metrics, evidence reads" },
+          { "name": "replay:start", "description": "Create/start/resume/step replay runs" },
+          { "name": "replay:pause", "description": "Pause replay runs" },
+          { "name": "replay:stop", "description": "Stop replay runs" },
+          { "name": "replay:evidence", "description": "Download replay evidence" },
+          { "name": "replay:delete", "description": "Delete replay runs" },
+          { "name": "replay-admin", "description": "Full replay administration (any operation)" }
+        ]
+      },
+      "clients": [
+        {
+          "clientId": "options-edge-web",
+          "protocol": "openid-connect",
+          "publicClient": true,
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "redirectUris": ["https://fullfunding.nl/*"],
+          "webOrigins": ["https://fullfunding.nl"],
+          "attributes": {
+            "pkce.code.challenge.method": "S256",
+            "post.logout.redirect.uris": "https://fullfunding.nl/*"
+          },
+          "protocolMappers": [
+            {
+              "name": "replay-audience",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "consentRequired": false,
+              "config": {
+                "included.custom.audience": "options-edge-replay",
+                "id.token.claim": "false",
+                "access.token.claim": "true"
+              }
+            },
+            {
+              "name": "audience-options-edge-web",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "consentRequired": false,
+              "config": {
+                "included.custom.audience": "options-edge-web",
+                "id.token.claim": "false",
+                "access.token.claim": "true"
+              }
+            }
+          ]
+        }
+      ]
+    }
