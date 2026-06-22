@@ -63,14 +63,16 @@ spec:
               value: "https://fullfunding.nl"
             - name: APP_MARKET_DATA_SOURCE
               value: "DATABENTO"
-            # Postgres not required for the option-chain page; keep it disabled so prod start-up does not
-            # demand POSTGRES_JDBC_URL/USER/PASSWORD (RuntimeProfileConfig gates those on POSTGRES_ENABLED).
-            - name: POSTGRES_ENABLED
-              value: "false"
           envFrom:
-            # Provides KAFKA_BOOTSTRAP_SERVERS (required, non-loopback) + schema registry.
+            # Provides KAFKA_BOOTSTRAP_SERVERS (required, non-loopback), schema registry, and the prod
+            # Postgres coordinates (POSTGRES_JDBC_URL=.../options_flow, POSTGRES_USER=options_flow,
+            # POSTGRES_ENABLED=true). RuntimeProfileConfig requires POSTGRES_PASSWORD in prod regardless of
+            # POSTGRES_ENABLED, so the runtime-secrets secret is mounted too (same pattern as the
+            # postgres-writer services). The web app uses this prod DB exactly as the legacy Tomcat did.
             - configMapRef:
                 name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
           ports:
             - name: http
               containerPort: 8080
