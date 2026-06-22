@@ -1,11 +1,6 @@
 resources:
   - namespace.yaml
   - configmap.yaml
-  # --- Production identity provider (Keycloak) — see docs/keycloak-prod.md ---
-  - keycloak-realm-configmap.yaml
-  - keycloak-postgres.yaml
-  - keycloak-deployment.yaml
-  - keycloak-ingress.yaml
   - databento-feed-configmap.yaml
   - databento-feed-deployment.yaml
   - databento-feed-service.yaml
