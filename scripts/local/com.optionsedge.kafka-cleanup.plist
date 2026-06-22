@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Mac launchd job for nightly Kafka changelog/repartition cleanup.
+
+  Mirrors the in-cluster CronJob in k8s/base/kafka-changelog-cleanup-cronjob.yaml.
+  Fires at 00:00 local Mac time (set your Mac's timezone to Europe/Amsterdam
+  to match the cluster CronJob; launchd does not natively support
+  per-job timezones).
+
+  RECOVERY: if the Mac is asleep/off at midnight, launchd will fire the
+  job the moment it wakes up (StartCalendarInterval semantics). The job
+  itself is idempotent — running it twice in close succession does
+  nothing the second time (the watermark is already at the trim line).
+
+  INSTALL:
+    cp scripts/local/cleanup-kafka-changelogs.sh ~/bin/oe-kafka-cleanup.sh
+    chmod +x ~/bin/oe-kafka-cleanup.sh
+    sed -i "" "s|__SCRIPT__|$HOME/bin/oe-kafka-cleanup.sh|" \
+      scripts/local/com.optionsedge.kafka-cleanup.plist
+    cp scripts/local/com.optionsedge.kafka-cleanup.plist \
+       ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.optionsedge.kafka-cleanup.plist
+
+  UNINSTALL:
+    launchctl unload -w ~/Library/LaunchAgents/com.optionsedge.kafka-cleanup.plist
+    rm ~/Library/LaunchAgents/com.optionsedge.kafka-cleanup.plist
+
+  AD-HOC RUN (no wait for midnight):
+    launchctl start com.optionsedge.kafka-cleanup
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.optionsedge.kafka-cleanup</string>
+
+    <!-- bash invoked with the script path as a separate argv element
+         (NOT via `-c "..."`), so the path is not shell-parsed and a
+         path with spaces or shell metacharacters is handled safely. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__SCRIPT__</string>
+    </array>
+
+    <!-- 00:00 local Mac time, every day -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>0</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Bring up at next wake if the Mac was asleep at fire time. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- Per-run timeout is enforced INSIDE the script via a
+         watchdog that calls `docker stop` after $TIMEOUT_SECS (30 min
+         default). launchd's AbandonProcessGroup does NOT impose a
+         timeout, so it's intentionally omitted. -->
+
+    <key>StandardOutPath</key>
+    <string>/tmp/oe-kafka-cleanup.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/oe-kafka-cleanup.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <!-- Soft resource caps so a runaway job can't starve the Mac. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>
