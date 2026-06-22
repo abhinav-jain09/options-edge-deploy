@@ -1,66 +1,99 @@
 // ============================================================================
-// Jenkinsfile TEMPLATE for a NEW OptionsEdge service that needs a build job.
+// Jenkinsfile TEMPLATE for a NEW OptionsEdge service build job.
+// Conforms to the uniform deploy policy — see options-edge/UNIFORM-DEPLOY-POLICY.md.
 //
 // HOW TO USE:
 //   1. Copy this file into the new service's repo as `Jenkinsfile`.
 //   2. Set SERVICE_NAME's defaultValue below (e.g. options-edge-foo).
 //   3. Create the Jenkins job: scripts/jenkins/create-service-job.sh
-//        (or clone an existing job in the UI and point scriptPath at this file).
-//   4. Add the service's k8s manifests to options-edge-deploy/k8s/base/ + kustomization.yaml
-//        so `options-edge-deploy` applies it. (This job only BUILDS the image.)
+//   4. Add the service's k8s manifests in ONE place (the service repo) so
+//      options-edge-deploy references them. (This job only BUILDS + PUSHES the image.)
 //
-// dev  = docker-desktop on the Mac  -> linux/arm64, load locally, no registry
-// prod = k3s on A(192.168.100.252)+B(192.168.100.4) -> linux/amd64, push to 192.168.100.252:5000
-// An arm64 image will NOT run on the amd64 prod nodes — always match BUILD_PLATFORM.
+// Registry + build platform come from oeProfile(ENVIRONMENT) — NEVER hardcode them:
+//   dev                 -> local dev registry + linux/arm64
+//   staging|production  -> remote registry  + linux/amd64
+// The profile keeps registry/platform in sync, so an arm64 image never lands on amd64 nodes.
 // ============================================================================
+@Library('oe') _
+
 pipeline {
-  agent { label 'local-mac' }                 // Jenkins build agent = the Mac
+  agent { label 'local-mac' }                  // Jenkins build agent = the Mac
   options { disableConcurrentBuilds() }
+  // No SCM polling / triggers block: builds + deploys are manual (explicit) only,
+  // per UNIFORM-DEPLOY-POLICY.md. Do not add an SCM poll trigger here.
 
   parameters {
     string(name: 'SERVICE_NAME', defaultValue: 'CHANGE-ME',
            description: 'Image/service name, e.g. options-edge-foo')
-    choice(name: 'ENVIRONMENT', choices: ['dev', 'prod'],
-           description: 'dev = arm64/local ; prod = amd64/registry')
-    // The defaults below are the DEV defaults. A prod run overrides them (see the doc / job params).
-    string(name: 'BUILD_PLATFORM', defaultValue: 'linux/arm64',
-           description: 'dev=linux/arm64 (Mac), prod=linux/amd64 (Linux nodes)')
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'staging', 'production'],
+           description: 'Drives registry + build platform from oeProfile (single source of truth)')
     string(name: 'IMAGE_REGISTRY', defaultValue: '',
-           description: 'prod: 192.168.100.252:5000 ; dev: empty (local docker)')
-    string(name: 'IMAGE_TAG', defaultValue: 'dev', description: 'Image tag (e.g. prod, build number)')
-    booleanParam(name: 'PUSH_IMAGE', defaultValue: false,
-           description: 'prod: true (push to registry) ; dev: false (load into local docker)')
+           description: 'Override registry. Empty = derive from oeProfile(ENVIRONMENT). Kept for back-compat callers (e.g. bring-up-all).')
+    string(name: 'IMAGE_TAG', defaultValue: '', description: 'Image tag. Empty = current git short SHA.')
+    string(name: 'DEV_IMAGE_TAG', defaultValue: 'dev', description: 'Also publish this mutable tag for the deploy job. Empty disables it.')
+    string(name: 'BUILD_PLATFORM', defaultValue: '',
+           description: 'Override platform. Empty = derive from oeProfile(ENVIRONMENT). Kept for back-compat callers.')
+    booleanParam(name: 'PUSH_IMAGE', defaultValue: true,
+           description: 'Push to the (oeProfile) registry so options-edge-deploy can pull it. false = load into local docker only.')
     string(name: 'DOCKERFILE', defaultValue: 'Dockerfile', description: 'Path to the Dockerfile')
     string(name: 'BUILD_CONTEXT', defaultValue: '.', description: 'Docker build context dir')
   }
 
   stages {
+    stage('Resolve profile') {
+      steps {
+        script {
+          // Single source of truth: registry + platform from oeProfile(ENVIRONMENT)
+          // unless explicitly overridden by a caller. oeProfile() fails loudly on an
+          // unknown ENVIRONMENT.
+          def p = oeProfile(params.ENVIRONMENT)
+          env.IMAGE_REGISTRY = params.IMAGE_REGISTRY?.trim() ? params.IMAGE_REGISTRY : p.registry
+          env.BUILD_PLATFORM = params.BUILD_PLATFORM?.trim() ? params.BUILD_PLATFORM : p.platform
+          echo "resolved (env=${params.ENVIRONMENT}): registry=${env.IMAGE_REGISTRY} platform=${env.BUILD_PLATFORM}"
+        }
+      }
+    }
+
     stage('Build') {
       steps {
         sh 'mvn -B clean package -DskipTests || echo "no maven build (skipping)"'   // drop/edit if not Java
       }
     }
+
     stage('Image') {
       steps {
         sh '''
           set -euo pipefail
           [ "$SERVICE_NAME" != "CHANGE-ME" ] || { echo "Set SERVICE_NAME" >&2; exit 1; }
-          if [ -n "$IMAGE_REGISTRY" ]; then IMAGE="$IMAGE_REGISTRY/$SERVICE_NAME:$IMAGE_TAG"
-          else IMAGE="$SERVICE_NAME:$IMAGE_TAG"; fi
-          echo "Building $IMAGE  (platform=$BUILD_PLATFORM, env=$ENVIRONMENT)"
+          TAG="${IMAGE_TAG:-$(git rev-parse --short=12 HEAD)}"
+          IMAGE="$IMAGE_REGISTRY/$SERVICE_NAME:$TAG"
+
+          # buildkit must be told the (oeProfile-resolved) registry is insecure http to push to it.
+          BKCFG="$(mktemp)"
+          printf '[registry."%s"]\n  http = true\n  insecure = true\n' "$IMAGE_REGISTRY" > "$BKCFG"
+          BUILDER="oe-newsvc-${BUILD_NUMBER:-local}"
+          docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
+          docker buildx create --name "$BUILDER" --driver docker-container --config "$BKCFG" --use >/dev/null
+          cleanup() { docker buildx rm "$BUILDER" >/dev/null 2>&1 || true; rm -f "$BKCFG"; }
+          trap cleanup EXIT
+
+          TAGS="-t $IMAGE"
+          if [ -n "${DEV_IMAGE_TAG:-}" ] && [ "$DEV_IMAGE_TAG" != "$TAG" ]; then
+            TAGS="$TAGS -t $IMAGE_REGISTRY/$SERVICE_NAME:$DEV_IMAGE_TAG"
+          fi
+          echo "Building $IMAGE (platform=$BUILD_PLATFORM, push=$PUSH_IMAGE)"
           if [ "$PUSH_IMAGE" = "true" ]; then
-            docker buildx build --platform "$BUILD_PLATFORM" -t "$IMAGE" -f "$DOCKERFILE" --push "$BUILD_CONTEXT"
-            echo "Pushed $IMAGE"
+            docker buildx build --platform "$BUILD_PLATFORM" $TAGS -f "$DOCKERFILE" --push "$BUILD_CONTEXT"
           else
-            docker buildx build --platform "$BUILD_PLATFORM" -t "$IMAGE" -f "$DOCKERFILE" --load "$BUILD_CONTEXT"
-            echo "Loaded $IMAGE into local docker"
+            docker buildx build --platform "$BUILD_PLATFORM" $TAGS -f "$DOCKERFILE" --load "$BUILD_CONTEXT"
           fi
         '''
       }
     }
   }
+
   post {
-    success { echo "${params.SERVICE_NAME}: image built (${params.ENVIRONMENT} / ${params.BUILD_PLATFORM})." }
+    success { echo "${params.SERVICE_NAME}: image built (${params.ENVIRONMENT} / ${env.BUILD_PLATFORM})." }
     failure { echo "${params.SERVICE_NAME}: build FAILED." }
   }
 }

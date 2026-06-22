@@ -4,9 +4,14 @@ When a new OptionsEdge service needs CI/CD, use this template so it matches ever
 service: a **build job** (builds the image per-arch) + the **k8s manifests** that
 `options-edge-deploy` applies. (Build and deploy are separate — this job only builds.)
 
-> Reminder: **dev = Mac/arm64**, **prod = Linux/amd64** — images must be built per-arch
-> (`linux/arm64` for docker-desktop, `linux/amd64` for the k3s nodes). See `docs/jenkins-jobs.md`.
-> Jenkins runs in docker-desktop on the Mac → **http://localhost:8085** (`192.168.100.102`).
+> **Conforms to the uniform deploy policy** — read `options-edge/UNIFORM-DEPLOY-POLICY.md` first.
+> The template uses `@Library('oe')` and derives **registry + build platform from
+> `oeProfile(ENVIRONMENT)`** (the single source of truth) — never hardcode them. It has
+> **no SCM polling** (manual builds only).
+>
+> Reminder: **dev = Mac/arm64**, **staging|production = Linux/amd64** — `oeProfile` keeps
+> registry/platform in sync per environment. Jenkins runs in docker-desktop on the Mac →
+> **http://localhost:8085** (`192.168.100.102`).
 
 ---
 
@@ -36,8 +41,10 @@ at the new repo + `Jenkinsfile`, strips the SCM poll (manual job), and creates
 So `options-edge-deploy` deploys it with everything else:
 - add `k8s/base/foo-deployment.yaml` (+ `foo-service.yaml` if it serves traffic)
 - list them in `k8s/base/kustomization.yaml`
-- the deployment's `image:` must match what the build job pushes:
-  `192.168.100.252:5000/options-edge-foo:<tag>` for prod.
+- the deployment's `image:` must match what the build job pushes — i.e. the
+  `oeProfile(ENVIRONMENT).registry` + `options-edge-foo:<tag>` (dev = local dev registry,
+  staging|production = the remote registry). Keep the manifest in ONE place (the service
+  repo) — do not duplicate it in `options-edge-deploy`.
 
 ### 5. (Optional) Add it to the bring-up-all umbrella
 If it should come up with a full platform bring-up, add a stage to `Jenkinsfile.bring-up-all`
@@ -47,16 +54,20 @@ If it should come up with a full platform bring-up, add a stage to `Jenkinsfile.
 
 ## Running the new job
 
-| | DEV (docker-desktop, Mac) | PROD (k3s A/B) |
-|---|---|---|
-| `ENVIRONMENT` | `dev` | `prod` |
-| `BUILD_PLATFORM` | `linux/arm64` | `linux/amd64` |
-| `IMAGE_REGISTRY` | *(empty)* | `192.168.100.252:5000` |
-| `PUSH_IMAGE` | `false` (load locally) | `true` (push to registry) |
-| `IMAGE_TAG` | `dev` | `prod` (or build number) |
+Normally you set only `ENVIRONMENT` — `IMAGE_REGISTRY` and `BUILD_PLATFORM` are derived
+from `oeProfile(ENVIRONMENT)` (leave them empty). They remain as overrides for callers
+(e.g. `bring-up-all`) that still pass them explicitly.
 
-1. **Build with Parameters** → set the values above → Build (builds + pushes/loads the image).
-2. Deploy: run **`options-edge-deploy`** (`ENVIRONMENT=dev|prod`) — it applies the whole
+| | DEV (docker-desktop, Mac) | PRODUCTION (k3s A/B) |
+|---|---|---|
+| `ENVIRONMENT` | `dev` | `production` |
+| `IMAGE_REGISTRY` | *(empty → oeProfile: local dev registry)* | *(empty → oeProfile: remote registry)* |
+| `BUILD_PLATFORM` | *(empty → oeProfile: `linux/arm64`)* | *(empty → oeProfile: `linux/amd64`)* |
+| `PUSH_IMAGE` | `true` (push so deploy can pull) | `true` |
+| `IMAGE_TAG` | *(empty → git short SHA)* | *(empty → git short SHA)* |
+
+1. **Build with Parameters** → set `ENVIRONMENT` → Build (builds + pushes the image).
+2. Deploy: run **`options-edge-deploy`** (`ENVIRONMENT=dev|production`) — it applies the whole
    namespace, including the new manifests.
 
 ---
