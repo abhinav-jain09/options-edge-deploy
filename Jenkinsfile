@@ -18,6 +18,7 @@ pipeline {
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '', description: 'Databento volume aggregator image')
     string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '', description: 'Databento feed image')
     string(name: 'DATABENTO_GEX_IMAGE', defaultValue: '', description: 'Databento per-strike GEX image')
+    string(name: 'DATABENTO_MAXPAIN_IMAGE', defaultValue: '', description: 'Databento per-(symbol,expiry) max-pain image')
     string(name: 'DATABENTO_MISSION_PACE_IMAGE', defaultValue: '', description: 'Databento mission pace image')
     string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', defaultValue: '', description: 'Databento mission pressure image')
     string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', defaultValue: '', description: 'Databento mission sandwich image')
@@ -72,6 +73,7 @@ pipeline {
     DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: oeProfile.image('databento-volume-aggregator', 'production', 'dev')}"
     DATABENTO_FEED_IMAGE = "${params.DATABENTO_FEED_IMAGE ?: oeProfile.image('databento-feed', 'production', 'dev')}"
     DATABENTO_GEX_IMAGE = "${params.DATABENTO_GEX_IMAGE ?: oeProfile.image('databento-gex', 'production', 'dev')}"
+    DATABENTO_MAXPAIN_IMAGE = "${params.DATABENTO_MAXPAIN_IMAGE ?: oeProfile.image('databento-maxpain', 'production', 'dev')}"
     DATABENTO_MISSION_PACE_IMAGE = "${params.DATABENTO_MISSION_PACE_IMAGE ?: oeProfile.image('databento-mission-pace', 'production', 'dev')}"
     DATABENTO_MISSION_PRESSURE_IMAGE = "${params.DATABENTO_MISSION_PRESSURE_IMAGE ?: oeProfile.image('databento-mission-pressure', 'production', 'dev')}"
     DATABENTO_MISSION_SANDWICH_IMAGE = "${params.DATABENTO_MISSION_SANDWICH_IMAGE ?: oeProfile.image('databento-mission-sandwich', 'production', 'dev')}"
@@ -265,6 +267,7 @@ RAW_TO_DISPLAY_IMAGE=$registry/options-edge-raw-to-display:$image_tag
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$registry/options-edge-databento-volume-aggregator:$image_tag
 DATABENTO_FEED_IMAGE=$registry/options-edge-databento-feed:$image_tag
 DATABENTO_GEX_IMAGE=$registry/options-edge-databento-gex:$image_tag
+DATABENTO_MAXPAIN_IMAGE=$registry/options-edge-databento-maxpain:$image_tag
 DATABENTO_MISSION_PACE_IMAGE=$registry/options-edge-databento-mission-pace:$image_tag
 DATABENTO_MISSION_PRESSURE_IMAGE=$registry/options-edge-databento-mission-pressure:$image_tag
 DATABENTO_MISSION_SANDWICH_IMAGE=$registry/options-edge-databento-mission-sandwich:$image_tag
@@ -289,6 +292,7 @@ RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
 DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
 DATABENTO_GEX_IMAGE=$DATABENTO_GEX_IMAGE
+DATABENTO_MAXPAIN_IMAGE=$DATABENTO_MAXPAIN_IMAGE
 DATABENTO_MISSION_PACE_IMAGE=$DATABENTO_MISSION_PACE_IMAGE
 DATABENTO_MISSION_PRESSURE_IMAGE=$DATABENTO_MISSION_PRESSURE_IMAGE
 DATABENTO_MISSION_SANDWICH_IMAGE=$DATABENTO_MISSION_SANDWICH_IMAGE
@@ -324,6 +328,7 @@ EOF
             DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
             DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
             DATABENTO_GEX_IMAGE=$DATABENTO_GEX_IMAGE
+            DATABENTO_MAXPAIN_IMAGE=$DATABENTO_MAXPAIN_IMAGE
             DATABENTO_MISSION_PACE_IMAGE=$DATABENTO_MISSION_PACE_IMAGE
             DATABENTO_MISSION_PRESSURE_IMAGE=$DATABENTO_MISSION_PRESSURE_IMAGE
             DATABENTO_MISSION_SANDWICH_IMAGE=$DATABENTO_MISSION_SANDWICH_IMAGE
@@ -680,7 +685,7 @@ EOF
           # service: match the base name, remap to the resolved repo, pin the digest). This works for ANY
           # overlay -- dev (which has its own images: block) and staging/production (which have none).
           yq -i '.images = []' "$_overlay_kustomization"
-          for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE DATABENTO_MISSION_PACE_IMAGE \
+          for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE DATABENTO_MAXPAIN_IMAGE DATABENTO_MISSION_PACE_IMAGE \
             DATABENTO_MISSION_PRESSURE_IMAGE DATABENTO_MISSION_SANDWICH_IMAGE DATABENTO_VOLUME_AGGREGATOR_IMAGE \
             DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
             IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
@@ -779,6 +784,7 @@ EOF
           kubectl -n options-edge set image deployment/options-edge-databento-feed databento-feed="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
+          kubectl -n options-edge set image deployment/databento-maxpain-service databento-maxpain="$DATABENTO_MAXPAIN_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pace-service databento-mission-pace="$DATABENTO_MISSION_PACE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pressure-service databento-mission-pressure="$DATABENTO_MISSION_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-sandwich-service databento-mission-sandwich="$DATABENTO_MISSION_SANDWICH_IMAGE"
@@ -809,6 +815,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/databento-mission-pressure-service
           kubectl -n options-edge rollout restart deployment/databento-mission-sandwich-service
           kubectl -n options-edge rollout restart deployment/databento-gex-service
+          kubectl -n options-edge rollout restart deployment/databento-maxpain-service
           kubectl -n options-edge rollout restart deployment/volume-pace-service
           kubectl -n options-edge rollout restart deployment/volume-pace-databento-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-service
@@ -836,6 +843,7 @@ EOF
           kubectl -n options-edge rollout status deployment/databento-mission-pressure-service --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-mission-sandwich-service --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=240s
+          kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=240s
           kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=180s
           kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=180s
@@ -1013,6 +1021,7 @@ EOF
               string(name: 'RAW_TO_DISPLAY_IMAGE', value: params.RAW_TO_DISPLAY_IMAGE),
               string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
               string(name: 'DATABENTO_GEX_IMAGE', value: params.DATABENTO_GEX_IMAGE),
+              string(name: 'DATABENTO_MAXPAIN_IMAGE', value: params.DATABENTO_MAXPAIN_IMAGE),
               string(name: 'DATABENTO_MISSION_PACE_IMAGE', value: params.DATABENTO_MISSION_PACE_IMAGE),
               string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', value: params.DATABENTO_MISSION_PRESSURE_IMAGE),
               string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', value: params.DATABENTO_MISSION_SANDWICH_IMAGE),

@@ -12,6 +12,8 @@ resources:
   - databento-volume-aggregator-service.yaml
   - databento-gex-deployment.yaml
   - databento-gex-service.yaml
+  - databento-maxpain-deployment.yaml
+  - databento-maxpain-service.yaml
   - databento-mission-pace-deployment.yaml
   - databento-mission-pace-service.yaml
   - databento-mission-pressure-deployment.yaml
