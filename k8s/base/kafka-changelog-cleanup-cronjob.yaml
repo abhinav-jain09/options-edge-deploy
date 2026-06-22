@@ -113,28 +113,45 @@ spec:
                       SKIPPED=$((SKIPPED+1)); continue
                     fi
 
-                    # GetOffsetShell --time <ts>: returns the earliest offset with timestamp >= ts
-                    # per partition. THREE outcomes:
-                    #   (a) all records older than cutoff -> empty result (NO record has ts >= cutoff)
-                    #       -> we want to trim EVERYTHING -> fall through to --time -1 (latest end offset)
-                    #   (b) some older + some newer -> returns the partition's first-new offset
-                    #       -> trim before that = drop only the old ones
-                    #   (c) all newer than cutoff -> returns the earliest offset of each partition
-                    #       -> trim before that = no-op (offset is already at the head)
-                    OFFSETS=$(kafka-run-class kafka.tools.GetOffsetShell \
-                                              --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
-                                              --topic "$T" --time "$TS_MS" 2>/dev/null || true)
-                    if [ -z "$OFFSETS" ]; then
-                      # Case (a): all records are older than cutoff -> trim to end (latest offsets).
-                      OFFSETS=$(kafka-run-class kafka.tools.GetOffsetShell \
-                                                --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
-                                                --topic "$T" --time -1 2>/dev/null || true)
-                      if [ -z "$OFFSETS" ]; then
-                        echo "[cleanup] SKIP $T (no end offsets available — topic has no partitions?)" >&2
-                        SKIPPED=$((SKIPPED+1)); continue
-                      fi
-                      echo "[cleanup] $T: all records older than cutoff -> trimming to latest end offsets"
+                    # Per-partition offset resolution. GetOffsetShell --time <ts> returns the
+                    # earliest offset with timestamp >= ts. CRUCIALLY, it OMITS partitions where
+                    # NO record has ts >= ts (i.e. all records in that partition are older than
+                    # cutoff). To handle that, we query LATEST end offsets per partition and
+                    # MERGE: prefer the timestamp offset where present, else fall back to the
+                    # latest end offset (= trim all records in that partition).
+                    #
+                    # Both lookups must succeed for us to proceed. If either errors, SKIP the
+                    # topic rather than guess — guessing here could trim a topic to its end.
+                    LATEST_ERR=$(mktemp); LATEST_OUT=$(mktemp)
+                    if ! kafka-run-class kafka.tools.GetOffsetShell \
+                                          --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+                                          --topic "$T" --time -1 >"$LATEST_OUT" 2>"$LATEST_ERR"; then
+                      echo "[cleanup] SKIP $T (GetOffsetShell --time -1 failed: $(cat "$LATEST_ERR"))" >&2
+                      SKIPPED=$((SKIPPED+1)); rm -f "$LATEST_OUT" "$LATEST_ERR"; continue
                     fi
+                    LATEST=$(grep -E '^[^[:space:]]+:[0-9]+:[0-9]+$' "$LATEST_OUT" || true)
+                    rm -f "$LATEST_OUT" "$LATEST_ERR"
+                    if [ -z "$LATEST" ]; then
+                      # No partitions / empty topic — nothing to trim.
+                      echo "[cleanup] SKIP $T (no end offsets — empty topic)"
+                      SKIPPED=$((SKIPPED+1)); continue
+                    fi
+
+                    TS_ERR=$(mktemp); TS_OUT=$(mktemp)
+                    if ! kafka-run-class kafka.tools.GetOffsetShell \
+                                          --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+                                          --topic "$T" --time "$TS_MS" >"$TS_OUT" 2>"$TS_ERR"; then
+                      echo "[cleanup] SKIP $T (GetOffsetShell --time $TS_MS failed: $(cat "$TS_ERR"))" >&2
+                      SKIPPED=$((SKIPPED+1)); rm -f "$TS_OUT" "$TS_ERR"; continue
+                    fi
+                    TS_OFFSETS=$(grep -E '^[^[:space:]]+:[0-9]+:[0-9]+$' "$TS_OUT" || true)
+                    rm -f "$TS_OUT" "$TS_ERR"
+
+                    # Merge: timestamp wins, latest fills gaps. Output `topic:part:offset`.
+                    OFFSETS=$(awk -F: '
+                      NR==FNR { ts[$1 FS $2] = $3; next }
+                      { key=$1 FS $2; if (key in ts) print $1":"$2":"ts[key]; else print $0 }
+                    ' <(printf '%s\n' "$TS_OFFSETS") <(printf '%s\n' "$LATEST"))
 
                     # Build the kafka-delete-records JSON spec from `TOPIC:PARTITION:OFFSET` lines.
                     SPEC=$(mktemp)
