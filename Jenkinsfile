@@ -44,6 +44,7 @@ pipeline {
     string(name: 'IB_PORT', defaultValue: '4001', description: 'IB Gateway/TWS API port')
     string(name: 'IB_CLIENT_ID', defaultValue: '212', description: 'IBKR feed API client id')
     string(name: 'IB_EXPIRY', defaultValue: '', description: 'Option expiry/date. Empty uses the current weekday on the Jenkins agent.')
+    string(name: 'DATABENTO_EXPIRY', defaultValue: '', description: 'Override expiry for Databento Historical feed (YYYYMMDD). Empty -> auto-resolved from Databento metadata + MarketCalendar in the Resolve Databento Expiry stage (fail-closed if Databento is unreachable or the result is not a trading day).')
     string(name: 'IB_MAX_STRIKES', defaultValue: '43', description: 'Max strikes around spot for IBKR feed')
     booleanParam(name: 'KAFKA_CLEANUP_TOPICS', defaultValue: false, description: 'Clean Kafka topics before deployment')
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
@@ -97,6 +98,7 @@ pipeline {
     IB_PORT = "${params.IB_PORT ?: '4001'}"
     IB_CLIENT_ID = "${params.IB_CLIENT_ID ?: '212'}"
     IB_EXPIRY = "${params.IB_EXPIRY ?: ''}"
+    DATABENTO_EXPIRY = "${params.DATABENTO_EXPIRY ?: ''}"
     IB_MAX_STRIKES = "${params.IB_MAX_STRIKES ?: '43'}"
     KAFKA_CLEANUP_TOPICS = "${params.KAFKA_CLEANUP_TOPICS ?: false}"
     KAFKA_DELETE_UNWANTED_TOPICS = "${params.KAFKA_DELETE_UNWANTED_TOPICS ?: false}"
@@ -201,6 +203,29 @@ pipeline {
           printf 'EFFECTIVE_BUILD_PLATFORM=%s\n' "$effective_build_platform" >"$JENKINS_WORK_DIR/options-edge-build.env"
           echo "Effective build/deploy image platform: $effective_build_platform"
         '''
+      }
+    }
+    stage('Resolve Databento Expiry') {
+      // Placed AFTER Validate (so enforce-main-branch.sh has already blocked non-main runs)
+      // and BEFORE Bootstrap Jenkins Kubernetes Guard. Resolves the latest OPRA.PILLAR
+      // Historical trading-day expiry via scripts/jenkins/pick-databento-historical-expiry.sh
+      // and exposes it as env.RESOLVED_DATABENTO_EXPIRY for the configmap-patch stage.
+      // Fail-closed — if Databento metadata is unreachable or the result is not a trading
+      // day (e.g., explicit override of a holiday like Juneteenth), the build fails here
+      // instead of crash-looping the feed pod later.
+      steps {
+        withCredentials([
+          string(credentialsId: params.DATABENTO_API_KEY_CREDENTIAL_ID, variable: 'DATABENTO_API_KEY')
+        ]) {
+          script {
+            def resolved = sh(
+              returnStdout: true,
+              script: 'scripts/jenkins/pick-databento-historical-expiry.sh'
+            ).trim()
+            env.RESOLVED_DATABENTO_EXPIRY = resolved
+            echo "Resolved DATABENTO_EXPIRY = ${resolved}"
+          }
+        }
       }
     }
     stage('Bootstrap Jenkins Kubernetes Guard') {
@@ -773,7 +798,7 @@ EOF
             --patch "$(cat "$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json")"
           if kubectl -n options-edge get configmap options-edge-databento-feed-config >/dev/null 2>&1; then
             cat >"$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json" <<EOF
-{"data":{"APP_PROFILE":"$databento_feed_profile","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","DATABENTO_EXPIRY":"$effective_expiry"}}
+{"data":{"APP_PROFILE":"$databento_feed_profile","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","DATABENTO_EXPIRY":"$RESOLVED_DATABENTO_EXPIRY"}}
 EOF
             kubectl -n options-edge patch configmap options-edge-databento-feed-config \
               --type merge \
@@ -1040,12 +1065,14 @@ EOF
               string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', value: params.STRIKE_FLOW_CLASSIFIER_IMAGE),
               string(name: 'IBKR_FEED_IMAGE', value: params.IBKR_FEED_IMAGE),
               string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', value: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID),
+              string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
               string(name: 'MARKET_DATA_SOURCE', value: params.MARKET_DATA_SOURCE),
               string(name: 'RAW_TOPIC', value: params.RAW_TOPIC),
               string(name: 'IB_HOST', value: params.IB_HOST),
               string(name: 'IB_PORT', value: params.IB_PORT),
               string(name: 'IB_CLIENT_ID', value: params.IB_CLIENT_ID),
               string(name: 'IB_EXPIRY', value: params.IB_EXPIRY),
+              string(name: 'DATABENTO_EXPIRY', value: params.DATABENTO_EXPIRY),
               string(name: 'IB_MAX_STRIKES', value: params.IB_MAX_STRIKES),
               booleanParam(name: 'KAFKA_CLEANUP_TOPICS', value: false),
               booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', value: false),

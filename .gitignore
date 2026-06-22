@@ -17,3 +17,4 @@ __pycache__/
 /evidance-report/
 /.replay/**/evidence-report/
 /.replay/**/evidance-report/
+scripts/jenkins/.helper-venv/
