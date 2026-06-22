@@ -46,6 +46,11 @@ spec:
         app.kubernetes.io/part-of: options-edge
         app.kubernetes.io/component: auth
     spec:
+      # Pin to the control-plane node (same as the Keycloak Deployment) so Keycloak reaches its DB intra-node
+      # on the node where cluster DNS works. NOTE: local-path PVs are node-affine — when changing this, the
+      # existing PVC (bound on the old node) must be deleted so a new one provisions here. See docs/keycloak-prod.md.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
       securityContext:
         fsGroup: 999          # postgres group, so the mounted volume is writable
       containers:

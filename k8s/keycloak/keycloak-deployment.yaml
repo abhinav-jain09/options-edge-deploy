@@ -77,6 +77,13 @@ spec:
         app.kubernetes.io/part-of: options-edge
         app.kubernetes.io/component: auth
     spec:
+      # Pin to the control-plane node. Cluster DNS (CoreDNS) and traefik both run there, and pods on the
+      # oe-failover-56 node cannot currently reach CoreDNS (cross-node pod networking to that node is broken),
+      # so a Keycloak pod scheduled there cannot resolve its Postgres Service and fails with a JDBC
+      # acquisition timeout. Co-locating Keycloak + its Postgres here keeps DNS, the DB connection, and the
+      # traefik->Keycloak hop all intra-node on the healthy node. See docs/keycloak-prod.md.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
       containers:
         - name: keycloak
           # Pinned to the tag's current manifest-list digest for reproducibility (arch-independent index;
