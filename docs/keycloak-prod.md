@@ -138,10 +138,12 @@ VITE_AUTH_ENABLED=true
 VITE_AUTH_ISSUER=https://auth.fullfunding.nl/realms/optionsedge
 VITE_AUTH_CLIENT_ID=options-edge-web
 AUTH_AUDIENCE=options-edge-web
-# feed-gateway
-GATEWAY_AUTH_ENABLED=true
-GATEWAY_AUTH_ISSUER_URI=https://auth.fullfunding.nl/realms/optionsedge
-GATEWAY_AUTH_AUDIENCE=options-edge-web
+# feed-gateway (oc.bearer WS auth — the web app's path; NOT the ticket/GATEWAY_AUTH_ENABLED mode,
+# which needs a replay orchestrator + approval gate prod doesn't run). Set on the feed-gateway Deployment.
+WS_AUTH_ENABLED=true
+WS_AUTH_ISSUER_URI=https://auth.fullfunding.nl/realms/optionsedge
+WS_AUTH_AUDIENCE=options-edge-web
+WS_ALLOWED_ORIGINS=https://fullfunding.nl   # explicit allow-list required once auth is on
 ```
 
 The app prod profiles **fail closed**: they refuse to start unless auth is enabled with a non-loopback HTTPS
