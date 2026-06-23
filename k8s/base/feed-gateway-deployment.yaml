@@ -38,6 +38,22 @@ spec:
               value: "524288"
             - name: GATEWAY_KAFKA_RECEIVE_BUFFER_BYTES
               value: "524288"
+            # --- WS auth: close the open market-data WS for the web app (oc.bearer / legacy single-tenant
+            # mode). The web app authenticates the /ws/events handshake with the oc.bearer subprotocol +
+            # access token; the gateway validates the JWT against the prod Keycloak issuer. This wires ONLY
+            # the JWT interceptor (NOT GATEWAY_AUTH_ENABLED / the multi-tenant ticket mode, which requires a
+            # replay orchestrator + approval gate that prod does not run — see MtSessionSecurityInvariant).
+            # WS_ALLOWED_ORIGINS MUST be an explicit allow-list (not '*') once auth is on or the gateway
+            # fails closed. The oc.bearer default Selection (IB_SYMBOL/IB_EXPIRY/APP_MARKET_DATA_SOURCE)
+            # comes from options-edge-config (IB_EXPIRY is filled to a weekday date by the deploy pipeline). ---
+            - name: WS_AUTH_ENABLED
+              value: "true"
+            - name: WS_AUTH_ISSUER_URI
+              value: "https://auth.fullfunding.nl/realms/optionsedge"
+            - name: WS_AUTH_AUDIENCE
+              value: "options-edge-web"
+            - name: WS_ALLOWED_ORIGINS
+              value: "https://fullfunding.nl"
           envFrom:
             - configMapRef:
                 name: options-edge-config
