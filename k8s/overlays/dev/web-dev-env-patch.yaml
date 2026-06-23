@@ -8,7 +8,16 @@
 # (options-edge-web-deploy #224, which passed the Selenium live-UI smoke):
 #   - Keycloak issuer:  http://192.168.100.102:8089/realms/optionsedge
 #   - Feed-gateway WS:   ws://192.168.100.102:8093/ws/events  (browser + server)
-#   - UI base / mission-control / replay: localhost (Mac-reachable dev endpoints)
+#   - Replay orchestrator: http://localhost:8095 (dev host jar)
+#
+# UI base / mission-control point at the k8s web Service's own port. PR #104 exposes
+# options-edge-web as a LoadBalancer on :8094 (DELIBERATELY not :8090, so the new k8s
+# web coexists with the legacy Tomcat web on :8090 until the signed-off cutover). In
+# docker-desktop k3s the ServiceLB binds that port on localhost, so the Mac browser
+# reaches the dev k8s web at http://localhost:8094 — directly analogous to prod, whose
+# web smoke already targets 192.168.100.252:8094. (The old :8090 here would have pointed
+# the browser at the legacy listener, not this k8s Deployment — the bug Codex caught.)
+# Dev-deploy smoke must pass WEB_PUBLIC_URL=http://localhost:8094 to verify THIS web.
 #
 # Auth stays MANDATORY in dev (mirrors prod per rule.md) — only the issuer host changes.
 # Image + imagePullPolicy are handled by the dev overlay kustomization (images: rewrite
@@ -37,8 +46,8 @@ spec:
             - name: VITE_WS_URL
               value: "ws://192.168.100.102:8093/ws/events"
             - name: VITE_API_BASE_URL
-              value: "http://localhost:8090"
+              value: "http://localhost:8094"
             - name: VITE_MISSION_CONTROL_URL
-              value: "http://localhost:8090"
+              value: "http://localhost:8094"
             - name: VITE_REPLAY_ORCHESTRATOR_URL
               value: "http://localhost:8095"
