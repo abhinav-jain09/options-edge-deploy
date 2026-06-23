@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: pin-postgres-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: pin-postgres-writer
+    app.kubernetes.io/part-of: options-edge
+  # No prometheus.io/scrape: this writer exposes /health only (no /metrics endpoint yet); a scrape
+  # annotation would point Prometheus at a 404. Add it when a metrics endpoint lands.
+spec:
+  selector:
+    app.kubernetes.io/name: pin-postgres-writer
+  ports:
+    - name: health
+      port: 8098
+      targetPort: health

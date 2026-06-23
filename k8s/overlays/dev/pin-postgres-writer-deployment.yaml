@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pin-postgres-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: pin-postgres-writer
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Single replica: at-least-once Kafka consumers with per-row idempotent upserts. A second replica would
+  # only double-read the same partitions (same group) without adding throughput this workload needs.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pin-postgres-writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pin-postgres-writer
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: pin-postgres-writer
+          image: 192.168.100.252:5000/options-edge-pin-postgres-writer:dev
+          imagePullPolicy: Always
+          # Shared platform config/secret: POSTGRES_JDBC_URL/USER/PASSWORD, KAFKA_BOOTSTRAP_SERVERS,
+          # KAFKA_SCHEMA_REGISTRY_URL. The pin topic/group names use the app's own dev defaults.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          ports:
+            - name: health
+              containerPort: 8098
+          # /health/live = process up; /health/ready = 200 only when BOTH consumers reach RUNNING
+          # (subscribed + polling), 503 otherwise so a rollout is held until the writer is consuming.
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
