@@ -972,7 +972,12 @@ EOF
         sh '''
           set -euo pipefail
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://host.docker.internal:8090}"
+            # Default to the k8s web Service (LoadBalancer :8094, bound on localhost by
+            # docker-desktop ServiceLB on the native Mac agent) — mirroring prod, which
+            # verifies the k8s web at 192.168.100.252:8094. Must NOT default to the legacy
+            # Tomcat :8090, or this stage false-greens against the old listener instead of
+            # the options-edge-web Deployment this pipeline just rolled out.
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8094}"
             curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
             curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
             echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
@@ -1000,12 +1005,15 @@ EOF
               # the Smoke stage targets the same endpoint as 'Verify OptionsEdge
               # Web App'. The smoke runs on the native (Mac) Jenkins agent, where
               # the docker-only DNS name host.docker.internal does not resolve, so
-              # dev runs pass WEB_PUBLIC_URL=http://localhost:8090.
+              # the dev default below uses localhost (docker-desktop ServiceLB binds
+              # the k8s web LoadBalancer :8094 on localhost).
               # Production must NOT honor an inherited dev WEB_PUBLIC_URL (the
               # promote step forwards the dev value); it always targets prod.
               WEB_BASE_URL="$WEB_PUBLIC_URL"
             elif [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              WEB_BASE_URL=http://host.docker.internal:8090
+              # k8s web Service (:8094 on localhost), NOT legacy Tomcat :8090 — same
+              # rationale as the Verify stage above; mirrors prod's :8094 target.
+              WEB_BASE_URL=http://localhost:8094
             else
               WEB_BASE_URL=http://192.168.100.252:8094
             fi
