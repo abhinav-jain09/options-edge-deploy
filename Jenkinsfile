@@ -222,41 +222,7 @@ captured loudly in the build log."""
             }
           }
         }
-        sh '''
-          set -euo pipefail
-          scripts/jenkins/enforce-main-branch.sh
-          scripts/jenkins/enforce-local-dev-defaults.sh
-          test "$REMOTE_APP_HOME" = "$OE_REMOTE_APP_HOME"
-          test ! -d /root/options-edge
-          test ! -d /options-edge
-          mkdir -p "$JENKINS_WORK_DIR"
-          test -w "$JENKINS_WORK_DIR"
-          case "${ENVIRONMENT:-dev}" in
-            dev)
-              effective_build_platform="${BUILD_PLATFORM:-linux/arm64}"
-              ;;
-            production)
-              effective_build_platform="linux/amd64"
-              if [ -n "${BUILD_PLATFORM:-}" ] && [ "$BUILD_PLATFORM" != "linux/amd64" ]; then
-                echo "BUILD_PLATFORM=$BUILD_PLATFORM is not allowed for ${ENVIRONMENT}; production Kubernetes nodes are CentOS amd64 and require linux/amd64." >&2
-                exit 1
-              fi
-              ;;
-            *)
-              echo "Unsupported ENVIRONMENT for BUILD_PLATFORM resolution: ${ENVIRONMENT:-}" >&2
-              exit 1
-              ;;
-          esac
-          case "$effective_build_platform" in
-            linux/arm64|linux/amd64) ;;
-            *)
-              echo "Unsupported BUILD_PLATFORM: $effective_build_platform" >&2
-              exit 1
-              ;;
-          esac
-          printf 'EFFECTIVE_BUILD_PLATFORM=%s\n' "$effective_build_platform" >"$JENKINS_WORK_DIR/options-edge-build.env"
-          echo "Effective build/deploy image platform: $effective_build_platform"
-        '''
+        sh 'bash -x scripts/deploy/validate-platform.sh'
       }
     }
     stage('Resolve Databento Expiry') {
@@ -616,40 +582,7 @@ captured loudly in the build log."""
         expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_HPSF_SMOKE }
       }
       steps {
-        sh '''
-          set -euo pipefail
-          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          # Single source of truth: derive bootstrap + RF/minISR from the rendered
-          # per-environment configmap (k8s/overlays/${ENVIRONMENT}).
-          . scripts/kafka/load-kafka-settings.sh
-          export TOPIC_PREFIX
-          export KUBECONFIG="${KUBECONFIG}"
-          export NAMESPACE=options-edge
-          export REQUIRE_LATEST_SIGNAL=false
-          scripts/kafka/create-hpsf-topics.sh
-          scripts/kafka/verify-hpsf-topics.sh
-          restore_stage_b_release_runtime() {
-            kubectl -n "$NAMESPACE" set env deployment/hpsf-stage-b-service \
-              HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-v2-1 \
-              HPSF_STAGE_B_EVALUATION_MODE- \
-              HPSF_STAGE_B_PUNCTUATION_TYPE- \
-              HPSF_ALLOW_DEBUG_EVALUATION_IN_LIVE- || true
-            kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-stage-b-service || true
-            kubectl -n "$NAMESPACE" rollout status deployment/hpsf-stage-b-service --timeout=240s || true
-          }
-          trap 'rc=$?; restore_stage_b_release_runtime; exit $rc' EXIT
-          scripts/kafka/create-hpsf-topics.sh
-          scripts/smoke/check-hpsf-deployment.sh
-          stage_b_smoke_app_id="options-edge-hpsf-stage-b-v2-1-smoke-${BUILD_NUMBER:-manual}"
-          echo "Using isolated Stage B Kafka Streams application id for deploy smoke: ${stage_b_smoke_app_id}"
-          kubectl -n "$NAMESPACE" set env deployment/hpsf-stage-b-service \
-            HPSF_STREAMS_APPLICATION_ID="${stage_b_smoke_app_id}" \
-            HPSF_STAGE_B_EVALUATION_MODE=SCHEDULED \
-            HPSF_STAGE_B_PUNCTUATION_TYPE=WALL_CLOCK_TIME
-          kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-stage-b-service
-          kubectl -n "$NAMESPACE" rollout status deployment/hpsf-stage-b-service --timeout=600s || echo "WARN: hpsf-stage-b rollout status slow (old replica likely stuck terminating on dev); runtime check below validates the new pod"
-          scripts/smoke/check-hpsf-stage-b-runtime.sh
-        '''
+        sh 'bash -x scripts/deploy/hpsf-smoke.sh'
       }
     }
     stage('Promote To Production') {
