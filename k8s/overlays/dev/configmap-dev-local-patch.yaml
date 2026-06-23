@@ -16,9 +16,14 @@ data:
   # Dev-only data-topic retention: 10h (36,000,000 ms). Overrides the base 24h
   # (KAFKA_TOPIC_RETENTION_MS=86400000); prod keeps 24h. load-kafka-settings.sh
   # derives KAFKA_TOPIC_RETENTION_MS from this rendered per-env configmap, so the
-  # Kafka Topics stage applies 10h to dev data topics. (Streams-internal/changelog
-  # retention is set separately in the Jenkinsfile and is unchanged.)
+  # Kafka Topics stage applies 10h to dev data topics.
   KAFKA_TOPIC_RETENTION_MS: "36000000"
+  # Dev-only universal retention CAP: 10h. load-kafka-settings.sh exports this, and
+  # the HPSF topic create/verify scripts + the Kafka Internal Topics stage cap every
+  # topic's retention.ms at this value when set — so ALL dev Kafka topics (data,
+  # streams-internal, changelog, HPSF/opra/signal/dlq/audit) retain at most 10h.
+  # Unset in prod -> no cap -> prod keeps its per-topic retention (24h/7d/30d).
+  KAFKA_MAX_RETENTION_MS: "36000000"
   POSTGRES_JDBC_URL: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
   POSTGRES_USER: options_flow
   POSTGRES_PASSWORD: Options#100

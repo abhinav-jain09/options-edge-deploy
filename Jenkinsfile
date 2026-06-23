@@ -707,10 +707,17 @@ EOF
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
-          export KAFKA_TOPIC_RETENTION_MS=86400000
-          export KAFKA_STREAMS_INTERNAL_RETENTION_MS="${KAFKA_STREAMS_INTERNAL_RETENTION_MS:-86400000}"
+          # Single source of truth for the per-env retention cap: load-kafka-settings.sh
+          # exports KAFKA_MAX_RETENTION_MS from the rendered configmap (dev=10h; unset in
+          # prod). KAFKA_BOOTSTRAP_SERVERS/MIN_ISR are already set above, so its ':='
+          # derivations no-op for those. The streams-internal + changelog retention then
+          # default to the cap (dev 10h), or 24h when no cap is set (prod unchanged).
+          . scripts/kafka/load-kafka-settings.sh
+          internal_ret_default="${KAFKA_MAX_RETENTION_MS:-86400000}"
+          export KAFKA_TOPIC_RETENTION_MS="${internal_ret_default}"
+          export KAFKA_STREAMS_INTERNAL_RETENTION_MS="${KAFKA_STREAMS_INTERNAL_RETENTION_MS:-$internal_ret_default}"
           export KAFKA_STREAMS_INTERNAL_SEGMENT_MS="${KAFKA_STREAMS_INTERNAL_SEGMENT_MS:-3600000}"
-          export KAFKA_CHANGELOG_RETENTION_MS="${KAFKA_CHANGELOG_RETENTION_MS:-86400000}"
+          export KAFKA_CHANGELOG_RETENTION_MS="${KAFKA_CHANGELOG_RETENTION_MS:-$internal_ret_default}"
           export KAFKA_CHANGELOG_DELETE_RETENTION_MS="${KAFKA_CHANGELOG_DELETE_RETENTION_MS:-3600000}"
           export KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO="${KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO:-0.01}"
           scripts/kafka/apply-internal-topic-configs.sh
