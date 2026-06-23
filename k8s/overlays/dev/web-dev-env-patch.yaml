@@ -17,7 +17,9 @@
 # reaches the dev k8s web at http://localhost:8094 — directly analogous to prod, whose
 # web smoke already targets 192.168.100.252:8094. (The old :8090 here would have pointed
 # the browser at the legacy listener, not this k8s Deployment — the bug Codex caught.)
-# Dev-deploy smoke must pass WEB_PUBLIC_URL=http://localhost:8094 to verify THIS web.
+# The dev Verify/Smoke stages now default to http://localhost:8094 too (Jenkinsfile), so
+# the pipeline verifies THIS k8s web rather than the legacy :8090 listener — no operator
+# WEB_PUBLIC_URL override required.
 #
 # Auth stays MANDATORY in dev (mirrors prod per rule.md) — only the issuer host changes.
 # Image + imagePullPolicy are handled by the dev overlay kustomization (images: rewrite
