@@ -2,6 +2,7 @@ resources:
   - ../../base
 patches:
   - path: configmap-dev-local-patch.yaml
+  - path: web-dev-env-patch.yaml
   - target:
       kind: Deployment
     patch: |-
@@ -74,4 +75,7 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-ibkr-feed
     newName: host.docker.internal:5001/options-edge-ibkr-feed
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-web
+    newName: host.docker.internal:5001/options-edge-web
     newTag: dev
