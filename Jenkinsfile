@@ -28,6 +28,7 @@ pipeline {
     string(name: 'VOLUME_SANDWICH_IMAGE', defaultValue: '', description: 'Volume-sandwich image')
     string(name: 'UNUSUAL_WHALES_GEX_IMAGE', defaultValue: '', description: 'Unusual Whales GEX image')
     string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Unusual Whales GEX history image')
+    string(name: 'DATABENTO_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Databento GEX history image')
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pressure Postgres writer image')
     string(name: 'PIN_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pin Postgres writer image (dev-only deployment)')
@@ -91,6 +92,7 @@ pipeline {
     VOLUME_SANDWICH_IMAGE = "${params.VOLUME_SANDWICH_IMAGE ?: oeProfile.image('volume-sandwich', 'production', 'dev')}"
     UNUSUAL_WHALES_GEX_IMAGE = "${params.UNUSUAL_WHALES_GEX_IMAGE ?: oeProfile.image('unusual-whales-gex', 'production', 'dev')}"
     UNUSUAL_WHALES_GEX_HISTORY_IMAGE = "${params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE ?: oeProfile.image('unusual-whales-gex-history', 'production', 'dev')}"
+    DATABENTO_GEX_HISTORY_IMAGE = "${params.DATABENTO_GEX_HISTORY_IMAGE ?: oeProfile.image('databento-gex-history', 'production', 'dev')}"
     RAW_POSTGRES_WRITER_IMAGE = "${params.RAW_POSTGRES_WRITER_IMAGE ?: oeProfile.image('raw-postgres-writer', 'production', 'dev')}"
     PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pressure-postgres-writer', 'production', 'dev')}"
     // pin-postgres-writer is a DEV-ONLY deployment (manifests live in k8s/overlays/dev, not base). The env
@@ -693,6 +695,7 @@ captured loudly in the build log."""
               string(name: 'VOLUME_SANDWICH_IMAGE', value: params.VOLUME_SANDWICH_IMAGE),
               string(name: 'UNUSUAL_WHALES_GEX_IMAGE', value: params.UNUSUAL_WHALES_GEX_IMAGE),
               string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', value: params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE),
+              string(name: 'DATABENTO_GEX_HISTORY_IMAGE', value: params.DATABENTO_GEX_HISTORY_IMAGE),
               string(name: 'RAW_POSTGRES_WRITER_IMAGE', value: params.RAW_POSTGRES_WRITER_IMAGE),
               string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', value: params.PRESSURE_POSTGRES_WRITER_IMAGE),
               string(name: 'FEED_GATEWAY_IMAGE', value: params.FEED_GATEWAY_IMAGE),
