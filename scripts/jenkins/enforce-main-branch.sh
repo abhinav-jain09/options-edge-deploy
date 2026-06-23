@@ -11,15 +11,17 @@ fi
 
 target_env="${ENVIRONMENT:-dev}"
 if [[ "$job_name" == "$replay_job_name" ]]; then
+  # The replay job intentionally tests un-merged changes against a per-run topic
+  # namespace; it is the ONLY job permitted to override the allowed branch.
   allowed_branch="${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}"
-elif [[ "$target_env" == "dev" ]]; then
-  # Dev may deploy any branch (for testing un-merged changes against the dev cluster).
-  allowed_branch="${DEPLOY_BRANCH:-${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}}"
 else
-  # Staging and production are locked to main: prod only ever runs reviewed-and-merged code.
+  # Every other deploy is LOCKED TO MAIN — dev AND prod. Only reviewed-and-merged
+  # code reaches a cluster. The earlier dev-only branch escape ("dev may deploy
+  # any branch") was removed by user policy: feature branches must be merged
+  # before any cluster deploy.
   requested_branch="${DEPLOY_BRANCH:-main}"
   if [[ "$requested_branch" != "main" ]]; then
-    echo "Jenkins deployment blocked: '$target_env' deploys must use branch 'main' (got '$requested_branch'). Branch deploys are allowed for ENVIRONMENT=dev only." >&2
+    echo "Jenkins deployment blocked: '$target_env' deploys must use branch 'main' (got '$requested_branch'). All deploys are main-only (dev and prod). Merge first." >&2
     exit 1
   fi
   if [[ "${JENKINS_ALLOWED_DEPLOY_BRANCH:-main}" != "main" ]]; then

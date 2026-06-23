@@ -4,7 +4,7 @@ pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'], description: 'Target environment')
-    string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. Any branch is allowed for ENVIRONMENT=dev; production is locked to main. The job SCM checks out this branch.')
+    string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. LOCKED TO main for all environments (dev AND prod) — feature branches must be merged before deploy. The job SCM checks out this branch; enforce-main-branch.sh rejects anything but main.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '', description: 'Dev deployer kubeconfig path on the Jenkins agent (Mac, ~/.kube — like prod). Bootstrap generates it from the admin kubeconfig.')
     string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '', description: 'Dev admin (docker-desktop cluster-admin) kubeconfig used only to bootstrap the Jenkins-only deploy guard. Empty = derive from oeProfile(ENVIRONMENT).kubeconfigAdmin.')
     string(name: 'PROD_KUBECONFIG_FILE', defaultValue: '', description: 'Deployer kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button (prod is a separate cluster from dev).')
