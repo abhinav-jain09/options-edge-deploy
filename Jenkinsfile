@@ -42,6 +42,7 @@ pipeline {
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
     string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-db-password', description: 'Jenkins secret-text credential with the prod Keycloak DB password (oe-keycloak-secrets POSTGRES_PASSWORD)')
     string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-admin-password', description: 'Jenkins secret-text credential with the prod Keycloak bootstrap admin password')
+    string(name: 'SMOKE_AUTH_CREDENTIAL_ID', defaultValue: '', description: 'Optional Jenkins secret-text credential holding the options-edge-smoke client_credentials SECRET. When set, the web smoke obtains a Keycloak token and deep-verifies authenticated /api/config (not just the 401 posture). Empty = posture-only. Create the realm client + this credential per docs/smoke-auth-account.md.')
     choice(name: 'MARKET_DATA_SOURCE', choices: ['DATABENTO', 'IBKR'], description: 'Runtime raw market-data source for processors')
     string(name: 'RAW_TOPIC', defaultValue: '', description: 'Override raw topic. Empty uses source default.')
     string(name: 'IB_HOST', defaultValue: '127.0.0.1', description: 'IB Gateway/TWS host. IBKR feed uses hostNetwork, so localhost is the remote host.')
@@ -1033,29 +1034,36 @@ EOF
         expression { return !params.DEPLOY_DRY_RUN }
       }
       steps {
-        sh '''
-          set -euo pipefail
-          # The option-chain UI is gated behind Keycloak login: public shell/assets serve, but /api/** is
-          # 401 without a bearer JWT. check-options-edge-web.sh asserts that posture (public "/" +
-          # "/option-chain" == 200; "/api/config" == 200+provider when auth is off OR 401 when on), so the
-          # verify is auth-on/off portable instead of false-failing on the (correct) 401.
-          if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            # Default to the k8s web Service (LoadBalancer :8094, bound on localhost by
-            # docker-desktop ServiceLB on the native Mac agent) — mirroring prod, which
-            # verifies the k8s web at 192.168.100.252:8094. Must NOT default to the legacy
-            # Tomcat :8090, or this stage false-greens against the old listener instead of
-            # the options-edge-web Deployment this pipeline just rolled out.
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8094}" \
-              scripts/smoke/check-options-edge-web.sh
-          else
-            # The prod web app runs on the prod host (192.168.100.252), not the Jenkins agent;
-            # verify the deployed prod web app remotely over HTTP.
-            # Note: do NOT reuse WEB_PUBLIC_URL -- the promote step forwards the
-            # dev value (localhost) into the production build.
-            WEB_PUBLIC_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8094}" \
-              scripts/smoke/check-options-edge-web.sh
-          fi
-        '''
+        script {
+          // The option-chain UI is gated behind Keycloak login: public shell/assets serve, but /api/** is
+          // 401 without a bearer JWT. check-options-edge-web.sh asserts that posture (public "/" +
+          // "/option-chain" == 200; "/api/config" == 200+provider when auth is off OR 401 when on), so the
+          // verify is auth-on/off portable instead of false-failing on the (correct) 401. When
+          // SMOKE_AUTH_CREDENTIAL_ID is configured, it ALSO obtains a token and deep-verifies authenticated
+          // /api/config. WEB_PUBLIC_URL defaults to the k8s web Service (:8094) — NOT legacy Tomcat :8090.
+          def isDev = (env.ENVIRONMENT ?: 'dev') == 'dev'
+          def issuer = isDev ? 'http://192.168.100.102:8089/realms/optionsedge'
+                             : 'https://auth.fullfunding.nl/realms/optionsedge'
+          def body = '''
+            set -euo pipefail
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              export WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8094}"
+            else
+              # Do NOT reuse WEB_PUBLIC_URL -- the promote step forwards the dev value (localhost) into prod.
+              export WEB_PUBLIC_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8094}"
+            fi
+            scripts/smoke/check-options-edge-web.sh
+          '''
+          if (params.SMOKE_AUTH_CREDENTIAL_ID?.trim()) {
+            withCredentials([string(credentialsId: params.SMOKE_AUTH_CREDENTIAL_ID, variable: 'OPTIONS_EDGE_SMOKE_CLIENT_SECRET')]) {
+              withEnv(["OPTIONS_EDGE_SMOKE_ISSUER=${issuer}"]) {
+                sh body
+              }
+            }
+          } else {
+            sh body
+          }
+        }
       }
     }
     stage('Smoke') {
@@ -1183,6 +1191,9 @@ EOF
               string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
               string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID),
               string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID),
+              // Carry the deep-verify credential id into the prod promotion so prod is verified at the same
+              // depth as dev (else a dev run with deep verify silently promotes to posture-only on prod).
+              string(name: 'SMOKE_AUTH_CREDENTIAL_ID', value: params.SMOKE_AUTH_CREDENTIAL_ID),
               string(name: 'MARKET_DATA_SOURCE', value: params.MARKET_DATA_SOURCE),
               string(name: 'RAW_TOPIC', value: params.RAW_TOPIC),
               string(name: 'IB_HOST', value: params.IB_HOST),
