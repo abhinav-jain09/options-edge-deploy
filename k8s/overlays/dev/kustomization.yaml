@@ -3,6 +3,18 @@ resources:
 patches:
   - path: configmap-dev-local-patch.yaml
   - path: web-dev-env-patch.yaml
+  # The base web Deployment pins itself to the prod control-plane node
+  # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
+  # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,
+  # whose node is labelled node-role.kubernetes.io/control-plane="" (empty, not
+  # "true"), so that selector leaves the web pod unschedulable (Pending). Remove
+  # the selector for dev — there is only one node to schedule on anyway.
+  - target:
+      kind: Deployment
+      name: options-edge-web
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/nodeSelector
   - target:
       kind: Deployment
     patch: |-
