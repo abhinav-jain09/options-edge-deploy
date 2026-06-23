@@ -7,6 +7,7 @@ images:
   volume-sandwich-service: ghcr.io/abhinav-jain09/options-edge-volume-sandwich:production
   unusual-whales-gex-service: ghcr.io/abhinav-jain09/options-edge-unusual-whales-gex:production
   unusual-whales-gex-history-service: ghcr.io/abhinav-jain09/options-edge-unusual-whales-gex-history:production
+  databento-gex-history-service: ghcr.io/abhinav-jain09/options-edge-databento-gex-history:production
   raw-postgres-writer: ghcr.io/abhinav-jain09/options-edge-raw-postgres-writer:production
   pressure-postgres-writer: ghcr.io/abhinav-jain09/options-edge-pressure-postgres-writer:production
   feed-gateway-service: ghcr.io/abhinav-jain09/options-edge-feed-gateway:production

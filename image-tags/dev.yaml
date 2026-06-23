@@ -7,6 +7,7 @@ images:
   volume-sandwich-service: 192.168.100.252:5000/options-edge-volume-sandwich:dev
   unusual-whales-gex-service: 192.168.100.252:5000/options-edge-unusual-whales-gex:dev
   unusual-whales-gex-history-service: 192.168.100.252:5000/options-edge-unusual-whales-gex-history:dev
+  databento-gex-history-service: 192.168.100.252:5000/options-edge-databento-gex-history:dev
   raw-postgres-writer: 192.168.100.252:5000/options-edge-raw-postgres-writer:dev
   pressure-postgres-writer: 192.168.100.252:5000/options-edge-pressure-postgres-writer:dev
   pin-postgres-writer: 192.168.100.252:5000/options-edge-pin-postgres-writer:dev
