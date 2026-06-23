@@ -1035,26 +1035,25 @@ EOF
       steps {
         sh '''
           set -euo pipefail
+          # The option-chain UI is gated behind Keycloak login: public shell/assets serve, but /api/** is
+          # 401 without a bearer JWT. check-options-edge-web.sh asserts that posture (public "/" +
+          # "/option-chain" == 200; "/api/config" == 200+provider when auth is off OR 401 when on), so the
+          # verify is auth-on/off portable instead of false-failing on the (correct) 401.
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
             # Default to the k8s web Service (LoadBalancer :8094, bound on localhost by
             # docker-desktop ServiceLB on the native Mac agent) — mirroring prod, which
             # verifies the k8s web at 192.168.100.252:8094. Must NOT default to the legacy
             # Tomcat :8090, or this stage false-greens against the old listener instead of
             # the options-edge-web Deployment this pipeline just rolled out.
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8094}"
-            curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
-            curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
-            echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8094}" \
+              scripts/smoke/check-options-edge-web.sh
           else
-            # The prod web app (Tomcat) runs on the prod host (192.168.100.252),
-            # not the Jenkins agent, so the local-Tomcat check script does not
-            # apply here. Verify the deployed prod web app remotely over HTTP.
+            # The prod web app runs on the prod host (192.168.100.252), not the Jenkins agent;
+            # verify the deployed prod web app remotely over HTTP.
             # Note: do NOT reuse WEB_PUBLIC_URL -- the promote step forwards the
             # dev value (localhost) into the production build.
-            PROD_WEB_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8094}"
-            curl -fsS --connect-timeout 5 --max-time 20 "$PROD_WEB_URL/api/config" | grep -q '"provider"'
-            curl -fsS --connect-timeout 5 --max-time 20 -o /dev/null "$PROD_WEB_URL/"
-            echo "OptionsEdge prod web app is healthy at $PROD_WEB_URL/"
+            WEB_PUBLIC_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8094}" \
+              scripts/smoke/check-options-edge-web.sh
           fi
         '''
       }

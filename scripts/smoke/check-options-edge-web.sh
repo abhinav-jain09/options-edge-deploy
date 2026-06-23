@@ -1,61 +1,58 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WEB_LOCAL_URL="${WEB_LOCAL_URL:-http://127.0.0.1:8090}"
-if [[ -z "${WEB_PUBLIC_URL:-}" ]]; then
-  WEB_PUBLIC_URL="http://192.168.100.252:8094"
-fi
-TOMCAT_PID_FILE="${TOMCAT_PID_FILE:-/home/abhinav/ci/tomcat/tomcat.pid}"
-TOMCAT_LOG_FILE="${TOMCAT_LOG_FILE:-/home/abhinav/ci/tomcat/current/logs/catalina.out}"
+# Liveness + auth-posture smoke for the OptionsEdge web app (k8s Deployment, served on :8094).
+#
+# The option-chain UI is gated behind Keycloak login (SecurityConfig): the SPA shell + assets are PUBLIC,
+# but every /api/** route requires a valid bearer JWT (401 without one). An unauthenticated smoke therefore
+# must NOT expect /api/config to return 200 — it correctly returns 401 once login is enabled. This check is
+# auth-on/off portable and still asserts a real posture:
+#   * public routes "/" and "/option-chain" MUST be 200 (a blanket-401 / ingress misconfig fails here), and
+#   * "/api/config" MUST be either 200 with a "provider" body (auth disabled) OR 401 (auth enabled);
+#     any other status or a connection failure fails.
+# It deliberately does NOT obtain a token: that needs a dedicated CI identity and belongs to a separate
+# authenticated integration smoke, not this deploy liveness/posture check.
+
+WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8094}"
+WEB_PUBLIC_URL="${WEB_PUBLIC_URL%/}"
 TIMEOUT_SECONDS="${OPTIONS_EDGE_WEB_TIMEOUT_SECONDS:-120}"
 
-WEB_LOCAL_URL="${WEB_LOCAL_URL%/}"
-WEB_PUBLIC_URL="${WEB_PUBLIC_URL%/}"
-
-print_diagnostics() {
-  echo "OptionsEdge web app diagnostics:" >&2
-  if [ -f "$TOMCAT_PID_FILE" ]; then
-    echo "Tomcat pid file: $TOMCAT_PID_FILE pid=$(cat "$TOMCAT_PID_FILE")" >&2
-    ps -fp "$(cat "$TOMCAT_PID_FILE")" >&2 || true
-  else
-    echo "Tomcat pid file missing: $TOMCAT_PID_FILE" >&2
-  fi
-  ss -ltnp 2>/dev/null | grep ':8090' >&2 || true
-  echo "Recent Tomcat deployment/logging errors:" >&2
-  if [ -f "$TOMCAT_LOG_FILE" ]; then
-    grep -E 'Error deploying|LoggerFactory|SLF4J|LifecycleException|ROOT.war' "$TOMCAT_LOG_FILE" | tail -80 >&2 || true
-    echo "Last 120 catalina.out lines:" >&2
-    tail -120 "$TOMCAT_LOG_FILE" >&2 || true
-  else
-    echo "Tomcat log file missing: $TOMCAT_LOG_FILE" >&2
-  fi
+http_code() {
+  # http_code <url> [body_out_file] -> prints the HTTP status (000 on connection failure)
+  local code
+  code="$(curl -s -o "${2:-/dev/null}" -w '%{http_code}' --connect-timeout 5 --max-time 15 "$1" 2>/dev/null)" || code="000"
+  printf '%s' "${code:-000}"
 }
 
-pid_alive() {
-  [ -f "$TOMCAT_PID_FILE" ] && kill -0 "$(cat "$TOMCAT_PID_FILE")" 2>/dev/null
-}
-
-config_ok() {
-  curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
-}
-
-root_ok() {
-  curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_LOCAL_URL/" \
-    && curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
+posture_ok() {
+  # Public SPA shell + a public route must serve (guards against a blanket-401 / misrouted deployment).
+  [ "$(http_code "$WEB_PUBLIC_URL/")" = "200" ] || return 1
+  [ "$(http_code "$WEB_PUBLIC_URL/option-chain")" = "200" ] || return 1
+  # API posture: 200 + "provider" (auth disabled) OR 401 (auth enabled). Anything else is unhealthy.
+  local body code
+  body="$(mktemp)"
+  code="$(http_code "$WEB_PUBLIC_URL/api/config" "$body")"
+  case "$code" in
+    200) grep -q '"provider"' "$body" || { rm -f "$body"; return 1; } ;;
+    401) ;; # auth enabled — /api/config correctly demands a bearer JWT
+    *) rm -f "$body"; return 1 ;;
+  esac
+  rm -f "$body"
+  return 0
 }
 
 deadline=$((SECONDS + TIMEOUT_SECONDS))
 while (( SECONDS < deadline )); do
-  if pid_alive && root_ok && config_ok; then
-    echo "OptionsEdge web app is healthy at $WEB_PUBLIC_URL/"
+  if posture_ok; then
+    echo "OptionsEdge web app healthy at $WEB_PUBLIC_URL/ (public shell 200; /api/config posture OK)"
     exit 0
   fi
   sleep 2
 done
 
-echo "OptionsEdge web app did not become healthy before timeout." >&2
-echo "Expected local URL: $WEB_LOCAL_URL/" >&2
-echo "Expected public URL: $WEB_PUBLIC_URL/" >&2
-echo "Expected config URL: $WEB_PUBLIC_URL/api/config" >&2
-print_diagnostics
+echo "OptionsEdge web app did not reach a healthy posture at $WEB_PUBLIC_URL before timeout." >&2
+echo "Endpoint statuses:" >&2
+for path in / /option-chain /api/config; do
+  echo "  ${path} -> $(http_code "$WEB_PUBLIC_URL$path")" >&2
+done
 exit 1

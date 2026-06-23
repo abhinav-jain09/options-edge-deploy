@@ -302,7 +302,19 @@ request_selected_contract() {
   local config_file="$TMP_DIR/options-edge-web-config.json"
   local form_file="$TMP_DIR/options-edge-web-connect-form.txt"
   echo "Requesting selected $source_mode contract through $WEB_BASE_URL/api/connect"
-  curl -fsS "$WEB_BASE_URL/api/config" >"$config_file"
+  # /api/config and /api/connect are gated behind Keycloak login (401 without a bearer JWT). When auth is
+  # enabled the unauthenticated connect-seed can't run — and it isn't needed: the live Databento feed pod
+  # seeds market data into Kafka independently of the web app's /api/connect. Skip rather than false-fail.
+  local config_code
+  config_code="$(curl -s -o "$config_file" -w '%{http_code}' --connect-timeout 5 --max-time 15 "$WEB_BASE_URL/api/config")" || config_code="000"
+  if [ "$config_code" = "401" ]; then
+    echo "Web /api/config requires auth (login enabled); skipping unauthenticated connect-seed (feed pod seeds data independently)."
+    return 0
+  fi
+  if [ "$config_code" != "200" ]; then
+    echo "Unexpected status $config_code from $WEB_BASE_URL/api/config" >&2
+    return 1
+  fi
   python3 - "$config_file" "$source_mode" >"$form_file" <<'PY'
 import json
 import sys
