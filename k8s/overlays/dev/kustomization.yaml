@@ -66,6 +66,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-unusual-whales-gex-history
     newName: host.docker.internal:5001/options-edge-unusual-whales-gex-history
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-gex-history
+    newName: host.docker.internal:5001/options-edge-databento-gex-history
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-raw-postgres-writer
     newName: host.docker.internal:5001/options-edge-raw-postgres-writer
     newTag: dev
