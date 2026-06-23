@@ -31,6 +31,30 @@ spec:
       port: 8080
       targetPort: 8080
 ---
+# LAN admin access: a LoadBalancer that publishes Keycloak on host port 8089 (192.168.100.252:8089) so
+# operators on the trusted LAN can reach the admin console WITHOUT the public tunnel. The Deployment sets
+# KC_HOSTNAME_ADMIN=http://192.168.100.252:8089 so the admin console works at this LAN URL despite the strict
+# public KC_HOSTNAME. The PUBLIC /admin stays blocked at the Cloudflare edge — this port is LAN-only (not
+# routed through the tunnel). Plain HTTP on the LAN: acceptable on the trusted prod LAN; do not expose 8089
+# beyond it (firewall the WAN). See docs/keycloak-prod.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: oe-keycloak-lan
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oe-keycloak
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: auth
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: oe-keycloak
+  ports:
+    - name: http
+      port: 8089
+      targetPort: 8080
+---
 # Headless service for Infinispan cache discovery (JGroups DNS_PING) when scaling to >1 replica. Unused at
 # replicas: 1, but present so HA is a one-line change (raise replicas + uncomment KC_CACHE_* below).
 apiVersion: v1
@@ -116,6 +140,11 @@ spec:
             # --- Hostname / TLS (terminated at the Cloudflare edge; traefik forwards X-Forwarded-*) ---
             - name: KC_HOSTNAME
               value: "https://auth.fullfunding.nl"
+            # Admin console served at the LAN URL (oe-keycloak-lan LoadBalancer on host :8089), so operators
+            # on the trusted LAN can use the console by IP despite the strict public hostname. Public /admin
+            # stays blocked at the edge.
+            - name: KC_HOSTNAME_ADMIN
+              value: "http://192.168.100.252:8089"
             - name: KC_PROXY_HEADERS
               value: xforwarded
             - name: KC_HTTP_ENABLED
