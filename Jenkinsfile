@@ -30,6 +30,7 @@ pipeline {
     string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Unusual Whales GEX history image')
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pressure Postgres writer image')
+    string(name: 'PIN_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pin Postgres writer image (dev-only deployment)')
     string(name: 'FEED_GATEWAY_IMAGE', defaultValue: '', description: 'Feed gateway image')
     string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: '', description: 'Integration-test image')
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'HPSF Stage A/B processing image')
@@ -90,6 +91,11 @@ pipeline {
     UNUSUAL_WHALES_GEX_HISTORY_IMAGE = "${params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE ?: oeProfile.image('unusual-whales-gex-history', 'production', 'dev')}"
     RAW_POSTGRES_WRITER_IMAGE = "${params.RAW_POSTGRES_WRITER_IMAGE ?: oeProfile.image('raw-postgres-writer', 'production', 'dev')}"
     PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pressure-postgres-writer', 'production', 'dev')}"
+    // pin-postgres-writer is a DEV-ONLY deployment (manifests live in k8s/overlays/dev, not base). The env
+    // value is resolved in both profiles for consistency, but it is only digest-pinned/applied for dev (see
+    // the dev-gated extension to the digest-pin loop) so a prod deploy never tries to resolve an image that
+    // does not exist in the prod registry.
+    PIN_POSTGRES_WRITER_IMAGE = "${params.PIN_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pin-postgres-writer', 'production', 'dev')}"
     FEED_GATEWAY_IMAGE = "${params.FEED_GATEWAY_IMAGE ?: oeProfile.image('feed-gateway', 'production', 'dev')}"
     INTEGRATION_TEST_IMAGE = "${params.INTEGRATION_TEST_IMAGE ?: oeProfile.image('integration-test', 'production', 'dev')}"
     HPSF_PROCESSING_IMAGE = "${params.HPSF_PROCESSING_IMAGE ?: oeProfile.image('hpsf-processing', 'production', 'dev')}"
@@ -343,6 +349,7 @@ UNUSUAL_WHALES_GEX_IMAGE=$registry/options-edge-unusual-whales-gex:$image_tag
 UNUSUAL_WHALES_GEX_HISTORY_IMAGE=$registry/options-edge-unusual-whales-gex-history:$image_tag
 RAW_POSTGRES_WRITER_IMAGE=$registry/options-edge-raw-postgres-writer:$image_tag
 PRESSURE_POSTGRES_WRITER_IMAGE=$registry/options-edge-pressure-postgres-writer:$image_tag
+PIN_POSTGRES_WRITER_IMAGE=$registry/options-edge-pin-postgres-writer:$image_tag
 FEED_GATEWAY_IMAGE=$registry/options-edge-feed-gateway:$image_tag
 INTEGRATION_TEST_IMAGE=$registry/options-edge-integration-test:$image_tag
 HPSF_PROCESSING_IMAGE=$registry/options-edge-hpsf-processing:$image_tag
@@ -759,12 +766,20 @@ EOF
           # service: match the base name, remap to the resolved repo, pin the digest). This works for ANY
           # overlay -- dev (which has its own images: block) and production (which have none).
           yq -i '.images = []' "$_overlay_kustomization"
+          # pin-postgres-writer is a DEV-ONLY deployment (k8s/overlays/dev only). Pin it for dev so the
+          # fail-closed render guard passes; OMIT it for prod, where the image is intentionally absent from
+          # the prod registry and resolving its digest would (correctly) fail and abort the prod deploy.
+          _dev_only_images=""
+          if [ "${ENVIRONMENT}" = "dev" ]; then
+            _dev_only_images="PIN_POSTGRES_WRITER_IMAGE"
+          fi
           for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE DATABENTO_MAXPAIN_IMAGE DATABENTO_MISSION_PACE_IMAGE \
             DATABENTO_MISSION_PRESSURE_IMAGE DATABENTO_MISSION_SANDWICH_IMAGE DATABENTO_VOLUME_AGGREGATOR_IMAGE \
             DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
             IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
-            UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE; do
+            UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE \
+            $_dev_only_images; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
