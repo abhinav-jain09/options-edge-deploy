@@ -35,8 +35,8 @@ Do not change these defaults without intentionally migrating Jenkins and updatin
 - Dev image registry: `host.docker.internal:5001`
 - Dev Kafka: `host.docker.internal:9092`
 - Dev Kafka topic prefix: empty/unprefixed
-- Dev OptionsEdge web smoke URL inside Jenkins: `http://host.docker.internal:8090`
-- Dev OptionsEdge web app from the Mac browser: `http://localhost:8090`
+- Dev OptionsEdge web smoke URL inside Jenkins: `http://localhost:8094` (k8s Service `options-edge-web`, LoadBalancer bound on the Mac's localhost by docker-desktop ServiceLB)
+- Dev OptionsEdge web app from the Mac browser: `http://localhost:8094` (the legacy `:8090` Docker container has been removed)
 
 ## Remote Production Invariants
 
@@ -46,7 +46,7 @@ defaults. Changes for `192.168.100.252` must be treated as production changes:
 - Production registry: `192.168.100.252:5000`
 - Production Kafka: `192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096`
 - Production Kafka topic prefix: empty/unprefixed
-- Production web app: `http://192.168.100.252:8090`
+- Production web app: `http://192.168.100.252:8094` (k8s Service `options-edge-web`, LoadBalancer on prod cluster). Public via cloudflared tunnel: `https://fullfunding.nl`.
 - Production/remote kubeconfig path: `/home/options-edge/config/...`
 
 Build `#264` failed because the Jenkinsfile drifted back to `/home/options-edge/config/kubeconfig`, which does not exist in local Jenkins. The `scripts/jenkins/enforce-local-dev-defaults.sh` rule now runs in the Jenkins `Validate` stage and blocks this kind of drift before any deploy, Kafka topic, or smoke-test step runs.

@@ -36,7 +36,10 @@ data:
   POSTGRES_USER: options_flow
   POSTGRES_PASSWORD: Options#100
   APP_FEED_GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
-  WEB_BASE_URL: http://host.docker.internal:8090
+  # WEB_BASE_URL: the k8s web LoadBalancer Service on the dev cluster, bound on the Mac
+  # agent's localhost by docker-desktop's ServiceLB. Was http://host.docker.internal:8090
+  # (the legacy local Docker container) — that container has been removed.
+  WEB_BASE_URL: http://localhost:8094
   GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
   CHECK_MARKET_DATA_SOURCES: DATABENTO
 ---
