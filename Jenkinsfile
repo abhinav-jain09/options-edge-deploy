@@ -1141,7 +1141,8 @@ EOF
               booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', value: false),
               booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true),
               booleanParam(name: 'DEPLOY_DRY_RUN', value: params.DEPLOY_DRY_RUN),
-              booleanParam(name: 'SKIP_HPSF_SMOKE', value: params.SKIP_HPSF_SMOKE)
+              booleanParam(name: 'SKIP_HPSF_SMOKE', value: params.SKIP_HPSF_SMOKE),
+              booleanParam(name: 'SKIP_KAFKA_TOPICS', value: params.SKIP_KAFKA_TOPICS)
             ]
         }
       }
