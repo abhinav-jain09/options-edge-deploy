@@ -1,0 +1,480 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpsf-stage-a-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: hpsf-stage-a
+          env:
+            - name: HPSF_STATE_STORE_TYPE
+              value: persistent
+          volumeMounts:
+            - name: hpsf-kafka-streams-state
+              mountPath: /home/options-edge/data/kafka-streams/hpsf
+          resources:
+            limits:
+              memory: 7Gi
+      volumes:
+        - name: hpsf-kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: hpsf-stage-a-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpsf-stage-b-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: hpsf-stage-b
+          env:
+            - name: HPSF_STATE_STORE_TYPE
+              value: persistent
+          volumeMounts:
+            - name: hpsf-kafka-streams-state
+              mountPath: /home/options-edge/data/kafka-streams/hpsf
+          resources:
+            limits:
+              memory: 5Gi
+      volumes:
+        - name: hpsf-kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: hpsf-stage-b-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-volume-aggregator
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: databento-volume-aggregator
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 3Gi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: databento-volume-aggregator-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-maxpain-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: databento-maxpain
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 3584Mi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: databento-maxpain-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-mission-pace-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: databento-mission-pace
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 5632Mi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: databento-mission-pace-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-mission-pressure-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: databento-mission-pressure
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 5632Mi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: databento-mission-pressure-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-mission-sandwich-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: databento-mission-sandwich
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 5632Mi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: databento-mission-sandwich-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: directional-pressure-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: directional-pressure
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 2560Mi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: directional-pressure-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: directional-pressure-databento-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: directional-pressure
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 2560Mi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: directional-pressure-databento-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: raw-to-display-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: raw-to-display
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 2560Mi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: raw-to-display-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: raw-to-display-databento-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: raw-to-display
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 2560Mi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: raw-to-display-databento-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spx-mission-control-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: spx-mission-control
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 2560Mi
+      volumes:
+        - name: kafka-streams-state
+          persistentVolumeClaim:
+            claimName: spx-mission-control-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strike-flow-classifier-databento
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: strike-flow-classifier
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 2560Mi
+      volumes:
+        - name: kafka-streams-state
+          persistentVolumeClaim:
+            claimName: strike-flow-classifier-databento-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: strike-flow-classifier-ibkr
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: strike-flow-classifier
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 2560Mi
+      volumes:
+        - name: kafka-streams-state
+          persistentVolumeClaim:
+            claimName: strike-flow-classifier-ibkr-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unusual-whales-gex-history-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: unusual-whales-gex-history
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: unusual-whales-gex-history-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: volume-pace-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: volume-pace
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 25Gi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: volume-pace-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: volume-pace-databento-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: volume-pace
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 9Gi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: volume-pace-databento-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: volume-sandwich-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: volume-sandwich
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 3Gi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: volume-sandwich-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: volume-sandwich-databento-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: volume-sandwich
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          resources:
+            limits:
+              memory: 3Gi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: volume-sandwich-databento-service-streams-state
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-gex-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: databento-gex
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: null
+          persistentVolumeClaim:
+            claimName: databento-gex-service-streams-state

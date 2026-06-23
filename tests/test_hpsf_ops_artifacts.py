@@ -28,7 +28,7 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "HPSF_STREAMS_REPLICATION_FACTOR: \"1\"",
             "HPSF_STREAMS_NUM_STANDBY_REPLICAS: \"0\"",
             "HPSF_STREAMS_STATE_DIR: /home/options-edge/data/kafka-streams/hpsf",
-            "HPSF_STATE_STORE_TYPE: memory",
+            "HPSF_STATE_STORE_TYPE: persistent",
             "HPSF_TOPIC_OPRA_TCBBO: options.opra.tcbbo",
             "HPSF_TOPIC_UNDERLYING_ES_TRADES: underlying.es.trades",
             "HPSF_TOPIC_UNDERLYING_SPX_PRICE: underlying.spx.price",
