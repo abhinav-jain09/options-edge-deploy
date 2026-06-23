@@ -37,11 +37,15 @@ _lks_cfg() {
 : "${KAFKA_TOPIC_REPLICATION_FACTOR:=$(_lks_cfg KAFKA_TOPIC_REPLICATION_FACTOR)}"
 : "${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:=$(_lks_cfg KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS)}"
 : "${KAFKA_TOPIC_RETENTION_MS:=$(_lks_cfg KAFKA_TOPIC_RETENTION_MS)}"
+# Optional universal per-env retention cap (dev configmap sets 10h; prod leaves it
+# unset). When set, the HPSF create/verify scripts and the Kafka Internal Topics
+# stage cap every topic's retention.ms at this value. Empty => no cap (prod).
+: "${KAFKA_MAX_RETENTION_MS:=$(_lks_cfg KAFKA_MAX_RETENTION_MS)}"
 export KAFKA_BOOTSTRAP_SERVERS KAFKA_TOPIC_REPLICATION_FACTOR
-export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS KAFKA_TOPIC_RETENTION_MS
+export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS KAFKA_TOPIC_RETENTION_MS KAFKA_MAX_RETENTION_MS
 
 : "${KAFKA_BOOTSTRAP_SERVERS:?could not derive KAFKA_BOOTSTRAP_SERVERS from ${ENVIRONMENT} configmap}"
 : "${KAFKA_TOPIC_REPLICATION_FACTOR:?could not derive KAFKA_TOPIC_REPLICATION_FACTOR from ${ENVIRONMENT} configmap}"
 : "${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:?could not derive KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS from ${ENVIRONMENT} configmap}"
 
-echo "[kafka-settings] env=${ENVIRONMENT} RF=${KAFKA_TOPIC_REPLICATION_FACTOR} minISR=${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS} retention=${KAFKA_TOPIC_RETENTION_MS} bootstrap=${KAFKA_BOOTSTRAP_SERVERS}"
+echo "[kafka-settings] env=${ENVIRONMENT} RF=${KAFKA_TOPIC_REPLICATION_FACTOR} minISR=${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS} retention=${KAFKA_TOPIC_RETENTION_MS} maxRetentionCap=${KAFKA_MAX_RETENTION_MS:-<none>} bootstrap=${KAFKA_BOOTSTRAP_SERVERS}"
