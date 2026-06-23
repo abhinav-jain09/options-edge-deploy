@@ -90,14 +90,15 @@ apply_jenkins_deployer_rbac
 # so the cluster's policy always matches the YAML in git.
 kubectl --kubeconfig "$admin_kubeconfig" apply -f k8s/security/jenkins-only-workload-admission.yaml
 
-if kubectl --kubeconfig "$admin_kubeconfig" get validatingadmissionpolicy options-edge-jenkins-only-workloads >/dev/null 2>&1; then
-  if [[ -f "$jenkins_kubeconfig" ]] && verify_jenkins_deployer_access >/dev/null 2>&1; then
-    echo "Kubernetes deploy guard is already active and Jenkins deployer kubeconfig is usable."
-    exit 0
-  fi
-  echo "Kubernetes deploy guard is active, but Jenkins deployer kubeconfig is missing or unusable: $jenkins_kubeconfig" >&2
-  echo "Repair requires temporary cluster-admin intervention because direct non-Jenkins workload changes are blocked." >&2
-  exit 1
+# Already fully bootstrapped iff the Jenkins deployer kubeconfig exists AND works. The admission policy is
+# now (idempotently) applied on EVERY run just above, so its mere existence no longer distinguishes a fresh
+# cluster from a bootstrapped one -- gate the early-exit on the kubeconfig, not the policy. On a fresh OR a
+# broken-kubeconfig cluster we fall through and (re)bootstrap below using the admin kubeconfig (namespace
+# label + deployer SA/kubeconfig creation are admin-cred operations, not gated workload mutations), which
+# self-heals instead of dead-ending at exit 1.
+if [[ -f "$jenkins_kubeconfig" ]] && verify_jenkins_deployer_access >/dev/null 2>&1; then
+  echo "Kubernetes deploy guard is already active and Jenkins deployer kubeconfig is usable."
+  exit 0
 fi
 
 mkdir -p "$(dirname "$jenkins_kubeconfig")"

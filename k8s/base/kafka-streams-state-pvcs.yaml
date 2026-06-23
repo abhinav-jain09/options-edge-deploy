@@ -245,3 +245,16 @@ spec:
   resources:
     requests:
       storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: databento-gex-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi
