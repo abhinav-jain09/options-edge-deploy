@@ -28,7 +28,6 @@ pipeline {
     string(name: 'VOLUME_SANDWICH_IMAGE', defaultValue: '', description: 'Volume-sandwich image')
     string(name: 'UNUSUAL_WHALES_GEX_IMAGE', defaultValue: '', description: 'Unusual Whales GEX image')
     string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Unusual Whales GEX history image')
-    string(name: 'DATABENTO_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Databento GEX history image')
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pressure Postgres writer image')
     string(name: 'PIN_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pin Postgres writer image (dev-only deployment)')
@@ -93,7 +92,6 @@ pipeline {
     VOLUME_SANDWICH_IMAGE = "${params.VOLUME_SANDWICH_IMAGE ?: oeProfile.image('volume-sandwich', 'production', 'dev')}"
     UNUSUAL_WHALES_GEX_IMAGE = "${params.UNUSUAL_WHALES_GEX_IMAGE ?: oeProfile.image('unusual-whales-gex', 'production', 'dev')}"
     UNUSUAL_WHALES_GEX_HISTORY_IMAGE = "${params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE ?: oeProfile.image('unusual-whales-gex-history', 'production', 'dev')}"
-    DATABENTO_GEX_HISTORY_IMAGE = "${params.DATABENTO_GEX_HISTORY_IMAGE ?: oeProfile.image('databento-gex-history', 'production', 'dev')}"
     RAW_POSTGRES_WRITER_IMAGE = "${params.RAW_POSTGRES_WRITER_IMAGE ?: oeProfile.image('raw-postgres-writer', 'production', 'dev')}"
     PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pressure-postgres-writer', 'production', 'dev')}"
     // pin-postgres-writer is a DEV-ONLY deployment (manifests live in k8s/overlays/dev, not base). The env
@@ -391,7 +389,6 @@ DIRECTIONAL_PRESSURE_IMAGE=$registry/options-edge-directional-pressure:$image_ta
 VOLUME_SANDWICH_IMAGE=$registry/options-edge-volume-sandwich:$image_tag
 UNUSUAL_WHALES_GEX_IMAGE=$registry/options-edge-unusual-whales-gex:$image_tag
 UNUSUAL_WHALES_GEX_HISTORY_IMAGE=$registry/options-edge-unusual-whales-gex-history:$image_tag
-DATABENTO_GEX_HISTORY_IMAGE=$registry/options-edge-databento-gex-history:$image_tag
 RAW_POSTGRES_WRITER_IMAGE=$registry/options-edge-raw-postgres-writer:$image_tag
 PRESSURE_POSTGRES_WRITER_IMAGE=$registry/options-edge-pressure-postgres-writer:$image_tag
 PIN_POSTGRES_WRITER_IMAGE=$registry/options-edge-pin-postgres-writer:$image_tag
@@ -419,7 +416,6 @@ DIRECTIONAL_PRESSURE_IMAGE=$DIRECTIONAL_PRESSURE_IMAGE
 VOLUME_SANDWICH_IMAGE=$VOLUME_SANDWICH_IMAGE
 UNUSUAL_WHALES_GEX_IMAGE=$UNUSUAL_WHALES_GEX_IMAGE
 UNUSUAL_WHALES_GEX_HISTORY_IMAGE=$UNUSUAL_WHALES_GEX_HISTORY_IMAGE
-DATABENTO_GEX_HISTORY_IMAGE=$DATABENTO_GEX_HISTORY_IMAGE
 RAW_POSTGRES_WRITER_IMAGE=$RAW_POSTGRES_WRITER_IMAGE
 PRESSURE_POSTGRES_WRITER_IMAGE=$PRESSURE_POSTGRES_WRITER_IMAGE
 FEED_GATEWAY_IMAGE=$FEED_GATEWAY_IMAGE
@@ -457,7 +453,6 @@ EOF
             VOLUME_SANDWICH_IMAGE=$VOLUME_SANDWICH_IMAGE
             UNUSUAL_WHALES_GEX_IMAGE=$UNUSUAL_WHALES_GEX_IMAGE
             UNUSUAL_WHALES_GEX_HISTORY_IMAGE=$UNUSUAL_WHALES_GEX_HISTORY_IMAGE
-            DATABENTO_GEX_HISTORY_IMAGE=$DATABENTO_GEX_HISTORY_IMAGE
             RAW_POSTGRES_WRITER_IMAGE=$RAW_POSTGRES_WRITER_IMAGE
             PRESSURE_POSTGRES_WRITER_IMAGE=$PRESSURE_POSTGRES_WRITER_IMAGE
             FEED_GATEWAY_IMAGE=$FEED_GATEWAY_IMAGE
@@ -826,7 +821,6 @@ EOF
             IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE \
-            DATABENTO_GEX_HISTORY_IMAGE \
             $_dev_only_images; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
@@ -934,7 +928,6 @@ EOF
           kubectl -n options-edge set image deployment/volume-sandwich-databento-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
           kubectl -n options-edge set image deployment/unusual-whales-gex-service unusual-whales-gex="$UNUSUAL_WHALES_GEX_IMAGE"
           kubectl -n options-edge set image deployment/unusual-whales-gex-history-service unusual-whales-gex-history="$UNUSUAL_WHALES_GEX_HISTORY_IMAGE"
-          kubectl -n options-edge set image deployment/databento-gex-history-service databento-gex-history="$DATABENTO_GEX_HISTORY_IMAGE"
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/feed-gateway-service feed-gateway="$FEED_GATEWAY_IMAGE"
@@ -963,7 +956,6 @@ EOF
           kubectl -n options-edge rollout restart deployment/volume-sandwich-databento-service
           kubectl -n options-edge rollout restart deployment/unusual-whales-gex-service
           kubectl -n options-edge rollout restart deployment/unusual-whales-gex-history-service
-          kubectl -n options-edge rollout restart deployment/databento-gex-history-service
           kubectl -n options-edge rollout restart deployment/raw-postgres-writer
           kubectl -n options-edge rollout restart deployment/pressure-postgres-writer
           kubectl -n options-edge rollout restart deployment/feed-gateway-service
@@ -993,7 +985,6 @@ EOF
           kubectl -n options-edge rollout status deployment/volume-sandwich-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/unusual-whales-gex-service --timeout=180s
           kubectl -n options-edge rollout status deployment/unusual-whales-gex-history-service --timeout=180s
-          kubectl -n options-edge rollout status deployment/databento-gex-history-service --timeout=180s
           kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=900s
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=180s
           kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=180s
@@ -1187,7 +1178,6 @@ EOF
               string(name: 'VOLUME_SANDWICH_IMAGE', value: params.VOLUME_SANDWICH_IMAGE),
               string(name: 'UNUSUAL_WHALES_GEX_IMAGE', value: params.UNUSUAL_WHALES_GEX_IMAGE),
               string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', value: params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE),
-              string(name: 'DATABENTO_GEX_HISTORY_IMAGE', value: params.DATABENTO_GEX_HISTORY_IMAGE),
               string(name: 'RAW_POSTGRES_WRITER_IMAGE', value: params.RAW_POSTGRES_WRITER_IMAGE),
               string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', value: params.PRESSURE_POSTGRES_WRITER_IMAGE),
               string(name: 'FEED_GATEWAY_IMAGE', value: params.FEED_GATEWAY_IMAGE),
