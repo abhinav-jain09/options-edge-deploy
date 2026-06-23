@@ -54,7 +54,9 @@ pipeline {
     booleanParam(name: 'KAFKA_CLEANUP_TOPICS', defaultValue: false, description: 'Clean Kafka topics before deployment')
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
-    booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', defaultValue: false, description: 'Internal guard used by the manual production promotion build')
+    booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', defaultValue: false, description: 'Internal guard used by the manual production promotion build. DO NOT pass this by hand — it is set by the Promote To Production stage. Manual ENVIRONMENT=production runs with SKIP_PRODUCTION_PROMOTION=true are now REJECTED at Validate unless the build came from a dev run of this job (the legitimate promote path) OR the EMERGENCY_DIRECT_PROD_DEPLOY break-glass is engaged.')
+    booleanParam(name: 'EMERGENCY_DIRECT_PROD_DEPLOY', defaultValue: false, description: 'BREAK-GLASS: skip the must-go-via-dev rule and deploy directly to prod. Use ONLY for genuine emergencies (prod broken AND the dev path is unusable). Requires a non-empty EMERGENCY_REASON. The override is loudly audit-logged to the build console.')
+    string(name: 'EMERGENCY_REASON', defaultValue: '', description: 'Why are you doing a direct-to-prod emergency deploy? Required and non-empty when EMERGENCY_DIRECT_PROD_DEPLOY=true. Captured in the audit log.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false, description: 'Validate render, image preflight, and server-side Kubernetes apply without mutating runtime resources.')
     booleanParam(name: 'SKIP_HPSF_SMOKE', defaultValue: true, description: 'Skip the HPSF Smoke stage (Stage B runtime check). Temporarily bypassed until the Stage B underlying-state/runtime check is fixed; set false to re-enable.')
   }
@@ -175,14 +177,53 @@ pipeline {
     }
     stage('Validate') {
       steps {
+        script {
+          // Must-go-via-dev gate. ENVIRONMENT=production deploys are only legitimate when:
+          //   (A) the build was triggered as a downstream of the "Promote To Production" stage
+          //       of a dev run of THIS SAME job (the build job: env.JOB_NAME call below records an
+          //       UpstreamCause we can verify), OR
+          //   (B) the operator engages the audited break-glass: EMERGENCY_DIRECT_PROD_DEPLOY=true
+          //       PLUS a non-empty EMERGENCY_REASON. Both required, both logged loudly.
+          // This closes the previous hole where any operator could pass SKIP_PRODUCTION_PROMOTION=true
+          // and bypass the direct-prod guard. SKIP_PRODUCTION_PROMOTION remains the implementation
+          // marker (the promote stage's downstream build needs it set to true so it does not
+          // re-promote and re-block itself), but operators no longer get to set it themselves.
+          if (params.ENVIRONMENT == 'production') {
+            if (!params.SKIP_PRODUCTION_PROMOTION) {
+              error "Direct production runs are disabled. Run ENVIRONMENT=dev and use the final Promote To Production button after dev smoke passes."
+            }
+            def upstreamFromPromote = currentBuild.upstreamBuilds.any { it.fullProjectName == env.JOB_NAME }
+            def breakglass = params.EMERGENCY_DIRECT_PROD_DEPLOY ?: false
+            def reason = ((params.EMERGENCY_REASON ?: '') as String).trim()
+            if (upstreamFromPromote) {
+              echo "Promote-from-dev path verified: prod build triggered by upstream dev run of ${env.JOB_NAME}."
+            } else if (breakglass) {
+              if (!reason) {
+                error "EMERGENCY_DIRECT_PROD_DEPLOY=true requires a non-empty EMERGENCY_REASON. Aborting."
+              }
+              def who = currentBuild.getBuildCauses().collect { (it.userId ?: it.userName ?: '') as String }.find { it } ?: 'unknown'
+              echo "*******************************************************************"
+              echo "* EMERGENCY DIRECT-TO-PROD DEPLOY (break-glass override engaged)  *"
+              echo "* Build:   ${env.BUILD_TAG}"
+              echo "* User:    ${who}"
+              echo "* Reason:  ${reason}"
+              echo "* Bypassed the must-go-via-dev rule. Audit-logged.                *"
+              echo "*******************************************************************"
+            } else {
+              error """Direct production deploys are forbidden.
+SKIP_PRODUCTION_PROMOTION=true is only valid when the build is launched by the Promote
+To Production stage of a dev run of this same job (verified via the upstream cause).
+To deploy to prod normally: run ENVIRONMENT=dev and click 'Promote To Production' at
+the end of the dev run. To override in a genuine emergency, also pass
+EMERGENCY_DIRECT_PROD_DEPLOY=true AND a non-empty EMERGENCY_REASON — both will be
+captured loudly in the build log."""
+            }
+          }
+        }
         sh '''
           set -euo pipefail
           scripts/jenkins/enforce-main-branch.sh
           scripts/jenkins/enforce-local-dev-defaults.sh
-          if [ "${ENVIRONMENT:-dev}" = "production" ] && [ "${SKIP_PRODUCTION_PROMOTION:-false}" != "true" ]; then
-            echo "Direct production runs are disabled. Run ENVIRONMENT=dev and use the final Promote To Production button after dev smoke passes." >&2
-            exit 1
-          fi
           test "$REMOTE_APP_HOME" = "$OE_REMOTE_APP_HOME"
           test ! -d /root/options-edge
           test ! -d /options-edge
