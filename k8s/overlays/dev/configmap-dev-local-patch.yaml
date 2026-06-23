@@ -13,6 +13,12 @@ data:
   KAFKA_BROKER_COUNT: "1"
   KAFKA_TOPIC_REPLICATION_FACTOR: "1"
   KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS: "1"
+  # Dev-only data-topic retention: 10h (36,000,000 ms). Overrides the base 24h
+  # (KAFKA_TOPIC_RETENTION_MS=86400000); prod keeps 24h. load-kafka-settings.sh
+  # derives KAFKA_TOPIC_RETENTION_MS from this rendered per-env configmap, so the
+  # Kafka Topics stage applies 10h to dev data topics. (Streams-internal/changelog
+  # retention is set separately in the Jenkinsfile and is unchanged.)
+  KAFKA_TOPIC_RETENTION_MS: "36000000"
   POSTGRES_JDBC_URL: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
   POSTGRES_USER: options_flow
   POSTGRES_PASSWORD: Options#100
