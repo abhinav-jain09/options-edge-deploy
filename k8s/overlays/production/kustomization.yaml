@@ -1,5 +1,9 @@
 resources:
   - ../../base
+  # --- Production identity provider (Keycloak) — PRODUCTION ONLY (dev uses the docker Keycloak on :8089).
+  # A self-contained component dir (not in base) so dev deploys never get the prod-hostname KC. See
+  # docs/keycloak-prod.md.
+  - ../../keycloak
 
 # Prod-only: the node already has the images cached, so re-pulling all ~26 at
 # once on every rollout trips the kubelet image-pull QPS limit ("pull QPS

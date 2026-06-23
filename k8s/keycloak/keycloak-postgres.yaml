@@ -1,0 +1,127 @@
+# Production Postgres for Keycloak — the "keycloak database", isolated from the application DB.
+#
+# DURABILITY: StatefulSet with a volumeClaimTemplate, so the replica gets a PersistentVolumeClaim backed by
+# a real PersistentVolume — data is written to DISK and survives pod restarts, rescheduling, and node moves
+# (NOT in-memory, NOT in the container layer like the dev H2 DB). On k3s the default StorageClass is
+# `local-path` (node-local disk). NOTE: local-path is node-affine — the PVC binds to whichever node first
+# schedules the pod; a node loss strands the data. Backups (pg_dump CronJob / volume snapshots) are a
+# follow-up (see docs/keycloak-prod.md) — a PVC protects against pod loss, not deletion/corruption.
+apiVersion: v1
+kind: Service
+metadata:
+  name: oe-keycloak-postgres
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oe-keycloak-postgres
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: auth
+spec:
+  clusterIP: None            # headless — governing Service for the StatefulSet (stable pod identity)
+  selector:
+    app.kubernetes.io/name: oe-keycloak-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+# Dedicated ClusterIP Service that Keycloak connects to. This cluster's overlay does NOT route direct
+# pod-IP-to-pod-IP traffic (verified: pod->ClusterIP works via kube-proxy, but pod->pod-IP fails; this is
+# why feed-gateway runs hostNetwork). A headless Service hands clients the raw pod IP (the broken path), so
+# Keycloak must reach Postgres through a ClusterIP (the kube-proxy DNAT path that works). KC_DB_URL targets
+# this Service. See docs/keycloak-prod.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: oe-keycloak-postgres-db
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oe-keycloak-postgres
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: auth
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: oe-keycloak-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: oe-keycloak-postgres
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oe-keycloak-postgres
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: auth
+spec:
+  serviceName: oe-keycloak-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oe-keycloak-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oe-keycloak-postgres
+        app.kubernetes.io/part-of: options-edge
+        app.kubernetes.io/component: auth
+    spec:
+      # Pin to the control-plane node (same as the Keycloak Deployment) so Keycloak reaches its DB intra-node
+      # on the node where cluster DNS works. NOTE: local-path PVs are node-affine — when changing this, the
+      # existing PVC (bound on the old node) must be deleted so a new one provisions here. See docs/keycloak-prod.md.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      securityContext:
+        fsGroup: 999          # postgres group, so the mounted volume is writable
+      containers:
+        - name: postgres
+          # Pinned to the tag's current manifest-list digest for reproducibility (see keycloak-deployment.yaml).
+          image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: keycloak
+            - name: POSTGRES_USER
+              value: keycloak
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: oe-keycloak-secrets
+                  key: POSTGRES_PASSWORD
+            # Keep the data dir in a subdirectory of the mount (postgres refuses a non-empty mount root,
+            # e.g. lost+found on some volumes).
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U keycloak -d keycloak"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U keycloak -d keycloak"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # storageClassName: local-path   # k3s default; uncomment/override for a replicated class
+        resources:
+          requests:
+            storage: 10Gi

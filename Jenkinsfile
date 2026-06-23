@@ -4,7 +4,7 @@ pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'], description: 'Target environment')
-    string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. Any branch is allowed for ENVIRONMENT=dev; production is locked to main. The job SCM checks out this branch.')
+    string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. LOCKED TO main for all environments (dev AND prod) — feature branches must be merged before deploy. The job SCM checks out this branch; enforce-main-branch.sh rejects anything but main.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '', description: 'Dev deployer kubeconfig path on the Jenkins agent (Mac, ~/.kube — like prod). Bootstrap generates it from the admin kubeconfig.')
     string(name: 'KUBECONFIG_ADMIN_FILE', defaultValue: '', description: 'Dev admin (docker-desktop cluster-admin) kubeconfig used only to bootstrap the Jenkins-only deploy guard. Empty = derive from oeProfile(ENVIRONMENT).kubeconfigAdmin.')
     string(name: 'PROD_KUBECONFIG_FILE', defaultValue: '', description: 'Deployer kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button (prod is a separate cluster from dev).')
@@ -15,6 +15,7 @@ pipeline {
     string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty derives from oeProfile(ENVIRONMENT).kafkaBootstrap.')
     string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses the per-environment dev/prod default.')
     string(name: 'RAW_TO_DISPLAY_IMAGE', defaultValue: '', description: 'Raw-to-display image')
+    string(name: 'WEB_IMAGE', defaultValue: '', description: 'OptionsEdge web image')
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '', description: 'Databento volume aggregator image')
     string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '', description: 'Databento feed image')
     string(name: 'DATABENTO_GEX_IMAGE', defaultValue: '', description: 'Databento per-strike GEX image')
@@ -29,6 +30,7 @@ pipeline {
     string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Unusual Whales GEX history image')
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pressure Postgres writer image')
+    string(name: 'PIN_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pin Postgres writer image (dev-only deployment)')
     string(name: 'FEED_GATEWAY_IMAGE', defaultValue: '', description: 'Feed gateway image')
     string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: '', description: 'Integration-test image')
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'HPSF Stage A/B processing image')
@@ -38,6 +40,8 @@ pipeline {
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
     string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
+    string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-db-password', description: 'Jenkins secret-text credential with the prod Keycloak DB password (oe-keycloak-secrets POSTGRES_PASSWORD)')
+    string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-admin-password', description: 'Jenkins secret-text credential with the prod Keycloak bootstrap admin password')
     choice(name: 'MARKET_DATA_SOURCE', choices: ['DATABENTO', 'IBKR'], description: 'Runtime raw market-data source for processors')
     string(name: 'RAW_TOPIC', defaultValue: '', description: 'Override raw topic. Empty uses source default.')
     string(name: 'IB_HOST', defaultValue: '127.0.0.1', description: 'IB Gateway/TWS host. IBKR feed uses hostNetwork, so localhost is the remote host.')
@@ -46,10 +50,13 @@ pipeline {
     string(name: 'IB_EXPIRY', defaultValue: '', description: 'Option expiry/date. Empty uses the current weekday on the Jenkins agent.')
     string(name: 'DATABENTO_EXPIRY', defaultValue: '', description: 'Override expiry for Databento Historical feed (YYYYMMDD). Empty -> auto-resolved from Databento metadata + MarketCalendar in the Resolve Databento Expiry stage (fail-closed if Databento is unreachable or the result is not a trading day).')
     string(name: 'IB_MAX_STRIKES', defaultValue: '43', description: 'Max strikes around spot for IBKR feed')
+    booleanParam(name: 'SKIP_KAFKA_TOPICS', defaultValue: false, description: 'Skip all three Kafka topic stages (Kafka Topics, Reset HPSF Stage B Internal Topics, Kafka Internal Topics). Use for a code/image-only redeploy when topic configs and partitions are already correct on the cluster — saves ~5-15 min on a typical run. Defaults off (run the full topic apply/verify path).')
     booleanParam(name: 'KAFKA_CLEANUP_TOPICS', defaultValue: false, description: 'Clean Kafka topics before deployment')
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
-    booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', defaultValue: false, description: 'Internal guard used by the manual production promotion build')
+    booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', defaultValue: false, description: 'Internal guard used by the manual production promotion build. DO NOT pass this by hand — it is set by the Promote To Production stage. Manual ENVIRONMENT=production runs with SKIP_PRODUCTION_PROMOTION=true are now REJECTED at Validate unless the build came from a dev run of this job (the legitimate promote path) OR the EMERGENCY_DIRECT_PROD_DEPLOY break-glass is engaged.')
+    booleanParam(name: 'EMERGENCY_DIRECT_PROD_DEPLOY', defaultValue: false, description: 'BREAK-GLASS: skip the must-go-via-dev rule and deploy directly to prod. Use ONLY for genuine emergencies (prod broken AND the dev path is unusable). Requires a non-empty EMERGENCY_REASON. The override is loudly audit-logged to the build console.')
+    string(name: 'EMERGENCY_REASON', defaultValue: '', description: 'Why are you doing a direct-to-prod emergency deploy? Required and non-empty when EMERGENCY_DIRECT_PROD_DEPLOY=true. Captured in the audit log.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false, description: 'Validate render, image preflight, and server-side Kubernetes apply without mutating runtime resources.')
     booleanParam(name: 'SKIP_HPSF_SMOKE', defaultValue: true, description: 'Skip the HPSF Smoke stage (Stage B runtime check). Temporarily bypassed until the Stage B underlying-state/runtime check is fixed; set false to re-enable.')
   }
@@ -71,6 +78,7 @@ pipeline {
     KAFKA_BOOTSTRAP_SERVERS = "${params.KAFKA_BOOTSTRAP_SERVERS ?: ''}"
     WEB_PUBLIC_URL = "${params.WEB_PUBLIC_URL ?: ''}"
     RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: oeProfile.image('raw-to-display', 'production', 'dev')}"
+    WEB_IMAGE = "${params.WEB_IMAGE ?: oeProfile.image('web', 'production', 'dev')}"
     DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: oeProfile.image('databento-volume-aggregator', 'production', 'dev')}"
     DATABENTO_FEED_IMAGE = "${params.DATABENTO_FEED_IMAGE ?: oeProfile.image('databento-feed', 'production', 'dev')}"
     DATABENTO_GEX_IMAGE = "${params.DATABENTO_GEX_IMAGE ?: oeProfile.image('databento-gex', 'production', 'dev')}"
@@ -85,6 +93,11 @@ pipeline {
     UNUSUAL_WHALES_GEX_HISTORY_IMAGE = "${params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE ?: oeProfile.image('unusual-whales-gex-history', 'production', 'dev')}"
     RAW_POSTGRES_WRITER_IMAGE = "${params.RAW_POSTGRES_WRITER_IMAGE ?: oeProfile.image('raw-postgres-writer', 'production', 'dev')}"
     PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pressure-postgres-writer', 'production', 'dev')}"
+    // pin-postgres-writer is a DEV-ONLY deployment (manifests live in k8s/overlays/dev, not base). The env
+    // value is resolved in both profiles for consistency, but it is only digest-pinned/applied for dev (see
+    // the dev-gated extension to the digest-pin loop) so a prod deploy never tries to resolve an image that
+    // does not exist in the prod registry.
+    PIN_POSTGRES_WRITER_IMAGE = "${params.PIN_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pin-postgres-writer', 'production', 'dev')}"
     FEED_GATEWAY_IMAGE = "${params.FEED_GATEWAY_IMAGE ?: oeProfile.image('feed-gateway', 'production', 'dev')}"
     INTEGRATION_TEST_IMAGE = "${params.INTEGRATION_TEST_IMAGE ?: oeProfile.image('integration-test', 'production', 'dev')}"
     HPSF_PROCESSING_IMAGE = "${params.HPSF_PROCESSING_IMAGE ?: oeProfile.image('hpsf-processing', 'production', 'dev')}"
@@ -164,14 +177,53 @@ pipeline {
     }
     stage('Validate') {
       steps {
+        script {
+          // Must-go-via-dev gate. ENVIRONMENT=production deploys are only legitimate when:
+          //   (A) the build was triggered as a downstream of the "Promote To Production" stage
+          //       of a dev run of THIS SAME job (the build job: env.JOB_NAME call below records an
+          //       UpstreamCause we can verify), OR
+          //   (B) the operator engages the audited break-glass: EMERGENCY_DIRECT_PROD_DEPLOY=true
+          //       PLUS a non-empty EMERGENCY_REASON. Both required, both logged loudly.
+          // This closes the previous hole where any operator could pass SKIP_PRODUCTION_PROMOTION=true
+          // and bypass the direct-prod guard. SKIP_PRODUCTION_PROMOTION remains the implementation
+          // marker (the promote stage's downstream build needs it set to true so it does not
+          // re-promote and re-block itself), but operators no longer get to set it themselves.
+          if (params.ENVIRONMENT == 'production') {
+            if (!params.SKIP_PRODUCTION_PROMOTION) {
+              error "Direct production runs are disabled. Run ENVIRONMENT=dev and use the final Promote To Production button after dev smoke passes."
+            }
+            def upstreamFromPromote = currentBuild.upstreamBuilds.any { it.fullProjectName == env.JOB_NAME }
+            def breakglass = params.EMERGENCY_DIRECT_PROD_DEPLOY ?: false
+            def reason = ((params.EMERGENCY_REASON ?: '') as String).trim()
+            if (upstreamFromPromote) {
+              echo "Promote-from-dev path verified: prod build triggered by upstream dev run of ${env.JOB_NAME}."
+            } else if (breakglass) {
+              if (!reason) {
+                error "EMERGENCY_DIRECT_PROD_DEPLOY=true requires a non-empty EMERGENCY_REASON. Aborting."
+              }
+              def who = currentBuild.getBuildCauses().collect { (it.userId ?: it.userName ?: '') as String }.find { it } ?: 'unknown'
+              echo "*******************************************************************"
+              echo "* EMERGENCY DIRECT-TO-PROD DEPLOY (break-glass override engaged)  *"
+              echo "* Build:   ${env.BUILD_TAG}"
+              echo "* User:    ${who}"
+              echo "* Reason:  ${reason}"
+              echo "* Bypassed the must-go-via-dev rule. Audit-logged.                *"
+              echo "*******************************************************************"
+            } else {
+              error """Direct production deploys are forbidden.
+SKIP_PRODUCTION_PROMOTION=true is only valid when the build is launched by the Promote
+To Production stage of a dev run of this same job (verified via the upstream cause).
+To deploy to prod normally: run ENVIRONMENT=dev and click 'Promote To Production' at
+the end of the dev run. To override in a genuine emergency, also pass
+EMERGENCY_DIRECT_PROD_DEPLOY=true AND a non-empty EMERGENCY_REASON — both will be
+captured loudly in the build log."""
+            }
+          }
+        }
         sh '''
           set -euo pipefail
           scripts/jenkins/enforce-main-branch.sh
           scripts/jenkins/enforce-local-dev-defaults.sh
-          if [ "${ENVIRONMENT:-dev}" = "production" ] && [ "${SKIP_PRODUCTION_PROMOTION:-false}" != "true" ]; then
-            echo "Direct production runs are disabled. Run ENVIRONMENT=dev and use the final Promote To Production button after dev smoke passes." >&2
-            exit 1
-          fi
           test "$REMOTE_APP_HOME" = "$OE_REMOTE_APP_HOME"
           test ! -d /root/options-edge
           test ! -d /options-edge
@@ -271,6 +323,40 @@ pipeline {
         }
       }
     }
+    // Production identity provider (Keycloak) secret — created the same deployer-SA way (the admission
+    // policy blocks any other principal from writing secrets, verified even system:admin is denied).
+    // PRODUCTION ONLY: the KC manifests live only in the production overlay, so dev has no consumer — and
+    // the KC credentials are bound in THIS stage's withCredentials, so dev runs never resolve them.
+    stage('Keycloak Secret') {
+      when { expression { return params.ENVIRONMENT == 'production' } }
+      steps {
+        withCredentials([
+          string(credentialsId: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID, variable: 'KEYCLOAK_DB_PASSWORD'),
+          string(credentialsId: params.KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID, variable: 'KEYCLOAK_ADMIN_PASSWORD')
+        ]) {
+          sh '''
+            set -euo pipefail
+            test -n "$KEYCLOAK_DB_PASSWORD"
+            test -n "$KEYCLOAK_ADMIN_PASSWORD"
+            apply_args=""
+            if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+              apply_args="--dry-run=server"
+              echo "DEPLOY_DRY_RUN=true: validating the Keycloak secret without changing Kubernetes."
+            fi
+            # Feed secret material via a 0600 temp env-file (trap-cleaned), not --from-literal, so the
+            # values never appear in the kubectl process argv on the Jenkins agent. Two keys:
+            # POSTGRES_PASSWORD is the single source of truth for both Postgres AND Keycloak's JDBC pw.
+            umask 077
+            envfile="$(mktemp)"; trap 'rm -f "$envfile"' EXIT
+            printf 'POSTGRES_PASSWORD=%s\\nKC_BOOTSTRAP_ADMIN_PASSWORD=%s\\n' \
+              "$KEYCLOAK_DB_PASSWORD" "$KEYCLOAK_ADMIN_PASSWORD" > "$envfile"
+            kubectl -n options-edge create secret generic oe-keycloak-secrets \
+              --from-env-file="$envfile" \
+              --dry-run=client -o yaml | kubectl apply $apply_args -f -
+          '''
+        }
+      }
+    }
     stage('Resolve Images') {
       steps {
         sh '''
@@ -289,6 +375,7 @@ pipeline {
             fi
             cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$registry/options-edge-raw-to-display:$image_tag
+WEB_IMAGE=$registry/options-edge-web:$image_tag
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$registry/options-edge-databento-volume-aggregator:$image_tag
 DATABENTO_FEED_IMAGE=$registry/options-edge-databento-feed:$image_tag
 DATABENTO_GEX_IMAGE=$registry/options-edge-databento-gex:$image_tag
@@ -303,6 +390,7 @@ UNUSUAL_WHALES_GEX_IMAGE=$registry/options-edge-unusual-whales-gex:$image_tag
 UNUSUAL_WHALES_GEX_HISTORY_IMAGE=$registry/options-edge-unusual-whales-gex-history:$image_tag
 RAW_POSTGRES_WRITER_IMAGE=$registry/options-edge-raw-postgres-writer:$image_tag
 PRESSURE_POSTGRES_WRITER_IMAGE=$registry/options-edge-pressure-postgres-writer:$image_tag
+PIN_POSTGRES_WRITER_IMAGE=$registry/options-edge-pin-postgres-writer:$image_tag
 FEED_GATEWAY_IMAGE=$registry/options-edge-feed-gateway:$image_tag
 INTEGRATION_TEST_IMAGE=$registry/options-edge-integration-test:$image_tag
 HPSF_PROCESSING_IMAGE=$registry/options-edge-hpsf-processing:$image_tag
@@ -314,6 +402,7 @@ EOF
           else
             cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
+WEB_IMAGE=$WEB_IMAGE
 DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
 DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
 DATABENTO_GEX_IMAGE=$DATABENTO_GEX_IMAGE
@@ -350,6 +439,7 @@ EOF
           . "$JENKINS_WORK_DIR/options-edge-build.env"
           images="
             RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE
+            WEB_IMAGE=$WEB_IMAGE
             DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
             DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
             DATABENTO_GEX_IMAGE=$DATABENTO_GEX_IMAGE
@@ -596,7 +686,7 @@ EOF
     }
     stage('Kafka Topics') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN }
+        expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
       }
       steps {
         sh '''
@@ -617,7 +707,7 @@ EOF
     }
     stage('Reset HPSF Stage B Internal Topics') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN }
+        expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
       }
       steps {
         sh '''
@@ -654,7 +744,7 @@ EOF
     }
     stage('Kafka Internal Topics') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN }
+        expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
       }
       steps {
         sh '''
@@ -666,10 +756,17 @@ EOF
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
-          export KAFKA_TOPIC_RETENTION_MS=86400000
-          export KAFKA_STREAMS_INTERNAL_RETENTION_MS="${KAFKA_STREAMS_INTERNAL_RETENTION_MS:-86400000}"
+          # Single source of truth for the per-env retention cap: load-kafka-settings.sh
+          # exports KAFKA_MAX_RETENTION_MS from the rendered configmap (dev=10h; unset in
+          # prod). KAFKA_BOOTSTRAP_SERVERS/MIN_ISR are already set above, so its ':='
+          # derivations no-op for those. The streams-internal + changelog retention then
+          # default to the cap (dev 10h), or 24h when no cap is set (prod unchanged).
+          . scripts/kafka/load-kafka-settings.sh
+          internal_ret_default="${KAFKA_MAX_RETENTION_MS:-86400000}"
+          export KAFKA_TOPIC_RETENTION_MS="${internal_ret_default}"
+          export KAFKA_STREAMS_INTERNAL_RETENTION_MS="${KAFKA_STREAMS_INTERNAL_RETENTION_MS:-$internal_ret_default}"
           export KAFKA_STREAMS_INTERNAL_SEGMENT_MS="${KAFKA_STREAMS_INTERNAL_SEGMENT_MS:-3600000}"
-          export KAFKA_CHANGELOG_RETENTION_MS="${KAFKA_CHANGELOG_RETENTION_MS:-86400000}"
+          export KAFKA_CHANGELOG_RETENTION_MS="${KAFKA_CHANGELOG_RETENTION_MS:-$internal_ret_default}"
           export KAFKA_CHANGELOG_DELETE_RETENTION_MS="${KAFKA_CHANGELOG_DELETE_RETENTION_MS:-3600000}"
           export KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO="${KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO:-0.01}"
           scripts/kafka/apply-internal-topic-configs.sh
@@ -710,12 +807,20 @@ EOF
           # service: match the base name, remap to the resolved repo, pin the digest). This works for ANY
           # overlay -- dev (which has its own images: block) and production (which have none).
           yq -i '.images = []' "$_overlay_kustomization"
+          # pin-postgres-writer is a DEV-ONLY deployment (k8s/overlays/dev only). Pin it for dev so the
+          # fail-closed render guard passes; OMIT it for prod, where the image is intentionally absent from
+          # the prod registry and resolving its digest would (correctly) fail and abort the prod deploy.
+          _dev_only_images=""
+          if [ "${ENVIRONMENT}" = "dev" ]; then
+            _dev_only_images="PIN_POSTGRES_WRITER_IMAGE"
+          fi
           for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE DATABENTO_MAXPAIN_IMAGE DATABENTO_MISSION_PACE_IMAGE \
             DATABENTO_MISSION_PRESSURE_IMAGE DATABENTO_MISSION_SANDWICH_IMAGE DATABENTO_VOLUME_AGGREGATOR_IMAGE \
             DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
             IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
-            RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE \
-            UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE; do
+            RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
+            UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE \
+            $_dev_only_images; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
@@ -805,6 +910,7 @@ EOF
               --patch "$(cat "$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json")"
           fi
           kubectl -n options-edge set image deployment/raw-to-display-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
+          kubectl -n options-edge set image deployment/options-edge-web web="$WEB_IMAGE"
           kubectl -n options-edge set image deployment/raw-to-display-databento-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-databento-feed databento-feed="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
@@ -861,6 +967,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/spx-mission-control-service
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/options-edge-web --timeout=240s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-volume-aggregator --timeout=240s
@@ -929,7 +1036,12 @@ EOF
         sh '''
           set -euo pipefail
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://host.docker.internal:8090}"
+            # Default to the k8s web Service (LoadBalancer :8094, bound on localhost by
+            # docker-desktop ServiceLB on the native Mac agent) — mirroring prod, which
+            # verifies the k8s web at 192.168.100.252:8094. Must NOT default to the legacy
+            # Tomcat :8090, or this stage false-greens against the old listener instead of
+            # the options-edge-web Deployment this pipeline just rolled out.
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8094}"
             curl -fsS --connect-timeout 5 --max-time 10 "$WEB_PUBLIC_URL/api/config" | grep -q '"provider"'
             curl -fsS --connect-timeout 5 --max-time 10 -o /dev/null "$WEB_PUBLIC_URL/"
             echo "OptionsEdge dev web app is healthy at $WEB_PUBLIC_URL/"
@@ -939,7 +1051,7 @@ EOF
             # apply here. Verify the deployed prod web app remotely over HTTP.
             # Note: do NOT reuse WEB_PUBLIC_URL -- the promote step forwards the
             # dev value (localhost) into the production build.
-            PROD_WEB_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8090}"
+            PROD_WEB_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8094}"
             curl -fsS --connect-timeout 5 --max-time 20 "$PROD_WEB_URL/api/config" | grep -q '"provider"'
             curl -fsS --connect-timeout 5 --max-time 20 -o /dev/null "$PROD_WEB_URL/"
             echo "OptionsEdge prod web app is healthy at $PROD_WEB_URL/"
@@ -957,14 +1069,17 @@ EOF
               # the Smoke stage targets the same endpoint as 'Verify OptionsEdge
               # Web App'. The smoke runs on the native (Mac) Jenkins agent, where
               # the docker-only DNS name host.docker.internal does not resolve, so
-              # dev runs pass WEB_PUBLIC_URL=http://localhost:8090.
+              # the dev default below uses localhost (docker-desktop ServiceLB binds
+              # the k8s web LoadBalancer :8094 on localhost).
               # Production must NOT honor an inherited dev WEB_PUBLIC_URL (the
               # promote step forwards the dev value); it always targets prod.
               WEB_BASE_URL="$WEB_PUBLIC_URL"
             elif [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              WEB_BASE_URL=http://host.docker.internal:8090
+              # k8s web Service (:8094 on localhost), NOT legacy Tomcat :8090 — same
+              # rationale as the Verify stage above; mirrors prod's :8094 target.
+              WEB_BASE_URL=http://localhost:8094
             else
-              WEB_BASE_URL=http://192.168.100.252:8090
+              WEB_BASE_URL=http://192.168.100.252:8094
             fi
           fi
           export WEB_BASE_URL
@@ -1044,6 +1159,7 @@ EOF
               string(name: 'KAFKA_BOOTSTRAP_SERVERS', value: ''),
               string(name: 'WEB_PUBLIC_URL', value: params.WEB_PUBLIC_URL),
               string(name: 'RAW_TO_DISPLAY_IMAGE', value: params.RAW_TO_DISPLAY_IMAGE),
+              string(name: 'WEB_IMAGE', value: params.WEB_IMAGE),
               string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
               string(name: 'DATABENTO_GEX_IMAGE', value: params.DATABENTO_GEX_IMAGE),
               string(name: 'DATABENTO_MAXPAIN_IMAGE', value: params.DATABENTO_MAXPAIN_IMAGE),
@@ -1066,6 +1182,8 @@ EOF
               string(name: 'IBKR_FEED_IMAGE', value: params.IBKR_FEED_IMAGE),
               string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', value: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID),
               string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
+              string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID),
+              string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID),
               string(name: 'MARKET_DATA_SOURCE', value: params.MARKET_DATA_SOURCE),
               string(name: 'RAW_TOPIC', value: params.RAW_TOPIC),
               string(name: 'IB_HOST', value: params.IB_HOST),
@@ -1079,7 +1197,8 @@ EOF
               booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', value: false),
               booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true),
               booleanParam(name: 'DEPLOY_DRY_RUN', value: params.DEPLOY_DRY_RUN),
-              booleanParam(name: 'SKIP_HPSF_SMOKE', value: params.SKIP_HPSF_SMOKE)
+              booleanParam(name: 'SKIP_HPSF_SMOKE', value: params.SKIP_HPSF_SMOKE),
+              booleanParam(name: 'SKIP_KAFKA_TOPICS', value: params.SKIP_KAFKA_TOPICS)
             ]
         }
       }

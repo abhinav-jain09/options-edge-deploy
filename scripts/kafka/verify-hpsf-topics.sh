@@ -39,8 +39,22 @@ topic_name() {
   printf '%s%s' "$TOPIC_PREFIX" "$1"
 }
 
+# Mirror create-hpsf-topics.sh: when the env-derived cap KAFKA_MAX_RETENTION_MS is
+# set (dev = 10h; unset in prod), the topics were CREATED with retention capped at
+# that value, so the verifier must expect the capped retention too — otherwise dev
+# verification would fail against its own capped topics. Unset => no cap (prod).
+cap_retention() {
+  local v="$1"
+  if [[ -n "${KAFKA_MAX_RETENTION_MS:-}" && "$v" =~ ^[0-9]+$ && "$KAFKA_MAX_RETENTION_MS" =~ ^[0-9]+$ && "$v" -gt "$KAFKA_MAX_RETENTION_MS" ]]; then
+    printf '%s' "$KAFKA_MAX_RETENTION_MS"
+  else
+    printf '%s' "$v"
+  fi
+}
+
 for spec in "${TOPICS[@]}"; do
   IFS='|' read -r topic expected_partitions expected_cleanup expected_retention <<<"$spec"
+  expected_retention="$(cap_retention "$expected_retention")"
   topic="$(topic_name "$topic")"
   echo "Verifying $topic"
   description="$(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$topic")"

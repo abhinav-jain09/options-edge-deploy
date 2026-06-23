@@ -41,11 +41,18 @@ spec:
               value: options-databento-gex-streams-v1
             - name: KAFKA_GEX_STREAMS_NUM_THREADS
               value: "4"
-            # Dealer-positioning sign: flow-adjusted (blended with the naive prior). The feed now
-            # publishes askVolume/bidVolume + lastTradeAt, so the flow path and the zero-bid mark
-            # staleness age-gate are active rather than dormant.
+            # Dealer-positioning sign: NAIVE (call +1 / put -1).
+            # The 1-year SPXW 0DTE backtest (gex-backtest, run phase3-1w-...-b10, 252 days /
+            # 7,541 samples) ranked the three models NAIVE ~= V2 >> V1(FLOW_ADJUSTED):
+            #   NAIVE  : Spearman IC(-netGEX, fwd realized var) = 0.56, per-day IC +0.143
+            #   V2     : IC 0.56 (tied) but no measurable lift over NAIVE (lift CI crosses 0,
+            #            beats-naive in only 3/12 walk-forward months) — flow machinery earns nothing
+            #   V1     : IC 0.35 AND per-day IC -0.21 (intraday signal points the WRONG way)
+            # The IC=0.56 survives de-seasonalization (within-time-of-day-bucket IC 0.58, 100% of
+            # buckets positive), so it is a real signal, not the intraday vol cycle. NAIVE is the
+            # best AND simplest, so the flow-adjusted path is retired in production.
             - name: DATABENTO_GEX_DEALER_SIGN_MODEL
-              value: FLOW_ADJUSTED
+              value: NAIVE_CALL_PLUS_PUT_MINUS
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms1g -Xmx4g"
           ports:

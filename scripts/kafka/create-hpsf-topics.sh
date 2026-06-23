@@ -88,6 +88,19 @@ cleanup_for_config_add() {
   fi
 }
 
+# Cap a topic's retention.ms at KAFKA_MAX_RETENTION_MS when that env-derived cap is
+# set (dev = 10h; unset in prod). Keeps dev Kafka uniformly short without touching
+# prod's deliberately long HPSF retentions. verify-hpsf-topics.sh applies the same
+# cap so creation and verification stay in lockstep.
+cap_retention() {
+  local v="$1"
+  if [[ -n "${KAFKA_MAX_RETENTION_MS:-}" && "$v" =~ ^[0-9]+$ && "$KAFKA_MAX_RETENTION_MS" =~ ^[0-9]+$ && "$v" -gt "$KAFKA_MAX_RETENTION_MS" ]]; then
+    printf '%s' "$KAFKA_MAX_RETENTION_MS"
+  else
+    printf '%s' "$v"
+  fi
+}
+
 base_configs() {
   local cleanup_policy="$1"
   local retention_ms="$2"
@@ -135,6 +148,7 @@ create_topic_if_needed() {
   local extra="$7"
   local description current_partitions current_replication_factor configs
 
+  retention_ms="$(cap_retention "$retention_ms")"
   configs="$(base_configs "$cleanup_policy" "$retention_ms" "$segment_ms" "$segment_bytes" "$extra")"
 
   if [[ "$DRY_RUN" == "true" ]]; then

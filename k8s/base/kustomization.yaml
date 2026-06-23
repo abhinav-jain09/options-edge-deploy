@@ -1,6 +1,8 @@
 resources:
   - namespace.yaml
   - configmap.yaml
+  - options-edge-web-deployment.yaml
+  - options-edge-web-service.yaml
   - databento-feed-configmap.yaml
   - databento-feed-deployment.yaml
   - databento-feed-service.yaml
@@ -51,6 +53,7 @@ resources:
   - unusual-whales-gex-history-deployment.yaml
   - unusual-whales-gex-history-service.yaml
   - kafka-streams-state-pvcs.yaml
+  - kafka-changelog-cleanup-cronjob.yaml
 
 patches:
   - path: kafka-streams-state-patches.yaml
