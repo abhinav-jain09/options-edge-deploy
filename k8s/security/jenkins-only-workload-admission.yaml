@@ -40,7 +40,18 @@ spec:
           - ingresses
           - networkpolicies
   validations:
-    - expression: "request.userInfo.username == 'system:serviceaccount:options-edge:jenkins-deployer'"
+    # Allow the Jenkins deployer, AND the Kubernetes system principals that MUST mutate these resources for
+    # the cluster to function. In particular: with PersistentVolumeClaims now gated, a WaitForFirstConsumer
+    # StorageClass requires system:kube-scheduler to patch/bind the PVC during pod scheduling, and the
+    # kube-controller-manager / kube-system controllers (e.g. the PV binder) to manage binding. Without this
+    # exemption the scheduler's PVC bind is denied -> PVC stays Pending -> the pod never schedules (the
+    # Streams pods deadlock). Human/app (non-system, non-deployer) workload changes remain blocked.
+    - expression: >-
+        request.userInfo.username == 'system:serviceaccount:options-edge:jenkins-deployer'
+        || request.userInfo.username == 'system:kube-scheduler'
+        || request.userInfo.username == 'system:kube-controller-manager'
+        || request.userInfo.username.startsWith('system:serviceaccount:kube-system:')
+        || request.userInfo.username.startsWith('system:node:')
       message: "OptionsEdge Kubernetes workload changes are blocked unless they run through the Jenkins deployer ServiceAccount."
 ---
 apiVersion: admissionregistration.k8s.io/v1
