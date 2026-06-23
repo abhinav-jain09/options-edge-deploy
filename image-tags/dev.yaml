@@ -9,6 +9,7 @@ images:
   unusual-whales-gex-history-service: 192.168.100.252:5000/options-edge-unusual-whales-gex-history:dev
   raw-postgres-writer: 192.168.100.252:5000/options-edge-raw-postgres-writer:dev
   pressure-postgres-writer: 192.168.100.252:5000/options-edge-pressure-postgres-writer:dev
+  pin-postgres-writer: 192.168.100.252:5000/options-edge-pin-postgres-writer:dev
   feed-gateway-service: 192.168.100.252:5000/options-edge-feed-gateway:dev
   options-edge-integration-test: 192.168.100.252:5000/options-edge-integration-test:dev
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:dev
