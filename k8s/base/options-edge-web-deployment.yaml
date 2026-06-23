@@ -28,6 +28,11 @@ spec:
         app.kubernetes.io/component: web
         app.kubernetes.io/part-of: options-edge
     spec:
+      # Pin to the control-plane node (192.168.100.252). The oe-failover-56 node (.4) has intermittently
+      # broken pod DNS, which makes the startup OIDC issuer fetch (https://auth.fullfunding.nl) fail with
+      # UnknownHostException. The control-plane node resolves reliably (same reason Keycloak is pinned here).
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
       containers:
         - name: web
           image: 192.168.100.252:5000/options-edge-web:dev

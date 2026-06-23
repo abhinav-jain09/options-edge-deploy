@@ -21,6 +21,9 @@ metadata:
     app.kubernetes.io/component: auth
 spec:
   type: ClusterIP
+  # Pinned clusterIP: the cloudflared tunnel routes auth.fullfunding.nl -> this IP:8080 (traefik on :80 is
+  # broken on this cluster), so the IP must be stable across redeploys. This is the IP already assigned.
+  clusterIP: 10.43.127.26
   selector:
     app.kubernetes.io/name: oe-keycloak
   ports:
