@@ -11,15 +11,14 @@
 #   - Replay orchestrator: http://localhost:8095 (dev host jar)
 #
 # UI base / mission-control point at the k8s web Service's own port. PR #104 exposes
-# options-edge-web as a LoadBalancer on :8094 (DELIBERATELY not :8090, so the new k8s
-# web coexists with the legacy Tomcat web on :8090 until the signed-off cutover). In
-# docker-desktop k3s the ServiceLB binds that port on localhost, so the Mac browser
-# reaches the dev k8s web at http://localhost:8094 — directly analogous to prod, whose
-# web smoke already targets 192.168.100.252:8094. (The old :8090 here would have pointed
-# the browser at the legacy listener, not this k8s Deployment — the bug Codex caught.)
-# The dev Verify/Smoke stages now default to http://localhost:8094 too (Jenkinsfile), so
-# the pipeline verifies THIS k8s web rather than the legacy :8090 listener — no operator
-# WEB_PUBLIC_URL override required.
+# options-edge-web as a LoadBalancer on :8094 (originally not :8090 so the k8s web could
+# coexist with the legacy local Docker container web on :8090 during cutover). The legacy
+# :8090 listener has since been removed (container stopped + options-edge-web-deploy
+# RUN_LOCAL default flipped to false). In docker-desktop k3s the ServiceLB binds :8094 on
+# localhost, so the Mac browser reaches the dev k8s web at http://localhost:8094 —
+# directly analogous to prod, whose web smoke targets 192.168.100.252:8094.
+# The dev Verify/Smoke stages default to http://localhost:8094 (Jenkinsfile), so the
+# pipeline verifies THIS k8s web — no operator WEB_PUBLIC_URL override required.
 #
 # Auth stays MANDATORY in dev (mirrors prod per rule.md) — only the issuer host changes.
 # Image + imagePullPolicy are handled by the dev overlay kustomization (images: rewrite

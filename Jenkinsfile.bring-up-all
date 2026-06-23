@@ -42,7 +42,12 @@ pipeline {
     //
     // Non-env-derived knobs (operator behavior):
     PUSH_IMAGE     = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
-    RUN_LOCAL      = "${params.PROFILE == 'prod' ? 'false' : 'true'}"
+    // RUN_LOCAL is OFF for every profile now. Dev used to docker-run the web image on the
+    // Mac agent at :8090 (legacy local-run); the web UI runs in k8s in both envs now
+    // (LoadBalancer Service options-edge-web :8094) so the local-run path is no longer
+    // wanted. Operators who need a one-off local-run can still pass RUN_LOCAL=true
+    // directly to options-edge-web-deploy.
+    RUN_LOCAL      = "false"
     IS_PROD        = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
     // Canonical ENVIRONMENT for child jobs (every child now uses @Library('oe') oeProfile
     // which accepts ONLY ['dev','production']). UI param PROFILE stays 'dev'/'prod'
