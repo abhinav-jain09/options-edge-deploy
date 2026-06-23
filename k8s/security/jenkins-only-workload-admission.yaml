@@ -40,18 +40,20 @@ spec:
           - ingresses
           - networkpolicies
   validations:
-    # Allow the Jenkins deployer, AND the Kubernetes system principals that MUST mutate these resources for
-    # the cluster to function. In particular: with PersistentVolumeClaims now gated, a WaitForFirstConsumer
-    # StorageClass requires system:kube-scheduler to patch/bind the PVC during pod scheduling, and the
-    # kube-controller-manager / kube-system controllers (e.g. the PV binder) to manage binding. Without this
-    # exemption the scheduler's PVC bind is denied -> PVC stays Pending -> the pod never schedules (the
-    # Streams pods deadlock). Human/app (non-system, non-deployer) workload changes remain blocked.
+    # The Jenkins deployer SA may mutate ANY gated resource. System principals are exempted ONLY for
+    # persistentvolumeclaims, and only the ones that actually bind a PVC: with a WaitForFirstConsumer
+    # StorageClass, system:kube-scheduler patches/binds the PVC during pod scheduling, and the
+    # kube-controller-manager / a kube-system controller (the PV binder) completes the bind. Without this
+    # the scheduler's PVC bind is denied -> PVC stays Pending -> the pod never schedules (Streams pods
+    # deadlock). The carveout is PVC-scoped, so these system principals CANNOT touch Deployments/Secrets/
+    # etc.; all human/app (non-system, non-deployer) workload changes remain blocked. (system:node:* is NOT
+    # exempted -- kubelets do not mutate the PVC resource for binding.)
     - expression: >-
         request.userInfo.username == 'system:serviceaccount:options-edge:jenkins-deployer'
-        || request.userInfo.username == 'system:kube-scheduler'
-        || request.userInfo.username == 'system:kube-controller-manager'
-        || request.userInfo.username.startsWith('system:serviceaccount:kube-system:')
-        || request.userInfo.username.startsWith('system:node:')
+        || (request.resource.resource == 'persistentvolumeclaims'
+            && (request.userInfo.username == 'system:kube-scheduler'
+                || request.userInfo.username == 'system:kube-controller-manager'
+                || request.userInfo.username.startsWith('system:serviceaccount:kube-system:')))
       message: "OptionsEdge Kubernetes workload changes are blocked unless they run through the Jenkins deployer ServiceAccount."
 ---
 apiVersion: admissionregistration.k8s.io/v1
