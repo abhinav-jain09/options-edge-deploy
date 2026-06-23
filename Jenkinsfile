@@ -179,49 +179,12 @@ pipeline {
     }
     stage('Validate') {
       steps {
-        script {
-          // Must-go-via-dev gate. ENVIRONMENT=production deploys are only legitimate when:
-          //   (A) the build was triggered as a downstream of the "Promote To Production" stage
-          //       of a dev run of THIS SAME job (the build job: env.JOB_NAME call below records an
-          //       UpstreamCause we can verify), OR
-          //   (B) the operator engages the audited break-glass: EMERGENCY_DIRECT_PROD_DEPLOY=true
-          //       PLUS a non-empty EMERGENCY_REASON. Both required, both logged loudly.
-          // This closes the previous hole where any operator could pass SKIP_PRODUCTION_PROMOTION=true
-          // and bypass the direct-prod guard. SKIP_PRODUCTION_PROMOTION remains the implementation
-          // marker (the promote stage's downstream build needs it set to true so it does not
-          // re-promote and re-block itself), but operators no longer get to set it themselves.
-          if (params.ENVIRONMENT == 'production') {
-            if (!params.SKIP_PRODUCTION_PROMOTION) {
-              error "Direct production runs are disabled. Run ENVIRONMENT=dev and use the final Promote To Production button after dev smoke passes."
-            }
-            def upstreamFromPromote = currentBuild.upstreamBuilds.any { it.fullProjectName == env.JOB_NAME }
-            def breakglass = params.EMERGENCY_DIRECT_PROD_DEPLOY ?: false
-            def reason = ((params.EMERGENCY_REASON ?: '') as String).trim()
-            if (upstreamFromPromote) {
-              echo "Promote-from-dev path verified: prod build triggered by upstream dev run of ${env.JOB_NAME}."
-            } else if (breakglass) {
-              if (!reason) {
-                error "EMERGENCY_DIRECT_PROD_DEPLOY=true requires a non-empty EMERGENCY_REASON. Aborting."
-              }
-              def who = currentBuild.getBuildCauses().collect { (it.userId ?: it.userName ?: '') as String }.find { it } ?: 'unknown'
-              echo "*******************************************************************"
-              echo "* EMERGENCY DIRECT-TO-PROD DEPLOY (break-glass override engaged)  *"
-              echo "* Build:   ${env.BUILD_TAG}"
-              echo "* User:    ${who}"
-              echo "* Reason:  ${reason}"
-              echo "* Bypassed the must-go-via-dev rule. Audit-logged.                *"
-              echo "*******************************************************************"
-            } else {
-              error """Direct production deploys are forbidden.
-SKIP_PRODUCTION_PROMOTION=true is only valid when the build is launched by the Promote
-To Production stage of a dev run of this same job (verified via the upstream cause).
-To deploy to prod normally: run ENVIRONMENT=dev and click 'Promote To Production' at
-the end of the dev run. To override in a genuine emergency, also pass
-EMERGENCY_DIRECT_PROD_DEPLOY=true AND a non-empty EMERGENCY_REASON — both will be
-captured loudly in the build log."""
-            }
-          }
-        }
+        // The must-go-via-dev prod-promotion guard lives in the top-level
+        // enforceProdPromotionGuard() method (defined after pipeline{}). Moving
+        // this CPS-heavy Groovy out of the declarative pipeline's single compiled
+        // method keeps it under the JVM 64KB per-method bytecode limit
+        // (MethodTooLargeException). See also promoteToProduction() below.
+        script { enforceProdPromotionGuard() }
         sh 'bash -x scripts/deploy/validate-platform.sh'
       }
     }
@@ -590,76 +553,142 @@ captured loudly in the build log."""
         expression { return env.ENVIRONMENT != 'production' && !params.SKIP_PRODUCTION_PROMOTION }
       }
       steps {
-        script {
-          def promoteToProduction = false
-          try {
-            timeout(time: 30, unit: 'MINUTES') {
-              input message: 'Dev deployment and smoke checks completed. Deploy the same build to PRODUCTION?', ok: 'Deploy to production'
-            }
-            promoteToProduction = true
-          } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException ignored) {
-            echo 'Production promotion was not approved; dev deployment remains complete.'
-          }
-          if (!promoteToProduction) {
-            return
-          }
-          build job: env.JOB_NAME,
-            wait: false,
-            propagate: false,
-            parameters: [
-              string(name: 'ENVIRONMENT', value: 'production'),
-              string(name: 'KUBECONFIG_FILE', value: params.PROD_KUBECONFIG_FILE),
-              string(name: 'KUBECONFIG_ADMIN_FILE', value: params.PROD_KUBECONFIG_ADMIN_FILE),
-              string(name: 'IMAGE_REGISTRY', value: params.IMAGE_REGISTRY),
-              string(name: 'IMAGE_TAG', value: params.IMAGE_TAG),
-              string(name: 'BUILD_PLATFORM', value: 'linux/amd64'),
-              string(name: 'KAFKA_BOOTSTRAP_SERVERS', value: ''),
-              string(name: 'WEB_PUBLIC_URL', value: params.WEB_PUBLIC_URL),
-              string(name: 'RAW_TO_DISPLAY_IMAGE', value: params.RAW_TO_DISPLAY_IMAGE),
-              string(name: 'WEB_IMAGE', value: params.WEB_IMAGE),
-              string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
-              string(name: 'DATABENTO_GEX_IMAGE', value: params.DATABENTO_GEX_IMAGE),
-              string(name: 'DATABENTO_MAXPAIN_IMAGE', value: params.DATABENTO_MAXPAIN_IMAGE),
-              string(name: 'DATABENTO_MISSION_PACE_IMAGE', value: params.DATABENTO_MISSION_PACE_IMAGE),
-              string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', value: params.DATABENTO_MISSION_PRESSURE_IMAGE),
-              string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', value: params.DATABENTO_MISSION_SANDWICH_IMAGE),
-              string(name: 'VOLUME_PACE_IMAGE', value: params.VOLUME_PACE_IMAGE),
-              string(name: 'DIRECTIONAL_PRESSURE_IMAGE', value: params.DIRECTIONAL_PRESSURE_IMAGE),
-              string(name: 'VOLUME_SANDWICH_IMAGE', value: params.VOLUME_SANDWICH_IMAGE),
-              string(name: 'UNUSUAL_WHALES_GEX_IMAGE', value: params.UNUSUAL_WHALES_GEX_IMAGE),
-              string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', value: params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE),
-              string(name: 'DATABENTO_GEX_HISTORY_IMAGE', value: params.DATABENTO_GEX_HISTORY_IMAGE),
-              string(name: 'RAW_POSTGRES_WRITER_IMAGE', value: params.RAW_POSTGRES_WRITER_IMAGE),
-              string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', value: params.PRESSURE_POSTGRES_WRITER_IMAGE),
-              string(name: 'FEED_GATEWAY_IMAGE', value: params.FEED_GATEWAY_IMAGE),
-              string(name: 'INTEGRATION_TEST_IMAGE', value: params.INTEGRATION_TEST_IMAGE),
-              string(name: 'HPSF_PROCESSING_IMAGE', value: params.HPSF_PROCESSING_IMAGE),
-              string(name: 'HPSF_POSTGRES_WRITER_IMAGE', value: params.HPSF_POSTGRES_WRITER_IMAGE),
-              string(name: 'SPX_MISSION_CONTROL_IMAGE', value: params.SPX_MISSION_CONTROL_IMAGE),
-              string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', value: params.STRIKE_FLOW_CLASSIFIER_IMAGE),
-              string(name: 'IBKR_FEED_IMAGE', value: params.IBKR_FEED_IMAGE),
-              string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', value: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID),
-              string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
-              string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID),
-              string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID),
-              string(name: 'MARKET_DATA_SOURCE', value: params.MARKET_DATA_SOURCE),
-              string(name: 'RAW_TOPIC', value: params.RAW_TOPIC),
-              string(name: 'IB_HOST', value: params.IB_HOST),
-              string(name: 'IB_PORT', value: params.IB_PORT),
-              string(name: 'IB_CLIENT_ID', value: params.IB_CLIENT_ID),
-              string(name: 'IB_EXPIRY', value: params.IB_EXPIRY),
-              string(name: 'DATABENTO_EXPIRY', value: params.DATABENTO_EXPIRY),
-              string(name: 'IB_MAX_STRIKES', value: params.IB_MAX_STRIKES),
-              booleanParam(name: 'KAFKA_CLEANUP_TOPICS', value: false),
-              booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', value: false),
-              booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', value: false),
-              booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true),
-              booleanParam(name: 'DEPLOY_DRY_RUN', value: params.DEPLOY_DRY_RUN),
-              booleanParam(name: 'SKIP_HPSF_SMOKE', value: params.SKIP_HPSF_SMOKE),
-              booleanParam(name: 'SKIP_KAFKA_TOPICS', value: params.SKIP_KAFKA_TOPICS)
-            ]
-        }
+        // The promotion gate + downstream prod build (a CPS-heavy build job: with
+        // ~50 parameter() calls — the single largest Groovy block in this file)
+        // lives in the top-level promoteToProduction() method (defined after
+        // pipeline{}). Keeping it out of the declarative pipeline's single
+        // compiled method is what keeps the script under the JVM 64KB per-method
+        // bytecode limit (MethodTooLargeException).
+        script { promoteToProduction() }
       }
     }
   }
+}
+
+// --- Top-level helper methods ---------------------------------------------
+// Defined OUTSIDE the pipeline{} block so each compiles to its OWN CPS method,
+// rather than being inlined into the single giant WorkflowScript method that
+// the declarative pipeline produces. Pipeline steps (error/echo/input/build/
+// timeout) and the params/env/currentBuild bindings resolve at runtime through
+// the script binding, exactly as they do inline. This is the structural fix for
+// MethodTooLargeException: the prod-promotion guard and the downstream prod
+// build are the two heaviest Groovy blocks, so hoisting them frees the most
+// per-method bytecode.
+
+// Must-go-via-dev gate. ENVIRONMENT=production deploys are only legitimate when:
+//   (A) the build was triggered as a downstream of the "Promote To Production"
+//       stage of a dev run of THIS SAME job (the build job: env.JOB_NAME call in
+//       promoteToProduction() records an UpstreamCause we can verify), OR
+//   (B) the operator engages the audited break-glass: EMERGENCY_DIRECT_PROD_DEPLOY
+//       =true PLUS a non-empty EMERGENCY_REASON. Both required, both logged loudly.
+// This closes the previous hole where any operator could pass
+// SKIP_PRODUCTION_PROMOTION=true and bypass the direct-prod guard.
+// SKIP_PRODUCTION_PROMOTION remains the implementation marker (the promote stage's
+// downstream build needs it set to true so it does not re-promote and re-block
+// itself), but operators no longer get to set it themselves.
+void enforceProdPromotionGuard() {
+  if (params.ENVIRONMENT == 'production') {
+    if (!params.SKIP_PRODUCTION_PROMOTION) {
+      error "Direct production runs are disabled. Run ENVIRONMENT=dev and use the final Promote To Production button after dev smoke passes."
+    }
+    def upstreamFromPromote = currentBuild.upstreamBuilds.any { it.fullProjectName == env.JOB_NAME }
+    def breakglass = params.EMERGENCY_DIRECT_PROD_DEPLOY ?: false
+    def reason = ((params.EMERGENCY_REASON ?: '') as String).trim()
+    if (upstreamFromPromote) {
+      echo "Promote-from-dev path verified: prod build triggered by upstream dev run of ${env.JOB_NAME}."
+    } else if (breakglass) {
+      if (!reason) {
+        error "EMERGENCY_DIRECT_PROD_DEPLOY=true requires a non-empty EMERGENCY_REASON. Aborting."
+      }
+      def who = currentBuild.getBuildCauses().collect { (it.userId ?: it.userName ?: '') as String }.find { it } ?: 'unknown'
+      echo "*******************************************************************"
+      echo "* EMERGENCY DIRECT-TO-PROD DEPLOY (break-glass override engaged)  *"
+      echo "* Build:   ${env.BUILD_TAG}"
+      echo "* User:    ${who}"
+      echo "* Reason:  ${reason}"
+      echo "* Bypassed the must-go-via-dev rule. Audit-logged.                *"
+      echo "*******************************************************************"
+    } else {
+      error """Direct production deploys are forbidden.
+SKIP_PRODUCTION_PROMOTION=true is only valid when the build is launched by the Promote
+To Production stage of a dev run of this same job (verified via the upstream cause).
+To deploy to prod normally: run ENVIRONMENT=dev and click 'Promote To Production' at
+the end of the dev run. To override in a genuine emergency, also pass
+EMERGENCY_DIRECT_PROD_DEPLOY=true AND a non-empty EMERGENCY_REASON — both will be
+captured loudly in the build log."""
+    }
+  }
+}
+
+// Manual approval gate, then launch the same job against production as a
+// downstream build (records the UpstreamCause that enforceProdPromotionGuard()
+// verifies). Returns without promoting if the input times out / is rejected.
+void promoteToProduction() {
+  def approved = false
+  try {
+    timeout(time: 30, unit: 'MINUTES') {
+      input message: 'Dev deployment and smoke checks completed. Deploy the same build to PRODUCTION?', ok: 'Deploy to production'
+    }
+    approved = true
+  } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException ignored) {
+    echo 'Production promotion was not approved; dev deployment remains complete.'
+  }
+  if (!approved) {
+    return
+  }
+  build job: env.JOB_NAME,
+    wait: false,
+    propagate: false,
+    parameters: [
+      string(name: 'ENVIRONMENT', value: 'production'),
+      string(name: 'KUBECONFIG_FILE', value: params.PROD_KUBECONFIG_FILE),
+      string(name: 'KUBECONFIG_ADMIN_FILE', value: params.PROD_KUBECONFIG_ADMIN_FILE),
+      string(name: 'IMAGE_REGISTRY', value: params.IMAGE_REGISTRY),
+      string(name: 'IMAGE_TAG', value: params.IMAGE_TAG),
+      string(name: 'BUILD_PLATFORM', value: 'linux/amd64'),
+      string(name: 'KAFKA_BOOTSTRAP_SERVERS', value: ''),
+      string(name: 'WEB_PUBLIC_URL', value: params.WEB_PUBLIC_URL),
+      string(name: 'RAW_TO_DISPLAY_IMAGE', value: params.RAW_TO_DISPLAY_IMAGE),
+      string(name: 'WEB_IMAGE', value: params.WEB_IMAGE),
+      string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
+      string(name: 'DATABENTO_GEX_IMAGE', value: params.DATABENTO_GEX_IMAGE),
+      string(name: 'DATABENTO_MAXPAIN_IMAGE', value: params.DATABENTO_MAXPAIN_IMAGE),
+      string(name: 'DATABENTO_MISSION_PACE_IMAGE', value: params.DATABENTO_MISSION_PACE_IMAGE),
+      string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', value: params.DATABENTO_MISSION_PRESSURE_IMAGE),
+      string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', value: params.DATABENTO_MISSION_SANDWICH_IMAGE),
+      string(name: 'VOLUME_PACE_IMAGE', value: params.VOLUME_PACE_IMAGE),
+      string(name: 'DIRECTIONAL_PRESSURE_IMAGE', value: params.DIRECTIONAL_PRESSURE_IMAGE),
+      string(name: 'VOLUME_SANDWICH_IMAGE', value: params.VOLUME_SANDWICH_IMAGE),
+      string(name: 'UNUSUAL_WHALES_GEX_IMAGE', value: params.UNUSUAL_WHALES_GEX_IMAGE),
+      string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', value: params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE),
+      string(name: 'DATABENTO_GEX_HISTORY_IMAGE', value: params.DATABENTO_GEX_HISTORY_IMAGE),
+      string(name: 'RAW_POSTGRES_WRITER_IMAGE', value: params.RAW_POSTGRES_WRITER_IMAGE),
+      string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', value: params.PRESSURE_POSTGRES_WRITER_IMAGE),
+      string(name: 'FEED_GATEWAY_IMAGE', value: params.FEED_GATEWAY_IMAGE),
+      string(name: 'INTEGRATION_TEST_IMAGE', value: params.INTEGRATION_TEST_IMAGE),
+      string(name: 'HPSF_PROCESSING_IMAGE', value: params.HPSF_PROCESSING_IMAGE),
+      string(name: 'HPSF_POSTGRES_WRITER_IMAGE', value: params.HPSF_POSTGRES_WRITER_IMAGE),
+      string(name: 'SPX_MISSION_CONTROL_IMAGE', value: params.SPX_MISSION_CONTROL_IMAGE),
+      string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', value: params.STRIKE_FLOW_CLASSIFIER_IMAGE),
+      string(name: 'IBKR_FEED_IMAGE', value: params.IBKR_FEED_IMAGE),
+      string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', value: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID),
+      string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
+      string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID),
+      string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID),
+      string(name: 'MARKET_DATA_SOURCE', value: params.MARKET_DATA_SOURCE),
+      string(name: 'RAW_TOPIC', value: params.RAW_TOPIC),
+      string(name: 'IB_HOST', value: params.IB_HOST),
+      string(name: 'IB_PORT', value: params.IB_PORT),
+      string(name: 'IB_CLIENT_ID', value: params.IB_CLIENT_ID),
+      string(name: 'IB_EXPIRY', value: params.IB_EXPIRY),
+      string(name: 'DATABENTO_EXPIRY', value: params.DATABENTO_EXPIRY),
+      string(name: 'IB_MAX_STRIKES', value: params.IB_MAX_STRIKES),
+      booleanParam(name: 'KAFKA_CLEANUP_TOPICS', value: false),
+      booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', value: false),
+      booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', value: false),
+      booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true),
+      booleanParam(name: 'DEPLOY_DRY_RUN', value: params.DEPLOY_DRY_RUN),
+      booleanParam(name: 'SKIP_HPSF_SMOKE', value: params.SKIP_HPSF_SMOKE),
+      booleanParam(name: 'SKIP_KAFKA_TOPICS', value: params.SKIP_KAFKA_TOPICS)
+    ]
 }
