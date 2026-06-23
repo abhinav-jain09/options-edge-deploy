@@ -49,6 +49,7 @@ pipeline {
     string(name: 'IB_EXPIRY', defaultValue: '', description: 'Option expiry/date. Empty uses the current weekday on the Jenkins agent.')
     string(name: 'DATABENTO_EXPIRY', defaultValue: '', description: 'Override expiry for Databento Historical feed (YYYYMMDD). Empty -> auto-resolved from Databento metadata + MarketCalendar in the Resolve Databento Expiry stage (fail-closed if Databento is unreachable or the result is not a trading day).')
     string(name: 'IB_MAX_STRIKES', defaultValue: '43', description: 'Max strikes around spot for IBKR feed')
+    booleanParam(name: 'SKIP_KAFKA_TOPICS', defaultValue: false, description: 'Skip all three Kafka topic stages (Kafka Topics, Reset HPSF Stage B Internal Topics, Kafka Internal Topics). Use for a code/image-only redeploy when topic configs and partitions are already correct on the cluster — saves ~5-15 min on a typical run. Defaults off (run the full topic apply/verify path).')
     booleanParam(name: 'KAFKA_CLEANUP_TOPICS', defaultValue: false, description: 'Clean Kafka topics before deployment')
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
@@ -637,7 +638,7 @@ EOF
     }
     stage('Kafka Topics') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN }
+        expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
       }
       steps {
         sh '''
@@ -658,7 +659,7 @@ EOF
     }
     stage('Reset HPSF Stage B Internal Topics') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN }
+        expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
       }
       steps {
         sh '''
@@ -695,7 +696,7 @@ EOF
     }
     stage('Kafka Internal Topics') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN }
+        expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
       }
       steps {
         sh '''
@@ -1140,7 +1141,8 @@ EOF
               booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', value: false),
               booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true),
               booleanParam(name: 'DEPLOY_DRY_RUN', value: params.DEPLOY_DRY_RUN),
-              booleanParam(name: 'SKIP_HPSF_SMOKE', value: params.SKIP_HPSF_SMOKE)
+              booleanParam(name: 'SKIP_HPSF_SMOKE', value: params.SKIP_HPSF_SMOKE),
+              booleanParam(name: 'SKIP_KAFKA_TOPICS', value: params.SKIP_KAFKA_TOPICS)
             ]
         }
       }
