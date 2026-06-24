@@ -56,11 +56,11 @@ spec:
             # gateway at :8093. In a real prod cluster the gateway Service IS pod-reachable, so prod sets
             # APP_FEED_GATEWAY_HEALTH_URL to the actual in-cluster gateway Service for a genuine probe.
             - name: APP_FEED_GATEWAY_WS_URL
-              value: "ws://localhost:8093/ws/events"
+              value: "ws://localhost:8091/ws/events"
             - name: APP_FEED_GATEWAY_HEALTH_URL
               value: "ws://localhost:8080/ws/events"
             - name: VITE_WS_URL
-              value: "ws://localhost:8093/ws/events"
+              value: "ws://localhost:8091/ws/events"
             # The web serves its own /api + /mission-control on the dev host port :8090. The same-origin
             # ("blank") behaviour requires the #89 web image (RuntimeProfileConfig treats blank as
             # window.location); the currently-deployed image is older and mis-defaults a BLANK
