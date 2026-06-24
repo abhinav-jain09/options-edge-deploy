@@ -154,8 +154,16 @@ MSG
         '''
       }
     }
-    stage('Kustomize apply') {
+    stage('Kustomize render + image-tag injection + apply (atomic)') {
       steps {
+        // Codex round-deploy-v3 high: the previous two-step approach
+        // (apply default-tagged manifest, then `kubectl set image` to
+        // the real tag) had a small window where prod could roll on
+        // :dev. v4 fix: render the kustomize output to YAML, mutate
+        // the image tag IN that YAML with `kubectl set image
+        // --local`, THEN apply the corrected manifest in one shot.
+        // No two-step window. No standalone `kustomize` binary needed
+        // (kubectl set image --local works on stdin).
         sh '''
           set -euo pipefail
           OVERLAY_DIR="${JENKINS_WORK_DIR}/k8s/overlays/${ENVIRONMENT}"
@@ -163,32 +171,6 @@ MSG
             echo "FAIL: overlay dir does not exist: ${OVERLAY_DIR}" >&2
             exit 1
           fi
-          # Use `kubectl kustomize` (embedded), NOT the standalone
-          # `kustomize` binary which isn't installed on the Mac agent
-          # (Codex round-deploy-v2 medium). Image-tag injection now
-          # happens via `kubectl set image` AFTER apply (next stage),
-          # which doesn't need any extra tooling.
-          kubectl kustomize "${OVERLAY_DIR}" \
-            | kubectl apply --dry-run=server -f -
-          kubectl kustomize "${OVERLAY_DIR}" \
-            | kubectl apply -f -
-        '''
-      }
-    }
-    stage('Set image tag + rollout restart') {
-      // Two-in-one: setting the image to the operator-chosen tag
-      // AND forcing a pod refresh.
-      // - `kubectl set image` updates the Deployment's container image
-      //   (Codex round-deploy-v1 high 2 wiring; round-deploy-v2 medium
-      //   replacement for the standalone `kustomize edit set image`
-      //   that the Mac agent doesn't have).
-      // - Even if the image ref didn't change (mutable tag, e.g.
-      //   :dev), the rewind base disables ConfigMap hash suffixes so
-      //   kustomize wouldn't auto-roll on CM changes. `rollout restart`
-      //   forces a fresh pod regardless.
-      steps {
-        sh '''
-          set -euo pipefail
           # Per-env registry — matches the overlay's image rewrite.
           if [ "${ENVIRONMENT}" = "dev" ]; then
             registry="host.docker.internal:5001"
@@ -196,12 +178,76 @@ MSG
             registry="192.168.100.252:5000"
           fi
           target="${registry}/options-edge-databento-rewind:${IMAGE_TAG}"
-          echo "setting deployment/${REWIND_DEPLOY} container=rewind to image=${target}"
-          kubectl -n "${REWIND_NAMESPACE}" set image \
-            "deployment/${REWIND_DEPLOY}" "rewind=${target}"
-          # Force a rollout even if the image ref didn't change
-          # (mutable-tag case: new build pushed under :dev, Deployment
-          # spec unchanged, kustomize apply is a no-op for the pod).
+          echo "rendering + setting deployment/${REWIND_DEPLOY} container=rewind image=${target}"
+
+          rendered=$(mktemp)
+          mutated=$(mktemp)
+          trap 'rm -f "$rendered" "$mutated"' EXIT
+
+          # 1) Render the kustomize output to YAML on disk.
+          kubectl kustomize "${OVERLAY_DIR}" > "$rendered"
+
+          # 2) Mutate the rendered Deployment's container image. -f
+          #    --local reads/writes locally (no API call). -o yaml
+          #    emits the FULL multi-resource doc so we don't lose
+          #    Service/ServiceAccount/Lease.
+          #
+          #    `--local` requires individual resources; the cleanest
+          #    way to mutate just the Deployment without losing the
+          #    others is to split, set, recombine. Use yq if available,
+          #    otherwise do a stream-edit on the image:line.
+          if command -v yq >/dev/null 2>&1; then
+            yq eval-all \
+              'select(.kind == "Deployment" and .metadata.name == "'"${REWIND_DEPLOY}"'") |= (.spec.template.spec.containers[0].image = "'"${target}"'") | select(. != null)' \
+              "$rendered" > "$mutated"
+          else
+            # yq not present on the Mac agent. Fallback: use sed on
+            # the image: line, scoped to the Deployment block. This
+            # works because the rewind base has exactly one container
+            # named `rewind` in the only Deployment, with an image
+            # line of the form
+            #   image: <registry>/options-edge-databento-rewind:<tag>
+            python3 - "$rendered" "$mutated" "$target" <<'PY'
+import sys, re
+src_path, dst_path, target = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(src_path).read()
+# Match only the rewind image line(s) (image rewrites in the overlay
+# already normalised the registry; we just need to replace the FULL
+# image: line for the rewind image, regardless of current tag).
+pattern = re.compile(
+    r'^(\s*image:\s+)(?:host\.docker\.internal:5001|192\.168\.100\.252:5000)/options-edge-databento-rewind:[^\s]+$',
+    re.MULTILINE,
+)
+new, n = pattern.subn(lambda m: m.group(1) + target, src)
+if n == 0:
+    sys.stderr.write("FAIL: no rewind image line found in rendered manifest\n")
+    sys.exit(1)
+if n > 1:
+    sys.stderr.write(f"WARN: replaced {n} image lines (expected 1)\n")
+open(dst_path, 'w').write(new)
+print(f"image rewrite OK: replaced {n} line(s) -> {target}")
+PY
+          fi
+
+          # 3) Server-side dry-run on the mutated manifest.
+          kubectl apply --dry-run=server -f "$mutated"
+
+          # 4) Real apply (single atomic step — no window where the
+          #    cluster sees the default :dev tag for a prod deploy).
+          kubectl apply -f "$mutated"
+        '''
+      }
+    }
+    stage('Rollout restart (force pod refresh)') {
+      // Even with the correct image already in the Deployment spec,
+      // the rewind base disables ConfigMap hash suffixes (intentional,
+      // for resume-live's stable CM-name lookup) — meaning CM changes
+      // don't auto-roll. Also handles the mutable-tag case: a fresh
+      // build pushed under :dev doesn't change the Deployment spec;
+      // rollout restart forces a fresh pull regardless.
+      steps {
+        sh '''
+          set -euo pipefail
           kubectl -n "${REWIND_NAMESPACE}" rollout restart "deployment/${REWIND_DEPLOY}"
         '''
       }
@@ -246,19 +292,16 @@ MSG
           set -e
           echo "smoke: kubectl rc=$rc http_status=$status"
           if [ $rc -ne 0 ]; then
-            # Admission denial fingerprint: the options-edge-jenkins-
-            # only-workloads policy returns a specific error string
-            # ("admission webhook" + "denied the request" OR
-            # "ValidatingAdmissionPolicy ... denied"). If the stderr
-            # matches that fingerprint, tolerate the failure (the
-            # rollout-status above is the authoritative readiness proof).
-            # Any OTHER non-zero exit (curl timeout, DNS, image pull,
-            # exec failure) fails the deploy.
-            if echo "$stderr_content" | grep -qE "(ValidatingAdmissionPolicy|admission webhook).+(denied|deny)"; then
-              echo "smoke: kubectl run BLOCKED BY ADMISSION POLICY (verified); rollout-status above is authoritative"
+            # Codex round-deploy-v3 medium: match the SPECIFIC expected
+            # admission policy by name (options-edge-jenkins-only-workloads),
+            # not any "admission webhook denied" — an unrelated policy
+            # (image allowlist, pod security) would otherwise skip the
+            # 401 assertion and silently pass the deploy.
+            if echo "$stderr_content" | grep -q "options-edge-jenkins-only-workloads"; then
+              echo "smoke: kubectl run BLOCKED BY options-edge-jenkins-only-workloads (verified); rollout-status above is authoritative"
               echo "$stderr_content" | head -5
             else
-              echo "FAIL smoke: kubectl run failed with non-admission error (rc=$rc); fail-closed per Codex round-deploy-v2" >&2
+              echo "FAIL smoke: kubectl run failed (rc=$rc) and stderr did NOT match the known options-edge-jenkins-only-workloads policy denial. Any other failure fails the deploy (rule.md auth-mandatory requires proof of 401)." >&2
               echo "$stderr_content" >&2
               exit 1
             fi
