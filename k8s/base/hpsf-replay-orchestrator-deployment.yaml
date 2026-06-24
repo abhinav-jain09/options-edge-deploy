@@ -21,17 +21,19 @@ metadata:
     app.kubernetes.io/component: hpsf-replay-orchestrator
     app.kubernetes.io/part-of: options-edge
 rules:
-  # Discover live deployment shapes for clone (KubernetesReplayProcessorFleet).
+  # Discover live deployment shapes for clone (KubernetesReplayProcessorFleet). `watch` is required
+  # for the orchestrator's teardown path (`kubectl wait --for=delete`) to confirm clone deletion.
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["get", "list", "create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Create/destroy the historical-feed Job per run (KubernetesReplayHistoricalPublisher).
+  # `watch` for the same `kubectl wait --for=delete` teardown confirmation.
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["get", "list", "create", "update", "patch", "delete"]
-  # Read pod status for K8s symmetric failure detection (KubeHandle.failures()).
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read pod status for K8s symmetric failure detection (KubeHandle.failures() — G1 Phase A).
   - apiGroups: [""]
-    resources: ["pods", "pods/status", "pods/log"]
+    resources: ["pods", "pods/status"]
     verbs: ["get", "list", "watch"]
   # Read ConfigMaps + Secrets the live deployments reference via envFrom so the clone classifier
   # can resolve effective env (ReplayCloneSourceReader).
@@ -94,6 +96,17 @@ spec:
               value: "false"
             - name: ORDER_PLACEMENT_ENABLED
               value: "false"
+            # Run mode: LIVE_UNSECURED is the dev-only mode (auth disabled). For prod, set
+            # HPSF_REPLAY_MODE=LIVE and supply HPSF_REPLAY_AUTH_ISSUER_URI + HPSF_REPLAY_AUTH_AUDIENCE
+            # (Keycloak issuer + audience). The base default here is dev-friendly; the prod overlay
+            # MUST patch this to LIVE + provide auth env before merging this manifest into prod.
+            - name: HPSF_REPLAY_MODE
+              value: LIVE_UNSECURED
+            # Runtime selector: kubernetes engages ReplayKubeApi + KubernetesReplayProcessorFleet +
+            # KubernetesReplayHistoricalPublisher. Without this the orchestrator stays simulated or
+            # falls to process-mode and the RBAC granted to this SA is never exercised.
+            - name: HPSF_REPLAY_FLEET_RUNTIME
+              value: kubernetes
             # Tell the orchestrator which namespace it operates in (matches the SA + Role above).
             # Env name MUST match ReplayKubeSettings.java's HPSF_REPLAY_FLEET_NAMESPACE.
             - name: HPSF_REPLAY_FLEET_NAMESPACE
