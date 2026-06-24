@@ -1,0 +1,28 @@
+# DEV-ONLY spx-mission-control auth env. The base deployment hardcodes PROD Keycloak
+# (https://auth.fullfunding.nl/realms/optionsedge) as direct container env, which
+# overrides any configmap value. On dev the cluster cannot reach the prod issuer, so
+# JWT validation would fail and (more importantly at boot) the JWK fetch the verifier
+# performs against an unreachable host would either hang or fail. This patch overrides
+# both URIs back to the local Mac Keycloak on the docker-desktop host bridge IP
+# (192.168.100.102:8089), exactly mirroring the feed-gateway-dev-env-patch pattern.
+# Audience stays "options-edge-web" (the gateway/web client) so a token issued for the
+# UI authenticates mission-control API calls without a second login.
+#
+# Prod overlay is untouched — it keeps the base prod values.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spx-mission-control-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: spx-mission-control
+          # env merges by name: these override the base prod auth URIs and leave
+          # MISSION_AUTH_AUDIENCE inheriting from base ("options-edge-web").
+          env:
+            - name: MISSION_AUTH_ISSUER_URI
+              value: "http://192.168.100.102:8089/realms/optionsedge"
+            - name: MISSION_AUTH_JWK_SET_URI
+              value: "http://192.168.100.102:8089/realms/optionsedge/protocol/openid-connect/certs"

@@ -53,6 +53,12 @@ patches:
   # DEV-ONLY orchestrator mode: base ships SIMULATED (safe-by-default for prod kustomize); dev
   # flips to LIVE_UNSECURED so the Mac dev cluster's "Run Backtest" actually launches HPSF replays.
   - path: hpsf-replay-orchestrator-dev-patch.yaml
+  # DEV-ONLY spx-mission-control auth: base points at the prod Keycloak
+  # (https://auth.fullfunding.nl/realms/optionsedge) which dev cannot reach.
+  # Override the issuer + JWKS URIs to the local Mac Keycloak (192.168.100.102:8089)
+  # so the mandatory MissionAuthSettings.validate() check is satisfied AND the JWKS
+  # is actually fetchable at startup. Audience inherits from base ("options-edge-web").
+  - path: spx-mission-control-dev-env-patch.yaml
 images:
   - name: 192.168.100.252:5000/options-edge-raw-to-display
     newName: host.docker.internal:5001/options-edge-raw-to-display
