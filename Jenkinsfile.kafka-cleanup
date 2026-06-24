@@ -1,0 +1,132 @@
+@Library('oe') _
+
+// Nightly trigger for the kafka-changelog-cleanup CronJob.
+//
+// WHY a Jenkins job instead of the native k8s CronJob schedule:
+//   The cluster enforces a ValidatingAdmissionPolicy
+//   (options-edge-jenkins-only-workloads) that DENIES batch/Job creation by
+//   ANY principal except the jenkins-deployer ServiceAccount. The k8s CronJob
+//   controller creates its Jobs under its own SA
+//   (system:serviceaccount:kube-system:cronjob-controller), so the native
+//   nightly firing is rejected every night (confirmed in the k3s controller
+//   log). The CronJob is therefore kept suspend:true and serves ONLY as the
+//   reusable Job template. We materialise a one-off Job from it HERE, from the
+//   Jenkins Mac agent, using the deployer kubeconfig — the only principal the
+//   admission policy permits to create Jobs.
+//
+// WHAT it does: `kubectl create job --from=cronjob/kafka-changelog-cleanup`,
+//   waits for completion, surfaces the cleanup logs, then prunes its own old
+//   Jobs (the CronJob history limits do NOT apply to manually-created Jobs).
+//
+// WHEN: 02:00 Europe/Amsterdam every day (operator request).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['production', 'dev'],
+      description: 'Deploy profile (oeProfile) — selects the deployer kubeconfig. Scheduled runs use the default (production).')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    string(name: 'CRONJOB_NAME', defaultValue: 'kafka-changelog-cleanup',
+      description: 'CronJob whose jobTemplate we materialise a one-off Job from.')
+    string(name: 'NAMESPACE', defaultValue: 'options-edge',
+      description: 'Namespace of the CronJob / Jobs.')
+    string(name: 'KEEP_JOBS', defaultValue: '5',
+      description: 'How many most-recent cleanup Jobs to retain (older ones are pruned after each run).')
+  }
+  triggers {
+    // 02:00 Europe/Amsterdam nightly. The TZ= prefix pins the schedule to
+    // Amsterdam regardless of the Jenkins controller/agent timezone.
+    cron('''TZ=Europe/Amsterdam
+0 2 * * *''')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 40, unit: 'MINUTES')
+  }
+  environment {
+    KUBECONFIG   = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    CRONJOB_NAME = "${params.CRONJOB_NAME}"
+    NAMESPACE    = "${params.NAMESPACE}"
+    KEEP_JOBS    = "${params.KEEP_JOBS}"
+  }
+  stages {
+    stage('Trigger kafka-changelog-cleanup') {
+      steps {
+        sh '''
+          set -euo pipefail
+          ts="$(date +%Y%m%d-%H%M%S)"
+          JOB="${CRONJOB_NAME}-${ts}"
+          echo "Creating Job ${JOB} from cronjob/${CRONJOB_NAME} in ns ${NAMESPACE}"
+          echo "KUBECONFIG=${KUBECONFIG}"
+
+          # PREFLIGHT — fail fast on the WRONG identity. The jenkins-only admission
+          # policy permits Job creation ONLY for system:serviceaccount:options-edge:
+          # jenkins-deployer; an admin/root kubeconfig (e.g. a manual KUBECONFIG_FILE
+          # override) would be denied AT create time with a cryptic error. Assert the
+          # resolved identity up front so a misconfigured run fails with a clear cause.
+          WANT="system:serviceaccount:options-edge:jenkins-deployer"
+          WHOAMI="$(kubectl auth whoami -o jsonpath='{.status.userInfo.username}' 2>/dev/null || echo '')"
+          echo "kubectl identity: ${WHOAMI:-<unknown>}"
+          if [ "${WHOAMI}" != "${WANT}" ]; then
+            echo "FATAL: kubeconfig identity is '${WHOAMI:-<unknown>}', expected '${WANT}'." >&2
+            echo "       This job must run as the jenkins-deployer SA (the only principal the" >&2
+            echo "       jenkins-only admission policy allows to create Jobs). Aborting." >&2
+            exit 1
+          fi
+
+          # The deployer SA is the only principal the jenkins-only admission policy
+          # permits to create Jobs. --from copies the (suspended) CronJob jobTemplate;
+          # suspend only gates the controller's auto-scheduling, not manual --from.
+          kubectl -n "${NAMESPACE}" create job --from="cronjob/${CRONJOB_NAME}" "${JOB}"
+
+          echo "Waiting for ${JOB} to finish (cap 30m)..."
+          deadline=$(( $(date +%s) + 1800 ))
+          rc=2
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            succeeded="$(kubectl -n "${NAMESPACE}" get job "${JOB}" -o jsonpath='{.status.succeeded}' 2>/dev/null || echo '')"
+            failed="$(kubectl -n "${NAMESPACE}" get job "${JOB}" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null || echo '')"
+            if [ "${succeeded:-0}" -ge 1 ] 2>/dev/null; then rc=0; break; fi
+            if [ "${failed:-}" = "True" ]; then rc=1; break; fi
+            sleep 10
+          done
+
+          echo "===== cleanup logs (${JOB}) ====="
+          kubectl -n "${NAMESPACE}" logs "job/${JOB}" --tail=-1 || true
+          echo "===== end logs ====="
+
+          if [ "$rc" -eq 1 ]; then
+            echo "Cleanup Job ${JOB} FAILED." >&2; exit 1
+          elif [ "$rc" -eq 2 ]; then
+            echo "Cleanup Job ${JOB} did not finish within 30m." >&2; exit 1
+          fi
+          echo "Cleanup Job ${JOB} completed successfully."
+        '''
+      }
+    }
+  }
+  post {
+    always {
+      // Prune our own old cleanup Jobs to the most recent ${KEEP_JOBS}. CronJob
+      // successfulJobsHistoryLimit does NOT cover manually-created (--from) Jobs,
+      // so without this they accumulate. Portable (BSD/macOS) — no GNU head -n -N.
+      sh '''
+        set +e
+        keep="${KEEP_JOBS:-5}"
+        names="$(kubectl -n "${NAMESPACE}" get jobs \
+                   -l app.kubernetes.io/name="${CRONJOB_NAME}" \
+                   --sort-by=.metadata.creationTimestamp -o name 2>/dev/null)"
+        total="$(printf '%s\\n' "$names" | grep -c . )"
+        del=$(( total - keep ))
+        if [ "$del" -gt 0 ]; then
+          echo "Pruning ${del} old cleanup Job(s) (keeping newest ${keep} of ${total})"
+          printf '%s\\n' "$names" | sed -n "1,${del}p" | while read -r n; do
+            [ -n "$n" ] && kubectl -n "${NAMESPACE}" delete "$n" --ignore-not-found
+          done
+        else
+          echo "No old cleanup Jobs to prune (total=${total}, keep=${keep})"
+        fi
+        true
+      '''
+    }
+  }
+}

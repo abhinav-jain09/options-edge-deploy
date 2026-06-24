@@ -16,13 +16,25 @@
 # than that watermark. The operation is fully idempotent — running twice does
 # nothing the second time (the watermark is already at the trim line).
 #
-# WHEN: 00:00 Europe/Amsterdam every day (operator-local midnight).
+# WHEN: 02:00 Europe/Amsterdam every day (operator request).
+#
+# HOW IT IS TRIGGERED (important): this CronJob is suspend:true and does NOT
+# self-schedule. The cluster enforces a ValidatingAdmissionPolicy
+# (options-edge-jenkins-only-workloads) that denies batch/Job creation by any
+# principal except the jenkins-deployer ServiceAccount. The k8s CronJob
+# controller creates Jobs under its own SA
+# (system:serviceaccount:kube-system:cronjob-controller), so a native firing is
+# rejected every night. Instead the Jenkins job `options-edge-kafka-cleanup`
+# (Jenkinsfile.kafka-cleanup) fires at 02:00 Europe/Amsterdam and runs
+# `kubectl create job --from=cronjob/kafka-changelog-cleanup` using the deployer
+# kubeconfig — the only principal the policy permits. This CronJob remains the
+# single source of truth for the Job template (image, script, env, limits,
+# securityContext); the `schedule` below documents the intended cadence. Keep
+# suspend:true so the controller does not spam denied-Job errors in the k3s log.
 #
 # RETRY: backoffLimit=3 retries within a single firing on pod failure.
-# concurrencyPolicy=Forbid + startingDeadlineSeconds=600 means a missed run
-# (cluster down at the scheduled time) is SKIPPED, and the next day's run
-# proceeds normally. This avoids cleanup firing unexpectedly during US
-# market hours when the cluster comes back from a multi-hour outage.
+# concurrencyPolicy=Forbid + startingDeadlineSeconds=600 are retained for the
+# Job semantics (and in case the policy carve-out is ever added later).
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -33,13 +45,24 @@ metadata:
     app.kubernetes.io/part-of: options-edge
     app.kubernetes.io/component: maintenance
 spec:
-  schedule: "0 0 * * *"
+  # Triggered by the Jenkins job options-edge-kafka-cleanup, NOT by the k8s
+  # CronJob controller (blocked by the jenkins-only admission policy — see header).
+  suspend: true
+  schedule: "0 2 * * *"                  # 02:00 Europe/Amsterdam — documents the cadence Jenkins fires on
   timeZone: Europe/Amsterdam
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600          # skip if can't start within 10 min; next day catches up
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
+    metadata:
+      # Label the JOB object (not just the pod) so the Jenkins trigger's prune
+      # selector (-l app.kubernetes.io/name=kafka-changelog-cleanup) reliably
+      # matches Jobs made via `kubectl create job --from=cronjob`. kubectl copies
+      # Job labels from cronJob.spec.jobTemplate.metadata.labels; without this,
+      # the label is kubectl-version-dependent and old Jobs could accumulate.
+      labels:
+        app.kubernetes.io/name: kafka-changelog-cleanup
     spec:
       backoffLimit: 3                   # retry the pod up to 3 times within a firing
       activeDeadlineSeconds: 1800       # 30 min cap per firing
