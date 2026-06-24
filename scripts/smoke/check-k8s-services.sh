@@ -15,6 +15,32 @@ LIVE_UI_MARKET_OPEN="${LIVE_UI_MARKET_OPEN:-09:30}"
 LIVE_UI_MARKET_CLOSE="${LIVE_UI_MARKET_CLOSE:-16:00}"
 mkdir -p "$TMP_DIR"
 
+# Smoke an endpoint that may be protected by the Keycloak/OIDC login gate.
+#   - HTTP 200            -> the endpoint served; its body MUST match $pattern.
+#   - HTTP 401 + "Www-Authenticate: Bearer" -> the service is up AND correctly
+#                           enforcing login (the gate we deliberately enabled).
+#                           That is a healthy state, so it passes.
+#   - anything else (000 connection-refused, 5xx, 401 without Bearer) -> fail.
+# This keeps the smoke meaningful with auth ON or OFF without embedding tokens.
+smoke_authgated_endpoint() {
+  local url="$1" label="$2" pattern="$3"
+  local hdr="$TMP_DIR/smoke-authgated.hdr" body="$TMP_DIR/smoke-authgated.body" code
+  code="$(curl -s --connect-timeout 5 --max-time 20 -D "$hdr" -o "$body" -w '%{http_code}' "$url")" || code="000"
+  if [ "$code" = "200" ]; then
+    if grep -Eq "$pattern" "$body"; then
+      echo "  $label -> 200, content OK"
+    else
+      echo "ERROR: $label returned 200 but body did not match /$pattern/" >&2
+      return 1
+    fi
+  elif [ "$code" = "401" ] && grep -qi '^www-authenticate:[[:space:]]*bearer' "$hdr"; then
+    echo "  $label -> 401 Bearer (service up + login enforced) OK"
+  else
+    echo "ERROR: $label returned unexpected HTTP $code (expected 200 with content, or 401 Bearer)" >&2
+    return 1
+  fi
+}
+
 live_ui_market_open() {
   if ! command -v python3 >/dev/null 2>&1; then
     echo "CLOSED"
@@ -191,8 +217,8 @@ check_spx_mission_control() {
   local metrics
   metrics="$(curl -fsS "http://127.0.0.1:${local_port}/metrics")"
   grep -q 'options_edge_processing_service_ready{service="spx-mission-control-service"}' <<<"$metrics"
-  curl -fsS "http://127.0.0.1:${local_port}/mission-control" | grep -q 'SPX Mission Control'
-  curl -fsS "http://127.0.0.1:${local_port}/api/mission-control/latest" | grep -Eq 'spx-mission-control|NO_DATA'
+  smoke_authgated_endpoint "http://127.0.0.1:${local_port}/mission-control" "/mission-control" 'SPX Mission Control'
+  smoke_authgated_endpoint "http://127.0.0.1:${local_port}/api/mission-control/latest" "/api/mission-control/latest" 'spx-mission-control|NO_DATA'
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   trap - RETURN
