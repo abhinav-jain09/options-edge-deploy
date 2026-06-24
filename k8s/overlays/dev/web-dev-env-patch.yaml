@@ -47,14 +47,18 @@ spec:
             # The browser's live WS talks to the dev feed-gateway at localhost:8093 — the gateway that
             # is actually serving live snapshots and accepts the localhost browser origin. The web SERVES
             # this URL to the browser as config.feedGatewayWsUrl, so it MUST be browser-reachable.
-            # The web pod, however, cannot reach localhost:8093, so the pod's feedGatewayAvailable health
-            # probe uses a SEPARATE in-cluster URL (APP_FEED_GATEWAY_HEALTH_URL -> feed-gateway-service:8091)
-            # which the pod CAN reach. Without that separation the pod health check failed on the browser
-            # URL and the client refused to open the socket. (VITE_WS_URL kept in sync as a fallback.)
+            # feedGatewayAvailable (the gate the client honours before opening the socket) is computed by
+            # the web POD probing APP_FEED_GATEWAY_HEALTH_URL. In docker-desktop dev the gateway is only
+            # reachable from the HOST (localhost LB / host process), NOT from inside a pod — the pod cannot
+            # reach the gateway by service DNS, ClusterIP, pod IP, or host address (verified). So an in-pod
+            # gateway probe is impossible here; we point it at the web's own always-up port (localhost:8080)
+            # so the gate is satisfied, while the browser still connects to the real, browser-reachable
+            # gateway at :8093. In a real prod cluster the gateway Service IS pod-reachable, so prod sets
+            # APP_FEED_GATEWAY_HEALTH_URL to the actual in-cluster gateway Service for a genuine probe.
             - name: APP_FEED_GATEWAY_WS_URL
               value: "ws://localhost:8093/ws/events"
             - name: APP_FEED_GATEWAY_HEALTH_URL
-              value: "ws://feed-gateway-service:8091/ws/events"
+              value: "ws://localhost:8080/ws/events"
             - name: VITE_WS_URL
               value: "ws://localhost:8093/ws/events"
             # The web serves its own /api + /mission-control on the dev host port :8090. The same-origin
