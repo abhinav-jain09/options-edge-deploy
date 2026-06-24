@@ -91,7 +91,14 @@
             done
             printf '%s\n' "$value"
           }
-          effective_expiry="${IB_EXPIRY:-$(default_weekday_expiry)}"
+          # IB_EXPIRY drives the web + gateway option-chain default selection; it MUST match the date the
+          # Databento feed actually publishes (RESOLVED_DATABENTO_EXPIRY, the data-aware single source of
+          # truth resolved in the "Resolve Databento Expiry" stage and used for the feed configmap below).
+          # If they diverge the chain filters for an expiry the feed never produced and goes empty (e.g.
+          # after the close the calendar weekday rolls to the next session while the feed stays on the last
+          # session with data). Precedence: explicit IB_EXPIRY param > resolved Databento expiry > calendar
+          # weekday fallback (only when no Databento expiry was resolved, e.g. an IBKR-only deploy).
+          effective_expiry="${IB_EXPIRY:-${RESOLVED_DATABENTO_EXPIRY:-$(default_weekday_expiry)}}"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
             : "${OE_KAFKA_BOOTSTRAP:?OE_KAFKA_BOOTSTRAP must be set by the Resolve profile stage (oeProfile single source of truth)}"
             KAFKA_BOOTSTRAP_SERVERS="$OE_KAFKA_BOOTSTRAP"
