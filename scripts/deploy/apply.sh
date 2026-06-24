@@ -166,6 +166,7 @@ EOF
           kubectl -n options-edge set image deployment/hpsf-stage-a-service hpsf-stage-a="$HPSF_PROCESSING_IMAGE"
           kubectl -n options-edge set image deployment/hpsf-stage-b-service hpsf-stage-b="$HPSF_PROCESSING_IMAGE"
           kubectl -n options-edge set image deployment/hpsf-postgres-writer-service hpsf-postgres-writer="$HPSF_POSTGRES_WRITER_IMAGE"
+          kubectl -n options-edge set image deployment/hpsf-replay-orchestrator-service hpsf-replay-orchestrator="$HPSF_REPLAY_ORCHESTRATOR_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-classifier-databento strike-flow-classifier="$STRIKE_FLOW_CLASSIFIER_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-classifier-ibkr strike-flow-classifier="$STRIKE_FLOW_CLASSIFIER_IMAGE"
           kubectl -n options-edge set image deployment/spx-mission-control-service spx-mission-control="$SPX_MISSION_CONTROL_IMAGE"
@@ -195,6 +196,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/hpsf-stage-a-service
           kubectl -n options-edge rollout restart deployment/hpsf-stage-b-service
           kubectl -n options-edge rollout restart deployment/hpsf-postgres-writer-service
+          kubectl -n options-edge rollout restart deployment/hpsf-replay-orchestrator-service
           kubectl -n options-edge rollout restart deployment/strike-flow-classifier-databento
           kubectl -n options-edge rollout restart deployment/strike-flow-classifier-ibkr
           kubectl -n options-edge rollout restart deployment/spx-mission-control-service
@@ -225,6 +227,7 @@ EOF
           kubectl -n options-edge rollout status deployment/hpsf-stage-a-service --timeout=240s
           kubectl -n options-edge rollout status deployment/hpsf-stage-b-service --timeout=600s || echo "WARN: hpsf-stage-b rollout status slow (old replica likely stuck terminating on dev); HPSF smoke validates the new pod"
           kubectl -n options-edge rollout status deployment/hpsf-postgres-writer-service --timeout=180s
+          kubectl -n options-edge rollout status deployment/hpsf-replay-orchestrator-service --timeout=180s
           kubectl -n options-edge rollout status deployment/strike-flow-classifier-databento --timeout=180s
           kubectl -n options-edge rollout status deployment/strike-flow-classifier-ibkr --timeout=180s
           kubectl -n options-edge rollout status deployment/spx-mission-control-service --timeout=180s
