@@ -36,7 +36,6 @@ pipeline {
     string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: '', description: 'Integration-test image')
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'HPSF Stage A/B processing image')
     string(name: 'HPSF_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'HPSF Postgres writer image')
-    string(name: 'HPSF_REPLAY_ORCHESTRATOR_IMAGE', defaultValue: '', description: 'HPSF replay orchestrator image')
     string(name: 'SPX_MISSION_CONTROL_IMAGE', defaultValue: '', description: 'SPX mission control image')
     string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', defaultValue: '', description: 'Strike flow classifier image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
@@ -105,7 +104,6 @@ pipeline {
     INTEGRATION_TEST_IMAGE = "${params.INTEGRATION_TEST_IMAGE ?: oeProfile.image('integration-test', 'production', 'dev')}"
     HPSF_PROCESSING_IMAGE = "${params.HPSF_PROCESSING_IMAGE ?: oeProfile.image('hpsf-processing', 'production', 'dev')}"
     HPSF_POSTGRES_WRITER_IMAGE = "${params.HPSF_POSTGRES_WRITER_IMAGE ?: oeProfile.image('hpsf-postgres-writer', 'production', 'dev')}"
-    HPSF_REPLAY_ORCHESTRATOR_IMAGE = "${params.HPSF_REPLAY_ORCHESTRATOR_IMAGE ?: oeProfile.image('hpsf-replay-orchestrator', 'production', 'dev')}"
     SPX_MISSION_CONTROL_IMAGE = "${params.SPX_MISSION_CONTROL_IMAGE ?: oeProfile.image('spx-mission-control', 'production', 'dev')}"
     STRIKE_FLOW_CLASSIFIER_IMAGE = "${params.STRIKE_FLOW_CLASSIFIER_IMAGE ?: oeProfile.image('strike-flow-classifier', 'production', 'dev')}"
     IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: oeProfile.image('ibkr-feed', 'production', 'dev')}"
@@ -671,7 +669,6 @@ void promoteToProduction() {
       string(name: 'INTEGRATION_TEST_IMAGE', value: params.INTEGRATION_TEST_IMAGE),
       string(name: 'HPSF_PROCESSING_IMAGE', value: params.HPSF_PROCESSING_IMAGE),
       string(name: 'HPSF_POSTGRES_WRITER_IMAGE', value: params.HPSF_POSTGRES_WRITER_IMAGE),
-      string(name: 'HPSF_REPLAY_ORCHESTRATOR_IMAGE', value: params.HPSF_REPLAY_ORCHESTRATOR_IMAGE),
       string(name: 'SPX_MISSION_CONTROL_IMAGE', value: params.SPX_MISSION_CONTROL_IMAGE),
       string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', value: params.STRIKE_FLOW_CLASSIFIER_IMAGE),
       string(name: 'IBKR_FEED_IMAGE', value: params.IBKR_FEED_IMAGE),

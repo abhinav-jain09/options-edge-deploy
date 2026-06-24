@@ -31,8 +31,6 @@ resources:
   - hpsf-stage-b-deployment.yaml
   - hpsf-postgres-writer-deployment.yaml
   - hpsf-postgres-writer-service.yaml
-  - hpsf-replay-orchestrator-deployment.yaml
-  - hpsf-replay-orchestrator-service.yaml
   - spx-mission-control-deployment.yaml
   - spx-mission-control-service.yaml
   - strike-flow-classifier-deployment.yaml

@@ -33,10 +33,10 @@ patches:
       - op: remove
         path: /spec/template/spec/nodeSelector
   # DEV-ONLY: serve the k8s web on :8090 (not the base :8094). The legacy host web that
-  # owned :8090 is retired, so :8090 is free; and the feed-gateway WS_ALLOWED_ORIGINS +
-  # replay-orchestrator CORS already trust http://localhost:8090, so the browser's live
-  # WS + replay are accepted with no per-port allow-list churn, and the existing
-  # http://localhost:8090/option-chain URL works. Prod keeps the base Service :8094.
+  # owned :8090 is retired, so :8090 is free; and the feed-gateway WS_ALLOWED_ORIGINS
+  # already trusts http://localhost:8090, so the browser's live WS is accepted with no
+  # per-port allow-list churn, and the existing http://localhost:8090/option-chain URL
+  # works. Prod keeps the base Service :8094.
   - target:
       kind: Service
       name: options-edge-web
@@ -50,9 +50,6 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Always
-  # DEV-ONLY orchestrator mode: base ships SIMULATED (safe-by-default for prod kustomize); dev
-  # flips to LIVE_UNSECURED so the Mac dev cluster's "Run Backtest" actually launches HPSF replays.
-  - path: hpsf-replay-orchestrator-dev-patch.yaml
   # DEV-ONLY spx-mission-control auth: base points at the prod Keycloak
   # (https://auth.fullfunding.nl/realms/optionsedge) which dev cannot reach.
   # Override the issuer + JWKS URIs to the local Mac Keycloak (192.168.100.102:8089)
@@ -122,9 +119,6 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-hpsf-postgres-writer
     newName: host.docker.internal:5001/options-edge-hpsf-postgres-writer
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-hpsf-replay-orchestrator
-    newName: host.docker.internal:5001/options-edge-hpsf-replay-orchestrator
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-spx-mission-control
     newName: host.docker.internal:5001/options-edge-spx-mission-control
