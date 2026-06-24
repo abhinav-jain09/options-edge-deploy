@@ -10,15 +10,17 @@
 #   - Feed-gateway WS:   ws://192.168.100.102:8093/ws/events  (browser + server)
 #   - Replay orchestrator: http://localhost:8095 (dev host jar)
 #
-# UI base / mission-control point at the k8s web Service's own port. PR #104 exposes
-# options-edge-web as a LoadBalancer on :8094 (originally not :8090 so the k8s web could
-# coexist with the legacy local Docker container web on :8090 during cutover). The legacy
-# :8090 listener has since been removed (container stopped + options-edge-web-deploy
-# RUN_LOCAL default flipped to false). In docker-desktop k3s the ServiceLB binds :8094 on
-# localhost, so the Mac browser reaches the dev k8s web at http://localhost:8094 —
-# directly analogous to prod, whose web smoke targets 192.168.100.252:8094.
-# The dev Verify/Smoke stages default to http://localhost:8094 (Jenkinsfile), so the
-# pipeline verifies THIS k8s web — no operator WEB_PUBLIC_URL override required.
+# UI base / mission-control point at the k8s web Service's own port. PR #104 originally
+# exposed options-edge-web on :8094 to coexist with the legacy local Docker web on :8090
+# during cutover; that legacy :8090 listener is gone (container stopped + options-edge-web-
+# deploy RUN_LOCAL=false), so DEV now serves the k8s web on :8090 (the kustomization patches
+# the Service port to 8090). This matters: the feed-gateway (WS_ALLOWED_ORIGINS) and replay
+# orchestrator (CORS) trust origin http://localhost:8090, so a browser loading the UI at
+# :8090 gets its live-data WS + replay accepted with NO per-port allow-list churn — and the
+# user's existing http://localhost:8090/option-chain URL works. PROD is unchanged: it keeps
+# the base Service :8094 behind Cloudflare (this is a dev-overlay-only move). In docker-
+# desktop k3s the ServiceLB binds :8090 on localhost; the dev Verify/Smoke stages default to
+# http://localhost:8090 (Jenkinsfile), so the pipeline verifies THIS k8s web.
 #
 # Auth stays MANDATORY in dev (mirrors prod per rule.md) — only the issuer host changes.
 # Image + imagePullPolicy are handled by the dev overlay kustomization (images: rewrite
@@ -47,8 +49,8 @@ spec:
             - name: VITE_WS_URL
               value: "ws://192.168.100.102:8093/ws/events"
             - name: VITE_API_BASE_URL
-              value: "http://localhost:8094"
+              value: "http://localhost:8090"
             - name: VITE_MISSION_CONTROL_URL
-              value: "http://localhost:8094"
+              value: "http://localhost:8090"
             - name: VITE_REPLAY_ORCHESTRATOR_URL
               value: "http://localhost:8095"

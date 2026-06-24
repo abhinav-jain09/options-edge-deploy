@@ -37,9 +37,10 @@ data:
   POSTGRES_PASSWORD: Options#100
   APP_FEED_GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
   # WEB_BASE_URL: the k8s web LoadBalancer Service on the dev cluster, bound on the Mac
-  # agent's localhost by docker-desktop's ServiceLB. Was http://host.docker.internal:8090
-  # (the legacy local Docker container) — that container has been removed.
-  WEB_BASE_URL: http://localhost:8094
+  # agent's localhost by docker-desktop's ServiceLB. The dev web Service is patched to
+  # :8090 (the legacy local Docker container that owned :8090 has been removed), the origin
+  # the feed-gateway/orchestrator already trust — see web-dev-env-patch.yaml.
+  WEB_BASE_URL: http://localhost:8090
   GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
   CHECK_MARKET_DATA_SOURCES: DATABENTO
 ---

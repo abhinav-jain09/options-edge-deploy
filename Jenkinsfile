@@ -494,12 +494,13 @@ pipeline {
           # "/option-chain" == 200; "/api/config" == 200+provider when auth is off OR 401 when on), so the
           # verify is auth-on/off portable instead of false-failing on the (correct) 401.
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-            # Default to the k8s web Service (LoadBalancer :8094, bound on localhost by
-            # docker-desktop ServiceLB on the native Mac agent) — mirroring prod, which
-            # verifies the k8s web at 192.168.100.252:8094. Must NOT default to the legacy
-            # Tomcat :8090, or this stage false-greens against the old listener instead of
-            # the options-edge-web Deployment this pipeline just rolled out.
-            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8094}" \
+            # Default to the k8s web Service (LoadBalancer :8090, bound on localhost by
+            # docker-desktop ServiceLB on the native Mac agent). The dev web is exposed on
+            # :8090 (the legacy host Tomcat that previously owned :8090 was retired), which
+            # is the origin the feed-gateway (WS_ALLOWED_ORIGINS) and replay orchestrator
+            # (CORS) already trust — so the browser's live-data WS and replay work without
+            # per-port allow-list churn. Prod is unchanged (:8094 behind Cloudflare).
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8090}" \
               scripts/smoke/check-options-edge-web.sh
           else
             # The prod web app runs on the prod host (192.168.100.252), not the Jenkins agent;
@@ -528,9 +529,9 @@ pipeline {
               # promote step forwards the dev value); it always targets prod.
               WEB_BASE_URL="$WEB_PUBLIC_URL"
             elif [ "${ENVIRONMENT:-dev}" = "dev" ]; then
-              # k8s web Service (:8094 on localhost), NOT legacy Tomcat :8090 — same
-              # rationale as the Verify stage above; mirrors prod's :8094 target.
-              WEB_BASE_URL=http://localhost:8094
+              # k8s web Service on :8090 (localhost via docker-desktop ServiceLB) — same
+              # rationale as the Verify stage above (origin the gateway/orchestrator trust).
+              WEB_BASE_URL=http://localhost:8090
             else
               WEB_BASE_URL=http://192.168.100.252:8094
             fi
