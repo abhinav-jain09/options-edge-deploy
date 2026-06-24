@@ -1,0 +1,45 @@
+# DEV-ONLY feed-gateway config. This replaces the retired hand-run host gateway (:8093): its dev env
+# (ci/config/feed-gateway.env) is mirrored here so the k8s gateway (feed-gateway-service, :8091) is the
+# single gateway in dev and Jenkins owns it. The base manifest hardcodes PROD WS auth/origins
+# (https://fullfunding.nl, auth.fullfunding.nl) as direct container env, which override the configmap;
+# this patch overrides them back to dev so a http://localhost:8090 browser with a dev-Keycloak token is
+# accepted. Prod overlay is untouched (keeps the base prod values).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feed-gateway-service
+  namespace: options-edge
+spec:
+  # NOTE: strategy stays Recreate (base). The gateway runs hostNetwork: true and binds the node port
+  # :18091 directly, so two pods cannot co-exist on the single docker-desktop node — a surge pod
+  # (RollingUpdate maxSurge:1) could never bind the port and the rollout would hang. Gateway deploys are
+  # infrequent and the browser WS auto-reconnects, so the brief :8091 blip on a gateway deploy is fine.
+  template:
+    spec:
+      containers:
+        - name: feed-gateway
+          # env merges by name: these override the base prod WS values and add the dev GATEWAY_* keys.
+          env:
+            - name: WS_ALLOWED_ORIGINS
+              value: "http://localhost:8090"
+            - name: WS_AUTH_ISSUER_URI
+              value: "http://192.168.100.102:8089/realms/optionsedge"
+            - name: GATEWAY_KEYCLOAK_ISSUER
+              value: "http://192.168.100.102:8089/realms/optionsedge"
+            - name: GATEWAY_KEYCLOAK_CLIENT_ID
+              value: "options-edge-web"
+            # Replay orchestrator is a host process on :8095; in-cluster it is reached via host.docker.internal.
+            - name: GATEWAY_REPLAY_ORCHESTRATOR_URL
+              value: "http://host.docker.internal:8095"
+            - name: GATEWAY_APPROVAL_ROLE
+              value: "replay-admin"
+            # Dev-only relaxations (the host gateway set these): non-durable in-memory ticket store and
+            # PLAINTEXT Kafka while auth is on. NEVER set in prod.
+            - name: GATEWAY_ALLOW_INMEMORY_TICKETS
+              value: "true"
+            - name: GATEWAY_ALLOW_INSECURE_KAFKA
+              value: "true"
+            - name: GATEWAY_MARKET_HOLIDAYS
+              value: "2026-01-01,2026-01-19,2026-02-16,2026-04-03,2026-05-25,2026-06-19,2026-07-03,2026-09-07,2026-11-26,2026-12-25"
+            - name: GATEWAY_MARKET_EARLY_CLOSES
+              value: "2026-11-27=13:00,2026-12-24=13:00"

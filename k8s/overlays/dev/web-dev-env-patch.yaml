@@ -44,10 +44,14 @@ spec:
               value: "dev"
             - name: VITE_AUTH_ISSUER
               value: "http://192.168.100.102:8089/realms/optionsedge"
+            # Retired the hand-run host gateway (:8093). The browser's live WS now talks to the
+            # Jenkins-owned k8s feed-gateway (feed-gateway-service, LoadBalancer :8091 bound on the Mac
+            # by docker-desktop). VITE_WS_URL is browser-facing (localhost:8091); APP_FEED_GATEWAY_WS_URL
+            # is the web backend's in-cluster reachability check (service DNS feed-gateway-service:8091).
             - name: APP_FEED_GATEWAY_WS_URL
-              value: "ws://192.168.100.102:8093/ws/events"
+              value: "ws://feed-gateway-service:8091/ws/events"
             - name: VITE_WS_URL
-              value: "ws://192.168.100.102:8093/ws/events"
+              value: "ws://localhost:8091/ws/events"
             # SAME-ORIGIN: the web serves its own /api + /mission-control, so leave these BLANK — the SPA
             # resolves a blank base against window.location, so it calls whatever host/port the web is
             # served at (dev :8090) with no hardcoded port to drift if the Service port ever moves again.
