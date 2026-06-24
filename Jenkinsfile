@@ -43,6 +43,7 @@ pipeline {
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
     string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-db-password', description: 'Jenkins secret-text credential with the prod Keycloak DB password (oe-keycloak-secrets POSTGRES_PASSWORD)')
     string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-admin-password', description: 'Jenkins secret-text credential with the prod Keycloak bootstrap admin password')
+    string(name: 'SMOKE_AUTH_PASSWORD_CREDENTIAL_ID', defaultValue: 'options-edge-smoke-password', description: 'Jenkins secret-text credential with the read-only smoke dummy user (oe-smoke) password. Optional: if absent the runtime secret is created with an empty SMOKE_AUTH_PASSWORD and the synthetic auth check fails until it exists.')
     choice(name: 'MARKET_DATA_SOURCE', choices: ['DATABENTO', 'IBKR'], description: 'Runtime raw market-data source for processors')
     string(name: 'RAW_TOPIC', defaultValue: '', description: 'Override raw topic. Empty uses source default.')
     string(name: 'IB_HOST', defaultValue: '127.0.0.1', description: 'IB Gateway/TWS host. IBKR feed uses hostNetwork, so localhost is the remote host.')
@@ -226,31 +227,55 @@ pipeline {
     }
     stage('Unusual Whales Secret') {
       steps {
-        withCredentials([
-          string(credentialsId: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID, variable: 'UNUSUAL_WHALES_API_KEY'),
-          string(credentialsId: params.DATABENTO_API_KEY_CREDENTIAL_ID, variable: 'DATABENTO_API_KEY')
-        ]) {
-          sh '''
-            set -euo pipefail
-            test -n "$UNUSUAL_WHALES_API_KEY"
-            test -n "$DATABENTO_API_KEY"
-            apply_args=""
-            if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
-              apply_args="--dry-run=server"
-              echo "DEPLOY_DRY_RUN=true: validating secret manifests without changing Kubernetes."
-            fi
-            kubectl create namespace options-edge --dry-run=client -o yaml | kubectl apply $apply_args -f -
-            kubectl -n options-edge create secret generic options-edge-secrets \
-              --from-literal=unusual-whales-api-key="$UNUSUAL_WHALES_API_KEY" \
-              --dry-run=client -o yaml | kubectl apply $apply_args -f -
-            kubectl -n options-edge create secret generic options-edge-runtime-secrets \
-              --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-Options#100}" \
-              --from-literal=UNUSUAL_WHALES_API_KEY="$UNUSUAL_WHALES_API_KEY" \
-              --dry-run=client -o yaml | kubectl apply $apply_args -f -
-            kubectl -n options-edge create secret generic options-edge-databento-feed-env \
-              --from-literal=DATABENTO_API_KEY="$DATABENTO_API_KEY" \
-              --dry-run=client -o yaml | kubectl apply $apply_args -f -
-          '''
+        script {
+          // The smoke dummy-user password is OPTIONAL: if its credential is not yet
+          // created, fall back to an empty SMOKE_AUTH_PASSWORD so the whole secret
+          // stage (and the deploy) doesn't break — only the synthetic auth check
+          // fails until the credential exists. Bind it when present; otherwise skip.
+          def baseBindings = [
+            string(credentialsId: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID, variable: 'UNUSUAL_WHALES_API_KEY'),
+            string(credentialsId: params.DATABENTO_API_KEY_CREDENTIAL_ID, variable: 'DATABENTO_API_KEY')
+          ]
+          def applySecrets = {
+            sh '''
+              set -euo pipefail
+              test -n "$UNUSUAL_WHALES_API_KEY"
+              test -n "$DATABENTO_API_KEY"
+              apply_args=""
+              if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+                apply_args="--dry-run=server"
+                echo "DEPLOY_DRY_RUN=true: validating secret manifests without changing Kubernetes."
+              fi
+              kubectl create namespace options-edge --dry-run=client -o yaml | kubectl apply $apply_args -f -
+              kubectl -n options-edge create secret generic options-edge-secrets \
+                --from-literal=unusual-whales-api-key="$UNUSUAL_WHALES_API_KEY" \
+                --dry-run=client -o yaml | kubectl apply $apply_args -f -
+              kubectl -n options-edge create secret generic options-edge-runtime-secrets \
+                --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-Options#100}" \
+                --from-literal=UNUSUAL_WHALES_API_KEY="$UNUSUAL_WHALES_API_KEY" \
+                --from-literal=SMOKE_AUTH_PASSWORD="${SMOKE_AUTH_PASSWORD:-}" \
+                --dry-run=client -o yaml | kubectl apply $apply_args -f -
+              kubectl -n options-edge create secret generic options-edge-databento-feed-env \
+                --from-literal=DATABENTO_API_KEY="$DATABENTO_API_KEY" \
+                --dry-run=client -o yaml | kubectl apply $apply_args -f -
+            '''
+          }
+          def smokeId = params.SMOKE_AUTH_PASSWORD_CREDENTIAL_ID?.trim()
+          boolean haveSmoke = false
+          if (smokeId) {
+            try {
+              // Resolve once to confirm the credential exists before the real apply.
+              withCredentials([string(credentialsId: smokeId, variable: 'SMOKE_AUTH_PASSWORD')]) { /* probe */ }
+              haveSmoke = true
+            } catch (ignored) {
+              echo "WARN: smoke-auth credential '${smokeId}' not found; creating options-edge-runtime-secrets with an EMPTY SMOKE_AUTH_PASSWORD. The synthetic auth check will fail until the credential is created."
+            }
+          }
+          if (haveSmoke) {
+            withCredentials(baseBindings + [string(credentialsId: smokeId, variable: 'SMOKE_AUTH_PASSWORD')]) { applySecrets() }
+          } else {
+            withCredentials(baseBindings) { applySecrets() }
+          }
         }
       }
     }
@@ -676,6 +701,7 @@ void promoteToProduction() {
       string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
       string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID),
       string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID),
+      string(name: 'SMOKE_AUTH_PASSWORD_CREDENTIAL_ID', value: params.SMOKE_AUTH_PASSWORD_CREDENTIAL_ID),
       string(name: 'MARKET_DATA_SOURCE', value: params.MARKET_DATA_SOURCE),
       string(name: 'RAW_TOPIC', value: params.RAW_TOPIC),
       string(name: 'IB_HOST', value: params.IB_HOST),

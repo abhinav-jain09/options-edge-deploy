@@ -21,6 +21,23 @@ spec:
         - name: integration-test
           image: 192.168.100.252:5000/options-edge-integration-test:dev
           imagePullPolicy: Always
+          env:
+            # Login is enforced on the web + gateway WS, so the synthetic verifier
+            # authenticates as a read-only dummy user (oe-smoke) via the OIDC
+            # password grant. SMOKE_AUTH_PASSWORD comes from the
+            # options-edge-runtime-secrets secret (envFrom below); the Jenkinsfile
+            # injects it from the options-edge-smoke-password credential.
+            - name: SMOKE_AUTH_ENABLED
+              value: "true"
+            - name: SMOKE_AUTH_CLIENT_ID
+              value: "options-edge-web"
+            - name: SMOKE_AUTH_USERNAME
+              value: "oe-smoke"
+            # Base = PROD issuer; the dev overlay overrides this. It MUST exactly
+            # match the issuer the web/gateway validate, else the token's iss claim
+            # is rejected even though the grant succeeds.
+            - name: SMOKE_AUTH_ISSUER_URI
+              value: "https://auth.fullfunding.nl/realms/optionsedge"
           envFrom:
             - configMapRef:
                 name: options-edge-config
