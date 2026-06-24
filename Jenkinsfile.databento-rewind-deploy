@@ -187,46 +187,56 @@ MSG
           # 1) Render the kustomize output to YAML on disk.
           kubectl kustomize "${OVERLAY_DIR}" > "$rendered"
 
-          # 2) Mutate the rendered Deployment's container image. -f
-          #    --local reads/writes locally (no API call). -o yaml
-          #    emits the FULL multi-resource doc so we don't lose
-          #    Service/ServiceAccount/Lease.
+          # 2) Mutate the rendered Deployment's container image.
           #
-          #    `--local` requires individual resources; the cleanest
-          #    way to mutate just the Deployment without losing the
-          #    others is to split, set, recombine. Use yq if available,
-          #    otherwise do a stream-edit on the image:line.
-          if command -v yq >/dev/null 2>&1; then
-            yq eval-all \
-              'select(.kind == "Deployment" and .metadata.name == "'"${REWIND_DEPLOY}"'") |= (.spec.template.spec.containers[0].image = "'"${target}"'") | select(. != null)' \
-              "$rendered" > "$mutated"
-          else
-            # yq not present on the Mac agent. Fallback: use sed on
-            # the image: line, scoped to the Deployment block. This
-            # works because the rewind base has exactly one container
-            # named `rewind` in the only Deployment, with an image
-            # line of the form
-            #   image: <registry>/options-edge-databento-rewind:<tag>
-            python3 - "$rendered" "$mutated" "$target" <<'PY'
+          #    Codex-v4 finding: a yq path scoped to
+          #    `.containers[0].image` rewrites the WRONG container if a
+          #    sidecar is ever inserted before the rewind container,
+          #    and silently no-ops if the Deployment name is renamed.
+          #    A name-scoped yq path on `.containers[] | select(.name=="rewind")`
+          #    has the same silent-no-op failure mode on a container
+          #    rename. The most robust, future-proof primitive is a
+          #    regex anchored to the known rewind registries +
+          #    image-name; this can ONLY match the rewind image (any
+          #    tag), and we assert exactly one rewrite. We use this on
+          #    every agent unconditionally so the dev/prod paths are
+          #    identical, and we don't depend on yq being installed.
+          python3 - "$rendered" "$mutated" "$target" <<'PY'
 import sys, re
 src_path, dst_path, target = sys.argv[1], sys.argv[2], sys.argv[3]
 src = open(src_path).read()
-# Match only the rewind image line(s) (image rewrites in the overlay
-# already normalised the registry; we just need to replace the FULL
-# image: line for the rewind image, regardless of current tag).
+# Match only the rewind image line (any tag), scoped to the two
+# registries that the kustomize image-rewrite stage emits. The image
+# name + path are pinned, so this CANNOT match any other service's
+# image line.
 pattern = re.compile(
     r'^(\s*image:\s+)(?:host\.docker\.internal:5001|192\.168\.100\.252:5000)/options-edge-databento-rewind:[^\s]+$',
     re.MULTILINE,
 )
 new, n = pattern.subn(lambda m: m.group(1) + target, src)
-if n == 0:
-    sys.stderr.write("FAIL: no rewind image line found in rendered manifest\n")
+if n != 1:
+    sys.stderr.write(
+        f"FAIL: expected exactly 1 rewind image line in rendered manifest, got {n}\n"
+    )
     sys.exit(1)
-if n > 1:
-    sys.stderr.write(f"WARN: replaced {n} image lines (expected 1)\n")
 open(dst_path, 'w').write(new)
 print(f"image rewrite OK: replaced {n} line(s) -> {target}")
 PY
+
+          # 2b) Independent post-mutation invariants. Don't trust the
+          #     mutator's own count; re-derive from the file. These
+          #     are belt-and-suspenders against any future regression
+          #     (a different mutator, a manifest restructure, etc.).
+          target_hits=$(grep -cE "^[[:space:]]*image:[[:space:]]+${target}[[:space:]]*$" "$mutated" || true)
+          if [ "$target_hits" -ne 1 ]; then
+            echo "FAIL: post-mutation expected exactly 1 occurrence of target image line == ${target}, got ${target_hits}" >&2
+            exit 1
+          fi
+          # No leftover rewind images on the wrong registry/tag.
+          rewind_total=$(grep -cE "^[[:space:]]*image:[[:space:]]+(host\.docker\.internal:5001|192\.168\.100\.252:5000)/options-edge-databento-rewind:" "$mutated" || true)
+          if [ "$rewind_total" -ne 1 ]; then
+            echo "FAIL: post-mutation expected exactly 1 rewind image reference, got ${rewind_total}" >&2
+            exit 1
           fi
 
           # 3) Server-side dry-run on the mutated manifest.
