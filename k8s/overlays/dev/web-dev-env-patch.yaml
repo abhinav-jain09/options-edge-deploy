@@ -48,9 +48,14 @@ spec:
               value: "ws://192.168.100.102:8093/ws/events"
             - name: VITE_WS_URL
               value: "ws://192.168.100.102:8093/ws/events"
+            # SAME-ORIGIN: the web serves its own /api + /mission-control, so leave these BLANK — the SPA
+            # resolves a blank base against window.location, so it calls whatever host/port the web is
+            # served at (dev :8090) with no hardcoded port to drift if the Service port ever moves again.
+            # Blank overrides the base manifest's prod fullfunding.nl values for dev (RuntimeProfileConfig
+            # treats blank as same-origin; dev does not require these to be set).
             - name: VITE_API_BASE_URL
-              value: "http://localhost:8090"
+              value: ""
             - name: VITE_MISSION_CONTROL_URL
-              value: "http://localhost:8090"
+              value: ""
             - name: VITE_REPLAY_ORCHESTRATOR_URL
               value: "http://localhost:8095"
