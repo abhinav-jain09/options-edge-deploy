@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpsf-replay-orchestrator-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: hpsf-replay-orchestrator
+          env:
+            # DEV-ONLY: flip from base SIMULATED to LIVE_UNSECURED so the dev cluster's "Run Backtest"
+            # button actually launches HPSF replay runs. LIVE_UNSECURED disables Keycloak auth — safe
+            # only on the Mac docker-desktop dev cluster which has no external exposure.
+            # Prod overlay (when added) MUST use HPSF_REPLAY_MODE=LIVE + supply the auth env.
+            - name: HPSF_REPLAY_MODE
+              value: LIVE_UNSECURED
