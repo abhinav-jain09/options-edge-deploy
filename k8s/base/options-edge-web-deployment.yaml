@@ -16,8 +16,17 @@ metadata:
     app.kubernetes.io/part-of: options-edge
 spec:
   replicas: 1
+  # RollingUpdate with maxUnavailable:0 guarantees the new pod is Ready (readinessProbe GET /) before
+  # the old one is terminated, so the Service always keeps >=1 endpoint. Recreate left a zero-endpoint
+  # window on every deploy that made the docker-desktop LoadBalancer drop the :8090 host-port binding
+  # and not re-establish it — breaking http://localhost:8090 after each deploy. The web app is fully
+  # stateless (no PVC/hostPort/singleton), so briefly running 2 pods during the roll is safe.
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  minReadySeconds: 5
   selector:
     matchLabels:
       app.kubernetes.io/name: options-edge-web
