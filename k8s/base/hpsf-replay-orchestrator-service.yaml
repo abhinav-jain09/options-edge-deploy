@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: hpsf-replay-orchestrator-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: hpsf-replay-orchestrator-service
+    app.kubernetes.io/component: hpsf-replay-orchestrator
+    app.kubernetes.io/part-of: options-edge
+spec:
+  selector:
+    app.kubernetes.io/name: hpsf-replay-orchestrator-service
+  ports:
+    - name: http
+      port: 8095
+      targetPort: http

@@ -111,6 +111,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-hpsf-postgres-writer
     newName: host.docker.internal:5001/options-edge-hpsf-postgres-writer
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-hpsf-replay-orchestrator
+    newName: host.docker.internal:5001/options-edge-hpsf-replay-orchestrator
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-spx-mission-control
     newName: host.docker.internal:5001/options-edge-spx-mission-control
     newTag: dev
