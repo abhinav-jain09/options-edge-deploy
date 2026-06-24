@@ -55,6 +55,14 @@ pipeline {
     REWIND_DEPLOY    = 'databento-rewind-service'
     JENKINS_WORK_DIR = "${WORKSPACE}/rewind-clone"
     DEPLOY_BRANCH    = "${params.REWIND_GIT_REF}"  // for enforce-main-branch.sh
+    // Jenkins only auto-exports `environment{}` entries to the shell;
+    // `params.*` are NOT exported. The sh blocks below reference
+    // ${ENVIRONMENT}, ${IMAGE_TAG}, ${REWIND_GIT_REF} — under
+    // `set -euo pipefail` (specifically `set -u`) those would explode
+    // as "unbound variable". Mirror each consumed param into env here.
+    ENVIRONMENT      = "${params.ENVIRONMENT}"
+    IMAGE_TAG        = "${params.IMAGE_TAG}"
+    REWIND_GIT_REF   = "${params.REWIND_GIT_REF}"
   }
   stages {
     stage('Enforce main-only (this Jenkinsfile and the rewind clone)') {
