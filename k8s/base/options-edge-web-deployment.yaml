@@ -69,6 +69,17 @@ spec:
               value: "wss://fullfunding.nl/ws/events"
             - name: VITE_WS_URL
               value: "wss://fullfunding.nl/ws/events"
+            # The browser-facing WS above is the PUBLIC edge (Cloudflare -> traefik). The web POD,
+            # however, computes feedGatewayAvailable by probing APP_FEED_GATEWAY_HEALTH_URL — and a
+            # pod must NOT health-check itself by round-tripping out to the public wss://fullfunding.nl
+            # and back (fragile: depends on egress + Cloudflare + DNS just to know the in-cluster
+            # gateway is up). In a real cluster the gateway Service is directly pod-reachable, so probe
+            # it in-cluster. Without this, APP_FEED_GATEWAY_HEALTH_URL defaults to the browser WS URL
+            # (the public edge) — the exact browser-vs-pod conflation that broke dev. Dev overrides this
+            # to ws://localhost:8080 (docker-desktop pods can't reach the gateway); prod uses the real
+            # in-cluster Service for a genuine probe.
+            - name: APP_FEED_GATEWAY_HEALTH_URL
+              value: "ws://feed-gateway-service:8091/ws/events"
             - name: VITE_API_BASE_URL
               value: "https://fullfunding.nl"
             - name: VITE_MISSION_CONTROL_URL
