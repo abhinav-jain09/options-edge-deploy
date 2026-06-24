@@ -8,10 +8,10 @@ data:
   TOPIC_PREFIX: ""
   KAFKA_APPLICATION_ID_SUFFIX: -dev
   SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
-  KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092
+  KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092,host.docker.internal:9094
   KAFKA_SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
-  KAFKA_BROKER_COUNT: "1"
-  KAFKA_TOPIC_REPLICATION_FACTOR: "1"
+  KAFKA_BROKER_COUNT: "2"
+  KAFKA_TOPIC_REPLICATION_FACTOR: "2"
   KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS: "1"
   # Dev-only data-topic retention: 10h (36,000,000 ms). Overrides the base 24h
   # (KAFKA_TOPIC_RETENTION_MS=86400000); prod keeps 24h. load-kafka-settings.sh
@@ -51,5 +51,5 @@ metadata:
   namespace: options-edge
 data:
   APP_PROFILE: dev
-  KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092
+  KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092,host.docker.internal:9094
   KAFKA_SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
