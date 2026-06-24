@@ -95,7 +95,8 @@ spec:
             - name: ORDER_PLACEMENT_ENABLED
               value: "false"
             # Tell the orchestrator which namespace it operates in (matches the SA + Role above).
-            - name: HPSF_REPLAY_KUBE_NAMESPACE
+            # Env name MUST match ReplayKubeSettings.java's HPSF_REPLAY_FLEET_NAMESPACE.
+            - name: HPSF_REPLAY_FLEET_NAMESPACE
               value: options-edge
             # Default-OFF distributed admission so a single-replica deploy works out of the box
             # (in-memory store + rate limit). Switch to postgres/redis when scaling to >1 replica.
