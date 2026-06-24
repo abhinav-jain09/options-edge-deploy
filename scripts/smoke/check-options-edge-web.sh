@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Liveness + auth-posture smoke for the OptionsEdge web app (k8s Deployment, served on :8094).
+# Liveness + auth-posture smoke for the OptionsEdge web app (k8s Deployment; dev :8090, prod :8094).
 #
 # The option-chain UI is gated behind Keycloak login (SecurityConfig): the SPA shell + assets are PUBLIC,
 # but every /api/** route requires a valid bearer JWT (401 without one). An unauthenticated smoke therefore
@@ -13,7 +13,7 @@ set -euo pipefail
 # It deliberately does NOT obtain a token: that needs a dedicated CI identity and belongs to a separate
 # authenticated integration smoke, not this deploy liveness/posture check.
 
-WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8094}"
+WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8090}"
 WEB_PUBLIC_URL="${WEB_PUBLIC_URL%/}"
 TIMEOUT_SECONDS="${OPTIONS_EDGE_WEB_TIMEOUT_SECONDS:-120}"
 

@@ -20,6 +20,18 @@ patches:
     patch: |-
       - op: remove
         path: /spec/template/spec/nodeSelector
+  # DEV-ONLY: serve the k8s web on :8090 (not the base :8094). The legacy host web that
+  # owned :8090 is retired, so :8090 is free; and the feed-gateway WS_ALLOWED_ORIGINS +
+  # replay-orchestrator CORS already trust http://localhost:8090, so the browser's live
+  # WS + replay are accepted with no per-port allow-list churn, and the existing
+  # http://localhost:8090/option-chain URL works. Prod keeps the base Service :8094.
+  - target:
+      kind: Service
+      name: options-edge-web
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8090
   - target:
       kind: Deployment
     patch: |-

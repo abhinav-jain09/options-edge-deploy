@@ -35,8 +35,8 @@ Do not change these defaults without intentionally migrating Jenkins and updatin
 - Dev image registry: `host.docker.internal:5001`
 - Dev Kafka: `host.docker.internal:9092`
 - Dev Kafka topic prefix: empty/unprefixed
-- Dev OptionsEdge web smoke URL inside Jenkins: `http://localhost:8094` (k8s Service `options-edge-web`, LoadBalancer bound on the Mac's localhost by docker-desktop ServiceLB)
-- Dev OptionsEdge web app from the Mac browser: `http://localhost:8094` (the legacy `:8090` Docker container has been removed)
+- Dev OptionsEdge web smoke URL inside Jenkins: `http://localhost:8090` (k8s Service `options-edge-web`, LoadBalancer bound on the Mac's localhost by docker-desktop ServiceLB)
+- Dev OptionsEdge web app from the Mac browser: `http://localhost:8090` (the dev k8s web Service is exposed on :8090, matching the gateway/orchestrator trusted origin)
 
 ## Remote Production Invariants
 
