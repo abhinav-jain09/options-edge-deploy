@@ -45,13 +45,15 @@ spec:
             - name: VITE_AUTH_ISSUER
               value: "http://192.168.100.102:8089/realms/optionsedge"
             # The browser's live WS talks to the dev feed-gateway at localhost:8093 — the gateway that
-            # is actually serving live snapshots and accepts the localhost browser origin. The k8s
-            # feed-gateway on :8091 is NOT yet usable from the browser in dev: it still carries prod WS
-            # config (origin/issuer) until that dev gateway config is deployed and verified, so pointing
-            # the browser there returns a 401 handshake and an empty chain. Until :8091 is verified
-            # end-to-end, VITE_WS_URL (browser-facing) stays on :8093. APP_FEED_GATEWAY_WS_URL remains
-            # the web backend's in-cluster reachability check (service DNS feed-gateway-service:8091).
+            # is actually serving live snapshots and accepts the localhost browser origin. The web SERVES
+            # this URL to the browser as config.feedGatewayWsUrl, so it MUST be browser-reachable.
+            # The web pod, however, cannot reach localhost:8093, so the pod's feedGatewayAvailable health
+            # probe uses a SEPARATE in-cluster URL (APP_FEED_GATEWAY_HEALTH_URL -> feed-gateway-service:8091)
+            # which the pod CAN reach. Without that separation the pod health check failed on the browser
+            # URL and the client refused to open the socket. (VITE_WS_URL kept in sync as a fallback.)
             - name: APP_FEED_GATEWAY_WS_URL
+              value: "ws://localhost:8093/ws/events"
+            - name: APP_FEED_GATEWAY_HEALTH_URL
               value: "ws://feed-gateway-service:8091/ws/events"
             - name: VITE_WS_URL
               value: "ws://localhost:8093/ws/events"
