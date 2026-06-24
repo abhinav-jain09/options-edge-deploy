@@ -1,0 +1,344 @@
+@Library('oe') _
+
+// Off-Market Rewind — deploy pipeline.
+//
+// Standalone job (NOT part of bring-up-all). Deploys the Rewind service
+// from its own repo (abhinav-jain09/options-edge-databento-rewind) into
+// the target cluster, plus ensures the rewind Kafka topics exist with
+// the exact shape the service requires (single partition,
+// cleanup.policy=compact for journal).
+//
+// Why standalone: Rewind is operator-driven (humans trigger replays from
+// the options-edge-databento-rewind job). It does NOT need to be part of
+// every platform deploy. Keeping it out of bring-up-all means a Rewind
+// issue can't block a routine deploy of the rest of the platform.
+//
+// Why this lives in options-edge-deploy: this repo owns Kafka topic
+// configuration (topics.env) and Jenkins job registrations. The Rewind
+// SERVICE manifests live in the rewind repo as the single source of
+// truth; this pipeline clones that repo at a configurable git ref (locked
+// to main) and kustomize-applies them.
+//
+// One-shot operator prerequisites (NOT created by this job):
+//   1. Secret `databento-rewind-secrets` in the options-edge namespace
+//      with key DATABENTO_API_KEY. Apply with kubectl create secret
+//      generic — never commit the key.
+//   2. Jenkins credential `rewind-service-token` (Secret Text) holding a
+//      Keycloak service-account bearer token. Used by the operational
+//      rewind jobs (Jenkinsfile.rewind, .resume-live in the rewind
+//      repo) to authenticate to /run/*. This deploy job itself does
+//      NOT need the token (kubectl auth is what drives the deploy).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
+      description: 'Target environment. Drives registry + kubeconfig from oeProfile.')
+    string(name: 'REWIND_GIT_REF', defaultValue: 'main',
+      description: 'Git ref in the rewind repo to deploy. LOCKED TO main per rule.md.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    booleanParam(name: 'APPLY_TOPICS', defaultValue: true,
+      description: 'Create/repair Kafka topic config. Idempotent. The verify-rewind-topics stage runs REGARDLESS — exact-shape verification of the rewind topics is mandatory because a wrong-shape journal silently corrupts the service.')
+    booleanParam(name: 'SKIP_BUILD_TRIGGER', defaultValue: false,
+      description: 'Skip triggering the upstream image-build job. Use when you have already built and pushed the image you want to deploy.')
+    string(name: 'IMAGE_TAG', defaultValue: 'dev',
+      description: 'Mutable image tag to deploy. Wired into kustomize via `kustomize edit set image` so the rendered Deployment actually references this tag (the dev overlay\'s base newTag is just a default).')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 30, unit: 'MINUTES')
+  }
+  environment {
+    KUBECONFIG       = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    REWIND_GIT_URL   = 'git@github.com:abhinav-jain09/options-edge-databento-rewind.git'
+    REWIND_NAMESPACE = 'options-edge'
+    REWIND_DEPLOY    = 'databento-rewind-service'
+    JENKINS_WORK_DIR = "${WORKSPACE}/rewind-clone"
+    DEPLOY_BRANCH    = "${params.REWIND_GIT_REF}"  // for enforce-main-branch.sh
+  }
+  stages {
+    stage('Enforce main-only (this Jenkinsfile and the rewind clone)') {
+      steps {
+        // Codex v1 finding 1: the previous version only locked
+        // REWIND_GIT_REF — but this Jenkinsfile itself, running from a
+        // non-main options-edge-deploy branch, would still roll the
+        // cluster. The shared helper enforces BOTH the SCM checkout
+        // and the DEPLOY_BRANCH param.
+        sh '''
+          set -euo pipefail
+          bash scripts/jenkins/enforce-main-branch.sh
+        '''
+      }
+    }
+    stage('Resolve profile') {
+      steps {
+        script {
+          def p = oeProfile(params.ENVIRONMENT)
+          env.OE_REGISTRY = p.registry
+          env.OE_KAFKA_BOOTSTRAP = p.kafkaBootstrap ?: ''
+          env.OE_KUBECONFIG_FILE = params.KUBECONFIG_FILE?.trim() ?: p.kubeconfigDeployer
+          echo "ENVIRONMENT=${params.ENVIRONMENT} registry=${env.OE_REGISTRY} kubeconfig=${env.OE_KUBECONFIG_FILE} kafka_bootstrap=${env.OE_KAFKA_BOOTSTRAP}"
+          if (!env.OE_KUBECONFIG_FILE?.trim()) {
+            error("Resolve profile: empty deployer kubeconfig — check deploy-profiles.yaml")
+          }
+        }
+      }
+    }
+    stage('Trigger image-build (upstream)') {
+      when { expression { params.SKIP_BUILD_TRIGGER != true } }
+      steps {
+        build(
+          job: 'options-edge-databento-rewind-image-build',
+          wait: true,
+          parameters: [
+            string(name: 'ENVIRONMENT', value: params.ENVIRONMENT),
+            string(name: 'IMAGE_TAG', value: params.IMAGE_TAG),
+            string(name: 'MUTABLE_TAG', value: params.IMAGE_TAG),
+            booleanParam(name: 'PUSH_IMAGE', value: true),
+          ],
+        )
+      }
+    }
+    stage('Apply Kafka topics') {
+      when { expression { params.APPLY_TOPICS == true } }
+      steps {
+        sh '''
+          set -euo pipefail
+          source scripts/kafka/load-kafka-settings.sh "${ENVIRONMENT}"
+          bash scripts/kafka/apply-topics.sh
+        '''
+      }
+    }
+    stage('Verify rewind topic shape (MANDATORY)') {
+      // Runs regardless of APPLY_TOPICS — exact-shape verification is
+      // not optional. If APPLY_TOPICS=false and the topic is missing or
+      // wrong-shape, this stage fails the deploy with a clear error
+      // (rather than silently letting a wrong-shape journal corrupt the
+      // service at startup).
+      steps {
+        sh '''
+          set -euo pipefail
+          source scripts/kafka/load-kafka-settings.sh "${ENVIRONMENT}"
+          bash scripts/kafka/verify-rewind-topics.sh
+        '''
+      }
+    }
+    stage('Clone rewind repo') {
+      steps {
+        sh '''
+          set -euo pipefail
+          rm -rf "${JENKINS_WORK_DIR}"
+          git clone --depth 1 --branch "${REWIND_GIT_REF}" "${REWIND_GIT_URL}" "${JENKINS_WORK_DIR}"
+          ( cd "${JENKINS_WORK_DIR}" && git log -1 --oneline )
+        '''
+      }
+    }
+    stage('Verify operator prereqs') {
+      steps {
+        sh '''
+          set -euo pipefail
+          if ! kubectl -n "${REWIND_NAMESPACE}" get secret databento-rewind-secrets >/dev/null 2>&1; then
+            cat >&2 <<MSG
+FAIL: Secret databento-rewind-secrets is missing in namespace ${REWIND_NAMESPACE}.
+
+Operator one-shot setup:
+  kubectl --kubeconfig "${KUBECONFIG}" -n ${REWIND_NAMESPACE} create secret \\
+    generic databento-rewind-secrets \\
+    --from-literal=DATABENTO_API_KEY='<your-databento-historical-api-key>'
+
+Re-run this deploy after the Secret is created.
+MSG
+            exit 1
+          fi
+          echo "operator prereq OK: databento-rewind-secrets exists"
+        '''
+      }
+    }
+    stage('Kustomize render + image-tag injection + apply (atomic)') {
+      steps {
+        // Codex round-deploy-v3 high: the previous two-step approach
+        // (apply default-tagged manifest, then `kubectl set image` to
+        // the real tag) had a small window where prod could roll on
+        // :dev. v4 fix: render the kustomize output to YAML, mutate
+        // the image tag IN that YAML with `kubectl set image
+        // --local`, THEN apply the corrected manifest in one shot.
+        // No two-step window. No standalone `kustomize` binary needed
+        // (kubectl set image --local works on stdin).
+        sh '''
+          set -euo pipefail
+          OVERLAY_DIR="${JENKINS_WORK_DIR}/k8s/overlays/${ENVIRONMENT}"
+          if [ ! -d "${OVERLAY_DIR}" ]; then
+            echo "FAIL: overlay dir does not exist: ${OVERLAY_DIR}" >&2
+            exit 1
+          fi
+          # Per-env registry — matches the overlay's image rewrite.
+          if [ "${ENVIRONMENT}" = "dev" ]; then
+            registry="host.docker.internal:5001"
+          else
+            registry="192.168.100.252:5000"
+          fi
+          target="${registry}/options-edge-databento-rewind:${IMAGE_TAG}"
+          echo "rendering + setting deployment/${REWIND_DEPLOY} container=rewind image=${target}"
+
+          rendered=$(mktemp)
+          mutated=$(mktemp)
+          trap 'rm -f "$rendered" "$mutated"' EXIT
+
+          # 1) Render the kustomize output to YAML on disk.
+          kubectl kustomize "${OVERLAY_DIR}" > "$rendered"
+
+          # 2) Mutate the rendered Deployment's container image.
+          #
+          #    Codex-v4 finding: a yq path scoped to
+          #    `.containers[0].image` rewrites the WRONG container if a
+          #    sidecar is ever inserted before the rewind container,
+          #    and silently no-ops if the Deployment name is renamed.
+          #    A name-scoped yq path on `.containers[] | select(.name=="rewind")`
+          #    has the same silent-no-op failure mode on a container
+          #    rename. The most robust, future-proof primitive is a
+          #    regex anchored to the known rewind registries +
+          #    image-name; this can ONLY match the rewind image (any
+          #    tag), and we assert exactly one rewrite. We use this on
+          #    every agent unconditionally so the dev/prod paths are
+          #    identical, and we don't depend on yq being installed.
+          python3 - "$rendered" "$mutated" "$target" <<'PY'
+import sys, re
+src_path, dst_path, target = sys.argv[1], sys.argv[2], sys.argv[3]
+src = open(src_path).read()
+# Match only the rewind image line (any tag), scoped to the two
+# registries that the kustomize image-rewrite stage emits. The image
+# name + path are pinned, so this CANNOT match any other service's
+# image line.
+pattern = re.compile(
+    r'^(\s*image:\s+)(?:host\.docker\.internal:5001|192\.168\.100\.252:5000)/options-edge-databento-rewind:[^\s]+$',
+    re.MULTILINE,
+)
+new, n = pattern.subn(lambda m: m.group(1) + target, src)
+if n != 1:
+    sys.stderr.write(
+        f"FAIL: expected exactly 1 rewind image line in rendered manifest, got {n}\n"
+    )
+    sys.exit(1)
+open(dst_path, 'w').write(new)
+print(f"image rewrite OK: replaced {n} line(s) -> {target}")
+PY
+
+          # 2b) Independent post-mutation invariants. Don't trust the
+          #     mutator's own count; re-derive from the file. These
+          #     are belt-and-suspenders against any future regression
+          #     (a different mutator, a manifest restructure, etc.).
+          target_hits=$(grep -cE "^[[:space:]]*image:[[:space:]]+${target}[[:space:]]*$" "$mutated" || true)
+          if [ "$target_hits" -ne 1 ]; then
+            echo "FAIL: post-mutation expected exactly 1 occurrence of target image line == ${target}, got ${target_hits}" >&2
+            exit 1
+          fi
+          # No leftover rewind images on the wrong registry/tag.
+          rewind_total=$(grep -cE "^[[:space:]]*image:[[:space:]]+(host\.docker\.internal:5001|192\.168\.100\.252:5000)/options-edge-databento-rewind:" "$mutated" || true)
+          if [ "$rewind_total" -ne 1 ]; then
+            echo "FAIL: post-mutation expected exactly 1 rewind image reference, got ${rewind_total}" >&2
+            exit 1
+          fi
+
+          # 3) Server-side dry-run on the mutated manifest.
+          kubectl apply --dry-run=server -f "$mutated"
+
+          # 4) Real apply (single atomic step — no window where the
+          #    cluster sees the default :dev tag for a prod deploy).
+          kubectl apply -f "$mutated"
+        '''
+      }
+    }
+    stage('Rollout restart (force pod refresh)') {
+      // Even with the correct image already in the Deployment spec,
+      // the rewind base disables ConfigMap hash suffixes (intentional,
+      // for resume-live's stable CM-name lookup) — meaning CM changes
+      // don't auto-roll. Also handles the mutable-tag case: a fresh
+      // build pushed under :dev doesn't change the Deployment spec;
+      // rollout restart forces a fresh pull regardless.
+      steps {
+        sh '''
+          set -euo pipefail
+          kubectl -n "${REWIND_NAMESPACE}" rollout restart "deployment/${REWIND_DEPLOY}"
+        '''
+      }
+    }
+    stage('Rollout + Ready check') {
+      steps {
+        sh '''
+          set -euo pipefail
+          # Pod blocks on Lease acquisition (up to 90s) before HTTP serves
+          # → readinessProbe initialDelaySeconds=120 in base manifest.
+          # 240s window covers Recreate strategy old-pod-terminating +
+          # new-pod-acquire-lease + readiness-grace.
+          kubectl -n "${REWIND_NAMESPACE}" rollout status \
+            "deployment/${REWIND_DEPLOY}" --timeout=240s
+          kubectl -n "${REWIND_NAMESPACE}" get pods -l app.kubernetes.io/name=${REWIND_DEPLOY}
+        '''
+      }
+    }
+    stage('Smoke check (auth-mandatory)') {
+      steps {
+        sh '''
+          set -euo pipefail
+          # Codex round-deploy-v2 high: the previous tolerance of "any
+          # nonzero kubectl rc = admission-blocked, continue" also let
+          # through curl timeout, DNS failure, refused connection, image
+          # pull error after admission. v3 distinguishes admission
+          # denials specifically (by error string) from every other
+          # failure, which fail closed.
+          POD="rewind-smoke-$(date +%s)"
+          stderr_file=$(mktemp)
+          set +e
+          status=$(kubectl -n "${REWIND_NAMESPACE}" run "${POD}" \
+            --rm -i --restart=Never --quiet \
+            --image=curlimages/curl:8.10.1 \
+            --command -- /bin/sh -c \
+            'curl -sS -o /dev/null -w "%{http_code}" --max-time 10 \
+              http://databento-rewind-service.options-edge.svc.cluster.local:8095/run/current' \
+            2> "$stderr_file")
+          rc=$?
+          stderr_content=$(cat "$stderr_file")
+          rm -f "$stderr_file"
+          set -e
+          echo "smoke: kubectl rc=$rc http_status=$status"
+          if [ $rc -ne 0 ]; then
+            # Codex round-deploy-v3 medium: match the SPECIFIC expected
+            # admission policy by name (options-edge-jenkins-only-workloads),
+            # not any "admission webhook denied" — an unrelated policy
+            # (image allowlist, pod security) would otherwise skip the
+            # 401 assertion and silently pass the deploy.
+            if echo "$stderr_content" | grep -q "options-edge-jenkins-only-workloads"; then
+              echo "smoke: kubectl run BLOCKED BY options-edge-jenkins-only-workloads (verified); rollout-status above is authoritative"
+              echo "$stderr_content" | head -5
+            else
+              echo "FAIL smoke: kubectl run failed (rc=$rc) and stderr did NOT match the known options-edge-jenkins-only-workloads policy denial. Any other failure fails the deploy (rule.md auth-mandatory requires proof of 401)." >&2
+              echo "$stderr_content" >&2
+              exit 1
+            fi
+          else
+            # kubectl run succeeded — assert exact 401 (auth-mandatory).
+            # A 200 means auth is broken; 5xx means service unhealthy;
+            # anything other than 401 fails the deploy.
+            if [ "$status" != "401" ]; then
+              echo "FAIL smoke: /run/current returned $status, expected 401 (auth-mandatory; 200 would mean auth is broken)" >&2
+              exit 1
+            fi
+            echo "smoke OK: /run/current returned 401 (auth-mandatory enforced)"
+          fi
+        '''
+      }
+    }
+  }
+  post {
+    success {
+      echo "OK — Rewind ${params.IMAGE_TAG} deployed to ${params.ENVIRONMENT}. Operational job: options-edge-databento-rewind (in the rewind repo)."
+    }
+    failure {
+      echo "Deploy failed. Recent rewind pod logs:"
+      sh '''
+        set +e
+        kubectl -n "${REWIND_NAMESPACE}" logs deploy/${REWIND_DEPLOY} --tail=50 || true
+      '''
+    }
+  }
+}
