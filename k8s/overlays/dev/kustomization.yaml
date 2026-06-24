@@ -11,6 +11,9 @@ patches:
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
   # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
   - path: feed-gateway-dev-env-patch.yaml
+  # DEV-ONLY: point the integration-test smoke-auth token grant at the dev Keycloak issuer
+  # (must match the issuer the dev web/gateway validate, else the token's iss claim is rejected).
+  - path: integration-test-dev-env-patch.yaml
   # The base web Deployment pins itself to the prod control-plane node
   # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
   # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,
