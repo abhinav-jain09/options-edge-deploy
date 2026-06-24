@@ -154,7 +154,7 @@ MSG
         '''
       }
     }
-    stage('Kustomize apply (with IMAGE_TAG injection)') {
+    stage('Kustomize apply') {
       steps {
         sh '''
           set -euo pipefail
@@ -163,48 +163,45 @@ MSG
             echo "FAIL: overlay dir does not exist: ${OVERLAY_DIR}" >&2
             exit 1
           fi
-          # Codex v1 finding 2: wire IMAGE_TAG into kustomize.
-          # The base overlay's `images:` block uses newTag=dev as a
-          # default; this `kustomize edit set image` rewrites it to the
-          # operator-chosen IMAGE_TAG (e.g. a build SHA from the
-          # upstream image-build job) so the rendered Deployment
-          # actually references that tag.
-          (
-            cd "${OVERLAY_DIR}"
-            # Determine the registry name used by the overlay's images
-            # entry. Dev overlay uses host.docker.internal:5001; prod
-            # uses 192.168.100.252:5000. Set the same registry,
-            # different tag.
-            if [ "${ENVIRONMENT}" = "dev" ]; then
-              kustomize edit set image \
-                host.docker.internal:5001/options-edge-databento-rewind=host.docker.internal:5001/options-edge-databento-rewind:${IMAGE_TAG}
-            else
-              kustomize edit set image \
-                192.168.100.252:5000/options-edge-databento-rewind=192.168.100.252:5000/options-edge-databento-rewind:${IMAGE_TAG}
-            fi
-          )
-          # Dry-run first (server-side validates RBAC + admission).
+          # Use `kubectl kustomize` (embedded), NOT the standalone
+          # `kustomize` binary which isn't installed on the Mac agent
+          # (Codex round-deploy-v2 medium). Image-tag injection now
+          # happens via `kubectl set image` AFTER apply (next stage),
+          # which doesn't need any extra tooling.
           kubectl kustomize "${OVERLAY_DIR}" \
             | kubectl apply --dry-run=server -f -
-          # Real apply.
           kubectl kustomize "${OVERLAY_DIR}" \
             | kubectl apply -f -
         '''
       }
     }
-    stage('Rollout restart (force pod refresh)') {
-      // Codex v1 finding 2: the rewind base kustomization sets
-      // disableNameSuffixHash on configMapGenerator — that's
-      // intentional (resume-live's manifest reader uses the stable CM
-      // name) BUT means kustomize doesn't auto-roll the pod on
-      // ConfigMap changes. We must force it.
-      // Mutable image tags have the same problem: if IMAGE_TAG didn't
-      // change (e.g. operator pushed a new image with tag=dev) then
-      // kustomize apply is a no-op for the Deployment spec, and the
-      // pod keeps the old image. rollout restart forces a fresh pull.
+    stage('Set image tag + rollout restart') {
+      // Two-in-one: setting the image to the operator-chosen tag
+      // AND forcing a pod refresh.
+      // - `kubectl set image` updates the Deployment's container image
+      //   (Codex round-deploy-v1 high 2 wiring; round-deploy-v2 medium
+      //   replacement for the standalone `kustomize edit set image`
+      //   that the Mac agent doesn't have).
+      // - Even if the image ref didn't change (mutable tag, e.g.
+      //   :dev), the rewind base disables ConfigMap hash suffixes so
+      //   kustomize wouldn't auto-roll on CM changes. `rollout restart`
+      //   forces a fresh pod regardless.
       steps {
         sh '''
           set -euo pipefail
+          # Per-env registry — matches the overlay's image rewrite.
+          if [ "${ENVIRONMENT}" = "dev" ]; then
+            registry="host.docker.internal:5001"
+          else
+            registry="192.168.100.252:5000"
+          fi
+          target="${registry}/options-edge-databento-rewind:${IMAGE_TAG}"
+          echo "setting deployment/${REWIND_DEPLOY} container=rewind to image=${target}"
+          kubectl -n "${REWIND_NAMESPACE}" set image \
+            "deployment/${REWIND_DEPLOY}" "rewind=${target}"
+          # Force a rollout even if the image ref didn't change
+          # (mutable-tag case: new build pushed under :dev, Deployment
+          # spec unchanged, kustomize apply is a no-op for the pod).
           kubectl -n "${REWIND_NAMESPACE}" rollout restart "deployment/${REWIND_DEPLOY}"
         '''
       }
@@ -227,30 +224,48 @@ MSG
       steps {
         sh '''
           set -euo pipefail
-          # Codex v1 finding 3: assert the HTTP status code, not just
-          # the curl exit code. /run/current MUST return 401 without an
-          # auth header (rule.md "Authentication Mandatory Rule"). A
-          # 200 there would mean auth is broken — the deploy must fail.
+          # Codex round-deploy-v2 high: the previous tolerance of "any
+          # nonzero kubectl rc = admission-blocked, continue" also let
+          # through curl timeout, DNS failure, refused connection, image
+          # pull error after admission. v3 distinguishes admission
+          # denials specifically (by error string) from every other
+          # failure, which fail closed.
           POD="rewind-smoke-$(date +%s)"
+          stderr_file=$(mktemp)
           set +e
           status=$(kubectl -n "${REWIND_NAMESPACE}" run "${POD}" \
             --rm -i --restart=Never --quiet \
             --image=curlimages/curl:8.10.1 \
             --command -- /bin/sh -c \
             'curl -sS -o /dev/null -w "%{http_code}" --max-time 10 \
-              http://databento-rewind-service.options-edge.svc.cluster.local:8095/run/current')
+              http://databento-rewind-service.options-edge.svc.cluster.local:8095/run/current' \
+            2> "$stderr_file")
           rc=$?
+          stderr_content=$(cat "$stderr_file")
+          rm -f "$stderr_file"
           set -e
           echo "smoke: kubectl rc=$rc http_status=$status"
           if [ $rc -ne 0 ]; then
-            # kubectl run may be blocked by the admission policy
-            # (one-shot Pod creation in options-edge). The rollout
-            # status above already proved Ready (= /health/ready
-            # returned 200 = Lease held + journal hydrated). Log and
-            # continue — admission can prevent the smoke pod but does
-            # not invalidate the rollout proof.
-            echo "smoke: kubectl run blocked (admission policy?); rollout-status above is authoritative"
+            # Admission denial fingerprint: the options-edge-jenkins-
+            # only-workloads policy returns a specific error string
+            # ("admission webhook" + "denied the request" OR
+            # "ValidatingAdmissionPolicy ... denied"). If the stderr
+            # matches that fingerprint, tolerate the failure (the
+            # rollout-status above is the authoritative readiness proof).
+            # Any OTHER non-zero exit (curl timeout, DNS, image pull,
+            # exec failure) fails the deploy.
+            if echo "$stderr_content" | grep -qE "(ValidatingAdmissionPolicy|admission webhook).+(denied|deny)"; then
+              echo "smoke: kubectl run BLOCKED BY ADMISSION POLICY (verified); rollout-status above is authoritative"
+              echo "$stderr_content" | head -5
+            else
+              echo "FAIL smoke: kubectl run failed with non-admission error (rc=$rc); fail-closed per Codex round-deploy-v2" >&2
+              echo "$stderr_content" >&2
+              exit 1
+            fi
           else
+            # kubectl run succeeded — assert exact 401 (auth-mandatory).
+            # A 200 means auth is broken; 5xx means service unhealthy;
+            # anything other than 401 fails the deploy.
             if [ "$status" != "401" ]; then
               echo "FAIL smoke: /run/current returned $status, expected 401 (auth-mandatory; 200 would mean auth is broken)" >&2
               exit 1
