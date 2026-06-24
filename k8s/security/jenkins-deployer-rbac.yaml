@@ -37,7 +37,18 @@ rules:
   - apiGroups: [""]
     resources:
       - serviceaccounts
-    verbs: ["get", "list", "watch"]
+    # Full mgmt needed because services (e.g. hpsf-replay-orchestrator) own a per-service SA
+    # bound to a per-service namespaced Role; without create/update/delete the apply -k aborts
+    # the moment a Deployment that references a new SA + Role + RoleBinding lands.
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
+    # Per-service namespaced RBAC (e.g. hpsf-replay-orchestrator needs to read live deployment
+    # specs / pod status to clone the live HPSF Stage A/B per-run). Cluster-wide perms are not
+    # needed and are not granted here — the new Roles are themselves namespace-scoped.
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources:
       - pods
