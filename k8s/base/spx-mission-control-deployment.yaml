@@ -61,6 +61,21 @@ spec:
               value: "false"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xmx1536m"
+            # SPX Mission Control auth (mandatory in EVERY env). The code path
+            # MissionAuthSettings.validate() fail-closes when any of the three URIs
+            # below is blank; the previous MISSION_AUTH_ENABLED off-switch was
+            # deliberately removed by the spx-mission-control Codex security rounds
+            # (commits c2608f6 + 01224ab). Without these env vars the container
+            # crash-loops on IllegalStateException at startup.
+            # Base values point at PROD Keycloak; dev overlay overrides to the local
+            # Mac Keycloak (spx-mission-control-dev-env-patch.yaml). Audience matches
+            # the gateway/web client (options-edge-web) so a single UI token works.
+            - name: MISSION_AUTH_ISSUER_URI
+              value: "https://auth.fullfunding.nl/realms/optionsedge"
+            - name: MISSION_AUTH_AUDIENCE
+              value: "options-edge-web"
+            - name: MISSION_AUTH_JWK_SET_URI
+              value: "https://auth.fullfunding.nl/realms/optionsedge/protocol/openid-connect/certs"
           ports:
             - name: http
               containerPort: 8096
