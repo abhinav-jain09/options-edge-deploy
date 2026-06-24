@@ -55,14 +55,16 @@ spec:
               value: "ws://feed-gateway-service:8091/ws/events"
             - name: VITE_WS_URL
               value: "ws://localhost:8093/ws/events"
-            # SAME-ORIGIN: the web serves its own /api + /mission-control, so leave these BLANK — the SPA
-            # resolves a blank base against window.location, so it calls whatever host/port the web is
-            # served at (dev :8090) with no hardcoded port to drift if the Service port ever moves again.
-            # Blank overrides the base manifest's prod fullfunding.nl values for dev (RuntimeProfileConfig
-            # treats blank as same-origin; dev does not require these to be set).
+            # The web serves its own /api + /mission-control on the dev host port :8090. The same-origin
+            # ("blank") behaviour requires the #89 web image (RuntimeProfileConfig treats blank as
+            # window.location); the currently-deployed image is older and mis-defaults a BLANK
+            # VITE_API_BASE_URL to the container-internal :8080, which is NOT reachable from the Mac host
+            # — so the browser's /api/config 503s and the chain never loads. Set these EXPLICITLY to the
+            # host-reachable http://localhost:8090 so the browser hits the web's own origin regardless of
+            # image age. (Forward-compatible: once the #89 image lands, explicit :8090 still resolves.)
             - name: VITE_API_BASE_URL
-              value: ""
+              value: "http://localhost:8090"
             - name: VITE_MISSION_CONTROL_URL
-              value: ""
+              value: "http://localhost:8090"
             - name: VITE_REPLAY_ORCHESTRATOR_URL
               value: "http://localhost:8095"
