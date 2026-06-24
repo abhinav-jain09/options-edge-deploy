@@ -96,12 +96,14 @@ spec:
               value: "false"
             - name: ORDER_PLACEMENT_ENABLED
               value: "false"
-            # Run mode: LIVE_UNSECURED is the dev-only mode (auth disabled). For prod, set
-            # HPSF_REPLAY_MODE=LIVE and supply HPSF_REPLAY_AUTH_ISSUER_URI + HPSF_REPLAY_AUTH_AUDIENCE
-            # (Keycloak issuer + audience). The base default here is dev-friendly; the prod overlay
-            # MUST patch this to LIVE + provide auth env before merging this manifest into prod.
+            # Run mode: SAFE-BY-DEFAULT = SIMULATED. SIMULATED accepts API requests but never
+            # actually launches real fleet workloads or publishes records — so a prod kustomize
+            # render that forgets to patch this stays harmless (no unauthenticated live replay).
+            # Dev overlay patches to LIVE_UNSECURED (auth disabled, suitable for Mac docker-desktop).
+            # Prod overlay MUST patch to LIVE + supply HPSF_REPLAY_AUTH_ISSUER_URI +
+            # HPSF_REPLAY_AUTH_AUDIENCE before the orchestrator can actually run real backtests.
             - name: HPSF_REPLAY_MODE
-              value: LIVE_UNSECURED
+              value: SIMULATED
             # Runtime selector: kubernetes engages ReplayKubeApi + KubernetesReplayProcessorFleet +
             # KubernetesReplayHistoricalPublisher. Without this the orchestrator stays simulated or
             # falls to process-mode and the RBAC granted to this SA is never exercised.

@@ -47,6 +47,9 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Always
+  # DEV-ONLY orchestrator mode: base ships SIMULATED (safe-by-default for prod kustomize); dev
+  # flips to LIVE_UNSECURED so the Mac dev cluster's "Run Backtest" actually launches HPSF replays.
+  - path: hpsf-replay-orchestrator-dev-patch.yaml
 images:
   - name: 192.168.100.252:5000/options-edge-raw-to-display
     newName: host.docker.internal:5001/options-edge-raw-to-display
