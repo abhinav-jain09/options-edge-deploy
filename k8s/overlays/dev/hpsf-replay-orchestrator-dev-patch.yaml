@@ -4,6 +4,13 @@ metadata:
   name: hpsf-replay-orchestrator-service
   namespace: options-edge
 spec:
+  # DEV-ONLY: the historical-replay orchestrator is not part of the live option-chain path and is not
+  # currently needed in dev, so it is scaled to 0 here. This keeps the deployment object (prod overlay
+  # unaffected) but runs no pod — so it cannot CrashLoopBackOff and `kubectl rollout status` returns
+  # immediately on 0/0 instead of timing out and failing the deploy. To re-enable dev backtest later,
+  # set replicas back to 1 AND add HPSF_REPLAY_ALLOW_UNAUTHENTICATED_LIVE=true below (the LIVE_UNSECURED
+  # security guard refuses to start without that explicit acknowledgement).
+  replicas: 0
   template:
     spec:
       containers:
