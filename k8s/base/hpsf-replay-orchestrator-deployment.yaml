@@ -32,8 +32,11 @@ rules:
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Read pod status for K8s symmetric failure detection (KubeHandle.failures() — G1 Phase A).
+  # `pods` get/list/watch already returns .status (kubectl reads it via the pod object), so
+  # the separate `pods/status` subresource is not needed and would force jenkins-deployer to
+  # hold pods/status before it could create this Role (RBAC privilege-escalation prevention).
   - apiGroups: [""]
-    resources: ["pods", "pods/status"]
+    resources: ["pods"]
     verbs: ["get", "list", "watch"]
   # Read ConfigMaps + Secrets the live deployments reference via envFrom so the clone classifier
   # can resolve effective env (ReplayCloneSourceReader).
