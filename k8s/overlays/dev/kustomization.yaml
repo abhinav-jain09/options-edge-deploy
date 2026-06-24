@@ -20,6 +20,15 @@ patches:
     patch: |-
       - op: remove
         path: /spec/template/spec/nodeSelector
+  # Same removal for ibkr-feed: it pins to the control-plane node in prod (co-located
+  # with IB Gateway), but docker-desktop's node is labelled control-plane="" (empty),
+  # so the selector would leave it Pending in dev. There is one node to schedule on.
+  - target:
+      kind: Deployment
+      name: ibkr-feed-service
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/nodeSelector
   # DEV-ONLY: serve the k8s web on :8090 (not the base :8094). The legacy host web that
   # owned :8090 is retired, so :8090 is free; and the feed-gateway WS_ALLOWED_ORIGINS +
   # replay-orchestrator CORS already trust http://localhost:8090, so the browser's live

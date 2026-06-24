@@ -21,6 +21,15 @@ spec:
     spec:
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
+      # Pin to the control-plane node (192.168.100.252). IB Gateway / TWS runs ONLY on
+      # node A and this pod uses hostNetwork + IB_HOST=127.0.0.1:4001, so it MUST be
+      # co-located with IB Gateway — on the oe-failover-56 node (.4) there is no
+      # :4001 listener and the feed crash-loops ("Could not connect to IBKR at
+      # 127.0.0.1:4001"). Same control-plane pin as the web + keycloak deployments.
+      # (The dev overlay removes this selector — docker-desktop's single node is not
+      # labelled control-plane=true.)
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
       containers:
         - name: ibkr-feed
           image: 192.168.100.252:5000/options-edge-ibkr-feed:dev
