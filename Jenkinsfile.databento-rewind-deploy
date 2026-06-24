@@ -209,18 +209,23 @@ src = open(src_path).read()
 # registries that the kustomize image-rewrite stage emits. The image
 # name + path are pinned, so this CANNOT match any other service's
 # image line.
+# (All backslashes are doubled: this heredoc lives inside a Groovy
+# triple-single-quoted string, which expands recognised escape
+# sequences. The doubled backslashes here collapse to single
+# backslashes in the shell heredoc, giving Python proper regex
+# whitespace metachars.)
 pattern = re.compile(
-    r'^(\s*image:\s+)(?:host\.docker\.internal:5001|192\.168\.100\.252:5000)/options-edge-databento-rewind:[^\s]+$',
+    r'^(\\s*image:\\s+)(?:host\\.docker\\.internal:5001|192\\.168\\.100\\.252:5000)/options-edge-databento-rewind:[^\\s]+$',
     re.MULTILINE,
 )
 new, n = pattern.subn(lambda m: m.group(1) + target, src)
 if n != 1:
     sys.stderr.write(
-        f"FAIL: expected exactly 1 rewind image line in rendered manifest, got {n}\n"
+        "FAIL: expected exactly 1 rewind image line in rendered manifest, got %d\\n" % n
     )
     sys.exit(1)
 open(dst_path, 'w').write(new)
-print(f"image rewrite OK: replaced {n} line(s) -> {target}")
+print("image rewrite OK: replaced %d line(s) -> %s" % (n, target))
 PY
 
           # 2b) Independent post-mutation invariants. Don't trust the
@@ -233,7 +238,7 @@ PY
             exit 1
           fi
           # No leftover rewind images on the wrong registry/tag.
-          rewind_total=$(grep -cE "^[[:space:]]*image:[[:space:]]+(host\.docker\.internal:5001|192\.168\.100\.252:5000)/options-edge-databento-rewind:" "$mutated" || true)
+          rewind_total=$(grep -cE "^[[:space:]]*image:[[:space:]]+(host\\.docker\\.internal:5001|192\\.168\\.100\\.252:5000)/options-edge-databento-rewind:" "$mutated" || true)
           if [ "$rewind_total" -ne 1 ]; then
             echo "FAIL: post-mutation expected exactly 1 rewind image reference, got ${rewind_total}" >&2
             exit 1
