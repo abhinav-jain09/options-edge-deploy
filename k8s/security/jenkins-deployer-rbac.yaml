@@ -83,6 +83,22 @@ rules:
       - ingresses
       - networkpolicies
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Required so the deployer can apply per-service namespaced Role
+  # specs that grant `coordination.k8s.io/leases` to a workload's own
+  # SA (the rewind service holds a singleton Lease for write-fencing,
+  # and its own per-service Role grants get/update/patch/delete on
+  # that named Lease). Without this, the deployer hits k8s RBAC
+  # escalation prevention:
+  #   roles "databento-rewind-lease" is forbidden:
+  #   user "system:serviceaccount:options-edge:jenkins-deployer" is
+  #   attempting to grant RBAC permissions not currently held:
+  #   {APIGroups:["coordination.k8s.io"], Resources:["leases"], ...}
+  # (k8s requires a grantor to hold >= the verbs/resources it grants.)
+  # Scoped narrowly to leases only — no broader coordination perms.
+  - apiGroups: ["coordination.k8s.io"]
+    resources:
+      - leases
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
