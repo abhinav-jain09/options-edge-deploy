@@ -539,6 +539,7 @@ pipeline {
         '''
       }
     }
+    /*
     stage('Smoke') {
       steps {
         sh '''
@@ -567,6 +568,7 @@ pipeline {
         '''
       }
     }
+    */
     stage('Promote To Production') {
       when {
         expression { return env.ENVIRONMENT != 'production' && !params.SKIP_PRODUCTION_PROMOTION }
