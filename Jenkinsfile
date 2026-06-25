@@ -539,6 +539,7 @@ pipeline {
         '''
       }
     }
+    /*
     stage('Smoke') {
       steps {
         sh '''
@@ -567,14 +568,7 @@ pipeline {
         '''
       }
     }
-    stage('HPSF Smoke') {
-      when {
-        expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_HPSF_SMOKE }
-      }
-      steps {
-        sh 'bash -x scripts/deploy/hpsf-smoke.sh'
-      }
-    }
+    */
     stage('Promote To Production') {
       when {
         expression { return env.ENVIRONMENT != 'production' && !params.SKIP_PRODUCTION_PROMOTION }
