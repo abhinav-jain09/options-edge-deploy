@@ -25,6 +25,17 @@ apply_jenkins_deployer_rbac() {
 verify_jenkins_deployer_access() {
   kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i patch deployment >/dev/null
   kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i create pods --subresource=portforward >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i create serviceaccounts >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i update serviceaccounts >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i patch serviceaccounts >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i get roles.rbac.authorization.k8s.io >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i create roles.rbac.authorization.k8s.io >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i update roles.rbac.authorization.k8s.io >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i patch roles.rbac.authorization.k8s.io >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i get rolebindings.rbac.authorization.k8s.io >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i create rolebindings.rbac.authorization.k8s.io >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i update rolebindings.rbac.authorization.k8s.io >/dev/null
+  kubectl --kubeconfig "$jenkins_kubeconfig" -n "$namespace" auth can-i patch rolebindings.rbac.authorization.k8s.io >/dev/null
 }
 
 write_jenkins_deployer_kubeconfig() {
