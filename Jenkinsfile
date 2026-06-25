@@ -670,13 +670,15 @@ void promoteToProduction() {
   if (!approved) {
     return
   }
-  // Manual promote: fire-and-forget (the operator clicked and doesn't wait at the console).
-  // AUTO_PROMOTE (bring-up-all PROFILE=prod): WAIT for the prod deploy and propagate its result,
-  // so a prod failure fails the umbrella — that is what makes "build-all to prod, nothing fails"
-  // an end-to-end guarantee rather than fire-and-forget.
+  // ALWAYS fire-and-forget. This job has disableConcurrentBuilds(), so the promoting run
+  // (this one) CANNOT wait on the downstream prod build: the prod build can't start while this
+  // run is still in progress, and this run won't finish until the prod build does — a deadlock.
+  // (An earlier AUTO_PROMOTE wait:true caused exactly that on bring-up-all PROFILE=prod.)
+  // So spawn the prod build and return; bring-up-all PROFILE=prod completes once the prod build
+  // is SCHEDULED, and the prod deploy's own result is monitored separately.
   build job: env.JOB_NAME,
-    wait: params.AUTO_PROMOTE ? true : false,
-    propagate: params.AUTO_PROMOTE ? true : false,
+    wait: false,
+    propagate: false,
     parameters: [
       string(name: 'ENVIRONMENT', value: 'production'),
       string(name: 'KUBECONFIG_FILE', value: params.PROD_KUBECONFIG_FILE),
