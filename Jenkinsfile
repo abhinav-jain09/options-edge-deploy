@@ -57,6 +57,7 @@ pipeline {
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
     booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', defaultValue: false, description: 'Internal guard used by the manual production promotion build. DO NOT pass this by hand — it is set by the Promote To Production stage. Manual ENVIRONMENT=production runs with SKIP_PRODUCTION_PROMOTION=true are now REJECTED at Validate unless the build came from a dev run of this job (the legitimate promote path) OR the EMERGENCY_DIRECT_PROD_DEPLOY break-glass is engaged.')
+    booleanParam(name: 'AUTO_PROMOTE', defaultValue: false, description: 'Auto-approve the Promote To Production gate instead of waiting for a human click. Used by bring-up-all PROFILE=prod to do build -> dev-verify -> prod in one job. The dev deploy + smoke STILL run first (the dev-first safety rule is preserved); this only removes the manual button and makes the downstream prod build waited-on so its failure propagates. Direct operators leave this false.')
     booleanParam(name: 'EMERGENCY_DIRECT_PROD_DEPLOY', defaultValue: false, description: 'BREAK-GLASS: skip the must-go-via-dev rule and deploy directly to prod. Use ONLY for genuine emergencies (prod broken AND the dev path is unusable). Requires a non-empty EMERGENCY_REASON. The override is loudly audit-logged to the build console.')
     string(name: 'EMERGENCY_REASON', defaultValue: '', description: 'Why are you doing a direct-to-prod emergency deploy? Required and non-empty when EMERGENCY_DIRECT_PROD_DEPLOY=true. Captured in the audit log.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false, description: 'Validate render, image preflight, and server-side Kubernetes apply without mutating runtime resources.')
@@ -651,20 +652,31 @@ captured loudly in the build log."""
 // verifies). Returns without promoting if the input times out / is rejected.
 void promoteToProduction() {
   def approved = false
-  try {
-    timeout(time: 30, unit: 'MINUTES') {
-      input message: 'Dev deployment and smoke checks completed. Deploy the same build to PRODUCTION?', ok: 'Deploy to production'
-    }
+  if (params.AUTO_PROMOTE) {
+    // bring-up-all PROFILE=prod path: the dev deploy + smoke already passed above (dev-first
+    // rule preserved); auto-approve the gate instead of waiting for a human click.
+    echo 'AUTO_PROMOTE=true — dev deploy + smoke passed; auto-approving Promote To Production.'
     approved = true
-  } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException ignored) {
-    echo 'Production promotion was not approved; dev deployment remains complete.'
+  } else {
+    try {
+      timeout(time: 30, unit: 'MINUTES') {
+        input message: 'Dev deployment and smoke checks completed. Deploy the same build to PRODUCTION?', ok: 'Deploy to production'
+      }
+      approved = true
+    } catch (org.jenkinsci.plugins.workflow.steps.FlowInterruptedException ignored) {
+      echo 'Production promotion was not approved; dev deployment remains complete.'
+    }
   }
   if (!approved) {
     return
   }
+  // Manual promote: fire-and-forget (the operator clicked and doesn't wait at the console).
+  // AUTO_PROMOTE (bring-up-all PROFILE=prod): WAIT for the prod deploy and propagate its result,
+  // so a prod failure fails the umbrella — that is what makes "build-all to prod, nothing fails"
+  // an end-to-end guarantee rather than fire-and-forget.
   build job: env.JOB_NAME,
-    wait: false,
-    propagate: false,
+    wait: params.AUTO_PROMOTE ? true : false,
+    propagate: params.AUTO_PROMOTE ? true : false,
     parameters: [
       string(name: 'ENVIRONMENT', value: 'production'),
       string(name: 'KUBECONFIG_FILE', value: params.PROD_KUBECONFIG_FILE),

@@ -57,6 +57,16 @@ pipeline {
     // 'Resolve profile' stage below (single source of truth — no hardcoded registries/arches
     // in this umbrella). Children that don't yet require ENVIRONMENT still accept these as
     // explicit overrides, so the contract is unchanged.
+    //
+    // Per-env web URLs baked into the web image at build time. THIS IS CRITICAL: the web
+    // serves /api/config.feedGatewayWsUrl from the build-time VITE_WS_URL/APP_FEED_GATEWAY_WS_URL,
+    // so building with the wrong gateway URL (the old job default ws://…:8093, the dead host
+    // gateway) makes the browser connect to a gateway that serves no chain. Bake the correct
+    // per-env values: dev -> the k8s gateway LB on :8091; prod -> the public wss edge.
+    WEB_WS_URL      = "${params.PROFILE == 'prod' ? 'wss://fullfunding.nl/ws/events' : 'ws://localhost:8091/ws/events'}"
+    WEB_API_BASE    = "${params.PROFILE == 'prod' ? 'https://fullfunding.nl' : 'http://localhost:8090'}"
+    WEB_AUTH_ISSUER = "${params.PROFILE == 'prod' ? 'https://auth.fullfunding.nl/realms/optionsedge' : 'http://192.168.100.102:8089/realms/optionsedge'}"
+    WEB_REPLAY_URL  = "${params.PROFILE == 'prod' ? 'https://fullfunding.nl' : 'http://localhost:8095'}"
   }
 
   // PREREQUISITE (not a stage): Keycloak + Postgres are a ONE-TIME setup, run as standalone
@@ -112,33 +122,65 @@ pipeline {
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
+        // Web image is built HERE (in the build phase, BEFORE Deploy) with the correct per-env
+        // gateway/auth URLs baked in, so the single Deploy stage below rolls the FRESH web image.
+        // Previously the web was a stage AFTER Deploy, so every run deployed the PRIOR run's web
+        // image and silently fell behind main — the root cause of the dev/prod drift.
+        stage('Web') {
+          when { expression { params.WEB_UI } }
+          steps {
+            build job: 'options-edge-web-deploy',
+                  parameters: [
+                    string(name: 'PROFILE',                      value: params.PROFILE),
+                    string(name: 'BUILD_PLATFORM',               value: env.BUILD_PLATFORM),
+                    booleanParam(name: 'PUSH_IMAGE',             value: env.PUSH_IMAGE == 'true'),
+                    booleanParam(name: 'RUN_LOCAL',              value: env.RUN_LOCAL == 'true'),
+                    // Push to the mutable :dev tag the deploy resolves (resolve-images.sh ->
+                    // <registry>/options-edge-web:dev for BOTH envs), so the Deploy stage rolls
+                    // THIS freshly-built image. env.WEB_IMAGE may carry a :prod tag the deploy
+                    // never reads, which would silently deploy a stale web (Codex HIGH).
+                    string(name: 'IMAGE',                        value: "${env.IMAGE_REGISTRY}/options-edge-web:dev"),
+                    string(name: 'VITE_WS_URL',                  value: env.WEB_WS_URL),
+                    string(name: 'APP_FEED_GATEWAY_WS_URL',      value: env.WEB_WS_URL),
+                    string(name: 'VITE_API_BASE_URL',            value: env.WEB_API_BASE),
+                    string(name: 'VITE_MISSION_CONTROL_URL',     value: env.WEB_API_BASE),
+                    string(name: 'VITE_AUTH_ISSUER',             value: env.WEB_AUTH_ISSUER),
+                    string(name: 'VITE_REPLAY_ORCHESTRATOR_URL', value: env.WEB_REPLAY_URL)
+                  ],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
       }
     }
 
-    // 2) ONE deploy applies the ENTIRE options-edge namespace (feeds + all stream apps) via
-    //    `kubectl kustomize k8s/overlays/<env> | kubectl apply`. Images above must already be pushed.
+    // 2) ONE deploy applies the ENTIRE options-edge namespace (feeds + all stream apps + the web
+    //    image built above) via `kubectl kustomize k8s/overlays/<env> | kubectl apply`.
+    //    dev  -> deploy to dev, no promote gate (SKIP_PRODUCTION_PROMOTION=true).
+    //    prod -> the dev-first gate REJECTS a direct ENVIRONMENT=production deploy, so we run the
+    //            SAME dev deploy + smoke, then AUTO_PROMOTE auto-approves the Promote stage, which
+    //            launches the real prod deploy. With AUTO_PROMOTE the prod build is waited-on and
+    //            its failure propagates, so a prod failure fails this bring-up (the "nothing fails"
+    //            contract holds end-to-end).
     stage('Deploy to Kubernetes') {
       steps {
-        build job: 'options-edge-deploy',
-              parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT)],
-              wait: true, propagate: !params.CONTINUE_ON_FAILURE
-      }
-    }
-
-    stage('Web UI') {                          // needs auth + backend up
-      when { expression { params.WEB_UI } }
-      steps {
-        build job: 'options-edge-web-deploy',            // confirmed (params: see options-edge#45)
-              parameters: [
-                string(name: 'PROFILE',        value: params.PROFILE),
-                string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM),
-                booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'),
-                booleanParam(name: 'RUN_LOCAL',  value: env.RUN_LOCAL == 'true'),
-                string(name: 'IMAGE',          value: env.WEB_IMAGE)
-                // prod also needs the prod URLs/issuer overridden (VITE_AUTH_ISSUER, VITE_API_BASE_URL, …)
-                // once those endpoints are defined — see options-edge#45 parameter list.
-              ],
-              wait: true, propagate: !params.CONTINUE_ON_FAILURE
+        script {
+          if (params.PROFILE == 'prod') {
+            build job: 'options-edge-deploy',
+                  parameters: [
+                    string(name: 'ENVIRONMENT', value: 'dev'),
+                    booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: false),
+                    booleanParam(name: 'AUTO_PROMOTE', value: true)
+                  ],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          } else {
+            build job: 'options-edge-deploy',
+                  parameters: [
+                    string(name: 'ENVIRONMENT', value: 'dev'),
+                    booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true)
+                  ],
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          }
+        }
       }
     }
     // NOTE: hpsf-historical-replay is intentionally NOT part of this bring-up (run it on its own).
