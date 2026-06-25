@@ -41,7 +41,14 @@ spec:
             - name: STRIKE_FLOW_ENABLED
               value: "true"
             # Institutional canary (databento only). Each flag is independent; kill-switch = "false".
-            # DELTA_OVERLAY intentionally left OFF until databento-feed/GEX topic is healthy.
+            # DELTA_OVERLAY: enables the GEX-backed per-leg delta-weighting (GexDeltaGlobalProcessor
+            # consumes options.databento.gex.strike -> global store; GexBackedDeltaProvider looks up
+            # per-leg delta and populates deltaWeightedBuyNotional/deltaWeightedSellNotional). Previously
+            # OFF (so those fields emitted 0); turned ON now the databento-feed/GEX topic carries real
+            # per-leg delta. Kill-switch = "false". Reads delta from KAFKA_DATABENTO_GEX_STRIKE_TOPIC
+            # (default options.databento.gex.strike).
+            - name: STRIKE_FLOW_DELTA_OVERLAY_ENABLED
+              value: "true"
             - name: STRIKE_FLOW_INSTITUTIONAL_ENABLED
               value: "true"
             - name: STRIKE_FLOW_INSTITUTIONAL_TICK_EPSILON
