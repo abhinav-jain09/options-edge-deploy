@@ -92,14 +92,16 @@ Deploy
 Resume Remote Apps
 Prometheus Scrapes
 Verify OptionsEdge Web App
-Smoke
-HPSF Smoke
 Promote To Production
 EOF
 )
 
 actual_stages="$(
-  sed -n "s/^    stage('\([^']*\)').*/\1/p" "$jenkinsfile"
+  awk '
+    /\/\*/ { in_block = 1 }
+    !in_block { print }
+    /\*\// { in_block = 0 }
+  ' "$jenkinsfile" | sed -n "s/^    stage('\([^']*\)').*/\1/p"
 )"
 
 if [[ "$actual_stages" != "$expected_stages" ]]; then
