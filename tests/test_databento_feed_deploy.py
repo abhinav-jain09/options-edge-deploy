@@ -34,6 +34,7 @@ class DatabentoFeedDeployTest(unittest.TestCase):
         for text in [
             "APP_PROFILE: prod",
             'DATABENTO_EXPIRY: ""',
+            "DATABENTO_MARKET_OPEN_ALIGNMENT: \"true\"",
             "KAFKA_BOOTSTRAP_SERVERS: 192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096",
             "KAFKA_DATABENTO_SNAPSHOT_TOPIC: options.databento.raw",
             "KAFKA_DATABENTO_CONTROL_TOPIC: options.databento.control",
@@ -51,6 +52,7 @@ class DatabentoFeedDeployTest(unittest.TestCase):
         self.assertIn("host.docker.internal:5001/options-edge-databento-feed", overlay)
         self.assertIn("name: options-edge-databento-feed-config", patch)
         self.assertIn("APP_PROFILE: dev", patch)
+        self.assertIn("DATABENTO_MARKET_OPEN_ALIGNMENT: \"true\"", patch)
         self.assertIn("KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092", patch)
 
     def test_jenkins_deploys_databento_feed_with_image_preflight_and_secret(self) -> None:

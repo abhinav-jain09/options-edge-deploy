@@ -51,5 +51,6 @@ metadata:
   namespace: options-edge
 data:
   APP_PROFILE: dev
+  DATABENTO_MARKET_OPEN_ALIGNMENT: "true"
   KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092
   KAFKA_SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
