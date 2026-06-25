@@ -123,6 +123,7 @@
               POSTGRES_JDBC_URL=jdbc:postgresql://192.168.100.252:5432/options_flow
             fi
           fi
+          databento_market_open_alignment="${DATABENTO_MARKET_OPEN_ALIGNMENT:-true}"
           kafka_schema_registry_url="$KAFKA_SCHEMA_REGISTRY_URL"
           postgres_jdbc_url="$POSTGRES_JDBC_URL"
           cat >"$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json" <<EOF
@@ -133,7 +134,7 @@ EOF
             --patch "$(cat "$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json")"
           if kubectl -n options-edge get configmap options-edge-databento-feed-config >/dev/null 2>&1; then
             cat >"$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json" <<EOF
-{"data":{"APP_PROFILE":"$databento_feed_profile","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","DATABENTO_EXPIRY":"$RESOLVED_DATABENTO_EXPIRY"}}
+{"data":{"APP_PROFILE":"$databento_feed_profile","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","DATABENTO_EXPIRY":"$RESOLVED_DATABENTO_EXPIRY","DATABENTO_MARKET_OPEN_ALIGNMENT":"$databento_market_open_alignment"}}
 EOF
             kubectl -n options-edge patch configmap options-edge-databento-feed-config \
               --type merge \
