@@ -145,7 +145,11 @@ pipeline {
                     string(name: 'VITE_API_BASE_URL',            value: env.WEB_API_BASE),
                     string(name: 'VITE_MISSION_CONTROL_URL',     value: env.WEB_API_BASE),
                     string(name: 'VITE_AUTH_ISSUER',             value: env.WEB_AUTH_ISSUER),
-                    string(name: 'VITE_REPLAY_ORCHESTRATOR_URL', value: env.WEB_REPLAY_URL)
+                    string(name: 'VITE_REPLAY_ORCHESTRATOR_URL', value: env.WEB_REPLAY_URL),
+                    // Build-only here: the deploy + UI verification happen in the Deploy stage
+                    // (and the prod promote). The web job's post-deploy Selenium smoke targets a
+                    // separately-deployed UI, so it would red-fail this build — skip it.
+                    booleanParam(name: 'SKIP_SELENIUM_SMOKE', value: true)
                   ],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
