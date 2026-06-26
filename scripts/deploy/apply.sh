@@ -144,6 +144,8 @@ EOF
           kubectl -n options-edge set image deployment/options-edge-web web="$WEB_IMAGE"
           kubectl -n options-edge set image deployment/raw-to-display-databento-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-databento-feed databento-feed="$DATABENTO_FEED_IMAGE"
+          # SPY (2nd isolated feed) shares the databento-feed image; keep it in lockstep with the SPX feed.
+          kubectl -n options-edge set image deployment/options-edge-databento-feed-spy databento-feed-spy="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
           kubectl -n options-edge set image deployment/databento-maxpain-service databento-maxpain="$DATABENTO_MAXPAIN_IMAGE"
@@ -173,6 +175,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
           kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
           kubectl -n options-edge rollout restart deployment/options-edge-databento-feed
+          kubectl -n options-edge rollout restart deployment/options-edge-databento-feed-spy
           kubectl -n options-edge rollout restart deployment/databento-volume-aggregator
           kubectl -n options-edge rollout restart deployment/databento-mission-pace-service
           kubectl -n options-edge rollout restart deployment/databento-mission-pressure-service
@@ -203,6 +206,7 @@ EOF
           kubectl -n options-edge rollout status deployment/options-edge-web --timeout=240s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=180s
           kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=240s
+          kubectl -n options-edge rollout status deployment/options-edge-databento-feed-spy --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-volume-aggregator --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-mission-pace-service --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-mission-pressure-service --timeout=240s

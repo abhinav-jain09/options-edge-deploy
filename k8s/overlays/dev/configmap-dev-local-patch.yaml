@@ -54,3 +54,18 @@ data:
   DATABENTO_MARKET_OPEN_ALIGNMENT: "true"
   KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092
   KAFKA_SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
+---
+# SPY (2nd isolated feed) MUST get the same dev/stage Kafka+SR repoint as the SPX feed.
+# The base SPY configmap hard-codes the prod endpoints (192.168.100.252) so a non-prod
+# deploy would otherwise publish SPY into PRODUCTION Kafka. This patch points it at the
+# local dev/stage broker, matching options-edge-databento-feed-config above.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-databento-feed-spy-config
+  namespace: options-edge
+data:
+  APP_PROFILE: dev
+  DATABENTO_MARKET_OPEN_ALIGNMENT: "true"
+  KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:9092
+  KAFKA_SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
