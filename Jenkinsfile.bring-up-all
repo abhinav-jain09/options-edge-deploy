@@ -67,6 +67,8 @@ pipeline {
     WEB_API_BASE    = "${params.PROFILE == 'prod' ? 'https://fullfunding.nl' : 'http://localhost:8090'}"
     WEB_AUTH_ISSUER = "${params.PROFILE == 'prod' ? 'https://auth.fullfunding.nl/realms/optionsedge' : 'http://192.168.100.102:8089/realms/optionsedge'}"
     WEB_REPLAY_URL  = "${params.PROFILE == 'prod' ? 'https://fullfunding.nl' : 'http://localhost:8095'}"
+    REMOTE_BUILD_HOST = "192.168.100.252"
+    REMOTE_BUILD_ROOT = "/home/abhinav/ci/remote-builds"
   }
 
   // PREREQUISITE (not a stage): Keycloak + Postgres are a ONE-TIME setup, run as standalone
@@ -95,7 +97,7 @@ pipeline {
         stage('Processing / streams') {
           steps {
             build job: 'options-edge-processing',
-                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGES', value: env.PUSH_IMAGE == 'true')],
+                  parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGES', value: env.PUSH_IMAGE == 'true'), string(name: 'REMOTE_BUILD_HOST', value: env.REMOTE_BUILD_HOST), string(name: 'REMOTE_BUILD_ROOT', value: env.REMOTE_BUILD_ROOT)],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
@@ -103,7 +105,7 @@ pipeline {
           when { expression { params.FEEDS } }
           steps {
             build job: 'options-edge-databento-feed-deploy',  // build+push only (Deploy stage was removed; options-edge-deploy is the sole deployer)
-                  parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
+                  parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'), string(name: 'REMOTE_BUILD_HOST', value: env.REMOTE_BUILD_HOST), string(name: 'REMOTE_BUILD_ROOT', value: env.REMOTE_BUILD_ROOT)],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
@@ -111,14 +113,14 @@ pipeline {
           when { expression { params.FEEDS } }
           steps {
             build job: 'options-edge-ibkr-feed',
-                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
+                  parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'), string(name: 'REMOTE_BUILD_HOST', value: env.REMOTE_BUILD_HOST), string(name: 'REMOTE_BUILD_ROOT', value: env.REMOTE_BUILD_ROOT)],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
         stage('Feed-gateway') {
           steps {
             build job: 'option-edge-feed-gateway',
-                  parameters: [string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true')],
+                  parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'), string(name: 'REMOTE_BUILD_HOST', value: env.REMOTE_BUILD_HOST), string(name: 'REMOTE_BUILD_ROOT', value: env.REMOTE_BUILD_ROOT)],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
@@ -146,6 +148,8 @@ pipeline {
                     string(name: 'VITE_MISSION_CONTROL_URL',     value: env.WEB_API_BASE),
                     string(name: 'VITE_AUTH_ISSUER',             value: env.WEB_AUTH_ISSUER),
                     string(name: 'VITE_REPLAY_ORCHESTRATOR_URL', value: env.WEB_REPLAY_URL),
+                    string(name: 'REMOTE_BUILD_HOST',            value: env.REMOTE_BUILD_HOST),
+                    string(name: 'REMOTE_BUILD_ROOT',            value: env.REMOTE_BUILD_ROOT),
                     // Build-only here: the deploy + UI verification happen in the Deploy stage
                     // (and the prod promote). The web job's post-deploy Selenium smoke targets a
                     // separately-deployed UI, so it would red-fail this build — skip it.
