@@ -148,6 +148,8 @@ EOF
           kubectl -n options-edge set image deployment/options-edge-databento-feed-spy databento-feed-spy="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
+          # Dedicated SPY GEX instance shares the databento-gex image; keep it in lockstep with SPX GEX.
+          kubectl -n options-edge set image deployment/databento-gex-spy-service databento-gex-spy="$DATABENTO_GEX_IMAGE"
           kubectl -n options-edge set image deployment/databento-maxpain-service databento-maxpain="$DATABENTO_MAXPAIN_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pace-service databento-mission-pace="$DATABENTO_MISSION_PACE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pressure-service databento-mission-pressure="$DATABENTO_MISSION_PRESSURE_IMAGE"
@@ -181,6 +183,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/databento-mission-pressure-service
           kubectl -n options-edge rollout restart deployment/databento-mission-sandwich-service
           kubectl -n options-edge rollout restart deployment/databento-gex-service
+          kubectl -n options-edge rollout restart deployment/databento-gex-spy-service
           kubectl -n options-edge rollout restart deployment/databento-maxpain-service
           kubectl -n options-edge rollout restart deployment/volume-pace-service
           kubectl -n options-edge rollout restart deployment/volume-pace-databento-service
@@ -212,6 +215,7 @@ EOF
           kubectl -n options-edge rollout status deployment/databento-mission-pressure-service --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-mission-sandwich-service --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=240s
+          kubectl -n options-edge rollout status deployment/databento-gex-spy-service --timeout=240s
           kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=240s
           kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=180s
           kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=180s

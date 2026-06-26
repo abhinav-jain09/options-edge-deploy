@@ -18,6 +18,9 @@ resources:
   - databento-volume-aggregator-service.yaml
   - databento-gex-deployment.yaml
   - databento-gex-service.yaml
+  # Dedicated SPY GEX instance: reads the isolated SPY raw topic, emits SPY dealer-gamma to gex.strike.
+  - databento-gex-spy-deployment.yaml
+  - databento-gex-spy-service.yaml
   - databento-maxpain-deployment.yaml
   - databento-maxpain-service.yaml
   - databento-mission-pace-deployment.yaml

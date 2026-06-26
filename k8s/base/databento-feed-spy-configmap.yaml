@@ -3,12 +3,17 @@ kind: ConfigMap
 metadata:
   name: options-edge-databento-feed-spy-config
   namespace: options-edge
-# Second, ISOLATED databento-feed instance that ingests the SPY option chain ONLY, so the GEX service
-# computes SPY dealer-gamma for the unified support/resistance engine's SPX+SPY confluence.
+# Second, ISOLATED databento-feed instance that ingests the SPY option chain ONLY, so a dedicated SPY
+# GEX instance computes SPY dealer-gamma for the unified support/resistance engine's SPX+SPY confluence.
+#
+# FULL ISOLATION (per "make the topic also different"): SPY publishes to its OWN raw/events topics
+# (options.databento.raw.spy / options.databento.events.raw.spy). NOTHING in the existing SPX pipeline
+# consumes those topics, so SPX display/pace/pressure/maxpain/volume/mission NEVER see SPY. Only the
+# dedicated databento-gex-spy pod consumes options.databento.raw.spy and emits SPY dealer-gamma onto the
+# SHARED options.databento.gex.strike (keyed by symbol|expiry|strike), which the unified S/R engine reads.
 #
 # Safety (per "do not disturb the existing SPX flow"):
-#   * Publishes ONLY SPY snapshots to the shared options.databento.raw (the GEX/volume/maxpain consumers
-#     are symbol-agnostic — keyed by symbol|expiry|strike). No SPX records are produced here.
+#   * Own raw/events topics — zero overlap with the SPX raw pipeline.
 #   * ALL SPX-only side-effects are DISABLED: HPSF tcbbo, ES trades, and underlying.spx.price are OFF, so
 #     this instance never touches the SPX HPSF pipeline or the SPX price topic.
 #   * Databento control is DISABLED — this feed is NOT driven by the SPX UI's expiry selection; it tracks
@@ -37,9 +42,9 @@ data:
   DATABENTO_MARKET_OPEN_ALIGNMENT: "true"
   KAFKA_BOOTSTRAP_SERVERS: 192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
   KAFKA_SCHEMA_REGISTRY_URL: http://192.168.100.252:8082
-  # Shared snapshot/event topics (consumers are symbol-agnostic; SPY rows key by symbol|expiry|strike).
-  KAFKA_DATABENTO_EVENTS_TOPIC: options.databento.events.raw
-  KAFKA_DATABENTO_SNAPSHOT_TOPIC: options.databento.raw
+  # DEDICATED SPY topics — fully isolated from the SPX raw pipeline. Only databento-gex-spy reads these.
+  KAFKA_DATABENTO_EVENTS_TOPIC: options.databento.events.raw.spy
+  KAFKA_DATABENTO_SNAPSHOT_TOPIC: options.databento.raw.spy
   # SPX-only HPSF/ES/price side-effects are DISABLED for the SPY instance.
   DATABENTO_HPSF_TCBBO_ENABLED: "false"
   DATABENTO_HPSF_ES_TRADES_ENABLED: "false"
