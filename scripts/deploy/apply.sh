@@ -30,20 +30,15 @@
           # service: match the base name, remap to the resolved repo, pin the digest). This works for ANY
           # overlay -- dev (which has its own images: block) and production (which have none).
           yq -i '.images = []' "$_overlay_kustomization"
-          # pin-postgres-writer is a DEV-ONLY deployment (k8s/overlays/dev only). Pin it for dev so the
-          # fail-closed render guard passes; OMIT it for prod, where the image is intentionally absent from
-          # the prod registry and resolving its digest would (correctly) fail and abort the prod deploy.
-          _dev_only_images=""
-          if [ "${ENVIRONMENT}" = "dev" ]; then
-            _dev_only_images="PIN_POSTGRES_WRITER_IMAGE"
-          fi
+          # pin-postgres-writer now ships in k8s/base, so it renders in BOTH dev and prod and must be
+          # digest-pinned in every environment (its prod image must exist in the prod registry before
+          # promotion, enforced by Image Preflight). It is therefore in the main pin list below.
           for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE DATABENTO_MAXPAIN_IMAGE DATABENTO_MISSION_PACE_IMAGE \
             DATABENTO_MISSION_PRESSURE_IMAGE DATABENTO_MISSION_SANDWICH_IMAGE DATABENTO_VOLUME_AGGREGATOR_IMAGE \
             DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
-            IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
+            IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
-            UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE DATABENTO_GEX_HISTORY_IMAGE \
-            $_dev_only_images; do
+            UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE DATABENTO_GEX_HISTORY_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
@@ -160,6 +155,7 @@ EOF
           kubectl -n options-edge set image deployment/unusual-whales-gex-history-service unusual-whales-gex-history="$UNUSUAL_WHALES_GEX_HISTORY_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-history-service databento-gex-history="$DATABENTO_GEX_HISTORY_IMAGE"
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
+          kubectl -n options-edge set image deployment/pin-postgres-writer pin-postgres-writer="$PIN_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/feed-gateway-service feed-gateway="$FEED_GATEWAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-integration-test integration-test="$INTEGRATION_TEST_IMAGE"
@@ -189,6 +185,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/unusual-whales-gex-history-service
           kubectl -n options-edge rollout restart deployment/databento-gex-history-service
           kubectl -n options-edge rollout restart deployment/raw-postgres-writer
+          kubectl -n options-edge rollout restart deployment/pin-postgres-writer
           kubectl -n options-edge rollout restart deployment/pressure-postgres-writer
           kubectl -n options-edge rollout restart deployment/feed-gateway-service
           kubectl -n options-edge rollout restart deployment/options-edge-integration-test
@@ -219,6 +216,7 @@ EOF
           kubectl -n options-edge rollout status deployment/unusual-whales-gex-history-service --timeout=180s
           kubectl -n options-edge rollout status deployment/databento-gex-history-service --timeout=180s
           kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=900s
+          kubectl -n options-edge rollout status deployment/pin-postgres-writer --timeout=180s
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=180s
           kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=180s
           kubectl -n options-edge rollout status deployment/options-edge-integration-test --timeout=180s

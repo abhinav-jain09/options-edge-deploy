@@ -1,10 +1,5 @@
 resources:
   - ../../base
-  # pin-postgres-writer is DEV-ONLY for now: its manifests live in this overlay (not base/), so the
-  # production overlay (live 252 cluster, prod DB) is untouched until pin storage is deliberately gated
-  # into prod as its own change. The image below is rewritten to the dev registry by the images: block.
-  - pin-postgres-writer-deployment.yaml
-  - pin-postgres-writer-service.yaml
 patches:
   - path: configmap-dev-local-patch.yaml
   - path: web-dev-env-patch.yaml

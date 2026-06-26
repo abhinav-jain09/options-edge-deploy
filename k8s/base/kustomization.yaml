@@ -42,6 +42,8 @@ resources:
   - raw-to-display-service.yaml
   - raw-postgres-writer-deployment.yaml
   - raw-postgres-writer-service.yaml
+  - pin-postgres-writer-deployment.yaml
+  - pin-postgres-writer-service.yaml
   - volume-pace-databento-deployment.yaml
   - volume-pace-deployment.yaml
   - volume-pace-service.yaml

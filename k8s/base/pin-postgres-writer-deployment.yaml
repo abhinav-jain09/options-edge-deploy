@@ -24,7 +24,10 @@ spec:
           image: 192.168.100.252:5000/options-edge-pin-postgres-writer:dev
           imagePullPolicy: Always
           # Shared platform config/secret: POSTGRES_JDBC_URL/USER/PASSWORD, KAFKA_BOOTSTRAP_SERVERS,
-          # KAFKA_SCHEMA_REGISTRY_URL. The pin topic/group names use the app's own dev defaults.
+          # KAFKA_SCHEMA_REGISTRY_URL. The pin topic/group names use the app's own environment-neutral
+          # defaults: input topics are the unprefixed options.databento.* names that exist in BOTH dev and
+          # prod (the envs are separated by Kafka bootstrap, not a topic prefix), and the consumer groups
+          # are fixed per service (pin-postgres-writer / -gex / -spot). No per-env overrides are needed.
           envFrom:
             - configMapRef:
                 name: options-edge-config
