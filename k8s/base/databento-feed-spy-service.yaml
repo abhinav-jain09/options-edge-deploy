@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: options-edge-databento-feed-spy
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: options-edge-databento-feed-spy
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8011"
+spec:
+  selector:
+    app.kubernetes.io/name: options-edge-databento-feed-spy
+  ports:
+    - name: metrics
+      port: 8011
+      targetPort: metrics

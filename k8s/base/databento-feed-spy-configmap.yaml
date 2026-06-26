@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-databento-feed-spy-config
+  namespace: options-edge
+# Second, ISOLATED databento-feed instance that ingests the SPY option chain ONLY, so the GEX service
+# computes SPY dealer-gamma for the unified support/resistance engine's SPX+SPY confluence.
+#
+# Safety (per "do not disturb the existing SPX flow"):
+#   * Publishes ONLY SPY snapshots to the shared options.databento.raw (the GEX/volume/maxpain consumers
+#     are symbol-agnostic — keyed by symbol|expiry|strike). No SPX records are produced here.
+#   * ALL SPX-only side-effects are DISABLED: HPSF tcbbo, ES trades, and underlying.spx.price are OFF, so
+#     this instance never touches the SPX HPSF pipeline or the SPX price topic.
+#   * Databento control is DISABLED — this feed is NOT driven by the SPX UI's expiry selection; it tracks
+#     the default (today = 0DTE), which is exactly the tenor the SPX+SPY confluence uses (D4: 0DTE only).
+#   * Same OPRA.PILLAR dataset + the SAME API key (shared secret) — a 2nd OPRA live session, well under
+#     Databento's per-dataset session limit (basic=10), so it cannot evict the SPX session.
+#   * Own metrics port (8011) so the two hostNetwork pods do not collide on the host port.
+data:
+  APP_PROFILE: prod
+  DATABENTO_DATASET: OPRA.PILLAR
+  DATABENTO_SYMBOL: SPY
+  DATABENTO_TRADING_CLASS: SPY
+  DATABENTO_EXPIRY: ""
+  DATABENTO_MIN_STRIKE: "650"
+  DATABENTO_MAX_STRIKE: "820"
+  DATABENTO_STRIKE_STEP: "1"
+  DATABENTO_SPOT_SOURCE: SYNTHETIC
+  DATABENTO_STATIC_SPOT: "740"
+  DATABENTO_USE_LIVE_REPLAY: "true"
+  DATABENTO_REPLAY_START_MINUTES: "5"
+  DATABENTO_RECONNECT_INITIAL_SECONDS: "5"
+  DATABENTO_RECONNECT_MAX_SECONDS: "60"
+  DATABENTO_RECONNECT_RESET_SECONDS: "300"
+  # NOT UI-controlled: SPY tracks the default (today) expiry independently of the SPX selection.
+  DATABENTO_CONTROL_ENABLED: "false"
+  DATABENTO_MARKET_OPEN_ALIGNMENT: "true"
+  KAFKA_BOOTSTRAP_SERVERS: 192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096
+  KAFKA_SCHEMA_REGISTRY_URL: http://192.168.100.252:8082
+  # Shared snapshot/event topics (consumers are symbol-agnostic; SPY rows key by symbol|expiry|strike).
+  KAFKA_DATABENTO_EVENTS_TOPIC: options.databento.events.raw
+  KAFKA_DATABENTO_SNAPSHOT_TOPIC: options.databento.raw
+  # SPX-only HPSF/ES/price side-effects are DISABLED for the SPY instance.
+  DATABENTO_HPSF_TCBBO_ENABLED: "false"
+  DATABENTO_HPSF_ES_TRADES_ENABLED: "false"
+  DATABENTO_HPSF_SPX_PRICE_ENABLED: "false"
+  METRICS_ENABLED: "true"
+  METRICS_HOST: 0.0.0.0
+  METRICS_PORT: "8011"

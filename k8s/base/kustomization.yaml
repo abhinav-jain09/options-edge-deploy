@@ -6,6 +6,10 @@ resources:
   - databento-feed-configmap.yaml
   - databento-feed-deployment.yaml
   - databento-feed-service.yaml
+  # Second isolated feed instance: SPY option chain only (for SPY GEX -> unified S/R confluence).
+  - databento-feed-spy-configmap.yaml
+  - databento-feed-spy-deployment.yaml
+  - databento-feed-spy-service.yaml
   - ibkr-feed-deployment.yaml
   - ibkr-feed-service.yaml
   - feed-gateway-deployment.yaml
