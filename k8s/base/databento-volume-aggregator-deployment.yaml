@@ -42,8 +42,12 @@ spec:
               value: options.databento.raw
             - name: KAFKA_DATABENTO_NORMALIZED_TOPIC
               value: options.databento.normalized
+            # -v2: topology reshaped so the events accumulator is the sole writer of the volume state
+            # store and the snapshot path reads a global projection (fixes cumulative volume resetting to
+            # 0 on redeploy). The bump gives a fresh changelog/consumer-group/state-dir, so the polluted
+            # -v1 state is never restored — no manual Kafka reset required. Must match the configmap value.
             - name: KAFKA_DATABENTO_VOLUME_AGGREGATOR_APP_ID
-              value: options-flow-databento-volume-aggregator-v1
+              value: options-flow-databento-volume-aggregator-v2
             - name: KAFKA_DATABENTO_VOLUME_AGGREGATOR_STREAMS_NUM_THREADS
               value: "2"
             - name: KAFKA_DATABENTO_VOLUME_AGGREGATOR_CACHE_MAX_BYTES_BUFFERING

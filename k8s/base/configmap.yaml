@@ -138,7 +138,9 @@ data:
   KAFKA_DATABENTO_DIRECTIONAL_PRESSURE_TOPIC: options.databento.directional-pressure
   KAFKA_DATABENTO_VOLUME_SANDWICH_CURRENT_TOPIC: options.databento.volume-sandwich.current
   KAFKA_DATABENTO_VOLUME_SANDWICH_ALERTS_TOPIC: options.databento.volume-sandwich.alerts
-  KAFKA_DATABENTO_VOLUME_AGGREGATOR_APP_ID: options-flow-databento-volume-aggregator-v1
+  # -v2: see databento-volume-aggregator-deployment.yaml — fresh namespace so the redeploy-resets-volume
+  # fix lands without a manual Kafka reset. Keep in sync with the deployment env of the same name.
+  KAFKA_DATABENTO_VOLUME_AGGREGATOR_APP_ID: options-flow-databento-volume-aggregator-v2
   KAFKA_UNUSUAL_WHALES_GEX_TOPIC: options.ibkr.unusualwhales.gex.strike
   KAFKA_UNUSUAL_WHALES_GEX_HISTORY_TOPIC: options.ibkr.unusualwhales.gex.strike.history
   KAFKA_IBKR_UNUSUAL_WHALES_GEX_TOPIC: options.ibkr.unusualwhales.gex.strike
