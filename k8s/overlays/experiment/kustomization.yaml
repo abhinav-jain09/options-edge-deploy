@@ -6,9 +6,38 @@ patches:
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
   # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
   - path: feed-gateway-dev-env-patch.yaml
-  # DEV-ONLY: point the integration-test smoke-auth token grant at the dev Keycloak issuer
-  # (must match the issuer the dev web/gateway validate, else the token's iss claim is rejected).
-  - path: integration-test-dev-env-patch.yaml
+  # EXPERIMENT-ONLY: drop the ibkr-feed and integration-test workloads. The experiment build job
+  # (Jenkinsfile.experiment-build) deliberately does NOT build :dev images for them — .2 runs the
+  # Databento data path only (no IBKR), and the synthetic integration tester is not needed there.
+  # Without these deletes the base brings them into the overlay and the pods sit in ImagePullBackOff.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ibkr-feed-service
+        namespace: options-edge
+      $patch: delete
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ibkr-feed-service
+        namespace: options-edge
+      $patch: delete
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: options-edge-integration-test
+        namespace: options-edge
+      $patch: delete
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: options-edge-integration-test
+        namespace: options-edge
+      $patch: delete
   # The base web Deployment pins itself to the prod control-plane node
   # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
   # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,
@@ -21,15 +50,8 @@ patches:
     patch: |-
       - op: remove
         path: /spec/template/spec/nodeSelector
-  # Same removal for ibkr-feed: it pins to the control-plane node in prod (co-located
-  # with IB Gateway), but docker-desktop's node is labelled control-plane="" (empty),
-  # so the selector would leave it Pending in dev. There is one node to schedule on.
-  - target:
-      kind: Deployment
-      name: ibkr-feed-service
-    patch: |-
-      - op: remove
-        path: /spec/template/spec/nodeSelector
+  # (the prior ibkr-feed-service nodeSelector-removal patch was here; obsolete now that the
+  # Deployment is excluded above — kustomize errors if a patch targets a deleted resource.)
   # DEV-ONLY: serve the k8s web on :8090 (not the base :8094). The legacy host web that
   # owned :8090 is retired, so :8090 is free; and the feed-gateway WS_ALLOWED_ORIGINS
   # already trusts http://localhost:8090, so the browser's live WS is accepted with no
