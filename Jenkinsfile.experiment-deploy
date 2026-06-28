@@ -24,6 +24,12 @@ pipeline {
     string(name: 'LOCAL_TUNNEL_PORT', defaultValue: '16443',
            description: 'Local port for the .2 k8s API tunnel — must match the server in oeProfile.kubeconfigDeployer.')
     string(name: 'ROLLOUT_TIMEOUT', defaultValue: '300s', description: 'rollout status timeout for the web pod.')
+    string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key',
+           description: 'Jenkins Secret-text credential id for the Unusual Whales API key (used to materialise options-edge-secrets + options-edge-runtime-secrets).')
+    string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key',
+           description: 'Jenkins Secret-text credential id for the Databento API key (used to materialise options-edge-databento-feed-env).')
+    string(name: 'SMOKE_AUTH_PASSWORD_CREDENTIAL_ID', defaultValue: 'options-edge-smoke-password',
+           description: 'OPTIONAL Jenkins Secret-text credential id for the synthetic-auth smoke user. If absent, the runtime-secrets Secret is still created with an empty SMOKE_AUTH_PASSWORD.')
   }
   environment {
     ENVIRONMENT = 'experiment'
@@ -59,6 +65,72 @@ pipeline {
           for i in 1 2 3 4 5 6 7 8; do nc -z 127.0.0.1 "$LOCAL_TUNNEL_PORT" 2>/dev/null && break; sleep 1; done
           kubectl --kubeconfig "$KUBECONFIG" get nodes
         '''
+      }
+    }
+
+    // The experiment overlay's pods reference options-edge-runtime-secrets (POSTGRES_PASSWORD,
+    // UNUSUAL_WHALES_API_KEY, SMOKE_AUTH_PASSWORD), options-edge-secrets (unusual-whales-api-key), and
+    // options-edge-databento-feed-env (DATABENTO_API_KEY). Without these the pods enter
+    // CreateContainerConfigError and nothing starts. We materialise them here from Jenkins-bound credentials
+    // BEFORE the kustomize apply, using the same dry-run|apply idempotent pattern as options-edge-deploy
+    // (so re-running the job is safe and updates secrets in place). Mirrors the main Jenkinsfile's
+    // 'Secrets' stage, scoped to the 3 secrets the experiment overlay actually consumes (Keycloak is
+    // production-only and intentionally omitted).
+    stage('Secrets') {
+      steps {
+        script {
+          def baseBindings = [
+            string(credentialsId: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID, variable: 'UNUSUAL_WHALES_API_KEY'),
+            string(credentialsId: params.DATABENTO_API_KEY_CREDENTIAL_ID, variable: 'DATABENTO_API_KEY')
+          ]
+          def applySecrets = {
+            sh '''
+              set -euo pipefail
+              test -n "$UNUSUAL_WHALES_API_KEY"
+              test -n "$DATABENTO_API_KEY"
+              # Feed secret material via 0600 mktemp env-files (NOT --from-literal, which puts the values
+              # in the kubectl process argv where anyone on the agent can ps them — the same pattern the
+              # main Jenkinsfile uses for the Keycloak Secret). Trap-cleans the files even on error.
+              umask 077
+              esFile="$(mktemp)"; rtEnv="$(mktemp)"; fdEnv="$(mktemp)"
+              trap 'rm -f "$esFile" "$rtEnv" "$fdEnv"' EXIT
+              # options-edge-secrets uses key "unusual-whales-api-key" (dashes — not a valid env-var name),
+              # so write the raw value to a file and use --from-file=KEY=PATH (kubectl reads PATH; argv carries
+              # the path, never the secret).
+              printf '%s' "$UNUSUAL_WHALES_API_KEY" > "$esFile"
+              # The other two secrets have env-shaped keys, so --from-env-file works.
+              printf 'POSTGRES_PASSWORD=%s\nUNUSUAL_WHALES_API_KEY=%s\nSMOKE_AUTH_PASSWORD=%s\n' \
+                "${POSTGRES_PASSWORD:-Options#100}" "$UNUSUAL_WHALES_API_KEY" "${SMOKE_AUTH_PASSWORD:-}" > "$rtEnv"
+              printf 'DATABENTO_API_KEY=%s\n' "$DATABENTO_API_KEY" > "$fdEnv"
+              kubectl --kubeconfig "$KUBECONFIG" create namespace "$NAMESPACE" --dry-run=client -o yaml \
+                | kubectl --kubeconfig "$KUBECONFIG" apply -f -
+              kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" create secret generic options-edge-secrets \
+                --from-file=unusual-whales-api-key="$esFile" \
+                --dry-run=client -o yaml | kubectl --kubeconfig "$KUBECONFIG" apply -f -
+              kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" create secret generic options-edge-runtime-secrets \
+                --from-env-file="$rtEnv" \
+                --dry-run=client -o yaml | kubectl --kubeconfig "$KUBECONFIG" apply -f -
+              kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" create secret generic options-edge-databento-feed-env \
+                --from-env-file="$fdEnv" \
+                --dry-run=client -o yaml | kubectl --kubeconfig "$KUBECONFIG" apply -f -
+            '''
+          }
+          def smokeId = params.SMOKE_AUTH_PASSWORD_CREDENTIAL_ID?.trim()
+          boolean haveSmoke = false
+          if (smokeId) {
+            try {
+              withCredentials([string(credentialsId: smokeId, variable: 'SMOKE_AUTH_PASSWORD')]) { /* probe */ }
+              haveSmoke = true
+            } catch (ignored) {
+              echo "WARN: smoke-auth credential '${smokeId}' not found; creating options-edge-runtime-secrets with an EMPTY SMOKE_AUTH_PASSWORD. The synthetic auth check will fail until the credential is created."
+            }
+          }
+          if (haveSmoke) {
+            withCredentials(baseBindings + [string(credentialsId: smokeId, variable: 'SMOKE_AUTH_PASSWORD')]) { applySecrets() }
+          } else {
+            withCredentials(baseBindings) { applySecrets() }
+          }
+        }
       }
     }
 
