@@ -25,9 +25,9 @@ pipeline {
   }
 
   parameters {
-    choice(name: 'PROFILE', choices: ['dev', 'prod'],
-           description: 'Environment to bring up (passed to every child job).')
-    booleanParam(name: 'FEEDS',  defaultValue: true,  description: 'Include the Databento/IBKR market feeds.')
+    choice(name: 'PROFILE', choices: ['dev', 'prod', 'experiment'],
+           description: 'Environment to bring up (passed to every child job). experiment = the .2 sandbox: builds run ON .2, deploy via options-edge-experiment-deploy.')
+    booleanParam(name: 'FEEDS',  defaultValue: true,  description: 'Include the Databento/IBKR market feeds. (Ignored for PROFILE=experiment — those jobs have no experiment build path yet; the .2 feed already runs.)')
     booleanParam(name: 'WEB_UI', defaultValue: true,  description: 'Include the web UI (options-edge-web-deploy).')
     booleanParam(name: 'CONTINUE_ON_FAILURE', defaultValue: false,
                  description: 'If true, keep going when a child job fails (otherwise abort the bring-up).')
@@ -41,7 +41,7 @@ pipeline {
     //   - databento-feed:                ENVIRONMENT, IMAGE_REGISTRY, PUSH_IMAGE
     //
     // Non-env-derived knobs (operator behavior):
-    PUSH_IMAGE     = "${params.PROFILE == 'prod' ? 'true' : 'false'}"
+    PUSH_IMAGE     = "${params.PROFILE == 'dev' ? 'false' : 'true'}"   // dev local-loads; prod & experiment push to their registry
     // RUN_LOCAL is OFF for every profile now. Dev used to docker-run the web image on the
     // Mac agent at :8090 (legacy local-run); the web UI runs in k8s in both envs now
     // (LoadBalancer Service options-edge-web :8094) so the local-run path is no longer
@@ -67,8 +67,12 @@ pipeline {
     WEB_API_BASE    = "${params.PROFILE == 'prod' ? 'https://fullfunding.nl' : 'http://localhost:8090'}"
     WEB_AUTH_ISSUER = "${params.PROFILE == 'prod' ? 'https://auth.fullfunding.nl/realms/optionsedge' : 'http://192.168.100.102:8089/realms/optionsedge'}"
     WEB_REPLAY_URL  = "${params.PROFILE == 'prod' ? 'https://fullfunding.nl' : 'http://localhost:8095'}"
-    REMOTE_BUILD_HOST = "192.168.100.252"
-    REMOTE_BUILD_ROOT = "/home/abhinav/ci/remote-builds"
+    // Where the native image build runs (children build there via ssh, no binary copy):
+    // prod/dev -> the Linux amd64 host; experiment -> the .2 box (build runs inside its Lima VM).
+    // The child jobs derive REMOTE_BUILD_USER from ENVIRONMENT (experiment->AMSKEL) when unset,
+    // so we only pass HOST + ROOT here.
+    REMOTE_BUILD_HOST = "${params.PROFILE == 'experiment' ? '192.168.100.2' : '192.168.100.252'}"
+    REMOTE_BUILD_ROOT = "${params.PROFILE == 'experiment' ? '/Users/rajuljain/ci/remote-builds' : '/home/abhinav/ci/remote-builds'}"
   }
 
   // PREREQUISITE (not a stage): Keycloak + Postgres are a ONE-TIME setup, run as standalone
@@ -102,7 +106,7 @@ pipeline {
           }
         }
         stage('Databento feed') {
-          when { expression { params.FEEDS } }
+          when { expression { params.FEEDS && params.PROFILE != 'experiment' } }
           steps {
             build job: 'options-edge-databento-feed-deploy',  // build+push only (Deploy stage was removed; options-edge-deploy is the sole deployer)
                   parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'), string(name: 'REMOTE_BUILD_HOST', value: env.REMOTE_BUILD_HOST), string(name: 'REMOTE_BUILD_ROOT', value: env.REMOTE_BUILD_ROOT)],
@@ -110,7 +114,7 @@ pipeline {
           }
         }
         stage('IBKR feed') {
-          when { expression { params.FEEDS } }
+          when { expression { params.FEEDS && params.PROFILE != 'experiment' } }
           steps {
             build job: 'options-edge-ibkr-feed',
                   parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGE', value: env.PUSH_IMAGE == 'true'), string(name: 'REMOTE_BUILD_HOST', value: env.REMOTE_BUILD_HOST), string(name: 'REMOTE_BUILD_ROOT', value: env.REMOTE_BUILD_ROOT)],
@@ -172,7 +176,14 @@ pipeline {
     stage('Deploy to Kubernetes') {
       steps {
         script {
-          if (params.PROFILE == 'prod') {
+          if (params.PROFILE == 'experiment') {
+            // The big options-edge-deploy can't run for experiment (it digest-pins by querying the
+            // registry from the agent; .2's registry is node-local in its Lima VM). Use the lean
+            // experiment deploy: resolve the :dev digest on .2 + kubectl set-image via the tunnel.
+            build job: 'options-edge-experiment-deploy',
+                  parameters: [],   // self-defaults: SERVICES (the 3 .2 deploys), REGISTRY_SSH, IMAGE_TAG=dev
+                  wait: true, propagate: !params.CONTINUE_ON_FAILURE
+          } else if (params.PROFILE == 'prod') {
             build job: 'options-edge-deploy',
                   parameters: [
                     string(name: 'ENVIRONMENT', value: 'dev'),
