@@ -264,7 +264,7 @@ fi
 if have "$KAFKA_CG"; then
   LAGGED=$("$KAFKA_CG" --bootstrap-server "$KAFKA_BOOTSTRAP" --all-groups --describe 2>/dev/null \
     | awk -v th="$LAG_THRESHOLD" 'NR>1 && $6 ~ /^[0-9]+$/ && $6+0 > th {print $1":"$6}' \
-    | grep -viE 'ibkr|replay|smoke' | sort -u | head -10)
+    | grep -viE 'ibkr|replay|smoke|bt-loc|^bt-' | sort -u | head -10)
   [ -n "$LAGGED" ] && warn "consumer lag > $LAG_THRESHOLD: $(echo "$LAGGED" | tr '\n' ' ')"
 fi
 if have "$KAFKA_GETOFF"; then
@@ -329,7 +329,13 @@ if have kubectl; then
   done
   ERROR_DIGEST=$(sort "$tmp" | uniq -c | sort -rn | head -"$TOP_N_ERRORS" \
     | sed -E 's/^ *([0-9]+) (.*)$/  x\1  \2/' | cut -c1-160)
+  # RecordTooLargeException-aware: a serialized record exceeding Kafka's 1MB
+  # default is the usual cause of DLQ growth. Surface it specifically (with the
+  # offending service) and the actionable fix, since it won't show in top-N if
+  # other errors are noisier.
+  RTL_SVCS=$(grep -i 'RecordTooLarge' "$tmp" 2>/dev/null | sed -E 's/\| .*//' | sort -u | tr '\n' ' ')
   rm -f "$tmp"
+  [ -n "$RTL_SVCS" ] && warn "RecordTooLargeException in: ${RTL_SVCS}— record > Kafka 1MB limit; raise producer max.request.size + topic max.message.bytes (mirror MissionPaceStreams). Likely the DLQ driver."
   [ -n "$ERROR_DIGEST" ] && warn "top error signatures present (see digest)"
 fi
 
