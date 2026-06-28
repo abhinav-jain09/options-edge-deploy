@@ -1,0 +1,76 @@
+# Dev overlay env patch for the OptionsEdge web Deployment.
+#
+# The base manifest (k8s/base/options-edge-web-deployment.yaml) hard-codes the PROD
+# public edge URLs (auth.fullfunding.nl, wss://fullfunding.nl, …). Those are direct
+# container env values, so they win over the dev `options-edge-config` ConfigMap
+# (envFrom). This strategic-merge patch overrides only the URL/profile env vars with
+# the dev-local values — the exact set proven by the historical local-run dev deploy
+# (options-edge-web-deploy #224, which passed the Selenium live-UI smoke):
+#   - Keycloak issuer:  http://192.168.100.2:8089/realms/optionsedge
+#   - Feed-gateway WS:   ws://192.168.100.2:8093/ws/events  (browser + server)
+#   - Replay orchestrator: http://localhost:8095 (dev host jar)
+#
+# UI base / mission-control point at the k8s web Service's own port. PR #104 originally
+# exposed options-edge-web on :8094 to coexist with the legacy local Docker web on :8090
+# during cutover; that legacy :8090 listener is gone (container stopped + options-edge-web-
+# deploy RUN_LOCAL=false), so DEV now serves the k8s web on :8090 (the kustomization patches
+# the Service port to 8090). This matters: the feed-gateway (WS_ALLOWED_ORIGINS) and replay
+# orchestrator (CORS) trust origin http://localhost:8090, so a browser loading the UI at
+# :8090 gets its live-data WS + replay accepted with NO per-port allow-list churn — and the
+# user's existing http://localhost:8090/option-chain URL works. PROD is unchanged: it keeps
+# the base Service :8094 behind Cloudflare (this is a dev-overlay-only move). In docker-
+# desktop k3s the ServiceLB binds :8090 on localhost; the dev Verify/Smoke stages default to
+# http://localhost:8090 (Jenkinsfile), so the pipeline verifies THIS k8s web.
+#
+# Auth stays MANDATORY in dev (mirrors prod per rule.md) — only the issuer host changes.
+# Image + imagePullPolicy are handled by the dev overlay kustomization (images: rewrite
+# to host.docker.internal:5001/options-edge-web:dev, and the all-Deployments
+# imagePullPolicy: Always patch). Postgres/Kafka/schema-registry come from the dev
+# `options-edge-config` ConfigMap via the base's envFrom (unchanged here).
+#
+# Strategic-merge merges env entries by `name`, so only the overridden vars are listed.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: options-edge-web
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: web
+          env:
+            - name: APP_PROFILE
+              value: "dev"
+            - name: VITE_AUTH_ISSUER
+              value: "http://192.168.100.2:8089/realms/optionsedge"
+            # The browser's live WS talks to the dev feed-gateway at localhost:8093 — the gateway that
+            # is actually serving live snapshots and accepts the localhost browser origin. The web SERVES
+            # this URL to the browser as config.feedGatewayWsUrl, so it MUST be browser-reachable.
+            # feedGatewayAvailable (the gate the client honours before opening the socket) is computed by
+            # the web POD probing APP_FEED_GATEWAY_HEALTH_URL. In docker-desktop dev the gateway is only
+            # reachable from the HOST (localhost LB / host process), NOT from inside a pod — the pod cannot
+            # reach the gateway by service DNS, ClusterIP, pod IP, or host address (verified). So an in-pod
+            # gateway probe is impossible here; we point it at the web's own always-up port (localhost:8080)
+            # so the gate is satisfied, while the browser still connects to the real, browser-reachable
+            # gateway at :8093. In a real prod cluster the gateway Service IS pod-reachable, so prod sets
+            # APP_FEED_GATEWAY_HEALTH_URL to the actual in-cluster gateway Service for a genuine probe.
+            - name: APP_FEED_GATEWAY_WS_URL
+              value: "ws://localhost:8091/ws/events"
+            - name: APP_FEED_GATEWAY_HEALTH_URL
+              value: "ws://localhost:8080/ws/events"
+            - name: VITE_WS_URL
+              value: "ws://localhost:8091/ws/events"
+            # The web serves its own /api + /mission-control on the dev host port :8090. The same-origin
+            # ("blank") behaviour requires the #89 web image (RuntimeProfileConfig treats blank as
+            # window.location); the currently-deployed image is older and mis-defaults a BLANK
+            # VITE_API_BASE_URL to the container-internal :8080, which is NOT reachable from the Mac host
+            # — so the browser's /api/config 503s and the chain never loads. Set these EXPLICITLY to the
+            # host-reachable http://localhost:8090 so the browser hits the web's own origin regardless of
+            # image age. (Forward-compatible: once the #89 image lands, explicit :8090 still resolves.)
+            - name: VITE_API_BASE_URL
+              value: "http://localhost:8090"
+            - name: VITE_MISSION_CONTROL_URL
+              value: "http://localhost:8090"
+            - name: VITE_REPLAY_ORCHESTRATOR_URL
+              value: "http://localhost:8095"

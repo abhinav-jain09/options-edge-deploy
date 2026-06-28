@@ -1,33 +1,29 @@
 @Library('oe') _
 
-// Experiment (.2 sandbox) deploy — lean, matches how the .2 box actually runs.
+// Experiment (.2 native Mac) deploy — lean, separate from the heavyweight options-edge-deploy.
 //
-// WHY THIS EXISTS (and is separate from the big options-edge-deploy job):
-// options-edge-deploy digest-pins every image by querying the registry FROM the Jenkins
-// agent. The .2 box's registry (localhost:5000) is node-local INSIDE its Lima VM and is NOT
-// reachable from the agent, so that model cannot run for experiment. Instead, the experiment
-// build jobs push mutable :dev images straight to .2's in-VM registry; this job then deploys
-// the freshly-built image to the .2 k3s.
+// WHY SEPARATE: options-edge-deploy digest-pins/preflights every image by querying the registry FROM
+// the Jenkins agent. .2's registry (host.docker.internal:5001) is node-local on .2 and NOT reachable
+// from the dev-Mac agent, so that model can't run for experiment. Instead, the experiment build jobs
+// push mutable :dev images to .2's local registry; this job just `kubectl apply -k`s the experiment
+// overlay (which references those :dev images with imagePullPolicy: Always) to .2's Docker-Desktop k8s
+// and rollout-restarts so the new images are pulled. .2 mirrors the dev Mac, so the overlay is the dev
+// overlay with the Keycloak issuer pointed at 192.168.100.2.
 //
-// IT DOES NOT bare `rollout restart`: the .2 Deployments are digest-pinned with
-// imagePullPolicy=IfNotPresent, so a restart would re-run the SAME old digest. So per service
-// we (1) resolve the CURRENT :dev digest from .2's registry API (curl localhost:5000/v2/.../
-// manifests/dev over ssh — the source of truth k3s pulls from), then (2) `kubectl set image
-// ...@<digest>` through the SSH tunnel (oeProfile('experiment').kubeconfigDeployer ->
-// 127.0.0.1:6444 -> .2 k3s), then (3) wait for the rollout to be Ready. set-image to a NEW
-// digest forces a real pull even with IfNotPresent. No built-binary copy; no agent-side registry access.
+// CONNECTIVITY: the deploy talks to .2's k8s API through an SSH tunnel (key auth — no password needed
+// for ssh/kubectl here; the .2 keychain password is only needed by the BUILD jobs for `docker push`).
+// Docker-Desktop's kube API port on .2 is DYNAMIC, so we discover it over ssh and open a fresh tunnel
+// to it on LOCAL_TUNNEL_PORT, which oeProfile('experiment').kubeconfigDeployer points at (127.0.0.1:16443).
 
 pipeline {
-  agent { label 'mac' }
+  agent { label 'hpsf-replay-mac' }   // the dev-Mac Jenkins agent (same as options-edge-deploy)
   options { timestamps(); disableConcurrentBuilds() }
   parameters {
-    string(name: 'SERVICES', defaultValue: 'volume-pace-databento-service feed-gateway-service options-edge-web',
-           description: 'Space-separated Deployment names (in the experiment namespace) to update to their latest :dev image on .2. They must already exist — this job re-images existing Deployments, it does not create them.')
-    string(name: 'REGISTRY_SSH', defaultValue: 'AMSKEL@192.168.100.2',
-           description: 'SSH target of the .2 box (user@host). Used only to resolve image digests from the in-VM registry via `curl http://localhost:5000/v2/...`. NOT a binary copy.')
-    string(name: 'IMAGE_TAG', defaultValue: 'dev',
-           description: 'Mutable tag the experiment build jobs publish (default dev). The digest behind this tag is what gets deployed.')
-    string(name: 'ROLLOUT_TIMEOUT', defaultValue: '180s', description: 'Per-Deployment `kubectl rollout status` timeout.')
+    string(name: 'SSH_TARGET', defaultValue: 'AMSKEL@192.168.100.2',
+           description: 'SSH user@host of the .2 box (key auth). Used to discover the kube API port + open the tunnel.')
+    string(name: 'LOCAL_TUNNEL_PORT', defaultValue: '16443',
+           description: 'Local port for the .2 k8s API tunnel — must match the server in oeProfile.kubeconfigDeployer.')
+    string(name: 'ROLLOUT_TIMEOUT', defaultValue: '300s', description: 'rollout status timeout for the web pod.')
   }
   environment {
     ENVIRONMENT = 'experiment'
@@ -36,41 +32,32 @@ pipeline {
     stage('Resolve profile') {
       steps {
         script {
-          def p = oeProfile('experiment')                 // single source of truth
-          env.KUBECONFIG = p.kubeconfigDeployer            // -> SSH-tunnel kubeconfig (127.0.0.1:6444)
+          def p = oeProfile('experiment')          // single source of truth
+          env.KUBECONFIG = p.kubeconfigDeployer     // server: https://127.0.0.1:16443 (the tunnel)
           env.NAMESPACE  = p.namespace
-          env.REGISTRY   = p.registry                      // localhost:5000 (node-local on .2)
-          echo "experiment deploy: ns=${env.NAMESPACE} registry=${env.REGISTRY} kubeconfig=${env.KUBECONFIG}"
+          echo "experiment deploy: ns=${env.NAMESPACE} kubeconfig=${env.KUBECONFIG}"
         }
       }
     }
 
-    stage('Preflight') {
+    stage('Open .2 k8s tunnel') {
       steps {
         sh '''
           set -eu
-          # Validate inputs (fail closed — these feed ssh/kubectl).
-          case "$REGISTRY_SSH" in -*|*[!a-zA-Z0-9._@:-]*|'') echo "invalid REGISTRY_SSH: '$REGISTRY_SSH'" >&2; exit 1 ;; esac
-          case "$IMAGE_TAG"    in *[!a-zA-Z0-9._-]*|'')   echo "invalid IMAGE_TAG: '$IMAGE_TAG'"       >&2; exit 1 ;; esac
-          [ -n "$(printf '%s' "$SERVICES" | tr -d '[:space:]')" ] || { echo "SERVICES is empty — nothing to deploy." >&2; exit 1; }
-          for svc in $SERVICES; do
-            # reject empty, leading '-' (kubectl option confusion), and non-DNS-name chars
-            case "$svc" in -*|*[!a-z0-9.-]*|'') echo "invalid service name: '$svc'" >&2; exit 1 ;; esac
-          done
-
-          # 1) The .2 k3s must be reachable through the SSH tunnel.
-          if ! kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" get nodes >/dev/null 2>&1; then
-            echo "FATAL: cannot reach the .2 k3s API via $KUBECONFIG." >&2
-            echo "Is the SSH tunnel up? (launchd com.optionsedge.experiment-k3s-tunnel -> 127.0.0.1:6444 -> .2)" >&2
-            exit 1
-          fi
-          # 2) We must be able to resolve digests from .2's in-VM registry (reachable on the .2 host).
-          if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$REGISTRY_SSH" "curl -fsS -o /dev/null http://localhost:5000/v2/"; then
-            echo "FATAL: cannot reach the .2 in-VM registry (http://localhost:5000/v2/) via ssh $REGISTRY_SSH." >&2
-            exit 1
-          fi
-          echo "Preflight OK — .2 k3s reachable and .2 registry responsive."
-          kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" get nodes
+          case "$SSH_TARGET"        in -*|*[!a-zA-Z0-9._@-]*|'') echo "invalid SSH_TARGET: '$SSH_TARGET'" >&2; exit 1 ;; esac
+          case "$LOCAL_TUNNEL_PORT" in ''|*[!0-9]*)              echo "invalid LOCAL_TUNNEL_PORT: '$LOCAL_TUNNEL_PORT'" >&2; exit 1 ;; esac
+          DOCKER_KUBECTL=/Applications/Docker.app/Contents/Resources/bin/kubectl
+          # Docker-Desktop's kube API port on .2 is dynamic — discover the current one over ssh.
+          api="$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_TARGET" "$DOCKER_KUBECTL config view --minify -o jsonpath='{.clusters[0].cluster.server}'")"
+          port="${api##*:}"
+          case "$port" in ''|*[!0-9]*) echo "FATAL: could not parse .2 kube API port from '$api'" >&2; exit 1 ;; esac
+          echo "discovered .2 kube API at $api -> tunneling 127.0.0.1:$LOCAL_TUNNEL_PORT"
+          # Replace any stale tunnel on this local port, then open a fresh background one.
+          pkill -f "ssh.*-L 127.0.0.1:$LOCAL_TUNNEL_PORT:127.0.0.1:" 2>/dev/null || true
+          ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -f -N \
+            -L "127.0.0.1:$LOCAL_TUNNEL_PORT:127.0.0.1:$port" "$SSH_TARGET"
+          for i in 1 2 3 4 5 6 7 8; do nc -z 127.0.0.1 "$LOCAL_TUNNEL_PORT" 2>/dev/null && break; sleep 1; done
+          kubectl --kubeconfig "$KUBECONFIG" get nodes
         '''
       }
     }
@@ -79,50 +66,23 @@ pipeline {
       steps {
         sh '''
           set -eu
-          for svc in $SERVICES; do
-            if ! kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" get deploy "$svc" >/dev/null 2>&1; then
-              echo "FATAL: Deployment '$svc' not found in namespace '$NAMESPACE' (this job re-images existing Deployments only)." >&2
-              exit 1
-            fi
-            # For every container whose image is in the experiment registry, deploy the freshly-built digest.
-            # Read into a var first (NOT `... | while`): a pipe runs the loop in a subshell where `exit 1`
-            # would not fail the build. The heredoc keeps the loop in this shell so FATALs abort the deploy.
-            containers="$(kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" get deploy "$svc" \
-              -o jsonpath='{range .spec.template.spec.containers[*]}{.name}={.image}{"\\n"}{end}')"
-            while IFS='=' read -r cname cimage; do
-              [ -n "$cname" ] || continue
-              case "$cimage" in
-                "$REGISTRY"/*) : ;;                 # ours — re-image it
-                *) echo "  $svc/$cname: $cimage (not in $REGISTRY) — leaving unchanged"; continue ;;
-              esac
-              # repo = strip registry prefix + any @digest / :tag, then validate before it reaches ssh.
-              repo="${cimage#$REGISTRY/}"; repo="${repo%@*}"; repo="${repo%:*}"
-              case "$repo" in ''|*[!a-zA-Z0-9._/-]*) echo "FATAL: unexpected repo '$repo' from image '$cimage'" >&2; exit 1 ;; esac
-              # Resolve the digest behind :$IMAGE_TAG from .2's REGISTRY (the source of truth k3s pulls),
-              # not local daemon metadata. The registry is reachable on the .2 host at localhost:5000.
-              digest="$(ssh -o BatchMode=yes "$REGISTRY_SSH" \
-                "curl -fsS -D - -o /dev/null -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' -H 'Accept: application/vnd.oci.image.index.v1+json' -H 'Accept: application/vnd.oci.image.manifest.v1+json' http://localhost:5000/v2/$repo/manifests/$IMAGE_TAG" 2>/dev/null \
-                | tr -d '\\r' | grep -i '^docker-content-digest:' | awk '{print $2}')"
-              case "$digest" in
-                sha256:*) : ;;
-                *) echo "FATAL: could not resolve $REGISTRY/$repo:$IMAGE_TAG digest from the .2 registry (got '$digest'). Did the build job push it?" >&2; exit 1 ;;
-              esac
-              pinned="$REGISTRY/$repo@$digest"
-              echo "  $svc/$cname -> $pinned"
-              kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" set image "deploy/$svc" "$cname=$pinned"
-            done <<EOF
-$containers
-EOF
-          done
-
-          echo "--- waiting for rollouts ---"
-          for svc in $SERVICES; do
-            kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" rollout status "deploy/$svc" --timeout="$ROLLOUT_TIMEOUT"
-          done
-          echo "Experiment deploy complete:"
-          kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" get deploy $SERVICES
+          # Apply the full experiment overlay (creates ns + all ~26 services from the :dev images the
+          # build jobs pushed to .2's local registry). rollout restart forces a re-pull of :dev on redeploys
+          # (imagePullPolicy: Always); on a first apply the pods pull :dev immediately and the restart is a no-op.
+          kubectl --kubeconfig "$KUBECONFIG" apply -k k8s/overlays/experiment
+          kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" rollout restart deploy
+          echo "--- waiting for the web pod (the Option Chain page) ---"
+          kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" rollout status deploy/options-edge-web --timeout="$ROLLOUT_TIMEOUT"
+          echo "Experiment deploy applied to .2."
+          kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" get deploy
         '''
       }
+    }
+  }
+
+  post {
+    always {
+      sh 'pkill -f "ssh.*-L 127.0.0.1:${LOCAL_TUNNEL_PORT:-16443}:127.0.0.1:" 2>/dev/null || true'
     }
   }
 }

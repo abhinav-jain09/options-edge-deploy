@@ -1,0 +1,132 @@
+resources:
+  - ../../base
+patches:
+  - path: configmap-dev-local-patch.yaml
+  - path: web-dev-env-patch.yaml
+  # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
+  # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
+  - path: feed-gateway-dev-env-patch.yaml
+  # DEV-ONLY: point the integration-test smoke-auth token grant at the dev Keycloak issuer
+  # (must match the issuer the dev web/gateway validate, else the token's iss claim is rejected).
+  - path: integration-test-dev-env-patch.yaml
+  # The base web Deployment pins itself to the prod control-plane node
+  # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
+  # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,
+  # whose node is labelled node-role.kubernetes.io/control-plane="" (empty, not
+  # "true"), so that selector leaves the web pod unschedulable (Pending). Remove
+  # the selector for dev — there is only one node to schedule on anyway.
+  - target:
+      kind: Deployment
+      name: options-edge-web
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/nodeSelector
+  # Same removal for ibkr-feed: it pins to the control-plane node in prod (co-located
+  # with IB Gateway), but docker-desktop's node is labelled control-plane="" (empty),
+  # so the selector would leave it Pending in dev. There is one node to schedule on.
+  - target:
+      kind: Deployment
+      name: ibkr-feed-service
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/nodeSelector
+  # DEV-ONLY: serve the k8s web on :8090 (not the base :8094). The legacy host web that
+  # owned :8090 is retired, so :8090 is free; and the feed-gateway WS_ALLOWED_ORIGINS
+  # already trusts http://localhost:8090, so the browser's live WS is accepted with no
+  # per-port allow-list churn, and the existing http://localhost:8090/option-chain URL
+  # works. Prod keeps the base Service :8094.
+  - target:
+      kind: Service
+      name: options-edge-web
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8090
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+  # DEV-ONLY spx-mission-control auth: base points at the prod Keycloak
+  # (https://auth.fullfunding.nl/realms/optionsedge) which dev cannot reach.
+  # Override the issuer + JWKS URIs to the local Mac Keycloak (192.168.100.2:8089)
+  # so the mandatory MissionAuthSettings.validate() check is satisfied AND the JWKS
+  # is actually fetchable at startup. Audience inherits from base ("options-edge-web").
+  - path: spx-mission-control-dev-env-patch.yaml
+images:
+  - name: 192.168.100.252:5000/options-edge-raw-to-display
+    newName: host.docker.internal:5001/options-edge-raw-to-display
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-volume-aggregator
+    newName: host.docker.internal:5001/options-edge-databento-volume-aggregator
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-feed
+    newName: host.docker.internal:5001/options-edge-databento-feed
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-gex
+    newName: host.docker.internal:5001/options-edge-databento-gex
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-maxpain
+    newName: host.docker.internal:5001/options-edge-databento-maxpain
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-mission-pace
+    newName: host.docker.internal:5001/options-edge-databento-mission-pace
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-mission-pressure
+    newName: host.docker.internal:5001/options-edge-databento-mission-pressure
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-mission-sandwich
+    newName: host.docker.internal:5001/options-edge-databento-mission-sandwich
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-volume-pace
+    newName: host.docker.internal:5001/options-edge-volume-pace
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-directional-pressure
+    newName: host.docker.internal:5001/options-edge-directional-pressure
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-volume-sandwich
+    newName: host.docker.internal:5001/options-edge-volume-sandwich
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-unusual-whales-gex
+    newName: host.docker.internal:5001/options-edge-unusual-whales-gex
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-unusual-whales-gex-history
+    newName: host.docker.internal:5001/options-edge-unusual-whales-gex-history
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-databento-gex-history
+    newName: host.docker.internal:5001/options-edge-databento-gex-history
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-raw-postgres-writer
+    newName: host.docker.internal:5001/options-edge-raw-postgres-writer
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-pin-postgres-writer
+    newName: host.docker.internal:5001/options-edge-pin-postgres-writer
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-pressure-postgres-writer
+    newName: host.docker.internal:5001/options-edge-pressure-postgres-writer
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-feed-gateway
+    newName: host.docker.internal:5001/options-edge-feed-gateway
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-integration-test
+    newName: host.docker.internal:5001/options-edge-integration-test
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-hpsf-processing
+    newName: host.docker.internal:5001/options-edge-hpsf-processing
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-hpsf-postgres-writer
+    newName: host.docker.internal:5001/options-edge-hpsf-postgres-writer
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-spx-mission-control
+    newName: host.docker.internal:5001/options-edge-spx-mission-control
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-strike-flow-classifier
+    newName: host.docker.internal:5001/options-edge-strike-flow-classifier
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-ibkr-feed
+    newName: host.docker.internal:5001/options-edge-ibkr-feed
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-web
+    newName: host.docker.internal:5001/options-edge-web
+    newTag: dev

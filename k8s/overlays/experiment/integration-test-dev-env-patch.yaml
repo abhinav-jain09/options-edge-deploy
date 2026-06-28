@@ -1,0 +1,25 @@
+# DEV-ONLY integration-test smoke-auth issuer. The base deployment hardcodes the
+# PROD Keycloak issuer (https://auth.fullfunding.nl/realms/optionsedge) as direct
+# container env. On dev the cluster cannot reach the prod issuer, and — more to the
+# point — the token's `iss` claim must EXACTLY match the issuer the web/gateway
+# validate (the dev Mac Keycloak on 192.168.100.2:8089), or a perfectly valid
+# grant still gets rejected. This overrides SMOKE_AUTH_ISSUER_URI to the dev issuer,
+# mirroring the web/feed-gateway/spx-mission-control dev-env-patch pattern. The other
+# SMOKE_AUTH_* vars (enabled/client/username) and SMOKE_AUTH_PASSWORD (from the
+# options-edge-runtime-secrets secret) inherit from base.
+#
+# Prod overlay is untouched — it keeps the base prod issuer.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: options-edge-integration-test
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: integration-test
+          # env merges by name: override only the issuer.
+          env:
+            - name: SMOKE_AUTH_ISSUER_URI
+              value: "http://192.168.100.2:8089/realms/optionsedge"
