@@ -36,11 +36,11 @@ data:
   POSTGRES_USER: options_flow
   POSTGRES_PASSWORD: Options#100
   APP_FEED_GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
-  # WEB_BASE_URL: the k8s web LoadBalancer Service on the dev cluster, bound on the Mac
-  # agent's localhost by docker-desktop's ServiceLB. The dev web Service is patched to
-  # :8090 (the legacy local Docker container that owned :8090 has been removed), the origin
-  # the feed-gateway/orchestrator already trust — see web-dev-env-patch.yaml.
-  WEB_BASE_URL: http://localhost:8090
+  # WEB_BASE_URL: the browser-facing base URL of the .2 web. EXPERIMENT uses the .2 LAN IP
+  # with the UNIQUE web port 18090 (docker-desktop binds the web LoadBalancer on all .2
+  # interfaces), so it stays distinct from the dev http://localhost:8090 and matches the
+  # web origin the feed-gateway trusts — see web-dev-env-patch.yaml + kustomization.yaml.
+  WEB_BASE_URL: http://192.168.100.2:18090
   GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
   CHECK_MARKET_DATA_SOURCES: DATABENTO
 ---
