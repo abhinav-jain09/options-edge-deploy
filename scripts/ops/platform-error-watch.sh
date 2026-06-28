@@ -16,6 +16,13 @@
 # never mutates the cluster.
 set -uo pipefail
 
+# Requires bash 4+ (associative arrays for the dedup state). macOS's /bin/bash is
+# 3.2 — invoke with a modern bash (e.g. /opt/homebrew/bin/bash), not /bin/bash.
+if [ "${BASH_VERSINFO:-0}" -lt 4 ]; then
+  echo "FATAL: platform-error-watch needs bash >= 4 (found ${BASH_VERSION:-unknown}); run via /opt/homebrew/bin/bash" >&2
+  exit 1
+fi
+
 # ---- config (override via env) ----
 NS="${K8S_NAMESPACE:-options-edge}"
 INTERVAL="${INTERVAL:-300}"                 # poll period seconds (5 min)
