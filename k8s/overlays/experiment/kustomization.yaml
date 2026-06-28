@@ -4,7 +4,7 @@ patches:
   - path: configmap-dev-local-patch.yaml
   - path: web-dev-env-patch.yaml
   # EXPERIMENT: give the k8s feed-gateway the .2 WS auth/origins/replay config, so the browser's live
-  # WS (ws://192.168.100.2:8091) is accepted from the web origin http://192.168.100.2:18090.
+  # WS (ws://localhost:18091, tunnel -> .2:8091) is accepted from the web origin http://localhost:18090.
   - path: feed-gateway-dev-env-patch.yaml
   # EXPERIMENT-ONLY: drop the ibkr-feed and integration-test workloads. The experiment build job
   # (Jenkinsfile.experiment-build) deliberately does NOT build :dev images for them — .2 runs the
@@ -52,12 +52,11 @@ patches:
         path: /spec/template/spec/nodeSelector
   # (the prior ibkr-feed-service nodeSelector-removal patch was here; obsolete now that the
   # Deployment is excluded above — kustomize errors if a patch targets a deleted resource.)
-  # EXPERIMENT-ONLY: serve the k8s web on the UNIQUE port :18090 (not dev :8090, not base
-  # :8094), so the .2 web origin http://192.168.100.2:18090 never collides with the local
-  # dev web on http://localhost:8090 when both run on the same dev Mac. docker-desktop's
-  # LoadBalancer binds :18090 on all .2 interfaces (LAN-reachable). The feed-gateway
-  # WS_ALLOWED_ORIGINS is set to http://192.168.100.2:18090 to match this origin. Prod
-  # keeps the base Service :8094.
+  # EXPERIMENT-ONLY: serve the k8s web on the UNIQUE port :18090 (not dev :8090, not base :8094). The
+  # browser reaches it at http://localhost:18090 via an SSH tunnel (localhost -> .2:18090) — localhost is
+  # required for the OIDC/PKCE secure context (crypto.subtle), and :18090 keeps it distinct from the dev
+  # http://localhost:8090 on the same Mac. docker-desktop's LoadBalancer binds :18090 on .2. The
+  # feed-gateway WS_ALLOWED_ORIGINS matches that origin (http://localhost:18090). Prod keeps base :8094.
   - target:
       kind: Service
       name: options-edge-web
