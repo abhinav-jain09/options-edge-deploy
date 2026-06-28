@@ -36,11 +36,11 @@ data:
   POSTGRES_USER: options_flow
   POSTGRES_PASSWORD: Options#100
   APP_FEED_GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
-  # WEB_BASE_URL: the browser-facing base URL of the .2 web. EXPERIMENT uses the .2 LAN IP
-  # with the UNIQUE web port 18090 (docker-desktop binds the web LoadBalancer on all .2
-  # interfaces), so it stays distinct from the dev http://localhost:8090 and matches the
-  # web origin the feed-gateway trusts — see web-dev-env-patch.yaml + kustomization.yaml.
-  WEB_BASE_URL: http://192.168.100.2:18090
+  # WEB_BASE_URL: the browser-facing base URL of the .2 web. EXPERIMENT serves the SPA at
+  # http://localhost:18090 (localhost for OIDC/PKCE secure context; UNIQUE port 18090 so it
+  # never collides with the dev http://localhost:8090) via an SSH tunnel to .2:18090. Matches
+  # the web origin the feed-gateway trusts — see web-dev-env-patch.yaml + kustomization.yaml.
+  WEB_BASE_URL: http://localhost:18090
   GATEWAY_WS_URL: ws://feed-gateway-service:8091/ws/events
   CHECK_MARKET_DATA_SOURCES: DATABENTO
 ---

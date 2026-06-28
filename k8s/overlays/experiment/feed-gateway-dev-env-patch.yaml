@@ -2,8 +2,8 @@
 # :18091, exposed via its LoadBalancer Service :8091) is the single gateway on .2 and Jenkins owns it.
 # The base manifest hardcodes PROD WS auth/origins (https://fullfunding.nl, auth.fullfunding.nl) as
 # direct container env, which override the configmap; this patch overrides them to the experiment values
-# so a http://192.168.100.2:18090 browser with a .2-Keycloak token is accepted (WS_ALLOWED_ORIGINS must
-# equal that web origin). Prod overlay is untouched (keeps the base prod values).
+# so a http://localhost:18090 browser (the SPA origin via the SSH tunnel) with a .2-Keycloak token is
+# accepted (WS_ALLOWED_ORIGINS must equal that web origin). Prod overlay is untouched (keeps base values).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,10 +20,11 @@ spec:
         - name: feed-gateway
           # env merges by name: these override the base prod WS values and add the dev GATEWAY_* keys.
           env:
-            # EXPERIMENT: must match the web origin (web is served at http://192.168.100.2:18090),
-            # else the browser's live-data WS handshake from that origin is rejected.
+            # EXPERIMENT: must match the web browser origin (the SPA is served at http://localhost:18090
+            # via the SSH tunnel — localhost for OIDC/PKCE secure context), else the browser's live-data
+            # WS handshake from that origin is rejected.
             - name: WS_ALLOWED_ORIGINS
-              value: "http://192.168.100.2:18090"
+              value: "http://localhost:18090"
             - name: WS_AUTH_ISSUER_URI
               value: "http://192.168.100.2:8089/realms/optionsedge"
             - name: GATEWAY_KEYCLOAK_ISSUER
