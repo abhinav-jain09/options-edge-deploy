@@ -31,6 +31,7 @@ pipeline {
     FEED_REPO = 'git@github.com:abhinav-jain09/options-edge-databento-feed.git'
     JAVA_HOME_REMOTE = '/Users/rajuljain/kafka-options-edge/jdk/jdk-21.0.11+10/Contents/Home'
     DOCKER_BIN = '/Applications/Docker.app/Contents/Resources/bin'
+    MAVEN_BIN = '/Users/rajuljain/oe-native/apache-maven-3.9.9/bin'
   }
   stages {
     stage('Validate') {
@@ -89,9 +90,9 @@ pipeline {
             # the reactors, then docker build/push every image to the .2 registry.
             ssh -o BatchMode=yes "$SSH_TARGET" \
               "REMOTE_ROOT='$REMOTE_ROOT' PUSH_REGISTRY='$PUSH_REGISTRY' SKIP_FEED='$SKIP_FEED' \
-               JAVA_HOME='$JAVA_HOME_REMOTE' DOCKER_BIN='$DOCKER_BIN' bash -s" <<'REMOTE'
+               JAVA_HOME='$JAVA_HOME_REMOTE' DOCKER_BIN='$DOCKER_BIN' MAVEN_BIN='$MAVEN_BIN' bash -s" <<'REMOTE'
 set -euo pipefail
-export PATH="$DOCKER_BIN:$JAVA_HOME/bin:$PATH"
+export PATH="$DOCKER_BIN:$JAVA_HOME/bin:$MAVEN_BIN:$PATH"
 export JAVA_HOME
 # Empty docker config (no credsStore) → push to the insecure localhost:5001 skips the osxkeychain
 # cred helper entirely, so no GUI-keychain unlock (and no password) is needed in this SSH session.
@@ -99,10 +100,10 @@ export DOCKER_CONFIG="$REMOTE_ROOT/.docker-noauth"
 mkdir -p "$DOCKER_CONFIG"; printf '{}' > "$DOCKER_CONFIG/config.json"
 echo "java: $(java -version 2>&1 | head -1)"; echo "docker: $(docker version --format '{{.Server.Version}}')"
 
-cd "$REMOTE_ROOT/options-edge-contracts" && ./mvnw -q -B -ntp -DskipTests install
-cd "$REMOTE_ROOT/options-edge-processing" && ./mvnw -q -B -ntp -DskipTests -pl '!hpsf-replay-orchestrator-service' package
-cd "$REMOTE_ROOT/options-edge"            && ./mvnw -q -B -ntp -DskipTests package
-cd "$REMOTE_ROOT/feed-gateway"            && ./mvnw -q -B -ntp -DskipTests package
+cd "$REMOTE_ROOT/options-edge-contracts" && mvn -q -B -ntp -DskipTests install
+cd "$REMOTE_ROOT/options-edge-processing" && mvn -q -B -ntp -DskipTests -pl '!hpsf-replay-orchestrator-service' package
+cd "$REMOTE_ROOT/options-edge"            && mvn -q -B -ntp -DskipTests package
+cd "$REMOTE_ROOT/feed-gateway"            && mvn -q -B -ntp -DskipTests package
 
 bp() {  # build+push: <image> <dockerfile> <context-dir> (relative to repo root) <repo-dir>
   img="$1"; df="$2"; ctx="$3"; repo="$4"
