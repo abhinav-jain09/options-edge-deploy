@@ -142,6 +142,17 @@ pipeline {
           # build jobs pushed to .2's local registry). rollout restart forces a re-pull of :dev on redeploys
           # (imagePullPolicy: Always); on a first apply the pods pull :dev immediately and the restart is a no-op.
           kubectl --kubeconfig "$KUBECONFIG" apply -k k8s/overlays/experiment
+          # Reconcile resources REMOVED from the overlay over time. `kubectl apply -k` only creates/updates;
+          # it does NOT delete resources that USED to be in the overlay and were later excluded. Without
+          # this step their Deployments would still be in the cluster, `rollout restart deploy` below would
+          # restart them, and their pods would sit in ImagePullBackOff forever because the build job no
+          # longer builds their image. ibkr-feed-service (no IBKR on .2) and options-edge-integration-test
+          # (no synthetic tester on .2) are excluded by the experiment overlay; reconcile-delete them
+          # idempotently here (--ignore-not-found, so this is a no-op once the cluster is clean). Add to
+          # this list when removing a workload from the experiment overlay.
+          kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" delete --ignore-not-found=true \
+            deployment/ibkr-feed-service deployment/options-edge-integration-test \
+            service/ibkr-feed-service service/options-edge-integration-test
           kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" rollout restart deploy
           echo "--- waiting for the web pod (the Option Chain page) ---"
           kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" rollout status deploy/options-edge-web --timeout="$ROLLOUT_TIMEOUT"
