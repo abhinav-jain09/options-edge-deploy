@@ -35,9 +35,12 @@ discord() {
   [ -n "$DISCORD_WEBHOOK_URL" ] || return 0
   command -v curl >/dev/null 2>&1 || return 0
   local msg="$1"
-  curl -fsS --max-time 10 -H 'Content-Type: application/json' \
-    -d "{\"username\":\"OptionsEdge Ops\",\"content\":\"${msg}\"}" \
-    "$DISCORD_WEBHOOK_URL" >/dev/null 2>&1 || log "WARN: Discord post failed"
+  # Pass the webhook URL via stdin config (-K -), NOT argv, so the secret is not
+  # exposed in process listings (ps/argv).
+  printf 'url = "%s"\n' "$DISCORD_WEBHOOK_URL" \
+    | curl -fsS --max-time 10 -K - -H 'Content-Type: application/json' \
+        -d "{\"username\":\"OptionsEdge Ops\",\"content\":\"${msg}\"}" \
+        >/dev/null 2>&1 || log "WARN: Discord post failed"
 }
 
 # disposable = ends in -changelog/-repartition, OR contains replay/smoke, OR starts with dev.

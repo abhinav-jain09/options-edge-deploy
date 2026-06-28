@@ -245,9 +245,11 @@ spec:
                   if [ -n "${DISCORD_WEBHOOK_URL:-}" ] && command -v curl >/dev/null 2>&1; then
                     if [ "$FAILED" -eq 0 ]; then EMO="🧹"; else EMO="⚠️"; fi
                     MSG="$EMO Kafka changelog cleanup — trimmed ${TRIMMED}, skipped ${SKIPPED}, failed ${FAILED} (of ${N} candidates)"
-                    curl -fsS --max-time 10 -H 'Content-Type: application/json' \
-                      -d "{\"username\":\"OptionsEdge Ops\",\"content\":\"${MSG}\"}" \
-                      "$DISCORD_WEBHOOK_URL" >/dev/null 2>&1 \
+                    # URL via stdin config (-K -), not argv, to keep the secret out of process listings.
+                    printf 'url = "%s"\n' "$DISCORD_WEBHOOK_URL" \
+                      | curl -fsS --max-time 10 -K - -H 'Content-Type: application/json' \
+                          -d "{\"username\":\"OptionsEdge Ops\",\"content\":\"${MSG}\"}" \
+                          >/dev/null 2>&1 \
                       || echo "[cleanup] WARN: Discord post failed" >&2
                   fi
 
