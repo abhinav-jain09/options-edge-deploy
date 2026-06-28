@@ -3,8 +3,8 @@ resources:
 patches:
   - path: configmap-dev-local-patch.yaml
   - path: web-dev-env-patch.yaml
-  # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
-  # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
+  # EXPERIMENT: give the k8s feed-gateway the .2 WS auth/origins/replay config, so the browser's live
+  # WS (ws://192.168.100.2:8091) is accepted from the web origin http://192.168.100.2:18090.
   - path: feed-gateway-dev-env-patch.yaml
   # EXPERIMENT-ONLY: drop the ibkr-feed and integration-test workloads. The experiment build job
   # (Jenkinsfile.experiment-build) deliberately does NOT build :dev images for them — .2 runs the
@@ -52,18 +52,19 @@ patches:
         path: /spec/template/spec/nodeSelector
   # (the prior ibkr-feed-service nodeSelector-removal patch was here; obsolete now that the
   # Deployment is excluded above — kustomize errors if a patch targets a deleted resource.)
-  # DEV-ONLY: serve the k8s web on :8090 (not the base :8094). The legacy host web that
-  # owned :8090 is retired, so :8090 is free; and the feed-gateway WS_ALLOWED_ORIGINS
-  # already trusts http://localhost:8090, so the browser's live WS is accepted with no
-  # per-port allow-list churn, and the existing http://localhost:8090/option-chain URL
-  # works. Prod keeps the base Service :8094.
+  # EXPERIMENT-ONLY: serve the k8s web on the UNIQUE port :18090 (not dev :8090, not base
+  # :8094), so the .2 web origin http://192.168.100.2:18090 never collides with the local
+  # dev web on http://localhost:8090 when both run on the same dev Mac. docker-desktop's
+  # LoadBalancer binds :18090 on all .2 interfaces (LAN-reachable). The feed-gateway
+  # WS_ALLOWED_ORIGINS is set to http://192.168.100.2:18090 to match this origin. Prod
+  # keeps the base Service :8094.
   - target:
       kind: Service
       name: options-edge-web
     patch: |-
       - op: replace
         path: /spec/ports/0/port
-        value: 8090
+        value: 18090
   - target:
       kind: Deployment
     patch: |-
