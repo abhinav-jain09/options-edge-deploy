@@ -92,6 +92,16 @@ spec:
                       key: KAFKA_BOOTSTRAP_SERVERS
                 - name: RETENTION_MS
                   value: "86400000"     # 24h — matches KAFKA_CHANGELOG_RETENTION_MS
+                # Discord notification target (optional). Create with:
+                #   kubectl -n options-edge create secret generic options-edge-discord \
+                #     --from-literal=webhook-url='https://discord.com/api/webhooks/...'
+                # optional:true keeps the Job runnable before the secret exists.
+                - name: DISCORD_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: options-edge-discord
+                      key: webhook-url
+                      optional: true
               resources:
                 requests:
                   cpu: 100m
@@ -230,4 +240,15 @@ spec:
 
                   printf '[cleanup] summary: trimmed=%s skipped=%s failed=%s of %s candidates\n' \
                     "$TRIMMED" "$SKIPPED" "$FAILED" "$N"
+
+                  # Optional Discord notification (no-op if the secret/webhook or curl is absent).
+                  if [ -n "${DISCORD_WEBHOOK_URL:-}" ] && command -v curl >/dev/null 2>&1; then
+                    if [ "$FAILED" -eq 0 ]; then EMO="🧹"; else EMO="⚠️"; fi
+                    MSG="$EMO Kafka changelog cleanup — trimmed ${TRIMMED}, skipped ${SKIPPED}, failed ${FAILED} (of ${N} candidates)"
+                    curl -fsS --max-time 10 -H 'Content-Type: application/json' \
+                      -d "{\"username\":\"OptionsEdge Ops\",\"content\":\"${MSG}\"}" \
+                      "$DISCORD_WEBHOOK_URL" >/dev/null 2>&1 \
+                      || echo "[cleanup] WARN: Discord post failed" >&2
+                  fi
+
                   [ "$FAILED" -eq 0 ]
