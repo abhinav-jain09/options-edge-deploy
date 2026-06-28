@@ -1,0 +1,72 @@
+// Pre-market DESTRUCTIVE clean-slate reset (P3) — T-4h before the open.
+//
+// Wipes every non-system Kafka topic + truncates the intraday Postgres
+// allow-list (NOT pin_session_close) + rolls today's expiry, on the prod host
+// over SSH. Same Jenkins->SSH pattern as Jenkinsfile.kafka-reset (native k8s
+// CronJob firing is blocked by the jenkins-only admission policy).
+//
+// SAFE BY DEFAULT: scheduled runs are DRY_RUN=true AND RESET_ENABLED=false, so
+// they only log what they would do. BOTH must be flipped (uncheck DRY_RUN AND
+// check RESET_ENABLED) to actually mutate — and even then the script's identity
+// guards (env + Kafka cluster-id + DB name + trading-date) must all pass.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    booleanParam(name: 'DRY_RUN', defaultValue: true,
+      description: 'Dry-run: log what would be reset without changing anything. Uncheck to mutate (also requires RESET_ENABLED).')
+    booleanParam(name: 'RESET_ENABLED', defaultValue: false,
+      description: 'Second safety latch. Must be checked AND DRY_RUN unchecked for any destructive action.')
+    string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
+      description: 'SSH target where the reset runs locally (Kafka + k3s + Postgres are local there).')
+  }
+  triggers {
+    // 05:30 America/New_York, Mon-Fri = open(09:30) minus 4h. Scheduled runs use
+    // default params (DRY_RUN=true, RESET_ENABLED=false) -> log-only until an
+    // operator deliberately runs it live.
+    cron('''TZ=America/New_York
+30 5 * * 1-5''')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 25, unit: 'MINUTES')
+  }
+  environment {
+    PROD_HOST     = "${params.PROD_HOST}"
+    DRY_RUN       = "${params.DRY_RUN}"
+    RESET_ENABLED = "${params.RESET_ENABLED}"
+  }
+  stages {
+    stage('Run pre-market reset on prod') {
+      steps {
+        withCredentials([
+          string(credentialsId: 'premarket-discord-webhook',   variable: 'DISCORD_WEBHOOK_URL'),
+          string(credentialsId: 'premarket-reset-pg-dsn',       variable: 'PG_DSN'),
+          string(credentialsId: 'premarket-kafka-cluster-id',   variable: 'EXPECTED_KAFKA_CLUSTER_ID'),
+        ]) {
+          sh '''
+            set -euo pipefail
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${PROD_HOST}" 'mkdir -p ~/premarket/jenkins ~/premarket/ops'
+            scp -o BatchMode=yes scripts/ops/premarket-reset.sh           "${PROD_HOST}:/home/abhinav/premarket/ops/premarket-reset.sh"
+            scp -o BatchMode=yes scripts/ops/premarket-expiry-rollover.sh "${PROD_HOST}:/home/abhinav/premarket/ops/premarket-expiry-rollover.sh"
+            scp -o BatchMode=yes scripts/jenkins/market_calendar.py       "${PROD_HOST}:/home/abhinav/premarket/jenkins/market_calendar.py"
+            echo "Running premarket-reset on ${PROD_HOST} (DRY_RUN=${DRY_RUN} RESET_ENABLED=${RESET_ENABLED})"
+            ssh -o BatchMode=yes "${PROD_HOST}" \
+              "chmod +x ~/premarket/ops/premarket-reset.sh ~/premarket/ops/premarket-expiry-rollover.sh && \
+               CALENDAR_DIR=~/premarket/jenkins \
+               DRY_RUN='${DRY_RUN}' RESET_ENABLED='${RESET_ENABLED}' EXPECTED_ENV='prod' \
+               DISCORD_WEBHOOK_URL='${DISCORD_WEBHOOK_URL:-}' \
+               PG_DSN='${PG_DSN:-}' \
+               EXPECTED_DB='options_flow' EXPECTED_DB_HOST='192.168.100.252' \
+               EXPECTED_KAFKA_CLUSTER_ID='${EXPECTED_KAFKA_CLUSTER_ID:-}' \
+               ~/premarket/ops/premarket-reset.sh"
+          '''
+        }
+      }
+    }
+  }
+  post {
+    failure {
+      echo 'Pre-market reset failed or aborted by a guard. If this was a live run, verify prod: kubectl -n options-edge get deploy'
+    }
+  }
+}
