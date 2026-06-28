@@ -25,10 +25,23 @@ NS="${K8S_NAMESPACE:-options-edge}"
 SELECTOR="${APP_SELECTOR:-app.kubernetes.io/part-of=options-edge}"
 DRY_RUN="${DRY_RUN:-true}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-180}"
+DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"   # empty -> no Discord post
 KT="$KAFKA_BIN/kafka-topics.sh"
 
 ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
 log() { echo "[$(ts)] $*"; }
+# Post a one-line summary to Discord (no-op if no webhook / no curl).
+discord() {
+  [ -n "$DISCORD_WEBHOOK_URL" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local msg="$1"
+  # Pass the webhook URL via stdin config (-K -), NOT argv, so the secret is not
+  # exposed in process listings (ps/argv).
+  printf 'url = "%s"\n' "$DISCORD_WEBHOOK_URL" \
+    | curl -fsS --max-time 10 -K - -H 'Content-Type: application/json' \
+        -d "{\"username\":\"OptionsEdge Ops\",\"content\":\"${msg}\"}" \
+        >/dev/null 2>&1 || log "WARN: Discord post failed"
+}
 
 # disposable = ends in -changelog/-repartition, OR contains replay/smoke, OR starts with dev.
 # system topics (__*, _schemas) and real data topics (options.*, underlying.*) are always kept.
@@ -67,6 +80,7 @@ if [ "$DRY_RUN" = "true" ]; then
   log "DRY-RUN: would delete $DELELIGIBLE topics, then rolling-restart apps ($SELECTOR):"
   while read -r t; do is_disposable "$t" && echo "    DEL $t"; done </tmp/dkr-topics.txt | head -40
   log "(showing up to 40; total $DELELIGIBLE). No changes made."
+  discord "🧪 Kafka daily-reset DRY-RUN — would delete ${DELELIGIBLE} disposable topics (of ${TOTAL}); no changes made."
   exit 0
 fi
 
@@ -101,3 +115,8 @@ for d in $(kubectl -n "$NS" get deploy -l "$SELECTOR" -o name 2>/dev/null); do
 done
 
 log "=== daily kafka reset complete ==="
+if [ "$failed" -eq 0 ]; then
+  discord "🧹 Kafka daily-reset complete — deleted ${deleted} disposable topics (of ${TOTAL}); apps rolling-restarted."
+else
+  discord "⚠️ Kafka daily-reset finished with errors — deleted ${deleted}, failed ${failed} (of ${TOTAL} total)."
+fi
