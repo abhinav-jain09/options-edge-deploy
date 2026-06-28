@@ -1,0 +1,79 @@
+// Pre-market readiness sweep (P1 — READ ONLY) for the OptionsEdge Databento pipeline.
+//
+// Fires at 09:30 ET minus 4h/3h/2h/1h (05:30/06:30/07:30/08:30 ET, Mon-Fri) and
+// runs the committed scripts/ops/premarket-readiness.sh ON the prod host over
+// SSH, so all kubectl + kafka admin + psql operations execute locally next to
+// the brokers and the k3s API (avoiding the flaky agent->prod link). This is the
+// same pattern as Jenkinsfile.kafka-reset / Jenkinsfile.kafka-cleanup, required
+// because the cluster's `options-edge-jenkins-only-workloads` admission policy
+// blocks native k8s CronJob firing.
+//
+// READ ONLY: this job never wipes topics, truncates Postgres, or scales pods.
+// The destructive T-4h reset is a separate, gated job (daily-kafka-reset.sh, P3).
+//
+// The script self-determines hours-to-open and skips non-trading days via the
+// vendored MarketCalendar, so one cron line covers all four sweeps. It exits 1
+// on NOT-READY, turning the Jenkins build red on a bad morning.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
+      description: 'SSH target where the sweep runs locally (Kafka + k3s + Postgres are local there).')
+  }
+  triggers {
+    // 05:30/06:30/07:30/08:30 America/New_York, Mon-Fri = open(09:30) minus 4/3/2/1h.
+    // The script guards holidays/half-days itself; the open never moves on half-days.
+    cron('''TZ=America/New_York
+30 5,6,7,8 * * 1-5''')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 15, unit: 'MINUTES')
+  }
+  environment {
+    PROD_HOST = "${params.PROD_HOST}"
+  }
+  stages {
+    stage('Run pre-market readiness sweep on prod') {
+      steps {
+        // Bind config/secrets from Jenkins credentials and pass them INLINE on
+        // the remote command — a non-login SSH shell does not inherit the prod
+        // host's env, so without this the checks/alerts would silently degrade.
+        // Each credential is OPTIONAL via a try/catch-free pattern: define the
+        // ones that exist as Jenkins 'Secret text' credentials with these IDs.
+        withCredentials([
+          string(credentialsId: 'premarket-discord-webhook',      variable: 'DISCORD_WEBHOOK_URL'),
+          string(credentialsId: 'premarket-anthropic-api-key',    variable: 'ANTHROPIC_API_KEY'),
+          string(credentialsId: 'premarket-pg-dsn',               variable: 'PG_DSN'),
+          string(credentialsId: 'premarket-keycloak-health-url',  variable: 'KEYCLOAK_HEALTH_URL'),
+          string(credentialsId: 'premarket-gateway-config-url',   variable: 'GATEWAY_CONFIG_URL'),
+          string(credentialsId: 'premarket-kafka-cluster-id',     variable: 'EXPECTED_KAFKA_CLUSTER_ID'),
+        ]) {
+          sh '''
+            set -euo pipefail
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${PROD_HOST}" 'mkdir -p ~/premarket/jenkins ~/premarket/ops'
+            scp -o BatchMode=yes scripts/ops/premarket-readiness.sh "${PROD_HOST}:/home/abhinav/premarket/ops/premarket-readiness.sh"
+            scp -o BatchMode=yes scripts/jenkins/market_calendar.py "${PROD_HOST}:/home/abhinav/premarket/jenkins/market_calendar.py"
+            echo "Running premarket-readiness on ${PROD_HOST}"
+            ssh -o BatchMode=yes "${PROD_HOST}" \
+              "chmod +x ~/premarket/ops/premarket-readiness.sh && \
+               CALENDAR_DIR=~/premarket/jenkins \
+               DISCORD_WEBHOOK_URL='${DISCORD_WEBHOOK_URL:-}' \
+               ANTHROPIC_API_KEY='${ANTHROPIC_API_KEY:-}' \
+               PG_DSN='${PG_DSN:-}' \
+               KEYCLOAK_HEALTH_URL='${KEYCLOAK_HEALTH_URL:-}' \
+               GATEWAY_CONFIG_URL='${GATEWAY_CONFIG_URL:-}' \
+               EXPECTED_KAFKA_CLUSTER_ID='${EXPECTED_KAFKA_CLUSTER_ID:-}' \
+               EXPECTED_ENV='prod' \
+               ~/premarket/ops/premarket-readiness.sh"
+          '''
+        }
+      }
+    }
+  }
+  post {
+    failure {
+      echo 'Pre-market sweep reported NOT-READY (or errored). Check the Discord card and prod: kubectl -n options-edge get deploy'
+    }
+  }
+}
