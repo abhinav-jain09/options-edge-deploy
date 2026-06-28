@@ -17,7 +17,7 @@
 
 pipeline {
   agent { label 'hpsf-replay-mac' }   // the dev-Mac Jenkins agent (same as options-edge-deploy)
-  options { timestamps(); disableConcurrentBuilds() }
+  options { disableConcurrentBuilds() }
   parameters {
     string(name: 'SSH_TARGET', defaultValue: 'AMSKEL@192.168.100.2',
            description: 'SSH user@host of the .2 box (key auth). Used to discover the kube API port + open the tunnel.')

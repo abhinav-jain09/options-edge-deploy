@@ -14,7 +14,7 @@
 
 pipeline {
   agent { label 'hpsf-replay-mac' }
-  options { timestamps(); disableConcurrentBuilds() }
+  options { disableConcurrentBuilds() }
   parameters {
     string(name: 'SSH_TARGET',        defaultValue: 'AMSKEL@192.168.100.2', description: 'SSH user@host of .2 (key auth).')
     string(name: 'PACE_BRANCH',       defaultValue: 'experiment', description: 'Branch for the pace repos (contracts, processing, gateway, web).')
