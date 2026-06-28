@@ -64,14 +64,18 @@ is_optional() { case " $OPTIONAL_SERVICES " in *" $1 "*) return 0;; *) return 1;
 
 # Databento pipeline deployments (IBKR + one-off test rigs excluded). Override
 # with PIPELINE_SERVICES="a b c". Tier prefix groups them in the card.
+# Names are the authoritative k8s metadata.name values (verified against the
+# deploy manifests + the dev cluster 2026-06-28). Databento variants only;
+# IBKR (*-ibkr) and the legacy non-databento duplicates are excluded.
 PIPELINE_SERVICES="${PIPELINE_SERVICES:-\
-T1:databento-feed T1:databento-volume-aggregator \
-T2:strike-flow-classifier T2:raw-to-display-databento T2:directional-pressure-databento \
-T2:volume-pace-databento T2:volume-sandwich-databento T2:databento-gex T2:databento-gex-history T2:databento-maxpain \
-T3:databento-mission-pace T3:databento-mission-pressure T3:databento-mission-sandwich T3:spx-mission-control \
-T3:feed-gateway T3:options-edge-web \
-T4:hpsf-postgres-writer T4:raw-postgres-writer T4:pressure-postgres-writer \
-H:hpsf-stage-a H:hpsf-stage-b}"
+T1:options-edge-databento-feed T1:databento-volume-aggregator \
+T2:strike-flow-classifier-databento T2:raw-to-display-databento-service T2:directional-pressure-databento-service \
+T2:volume-pace-databento-service T2:volume-sandwich-databento-service \
+T2:databento-gex-service T2:databento-gex-history-service T2:databento-maxpain-service \
+T3:databento-mission-pace-service T3:databento-mission-pressure-service T3:databento-mission-sandwich-service \
+T3:spx-mission-control-service T3:feed-gateway-service T3:options-edge-web \
+T4:hpsf-postgres-writer-service T4:raw-postgres-writer T4:pressure-postgres-writer T4:pin-postgres-writer \
+H:hpsf-stage-a-service H:hpsf-stage-b-service}"
 
 # ---------------------------------------------------------------------------
 # Result accumulation
@@ -122,8 +126,14 @@ secs = cal.seconds_until_next_open(now)
 print(f"OK {td.strftime('%Y%m%d')} {secs/3600:.1f}")
 PY
 )
+  # PREMARKET_FORCE=1 runs the sweep regardless of calendar (manual/on-demand
+  # verification). It still computes today's expiry where possible.
   case "$GUARD" in
-    SKIP*) echo "[premarket] $(date '+%FT%T%z') $GUARD — exiting 0, no alert"; exit 0 ;;
+    SKIP*) if [ "${PREMARKET_FORCE:-0}" = "1" ]; then
+             echo "[premarket] PREMARKET_FORCE=1 — running despite '$GUARD'"
+           else
+             echo "[premarket] $(date '+%FT%T%z') $GUARD — exiting 0, no alert"; exit 0
+           fi ;;
     OK*)   TODAY_EXPIRY=$(echo "$GUARD" | awk '{print $2}'); HOURS_TO_OPEN=$(echo "$GUARD" | awk '{print $3}') ;;
     *)     fail "calendar guard inconclusive ($GUARD) — cannot determine trading day; fail-closed" ;;
   esac
@@ -299,12 +309,14 @@ STATUS="GO"; COLOR=3066993   # green
 LABEL="T-${HOURS_TO_OPEN:-?}h"
 TITLE="$STATUS — pre-market (${LABEL} to open)"
 
-# Plain-text body (also the Haiku input on red)
-BODY=""
+# Plain-text body (also the Haiku input on red). Always show the passed COUNT so
+# a NOT-READY card still proves the full sweep ran; list failures/warns in detail.
+BODY="✅ ${#OKS[@]} checks passed, ❌ ${#FAILS[@]} failed, ⚠️ ${#WARNS[@]} warnings.\n"
 [ ${#FAILS[@]} -gt 0 ] && BODY+="❌ FAILURES:\n$(printf '  - %s\n' "${FAILS[@]}")\n"
 [ ${#WARNS[@]} -gt 0 ] && BODY+="⚠️ WARN:\n$(printf '  - %s\n' "${WARNS[@]}")\n"
 [ ${#P3_BLOCKED[@]} -gt 0 ] && BODY+="🔒 P3-blocked (reset prerequisites):\n$(printf '  - %s\n' "${P3_BLOCKED[@]}")\n"
-if [ "$STATUS" = "GO" ]; then BODY+="✅ ${#OKS[@]} checks passed.\n"; fi
+# On GO, list what passed (terse confirmation the pipeline is up).
+[ "$STATUS" = "GO" ] && [ ${#OKS[@]} -gt 0 ] && BODY+="passed:\n$(printf '  - %s\n' "${OKS[@]}")\n"
 [ -n "$ERROR_DIGEST" ] && BODY+="🪵 errors:\n$ERROR_DIGEST\n"
 
 TRIAGE=""
