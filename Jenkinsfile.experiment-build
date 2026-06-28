@@ -82,22 +82,26 @@ pipeline {
 
     stage('Build + push on .2') {
       steps {
-        sh '''
+        // KCPW (the .2 login/keychain password) comes from a Jenkins credential, masked in logs.
+        // docker build/push on macOS-over-SSH needs the GUI login keychain unlocked (its cred helper,
+        // even for an anonymous base-image pull, errors when the keychain is locked in a non-interactive
+        // SSH session). We unlock it, then `unset KCPW` immediately so the ~22 image builds never inherit it.
+        withCredentials([string(credentialsId: 'experiment-dot2-pass', variable: 'KCPW')]) {
+          sh '''
             set -eu
-            # Build script that runs ON .2: bundled JDK + Docker-Desktop PATH, an empty throwaway
-            # DOCKER_CONFIG so `docker push` to the insecure localhost:5001 never invokes the macOS
-            # keychain cred helper (no password/keychain-unlock needed), mvn-install contracts, package
-            # the reactors, then docker build/push every image to the .2 registry.
-            ssh -o BatchMode=yes "$SSH_TARGET" \
-              "REMOTE_ROOT='$REMOTE_ROOT' PUSH_REGISTRY='$PUSH_REGISTRY' SKIP_FEED='$SKIP_FEED' \
-               JAVA_HOME='$JAVA_HOME_REMOTE' DOCKER_BIN='$DOCKER_BIN' MAVEN_BIN='$MAVEN_BIN' bash -s" <<'REMOTE'
+            # 1) Ship the remote build script (contains NO secret) to .2.
+            ssh -o BatchMode=yes "$SSH_TARGET" "cat > '$REMOTE_ROOT/.exp-build.sh'" <<'SCRIPT'
 set -euo pipefail
+: "${REMOTE_ROOT:?}" "${PUSH_REGISTRY:?}" "${JAVA_HOME:?}" "${DOCKER_BIN:?}" "${MAVEN_BIN:?}"
+SKIP_FEED="${SKIP_FEED:-false}"
 export PATH="$DOCKER_BIN:$JAVA_HOME/bin:$MAVEN_BIN:$PATH"
 export JAVA_HOME
-# Empty docker config (no credsStore) → push to the insecure localhost:5001 skips the osxkeychain
-# cred helper entirely, so no GUI-keychain unlock (and no password) is needed in this SSH session.
-export DOCKER_CONFIG="$REMOTE_ROOT/.docker-noauth"
-mkdir -p "$DOCKER_CONFIG"; printf '{}' > "$DOCKER_CONFIG/config.json"
+# Read the keychain password from STDIN (line 1) — never argv or the ssh command line. Unlock the GUI
+# login keychain (docker's osxkeychain cred helper needs it in a non-interactive SSH session), then
+# drop the secret so none of the image builds below inherit it.
+IFS= read -r KCPW
+security unlock-keychain -p "$KCPW" "$HOME/Library/Keychains/login.keychain-db"
+unset KCPW
 echo "java: $(java -version 2>&1 | head -1)"; echo "docker: $(docker version --format '{{.Server.Version}}')"
 
 cd "$REMOTE_ROOT/options-edge-contracts" && mvn -q -B -ntp -DskipTests install
@@ -145,8 +149,12 @@ fi
 
 echo "EXPERIMENT BUILD DONE"
 echo "registry images: $(curl -s http://localhost:5001/v2/_catalog | tr ',' '\\n' | grep -c options-edge)"
-REMOTE
+SCRIPT
+            # 2) Run it; the password goes ONLY on stdin (shell-safe — never in argv or the ssh command line).
+            printf '%s\\n' "$KCPW" | ssh -o BatchMode=yes "$SSH_TARGET" \
+              "env REMOTE_ROOT='$REMOTE_ROOT' PUSH_REGISTRY='$PUSH_REGISTRY' SKIP_FEED='$SKIP_FEED' JAVA_HOME='$JAVA_HOME_REMOTE' DOCKER_BIN='$DOCKER_BIN' MAVEN_BIN='$MAVEN_BIN' bash '$REMOTE_ROOT/.exp-build.sh'"
           '''
+        }
       }
     }
   }
