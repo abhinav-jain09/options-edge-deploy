@@ -1,0 +1,152 @@
+@Library('oe') _
+
+// Experiment (.2 native Mac) BUILD — Jenkins (dev-Mac agent) commands .2 to build the whole suite
+// natively, from the experiment branch. No agent on .2; no binary copy of built jars — source is
+// rsync'd and `mvn`/`docker build` run ON .2.
+//
+// Flow: (1) the dev-Mac agent clones each repo at its branch (experiment for the pace repos, main for
+// the rest); (2) rsync each to .2 under ~/ci/experiment-build/<repo>; (3) ssh .2 → unlock the GUI
+// keychain (docker cred helper needs it) + bundled JDK + Docker-Desktop PATH → mvn package each repo →
+// docker build every image → push to .2's local registry localhost:5001 (host.docker.internal:5001
+// from inside the cluster). The experiment overlay (options-edge-experiment-deploy) then pulls :dev.
+//
+// Pairs with options-edge-experiment-deploy. See options-edge-documents/infra/EXPERIMENT-MACHINE-SETUP.md.
+
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  options { timestamps(); disableConcurrentBuilds() }
+  parameters {
+    string(name: 'SSH_TARGET',        defaultValue: 'AMSKEL@192.168.100.2', description: 'SSH user@host of .2 (key auth).')
+    string(name: 'PACE_BRANCH',       defaultValue: 'experiment', description: 'Branch for the pace repos (contracts, processing, gateway, web).')
+    string(name: 'FEED_BRANCH',       defaultValue: 'main',       description: 'Branch for the standalone databento-feed repo (no pace changes).')
+    string(name: 'REMOTE_ROOT',       defaultValue: '/Users/rajuljain/ci/experiment-build', description: 'Build workspace on .2 (under the .2 home).')
+    string(name: 'PUSH_REGISTRY',     defaultValue: 'localhost:5001', description: 'Registry to push to ON .2 (host-local; host.docker.internal:5001 does not resolve on the .2 host).')
+    booleanParam(name: 'SKIP_FEED',   defaultValue: false, description: 'Skip the Python databento-feed image (JVM-only standup).')
+  }
+  environment {
+    CONTRACTS_REPO = 'git@github.com:abhinav-jain09/options-edge-contracts.git'
+    PROCESSING_REPO = 'git@github.com:abhinav-jain09/options-edge-processing.git'
+    WEB_REPO = 'git@github.com:abhinav-jain09/options-edge.git'
+    GATEWAY_REPO = 'git@github.com:abhinav-jain09/option-edge-feed-gateway.git'
+    FEED_REPO = 'git@github.com:abhinav-jain09/options-edge-databento-feed.git'
+    JAVA_HOME_REMOTE = '/Users/rajuljain/kafka-options-edge/jdk/jdk-21.0.11+10/Contents/Home'
+    DOCKER_BIN = '/Applications/Docker.app/Contents/Resources/bin'
+  }
+  stages {
+    stage('Validate') {
+      steps {
+        sh '''
+          set -eu
+          case "$SSH_TARGET"    in -*|*[!a-zA-Z0-9._@-]*|'') echo "invalid SSH_TARGET" >&2; exit 1 ;; esac
+          case "$REMOTE_ROOT"   in ''|[!/]*|*[!a-zA-Z0-9._/-]*) echo "invalid REMOTE_ROOT (absolute path)" >&2; exit 1 ;; esac
+          case "$PUSH_REGISTRY" in ''|*[!a-zA-Z0-9.:_-]*) echo "invalid PUSH_REGISTRY" >&2; exit 1 ;; esac
+          for b in "$PACE_BRANCH" "$FEED_BRANCH"; do
+            case "$b" in ''|*[!a-zA-Z0-9._/-]*) echo "invalid branch '$b'" >&2; exit 1 ;; esac
+          done
+          ssh -o BatchMode=yes -o ConnectTimeout=15 "$SSH_TARGET" 'echo .2 reachable'
+        '''
+      }
+    }
+
+    stage('Checkout (dev-Mac)') {
+      steps {
+        sh '''
+          set -eu
+          rm -rf src && mkdir -p src
+          git clone --depth 1 -b "$PACE_BRANCH" "$CONTRACTS_REPO"  src/options-edge-contracts
+          git clone --depth 1 -b "$PACE_BRANCH" "$PROCESSING_REPO" src/options-edge-processing
+          git clone --depth 1 -b "$PACE_BRANCH" "$WEB_REPO"        src/options-edge
+          git clone --depth 1 -b "$PACE_BRANCH" "$GATEWAY_REPO"    src/feed-gateway
+          if [ "$SKIP_FEED" != "true" ]; then
+            git clone --depth 1 -b "$FEED_BRANCH" "$FEED_REPO"     src/options-edge-databento-feed
+          fi
+        '''
+      }
+    }
+
+    stage('Ship to .2') {
+      steps {
+        sh '''
+          set -eu
+          ssh -o BatchMode=yes "$SSH_TARGET" "mkdir -p '$REMOTE_ROOT'"
+          for repo in src/*/; do
+            name="$(basename "$repo")"
+            ssh -o BatchMode=yes "$SSH_TARGET" "rm -rf '$REMOTE_ROOT/$name' && mkdir -p '$REMOTE_ROOT/$name'"
+            rsync -az --delete --exclude '.git' --exclude 'target' --exclude 'node_modules' \
+              "$repo" "$SSH_TARGET:$REMOTE_ROOT/$name/"
+          done
+        '''
+      }
+    }
+
+    stage('Build + push on .2') {
+      steps {
+        sh '''
+            set -eu
+            # Build script that runs ON .2: bundled JDK + Docker-Desktop PATH, an empty throwaway
+            # DOCKER_CONFIG so `docker push` to the insecure localhost:5001 never invokes the macOS
+            # keychain cred helper (no password/keychain-unlock needed), mvn-install contracts, package
+            # the reactors, then docker build/push every image to the .2 registry.
+            ssh -o BatchMode=yes "$SSH_TARGET" \
+              "REMOTE_ROOT='$REMOTE_ROOT' PUSH_REGISTRY='$PUSH_REGISTRY' SKIP_FEED='$SKIP_FEED' \
+               JAVA_HOME='$JAVA_HOME_REMOTE' DOCKER_BIN='$DOCKER_BIN' bash -s" <<'REMOTE'
+set -euo pipefail
+export PATH="$DOCKER_BIN:$JAVA_HOME/bin:$PATH"
+export JAVA_HOME
+# Empty docker config (no credsStore) → push to the insecure localhost:5001 skips the osxkeychain
+# cred helper entirely, so no GUI-keychain unlock (and no password) is needed in this SSH session.
+export DOCKER_CONFIG="$REMOTE_ROOT/.docker-noauth"
+mkdir -p "$DOCKER_CONFIG"; printf '{}' > "$DOCKER_CONFIG/config.json"
+echo "java: $(java -version 2>&1 | head -1)"; echo "docker: $(docker version --format '{{.Server.Version}}')"
+
+cd "$REMOTE_ROOT/options-edge-contracts" && ./mvnw -q -B -ntp -DskipTests install
+cd "$REMOTE_ROOT/options-edge-processing" && ./mvnw -q -B -ntp -DskipTests -pl '!hpsf-replay-orchestrator-service' package
+cd "$REMOTE_ROOT/options-edge"            && ./mvnw -q -B -ntp -DskipTests package
+cd "$REMOTE_ROOT/feed-gateway"            && ./mvnw -q -B -ntp -DskipTests package
+
+bp() {  # build+push: <image> <dockerfile> <context-dir> (relative to repo root) <repo-dir>
+  img="$1"; df="$2"; ctx="$3"; repo="$4"
+  ( cd "$REMOTE_ROOT/$repo" && docker build -q -t "$PUSH_REGISTRY/$img:dev" -f "$df" "$ctx" && docker push -q "$PUSH_REGISTRY/$img:dev" ) \
+    && echo "OK   $img" || { echo "FAIL $img" >&2; return 1; }
+}
+
+# --- processing reactor images ---
+P=options-edge-processing
+bp options-edge-raw-to-display              raw-to-display-service/Dockerfile               raw-to-display-service               $P
+bp options-edge-databento-volume-aggregator databento-volume-aggregator/Dockerfile          databento-volume-aggregator          $P
+bp options-edge-volume-pace                 volume-pace-service/Dockerfile                   volume-pace-service                  $P
+bp options-edge-directional-pressure        directional-pressure-service/Dockerfile          directional-pressure-service         $P
+bp options-edge-strike-flow-classifier      strike-flow-classifier-service/Dockerfile        strike-flow-classifier-service       $P
+bp options-edge-volume-sandwich             volume-sandwich-service/Dockerfile               volume-sandwich-service              $P
+bp options-edge-unusual-whales-gex          unusual-whales-gex-service/Dockerfile            unusual-whales-gex-service           $P
+bp options-edge-unusual-whales-gex-history  unusual-whales-gex-history-service/Dockerfile    unusual-whales-gex-history-service   $P
+bp options-edge-raw-postgres-writer         raw-postgres-writer/Dockerfile                   raw-postgres-writer                  $P
+bp options-edge-pressure-postgres-writer    pressure-postgres-writer/Dockerfile              pressure-postgres-writer             $P
+bp options-edge-pin-postgres-writer         pin-postgres-writer/Dockerfile                   pin-postgres-writer                  $P
+bp options-edge-hpsf-processing             hpsf-processing-service/Dockerfile               hpsf-processing-service              $P
+bp options-edge-hpsf-postgres-writer        hpsf-postgres-writer/Dockerfile                  hpsf-postgres-writer                 $P
+bp options-edge-spx-mission-control         docker/spx-mission-control-service.Dockerfile    .                                    $P
+bp options-edge-databento-gex               databento-gex-service/Dockerfile                 databento-gex-service                $P
+bp options-edge-databento-gex-history       databento-gex-history-service/Dockerfile         databento-gex-history-service        $P
+bp options-edge-databento-mission-pace      databento-mission-pace-service/Dockerfile        databento-mission-pace-service       $P
+bp options-edge-databento-mission-pressure  docker/databento-mission-pressure-service.Dockerfile  .                              $P
+bp options-edge-databento-mission-sandwich  docker/databento-mission-sandwich-service.Dockerfile  .                              $P
+bp options-edge-databento-maxpain           databento-maxpain-service/Dockerfile             databento-maxpain-service            $P
+
+# --- web, gateway ---
+bp options-edge-web          Dockerfile  .  options-edge
+bp options-edge-feed-gateway Dockerfile  .  feed-gateway
+
+# --- databento feed (Python) ---
+if [ "$SKIP_FEED" != "true" ]; then
+  bp options-edge-databento-feed Dockerfile . options-edge-databento-feed
+fi
+
+echo "EXPERIMENT BUILD DONE"
+echo "registry images: $(curl -s http://localhost:5001/v2/_catalog | tr ',' '\\n' | grep -c options-edge)"
+REMOTE
+          '''
+      }
+    }
+  }
+}
