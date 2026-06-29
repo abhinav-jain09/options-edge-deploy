@@ -16,6 +16,8 @@ resources:
   - databento-gex-service.yaml
   - unified-sr-deployment.yaml
   - unified-sr-service.yaml
+  - strike-flow-avro-adapter-deployment.yaml
+  - strike-flow-avro-adapter-service.yaml
   - databento-maxpain-deployment.yaml
   - databento-maxpain-service.yaml
   - databento-mission-pace-deployment.yaml

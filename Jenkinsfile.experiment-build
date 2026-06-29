@@ -138,6 +138,7 @@ bp options-edge-databento-mission-pressure  docker/databento-mission-pressure-se
 bp options-edge-databento-mission-sandwich  docker/databento-mission-sandwich-service.Dockerfile  .                              $P
 bp options-edge-databento-maxpain           databento-maxpain-service/Dockerfile             databento-maxpain-service            $P
 bp options-edge-unified-sr                  unified-sr-service/Dockerfile                    unified-sr-service                   $P
+bp options-edge-strike-flow-avro-adapter    strike-flow-avro-adapter/Dockerfile              strike-flow-avro-adapter             $P
 
 # --- web, gateway ---
 bp options-edge-web          Dockerfile  .  options-edge
