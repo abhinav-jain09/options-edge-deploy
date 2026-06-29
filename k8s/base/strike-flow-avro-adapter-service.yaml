@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: strike-flow-avro-adapter
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: strike-flow-avro-adapter
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8109"
+spec:
+  selector:
+    app.kubernetes.io/name: strike-flow-avro-adapter
+  ports:
+    - name: health
+      port: 8109
+      targetPort: health
