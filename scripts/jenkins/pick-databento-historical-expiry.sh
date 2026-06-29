@@ -30,6 +30,13 @@ VENDORED_CAL_DIR="$SCRIPT_DIR"   # market_calendar.py is here
 
 # --- Override path: validate regex AND trading-day via vendored MarketCalendar ---
 if [ -n "${DATABENTO_EXPIRY:-}" ]; then
+  # AUTO override: the feed + gateway self-resolve the current trading date from their embedded
+  # MarketCalendar (AUTO mode), so pass it straight through with no Historical lookup.
+  if printf '%s' "$DATABENTO_EXPIRY" | grep -Eqi '^AUTO$'; then
+    echo "source=override value=AUTO (feed+gateway self-resolve from the market calendar)" >&2
+    printf 'AUTO\n'
+    exit 0
+  fi
   if ! printf '%s\n' "$DATABENTO_EXPIRY" | grep -Eq '^[0-9]{8}$'; then
     echo "ERROR: DATABENTO_EXPIRY override '$DATABENTO_EXPIRY' is not 8 digits YYYYMMDD" >&2
     exit 1
@@ -58,6 +65,15 @@ PY
   printf '%s\n' "$DATABENTO_EXPIRY"
   exit 0
 fi
+
+# --- Default (no override): emit AUTO. The feed AND gateway now self-resolve the current ET trading date
+# from their embedded MarketCalendar and daily-roll it (options-edge-databento-feed#35 + feed-gateway#41),
+# so apply.sh writes DATABENTO_EXPIRY=AUTO / IB_EXPIRY=AUTO — no lagging Databento Historical lookup and no
+# daily redeploy. An explicit DATABENTO_EXPIRY=YYYYMMDD still pins (replay). The Historical-walk code below
+# is retained (dead) for reference / quick revert.
+echo "source=auto value=AUTO (feed+gateway self-resolve from the market calendar)" >&2
+printf 'AUTO\n'
+exit 0
 
 # --- Bootstrap helper venv with the `databento` package (cached) ---
 if [ ! -x "$HELPER_VENV/bin/python3" ]; then
