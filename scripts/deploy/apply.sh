@@ -94,6 +94,11 @@
           # session with data). Precedence: explicit IB_EXPIRY param > resolved Databento expiry > calendar
           # weekday fallback (only when no Databento expiry was resolved, e.g. an IBKR-only deploy).
           effective_expiry="${IB_EXPIRY:-${RESOLVED_DATABENTO_EXPIRY:-$(default_weekday_expiry)}}"
+          # In AUTO mode the feed + gateway self-resolve + daily-roll the expiry from their embedded
+          # MarketCalendar (same date), so IB_EXPIRY=AUTO keeps the gateway locked to the feed. The Unusual
+          # Whales service needs a concrete YYYYMMDD, so give it the calendar weekday fallback when AUTO.
+          uw_expiry="$effective_expiry"
+          [ "$uw_expiry" = "AUTO" ] && uw_expiry="$(default_weekday_expiry)"
           if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
             : "${OE_KAFKA_BOOTSTRAP:?OE_KAFKA_BOOTSTRAP must be set by the Resolve profile stage (oeProfile single source of truth)}"
             KAFKA_BOOTSTRAP_SERVERS="$OE_KAFKA_BOOTSTRAP"
@@ -122,7 +127,7 @@
           kafka_schema_registry_url="$KAFKA_SCHEMA_REGISTRY_URL"
           postgres_jdbc_url="$POSTGRES_JDBC_URL"
           cat >"$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json" <<EOF
-{"data":{"APP_MARKET_DATA_SOURCE":"$market_data_source","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","POSTGRES_JDBC_URL":"$postgres_jdbc_url","KAFKA_RAW_TOPIC":"$effective_raw_topic","IB_HOST":"${IB_HOST:-127.0.0.1}","IB_PORT":"${IB_PORT:-4001}","IB_CLIENT_ID":"${IB_CLIENT_ID:-212}","IB_EXPIRY":"$effective_expiry","IB_MAX_STRIKES":"${IB_MAX_STRIKES:-43}","UNUSUAL_WHALES_EXPIRY":"$effective_expiry"}}
+{"data":{"APP_MARKET_DATA_SOURCE":"$market_data_source","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","POSTGRES_JDBC_URL":"$postgres_jdbc_url","KAFKA_RAW_TOPIC":"$effective_raw_topic","IB_HOST":"${IB_HOST:-127.0.0.1}","IB_PORT":"${IB_PORT:-4001}","IB_CLIENT_ID":"${IB_CLIENT_ID:-212}","IB_EXPIRY":"$effective_expiry","IB_MAX_STRIKES":"${IB_MAX_STRIKES:-43}","UNUSUAL_WHALES_EXPIRY":"$uw_expiry"}}
 EOF
           kubectl -n options-edge patch configmap options-edge-config \
             --type merge \
