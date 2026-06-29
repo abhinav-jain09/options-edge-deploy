@@ -35,6 +35,8 @@ resources:
   - spx-mission-control-service.yaml
   - unified-sr-deployment.yaml
   - unified-sr-service.yaml
+  - strike-flow-avro-adapter-deployment.yaml
+  - strike-flow-avro-adapter-service.yaml
   - strike-flow-classifier-deployment.yaml
   - strike-flow-classifier-service.yaml
   - pressure-postgres-writer-deployment.yaml

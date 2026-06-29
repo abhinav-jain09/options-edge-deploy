@@ -124,6 +124,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-unified-sr
     newName: host.docker.internal:5001/options-edge-unified-sr
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-strike-flow-avro-adapter
+    newName: host.docker.internal:5001/options-edge-strike-flow-avro-adapter
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-strike-flow-classifier
     newName: host.docker.internal:5001/options-edge-strike-flow-classifier
     newTag: dev
