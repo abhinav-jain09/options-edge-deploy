@@ -174,6 +174,11 @@ data:
   POSTGRES_ENABLED: "true"
   POSTGRES_JDBC_URL: jdbc:postgresql://192.168.100.252:5432/options_flow
   POSTGRES_USER: options_flow
+  # Let raw-postgres-writer self-migrate its table on startup (idempotent ADD COLUMN IF NOT EXISTS) so the
+  # additive spot-SSOT columns (canonical_spot, spot_event_time_ns, feed_epoch_id, epoch_seq, ...) are
+  # added without a manual DBA step. Platform is self-managed (no DBA) in every env; the migrations are
+  # additive/non-destructive. Without this the writer crash-loops on the missing canonical_spot column.
+  RAW_POSTGRES_WRITER_ENSURE_SCHEMA_ON_START: "true"
   PACE_POSTGRES_BACKFILL_ENABLED: "true"
   POSTGRES_RAW_AUTO_OFFSET_RESET: earliest
   POSTGRES_DIRECTIONAL_PRESSURE_AUTO_OFFSET_RESET: earliest
