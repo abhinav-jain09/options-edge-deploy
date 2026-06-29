@@ -28,3 +28,22 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Always
+  # unified-sr is experiment-only (live on .2); it's in k8s/base but never wired into the prod build or
+  # apply.sh's image build/pin list, so it renders with a mutable prod-registry :tag and the digest-pin
+  # guard would abort the prod deploy. It is NOT running on prod (no prod image exists). Remove it from
+  # the production render until it's properly built+pinned for prod. (Both the Deployment and Service are
+  # named unified-sr-service.) Mirrors the dev-overlay exclusion.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: unified-sr-service
+        namespace: options-edge
+      $patch: delete
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: unified-sr-service
+        namespace: options-edge
+      $patch: delete
