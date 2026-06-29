@@ -54,6 +54,25 @@ patches:
   # so the mandatory MissionAuthSettings.validate() check is satisfied AND the JWKS
   # is actually fetchable at startup. Audience inherits from base ("options-edge-web").
   - path: spx-mission-control-dev-env-patch.yaml
+  # DEV-ONLY: unified-sr is experiment-only (live on .2); it was added to k8s/base but never wired into
+  # the dev build or the deploy's image build/pin list, so its base manifest renders with a mutable
+  # prod-registry :tag and the apply.sh digest-pin guard aborts the ENTIRE dev deploy. Remove it from
+  # the dev render until it is properly built+pinned for dev. (Both the Deployment and Service are named
+  # unified-sr-service.) Prod overlay is unaffected.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: unified-sr-service
+        namespace: options-edge
+      $patch: delete
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: unified-sr-service
+        namespace: options-edge
+      $patch: delete
 images:
   - name: 192.168.100.252:5000/options-edge-raw-to-display
     newName: host.docker.internal:5001/options-edge-raw-to-display
