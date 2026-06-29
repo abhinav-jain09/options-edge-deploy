@@ -47,3 +47,21 @@ patches:
         name: unified-sr-service
         namespace: options-edge
       $patch: delete
+  # strike-flow-avro-adapter is experiment-only (the producer of unified-sr's per-strike Avro flow
+  # topic, live on .2). Same situation as unified-sr above: it's in k8s/base but has no prod image, so
+  # the prod render must exclude it or the digest-pin guard aborts the prod deploy. Remove until it is
+  # properly built+pinned for prod. Mirrors the dev-overlay exclusion.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: strike-flow-avro-adapter
+        namespace: options-edge
+      $patch: delete
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: strike-flow-avro-adapter
+        namespace: options-edge
+      $patch: delete
