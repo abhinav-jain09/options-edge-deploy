@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: unified-sr-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: unified-sr-service
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8108"
+spec:
+  selector:
+    app.kubernetes.io/name: unified-sr-service
+  ports:
+    - name: health
+      port: 8108
+      targetPort: health
