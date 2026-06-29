@@ -73,6 +73,23 @@ patches:
         name: unified-sr-service
         namespace: options-edge
       $patch: delete
+  # DEV-ONLY: strike-flow-avro-adapter is experiment-only (producer of unified-sr's per-strike Avro flow
+  # topic, live on .2). Same as unified-sr above — in k8s/base but no dev image, so the apply.sh digest-pin
+  # guard would abort the entire dev deploy. Remove from the dev render until built+pinned for dev.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: strike-flow-avro-adapter
+        namespace: options-edge
+      $patch: delete
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: strike-flow-avro-adapter
+        namespace: options-edge
+      $patch: delete
 images:
   - name: 192.168.100.252:5000/options-edge-raw-to-display
     newName: host.docker.internal:5001/options-edge-raw-to-display
