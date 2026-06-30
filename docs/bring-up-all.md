@@ -106,7 +106,7 @@ per the production environment** (the app intentionally has *no* prod defaults â
 | `VITE_API_BASE_URL` | `http://localhost:8090` | `https://bleadingoptions.com` |
 | `VITE_WS_URL` | `ws://192.168.100.102:8093/ws/events` | `wss://bleadingoptions.com/ws/events` |
 | `VITE_MISSION_CONTROL_URL` | `http://localhost:8090` | `https://bleadingoptions.com` |
-| `KAFKA_BOOTSTRAP_SERVERS` | _dev default_ | `192.168.100.252:9092,192.168.100.4:9092` â€” **confirm** |
+| `KAFKA_BOOTSTRAP_SERVERS` | _dev default_ | `192.168.100.252:9092` (the `.252` cluster only; `.4` is es4, a separate ES Kafka cluster, not part of it) |
 | `VITE_AUTH_ENABLED` | `true` | `true` (auth mandatory in every env) |
 | `VITE_AUTH_ISSUER` | `http://192.168.100.102:8089/realms/optionsedge` | `https://auth.bleadingoptions.com/realms/optionsedge` (deployed 2026-08-08) |
 | `VITE_AUTH_CLIENT_ID` | `options-edge-web` | `options-edge-web` |
