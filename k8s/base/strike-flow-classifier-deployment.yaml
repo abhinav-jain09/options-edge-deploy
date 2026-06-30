@@ -99,7 +99,6 @@ spec:
               cpu: 250m
               memory: 1Gi
             limits:
-              cpu: "2"
               memory: 2Gi
 ---
 apiVersion: apps/v1
@@ -177,5 +176,4 @@ spec:
               cpu: 250m
               memory: 1Gi
             limits:
-              cpu: "2"
               memory: 2Gi

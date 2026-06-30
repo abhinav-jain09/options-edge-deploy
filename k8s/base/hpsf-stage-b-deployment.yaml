@@ -84,7 +84,6 @@ spec:
               cpu: 500m
               memory: 3Gi
             limits:
-              cpu: "3"
               memory: 4Gi
       volumes:
         - name: hpsf-kafka-streams-state
