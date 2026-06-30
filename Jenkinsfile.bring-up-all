@@ -41,7 +41,14 @@ pipeline {
     //   - databento-feed:                ENVIRONMENT, IMAGE_REGISTRY, PUSH_IMAGE
     //
     // Non-env-derived knobs (operator behavior):
-    PUSH_IMAGE     = "${params.PROFILE == 'dev' ? 'false' : 'true'}"   // dev local-loads; prod & experiment push to their registry
+    // ALL profiles push to their registry. Dev previously used PUSH_IMAGE=false to
+    // --load images into the local docker daemon only (to avoid registry bloat), but the
+    // deploy job digest-pins + preflights against the REGISTRY, so dev --load left the
+    // registry without the images and the deploy failed (esp. after a registry wipe).
+    // Pushing for dev too makes build/deploy consistent. NOTE: this grows the dev registry,
+    // so periodic registry GC (delete old tags + garbage-collect) is required to avoid the
+    // disk-full incident — tracked separately.
+    PUSH_IMAGE     = 'true'   // dev/prod/experiment all push to their registry
     // RUN_LOCAL is OFF for every profile now. Dev used to docker-run the web image on the
     // Mac agent at :8090 (legacy local-run); the web UI runs in k8s in both envs now
     // (LoadBalancer Service options-edge-web :8094) so the local-run path is no longer
