@@ -9,6 +9,14 @@
 //
 // The reset uses `kubectl rollout restart` (rolling) — it never scales a
 // deployment to 0 replicas, so a transient k8s API blip cannot leave prod down.
+//
+// RETIRED 2026-06-30 (off-hours clean-slate, decision #4): the gentle "keep
+// real-data topics" daily reset is SUPERSEDED by the aggressive off-hours
+// clean-slate (scripts/ops/offhours-clean-slate.sh / Jenkinsfile.offhours-clean-slate),
+// which deletes state topics, purges ALL data topics to 0, clears the Streams
+// PVCs, and truncates the flow DB. To avoid two jobs fighting over the same
+// cluster, this job's nightly cron trigger is DISABLED — it remains runnable
+// MANUALLY (for ad-hoc Streams-state pruning) but no longer self-fires.
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
@@ -17,10 +25,8 @@ pipeline {
     string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
       description: 'SSH target where the reset runs locally (Kafka + k3s are local there).')
   }
-  triggers {
-    // 22:30 prod time (after US 0DTE close). Scheduled runs use default params (DRY_RUN=true).
-    cron('30 22 * * *')
-  }
+  // triggers {} — DISABLED. Retired in favour of the off-hours clean-slate (see
+  // header). No cron: this job no longer self-fires; it is manual-only now.
   options {
     disableConcurrentBuilds()
     timeout(time: 30, unit: 'MINUTES')
