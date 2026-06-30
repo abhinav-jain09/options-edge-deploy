@@ -48,7 +48,7 @@ spec:
             # per-leg delta. Kill-switch = "false". Reads delta from KAFKA_DATABENTO_GEX_STRIKE_TOPIC
             # (default options.databento.gex.strike).
             - name: STRIKE_FLOW_DELTA_OVERLAY_ENABLED
-              value: "true"
+              value: "false"
             - name: STRIKE_FLOW_INSTITUTIONAL_ENABLED
               value: "true"
             - name: STRIKE_FLOW_INSTITUTIONAL_TICK_EPSILON
