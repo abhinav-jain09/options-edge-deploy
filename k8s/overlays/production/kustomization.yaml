@@ -11,6 +11,8 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # Prod is a single-broker standalone node — force RF=1 (else Kafka topic creation aborts the deploy).
+  - path: configmap-prod-single-broker-patch.yaml
   - target:
       kind: Deployment
     patch: |-

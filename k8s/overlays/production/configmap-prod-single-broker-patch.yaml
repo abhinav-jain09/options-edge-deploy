@@ -1,0 +1,15 @@
+# Production is a STANDALONE SINGLE-BROKER Kafka node (2026-06-29 standalone migration; all
+# partitions reassigned to RF=1 on broker 1). The base configmap defaults to RF=2 (the old
+# multi-broker assumption), which makes the deploy's Kafka topic-creation stages fail with
+# InvalidReplicationFactorException ("target replication factor of 2 ... only 1 broker registered").
+# Override to single-broker RF=1 here (dev/experiment already do the same in their local patches).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-config
+  namespace: options-edge
+data:
+  KAFKA_BROKER_COUNT: "1"
+  KAFKA_TOPIC_REPLICATION_FACTOR: "1"
+  KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS: "1"
+  HPSF_STREAMS_REPLICATION_FACTOR: "1"
