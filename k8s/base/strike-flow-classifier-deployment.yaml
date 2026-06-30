@@ -49,6 +49,19 @@ spec:
             # (default options.databento.gex.strike).
             - name: STRIKE_FLOW_DELTA_OVERLAY_ENABLED
               value: "false"
+            # ONE-TIME state recovery. When DELTA_OVERLAY toggles between true/false, the topology's
+            # global-store set changes — but the persistent RocksDB state directory remembers the OLD
+            # set. On startup, GlobalStateManagerImpl.initialize() reads orphaned global-store state
+            # and throws "Encountered a topic-partition not associated with any global state store",
+            # crashing the main thread (verified on dev 2026-06-30: pod 0/1 not Ready, output topic
+            # empty). Setting this to "true" makes the classifier call streams.cleanUp() before
+            # streams.start() — wipes the local state dir, lets the topology bootstrap fresh from the
+            # changelog. Safe to leave on permanently for the strike-flow classifier specifically
+            # (its STATE_TTL = 86_400_000 / 24h, so a cold rebuild costs at most one session); but
+            # carries a one-time bootstrap-from-input penalty per restart. REMOVE OR SET TO "false"
+            # after the first successful deploy if you don't want the cold-rebuild on every pod cycle.
+            - name: KAFKA_STREAMS_CLEANUP_ON_START
+              value: "true"
             - name: STRIKE_FLOW_INSTITUTIONAL_ENABLED
               value: "true"
             - name: STRIKE_FLOW_INSTITUTIONAL_TICK_EPSILON
