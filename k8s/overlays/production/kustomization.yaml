@@ -28,40 +28,6 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Always
-  # unified-sr is experiment-only (live on .2); it's in k8s/base but never wired into the prod build or
-  # apply.sh's image build/pin list, so it renders with a mutable prod-registry :tag and the digest-pin
-  # guard would abort the prod deploy. It is NOT running on prod (no prod image exists). Remove it from
-  # the production render until it's properly built+pinned for prod. (Both the Deployment and Service are
-  # named unified-sr-service.) Mirrors the dev-overlay exclusion.
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: unified-sr-service
-        namespace: options-edge
-      $patch: delete
-  - patch: |-
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: unified-sr-service
-        namespace: options-edge
-      $patch: delete
-  # strike-flow-avro-adapter is experiment-only (the producer of unified-sr's per-strike Avro flow
-  # topic, live on .2). Same situation as unified-sr above: it's in k8s/base but has no prod image, so
-  # the prod render must exclude it or the digest-pin guard aborts the prod deploy. Remove until it is
-  # properly built+pinned for prod. Mirrors the dev-overlay exclusion.
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: strike-flow-avro-adapter
-        namespace: options-edge
-      $patch: delete
-  - patch: |-
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: strike-flow-avro-adapter
-        namespace: options-edge
-      $patch: delete
+  # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
+  # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
+  # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.

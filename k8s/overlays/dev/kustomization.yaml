@@ -54,42 +54,8 @@ patches:
   # so the mandatory MissionAuthSettings.validate() check is satisfied AND the JWKS
   # is actually fetchable at startup. Audience inherits from base ("options-edge-web").
   - path: spx-mission-control-dev-env-patch.yaml
-  # DEV-ONLY: unified-sr is experiment-only (live on .2); it was added to k8s/base but never wired into
-  # the dev build or the deploy's image build/pin list, so its base manifest renders with a mutable
-  # prod-registry :tag and the apply.sh digest-pin guard aborts the ENTIRE dev deploy. Remove it from
-  # the dev render until it is properly built+pinned for dev. (Both the Deployment and Service are named
-  # unified-sr-service.) Prod overlay is unaffected.
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: unified-sr-service
-        namespace: options-edge
-      $patch: delete
-  - patch: |-
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: unified-sr-service
-        namespace: options-edge
-      $patch: delete
-  # DEV-ONLY: strike-flow-avro-adapter is experiment-only (producer of unified-sr's per-strike Avro flow
-  # topic, live on .2). Same as unified-sr above — in k8s/base but no dev image, so the apply.sh digest-pin
-  # guard would abort the entire dev deploy. Remove from the dev render until built+pinned for dev.
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: strike-flow-avro-adapter
-        namespace: options-edge
-      $patch: delete
-  - patch: |-
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: strike-flow-avro-adapter
-        namespace: options-edge
-      $patch: delete
+  # unified-sr + strike-flow-avro-adapter are now promoted to main and built for every env, so they
+  # render and deploy in dev too (exclusions removed). Their dev image remaps are in the images: block.
 images:
   - name: 192.168.100.252:5000/options-edge-raw-to-display
     newName: host.docker.internal:5001/options-edge-raw-to-display
@@ -156,6 +122,12 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-spx-mission-control
     newName: host.docker.internal:5001/options-edge-spx-mission-control
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-unified-sr
+    newName: host.docker.internal:5001/options-edge-unified-sr
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-strike-flow-avro-adapter
+    newName: host.docker.internal:5001/options-edge-strike-flow-avro-adapter
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-strike-flow-classifier
     newName: host.docker.internal:5001/options-edge-strike-flow-classifier
