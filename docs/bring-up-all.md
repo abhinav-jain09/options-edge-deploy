@@ -105,7 +105,7 @@ per the production environment** (the app intentionally has *no* prod defaults �
 | `VITE_API_BASE_URL` | `http://localhost:8090` | `https://fullfunding.nl` |
 | `VITE_WS_URL` | `ws://192.168.100.102:8093/ws/events` | `wss://fullfunding.nl/ws/events` |
 | `VITE_MISSION_CONTROL_URL` | `http://localhost:8090` | `https://fullfunding.nl` |
-| `KAFKA_BOOTSTRAP_SERVERS` | _dev default_ | `192.168.100.252:9092,192.168.100.4:9092` — **confirm** |
+| `KAFKA_BOOTSTRAP_SERVERS` | _dev default_ | `192.168.100.252:9092` (single-node `.252`; `.4` decommissioned) |
 | `VITE_AUTH_ENABLED` | `true` | `true` (auth mandatory in every env) |
 | `VITE_AUTH_ISSUER` | `http://192.168.100.102:8089/realms/optionsedge` | _prod Keycloak issuer_ — **TBD** |
 | `VITE_AUTH_CLIENT_ID` | `options-edge-web` | `options-edge-web` |

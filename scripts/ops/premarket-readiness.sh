@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CALENDAR_DIR="${CALENDAR_DIR:-$SCRIPT_DIR/../jenkins}"   # market_calendar.py lives in scripts/jenkins
 
 NS="${K8S_NAMESPACE:-options-edge}"
-KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.4:9092}"
+KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092}"
 KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/kafka_2.13-4.3.0/bin}"
 SCHEMA_REGISTRY_URL="${SCHEMA_REGISTRY_URL:-http://192.168.100.252:8082}"
 KEYCLOAK_HEALTH_URL="${KEYCLOAK_HEALTH_URL:-}"           # e.g. http://192.168.100.252:9000/health/ready ; empty -> skip
