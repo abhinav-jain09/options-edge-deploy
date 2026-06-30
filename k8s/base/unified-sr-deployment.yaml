@@ -72,7 +72,6 @@ spec:
               cpu: 250m
               memory: 768Mi
             limits:
-              cpu: "1"
               memory: 3Gi
       volumes:
         - name: kafka-streams-state
