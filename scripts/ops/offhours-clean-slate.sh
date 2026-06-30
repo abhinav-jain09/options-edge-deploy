@@ -131,6 +131,82 @@ kc() { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }
 # the impersonation grant is narrow).
 kcr() { kubectl -n "$NS" "$@"; }
 
+# ---------------------------------------------------------------------------
+# Disk-space accounting for the "freed GB" report.
+# ---------------------------------------------------------------------------
+# The paths that back the local data the wipe actually frees: the Kafka data/log
+# dirs and the Postgres data dir. We resolve each to its backing filesystem and
+# sum across DISTINCT mountpoints (so two paths on the same fs are counted once)
+# excluding pseudo filesystems (tmpfs/devtmpfs). For each measured fs we report
+# free bytes (avail) and used bytes (size-avail).
+#
+# DEV caveat: on docker-desktop the PVC space lives INSIDE the docker VM and may
+# not appear in the Mac's `df` — so dev's number is APPROXIMATE. What the dev wipe
+# reclaims on the Mac filesystem (docker container json-logs, `docker system
+# prune`, and the local-registry GC) DOES live on the Mac fs and WILL show here.
+#
+# Mounts to measure: Kafka data dir(s) (KAFKA_DATA_DIRS, space/comma-separated;
+# falls back to the dir holding KAFKA_LOG_DIR) and the Postgres data dir
+# (PG_DATA_DIR, falling back to PG_LOG_DIR). Anything unreadable is fail-soft
+# skipped — disk accounting must NEVER abort the wipe.
+KAFKA_DATA_DIRS="${KAFKA_DATA_DIRS:-}"   # e.g. "/opt/kafka/data" or "/data1,/data2"; optional
+PG_DATA_DIR="${PG_DATA_DIR:-}"           # e.g. /var/lib/pgsql/data; optional
+
+# Echo the candidate paths whose backing filesystems we measure (one per line).
+_disk_paths() {
+  local p
+  for p in $(printf '%s' "${KAFKA_DATA_DIRS//,/ }"); do [ -n "$p" ] && echo "$p"; done
+  [ -n "$KAFKA_LOG_DIR" ] && echo "$KAFKA_LOG_DIR"
+  [ -n "$PG_DATA_DIR" ]   && echo "$PG_DATA_DIR"
+  [ -n "$PG_LOG_DIR" ]    && echo "$PG_LOG_DIR"
+}
+
+# free_bytes_total: sum of available bytes across the DISTINCT, real filesystems
+# backing the wipe's data paths. Prints an integer (bytes); prints 0 if nothing
+# measurable. Never fails (fail-soft) so it is safe to call on the live path.
+free_bytes_total() { _df_field avail; }   # df -P -k column 4 = Available (1K blocks)
+# used_bytes_total: sum of (size - avail) over the same DISTINCT filesystems.
+used_bytes_total() { _df_field used; }
+
+# _df_field <avail|used>: walk candidate paths, dedupe by mountpoint, and sum the
+# requested figure in BYTES. Uses `df -P -k` — POSIX 1024-byte blocks, portable to
+# BOTH GNU/Linux (prod) and BSD/macOS (the dev Jenkins agent). NOTE: GNU's `-B1`
+# is NOT portable to macOS `df`, so we read 1K blocks and multiply by 1024.
+_df_field() {
+  local want="$1" seen="" total=0 path mp avail1k size1k used1k
+  while IFS= read -r path; do
+    [ -e "$path" ] || continue
+    # One physical fs per path: -P forces a single, one-line-per-fs data row.
+    local line
+    line=$(df -P -k "$path" 2>/dev/null | awk 'NR==2{print}') || continue
+    [ -n "$line" ] || continue
+    # POSIX `df -P` columns: Filesystem 1024-blocks Used Available Capacity Mounted-on
+    local fsname; fsname=$(printf '%s' "$line" | awk '{print $1}')
+    case "$fsname" in tmpfs|devtmpfs|none|overlay) continue ;; esac
+    mp=$(printf '%s' "$line" | awk '{print $NF}')
+    [ -n "$mp" ] || continue
+    case " $seen " in *" $mp "*) continue ;; esac   # already counted this fs
+    seen="$seen $mp"
+    size1k=$(printf '%s'  "$line" | awk '{print $2}')
+    used1k=$(printf '%s'  "$line" | awk '{print $3}')
+    avail1k=$(printf '%s' "$line" | awk '{print $4}')
+    case "$want" in
+      avail) case "$avail1k" in ''|*[!0-9]*) : ;; *) total=$(( total + avail1k * 1024 )) ;; esac ;;
+      used)  # prefer reported Used; fall back to size-avail if Used is non-numeric
+             case "$used1k" in
+               ''|*[!0-9]*)
+                 case "$size1k$avail1k" in *[!0-9]*|'') : ;;
+                   *) total=$(( total + (size1k - avail1k) * 1024 )) ;; esac ;;
+               *) total=$(( total + used1k * 1024 )) ;;
+             esac ;;
+    esac
+  done <<<"$(_disk_paths)"
+  echo "$total"
+}
+
+# bytes_to_gb <bytes>: human GB with one decimal (1 GB = 1024^3 bytes).
+bytes_to_gb() { awk -v b="${1:-0}" 'BEGIN{printf "%.1f", b/1073741824}'; }
+
 MUTATE="true"; [ "$DRY_RUN" = "true" ] && MUTATE="false"
 
 # ===========================================================================
@@ -300,6 +376,17 @@ fi
 # LIVE WIPE PATH (DRY_RUN=false, WIPE_ENABLED=true, all guards passed).
 # ===========================================================================
 log ">>> LIVE WIPE BEGINS <<<"
+
+# Capture disk FREE before any delete, for the "freed GB" report at the end. This
+# is a measurement only (fail-soft) — it never blocks the wipe.
+FREE_BEFORE=$(free_bytes_total)
+USED_BEFORE=$(used_bytes_total)
+log "disk before wipe: free=$(bytes_to_gb "$FREE_BEFORE") GB used=$(bytes_to_gb "$USED_BEFORE") GB"
+
+# TRIGGER ping — LIVE path only (the DRY-RUN path above posts its own 🧪 line).
+# Posted before scaling anything so operators see the wipe START in real time.
+NOW_ET=$(TZ='America/New_York' date '+%H:%M' 2>/dev/null || date '+%H:%M')
+discord "▶️ Off-hours clean-slate TRIGGERED ($EXPECTED_ENV, dry_run=$DRY_RUN) — disk in use $(bytes_to_gb "$USED_BEFORE") GB · ${NOW_ET} ET"
 
 # Snapshot replica counts FIRST so any failure path can always scale back up.
 SNAP=$(kcr get deploy -l "$SELECTOR" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.replicas}{"\n"}{end}')
@@ -488,13 +575,25 @@ fi
 # ===========================================================================
 # Summary
 # ===========================================================================
+# Re-measure disk AFTER all deletes/purges/truncate+checkpoint+vacuum and log
+# truncation, and compute the space freed. FREED clamps negatives to 0 (a busy
+# fs can grow during the window). On dev the figure is approximate — see the
+# disk-accounting comment block above (docker-VM PVC space is opaque to Mac df).
+FREE_AFTER=$(free_bytes_total)
+USED_AFTER=$(used_bytes_total)
+FREED=$(( FREE_AFTER - FREE_BEFORE )); [ "$FREED" -lt 0 ] && FREED=0
+FREED_GB=$(bytes_to_gb "$FREED")
+USED_BEFORE_GB=$(bytes_to_gb "$USED_BEFORE")
+USED_AFTER_GB=$(bytes_to_gb "$USED_AFTER")
+DISK_NOTE="freed ${FREED_GB} GB (was ${USED_BEFORE_GB} → now ${USED_AFTER_GB} GB)"
+
 ELAPSED=$(( $(date +%s) - START_TS ))
 log "=== off-hours clean-slate complete in ${ELAPSED}s ==="
-SUMMARY="env=$EXPECTED_ENV state_topics_deleted=$del_ok purge_topics=$purged pvcs_recreated=$pvc_ok db_tables_truncated=$trunc_n logs_truncated=$log_files scaleback_ok=$SCALEBACK_OK elapsed=${ELAPSED}s"
+SUMMARY="env=$EXPECTED_ENV state_topics_deleted=$del_ok purge_topics=$purged pvcs_recreated=$pvc_ok db_tables_truncated=$trunc_n logs_truncated=$log_files scaleback_ok=$SCALEBACK_OK $DISK_NOTE elapsed=${ELAPSED}s"
 log "SUMMARY: $SUMMARY"
 if [ "$del_fail" -eq 0 ] && [ "$pvc_fail" -eq 0 ] && [ "$SCALEBACK_OK" = "1" ]; then
-  discord "🧹 Off-hours clean-slate complete ($EXPECTED_ENV) — deleted **${del_ok}** state topics, purged **${purged}** data topics, recreated **${pvc_ok}** PVCs, truncated **${trunc_n}** DB tables, **${log_files}** logs; apps back up. ✅"
+  discord "🧹 Off-hours clean-slate complete ($EXPECTED_ENV) — deleted **${del_ok}** state topics, purged **${purged}** data topics, recreated **${pvc_ok}** PVCs, truncated **${trunc_n}** DB tables, **${log_files}** logs; apps back up. ✅ · ${DISK_NOTE}"
   exit 0
 fi
-discord "⚠️ Off-hours clean-slate ($EXPECTED_ENV) finished WITH ISSUES — state_del_fail=$del_fail pvc_fail=$pvc_fail scaleback_ok=$SCALEBACK_OK. CHECK: kubectl -n $NS get deploy"
+discord "⚠️ Off-hours clean-slate ($EXPECTED_ENV) finished WITH ISSUES — state_del_fail=$del_fail pvc_fail=$pvc_fail scaleback_ok=$SCALEBACK_OK. CHECK: kubectl -n $NS get deploy · ${DISK_NOTE}"
 exit 1
