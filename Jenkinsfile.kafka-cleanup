@@ -19,6 +19,13 @@
 //   Jobs (the CronJob history limits do NOT apply to manually-created Jobs).
 //
 // WHEN: 02:00 Europe/Amsterdam every day (operator request).
+//
+// RETIRED 2026-06-30 (off-hours clean-slate, decision #4): the gentle 24h
+// changelog/repartition TRIM is SUPERSEDED by the aggressive off-hours
+// clean-slate, which DELETES those topics outright (no 24h retention, no compact
+// sparing). To avoid the two fighting, this job's nightly cron trigger is
+// DISABLED — it stays runnable MANUALLY for ad-hoc trims but no longer self-fires.
+// (The kafka-changelog-cleanup CronJob template itself is already suspend:true.)
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
@@ -33,12 +40,8 @@ pipeline {
     string(name: 'KEEP_JOBS', defaultValue: '5',
       description: 'How many most-recent cleanup Jobs to retain (older ones are pruned after each run).')
   }
-  triggers {
-    // 02:00 Europe/Amsterdam nightly. The TZ= prefix pins the schedule to
-    // Amsterdam regardless of the Jenkins controller/agent timezone.
-    cron('''TZ=Europe/Amsterdam
-0 2 * * *''')
-  }
+  // triggers {} — DISABLED. Retired in favour of the off-hours clean-slate (see
+  // header). No cron: this job no longer self-fires; it is manual-only now.
   options {
     disableConcurrentBuilds()
     timeout(time: 40, unit: 'MINUTES')

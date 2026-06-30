@@ -66,6 +66,7 @@ resources:
   - databento-gex-history-service.yaml
   - kafka-streams-state-pvcs.yaml
   - kafka-changelog-cleanup-cronjob.yaml
+  - offhours-clean-slate-cronjob.yaml
 
 patches:
   - path: kafka-streams-state-patches.yaml

@@ -1,0 +1,138 @@
+// Off-hours CLEAN-SLATE wipe for OptionsEdge (dev + prod).
+//
+// Runs scripts/ops/offhours-clean-slate.sh ON the target host (over SSH) so all
+// kafka admin + kubectl + psql + log/docker ops execute locally next to the
+// brokers/API/DB — the SAME Jenkins->SSH execution model as
+// Jenkinsfile.kafka-reset / Jenkinsfile.premarket-reset (native k8s CronJob
+// firing is blocked by the jenkins-only admission policy).
+//
+// SAFE BY DEFAULT — TWO latches, BOTH required for any destruction:
+//   * scheduled/default runs are DRY_RUN=true AND WIPE_ENABLED=false → they only
+//     LOG what they would wipe. Uncheck DRY_RUN AND check WIPE_ENABLED to mutate.
+//   * even then the script's own guards must all pass: market-hours guard (refuse
+//     during the session), Kafka cluster-id, DB host/name + Keycloak-deny.
+//
+// SCHEDULE: 20:30 ET nightly, trading days only (cron is Mon-Fri; the script's
+// calendar guard additionally no-ops on holidays / refuses inside the session).
+//
+// DEV vs PROD execution differs — selected by ENVIRONMENT:
+//   * prod : SSH to the standalone .252 host. Native Kafka CLI + k3s + flow PG are
+//            local there. Runtime is containerd → there are NO docker json-logs and
+//            no local registry, so DOCKER_CONTAINER_LOG_GLOB stays empty and
+//            RECLAIM_DOCKER=false. Broker logs at /opt/kafka/logs.
+//   * dev  : the docker-desktop Mac (the Jenkins agent itself). Kafka/PG run on the
+//            host; the app runs in docker-desktop k8s. Here DOCKER_CONTAINER_LOG_GLOB
+//            and RECLAIM_DOCKER=true ARE set (the docker json-logs + 571GB-registry
+//            are the known dev disk-killers). Paths differ — see the dev branch.
+//
+// Both environments share ONE script; only the env wiring differs below.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    booleanParam(name: 'DRY_RUN', defaultValue: true,
+      description: 'Dry-run: log what would be wiped without changing anything. Uncheck to mutate (ALSO requires WIPE_ENABLED).')
+    booleanParam(name: 'WIPE_ENABLED', defaultValue: false,
+      description: 'Second safety latch. Must be checked AND DRY_RUN unchecked for any destructive action.')
+    choice(name: 'ENVIRONMENT', choices: ['prod', 'dev'],
+      description: 'Target env — selects host, identity creds, and dev-only docker/log wiring.')
+    string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
+      description: 'SSH target for ENVIRONMENT=prod (Kafka + k3s + Postgres are local there).')
+    string(name: 'DEV_HOST', defaultValue: '',
+      description: 'SSH target for ENVIRONMENT=dev (the docker-desktop Mac). Empty -> runs locally on the agent (when the agent IS the dev Mac).')
+  }
+  triggers {
+    // 20:30 America/New_York, Mon-Fri (post 16:15 ET options close, well into
+    // off-hours). Scheduled runs use the defaults (DRY_RUN=true, WIPE_ENABLED=
+    // false) so they ONLY log until an operator deliberately runs it live. The
+    // script's calendar guard handles holidays + refuses inside the session.
+    cron('''TZ=America/New_York
+30 20 * * 1-5''')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 40, unit: 'MINUTES')
+  }
+  environment {
+    DRY_RUN      = "${params.DRY_RUN}"
+    WIPE_ENABLED = "${params.WIPE_ENABLED}"
+    ENVIRONMENT  = "${params.ENVIRONMENT}"
+  }
+  stages {
+    stage('Run off-hours clean-slate (prod)') {
+      when { expression { params.ENVIRONMENT == 'prod' } }
+      steps {
+        withCredentials([
+          string(credentialsId: 'offhours-discord-webhook',     variable: 'DISCORD_WEBHOOK_URL'),
+          string(credentialsId: 'offhours-flow-pg-dsn',          variable: 'PG_DSN'),
+          string(credentialsId: 'offhours-kafka-cluster-id',     variable: 'EXPECTED_KAFKA_CLUSTER_ID'),
+        ]) {
+          sh '''
+            set -euo pipefail
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${PROD_HOST}" 'mkdir -p ~/offhours/jenkins ~/offhours/ops'
+            scp -o BatchMode=yes scripts/ops/offhours-clean-slate.sh "${PROD_HOST}:/home/abhinav/offhours/ops/offhours-clean-slate.sh"
+            scp -o BatchMode=yes scripts/jenkins/market_calendar.py   "${PROD_HOST}:/home/abhinav/offhours/jenkins/market_calendar.py"
+            echo "Running off-hours clean-slate on ${PROD_HOST} (DRY_RUN=${DRY_RUN} WIPE_ENABLED=${WIPE_ENABLED})"
+            ssh -o BatchMode=yes "${PROD_HOST}" \
+              "chmod +x ~/offhours/ops/offhours-clean-slate.sh && \
+               CALENDAR_DIR=~/offhours/jenkins \
+               DRY_RUN='${DRY_RUN}' WIPE_ENABLED='${WIPE_ENABLED}' EXPECTED_ENV='prod' \
+               KAFKA_BOOTSTRAP_SERVERS='192.168.100.252:9092' \
+               KAFKA_BIN='/opt/kafka/kafka_2.13-4.3.0/bin' \
+               KAFKA_LOG_DIR='/opt/kafka/logs' \
+               PG_LOG_DIR='/var/lib/pgsql/data/log' \
+               RECLAIM_DOCKER='false' DOCKER_CONTAINER_LOG_GLOB='' \
+               DISCORD_WEBHOOK_URL='${DISCORD_WEBHOOK_URL:-}' \
+               PG_DSN='${PG_DSN:-}' \
+               EXPECTED_DB='options_flow' EXPECTED_DB_HOST='192.168.100.252' \
+               EXPECTED_KAFKA_CLUSTER_ID='${EXPECTED_KAFKA_CLUSTER_ID:-}' \
+               ~/offhours/ops/offhours-clean-slate.sh"
+          '''
+        }
+      }
+    }
+    stage('Run off-hours clean-slate (dev)') {
+      when { expression { params.ENVIRONMENT == 'dev' } }
+      steps {
+        withCredentials([
+          string(credentialsId: 'offhours-discord-webhook-dev', variable: 'DISCORD_WEBHOOK_URL'),
+          string(credentialsId: 'offhours-flow-pg-dsn-dev',     variable: 'PG_DSN'),
+          string(credentialsId: 'offhours-kafka-cluster-id-dev', variable: 'EXPECTED_KAFKA_CLUSTER_ID'),
+        ]) {
+          // Dev runs on the docker-desktop Mac. If DEV_HOST is empty the agent IS
+          // that Mac, so we run the script locally; otherwise SSH to it. Dev DOES
+          // set the docker json-log glob + RECLAIM_DOCKER (the dev disk-killers).
+          sh '''
+            set -euo pipefail
+            RUNENV="CALENDAR_DIR=scripts/jenkins \
+              DRY_RUN='${DRY_RUN}' WIPE_ENABLED='${WIPE_ENABLED}' EXPECTED_ENV='dev' \
+              KAFKA_BOOTSTRAP_SERVERS='192.168.100.102:9092' \
+              KAFKA_BIN='${DEV_KAFKA_BIN:-/opt/homebrew/opt/kafka/libexec/bin}' \
+              KAFKA_LOG_DIR='${DEV_KAFKA_LOG_DIR:-/opt/homebrew/var/log/kafka}' \
+              PG_LOG_DIR='${DEV_PG_LOG_DIR:-}' \
+              RECLAIM_DOCKER='true' \
+              DOCKER_CONTAINER_LOG_GLOB='/var/lib/docker/containers/*/*-json.log' \
+              DISCORD_WEBHOOK_URL='${DISCORD_WEBHOOK_URL:-}' \
+              PG_DSN='${PG_DSN:-}' \
+              EXPECTED_DB='options_flow_dev' EXPECTED_DB_HOST='${DEV_DB_HOST:-host.docker.internal}' \
+              EXPECTED_KAFKA_CLUSTER_ID='${EXPECTED_KAFKA_CLUSTER_ID:-}'"
+            chmod +x scripts/ops/offhours-clean-slate.sh
+            if [ -n "${DEV_HOST}" ]; then
+              ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${DEV_HOST}" 'mkdir -p ~/offhours/jenkins ~/offhours/ops'
+              scp -o BatchMode=yes scripts/ops/offhours-clean-slate.sh "${DEV_HOST}:~/offhours/ops/offhours-clean-slate.sh"
+              scp -o BatchMode=yes scripts/jenkins/market_calendar.py   "${DEV_HOST}:~/offhours/jenkins/market_calendar.py"
+              ssh -o BatchMode=yes "${DEV_HOST}" "chmod +x ~/offhours/ops/offhours-clean-slate.sh && ${RUNENV} ~/offhours/ops/offhours-clean-slate.sh"
+            else
+              echo "Running off-hours clean-slate LOCALLY on the dev agent (DRY_RUN=${DRY_RUN} WIPE_ENABLED=${WIPE_ENABLED})"
+              env bash -c "${RUNENV} ./scripts/ops/offhours-clean-slate.sh"
+            fi
+          '''
+        }
+      }
+    }
+  }
+  post {
+    failure {
+      echo 'Off-hours clean-slate failed or was aborted by a guard. If this was a LIVE run, verify: kubectl -n options-edge get deploy'
+    }
+  }
+}
