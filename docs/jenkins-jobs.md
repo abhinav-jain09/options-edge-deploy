@@ -26,7 +26,7 @@
 | OS / CPU | macOS / Apple Silicon | CentOS Stream 9 / **x86_64** |
 | **Image platform (`BUILD_PLATFORM`)** | **`linux/arm64`** | **`linux/amd64`** |
 | Image registry | local docker-desktop (`host.docker.internal:5001`) | **`192.168.100.252:5000`** |
-| Push image? (`PUSH_IMAGE`) | `false` (load into local docker) | `true` (push to the registry) |
+| Push image? (`PUSH_IMAGE`) | `true` (push to the dev registry) | `true` (push to the registry) |
 | kube access (from the Mac agent) | context **`docker-desktop`** | **`~/.kube/oe-prod.yaml`** |
 | Kubernetes API | in-cluster | **https://192.168.100.252:6443** |
 
