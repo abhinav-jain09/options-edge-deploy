@@ -43,6 +43,10 @@ spec:
               value: options.spx.strike-sr.current
             - name: KAFKA_UNIFIED_SR_STREAMS_APP_ID
               value: options-edge-unified-sr-v1
+            # Streams state dir = the kafka-streams-state mount (PVC via kafka-streams-state-patches.yaml),
+            # so RocksDB state persists across restarts instead of replaying the full changelog each time.
+            - name: KAFKA_STREAMS_STATE_DIR
+              value: /var/lib/options-edge/kafka-streams
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx2g"
           ports:

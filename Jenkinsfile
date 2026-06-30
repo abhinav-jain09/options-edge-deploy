@@ -38,6 +38,8 @@ pipeline {
     string(name: 'HPSF_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'HPSF Postgres writer image')
     string(name: 'SPX_MISSION_CONTROL_IMAGE', defaultValue: '', description: 'SPX mission control image')
     string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', defaultValue: '', description: 'Strike flow classifier image')
+    string(name: 'UNIFIED_SR_IMAGE', defaultValue: '', description: 'Unified S/R image')
+    string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', defaultValue: '', description: 'Strike-flow Avro adapter image (unified-sr FLOW producer)')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
     string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
@@ -107,6 +109,8 @@ pipeline {
     HPSF_POSTGRES_WRITER_IMAGE = "${params.HPSF_POSTGRES_WRITER_IMAGE ?: oeProfile.image('hpsf-postgres-writer', 'production', 'dev')}"
     SPX_MISSION_CONTROL_IMAGE = "${params.SPX_MISSION_CONTROL_IMAGE ?: oeProfile.image('spx-mission-control', 'production', 'dev')}"
     STRIKE_FLOW_CLASSIFIER_IMAGE = "${params.STRIKE_FLOW_CLASSIFIER_IMAGE ?: oeProfile.image('strike-flow-classifier', 'production', 'dev')}"
+    UNIFIED_SR_IMAGE = "${params.UNIFIED_SR_IMAGE ?: oeProfile.image('unified-sr', 'production', 'dev')}"
+    STRIKE_FLOW_AVRO_ADAPTER_IMAGE = "${params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE ?: oeProfile.image('strike-flow-avro-adapter', 'production', 'dev')}"
     IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: oeProfile.image('ibkr-feed', 'production', 'dev')}"
     MARKET_DATA_SOURCE = "${params.MARKET_DATA_SOURCE ?: 'DATABENTO'}"
     RAW_TOPIC = "${params.RAW_TOPIC ?: ''}"
@@ -704,6 +708,8 @@ void promoteToProduction() {
       string(name: 'HPSF_POSTGRES_WRITER_IMAGE', value: params.HPSF_POSTGRES_WRITER_IMAGE),
       string(name: 'SPX_MISSION_CONTROL_IMAGE', value: params.SPX_MISSION_CONTROL_IMAGE),
       string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', value: params.STRIKE_FLOW_CLASSIFIER_IMAGE),
+      string(name: 'UNIFIED_SR_IMAGE', value: params.UNIFIED_SR_IMAGE),
+      string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', value: params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE),
       string(name: 'IBKR_FEED_IMAGE', value: params.IBKR_FEED_IMAGE),
       string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', value: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID),
       string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
