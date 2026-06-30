@@ -41,27 +41,38 @@ spec:
             - name: STRIKE_FLOW_ENABLED
               value: "true"
             # Institutional canary (databento only). Each flag is independent; kill-switch = "false".
-            # DELTA_OVERLAY: enables the GEX-backed per-leg delta-weighting (GexDeltaGlobalProcessor
-            # consumes options.databento.gex.strike -> global store; GexBackedDeltaProvider looks up
-            # per-leg delta and populates deltaWeightedBuyNotional/deltaWeightedSellNotional). Previously
-            # OFF (so those fields emitted 0); turned ON now the databento-feed/GEX topic carries real
-            # per-leg delta. Kill-switch = "false". Reads delta from KAFKA_DATABENTO_GEX_STRIKE_TOPIC
-            # (default options.databento.gex.strike).
+            # DELTA_OVERLAY: enables the GEX-backed per-leg delta-weighting that populates
+            # deltaWeightedBuyNotional/deltaWeightedSellNotional. The delta is now looked up from Redis
+            # (populated by the standalone gex-delta-redis-writer), NOT an in-process Kafka Streams global
+            # store — so a GEX/Redis failure can no longer take the classifier to ERROR (the 2026-06-29
+            # incident). The lookup is fail-open: if Redis is unreachable the classifier logs a throttled
+            # WARN and runs WITHOUT delta weighting. Kill-switch = "false".
+            # Re-enabled now that delta is read via a fail-open Redis lookup (no in-process global store):
+            # a GEX/Redis failure degrades to "no delta weighting", it can no longer take the classifier
+            # to ERROR like the 2026-06-29 incident. Kill-switch = "false".
             - name: STRIKE_FLOW_DELTA_OVERLAY_ENABLED
-              value: "false"
-            # ONE-TIME state recovery. When DELTA_OVERLAY toggles between true/false, the topology's
-            # global-store set changes — but the persistent RocksDB state directory remembers the OLD
-            # set. On startup, GlobalStateManagerImpl.initialize() reads orphaned global-store state
-            # and throws "Encountered a topic-partition not associated with any global state store",
-            # crashing the main thread (verified on dev 2026-06-30: pod 0/1 not Ready, output topic
-            # empty). Setting this to "true" makes the classifier call streams.cleanUp() before
-            # streams.start() — wipes the local state dir, lets the topology bootstrap fresh from the
-            # changelog. Safe to leave on permanently for the strike-flow classifier specifically
-            # (its STATE_TTL = 86_400_000 / 24h, so a cold rebuild costs at most one session); but
-            # carries a one-time bootstrap-from-input penalty per restart. REMOVE OR SET TO "false"
-            # after the first successful deploy if you don't want the cold-rebuild on every pod cycle.
+              value: "true"
+            # ONE-TIME state recovery for THIS migration. The previous image registered a gex-delta-by-strike
+            # GLOBAL store; this image removes it (delta now comes from Redis). The persistent RocksDB state
+            # dir still holds that orphaned global-store state, so GlobalStateManagerImpl.initialize() would
+            # throw "Encountered a topic-partition not associated with any global state store" and crash the
+            # main thread on first start. "true" makes the classifier streams.cleanUp() before start() —
+            # wipes the local state dir and rebuilds fresh from the changelog. Safe to leave on for the
+            # strike-flow classifier (STATE_TTL 24h, so a cold rebuild costs at most one session); set to
+            # "false" after the first successful post-migration deploy to avoid a cold rebuild per pod cycle.
             - name: KAFKA_STREAMS_CLEANUP_ON_START
               value: "true"
+            # Redis the delta lookup reads from. Host + key prefix MUST match the gex-delta-redis-writer's
+            # GEX_DELTA_REDIS_HOST / GEX_DELTA_REDIS_KEY_PREFIX. Short timeout so a Redis stall fails open
+            # instead of blocking classification.
+            - name: STRIKE_FLOW_DELTA_REDIS_HOST
+              value: options-edge-redis
+            - name: STRIKE_FLOW_DELTA_REDIS_PORT
+              value: "6379"
+            - name: STRIKE_FLOW_DELTA_REDIS_TIMEOUT_MS
+              value: "50"
+            - name: STRIKE_FLOW_DELTA_REDIS_KEY_PREFIX
+              value: "gexdelta:"
             - name: STRIKE_FLOW_INSTITUTIONAL_ENABLED
               value: "true"
             - name: STRIKE_FLOW_INSTITUTIONAL_TICK_EPSILON
