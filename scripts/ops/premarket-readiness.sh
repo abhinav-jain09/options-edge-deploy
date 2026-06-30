@@ -306,8 +306,15 @@ fi
 # ---------------------------------------------------------------------------
 STATUS="GO"; COLOR=3066993   # green
 [ ${#FAILS[@]} -gt 0 ] && { STATUS="NOT-READY"; COLOR=15158332; }   # red
-LABEL="T-${HOURS_TO_OPEN:-?}h"
-TITLE="$STATUS — pre-market (${LABEL} to open)"
+# Show the real hours-to-open when the calendar guard succeeded; otherwise say so explicitly.
+# A bare "T-?h" was opaque — an empty HOURS_TO_OPEN always means the calendar guard returned
+# non-OK (stale/missing market_calendar.py, bad CALENDAR_DIR, or a calendar crash), which is
+# ALSO why STATUS is NOT-READY (the fail-closed catch-all above). Make the cause visible.
+if [ -n "$HOURS_TO_OPEN" ]; then
+  TITLE="$STATUS — pre-market (T-${HOURS_TO_OPEN}h to open)"
+else
+  TITLE="$STATUS — pre-market (hours-to-open unknown — calendar guard failed)"
+fi
 
 # Plain-text body (also the Haiku input on red). Always show the passed COUNT so
 # a NOT-READY card still proves the full sweep ran; list failures/warns in detail.
