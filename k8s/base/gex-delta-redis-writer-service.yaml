@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: gex-delta-redis-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: gex-delta-redis-writer
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8101"
+spec:
+  selector:
+    app.kubernetes.io/name: gex-delta-redis-writer
+  ports:
+    - name: health
+      port: 8101
+      targetPort: health
