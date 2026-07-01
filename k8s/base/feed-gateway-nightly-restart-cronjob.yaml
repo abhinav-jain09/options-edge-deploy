@@ -11,8 +11,11 @@
 # options-edge namespace. This bumps the pod template's restartedAt
 # annotation and lets the Deployment controller do a rolling recreate.
 #
-# WHEN: 04:05 UTC daily (00:05 ET) — after midnight ET session rollover,
-# well before pre-market prep at ~09:00 UTC / 04:00 ET.
+# WHEN: 00:05 America/New_York daily — after midnight ET session rollover,
+# well before pre-market prep at ~04:00 ET. Using k8s CronJob spec.timeZone
+# so the intent is stable across DST transitions (a bare UTC schedule would
+# drift an hour twice a year and land at 23:05 ET during EST — BEFORE the
+# rollover this job is meant to recover from).
 #
 # HOW IT IS TRIGGERED (important): this CronJob is suspend:true and does NOT
 # self-schedule. The cluster enforces a ValidatingAdmissionPolicy
@@ -47,7 +50,8 @@ spec:
   # identity, not by the k8s CronJob controller (blocked by the jenkins-only
   # admission policy — see header).
   suspend: true
-  schedule: "5 4 * * *"                 # 04:05 UTC daily — documents the intended cadence
+  timeZone: America/New_York            # DST-safe: 00:05 ET year-round (not 04:05 UTC drifting)
+  schedule: "5 0 * * *"                 # 00:05 ET daily — documents the intended cadence
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
   successfulJobsHistoryLimit: 1

@@ -1,0 +1,105 @@
+@Library('oe') _
+
+// Nightly feed-gateway rollout restart — belt-and-braces vs silent-wedge.
+//
+// WHY a Jenkins job instead of the native k8s CronJob schedule:
+//   The cluster enforces a ValidatingAdmissionPolicy
+//   (options-edge-jenkins-only-workloads) that DENIES batch/Job creation by
+//   ANY principal except the jenkins-deployer ServiceAccount. The k8s CronJob
+//   controller creates its Jobs under its own SA
+//   (system:serviceaccount:kube-system:cronjob-controller), so the native
+//   nightly firing is rejected every night. The companion CronJob
+//   (k8s/base/feed-gateway-nightly-restart-cronjob.yaml) is therefore kept
+//   suspend:true and serves ONLY to document the intended cadence + Job
+//   template. This Jenkins job is the actual trigger — it runs under the
+//   deployer identity, the only principal the admission policy permits.
+//   Pattern mirrors Jenkinsfile.kafka-cleanup.
+//
+// WHAT: kubectl rollout restart deployment/feed-gateway-service, then
+//   kubectl rollout status ... --timeout=180s so a failed rollout is caught
+//   here rather than silently persisting until the next scheduled run.
+//
+// WHEN: 00:05 America/New_York daily — mirrors the CronJob's spec.timeZone
+//   + schedule. Using Jenkins' TZ= cron prefix so DST is handled correctly
+//   (a bare UTC cron would drift an hour twice a year and land at 23:05 ET
+//   during EST, BEFORE the midnight-ET rollover this is meant to recover
+//   from).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['production', 'dev'],
+      description: 'Deploy profile (oeProfile) — selects the deployer kubeconfig. Scheduled runs use the default (production).')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    string(name: 'DEPLOYMENT', defaultValue: 'feed-gateway-service',
+      description: 'Deployment to rollout-restart.')
+    string(name: 'NAMESPACE', defaultValue: 'options-edge',
+      description: 'Namespace of the Deployment.')
+    string(name: 'ROLLOUT_TIMEOUT', defaultValue: '180s',
+      description: 'kubectl rollout status timeout.')
+  }
+  triggers {
+    // 00:05 America/New_York daily — DST-safe. Matches the CronJob template's
+    // spec.timeZone + schedule (single source of truth for the cadence lives
+    // in that manifest; this cron duplicates it because Jenkins is the actual
+    // trigger).
+    cron('''TZ=America/New_York
+5 0 * * *''')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 15, unit: 'MINUTES')
+  }
+  environment {
+    KUBECONFIG = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    DEPLOYMENT = "${params.DEPLOYMENT}"
+    NAMESPACE  = "${params.NAMESPACE}"
+    ROLLOUT_TIMEOUT = "${params.ROLLOUT_TIMEOUT}"
+  }
+  stages {
+    stage('Restart feed-gateway') {
+      steps {
+        sh '''
+          set -euo pipefail
+          echo "KUBECONFIG=${KUBECONFIG}"
+          echo "Target: deployment/${DEPLOYMENT} in ns ${NAMESPACE}"
+
+          # PREFLIGHT — fail fast on the WRONG identity. The jenkins-only
+          # admission policy permits Deployment writes ONLY for
+          # system:serviceaccount:options-edge:jenkins-deployer; an admin/root
+          # kubeconfig (e.g. a manual KUBECONFIG_FILE override) would be denied.
+          # Same pattern as Jenkinsfile.kafka-cleanup.
+          WANT="system:serviceaccount:options-edge:jenkins-deployer"
+          WHOAMI="$(kubectl auth whoami -o jsonpath='{.status.userInfo.username}' 2>/dev/null || echo '')"
+          echo "kubectl identity: ${WHOAMI:-<unknown>}"
+          if [ "${WHOAMI}" != "${WANT}" ]; then
+            echo "FATAL: kubeconfig identity is '${WHOAMI:-<unknown>}', expected '${WANT}'." >&2
+            exit 1
+          fi
+
+          kubectl -n "${NAMESPACE}" rollout restart "deployment/${DEPLOYMENT}"
+          # Fail the build if the new ReplicaSet does not become Available in time —
+          # a wedged rollout should page us here, not silently persist to next night.
+          kubectl -n "${NAMESPACE}" rollout status "deployment/${DEPLOYMENT}" --timeout="${ROLLOUT_TIMEOUT}"
+          echo "feed-gateway rollout complete."
+        '''
+      }
+    }
+  }
+  post {
+    failure {
+      // TODO(operator): wire Discord alert on failure. Pattern from
+      // Jenkinsfile.offhours-clean-slate:
+      //   withCredentials([string(credentialsId: 'gateway-nightly-restart-discord-webhook',
+      //                           variable: 'DISCORD_WEBHOOK_URL')]) {
+      //     sh '''curl -fsS -H 'Content-Type: application/json' \
+      //             -d "{\\"content\\":\\":rotating_light: feed-gateway nightly restart FAILED (build ${BUILD_NUMBER})\\"}" \
+      //             "${DISCORD_WEBHOOK_URL}"'''
+      //   }
+      // Requires the `gateway-nightly-restart-discord-webhook` Secret-text
+      // credential in Jenkins first — leave commented until it exists so the
+      // job does not fail its post-block on a missing credential.
+      echo "feed-gateway nightly restart FAILED — see stage logs above."
+    }
+  }
+}
