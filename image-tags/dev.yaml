@@ -15,6 +15,7 @@ images:
   options-edge-integration-test: 192.168.100.252:5000/options-edge-integration-test:dev
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:dev
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:dev
+  delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:dev
   spx-mission-control-service: 192.168.100.252:5000/options-edge-spx-mission-control:dev
   unified-sr-service: 192.168.100.252:5000/options-edge-unified-sr:dev
   strike-flow-avro-adapter: 192.168.100.252:5000/options-edge-strike-flow-avro-adapter:dev
