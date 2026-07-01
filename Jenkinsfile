@@ -51,7 +51,8 @@ pipeline {
     string(name: 'IB_HOST', defaultValue: '127.0.0.1', description: 'IB Gateway/TWS host. IBKR feed uses hostNetwork, so localhost is the remote host.')
     string(name: 'IB_PORT', defaultValue: '4001', description: 'IB Gateway/TWS API port')
     string(name: 'IB_CLIENT_ID', defaultValue: '212', description: 'IBKR feed API client id')
-    string(name: 'IB_EXPIRY', defaultValue: '', description: 'Option expiry/date. Empty uses the current weekday on the Jenkins agent.')
+    string(name: 'MARKET_DATA_EXPIRY', defaultValue: '', description: 'Source-neutral option expiry/date (YYYYMMDD or AUTO). Empty falls back to the deprecated IB_EXPIRY param, then the current weekday on the Jenkins agent.')
+    string(name: 'IB_EXPIRY', defaultValue: '', description: 'DEPRECATED alias for MARKET_DATA_EXPIRY (leftover from the retired IBKR feed). Kept as a backward-compat fallback; prefer MARKET_DATA_EXPIRY.')
     string(name: 'DATABENTO_EXPIRY', defaultValue: '', description: 'Override expiry for Databento Historical feed (YYYYMMDD). Empty -> auto-resolved from Databento metadata + MarketCalendar in the Resolve Databento Expiry stage (fail-closed if Databento is unreachable or the result is not a trading day).')
     string(name: 'IB_MAX_STRIKES', defaultValue: '43', description: 'Max strikes around spot for IBKR feed')
     booleanParam(name: 'SKIP_KAFKA_TOPICS', defaultValue: false, description: 'Skip all three Kafka topic stages (Kafka Topics, Reset HPSF Stage B Internal Topics, Kafka Internal Topics). Use for a code/image-only redeploy when topic configs and partitions are already correct on the cluster — saves ~5-15 min on a typical run. Defaults off (run the full topic apply/verify path).')
@@ -117,6 +118,8 @@ pipeline {
     IB_HOST = "${params.IB_HOST ?: '127.0.0.1'}"
     IB_PORT = "${params.IB_PORT ?: '4001'}"
     IB_CLIENT_ID = "${params.IB_CLIENT_ID ?: '212'}"
+    // MARKET_DATA_EXPIRY is primary; the deprecated IB_EXPIRY param is the backward-compat fallback.
+    MARKET_DATA_EXPIRY = "${params.MARKET_DATA_EXPIRY ?: (params.IB_EXPIRY ?: '')}"
     IB_EXPIRY = "${params.IB_EXPIRY ?: ''}"
     DATABENTO_EXPIRY = "${params.DATABENTO_EXPIRY ?: ''}"
     IB_MAX_STRIKES = "${params.IB_MAX_STRIKES ?: '43'}"
@@ -721,6 +724,7 @@ void promoteToProduction() {
       string(name: 'IB_HOST', value: params.IB_HOST),
       string(name: 'IB_PORT', value: params.IB_PORT),
       string(name: 'IB_CLIENT_ID', value: params.IB_CLIENT_ID),
+      string(name: 'MARKET_DATA_EXPIRY', value: params.MARKET_DATA_EXPIRY),
       string(name: 'IB_EXPIRY', value: params.IB_EXPIRY),
       string(name: 'DATABENTO_EXPIRY', value: params.DATABENTO_EXPIRY),
       string(name: 'IB_MAX_STRIKES', value: params.IB_MAX_STRIKES),
