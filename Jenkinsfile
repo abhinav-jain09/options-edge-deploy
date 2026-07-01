@@ -20,6 +20,7 @@ pipeline {
     string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '', description: 'Databento feed image')
     string(name: 'DATABENTO_GEX_IMAGE', defaultValue: '', description: 'Databento per-strike GEX image')
     string(name: 'DATABENTO_MAXPAIN_IMAGE', defaultValue: '', description: 'Databento per-(symbol,expiry) max-pain image')
+    string(name: 'OPTION_PRICE_BEHAVIOR_IMAGE', defaultValue: '', description: 'Option Price Behavior image')
     string(name: 'DATABENTO_MISSION_PACE_IMAGE', defaultValue: '', description: 'Databento mission pace image')
     string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', defaultValue: '', description: 'Databento mission pressure image')
     string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', defaultValue: '', description: 'Databento mission sandwich image')
@@ -90,6 +91,7 @@ pipeline {
     DATABENTO_FEED_IMAGE = "${params.DATABENTO_FEED_IMAGE ?: oeProfile.image('databento-feed', 'production', 'dev')}"
     DATABENTO_GEX_IMAGE = "${params.DATABENTO_GEX_IMAGE ?: oeProfile.image('databento-gex', 'production', 'dev')}"
     DATABENTO_MAXPAIN_IMAGE = "${params.DATABENTO_MAXPAIN_IMAGE ?: oeProfile.image('databento-maxpain', 'production', 'dev')}"
+    OPTION_PRICE_BEHAVIOR_IMAGE = "${params.OPTION_PRICE_BEHAVIOR_IMAGE ?: oeProfile.image('option-price-behavior', 'production', 'dev')}"
     DATABENTO_MISSION_PACE_IMAGE = "${params.DATABENTO_MISSION_PACE_IMAGE ?: oeProfile.image('databento-mission-pace', 'production', 'dev')}"
     DATABENTO_MISSION_PRESSURE_IMAGE = "${params.DATABENTO_MISSION_PRESSURE_IMAGE ?: oeProfile.image('databento-mission-pressure', 'production', 'dev')}"
     DATABENTO_MISSION_SANDWICH_IMAGE = "${params.DATABENTO_MISSION_SANDWICH_IMAGE ?: oeProfile.image('databento-mission-sandwich', 'production', 'dev')}"
@@ -694,6 +696,7 @@ void promoteToProduction() {
       string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
       string(name: 'DATABENTO_GEX_IMAGE', value: params.DATABENTO_GEX_IMAGE),
       string(name: 'DATABENTO_MAXPAIN_IMAGE', value: params.DATABENTO_MAXPAIN_IMAGE),
+      string(name: 'OPTION_PRICE_BEHAVIOR_IMAGE', value: params.OPTION_PRICE_BEHAVIOR_IMAGE),
       string(name: 'DATABENTO_MISSION_PACE_IMAGE', value: params.DATABENTO_MISSION_PACE_IMAGE),
       string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', value: params.DATABENTO_MISSION_PRESSURE_IMAGE),
       string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', value: params.DATABENTO_MISSION_SANDWICH_IMAGE),
