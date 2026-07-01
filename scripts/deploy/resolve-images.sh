@@ -39,6 +39,7 @@ SPX_MISSION_CONTROL_IMAGE=$registry/options-edge-spx-mission-control:$image_tag
 STRIKE_FLOW_CLASSIFIER_IMAGE=$registry/options-edge-strike-flow-classifier:$image_tag
 UNIFIED_SR_IMAGE=$registry/options-edge-unified-sr:$image_tag
 STRIKE_FLOW_AVRO_ADAPTER_IMAGE=$registry/options-edge-strike-flow-avro-adapter:$image_tag
+GEX_DELTA_REDIS_WRITER_IMAGE=$registry/options-edge-gex-delta-redis-writer:$image_tag
 IBKR_FEED_IMAGE=$registry/options-edge-ibkr-feed:$image_tag
 EOF
           else
@@ -69,6 +70,7 @@ SPX_MISSION_CONTROL_IMAGE=$SPX_MISSION_CONTROL_IMAGE
 STRIKE_FLOW_CLASSIFIER_IMAGE=$STRIKE_FLOW_CLASSIFIER_IMAGE
 UNIFIED_SR_IMAGE=$UNIFIED_SR_IMAGE
 STRIKE_FLOW_AVRO_ADAPTER_IMAGE=$STRIKE_FLOW_AVRO_ADAPTER_IMAGE
+GEX_DELTA_REDIS_WRITER_IMAGE=$GEX_DELTA_REDIS_WRITER_IMAGE
 IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
 EOF
           fi
