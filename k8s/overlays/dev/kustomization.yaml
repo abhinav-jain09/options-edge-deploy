@@ -2,6 +2,7 @@ resources:
   - ../../base
 patches:
   - path: configmap-dev-local-patch.yaml
+  - path: streams-processing-guarantee-dev-patch.yaml
   - target:
       kind: Deployment
     patch: |-
