@@ -14,6 +14,7 @@ images:
   options-edge-integration-test: ghcr.io/abhinav-jain09/options-edge-integration-test:production
   ibkr-feed-service: ghcr.io/abhinav-jain09/options-edge-ibkr-feed:production
   strike-flow-classifier-service: ghcr.io/abhinav-jain09/options-edge-strike-flow-classifier:production
+  delta-flow-service: ghcr.io/abhinav-jain09/options-edge-delta-flow:production
   spx-mission-control-service: ghcr.io/abhinav-jain09/options-edge-spx-mission-control:production
   unified-sr-service: ghcr.io/abhinav-jain09/options-edge-unified-sr:production
   strike-flow-avro-adapter: ghcr.io/abhinav-jain09/options-edge-strike-flow-avro-adapter:production

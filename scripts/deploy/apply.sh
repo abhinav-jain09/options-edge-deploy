@@ -39,7 +39,7 @@
             IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE DATABENTO_GEX_HISTORY_IMAGE \
-            UNIFIED_SR_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE; do
+            DELTA_FLOW_IMAGE UNIFIED_SR_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
@@ -170,6 +170,7 @@ EOF
           kubectl -n options-edge set image deployment/hpsf-postgres-writer-service hpsf-postgres-writer="$HPSF_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-classifier-databento strike-flow-classifier="$STRIKE_FLOW_CLASSIFIER_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-classifier-ibkr strike-flow-classifier="$STRIKE_FLOW_CLASSIFIER_IMAGE"
+          kubectl -n options-edge set image deployment/delta-flow-service delta-flow="$DELTA_FLOW_IMAGE"
           kubectl -n options-edge set image deployment/spx-mission-control-service spx-mission-control="$SPX_MISSION_CONTROL_IMAGE"
           kubectl -n options-edge set image deployment/unified-sr-service unified-sr="$UNIFIED_SR_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-avro-adapter strike-flow-avro-adapter="$STRIKE_FLOW_AVRO_ADAPTER_IMAGE"
@@ -202,6 +203,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/hpsf-postgres-writer-service
           kubectl -n options-edge rollout restart deployment/strike-flow-classifier-databento
           kubectl -n options-edge rollout restart deployment/strike-flow-classifier-ibkr
+          kubectl -n options-edge rollout restart deployment/delta-flow-service
           kubectl -n options-edge rollout restart deployment/spx-mission-control-service
           kubectl -n options-edge rollout restart deployment/unified-sr-service
           kubectl -n options-edge rollout restart deployment/strike-flow-avro-adapter
@@ -235,6 +237,7 @@ EOF
           kubectl -n options-edge rollout status deployment/hpsf-postgres-writer-service --timeout=600s
           kubectl -n options-edge rollout status deployment/strike-flow-classifier-databento --timeout=600s
           kubectl -n options-edge rollout status deployment/strike-flow-classifier-ibkr --timeout=600s
+          kubectl -n options-edge rollout status deployment/delta-flow-service --timeout=600s
           kubectl -n options-edge rollout status deployment/spx-mission-control-service --timeout=600s
           kubectl -n options-edge rollout status deployment/unified-sr-service --timeout=600s
           kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=600s

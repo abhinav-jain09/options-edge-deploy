@@ -135,6 +135,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-gex-delta-redis-writer
     newName: host.docker.internal:5001/options-edge-gex-delta-redis-writer
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-delta-flow
+    newName: host.docker.internal:5001/options-edge-delta-flow
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-ibkr-feed
     newName: host.docker.internal:5001/options-edge-ibkr-feed
     newTag: dev

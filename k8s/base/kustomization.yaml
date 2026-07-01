@@ -18,6 +18,8 @@ resources:
   - redis-service.yaml
   - gex-delta-redis-writer-deployment.yaml
   - gex-delta-redis-writer-service.yaml
+  - delta-flow-deployment.yaml
+  - delta-flow-service.yaml
   - unified-sr-deployment.yaml
   - unified-sr-service.yaml
   - strike-flow-avro-adapter-deployment.yaml
