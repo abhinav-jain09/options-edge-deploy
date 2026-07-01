@@ -68,7 +68,8 @@ fi
 
 # --- Default (no override): emit AUTO. The feed AND gateway now self-resolve the current ET trading date
 # from their embedded MarketCalendar and daily-roll it (options-edge-databento-feed#35 + feed-gateway#41),
-# so apply.sh writes DATABENTO_EXPIRY=AUTO / IB_EXPIRY=AUTO — no lagging Databento Historical lookup and no
+# so apply.sh writes DATABENTO_EXPIRY=AUTO / MARKET_DATA_EXPIRY=AUTO (IB_EXPIRY=AUTO kept as deprecated
+# fallback) — no lagging Databento Historical lookup and no
 # daily redeploy. An explicit DATABENTO_EXPIRY=YYYYMMDD still pins (replay). The Historical-walk code below
 # is retained (dead) for reference / quick revert.
 echo "source=auto value=AUTO (feed+gateway self-resolve from the market calendar)" >&2

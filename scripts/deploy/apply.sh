@@ -87,16 +87,18 @@
             done
             printf '%s\n' "$value"
           }
-          # IB_EXPIRY drives the web + gateway option-chain default selection; it MUST match the date the
-          # Databento feed actually publishes (RESOLVED_DATABENTO_EXPIRY, the data-aware single source of
+          # MARKET_DATA_EXPIRY drives the web + gateway option-chain default selection; it MUST match the date
+          # the Databento feed actually publishes (RESOLVED_DATABENTO_EXPIRY, the data-aware single source of
           # truth resolved in the "Resolve Databento Expiry" stage and used for the feed configmap below).
           # If they diverge the chain filters for an expiry the feed never produced and goes empty (e.g.
           # after the close the calendar weekday rolls to the next session while the feed stays on the last
-          # session with data). Precedence: explicit IB_EXPIRY param > resolved Databento expiry > calendar
-          # weekday fallback (only when no Databento expiry was resolved, e.g. an IBKR-only deploy).
-          effective_expiry="${IB_EXPIRY:-${RESOLVED_DATABENTO_EXPIRY:-$(default_weekday_expiry)}}"
+          # session with data). Precedence: explicit MARKET_DATA_EXPIRY param > deprecated IB_EXPIRY fallback >
+          # resolved Databento expiry > calendar weekday fallback (last only when no Databento expiry resolved).
+          # IB_EXPIRY is a leftover from the retired IBKR feed (system is Databento-only) — read only as a
+          # backward-compat fallback so an old pipeline param still works during the transition.
+          effective_expiry="${MARKET_DATA_EXPIRY:-${IB_EXPIRY:-${RESOLVED_DATABENTO_EXPIRY:-$(default_weekday_expiry)}}}"
           # In AUTO mode the feed + gateway self-resolve + daily-roll the expiry from their embedded
-          # MarketCalendar (same date), so IB_EXPIRY=AUTO keeps the gateway locked to the feed. The Unusual
+          # MarketCalendar (same date), so MARKET_DATA_EXPIRY=AUTO keeps the gateway locked to the feed. The Unusual
           # Whales service needs a concrete YYYYMMDD, so give it the calendar weekday fallback when AUTO.
           uw_expiry="$effective_expiry"
           [ "$uw_expiry" = "AUTO" ] && uw_expiry="$(default_weekday_expiry)"
@@ -128,7 +130,7 @@
           kafka_schema_registry_url="$KAFKA_SCHEMA_REGISTRY_URL"
           postgres_jdbc_url="$POSTGRES_JDBC_URL"
           cat >"$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json" <<EOF
-{"data":{"APP_MARKET_DATA_SOURCE":"$market_data_source","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","POSTGRES_JDBC_URL":"$postgres_jdbc_url","KAFKA_RAW_TOPIC":"$effective_raw_topic","IB_HOST":"${IB_HOST:-127.0.0.1}","IB_PORT":"${IB_PORT:-4001}","IB_CLIENT_ID":"${IB_CLIENT_ID:-212}","IB_EXPIRY":"$effective_expiry","IB_MAX_STRIKES":"${IB_MAX_STRIKES:-43}","UNUSUAL_WHALES_EXPIRY":"$uw_expiry"}}
+{"data":{"APP_MARKET_DATA_SOURCE":"$market_data_source","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","POSTGRES_JDBC_URL":"$postgres_jdbc_url","KAFKA_RAW_TOPIC":"$effective_raw_topic","IB_HOST":"${IB_HOST:-127.0.0.1}","IB_PORT":"${IB_PORT:-4001}","IB_CLIENT_ID":"${IB_CLIENT_ID:-212}","MARKET_DATA_EXPIRY":"$effective_expiry","IB_EXPIRY":"$effective_expiry","IB_MAX_STRIKES":"${IB_MAX_STRIKES:-43}","UNUSUAL_WHALES_EXPIRY":"$uw_expiry"}}
 EOF
           kubectl -n options-edge patch configmap options-edge-config \
             --type merge \
