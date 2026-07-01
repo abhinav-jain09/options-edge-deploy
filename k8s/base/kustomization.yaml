@@ -66,6 +66,8 @@ resources:
   - unusual-whales-gex-history-service.yaml
   - databento-gex-history-deployment.yaml
   - databento-gex-history-service.yaml
+  - option-price-behavior-deployment.yaml
+  - option-price-behavior-service.yaml
   - kafka-streams-state-pvcs.yaml
   - kafka-changelog-cleanup-cronjob.yaml
   - offhours-clean-slate-cronjob.yaml

@@ -387,6 +387,7 @@ check_deployment volume-sandwich-databento-service 18093
 check_deployment unusual-whales-gex-service 18088
 check_deployment unusual-whales-gex-history-service 18089
 check_deployment databento-gex-history-service 18095
+check_deployment option-price-behavior-service 18100
 check_deployment raw-postgres-writer 18085
 check_deployment pressure-postgres-writer 18086
 check_spx_mission_control
