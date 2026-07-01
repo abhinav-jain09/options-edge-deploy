@@ -33,7 +33,7 @@
           # pin-postgres-writer now ships in k8s/base, so it renders in BOTH dev and prod and must be
           # digest-pinned in every environment (its prod image must exist in the prod registry before
           # promotion, enforced by Image Preflight). It is therefore in the main pin list below.
-          for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE DATABENTO_MAXPAIN_IMAGE DATABENTO_MISSION_PACE_IMAGE \
+          for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE DATABENTO_MAXPAIN_IMAGE OPTION_PRICE_BEHAVIOR_IMAGE DATABENTO_MISSION_PACE_IMAGE \
             DATABENTO_MISSION_PRESSURE_IMAGE DATABENTO_MISSION_SANDWICH_IMAGE DATABENTO_VOLUME_AGGREGATOR_IMAGE \
             DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
             IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
@@ -148,6 +148,7 @@ EOF
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
           kubectl -n options-edge set image deployment/databento-maxpain-service databento-maxpain="$DATABENTO_MAXPAIN_IMAGE"
+          kubectl -n options-edge set image deployment/option-price-behavior-service option-price-behavior="$OPTION_PRICE_BEHAVIOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pace-service databento-mission-pace="$DATABENTO_MISSION_PACE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pressure-service databento-mission-pressure="$DATABENTO_MISSION_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-sandwich-service databento-mission-sandwich="$DATABENTO_MISSION_SANDWICH_IMAGE"
@@ -184,6 +185,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/databento-mission-sandwich-service
           kubectl -n options-edge rollout restart deployment/databento-gex-service
           kubectl -n options-edge rollout restart deployment/databento-maxpain-service
+          kubectl -n options-edge rollout restart deployment/option-price-behavior-service
           kubectl -n options-edge rollout restart deployment/volume-pace-service
           kubectl -n options-edge rollout restart deployment/volume-pace-databento-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-service
@@ -218,6 +220,7 @@ EOF
           kubectl -n options-edge rollout status deployment/databento-mission-sandwich-service --timeout=600s
           kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=600s
           kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=600s
+          kubectl -n options-edge rollout status deployment/option-price-behavior-service --timeout=600s
           kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=600s
           kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=600s
           kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=600s
