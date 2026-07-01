@@ -78,5 +78,8 @@ GEX_DELTA_REDIS_WRITER_IMAGE=$GEX_DELTA_REDIS_WRITER_IMAGE
 IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
 EOF
           fi
+          . scripts/deploy/image-lock.sh
+          . "$JENKINS_WORK_DIR/options-edge-images.env"
+          apply_image_lock "${IMAGE_LOCK_FILE:-}" "${REQUIRE_IMAGE_LOCK:-false}" "$JENKINS_WORK_DIR/options-edge-images.env"
           echo "Resolved deployment images:"
           sed 's/^/  /' "$JENKINS_WORK_DIR/options-edge-images.env"

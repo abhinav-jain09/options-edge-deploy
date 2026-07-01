@@ -19,6 +19,7 @@
           export REGISTRY_SCHEME="${REGISTRY_SCHEME:-http}"
           command -v yq >/dev/null 2>&1 || { echo "FATAL: yq is required to digest-pin the kustomize overlay; aborting before any kubectl mutation." >&2; exit 1; }
           . scripts/deploy/pin-image.sh
+          . scripts/deploy/image-lock.sh
           case "${DEPLOY_TARGET:-all}" in
             all)
               ;;
@@ -29,6 +30,7 @@
               }
               export DELTA_FLOW_IMAGE
               echo "pinned DELTA_FLOW_IMAGE -> $DELTA_FLOW_IMAGE"
+              rewrite_images_env "$JENKINS_WORK_DIR/options-edge-images.env"
               _target_render="$JENKINS_WORK_DIR/options-edge-${ENVIRONMENT}-delta-flow.yaml"
               kubectl kustomize "k8s/overlays/${ENVIRONMENT}" \
                 | yq '
@@ -55,6 +57,7 @@
               fi
               kubectl apply -f "$_target_render"
               kubectl -n options-edge rollout status deployment/delta-flow-service --timeout=600s
+              scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
               exit 0
               ;;
             *)
@@ -94,6 +97,7 @@
               yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
             echo "pinned ${_img_var} -> ${_pinned}"
           done
+          rewrite_images_env "$JENKINS_WORK_DIR/options-edge-images.env"
           # Authoritative fail-closed gate: render the overlay and require EVERY options-edge service image
           # that apply -k would publish to be digest-pinned (@sha256) BEFORE any kubectl mutation. This is
           # checked on the rendered manifest (not just the images: list), so it catches any environment or
@@ -218,6 +222,7 @@ EOF
           kubectl -n options-edge set image deployment/spx-mission-control-service spx-mission-control="$SPX_MISSION_CONTROL_IMAGE"
           kubectl -n options-edge set image deployment/unified-sr-service unified-sr="$UNIFIED_SR_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-avro-adapter strike-flow-avro-adapter="$STRIKE_FLOW_AVRO_ADAPTER_IMAGE"
+          kubectl -n options-edge set image deployment/gex-delta-redis-writer gex-delta-redis-writer="$GEX_DELTA_REDIS_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
           kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
@@ -252,6 +257,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/spx-mission-control-service
           kubectl -n options-edge rollout restart deployment/unified-sr-service
           kubectl -n options-edge rollout restart deployment/strike-flow-avro-adapter
+          kubectl -n options-edge rollout restart deployment/gex-delta-redis-writer
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=600s
           kubectl -n options-edge rollout status deployment/options-edge-web --timeout=600s
@@ -287,4 +293,6 @@ EOF
           kubectl -n options-edge rollout status deployment/spx-mission-control-service --timeout=600s
           kubectl -n options-edge rollout status deployment/unified-sr-service --timeout=600s
           kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=600s
+          kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=600s
           kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=600s
+          scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
