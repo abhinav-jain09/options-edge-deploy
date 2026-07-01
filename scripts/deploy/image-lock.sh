@@ -50,6 +50,75 @@ target_image_vars() {
   esac
 }
 
+image_lock_key_allowed() {
+  local key="$1" base
+  case "$key" in
+    OPTIONS_EDGE_IMAGE_LOCK_FORMAT|OPTIONS_EDGE_IMAGE_LOCK_SOURCE_REPO|OPTIONS_EDGE_IMAGE_LOCK_GIT_COMMIT|OPTIONS_EDGE_IMAGE_LOCK_BUILD_URL|OPTIONS_EDGE_IMAGE_LOCK_PLATFORM|OPTIONS_EDGE_IMAGE_LOCK_TAG)
+      return 0
+      ;;
+    *_GIT_COMMIT)
+      base="${key%_GIT_COMMIT}"
+      ;;
+    *_JENKINS_BUILD_URL)
+      base="${key%_JENKINS_BUILD_URL}"
+      ;;
+    *)
+      base="$key"
+      ;;
+  esac
+  while IFS= read -r var_name; do
+    [ "$base" = "$var_name" ] && return 0
+  done < <(all_image_vars)
+  return 1
+}
+
+parse_image_lock_file() {
+  local lock_file="$1" parsed_file="$2" keys_file line line_no key
+  keys_file="$(mktemp)"
+  : >"$parsed_file"
+  line_no=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line_no=$((line_no + 1))
+    [ -n "$line" ] || continue
+    if [[ "$line" != *=* ]]; then
+      echo "FATAL: image lock line $line_no is not strict KEY=value syntax: $line" >&2
+      rm -f "$keys_file"
+      return 1
+    fi
+    key="${line%%=*}"
+    if [[ ! "$key" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+      echo "FATAL: image lock line $line_no has invalid key: $key" >&2
+      rm -f "$keys_file"
+      return 1
+    fi
+    if ! image_lock_key_allowed "$key"; then
+      echo "FATAL: image lock line $line_no has unknown key: $key" >&2
+      rm -f "$keys_file"
+      return 1
+    fi
+    if grep -Fxq "$key" "$keys_file"; then
+      echo "FATAL: image lock contains duplicate key: $key" >&2
+      rm -f "$keys_file"
+      return 1
+    fi
+    printf '%s\n' "$key" >>"$keys_file"
+    printf '%s\n' "$line" >>"$parsed_file"
+  done <"$lock_file"
+  rm -f "$keys_file"
+}
+
+image_lock_value() {
+  local parsed_file="$1" wanted="$2" line key
+  while IFS= read -r line || [ -n "$line" ]; do
+    key="${line%%=*}"
+    if [ "$key" = "$wanted" ]; then
+      printf '%s\n' "${line#*=}"
+      return 0
+    fi
+  done <"$parsed_file"
+  return 1
+}
+
 rewrite_images_env() {
   local env_file="$1" tmp_file
   tmp_file="${env_file}.tmp"
@@ -62,7 +131,7 @@ rewrite_images_env() {
 }
 
 apply_image_lock() {
-  local lock_file="${1:-}" required="${2:-false}" env_file="$3"
+  local lock_file="${1:-}" required="${2:-false}" env_file="$3" parsed_lock locked missing var_name
   if [ -z "$lock_file" ]; then
     if [ "$required" = "true" ]; then
       echo "FATAL: REQUIRE_IMAGE_LOCK=true but IMAGE_LOCK_FILE is empty." >&2
@@ -80,22 +149,29 @@ apply_image_lock() {
     return 0
   fi
 
-  if ! grep -q '^OPTIONS_EDGE_IMAGE_LOCK_FORMAT=1$' "$lock_file"; then
+  parsed_lock="$(mktemp)"
+  if ! parse_image_lock_file "$lock_file" "$parsed_lock"; then
+    rm -f "$parsed_lock"
+    return 1
+  fi
+
+  if [ "$(image_lock_value "$parsed_lock" OPTIONS_EDGE_IMAGE_LOCK_FORMAT || true)" != "1" ]; then
     echo "FATAL: image lock file is missing OPTIONS_EDGE_IMAGE_LOCK_FORMAT=1: $lock_file" >&2
+    rm -f "$parsed_lock"
     return 1
   fi
 
   missing=0
   while IFS= read -r var_name; do
     [ -n "$var_name" ] || continue
-    if ! grep -q "^${var_name}=" "$lock_file"; then
+    locked="$(image_lock_value "$parsed_lock" "$var_name" || true)"
+    if [ -z "$locked" ]; then
       if [ "$required" = "true" ]; then
         echo "FATAL: image lock missing required image variable: $var_name" >&2
         missing=1
       fi
       continue
     fi
-    locked="$(grep "^${var_name}=" "$lock_file" | tail -1 | cut -d= -f2-)"
     if [[ "$locked" != *@sha256:* ]]; then
       echo "FATAL: image lock value for $var_name is not digest-pinned: $locked" >&2
       missing=1
@@ -106,9 +182,11 @@ apply_image_lock() {
   done < <(target_image_vars)
 
   if [ "$missing" != "0" ]; then
+    rm -f "$parsed_lock"
     return 1
   fi
 
+  rm -f "$parsed_lock"
   rewrite_images_env "$env_file"
   echo "Applied image lock: $lock_file"
   sed 's/^/  /' "$env_file"

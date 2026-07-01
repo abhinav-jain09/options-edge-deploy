@@ -222,6 +222,7 @@ EOF
           kubectl -n options-edge set image deployment/spx-mission-control-service spx-mission-control="$SPX_MISSION_CONTROL_IMAGE"
           kubectl -n options-edge set image deployment/unified-sr-service unified-sr="$UNIFIED_SR_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-avro-adapter strike-flow-avro-adapter="$STRIKE_FLOW_AVRO_ADAPTER_IMAGE"
+          kubectl -n options-edge set image deployment/gex-delta-redis-writer gex-delta-redis-writer="$GEX_DELTA_REDIS_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
           kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
@@ -256,6 +257,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/spx-mission-control-service
           kubectl -n options-edge rollout restart deployment/unified-sr-service
           kubectl -n options-edge rollout restart deployment/strike-flow-avro-adapter
+          kubectl -n options-edge rollout restart deployment/gex-delta-redis-writer
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=600s
           kubectl -n options-edge rollout status deployment/options-edge-web --timeout=600s
@@ -291,5 +293,6 @@ EOF
           kubectl -n options-edge rollout status deployment/spx-mission-control-service --timeout=600s
           kubectl -n options-edge rollout status deployment/unified-sr-service --timeout=600s
           kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=600s
+          kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=600s
           kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=600s
           scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
