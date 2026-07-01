@@ -50,16 +50,21 @@
 
           image_exists_once() {
             local image="$1"
-            local registry remainder repository tag
+            local registry remainder repository reference tagged
             registry="${image%%/*}"
             remainder="${image#*/}"
-            if [ "$registry" = "$image" ] || [ "$remainder" = "$image" ] || [[ "$remainder" != *:* ]]; then
+            if [ "$registry" = "$image" ] || [ "$remainder" = "$image" ] || { [[ "$remainder" != *:* ]] && [[ "$remainder" != *@sha256:* ]]; }; then
               docker pull "$image" >/dev/null 2>&1
               return $?
             fi
 
-            repository="${remainder%:*}"
-            tag="${remainder##*:}"
+            tagged="${remainder%@*}"
+            repository="${tagged%:*}"
+            if [[ "$remainder" == *@sha256:* ]]; then
+              reference="${remainder##*@}"
+            else
+              reference="${remainder##*:}"
+            fi
             for scheme in http https; do
               # Accept must include the multi-arch index/list media types, otherwise
               # the registry cannot content-negotiate a HEAD for an index-tagged image
@@ -69,7 +74,7 @@
                 -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
                 -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
                 -H 'Accept: application/vnd.oci.image.index.v1+json' \
-                "$scheme://$registry/v2/$repository/manifests/$tag" >/dev/null 2>&1; then
+                "$scheme://$registry/v2/$repository/manifests/$reference" >/dev/null 2>&1; then
                 return 0
               fi
             done

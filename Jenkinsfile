@@ -11,6 +11,8 @@ pipeline {
     string(name: 'PROD_KUBECONFIG_ADMIN_FILE', defaultValue: '', description: 'Admin kubeconfig for the PROD cluster, passed to the build launched by the Promote To Production button.')
     string(name: 'IMAGE_REGISTRY', defaultValue: '', description: 'Docker registry namespace used when IMAGE_TAG is set. Empty derives from oeProfile(ENVIRONMENT).registry.')
     string(name: 'IMAGE_TAG', defaultValue: '', description: 'Exact Docker tag to use for all runtime images. Empty keeps per-image parameters.')
+    string(name: 'IMAGE_LOCK_FILE', defaultValue: '', description: 'Optional path to a build-produced options-edge image lock env file. When supplied, its digest-pinned images override tag/default resolution.')
+    booleanParam(name: 'REQUIRE_IMAGE_LOCK', defaultValue: false, description: 'Fail before deploy unless IMAGE_LOCK_FILE exists and contains every image for DEPLOY_TARGET. Turn on for stale-image fail-closed deploys.')
     string(name: 'BUILD_PLATFORM', defaultValue: '', description: 'Image platform. Empty derives from oeProfile(ENVIRONMENT).platform.')
     string(name: 'KAFKA_BOOTSTRAP_SERVERS', defaultValue: '', description: 'Kafka bootstrap servers. Empty derives from oeProfile(ENVIRONMENT).kafkaBootstrap.')
     string(name: 'WEB_PUBLIC_URL', defaultValue: '', description: 'Public OptionsEdge web URL for smoke checks. Empty uses the per-environment dev/prod default.')
@@ -83,6 +85,8 @@ pipeline {
     // prefix was removed; it pointed at a directory that does not exist on local-mac).
     IMAGE_REGISTRY = "${params.IMAGE_REGISTRY ?: ''}"
     IMAGE_TAG = "${params.IMAGE_TAG ?: ''}"
+    IMAGE_LOCK_FILE = "${params.IMAGE_LOCK_FILE ?: ''}"
+    REQUIRE_IMAGE_LOCK = "${params.REQUIRE_IMAGE_LOCK ?: false}"
     BUILD_PLATFORM = "${params.BUILD_PLATFORM ?: ''}"
     KAFKA_BOOTSTRAP_SERVERS = "${params.KAFKA_BOOTSTRAP_SERVERS ?: ''}"
     WEB_PUBLIC_URL = "${params.WEB_PUBLIC_URL ?: ''}"
