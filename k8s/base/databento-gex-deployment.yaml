@@ -28,9 +28,24 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
+            - secretRef:
+                name: options-edge-databento-feed-env
+                optional: true
           env:
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
+            - name: DATABENTO_DATASET
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-databento-feed-config
+                  key: DATABENTO_DATASET
+                  optional: true
+            - name: DATABENTO_GEX_OI_TRADING_CLASS
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-databento-feed-config
+                  key: DATABENTO_TRADING_CLASS
+                  optional: true
             - name: HEALTH_PORT
               value: "8100"
             - name: KAFKA_DATABENTO_RAW_TOPIC
