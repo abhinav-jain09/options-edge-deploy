@@ -1,0 +1,101 @@
+# Nightly feed-gateway rollout restart — belt-and-braces vs silent-wedge.
+#
+# WHY: On 2026-07-01 prod feed-gateway silently wedged for 9.5 hours during
+# market hours after a midnight-ET session-rollover — the pod stayed Ready
+# but stopped serving fresh market data. A forward-watchdog is being added
+# separately; this CronJob is the belt-and-braces safety net: rotate the
+# gateway once a day, well outside market hours, so any silent-wedge state
+# from the prior session never survives into the next open.
+#
+# WHAT: `kubectl rollout restart deployment/feed-gateway-service` in the
+# options-edge namespace. This bumps the pod template's restartedAt
+# annotation and lets the Deployment controller do a rolling recreate.
+#
+# WHEN: 00:05 America/New_York daily — after midnight ET session rollover,
+# well before pre-market prep at ~04:00 ET. Using k8s CronJob spec.timeZone
+# so the intent is stable across DST transitions (a bare UTC schedule would
+# drift an hour twice a year and land at 23:05 ET during EST — BEFORE the
+# rollover this job is meant to recover from).
+#
+# HOW IT IS TRIGGERED (important): this CronJob is suspend:true and does NOT
+# self-schedule. The cluster enforces a ValidatingAdmissionPolicy
+# (options-edge-jenkins-only-workloads) that DENIES batch/Job creation by
+# any principal except the jenkins-deployer ServiceAccount. The k8s CronJob
+# controller creates its Jobs under its own SA
+# (system:serviceaccount:kube-system:cronjob-controller), so a native firing
+# is rejected every night. The real trigger is a companion Jenkins job
+# (Jenkinsfile.gateway-nightly-restart, FOLLOW-UP) that runs
+# `kubectl create job --from=cronjob/feed-gateway-nightly-restart` under
+# the deployer identity — the only principal the policy permits to create
+# Jobs. This CronJob is the single source of truth for the Job template
+# (image, script, RBAC, resource limits); the `schedule` below documents
+# the intended cadence. Keep suspend:true so the controller does not spam
+# denied-Job errors in the k3s log. The pattern mirrors
+# kafka-changelog-cleanup-cronjob.yaml + Jenkinsfile.kafka-cleanup.
+#
+# PROD-ONLY: this manifest is included in base (base is inherited by every
+# overlay), but it's harmless in dev/experiment because it is suspended and
+# the companion Jenkins trigger only runs against the production kubeconfig.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: feed-gateway-nightly-restart
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: feed-gateway-nightly-restart
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: maintenance
+spec:
+  # SUSPENDED. Triggered by the Jenkins companion job under the deployer
+  # identity, not by the k8s CronJob controller (blocked by the jenkins-only
+  # admission policy — see header).
+  suspend: true
+  timeZone: America/New_York            # DST-safe: 00:05 ET year-round (not 04:05 UTC drifting)
+  schedule: "5 0 * * *"                 # 00:05 ET daily — documents the intended cadence
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      # Label the JOB so the Jenkins trigger's prune selector reliably matches
+      # Jobs made via `kubectl create job --from=cronjob`.
+      labels:
+        app.kubernetes.io/name: feed-gateway-nightly-restart
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 600        # 10 min cap per firing
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: feed-gateway-nightly-restart
+        spec:
+          restartPolicy: OnFailure
+          # Must talk to the k8s API to patch the Deployment — token stays mounted.
+          serviceAccountName: jenkins-deployer
+          automountServiceAccountToken: true
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: kubectl
+              image: bitnami/kubectl:latest
+              imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 200m
+                  memory: 512Mi
+              command: ["kubectl"]
+              args:
+                - "rollout"
+                - "restart"
+                - "deployment/feed-gateway-service"
+                - "-n"
+                - "options-edge"

@@ -51,6 +51,8 @@ spec:
               value: "5.0"
             - name: KAFKA_SPX_MISSION_STREAMS_APP_ID
               value: options-edge-spx-mission-control-v2
+            - name: KAFKA_SPX_MISSION_STREAMS_COMMIT_INTERVAL_MS
+              value: "1000"
             - name: KAFKA_SPX_MISSION_STREAMS_NUM_THREADS
               value: "4"
             - name: SPX_MISSION_ALLOW_LEGACY_PACE

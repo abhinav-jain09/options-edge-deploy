@@ -67,6 +67,7 @@ resources:
   - databento-gex-history-deployment.yaml
   - databento-gex-history-service.yaml
   - kafka-streams-state-pvcs.yaml
+  - feed-gateway-nightly-restart-cronjob.yaml
   - kafka-changelog-cleanup-cronjob.yaml
   - offhours-clean-slate-cronjob.yaml
 

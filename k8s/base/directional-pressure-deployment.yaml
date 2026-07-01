@@ -37,6 +37,8 @@ spec:
               value: options.ibkr.directional-pressure
             - name: KAFKA_DIRECTIONAL_PRESSURE_STREAMS_APP_ID
               value: options-flow-directional-pressure-streams-v4
+            - name: KAFKA_DIRECTIONAL_PRESSURE_STREAMS_COMMIT_INTERVAL_MS
+              value: "1000"
           ports:
             - name: health
               containerPort: 8080
