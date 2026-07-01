@@ -2,6 +2,7 @@ resources:
   - ../../base
 patches:
   - path: configmap-dev-local-patch.yaml
+  - path: streams-processing-guarantee-dev-patch.yaml
   - path: web-dev-env-patch.yaml
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
   # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).

@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-volume-aggregator
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: databento-volume-aggregator
+          env:
+            - name: KAFKA_DATABENTO_VOLUME_AGGREGATOR_PROCESSING_GUARANTEE
+              value: at_least_once
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpsf-stage-a-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: hpsf-stage-a
+          env:
+            - name: HPSF_STREAMS_PROCESSING_GUARANTEE
+              value: at_least_once
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpsf-stage-b-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: hpsf-stage-b
+          env:
+            - name: HPSF_STREAMS_PROCESSING_GUARANTEE
+              value: at_least_once
