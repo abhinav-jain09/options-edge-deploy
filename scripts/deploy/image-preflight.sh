@@ -34,6 +34,19 @@
             GEX_DELTA_REDIS_WRITER_IMAGE=$GEX_DELTA_REDIS_WRITER_IMAGE
             IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
           "
+          case "${DEPLOY_TARGET:-all}" in
+            all)
+              ;;
+            delta-flow-service)
+              images="
+                DELTA_FLOW_IMAGE=$DELTA_FLOW_IMAGE
+              "
+              ;;
+            *)
+              echo "Unsupported DEPLOY_TARGET: ${DEPLOY_TARGET}" >&2
+              exit 1
+              ;;
+          esac
 
           image_exists_once() {
             local image="$1"

@@ -32,6 +32,8 @@ class DeltaFlowDeployTest(unittest.TestCase):
         monitoring = (ROOT / "scripts" / "monitoring" / "apply-prometheus-scrapes.sh").read_text()
 
         self.assertIn("string(name: 'DELTA_FLOW_IMAGE'", jenkinsfile)
+        self.assertIn("choice(name: 'DEPLOY_TARGET'", jenkinsfile)
+        self.assertIn("DEPLOY_TARGET = ", jenkinsfile)
         self.assertIn("DELTA_FLOW_IMAGE = ", jenkinsfile)
         self.assertIn("options-edge-delta-flow:$image_tag", resolve_images)
         self.assertIn("DELTA_FLOW_IMAGE=$DELTA_FLOW_IMAGE", resolve_images)
@@ -39,6 +41,10 @@ class DeltaFlowDeployTest(unittest.TestCase):
         self.assertIn("rollout restart deployment/delta-flow-service", apply_script)
         self.assertIn("rollout status deployment/delta-flow-service", apply_script)
         self.assertIn("DELTA_FLOW_IMAGE=$DELTA_FLOW_IMAGE", preflight)
+        self.assertIn('delta-flow-service)', apply_script)
+        self.assertIn('kubectl apply -f "$_target_render"', apply_script)
+        self.assertIn('DELTA_FLOW_IMAGE=$DELTA_FLOW_IMAGE', preflight)
+        self.assertIn('DEPLOY_TARGET:-all', preflight)
         self.assertIn("add_service_scrape delta-flow-service 8110", monitoring)
 
 

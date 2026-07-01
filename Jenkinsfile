@@ -66,6 +66,7 @@ pipeline {
     booleanParam(name: 'EMERGENCY_DIRECT_PROD_DEPLOY', defaultValue: false, description: 'BREAK-GLASS: skip the must-go-via-dev rule and deploy directly to prod. Use ONLY for genuine emergencies (prod broken AND the dev path is unusable). Requires a non-empty EMERGENCY_REASON. The override is loudly audit-logged to the build console.')
     string(name: 'EMERGENCY_REASON', defaultValue: '', description: 'Why are you doing a direct-to-prod emergency deploy? Required and non-empty when EMERGENCY_DIRECT_PROD_DEPLOY=true. Captured in the audit log.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false, description: 'Validate render, image preflight, and server-side Kubernetes apply without mutating runtime resources.')
+    choice(name: 'DEPLOY_TARGET', choices: ['all', 'delta-flow-service'], description: 'Deployment scope. all reconciles the normal stack; delta-flow-service applies only Delta Flow resources and rolls only that deployment.')
     booleanParam(name: 'SKIP_HPSF_SMOKE', defaultValue: true, description: 'Skip the HPSF Smoke stage (Stage B runtime check). Temporarily bypassed until the Stage B underlying-state/runtime check is fixed; set false to re-enable.')
   }
   environment {
@@ -131,6 +132,7 @@ pipeline {
     ALLOW_PROD_KAFKA_CLEANUP = "${params.ALLOW_PROD_KAFKA_CLEANUP ?: false}"
     SKIP_PRODUCTION_PROMOTION = "${params.SKIP_PRODUCTION_PROMOTION ?: false}"
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN ?: false}"
+    DEPLOY_TARGET = "${params.DEPLOY_TARGET ?: 'all'}"
   }
   stages {
     stage('Resolve profile') {
@@ -200,6 +202,9 @@ pipeline {
       }
     }
     stage('Resolve Databento Expiry') {
+      when {
+        expression { return params.DEPLOY_TARGET != 'delta-flow-service' }
+      }
       // Placed AFTER Validate (so enforce-main-branch.sh has already blocked non-main runs)
       // and BEFORE Bootstrap Jenkins Kubernetes Guard. Resolves the latest OPRA.PILLAR
       // Historical trading-day expiry via scripts/jenkins/pick-databento-historical-expiry.sh
@@ -335,7 +340,7 @@ pipeline {
     }
     stage('Pause Runtime For Kafka Cleanup') {
       when {
-        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+        expression { return params.DEPLOY_TARGET != 'delta-flow-service' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -373,7 +378,7 @@ pipeline {
     }
     stage('Kafka Cleanup') {
       when {
-        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+        expression { return params.DEPLOY_TARGET != 'delta-flow-service' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -416,7 +421,7 @@ pipeline {
     }
     stage('Reset HPSF Stage B Internal Topics') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
+        expression { return params.DEPLOY_TARGET != 'delta-flow-service' && !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
       }
       steps {
         sh '''
@@ -489,7 +494,7 @@ pipeline {
     }
     stage('Resume Remote Apps') {
       when {
-        expression { return params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+        expression { return params.DEPLOY_TARGET != 'delta-flow-service' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -519,7 +524,7 @@ pipeline {
     }
     stage('Verify OptionsEdge Web App') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN }
+        expression { return params.DEPLOY_TARGET != 'delta-flow-service' && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -738,6 +743,7 @@ void promoteToProduction() {
       booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', value: false),
       booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true),
       booleanParam(name: 'DEPLOY_DRY_RUN', value: params.DEPLOY_DRY_RUN),
+      string(name: 'DEPLOY_TARGET', value: params.DEPLOY_TARGET),
       booleanParam(name: 'SKIP_HPSF_SMOKE', value: params.SKIP_HPSF_SMOKE),
       booleanParam(name: 'SKIP_KAFKA_TOPICS', value: params.SKIP_KAFKA_TOPICS)
     ]

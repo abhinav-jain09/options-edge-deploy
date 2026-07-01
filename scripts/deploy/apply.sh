@@ -19,6 +19,49 @@
           export REGISTRY_SCHEME="${REGISTRY_SCHEME:-http}"
           command -v yq >/dev/null 2>&1 || { echo "FATAL: yq is required to digest-pin the kustomize overlay; aborting before any kubectl mutation." >&2; exit 1; }
           . scripts/deploy/pin-image.sh
+          case "${DEPLOY_TARGET:-all}" in
+            all)
+              ;;
+            delta-flow-service)
+              DELTA_FLOW_IMAGE="$(pin_ref "$DELTA_FLOW_IMAGE")" || {
+                echo "FATAL: cannot resolve registry digest for DELTA_FLOW_IMAGE=$DELTA_FLOW_IMAGE; aborting before any kubectl mutation." >&2
+                exit 1
+              }
+              export DELTA_FLOW_IMAGE
+              echo "pinned DELTA_FLOW_IMAGE -> $DELTA_FLOW_IMAGE"
+              _target_render="$JENKINS_WORK_DIR/options-edge-${ENVIRONMENT}-delta-flow.yaml"
+              kubectl kustomize "k8s/overlays/${ENVIRONMENT}" \
+                | yq '
+                    select(
+                      (.kind == "Namespace" and .metadata.name == "options-edge")
+                      or (.kind == "ConfigMap" and .metadata.name == "options-edge-config")
+                      or (.kind == "Service" and .metadata.name == "delta-flow-service")
+                      or (.kind == "Deployment" and .metadata.name == "delta-flow-service")
+                    )
+                  ' >"$_target_render"
+              yq -i '(. | select(.kind == "Deployment" and .metadata.name == "delta-flow-service").spec.template.spec.containers[] | select(.name == "delta-flow").image) = strenv(DELTA_FLOW_IMAGE)' "$_target_render"
+              _unpinned_rendered="$(yq -r 'select(.kind=="Deployment") | (.spec.template.spec.containers[].image), (.spec.template.spec.initContainers[]?.image)' "$_target_render" \
+                | { grep '/options-edge-' || true; } | { grep -v '@sha256:' || true; })"
+              if [ -n "$_unpinned_rendered" ]; then
+                echo "FATAL: rendered Delta Flow Deployment image is not digest-pinned before apply:" >&2
+                printf '%s\n' "$_unpinned_rendered" >&2
+                echo "aborting before any kubectl mutation." >&2
+                exit 1
+              fi
+              if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+                echo "DEPLOY_DRY_RUN=true: validating Delta Flow targeted apply without changing runtime resources."
+                kubectl apply --dry-run=server -f "$_target_render"
+                exit 0
+              fi
+              kubectl apply -f "$_target_render"
+              kubectl -n options-edge rollout status deployment/delta-flow-service --timeout=600s
+              exit 0
+              ;;
+            *)
+              echo "Unsupported DEPLOY_TARGET: ${DEPLOY_TARGET}" >&2
+              exit 1
+              ;;
+          esac
           _overlay_kustomization="k8s/overlays/${ENVIRONMENT}/kustomization.yaml"
           # The kustomize images: 'name' match key is the image as it appears in the base manifests, i.e.
           # the base registry/repo (same across all overlays). Derive the base registry from the rendered
