@@ -62,6 +62,7 @@ Deploy step is why per-feed deploy stages were dropped — `options-edge-deploy`
 | `PROFILE` | choice `dev` \| `prod` | `dev` | Environment; **passed to every child job**. |
 | `FEEDS` | boolean | `true` | Include the Databento/IBKR market feeds. |
 | `WEB_UI` | boolean | `true` | Include `options-edge-web-deploy`. |
+| `SKIP_KAFKA_TOPICS` | boolean | `false` | Pass through to `options-edge-deploy` to skip Kafka topic reconciliation during code/image-only redeploys. |
 | `CONTINUE_ON_FAILURE` | boolean | `false` | `false` = abort the bring-up on the first failed child; `true` = keep going and report failures at the end. |
 
 Run it: **Jenkins → `options-edge-bring-up-all` → Build with Parameters → pick `PROFILE` → Build.**

@@ -29,6 +29,8 @@ pipeline {
            description: 'Environment to bring up (passed to every child job). experiment = the .2 sandbox: builds run ON .2, deploy via options-edge-experiment-deploy.')
     booleanParam(name: 'FEEDS',  defaultValue: true,  description: 'Include the Databento/IBKR market feeds. (Ignored for PROFILE=experiment — those jobs have no experiment build path yet; the .2 feed already runs.)')
     booleanParam(name: 'WEB_UI', defaultValue: true,  description: 'Include the web UI (options-edge-web-deploy).')
+    booleanParam(name: 'SKIP_KAFKA_TOPICS', defaultValue: false,
+                 description: 'Pass through to options-edge-deploy to skip Kafka topic reconciliation for code/image-only redeploys when cluster topics are already managed separately.')
     booleanParam(name: 'CONTINUE_ON_FAILURE', defaultValue: false,
                  description: 'If true, keep going when a child job fails (otherwise abort the bring-up).')
   }
@@ -195,14 +197,16 @@ pipeline {
                   parameters: [
                     string(name: 'ENVIRONMENT', value: 'dev'),
                     booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: false),
-                    booleanParam(name: 'AUTO_PROMOTE', value: true)
+                    booleanParam(name: 'AUTO_PROMOTE', value: true),
+                    booleanParam(name: 'SKIP_KAFKA_TOPICS', value: params.SKIP_KAFKA_TOPICS)
                   ],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           } else {
             build job: 'options-edge-deploy',
                   parameters: [
                     string(name: 'ENVIRONMENT', value: 'dev'),
-                    booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true)
+                    booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true),
+                    booleanParam(name: 'SKIP_KAFKA_TOPICS', value: params.SKIP_KAFKA_TOPICS)
                   ],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
