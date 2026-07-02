@@ -73,6 +73,12 @@ pipeline {
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
+    // Databento key is PER-ENVIRONMENT: Databento allows only ONE live session per API key, so dev
+    // MUST use its own key, separate from prod's. Select the credential by ENVIRONMENT — dev uses
+    // 'options-edge-databento-api-key-dev', staging/prod use the shared prod credential
+    // (params.DATABENTO_API_KEY_CREDENTIAL_ID, default 'options-edge-databento-api-key'). Without this,
+    // every dev deploy rebuilt the feed secret from the prod credential and clobbered dev's key.
+    DATABENTO_API_KEY_CREDENTIAL_ID_EFFECTIVE = "${(params.ENVIRONMENT ?: 'dev') == 'dev' ? 'options-edge-databento-api-key-dev' : (params.DATABENTO_API_KEY_CREDENTIAL_ID ?: 'options-edge-databento-api-key')}"
     // KUBECONFIG / KUBECONFIG_ADMIN_FILE / REMOTE_APP_HOME come from oeProfile (single
     // source of truth). An explicit non-empty operator override is honored; empty derives
     // from the profile.
@@ -218,7 +224,7 @@ pipeline {
       // instead of crash-looping the feed pod later.
       steps {
         withCredentials([
-          string(credentialsId: params.DATABENTO_API_KEY_CREDENTIAL_ID, variable: 'DATABENTO_API_KEY')
+          string(credentialsId: env.DATABENTO_API_KEY_CREDENTIAL_ID_EFFECTIVE, variable: 'DATABENTO_API_KEY')
         ]) {
           script {
             def resolved = sh(
@@ -253,7 +259,7 @@ pipeline {
           // fails until the credential exists. Bind it when present; otherwise skip.
           def baseBindings = [
             string(credentialsId: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID, variable: 'UNUSUAL_WHALES_API_KEY'),
-            string(credentialsId: params.DATABENTO_API_KEY_CREDENTIAL_ID, variable: 'DATABENTO_API_KEY')
+            string(credentialsId: env.DATABENTO_API_KEY_CREDENTIAL_ID_EFFECTIVE, variable: 'DATABENTO_API_KEY')
           ]
           def applySecrets = {
             sh '''
