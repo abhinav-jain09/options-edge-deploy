@@ -106,9 +106,11 @@ pipeline {
         sh '''
           set -euo pipefail
           export SERVICE=web
-          export DEPLOY_DRY_RUN="$DEPLOY_DRY_RUN_PARAM"
-          HEALTH_URL="$HEALTH_URL_PARAM"
-          [ -n "$HEALTH_URL" ] || HEALTH_URL="$HEALTH_URL_DEFAULT"
+          # Jenkins DROPS environment{} entries whose value is the empty string, so any
+          # of these can be entirely unset here — default them under set -u.
+          export DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN_PARAM:-false}"
+          HEALTH_URL="${HEALTH_URL_PARAM:-}"
+          [ -n "$HEALTH_URL" ] || HEALTH_URL="${HEALTH_URL_DEFAULT:-}"
           export HEALTH_URL
           WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/service-deploy.sh
         '''
