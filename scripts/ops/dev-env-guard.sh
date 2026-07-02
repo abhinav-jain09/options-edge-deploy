@@ -86,24 +86,43 @@ check_kafka() {
 
 check_kubernetes_config() {
   have kubectl || return 0
-  local cm_yaml
-  if ! cm_yaml="$(kubectl --context "$KUBECTL_CONTEXT" -n "$NS" get cm options-edge-config options-edge-databento-feed-config -o yaml 2>/tmp/dev-env-guard-kubectl.err)"; then
+  local cm_json
+  if ! cm_json="$(kubectl --context "$KUBECTL_CONTEXT" -n "$NS" get cm options-edge-config options-edge-databento-feed-config -o json 2>/tmp/dev-env-guard-kubectl.err)"; then
     fail "could not read dev configmaps: $(cat /tmp/dev-env-guard-kubectl.err)"
     return 0
   fi
 
-  if printf '%s\n' "$cm_yaml" | rg 'broker[-_]?2|:29092|localhost:9093|host\.docker\.internal:29092' >/dev/null; then
-    fail "Kubernetes ConfigMaps still contain broker 2 / old broker endpoints"
+  local cm_data
+  cm_data="$(printf '%s\n' "$cm_json" | jq -r '.items[] | .metadata.name as $name | .data // {} | to_entries[] | "\($name)\t\(.key)\t\(.value)"')"
+
+  if printf '%s\n' "$cm_data" | rg 'broker[-_]?2|:29092|localhost:9092|localhost:9093|host\.docker\.internal:9092|host\.docker\.internal:29092' >/dev/null; then
+    fail "Kubernetes ConfigMap data still contains broker 2 / old Kafka endpoints"
   else
-    ok "ConfigMaps contain no broker 2 endpoints"
+    ok "ConfigMap data contains no broker 2 / old Kafka endpoints"
   fi
 
   local live_bootstrap
-  live_bootstrap="$(printf '%s\n' "$cm_yaml" | awk '/KAFKA_BOOTSTRAP_SERVERS:/ {print $2}' | sort -u | tr '\n' ' ')"
+  live_bootstrap="$(printf '%s\n' "$cm_data" | awk -F '\t' '$2 == "KAFKA_BOOTSTRAP_SERVERS" {print $3}' | sort -u | tr '\n' ' ')"
   if printf '%s' "$live_bootstrap" | rg 'host\.docker\.internal:19092|localhost:19092' >/dev/null; then
     ok "Kubernetes bootstrap points at native Kafka ($live_bootstrap)"
   else
     fail "Kubernetes bootstrap does not point at native Kafka: $live_bootstrap"
+  fi
+
+  local broker_counts
+  broker_counts="$(printf '%s\n' "$cm_data" | awk -F '\t' '$2 == "KAFKA_BROKER_COUNT" {print $3}' | sort -u | tr '\n' ' ')"
+  if [ -n "$broker_counts" ] && [ "$broker_counts" != "1 " ]; then
+    fail "Kubernetes broker count is not single-broker: $broker_counts"
+  else
+    ok "Kubernetes broker count is single-broker"
+  fi
+
+  local partition_defaults
+  partition_defaults="$(printf '%s\n' "$cm_data" | awk -F '\t' '$2 == "KAFKA_TOPIC_PARTITIONS_DEFAULT" {print $3}' | sort -u | tr '\n' ' ')"
+  if printf '%s' "$partition_defaults" | awk '{for (i=1; i<=NF; i++) if ($i > max) bad=1} END {exit bad ? 0 : 1}' max="$MAX_PARTITIONS"; then
+    fail "Kubernetes topic partition default exceeds ${MAX_PARTITIONS}: $partition_defaults"
+  else
+    ok "Kubernetes topic partition default is <= ${MAX_PARTITIONS} (${partition_defaults:-unset})"
   fi
 }
 
