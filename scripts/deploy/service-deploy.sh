@@ -60,11 +60,14 @@ if [ -n "$bad_kinds" ]; then
   exit 1
 fi
 
-DEPLOYMENT="$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$RENDER" | head -1)"
-CONTAINER="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].name' "$RENDER" | head -1)"
-MUTABLE_IMAGE="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image' "$RENDER" | head -1)"
+# A service may own MULTIPLE Deployments (raw-to-display x2, classifiers x2, ...);
+# they share one image, and every one is pinned/rolled/gated below.
+DEPLOYMENTS="$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$RENDER" | grep -v '^---$')"
+DEPLOYMENT="$(printf '%s\n' "$DEPLOYMENTS" | head -1)"
+CONTAINER="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].name' "$RENDER" | grep -v '^---$' | head -1)"
+MUTABLE_IMAGE="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image' "$RENDER" | grep -v '^---$' | head -1)"
 [ -n "$DEPLOYMENT" ] && [ -n "$MUTABLE_IMAGE" ] || { echo "FATAL: could not extract Deployment/image from the render" >&2; exit 1; }
-echo "service=$SERVICE deployment=$DEPLOYMENT container=$CONTAINER image=$MUTABLE_IMAGE"
+echo "service=$SERVICE deployments=[$(printf '%s' "$DEPLOYMENTS" | tr '\n' ' ')] container=$CONTAINER image=$MUTABLE_IMAGE"
 
 # --- §13.7 digest-pin the image (fail-closed via the shared resolver) -----------------
 . scripts/deploy/pin-image.sh
@@ -74,7 +77,7 @@ PINNED_IMAGE="$(pin_ref "$MUTABLE_IMAGE")" || {
 }
 echo "pinned $MUTABLE_IMAGE -> $PINNED_IMAGE"
 PINNED_IMAGE="$PINNED_IMAGE" yq -i \
-  "(. | select(.kind == \"Deployment\").spec.template.spec.containers[0].image) = strenv(PINNED_IMAGE)" \
+  "(. | select(.kind == \"Deployment\") | .spec.template.spec.containers[0].image) |= strenv(PINNED_IMAGE)" \
   "$RENDER"
 unpinned="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[].image' "$RENDER" \
   | { grep '/options-edge-' || true; } | { grep -v '@sha256:' || true; })"
@@ -98,12 +101,24 @@ fi
 
 echo "=== apply (service-scoped) ==="
 kubectl apply -f "$RENDER"
-echo "=== rollout ==="
-kubectl -n "$NAMESPACE" rollout status "deployment/$DEPLOYMENT" --timeout=600s
+echo "=== rollout (all deployments of this service) ==="
+for dep in $DEPLOYMENTS; do
+  kubectl -n "$NAMESPACE" rollout status "deployment/$dep" --timeout=600s
+done
 
 # --- §13.3 post-rollout health gate ---------------------------------------------------
 echo "=== health gate ==="
 PINNED_DIGEST="${PINNED_IMAGE#*@}"
+DESIRED_TOTAL=0
+for dep in $DEPLOYMENTS; do
+  r="$(kubectl -n "$NAMESPACE" get deployment "$dep" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0)"
+  DESIRED_TOTAL=$((DESIRED_TOTAL + ${r:-0}))
+done
+if [ "$DESIRED_TOTAL" -eq 0 ]; then
+  echo "  service is scaled to 0 (temporarily disabled) — spec applied, no pods to gate."
+  echo "=== $SERVICE deployed to $ENVIRONMENT (replicas 0): $PINNED_IMAGE ==="
+  exit 0
+fi
 # -o json (not jsonpath: jsonpath renders maps as `map[k:v]`, which yq can't parse)
 selector="$(kubectl -n "$NAMESPACE" get deployment "$DEPLOYMENT" -o json \
   | yq -r '.spec.selector.matchLabels | to_entries | map(.key + "=" + .value) | join(",")')"

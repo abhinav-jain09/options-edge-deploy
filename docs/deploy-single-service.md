@@ -128,7 +128,21 @@ re-discovers them):
 
 ---
 
-## 5. Onboarding the NEXT service to the fast path
+## 5. Processing services — ALL on the fast path (generated slices)
+
+Every options-edge-processing service (~25) is standalone via the generic
+**`service-deploy`** job: pick `SERVICE` + `ENVIRONMENT`, optionally
+`BUILD_IMAGES=true` (triggers the full processing image build first), and it deploys
+ONLY that service — same guarantees as web (blast radius, digest pin, rollback,
+health gate; multi-Deployment services like raw-to-display roll every Deployment).
+
+Their overlays are **GENERATED** by `scripts/deploy/generate-service-slices.sh`: each
+slice is the monolithic overlay's render of just that service, so the mirror rule
+holds by construction. **Never edit a generated `manifest.yaml` by hand** — change the
+base manifests/overlay patches, re-run the generator, and commit the regenerated
+slices (CI fails on drift until you do).
+
+## 6. Onboarding a NEW service to the fast path
 
 Per the design, migrate in small batches (gateway next, then one low-risk processing
 service). For a service `<svc>`:

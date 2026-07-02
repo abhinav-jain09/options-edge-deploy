@@ -1,0 +1,85 @@
+@Library('oe') _
+
+// GENERIC STANDALONE SERVICE DEPLOY — one job for every processing service
+// (standalone-service-deployment design; web has its own job with the native web build).
+//
+// Deploys ONE service's workload to ONE environment in minutes:
+//   render k8s/services/<SERVICE>/overlays/<env> (a GENERATED snapshot of the monolith's
+//   render of just that service — mirror rule by construction) → blast-radius guard →
+//   digest-pin → apply ONLY that workload → rollout each of its Deployments → health gate
+//   → rollback command in the log.
+//
+// Image builds: processing images are built by the options-edge-processing job (all
+// modules in one reactor build). BUILD_IMAGES=true triggers it first for this env;
+// leave false to deploy the images already in the env registry (the fast path).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'SERVICE', choices: [
+      'databento-gex', 'databento-gex-history', 'databento-maxpain',
+      'databento-mission-pace', 'databento-mission-pressure', 'databento-mission-sandwich',
+      'databento-volume-aggregator', 'delta-flow', 'directional-pressure',
+      'gex-delta-redis-writer', 'hpsf-postgres-writer', 'hpsf-processing',
+      'option-price-behavior', 'pin-postgres-writer', 'pressure-postgres-writer',
+      'raw-postgres-writer', 'raw-to-display', 'spx-mission-control',
+      'strike-flow-avro-adapter', 'strike-flow-classifier', 'unified-sr',
+      'unusual-whales-gex', 'unusual-whales-gex-history', 'volume-pace', 'volume-sandwich'
+    ], description: 'Which service to deploy (dir under k8s/services; keep in sync with services.yaml standalone entries).')
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
+      description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
+    booleanParam(name: 'BUILD_IMAGES', defaultValue: false,
+      description: 'Build+push ALL processing images for this env first (options-edge-processing, ~15-20 min). false = deploy the image already in the registry (fast path).')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
+      description: 'true = render + digest-pin + server-side validate only; nothing changes.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 45, unit: 'MINUTES')
+  }
+  environment {
+    KUBECONFIG           = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT          = "${params.ENVIRONMENT}"
+    SERVICE_PARAM        = "${params.SERVICE}"
+    DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
+  }
+  stages {
+    stage('Validate service registry') {
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-services.sh
+        '''
+      }
+    }
+    stage('Build processing images') {
+      when { expression { params.BUILD_IMAGES && !params.DEPLOY_DRY_RUN } }
+      steps {
+        build job: 'options-edge-processing',
+              parameters: [
+                string(name: 'ENVIRONMENT',        value: params.ENVIRONMENT),
+                string(name: 'PROCESSING_BRANCH',  value: 'main'),
+                string(name: 'CONTRACTS_BRANCH',   value: 'main'),
+                booleanParam(name: 'PUSH_IMAGES',  value: true)
+              ],
+              wait: true, propagate: true
+      }
+    }
+    stage('Deploy (service-scoped)') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export SERVICE="${SERVICE_PARAM:?}"
+          export DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN_PARAM:-false}"
+          WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/service-deploy.sh
+        '''
+      }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: '.jenkins-tmp/*-*.yaml', allowEmptyArchive: true
+    }
+  }
+}
