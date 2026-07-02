@@ -2,6 +2,13 @@
 # This is the monolithic k8s/overlays/experiment render of ONLY this service's workload
 # (mirror rule holds by construction). To change the service, change the base
 # manifests/overlay patches and re-run the generator.
+#
+# DEPLOYMENT SAFETY — NEVER kubectl-apply this manifest directly. It is a PRE-PIN
+# render: the image ref below is the BASE (dev-registry) ref, NOT this env's image.
+# The ONLY deploy paths are the Jenkins jobs (Jenkinsfile.service-deploy -> 
+# scripts/deploy/service-deploy.sh, or the monolithic Jenkinsfile), which remap the
+# image to image-tags/experiment.yaml and digest-pin it fail-closed BEFORE any apply.
+# Applying this file directly to production would roll out the dev image.
 apiVersion: v1
 kind: Service
 metadata:
