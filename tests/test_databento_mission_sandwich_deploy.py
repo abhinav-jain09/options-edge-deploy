@@ -44,8 +44,8 @@ class DatabentoMissionSandwichDeployTest(unittest.TestCase):
     def test_topics_include_mission_sandwich(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
 
-        self.assertIn("options.databento.sandwich.mission:32", topics)
-        self.assertIn("display.volume.current:32", topics)
+        self.assertIn("options.databento.sandwich.mission:4", topics)
+        self.assertIn("display.volume.current:4", topics)
         self.assertIn("options.databento.sandwich.mission", topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1])
 
     def test_smoke_and_monitoring_include_mission_sandwich(self) -> None:

@@ -16,23 +16,23 @@ if ! [[ "$EXPECTED_MIN_ISR" =~ ^[1-9][0-9]*$ ]] || (( EXPECTED_MIN_ISR > EXPECTE
 fi
 
 TOPICS=(
-  'options.opra.tcbbo|32|delete|86400000'
-  'options.opra.trades|6|delete|86400000'
-  'options.opra.quotes|6|delete|86400000'
+  'options.opra.tcbbo|4|delete|86400000'
+  'options.opra.trades|4|delete|86400000'
+  'options.opra.quotes|4|delete|86400000'
   'underlying.es.trades|2|delete|86400000'
   'underlying.spx.price|1|compact,delete|86400000'
   'options.hpsf.underlying-state|1|compact,delete|604800000'
   'options.hpsf.market-flow|1|compact,delete|172800000'
-  'options.hpsf.strike-flow|6|compact,delete|172800000'
-  'options.hpsf.strike-score|6|compact,delete|172800000'
+  'options.hpsf.strike-flow|4|compact,delete|172800000'
+  'options.hpsf.strike-score|4|compact,delete|172800000'
   'options.hpsf.latest-signal|1|compact,delete|2592000000'
   'options.hpsf.signal|1|delete|2592000000'
   'options.hpsf.audit|2|delete|604800000'
   'options.hpsf.dlq|1|delete|2592000000'
   'options.hpsf.writer-dlq|1|delete|2592000000'
   'options.hpsf.exit-signal|1|delete|2592000000'
-  'options.databento.strike-flow|32|compact,delete|172800000'
-  'options.ibkr.strike-flow|32|compact,delete|172800000'
+  'options.databento.strike-flow|4|compact,delete|172800000'
+  'options.ibkr.strike-flow|4|compact,delete|172800000'
 )
 
 topic_name() {
