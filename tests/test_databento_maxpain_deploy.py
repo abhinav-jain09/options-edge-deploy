@@ -100,7 +100,7 @@ class DatabentoMaxPainDeployTest(unittest.TestCase):
     def test_topics_include_maxpain_compacted(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
         # In the approved-topics whitelist.
-        self.assertIn("options.databento.maxpain:32", topics)
+        self.assertIn("options.databento.maxpain:4", topics)
         # And in the compacted-topics list (bridge calls ensureCompactedTopic).
         self.assertIn(
             "options.databento.maxpain",

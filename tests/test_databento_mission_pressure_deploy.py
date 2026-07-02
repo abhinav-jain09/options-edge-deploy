@@ -44,9 +44,9 @@ class DatabentoMissionPressureDeployTest(unittest.TestCase):
     def test_topics_include_mission_pressure_and_mission_pace(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
 
-        self.assertIn("options.databento.pace.mission:32", topics)
-        self.assertIn("options.databento.market-pressure.mission:32", topics)
-        self.assertIn("options.databento.sandwich.mission:32", topics)
+        self.assertIn("options.databento.pace.mission:4", topics)
+        self.assertIn("options.databento.market-pressure.mission:4", topics)
+        self.assertIn("options.databento.sandwich.mission:4", topics)
         self.assertIn("options.databento.pace.mission", topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1])
         self.assertIn("options.databento.market-pressure.mission", topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1])
 
