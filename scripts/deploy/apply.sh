@@ -211,7 +211,7 @@ EOF
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pin-postgres-writer pin-postgres-writer="$PIN_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
-          kubectl -n options-edge set image deployment/feed-gateway-service feed-gateway="$FEED_GATEWAY_IMAGE"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/feed-gateway-service feed-gateway="$FEED_GATEWAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-integration-test integration-test="$INTEGRATION_TEST_IMAGE"
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/hpsf-stage-a-service hpsf-stage-a="$HPSF_PROCESSING_IMAGE"
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/hpsf-stage-b-service hpsf-stage-b="$HPSF_PROCESSING_IMAGE"
@@ -246,7 +246,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/raw-postgres-writer
           kubectl -n options-edge rollout restart deployment/pin-postgres-writer
           kubectl -n options-edge rollout restart deployment/pressure-postgres-writer
-          kubectl -n options-edge rollout restart deployment/feed-gateway-service
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/feed-gateway-service
           kubectl -n options-edge rollout restart deployment/options-edge-integration-test
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/hpsf-stage-a-service
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/hpsf-stage-b-service
@@ -282,7 +282,7 @@ EOF
           kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=600s
           kubectl -n options-edge rollout status deployment/pin-postgres-writer --timeout=600s
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=600s
-          kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=600s
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=600s
           kubectl -n options-edge rollout status deployment/options-edge-integration-test --timeout=600s
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/hpsf-stage-a-service --timeout=600s
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/hpsf-stage-b-service --timeout=600s || echo "WARN: hpsf-stage-b rollout status slow (old replica likely stuck terminating on dev); HPSF smoke validates the new pod"

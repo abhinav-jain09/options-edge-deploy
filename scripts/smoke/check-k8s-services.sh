@@ -393,7 +393,7 @@ check_deployment pressure-postgres-writer 18086
 check_spx_mission_control
 check_strike_flow_classifier
 check_ibkr_feed
-check_feed_gateway
+# DISABLED until further notice (svc scaled to 0, not deployed): check_feed_gateway
 if skip_live_ui_check_outside_market_hours; then
   exit 0
 fi
