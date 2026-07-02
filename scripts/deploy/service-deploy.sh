@@ -104,8 +104,9 @@ kubectl -n "$NAMESPACE" rollout status "deployment/$DEPLOYMENT" --timeout=600s
 # --- §13.3 post-rollout health gate ---------------------------------------------------
 echo "=== health gate ==="
 PINNED_DIGEST="${PINNED_IMAGE#*@}"
-selector="$(kubectl -n "$NAMESPACE" get deployment "$DEPLOYMENT" -o jsonpath='{.spec.selector.matchLabels}' \
-  | yq -r 'to_entries | map(.key + "=" + .value) | join(",")')"
+# -o json (not jsonpath: jsonpath renders maps as `map[k:v]`, which yq can't parse)
+selector="$(kubectl -n "$NAMESPACE" get deployment "$DEPLOYMENT" -o json \
+  | yq -r '.spec.selector.matchLabels | to_entries | map(.key + "=" + .value) | join(",")')"
 gate_fail=0
 
 running_ids="$(kubectl -n "$NAMESPACE" get pods -l "$selector" --field-selector=status.phase=Running \

@@ -61,9 +61,17 @@ echo "=== PVC gate (create-only; never patch an existing claim) ==="
 pvc_create=() ; pvc_skip=0 ; pvc_conflict=0
 while IFS=$'\t' read -r name manifest_sc; do
   [ -n "$name" ] || continue
+  # Every env-rendered infra PVC MUST pin an explicit storageClassName: an empty class
+  # would let the cluster's default provisioner pick one silently — the exact ambiguity
+  # (manifest omits vs live defaulted class) that produced the immutable-field failures.
+  if [ -z "$manifest_sc" ]; then
+    echo "  CONFLICT $name: rendered PVC has NO storageClassName — the env overlay must pin the live class explicitly" >&2
+    pvc_conflict=$((pvc_conflict + 1))
+    continue
+  fi
   if live_sc="$(kubectl -n "$NAMESPACE" get pvc "$name" -o jsonpath='{.spec.storageClassName}' 2>/dev/null)"; then
-    if [ -n "$manifest_sc" ] && [ "$manifest_sc" != "$live_sc" ]; then
-      echo "  CONFLICT $name: manifest storageClassName='$manifest_sc' but live immutable class='$live_sc'" >&2
+    if [ "$manifest_sc" != "$live_sc" ]; then
+      echo "  CONFLICT $name: manifest storageClassName='$manifest_sc' but live immutable class='${live_sc:-<empty>}'" >&2
       pvc_conflict=$((pvc_conflict + 1))
     else
       pvc_skip=$((pvc_skip + 1))

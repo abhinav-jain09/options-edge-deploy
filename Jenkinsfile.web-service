@@ -41,7 +41,9 @@ pipeline {
     // Per-env web URLs baked into the image at BUILD time — the exact matrix the
     // bring-up-all umbrella uses (keep in sync with Jenkinsfile.bring-up-all).
     IS_PROD         = "${params.ENVIRONMENT == 'production' ? 'true' : 'false'}"
-    WEB_PROFILE     = "${params.ENVIRONMENT == 'production' ? 'prod' : 'dev'}"
+    // Same PROFILE contract as Jenkinsfile.bring-up-all: production -> 'prod',
+    // dev -> 'dev', experiment -> 'experiment' (the web job branches on it).
+    WEB_PROFILE     = "${params.ENVIRONMENT == 'production' ? 'prod' : params.ENVIRONMENT}"
     WEB_WS_URL      = "${params.ENVIRONMENT == 'production' ? 'wss://fullfunding.nl/ws/events' : 'ws://localhost:8091/ws/events'}"
     WEB_API_BASE    = "${params.ENVIRONMENT == 'production' ? 'https://fullfunding.nl' : 'http://localhost:8090'}"
     WEB_AUTH_ISSUER = "${params.ENVIRONMENT == 'production' ? 'https://auth.fullfunding.nl/realms/optionsedge' : 'http://192.168.100.102:8089/realms/optionsedge'}"
@@ -49,6 +51,10 @@ pipeline {
     REMOTE_BUILD_HOST = "${params.ENVIRONMENT == 'experiment' ? '192.168.100.2' : '192.168.100.252'}"
     REMOTE_BUILD_ROOT = "${params.ENVIRONMENT == 'experiment' ? '/Users/rajuljain/ci/remote-builds' : '/home/abhinav/ci/remote-builds'}"
     HEALTH_URL_DEFAULT = "${params.ENVIRONMENT == 'production' ? 'http://192.168.100.252:8094/' : (params.ENVIRONMENT == 'dev' ? 'http://localhost:8090/' : '')}"
+    // Passed to the sh step as REAL environment variables (never interpolated into the
+    // shell script text — a param containing $/`/quotes must not alter the script).
+    HEALTH_URL_PARAM     = "${params.HEALTH_URL ?: ''}"
+    DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
   }
   stages {
     stage('Resolve profile') {
@@ -100,8 +106,8 @@ pipeline {
         sh '''
           set -euo pipefail
           export SERVICE=web
-          export DEPLOY_DRY_RUN="''' + "${params.DEPLOY_DRY_RUN}" + '''"
-          export HEALTH_URL="''' + "${params.HEALTH_URL ?: ''}" + '''"
+          export DEPLOY_DRY_RUN="$DEPLOY_DRY_RUN_PARAM"
+          HEALTH_URL="$HEALTH_URL_PARAM"
           [ -n "$HEALTH_URL" ] || HEALTH_URL="$HEALTH_URL_DEFAULT"
           export HEALTH_URL
           WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/service-deploy.sh
