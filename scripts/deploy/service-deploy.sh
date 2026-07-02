@@ -87,6 +87,22 @@ if [ "$(printf '%s\n' "$DEPLOYMENTS" | sort)" != "$(printf '%s\n' "$ALLOWED" | s
   echo "  registered: $(printf '%s ' $ALLOWED)" >&2
   exit 1
 fi
+# --- env image remap (Codex round 3): generated slices mirror the MONOLITH render, which
+# carries the base (dev-registry) image ref pre-pin. The authoritative per-env mutable ref
+# lives in image-tags/${ENVIRONMENT}.yaml — remap BEFORE pinning so a production fast-path
+# deploy can never pin (and roll out) the dev registry's image. Matched by the service's
+# registered image basename; fail-closed if the env has no entry for it.
+IMAGE_BASENAME="$(yq -r ".services[] | select(.name == \"$SERVICE\") | .image" services.yaml)"
+[ -n "$IMAGE_BASENAME" ] && [ "$IMAGE_BASENAME" != "null" ] || { echo "FATAL: $SERVICE has no image registered in services.yaml" >&2; exit 1; }
+ENV_IMAGE="$(yq -r ".images | to_entries[] | select(.value | test(\"/${IMAGE_BASENAME}:\")) | .value" "image-tags/${ENVIRONMENT}.yaml" | head -1)"
+if [ -z "$ENV_IMAGE" ] || [ "$ENV_IMAGE" = "null" ]; then
+  echo "FATAL: image-tags/${ENVIRONMENT}.yaml has no entry for image '$IMAGE_BASENAME' (service $SERVICE)" >&2
+  exit 1
+fi
+if [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
+  echo "remapping render image -> env image: $MUTABLE_IMAGE -> $ENV_IMAGE"
+  MUTABLE_IMAGE="$ENV_IMAGE"
+fi
 echo "service=$SERVICE deployments=[$(printf '%s' "$DEPLOYMENTS" | tr '\n' ' ')] container=$CONTAINER image=$MUTABLE_IMAGE"
 
 # --- §13.7 digest-pin the image (fail-closed via the shared resolver) -----------------
