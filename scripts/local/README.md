@@ -43,7 +43,7 @@ launchctl start com.optionsedge.kafka-cleanup
 
 | Var | Default | Notes |
 |---|---|---|
-| `KAFKA_BOOTSTRAP_SERVERS` | `192.168.100.102:9092` | Dev Kafka per memory:dev-deploy-topology |
+| `KAFKA_BOOTSTRAP_SERVERS` | `host.docker.internal:19092` | Native dev Kafka endpoint |
 | `RETENTION_MS` | `86400000` (24h) | Match `KAFKA_CHANGELOG_RETENTION_MS` in the configmap |
 | `KAFKA_IMAGE` | `confluentinc/cp-kafka:7.6.0` | Same image the CronJob uses |
 | `LOG_DIR` | `~/.local/var/log/oe-kafka-cleanup` | One file per run, auto-pruned >30 days |
@@ -52,7 +52,7 @@ Examples:
 
 ```bash
 RETENTION_MS=43200000 ./scripts/local/cleanup-kafka-changelogs.sh   # 12h
-KAFKA_BOOTSTRAP_SERVERS=localhost:9092 ./scripts/local/cleanup-kafka-changelogs.sh
+KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:19092 ./scripts/local/cleanup-kafka-changelogs.sh
 ```
 
 ## Safety
@@ -98,10 +98,10 @@ rm ~/bin/oe-kafka-cleanup.sh
 - **Networking on Docker Desktop Mac**: the script uses the default
   Docker bridge network (NOT `--network host`). Bridge networking is
   the safe default — it works on every Docker Desktop version. The
-  default `KAFKA_BOOTSTRAP_SERVERS=192.168.100.102:9092` is a LAN IP
-  routable from inside a bridge-networked container.
-  - For a Kafka bound to `localhost:9092`, use:
-    `KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092`
+  default `KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:19092` is routable
+  from inside a bridge-networked container.
+  - For native dev Kafka, use:
+    `KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:19092`
   - If you specifically need host networking (e.g. for an obscure
     bind), Docker Desktop 4.34+ supports it via the opt-in
     "Enable host networking" setting. Add `--network host` to the

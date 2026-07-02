@@ -161,6 +161,21 @@ check_source_config() {
         ok "rendered $env infra overlay partition default is <= ${MAX_PARTITIONS} ($rendered_defaults)"
       fi
     done
+
+    local prod_render prod_bootstrap prod_partition_default
+    prod_render="$(kubectl kustomize "$repo_root/k8s/infra/overlays/production" 2>/tmp/dev-env-guard-kustomize-prod.err || true)"
+    prod_bootstrap="$(printf '%s\n' "$prod_render" | awk '/KAFKA_BOOTSTRAP_SERVERS:/ {print $2}' | sort -u | tr '\n' ' ')"
+    prod_partition_default="$(printf '%s\n' "$prod_render" | awk '/KAFKA_TOPIC_PARTITIONS_DEFAULT:/ {gsub(/"/, "", $2); print $2}' | sort -u | tr '\n' ' ')"
+    if printf '%s' "$prod_bootstrap" | rg 'host\.docker\.internal:19092|localhost:19092' >/dev/null; then
+      fail "rendered production infra overlay points at dev Kafka: $prod_bootstrap"
+    else
+      ok "rendered production infra overlay does not point at dev Kafka"
+    fi
+    if [ "$prod_partition_default" = "4 " ]; then
+      ok "rendered production infra overlay keeps production partition default (4)"
+    else
+      fail "rendered production infra overlay partition default changed from 4: ${prod_partition_default:-unset}"
+    fi
   else
     warn "kubectl missing; skipped source kustomize render checks"
   fi
