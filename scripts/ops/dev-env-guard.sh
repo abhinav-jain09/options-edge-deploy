@@ -126,6 +126,46 @@ check_kubernetes_config() {
   fi
 }
 
+check_source_config() {
+  local repo_root
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+  local source_defaults
+  source_defaults="$(awk '
+    /KAFKA_TOPIC_PARTITIONS_DEFAULT:/ {
+      gsub(/"/, "", $2)
+      print FILENAME ":" $2
+    }' \
+    "$repo_root/k8s/infra/base/configmap.yaml" \
+    "$repo_root/k8s/infra/overlays/dev/configmap-dev-local-patch.yaml" \
+    "$repo_root/k8s/infra/overlays/experiment/configmap-dev-local-patch.yaml" 2>/dev/null || true)"
+
+  if printf '%s\n' "$source_defaults" | awk -F: -v max="$MAX_PARTITIONS" 'NF && $NF > max {bad=1} END {exit bad ? 0 : 1}'; then
+    fail "source Kafka partition default exceeds ${MAX_PARTITIONS}: ${source_defaults//$'\n'/, }"
+  else
+    ok "source Kafka partition defaults are <= ${MAX_PARTITIONS}"
+  fi
+
+  if have kubectl; then
+    local env
+    for env in dev experiment; do
+      local rendered_defaults
+      rendered_defaults="$(kubectl kustomize "$repo_root/k8s/infra/overlays/$env" 2>/tmp/dev-env-guard-kustomize.err \
+        | awk '/KAFKA_TOPIC_PARTITIONS_DEFAULT:/ {gsub(/"/, "", $2); print $2}' \
+        | sort -u | tr '\n' ' ')"
+      if [ -z "$rendered_defaults" ]; then
+        fail "rendered $env infra overlay has no KAFKA_TOPIC_PARTITIONS_DEFAULT"
+      elif printf '%s' "$rendered_defaults" | awk -v max="$MAX_PARTITIONS" '{for (i=1; i<=NF; i++) if ($i > max) bad=1} END {exit bad ? 0 : 1}'; then
+        fail "rendered $env infra overlay partition default exceeds ${MAX_PARTITIONS}: $rendered_defaults"
+      else
+        ok "rendered $env infra overlay partition default is <= ${MAX_PARTITIONS} ($rendered_defaults)"
+      fi
+    done
+  else
+    warn "kubectl missing; skipped source kustomize render checks"
+  fi
+}
+
 check_postgres() {
   if nc -z "$POSTGRES_HOST" "$POSTGRES_PORT" >/dev/null 2>&1; then
     ok "Postgres TCP reachable at ${POSTGRES_HOST}:${POSTGRES_PORT}"
@@ -214,6 +254,7 @@ check_gex_logs() {
 check_tools
 check_kafka
 check_kubernetes_config
+check_source_config
 check_postgres
 check_services
 check_gateway_health
