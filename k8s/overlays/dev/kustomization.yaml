@@ -57,6 +57,17 @@ patches:
   - path: spx-mission-control-dev-env-patch.yaml
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for every env, so they
   # render and deploy in dev too (exclusions removed). Their dev image remaps are in the images: block.
+  # Pin the Kafka Streams state PVCs to dev's live storageClassName (standard, the docker-desktop
+  # default). The base omits storageClassName; declaring the live value here keeps kubectl apply a
+  # no-op on this immutable field so the Deploy stage never trips the local-path/standard conflict
+  # the prod overlay fixes with local-path. See docs / the deploy-pvc runbook.
+  - target:
+      kind: PersistentVolumeClaim
+      labelSelector: app.kubernetes.io/component=kafka-streams-state
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: standard
 images:
   - name: 192.168.100.252:5000/options-edge-raw-to-display
     newName: host.docker.internal:5001/options-edge-raw-to-display

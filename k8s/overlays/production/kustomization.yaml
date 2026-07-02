@@ -33,3 +33,16 @@ patches:
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.
+  # Pin the Kafka Streams state PVCs to prod's live storageClassName (local-path). The base omits
+  # storageClassName, so an earlier apply baked "standard" (the docker-desktop dev default) into these
+  # PVCs' last-applied-configuration. Because storageClassName is immutable after creation, every prod
+  # apply then computed local-path -> standard and the API server rejected it, failing the Deploy stage
+  # (the app Deployments had already rolled, so this only red-flagged the job). Declaring the live value
+  # makes the apply a no-op. Dev overlay pins "standard" to match its cluster.
+  - target:
+      kind: PersistentVolumeClaim
+      labelSelector: app.kubernetes.io/component=kafka-streams-state
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: local-path
