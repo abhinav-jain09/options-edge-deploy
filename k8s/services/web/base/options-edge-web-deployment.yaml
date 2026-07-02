@@ -79,7 +79,7 @@ spec:
             # to ws://localhost:8080 (docker-desktop pods can't reach the gateway); prod uses the real
             # in-cluster Service for a genuine probe.
             - name: APP_FEED_GATEWAY_HEALTH_URL
-              value: "ws://feed-gateway-service:8091/ws/events"
+              value: "http://feed-gateway-service:8091/health"
             - name: VITE_API_BASE_URL
               value: "https://fullfunding.nl"
             - name: VITE_MISSION_CONTROL_URL
