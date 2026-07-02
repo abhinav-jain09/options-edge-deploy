@@ -77,7 +77,7 @@ add_service_scrape databento-volume-aggregator 8080
 add_service_scrape option-price-behavior-service 8080
 add_service_scrape databento-mission-pressure-service 8098
 add_service_scrape databento-mission-sandwich-service 8099
-add_service_scrape volume-pace-service 8080
+# DISABLED until further notice (svc replicas pinned to 0, not deployed): add_service_scrape volume-pace-service 8080
 add_service_scrape directional-pressure-service 8080
 add_service_scrape volume-sandwich-service 8080
 add_service_scrape unusual-whales-gex-service 8080
@@ -142,7 +142,8 @@ prometheus_query_is_one() {
   python3 -c 'import json, sys; data = json.load(sys.stdin); sys.exit(0 if any(str(row.get("value", ["", "0"])[1]) == "1" for row in data.get("data", {}).get("result", [])) else 1)' <<<"$body" 2>/dev/null
 }
 
-for service_name in raw-to-display-service options-edge-databento-feed databento-volume-aggregator option-price-behavior-service databento-mission-pressure-service databento-mission-sandwich-service volume-pace-service directional-pressure-service volume-sandwich-service unusual-whales-gex-service raw-postgres-writer pressure-postgres-writer hpsf-postgres-writer-service spx-mission-control-service delta-flow-service ibkr-feed-service feed-gateway-service options-edge-integration-test; do
+# volume-pace-service removed from the verify list: DISABLED until further notice (replicas pinned to 0, scrape can never come up)
+for service_name in raw-to-display-service options-edge-databento-feed databento-volume-aggregator option-price-behavior-service databento-mission-pressure-service databento-mission-sandwich-service directional-pressure-service volume-sandwich-service unusual-whales-gex-service raw-postgres-writer pressure-postgres-writer hpsf-postgres-writer-service spx-mission-control-service delta-flow-service ibkr-feed-service feed-gateway-service options-edge-integration-test; do
   if [[ "$service_name" == options-edge-* ]]; then
     job_name="$service_name"
   else
