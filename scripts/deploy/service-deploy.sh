@@ -104,9 +104,11 @@ unpinned="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[
 # --- §13.2 record the CURRENT image for rollback BEFORE mutating -----------------------
 PREV_FILE="$WORK_DIR/${SERVICE}-${ENVIRONMENT}-previous.txt"; : >"$PREV_FILE"
 for dep in $DEPLOYMENTS; do
+  # container name PER deployment (they can differ: hpsf-stage-a vs hpsf-stage-b)
+  ctr="$(yq -r "select(.kind == \"Deployment\" and .metadata.name == \"$dep\") | .spec.template.spec.containers[0].name" "$RENDER" | grep -v '^---$' | head -1)"
   prev="$(kubectl -n "$NAMESPACE" get deployment "$dep" \
     -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")"
-  printf '%s\t%s\n' "$dep" "$prev" >>"$PREV_FILE"
+  printf '%s\t%s\t%s\n' "$dep" "$ctr" "$prev" >>"$PREV_FILE"
   if [ -n "$prev" ]; then
     echo "previous image (rollback target) $dep: $prev"
   else
@@ -184,10 +186,10 @@ fi
 
 # --- §13.2 rollback instructions (always printed) --------------------------------------
 echo "=== rollback (no rebuild needed — re-points to the recorded digests) ==="
-while IFS=$'\t' read -r dep prev; do
+while IFS=$'\t' read -r dep ctr prev; do
   [ -n "$dep" ] || continue
   if [ -n "$prev" ]; then
-    echo "  kubectl -n $NAMESPACE set image deployment/$dep $CONTAINER=$prev"
+    echo "  kubectl -n $NAMESPACE set image deployment/$dep $ctr=$prev"
   fi
   echo "  # or: kubectl -n $NAMESPACE rollout undo deployment/$dep"
 done <"$PREV_FILE"
