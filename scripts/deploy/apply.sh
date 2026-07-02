@@ -194,7 +194,7 @@ EOF
           kubectl -n options-edge set image deployment/options-edge-databento-feed databento-feed="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
-          kubectl -n options-edge set image deployment/databento-maxpain-service databento-maxpain="$DATABENTO_MAXPAIN_IMAGE"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/databento-maxpain-service databento-maxpain="$DATABENTO_MAXPAIN_IMAGE"
           kubectl -n options-edge set image deployment/option-price-behavior-service option-price-behavior="$OPTION_PRICE_BEHAVIOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pace-service databento-mission-pace="$DATABENTO_MISSION_PACE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pressure-service databento-mission-pressure="$DATABENTO_MISSION_PRESSURE_IMAGE"
@@ -205,8 +205,8 @@ EOF
           kubectl -n options-edge set image deployment/directional-pressure-databento-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/volume-sandwich-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/volume-sandwich-databento-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
-          kubectl -n options-edge set image deployment/unusual-whales-gex-service unusual-whales-gex="$UNUSUAL_WHALES_GEX_IMAGE"
-          kubectl -n options-edge set image deployment/unusual-whales-gex-history-service unusual-whales-gex-history="$UNUSUAL_WHALES_GEX_HISTORY_IMAGE"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/unusual-whales-gex-service unusual-whales-gex="$UNUSUAL_WHALES_GEX_IMAGE"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/unusual-whales-gex-history-service unusual-whales-gex-history="$UNUSUAL_WHALES_GEX_HISTORY_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-history-service databento-gex-history="$DATABENTO_GEX_HISTORY_IMAGE"
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pin-postgres-writer pin-postgres-writer="$PIN_POSTGRES_WRITER_IMAGE"
@@ -232,7 +232,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/databento-mission-pressure-service
           kubectl -n options-edge rollout restart deployment/databento-mission-sandwich-service
           kubectl -n options-edge rollout restart deployment/databento-gex-service
-          kubectl -n options-edge rollout restart deployment/databento-maxpain-service
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/databento-maxpain-service
           kubectl -n options-edge rollout restart deployment/option-price-behavior-service
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/volume-pace-service
           kubectl -n options-edge rollout restart deployment/volume-pace-databento-service
@@ -240,8 +240,8 @@ EOF
           kubectl -n options-edge rollout restart deployment/directional-pressure-databento-service
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/volume-sandwich-service
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/volume-sandwich-databento-service
-          kubectl -n options-edge rollout restart deployment/unusual-whales-gex-service
-          kubectl -n options-edge rollout restart deployment/unusual-whales-gex-history-service
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/unusual-whales-gex-service
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/unusual-whales-gex-history-service
           kubectl -n options-edge rollout restart deployment/databento-gex-history-service
           kubectl -n options-edge rollout restart deployment/raw-postgres-writer
           kubectl -n options-edge rollout restart deployment/pin-postgres-writer
@@ -268,7 +268,7 @@ EOF
           kubectl -n options-edge rollout status deployment/databento-mission-pressure-service --timeout=600s
           kubectl -n options-edge rollout status deployment/databento-mission-sandwich-service --timeout=600s
           kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=600s
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=600s
           kubectl -n options-edge rollout status deployment/option-price-behavior-service --timeout=600s
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=600s
           kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=600s
@@ -276,8 +276,8 @@ EOF
           kubectl -n options-edge rollout status deployment/directional-pressure-databento-service --timeout=600s
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/volume-sandwich-service --timeout=600s
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/volume-sandwich-databento-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/unusual-whales-gex-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/unusual-whales-gex-history-service --timeout=600s
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/unusual-whales-gex-service --timeout=600s
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/unusual-whales-gex-history-service --timeout=600s
           kubectl -n options-edge rollout status deployment/databento-gex-history-service --timeout=600s
           kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=600s
           kubectl -n options-edge rollout status deployment/pin-postgres-writer --timeout=600s
