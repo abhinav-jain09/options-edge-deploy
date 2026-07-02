@@ -199,8 +199,8 @@ EOF
           kubectl -n options-edge set image deployment/databento-mission-pace-service databento-mission-pace="$DATABENTO_MISSION_PACE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pressure-service databento-mission-pressure="$DATABENTO_MISSION_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-sandwich-service databento-mission-sandwich="$DATABENTO_MISSION_SANDWICH_IMAGE"
-          kubectl -n options-edge set image deployment/volume-pace-service volume-pace="$VOLUME_PACE_IMAGE"
-          kubectl -n options-edge set image deployment/volume-pace-databento-service volume-pace="$VOLUME_PACE_IMAGE"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/volume-pace-service volume-pace="$VOLUME_PACE_IMAGE"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/volume-pace-databento-service volume-pace="$VOLUME_PACE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-databento-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/volume-sandwich-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
@@ -213,8 +213,8 @@ EOF
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/feed-gateway-service feed-gateway="$FEED_GATEWAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-integration-test integration-test="$INTEGRATION_TEST_IMAGE"
-          kubectl -n options-edge set image deployment/hpsf-stage-a-service hpsf-stage-a="$HPSF_PROCESSING_IMAGE"
-          kubectl -n options-edge set image deployment/hpsf-stage-b-service hpsf-stage-b="$HPSF_PROCESSING_IMAGE"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/hpsf-stage-a-service hpsf-stage-a="$HPSF_PROCESSING_IMAGE"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/hpsf-stage-b-service hpsf-stage-b="$HPSF_PROCESSING_IMAGE"
           kubectl -n options-edge set image deployment/hpsf-postgres-writer-service hpsf-postgres-writer="$HPSF_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-classifier-databento strike-flow-classifier="$STRIKE_FLOW_CLASSIFIER_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-classifier-ibkr strike-flow-classifier="$STRIKE_FLOW_CLASSIFIER_IMAGE"
@@ -234,8 +234,8 @@ EOF
           kubectl -n options-edge rollout restart deployment/databento-gex-service
           kubectl -n options-edge rollout restart deployment/databento-maxpain-service
           kubectl -n options-edge rollout restart deployment/option-price-behavior-service
-          kubectl -n options-edge rollout restart deployment/volume-pace-service
-          kubectl -n options-edge rollout restart deployment/volume-pace-databento-service
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/volume-pace-service
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/volume-pace-databento-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-databento-service
           kubectl -n options-edge rollout restart deployment/volume-sandwich-service
@@ -248,8 +248,8 @@ EOF
           kubectl -n options-edge rollout restart deployment/pressure-postgres-writer
           kubectl -n options-edge rollout restart deployment/feed-gateway-service
           kubectl -n options-edge rollout restart deployment/options-edge-integration-test
-          kubectl -n options-edge rollout restart deployment/hpsf-stage-a-service
-          kubectl -n options-edge rollout restart deployment/hpsf-stage-b-service
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/hpsf-stage-a-service
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/hpsf-stage-b-service
           kubectl -n options-edge rollout restart deployment/hpsf-postgres-writer-service
           kubectl -n options-edge rollout restart deployment/strike-flow-classifier-databento
           kubectl -n options-edge rollout restart deployment/strike-flow-classifier-ibkr
@@ -270,8 +270,8 @@ EOF
           kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=600s
           kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=600s
           kubectl -n options-edge rollout status deployment/option-price-behavior-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=600s
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=600s
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=600s
           kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=600s
           kubectl -n options-edge rollout status deployment/directional-pressure-databento-service --timeout=600s
           kubectl -n options-edge rollout status deployment/volume-sandwich-service --timeout=600s
@@ -284,8 +284,8 @@ EOF
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=600s
           kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=600s
           kubectl -n options-edge rollout status deployment/options-edge-integration-test --timeout=600s
-          kubectl -n options-edge rollout status deployment/hpsf-stage-a-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/hpsf-stage-b-service --timeout=600s || echo "WARN: hpsf-stage-b rollout status slow (old replica likely stuck terminating on dev); HPSF smoke validates the new pod"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/hpsf-stage-a-service --timeout=600s
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/hpsf-stage-b-service --timeout=600s || echo "WARN: hpsf-stage-b rollout status slow (old replica likely stuck terminating on dev); HPSF smoke validates the new pod"
           kubectl -n options-edge rollout status deployment/hpsf-postgres-writer-service --timeout=600s
           kubectl -n options-edge rollout status deployment/strike-flow-classifier-databento --timeout=600s
           kubectl -n options-edge rollout status deployment/strike-flow-classifier-ibkr --timeout=600s

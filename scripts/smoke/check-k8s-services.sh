@@ -378,8 +378,8 @@ check_deployment databento-volume-aggregator 18094
 check_databento_mission_pace
 check_databento_mission_pressure
 check_databento_mission_sandwich
-check_deployment volume-pace-service 18081
-check_deployment volume-pace-databento-service 18091
+# DISABLED until further notice (svc scaled to 0, not deployed): check_deployment volume-pace-service 18081
+# DISABLED until further notice (svc scaled to 0, not deployed): check_deployment volume-pace-databento-service 18091
 check_deployment directional-pressure-service 18084
 check_deployment directional-pressure-databento-service 18092
 check_deployment volume-sandwich-service 18083
