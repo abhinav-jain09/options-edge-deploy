@@ -124,7 +124,17 @@ for item in deployments.get("items", []):
         if not expected_image:
             continue
         rows.append((deployment, name, var_name, expected_image, image))
-        if image != expected_image:
+        # Compare by DIGEST when both refs are digest-pinned: `repo:tag@sha256:X` and
+        # `repo@sha256:X` are the same immutable image. The tag-less form appears on
+        # deployments whose `set image` roll is disabled (replicas pinned to 0) — the
+        # kustomize apply publishes repo@digest while the env file carries repo:tag@digest.
+        def _norm(ref: str) -> str:
+            if "@" in ref:
+                repo_tag, digest = ref.split("@", 1)
+                repo = repo_tag.rsplit(":", 1)[0] if ":" in repo_tag.split("/")[-1] else repo_tag
+                return f"{repo}@{digest}"
+            return ref
+        if _norm(image) != _norm(expected_image):
             errors.append(
                 f"deployment/{deployment} container/{name} image mismatch for {var_name}: "
                 f"expected {expected_image}, got {image}"
