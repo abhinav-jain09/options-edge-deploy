@@ -1,0 +1,13 @@
+# SERVICE SLICE — options-edge-web (standalone-service-deployment design).
+# Owns ONLY this service's workload: Deployment + Service. No PVCs, no shared
+# ConfigMaps/Secrets, no topics — those are common infra (k8s/infra), applied by
+# Jenkinsfile.common-infra (§13.5 blast-radius rule).
+#
+# Included by the monolithic env overlays (k8s/overlays/<env>) so the full deploy still
+# renders the web app, AND by ../overlays/<env> for the STANDALONE web deploy
+# (Jenkinsfile.web-service) — the fast path that ships a web change without a full build.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - options-edge-web-deployment.yaml
+  - options-edge-web-service.yaml

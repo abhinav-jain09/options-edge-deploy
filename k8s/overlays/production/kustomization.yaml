@@ -1,9 +1,15 @@
 resources:
   - ../../base
-  # --- Production identity provider (Keycloak) — PRODUCTION ONLY (dev uses the docker Keycloak on :8089).
-  # A self-contained component dir (not in base) so dev deploys never get the prod-hostname KC. See
-  # docs/keycloak-prod.md.
-  - ../../keycloak
+  # Common infra (namespace, shared ConfigMaps with the prod single-broker RF=1 override,
+  # streams-state PVCs with prod's 'local-path' storageClassName, ops CronJobs, and the
+  # production Keycloak) — the same overlay Jenkinsfile.common-infra applies standalone.
+  # The former top-level configmap-prod-single-broker-patch.yaml and the ../../keycloak
+  # inclusion moved INTO that overlay (Keycloak is shared auth infra).
+  - ../../infra/overlays/production
+  # The web app's service slice (Deployment+Service). The STANDALONE web overlay
+  # (k8s/services/web/overlays/production) mirrors the prod patches — sync enforced by
+  # scripts/ci/validate-services.sh render equivalence.
+  - ../../services/web/base
 
 # Prod-only: the node already has the images cached, so re-pulling all ~26 at
 # once on every rollout trips the kubelet image-pull QPS limit ("pull QPS
@@ -11,8 +17,6 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
-  # Prod is a single-broker standalone node — force RF=1 (else Kafka topic creation aborts the deploy).
-  - path: configmap-prod-single-broker-patch.yaml
   - target:
       kind: Deployment
     patch: |-

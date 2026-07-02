@@ -22,7 +22,7 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             self.assertIn(manifest, kustomization)
 
     def test_hpsf_config_uses_databento_rf1_and_signal_only(self) -> None:
-        config = self.read("k8s/base/configmap.yaml")
+        config = self.read("k8s/infra/base/configmap.yaml")
         required = [
             "HPSF_MODE: LIVE_SIGNAL_ONLY",
             "HPSF_STREAMS_REPLICATION_FACTOR: \"1\"",
@@ -51,8 +51,8 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         self.assertIn("HPSF_TOPOLOGY_ENABLED", stage_a)
         self.assertIn("value: \"true\"", stage_a)
         self.assertIn("/home/options-edge/data/kafka-streams/hpsf/stage-a", stage_a)
-        self.assertIn("strike-current-state-store", self.read("k8s/base/configmap.yaml"))
-        self.assertIn("strike-bucket-state-store", self.read("k8s/base/configmap.yaml"))
+        self.assertIn("strike-current-state-store", self.read("k8s/infra/base/configmap.yaml"))
+        self.assertIn("strike-bucket-state-store", self.read("k8s/infra/base/configmap.yaml"))
         self.assertIn("/health/live", writer)
         self.assertIn("/health/ready", writer)
         self.assertIn("options.hpsf.writer-dlq", writer)
@@ -219,7 +219,7 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             self.assertIn(text, pipeline)
 
     def test_base_configmap_does_not_pin_expired_option_date(self) -> None:
-        config = self.read("k8s/base/configmap.yaml")
+        config = self.read("k8s/infra/base/configmap.yaml")
         self.assertIn('IB_EXPIRY: ""', config)
         self.assertIn('UNUSUAL_WHALES_EXPIRY: ""', config)
         self.assertNotIn('IB_EXPIRY: "20260615"', config)

@@ -1,0 +1,21 @@
+# COMMON INFRA — resources shared by every service and owned by the common-infra deploy
+# (Jenkinsfile.common-infra), NEVER by a per-service deploy (standalone-service-deployment
+# design §13.5 blast-radius rule).
+#
+# Contents: namespace, shared ConfigMaps, ALL Kafka-Streams state PVCs, ops CronJobs.
+# The env-specific values (dev/prod configmap overrides, PVC storageClassName) live in
+# ../overlays/<env> — apply THOSE, never this base directly.
+#
+# PVCs deliberately carry NO storageClassName here: it is immutable after creation and
+# differs per env (dev docker-desktop = standard, prod k3s = local-path). Hard-coding one
+# value in base is exactly what made prod deploys fail with
+# "spec: Forbidden: spec is immutable" — each env overlay patches its own correct class.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - databento-feed-configmap.yaml
+  - kafka-streams-state-pvcs.yaml
+  - kafka-changelog-cleanup-cronjob.yaml
+  - offhours-clean-slate-cronjob.yaml

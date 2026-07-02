@@ -38,7 +38,7 @@ class StrikeFlowIbkrDeployTest(unittest.TestCase):
 
     def test_databento_classifier_uses_opra_tcbbo_json_contract(self) -> None:
         deployment = (ROOT / "k8s" / "base" / "strike-flow-classifier-deployment.yaml").read_text()
-        configmap = (ROOT / "k8s" / "base" / "configmap.yaml").read_text()
+        configmap = (ROOT / "k8s" / "infra" / "base" / "configmap.yaml").read_text()
 
         self.assertEqual(
             "DATABENTO",

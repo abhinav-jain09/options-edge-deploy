@@ -1,0 +1,39 @@
+# STANDALONE web overlay — experiment (.2). Used ONLY by Jenkinsfile.web-service.
+# The monolithic experiment deploy renders web via k8s/overlays/experiment.
+#
+# ⚠ MIRROR RULE: every web-targeting patch in k8s/overlays/experiment/kustomization.yaml
+# MUST be replicated here. scripts/ci/validate-services.sh enforces render equivalence.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # .2 env vars for the web container (mirror of k8s/overlays/experiment/web-dev-env-patch.yaml).
+  - path: web-dev-env-patch.yaml
+  # .2 is a single-node k3s whose node lacks the control-plane="true" label — remove the pin.
+  - target:
+      kind: Deployment
+      name: options-edge-web
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/nodeSelector
+  # Experiment serves the web on the UNIQUE port :18090 (mirror of the monolith patch).
+  - target:
+      kind: Service
+      name: options-edge-web
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 18090
+  # Experiment always re-pulls the freshly-built :dev image (mirror, scoped to this service).
+  - target:
+      kind: Deployment
+      name: options-edge-web
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+images:
+  - name: 192.168.100.252:5000/options-edge-web
+    newName: host.docker.internal:5001/options-edge-web
+    newTag: dev

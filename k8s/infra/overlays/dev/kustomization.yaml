@@ -1,0 +1,21 @@
+# COMMON INFRA — dev (local Mac docker-desktop).
+# Applied standalone by Jenkinsfile.common-infra AND included by k8s/overlays/dev (the
+# monolithic deploy) so both paths render identical infra.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # Dev-local values for the shared ConfigMaps (moved here from k8s/overlays/dev so the
+  # standalone common-infra deploy renders the correct env configmap on its own).
+  - path: configmap-dev-local-patch.yaml
+  # Streams-state PVCs: dev docker-desktop provisions with the 'standard' storage class
+  # (matches the 22 live dev PVCs). storageClassName is immutable — this MUST equal the
+  # live class or kubectl apply is rejected with "spec: Forbidden: spec is immutable".
+  - target:
+      kind: PersistentVolumeClaim
+      labelSelector: app.kubernetes.io/component=kafka-streams-state
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: standard

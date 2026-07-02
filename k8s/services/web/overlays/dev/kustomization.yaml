@@ -1,0 +1,44 @@
+# STANDALONE web overlay — dev. Used ONLY by Jenkinsfile.web-service (the per-service
+# fast path). The monolithic dev deploy renders web via k8s/overlays/dev (which includes
+# ../../base and applies the same env patches at its top level).
+#
+# ⚠ MIRROR RULE: every web-targeting patch in k8s/overlays/dev/kustomization.yaml MUST be
+# replicated here (and vice versa). scripts/ci/validate-services.sh enforces this by
+# asserting the web Deployment+Service rendered from THIS overlay are identical to the
+# web docs rendered from the monolithic dev overlay.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # Dev env vars for the web container (mirror of k8s/overlays/dev/web-dev-env-patch.yaml).
+  - path: web-dev-env-patch.yaml
+  # Dev is single-node docker-desktop whose node is labelled control-plane="" (empty, not
+  # "true") — remove the base's prod control-plane pin or the pod is unschedulable.
+  - target:
+      kind: Deployment
+      name: options-edge-web
+    patch: |-
+      - op: remove
+        path: /spec/template/spec/nodeSelector
+  # Dev serves the web on :8090 (base :8094 is the prod port; mirror of the monolith patch).
+  - target:
+      kind: Service
+      name: options-edge-web
+    patch: |-
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8090
+  # Dev always re-pulls the freshly-built :dev image (mirror of the monolith's
+  # all-Deployments imagePullPolicy patch, scoped to this service).
+  - target:
+      kind: Deployment
+      name: options-edge-web
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+images:
+  - name: 192.168.100.252:5000/options-edge-web
+    newName: host.docker.internal:5001/options-edge-web
+    newTag: dev

@@ -1,7 +1,16 @@
 resources:
   - ../../base
+  # Common infra (namespace, shared ConfigMaps with the dev-local values, streams-state
+  # PVCs with dev's 'standard' storageClassName, ops CronJobs) — the same overlay
+  # Jenkinsfile.common-infra applies standalone. The former top-level
+  # configmap-dev-local-patch.yaml moved INTO that overlay.
+  - ../../infra/overlays/dev
+  # The web app's service slice (Deployment+Service). Its dev env patches stay HERE at the
+  # top level (below) so this monolithic render is unchanged; the STANDALONE web overlay
+  # (k8s/services/web/overlays/dev) mirrors them — sync is enforced by
+  # scripts/ci/validate-services.sh render equivalence.
+  - ../../services/web/base
 patches:
-  - path: configmap-dev-local-patch.yaml
   - path: streams-processing-guarantee-dev-patch.yaml
   - path: web-dev-env-patch.yaml
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093

@@ -1,0 +1,76 @@
+@Library('oe') _
+
+// COMMON-INFRA DEPLOY (standalone-service-deployment design §3.1 / §13.8).
+//
+// Applies k8s/infra/overlays/<ENVIRONMENT> — the shared layer (namespace, shared
+// ConfigMaps, ALL streams-state PVCs, ops CronJobs, prod Keycloak). Per-service deploy
+// jobs (e.g. web-service-deploy) NEVER touch these resources; this job is their single
+// owner. Runs RARELY — only when infra actually changes.
+//
+// Safety posture (§13.8):
+//   * DRY-RUN BY DEFAULT — a real apply must be opted into per run.
+//   * Production applies additionally require a manual approval gate.
+//   * PVCs are create-only; an immutable storageClassName mismatch fails the job
+//     loudly BEFORE any mutation (scripts/deploy/common-infra.sh).
+//   * disableConcurrentBuilds serialises infra changes; per-service deploys should not
+//     run while this job is applying (they share no resources, but keep ops simple).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'production', 'experiment'],
+      description: 'Target environment — selects k8s/infra/overlays/<env> and the deployer kubeconfig (oeProfile).')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: true,
+      description: 'true = render + diff + server-side validate only (DEFAULT). Set false to actually apply.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 30, unit: 'MINUTES')
+  }
+  environment {
+    KUBECONFIG     = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT    = "${params.ENVIRONMENT}"
+    DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN}"
+  }
+  stages {
+    stage('Render + Diff (always)') {
+      steps {
+        sh '''
+          set -euo pipefail
+          # First pass is ALWAYS a dry-run so the log carries the full render/diff/plan
+          # even when a real apply follows.
+          DEPLOY_DRY_RUN=true WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/common-infra.sh
+        '''
+      }
+    }
+    stage('Approve production infra change') {
+      when {
+        allOf {
+          expression { params.ENVIRONMENT == 'production' }
+          expression { !params.DEPLOY_DRY_RUN }
+        }
+      }
+      steps {
+        // §13.8: manual approval for prod infra changes. The diff is in the stage above.
+        input message: "Apply the rendered infra changes to PRODUCTION? Review the 'Render + Diff' stage log first.",
+              ok: 'Apply to production'
+      }
+    }
+    stage('Apply') {
+      when { expression { !params.DEPLOY_DRY_RUN } }
+      steps {
+        sh '''
+          set -euo pipefail
+          DEPLOY_DRY_RUN=false WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/common-infra.sh
+        '''
+      }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: '.jenkins-tmp/infra-*.yaml, .jenkins-tmp/infra-diff.txt',
+        allowEmptyArchive: true
+    }
+  }
+}
