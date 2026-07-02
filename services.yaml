@@ -14,7 +14,11 @@
 # image:      the image basename in the env registry (oeProfile prepends the registry).
 # managedBy:  standalone = has its own <svc>-deploy fast path;
 #             monolith   = still deployed by the monolithic options-edge-deploy.
-# Migration: services move monolith -> standalone in batches (§9); never all at once.
+# Migration COMPLETE for the processing repo (2026-07-02): every processing service is
+# standalone. sliceGenerated entries get their overlays from
+# scripts/deploy/generate-service-slices.sh (the monolith render of just that service —
+# mirror rule by construction); re-run it whenever base manifests/patches change.
+# Still monolith-only: feeds, gateway, integration-test, redis (other repos / infra).
 
 services:
   # --- standalone (per-service fast path) ---------------------------------------------
@@ -35,31 +39,31 @@ services:
   - { name: databento-feed,               managedBy: monolith, image: options-edge-databento-feed,               deployments: [options-edge-databento-feed] }
   - { name: ibkr-feed,                    managedBy: monolith, image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service] }
   - { name: feed-gateway,                 managedBy: monolith, image: options-edge-feed-gateway,                 deployments: [feed-gateway-service] }
-  - { name: raw-to-display,               managedBy: monolith, image: options-edge-raw-to-display,               deployments: [raw-to-display-service, raw-to-display-databento-service] }
-  - { name: databento-volume-aggregator,  managedBy: monolith, image: options-edge-databento-volume-aggregator,  deployments: [databento-volume-aggregator] }
-  - { name: databento-gex,                managedBy: monolith, image: options-edge-databento-gex,                deployments: [databento-gex-service] }
-  - { name: databento-gex-history,        managedBy: monolith, image: options-edge-databento-gex-history,        deployments: [databento-gex-history-service] }
-  - { name: databento-maxpain,            managedBy: monolith, image: options-edge-databento-maxpain,            deployments: [databento-maxpain-service] }
-  - { name: databento-mission-pace,       managedBy: monolith, image: options-edge-databento-mission-pace,       deployments: [databento-mission-pace-service] }
-  - { name: databento-mission-pressure,   managedBy: monolith, image: options-edge-databento-mission-pressure,   deployments: [databento-mission-pressure-service] }
-  - { name: databento-mission-sandwich,   managedBy: monolith, image: options-edge-databento-mission-sandwich,   deployments: [databento-mission-sandwich-service] }
-  - { name: delta-flow,                   managedBy: monolith, image: options-edge-delta-flow,                   deployments: [delta-flow-service] }
-  - { name: option-price-behavior,        managedBy: monolith, image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
-  - { name: directional-pressure,         managedBy: monolith, image: options-edge-directional-pressure,         deployments: [directional-pressure-service, directional-pressure-databento-service] }
-  - { name: volume-pace,                  managedBy: monolith, image: options-edge-volume-pace,                  deployments: [volume-pace-service, volume-pace-databento-service] }
-  - { name: volume-sandwich,              managedBy: monolith, image: options-edge-volume-sandwich,              deployments: [volume-sandwich-service, volume-sandwich-databento-service] }
-  - { name: strike-flow-classifier,       managedBy: monolith, image: options-edge-strike-flow-classifier,       deployments: [strike-flow-classifier-databento, strike-flow-classifier-ibkr] }
-  - { name: strike-flow-avro-adapter,     managedBy: monolith, image: options-edge-strike-flow-avro-adapter,     deployments: [strike-flow-avro-adapter] }
-  - { name: unified-sr,                   managedBy: monolith, image: options-edge-unified-sr,                   deployments: [unified-sr-service] }
-  - { name: unusual-whales-gex,           managedBy: monolith, image: options-edge-unusual-whales-gex,           deployments: [unusual-whales-gex-service] }
-  - { name: unusual-whales-gex-history,   managedBy: monolith, image: options-edge-unusual-whales-gex-history,   deployments: [unusual-whales-gex-history-service] }
-  - { name: gex-delta-redis-writer,       managedBy: monolith, image: options-edge-gex-delta-redis-writer,       deployments: [gex-delta-redis-writer] }
-  - { name: raw-postgres-writer,          managedBy: monolith, image: options-edge-raw-postgres-writer,          deployments: [raw-postgres-writer] }
-  - { name: pin-postgres-writer,          managedBy: monolith, image: options-edge-pin-postgres-writer,          deployments: [pin-postgres-writer] }
-  - { name: pressure-postgres-writer,     managedBy: monolith, image: options-edge-pressure-postgres-writer,     deployments: [pressure-postgres-writer] }
-  - { name: hpsf-processing,              managedBy: monolith, image: options-edge-hpsf-processing,              deployments: [hpsf-stage-a-service, hpsf-stage-b-service] }
-  - { name: hpsf-postgres-writer,         managedBy: monolith, image: options-edge-hpsf-postgres-writer,         deployments: [hpsf-postgres-writer-service] }
-  - { name: spx-mission-control,          managedBy: monolith, image: options-edge-spx-mission-control,          deployments: [spx-mission-control-service] }
+  - { name: raw-to-display,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-to-display,               deployments: [raw-to-display-service, raw-to-display-databento-service] }
+  - { name: databento-volume-aggregator,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-volume-aggregator,  deployments: [databento-volume-aggregator] }
+  - { name: databento-gex,                managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-gex,                deployments: [databento-gex-service] }
+  - { name: databento-gex-history,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-gex-history,        deployments: [databento-gex-history-service] }
+  - { name: databento-maxpain,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-maxpain,            deployments: [databento-maxpain-service] }
+  - { name: databento-mission-pace,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-mission-pace,       deployments: [databento-mission-pace-service] }
+  - { name: databento-mission-pressure,   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-mission-pressure,   deployments: [databento-mission-pressure-service] }
+  - { name: databento-mission-sandwich,   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-mission-sandwich,   deployments: [databento-mission-sandwich-service] }
+  - { name: delta-flow,                   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-delta-flow,                   deployments: [delta-flow-service] }
+  - { name: option-price-behavior,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
+  - { name: directional-pressure,         managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-directional-pressure,         deployments: [directional-pressure-service, directional-pressure-databento-service] }
+  - { name: volume-pace,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-volume-pace,                  deployments: [volume-pace-service, volume-pace-databento-service] }
+  - { name: volume-sandwich,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-volume-sandwich,              deployments: [volume-sandwich-service, volume-sandwich-databento-service] }
+  - { name: strike-flow-classifier,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-flow-classifier,       deployments: [strike-flow-classifier-databento, strike-flow-classifier-ibkr] }
+  - { name: strike-flow-avro-adapter,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-flow-avro-adapter,     deployments: [strike-flow-avro-adapter] }
+  - { name: unified-sr,                   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-unified-sr,                   deployments: [unified-sr-service] }
+  - { name: unusual-whales-gex,           managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-unusual-whales-gex,           deployments: [unusual-whales-gex-service] }
+  - { name: unusual-whales-gex-history,   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-unusual-whales-gex-history,   deployments: [unusual-whales-gex-history-service] }
+  - { name: gex-delta-redis-writer,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-gex-delta-redis-writer,       deployments: [gex-delta-redis-writer] }
+  - { name: raw-postgres-writer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-postgres-writer,          deployments: [raw-postgres-writer] }
+  - { name: pin-postgres-writer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pin-postgres-writer,          deployments: [pin-postgres-writer] }
+  - { name: pressure-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pressure-postgres-writer,     deployments: [pressure-postgres-writer] }
+  - { name: hpsf-processing,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-hpsf-processing,              deployments: [hpsf-stage-a-service, hpsf-stage-b-service] }
+  - { name: hpsf-postgres-writer,         managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-hpsf-postgres-writer,         deployments: [hpsf-postgres-writer-service] }
+  - { name: spx-mission-control,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spx-mission-control,          deployments: [spx-mission-control-service] }
   - { name: integration-test,             managedBy: monolith, image: options-edge-integration-test,             deployments: [options-edge-integration-test] }
   - { name: redis,                        managedBy: monolith, image: redis,                                     deployments: [options-edge-redis] }
 
