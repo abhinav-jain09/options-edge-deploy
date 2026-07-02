@@ -39,7 +39,10 @@ pipeline {
   }
   options {
     disableConcurrentBuilds()
-    timeout(time: 45, unit: 'MINUTES')
+    // 120 min: BUILD_IMAGES=true triggers the full processing reactor build (~25-45 min
+    // incl. queue/remote-build time); the old 45-min cap killed the build mid-flight
+    // ("Cancelling nested steps due to timeout" — aborted runs #5/#6).
+    timeout(time: 120, unit: 'MINUTES')
   }
   environment {
     KUBECONFIG           = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
