@@ -382,8 +382,8 @@ check_databento_mission_sandwich
 check_deployment volume-pace-databento-service 18091
 check_deployment directional-pressure-service 18084
 check_deployment directional-pressure-databento-service 18092
-check_deployment volume-sandwich-service 18083
-check_deployment volume-sandwich-databento-service 18093
+# DISABLED until further notice (svc scaled to 0, not deployed): check_deployment volume-sandwich-service 18083
+# DISABLED until further notice (svc scaled to 0, not deployed): check_deployment volume-sandwich-databento-service 18093
 check_deployment unusual-whales-gex-service 18088
 check_deployment unusual-whales-gex-history-service 18089
 check_deployment databento-gex-history-service 18095

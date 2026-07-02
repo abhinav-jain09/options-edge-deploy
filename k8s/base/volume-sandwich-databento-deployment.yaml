@@ -7,7 +7,8 @@ metadata:
     app.kubernetes.io/name: volume-sandwich-databento-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # TEMPORARILY DISABLED until further notice — service must not be deployed/scaled up (2026-07-02, per Abhinav)
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: volume-sandwich-databento-service
