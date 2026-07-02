@@ -38,6 +38,8 @@ spec:
               value: "524288"
             - name: GATEWAY_KAFKA_RECEIVE_BUFFER_BYTES
               value: "524288"
+            - name: MARKETDATA_GATEWAY_MAX_STALE_MS
+              value: "300000"
             # --- WS auth: close the open market-data WS for the web app (oc.bearer / legacy single-tenant
             # mode). The web app authenticates the /ws/events handshake with the oc.bearer subprotocol +
             # access token; the gateway validates the JWT against the prod Keycloak issuer. This wires ONLY
