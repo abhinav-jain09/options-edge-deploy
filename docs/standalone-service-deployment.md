@@ -4,6 +4,9 @@ Design: `options-edge-documents/design/STANDALONE-SERVICE-DEPLOYMENT-DESIGN.md`
 (Codex-approved Gate-1). This doc covers what landed in **Phase 1 (common infra) +
 Phase 2 (web pilot)** and how to operate it.
 
+> **Hands-on runbook:** `docs/deploy-single-service.md` — deploy one service step by
+> step, rollback, Jenkins job setup, and onboarding the next service.
+
 ## The idea
 
 Infra is COMMON (one shared layer, applied rarely). Each service is deployable as a
