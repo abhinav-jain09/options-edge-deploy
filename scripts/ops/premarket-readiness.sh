@@ -67,15 +67,16 @@ is_optional() { case " $OPTIONAL_SERVICES " in *" $1 "*) return 0;; *) return 1;
 # Names are the authoritative k8s metadata.name values (verified against the
 # deploy manifests + the dev cluster 2026-06-28). Databento variants only;
 # IBKR (*-ibkr) and the legacy non-databento duplicates are excluded.
-# DISABLED until further notice (2026-07-02): T2:volume-pace-databento-service,
-# H:hpsf-stage-a-service and H:hpsf-stage-b-service removed from the required
+# DISABLED until further notice (2026-07-02): H:hpsf-stage-a-service and
+# H:hpsf-stage-b-service (+ volume-pace-service) removed from the required
 # list — their replicas are pinned to 0 in k8s/base (temporarily not deployed),
 # and line ~234 hard-fails any non-optional service at 0 desired replicas.
+# volume-pace-databento-service RE-ENABLED 2026-07-02 (per Abhinav).
 # Restore them below when the services are re-enabled.
 PIPELINE_SERVICES="${PIPELINE_SERVICES:-\
 T1:options-edge-databento-feed T1:databento-volume-aggregator \
 T2:strike-flow-classifier-databento T2:raw-to-display-databento-service T2:directional-pressure-databento-service \
-T2:volume-sandwich-databento-service \
+T2:volume-sandwich-databento-service T2:volume-pace-databento-service \
 T2:databento-gex-service T2:databento-gex-history-service T2:databento-maxpain-service \
 T3:databento-mission-pace-service T3:databento-mission-pressure-service T3:databento-mission-sandwich-service \
 T3:spx-mission-control-service T3:feed-gateway-service T3:options-edge-web \
