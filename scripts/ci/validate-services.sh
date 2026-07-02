@@ -64,7 +64,10 @@ while IFS= read -r name; do
       fail=1
     fi
     # image basename (§13.9)
-    rendered_img="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[0].image' "$TMP/svc-$name-$e.yaml" | head -1)"
+    # capture fully, then truncate — `yq | head -1` dies with SIGPIPE (rc 141) under
+    # `set -o pipefail` when yq keeps writing after head exits (agent yq buffering).
+    _imgs="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[0].image' "$TMP/svc-$name-$e.yaml")"
+    rendered_img="$(printf '%s\n' "$_imgs" | grep -v '^---$' | head -1)"
     base="${rendered_img##*/}"; base="${base%%[:@]*}"
     if [ "$base" != "$img" ]; then
       echo "FAIL: $overlay image basename '$base' != services.yaml image '$img'" >&2

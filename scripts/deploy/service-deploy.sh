@@ -76,8 +76,10 @@ done
 # they share one image, and every one is pinned/rolled/gated below.
 DEPLOYMENTS="$(yq -r 'select(.kind == "Deployment") | .metadata.name' "$RENDER" | grep -v '^---$')"
 DEPLOYMENT="$(printf '%s\n' "$DEPLOYMENTS" | head -1)"
-CONTAINER="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].name' "$RENDER" | grep -v '^---$' | head -1)"
-MUTABLE_IMAGE="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image' "$RENDER" | grep -v '^---$' | head -1)"
+_ctrs="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].name' "$RENDER")"
+CONTAINER="$(printf '%s\n' "$_ctrs" | grep -v '^---$' | head -1)"
+_imgs="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image' "$RENDER")"
+MUTABLE_IMAGE="$(printf '%s\n' "$_imgs" | grep -v '^---$' | head -1)"
 [ -n "$DEPLOYMENT" ] && [ -n "$MUTABLE_IMAGE" ] || { echo "FATAL: could not extract Deployment/image from the render" >&2; exit 1; }
 if [ "$(printf '%s\n' "$DEPLOYMENTS" | sort)" != "$(printf '%s\n' "$ALLOWED" | sort)" ]; then
   echo "FATAL: rendered Deployments do not exactly match services.yaml for '$SERVICE'" >&2
@@ -105,7 +107,8 @@ unpinned="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[
 PREV_FILE="$WORK_DIR/${SERVICE}-${ENVIRONMENT}-previous.txt"; : >"$PREV_FILE"
 for dep in $DEPLOYMENTS; do
   # container name PER deployment (they can differ: hpsf-stage-a vs hpsf-stage-b)
-  ctr="$(yq -r "select(.kind == \"Deployment\" and .metadata.name == \"$dep\") | .spec.template.spec.containers[0].name" "$RENDER" | grep -v '^---$' | head -1)"
+  _c="$(yq -r "select(.kind == \"Deployment\" and .metadata.name == \"$dep\") | .spec.template.spec.containers[0].name" "$RENDER")"
+  ctr="$(printf '%s\n' "$_c" | grep -v '^---$' | head -1)"
   prev="$(kubectl -n "$NAMESPACE" get deployment "$dep" \
     -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")"
   printf '%s\t%s\t%s\n' "$dep" "$ctr" "$prev" >>"$PREV_FILE"
