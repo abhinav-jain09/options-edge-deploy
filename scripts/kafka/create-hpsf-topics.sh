@@ -43,23 +43,23 @@ topic_name() {
 
 # topic|partitions|cleanup.policy|retention.ms|segment.ms|segment.bytes|extra-config-csv
 HPSF_TOPIC_SPECS=(
-  'options.opra.tcbbo|4|delete|86400000|900000|536870912|'
-  'options.opra.trades|4|delete|86400000|900000|536870912|'
-  'options.opra.quotes|4|delete|86400000|900000|536870912|'
-  'underlying.es.trades|2|delete|86400000|1800000|268435456|'
+  'options.opra.tcbbo|32|delete|86400000|900000|536870912|'
+  'options.opra.trades|32|delete|86400000|900000|536870912|'
+  'options.opra.quotes|32|delete|86400000|900000|536870912|'
+  'underlying.es.trades|32|delete|86400000|1800000|268435456|'
   'underlying.spx.price|1|compact,delete|86400000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
   'options.hpsf.underlying-state|1|compact,delete|604800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
-  'options.hpsf.market-flow|1|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
-  'options.hpsf.strike-flow|4|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
-  'options.hpsf.strike-score|4|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
-  'options.hpsf.latest-signal|1|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
-  'options.hpsf.signal|1|delete|2592000000|1800000|134217728|'
-  'options.hpsf.audit|2|delete|604800000|1800000|134217728|'
-  'options.hpsf.dlq|1|delete|2592000000|1800000|134217728|'
-  'options.hpsf.writer-dlq|1|delete|2592000000|1800000|134217728|'
-  'options.hpsf.exit-signal|1|delete|2592000000|1800000|134217728|'
-  'options.databento.strike-flow|4|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
-  'options.ibkr.strike-flow|4|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
+  'options.hpsf.market-flow|32|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
+  'options.hpsf.strike-flow|32|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
+  'options.hpsf.strike-score|32|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
+  'options.hpsf.latest-signal|32|compact,delete|2592000000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10'
+  'options.hpsf.signal|32|delete|2592000000|1800000|134217728|'
+  'options.hpsf.audit|32|delete|604800000|1800000|134217728|'
+  'options.hpsf.dlq|32|delete|2592000000|1800000|134217728|'
+  'options.hpsf.writer-dlq|32|delete|2592000000|1800000|134217728|'
+  'options.hpsf.exit-signal|32|delete|2592000000|1800000|134217728|'
+  'options.databento.strike-flow|32|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
+  'options.ibkr.strike-flow|32|compact,delete|172800000|1800000|134217728|delete.retention.ms=3600000,min.cleanable.dirty.ratio=0.10,max.compaction.lag.ms=3600000'
 )
 
 rf1_warning() {

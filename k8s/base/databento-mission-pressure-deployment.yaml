@@ -50,6 +50,8 @@ spec:
               value: options-edge-databento-mission-pressure-v1
             - name: KAFKA_MISSION_PRESSURE_STREAMS_NUM_THREADS
               value: "4"
+            - name: KAFKA_MISSION_PRESSURE_MAX_CHANGELOG_BYTES
+              value: "8388608"
             - name: KAFKA_MISSION_PRESSURE_OUTPUT_INTERVAL_MS
               value: "1000"
             - name: KAFKA_MISSION_PRESSURE_STALE_AFTER_MS
