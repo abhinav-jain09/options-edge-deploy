@@ -1,0 +1,66 @@
+# SERVICE REGISTRY — single source of truth for the standalone-service-deployment design
+# (design doc: options-edge-documents/design/STANDALONE-SERVICE-DEPLOYMENT-DESIGN.md §5).
+#
+# Every deployable unit is registered here. scripts/ci/validate-services.sh enforces:
+#   * every `standalone` service has its k8s/services/<name> slice + env overlays, and
+#     its standalone render is EQUIVALENT to the monolithic overlay's render of the same
+#     workload (the mirror rule);
+#   * every Deployment rendered by the monolithic overlays is registered here
+#     (completeness — a new service that skips registration fails CI: the gap that let
+#     delta-flow/maxpain/integration-test reach a deploy with no image);
+#   * blast-radius: standalone slices carry only service-owned kinds.
+#
+# deployment: the k8s Deployment name(s) the service owns.
+# image:      the image basename in the env registry (oeProfile prepends the registry).
+# managedBy:  standalone = has its own <svc>-deploy fast path;
+#             monolith   = still deployed by the monolithic options-edge-deploy.
+# Migration: services move monolith -> standalone in batches (§9); never all at once.
+
+services:
+  # --- standalone (per-service fast path) ---------------------------------------------
+  - name: web
+    managedBy: standalone
+    image: options-edge-web
+    deployments: [options-edge-web]
+    container: web
+    buildJob: options-edge-web-deploy
+    sourceRepo: options-edge
+    envs: [dev, production, experiment]
+    dependsOnInfraOnly: true
+    consumedTopics: []       # browser data arrives via the feed-gateway WS, not Kafka
+    producedTopics: []
+    requiredConfigKeys: [KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, POSTGRES_JDBC_URL]
+
+  # --- monolith (deployed by options-edge-deploy; migrate in batches) ------------------
+  - { name: databento-feed,               managedBy: monolith, image: options-edge-databento-feed,               deployments: [options-edge-databento-feed] }
+  - { name: ibkr-feed,                    managedBy: monolith, image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service] }
+  - { name: feed-gateway,                 managedBy: monolith, image: options-edge-feed-gateway,                 deployments: [feed-gateway-service] }
+  - { name: raw-to-display,               managedBy: monolith, image: options-edge-raw-to-display,               deployments: [raw-to-display-service, raw-to-display-databento-service] }
+  - { name: databento-volume-aggregator,  managedBy: monolith, image: options-edge-databento-volume-aggregator,  deployments: [databento-volume-aggregator] }
+  - { name: databento-gex,                managedBy: monolith, image: options-edge-databento-gex,                deployments: [databento-gex-service] }
+  - { name: databento-gex-history,        managedBy: monolith, image: options-edge-databento-gex-history,        deployments: [databento-gex-history-service] }
+  - { name: databento-maxpain,            managedBy: monolith, image: options-edge-databento-maxpain,            deployments: [databento-maxpain-service] }
+  - { name: databento-mission-pace,       managedBy: monolith, image: options-edge-databento-mission-pace,       deployments: [databento-mission-pace-service] }
+  - { name: databento-mission-pressure,   managedBy: monolith, image: options-edge-databento-mission-pressure,   deployments: [databento-mission-pressure-service] }
+  - { name: databento-mission-sandwich,   managedBy: monolith, image: options-edge-databento-mission-sandwich,   deployments: [databento-mission-sandwich-service] }
+  - { name: delta-flow,                   managedBy: monolith, image: options-edge-delta-flow,                   deployments: [delta-flow-service] }
+  - { name: option-price-behavior,        managedBy: monolith, image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
+  - { name: directional-pressure,         managedBy: monolith, image: options-edge-directional-pressure,         deployments: [directional-pressure-service, directional-pressure-databento-service] }
+  - { name: volume-pace,                  managedBy: monolith, image: options-edge-volume-pace,                  deployments: [volume-pace-service, volume-pace-databento-service] }
+  - { name: volume-sandwich,              managedBy: monolith, image: options-edge-volume-sandwich,              deployments: [volume-sandwich-service, volume-sandwich-databento-service] }
+  - { name: strike-flow-classifier,       managedBy: monolith, image: options-edge-strike-flow-classifier,       deployments: [strike-flow-classifier-databento, strike-flow-classifier-ibkr] }
+  - { name: strike-flow-avro-adapter,     managedBy: monolith, image: options-edge-strike-flow-avro-adapter,     deployments: [strike-flow-avro-adapter] }
+  - { name: unified-sr,                   managedBy: monolith, image: options-edge-unified-sr,                   deployments: [unified-sr-service] }
+  - { name: unusual-whales-gex,           managedBy: monolith, image: options-edge-unusual-whales-gex,           deployments: [unusual-whales-gex-service] }
+  - { name: unusual-whales-gex-history,   managedBy: monolith, image: options-edge-unusual-whales-gex-history,   deployments: [unusual-whales-gex-history-service] }
+  - { name: gex-delta-redis-writer,       managedBy: monolith, image: options-edge-gex-delta-redis-writer,       deployments: [gex-delta-redis-writer] }
+  - { name: raw-postgres-writer,          managedBy: monolith, image: options-edge-raw-postgres-writer,          deployments: [raw-postgres-writer] }
+  - { name: pin-postgres-writer,          managedBy: monolith, image: options-edge-pin-postgres-writer,          deployments: [pin-postgres-writer] }
+  - { name: pressure-postgres-writer,     managedBy: monolith, image: options-edge-pressure-postgres-writer,     deployments: [pressure-postgres-writer] }
+  - { name: hpsf-processing,              managedBy: monolith, image: options-edge-hpsf-processing,              deployments: [hpsf-stage-a-service, hpsf-stage-b-service] }
+  - { name: hpsf-postgres-writer,         managedBy: monolith, image: options-edge-hpsf-postgres-writer,         deployments: [hpsf-postgres-writer-service] }
+  - { name: spx-mission-control,          managedBy: monolith, image: options-edge-spx-mission-control,          deployments: [spx-mission-control-service] }
+  - { name: integration-test,             managedBy: monolith, image: options-edge-integration-test,             deployments: [options-edge-integration-test] }
+  - { name: redis,                        managedBy: monolith, image: redis,                                     deployments: [options-edge-redis] }
+
+# Infra workloads (Keycloak etc.) are owned by common-infra (k8s/infra), not listed here.

@@ -1,0 +1,19 @@
+# COMMON INFRA — experiment (.2 native k3s).
+# Applied standalone by Jenkinsfile.common-infra AND included by k8s/overlays/experiment
+# (the monolithic deploy) so both paths render identical infra.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # .2-local values for the shared ConfigMaps (moved here from k8s/overlays/experiment).
+  - path: configmap-dev-local-patch.yaml
+  # Streams-state PVCs: .2 runs native k3s whose default provisioner is 'local-path'
+  # (same as prod). storageClassName is immutable — must match the live class.
+  - target:
+      kind: PersistentVolumeClaim
+      labelSelector: app.kubernetes.io/component=kafka-streams-state
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: local-path

@@ -1,9 +1,8 @@
+# APP-SERVICE base — Deployments/Services only. Shared infra (namespace, shared
+# ConfigMaps, streams-state PVCs, ops CronJobs) moved to k8s/infra; the web app moved to
+# k8s/services/web (standalone-service-deployment design). The env overlays
+# (k8s/overlays/<env>) compose base + infra + service slices.
 resources:
-  - namespace.yaml
-  - configmap.yaml
-  - options-edge-web-deployment.yaml
-  - options-edge-web-service.yaml
-  - databento-feed-configmap.yaml
   - databento-feed-deployment.yaml
   - databento-feed-service.yaml
   - ibkr-feed-deployment.yaml
@@ -68,10 +67,7 @@ resources:
   - databento-gex-history-service.yaml
   - option-price-behavior-deployment.yaml
   - option-price-behavior-service.yaml
-  - kafka-streams-state-pvcs.yaml
   - feed-gateway-nightly-restart-cronjob.yaml
-  - kafka-changelog-cleanup-cronjob.yaml
-  - offhours-clean-slate-cronjob.yaml
 
 patches:
   - path: kafka-streams-state-patches.yaml

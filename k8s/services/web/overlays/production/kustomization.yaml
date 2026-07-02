@@ -1,0 +1,20 @@
+# STANDALONE web overlay — production. Used ONLY by Jenkinsfile.web-service (the
+# per-service fast path). The monolithic prod deploy renders web via
+# k8s/overlays/production.
+#
+# ⚠ MIRROR RULE: every web-targeting patch in k8s/overlays/production/kustomization.yaml
+# MUST be replicated here. scripts/ci/validate-services.sh enforces render equivalence.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # Prod reuses the node's cached image to avoid the kubelet pull-QPS throttle (mirror of
+  # the monolith's all-Deployments IfNotPresent patch, scoped to this service).
+  - target:
+      kind: Deployment
+      name: options-edge-web
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent

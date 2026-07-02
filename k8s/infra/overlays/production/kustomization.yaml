@@ -1,0 +1,26 @@
+# COMMON INFRA — production (.252 standalone k3s node).
+# Applied standalone by Jenkinsfile.common-infra AND included by k8s/overlays/production
+# (the monolithic deploy) so both paths render identical infra.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  # Production identity provider (Keycloak) — production-ONLY infra (dev uses the docker
+  # Keycloak on :8089). Moved here from k8s/overlays/production: Keycloak is shared infra
+  # (auth for every service), so it belongs to the common-infra layer, not the app deploy.
+  - ../../../keycloak
+patches:
+  # Prod is a STANDALONE SINGLE-BROKER Kafka node — force RF=1 (moved here from
+  # k8s/overlays/production; it patches the shared configmap, which is infra).
+  - path: configmap-prod-single-broker-patch.yaml
+  # Streams-state PVCs: prod k3s provisions with the 'local-path' storage class (matches
+  # the 22 live prod PVCs). storageClassName is immutable — base's former hard-coded
+  # 'standard' is exactly what failed every prod deploy with "spec: Forbidden: spec is
+  # immutable" (deploy #490/#502). This pins prod to its real class.
+  - target:
+      kind: PersistentVolumeClaim
+      labelSelector: app.kubernetes.io/component=kafka-streams-state
+    patch: |-
+      - op: add
+        path: /spec/storageClassName
+        value: local-path

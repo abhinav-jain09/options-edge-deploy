@@ -12,13 +12,16 @@ class DatabentoFeedDeployTest(unittest.TestCase):
         return (ROOT / relative).read_text()
 
     def test_databento_feed_manifests_are_part_of_base_kustomization(self) -> None:
+        # The feed workload (Deployment/Service) stays in the app base; its shared
+        # ConfigMap moved to the common-infra layer (standalone-service-deployment).
         kustomization = self.read("k8s/base/kustomization.yaml")
         for manifest in [
-            "databento-feed-configmap.yaml",
             "databento-feed-deployment.yaml",
             "databento-feed-service.yaml",
         ]:
             self.assertIn(manifest, kustomization)
+        infra_kustomization = self.read("k8s/infra/base/kustomization.yaml")
+        self.assertIn("databento-feed-configmap.yaml", infra_kustomization)
 
     def test_databento_feed_deployment_uses_jenkins_managed_secret(self) -> None:
         deployment = self.read("k8s/base/databento-feed-deployment.yaml")
@@ -30,7 +33,7 @@ class DatabentoFeedDeployTest(unittest.TestCase):
         self.assertNotIn("options-edge-databento-feed-env-dev", deployment)
 
     def test_databento_feed_config_matches_current_topic_policy(self) -> None:
-        config = self.read("k8s/base/databento-feed-configmap.yaml")
+        config = self.read("k8s/infra/base/databento-feed-configmap.yaml")
         for text in [
             "APP_PROFILE: prod",
             'DATABENTO_EXPIRY: ""',
@@ -48,7 +51,7 @@ class DatabentoFeedDeployTest(unittest.TestCase):
 
     def test_dev_overlay_points_databento_feed_to_local_dev(self) -> None:
         overlay = self.read("k8s/overlays/dev/kustomization.yaml")
-        patch = self.read("k8s/overlays/dev/configmap-dev-local-patch.yaml")
+        patch = self.read("k8s/infra/overlays/dev/configmap-dev-local-patch.yaml")
         self.assertIn("192.168.100.252:5000/options-edge-databento-feed", overlay)
         self.assertIn("host.docker.internal:5001/options-edge-databento-feed", overlay)
         self.assertIn("name: options-edge-databento-feed-config", patch)

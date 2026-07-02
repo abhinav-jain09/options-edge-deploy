@@ -1,0 +1,117 @@
+@Library('oe') _
+
+// STANDALONE WEB DEPLOY — the per-service fast path (standalone-service-deployment
+// design §3.2, pilot service). Ships a web change to ONE environment WITHOUT the
+// monolithic all-services build/deploy:
+//
+//   Build (native, on the target arch's machine)  →  Deploy ONLY the web workload
+//   →  rollout  →  health gate  →  rollback instructions.
+//
+// * Build reuses the existing options-edge-web-deploy job with the exact same
+//   per-env contract the bring-up-all umbrella uses (native: dev builds on the Mac
+//   arm64, prod builds on .252 amd64 via ssh — §2.3 native two-arch rule).
+// * Deploy applies ONLY k8s/services/web/overlays/<env> (Deployment+Service), digest-
+//   pinned; the blast-radius guard in scripts/deploy/service-deploy.sh refuses any
+//   infra kind (§13.5). Common infra must already be in place (Jenkinsfile.common-infra).
+// * Rollback never rebuilds: the job log prints the previously-running digest and the
+//   exact re-point command (§13.2).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['dev', 'production', 'experiment'],
+      description: 'Target environment — selects k8s/services/web/overlays/<env> and the deployer kubeconfig (oeProfile).')
+    booleanParam(name: 'BUILD_IMAGE', defaultValue: true,
+      description: 'Build+push the web image first (options-edge-web-deploy, native on the target machine). false = deploy the image already in the registry.')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
+      description: 'true = render + digest-pin + server-side validate only; nothing changes.')
+    string(name: 'HEALTH_URL', defaultValue: '',
+      description: 'Optional post-rollout endpoint that must answer 200. Empty = per-env default (dev http://localhost:8090/, production http://192.168.100.252:8094/, experiment skip).')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+  }
+  options {
+    // §13.6 deploy locking: one web deploy at a time (covers all envs of this job —
+    // conservative, plugin-free serialisation).
+    disableConcurrentBuilds()
+    timeout(time: 45, unit: 'MINUTES')
+  }
+  environment {
+    KUBECONFIG  = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT = "${params.ENVIRONMENT}"
+    // Per-env web URLs baked into the image at BUILD time — the exact matrix the
+    // bring-up-all umbrella uses (keep in sync with Jenkinsfile.bring-up-all).
+    IS_PROD         = "${params.ENVIRONMENT == 'production' ? 'true' : 'false'}"
+    WEB_PROFILE     = "${params.ENVIRONMENT == 'production' ? 'prod' : 'dev'}"
+    WEB_WS_URL      = "${params.ENVIRONMENT == 'production' ? 'wss://fullfunding.nl/ws/events' : 'ws://localhost:8091/ws/events'}"
+    WEB_API_BASE    = "${params.ENVIRONMENT == 'production' ? 'https://fullfunding.nl' : 'http://localhost:8090'}"
+    WEB_AUTH_ISSUER = "${params.ENVIRONMENT == 'production' ? 'https://auth.fullfunding.nl/realms/optionsedge' : 'http://192.168.100.102:8089/realms/optionsedge'}"
+    WEB_REPLAY_URL  = "${params.ENVIRONMENT == 'production' ? 'https://fullfunding.nl' : 'http://localhost:8095'}"
+    REMOTE_BUILD_HOST = "${params.ENVIRONMENT == 'experiment' ? '192.168.100.2' : '192.168.100.252'}"
+    REMOTE_BUILD_ROOT = "${params.ENVIRONMENT == 'experiment' ? '/Users/rajuljain/ci/remote-builds' : '/home/abhinav/ci/remote-builds'}"
+    HEALTH_URL_DEFAULT = "${params.ENVIRONMENT == 'production' ? 'http://192.168.100.252:8094/' : (params.ENVIRONMENT == 'dev' ? 'http://localhost:8090/' : '')}"
+  }
+  stages {
+    stage('Resolve profile') {
+      steps {
+        script {
+          def p = oeProfile(params.ENVIRONMENT)
+          env.IMAGE_REGISTRY = p.registry
+          env.BUILD_PLATFORM = p.platform
+          echo "web-service resolved (env=${params.ENVIRONMENT}): registry=${env.IMAGE_REGISTRY} platform=${env.BUILD_PLATFORM}"
+        }
+      }
+    }
+    stage('Validate service registry') {
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-services.sh
+        '''
+      }
+    }
+    stage('Build web image (native)') {
+      when { expression { params.BUILD_IMAGE && !params.DEPLOY_DRY_RUN } }
+      steps {
+        // Same contract as the bring-up-all Web stage: native build on the target
+        // machine, push to the env registry's mutable :dev tag; the Deploy stage
+        // below digest-pins whatever that tag resolves to (immutable in the pod spec).
+        build job: 'options-edge-web-deploy',
+              parameters: [
+                string(name: 'PROFILE',                      value: env.WEB_PROFILE),
+                string(name: 'BUILD_PLATFORM',               value: env.BUILD_PLATFORM),
+                booleanParam(name: 'PUSH_IMAGE',             value: true),
+                booleanParam(name: 'RUN_LOCAL',              value: false),
+                string(name: 'IMAGE',                        value: "${env.IMAGE_REGISTRY}/options-edge-web:dev"),
+                string(name: 'VITE_WS_URL',                  value: env.WEB_WS_URL),
+                string(name: 'APP_FEED_GATEWAY_WS_URL',      value: env.WEB_WS_URL),
+                string(name: 'VITE_API_BASE_URL',            value: env.WEB_API_BASE),
+                string(name: 'VITE_MISSION_CONTROL_URL',     value: env.WEB_API_BASE),
+                string(name: 'VITE_AUTH_ISSUER',             value: env.WEB_AUTH_ISSUER),
+                string(name: 'VITE_REPLAY_ORCHESTRATOR_URL', value: env.WEB_REPLAY_URL),
+                string(name: 'REMOTE_BUILD_HOST',            value: env.REMOTE_BUILD_HOST),
+                string(name: 'REMOTE_BUILD_ROOT',            value: env.REMOTE_BUILD_ROOT),
+                booleanParam(name: 'SKIP_SELENIUM_SMOKE',    value: true)
+              ],
+              wait: true, propagate: true
+      }
+    }
+    stage('Deploy (service-scoped)') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export SERVICE=web
+          export DEPLOY_DRY_RUN="''' + "${params.DEPLOY_DRY_RUN}" + '''"
+          export HEALTH_URL="''' + "${params.HEALTH_URL ?: ''}" + '''"
+          [ -n "$HEALTH_URL" ] || HEALTH_URL="$HEALTH_URL_DEFAULT"
+          export HEALTH_URL
+          WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/service-deploy.sh
+        '''
+      }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: '.jenkins-tmp/web-*.yaml', allowEmptyArchive: true
+    }
+  }
+}
