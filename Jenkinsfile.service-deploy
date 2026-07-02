@@ -12,11 +12,14 @@
 // Image builds: processing images are built by the options-edge-processing job (all
 // modules in one reactor build). BUILD_IMAGES=true triggers it first for this env;
 // leave false to deploy the images already in the env registry (the fast path).
+// EXCEPTION databento-feed: its image builds in its OWN job
+// (options-edge-databento-feed-deploy) — run that first, then deploy here with
+// BUILD_IMAGES=false (the processing reactor does not build the feed image).
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
     choice(name: 'SERVICE', choices: [
-      'databento-gex', 'databento-gex-history', 'databento-maxpain',
+      'databento-feed', 'databento-gex', 'databento-gex-history', 'databento-maxpain',
       'databento-mission-pace', 'databento-mission-pressure', 'databento-mission-sandwich',
       'databento-volume-aggregator', 'delta-flow', 'directional-pressure',
       'gex-delta-redis-writer', 'hpsf-postgres-writer', 'hpsf-processing',
