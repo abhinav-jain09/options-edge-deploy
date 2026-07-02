@@ -203,8 +203,8 @@ EOF
           kubectl -n options-edge set image deployment/volume-pace-databento-service volume-pace="$VOLUME_PACE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-databento-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
-          kubectl -n options-edge set image deployment/volume-sandwich-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
-          kubectl -n options-edge set image deployment/volume-sandwich-databento-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/volume-sandwich-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/volume-sandwich-databento-service volume-sandwich="$VOLUME_SANDWICH_IMAGE"
           kubectl -n options-edge set image deployment/unusual-whales-gex-service unusual-whales-gex="$UNUSUAL_WHALES_GEX_IMAGE"
           kubectl -n options-edge set image deployment/unusual-whales-gex-history-service unusual-whales-gex-history="$UNUSUAL_WHALES_GEX_HISTORY_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-history-service databento-gex-history="$DATABENTO_GEX_HISTORY_IMAGE"
@@ -238,8 +238,8 @@ EOF
           kubectl -n options-edge rollout restart deployment/volume-pace-databento-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-databento-service
-          kubectl -n options-edge rollout restart deployment/volume-sandwich-service
-          kubectl -n options-edge rollout restart deployment/volume-sandwich-databento-service
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/volume-sandwich-service
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/volume-sandwich-databento-service
           kubectl -n options-edge rollout restart deployment/unusual-whales-gex-service
           kubectl -n options-edge rollout restart deployment/unusual-whales-gex-history-service
           kubectl -n options-edge rollout restart deployment/databento-gex-history-service
@@ -274,8 +274,8 @@ EOF
           kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=600s
           kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=600s
           kubectl -n options-edge rollout status deployment/directional-pressure-databento-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/volume-sandwich-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/volume-sandwich-databento-service --timeout=600s
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/volume-sandwich-service --timeout=600s
+          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/volume-sandwich-databento-service --timeout=600s
           kubectl -n options-edge rollout status deployment/unusual-whales-gex-service --timeout=600s
           kubectl -n options-edge rollout status deployment/unusual-whales-gex-history-service --timeout=600s
           kubectl -n options-edge rollout status deployment/databento-gex-history-service --timeout=600s
