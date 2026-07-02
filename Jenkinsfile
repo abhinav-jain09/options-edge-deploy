@@ -425,7 +425,12 @@ pipeline {
     }
     stage('Reset HPSF Stage B Internal Topics') {
       when {
-        expression { return params.DEPLOY_TARGET != 'delta-flow-service' && !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
+        // DISABLED until further notice (2026-07-02): hpsf-stage-a/b are temporarily
+        // not deployed (replicas pinned to 0 in k8s/base), so resetting stage-b
+        // internal topics on every run is pointless churn. Restore the original
+        // expression below when the services are re-enabled.
+        // expression { return params.DEPLOY_TARGET != 'delta-flow-service' && !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
+        expression { return false }
       }
       steps {
         sh '''

@@ -24,6 +24,18 @@ log() {
   printf '[hpsf-smoke] %s\n' "$*"
 }
 
+# DISABLED until further notice (2026-07-02): hpsf-stage-a/b replicas are pinned
+# to 0 in k8s/base (temporarily not deployed). Their rollout checks can never
+# pass with zero pods, so skip the whole HPSF smoke cleanly. Remove this guard
+# when re-enabling.
+if [[ "$DRY_RUN" == "false" && "$SKIP_K8S" != "true" ]] && command -v kubectl >/dev/null 2>&1; then
+  desired="$("${KUBECTL[@]}" get deployment hpsf-stage-a-service -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "")"
+  if [[ "$desired" == "0" ]]; then
+    log "hpsf-stage-a/b are DISABLED until further notice (replicas=0); skipping HPSF deployment smoke."
+    exit 0
+  fi
+fi
+
 topic_name() {
   printf '%s%s' "$TOPIC_PREFIX" "$1"
 }

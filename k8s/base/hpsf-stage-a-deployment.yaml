@@ -13,7 +13,8 @@ metadata:
     app.kubernetes.io/component: hpsf-stage-a
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # TEMPORARILY DISABLED until further notice — service must not be deployed/scaled up (2026-07-02, per Abhinav)
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: hpsf-stage-a-service
