@@ -39,6 +39,7 @@ HPSF_POSTGRES_WRITER_IMAGE=$registry/options-edge-hpsf-postgres-writer:$image_ta
 SPX_MISSION_CONTROL_IMAGE=$registry/options-edge-spx-mission-control:$image_tag
 STRIKE_FLOW_CLASSIFIER_IMAGE=$registry/options-edge-strike-flow-classifier:$image_tag
 DELTA_FLOW_IMAGE=$registry/options-edge-delta-flow:$image_tag
+STRIKE_LIQUIDITY_HEATMAP_IMAGE=$registry/options-edge-strike-liquidity-heatmap:$image_tag
 UNIFIED_SR_IMAGE=$registry/options-edge-unified-sr:$image_tag
 STRIKE_FLOW_AVRO_ADAPTER_IMAGE=$registry/options-edge-strike-flow-avro-adapter:$image_tag
 GEX_DELTA_REDIS_WRITER_IMAGE=$registry/options-edge-gex-delta-redis-writer:$image_tag

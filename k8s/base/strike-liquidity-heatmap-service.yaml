@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: strike-liquidity-heatmap-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: strike-liquidity-heatmap-service
+    app.kubernetes.io/component: strike-liquidity-heatmap-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: strike-liquidity-heatmap-service
+  ports:
+    - name: health
+      port: 8111
+      targetPort: health
