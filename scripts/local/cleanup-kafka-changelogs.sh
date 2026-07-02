@@ -30,7 +30,7 @@
 #
 set -euo pipefail
 
-KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.102:9092}"
+KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:19092}"
 RETENTION_MS="${RETENTION_MS:-86400000}"     # 24h
 KAFKA_IMAGE="${KAFKA_IMAGE:-confluentinc/cp-kafka:7.6.0}"
 LOG_DIR="${LOG_DIR:-$HOME/.local/var/log/oe-kafka-cleanup}"
@@ -76,9 +76,9 @@ fi
 # Networking note: we DO NOT use `--network host` here. Docker Desktop
 # Mac only supports host networking on 4.34+ as an opt-in feature, and
 # we can't assume it's enabled. The default KAFKA_BOOTSTRAP_SERVERS
-# (192.168.100.102:9092) is a LAN IP that is reachable from the
+# (host.docker.internal:19092) is the native dev Kafka endpoint reachable from the
 # default Docker bridge network on Docker Desktop. For localhost-only
-# Kafka, pass KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092.
+# Kafka, pass KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:19092.
 docker run --rm --name "$CONTAINER_NAME" \
   -e KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP_SERVERS" \
   -e RETENTION_MS="$RETENTION_MS" \

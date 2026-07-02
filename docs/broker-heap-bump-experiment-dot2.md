@@ -59,7 +59,7 @@ ps -eo pid,args | grep '[k]afka\.Kafka' | grep -oE 'Xms[0-9a-z]+ -Xmx[0-9a-z]+'
 ```bash
 # Broker accepts client connections again
 ~/kafka-options-edge/current/bin/kafka-broker-api-versions.sh \
-  --bootstrap-server localhost:9092 | head -1
+  --bootstrap-server localhost:19092 | head -1
 
 # Streams pods rebalance and resume consuming (give them ~30s after restart)
 /Applications/Docker.app/Contents/Resources/bin/kubectl -n options-edge \
@@ -69,7 +69,7 @@ ps -eo pid,args | grep '[k]afka\.Kafka' | grep -oE 'Xms[0-9a-z]+ -Xmx[0-9a-z]+'
 # A real test — watch for new records on the strike-sr output topic during
 # market hours; this is the canary that the unified-sr pipeline is healthy:
 ~/oe-native/confluent-7.7.1/bin/kafka-console-consumer \
-  --bootstrap-server localhost:9092 \
+  --bootstrap-server localhost:19092 \
   --topic options.spx.strike-sr.current \
   --max-messages 3
 ```
@@ -102,5 +102,5 @@ a container image), so there's nothing for Jenkins to deploy — its config
 lives on the host's filesystem, not in any image. This is the documented
 exception.
 
-Production (`.252`) and dev (`localhost:9092` Mac install on a different host)
+Production (`.252`) and dev (`localhost:19092` Mac install on a different host)
 have their own broker configs and aren't touched by this runbook.

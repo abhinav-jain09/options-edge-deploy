@@ -105,7 +105,7 @@ pipeline {
             set -euo pipefail
             RUNENV="CALENDAR_DIR=scripts/jenkins \
               DRY_RUN='${DRY_RUN}' WIPE_ENABLED='${WIPE_ENABLED}' EXPECTED_ENV='dev' \
-              KAFKA_BOOTSTRAP_SERVERS='192.168.100.102:9092' \
+              KAFKA_BOOTSTRAP_SERVERS='host.docker.internal:19092' \
               KAFKA_BIN='${DEV_KAFKA_BIN:-/opt/homebrew/opt/kafka/libexec/bin}' \
               KAFKA_LOG_DIR='${DEV_KAFKA_LOG_DIR:-/opt/homebrew/var/log/kafka}' \
               PG_LOG_DIR='${DEV_PG_LOG_DIR:-}' \
