@@ -115,7 +115,7 @@ spec:
             - name: MISSION_PRESSURE_STRIKE_FLOW_CONFIRMATION_WEIGHT
               value: "1.0"
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms1g -Xmx4g
+              value: -Xms1g -Xmx6g
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -141,10 +141,10 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 5632Mi
+              memory: 8Gi
             requests:
               cpu: 250m
-              memory: 1Gi
+              memory: 2Gi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
               name: kafka-streams-state
