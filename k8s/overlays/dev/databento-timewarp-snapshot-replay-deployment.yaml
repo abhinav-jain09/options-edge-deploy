@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: timewarp-snapshot-replay
-          image: host.docker.internal:5001/options-edge-databento-feed:dev
+          image: 192.168.100.252:5000/options-edge-databento-feed:dev
           imagePullPolicy: Always
           command: ["options-edge-databento-timewarp-snapshot-replay"]
           envFrom:
