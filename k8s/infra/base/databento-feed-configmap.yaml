@@ -12,7 +12,16 @@ data:
   DATABENTO_MIN_STRIKE: "7000"
   DATABENTO_MAX_STRIKE: "8000"
   DATABENTO_STRIKE_STEP: "5"
-  DATABENTO_SPOT_SOURCE: SYNTHETIC
+  # SPX spot cascade: native SPX index → ES-basis (cost-of-carry from ES trades) → synthetic option-implied fallback.
+  # Cascade tier is selected per-publish inside the feed (CascadedSpotProvider). Feed PR #41 introduces a
+  # prod guardrail that refuses to boot when APP_PROFILE=prod AND the resolved source is SYNTHETIC — that is
+  # why this key MUST be CASCADED for prod. SPY (see DATABENTO_EXTRA_INSTRUMENTS below) has no native index
+  # feed and no ES basis; the cascade transparently falls through to synthetic for SPY at runtime.
+  DATABENTO_SPOT_SOURCE: CASCADED
+  # ES-basis cost-of-carry inputs. Update when SOFR / SPX dividend outlook shifts materially.
+  # Applied only when cascade falls through to ES-basis tier.
+  DATABENTO_ES_ANNUAL_RATE: "0.053"
+  DATABENTO_ES_ANNUAL_DIV_YIELD: "0.013"
   DATABENTO_STATIC_SPOT: "7500"
   # Additional option-chain underlyings ingested by the SAME feed for the GEX calc (no UI work).
   # SPY rides alongside SPX in one feed instance, sharing the feed-level DATABENTO_EXPIRY above.
@@ -43,8 +52,9 @@ data:
   KAFKA_HPSF_ES_TRADES_TOPIC: underlying.es.trades
   DATABENTO_HPSF_SPX_PRICE_ENABLED: "true"
   KAFKA_HPSF_SPX_PRICE_TOPIC: underlying.spx.price
-  HPSF_SPX_SPOT_SOURCE: SYNTHETIC_OPTION_SPOT
-  HPSF_SPX_SPOT_QUALITY: SYNTHETIC
+  HPSF_SPX_SPOT_SOURCE: CASCADED
+  # spotQuality is now computed per-publish by CascadedSpotProvider (LIVE_INDEX / LIVE_ES_BASIS / SYNTHETIC).
+  # Static config value ignored — key intentionally removed.
   METRICS_ENABLED: "true"
   METRICS_HOST: 0.0.0.0
   METRICS_PORT: "8010"
