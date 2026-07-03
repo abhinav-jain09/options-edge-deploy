@@ -15,6 +15,8 @@ images:
   ibkr-feed-service: ghcr.io/abhinav-jain09/options-edge-ibkr-feed:production
   strike-flow-classifier-service: ghcr.io/abhinav-jain09/options-edge-strike-flow-classifier:production
   delta-flow-service: ghcr.io/abhinav-jain09/options-edge-delta-flow:production
+  pin-postgres-writer: ghcr.io/abhinav-jain09/options-edge-pin-postgres-writer:production
+  strike-liquidity-heatmap-service: ghcr.io/abhinav-jain09/options-edge-strike-liquidity-heatmap:production
   spx-mission-control-service: ghcr.io/abhinav-jain09/options-edge-spx-mission-control:production
   unified-sr-service: ghcr.io/abhinav-jain09/options-edge-unified-sr:production
   strike-flow-avro-adapter: ghcr.io/abhinav-jain09/options-edge-strike-flow-avro-adapter:production

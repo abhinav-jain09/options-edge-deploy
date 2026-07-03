@@ -19,6 +19,8 @@ resources:
   - gex-delta-redis-writer-service.yaml
   - delta-flow-deployment.yaml
   - delta-flow-service.yaml
+  - strike-liquidity-heatmap-deployment.yaml
+  - strike-liquidity-heatmap-service.yaml
   - unified-sr-deployment.yaml
   - unified-sr-service.yaml
   - strike-flow-avro-adapter-deployment.yaml

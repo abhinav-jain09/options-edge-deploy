@@ -28,6 +28,7 @@ HPSF_POSTGRES_WRITER_IMAGE
 SPX_MISSION_CONTROL_IMAGE
 STRIKE_FLOW_CLASSIFIER_IMAGE
 DELTA_FLOW_IMAGE
+STRIKE_LIQUIDITY_HEATMAP_IMAGE
 UNIFIED_SR_IMAGE
 STRIKE_FLOW_AVRO_ADAPTER_IMAGE
 GEX_DELTA_REDIS_WRITER_IMAGE
@@ -42,6 +43,9 @@ target_image_vars() {
       ;;
     delta-flow-service)
       printf '%s\n' DELTA_FLOW_IMAGE
+      ;;
+    strike-liquidity-heatmap-service)
+      printf '%s\n' STRIKE_LIQUIDITY_HEATMAP_IMAGE
       ;;
     *)
       echo "Unsupported DEPLOY_TARGET: ${DEPLOY_TARGET}" >&2

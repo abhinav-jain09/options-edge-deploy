@@ -25,7 +25,7 @@ pipeline {
       'gex-delta-redis-writer', 'hpsf-postgres-writer', 'hpsf-processing',
       'option-price-behavior', 'pin-postgres-writer', 'pressure-postgres-writer',
       'raw-postgres-writer', 'raw-to-display', 'spx-mission-control',
-      'strike-flow-avro-adapter', 'strike-flow-classifier', 'unified-sr',
+      'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-liquidity-heatmap', 'unified-sr',
       'unusual-whales-gex', 'unusual-whales-gex-history', 'volume-pace', 'volume-sandwich'
     ], description: 'Which service to deploy (dir under k8s/services; keep in sync with services.yaml standalone entries).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],

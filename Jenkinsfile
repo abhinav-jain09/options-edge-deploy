@@ -42,6 +42,7 @@ pipeline {
     string(name: 'SPX_MISSION_CONTROL_IMAGE', defaultValue: '', description: 'SPX mission control image')
     string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', defaultValue: '', description: 'Strike flow classifier image')
     string(name: 'DELTA_FLOW_IMAGE', defaultValue: '', description: 'Delta flow service image')
+    string(name: 'STRIKE_LIQUIDITY_HEATMAP_IMAGE', defaultValue: '', description: 'Strike liquidity heatmap service image')
     string(name: 'UNIFIED_SR_IMAGE', defaultValue: '', description: 'Unified S/R image')
     string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', defaultValue: '', description: 'Strike-flow Avro adapter image (unified-sr FLOW producer)')
     string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', defaultValue: '', description: 'GEX delta Redis writer image')
@@ -68,7 +69,7 @@ pipeline {
     booleanParam(name: 'EMERGENCY_DIRECT_PROD_DEPLOY', defaultValue: false, description: 'BREAK-GLASS: skip the must-go-via-dev rule and deploy directly to prod. Use ONLY for genuine emergencies (prod broken AND the dev path is unusable). Requires a non-empty EMERGENCY_REASON. The override is loudly audit-logged to the build console.')
     string(name: 'EMERGENCY_REASON', defaultValue: '', description: 'Why are you doing a direct-to-prod emergency deploy? Required and non-empty when EMERGENCY_DIRECT_PROD_DEPLOY=true. Captured in the audit log.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false, description: 'Validate render, image preflight, and server-side Kubernetes apply without mutating runtime resources.')
-    choice(name: 'DEPLOY_TARGET', choices: ['all', 'delta-flow-service'], description: 'Deployment scope. all reconciles the normal stack; delta-flow-service applies only Delta Flow resources and rolls only that deployment.')
+    choice(name: 'DEPLOY_TARGET', choices: ['all', 'delta-flow-service', 'strike-liquidity-heatmap-service'], description: 'Deployment scope. all reconciles the normal stack; a service-named target applies only that service\'s resources and rolls only that deployment.')
     booleanParam(name: 'SKIP_HPSF_SMOKE', defaultValue: true, description: 'Skip the HPSF Smoke stage (Stage B runtime check). Temporarily bypassed until the Stage B underlying-state/runtime check is fixed; set false to re-enable.')
   }
   environment {
@@ -125,6 +126,7 @@ pipeline {
     SPX_MISSION_CONTROL_IMAGE = "${params.SPX_MISSION_CONTROL_IMAGE ?: oeProfile.image('spx-mission-control', 'production', 'dev')}"
     STRIKE_FLOW_CLASSIFIER_IMAGE = "${params.STRIKE_FLOW_CLASSIFIER_IMAGE ?: oeProfile.image('strike-flow-classifier', 'production', 'dev')}"
     DELTA_FLOW_IMAGE = "${params.DELTA_FLOW_IMAGE ?: oeProfile.image('delta-flow', 'production', 'dev')}"
+    STRIKE_LIQUIDITY_HEATMAP_IMAGE = "${params.STRIKE_LIQUIDITY_HEATMAP_IMAGE ?: oeProfile.image('strike-liquidity-heatmap', 'production', 'dev')}"
     UNIFIED_SR_IMAGE = "${params.UNIFIED_SR_IMAGE ?: oeProfile.image('unified-sr', 'production', 'dev')}"
     STRIKE_FLOW_AVRO_ADAPTER_IMAGE = "${params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE ?: oeProfile.image('strike-flow-avro-adapter', 'production', 'dev')}"
     GEX_DELTA_REDIS_WRITER_IMAGE = "${params.GEX_DELTA_REDIS_WRITER_IMAGE ?: oeProfile.image('gex-delta-redis-writer', 'production', 'dev')}"
@@ -213,7 +215,7 @@ pipeline {
     }
     stage('Resolve Databento Expiry') {
       when {
-        expression { return params.DEPLOY_TARGET != 'delta-flow-service' }
+        expression { return params.DEPLOY_TARGET == 'all' }
       }
       // Placed AFTER Validate (so enforce-main-branch.sh has already blocked non-main runs)
       // and BEFORE Bootstrap Jenkins Kubernetes Guard. Resolves the latest OPRA.PILLAR
@@ -350,7 +352,7 @@ pipeline {
     }
     stage('Pause Runtime For Kafka Cleanup') {
       when {
-        expression { return params.DEPLOY_TARGET != 'delta-flow-service' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+        expression { return params.DEPLOY_TARGET == 'all' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -388,7 +390,7 @@ pipeline {
     }
     stage('Kafka Cleanup') {
       when {
-        expression { return params.DEPLOY_TARGET != 'delta-flow-service' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+        expression { return params.DEPLOY_TARGET == 'all' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -435,7 +437,7 @@ pipeline {
         // not deployed (replicas pinned to 0 in k8s/base), so resetting stage-b
         // internal topics on every run is pointless churn. Restore the original
         // expression below when the services are re-enabled.
-        // expression { return params.DEPLOY_TARGET != 'delta-flow-service' && !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
+        // expression { return params.DEPLOY_TARGET == 'all' && !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
         expression { return false }
       }
       steps {
@@ -509,7 +511,7 @@ pipeline {
     }
     stage('Resume Remote Apps') {
       when {
-        expression { return params.DEPLOY_TARGET != 'delta-flow-service' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+        expression { return params.DEPLOY_TARGET == 'all' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -539,7 +541,7 @@ pipeline {
     }
     stage('Verify OptionsEdge Web App') {
       when {
-        expression { return params.DEPLOY_TARGET != 'delta-flow-service' && !params.DEPLOY_DRY_RUN }
+        expression { return params.DEPLOY_TARGET == 'all' && !params.DEPLOY_DRY_RUN }
       }
       steps {
         sh '''
@@ -736,6 +738,7 @@ void promoteToProduction() {
       string(name: 'SPX_MISSION_CONTROL_IMAGE', value: params.SPX_MISSION_CONTROL_IMAGE),
       string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', value: params.STRIKE_FLOW_CLASSIFIER_IMAGE),
       string(name: 'DELTA_FLOW_IMAGE', value: params.DELTA_FLOW_IMAGE),
+      string(name: 'STRIKE_LIQUIDITY_HEATMAP_IMAGE', value: params.STRIKE_LIQUIDITY_HEATMAP_IMAGE),
       string(name: 'UNIFIED_SR_IMAGE', value: params.UNIFIED_SR_IMAGE),
       string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', value: params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE),
       string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', value: params.GEX_DELTA_REDIS_WRITER_IMAGE),

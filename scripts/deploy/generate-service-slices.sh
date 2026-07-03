@@ -46,6 +46,13 @@ while IFS= read -r name; do
       echo "# This is the monolithic k8s/overlays/$e render of ONLY this service's workload"
       echo "# (mirror rule holds by construction). To change the service, change the base"
       echo "# manifests/overlay patches and re-run the generator."
+      echo "#"
+      echo "# DEPLOYMENT SAFETY — NEVER kubectl-apply this manifest directly. It is a PRE-PIN"
+      echo "# render: the image ref below is the BASE (dev-registry) ref, NOT this env's image."
+      echo "# The ONLY deploy paths are the Jenkins jobs (Jenkinsfile.service-deploy ->"
+      echo "# scripts/deploy/service-deploy.sh, or the monolithic Jenkinsfile), which remap the"
+      echo "# image to image-tags/$e.yaml and digest-pin it fail-closed BEFORE any apply."
+      echo "# Applying this file directly to production would roll out the dev image."
       cat "$docs"
     } >"$dir/manifest.yaml"
     cat >"$dir/kustomization.yaml" <<EOF

@@ -86,6 +86,23 @@ while IFS= read -r name; do
         fail=1
       fi
     done
+    # env image-tag CONSISTENCY guard (review): a service mapped in ANY image-tags env file
+    # must be mapped in EVERY env it deploys to — a partial mapping means the production
+    # fast path fails closed at deploy time (the render carries the base dev-registry ref
+    # pre-pin, so the mapping is the only production-image source). Services with NO
+    # mappings anywhere (own-job images: web, feed, ...) are out of this mechanism.
+    if [ -f "image-tags/$e.yaml" ]; then
+      _mapped_any=0
+      for _f in image-tags/*.yaml; do
+        # NOTE: plain grep >/dev/null, NOT grep -q — under pipefail, -q's early exit
+        # SIGPIPEs yq and a successful match reads as pipeline failure.
+        if yq -r ".images | to_entries[] | .value" "$_f" | grep "/$img:" >/dev/null; then _mapped_any=1; break; fi
+      done
+      if [ "$_mapped_any" = "1" ] && ! yq -r ".images | to_entries[] | .value" "image-tags/$e.yaml" | grep "/$img:" >/dev/null; then
+        echo "FAIL: image '$img' (service $name) is mapped in some image-tags env but MISSING from image-tags/$e.yaml" >&2
+        exit 1
+      fi
+    fi
     echo "ok: $name/$e (blast radius, image, mirror)"
   done
 done < <(yq -r '.services[] | select(.managedBy == "standalone") | .name' services.yaml)
