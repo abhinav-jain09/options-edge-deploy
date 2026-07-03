@@ -6,11 +6,12 @@
 # DEPLOYMENT SAFETY — NEVER kubectl-apply this manifest directly. It is a
 # PRE-DIGEST render: the image ref below is at best a mutable TAG (and, where the
 # overlay carries no env mapping, the BASE dev-registry ref — not this env's image).
-# The ONLY deploy paths are the Jenkins jobs (Jenkinsfile.service-deploy ->
-# scripts/deploy/service-deploy.sh, or the monolithic Jenkinsfile), which remap the
-# image via image-tags/dev.yaml and digest-pin it fail-closed BEFORE any apply.
-# Applying this file directly bypasses that pinning and can roll out a wrong or
-# stale image.
+# The ONLY deploy paths are the Jenkins jobs, which digest-pin the image
+# fail-closed BEFORE any apply: Jenkinsfile.service-deploy -> service-deploy.sh
+# keeps this env-correct render ref then pins (image-tags/dev.yaml is
+# informational here); the monolithic Jenkinsfile pins from the build-resolved
+# images env (resolve-images.sh). Applying this file directly bypasses that
+# pinning and can roll out a wrong or stale image.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

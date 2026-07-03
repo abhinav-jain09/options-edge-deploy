@@ -58,12 +58,20 @@ while IFS= read -r name; do
         echo "# (Jenkinsfile.experiment-deploy), which applies the monolithic overlay; there is"
         echo "# NO digest pinning on this env. Applying this file by hand still violates the"
         echo "# Jenkins-only deployment rule and can roll out a wrong or stale image."
-      else
-        echo "# The ONLY deploy paths are the Jenkins jobs (Jenkinsfile.service-deploy ->"
-        echo "# scripts/deploy/service-deploy.sh, or the monolithic Jenkinsfile), which remap the"
-        echo "# image via image-tags/$e.yaml and digest-pin it fail-closed BEFORE any apply."
+      elif [ "$e" = "production" ]; then
+        echo "# The ONLY deploy paths are the Jenkins jobs, which digest-pin the image"
+        echo "# fail-closed BEFORE any apply: Jenkinsfile.service-deploy -> service-deploy.sh"
+        echo "# remaps this render via image-tags/production.yaml then pins; the monolithic"
+        echo "# Jenkinsfile pins from the build-resolved images env (resolve-images.sh)."
         echo "# Applying this file directly bypasses that pinning and can roll out a wrong or"
         echo "# stale image."
+      else
+        echo "# The ONLY deploy paths are the Jenkins jobs, which digest-pin the image"
+        echo "# fail-closed BEFORE any apply: Jenkinsfile.service-deploy -> service-deploy.sh"
+        echo "# keeps this env-correct render ref then pins (image-tags/$e.yaml is"
+        echo "# informational here); the monolithic Jenkinsfile pins from the build-resolved"
+        echo "# images env (resolve-images.sh). Applying this file directly bypasses that"
+        echo "# pinning and can roll out a wrong or stale image."
       fi
       cat "$docs"
     } >"$dir/manifest.yaml"
