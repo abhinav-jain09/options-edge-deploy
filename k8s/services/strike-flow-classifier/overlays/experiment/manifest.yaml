@@ -106,7 +106,7 @@ spec:
             - name: HEALTH_PORT
               value: "8097"
             - name: JAVA_TOOL_OPTIONS
-              value: -Xmx1536m
+              value: -Xms2g -Xmx4g
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -132,10 +132,10 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 2560Mi
+              memory: 8Gi
             requests:
-              cpu: 250m
-              memory: 1Gi
+              cpu: "1"
+              memory: 3Gi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
               name: kafka-streams-state

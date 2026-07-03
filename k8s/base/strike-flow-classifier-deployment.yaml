@@ -104,7 +104,7 @@ spec:
             - name: HEALTH_PORT
               value: "8097"
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xmx1536m"
+              value: "-Xms2g -Xmx4g"
           ports:
             - name: http
               containerPort: 8097
@@ -122,10 +122,10 @@ spec:
             periodSeconds: 10
           resources:
             requests:
-              cpu: 250m
-              memory: 1Gi
+              cpu: "1"
+              memory: 3Gi
             limits:
-              memory: 2Gi
+              memory: 8Gi
 ---
 apiVersion: apps/v1
 kind: Deployment

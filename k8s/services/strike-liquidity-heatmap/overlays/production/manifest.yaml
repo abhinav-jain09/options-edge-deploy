@@ -100,10 +100,10 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 1Gi
+              memory: 2Gi
             requests:
               cpu: 100m
-              memory: 384Mi
+              memory: 512Mi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
               name: kafka-streams-state
