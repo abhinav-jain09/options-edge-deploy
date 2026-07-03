@@ -91,7 +91,8 @@ check_k8s() {
     log "kubectl not found; skipping Kubernetes checks"
     return 0
   fi
-  for deployment in hpsf-stage-a-service hpsf-stage-b-service hpsf-postgres-writer-service feed-gateway-service; do
+  # feed-gateway-service removed until further notice (svc scaled to 0, 2026-07-03)
+  for deployment in hpsf-stage-a-service hpsf-stage-b-service hpsf-postgres-writer-service; do
     log "checking rollout for $deployment"
     if ! run_or_echo "${KUBECTL[@]}" rollout status deployment/"$deployment" --timeout=180s; then
       print_k8s_diagnostics "$deployment"

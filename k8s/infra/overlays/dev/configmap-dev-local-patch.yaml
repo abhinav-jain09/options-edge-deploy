@@ -13,7 +13,7 @@ data:
   KAFKA_BROKER_COUNT: "1"
   KAFKA_TOPIC_REPLICATION_FACTOR: "1"
   KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS: "1"
-  KAFKA_TOPIC_PARTITIONS_DEFAULT: "3"
+  KAFKA_TOPIC_PARTITIONS_DEFAULT: "32"
   # Dev-only data-topic retention: 10h (36,000,000 ms). Overrides the base 24h
   # (KAFKA_TOPIC_RETENTION_MS=86400000); prod keeps 24h. load-kafka-settings.sh
   # derives KAFKA_TOPIC_RETENTION_MS from this rendered per-env configmap, so the

@@ -34,7 +34,7 @@ metadata:
   name: unusual-whales-gex-service
   namespace: options-edge
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: unusual-whales-gex-service
