@@ -7,8 +7,7 @@ metadata:
     app.kubernetes.io/name: volume-pace-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # TEMPORARILY DISABLED until further notice — service must not be deployed/scaled up (2026-07-02, per Abhinav)
-  replicas: 0
+  replicas: 1
   strategy:
     type: Recreate
   selector:

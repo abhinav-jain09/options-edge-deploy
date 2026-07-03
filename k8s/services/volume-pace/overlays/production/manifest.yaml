@@ -38,7 +38,7 @@ metadata:
   name: volume-pace-service
   namespace: options-edge
 spec:
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: volume-pace-service
