@@ -237,7 +237,7 @@ EOF
           kubectl -n options-edge set image deployment/databento-mission-pace-service databento-mission-pace="$DATABENTO_MISSION_PACE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-pressure-service databento-mission-pressure="$DATABENTO_MISSION_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-sandwich-service databento-mission-sandwich="$DATABENTO_MISSION_SANDWICH_IMAGE"
-          # DISABLED until further notice (svc not deployed): kubectl -n options-edge set image deployment/volume-pace-service volume-pace="$VOLUME_PACE_IMAGE"
+          kubectl -n options-edge set image deployment/volume-pace-service volume-pace="$VOLUME_PACE_IMAGE"
           kubectl -n options-edge set image deployment/volume-pace-databento-service volume-pace="$VOLUME_PACE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-databento-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
@@ -273,7 +273,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/databento-gex-service
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/databento-maxpain-service
           kubectl -n options-edge rollout restart deployment/option-price-behavior-service
-          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout restart deployment/volume-pace-service
+          kubectl -n options-edge rollout restart deployment/volume-pace-service
           kubectl -n options-edge rollout restart deployment/volume-pace-databento-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-service
           kubectl -n options-edge rollout restart deployment/directional-pressure-databento-service
@@ -310,7 +310,7 @@ EOF
           kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=600s
           # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=600s
           kubectl -n options-edge rollout status deployment/option-price-behavior-service --timeout=600s
-          # DISABLED until further notice (svc not deployed): kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=600s
+          kubectl -n options-edge rollout status deployment/volume-pace-service --timeout=600s
           kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=600s
           kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=600s
           kubectl -n options-edge rollout status deployment/directional-pressure-databento-service --timeout=600s

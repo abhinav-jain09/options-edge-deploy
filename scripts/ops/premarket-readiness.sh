@@ -68,16 +68,16 @@ is_optional() { case " $OPTIONAL_SERVICES " in *" $1 "*) return 0;; *) return 1;
 # deploy manifests + the dev cluster 2026-06-28). Databento variants only;
 # IBKR (*-ibkr) and the legacy non-databento duplicates are excluded.
 # DISABLED until further notice (2026-07-02): H:hpsf-stage-a-service and
-# H:hpsf-stage-b-service (+ volume-pace-service) removed from the required
+# H:hpsf-stage-b-service removed from the required
 # list — their replicas are pinned to 0 in k8s/base (temporarily not deployed),
 # and line ~234 hard-fails any non-optional service at 0 desired replicas.
-# volume-pace-databento-service RE-ENABLED 2026-07-02 (per Abhinav).
+# volume-pace-databento-service RE-ENABLED 2026-07-02; volume-pace-service RE-ENABLED 2026-07-03 (per Abhinav).
 # volume-sandwich-service + volume-sandwich-databento-service DISABLED 2026-07-02 (per Abhinav).
 # Restore them below when the services are re-enabled.
 PIPELINE_SERVICES="${PIPELINE_SERVICES:-\
 T1:options-edge-databento-feed T1:databento-volume-aggregator \
 T2:strike-flow-classifier-databento T2:raw-to-display-databento-service T2:directional-pressure-databento-service \
-T2:volume-pace-databento-service \
+T2:volume-pace-databento-service T2:volume-pace-service \
 T2:databento-gex-service T2:databento-gex-history-service \
 T3:databento-mission-pace-service T3:databento-mission-pressure-service T3:databento-mission-sandwich-service \
 T3:spx-mission-control-service T3:strike-liquidity-heatmap-service T3:options-edge-web \
