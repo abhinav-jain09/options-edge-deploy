@@ -77,7 +77,7 @@ spec:
             - name: KAFKA_MISSION_PRESSURE_STREAMS_NUM_THREADS
               value: "4"
             - name: KAFKA_MISSION_PRESSURE_MAX_CHANGELOG_BYTES
-              value: "8388608"
+              value: "67108864"
             - name: KAFKA_MISSION_PRESSURE_OUTPUT_INTERVAL_MS
               value: "1000"
             - name: KAFKA_MISSION_PRESSURE_STALE_AFTER_MS
@@ -98,6 +98,8 @@ spec:
               value: "10.0"
             - name: MISSION_PRESSURE_MAX_RANKED_STRIKES
               value: "75"
+            - name: MISSION_PRESSURE_MAX_TRACKED_STRIKES
+              value: "256"
             - name: MISSION_PRESSURE_MIN_VOLUME_FOR_ACTIVE_STRIKE
               value: "50"
             - name: MISSION_PRESSURE_FLOW_VS_OI_ACTIVE_RATIO
