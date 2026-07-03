@@ -39,7 +39,7 @@ spec:
             - name: TIMEWARP_TARGET_TRADE_DATE
               value: "2026-07-06"
             - name: TIMEWARP_TARGET_EXPIRY
-              value: "2026-07-06"
+              value: "20260706"
             - name: TIMEWARP_SNAPSHOT_TOPIC
               value: options.databento.raw
             - name: TIMEWARP_SPX_PRICE_TOPIC
@@ -49,8 +49,10 @@ spec:
             - name: TIMEWARP_SNAPSHOT_BASE_SPOT
               value: "7500.0"
             - name: TIMEWARP_SNAPSHOT_PUBLISH_INTERVAL_SECONDS
-              value: "5.0"
+              value: "1.0"
             - name: TIMEWARP_SNAPSHOT_SYNTHETIC_OI_ENABLED
+              value: "true"
+            - name: TIMEWARP_SYNTHETIC_PACE_ENABLED
               value: "true"
             - name: TIMEWARP_HEATMAP_EVENTS_ENABLED
               value: "true"

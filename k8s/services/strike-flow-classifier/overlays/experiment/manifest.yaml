@@ -93,6 +93,8 @@ spec:
               value: options.databento.strike-flow
             - name: KAFKA_STRIKE_FLOW_STREAMS_APP_ID
               value: options-edge-databento-strike-flow-classifier-v2
+            - name: KAFKA_STRIKE_FLOW_STREAMS_NUM_THREADS
+              value: "8"
             - name: STRIKE_FLOW_SYMBOL
               value: SPX
             - name: STRIKE_FLOW_OUTPUT_INTERVAL_MS

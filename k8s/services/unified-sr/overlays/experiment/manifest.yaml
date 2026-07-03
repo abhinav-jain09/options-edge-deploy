@@ -67,6 +67,8 @@ spec:
               value: options-edge-unified-sr-v3
             - name: KAFKA_UNIFIED_SR_STREAMS_COMMIT_INTERVAL_MS
               value: "1000"
+            - name: KAFKA_UNIFIED_SR_STREAMS_NUM_THREADS
+              value: "8"
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
             - name: JAVA_TOOL_OPTIONS

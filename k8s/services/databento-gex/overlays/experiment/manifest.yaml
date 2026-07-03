@@ -76,7 +76,7 @@ spec:
             - name: KAFKA_GEX_STREAMS_APP_ID
               value: options-databento-gex-streams-v1
             - name: KAFKA_GEX_STREAMS_NUM_THREADS
-              value: "4"
+              value: "8"
             - name: DATABENTO_GEX_DEALER_SIGN_MODEL
               value: NAIVE_CALL_PLUS_PUT_MINUS
             - name: JAVA_TOOL_OPTIONS
