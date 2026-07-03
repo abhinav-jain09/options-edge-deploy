@@ -80,7 +80,7 @@ T2:strike-flow-classifier-databento T2:raw-to-display-databento-service T2:direc
 T2:volume-pace-databento-service T2:volume-pace-service \
 T2:databento-gex-service T2:databento-gex-history-service \
 T3:databento-mission-pace-service T3:databento-mission-pressure-service T3:databento-mission-sandwich-service \
-T3:spx-mission-control-service T3:strike-liquidity-heatmap-service T3:options-edge-web \
+T3:spx-mission-control-service T3:strike-liquidity-heatmap-service T3:feed-gateway-service T3:options-edge-web \
 T4:hpsf-postgres-writer-service T4:raw-postgres-writer T4:pressure-postgres-writer T4:pin-postgres-writer}"
 
 # ---------------------------------------------------------------------------
