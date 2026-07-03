@@ -50,6 +50,8 @@ spec:
               value: "7500.0"
             - name: TIMEWARP_SNAPSHOT_PUBLISH_INTERVAL_SECONDS
               value: "1.0"
+            - name: TIMEWARP_SNAPSHOT_SESSION_DURATION_SECONDS
+              value: "23400"
             - name: TIMEWARP_SNAPSHOT_SYNTHETIC_OI_ENABLED
               value: "true"
             - name: TIMEWARP_SYNTHETIC_PACE_ENABLED
