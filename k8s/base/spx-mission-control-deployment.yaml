@@ -55,6 +55,8 @@ spec:
               value: "1000"
             - name: KAFKA_SPX_MISSION_STREAMS_NUM_THREADS
               value: "4"
+            - name: KAFKA_SPX_MISSION_MAX_CHANGELOG_BYTES
+              value: "4194304"
             - name: SPX_MISSION_ALLOW_LEGACY_PACE
               value: "false"
             - name: SPX_MISSION_ALLOW_LEGACY_PRESSURE

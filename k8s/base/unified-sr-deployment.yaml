@@ -45,6 +45,8 @@ spec:
               value: options-edge-unified-sr-v3
             - name: KAFKA_UNIFIED_SR_STREAMS_COMMIT_INTERVAL_MS
               value: "1000"
+            - name: KAFKA_UNIFIED_SR_STREAMS_NUM_THREADS
+              value: "8"
             # Streams state dir = the kafka-streams-state mount (PVC via kafka-streams-state-patches.yaml),
             # so RocksDB state persists across restarts instead of replaying the full changelog each time.
             - name: KAFKA_STREAMS_STATE_DIR

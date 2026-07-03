@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-timewarp-snapshot-replay
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: databento-timewarp-snapshot-replay
+    app.kubernetes.io/component: replay
+    app.kubernetes.io/part-of: options-edge
+    oe.replay/mode: time-warp-snapshot
+spec:
+  # Dev-only replay add-on. Keep stopped after normal deploys; start explicitly with:
+  # kubectl -n options-edge scale deployment/databento-timewarp-snapshot-replay --replicas=1
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: databento-timewarp-snapshot-replay
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: databento-timewarp-snapshot-replay
+        app.kubernetes.io/component: replay
+        app.kubernetes.io/part-of: options-edge
+        oe.replay/mode: time-warp-snapshot
+    spec:
+      containers:
+        - name: timewarp-snapshot-replay
+          image: host.docker.internal:5001/options-edge-databento-feed:dev
+          imagePullPolicy: Always
+          command: ["options-edge-databento-timewarp-snapshot-replay"]
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          env:
+            - name: APP_PROFILE
+              value: dev
+            - name: TIMEWARP_INPUT_FILE
+              value: /historical-data/bt_260626B_input.jsonl
+            - name: TIMEWARP_TARGET_TRADE_DATE
+              value: "2026-07-06"
+            - name: TIMEWARP_TARGET_EXPIRY
+              value: "20260706"
+            - name: TIMEWARP_SNAPSHOT_TOPIC
+              value: options.databento.raw
+            - name: TIMEWARP_SPX_PRICE_TOPIC
+              value: underlying.spx.price
+            - name: TIMEWARP_SNAPSHOT_SEED_RECORDS
+              value: "75000"
+            - name: TIMEWARP_SNAPSHOT_BASE_SPOT
+              value: "7500.0"
+            - name: TIMEWARP_SNAPSHOT_PUBLISH_INTERVAL_SECONDS
+              value: "1.0"
+            - name: TIMEWARP_SNAPSHOT_SYNTHETIC_OI_ENABLED
+              value: "true"
+            - name: TIMEWARP_SYNTHETIC_PACE_ENABLED
+              value: "true"
+            - name: TIMEWARP_HEATMAP_EVENTS_ENABLED
+              value: "true"
+            - name: TIMEWARP_HEATMAP_EVENTS_TOPIC
+              value: options.databento.events.raw
+          volumeMounts:
+            - name: historical-data
+              mountPath: /historical-data
+              readOnly: true
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: historical-data
+          hostPath:
+            path: /var/lib/options-edge/historical-data
+            type: Directory

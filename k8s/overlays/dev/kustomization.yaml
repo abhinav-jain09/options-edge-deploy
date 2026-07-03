@@ -10,6 +10,8 @@ resources:
   # (k8s/services/web/overlays/dev) mirrors them — sync is enforced by
   # scripts/ci/validate-services.sh render equivalence.
   - ../../services/web/base
+  - databento-timewarp-replay-job.yaml
+  - databento-timewarp-snapshot-replay-deployment.yaml
 patches:
   - path: streams-processing-guarantee-dev-patch.yaml
   - path: web-dev-env-patch.yaml

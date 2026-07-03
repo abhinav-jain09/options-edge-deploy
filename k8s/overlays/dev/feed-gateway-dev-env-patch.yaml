@@ -43,3 +43,7 @@ spec:
               value: "2026-01-01,2026-01-19,2026-02-16,2026-04-03,2026-05-25,2026-06-19,2026-07-03,2026-09-07,2026-11-26,2026-12-25"
             - name: GATEWAY_MARKET_EARLY_CLOSES
               value: "2026-11-27=13:00,2026-12-24=13:00"
+            # DEV replay cadence is slower than live one-second liquidity columns; keep prod's 5s default
+            # untouched, but give dev replay a stable window so the UI can render between replay bursts.
+            - name: GATEWAY_LIQUIDITY_HEATMAP_TTL_MS
+              value: "60000"

@@ -55,7 +55,7 @@ spec:
             - name: KAFKA_GEX_STREAMS_APP_ID
               value: options-databento-gex-streams-v1
             - name: KAFKA_GEX_STREAMS_NUM_THREADS
-              value: "4"
+              value: "8"
             # Dealer-positioning sign: NAIVE (call +1 / put -1).
             # The 1-year SPXW 0DTE backtest (gex-backtest, run phase3-1w-...-b10, 252 days /
             # 7,541 samples) ranked the three models NAIVE ~= V2 >> V1(FLOW_ADJUSTED):
