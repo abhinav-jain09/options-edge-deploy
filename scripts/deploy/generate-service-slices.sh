@@ -50,11 +50,21 @@ while IFS= read -r name; do
       echo "# DEPLOYMENT SAFETY — NEVER kubectl-apply this manifest directly. It is a"
       echo "# PRE-DIGEST render: the image ref below is at best a mutable TAG (and, where the"
       echo "# overlay carries no env mapping, the BASE dev-registry ref — not this env's image)."
-      echo "# The ONLY deploy paths are the Jenkins jobs (Jenkinsfile.service-deploy ->"
-      echo "# scripts/deploy/service-deploy.sh, or the monolithic Jenkinsfile), which remap the"
-      echo "# image via image-tags/$e.yaml and digest-pin it fail-closed BEFORE any apply."
-      echo "# Applying this file directly bypasses that pinning and can roll out a wrong or"
-      echo "# stale image."
+      if [ "$e" = "experiment" ]; then
+        # Experiment has NO image-tags mapping and NO digest pinning: its Jenkins job
+        # (Jenkinsfile.experiment-deploy) applies the overlay directly. The header must not
+        # claim a pin path that does not exist for this env.
+        echo "# The ONLY deploy path for experiment is the Jenkins experiment job"
+        echo "# (Jenkinsfile.experiment-deploy), which applies the monolithic overlay; there is"
+        echo "# NO digest pinning on this env. Applying this file by hand still violates the"
+        echo "# Jenkins-only deployment rule and can roll out a wrong or stale image."
+      else
+        echo "# The ONLY deploy paths are the Jenkins jobs (Jenkinsfile.service-deploy ->"
+        echo "# scripts/deploy/service-deploy.sh, or the monolithic Jenkinsfile), which remap the"
+        echo "# image via image-tags/$e.yaml and digest-pin it fail-closed BEFORE any apply."
+        echo "# Applying this file directly bypasses that pinning and can roll out a wrong or"
+        echo "# stale image."
+      fi
       cat "$docs"
     } >"$dir/manifest.yaml"
     cat >"$dir/kustomization.yaml" <<EOF

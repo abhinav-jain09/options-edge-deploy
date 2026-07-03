@@ -6,11 +6,10 @@
 # DEPLOYMENT SAFETY — NEVER kubectl-apply this manifest directly. It is a
 # PRE-DIGEST render: the image ref below is at best a mutable TAG (and, where the
 # overlay carries no env mapping, the BASE dev-registry ref — not this env's image).
-# The ONLY deploy paths are the Jenkins jobs (Jenkinsfile.service-deploy ->
-# scripts/deploy/service-deploy.sh, or the monolithic Jenkinsfile), which remap the
-# image via image-tags/experiment.yaml and digest-pin it fail-closed BEFORE any apply.
-# Applying this file directly bypasses that pinning and can roll out a wrong or
-# stale image.
+# The ONLY deploy path for experiment is the Jenkins experiment job
+# (Jenkinsfile.experiment-deploy), which applies the monolithic overlay; there is
+# NO digest pinning on this env. Applying this file by hand still violates the
+# Jenkins-only deployment rule and can roll out a wrong or stale image.
 apiVersion: v1
 kind: Service
 metadata:
