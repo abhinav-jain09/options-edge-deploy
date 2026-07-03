@@ -42,6 +42,7 @@ pipeline {
     string(name: 'SPX_MISSION_CONTROL_IMAGE', defaultValue: '', description: 'SPX mission control image')
     string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', defaultValue: '', description: 'Strike flow classifier image')
     string(name: 'DELTA_FLOW_IMAGE', defaultValue: '', description: 'Delta flow service image')
+    string(name: 'STRIKE_LIQUIDITY_HEATMAP_IMAGE', defaultValue: '', description: 'Strike liquidity heatmap service image')
     string(name: 'UNIFIED_SR_IMAGE', defaultValue: '', description: 'Unified S/R image')
     string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', defaultValue: '', description: 'Strike-flow Avro adapter image (unified-sr FLOW producer)')
     string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', defaultValue: '', description: 'GEX delta Redis writer image')
@@ -737,6 +738,7 @@ void promoteToProduction() {
       string(name: 'SPX_MISSION_CONTROL_IMAGE', value: params.SPX_MISSION_CONTROL_IMAGE),
       string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', value: params.STRIKE_FLOW_CLASSIFIER_IMAGE),
       string(name: 'DELTA_FLOW_IMAGE', value: params.DELTA_FLOW_IMAGE),
+      string(name: 'STRIKE_LIQUIDITY_HEATMAP_IMAGE', value: params.STRIKE_LIQUIDITY_HEATMAP_IMAGE),
       string(name: 'UNIFIED_SR_IMAGE', value: params.UNIFIED_SR_IMAGE),
       string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', value: params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE),
       string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', value: params.GEX_DELTA_REDIS_WRITER_IMAGE),
