@@ -47,12 +47,32 @@ while IFS= read -r name; do
       echo "# (mirror rule holds by construction). To change the service, change the base"
       echo "# manifests/overlay patches and re-run the generator."
       echo "#"
-      echo "# DEPLOYMENT SAFETY — NEVER kubectl-apply this manifest directly. It is a PRE-PIN"
-      echo "# render: the image ref below is the BASE (dev-registry) ref, NOT this env's image."
-      echo "# The ONLY deploy paths are the Jenkins jobs (Jenkinsfile.service-deploy ->"
-      echo "# scripts/deploy/service-deploy.sh, or the monolithic Jenkinsfile), which remap the"
-      echo "# image to image-tags/$e.yaml and digest-pin it fail-closed BEFORE any apply."
-      echo "# Applying this file directly to production would roll out the dev image."
+      echo "# DEPLOYMENT SAFETY — NEVER kubectl-apply this manifest directly. It is a"
+      echo "# PRE-DIGEST render: the image ref below is at best a mutable TAG (and, where the"
+      echo "# overlay carries no env mapping, the BASE dev-registry ref — not this env's image)."
+      if [ "$e" = "experiment" ]; then
+        # Experiment has NO image-tags mapping and NO digest pinning: its Jenkins job
+        # (Jenkinsfile.experiment-deploy) applies the overlay directly. The header must not
+        # claim a pin path that does not exist for this env.
+        echo "# The ONLY deploy path for experiment is the Jenkins experiment job"
+        echo "# (Jenkinsfile.experiment-deploy), which applies the monolithic overlay; there is"
+        echo "# NO digest pinning on this env. Applying this file by hand still violates the"
+        echo "# Jenkins-only deployment rule and can roll out a wrong or stale image."
+      elif [ "$e" = "production" ]; then
+        echo "# The ONLY deploy paths are the Jenkins jobs, which digest-pin the image"
+        echo "# fail-closed BEFORE any apply: Jenkinsfile.service-deploy -> service-deploy.sh"
+        echo "# remaps this render via image-tags/production.yaml then pins; the monolithic"
+        echo "# Jenkinsfile pins from the build-resolved images env (resolve-images.sh)."
+        echo "# Applying this file directly bypasses that pinning and can roll out a wrong or"
+        echo "# stale image."
+      else
+        echo "# The ONLY deploy paths are the Jenkins jobs, which digest-pin the image"
+        echo "# fail-closed BEFORE any apply: Jenkinsfile.service-deploy -> service-deploy.sh"
+        echo "# keeps this env-correct render ref then pins (image-tags/$e.yaml is"
+        echo "# informational here); the monolithic Jenkinsfile pins from the build-resolved"
+        echo "# images env (resolve-images.sh). Applying this file directly bypasses that"
+        echo "# pinning and can roll out a wrong or stale image."
+      fi
       cat "$docs"
     } >"$dir/manifest.yaml"
     cat >"$dir/kustomization.yaml" <<EOF
