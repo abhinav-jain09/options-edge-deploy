@@ -94,16 +94,36 @@ fi
 # registered image basename; fail-closed if the env has no entry for it.
 IMAGE_BASENAME="$(yq -r ".services[] | select(.name == \"$SERVICE\") | .image" services.yaml)"
 [ -n "$IMAGE_BASENAME" ] && [ "$IMAGE_BASENAME" != "null" ] || { echo "FATAL: $SERVICE has no image registered in services.yaml" >&2; exit 1; }
-ENV_IMAGE="$(yq -r ".images | to_entries[] | select(.value | test(\"/${IMAGE_BASENAME}:\")) | .value" "image-tags/${ENVIRONMENT}.yaml" | head -1)"
-if [ -z "$ENV_IMAGE" ] || [ "$ENV_IMAGE" = "null" ]; then
-  echo "FATAL: image-tags/${ENVIRONMENT}.yaml has no entry for image '$IMAGE_BASENAME' (service $SERVICE)" >&2
-  exit 1
+ENV_IMAGE=""
+if [ -f "image-tags/${ENVIRONMENT}.yaml" ]; then
+  ENV_IMAGE="$(yq -r ".images | to_entries[] | select(.value | test(\"/${IMAGE_BASENAME}:\")) | .value" "image-tags/${ENVIRONMENT}.yaml" | awk 'NR==1')"
 fi
-if [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
-  echo "remapping render image -> env image: $MUTABLE_IMAGE -> $ENV_IMAGE"
-  MUTABLE_IMAGE="$ENV_IMAGE"
+if [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ]; then
+  if [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
+    echo "remapping render image -> env image: $MUTABLE_IMAGE -> $ENV_IMAGE"
+    MUTABLE_IMAGE="$ENV_IMAGE"
+  fi
+elif [ "$ENVIRONMENT" = "production" ]; then
+  # The render ref is the BASE (dev-registry) ref by design; deploying it to production is
+  # exactly the dev-image bug. No mapping -> no production fast path: fail closed.
+  echo "FATAL: image-tags/production.yaml has no entry for image '$IMAGE_BASENAME' (service $SERVICE)." >&2
+  echo "       Add the production mapping before using the per-service fast path for this service." >&2
+  exit 1
+else
+  echo "WARN: image-tags/${ENVIRONMENT}.yaml has no entry for '$IMAGE_BASENAME'; using the render ref (dev-parity registries only)."
 fi
 echo "service=$SERVICE deployments=[$(printf '%s' "$DEPLOYMENTS" | tr '\n' ' ')] container=$CONTAINER image=$MUTABLE_IMAGE"
+
+# --- PVC preflight (review P0): slices may NOT carry PVCs (blast radius — common-infra
+# owns them), so any claim the workload references must ALREADY exist or the rollout dies
+# on unbound claims. Fail early with a pointer to the common-infra job.
+for _claim in $(yq -r 'select(.kind == "Deployment") | .spec.template.spec.volumes[]?.persistentVolumeClaim.claimName' "$RENDER" | grep -v '^---$' | grep -v '^null$' | sort -u); do
+  if ! kubectl -n "$NAMESPACE" get pvc "$_claim" >/dev/null 2>&1; then
+    echo "FATAL: PVC '$_claim' referenced by $SERVICE does not exist in $NAMESPACE." >&2
+    echo "       Run the common-infra deploy (Jenkinsfile.common-infra) for $ENVIRONMENT first." >&2
+    exit 1
+  fi
+done
 
 # --- §13.7 digest-pin the image (fail-closed via the shared resolver) -----------------
 . scripts/deploy/pin-image.sh

@@ -73,7 +73,10 @@ spec:
             - name: kafka-streams-state
               mountPath: /var/lib/options-edge/kafka-streams
           # Isolation hard requirement (design §7): own requests/limits so a leak or hot loop
-          # can never starve co-located services.
+          # can never starve co-located services. CPU limit is INTENTIONALLY absent (matches
+          # every sibling streams service): CFS throttling would inject tail latency into the
+          # 1.5s p99 event->frame SLO, while the CPU request still guarantees fair scheduling;
+          # the memory limit bounds the one resource a runaway JVM actually exhausts.
           resources:
             requests:
               cpu: 100m
