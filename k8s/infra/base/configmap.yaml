@@ -107,7 +107,7 @@ data:
   STRIKE_FLOW_SOURCE: DATABENTO
   KAFKA_STRIKE_FLOW_INPUT_TOPIC: options.opra.tcbbo
   KAFKA_STRIKE_FLOW_OUTPUT_TOPIC: options.databento.strike-flow
-  KAFKA_STRIKE_FLOW_STREAMS_APP_ID: options-edge-databento-strike-flow-classifier-v2
+  KAFKA_STRIKE_FLOW_STREAMS_APP_ID: options-edge-databento-strike-flow-classifier-v3
   KAFKA_DATABENTO_STRIKE_FLOW_TOPIC: options.databento.strike-flow
   KAFKA_IBKR_STRIKE_FLOW_TOPIC: options.ibkr.strike-flow
   STRIKE_FLOW_ENABLED: "true"
