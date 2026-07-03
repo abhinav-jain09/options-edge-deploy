@@ -68,4 +68,8 @@ services:
   - { name: integration-test,             managedBy: monolith, image: options-edge-integration-test,             deployments: [options-edge-integration-test] }
   - { name: redis,                        managedBy: monolith, image: redis,                                     deployments: [options-edge-redis] }
 
+  # Dev-only timewarp replay rig (added 2026-07-03): replays a recorded session through the
+  # feed image; dev overlay only, no standalone path.
+  - { name: databento-timewarp-snapshot-replay, managedBy: monolith, image: options-edge-databento-feed, deployments: [databento-timewarp-snapshot-replay] }
+
 # Infra workloads (Keycloak etc.) are owned by common-infra (k8s/infra), not listed here.
