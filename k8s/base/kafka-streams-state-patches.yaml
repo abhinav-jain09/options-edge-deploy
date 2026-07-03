@@ -309,7 +309,10 @@ spec:
               mountPath: /var/lib/options-edge/kafka-streams
           resources:
             limits:
-              memory: 2560Mi
+              # Must stay >= the base request (raised to 3Gi in "Raise memory for realtime strike services");
+              # the old 2560Mi override made request > limit and the API rejected the whole Deployment.
+              # 8Gi matches the base limit intent.
+              memory: 8Gi
       volumes:
         - name: kafka-streams-state
           persistentVolumeClaim:
