@@ -64,6 +64,12 @@ class HpsfTopicScriptTest(unittest.TestCase):
         self.assertNotIn("options.databento.strike-flow", topics_env)
         self.assertNotIn("options.ibkr.strike-flow", topics_env)
 
+    def test_generic_topic_list_owns_databento_volume_global_state(self) -> None:
+        topics_env = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
+
+        self.assertIn("options.databento.volume.state.compacted:32", topics_env)
+        self.assertIn("options.databento.volume.state.compacted", topics_env.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1])
+
     def test_jenkins_refreshes_hpsf_topics_after_service_startup(self) -> None:
         jenkinsfile = (ROOT / "Jenkinsfile").read_text()
         kafka_topics_stage = jenkinsfile.split("stage('Kafka Topics')", 1)[1]
