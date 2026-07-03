@@ -199,9 +199,7 @@ spec:
             - name: KAFKA_STRIKE_FLOW_OUTPUT_TOPIC
               value: options.ibkr.strike-flow
             - name: KAFKA_STRIKE_FLOW_STREAMS_APP_ID
-              value: options-edge-ibkr-strike-flow-classifier-v2
-            - name: KAFKA_STRIKE_FLOW_STREAMS_AUTO_OFFSET_RESET
-              value: earliest
+              value: options-edge-ibkr-strike-flow-classifier-v1
             - name: STRIKE_FLOW_SYMBOL
               value: SPX
             - name: STRIKE_FLOW_OUTPUT_INTERVAL_MS
