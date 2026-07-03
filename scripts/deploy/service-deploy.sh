@@ -99,9 +99,16 @@ if [ -f "image-tags/${ENVIRONMENT}.yaml" ]; then
   ENV_IMAGE="$(yq -r ".images | to_entries[] | select(.value | test(\"/${IMAGE_BASENAME}:\")) | .value" "image-tags/${ENVIRONMENT}.yaml" | awk 'NR==1')"
 fi
 if [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ]; then
-  if [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
+  if [ "$ENVIRONMENT" = "production" ] && [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
     echo "remapping render image -> env image: $MUTABLE_IMAGE -> $ENV_IMAGE"
     MUTABLE_IMAGE="$ENV_IMAGE"
+  elif [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
+    # Non-production renders are ALREADY env-correct by overlay construction (Codex round 7:
+    # the dev overlay remaps every image to the local dev registry, while legacy
+    # image-tags/dev.yaml entries still carry the remote registry). Remapping here would
+    # swap a correct local ref for the remote one — so outside production the mapping is
+    # informational only and the render ref wins.
+    echo "INFO: image-tags/${ENVIRONMENT}.yaml maps '$IMAGE_BASENAME' to $ENV_IMAGE; keeping the env-correct render ref $MUTABLE_IMAGE (mapping is authoritative only for production)."
   fi
 elif [ "$ENVIRONMENT" = "production" ]; then
   # The render ref is the BASE (dev-registry) ref by design; deploying it to production is
