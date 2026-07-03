@@ -17,6 +17,13 @@ data:
   # prod guardrail that refuses to boot when APP_PROFILE=prod AND the resolved source is SYNTHETIC — that is
   # why this key MUST be CASCADED for prod. SPY (see DATABENTO_EXTRA_INSTRUMENTS below) has no native index
   # feed and no ES basis; the cascade transparently falls through to synthetic for SPY at runtime.
+  # WARNING: DATABENTO_SPOT_SOURCE=CASCADED and HPSF_SPX_SPOT_SOURCE=CASCADED require
+  # the feed image built from options-edge-databento-feed PR #41 or later. Applying
+  # this ConfigMap against an older image will fail feed boot (config validation
+  # rejects the new enum value — old allowlist only accepts IBKR_INDEX,
+  # SYNTHETIC_OPTION_SPOT, STATIC_DEV). Confirm the deployed image tag includes
+  # PR #41 before applying or restarting the feed pod. See the Jenkinsfile / build
+  # job for the currently-pinned image SHA.
   DATABENTO_SPOT_SOURCE: CASCADED
   # ES-basis cost-of-carry inputs. Update when SOFR / SPX dividend outlook shifts materially.
   # Applied only when cascade falls through to ES-basis tier.
