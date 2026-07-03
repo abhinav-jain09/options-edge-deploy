@@ -47,7 +47,7 @@ spec:
             - name: TIMEWARP_SNAPSHOT_SEED_RECORDS
               value: "75000"
             - name: TIMEWARP_SNAPSHOT_BASE_SPOT
-              value: "7500.0"
+              value: "auto"
             - name: TIMEWARP_SNAPSHOT_PUBLISH_INTERVAL_SECONDS
               value: "1.0"
             - name: TIMEWARP_SNAPSHOT_SESSION_DURATION_SECONDS
