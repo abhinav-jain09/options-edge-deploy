@@ -37,3 +37,14 @@ patches:
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.
+
+# Institutional review (strike-liquidity package, P1): the COMMITTED production render — and
+# therefore its generated k8s/services mirror slice — must not carry the base :dev image ref,
+# so a raw `kubectl apply -f manifest.yaml` can never roll the dev image into production.
+# Deploy behavior is unchanged: apply.sh REPLACES this images block with digest-pinned
+# entries resolved from the build (.images = [] first), so this mapping only hardens the
+# at-rest render. Tag-level ref here; the digest pin still happens fail-closed at deploy.
+images:
+  - name: 192.168.100.252:5000/options-edge-strike-liquidity-heatmap
+    newName: ghcr.io/abhinav-jain09/options-edge-strike-liquidity-heatmap
+    newTag: production
