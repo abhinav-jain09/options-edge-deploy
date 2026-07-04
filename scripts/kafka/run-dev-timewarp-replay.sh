@@ -265,6 +265,7 @@ for topic in \
   delta-flow-by-strike \
   delta-flow-dashboard \
   delta-flow-diagnostics \
+  options.spx.strike-sr.current \
   options-edge-strike-liquidity-heatmap-v1-dev-chain-rekey; do
   allow_future_timestamps "$topic"
 done
