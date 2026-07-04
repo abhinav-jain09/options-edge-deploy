@@ -221,11 +221,22 @@ for dep in $DEPLOYMENTS; do
 done
 
 if [ -n "${HEALTH_URL:-}" ]; then
-  code="$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 20 "$HEALTH_URL" || echo "000")"
+  # `rollout status` returns the moment the Deployment is Available, but a web
+  # container can accept the TCP connection a few seconds before it serves a full
+  # HTTP response (curl 52 / empty reply). A single-shot check false-FAILs on that
+  # startup race and prints a rollback for a deploy that is actually healthy. Retry
+  # with a bounded grace window: still must reach 200, just tolerates the race.
+  code=""
+  for attempt in $(seq 1 "${HEALTH_RETRIES:-10}"); do
+    code="$(curl -fsS -o /dev/null -w '%{http_code}' --max-time 20 "$HEALTH_URL" || echo "000")"
+    [ "$code" = "200" ] && break
+    echo "  endpoint: $HEALTH_URL -> $code (attempt $attempt, retrying) …"
+    sleep "${HEALTH_RETRY_DELAY:-3}"
+  done
   if [ "$code" = "200" ]; then
     echo "  endpoint: $HEALTH_URL -> 200 ✓"
   else
-    echo "  endpoint: FAIL — $HEALTH_URL -> $code" >&2
+    echo "  endpoint: FAIL — $HEALTH_URL -> $code (after ${HEALTH_RETRIES:-10} attempts)" >&2
     gate_fail=1
   fi
 fi
