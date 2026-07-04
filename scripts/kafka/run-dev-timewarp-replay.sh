@@ -52,6 +52,20 @@ wait_topics_deleted() {
   exit 1
 }
 
+wait_snapshot_seeded() {
+  local attempts="${SNAPSHOT_SEED_WAIT_SECONDS:-240}"
+  for ((i = 1; i <= attempts; i++)); do
+    if kube logs deploy/databento-timewarp-snapshot-replay --since=10m --tail=300 2>/dev/null \
+      | grep -q '"event": "seeded"'; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Timed out waiting for databento-timewarp-snapshot-replay to finish seeding" >&2
+  kube logs deploy/databento-timewarp-snapshot-replay --tail=80 || true
+  exit 1
+}
+
 topic_partitions() {
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$1" 2>/dev/null \
     | sed -n '1s/.*PartitionCount: \([0-9][0-9]*\).*/\1/p' \
@@ -214,14 +228,18 @@ restore_deployments
 
 echo "[replay] refreshing timewarp manifests"
 kube delete job databento-timewarp-replay --ignore-not-found=true
-kubectl "${KUBECTL_AUTH_ARGS[@]}" apply -k "$ROOT/k8s/overlays/dev"
+kubectl "${KUBECTL_AUTH_ARGS[@]}" apply -f "$ROOT/k8s/overlays/dev/databento-timewarp-snapshot-replay-deployment.yaml"
+kubectl "${KUBECTL_AUTH_ARGS[@]}" apply -f "$ROOT/k8s/overlays/dev/databento-timewarp-replay-job.yaml"
 
 echo "[replay] starting six-and-a-half-hour replay"
 kube scale deploy/databento-timewarp-snapshot-replay --replicas=1
+kube rollout status deploy/databento-timewarp-snapshot-replay --timeout=180s
+
+echo "[replay] waiting for snapshot replay seed before starting TCBBO replay"
+wait_snapshot_seeded
 kube patch job databento-timewarp-replay --type=merge -p '{"spec":{"suspend":false}}'
 
 echo "[replay] waiting for core replay services"
-kube rollout status deploy/databento-timewarp-snapshot-replay --timeout=180s
 for deploy in \
   options-edge-web \
   databento-gex-service \
