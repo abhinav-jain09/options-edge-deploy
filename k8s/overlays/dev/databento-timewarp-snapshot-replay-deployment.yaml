@@ -63,9 +63,9 @@ spec:
             - name: TIMEWARP_HEATMAP_EVENTS_TOPIC
               value: options.databento.events.raw
             - name: TIMEWARP_SNAPSHOT_CLOCK_MODE
-              value: session
+              value: session-wall
             - name: TIMEWARP_HEATMAP_CLOCK_MODE
-              value: session
+              value: session-wall
           volumeMounts:
             - name: historical-data
               mountPath: /historical-data

@@ -66,6 +66,31 @@ wait_snapshot_seeded() {
   exit 1
 }
 
+topic_offset_total() {
+  kafka-run-class kafka.tools.GetOffsetShell \
+    --broker-list "$KAFKA_BOOTSTRAP_SERVERS" \
+    --topic "$1" \
+    --time -1 2>/dev/null \
+    | awk -F: '{s+=$3} END{print s+0}'
+}
+
+wait_topic_records() {
+  local topic="$1"
+  local minimum="$2"
+  local attempts="${3:-120}"
+  local total
+  for ((i = 1; i <= attempts; i++)); do
+    total="$(topic_offset_total "$topic")"
+    if (( total >= minimum )); then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "Timed out waiting for $topic to reach $minimum records" >&2
+  kafka-run-class kafka.tools.GetOffsetShell --broker-list "$KAFKA_BOOTSTRAP_SERVERS" --topic "$topic" --time -1 || true
+  exit 1
+}
+
 topic_partitions() {
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$1" 2>/dev/null \
     | sed -n '1s/.*PartitionCount: \([0-9][0-9]*\).*/\1/p' \
@@ -125,6 +150,9 @@ restore_deployments() {
   while read -r name replicas; do
     [[ -z "${name:-}" ]] && continue
     case "$name" in
+      options-edge-web|feed-gateway-service|options-edge-redis|raw-to-display-databento-service|databento-gex-service|databento-gex-history-service|gex-delta-redis-writer|option-price-behavior-service|strike-liquidity-heatmap-service|databento-mission-pace-service|databento-mission-pressure-service|databento-mission-sandwich-service|spx-mission-control-service|strike-flow-classifier-databento|strike-flow-avro-adapter|delta-flow-service|directional-pressure-databento-service|unified-sr-service)
+        replicas=1
+        ;;
       *hpsf*|unusual-whales-*|strike-flow-classifier-ibkr|volume-pace-service|volume-sandwich-service)
         replicas=0
         ;;
@@ -193,6 +221,15 @@ ensure_topic option-price-behavior-session 32 delete
 ensure_topic option-price-behavior-by-strike 32 delete
 ensure_topic option-price-behavior-by-moneyness 32 delete
 ensure_topic option-price-behavior-dashboard 32 compact,delete
+ensure_topic delta-flow-by-trade 32 delete
+ensure_topic delta-flow-10s 32 delete
+ensure_topic delta-flow-1m 32 delete
+ensure_topic delta-flow-5m 32 delete
+ensure_topic delta-flow-15m 32 delete
+ensure_topic delta-flow-session 32 delete
+ensure_topic delta-flow-by-strike 32 delete
+ensure_topic delta-flow-dashboard 32 compact,delete
+ensure_topic delta-flow-diagnostics 32 delete
 ensure_topic options-edge-strike-liquidity-heatmap-v1-dev-chain-rekey 32 delete
 
 echo "[replay] allowing Monday-session replay timestamps on derived output topics"
@@ -219,12 +256,34 @@ for topic in \
   option-price-behavior-by-strike \
   option-price-behavior-by-moneyness \
   option-price-behavior-dashboard \
+  delta-flow-by-trade \
+  delta-flow-10s \
+  delta-flow-1m \
+  delta-flow-5m \
+  delta-flow-15m \
+  delta-flow-session \
+  delta-flow-by-strike \
+  delta-flow-dashboard \
+  delta-flow-diagnostics \
   options-edge-strike-liquidity-heatmap-v1-dev-chain-rekey; do
   allow_future_timestamps "$topic"
 done
 
 echo "[replay] restoring dev services, leaving out-of-scope feeds scaled to zero"
 restore_deployments
+
+echo "[replay] waiting for replay consumers before starting producers"
+for deploy in \
+  databento-gex-service \
+  delta-flow-service \
+  option-price-behavior-service \
+  strike-liquidity-heatmap-service \
+  databento-mission-pace-service \
+  spx-mission-control-service \
+  strike-flow-classifier-databento \
+  strike-flow-avro-adapter; do
+  kube rollout status "deploy/$deploy" --timeout=180s || true
+done
 
 echo "[replay] refreshing timewarp manifests"
 kube delete job databento-timewarp-replay --ignore-not-found=true
@@ -237,12 +296,20 @@ kube rollout status deploy/databento-timewarp-snapshot-replay --timeout=180s
 
 echo "[replay] waiting for snapshot replay seed before starting TCBBO replay"
 wait_snapshot_seeded
+echo "[replay] waiting for derived GEX to be available before starting TCBBO replay"
+wait_topic_records options.databento.gex.strike 1 "${GEX_WARMUP_WAIT_SECONDS:-120}"
 kube patch job databento-timewarp-replay --type=merge -p '{"spec":{"suspend":false}}'
+
+echo "[replay] allowing Monday-session replay timestamps on delta-flow internal changelogs"
+for topic in $(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list | grep '^options-edge-delta-flow-service-v1-dev-' || true); do
+  allow_future_timestamps "$topic"
+done
 
 echo "[replay] waiting for core replay services"
 for deploy in \
   options-edge-web \
   databento-gex-service \
+  delta-flow-service \
   option-price-behavior-service \
   strike-liquidity-heatmap-service \
   databento-mission-pace-service \
