@@ -7,7 +7,6 @@ REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:?KAFKA_TOPIC_REPLICATION_FA
 RETENTION_MS="${KAFKA_TOPIC_RETENTION_MS:-86400000}"
 CLEANUP_POLICY="${KAFKA_TOPIC_CLEANUP_POLICY:-delete}"
 MIN_ISR="${KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS:-1}"
-MESSAGE_TIMESTAMP_AFTER_MAX_MS="${KAFKA_TOPIC_MESSAGE_TIMESTAMP_AFTER_MAX_MS:-}"
 RECREATE_MISMATCHED="${KAFKA_RECREATE_MISMATCHED_TOPICS:-false}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
@@ -101,23 +100,16 @@ create_topic() {
   local topic="$1"
   local partitions="$2"
   local cleanup_policy
-  local -a configs
   cleanup_policy="$(topic_cleanup_policy "$topic")"
-  configs=(
-    --config "retention.ms=$RETENTION_MS"
-    --config "cleanup.policy=$cleanup_policy"
-    --config "min.insync.replicas=$MIN_ISR"
-  )
-  if [[ -n "$MESSAGE_TIMESTAMP_AFTER_MAX_MS" ]]; then
-    configs+=(--config "message.timestamp.after.max.ms=$MESSAGE_TIMESTAMP_AFTER_MAX_MS")
-  fi
 
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --create \
     --topic "$topic" \
     --partitions "$partitions" \
     --replication-factor "$REPLICATION_FACTOR" \
-    "${configs[@]}"
+    --config "retention.ms=$RETENTION_MS" \
+    --config "cleanup.policy=$cleanup_policy" \
+    --config "min.insync.replicas=$MIN_ISR"
 }
 
 topic_cleanup_policy() {
@@ -146,16 +138,11 @@ alter_topic_config() {
   local topic="$1"
   local cleanup_policy="$2"
   local attempts="${KAFKA_TOPIC_CONFIG_RETRY_ATTEMPTS:-10}"
-  local add_config
-  add_config="retention.ms=$RETENTION_MS,cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR"
-  if [[ -n "$MESSAGE_TIMESTAMP_AFTER_MAX_MS" ]]; then
-    add_config="$add_config,message.timestamp.after.max.ms=$MESSAGE_TIMESTAMP_AFTER_MAX_MS"
-  fi
 
   for ((i = 1; i <= attempts; i++)); do
     if kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
       --entity-type topics --entity-name "$topic" --alter \
-      --add-config "$add_config"; then
+      --add-config "retention.ms=$RETENTION_MS,cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR"; then
       return 0
     fi
     sleep 1

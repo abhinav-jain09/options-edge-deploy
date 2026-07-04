@@ -19,9 +19,6 @@ data:
   # derives KAFKA_TOPIC_RETENTION_MS from this rendered per-env configmap, so the
   # Kafka Topics stage applies 10h to dev data topics.
   KAFKA_TOPIC_RETENTION_MS: "36000000"
-  # Dev replay can intentionally stamp records ahead of wall-clock time to simulate the
-  # next session; keep Kafka from rejecting those replay records after topic recreate.
-  KAFKA_TOPIC_MESSAGE_TIMESTAMP_AFTER_MAX_MS: "604800000"
   # Dev-only universal retention CAP: 10h. load-kafka-settings.sh exports this, and
   # the HPSF topic create/verify scripts + the Kafka Internal Topics stage cap every
   # topic's retention.ms at this value when set — so ALL dev Kafka topics (data,
