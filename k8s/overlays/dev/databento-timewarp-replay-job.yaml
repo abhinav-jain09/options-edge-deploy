@@ -26,7 +26,10 @@ spec:
       restartPolicy: Never
       containers:
         - name: timewarp-replay
-          image: host.docker.internal:5001/options-edge-databento-feed:dev
+          # Base-registry name (not host.docker.internal:5001) so the deploy pin-transformer —
+          # keyed on the base image name — matches this ref and digest-pins it. The dev overlay's
+          # images: block remaps this to the dev registry for plain kustomize builds.
+          image: 192.168.100.252:5000/options-edge-databento-feed:dev
           imagePullPolicy: Always
           command: ["options-edge-databento-timewarp-replay"]
           envFrom:
