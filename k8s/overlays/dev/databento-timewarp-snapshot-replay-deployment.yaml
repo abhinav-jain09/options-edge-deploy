@@ -25,7 +25,7 @@ spec:
     spec:
       containers:
         - name: timewarp-snapshot-replay
-          image: 192.168.100.252:5000/options-edge-databento-feed:dev
+          image: host.docker.internal:5001/options-edge-databento-feed:dev
           imagePullPolicy: Always
           command: ["options-edge-databento-timewarp-snapshot-replay"]
           envFrom:
@@ -37,9 +37,9 @@ spec:
             - name: TIMEWARP_INPUT_FILE
               value: /historical-data/bt_260626B_input.jsonl
             - name: TIMEWARP_TARGET_TRADE_DATE
-              value: "2026-07-03"
+              value: "2026-07-06"
             - name: TIMEWARP_TARGET_EXPIRY
-              value: "20260703"
+              value: "20260706"
             - name: TIMEWARP_SNAPSHOT_TOPIC
               value: options.databento.raw
             - name: TIMEWARP_SPX_PRICE_TOPIC
@@ -56,10 +56,16 @@ spec:
               value: "true"
             - name: TIMEWARP_SYNTHETIC_PACE_ENABLED
               value: "true"
+            - name: TIMEWARP_SYNTHETIC_GEX_QUOTES_ENABLED
+              value: "true"
             - name: TIMEWARP_HEATMAP_EVENTS_ENABLED
               value: "true"
             - name: TIMEWARP_HEATMAP_EVENTS_TOPIC
               value: options.databento.events.raw
+            - name: TIMEWARP_SNAPSHOT_CLOCK_MODE
+              value: session
+            - name: TIMEWARP_HEATMAP_CLOCK_MODE
+              value: wall
           volumeMounts:
             - name: historical-data
               mountPath: /historical-data

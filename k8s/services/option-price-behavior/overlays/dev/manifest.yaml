@@ -70,7 +70,7 @@ spec:
             - name: OPTION_PRICE_BEHAVIOR_STREAMS_AUTO_OFFSET_RESET
               value: latest
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms512m -Xmx2g
+              value: -Xms1g -Xmx6g
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -96,10 +96,10 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 2Gi
+              memory: 8Gi
             requests:
               cpu: 250m
-              memory: 768Mi
+              memory: 2Gi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
               name: kafka-streams-state
