@@ -65,7 +65,7 @@ spec:
             - name: TIMEWARP_SNAPSHOT_CLOCK_MODE
               value: session
             - name: TIMEWARP_HEATMAP_CLOCK_MODE
-              value: wall
+              value: session
           volumeMounts:
             - name: historical-data
               mountPath: /historical-data
