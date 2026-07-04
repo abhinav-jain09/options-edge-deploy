@@ -301,7 +301,7 @@ wait_topic_records options.databento.gex.strike 1 "${GEX_WARMUP_WAIT_SECONDS:-12
 kube patch job databento-timewarp-replay --type=merge -p '{"spec":{"suspend":false}}'
 
 echo "[replay] allowing Monday-session replay timestamps on delta-flow internal changelogs"
-for topic in $(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list | grep '^options-edge-delta-flow-service-v1-dev-' || true); do
+for topic in $(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list | grep -E '^(options-edge-|options-flow-|options-databento-).*(repartition|changelog)$' || true); do
   allow_future_timestamps "$topic"
 done
 
