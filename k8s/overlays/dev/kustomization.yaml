@@ -60,6 +60,19 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Always
+  # DEV-ONLY: option-price-behavior uses Kafka Streams/RocksDB state. Its JVM heap is
+  # 2g, so a 2Gi pod limit leaves no native/off-heap headroom and the kubelet OOM-kills
+  # it during replay. Give the container enough room without changing service logic.
+  - target:
+      kind: Deployment
+      name: option-price-behavior-service
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 1Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 4Gi
   # DEV-ONLY spx-mission-control auth: base points at the prod Keycloak
   # (https://auth.fullfunding.nl/realms/optionsedge) which dev cannot reach.
   # Override the issuer + JWKS URIs to the local Mac Keycloak (192.168.100.102:8089)

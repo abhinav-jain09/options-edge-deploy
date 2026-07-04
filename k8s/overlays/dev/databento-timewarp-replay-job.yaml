@@ -47,6 +47,10 @@ spec:
               value: session-shift
             - name: TIMEWARP_MAX_RECORDS
               value: "0"
+            - name: TIMEWARP_SORT_BY_EVENT_TIME
+              value: "true"
+            - name: TIMEWARP_SORT_CHUNK_RECORDS
+              value: "25000"
             - name: TIMEWARP_PROGRESS_EVERY
               value: "10000"
           volumeMounts:
@@ -56,9 +60,9 @@ spec:
           resources:
             requests:
               cpu: 500m
-              memory: 512Mi
-            limits:
               memory: 1Gi
+            limits:
+              memory: 2Gi
       volumes:
         - name: historical-data
           hostPath:
