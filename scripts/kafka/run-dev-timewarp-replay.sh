@@ -54,7 +54,8 @@ wait_topics_deleted() {
 
 topic_partitions() {
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$1" 2>/dev/null \
-    | sed -n '1s/.*PartitionCount: \([0-9][0-9]*\).*/\1/p'
+    | sed -n '1s/.*PartitionCount: \([0-9][0-9]*\).*/\1/p' \
+    || true
 }
 
 kafka_config_value() {
