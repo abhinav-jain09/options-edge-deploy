@@ -75,6 +75,7 @@ add_service_scrape raw-to-display-service 8080
 add_service_scrape options-edge-databento-feed 8010
 add_service_scrape databento-volume-aggregator 8080
 add_service_scrape option-price-behavior-service 8080
+add_service_scrape option-price-behavior-service-v2 8080
 add_service_scrape databento-mission-pressure-service 8098
 add_service_scrape databento-mission-sandwich-service 8099
 # DISABLED until further notice (svc replicas pinned to 0, not deployed): add_service_scrape volume-pace-service 8080
