@@ -53,6 +53,39 @@ class OptionPriceBehaviorDeployTest(unittest.TestCase):
             jenkinsfile,
         )
 
+    def test_surface_residual_v2_shadow_is_registered_and_deployed(self):
+        # SURFACE_RESIDUAL_V2 shadow: a second deployment that runs the SAME image as V1 with
+        # OPB_SERVICE_VARIANT=v2. It must be registered in the base kustomization, listed as a
+        # second deployment on the option-price-behavior service, and image-pinned/rolled by
+        # apply.sh through the shared OPTION_PRICE_BEHAVIOR_IMAGE digest.
+        kustomization = (ROOT / "k8s" / "base" / "kustomization.yaml").read_text()
+        deployment = (ROOT / "k8s" / "base" / "option-price-behavior-v2-deployment.yaml").read_text()
+        service = (ROOT / "k8s" / "base" / "option-price-behavior-v2-service.yaml").read_text()
+        services_yaml = (ROOT / "services.yaml").read_text()
+        apply_script = (ROOT / "scripts" / "deploy" / "apply.sh").read_text()
+
+        self.assertIn("option-price-behavior-v2-deployment.yaml", kustomization)
+        self.assertIn("option-price-behavior-v2-service.yaml", kustomization)
+        self.assertIn("name: option-price-behavior-service-v2", deployment)
+        # Container name stays "option-price-behavior" so the shared set-image path matches.
+        self.assertIn("name: option-price-behavior\n", deployment)
+        self.assertIn("value: v2", deployment)  # OPB_SERVICE_VARIANT
+        self.assertIn("OPTION_PRICE_BEHAVIOR_V2_BY_OPTION_TOPIC", deployment)
+        self.assertIn("option-price-behavior-v2-by-option", deployment)
+        self.assertIn("OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC", deployment)
+        self.assertIn("option-price-behavior-v2-session", deployment)
+        self.assertIn("options-edge-option-price-behavior:dev", deployment)
+        self.assertIn("port: 8080", service)
+        # Same image artifact as V1 -> both deployments live on one services.yaml entry.
+        self.assertIn("option-price-behavior-service, option-price-behavior-service-v2", services_yaml)
+        # apply.sh pins the shadow with the SAME digest and rolls/verifies it.
+        self.assertIn(
+            'deployment/option-price-behavior-service-v2 option-price-behavior="$OPTION_PRICE_BEHAVIOR_IMAGE"',
+            apply_script,
+        )
+        self.assertIn("rollout restart deployment/option-price-behavior-service-v2", apply_script)
+        self.assertIn("rollout status deployment/option-price-behavior-service-v2", apply_script)
+
 
 if __name__ == "__main__":
     unittest.main()
