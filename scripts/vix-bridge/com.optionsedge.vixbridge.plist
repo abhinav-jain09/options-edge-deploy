@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Live VIX bridge: prod underlying.vix.price -> dev underlying.vix.price. Runs as a daemon
+  (KeepAlive) so it reconnects across restarts and dev's nightly Kafka wipe.  Install:
+    cp com.optionsedge.vixbridge.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.optionsedge.vixbridge.plist
+  It idles silently when VIX isn't ticking (off-hours); it does real work during market hours,
+  once prod is actually producing VIX (VIX-only ibkr-feed deployed to prod).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.optionsedge.vixbridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/abhinav/development/workspace/options-edge-deploy-main-checkin/scripts/vix-bridge/run-vix-bridge.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SOURCE_BOOTSTRAP</key><string>192.168.100.252:9092</string>
+    <key>TARGET_BOOTSTRAP</key><string>localhost:19092</string>
+    <key>TOPIC</key><string>underlying.vix.price</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/abhinav/oe-ops/logs/vix-bridge.log</string>
+  <key>StandardErrorPath</key><string>/Users/abhinav/oe-ops/logs/vix-bridge.log</string>
+</dict>
+</plist>
