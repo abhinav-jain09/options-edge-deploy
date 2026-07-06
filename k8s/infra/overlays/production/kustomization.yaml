@@ -13,9 +13,10 @@ patches:
   # Prod is a STANDALONE SINGLE-BROKER Kafka node — force RF=1 (moved here from
   # k8s/overlays/production; it patches the shared configmap, which is infra).
   - path: configmap-prod-single-broker-patch.yaml
-  # Prod MUST carry a REAL SPX spot source — base defaults to SYNTHETIC (dev), which the
-  # feed's fail-loud guard forbids in prod. Restores CASCADED for prod only.
-  - path: configmap-prod-real-spot-patch.yaml
+  # Prod feed spot = exactly like dev (APP_PROFILE=dev disables the synthetic-spot guard;
+  # spot keys pinned to the dev SYNTHETIC values). Per explicit user request; overrides the
+  # "prod must carry real data" rule — see the patch file header.
+  - path: configmap-prod-feed-synthetic-spot-patch.yaml
   # Streams-state PVCs: prod k3s provisions with the 'local-path' storage class (matches
   # the 22 live prod PVCs). storageClassName is immutable — base's former hard-coded
   # 'standard' is exactly what failed every prod deploy with "spec: Forbidden: spec is
