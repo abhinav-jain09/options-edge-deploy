@@ -43,6 +43,7 @@ pipeline {
     string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', defaultValue: '', description: 'Strike flow classifier image')
     string(name: 'DELTA_FLOW_IMAGE', defaultValue: '', description: 'Delta flow service image')
     string(name: 'DEALER_LEDGER_IMAGE', defaultValue: '', description: 'Dealer ledger service image')
+    string(name: 'DEALER_LEDGER_CALIBRATION_IMAGE', defaultValue: '', description: 'Dealer ledger calibration service image (scorer + accumulator)')
     string(name: 'STRIKE_LIQUIDITY_HEATMAP_IMAGE', defaultValue: '', description: 'Strike liquidity heatmap service image')
     string(name: 'UNIFIED_SR_IMAGE', defaultValue: '', description: 'Unified S/R image')
     string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', defaultValue: '', description: 'Strike-flow Avro adapter image (unified-sr FLOW producer)')
@@ -128,6 +129,7 @@ pipeline {
     STRIKE_FLOW_CLASSIFIER_IMAGE = "${params.STRIKE_FLOW_CLASSIFIER_IMAGE ?: oeProfile.image('strike-flow-classifier', 'production', 'prod')}"
     DELTA_FLOW_IMAGE = "${params.DELTA_FLOW_IMAGE ?: oeProfile.image('delta-flow', 'production', 'prod')}"
     DEALER_LEDGER_IMAGE = "${params.DEALER_LEDGER_IMAGE ?: oeProfile.image('dealer-ledger', 'production', 'prod')}"
+    DEALER_LEDGER_CALIBRATION_IMAGE = "${params.DEALER_LEDGER_CALIBRATION_IMAGE ?: oeProfile.image('dealer-ledger-calibration', 'production', 'prod')}"
     STRIKE_LIQUIDITY_HEATMAP_IMAGE = "${params.STRIKE_LIQUIDITY_HEATMAP_IMAGE ?: oeProfile.image('strike-liquidity-heatmap', 'production', 'prod')}"
     UNIFIED_SR_IMAGE = "${params.UNIFIED_SR_IMAGE ?: oeProfile.image('unified-sr', 'production', 'prod')}"
     STRIKE_FLOW_AVRO_ADAPTER_IMAGE = "${params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE ?: oeProfile.image('strike-flow-avro-adapter', 'production', 'prod')}"
@@ -741,6 +743,7 @@ void promoteToProduction() {
       string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', value: params.STRIKE_FLOW_CLASSIFIER_IMAGE),
       string(name: 'DELTA_FLOW_IMAGE', value: params.DELTA_FLOW_IMAGE),
       string(name: 'DEALER_LEDGER_IMAGE', value: params.DEALER_LEDGER_IMAGE),
+      string(name: 'DEALER_LEDGER_CALIBRATION_IMAGE', value: params.DEALER_LEDGER_CALIBRATION_IMAGE),
       string(name: 'STRIKE_LIQUIDITY_HEATMAP_IMAGE', value: params.STRIKE_LIQUIDITY_HEATMAP_IMAGE),
       string(name: 'UNIFIED_SR_IMAGE', value: params.UNIFIED_SR_IMAGE),
       string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', value: params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE),
