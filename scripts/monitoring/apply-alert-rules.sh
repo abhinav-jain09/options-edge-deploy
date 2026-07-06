@@ -31,11 +31,19 @@ if [[ ! -f "$SOURCE_RULES_FILE" ]]; then
 fi
 
 # Alerting rules are optional observability config, applied where Prometheus actually runs. On an agent
-# without a local Prometheus config (e.g. the Mac deploy agent) skip gracefully — the workloads are
-# already rolled out by this point and this must not fail the deploy.
+# without a local Prometheus config (e.g. the Mac deploy agent) we skip — but skipping means NO alert
+# rules are installed anywhere, so a release that claims monitoring coverage must be able to REQUIRE the
+# apply. ALLOW_ALERT_RULE_SKIP defaults true (dev/CI agents without local Prometheus); set it false in a
+# production/release context to turn a missing Prometheus config into a hard failure instead of a silent
+# no-op.
+ALLOW_ALERT_RULE_SKIP="${ALLOW_ALERT_RULE_SKIP:-true}"
 if [[ ! -f "$PROMETHEUS_CONFIG_FILE" ]]; then
-  echo "Prometheus config $PROMETHEUS_CONFIG_FILE not present on this agent; skipping alert-rule configuration (non-fatal)."
-  exit 0
+  if [[ "$ALLOW_ALERT_RULE_SKIP" == "true" ]]; then
+    echo "Prometheus config $PROMETHEUS_CONFIG_FILE not present on this agent; skipping alert-rule configuration (ALLOW_ALERT_RULE_SKIP=true, non-fatal)."
+    exit 0
+  fi
+  echo "Prometheus config $PROMETHEUS_CONFIG_FILE not present and ALLOW_ALERT_RULE_SKIP=false — refusing to report success without installing alert rules. Point this at the Prometheus host, or set ALLOW_ALERT_RULE_SKIP=true to skip explicitly." >&2
+  exit 1
 fi
 
 if ! command -v promtool >/dev/null 2>&1; then
@@ -61,8 +69,19 @@ awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
   skip != 1 { print }
 ' "$PROMETHEUS_CONFIG_FILE" >"$base_config"
 
-if grep -qE '^[[:space:]]*rule_files:' "$base_config"; then
-  # There is already a rule_files: key — append our managed entry right after it.
+if grep -qE '^[[:space:]]*rule_files:[[:space:]]*\[' "$base_config"; then
+  # INLINE flow-style rule_files (e.g. `rule_files: ["a.yml"]`). Our marker-block insertion only
+  # supports the block/standalone form; blindly appending a second top-level `rule_files:` would
+  # produce a duplicate key that Prometheus rejects (or silently drop our managed block). Fail clearly
+  # rather than emit invalid/partial config — convert prometheus.yml to the block form, or install yq.
+  echo "prometheus.yml uses inline flow-style 'rule_files: [...]' which this script cannot safely merge." >&2
+  echo "Convert it to block form:" >&2
+  echo "  rule_files:" >&2
+  echo "    - existing-rule.yml" >&2
+  echo "then re-run. (Or extend this script with a YAML-aware tool such as yq.)" >&2
+  exit 1
+elif grep -qE '^[[:space:]]*rule_files:[[:space:]]*$' "$base_config"; then
+  # Block/standalone `rule_files:` header — append our managed entry right after it.
   awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" -v path="$PROMETHEUS_RULES_FILE" '
     { print }
     $0 ~ /^[[:space:]]*rule_files:[[:space:]]*$/ && !done {
@@ -81,6 +100,13 @@ else
     echo "  - $PROMETHEUS_RULES_FILE"
     echo "$END_MARKER"
   } >>"$next_config"
+fi
+
+# Guard against silently emitting a config that does NOT reference our rule file (e.g. an unexpected
+# rule_files shape slipped past the checks above). The managed block MUST be present now.
+if ! grep -qF "$BEGIN_MARKER" "$next_config" || ! grep -qF "$PROMETHEUS_RULES_FILE" "$next_config"; then
+  echo "Refusing to install: the managed rule_files block was not inserted into the rendered prometheus.yml (unsupported existing rule_files shape)." >&2
+  exit 1
 fi
 
 install_rules_and_config() {
@@ -115,14 +141,36 @@ else
 fi
 
 # Verify Prometheus actually loaded the delta-flow rule groups.
+loaded=false
 for _ in $(seq 1 20); do
   if body="$(curl -fsS "$PROMETHEUS_URL/api/v1/rules" 2>/dev/null)" \
      && printf '%s' "$body" | grep -q 'delta-flow.health'; then
     echo "Prometheus loaded delta-flow alert rules"
-    exit 0
+    loaded=true
+    break
   fi
   sleep 3
 done
+if [[ "$loaded" != "true" ]]; then
+  echo "Prometheus did not report the delta-flow.health rule group after reload" >&2
+  exit 1
+fi
 
-echo "Prometheus did not report the delta-flow.health rule group after reload" >&2
-exit 1
+# Scrape smoke check: the rules reference metrics under job="options-edge-delta-flow-service". Confirm
+# Prometheus is actually SCRAPING that job and the metric family exists — otherwise the rules are dead
+# (they reference series that never appear). This is a WARNING, not a failure: off-hours the service may
+# be scaled to 0, so absence here is not necessarily a config error, but it must be visible in the log.
+scrape_series_count() {
+  local q="$1" body
+  body="$(curl -fsS --get "$PROMETHEUS_URL/api/v1/query" --data-urlencode "query=$q" 2>/dev/null)" || return 1
+  # count elements in data.result[] without needing jq
+  printf '%s' "$body" | grep -o '"metric"' | wc -l | tr -d ' '
+}
+up_n="$(scrape_series_count 'up{job="options-edge-delta-flow-service"}' || echo 0)"
+metric_n="$(scrape_series_count 'delta_flow_kafka_streams_state{job="options-edge-delta-flow-service"}' || echo 0)"
+if [[ "${up_n:-0}" -ge 1 && "${metric_n:-0}" -ge 1 ]]; then
+  echo "Scrape smoke OK: delta-flow target up ($up_n) and delta_flow_* metrics present ($metric_n)."
+else
+  echo "WARNING: delta-flow rules loaded, but Prometheus scrape for job=options-edge-delta-flow-service looks absent (up=$up_n, delta_flow_kafka_streams_state=$metric_n). If the service is running, check the scrape config (apply-prometheus-scrapes.sh) and the job label — the alerts are inert until the target is scraped." >&2
+fi
+exit 0

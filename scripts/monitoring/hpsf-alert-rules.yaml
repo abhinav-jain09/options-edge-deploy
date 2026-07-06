@@ -129,15 +129,26 @@ groups:
         annotations:
           summary: "delta-flow produced a NON-FINITE signed-delta on {{ $labels.instance }} (math/guard defect)"
       - alert: DeltaFlowNoFreshEvents
-        # Gate to RTH (13:30-20:00 UTC) in routing; no trades seen while it should flow.
-        expr: increase(delta_flow_trades_seen_total{job="options-edge-delta-flow-service"}[10m]) == 0
+        # No trades seen while it should flow. The market_hours_only label is only a routing HINT — it
+        # does NOT gate on its own, so we ALSO gate here in PromQL as defense-in-depth: fire only on
+        # weekdays during regular US options hours. NB this is a COARSE UTC gate — it covers RTH under
+        # BOTH DST regimes (EDT 13:30-20:00 UTC and EST 14:30-21:00 UTC) by using 13:30-21:00 UTC, and
+        # it is NOT holiday/early-close aware. The correct long-term gate is a service-emitted
+        # delta_flow_market_open metric; replace the time predicate with it once that exists.
+        expr: |
+          (increase(delta_flow_trades_seen_total{job="options-edge-delta-flow-service"}[10m]) == 0)
+            and on() (day_of_week() > 0)
+            and on() (day_of_week() < 6)
+            and on() (
+              (hour() == 13 and minute() >= 30) or (hour() > 13 and hour() < 21)
+            )
         for: 10m
         labels:
           severity: warning
           service: delta-flow
           market_hours_only: "true"
         annotations:
-          summary: "delta-flow saw no trades in 10m on {{ $labels.instance }} (during RTH)"
+          summary: "delta-flow saw no trades in 10m on {{ $labels.instance }} (weekday RTH, coarse UTC gate)"
 
   - name: delta-flow.input-quality
     interval: 30s
