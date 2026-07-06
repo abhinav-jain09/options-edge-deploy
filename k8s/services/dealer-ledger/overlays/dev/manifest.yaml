@@ -91,8 +91,6 @@ spec:
               value: "false"
             - name: DEALER_LEDGER_UI_VISIBLE
               value: "true"
-            # SHADOW = signal is computed + shown but explicitly NOT advisory/tradeable (dev visibility
-            # before the calibration engine earns LIVE via Wilson-passing evidence). ADVISORY stays false.
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
               value: SHADOW
             - name: JAVA_TOOL_OPTIONS
