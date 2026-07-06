@@ -87,7 +87,7 @@ pipeline {
                 string(name: 'BUILD_PLATFORM',               value: env.BUILD_PLATFORM),
                 booleanParam(name: 'PUSH_IMAGE',             value: true),
                 booleanParam(name: 'RUN_LOCAL',              value: false),
-                string(name: 'IMAGE',                        value: "${env.IMAGE_REGISTRY}/options-edge-web:dev"),
+                string(name: 'IMAGE',                        value: "${env.IMAGE_REGISTRY}/options-edge-web:${params.ENVIRONMENT == 'production' ? 'prod' : 'dev'}"),
                 string(name: 'VITE_WS_URL',                  value: env.WEB_WS_URL),
                 string(name: 'APP_FEED_GATEWAY_WS_URL',      value: env.WEB_WS_URL),
                 string(name: 'VITE_API_BASE_URL',            value: env.WEB_API_BASE),
