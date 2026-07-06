@@ -78,7 +78,8 @@ def run(source, target, topic, prime, poll_ms):
     ensure_target_topic(target, topic, len(tps))
     producer = KafkaProducer(
         bootstrap_servers=target.split(","),
-        acks="all", linger_ms=10, compression_type="lz4",
+        acks="all", linger_ms=10,   # no compression: VIX msgs are tiny + infrequent, and the
+                                     # pure-python venv has no lz4/snappy codec
         key_serializer=lambda b: b, value_serializer=lambda b: b,
     )
 
