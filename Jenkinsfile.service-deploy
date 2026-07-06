@@ -9,12 +9,13 @@
 //   digest-pin → apply ONLY that workload → rollout each of its Deployments → health gate
 //   → rollback command in the log.
 //
-// Image builds: processing images are built by the options-edge-processing job (all
-// modules in one reactor build). BUILD_IMAGES=true triggers it first for this env;
-// leave false to deploy the images already in the env registry (the fast path).
+// Image builds: BUILD_IMAGES=true builds+pushes ONLY the selected service's image first
+// (options-edge-processing with BUILD_TARGET=<this service's image>, i.e. `mvn -pl <module> -am`
+// then build just that image — a few minutes, not the whole ~25-image reactor). Leave false to
+// deploy the image already in the env registry (the fastest path).
 // EXCEPTION databento-feed: its image builds in its OWN job
 // (options-edge-databento-feed-deploy) — run that first, then deploy here with
-// BUILD_IMAGES=false (the processing reactor does not build the feed image).
+// BUILD_IMAGES=false (the processing reactor has no feed module).
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
@@ -31,7 +32,7 @@ pipeline {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
     booleanParam(name: 'BUILD_IMAGES', defaultValue: false,
-      description: 'Build+push ALL processing images for this env first (options-edge-processing, ~15-20 min). false = deploy the image already in the registry (fast path).')
+      description: 'Build+push ONLY the selected service\'s image first (options-edge-processing with BUILD_TARGET=<this service>, mvn -pl <module> -am — a few minutes, not the whole reactor). false = deploy the image already in the registry (fastest path).')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + server-side validate only; nothing changes.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
@@ -39,9 +40,9 @@ pipeline {
   }
   options {
     disableConcurrentBuilds()
-    // 120 min: BUILD_IMAGES=true triggers the full processing reactor build (~25-45 min
-    // incl. queue/remote-build time); the old 45-min cap killed the build mid-flight
-    // ("Cancelling nested steps due to timeout" — aborted runs #5/#6).
+    // 120 min: a single-service BUILD_IMAGES build is only a few minutes, but the cap stays
+    // generous to absorb queue/remote-build time (prod builds run on .252 over ssh). The old
+    // 45-min cap killed builds mid-flight ("Cancelling nested steps due to timeout" — runs #5/#6).
     timeout(time: 120, unit: 'MINUTES')
   }
   environment {
@@ -59,17 +60,35 @@ pipeline {
         '''
       }
     }
-    stage('Build processing images') {
+    stage('Build image (this service only)') {
       when { expression { params.BUILD_IMAGES && !params.DEPLOY_DRY_RUN } }
       steps {
-        build job: 'options-edge-processing',
-              parameters: [
-                string(name: 'ENVIRONMENT',        value: params.ENVIRONMENT),
-                string(name: 'PROCESSING_BRANCH',  value: 'main'),
-                string(name: 'CONTRACTS_BRANCH',   value: 'main'),
-                booleanParam(name: 'PUSH_IMAGES',  value: true)
-              ],
-              wait: true, propagate: true
+        script {
+          // Build ONLY the selected service's image (fast path), not the whole processing set.
+          // Resolve the service's image name from services.yaml and pass it as BUILD_TARGET; the
+          // processing job maps image->maven module and runs `mvn -pl <module> -am`, then builds+pushes
+          // just that image. SERVICE_PARAM is read by the shell (env), never Groovy-interpolated into the
+          // script text (injection-safe, matches the rest of these jobs).
+          // NOTE: databento-feed has no processing module (it builds in options-edge-databento-feed-deploy);
+          // selecting it with BUILD_IMAGES=true fails fast in the processing job with the valid list.
+          def image = sh(
+            script: 'set -euo pipefail; yq -r ".services[] | select(.name == \\"$SERVICE_PARAM\\") | .image" services.yaml',
+            returnStdout: true
+          ).trim()
+          if (!image || image == 'null') {
+            error("service-deploy: could not resolve an image for SERVICE='${env.SERVICE_PARAM}' from services.yaml")
+          }
+          echo "Building ONLY ${env.SERVICE_PARAM} -> BUILD_TARGET=${image}"
+          build job: 'options-edge-processing',
+                parameters: [
+                  string(name: 'ENVIRONMENT',        value: params.ENVIRONMENT),
+                  string(name: 'BUILD_TARGET',       value: image),
+                  string(name: 'PROCESSING_BRANCH',  value: 'main'),
+                  string(name: 'CONTRACTS_BRANCH',   value: 'main'),
+                  booleanParam(name: 'PUSH_IMAGES',  value: true)
+                ],
+                wait: true, propagate: true
+        }
       }
     }
     stage('Deploy (service-scoped)') {
