@@ -1,0 +1,88 @@
+// Jenkinsfile.replay — standalone, ON-DEMAND replay deploy (job: replay-deploy).
+//
+// Deploys ONLY the k8s/replay/<env> slice: the databento timewarp replay Job + the
+// snapshot-replay Deployment. This is deliberately SEPARATE from the monolithic dev/prod
+// bring-up (options-edge-deploy) because:
+//   * a Kubernetes Job's spec.template is IMMUTABLE — re-applying it inside the monolith
+//     aborts the WHOLE deploy the moment the image/config changes ("field is immutable");
+//   * re-running a historical replay on every deploy risks injecting stale data into live
+//     topics. Replay must be a deliberate, explicit action.
+//
+// Auth: the cluster enforces a jenkins-only admission policy, so this uses the
+// jenkins-deployer identity via oeProfile(ENVIRONMENT).kubeconfigDeployer (same single
+// source of truth as options-edge-deploy / web-service-deploy). The namespace and the
+// shared options-edge-config ConfigMap the replay consumes are created by the monolith /
+// common-infra; this job only (re)creates the replay workloads.
+pipeline {
+  agent { label 'hpsf-replay-mac' }   // the dev-Mac Jenkins agent (same as options-edge-deploy)
+
+  options {
+    disableConcurrentBuilds()          // plugin-free lock: never two replays at once
+    timeout(time: 30, unit: 'MINUTES')
+  }
+
+  parameters {
+    // Only dev has a replay slice today; keep it a choice so adding prod/experiment later
+    // is a one-line change plus a k8s/replay/<env> dir.
+    choice(name: 'ENVIRONMENT', choices: ['dev'],
+      description: 'Target environment — selects k8s/replay/<env> and the deployer kubeconfig (oeProfile).')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
+      description: 'true = render + server-side validate only; changes nothing.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+  }
+
+  environment {
+    KUBECONFIG  = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT = "${params.ENVIRONMENT}"
+  }
+
+  stages {
+    stage('Resolve profile') {
+      steps {
+        script {
+          echo "replay-deploy: env=${env.ENVIRONMENT} kubeconfig=${env.KUBECONFIG} dryRun=${params.DEPLOY_DRY_RUN}"
+        }
+      }
+    }
+
+    stage('Deploy replay') {
+      steps {
+        sh '''
+          set -euo pipefail
+          test -n "${KUBECONFIG:-}" || { echo "FATAL: KUBECONFIG unset (empty oeProfile deployer?)" >&2; exit 1; }
+          test -f "$KUBECONFIG"     || { echo "FATAL: deployer kubeconfig $KUBECONFIG not found on agent" >&2; exit 1; }
+          overlay="k8s/replay/${ENVIRONMENT}"
+          test -d "$overlay"        || { echo "FATAL: no replay slice at $overlay" >&2; exit 1; }
+
+          echo "=== rendered replay workloads ==="
+          kubectl --kubeconfig "$KUBECONFIG" kustomize "$overlay" \
+            | { grep -E '^(kind|  name|          image):' || true; }
+
+          if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+            echo "DEPLOY_DRY_RUN=true: server-side validate only, no changes."
+            kubectl --kubeconfig "$KUBECONFIG" apply -k "$overlay" --dry-run=server
+            exit 0
+          fi
+
+          # A Job's pod template is immutable: delete any prior run so a changed image/config
+          # is honored. This is the whole reason replay can't live in the monolith. Recreating
+          # the Job re-runs the replay — which is the intended, deliberate action here.
+          kubectl --kubeconfig "$KUBECONFIG" -n options-edge \
+            delete job/databento-timewarp-replay --ignore-not-found=true
+
+          kubectl --kubeconfig "$KUBECONFIG" apply -k "$overlay"
+
+          echo "=== replay workloads after apply ==="
+          kubectl --kubeconfig "$KUBECONFIG" -n options-edge get \
+            job/databento-timewarp-replay deploy/databento-timewarp-snapshot-replay
+        '''
+      }
+    }
+  }
+
+  post {
+    success { echo "replay-deploy (${params.ENVIRONMENT}) OK — timewarp replay Job (re)created and snapshot-replay Deployment applied." }
+    failure { echo "replay-deploy (${params.ENVIRONMENT}) FAILED — see the stage log above." }
+  }
+}
