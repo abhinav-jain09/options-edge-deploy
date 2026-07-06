@@ -173,7 +173,7 @@ metadata:
   name: strike-flow-classifier-ibkr
   namespace: options-edge
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: strike-flow-classifier-ibkr
