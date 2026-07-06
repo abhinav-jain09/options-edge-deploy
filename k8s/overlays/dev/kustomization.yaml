@@ -177,6 +177,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-delta-flow
     newName: host.docker.internal:5001/options-edge-delta-flow
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-dealer-ledger
+    newName: host.docker.internal:5001/options-edge-dealer-ledger
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-strike-liquidity-heatmap
     newName: host.docker.internal:5001/options-edge-strike-liquidity-heatmap
     newTag: dev

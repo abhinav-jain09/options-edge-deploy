@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dealer-ledger-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: dealer-ledger-service
+    app.kubernetes.io/component: dealer-ledger-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dealer-ledger-service
+  ports:
+    - name: health
+      port: 8113
+      targetPort: health

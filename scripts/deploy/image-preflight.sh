@@ -29,6 +29,7 @@
             SPX_MISSION_CONTROL_IMAGE=$SPX_MISSION_CONTROL_IMAGE
             STRIKE_FLOW_CLASSIFIER_IMAGE=$STRIKE_FLOW_CLASSIFIER_IMAGE
             DELTA_FLOW_IMAGE=$DELTA_FLOW_IMAGE
+            DEALER_LEDGER_IMAGE=$DEALER_LEDGER_IMAGE
             STRIKE_LIQUIDITY_HEATMAP_IMAGE=$STRIKE_LIQUIDITY_HEATMAP_IMAGE
             UNIFIED_SR_IMAGE=$UNIFIED_SR_IMAGE
             STRIKE_FLOW_AVRO_ADAPTER_IMAGE=$STRIKE_FLOW_AVRO_ADAPTER_IMAGE
@@ -41,6 +42,11 @@
             delta-flow-service)
               images="
                 DELTA_FLOW_IMAGE=$DELTA_FLOW_IMAGE
+              "
+              ;;
+            dealer-ledger-service)
+              images="
+                DEALER_LEDGER_IMAGE=$DEALER_LEDGER_IMAGE
               "
               ;;
             strike-liquidity-heatmap-service)

@@ -16,6 +16,7 @@ images:
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:dev
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:dev
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:dev
+  dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:dev
   strike-liquidity-heatmap-service: host.docker.internal:5001/options-edge-strike-liquidity-heatmap:dev
   spx-mission-control-service: 192.168.100.252:5000/options-edge-spx-mission-control:dev
   unified-sr-service: 192.168.100.252:5000/options-edge-unified-sr:dev

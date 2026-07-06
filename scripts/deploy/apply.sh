@@ -60,6 +60,43 @@
               scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
               exit 0
               ;;
+            dealer-ledger-service)
+              DEALER_LEDGER_IMAGE="$(pin_ref "$DEALER_LEDGER_IMAGE")" || {
+                echo "FATAL: cannot resolve registry digest for DEALER_LEDGER_IMAGE=$DEALER_LEDGER_IMAGE; aborting before any kubectl mutation." >&2
+                exit 1
+              }
+              export DEALER_LEDGER_IMAGE
+              echo "pinned DEALER_LEDGER_IMAGE -> $DEALER_LEDGER_IMAGE"
+              rewrite_images_env "$JENKINS_WORK_DIR/options-edge-images.env"
+              _target_render="$JENKINS_WORK_DIR/options-edge-${ENVIRONMENT}-dealer-ledger.yaml"
+              kubectl kustomize "k8s/overlays/${ENVIRONMENT}" \
+                | yq '
+                    select(
+                      (.kind == "Namespace" and .metadata.name == "options-edge")
+                      or (.kind == "ConfigMap" and .metadata.name == "options-edge-config")
+                      or (.kind == "Service" and .metadata.name == "dealer-ledger-service")
+                      or (.kind == "Deployment" and .metadata.name == "dealer-ledger-service")
+                    )
+                  ' >"$_target_render"
+              yq -i '(. | select(.kind == "Deployment" and .metadata.name == "dealer-ledger-service").spec.template.spec.containers[] | select(.name == "dealer-ledger").image) = strenv(DEALER_LEDGER_IMAGE)' "$_target_render"
+              _unpinned_rendered="$(yq -r 'select(.kind=="Deployment") | (.spec.template.spec.containers[].image), (.spec.template.spec.initContainers[]?.image)' "$_target_render" \
+                | { grep '/options-edge-' || true; } | { grep -v '@sha256:' || true; })"
+              if [ -n "$_unpinned_rendered" ]; then
+                echo "FATAL: rendered Dealer Ledger Deployment image is not digest-pinned before apply:" >&2
+                printf '%s\n' "$_unpinned_rendered" >&2
+                echo "aborting before any kubectl mutation." >&2
+                exit 1
+              fi
+              if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
+                echo "DEPLOY_DRY_RUN=true: validating Dealer Ledger targeted apply without changing runtime resources."
+                kubectl apply --dry-run=server -f "$_target_render"
+                exit 0
+              fi
+              kubectl apply -f "$_target_render"
+              kubectl -n options-edge rollout status deployment/dealer-ledger-service --timeout=600s
+              scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
+              exit 0
+              ;;
             strike-liquidity-heatmap-service)
               STRIKE_LIQUIDITY_HEATMAP_IMAGE="$(pin_ref "$STRIKE_LIQUIDITY_HEATMAP_IMAGE")" || {
                 echo "FATAL: cannot resolve registry digest for STRIKE_LIQUIDITY_HEATMAP_IMAGE=$STRIKE_LIQUIDITY_HEATMAP_IMAGE; aborting before any kubectl mutation." >&2
@@ -123,7 +160,7 @@
             IBKR_FEED_IMAGE INTEGRATION_TEST_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             UNUSUAL_WHALES_GEX_HISTORY_IMAGE UNUSUAL_WHALES_GEX_IMAGE VOLUME_PACE_IMAGE VOLUME_SANDWICH_IMAGE DATABENTO_GEX_HISTORY_IMAGE \
-            DELTA_FLOW_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE; do
+            DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
@@ -257,6 +294,7 @@ EOF
           kubectl -n options-edge set image deployment/strike-flow-classifier-databento strike-flow-classifier="$STRIKE_FLOW_CLASSIFIER_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-classifier-ibkr strike-flow-classifier="$STRIKE_FLOW_CLASSIFIER_IMAGE"
           kubectl -n options-edge set image deployment/delta-flow-service delta-flow="$DELTA_FLOW_IMAGE"
+          kubectl -n options-edge set image deployment/dealer-ledger-service dealer-ledger="$DEALER_LEDGER_IMAGE"
           kubectl -n options-edge set image deployment/strike-liquidity-heatmap-service strike-liquidity-heatmap="$STRIKE_LIQUIDITY_HEATMAP_IMAGE"
           kubectl -n options-edge set image deployment/spx-mission-control-service spx-mission-control="$SPX_MISSION_CONTROL_IMAGE"
           kubectl -n options-edge set image deployment/unified-sr-service unified-sr="$UNIFIED_SR_IMAGE"
@@ -293,6 +331,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/strike-flow-classifier-databento
           kubectl -n options-edge rollout restart deployment/strike-flow-classifier-ibkr
           kubectl -n options-edge rollout restart deployment/delta-flow-service
+          kubectl -n options-edge rollout restart deployment/dealer-ledger-service
           kubectl -n options-edge rollout restart deployment/strike-liquidity-heatmap-service
           kubectl -n options-edge rollout restart deployment/spx-mission-control-service
           kubectl -n options-edge rollout restart deployment/unified-sr-service
@@ -330,6 +369,7 @@ EOF
           kubectl -n options-edge rollout status deployment/strike-flow-classifier-databento --timeout=600s
           kubectl -n options-edge rollout status deployment/strike-flow-classifier-ibkr --timeout=600s
           kubectl -n options-edge rollout status deployment/delta-flow-service --timeout=600s
+          kubectl -n options-edge rollout status deployment/dealer-ledger-service --timeout=600s
           kubectl -n options-edge rollout status deployment/strike-liquidity-heatmap-service --timeout=600s
           kubectl -n options-edge rollout status deployment/spx-mission-control-service --timeout=600s
           kubectl -n options-edge rollout status deployment/unified-sr-service --timeout=600s

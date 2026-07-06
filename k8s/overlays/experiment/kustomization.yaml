@@ -109,6 +109,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-option-price-behavior
     newName: host.docker.internal:5001/options-edge-option-price-behavior
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-dealer-ledger
+    newName: host.docker.internal:5001/options-edge-dealer-ledger
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-mission-pace
     newName: host.docker.internal:5001/options-edge-databento-mission-pace
     newTag: dev
