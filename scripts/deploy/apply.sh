@@ -263,7 +263,7 @@ EOF
             --patch "$(cat "$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json")"
           if kubectl -n options-edge get configmap options-edge-databento-feed-config >/dev/null 2>&1; then
             cat >"$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json" <<EOF
-{"data":{"APP_PROFILE":"$databento_feed_profile","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","DATABENTO_EXPIRY":"$RESOLVED_DATABENTO_EXPIRY","DATABENTO_MARKET_OPEN_ALIGNMENT":"$databento_market_open_alignment","DATABENTO_USE_LIVE_REPLAY":"true"}}
+{"data":{"APP_PROFILE":"$databento_feed_profile","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","DATABENTO_EXPIRY":"$RESOLVED_DATABENTO_EXPIRY","DATABENTO_MARKET_OPEN_ALIGNMENT":"$databento_market_open_alignment","DATABENTO_USE_LIVE_REPLAY":"false"}}
 EOF
             kubectl -n options-edge patch configmap options-edge-databento-feed-config \
               --type merge \
