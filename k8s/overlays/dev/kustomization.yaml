@@ -10,8 +10,12 @@ resources:
   # (k8s/services/web/overlays/dev) mirrors them — sync is enforced by
   # scripts/ci/validate-services.sh render equivalence.
   - ../../services/web/base
-  - databento-timewarp-replay-job.yaml
-  - databento-timewarp-snapshot-replay-deployment.yaml
+  # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
+  # here. They moved to k8s/replay/dev and now deploy on-demand via the dedicated
+  # `replay-deploy` job (Jenkinsfile.replay) — OUT of the dev/prod bring-up path. A Job's
+  # pod template is immutable, so re-applying it inside the monolith aborted the whole
+  # deploy whenever the image/config changed; and re-running a historical replay on every
+  # deploy risks polluting live topics. Keep replay a separate, deliberate action.
 patches:
   - path: streams-processing-guarantee-dev-patch.yaml
   - path: web-dev-env-patch.yaml
