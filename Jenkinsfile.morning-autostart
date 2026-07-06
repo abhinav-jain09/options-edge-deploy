@@ -1,0 +1,75 @@
+// Morning AUTOSTART for OptionsEdge prod — brings the stack back UP on trading-day
+// mornings (08:00 ET, Mon-Fri, ~90 min before the 09:30 open). It is the inverse of
+// Jenkinsfile.offhours-clean-slate's scale-DOWN and closes the gap where prod, once
+// scaled to a clean slate off-hours, stayed dead through the weekend with nothing to
+// bring it back.
+//
+// Runs scripts/ops/morning-autostart.sh ON the prod host over SSH — the SAME
+// Jenkins->SSH model as Jenkinsfile.offhours-clean-slate / kafka-reset. A native k8s
+// CronJob cannot do this: the jenkins-only admission policy denies batch/Job creation
+// AND apps/deployments/scale to every principal except the jenkins-deployer SA, so the
+// script impersonates jenkins-deployer (--as) for the scale ops.
+//
+// NON-DESTRUCTIVE: only scales Deployments (up-set -> 1, keep-at-0 set -> 0). It never
+// deletes/purges topics, PVCs, DB rows or logs. The script's trading-day guard no-ops
+// on holidays (the cron already restricts to Mon-Fri).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+
+  parameters {
+    booleanParam(name: 'ENABLED', defaultValue: true,
+      description: 'Actually scale. Uncheck for a dry log-only run (reports what it would do, changes nothing).')
+    choice(name: 'ENVIRONMENT', choices: ['prod'],
+      description: 'Target env. Prod only — dev has its own bring-up (dev-cleanup start / 09:00 ET launchd).')
+    string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
+      description: 'SSH target for prod (k3s is local there; scale ops impersonate jenkins-deployer).')
+  }
+
+  triggers {
+    // 08:00 America/New_York, Mon-Fri. The script's calendar guard additionally
+    // no-ops on market holidays, so a holiday Monday leaves prod down.
+    cron('''TZ=America/New_York
+0 8 * * 1-5''')
+  }
+
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 15, unit: 'MINUTES')
+  }
+
+  environment {
+    ENABLED     = "${params.ENABLED}"
+    ENVIRONMENT = "${params.ENVIRONMENT}"
+  }
+
+  stages {
+    stage('Morning autostart (prod)') {
+      when { expression { params.ENVIRONMENT == 'prod' } }
+      steps {
+        withCredentials([
+          string(credentialsId: 'offhours-discord-webhook', variable: 'DISCORD_WEBHOOK_URL'),
+        ]) {
+          sh '''
+            set -euo pipefail
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${PROD_HOST}" 'mkdir -p ~/autostart/jenkins ~/autostart/ops'
+            scp -o BatchMode=yes scripts/ops/morning-autostart.sh   "${PROD_HOST}:/home/abhinav/autostart/ops/morning-autostart.sh"
+            scp -o BatchMode=yes scripts/jenkins/market_calendar.py "${PROD_HOST}:/home/abhinav/autostart/jenkins/market_calendar.py"
+            echo "Running morning autostart on ${PROD_HOST} (ENABLED=${ENABLED})"
+            ssh -o BatchMode=yes "${PROD_HOST}" \
+              "chmod +x ~/autostart/ops/morning-autostart.sh && \
+               CALENDAR_DIR=~/autostart/jenkins \
+               ENABLED='${ENABLED}' EXPECTED_ENV='prod' \
+               DISCORD_WEBHOOK_URL='${DISCORD_WEBHOOK_URL:-}' \
+               ~/autostart/ops/morning-autostart.sh"
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      echo 'Morning autostart failed or was aborted by a guard. Verify: kubectl -n options-edge get deploy'
+    }
+  }
+}
