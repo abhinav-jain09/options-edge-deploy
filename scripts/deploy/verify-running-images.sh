@@ -53,6 +53,7 @@ IMAGE_MAP = {
     ("strike-flow-classifier-ibkr", "strike-flow-classifier"): "STRIKE_FLOW_CLASSIFIER_IMAGE",
     ("delta-flow-service", "delta-flow"): "DELTA_FLOW_IMAGE",
     ("strike-liquidity-heatmap-service", "strike-liquidity-heatmap"): "STRIKE_LIQUIDITY_HEATMAP_IMAGE",
+    ("dealer-ledger-service", "dealer-ledger"): "DEALER_LEDGER_IMAGE",
     ("spx-mission-control-service", "spx-mission-control"): "SPX_MISSION_CONTROL_IMAGE",
     ("unified-sr-service", "unified-sr"): "UNIFIED_SR_IMAGE",
     ("strike-flow-avro-adapter", "strike-flow-avro-adapter"): "STRIKE_FLOW_AVRO_ADAPTER_IMAGE",
@@ -66,6 +67,8 @@ elif deploy_target == "delta-flow-service":
     target_deployments = {"delta-flow-service"}
 elif deploy_target == "strike-liquidity-heatmap-service":
     target_deployments = {"strike-liquidity-heatmap-service"}
+elif deploy_target == "dealer-ledger-service":
+    target_deployments = {"dealer-ledger-service"}
 else:
     print(f"FATAL: unsupported DEPLOY_TARGET={deploy_target}", file=sys.stderr)
     sys.exit(1)
