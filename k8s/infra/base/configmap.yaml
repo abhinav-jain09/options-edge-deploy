@@ -25,6 +25,10 @@ data:
   IB_MAX_STRIKES: "43"
   IB_USE_DELAYED_DATA: "true"
   IB_GENERIC_TICKS: 100,101,104,106
+  # VIX-only: skip the SPX underlying + option-chain subscriptions and publish only
+  # underlying.vix.price. We only want VIX from IBKR (SPX chain/spot come from Databento).
+  # ibkr-feed runs on prod only; dev stays scaled to 0 and gets VIX via the prod->dev bridge.
+  IBKR_CHAIN_ENABLED: "false"
   IBKR_VIX_PRICE_ENABLED: "true"
   IBKR_VIX_SYMBOL: VIX
   IBKR_VIX_EXCHANGE: CBOE
