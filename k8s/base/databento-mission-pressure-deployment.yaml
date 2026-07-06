@@ -12,7 +12,10 @@ metadata:
     app.kubernetes.io/name: databento-mission-pressure-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # DISABLED until further notice (all envs, 2026-07-06 per Abhinav): its Streams repartition topic
+  # (partial-by-market, retention.ms=-1) flooded the dev disk to 100% (~618 GB on 2 hot partitions).
+  # Held at 0 in dev+prod until repartition retention / hot-partition is fixed.
+  replicas: 0
   strategy:
     type: Recreate
   selector:

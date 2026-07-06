@@ -12,7 +12,9 @@ metadata:
     app.kubernetes.io/name: databento-mission-pace-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # DISABLED until further notice (all envs, 2026-07-06 per Abhinav): mission-pace held at 0 alongside
+  # mission-pressure (its Streams repartition topic flooded the dev disk to 100%). Kept down in dev+prod.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
