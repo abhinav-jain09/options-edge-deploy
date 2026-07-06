@@ -296,4 +296,8 @@ spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
-      storage: 20Gi
+      # 100Gi to match the live claim and the 5 sibling streams-state PVCs. PVC size
+      # is immutable except growth on a bound claim, so a manifest value below the
+      # live 100Gi makes `kubectl apply -k` fail closed ("spec is immutable") and
+      # aborts the monolithic deploy. Keep in lockstep with reality.
+      storage: 100Gi
