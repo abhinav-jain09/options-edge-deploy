@@ -16,6 +16,8 @@ images:
   strike-flow-classifier-service: ghcr.io/abhinav-jain09/options-edge-strike-flow-classifier:production
   delta-flow-service: ghcr.io/abhinav-jain09/options-edge-delta-flow:production
   dealer-ledger-service: ghcr.io/abhinav-jain09/options-edge-dealer-ledger:production
+  dealer-ledger-calibration-scorer: ghcr.io/abhinav-jain09/options-edge-dealer-ledger-calibration:production
+  dealer-ledger-calibration-accumulator: ghcr.io/abhinav-jain09/options-edge-dealer-ledger-calibration:production
   pin-postgres-writer: ghcr.io/abhinav-jain09/options-edge-pin-postgres-writer:production
   strike-liquidity-heatmap-service: ghcr.io/abhinav-jain09/options-edge-strike-liquidity-heatmap:production
   spx-mission-control-service: ghcr.io/abhinav-jain09/options-edge-spx-mission-control:production
