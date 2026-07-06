@@ -1,0 +1,22 @@
+# PROD feed spot = EXACTLY like dev, per explicit user request (2026-07-06).
+#
+# The base databento-feed config already defaults the spot keys to SYNTHETIC (dev values); the
+# only thing that made prod differ is APP_PROFILE=prod, which trips the feed's fail-loud guard
+# (config.py: synthetic spot forbidden when runtime_profile in {prod,production}). To run prod's
+# feed the same way dev does, set APP_PROFILE=dev here so that guard does not fire, and pin the
+# spot keys to the dev values explicitly.
+#
+# NOTE: this intentionally OVERRIDES the "prod must carry real data" SSOT rule — prod's SPX spot
+# is now the SYNTHETIC (option-parity-derived) value, not a real index price, so every downstream
+# number is built on a derived spot. APP_PROFILE only gates the feed's spot/replay guards
+# (verified) — it does NOT change Kafka RF, credentials, or topics. To go back to real data,
+# restore APP_PROFILE=prod + DATABENTO_SPOT_SOURCE/HPSF_SPX_SPOT_SOURCE=CASCADED.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-databento-feed-config
+  namespace: options-edge
+data:
+  APP_PROFILE: dev
+  DATABENTO_SPOT_SOURCE: SYNTHETIC
+  HPSF_SPX_SPOT_SOURCE: SYNTHETIC_OPTION_SPOT
