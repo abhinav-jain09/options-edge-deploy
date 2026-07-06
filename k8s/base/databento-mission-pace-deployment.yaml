@@ -12,7 +12,8 @@ metadata:
     app.kubernetes.io/name: databento-mission-pace-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  replicas: 0   # DISABLED: heavy Streams grinder — saturated prod (.252) to load ~47,
+                # causing Kafka _MSG_TIMED_OUT / no data. Keep at 0 so no deploy re-ups it.
   strategy:
     type: Recreate
   selector:
