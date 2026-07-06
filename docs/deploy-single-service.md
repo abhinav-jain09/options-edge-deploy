@@ -132,9 +132,14 @@ re-discovers them):
 
 Every options-edge-processing service (~25) is standalone via the generic
 **`service-deploy`** job: pick `SERVICE` + `ENVIRONMENT`, optionally
-`BUILD_IMAGES=true` (triggers the full processing image build first), and it deploys
+`BUILD_IMAGES=true` (builds+pushes **only that service's** image first — it resolves
+the service's image from `services.yaml` and passes it as `BUILD_TARGET` to
+`options-edge-processing`, which runs `mvn -pl <module> -am` and builds just that one
+image, a few minutes rather than the whole ~25-image reactor), and it deploys
 ONLY that service — same guarantees as web (blast radius, digest pin, rollback,
 health gate; multi-Deployment services like raw-to-display roll every Deployment).
+(`databento-feed` is the exception — its image builds in `options-edge-databento-feed-deploy`,
+not the processing reactor; deploy it here with `BUILD_IMAGES=false`.)
 
 Their overlays are **GENERATED** by `scripts/deploy/generate-service-slices.sh`: each
 slice is the monolithic overlay's render of just that service, so the mirror rule
