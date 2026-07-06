@@ -26,5 +26,33 @@ jobs:
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/kubectl
 
+      - name: Install yq
+        run: |
+          set -euo pipefail
+          curl -fsSLo yq "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64"
+          chmod +x yq
+          sudo mv yq /usr/local/bin/yq
+
+      - name: Service slices are regenerated (no drift)
+        # Catches the recurring mirror-drift class: someone tunes a service's patch in the
+        # monolith overlay (k8s/overlays/*) but forgets to re-run the slice generator, so the
+        # generated k8s/services/*/overlays/* slices go stale and every deploy's Validate stage
+        # fails later. Run the generator here and fail the PR if it would change any committed
+        # slice — i.e. the author must commit the regenerated output.
+        run: |
+          set -euo pipefail
+          bash scripts/deploy/generate-service-slices.sh
+          if ! git diff --quiet -- k8s/services; then
+            echo "::error::Service slices are out of date. Run scripts/deploy/generate-service-slices.sh and commit the regenerated k8s/services/**."
+            git --no-pager diff --stat -- k8s/services
+            echo "----- full diff -----"
+            git --no-pager diff -- k8s/services
+            exit 1
+          fi
+          echo "Service slices are up to date."
+
+      - name: Validate service registry (completeness + mirror + image name)
+        run: scripts/ci/validate-services.sh
+
       - name: Validate deploy image locks
         run: scripts/deploy/validate-image-lock-ci.sh
