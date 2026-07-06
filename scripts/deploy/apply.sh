@@ -192,6 +192,12 @@
             exit 0
           fi
           kubectl -n options-edge delete deployment/strike-flow-classifier-service service/strike-flow-classifier-service --ignore-not-found=true
+          # Reconcile-delete the timewarp replay workloads. They were removed from the overlay
+          # (they deploy on-demand via replay-deploy / k8s/replay), but `kubectl apply -k` never
+          # prunes resources dropped from a manifest — so a prior replay run would otherwise linger
+          # through every full deploy. A full service deploy must NOT carry replay: delete them here
+          # (idempotent, --ignore-not-found; a no-op in prod, which never had them).
+          kubectl -n options-edge delete deployment/databento-timewarp-snapshot-replay job/databento-timewarp-replay --ignore-not-found=true
           kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
           market_data_source="${MARKET_DATA_SOURCE:-DATABENTO}"
           effective_raw_topic="${RAW_TOPIC:-}"
@@ -257,7 +263,7 @@ EOF
             --patch "$(cat "$JENKINS_WORK_DIR/options-edge-runtime-config-patch.json")"
           if kubectl -n options-edge get configmap options-edge-databento-feed-config >/dev/null 2>&1; then
             cat >"$JENKINS_WORK_DIR/options-edge-databento-feed-config-patch.json" <<EOF
-{"data":{"APP_PROFILE":"$databento_feed_profile","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","DATABENTO_EXPIRY":"$RESOLVED_DATABENTO_EXPIRY","DATABENTO_MARKET_OPEN_ALIGNMENT":"$databento_market_open_alignment","DATABENTO_USE_LIVE_REPLAY":"true"}}
+{"data":{"APP_PROFILE":"$databento_feed_profile","KAFKA_BOOTSTRAP_SERVERS":"$kafka_bootstrap_servers","KAFKA_SCHEMA_REGISTRY_URL":"$kafka_schema_registry_url","DATABENTO_EXPIRY":"$RESOLVED_DATABENTO_EXPIRY","DATABENTO_MARKET_OPEN_ALIGNMENT":"$databento_market_open_alignment","DATABENTO_USE_LIVE_REPLAY":"false"}}
 EOF
             kubectl -n options-edge patch configmap options-edge-databento-feed-config \
               --type merge \

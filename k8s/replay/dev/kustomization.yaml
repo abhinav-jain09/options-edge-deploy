@@ -1,16 +1,17 @@
-# Standalone DEV replay slice — the databento timewarp replay Job + snapshot-replay
-# Deployment. Deployed ON-DEMAND by the `replay-deploy` job (Jenkinsfile.replay), NOT by
-# the monolithic dev/prod bring-up. Kept separate because (a) a Job's pod template is
-# immutable, so re-applying it inside the monolith aborts the whole deploy on any image or
-# config change, and (b) re-running a historical replay on every deploy risks injecting
-# stale data into live topics. The namespace + shared options-edge-config ConfigMap this
-# replay consumes are created by common-infra / the monolith; this slice only adds replay.
+# Standalone DEV replay slice — the databento timewarp replay Job. Deployed ON-DEMAND by
+# the `replay-deploy` job (Jenkinsfile.replay), NOT by the monolithic dev/prod bring-up.
+# Kept separate because a Job's pod template is immutable, so re-applying it inside the
+# monolith aborts the whole deploy on any image/config change, and re-running a historical
+# replay on every deploy risks injecting stale data into live topics. The namespace + shared
+# options-edge-config ConfigMap this replay consumes are created by common-infra / the
+# monolith; this slice only adds replay.
+# NOTE: databento-timewarp-snapshot-replay (the long-running seeder Deployment) was removed
+# from the deployable set — it is no longer deployed anywhere.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: options-edge
 resources:
   - databento-timewarp-replay-job.yaml
-  - databento-timewarp-snapshot-replay-deployment.yaml
 # Same base->dev-registry remap the dev overlay applied, so the databento-feed image
 # resolves to the node-local dev registry. Jenkinsfile.replay digest-pins at deploy time.
 images:

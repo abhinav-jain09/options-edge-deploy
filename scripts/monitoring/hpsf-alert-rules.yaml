@@ -92,3 +92,159 @@ groups:
         annotations:
           summary: "HPSF old bucket cleanup may not be running"
           description: "strike-bucket-state-store keys are present but no old bucket keys were deleted recently."
+
+  # ==========================================================================
+  # delta-flow-service (R19). Job label is options-edge-delta-flow-service
+  # (apply-prometheus-scrapes.sh prepends options-edge- to delta-flow-service).
+  # Thresholds calibrated from real backdata (SPXW 0DTE): ~60% at-touch HIGH,
+  # ~15% midpoint baseline, ~99.9% normal markets. TUNE against live metrics.
+  # Kafka Streams state ordinals: healthy = RUNNING(2)/REBALANCING(1); >2 = shutdown/error.
+  # ==========================================================================
+  - name: delta-flow.health
+    interval: 30s
+    rules:
+      - alert: DeltaFlowStreamsError
+        expr: delta_flow_kafka_streams_state{job="options-edge-delta-flow-service"} > 2
+        for: 2m
+        labels:
+          severity: critical
+          service: delta-flow
+        annotations:
+          summary: "delta-flow Kafka Streams in shutdown/error on {{ $labels.instance }}"
+          description: "kafka_streams_state={{ $value }} (>2 = PENDING_SHUTDOWN/NOT_RUNNING/ERROR) for 2m."
+      - alert: DeltaFlowNotReady
+        expr: delta_flow_ready{job="options-edge-delta-flow-service"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: delta-flow
+        annotations:
+          summary: "delta-flow not READY on {{ $labels.instance }} for 5m"
+      - alert: DeltaFlowNonFiniteOutput
+        expr: increase(delta_flow_non_finite_signed_delta_flow_total{job="options-edge-delta-flow-service"}[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: delta-flow
+        annotations:
+          summary: "delta-flow produced a NON-FINITE signed-delta on {{ $labels.instance }} (math/guard defect)"
+      - alert: DeltaFlowNoFreshEvents
+        # No trades seen while it should flow. The market_hours_only label is only a routing HINT — it
+        # does NOT gate on its own, so we ALSO gate here in PromQL as defense-in-depth: fire only on
+        # weekdays during regular US options hours. NB this is a COARSE UTC gate — it covers RTH under
+        # BOTH DST regimes (EDT 13:30-20:00 UTC and EST 14:30-21:00 UTC) by using 13:30-21:00 UTC, and
+        # it is NOT holiday/early-close aware. The correct long-term gate is a service-emitted
+        # delta_flow_market_open metric; replace the time predicate with it once that exists.
+        expr: |
+          (increase(delta_flow_trades_seen_total{job="options-edge-delta-flow-service"}[10m]) == 0)
+            and on() (day_of_week() > 0)
+            and on() (day_of_week() < 6)
+            and on() (
+              (hour() == 13 and minute() >= 30) or (hour() > 13 and hour() < 21)
+            )
+        for: 10m
+        labels:
+          severity: warning
+          service: delta-flow
+          market_hours_only: "true"
+        annotations:
+          summary: "delta-flow saw no trades in 10m on {{ $labels.instance }} (weekday RTH, coarse UTC gate)"
+
+  - name: delta-flow.input-quality
+    interval: 30s
+    rules:
+      - alert: DeltaFlowStaleGreekRateHigh
+        expr: |
+          sum by (instance) (rate(delta_flow_stale_greek_total{job="options-edge-delta-flow-service"}[5m]))
+            / clamp_min(sum by (instance) (rate(delta_flow_trades_seen_total{job="options-edge-delta-flow-service"}[5m])), 1) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: delta-flow
+        annotations:
+          summary: "delta-flow stale-greek rate > 5% on {{ $labels.instance }} (GEX surface lagging)"
+      - alert: DeltaFlowUnknownAggressorRateHigh
+        # Real baseline ~15% (midpoint). Sustained >30% => quote quality / classifier degradation.
+        expr: delta_flow_unknown_aggressor_rate{job="options-edge-delta-flow-service"} > 0.30
+        for: 15m
+        labels:
+          severity: warning
+          service: delta-flow
+        annotations:
+          summary: "delta-flow unknown-aggressor rate > 30% on {{ $labels.instance }}"
+      - alert: DeltaFlowLookaheadDetected
+        expr: increase(delta_flow_lookahead_greek_total{job="options-edge-delta-flow-service"}[10m])
+              + increase(delta_flow_lookahead_quote_total{job="options-edge-delta-flow-service"}[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: delta-flow
+        annotations:
+          summary: "delta-flow lookahead quote/greek on {{ $labels.instance }} (clock skew / ordering)"
+      - alert: DeltaFlowConditionRejectSurge
+        expr: |
+          sum by (instance) (rate(delta_flow_condition_rejected_total{job="options-edge-delta-flow-service"}[5m]))
+            / clamp_min(sum by (instance) (rate(delta_flow_trades_seen_total{job="options-edge-delta-flow-service"}[5m])), 1) > 0.10
+        for: 10m
+        labels:
+          severity: warning
+          service: delta-flow
+        annotations:
+          summary: "delta-flow condition-reject rate > 10% on {{ $labels.instance }} (feed metadata degraded)"
+      - alert: DeltaFlowContractRefUnknownRateHigh
+        expr: sum by (instance) (rate(delta_flow_contract_ref_unknown_total{job="options-edge-delta-flow-service"}[10m])) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          service: delta-flow
+        annotations:
+          summary: "delta-flow CONTRACT_REF_UNKNOWN rate high on {{ $labels.instance }}"
+
+  - name: delta-flow.calibration
+    interval: 30s
+    rules:
+      - alert: DeltaFlowSideAccuracyBelowFloor
+        expr: delta_flow_side_accuracy_ci_low{job="options-edge-delta-flow-service"} < 0.75
+              and delta_flow_side_accuracy_comparable_total{job="options-edge-delta-flow-service"} > 500
+        for: 15m
+        labels:
+          severity: warning
+          service: delta-flow
+        annotations:
+          summary: "delta-flow side-accuracy CI-low < 0.75 on {{ $labels.instance }} (classifier regressed)"
+      - alert: DeltaFlowClusterUncalibrated
+        # cluster_calibrated == 0 = enabled but uncalibrated; -1 = feature disabled (inert).
+        expr: delta_flow_cluster_calibrated{job="options-edge-delta-flow-service"} == 0
+        for: 30m
+        labels:
+          severity: warning
+          service: delta-flow
+          market_hours_only: "true"
+        annotations:
+          summary: "delta-flow cluster NOT calibrated for 30m (weighted signal suppressed)"
+
+  - name: delta-flow.reversal-positioning
+    interval: 30s
+    rules:
+      - alert: DeltaFlowCancelUnlinkableRateHigh
+        expr: |
+          sum by (instance) (rate(delta_flow_cancel_unlinkable_total{job="options-edge-delta-flow-service"}[10m]))
+            / clamp_min(sum by (instance) (
+                rate(delta_flow_cancel_unlinkable_total{job="options-edge-delta-flow-service"}[10m])
+              + rate(delta_flow_cancel_applied_total{job="options-edge-delta-flow-service"}[10m])), 1) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          service: delta-flow
+        annotations:
+          summary: "delta-flow >50% of cancels UNLINKABLE on {{ $labels.instance }} (feed linkage gap, R16)"
+      - alert: DeltaFlowPositioningUnknownRateHigh
+        expr: |
+          sum by (instance) (rate(delta_flow_positioning_unknown_total{job="options-edge-delta-flow-service"}[15m]))
+            / clamp_min(sum by (instance) (rate(delta_flow_positioning_emit_total{job="options-edge-delta-flow-service"}[15m])), 1) > 0.5
+        for: 20m
+        labels:
+          severity: warning
+          service: delta-flow
+        annotations:
+          summary: "delta-flow >50% of positioning emits UNKNOWN on {{ $labels.instance }} (OI gap, R1)"

@@ -44,7 +44,7 @@ metadata:
   name: databento-mission-pace-service
   namespace: options-edge
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: databento-mission-pace-service

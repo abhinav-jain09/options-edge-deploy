@@ -19,7 +19,11 @@ data:
   # SPY trades ~SPX/10 (~700-800 here) with $1 strikes; the synthetic spot source derives SPY's own
   # spot from its option chain. SPX-only HPSF/ES/underlying.spx.price side-effects stay SPX-only.
   DATABENTO_EXTRA_INSTRUMENTS: '[{"symbol":"SPY","trading_class":"SPY","min_strike":650,"max_strike":820,"strike_step":1,"static_spot":740}]'
-  DATABENTO_USE_LIVE_REPLAY: "true"
+  # false = feed seeds the full chain snapshot immediately from live data on boot
+  # (service.py:_publish_seed_snapshots). true deferred the seed until a market-time
+  # replay trigger, which never fires on a mid-day (re)start -> gateway never marks the
+  # selection ready -> blank chain until the next pre-market start. Live feed needs no replay.
+  DATABENTO_USE_LIVE_REPLAY: "false"
   DATABENTO_REPLAY_START_MINUTES: "5"
   DATABENTO_RECONNECT_INITIAL_SECONDS: "5"
   DATABENTO_RECONNECT_MAX_SECONDS: "60"

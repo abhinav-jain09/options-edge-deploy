@@ -154,7 +154,7 @@ pipeline {
                     // <registry>/options-edge-web:dev for BOTH envs), so the Deploy stage rolls
                     // THIS freshly-built image. env.WEB_IMAGE may carry a :prod tag the deploy
                     // never reads, which would silently deploy a stale web (Codex HIGH).
-                    string(name: 'IMAGE',                        value: "${env.IMAGE_REGISTRY}/options-edge-web:dev"),
+                    string(name: 'IMAGE',                        value: "${env.IMAGE_REGISTRY}/options-edge-web:${params.PROFILE == 'prod' ? 'prod' : 'dev'}"),
                     string(name: 'VITE_WS_URL',                  value: env.WEB_WS_URL),
                     string(name: 'APP_FEED_GATEWAY_WS_URL',      value: env.WEB_WS_URL),
                     string(name: 'VITE_API_BASE_URL',            value: env.WEB_API_BASE),
