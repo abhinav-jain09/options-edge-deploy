@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  BOOT-LEVEL variant of the VIX bridge. Unlike the LaunchAgent (which only runs once you log into
+  the GUI), this LaunchDaemon starts at boot with NO login required — so it survives a reboot with
+  zero manual steps. It still runs as your user (UserName) so ~/.oe-kafka-archive-venv and the log
+  path resolve normally.
+
+  Install (needs sudo; do this INSTEAD of the LaunchAgent):
+    launchctl unload ~/Library/LaunchAgents/com.optionsedge.vixbridge.plist 2>/dev/null
+    rm -f ~/Library/LaunchAgents/com.optionsedge.vixbridge.plist
+    sudo cp com.optionsedge.vixbridge.daemon.plist /Library/LaunchDaemons/com.optionsedge.vixbridge.plist
+    sudo chown root:wheel /Library/LaunchDaemons/com.optionsedge.vixbridge.plist
+    sudo chmod 644       /Library/LaunchDaemons/com.optionsedge.vixbridge.plist
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.optionsedge.vixbridge.plist
+  Verify:  sudo launchctl print system/com.optionsedge.vixbridge | grep -iE 'state|pid'
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.optionsedge.vixbridge</string>
+  <key>UserName</key><string>abhinav</string>
+  <key>GroupName</key><string>staff</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/abhinav/development/workspace/options-edge-deploy-main-checkin/scripts/vix-bridge/run-vix-bridge.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key><string>/Users/abhinav</string>
+    <key>OE_KAFKA_VENV</key><string>/Users/abhinav/.oe-kafka-archive-venv</string>
+    <key>SOURCE_BOOTSTRAP</key><string>192.168.100.252:9092</string>
+    <key>TARGET_BOOTSTRAP</key><string>localhost:19092</string>
+    <key>TOPIC</key><string>underlying.vix.price</string>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/abhinav/oe-ops/logs/vix-bridge.log</string>
+  <key>StandardErrorPath</key><string>/Users/abhinav/oe-ops/logs/vix-bridge.log</string>
+</dict>
+</plist>
