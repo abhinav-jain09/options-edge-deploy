@@ -7,7 +7,9 @@ metadata:
     app.kubernetes.io/name: options-edge-integration-test
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # DISABLED until further notice (all envs): smoke/integration-test runner, not part of the live chain.
+  # Held at 0.
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: options-edge-integration-test
