@@ -7,6 +7,9 @@ metadata:
     app.kubernetes.io/name: option-price-behavior-service
     app.kubernetes.io/part-of: options-edge
 spec:
+  # SURFACE_RESIDUAL_V2 is now THE option-price-behavior signal (V1 retired). Same image, run via
+  # OPB_SERVICE_VARIANT=v2; reads tcbbo/greeks/underlying and writes the option-price-behavior-v2-*
+  # topics that the gateway/UI consume.
   replicas: 1
   selector:
     matchLabels:
@@ -27,6 +30,8 @@ spec:
             - secretRef:
                 name: options-edge-runtime-secrets
           env:
+            - name: OPB_SERVICE_VARIANT
+              value: v2
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: OPTION_PRICE_BEHAVIOR_INPUT_TCBBO_TOPIC
@@ -35,14 +40,33 @@ spec:
               value: options.databento.gex.strike
             - name: OPTION_PRICE_BEHAVIOR_INPUT_UNDERLYING_TOPIC
               value: underlying.spx.price
-            - name: OPTION_PRICE_BEHAVIOR_DASHBOARD_TOPIC
-              value: option-price-behavior-dashboard
-            - name: OPTION_PRICE_BEHAVIOR_STREAMS_APP_ID
-              value: option-price-behavior-service-v1
-            - name: OPTION_PRICE_BEHAVIOR_STREAMS_NUM_THREADS
+            - name: OPTION_PRICE_BEHAVIOR_V2_BY_OPTION_TOPIC
+              value: option-price-behavior-v2-by-option
+            - name: OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC
+              value: option-price-behavior-v2-session
+            - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_APP_ID
+              value: option-price-behavior-service-v2
+            - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_NUM_THREADS
               value: "1"
-            - name: OPTION_PRICE_BEHAVIOR_STREAMS_AUTO_OFFSET_RESET
-              value: latest
+            # First boot reads from earliest so the surface baselines are built before scoring
+            # (design §8 bootstrap freshness); steady state advances on committed offsets.
+            - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_AUTO_OFFSET_RESET
+              value: earliest
+            - name: KAFKA_STREAMS_STATE_DIR
+              value: /var/lib/options-edge/kafka-streams
+            # Calibrated constants from the 22-session 0DTE offline replay (held-out validated;
+            # design/OPTION-PRICE-BEHAVIOR-V2-CALIBRATION-LEDGER-RESULTS.md §4). winsorK=7 is the key fix
+            # (unit-variance z). The backtest's MID_SIZE_INVALID mark policy is intentionally NOT set:
+            # the live tcbbo feed carries real quote sizes, so the default microprice policy applies.
+            # k_quote/k_greek stay at defaults until calibrated from this deployment's live staleness.
+            - name: OPB_V2_WINSOR_K
+              value: "7"
+            - name: OPB_V2_HALF_SPREAD_WEIGHT
+              value: "0.38"
+            - name: OPB_V2_WEIGHT_CAP
+              value: "125"
+            - name: OPB_V2_Z_THRESHOLD
+              value: "2.19"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx2g"
           ports:
