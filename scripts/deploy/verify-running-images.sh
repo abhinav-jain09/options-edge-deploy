@@ -54,6 +54,8 @@ IMAGE_MAP = {
     ("delta-flow-service", "delta-flow"): "DELTA_FLOW_IMAGE",
     ("strike-liquidity-heatmap-service", "strike-liquidity-heatmap"): "STRIKE_LIQUIDITY_HEATMAP_IMAGE",
     ("dealer-ledger-service", "dealer-ledger"): "DEALER_LEDGER_IMAGE",
+    ("dealer-ledger-calibration-scorer", "dealer-ledger-calibration-scorer"): "DEALER_LEDGER_CALIBRATION_IMAGE",
+    ("dealer-ledger-calibration-accumulator", "dealer-ledger-calibration-accumulator"): "DEALER_LEDGER_CALIBRATION_IMAGE",
     ("spx-mission-control-service", "spx-mission-control"): "SPX_MISSION_CONTROL_IMAGE",
     ("unified-sr-service", "unified-sr"): "UNIFIED_SR_IMAGE",
     ("strike-flow-avro-adapter", "strike-flow-avro-adapter"): "STRIKE_FLOW_AVRO_ADAPTER_IMAGE",
@@ -69,6 +71,8 @@ elif deploy_target == "strike-liquidity-heatmap-service":
     target_deployments = {"strike-liquidity-heatmap-service"}
 elif deploy_target == "dealer-ledger-service":
     target_deployments = {"dealer-ledger-service"}
+elif deploy_target == "dealer-ledger-calibration":
+    target_deployments = {"dealer-ledger-calibration-scorer", "dealer-ledger-calibration-accumulator"}
 else:
     print(f"FATAL: unsupported DEPLOY_TARGET={deploy_target}", file=sys.stderr)
     sys.exit(1)

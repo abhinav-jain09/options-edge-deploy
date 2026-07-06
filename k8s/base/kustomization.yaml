@@ -21,6 +21,8 @@ resources:
   - delta-flow-service.yaml
   - dealer-ledger-deployment.yaml
   - dealer-ledger-service.yaml
+  - dealer-ledger-calibration-scorer-deployment.yaml
+  - dealer-ledger-calibration-accumulator-deployment.yaml
   - strike-liquidity-heatmap-deployment.yaml
   - strike-liquidity-heatmap-service.yaml
   - unified-sr-deployment.yaml

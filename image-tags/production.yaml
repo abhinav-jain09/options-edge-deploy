@@ -16,6 +16,8 @@ images:
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:prod
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:prod
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:prod
+  dealer-ledger-calibration-scorer: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:prod
+  dealer-ledger-calibration-accumulator: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:prod
   pin-postgres-writer: 192.168.100.252:5000/options-edge-pin-postgres-writer:prod
   strike-liquidity-heatmap-service: 192.168.100.252:5000/options-edge-strike-liquidity-heatmap:prod
   spx-mission-control-service: 192.168.100.252:5000/options-edge-spx-mission-control:prod

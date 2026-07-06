@@ -22,7 +22,7 @@ pipeline {
     choice(name: 'SERVICE', choices: [
       'databento-feed', 'databento-gex', 'databento-gex-history', 'databento-maxpain',
       'databento-mission-pace', 'databento-mission-pressure', 'databento-mission-sandwich',
-      'databento-volume-aggregator', 'delta-flow', 'directional-pressure',
+      'databento-volume-aggregator', 'dealer-ledger-calibration', 'delta-flow', 'directional-pressure',
       'gex-delta-redis-writer', 'hpsf-postgres-writer', 'hpsf-processing',
       'option-price-behavior', 'pin-postgres-writer', 'pressure-postgres-writer',
       'raw-postgres-writer', 'raw-to-display', 'spx-mission-control',
