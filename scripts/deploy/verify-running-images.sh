@@ -92,6 +92,18 @@ def digest_from_image(image: str) -> str:
         return ""
     return image.split("@", 1)[1]
 
+def _norm(ref: str) -> str:
+    # Compare by DIGEST when both refs are digest-pinned: `repo:tag@sha256:X` and
+    # `repo@sha256:X` are the same immutable image. The tag-less form appears on pods
+    # pinned via the kustomize `newName+digest` path (repo@digest) while the env file
+    # carries repo:tag@digest — so both loops (deployment specs AND running pods) must
+    # normalize before comparing, else an identical image reads as a mismatch.
+    if "@" in ref:
+        repo_tag, digest = ref.split("@", 1)
+        repo = repo_tag.rsplit(":", 1)[0] if ":" in repo_tag.split("/")[-1] else repo_tag
+        return f"{repo}@{digest}"
+    return ref
+
 with open(deployments_path, "r", encoding="utf-8") as handle:
     deployments = json.load(handle)
 with open(pods_path, "r", encoding="utf-8") as handle:
@@ -134,16 +146,6 @@ for item in deployments.get("items", []):
         if not expected_image:
             continue
         rows.append((deployment, name, var_name, expected_image, image))
-        # Compare by DIGEST when both refs are digest-pinned: `repo:tag@sha256:X` and
-        # `repo@sha256:X` are the same immutable image. The tag-less form appears on
-        # deployments whose `set image` roll is disabled (replicas pinned to 0) — the
-        # kustomize apply publishes repo@digest while the env file carries repo:tag@digest.
-        def _norm(ref: str) -> str:
-            if "@" in ref:
-                repo_tag, digest = ref.split("@", 1)
-                repo = repo_tag.rsplit(":", 1)[0] if ":" in repo_tag.split("/")[-1] else repo_tag
-                return f"{repo}@{digest}"
-            return ref
         if _norm(image) != _norm(expected_image):
             errors.append(
                 f"deployment/{deployment} container/{name} image mismatch for {var_name}: "
@@ -176,7 +178,7 @@ for item in pods.get("items", []):
         var_name, expected_image = expected_image_for(pod_app, name)
         if not expected_image:
             continue
-        if image != expected_image:
+        if _norm(image) != _norm(expected_image):
             errors.append(
                 f"pod/{pod} container/{name} spec image mismatch for deployment/{pod_app} {var_name}: "
                 f"expected {expected_image}, got {image}"
