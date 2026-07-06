@@ -68,12 +68,16 @@ spec:
             #     UNCALIBRATED) until the calibration feature promotes it. Flip these deliberately. ---
             - name: DEALER_LEDGER_ENABLED
               value: "true"
+            # ADVISORY stays false in ALL envs: an uncalibrated signal is never auto-advisory/tradeable.
             - name: DEALER_LEDGER_ADVISORY_ENABLED
               value: "false"
+            # UI_VISIBLE + CALIBRATION_QUALITY live in the BASE (env-independent) so dev and prod render
+            # IDENTICALLY. SHADOW = signal computed + shown, explicitly NOT advisory, before the calibration
+            # engine earns LIVE via Wilson-passing evidence. Flip both together if ever shipping fully dark.
             - name: DEALER_LEDGER_UI_VISIBLE
-              value: "false"
+              value: "true"
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
-              value: UNCALIBRATED
+              value: SHADOW
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms384m -Xmx1024m"
           ports:

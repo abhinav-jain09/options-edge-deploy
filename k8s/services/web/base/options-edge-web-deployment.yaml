@@ -88,6 +88,11 @@ spec:
               value: "https://fullfunding.nl"
             - name: APP_MARKET_DATA_SOURCE
               value: "DATABENTO"
+            # Dealer-ledger strike-signal render gate, served to the browser as config.dealerLedgerVisible.
+            # In the BASE (env-independent) so dev and prod are IDENTICAL. Pairs with the backend
+            # dealer-ledger-service base UI_VISIBLE=true + CALIBRATION_QUALITY=SHADOW.
+            - name: DEALER_LEDGER_UI_VISIBLE
+              value: "true"
           envFrom:
             # Provides KAFKA_BOOTSTRAP_SERVERS (required, non-loopback), schema registry, and the prod
             # Postgres coordinates (POSTGRES_JDBC_URL=.../options_flow, POSTGRES_USER=options_flow,

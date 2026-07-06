@@ -74,10 +74,3 @@ spec:
               value: "http://localhost:8090"
             - name: VITE_REPLAY_ORCHESTRATOR_URL
               value: "http://localhost:8095"
-            # Dealer-ledger strike-signal render gate. The web serves this to the browser as
-            # config.dealerLedgerVisible (strict boolean); ON here makes the pill render on dev. The
-            # backend dealer-ledger-service is co-flipped UI_VISIBLE=true + CALIBRATION_QUALITY=SHADOW.
-            # NB: this is the SLICE overlay applied by the web-service-deploy fast path (service-deploy.sh);
-            # the monolithic k8s/overlays/dev copy carries the same flag for the full-stack deploy.
-            - name: DEALER_LEDGER_UI_VISIBLE
-              value: "true"

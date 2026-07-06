@@ -24,10 +24,13 @@ class DealerLedgerDeployTest(unittest.TestCase):
         self.assertIn("options.databento.gex.strike", deployment)
         self.assertIn("DEALER_LEDGER_OUTPUT_STATE_TOPIC", deployment)
         self.assertIn("dealer-ledger-state", deployment)
-        # Ships DARK: runs + emits, but no advisory / not UI-visible / uncalibrated by default.
+        # SHADOW-visible in ALL envs (base, env-independent so dev==prod): the signal is computed + shown
+        # but NEVER advisory while uncalibrated. ADVISORY stays false; UI_VISIBLE true; quality SHADOW.
         self.assertIn('name: DEALER_LEDGER_ADVISORY_ENABLED', deployment)
         self.assertIn('name: DEALER_LEDGER_UI_VISIBLE', deployment)
-        self.assertIn("UNCALIBRATED", deployment)
+        self.assertIn("SHADOW", deployment)
+        # Advisory must remain OFF even when visible — an uncalibrated signal is never auto-tradeable.
+        self.assertRegex(deployment, r"DEALER_LEDGER_ADVISORY_ENABLED[\s\S]*?value:\s*\"false\"")
         self.assertIn("port: 8113", service)
         self.assertIn("host.docker.internal:5001/options-edge-dealer-ledger", dev_overlay)
         self.assertIn("host.docker.internal:5001/options-edge-dealer-ledger", experiment_overlay)
