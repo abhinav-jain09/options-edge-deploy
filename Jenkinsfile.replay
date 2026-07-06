@@ -1,8 +1,8 @@
 // Jenkinsfile.replay — standalone, ON-DEMAND replay deploy (job: replay-deploy).
 //
-// Deploys ONLY the k8s/replay/<env> slice: the databento timewarp replay Job + the
-// snapshot-replay Deployment. This is deliberately SEPARATE from the monolithic dev/prod
-// bring-up (options-edge-deploy) because:
+// Deploys ONLY the k8s/replay/<env> slice: the databento timewarp replay Job. (The
+// snapshot-replay seeder Deployment was removed from the deployable set.) This is
+// deliberately SEPARATE from the monolithic dev/prod bring-up (options-edge-deploy) because:
 //   * a Kubernetes Job's spec.template is IMMUTABLE — re-applying it inside the monolith
 //     aborts the WHOLE deploy the moment the image/config changes ("field is immutable");
 //   * re-running a historical replay on every deploy risks injecting stale data into live
@@ -75,14 +75,14 @@ pipeline {
 
           echo "=== replay workloads after apply ==="
           kubectl --kubeconfig "$KUBECONFIG" -n options-edge get \
-            job/databento-timewarp-replay deploy/databento-timewarp-snapshot-replay
+            job/databento-timewarp-replay
         '''
       }
     }
   }
 
   post {
-    success { echo "replay-deploy (${params.ENVIRONMENT}) OK — timewarp replay Job (re)created and snapshot-replay Deployment applied." }
+    success { echo "replay-deploy (${params.ENVIRONMENT}) OK — timewarp replay Job (re)created." }
     failure { echo "replay-deploy (${params.ENVIRONMENT}) FAILED — see the stage log above." }
   }
 }
