@@ -62,6 +62,8 @@ static_gate() {
   require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-b-deployment.yaml" "HPSF_TOPOLOGY_ENABLED"
   require_file_contains "$ROOT_DIR/k8s/base/hpsf-stage-b-deployment.yaml" "value: \"true\""
   require_file_contains "$ROOT_DIR/scripts/monitoring/hpsf-alert-rules.yaml" "HpsfOpraLagTooHigh"
+  require_file_contains "$ROOT_DIR/scripts/monitoring/hpsf-alert-rules.yaml" "DeltaFlowStreamsError"
+  require_file_contains "$ROOT_DIR/scripts/monitoring/hpsf-alert-rules.yaml" 'job="options-edge-delta-flow-service"'
   require_file_contains "$ROOT_DIR/scripts/smoke/check-hpsf-deployment.sh" "options.hpsf.latest-signal"
 
   for file in \
