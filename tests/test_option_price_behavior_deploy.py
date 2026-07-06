@@ -22,11 +22,32 @@ class OptionPriceBehaviorDeployTest(unittest.TestCase):
         self.assertIn("options.opra.tcbbo", deployment)
         self.assertIn("OPTION_PRICE_BEHAVIOR_INPUT_GREEKS_TOPIC", deployment)
         self.assertIn("options.databento.gex.strike", deployment)
-        self.assertIn("OPTION_PRICE_BEHAVIOR_DASHBOARD_TOPIC", deployment)
-        self.assertIn("option-price-behavior-dashboard", deployment)
         self.assertIn("port: 8080", service)
         self.assertIn("host.docker.internal:5001/options-edge-option-price-behavior", dev_overlay)
         self.assertIn("host.docker.internal:5001/options-edge-option-price-behavior", experiment_overlay)
+
+    def test_option_price_behavior_runs_surface_residual_v2(self):
+        # SURFACE_RESIDUAL_V2 is now THE option-price-behavior signal (V1 retired): the single
+        # deployment runs the same image with OPB_SERVICE_VARIANT=v2, emits the v2 topics, and carries
+        # the calibrated constants. There is NO separate -v2 deployment anymore.
+        base = ROOT / "k8s" / "base"
+        deployment = (base / "option-price-behavior-deployment.yaml").read_text()
+        kustomization = (base / "kustomization.yaml").read_text()
+
+        self.assertIn("OPB_SERVICE_VARIANT", deployment)
+        self.assertIn("value: v2", deployment)
+        self.assertIn("OPTION_PRICE_BEHAVIOR_V2_BY_OPTION_TOPIC", deployment)
+        self.assertIn("option-price-behavior-v2-by-option", deployment)
+        self.assertIn("OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC", deployment)
+        self.assertIn("option-price-behavior-v2-session", deployment)
+        # calibrated constants (results ledger §4)
+        self.assertIn("OPB_V2_WINSOR_K", deployment)
+        self.assertIn("OPB_V2_WEIGHT_CAP", deployment)
+        self.assertIn("OPB_V2_Z_THRESHOLD", deployment)
+        # V1 is gone: no dashboard topic, no separate v2 deployment file.
+        self.assertNotIn("OPTION_PRICE_BEHAVIOR_DASHBOARD_TOPIC", deployment)
+        self.assertNotIn("option-price-behavior-v2-deployment.yaml", kustomization)
+        self.assertFalse((base / "option-price-behavior-v2-deployment.yaml").exists())
 
     def test_option_price_behavior_image_is_resolved_and_deployed(self):
         jenkinsfile = (ROOT / "Jenkinsfile").read_text()
@@ -52,39 +73,8 @@ class OptionPriceBehaviorDeployTest(unittest.TestCase):
             "string(name: 'OPTION_PRICE_BEHAVIOR_IMAGE', value: params.OPTION_PRICE_BEHAVIOR_IMAGE)",
             jenkinsfile,
         )
-
-    def test_surface_residual_v2_shadow_is_registered_and_deployed(self):
-        # SURFACE_RESIDUAL_V2 shadow: a second deployment that runs the SAME image as V1 with
-        # OPB_SERVICE_VARIANT=v2. It must be registered in the base kustomization, listed as a
-        # second deployment on the option-price-behavior service, and image-pinned/rolled by
-        # apply.sh through the shared OPTION_PRICE_BEHAVIOR_IMAGE digest.
-        kustomization = (ROOT / "k8s" / "base" / "kustomization.yaml").read_text()
-        deployment = (ROOT / "k8s" / "base" / "option-price-behavior-v2-deployment.yaml").read_text()
-        service = (ROOT / "k8s" / "base" / "option-price-behavior-v2-service.yaml").read_text()
-        services_yaml = (ROOT / "services.yaml").read_text()
-        apply_script = (ROOT / "scripts" / "deploy" / "apply.sh").read_text()
-
-        self.assertIn("option-price-behavior-v2-deployment.yaml", kustomization)
-        self.assertIn("option-price-behavior-v2-service.yaml", kustomization)
-        self.assertIn("name: option-price-behavior-service-v2", deployment)
-        # Container name stays "option-price-behavior" so the shared set-image path matches.
-        self.assertIn("name: option-price-behavior\n", deployment)
-        self.assertIn("value: v2", deployment)  # OPB_SERVICE_VARIANT
-        self.assertIn("OPTION_PRICE_BEHAVIOR_V2_BY_OPTION_TOPIC", deployment)
-        self.assertIn("option-price-behavior-v2-by-option", deployment)
-        self.assertIn("OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC", deployment)
-        self.assertIn("option-price-behavior-v2-session", deployment)
-        self.assertIn("options-edge-option-price-behavior:dev", deployment)
-        self.assertIn("port: 8080", service)
-        # Same image artifact as V1 -> both deployments live on one services.yaml entry.
-        self.assertIn("option-price-behavior-service, option-price-behavior-service-v2", services_yaml)
-        # apply.sh pins the shadow with the SAME digest and rolls/verifies it.
-        self.assertIn(
-            'deployment/option-price-behavior-service-v2 option-price-behavior="$OPTION_PRICE_BEHAVIOR_IMAGE"',
-            apply_script,
-        )
-        self.assertIn("rollout restart deployment/option-price-behavior-service-v2", apply_script)
-        self.assertIn("rollout status deployment/option-price-behavior-service-v2", apply_script)
+        # No separate -v2 deployment lines anymore.
+        self.assertNotIn("deployment/option-price-behavior-service-v2", apply_script)
 
 
 if __name__ == "__main__":
