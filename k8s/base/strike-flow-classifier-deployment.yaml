@@ -139,7 +139,9 @@ metadata:
     app.kubernetes.io/component: strike-flow-classifier
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # DISABLED until further notice (all envs): the IBKR strike-flow pipeline is idle — ibkr-feed runs
+  # VIX-only so options.ibkr.raw is never produced, leaving this classifier with no input. Held at 0.
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: strike-flow-classifier-ibkr
