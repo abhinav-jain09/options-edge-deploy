@@ -28,3 +28,15 @@ patches:
       - op: add
         path: /spec/storageClassName
         value: local-path
+  # Prod's live strike-liquidity-heatmap PVC is 20Gi (created before the base bumped to 100Gi);
+  # every OTHER prod streams-state PVC is already 100Gi. local-path does NOT support resize, so
+  # rendering 100Gi here makes `kubectl apply -k` fail closed ("only dynamically provisioned pvc
+  # can be resized ...") and aborts the whole prod deploy. Pin THIS pvc to its live 20Gi for prod
+  # (name-targeted, so the other PVCs stay 100Gi). Dev keeps the base 100Gi (its live PVC is 100Gi).
+  - target:
+      kind: PersistentVolumeClaim
+      name: strike-liquidity-heatmap-service-streams-state
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 20Gi
