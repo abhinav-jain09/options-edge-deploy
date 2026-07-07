@@ -94,7 +94,10 @@ spec:
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
               value: SHADOW
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms384m -Xmx1024m
+              # 6GB heap: the day's-backlog catch-up OOM'd at -Xmx1024m (StreamThread died →
+              # readiness 503 → rollout-wait timeout). Container limit 8Gi leaves ~2Gi for RocksDB
+              # off-heap + JVM overhead so the kernel can't OOMKill the whole container.
+              value: -Xms1024m -Xmx6144m
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -120,10 +123,10 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 6Gi
+              memory: 8Gi
             requests:
               cpu: 100m
-              memory: 512Mi
+              memory: 2Gi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
               name: kafka-streams-state
