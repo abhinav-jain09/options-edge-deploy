@@ -44,7 +44,7 @@ The remote server values are production values and must not become local dev
 defaults. Changes for `192.168.100.252` must be treated as production changes:
 
 - Production registry: `192.168.100.252:5000`
-- Production Kafka: `192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096`
+- Production Kafka: `192.168.100.252:9092`
 - Production Kafka topic prefix: empty/unprefixed
 - Production web app: `http://192.168.100.252:8094` (k8s Service `options-edge-web`, LoadBalancer on prod cluster). Public via cloudflared tunnel: `https://fullfunding.nl`.
 - Production/remote kubeconfig path: `/home/options-edge/config/...`
@@ -57,7 +57,7 @@ Kafka topic namespace changes must follow the environment boundary above.
 Local Mac dev and remote production both use unprefixed topic names such as
 `options.databento.raw`. They are separated by Kafka bootstrap servers, not by a
 topic prefix: local dev uses `host.docker.internal:19092`; production uses
-`192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096`. Do not fix a
+`192.168.100.252:9092`. Do not fix a
 remote production topic issue by changing the local Mac dev namespace.
 
 ## Jenkins Deployment Flow
