@@ -14,10 +14,10 @@ patches:
   # EXPERIMENT: give the k8s feed-gateway the .2 WS auth/origins/replay config, so the browser's live
   # WS (ws://localhost:18091, tunnel -> .2:8091) is accepted from the web origin http://localhost:18090.
   - path: feed-gateway-dev-env-patch.yaml
-  # EXPERIMENT-ONLY: drop the ibkr-feed and integration-test workloads. The experiment build job
-  # (Jenkinsfile.experiment-build) deliberately does NOT build :dev images for them — .2 runs the
-  # Databento data path only (no IBKR), and the synthetic integration tester is not needed there.
-  # Without these deletes the base brings them into the overlay and the pods sit in ImagePullBackOff.
+  # EXPERIMENT-ONLY: drop the ibkr-feed workload. The experiment build job
+  # (Jenkinsfile.experiment-build) deliberately does NOT build a :dev image for it — .2 runs the
+  # Databento data path only (no IBKR). Without these deletes the base brings it into the overlay
+  # and the pods sit in ImagePullBackOff.
   - patch: |-
       apiVersion: apps/v1
       kind: Deployment
@@ -30,20 +30,6 @@ patches:
       kind: Service
       metadata:
         name: ibkr-feed-service
-        namespace: options-edge
-      $patch: delete
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: options-edge-integration-test
-        namespace: options-edge
-      $patch: delete
-  - patch: |-
-      apiVersion: v1
-      kind: Service
-      metadata:
-        name: options-edge-integration-test
         namespace: options-edge
       $patch: delete
   # The base web Deployment pins itself to the prod control-plane node
@@ -103,20 +89,11 @@ images:
   - name: 192.168.100.252:5000/options-edge-strike-flow-avro-adapter
     newName: host.docker.internal:5001/options-edge-strike-flow-avro-adapter
     newTag: dev
-  - name: 192.168.100.252:5000/options-edge-databento-maxpain
-    newName: host.docker.internal:5001/options-edge-databento-maxpain
-    newTag: dev
   - name: 192.168.100.252:5000/options-edge-option-price-behavior
     newName: host.docker.internal:5001/options-edge-option-price-behavior
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-dealer-ledger
     newName: host.docker.internal:5001/options-edge-dealer-ledger
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-databento-mission-pace
-    newName: host.docker.internal:5001/options-edge-databento-mission-pace
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-databento-mission-pressure
-    newName: host.docker.internal:5001/options-edge-databento-mission-pressure
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-mission-sandwich
     newName: host.docker.internal:5001/options-edge-databento-mission-sandwich
@@ -126,15 +103,6 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-directional-pressure
     newName: host.docker.internal:5001/options-edge-directional-pressure
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-volume-sandwich
-    newName: host.docker.internal:5001/options-edge-volume-sandwich
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-unusual-whales-gex
-    newName: host.docker.internal:5001/options-edge-unusual-whales-gex
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-unusual-whales-gex-history
-    newName: host.docker.internal:5001/options-edge-unusual-whales-gex-history
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-gex-history
     newName: host.docker.internal:5001/options-edge-databento-gex-history
@@ -150,12 +118,6 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-feed-gateway
     newName: host.docker.internal:5001/options-edge-feed-gateway
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-integration-test
-    newName: host.docker.internal:5001/options-edge-integration-test
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-hpsf-processing
-    newName: host.docker.internal:5001/options-edge-hpsf-processing
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-hpsf-postgres-writer
     newName: host.docker.internal:5001/options-edge-hpsf-postgres-writer

@@ -21,22 +21,15 @@ pipeline {
     string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', defaultValue: '', description: 'Databento volume aggregator image')
     string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '', description: 'Databento feed image')
     string(name: 'DATABENTO_GEX_IMAGE', defaultValue: '', description: 'Databento per-strike GEX image')
-    string(name: 'DATABENTO_MAXPAIN_IMAGE', defaultValue: '', description: 'Databento per-(symbol,expiry) max-pain image')
     string(name: 'OPTION_PRICE_BEHAVIOR_IMAGE', defaultValue: '', description: 'Option Price Behavior image')
-    string(name: 'DATABENTO_MISSION_PACE_IMAGE', defaultValue: '', description: 'Databento mission pace image')
-    string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', defaultValue: '', description: 'Databento mission pressure image')
     string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', defaultValue: '', description: 'Databento mission sandwich image')
     string(name: 'VOLUME_PACE_IMAGE', defaultValue: '', description: 'Volume-pace image')
     string(name: 'DIRECTIONAL_PRESSURE_IMAGE', defaultValue: '', description: 'Directional-pressure image')
-    string(name: 'VOLUME_SANDWICH_IMAGE', defaultValue: '', description: 'Volume-sandwich image')
-    string(name: 'UNUSUAL_WHALES_GEX_IMAGE', defaultValue: '', description: 'Unusual Whales GEX image')
-    string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Unusual Whales GEX history image')
     string(name: 'DATABENTO_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Databento GEX history image')
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pressure Postgres writer image')
     string(name: 'PIN_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pin Postgres writer image (deployed in dev AND prod; the prod image must exist before promotion)')
     string(name: 'FEED_GATEWAY_IMAGE', defaultValue: '', description: 'Feed gateway image')
-    string(name: 'INTEGRATION_TEST_IMAGE', defaultValue: '', description: 'Integration-test image')
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'HPSF Stage A/B processing image')
     string(name: 'HPSF_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'HPSF Postgres writer image')
     string(name: 'SPX_MISSION_CONTROL_IMAGE', defaultValue: '', description: 'SPX mission control image')
@@ -104,16 +97,10 @@ pipeline {
     DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: oeProfile.image('databento-volume-aggregator', 'production', 'prod')}"
     DATABENTO_FEED_IMAGE = "${params.DATABENTO_FEED_IMAGE ?: oeProfile.image('databento-feed', 'production', 'prod')}"
     DATABENTO_GEX_IMAGE = "${params.DATABENTO_GEX_IMAGE ?: oeProfile.image('databento-gex', 'production', 'prod')}"
-    DATABENTO_MAXPAIN_IMAGE = "${params.DATABENTO_MAXPAIN_IMAGE ?: oeProfile.image('databento-maxpain', 'production', 'prod')}"
     OPTION_PRICE_BEHAVIOR_IMAGE = "${params.OPTION_PRICE_BEHAVIOR_IMAGE ?: oeProfile.image('option-price-behavior', 'production', 'prod')}"
-    DATABENTO_MISSION_PACE_IMAGE = "${params.DATABENTO_MISSION_PACE_IMAGE ?: oeProfile.image('databento-mission-pace', 'production', 'prod')}"
-    DATABENTO_MISSION_PRESSURE_IMAGE = "${params.DATABENTO_MISSION_PRESSURE_IMAGE ?: oeProfile.image('databento-mission-pressure', 'production', 'prod')}"
     DATABENTO_MISSION_SANDWICH_IMAGE = "${params.DATABENTO_MISSION_SANDWICH_IMAGE ?: oeProfile.image('databento-mission-sandwich', 'production', 'prod')}"
     VOLUME_PACE_IMAGE = "${params.VOLUME_PACE_IMAGE ?: oeProfile.image('volume-pace', 'production', 'prod')}"
     DIRECTIONAL_PRESSURE_IMAGE = "${params.DIRECTIONAL_PRESSURE_IMAGE ?: oeProfile.image('directional-pressure', 'production', 'prod')}"
-    VOLUME_SANDWICH_IMAGE = "${params.VOLUME_SANDWICH_IMAGE ?: oeProfile.image('volume-sandwich', 'production', 'prod')}"
-    UNUSUAL_WHALES_GEX_IMAGE = "${params.UNUSUAL_WHALES_GEX_IMAGE ?: oeProfile.image('unusual-whales-gex', 'production', 'prod')}"
-    UNUSUAL_WHALES_GEX_HISTORY_IMAGE = "${params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE ?: oeProfile.image('unusual-whales-gex-history', 'production', 'prod')}"
     DATABENTO_GEX_HISTORY_IMAGE = "${params.DATABENTO_GEX_HISTORY_IMAGE ?: oeProfile.image('databento-gex-history', 'production', 'prod')}"
     RAW_POSTGRES_WRITER_IMAGE = "${params.RAW_POSTGRES_WRITER_IMAGE ?: oeProfile.image('raw-postgres-writer', 'production', 'prod')}"
     PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pressure-postgres-writer', 'production', 'prod')}"
@@ -122,7 +109,6 @@ pipeline {
     // The prod image must therefore exist in the prod registry before promotion, or Image Preflight fails.
     PIN_POSTGRES_WRITER_IMAGE = "${params.PIN_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pin-postgres-writer', 'production', 'prod')}"
     FEED_GATEWAY_IMAGE = "${params.FEED_GATEWAY_IMAGE ?: oeProfile.image('feed-gateway', 'production', 'prod')}"
-    INTEGRATION_TEST_IMAGE = "${params.INTEGRATION_TEST_IMAGE ?: oeProfile.image('integration-test', 'production', 'prod')}"
     HPSF_PROCESSING_IMAGE = "${params.HPSF_PROCESSING_IMAGE ?: oeProfile.image('hpsf-processing', 'production', 'prod')}"
     HPSF_POSTGRES_WRITER_IMAGE = "${params.HPSF_POSTGRES_WRITER_IMAGE ?: oeProfile.image('hpsf-postgres-writer', 'production', 'prod')}"
     SPX_MISSION_CONTROL_IMAGE = "${params.SPX_MISSION_CONTROL_IMAGE ?: oeProfile.image('spx-mission-control', 'production', 'prod')}"
@@ -721,22 +707,15 @@ void promoteToProduction() {
       string(name: 'WEB_IMAGE', value: params.WEB_IMAGE),
       string(name: 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', value: params.DATABENTO_VOLUME_AGGREGATOR_IMAGE),
       string(name: 'DATABENTO_GEX_IMAGE', value: params.DATABENTO_GEX_IMAGE),
-      string(name: 'DATABENTO_MAXPAIN_IMAGE', value: params.DATABENTO_MAXPAIN_IMAGE),
       string(name: 'OPTION_PRICE_BEHAVIOR_IMAGE', value: params.OPTION_PRICE_BEHAVIOR_IMAGE),
-      string(name: 'DATABENTO_MISSION_PACE_IMAGE', value: params.DATABENTO_MISSION_PACE_IMAGE),
-      string(name: 'DATABENTO_MISSION_PRESSURE_IMAGE', value: params.DATABENTO_MISSION_PRESSURE_IMAGE),
       string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', value: params.DATABENTO_MISSION_SANDWICH_IMAGE),
       string(name: 'VOLUME_PACE_IMAGE', value: params.VOLUME_PACE_IMAGE),
       string(name: 'DIRECTIONAL_PRESSURE_IMAGE', value: params.DIRECTIONAL_PRESSURE_IMAGE),
-      string(name: 'VOLUME_SANDWICH_IMAGE', value: params.VOLUME_SANDWICH_IMAGE),
-      string(name: 'UNUSUAL_WHALES_GEX_IMAGE', value: params.UNUSUAL_WHALES_GEX_IMAGE),
-      string(name: 'UNUSUAL_WHALES_GEX_HISTORY_IMAGE', value: params.UNUSUAL_WHALES_GEX_HISTORY_IMAGE),
       string(name: 'DATABENTO_GEX_HISTORY_IMAGE', value: params.DATABENTO_GEX_HISTORY_IMAGE),
       string(name: 'RAW_POSTGRES_WRITER_IMAGE', value: params.RAW_POSTGRES_WRITER_IMAGE),
       string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', value: params.PRESSURE_POSTGRES_WRITER_IMAGE),
       string(name: 'PIN_POSTGRES_WRITER_IMAGE', value: params.PIN_POSTGRES_WRITER_IMAGE),
       string(name: 'FEED_GATEWAY_IMAGE', value: params.FEED_GATEWAY_IMAGE),
-      string(name: 'INTEGRATION_TEST_IMAGE', value: params.INTEGRATION_TEST_IMAGE),
       string(name: 'HPSF_PROCESSING_IMAGE', value: params.HPSF_PROCESSING_IMAGE),
       string(name: 'HPSF_POSTGRES_WRITER_IMAGE', value: params.HPSF_POSTGRES_WRITER_IMAGE),
       string(name: 'SPX_MISSION_CONTROL_IMAGE', value: params.SPX_MISSION_CONTROL_IMAGE),

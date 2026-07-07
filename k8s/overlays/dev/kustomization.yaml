@@ -22,9 +22,6 @@ patches:
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
   # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
   - path: feed-gateway-dev-env-patch.yaml
-  # DEV-ONLY: point the integration-test smoke-auth token grant at the dev Keycloak issuer
-  # (must match the issuer the dev web/gateway validate, else the token's iss claim is rejected).
-  - path: integration-test-dev-env-patch.yaml
   # The base web Deployment pins itself to the prod control-plane node
   # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
   # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,
@@ -105,17 +102,8 @@ images:
   - name: 192.168.100.252:5000/options-edge-databento-gex
     newName: host.docker.internal:5001/options-edge-databento-gex
     newTag: dev
-  - name: 192.168.100.252:5000/options-edge-databento-maxpain
-    newName: host.docker.internal:5001/options-edge-databento-maxpain
-    newTag: dev
   - name: 192.168.100.252:5000/options-edge-option-price-behavior
     newName: host.docker.internal:5001/options-edge-option-price-behavior
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-databento-mission-pace
-    newName: host.docker.internal:5001/options-edge-databento-mission-pace
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-databento-mission-pressure
-    newName: host.docker.internal:5001/options-edge-databento-mission-pressure
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-mission-sandwich
     newName: host.docker.internal:5001/options-edge-databento-mission-sandwich
@@ -125,15 +113,6 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-directional-pressure
     newName: host.docker.internal:5001/options-edge-directional-pressure
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-volume-sandwich
-    newName: host.docker.internal:5001/options-edge-volume-sandwich
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-unusual-whales-gex
-    newName: host.docker.internal:5001/options-edge-unusual-whales-gex
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-unusual-whales-gex-history
-    newName: host.docker.internal:5001/options-edge-unusual-whales-gex-history
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-gex-history
     newName: host.docker.internal:5001/options-edge-databento-gex-history
@@ -149,12 +128,6 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-feed-gateway
     newName: host.docker.internal:5001/options-edge-feed-gateway
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-integration-test
-    newName: host.docker.internal:5001/options-edge-integration-test
-    newTag: dev
-  - name: 192.168.100.252:5000/options-edge-hpsf-processing
-    newName: host.docker.internal:5001/options-edge-hpsf-processing
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-hpsf-postgres-writer
     newName: host.docker.internal:5001/options-edge-hpsf-postgres-writer
