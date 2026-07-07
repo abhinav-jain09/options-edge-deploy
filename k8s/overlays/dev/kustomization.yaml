@@ -81,17 +81,25 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: 4Gi
-  # DEV-ONLY: dealer-ledger's 193 Kafka-Streams partitions push RocksDB off-heap
-  # past the base 1536Mi container limit (heap is only -Xmx1024m) → container
-  # OOMKilled on the single-node dev broker. Raise the DEV limit so off-heap
-  # state has headroom; prod/experiment keep the base 1536Mi.
+  # DEV-ONLY dealer-ledger heap: -Xmx1024m OOM'd (java.lang.OutOfMemoryError) on the day's-backlog
+  # catch-up → StreamThread died → readiness 503 → rollout-wait timeout. Raise heap to -Xmx6144m and
+  # the container limit to 8Gi so the 6GB heap + RocksDB off-heap (193 Kafka-Streams partitions) + JVM
+  # overhead can't be kernel-OOMKilled. Prod stays -Xmx1024m/3Gi (RAM-constrained single node — separate
+  # capacity check). env/19 = JAVA_TOOL_OPTIONS (in-place replace keeps env order == the standalone slice).
+  # MUST MIRROR the standalone slice k8s/services/dealer-ledger/overlays/dev (validate-services: mono==slice).
   - target:
       kind: Deployment
       name: dealer-ledger-service
     patch: |-
       - op: replace
+        path: /spec/template/spec/containers/0/env/19/value
+        value: -Xms1024m -Xmx6144m
+      - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
-        value: 6Gi
+        value: 8Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 2Gi
   # DEV-ONLY spx-mission-control auth: base points at the prod Keycloak
   # (https://auth.fullfunding.nl/realms/optionsedge) which dev cannot reach.
   # Override the issuer + JWKS URIs to the local Mac Keycloak (192.168.100.102:8089)
