@@ -1,0 +1,23 @@
+# PROD: option-price-behavior V2 OOMKill-crash-looped because the base container
+# limit (2Gi) == JVM heap (-Xmx2g), leaving ZERO room for Kafka-Streams RocksDB
+# off-heap + JVM overhead. Give the heap headroom AND off-heap headroom on prod:
+#   heap  -Xmx3g   (was 2g)
+#   limit 5Gi      (was 2Gi)  -> ~2Gi for off-heap/overhead above the heap
+# dev/experiment keep the base 2g/their own limits. Re-enabled (replicas back to
+# base 1) after the 2026-07-07 freeze incident, per USER (heap 3g / limit 5Gi).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: option-price-behavior-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: option-price-behavior
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms512m -Xmx3g"
+          resources:
+            limits:
+              memory: 5Gi
