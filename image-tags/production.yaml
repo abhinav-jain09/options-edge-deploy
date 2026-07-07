@@ -18,3 +18,8 @@ images:
   spx-mission-control-service: 192.168.100.252:5000/options-edge-spx-mission-control:prod
   unified-sr-service: 192.168.100.252:5000/options-edge-unified-sr:prod
   strike-flow-avro-adapter: 192.168.100.252:5000/options-edge-strike-flow-avro-adapter:prod
+  databento-volume-aggregator: 192.168.100.252:5000/options-edge-databento-volume-aggregator:prod
+  option-price-behavior-service: 192.168.100.252:5000/options-edge-option-price-behavior:prod
+  volume-pace-databento-service: 192.168.100.252:5000/options-edge-volume-pace:prod
+  gex-delta-redis-writer: 192.168.100.252:5000/options-edge-gex-delta-redis-writer:prod
+  hpsf-postgres-writer-service: 192.168.100.252:5000/options-edge-hpsf-postgres-writer:prod
