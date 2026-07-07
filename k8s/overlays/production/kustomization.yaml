@@ -23,6 +23,16 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
+  # PROD: give dealer-ledger's Kafka-Streams RocksDB off-heap state headroom
+  # above the base 1536Mi limit (heap is only -Xmx1024m). Prod hasn't OOMed but
+  # is RAM-constrained standalone, so 3Gi (not dev's 6Gi). Base/experiment 1536Mi.
+  - target:
+      kind: Deployment
+      name: dealer-ledger-service
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 3Gi
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.

@@ -81,6 +81,17 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: 4Gi
+  # DEV-ONLY: dealer-ledger's 193 Kafka-Streams partitions push RocksDB off-heap
+  # past the base 1536Mi container limit (heap is only -Xmx1024m) → container
+  # OOMKilled on the single-node dev broker. Raise the DEV limit so off-heap
+  # state has headroom; prod/experiment keep the base 1536Mi.
+  - target:
+      kind: Deployment
+      name: dealer-ledger-service
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 6Gi
   # DEV-ONLY spx-mission-control auth: base points at the prod Keycloak
   # (https://auth.fullfunding.nl/realms/optionsedge) which dev cannot reach.
   # Override the issuer + JWKS URIs to the local Mac Keycloak (192.168.100.102:8089)

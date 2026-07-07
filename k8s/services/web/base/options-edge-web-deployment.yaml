@@ -112,12 +112,18 @@ spec:
               port: http
             initialDelaySeconds: 20
             periodSeconds: 10
+            # GET / is CPU/GC-heavy under load; a 1s default timeout flaps the
+            # pod out of endpoints. Give the JVM room to answer before failing.
+            timeoutSeconds: 10
+            failureThreshold: 5
           livenessProbe:
             httpGet:
               path: /
               port: http
             initialDelaySeconds: 40
             periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 5
           resources:
             requests:
               cpu: 200m
