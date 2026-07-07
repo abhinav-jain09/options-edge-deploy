@@ -6,7 +6,7 @@ pipeline {
   }
   environment {
     PATH = "/home/confluent/confluent-8.2.1/bin:/usr/local/bin:/usr/bin:/bin:${env.PATH}"
-    KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096'}"
+    KAFKA_BOOTSTRAP_SERVERS = "${env.KAFKA_BOOTSTRAP_SERVERS ?: '192.168.100.252:9092'}"
     SKIP_REMOTE = "${env.SKIP_REMOTE ?: 'false'}"
   }
   stages {

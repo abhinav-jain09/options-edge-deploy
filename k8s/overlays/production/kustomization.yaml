@@ -33,6 +33,17 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: 3Gi
+  # PROD: keep option-price-behavior (V2) DOWN — it OOMKills in a crash-loop on the
+  # single broker (RocksDB off-heap > limit) and churns the coordinator. Scaled to 0
+  # live during the 2026-07-07 freeze incident; pin it here so a deploy can't revive it
+  # until the V2 memory footprint is fixed. Re-enable = remove this patch (+ mem bump).
+  - target:
+      kind: Deployment
+      name: option-price-behavior-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.

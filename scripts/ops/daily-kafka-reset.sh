@@ -19,7 +19,7 @@ set -uo pipefail
 
 # ---- config (override via env) ----
 KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/kafka_2.13-4.3.0/bin}"
-BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096}"
+BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092}"
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 NS="${K8S_NAMESPACE:-options-edge}"
 SELECTOR="${APP_SELECTOR:-app.kubernetes.io/part-of=options-edge}"

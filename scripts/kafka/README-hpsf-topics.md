@@ -20,7 +20,7 @@ scripts/kafka/create-hpsf-topics.sh --dry-run
 
 ```bash
 export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-export KAFKA_BOOTSTRAP_SERVERS="192.168.100.252:9092,192.168.100.252:9094,192.168.100.252:9096"
+export KAFKA_BOOTSTRAP_SERVERS="192.168.100.252:9092"
 export KAFKA_TOPIC_REPLICATION_FACTOR=1
 export KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1
 scripts/kafka/create-hpsf-topics.sh
