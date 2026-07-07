@@ -59,6 +59,17 @@ spec:
               value: "ws://localhost:8091/ws/events"
             - name: APP_FEED_GATEWAY_HEALTH_URL
               value: "ws://localhost:8080/ws/events"
+            # Server-side history-backfill proxy target (GET /api/liquidity-history in
+            # OptionMonitorWebServer). WITHOUT this explicit override, feedGatewayRestBase() derives the
+            # REST base from APP_FEED_GATEWAY_HEALTH_URL above → http://localhost:8080 (the web's OWN
+            # port), so the proxy calls itself, recurses until the 8s timeout, and returns 503 → the
+            # heatmap history never loads. Live WS layers are unaffected (browser → :8091 directly), so
+            # ONLY the heatmap looks broken. Unlike the WS-availability gate above, the pod CAN reach the
+            # gateway's REST over cluster DNS (verified: feed-gateway-service:8091/api/liquidity-history
+            # → 401 = reachable + auth-gated; the proxy forwards the browser's bearer token). Dev-only:
+            # prod's HEALTH_URL already points at the real in-cluster gateway, so its derivation is fine.
+            - name: FEED_GATEWAY_REST_URL
+              value: "http://feed-gateway-service:8091"
             - name: VITE_WS_URL
               value: "ws://localhost:8091/ws/events"
             # The web serves its own /api + /mission-control on the dev host port :8090. The same-origin
