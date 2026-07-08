@@ -88,7 +88,11 @@ spec:
             - name: DEALER_LEDGER_ENABLED
               value: "true"
             - name: DEALER_LEDGER_ADVISORY_ENABLED
-              value: "false"
+              # SHADOW-mode enable: with CALIBRATION_QUALITY=SHADOW the state machine fires + emits
+              # SignalFired (computed + UI-visible, marked SHADOW = observe-only, NOT actionable) so the
+              # calibration corpus can accumulate. LIVE_CALIBRATED is still earned per bucket via Wilson
+              # evidence; this flag alone never makes a signal actionable.
+              value: "true"
             - name: DEALER_LEDGER_UI_VISIBLE
               value: "true"
             - name: DEALER_LEDGER_CALIBRATION_QUALITY

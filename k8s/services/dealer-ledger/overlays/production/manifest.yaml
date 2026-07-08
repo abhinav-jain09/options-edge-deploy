@@ -88,7 +88,10 @@ spec:
             - name: DEALER_LEDGER_ENABLED
               value: "true"
             - name: DEALER_LEDGER_ADVISORY_ENABLED
-              value: "false"
+              # SHADOW-mode enable (dev/prod parity): fires + emits SignalFired, UI-visible + marked
+              # SHADOW (observe-only, NOT actionable) so calibration accumulates. LIVE_CALIBRATED is
+              # earned per bucket via Wilson evidence; this flag alone never makes a signal actionable.
+              value: "true"
             - name: DEALER_LEDGER_UI_VISIBLE
               value: "true"
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
