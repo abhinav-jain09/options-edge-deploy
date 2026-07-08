@@ -506,12 +506,26 @@ if [ "$DB_WIPE" = "true" ]; then
   [ "$DBN_NOW" = "$EXPECTED_DB" ] || die "DB name changed to '$DBN_NOW' — REFUSING truncate"
   # Discover every public table and TRUNCATE them all in one statement (no CASCADE
   # needed within a single all-tables truncate). pin_session_close IS included.
-  TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public'")
+  #
+  # PRESERVE the dealer-ledger CALIBRATION corpus across the wipe: calibration.outcome_scored +
+  # calibration.calibration_state hold the accumulated Wilson evidence that must survive daily (they
+  # self-heal via CalibrationStore.ensureSchema, but the DATA must persist to ever reach LIVE_CALIBRATED).
+  # They live in the dedicated `calibration` schema, so the schemaname='public' filter already excludes
+  # them. The extra tablename guard is belt-and-suspenders: even if a regression ever created those
+  # tables in `public`, this refuses to truncate them.
+  CALIB_TABLES="'outcome_scored', 'calibration_state'"
+  TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($CALIB_TABLES)")
   if [ -n "$TBL_LIST" ]; then
-    trunc_n=$(pg "select count(*) from pg_tables where schemaname='public'" | tr -d '[:space:]')
+    trunc_n=$(pg "select count(*) from pg_tables where schemaname='public' and tablename not in ($CALIB_TABLES)" | tr -d '[:space:]')
     pg "set lock_timeout='30s'; set statement_timeout='300s'; truncate table $TBL_LIST restart identity" \
       || die "TRUNCATE of flow DB failed"
-    log "truncated $trunc_n public tables in '$EXPECTED_DB' (incl. pin_session_close)"
+    log "truncated $trunc_n public tables in '$EXPECTED_DB' (incl. pin_session_close; calibration.* preserved)"
+    # Prove the calibration corpus survived (visibility): approx row counts are untouched by the wipe.
+    # Read the estimate from pg_stat_user_tables (never parse-errors if the table/schema is absent —
+    # returns no row -> -1) so this is safe on a fresh DB before the service's first run.
+    CALIB_OS=$(pg "select coalesce((select n_live_tup from pg_stat_user_tables where schemaname='calibration' and relname='outcome_scored'), -1)" | tr -d '[:space:]')
+    CALIB_ST=$(pg "select coalesce((select n_live_tup from pg_stat_user_tables where schemaname='calibration' and relname='calibration_state'), -1)" | tr -d '[:space:]')
+    log "calibration corpus preserved (approx rows, -1=absent): outcome_scored=$CALIB_OS calibration_state=$CALIB_ST"
     # Reclaim WAL/disk: CHECKPOINT recycles WAL segments; VACUUM returns pages.
     pg "checkpoint" >/dev/null 2>&1 || log "WARN: CHECKPOINT failed"
     # VACUUM cannot run inside a txn block; psql -c each is fine. FULL is heavy but
