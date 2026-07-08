@@ -79,6 +79,8 @@ spec:
               value: "8"
             - name: DATABENTO_GEX_DEALER_SIGN_MODEL
               value: NAIVE_CALL_PLUS_PUT_MINUS
+            - name: DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED
+              value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms1g -Xmx4g
           envFrom:
