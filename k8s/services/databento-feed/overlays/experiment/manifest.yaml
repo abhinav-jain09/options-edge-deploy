@@ -60,9 +60,9 @@ spec:
           image: host.docker.internal:5001/options-edge-databento-feed:dev
           imagePullPolicy: Always
           livenessProbe:
-            failureThreshold: 4
+            failureThreshold: 2
             httpGet:
-              path: /metrics
+              path: /health/live
               port: metrics
             initialDelaySeconds: 45
             periodSeconds: 15

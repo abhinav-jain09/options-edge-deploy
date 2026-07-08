@@ -33,13 +33,22 @@ spec:
           ports:
             - name: metrics
               containerPort: 8010
+          # Data-freshness liveness: /health/live fails when the market is OPEN but no live record
+          # has been published within the feed's stale window (a subscribed-but-silent "zombie"
+          # Databento session) — Kubernetes then restarts the pod to re-establish the session.
+          # /metrics only proved the process was up, so a zombie feed passed forever. Off-hours the
+          # check always passes (never restart-loops nights/weekends/holidays). With the feed's 15s
+          # in-app stale window, 2 x 15s here => a stalled feed restarts ~45s after data stops (fast
+          # recovery) while initialDelaySeconds 45 + 30s still comfortably clears a normal boot+seed.
           livenessProbe:
             httpGet:
-              path: /metrics
+              path: /health/live
               port: metrics
             initialDelaySeconds: 45
             periodSeconds: 15
-            failureThreshold: 4
+            failureThreshold: 2
+          # Readiness stays on /metrics (process-up): a stale-data window should NOT flap readiness;
+          # only liveness (restart) reacts to staleness.
           readinessProbe:
             httpGet:
               path: /metrics
