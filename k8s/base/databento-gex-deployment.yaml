@@ -68,6 +68,12 @@ spec:
             # best AND simplest, so the flow-adjusted path is retired in production.
             - name: DATABENTO_GEX_DEALER_SIGN_MODEL
               value: NAIVE_CALL_PLUS_PUT_MINUS
+            # Daily OI self-fetch: on the first snapshot per (symbol,expiry,day) the gex-service pulls
+            # the once-daily settled Open Interest from Databento historical statistics into Postgres,
+            # retrying with backoff until it lands (see DatabentoOiBaselineProvider). Set explicitly TRUE
+            # so a stray live env-drift can never silently disable it — without OI, GEX is all-zero.
+            - name: DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED
+              value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms1g -Xmx4g"
           ports:
