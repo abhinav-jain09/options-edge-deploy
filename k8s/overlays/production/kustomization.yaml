@@ -23,10 +23,10 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
-  # PROD: give dealer-ledger's Kafka-Streams RocksDB off-heap state headroom
-  # above the base 1536Mi limit (heap is only -Xmx1024m). Prod hasn't OOMed but
-  # is RAM-constrained standalone, so 3Gi (not dev's 6Gi). Base/experiment 1536Mi.
-  # env/16 = DEALER_LEDGER_ADVISORY_ENABLED → true (SHADOW-mode enable, dev/prod parity; observe-only).
+  # PROD dealer-ledger heap: -Xmx6144m (6GB, dev/prod parity — -Xmx1024m OOM'd on dev's day's-backlog
+  # catch-up; prod runs the same SPX data). Container 8Gi leaves ~2Gi for RocksDB off-heap + JVM overhead.
+  # .252 has 62Gi total / ~30Gi free, so 8Gi fits. env/16 = DEALER_LEDGER_ADVISORY_ENABLED → true
+  # (SHADOW-mode enable, observe-only), env/19 = JAVA_TOOL_OPTIONS. In-place replace keeps env order.
   # MUST MIRROR the standalone slice k8s/services/dealer-ledger/overlays/production (validate-services).
   - target:
       kind: Deployment
@@ -36,8 +36,14 @@ patches:
         path: /spec/template/spec/containers/0/env/16/value
         value: "true"
       - op: replace
+        path: /spec/template/spec/containers/0/env/19/value
+        value: -Xms1024m -Xmx6144m
+      - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
-        value: 3Gi
+        value: 8Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 2Gi
   # PROD: option-price-behavior V2 heap 3g + limit 5Gi (base 2g/2Gi OOMKilled —
   # heap == limit, no off-heap room). Re-enabled after the 2026-07-07 freeze.
   - path: option-price-behavior-prod-patch.yaml
