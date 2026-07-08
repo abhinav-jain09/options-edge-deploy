@@ -25,9 +25,12 @@ log(){ printf '\033[1;36m[vix-bridge]\033[0m %s\n' "$*"; }
 if [ ! -x "$VENV/bin/python" ]; then
   log "creating venv $VENV"
   python3 -m venv "$VENV"
-  "$VENV/bin/pip" install --quiet --upgrade pip kafka-python
+  "$VENV/bin/pip" install --quiet --upgrade pip kafka-python lz4
 fi
-"$VENV/bin/python" -c 'import kafka' 2>/dev/null || "$VENV/bin/pip" install --quiet kafka-python
+# lz4 is REQUIRED: prod produces underlying.vix.price with lz4 compression; without it kafka-python
+# throws UnsupportedCodecError on every message → reconnect loop → FD leak → bridge wedges (VIX stops
+# mirroring to dev). Ensure both kafka-python AND lz4 are present.
+"$VENV/bin/python" -c 'import kafka, lz4.frame' 2>/dev/null || "$VENV/bin/pip" install --quiet kafka-python lz4
 
 PRIME_FLAG=""; [ "${PRIME:-1}" = "0" ] && PRIME_FLAG="--no-prime"
 log "mirror $TOPIC:  $SOURCE_BOOTSTRAP  ->  $TARGET_BOOTSTRAP  ${PRIME_FLAG:-(prime latest)}"
