@@ -26,10 +26,15 @@ patches:
   # PROD: give dealer-ledger's Kafka-Streams RocksDB off-heap state headroom
   # above the base 1536Mi limit (heap is only -Xmx1024m). Prod hasn't OOMed but
   # is RAM-constrained standalone, so 3Gi (not dev's 6Gi). Base/experiment 1536Mi.
+  # env/16 = DEALER_LEDGER_ADVISORY_ENABLED → true (SHADOW-mode enable, dev/prod parity; observe-only).
+  # MUST MIRROR the standalone slice k8s/services/dealer-ledger/overlays/production (validate-services).
   - target:
       kind: Deployment
       name: dealer-ledger-service
     patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/16/value
+        value: "true"
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: 3Gi

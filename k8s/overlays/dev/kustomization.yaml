@@ -85,12 +85,16 @@ patches:
   # catch-up → StreamThread died → readiness 503 → rollout-wait timeout. Raise heap to -Xmx6144m and
   # the container limit to 8Gi so the 6GB heap + RocksDB off-heap (193 Kafka-Streams partitions) + JVM
   # overhead can't be kernel-OOMKilled. Prod stays -Xmx1024m/3Gi (RAM-constrained single node — separate
-  # capacity check). env/19 = JAVA_TOOL_OPTIONS (in-place replace keeps env order == the standalone slice).
+  # capacity check). env/16 = DEALER_LEDGER_ADVISORY_ENABLED (SHADOW-mode enable so it fires + accumulates
+  # calibration; still SHADOW = observe-only), env/19 = JAVA_TOOL_OPTIONS. In-place replace keeps env order.
   # MUST MIRROR the standalone slice k8s/services/dealer-ledger/overlays/dev (validate-services: mono==slice).
   - target:
       kind: Deployment
       name: dealer-ledger-service
     patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/16/value
+        value: "true"
       - op: replace
         path: /spec/template/spec/containers/0/env/19/value
         value: -Xms1024m -Xmx6144m
