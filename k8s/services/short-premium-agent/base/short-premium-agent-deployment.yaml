@@ -6,9 +6,16 @@
 #
 # Both containers use the SAME Python image (SP_BACKEND=sdk → ANTHROPIC_API_KEY from
 # options-edge-runtime-secrets). Agent A self-gates market hours; Agent B self-schedules
-# to SP_EOD_TIME ET. The whole feature ships OFF (SP_ENABLED=0) — flip it with the
-# short-premium-toggle Jenkins job. Image ref is the prod-registry BASE; each env overlay
-# remaps it (dev → host.docker.internal:5001) via its images: transformer.
+# to SP_EOD_TIME ET. The whole feature ships OFF (SP_ENABLED=0 on BOTH containers → no LLM
+# calls, no cost). To turn it on WITHOUT hand-applying: flip SP_ENABLED to "1" in this
+# manifest via a PR to main and re-run service-deploy (a dedicated short-premium-toggle
+# Jenkins job that does `kubectl set env` is a tracked follow-up). DEV-ONLY (envs: [dev]).
+# The dev overlay remaps the prod-registry base ref → host.docker.internal:5001 via its
+# images: transformer.
+#
+# NOTE: /data (paper book, audits, daily cost) is an emptyDir — ephemeral, wiped on every
+# pod restart/rollout. Acceptable for paper/Phase-0; a durable store (Postgres) is the
+# follow-up for cross-restart history + the web Paper Trades page (separate pod).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -98,6 +105,7 @@ spec:
             - secretRef:
                 name: options-edge-runtime-secrets
           env:
+            - {name: SP_ENABLED,   value: "0"}       # OFF like agent-a; daemon skips the EOD LLM call when 0
             - {name: SP_BACKEND,   value: "sdk"}
             - {name: SP_MODEL,     value: "claude-opus-4-8"}
             - {name: SP_SYMBOL,    value: "SPX"}

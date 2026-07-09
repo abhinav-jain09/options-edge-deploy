@@ -1,0 +1,7 @@
+# Hand-authored base for the DEV-ONLY short-premium-agent. Referenced from
+# k8s/overlays/dev (NOT k8s/base/kustomization.yaml), so prod/experiment never render it.
+# The generated dev slice (../overlays/dev) mirrors the monolith dev render of this base.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - short-premium-agent-deployment.yaml

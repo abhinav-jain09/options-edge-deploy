@@ -56,7 +56,6 @@ resources:
   - databento-gex-history-service.yaml
   - option-price-behavior-deployment.yaml
   - option-price-behavior-service.yaml
-  - short-premium-agent-deployment.yaml
   - feed-gateway-nightly-restart-cronjob.yaml
 
 patches:

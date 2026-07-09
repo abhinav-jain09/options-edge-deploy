@@ -120,6 +120,8 @@ spec:
             - run_agent_b.py
             - --daemon
           env:
+            - name: SP_ENABLED
+              value: "0"
             - name: SP_BACKEND
               value: sdk
             - name: SP_MODEL

@@ -49,7 +49,8 @@ services:
   - { name: dealer-ledger-calibration,    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-dealer-ledger-calibration,    deployments: [dealer-ledger-calibration-scorer, dealer-ledger-calibration-accumulator] }
   - { name: strike-intelligence,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-intelligence,          deployments: [strike-intelligence-service] }
   # short-premium-agent: ONE Deployment, TWO containers (Agent A live recommender + Agent B EOD advisor daemon).
-  - { name: short-premium-agent,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-short-premium-agent,          deployments: [short-premium-agent-service] }
+  # DEV-ONLY (envs: [dev]) — not registered in k8s/base, referenced only from k8s/overlays/dev.
+  - { name: short-premium-agent,          managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-short-premium-agent,          deployments: [short-premium-agent-service] }
   - { name: strike-liquidity-heatmap,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-liquidity-heatmap,     deployments: [strike-liquidity-heatmap-service] }
   - { name: option-price-behavior,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
   - { name: directional-pressure,         managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-directional-pressure,         deployments: [directional-pressure-service, directional-pressure-databento-service] }
