@@ -49,11 +49,23 @@ add_service_scrape() {
   else
     job_name="options-edge-${service_name}"
   fi
-  cluster_ip="$("${kubectl_cmd[@]}" get service "$service_name" -o jsonpath='{.spec.clusterIP}')"
-
-  if [[ -z "$cluster_ip" || "$cluster_ip" == "None" ]]; then
-    echo "Service $service_name does not have a ClusterIP" >&2
+  # --ignore-not-found makes a genuinely-absent service return empty output with
+  # exit 0, while a real lookup failure (API down, bad kubeconfig, RBAC) still
+  # exits non-zero. We must distinguish the two: skipping an absent service is
+  # fine, but treating a transient kubectl failure as "no services" would render
+  # an empty managed block and wipe the live scrape config on install. Abort
+  # instead so the existing prometheus.yml is left untouched.
+  if ! cluster_ip="$("${kubectl_cmd[@]}" get service "$service_name" --ignore-not-found -o jsonpath='{.spec.clusterIP}')"; then
+    echo "kubectl lookup failed for $service_name — aborting without touching Prometheus config" >&2
     exit 1
+  fi
+
+  # Services toggle on/off across environments (some are pinned to 0 replicas or
+  # removed entirely — see the disabled-services list). A genuinely absent or
+  # headless service must not fail the whole observability stage: skip it.
+  if [[ -z "$cluster_ip" || "$cluster_ip" == "None" ]]; then
+    echo "Skipping scrape for $service_name: no ClusterIP (service absent or headless)." >&2
+    return 0
   fi
 
   cat >>"$managed_block" <<EOF
@@ -61,6 +73,10 @@ add_service_scrape() {
     scrape_interval: 5s
     scrape_timeout: 5s
     metrics_path: /metrics
+    # Some services' /metrics handlers omit a Content-Type header; Prometheus 3.x
+    # rejects those unless a fallback wire format is declared. Compliant targets
+    # (which send a proper Content-Type) ignore this.
+    fallback_scrape_protocol: PrometheusText0.0.4
     static_configs:
       - targets:
           - ${cluster_ip}:${service_port}
@@ -71,13 +87,17 @@ add_service_scrape() {
 EOF
 }
 
+# Every deployed service that exposes an /metrics HTTP endpoint (app.kafka.ProcessingMetrics).
+# add_service_scrape skips gracefully if a service is absent, so entries for services that are
+# currently disabled/removed (mission-pressure, volume-pace, volume-sandwich, unusual-whales-gex)
+# are harmless — they light up automatically if the service comes back.
 add_service_scrape raw-to-display-service 8080
 add_service_scrape options-edge-databento-feed 8010
 add_service_scrape databento-volume-aggregator 8080
 add_service_scrape option-price-behavior-service 8080
 add_service_scrape databento-mission-pressure-service 8098
 add_service_scrape databento-mission-sandwich-service 8099
-# DISABLED until further notice (svc replicas pinned to 0, not deployed): add_service_scrape volume-pace-service 8080
+add_service_scrape volume-pace-service 8080
 add_service_scrape directional-pressure-service 8080
 add_service_scrape volume-sandwich-service 8080
 add_service_scrape unusual-whales-gex-service 8080
@@ -91,6 +111,14 @@ add_service_scrape strike-liquidity-heatmap-service 8111
 add_service_scrape ibkr-feed-service 8080
 add_service_scrape feed-gateway-service 8091
 add_service_scrape options-edge-integration-test 8080
+# Added 2026-07-09 — remaining services that expose /metrics (verified serving options_edge_* metrics).
+add_service_scrape databento-gex-service 8100
+add_service_scrape databento-gex-history-service 8080
+add_service_scrape gex-delta-redis-writer 8101
+add_service_scrape strike-flow-avro-adapter 8109
+add_service_scrape strike-flow-classifier-databento 8097
+add_service_scrape strike-intelligence-service 8114
+add_service_scrape unified-sr-service 8108
 
 cat >>"$managed_block" <<EOF
 $END_MARKER
@@ -98,6 +126,15 @@ EOF
 
 if ! grep -q '^scrape_configs:' "$PROMETHEUS_CONFIG_FILE"; then
   echo "$PROMETHEUS_CONFIG_FILE does not contain scrape_configs" >&2
+  exit 1
+fi
+
+# Guard: never install an empty managed block. Even though a failed kubectl
+# lookup already aborts above, refuse to write a config that would drop every
+# options-edge scrape — a real deploy always produces at least one job.
+generated_jobs="$(grep -c '^  - job_name: ' "$managed_block" || true)"
+if [[ "$generated_jobs" -eq 0 ]]; then
+  echo "Managed scrape block is empty — refusing to overwrite $PROMETHEUS_CONFIG_FILE" >&2
   exit 1
 fi
 
@@ -144,24 +181,33 @@ prometheus_query_is_one() {
   python3 -c 'import json, sys; data = json.load(sys.stdin); sys.exit(0 if any(str(row.get("value", ["", "0"])[1]) == "1" for row in data.get("data", {}).get("result", [])) else 1)' <<<"$body" 2>/dev/null
 }
 
-# volume-pace-service removed from the verify list: DISABLED until further notice (replicas pinned to 0, scrape can never come up)
-for service_name in raw-to-display-service options-edge-databento-feed databento-volume-aggregator option-price-behavior-service databento-mission-pressure-service databento-mission-sandwich-service directional-pressure-service volume-sandwich-service unusual-whales-gex-service raw-postgres-writer pressure-postgres-writer hpsf-postgres-writer-service spx-mission-control-service delta-flow-service dealer-ledger-service strike-liquidity-heatmap-service ibkr-feed-service feed-gateway-service options-edge-integration-test; do
-  if [[ "$service_name" == options-edge-* ]]; then
-    job_name="$service_name"
-  else
-    job_name="options-edge-${service_name}"
-  fi
+# Verify only the jobs we actually emitted (services that resolved to a ClusterIP).
+# Individual services can legitimately be down (starting, pinned to 0, market-gated
+# like the integration test), so a down scrape is a warning — the stage fails only
+# if the managed block produced nothing or Prometheus reloaded none of it.
+mapfile -t managed_jobs < <(awk '/^  - job_name: /{print $3}' "$managed_block")
+up_count=0
+for job_name in "${managed_jobs[@]}"; do
   query="up{job=\"${job_name}\"}"
+  ok=false
   for _ in $(seq 1 20); do
-    if prometheus_query_is_one "$query"; then
-      echo "Prometheus scrape is up for $service_name"
-      break
-    fi
+    if prometheus_query_is_one "$query"; then ok=true; break; fi
     sleep 3
   done
-
-  if ! prometheus_query_is_one "$query"; then
-    echo "Prometheus scrape did not become up for $service_name" >&2
-    exit 1
+  if [[ "$ok" == true ]]; then
+    up_count=$((up_count + 1))
+    echo "Prometheus scrape is up for $job_name"
+  else
+    echo "WARNING: Prometheus scrape not up for $job_name (service down or not yet ready)." >&2
   fi
 done
+
+if [[ "${#managed_jobs[@]}" -eq 0 ]]; then
+  echo "No managed scrape jobs were generated" >&2
+  exit 1
+fi
+if [[ "$up_count" -eq 0 ]]; then
+  echo "None of the ${#managed_jobs[@]} managed scrapes became up — Prometheus reload likely failed" >&2
+  exit 1
+fi
+echo "Prometheus scrapes up: ${up_count}/${#managed_jobs[@]}"
