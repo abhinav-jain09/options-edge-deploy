@@ -4,6 +4,7 @@ images:
   directional-pressure-service: 192.168.100.252:5000/options-edge-directional-pressure:dev
   databento-gex-history-service: 192.168.100.252:5000/options-edge-databento-gex-history:dev
   databento-gex-service: 192.168.100.252:5000/options-edge-databento-gex:dev
+  options-edge-databento-feed: 192.168.100.252:5000/options-edge-databento-feed:dev
   raw-postgres-writer: 192.168.100.252:5000/options-edge-raw-postgres-writer:dev
   pressure-postgres-writer: 192.168.100.252:5000/options-edge-pressure-postgres-writer:dev
   pin-postgres-writer: 192.168.100.252:5000/options-edge-pin-postgres-writer:dev
