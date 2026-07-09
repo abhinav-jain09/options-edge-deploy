@@ -79,7 +79,7 @@ spec:
             - name: KAFKA_MISSION_SANDWICH_MAX_CHANGELOG_BYTES
               value: "8388608"
             - name: KAFKA_MISSION_SANDWICH_OUTPUT_INTERVAL_MS
-              value: "1000"
+              value: "10000"
             - name: KAFKA_MISSION_SANDWICH_STALE_AFTER_MS
               value: "15000"
             - name: MISSION_SANDWICH_REQUIRE_DATABENTO_SOURCE
