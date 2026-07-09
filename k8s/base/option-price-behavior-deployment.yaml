@@ -7,9 +7,10 @@ metadata:
     app.kubernetes.io/name: option-price-behavior-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # SURFACE_RESIDUAL_V2 is now THE option-price-behavior signal (V1 retired). Same image, run via
-  # OPB_SERVICE_VARIANT=v2; reads tcbbo/greeks/underlying and writes the option-price-behavior-v2-*
-  # topics that the gateway/UI consume.
+  # SURFACE_RESIDUAL_V2 is THE (and only) option-price-behavior signal. V1 is DELETED from the codebase
+  # (no OptionPriceBehaviorStreams / launcher / OPB_SERVICE_VARIANT), so the image runs V2 directly. It
+  # reads tcbbo/greeks/underlying and writes the option-price-behavior-v2-* topics + the per-strike
+  # option-price-behavior-by-strike compatibility aggregate that strike-intelligence consumes.
   replicas: 1
   selector:
     matchLabels:
@@ -30,8 +31,6 @@ spec:
             - secretRef:
                 name: options-edge-runtime-secrets
           env:
-            - name: OPB_SERVICE_VARIANT
-              value: v2
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: OPTION_PRICE_BEHAVIOR_INPUT_TCBBO_TOPIC
@@ -44,8 +43,11 @@ spec:
               value: option-price-behavior-v2-by-option
             - name: OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC
               value: option-price-behavior-v2-session
+            # v2r3: bumped for the by-strike stage (new strike-contrib repartition + BY_STRIKE_STORE
+            # changelog). A fresh app.id resets the consumer group to earliest so the new per-strike
+            # aggregate backfills from history instead of starting mid-stream.
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_APP_ID
-              value: option-price-behavior-service-v2r2
+              value: option-price-behavior-service-v2r3
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_NUM_THREADS
               value: "1"
             # First boot reads from earliest so the surface baselines are built before scoring
