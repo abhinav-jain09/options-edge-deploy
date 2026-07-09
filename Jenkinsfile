@@ -39,6 +39,7 @@ pipeline {
     string(name: 'DEALER_LEDGER_CALIBRATION_IMAGE', defaultValue: '', description: 'Dealer ledger calibration service image (scorer + accumulator)')
     string(name: 'STRIKE_LIQUIDITY_HEATMAP_IMAGE', defaultValue: '', description: 'Strike liquidity heatmap service image')
     string(name: 'UNIFIED_SR_IMAGE', defaultValue: '', description: 'Unified S/R image')
+    string(name: 'STRIKE_INTELLIGENCE_IMAGE', defaultValue: '', description: 'Strike intelligence service image')
     string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', defaultValue: '', description: 'Strike-flow Avro adapter image (unified-sr FLOW producer)')
     string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', defaultValue: '', description: 'GEX delta Redis writer image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
@@ -119,6 +120,7 @@ pipeline {
     DEALER_LEDGER_CALIBRATION_IMAGE = "${params.DEALER_LEDGER_CALIBRATION_IMAGE ?: oeProfile.image('dealer-ledger-calibration', 'production', 'prod')}"
     STRIKE_LIQUIDITY_HEATMAP_IMAGE = "${params.STRIKE_LIQUIDITY_HEATMAP_IMAGE ?: oeProfile.image('strike-liquidity-heatmap', 'production', 'prod')}"
     UNIFIED_SR_IMAGE = "${params.UNIFIED_SR_IMAGE ?: oeProfile.image('unified-sr', 'production', 'prod')}"
+    STRIKE_INTELLIGENCE_IMAGE = "${params.STRIKE_INTELLIGENCE_IMAGE ?: oeProfile.image('strike-intelligence', 'production', 'prod')}"
     STRIKE_FLOW_AVRO_ADAPTER_IMAGE = "${params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE ?: oeProfile.image('strike-flow-avro-adapter', 'production', 'prod')}"
     GEX_DELTA_REDIS_WRITER_IMAGE = "${params.GEX_DELTA_REDIS_WRITER_IMAGE ?: oeProfile.image('gex-delta-redis-writer', 'production', 'prod')}"
     IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: oeProfile.image('ibkr-feed', 'production', 'prod')}"
@@ -734,6 +736,7 @@ void promoteToProduction() {
       string(name: 'DEALER_LEDGER_CALIBRATION_IMAGE', value: params.DEALER_LEDGER_CALIBRATION_IMAGE),
       string(name: 'STRIKE_LIQUIDITY_HEATMAP_IMAGE', value: params.STRIKE_LIQUIDITY_HEATMAP_IMAGE),
       string(name: 'UNIFIED_SR_IMAGE', value: params.UNIFIED_SR_IMAGE),
+      string(name: 'STRIKE_INTELLIGENCE_IMAGE', value: params.STRIKE_INTELLIGENCE_IMAGE),
       string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', value: params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE),
       string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', value: params.GEX_DELTA_REDIS_WRITER_IMAGE),
       string(name: 'IBKR_FEED_IMAGE', value: params.IBKR_FEED_IMAGE),
