@@ -67,6 +67,15 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" && pwd 2>/dev/null |
 DRY_RUN="${DRY_RUN:-true}"
 WIPE_ENABLED="${WIPE_ENABLED:-false}"
 
+# 2026-07-08: Kafka now self-expires data via a 12h broker retention
+# (log.retention.ms=43200000 broker-default; _schemas stays exempt at retention.ms=-1).
+# So by default we NO LONGER delete/purge Kafka topics or reset the Streams-state PVCs
+# nightly — that churn is what wiped _schemas (dead schema-ids -> gateway 40403 -> blank
+# UI) and raced app boot. WIPE_KAFKA=false keeps topics + Streams state intact; the
+# nightly run still scales apps to 0 (off-hours footprint), truncates the flow DB, and
+# trims logs. Set WIPE_KAFKA=true for a hard, from-empty Kafka reset.
+WIPE_KAFKA="${WIPE_KAFKA:-false}"
+
 # Market-hours guard: refuse to run between open and close+buffer. The calendar
 # already knows the per-day close (incl. early-close days); we add a buffer so the
 # 16:15 ET options close (calendar NORMAL_CLOSE is the 16:00 equity close) and any
@@ -354,10 +363,14 @@ log "streams-state PVCs discovered: $N_PVCS"
 # ===========================================================================
 if [ "$MUTATE" = "false" ]; then
   log "DRY-RUN — would perform (NO changes made):"
-  log "  A. Kafka: DELETE $N_STATE state topics; PURGE $N_PURGE data topics to 0; KEEP $KEEP_SYS system topics ($SYSTEM_TOPICS)"
-  [ "$N_STATE" -gt 0 ] && { log "     state-topic sample:"; echo $STATE_TOPICS | tr ' ' '\n' | grep . | head -20 | sed 's/^/       DEL /'; }
-  log "  B. Streams state: for each of $N_PVCS PVCs -> scale owner 0, delete+recreate PVC, scale 1 (--as=$KUBECTL_AS)"
-  [ "$N_PVCS" -gt 0 ] && printf '%s\n' "$STATE_PVCS" | sed 's/^/       PVC /'
+  if [ "$WIPE_KAFKA" = "true" ]; then
+    log "  A. Kafka (WIPE_KAFKA=true): DELETE $N_STATE state topics; PURGE $N_PURGE data topics to 0; KEEP $KEEP_SYS system topics ($SYSTEM_TOPICS)"
+    [ "$N_STATE" -gt 0 ] && { log "     state-topic sample:"; echo $STATE_TOPICS | tr ' ' '\n' | grep . | head -20 | sed 's/^/       DEL /'; }
+    log "  B. Streams state: for each of $N_PVCS PVCs -> scale owner 0, delete+recreate PVC, scale 1 (--as=$KUBECTL_AS)"
+    [ "$N_PVCS" -gt 0 ] && printf '%s\n' "$STATE_PVCS" | sed 's/^/       PVC /'
+  else
+    log "  A+B. Kafka topic wipe + Streams-state PVC reset: SKIPPED (WIPE_KAFKA=false — 12h broker retention self-expires the ${N_PURGE} data + ${N_STATE} state topics; topics + $N_PVCS PVCs persist)"
+  fi
   if [ "$DB_WIPE" = "true" ]; then
     log "  C. Postgres: TRUNCATE all public tables in '$EXPECTED_DB' (incl. pin_session_close) + CHECKPOINT + VACUUM"
     TBLS=$(pg "select count(*) from pg_tables where schemaname='public'" 2>/dev/null | tr -d '[:space:]')
@@ -431,8 +444,14 @@ while :; do
   sleep 5
 done
 
+# ==== Kafka topic wipe + Streams-state PVC reset — ONLY when WIPE_KAFKA=true ====
+# Default (WIPE_KAFKA=false): skip A.1/A.2/consumer-reset/B entirely. Kafka's 12h
+# retention expires the session's data on its own overnight, and the Streams state
+# stores persist (so no BufferUnderflow/codec-mismatch on restart — nothing is emptied).
+del_ok=0; del_fail=0; purged=0; pvc_ok=0; pvc_fail=0
+if [ "$WIPE_KAFKA" = "true" ]; then
+
 # ---- A.1: DELETE state topics (*-changelog / *-repartition, incl. compact) ----
-del_ok=0; del_fail=0
 for T in $STATE_TOPICS; do
   is_system_topic "$T" && { log "GUARD: refusing to delete system topic $T"; continue; }   # belt+braces
   if "$KT" --bootstrap-server "$BOOTSTRAP" --delete --topic "$T" >/dev/null 2>&1 \
@@ -505,6 +524,10 @@ if [ -n "$STATE_PVCS" ]; then
   done
 fi
 log "streams-state PVCs: recreated=$pvc_ok failed=$pvc_fail"
+
+else
+  log "WIPE_KAFKA=false — SKIPPING Kafka topic delete/purge + consumer-group reset + Streams-state PVC reset (12h broker retention self-expires the session's data; topics + Streams state persist)"
+fi
 
 # ---- C: Postgres flow-DB wipe (TRUNCATE all public + CHECKPOINT + VACUUM) ----
 trunc_n=0
