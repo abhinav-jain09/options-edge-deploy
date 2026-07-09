@@ -91,6 +91,8 @@ spec:
               value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms384m -Xmx1024m
+            - name: STRIKE_INTEL_ACK_UNTRUSTED_GEX
+              value: "true"
           envFrom:
             - configMapRef:
                 name: options-edge-config
