@@ -81,6 +81,10 @@ spec:
               value: "125"
             - name: OPB_V2_Z_THRESHOLD
               value: "2.19"
+            - name: OPB_V2_MAX_SURFACE_AGE_MS
+              value: "900000"
+            - name: OPB_V2_MAX_FORWARD_AGE_MS
+              value: "900000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms512m -Xmx2g
           envFrom:
