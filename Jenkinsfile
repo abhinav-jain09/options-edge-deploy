@@ -44,6 +44,7 @@ pipeline {
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
     string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
+    string(name: 'ANTHROPIC_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-anthropic-api-key', description: 'Jenkins secret-text credential containing the Anthropic API key (short-premium-agent SP_BACKEND=sdk)')
     string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-db-password', description: 'Jenkins secret-text credential with the prod Keycloak DB password (oe-keycloak-secrets POSTGRES_PASSWORD)')
     string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-admin-password', description: 'Jenkins secret-text credential with the prod Keycloak bootstrap admin password')
     string(name: 'SMOKE_AUTH_PASSWORD_CREDENTIAL_ID', defaultValue: 'options-edge-smoke-password', description: 'Jenkins secret-text credential with the read-only smoke dummy user (oe-smoke) password. Optional: if absent the runtime secret is created with an empty SMOKE_AUTH_PASSWORD and the synthetic auth check fails until it exists.')
@@ -271,28 +272,36 @@ pipeline {
                 --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-Options#100}" \
                 --from-literal=UNUSUAL_WHALES_API_KEY="$UNUSUAL_WHALES_API_KEY" \
                 --from-literal=SMOKE_AUTH_PASSWORD="${SMOKE_AUTH_PASSWORD:-}" \
+                --from-literal=ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
                 --dry-run=client -o yaml | kubectl apply $apply_args -f -
               kubectl -n options-edge create secret generic options-edge-databento-feed-env \
                 --from-literal=DATABENTO_API_KEY="$DATABENTO_API_KEY" \
                 --dry-run=client -o yaml | kubectl apply $apply_args -f -
             '''
           }
+          // Optional credentials: bind each ONLY if it resolves, so a missing one degrades to an
+          // empty literal (see applySecrets' ${VAR:-}) instead of breaking the whole secret stage.
+          def optionalBindings = []
           def smokeId = params.SMOKE_AUTH_PASSWORD_CREDENTIAL_ID?.trim()
-          boolean haveSmoke = false
           if (smokeId) {
             try {
               // Resolve once to confirm the credential exists before the real apply.
               withCredentials([string(credentialsId: smokeId, variable: 'SMOKE_AUTH_PASSWORD')]) { /* probe */ }
-              haveSmoke = true
+              optionalBindings << string(credentialsId: smokeId, variable: 'SMOKE_AUTH_PASSWORD')
             } catch (ignored) {
               echo "WARN: smoke-auth credential '${smokeId}' not found; creating options-edge-runtime-secrets with an EMPTY SMOKE_AUTH_PASSWORD. The synthetic auth check will fail until the credential is created."
             }
           }
-          if (haveSmoke) {
-            withCredentials(baseBindings + [string(credentialsId: smokeId, variable: 'SMOKE_AUTH_PASSWORD')]) { applySecrets() }
-          } else {
-            withCredentials(baseBindings) { applySecrets() }
+          def anthropicId = params.ANTHROPIC_API_KEY_CREDENTIAL_ID?.trim()
+          if (anthropicId) {
+            try {
+              withCredentials([string(credentialsId: anthropicId, variable: 'ANTHROPIC_API_KEY')]) { /* probe */ }
+              optionalBindings << string(credentialsId: anthropicId, variable: 'ANTHROPIC_API_KEY')
+            } catch (ignored) {
+              echo "WARN: anthropic credential '${anthropicId}' not found; creating options-edge-runtime-secrets with an EMPTY ANTHROPIC_API_KEY. short-premium-agent (SP_BACKEND=sdk) fails auth until the credential exists — no other service is affected."
+            }
           }
+          withCredentials(baseBindings + optionalBindings) { applySecrets() }
         }
       }
     }

@@ -10,6 +10,10 @@ resources:
   # (k8s/services/web/overlays/dev) mirrors them — sync is enforced by
   # scripts/ci/validate-services.sh render equivalence.
   - ../../services/web/base
+  # short-premium-agent is DEV-ONLY: referenced here (NOT in k8s/base/kustomization.yaml)
+  # so the production/experiment monolith overlays never render it. services.yaml declares
+  # envs: [dev] to match; the dev image remap below applies to it.
+  - ../../services/short-premium-agent/base
   # NOTE: the databento timewarp replay Job + snapshot-replay Deployment used to live
   # here. They moved to k8s/replay/dev and now deploy on-demand via the dedicated
   # `replay-deploy` job (Jenkinsfile.replay) — OUT of the dev/prod bring-up path. A Job's
@@ -200,4 +204,7 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-web
     newName: host.docker.internal:5001/options-edge-web
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-short-premium-agent
+    newName: host.docker.internal:5001/options-edge-short-premium-agent
     newTag: dev
