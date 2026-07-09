@@ -75,6 +75,16 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
+  # ibkr-feed is kept OFF (replicas:0) in prod too (USER 2026-07-09: VIX moved to dev, so prod no longer
+  # needs the IBKR VIX source). Base stays replicas:1; dev already patches it to 0 — this adds prod. Also
+  # in morning-autostart.sh KEEP_DOWN. Re-enable = remove this patch.
+  - target:
+      kind: Deployment
+      name: ibkr-feed-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.
