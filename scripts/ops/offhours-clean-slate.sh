@@ -377,6 +377,17 @@ fi
 # ===========================================================================
 log ">>> LIVE WIPE BEGINS <<<"
 
+# System-topic retention guard: _schemas (the Schema Registry backing store) MUST be compact + INFINITE
+# retention. The broker default is log.retention.ms=1d; without an explicit override, a _schemas that is
+# ever recreated (auto-create inherits the delete-policy default) would age out its schemas after a day →
+# SR wipe → producers emit dead cached schema IDs → gateway "Schema N not found; 40403" → blank UI (the
+# dev-schema-registry-wipe-gateway-wedge incident, 2026-07-08). _schemas is delete-exempt below; this
+# additionally pins its retention so the schemas can never expire. Fail-soft.
+"$KAFKA_BIN/kafka-configs.sh" --bootstrap-server "$BOOTSTRAP" --alter --entity-type topics \
+  --entity-name _schemas --add-config "retention.ms=-1,cleanup.policy=compact" >/dev/null 2>&1 \
+  && log "system-topic guard: _schemas pinned to compact + retention.ms=-1" \
+  || log "WARN: could not pin _schemas retention (non-fatal)"
+
 # Capture disk FREE before any delete, for the "freed GB" report at the end. This
 # is a measurement only (fail-soft) — it never blocks the wipe.
 FREE_BEFORE=$(free_bytes_total)
