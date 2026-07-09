@@ -54,7 +54,10 @@ spec:
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
-        - envFrom:
+        - env:
+            - name: DATABENTO_PUBLISH_INTERVAL_MS
+              value: "1000"
+          envFrom:
             - configMapRef:
                 name: options-edge-databento-feed-config
             - secretRef:

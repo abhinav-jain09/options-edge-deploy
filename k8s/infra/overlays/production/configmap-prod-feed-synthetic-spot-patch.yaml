@@ -20,7 +20,3 @@ data:
   APP_PROFILE: dev
   DATABENTO_SPOT_SOURCE: SYNTHETIC
   HPSF_SPX_SPOT_SOURCE: SYNTHETIC_OPTION_SPOT
-  # PROD-ONLY: publish each strike's snapshot at most once per second (dev keeps the 250ms default).
-  # Cuts the feed's per-strike publish/serialize/Kafka work ~4x to relieve the single-core CPU
-  # backpressure that runs prod ~5-6.5 min behind real-time. 1s is ample freshness for GEX.
-  DATABENTO_PUBLISH_INTERVAL_MS: "1000"

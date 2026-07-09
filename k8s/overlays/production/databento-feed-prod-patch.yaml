@@ -1,0 +1,19 @@
+# PROD-ONLY: publish each strike's snapshot at most once per second (dev keeps the 250ms default).
+# An explicit container env overrides the shared configmap's envFrom value, so this ships via the
+# per-service deploy (service-deploy) WITHOUT touching common-infra (the shared feed configmap is
+# consumed by databento-gex too and lives in the infra layer). Cuts the feed's per-strike publish/
+# serialize/Kafka work ~4x to relieve the single-core CPU backpressure that runs prod ~5-6.5 min
+# behind real-time. 1s is ample freshness for GEX.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: options-edge-databento-feed
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: databento-feed
+          env:
+            - name: DATABENTO_PUBLISH_INTERVAL_MS
+              value: "1000"
