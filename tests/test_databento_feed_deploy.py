@@ -76,7 +76,7 @@ class DatabentoFeedDeployTest(unittest.TestCase):
     def test_prometheus_scrape_includes_databento_feed(self) -> None:
         script = self.read("scripts/monitoring/apply-prometheus-scrapes.sh")
         self.assertIn("add_service_scrape options-edge-databento-feed 8010", script)
-        self.assertIn("options-edge-databento-feed databento-volume-aggregator", script)
+        self.assertIn("add_service_scrape databento-volume-aggregator 8080", script)
 
     def test_kustomize_renders_dev_and_production(self) -> None:
         for overlay in ["dev", "production"]:
