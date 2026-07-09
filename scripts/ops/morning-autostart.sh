@@ -42,10 +42,11 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #     databento-maxpain-service, hpsf-stage-a-service, hpsf-stage-b-service,
 #     unusual-whales-gex-service, unusual-whales-gex-history-service,
 #     volume-sandwich-service, volume-sandwich-databento-service
-#   3 USER-directed off (manifest still says 1 — enforced here until the manifest
-#   is corrected): volume-pace-service (IBKR variant), strike-flow-classifier-ibkr
-#   (IBKR out of scope), options-edge-integration-test (no continuous tests in prod)
-KEEP_DOWN="${KEEP_DOWN:-databento-maxpain-service hpsf-stage-a-service hpsf-stage-b-service unusual-whales-gex-service unusual-whales-gex-history-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service strike-flow-classifier-ibkr options-edge-integration-test}"
+#   4 USER-directed off (also set replicas:0 in the prod overlay): volume-pace-service
+#   (IBKR variant), strike-flow-classifier-ibkr (IBKR out of scope),
+#   options-edge-integration-test (no continuous tests in prod), spx-mission-control-service
+#   (2026-07-09 USER: keep OFF on prod; databento-mission-sandwich-service stays UP).
+KEEP_DOWN="${KEEP_DOWN:-databento-maxpain-service hpsf-stage-a-service hpsf-stage-b-service unusual-whales-gex-service unusual-whales-gex-history-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only
