@@ -160,7 +160,7 @@
             IBKR_FEED_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE \
-            DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE; do
+            DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
@@ -292,6 +292,7 @@ EOF
           kubectl -n options-edge set image deployment/strike-liquidity-heatmap-service strike-liquidity-heatmap="$STRIKE_LIQUIDITY_HEATMAP_IMAGE"
           kubectl -n options-edge set image deployment/spx-mission-control-service spx-mission-control="$SPX_MISSION_CONTROL_IMAGE"
           kubectl -n options-edge set image deployment/unified-sr-service unified-sr="$UNIFIED_SR_IMAGE"
+          kubectl -n options-edge set image deployment/strike-intelligence-service strike-intelligence="$STRIKE_INTELLIGENCE_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-avro-adapter strike-flow-avro-adapter="$STRIKE_FLOW_AVRO_ADAPTER_IMAGE"
           kubectl -n options-edge set image deployment/gex-delta-redis-writer gex-delta-redis-writer="$GEX_DELTA_REDIS_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
@@ -317,6 +318,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/strike-liquidity-heatmap-service
           kubectl -n options-edge rollout restart deployment/spx-mission-control-service
           kubectl -n options-edge rollout restart deployment/unified-sr-service
+          kubectl -n options-edge rollout restart deployment/strike-intelligence-service
           kubectl -n options-edge rollout restart deployment/strike-flow-avro-adapter
           kubectl -n options-edge rollout restart deployment/gex-delta-redis-writer
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
@@ -343,6 +345,7 @@ EOF
           kubectl -n options-edge rollout status deployment/strike-liquidity-heatmap-service --timeout=600s
           kubectl -n options-edge rollout status deployment/spx-mission-control-service --timeout=600s
           kubectl -n options-edge rollout status deployment/unified-sr-service --timeout=600s
+          kubectl -n options-edge rollout status deployment/strike-intelligence-service --timeout=600s
           kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=600s
           kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=600s
           kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=600s
