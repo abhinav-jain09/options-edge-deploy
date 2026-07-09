@@ -30,6 +30,18 @@ spec:
                 name: options-edge-databento-feed-config
             - secretRef:
                 name: options-edge-databento-feed-env
+          # Data-freshness liveness knobs (feed monitoring.evaluate_liveness). Explicit here so the
+          # /health/live thresholds are tunable via this deployment (edit + service-deploy databento-feed)
+          # with no code rebuild — the infra configmap is applied by common-infra-deploy, which is
+          # currently blocked by an unrelated guard, so the deployment env is the reliable knob. Values
+          # match the code defaults: STALE = restart a RUNNING feed whose last live record is older than
+          # this (market open); STARTUP_GRACE = longer window until the first record this process so a
+          # restart can't loop. Applies to all envs; add a per-env overlay patch to differ.
+          env:
+            - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
+              value: "15"
+            - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
+              value: "90"
           ports:
             - name: metrics
               containerPort: 8010
