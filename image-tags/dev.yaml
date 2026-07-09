@@ -22,6 +22,7 @@ images:
   strike-flow-avro-adapter: 192.168.100.252:5000/options-edge-strike-flow-avro-adapter:dev
   databento-volume-aggregator: 192.168.100.252:5000/options-edge-databento-volume-aggregator:dev
   option-price-behavior-service: 192.168.100.252:5000/options-edge-option-price-behavior:dev
+  short-premium-agent-service: host.docker.internal:5001/options-edge-short-premium-agent:dev
   volume-pace-databento-service: 192.168.100.252:5000/options-edge-volume-pace:dev
   gex-delta-redis-writer: 192.168.100.252:5000/options-edge-gex-delta-redis-writer:dev
   hpsf-postgres-writer-service: 192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev

@@ -201,3 +201,6 @@ images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: host.docker.internal:5001/options-edge-web
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-short-premium-agent
+    newName: host.docker.internal:5001/options-edge-short-premium-agent
+    newTag: dev

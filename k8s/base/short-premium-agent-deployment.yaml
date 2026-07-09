@@ -1,0 +1,116 @@
+# short-premium-agent — Agent A (live 0DTE SPX credit-spread recommender) + Agent B
+# (end-of-day system-improvement advisor). ONE Deployment, TWO containers sharing an
+# emptyDir at /data so Agent B can read the paper book / audits that Agent A writes
+# (separate pods could not share a filesystem, and a CronJob is forbidden in the
+# service slice by validate-services.sh's blast-radius rule).
+#
+# Both containers use the SAME Python image (SP_BACKEND=sdk → ANTHROPIC_API_KEY from
+# options-edge-runtime-secrets). Agent A self-gates market hours; Agent B self-schedules
+# to SP_EOD_TIME ET. The whole feature ships OFF (SP_ENABLED=0) — flip it with the
+# short-premium-toggle Jenkins job. Image ref is the prod-registry BASE; each env overlay
+# remaps it (dev → host.docker.internal:5001) via its images: transformer.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: short-premium-agent-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: short-premium-agent-service
+    app.kubernetes.io/component: short-premium-agent-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: short-premium-agent-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: short-premium-agent-service
+        app.kubernetes.io/component: short-premium-agent-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        # ---- Agent A: live recommender (entrypoint = run_agent.py) ----
+        - name: agent-a
+          image: 192.168.100.252:5000/options-edge-short-premium-agent:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config          # KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, …
+            - secretRef:
+                name: options-edge-runtime-secrets  # ANTHROPIC_API_KEY (SP_BACKEND=sdk)
+          env:
+            # --- control (SP_ENABLED flipped by the short-premium-toggle job) ---
+            - {name: SP_ENABLED,        value: "0"}
+            - {name: SP_BACKEND,        value: "sdk"}
+            - {name: SP_EMIT_KAFKA,     value: "1"}       # publish recs to the gateway topic
+            - {name: SP_HEALTH_PORT,    value: "8130"}
+            # --- model ---
+            - {name: SP_MODEL,          value: "claude-opus-4-8"}
+            - {name: SP_MAX_TOKENS,     value: "4000"}
+            # --- strategy guardrails ---
+            - {name: SP_WING,           value: "5"}
+            - {name: SP_MIN_CREDIT,     value: "2.50"}
+            - {name: SP_MAX_TRADES,     value: "2"}
+            - {name: SP_QTY,            value: "1"}
+            - {name: SP_SYMBOL,         value: "SPX"}
+            # --- cadence (ramps into the close) ---
+            - {name: SP_CADENCE,        value: "300"}
+            - {name: SP_CADENCE_T10_5,  value: "60"}
+            - {name: SP_CADENCE_FINAL5, value: "30"}
+            # --- market gate / data integrity ---
+            - {name: SP_OPEN,           value: "09:35"}
+            - {name: SP_CLOSE,          value: "16:00"}
+            - {name: SP_MARKET_GATE,    value: "1"}
+            - {name: SP_REQUIRE_REAL,   value: "1"}
+            - {name: SP_MAX_AGE,        value: "20"}
+            - {name: SP_REC_TOPIC,      value: "options.short-premium.recommendation"}
+            # --- shared paper-book/audit/cost state (read by Agent B in the sidecar) ---
+            - {name: SP_BOOK,           value: "/data/paper_book.json"}
+            - {name: SP_AUDIT_DIR,      value: "/data/audit"}
+            - {name: SP_COST,           value: "/data/daily_cost.json"}
+          volumeMounts:
+            - {name: sp-data, mountPath: /data}
+          ports:
+            - {name: health, containerPort: 8130}
+          livenessProbe:
+            httpGet: {path: /health, port: health}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /health, port: health}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 50m, memory: 256Mi}
+            limits:   {memory: 512Mi}
+        # ---- Agent B: end-of-day advisor daemon (entrypoint override) ----
+        - name: agent-b
+          image: 192.168.100.252:5000/options-edge-short-premium-agent:dev
+          imagePullPolicy: Always
+          command: ["python", "run_agent_b.py", "--daemon"]
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - {name: SP_BACKEND,   value: "sdk"}
+            - {name: SP_MODEL,     value: "claude-opus-4-8"}
+            - {name: SP_SYMBOL,    value: "SPX"}
+            - {name: SP_EOD_TIME,  value: "16:05"}
+            # same shared state paths as Agent A (same pod, shared /data)
+            - {name: SP_BOOK,      value: "/data/paper_book.json"}
+            - {name: SP_AUDIT_DIR, value: "/data/audit"}
+            - {name: SP_COST,      value: "/data/daily_cost.json"}
+          volumeMounts:
+            - {name: sp-data, mountPath: /data}
+          resources:
+            requests: {cpu: 25m, memory: 128Mi}
+            limits:   {memory: 256Mi}
+      volumes:
+        - name: sp-data
+          emptyDir: {}
