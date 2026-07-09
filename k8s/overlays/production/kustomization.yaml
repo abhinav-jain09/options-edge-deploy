@@ -65,6 +65,16 @@ patches:
   # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
   # MUST MIRROR the standalone slice k8s/services/databento-feed/overlays/production (validate-services).
   - path: databento-feed-prod-patch.yaml
+  # spx-mission-control is kept OFF (replicas:0) in prod (USER 2026-07-09). MUST MIRROR the standalone
+  # slice k8s/services/spx-mission-control/overlays/production (validate-services: mono==slice). Re-enable
+  # by removing this patch AND setting the slice back to replicas:1.
+  - target:
+      kind: Deployment
+      name: spx-mission-control-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.
