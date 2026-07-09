@@ -15,6 +15,7 @@ images:
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:dev
   dealer-ledger-calibration-scorer: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:dev
   dealer-ledger-calibration-accumulator: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:dev
+  strike-intelligence-service: 192.168.100.252:5000/options-edge-strike-intelligence:dev
   strike-liquidity-heatmap-service: host.docker.internal:5001/options-edge-strike-liquidity-heatmap:dev
   spx-mission-control-service: 192.168.100.252:5000/options-edge-spx-mission-control:dev
   unified-sr-service: 192.168.100.252:5000/options-edge-unified-sr:dev

@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: strike-intelligence-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: strike-intelligence-service
+    app.kubernetes.io/component: strike-intelligence-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: strike-intelligence-service
+  ports:
+    - name: health
+      port: 8114
+      targetPort: health
