@@ -80,6 +80,10 @@ _ctrs="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0
 CONTAINER="$(printf '%s\n' "$_ctrs" | grep -v '^---$' | head -1)"
 _imgs="$(yq -r 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image' "$RENDER")"
 MUTABLE_IMAGE="$(printf '%s\n' "$_imgs" | grep -v '^---$' | head -1)"
+# The exact image string as it appears in the render (before any production remap below).
+# A Deployment may run MORE THAN ONE container on this shared image (e.g. short-premium-agent's
+# agent-a + agent-b); the pin step below rewrites EVERY container carrying this ref, not just [0].
+RENDER_IMAGE0="$MUTABLE_IMAGE"
 [ -n "$DEPLOYMENT" ] && [ -n "$MUTABLE_IMAGE" ] || { echo "FATAL: could not extract Deployment/image from the render" >&2; exit 1; }
 if [ "$(printf '%s\n' "$DEPLOYMENTS" | sort)" != "$(printf '%s\n' "$ALLOWED" | sort)" ]; then
   echo "FATAL: rendered Deployments do not exactly match services.yaml for '$SERVICE'" >&2
@@ -139,8 +143,11 @@ PINNED_IMAGE="$(pin_ref "$MUTABLE_IMAGE")" || {
   exit 1
 }
 echo "pinned $MUTABLE_IMAGE -> $PINNED_IMAGE"
-PINNED_IMAGE="$PINNED_IMAGE" yq -i \
-  "(. | select(.kind == \"Deployment\") | .spec.template.spec.containers[0].image) |= strenv(PINNED_IMAGE)" \
+# Pin EVERY container that carries the shared service image (RENDER_IMAGE0), not just
+# containers[0] — a single-container Deployment is unchanged, while a multi-container pod
+# (agent-a + agent-b) gets its sidecar pinned too instead of failing the digest-pin gate below.
+PINNED_IMAGE="$PINNED_IMAGE" RENDER_IMAGE0="$RENDER_IMAGE0" yq -i \
+  "(. | select(.kind == \"Deployment\") | .spec.template.spec.containers[] | select(.image == strenv(RENDER_IMAGE0)) | .image) |= strenv(PINNED_IMAGE)" \
   "$RENDER"
 unpinned="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[].image' "$RENDER" \
   | { grep '/options-edge-' || true; } | { grep -v '@sha256:' || true; })"
