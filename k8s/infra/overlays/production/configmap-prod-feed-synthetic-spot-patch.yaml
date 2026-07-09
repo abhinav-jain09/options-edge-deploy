@@ -20,11 +20,3 @@ data:
   APP_PROFILE: dev
   DATABENTO_SPOT_SOURCE: SYNTHETIC
   HPSF_SPX_SPOT_SOURCE: SYNTHETIC_OPTION_SPOT
-  # Data-freshness liveness knobs (see monitoring.evaluate_liveness). Set explicitly on prod so the
-  # thresholds are tunable via this configmap without a code change. Values match the code defaults:
-  # STALE_SECONDS = while the market is OPEN and the feed HAS published, restart if the last live
-  # record is older than this. STARTUP_GRACE_SECONDS = the longer window used until the feed's FIRST
-  # record this process (boot/restart/dead-at-open) so a restart can never loop. Changing these needs
-  # a pod restart to take effect (configmap is read at process start): edit + service-deploy databento-feed.
-  DATABENTO_FEED_LIVENESS_STALE_SECONDS: "15"
-  DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS: "90"
