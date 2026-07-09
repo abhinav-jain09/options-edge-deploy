@@ -73,7 +73,10 @@ spec:
             - {name: SP_OPEN,           value: "09:35"}
             - {name: SP_CLOSE,          value: "16:00"}
             - {name: SP_MARKET_GATE,    value: "1"}
-            - {name: SP_REQUIRE_REAL,   value: "1"}
+            # DEV-DEMO: the dev feed is SYNTHETIC (APP_PROFILE=dev), so accept it here to
+            # exercise the full recommend→overlay pipeline. PROD MUST set this back to "1"
+            # (refuse synthetic / fail-loud) — never trade real money on synthetic data.
+            - {name: SP_REQUIRE_REAL,   value: "0"}
             - {name: SP_MAX_AGE,        value: "20"}
             - {name: SP_REC_TOPIC,      value: "options.short-premium.recommendation"}
             # --- shared paper-book/audit/cost state (read by Agent B in the sidecar) ---

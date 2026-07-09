@@ -72,7 +72,7 @@ spec:
             - name: SP_MARKET_GATE
               value: "1"
             - name: SP_REQUIRE_REAL
-              value: "1"
+              value: "0"
             - name: SP_MAX_AGE
               value: "20"
             - name: SP_REC_TOPIC
