@@ -18,7 +18,7 @@ class DatabentoMissionSandwichDeployTest(unittest.TestCase):
         self.assertIn("APP_MARKET_DATA_SOURCE", deployment)
         self.assertIn("DATABENTO", deployment)
         self.assertIn("KAFKA_MISSION_SANDWICH_VOLUME_TOPIC", deployment)
-        self.assertIn("display.volume.current", deployment)
+        self.assertIn("options.databento.display.volume.current", deployment)
         self.assertIn("KAFKA_MISSION_SANDWICH_PACE_TOPIC", deployment)
         self.assertIn("options.databento.pace.mission", deployment)
         self.assertIn("KAFKA_MISSION_SANDWICH_PRESSURE_TOPIC", deployment)
@@ -44,8 +44,8 @@ class DatabentoMissionSandwichDeployTest(unittest.TestCase):
     def test_topics_include_mission_sandwich(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
 
-        self.assertIn("options.databento.sandwich.mission:4", topics)
-        self.assertIn("display.volume.current:4", topics)
+        self.assertIn("options.databento.sandwich.mission:32", topics)
+        self.assertIn("options.databento.display.volume.current:32", topics)
         self.assertIn("options.databento.sandwich.mission", topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1])
 
     def test_smoke_and_monitoring_include_mission_sandwich(self) -> None:
