@@ -47,6 +47,10 @@ patches:
   # PROD: option-price-behavior V2 heap 3g + limit 5Gi (base 2g/2Gi OOMKilled —
   # heap == limit, no off-heap room). Re-enabled after the 2026-07-07 freeze.
   - path: option-price-behavior-prod-patch.yaml
+  # PROD-ONLY: databento-feed 1s snapshot publish interval (explicit container env overrides the
+  # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
+  # MUST MIRROR the standalone slice k8s/services/databento-feed/overlays/production (validate-services).
+  - path: databento-feed-prod-patch.yaml
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.
