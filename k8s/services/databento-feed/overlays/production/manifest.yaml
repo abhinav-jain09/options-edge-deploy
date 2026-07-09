@@ -56,7 +56,7 @@ spec:
       containers:
         - env:
             - name: DATABENTO_PUBLISH_INTERVAL_MS
-              value: "1000"
+              value: "2000"
             - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
               value: "15"
             - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
