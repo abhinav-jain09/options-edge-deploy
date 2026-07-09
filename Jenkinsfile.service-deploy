@@ -22,11 +22,11 @@ pipeline {
     choice(name: 'SERVICE', choices: [
       'databento-feed', 'databento-gex', 'databento-gex-history', 'databento-mission-sandwich',
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
-      'directional-pressure', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
+      'directional-pressure', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
       'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
       'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-liquidity-heatmap',
       'unified-sr', 'volume-pace'
-    ], description: 'Which service to deploy (dir under k8s/services; kept in sync with services.yaml standalone entries — added dealer-ledger, dropped 14-disabled-service leftovers per #288).')
+    ], description: 'Which service to deploy (dir under k8s/services; kept in sync with services.yaml standalone entries — added dealer-ledger + feed-gateway, dropped 14-disabled-service leftovers per #288).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
     booleanParam(name: 'BUILD_IMAGES', defaultValue: false,
@@ -67,8 +67,10 @@ pipeline {
           // processing job maps image->maven module and runs `mvn -pl <module> -am`, then builds+pushes
           // just that image. SERVICE_PARAM is read by the shell (env), never Groovy-interpolated into the
           // script text (injection-safe, matches the rest of these jobs).
-          // NOTE: databento-feed has no processing module (it builds in options-edge-databento-feed-deploy);
-          // selecting it with BUILD_IMAGES=true fails fast in the processing job with the valid list.
+          // NOTE: databento-feed and feed-gateway have no processing module (they build in their own
+          // repos' jobs — options-edge-databento-feed-deploy and feed-gateway-deploy respectively);
+          // selecting either with BUILD_IMAGES=true fails fast in the processing job with the valid
+          // list. Build their image via the own-repo job first, then deploy here with BUILD_IMAGES=false.
           def image = sh(
             script: 'set -euo pipefail; yq -r ".services[] | select(.name == \\"$SERVICE_PARAM\\") | .image" services.yaml',
             returnStdout: true
