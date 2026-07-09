@@ -24,6 +24,12 @@ export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 NS="${K8S_NAMESPACE:-options-edge}"
 SELECTOR="${APP_SELECTOR:-app.kubernetes.io/part-of=options-edge}"
 DRY_RUN="${DRY_RUN:-true}"
+# 2026-07-08: Kafka now self-expires data via a 12h broker retention
+# (log.retention.ms=43200000). This daily topic-delete + rolling-restart is therefore
+# REDUNDANT and is DISABLED by default (WIPE_KAFKA=false -> the run is a logged no-op).
+# The Jenkins job (options-edge-kafka-reset) can stay wired but does nothing unless
+# WIPE_KAFKA=true is explicitly set for a one-off hard reset.
+WIPE_KAFKA="${WIPE_KAFKA:-false}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-180}"
 DISCORD_WEBHOOK_URL="${DISCORD_WEBHOOK_URL:-}"   # empty -> no Discord post
 KT="$KAFKA_BIN/kafka-topics.sh"
@@ -63,7 +69,16 @@ LOCK="/tmp/daily-kafka-reset.lock"
 exec 9>"$LOCK" || exit 1
 if ! flock -n 9; then log "another reset is already running; exiting"; exit 0; fi
 
-log "=== daily kafka reset start (DRY_RUN=$DRY_RUN) ==="
+log "=== daily kafka reset start (DRY_RUN=$DRY_RUN WIPE_KAFKA=$WIPE_KAFKA) ==="
+
+# Disabled-by-default gate: Kafka's 12h broker retention self-expires the session's
+# data, so we no longer delete topics or rolling-restart apps nightly. Exit as a no-op
+# unless a hard reset is explicitly requested.
+if [ "$WIPE_KAFKA" != "true" ]; then
+  log "WIPE_KAFKA=false — Kafka self-expires via 12h broker retention; skipping topic delete + rolling restart (no-op)."
+  discord "💤 Kafka daily-reset skipped — 12h broker retention self-expires data; no topic delete (set WIPE_KAFKA=true for a hard reset)."
+  exit 0
+fi
 
 # ---- sanity: both kafka and k8s must be reachable, else abort untouched ----
 if ! "$KT" --bootstrap-server "$BOOTSTRAP" --list >/tmp/dkr-topics.txt 2>/dev/null; then

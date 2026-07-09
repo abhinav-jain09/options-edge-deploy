@@ -33,6 +33,11 @@ DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volu
 # self-creates its own output + Kafka-Streams internal topics on startup, exactly like prod.
 DEPLOY_REPO="${DEPLOY_REPO:-/Users/abhinav/development/workspace/options-edge-deploy}"
 TOPICS_ENV_REF="${TOPICS_ENV_REF:-origin/main:scripts/kafka/topics.env}"
+# 2026-07-08: Kafka now self-expires data via a 12h broker retention (log.retention.ms=43200000),
+# so we NO LONGER delete+recreate topics or reset Streams-state PVCs nightly (that churn caused the
+# _schemas wipe + boot-order races). WIPE_KAFKA=false skips the topic-delete + PVC-reset; the nightly
+# run just scales apps down + trims logs/registry/snapshots. Set WIPE_KAFKA=true for a hard reset.
+WIPE_KAFKA="${WIPE_KAFKA:-false}"
 LOG=/Users/abhinav/oe-ops/dev-cleanup.log
 
 # ---------- LOGS: safe, non-destructive (no topic/state data touched) ----------
@@ -161,7 +166,10 @@ do_clean() {
     sleep 5
   done
 
-  # 3. reset every streams-state PVC (delete + recreate empty RocksDB)
+  # 3. reset every streams-state PVC (delete + recreate empty RocksDB) — ONLY on a hard WIPE_KAFKA reset.
+  if [ "$WIPE_KAFKA" != true ]; then
+    echo "3) keeping Streams-state PVCs (retention-based cleanup — WIPE_KAFKA=false)"
+  else
   echo "3) resetting streams-state PVCs ..."
   $KK get pvc -o json 2>/dev/null | python3 -c '
 import sys,json
@@ -173,6 +181,7 @@ for p in json.load(sys.stdin)["items"]:
     $K delete pvc "$pvc" --wait=true --timeout=60s >/dev/null 2>&1
     printf 'apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: %s\n  namespace: options-edge\n  labels:\n    app.kubernetes.io/component: kafka-streams-state\nspec:\n  accessModes: [ReadWriteOnce]\n  storageClassName: %s\n  resources:\n    requests:\n      storage: %s\n' "$pvc" "$sc" "$sz" | $K apply -f - >/dev/null 2>&1
   done
+  fi
 
   # 3b. (removed 2026-07-08) The topic list is NO LONGER auto-captured from live state. 'start' now
   #     pre-creates the deploy repo's topics.env platform topics (the reviewed, versioned config);
@@ -180,10 +189,15 @@ for p in json.load(sys.stdin)["items"]:
   #     See do_start() + TOPICS_ENV_REF. This removes the autonomous drift where a clean run silently
   #     re-learned whatever happened to be present.
 
-  # 4. delete ALL non-system topics (data + changelog + repartition). Apps down -> nothing recreates them.
-  echo "4) deleting all non-system topics ..."
-  $KT --bootstrap-server $BS --list 2>/dev/null | grep -vE '^__|^_schemas' \
-    | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
+  # 4. delete ALL non-system topics — ONLY on a hard WIPE_KAFKA reset. Normally Kafka's 12h retention
+  #    expires data itself, so topics + Streams state PERSIST across the nightly run (no recreate churn).
+  if [ "$WIPE_KAFKA" != true ]; then
+    echo "4) keeping topics (Kafka 12h retention expires data itself — WIPE_KAFKA=false)"
+  else
+    echo "4) deleting all non-system topics ..."
+    $KT --bootstrap-server $BS --list 2>/dev/null | grep -vE '^__|^_schemas' \
+      | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
+  fi
 
   # 4b. safe docker-ENGINE image housekeeping (build side only — NOT the k8s containerd store).
   #     (The ~90 GB k8s containerd images + ~90 GB registry are a SEPARATE, deliberate GC — docker-desktop
