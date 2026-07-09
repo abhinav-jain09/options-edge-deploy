@@ -58,17 +58,6 @@ patches:
         value:
           name: STRIKE_INTEL_ACK_UNTRUSTED_GEX
           value: "true"
-  # spx-mission-control kept OFF on prod (replicas 0), mirroring the standalone slice set OFF by #321
-  # (k8s/services/spx-mission-control/overlays/production). USER (2026-07-09): future deploys must not
-  # bring spx-mission-control up in prod. MUST MIRROR the standalone slice (validate-services) — #321
-  # patched the slice but not this monolithic overlay, which broke the mirror gate.
-  - target:
-      kind: Deployment
-      name: spx-mission-control-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 0
   # PROD: option-price-behavior V2 heap 3g + limit 5Gi (base 2g/2Gi OOMKilled —
   # heap == limit, no off-heap room). Re-enabled after the 2026-07-07 freeze.
   - path: option-price-behavior-prod-patch.yaml

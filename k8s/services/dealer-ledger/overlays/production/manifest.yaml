@@ -88,18 +88,12 @@ spec:
             - name: DEALER_LEDGER_ENABLED
               value: "true"
             - name: DEALER_LEDGER_ADVISORY_ENABLED
-              # SHADOW-mode enable (dev/prod parity): fires + emits SignalFired, UI-visible + marked
-              # SHADOW (observe-only, NOT actionable) so calibration accumulates. LIVE_CALIBRATED is
-              # earned per bucket via Wilson evidence; this flag alone never makes a signal actionable.
               value: "true"
             - name: DEALER_LEDGER_UI_VISIBLE
               value: "true"
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
               value: SHADOW
             - name: JAVA_TOOL_OPTIONS
-              # 6GB heap (dev/prod parity) — -Xmx1024m OOM'd on dev's day's-backlog catch-up; prod
-              # processes the same SPX data so it needs the same headroom. .252 has 62Gi total / ~30Gi
-              # free, so an 8Gi container fits (leaves ~2Gi for RocksDB off-heap + JVM overhead).
               value: -Xms1024m -Xmx6144m
           envFrom:
             - configMapRef:
