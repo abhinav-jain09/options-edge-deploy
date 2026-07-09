@@ -24,7 +24,7 @@ pipeline {
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
       'directional-pressure', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
       'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
-      'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-liquidity-heatmap',
+      'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-liquidity-heatmap',
       'unified-sr', 'volume-pace'
     ], description: 'Which service to deploy (dir under k8s/services; kept in sync with services.yaml standalone entries — added dealer-ledger, dropped 14-disabled-service leftovers per #288).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],

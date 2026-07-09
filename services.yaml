@@ -47,6 +47,7 @@ services:
   - { name: delta-flow,                   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-delta-flow,                   deployments: [delta-flow-service] }
   - { name: dealer-ledger,                managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-dealer-ledger,                deployments: [dealer-ledger-service] }
   - { name: dealer-ledger-calibration,    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-dealer-ledger-calibration,    deployments: [dealer-ledger-calibration-scorer, dealer-ledger-calibration-accumulator] }
+  - { name: strike-intelligence,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-intelligence,          deployments: [strike-intelligence-service] }
   - { name: strike-liquidity-heatmap,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-liquidity-heatmap,     deployments: [strike-liquidity-heatmap-service] }
   - { name: option-price-behavior,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
   - { name: directional-pressure,         managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-directional-pressure,         deployments: [directional-pressure-service, directional-pressure-databento-service] }

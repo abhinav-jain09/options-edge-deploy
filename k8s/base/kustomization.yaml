@@ -23,6 +23,8 @@ resources:
   - dealer-ledger-service.yaml
   - dealer-ledger-calibration-scorer-deployment.yaml
   - dealer-ledger-calibration-accumulator-deployment.yaml
+  - strike-intelligence-deployment.yaml
+  - strike-intelligence-service.yaml
   - strike-liquidity-heatmap-deployment.yaml
   - strike-liquidity-heatmap-service.yaml
   - unified-sr-deployment.yaml
