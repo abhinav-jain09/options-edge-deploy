@@ -44,8 +44,6 @@ metadata:
   name: spx-mission-control-service
   namespace: options-edge
 spec:
-  # 2026-07-09 USER: keep spx-mission-control OFF on prod (databento-mission-sandwich stays UP).
-  # Also enforced DOWN each morning by morning-autostart.sh KEEP_DOWN.
   replicas: 0
   selector:
     matchLabels:
