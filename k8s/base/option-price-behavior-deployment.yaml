@@ -67,6 +67,17 @@ spec:
               value: "125"
             - name: OPB_V2_Z_THRESHOLD
               value: "2.19"
+            # Live-staleness override (stopgap). The default 5s surface/forward freshness gate was fine
+            # for the dense offline replay but starves the LIVE signal: the databento gex.strike feed
+            # refreshes each strike only ~every 12 min (measured median surface age 706s, p90 ~3h, 0%
+            # under 5s), so every trade's baseline surface was >5s old -> surfaceUsable=false -> ~100%
+            # excluded NO_BASELINE_SURFACE (samplesEligible=0, directionalPressureZ=0). 900000ms (15 min)
+            # accepts ~the fresher half of surfaces; the emitted currentSurfaceAgeMs/baselineSurfaceAgeMs
+            # keep staleness auditable. Real fix is faster per-strike gex refresh; revisit when done.
+            - name: OPB_V2_MAX_SURFACE_AGE_MS
+              value: "900000"
+            - name: OPB_V2_MAX_FORWARD_AGE_MS
+              value: "900000"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx2g"
           ports:
