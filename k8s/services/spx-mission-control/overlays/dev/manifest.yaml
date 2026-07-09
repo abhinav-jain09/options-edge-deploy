@@ -44,7 +44,10 @@ metadata:
   name: spx-mission-control-service
   namespace: options-edge
 spec:
-  replicas: 1
+  # 2026-07-09 USER: keep spx-mission-control OFF by default in dev too (prod overlay is
+  # also 0). Kept defined so it can be turned up on demand. dev-cleanup DISABLED_DEV also
+  # holds it down on 'dev-cleanup start'.
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: spx-mission-control-service
