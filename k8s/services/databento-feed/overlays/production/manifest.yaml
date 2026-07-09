@@ -65,9 +65,9 @@ spec:
           image: 192.168.100.252:5000/options-edge-databento-feed:dev
           imagePullPolicy: IfNotPresent
           livenessProbe:
-            failureThreshold: 4
+            failureThreshold: 2
             httpGet:
-              path: /metrics
+              path: /health/live
               port: metrics
             initialDelaySeconds: 45
             periodSeconds: 15
