@@ -42,6 +42,15 @@ spec:
               value: "15"
             - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
               value: "90"
+            # Feed reads SPX ONLY — no SPY (or any other) extra underlying. Set explicitly here (empty
+            # = single-symbol; feed config._parse_extra_instruments treats blank as no extras) so it is
+            # the RELIABLE, deploy-durable knob: this Deployment env OVERRIDES the configmap's
+            # DATABENTO_EXTRA_INSTRUMENTS and is applied by service-deploy (the infra configmap path via
+            # common-infra-deploy is currently blocked). The base configmap is also cleared to "" for
+            # source hygiene, but this override guarantees SPX-only even if the cluster configmap is stale.
+            # Applies to all envs; to re-enable an extra underlying, set the JSON list here (and configmap).
+            - name: DATABENTO_EXTRA_INSTRUMENTS
+              value: ""
           ports:
             - name: metrics
               containerPort: 8010
