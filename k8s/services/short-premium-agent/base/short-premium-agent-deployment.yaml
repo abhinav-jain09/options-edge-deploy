@@ -6,10 +6,11 @@
 #
 # Both containers use the SAME Python image (SP_BACKEND=sdk → ANTHROPIC_API_KEY from
 # options-edge-runtime-secrets). Agent A self-gates market hours; Agent B self-schedules
-# to SP_EOD_TIME ET. The whole feature ships OFF (SP_ENABLED=0 on BOTH containers → no LLM
-# calls, no cost). To turn it on WITHOUT hand-applying: flip SP_ENABLED to "1" in this
-# manifest via a PR to main and re-run service-deploy (a dedicated short-premium-toggle
-# Jenkins job that does `kubectl set env` is a tracked follow-up). DEV-ONLY (envs: [dev]).
+# to SP_EOD_TIME ET. DEV is ENABLED (SP_ENABLED=1 on both containers); agent-a still only
+# acts inside SP_MARKET_GATE (09:35-16:00 ET) and refuses synthetic data, so cost is bounded
+# to real market hours. To pause: set SP_ENABLED=0 here + re-run service-deploy (a dedicated
+# short-premium-toggle Jenkins job that does `kubectl set env` is a tracked follow-up).
+# DEV-ONLY (envs: [dev]).
 # The dev overlay remaps the prod-registry base ref → host.docker.internal:5001 via its
 # images: transformer.
 #
@@ -50,8 +51,8 @@ spec:
             - secretRef:
                 name: options-edge-runtime-secrets  # ANTHROPIC_API_KEY (SP_BACKEND=sdk)
           env:
-            # --- control (SP_ENABLED flipped by the short-premium-toggle job) ---
-            - {name: SP_ENABLED,        value: "0"}
+            # --- control (SP_ENABLED; DEV is ENABLED — self-gates market hours via SP_MARKET_GATE) ---
+            - {name: SP_ENABLED,        value: "1"}
             - {name: SP_BACKEND,        value: "sdk"}
             - {name: SP_EMIT_KAFKA,     value: "1"}       # publish recs to the gateway topic
             - {name: SP_HEALTH_PORT,    value: "8130"}
@@ -105,7 +106,7 @@ spec:
             - secretRef:
                 name: options-edge-runtime-secrets
           env:
-            - {name: SP_ENABLED,   value: "0"}       # OFF like agent-a; daemon skips the EOD LLM call when 0
+            - {name: SP_ENABLED,   value: "1"}       # matches agent-a; daemon runs the EOD review when 1
             - {name: SP_BACKEND,   value: "sdk"}
             - {name: SP_MODEL,     value: "claude-opus-4-8"}
             - {name: SP_SYMBOL,    value: "SPX"}
