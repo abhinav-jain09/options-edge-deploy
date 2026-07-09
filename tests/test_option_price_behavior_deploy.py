@@ -27,15 +27,17 @@ class OptionPriceBehaviorDeployTest(unittest.TestCase):
         self.assertIn("host.docker.internal:5001/options-edge-option-price-behavior", experiment_overlay)
 
     def test_option_price_behavior_runs_surface_residual_v2(self):
-        # SURFACE_RESIDUAL_V2 is now THE option-price-behavior signal (V1 retired): the single
-        # deployment runs the same image with OPB_SERVICE_VARIANT=v2, emits the v2 topics, and carries
-        # the calibrated constants. There is NO separate -v2 deployment anymore.
+        # SURFACE_RESIDUAL_V2 is THE (and only) option-price-behavior signal. V1 is DELETED from the
+        # codebase, so the image runs V2 directly with NO OPB_SERVICE_VARIANT switch. It emits the v2
+        # topics + the per-strike option-price-behavior-by-strike compatibility aggregate, and carries
+        # the calibrated constants.
         base = ROOT / "k8s" / "base"
         deployment = (base / "option-price-behavior-deployment.yaml").read_text()
         kustomization = (base / "kustomization.yaml").read_text()
 
-        self.assertIn("OPB_SERVICE_VARIANT", deployment)
-        self.assertIn("value: v2", deployment)
+        # V1 is gone: no variant switch declared (the image only runs V2). The comment may mention the
+        # retired var by name, so assert on the env *declaration* form, not a bare substring.
+        self.assertNotIn("- name: OPB_SERVICE_VARIANT", deployment)
         self.assertIn("OPTION_PRICE_BEHAVIOR_V2_BY_OPTION_TOPIC", deployment)
         self.assertIn("option-price-behavior-v2-by-option", deployment)
         self.assertIn("OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC", deployment)
@@ -73,8 +75,9 @@ class OptionPriceBehaviorDeployTest(unittest.TestCase):
             "string(name: 'OPTION_PRICE_BEHAVIOR_IMAGE', value: params.OPTION_PRICE_BEHAVIOR_IMAGE)",
             jenkinsfile,
         )
-        # No separate -v2 deployment lines anymore.
-        self.assertNotIn("deployment/option-price-behavior-service-v2", apply_script)
+        # The orphaned separate option-price-behavior-service-v2 deployment (old app.id, not in any
+        # overlay) is reconcile-deleted on every deploy so a duplicate V2 can't linger.
+        self.assertIn("delete deployment/option-price-behavior-service-v2", apply_script)
 
 
 if __name__ == "__main__":

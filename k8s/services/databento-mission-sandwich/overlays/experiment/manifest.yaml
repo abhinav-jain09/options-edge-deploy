@@ -63,7 +63,7 @@ spec:
             - name: HEALTH_PORT
               value: "8099"
             - name: KAFKA_MISSION_SANDWICH_VOLUME_TOPIC
-              value: display.volume.current
+              value: options.databento.display.volume.current
             - name: KAFKA_MISSION_SANDWICH_PACE_TOPIC
               value: options.databento.pace.mission
             - name: KAFKA_MISSION_SANDWICH_PRESSURE_TOPIC

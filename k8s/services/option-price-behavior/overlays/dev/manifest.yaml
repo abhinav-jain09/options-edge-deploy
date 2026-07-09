@@ -53,8 +53,6 @@ spec:
     spec:
       containers:
         - env:
-            - name: OPB_SERVICE_VARIANT
-              value: v2
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: OPTION_PRICE_BEHAVIOR_INPUT_TCBBO_TOPIC
@@ -68,7 +66,7 @@ spec:
             - name: OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC
               value: option-price-behavior-v2-session
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_APP_ID
-              value: option-price-behavior-service-v2r2
+              value: option-price-behavior-service-v2r3
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_NUM_THREADS
               value: "1"
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_AUTO_OFFSET_RESET
