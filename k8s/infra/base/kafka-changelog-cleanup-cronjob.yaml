@@ -91,7 +91,7 @@ spec:
                       name: options-edge-config
                       key: KAFKA_BOOTSTRAP_SERVERS
                 - name: RETENTION_MS
-                  value: "86400000"     # 24h — matches KAFKA_CHANGELOG_RETENTION_MS
+                  value: "43200000"     # 12h — matches KAFKA_CHANGELOG_RETENTION_MS
                 # Discord notification target (optional). Create with:
                 #   kubectl -n options-edge create secret generic options-edge-discord \
                 #     --from-literal=webhook-url='https://discord.com/api/webhooks/...'

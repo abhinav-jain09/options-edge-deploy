@@ -37,19 +37,22 @@ data:
   KAFKA_BROKER_COUNT: "1"
   KAFKA_TOPIC_REPLICATION_FACTOR: "1"
   KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS: "1"
-  KAFKA_TOPIC_RETENTION_MS: "86400000"
-  # Platform-wide 1-day retention cap. create-hpsf-topics.sh / verify-hpsf-topics.sh cap EVERY topic's
-  # retention.ms at this value on create AND alter, so the per-topic 2d/7d/30d defaults (market-flow,
-  # underlying-state, latest-signal, strike-flow/score) are all forced to <= 1 day in every environment.
-  # (dev overlay overrides this with its own stricter 10h.) Compacted system topics (_schemas,
-  # __consumer_offsets) ignore time retention and are unaffected. NOTE: this caps deploy-managed topics
-  # only; the external Kafka brokers' log.retention.ms is set separately on the broker hosts.
-  KAFKA_MAX_RETENTION_MS: "86400000"
+  KAFKA_TOPIC_RETENTION_MS: "43200000"
+  # Platform-wide 12h retention cap (2026-07-08). create-hpsf-topics.sh / verify-hpsf-topics.sh cap EVERY
+  # topic's retention.ms at this value on create AND alter, so the per-topic 2d/7d/30d defaults (market-flow,
+  # underlying-state, latest-signal, strike-flow/score) are all forced to <= 12h in every environment.
+  # WHY 12h: the market session is ~6.5h and the overnight gap is ~17h > 12h, so each session's data
+  # self-expires before the next open — this is what lets us retire the nightly Kafka wipe (see
+  # offhours-clean-slate.sh WIPE_KAFKA=false). Compacted system topics (_schemas, __consumer_offsets)
+  # ignore time retention and are unaffected. NOTE: this caps deploy-managed topics only; the external
+  # Kafka brokers' log.retention.ms (43200000) is set separately on the broker hosts as the belt-and-braces
+  # default for any topic WITHOUT a per-topic override.
+  KAFKA_MAX_RETENTION_MS: "43200000"
   KAFKA_TOPIC_CLEANUP_POLICY: delete
   KAFKA_TOPIC_PARTITIONS_DEFAULT: "32"
-  KAFKA_STREAMS_INTERNAL_RETENTION_MS: "86400000"
+  KAFKA_STREAMS_INTERNAL_RETENTION_MS: "43200000"
   KAFKA_STREAMS_INTERNAL_SEGMENT_MS: "3600000"
-  KAFKA_CHANGELOG_RETENTION_MS: "86400000"
+  KAFKA_CHANGELOG_RETENTION_MS: "43200000"
   KAFKA_CHANGELOG_DELETE_RETENTION_MS: "3600000"
   KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO: "0.01"
   KAFKA_STREAMS_STORE_TYPE: persistent
