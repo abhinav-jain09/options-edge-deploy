@@ -16,4 +16,4 @@ spec:
         - name: databento-feed
           env:
             - name: DATABENTO_PUBLISH_INTERVAL_MS
-              value: "1000"
+              value: "2000"
