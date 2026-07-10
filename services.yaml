@@ -51,6 +51,8 @@ services:
   # short-premium-agent: ONE Deployment, TWO containers (Agent A live recommender + Agent B EOD advisor daemon).
   # DEV-ONLY (envs: [dev]) — not registered in k8s/base, referenced only from k8s/overlays/dev.
   - { name: short-premium-agent,          managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-short-premium-agent,          deployments: [short-premium-agent-service] }
+  # databento-maxpain: DEV-ONLY (envs: [dev]) — not registered in k8s/base, referenced only from k8s/overlays/dev.
+  - { name: databento-maxpain,            managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-databento-maxpain,            deployments: [databento-maxpain-service] }
   - { name: strike-liquidity-heatmap,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-liquidity-heatmap,     deployments: [strike-liquidity-heatmap-service] }
   - { name: option-price-behavior,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-price-behavior,        deployments: [option-price-behavior-service] }
   - { name: directional-pressure,         managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-directional-pressure,         deployments: [directional-pressure-service, directional-pressure-databento-service] }

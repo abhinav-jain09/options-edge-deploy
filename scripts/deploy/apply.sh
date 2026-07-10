@@ -172,6 +172,24 @@
               yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
             echo "pinned ${_img_var} -> ${_pinned}"
           done
+          # DEV-ONLY services (short-premium-agent, databento-maxpain) render ONLY in the dev overlay and
+          # their images exist only in the dev registry. Pin them ONLY when ENVIRONMENT=dev so the dev
+          # `DEPLOY_TARGET=all` render passes the digest gate below; prod/experiment never render them and
+          # this block never runs there (so pin_ref is never asked to resolve a non-existent prod image).
+          if [ "${ENVIRONMENT}" = "dev" ]; then
+            for _img_var in SHORT_PREMIUM_AGENT_IMAGE DATABENTO_MAXPAIN_IMAGE; do
+              _pinned="$(pin_ref "${!_img_var}")" || {
+                echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
+                exit 1
+              }
+              printf -v "$_img_var" '%s' "$_pinned"
+              _repo="${_pinned%@*}"; _repo="${_repo%:*}"; _pdigest="${_pinned#*@}"; _pbase="${_repo##*/}"
+              _pname="$_base_registry/$_pbase"
+              _pname="$_pname" _pnewname="$_repo" _pdigest="$_pdigest" \
+                yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
+              echo "pinned ${_img_var} -> ${_pinned}"
+            done
+          fi
           rewrite_images_env "$JENKINS_WORK_DIR/options-edge-images.env"
           # Authoritative fail-closed gate: render the overlay and require EVERY options-edge service image
           # that apply -k would publish to be digest-pinned (@sha256) BEFORE any kubectl mutation. This is

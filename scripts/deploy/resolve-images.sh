@@ -41,6 +41,15 @@ STRIKE_FLOW_AVRO_ADAPTER_IMAGE=$registry/options-edge-strike-flow-avro-adapter:$
 GEX_DELTA_REDIS_WRITER_IMAGE=$registry/options-edge-gex-delta-redis-writer:$image_tag
 IBKR_FEED_IMAGE=$registry/options-edge-ibkr-feed:$image_tag
 EOF
+            # DEV-ONLY services (short-premium-agent, databento-maxpain): emit their image vars ONLY for
+            # dev, never for a tag-based prod/experiment resolve — mirrors all_image_vars' dev-only set so
+            # the two never appear in a non-dev resolved env.
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
+SHORT_PREMIUM_AGENT_IMAGE=$registry/options-edge-short-premium-agent:$image_tag
+DATABENTO_MAXPAIN_IMAGE=$registry/options-edge-databento-maxpain:$image_tag
+EOF
+            fi
           else
             cat >"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 RAW_TO_DISPLAY_IMAGE=$RAW_TO_DISPLAY_IMAGE

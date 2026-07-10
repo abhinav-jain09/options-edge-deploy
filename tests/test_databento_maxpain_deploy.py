@@ -4,13 +4,37 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SVC = ROOT / "k8s" / "services" / "databento-maxpain"
 
 
 class DatabentoMaxPainDeployTest(unittest.TestCase):
+    """
+    databento-maxpain is a DEV-ONLY standalone service (mirrors short-premium-agent): its slice lives
+    under k8s/services/databento-maxpain and is referenced ONLY from k8s/overlays/dev, so the
+    production/experiment monolith overlays never render it. Deployment happens via the shared
+    `kubectl kustomize k8s/overlays/dev | apply` path in the deploy job — no per-service Jenkinsfile
+    image plumbing (the current deploy architecture is overlay-apply, not per-image set-image).
+    """
+
+    def test_service_registered_dev_only(self) -> None:
+        services = (ROOT / "services.yaml").read_text()
+        self.assertIn("name: databento-maxpain,", services)
+        # Dev-only: declared envs: [dev], image basename matches.
+        maxpain_line = next(
+            ln for ln in services.splitlines()
+            if "name: databento-maxpain," in ln
+        )
+        self.assertIn("envs: [dev]", maxpain_line)
+        self.assertIn("image: options-edge-databento-maxpain,", maxpain_line)
+        self.assertIn("deployments: [databento-maxpain-service]", maxpain_line)
+        # Must NOT be registered in the shared base (that would render it into prod/experiment).
+        base_kustomization = (ROOT / "k8s" / "base" / "kustomization.yaml").read_text()
+        self.assertNotIn("databento-maxpain", base_kustomization)
+
     def test_deployment_and_service_are_declared(self) -> None:
-        deployment = (ROOT / "k8s" / "base" / "databento-maxpain-deployment.yaml").read_text()
-        service = (ROOT / "k8s" / "base" / "databento-maxpain-service.yaml").read_text()
-        kustomization = (ROOT / "k8s" / "base" / "kustomization.yaml").read_text()
+        deployment = (SVC / "base" / "databento-maxpain-deployment.yaml").read_text()
+        service = (SVC / "base" / "databento-maxpain-service.yaml").read_text()
+        kustomization = (SVC / "base" / "kustomization.yaml").read_text()
 
         self.assertIn("name: databento-maxpain-service", deployment)
         self.assertIn("options-edge-databento-maxpain:dev", deployment)
@@ -22,11 +46,13 @@ class DatabentoMaxPainDeployTest(unittest.TestCase):
         self.assertIn("KAFKA_DATABENTO_MAXPAIN_TOPIC", deployment)
         self.assertIn("options.databento.maxpain", deployment)
         self.assertIn("KAFKA_MAXPAIN_STREAMS_APP_ID", deployment)
-        self.assertIn("options-databento-maxpain-streams-v1", deployment)
+        # v2 app id: the refactor bumped the state-store codec (feedEpochId-last); a fresh app id gives
+        # a clean state store (the service has no prior deployment).
+        self.assertIn("options-databento-maxpain-streams-v2", deployment)
         self.assertIn("DATABENTO_MAXPAIN_SETTLEMENT_ZONE", deployment)
         self.assertIn("America/New_York", deployment)
         self.assertIn("DATABENTO_MAXPAIN_PM_CLOSE", deployment)
-        # Should NOT reference the GEX topic — independence is the headline correctness property.
+        # Independence is the headline correctness property — never reference the GEX topic.
         self.assertNotIn("options.databento.gex.strike", deployment)
 
         self.assertIn("port: 8101", service)
@@ -34,75 +60,52 @@ class DatabentoMaxPainDeployTest(unittest.TestCase):
         self.assertIn("databento-maxpain-deployment.yaml", kustomization)
         self.assertIn("databento-maxpain-service.yaml", kustomization)
 
-    def test_jenkins_rolls_databento_maxpain_image(self) -> None:
-        jenkinsfile = (ROOT / "Jenkinsfile").read_text()
-
-        # All ten insertion points the deploy job needs for a service must be present —
-        # a regression in any of them silently skips the new service. Each assertion pins
-        # ONE specific point to a unique substring so the failure points at the missing site.
-        # 1. params block
-        self.assertIn(
-            "string(name: 'DATABENTO_MAXPAIN_IMAGE', defaultValue: ''",
-            jenkinsfile,
-        )
-        # 2. env block default via oeProfile.image
-        self.assertIn(
-            "oeProfile.image('databento-maxpain', 'production', 'dev')",
-            jenkinsfile,
-        )
-        # 3. first heredoc (registry/tag substitution)
-        self.assertIn(
-            "DATABENTO_MAXPAIN_IMAGE=$registry/options-edge-databento-maxpain:$image_tag",
-            jenkinsfile,
-        )
-        # 4. second heredoc (env passthrough)
-        self.assertIn(
-            "DATABENTO_MAXPAIN_IMAGE=$DATABENTO_MAXPAIN_IMAGE",
-            jenkinsfile,
-        )
-        # 5. preflight images list (indented twice)
-        self.assertIn(
-            "            DATABENTO_MAXPAIN_IMAGE=$DATABENTO_MAXPAIN_IMAGE",
-            jenkinsfile,
-        )
-        # 6. overlay images:-pin loop must include maxpain in the for-list
-        self.assertRegex(jenkinsfile, r"for _img_var in [^\n]*DATABENTO_MAXPAIN_IMAGE")
-        # 7. kubectl set-image
-        self.assertIn(
-            'kubectl -n options-edge set image deployment/databento-maxpain-service '
-            'databento-maxpain="$DATABENTO_MAXPAIN_IMAGE"',
-            jenkinsfile,
-        )
-        # 8. rollout restart
-        self.assertIn(
-            "kubectl -n options-edge rollout restart deployment/databento-maxpain-service",
-            jenkinsfile,
-        )
-        # 9. rollout status
-        self.assertIn(
-            "kubectl -n options-edge rollout status deployment/databento-maxpain-service",
-            jenkinsfile,
-        )
-        # 10. sub-job param propagation
-        self.assertIn(
-            "string(name: 'DATABENTO_MAXPAIN_IMAGE', value: params.DATABENTO_MAXPAIN_IMAGE)",
-            jenkinsfile,
-        )
-
-    def test_dev_overlay_remaps_maxpain_image_to_local_registry(self) -> None:
-        # Operational parity with every other service: `kubectl apply -k k8s/overlays/dev`
-        # must produce the local-mac host.docker.internal:5001 image for maxpain too. Without
-        # this entry the dev overlay would still pull from the prod 192.168.100.252:5000.
+    def test_dev_overlay_references_and_remaps_maxpain(self) -> None:
         overlay = (ROOT / "k8s" / "overlays" / "dev" / "kustomization.yaml").read_text()
+        # Referenced dev-only (so it renders in the dev overlay).
+        self.assertIn("../../services/databento-maxpain/base", overlay)
+        # Image remapped to the local-mac registry, like every other dev service.
         self.assertIn("192.168.100.252:5000/options-edge-databento-maxpain", overlay)
         self.assertIn("host.docker.internal:5001/options-edge-databento-maxpain", overlay)
 
+    def test_standalone_dev_slice_exists(self) -> None:
+        # The generated dev slice (mirror of the monolith dev render) must exist for the service.
+        manifest = (SVC / "overlays" / "dev" / "manifest.yaml").read_text()
+        self.assertIn("name: databento-maxpain-service", manifest)
+        self.assertIn("containerPort: 8101", manifest)
+
+    def test_standalone_deploy_wiring(self) -> None:
+        # Deployed via the standalone service-deploy job (like short-premium-agent): selectable in the
+        # SERVICE dropdown and resolvable from image-tags/dev.yaml.
+        svc_deploy = (ROOT / "Jenkinsfile.service-deploy").read_text()
+        self.assertIn("'databento-maxpain'", svc_deploy)
+        image_tags = (ROOT / "image-tags" / "dev.yaml").read_text()
+        self.assertIn("databento-maxpain-service:", image_tags)
+        self.assertIn("options-edge-databento-maxpain:dev", image_tags)
+
+    def test_dev_only_image_pinned_only_for_dev(self) -> None:
+        # CRITICAL prod-safety invariant: maxpain (dev-only) is pinned in the monolith apply.sh ONLY inside
+        # the `ENVIRONMENT=dev` guard, and defined in resolve-images.sh ONLY in the dev branch — so the
+        # prod/experiment deploy never attempts to pin a dev-only image (which would fail-close). Mirrors
+        # short-premium-agent.
+        apply_sh = (ROOT / "scripts" / "deploy" / "apply.sh").read_text()
+        resolve_sh = (ROOT / "scripts" / "deploy" / "resolve-images.sh").read_text()
+        # The only apply.sh pin of the dev-only images is the dev-gated loop.
+        self.assertIn('if [ "${ENVIRONMENT}" = "dev" ]; then', apply_sh)
+        self.assertIn("SHORT_PREMIUM_AGENT_IMAGE DATABENTO_MAXPAIN_IMAGE", apply_sh)
+        # Defined exactly once (the dev heredoc), never in the prod passthrough branch.
+        self.assertEqual(resolve_sh.count("DATABENTO_MAXPAIN_IMAGE"), 1)
+
     def test_topics_include_maxpain_compacted(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
-        # In the approved-topics whitelist.
+        # In the approved-topics whitelist at the 4-partition policy count.
         self.assertIn("options.databento.maxpain:4", topics)
         # And in the compacted-topics list (bridge calls ensureCompactedTopic).
         self.assertIn(
             "options.databento.maxpain",
             topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1],
         )
+
+
+if __name__ == "__main__":
+    unittest.main()
