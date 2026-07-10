@@ -80,7 +80,7 @@ spec:
             - name: OPB_V2_RESIDUAL_FLOOR_VAR
               value: "0.0004"
             - name: OPB_V2_EWMA_HALFLIFE_MS
-              value: "600000"
+              value: "180000"
             - name: OPB_V2_WINSOR_K
               value: "7.0"
             - name: OPB_V2_K_QUOTE_AGE
