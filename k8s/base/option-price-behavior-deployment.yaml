@@ -60,11 +60,11 @@ spec:
             # BOOTSTRAP_UNCALIBRATED — NOT fit from live samples). Only the env names the code
             # actually reads are set here; the broader calibration/governance knobs are unimplemented.
             - name: OPB_V2_Z_THRESHOLD
-              value: "2.19"
+              value: "2.05"
             - name: OPB_V2_RESIDUAL_FLOOR_VAR
               value: "0.0004"
             - name: OPB_V2_EWMA_HALFLIFE_MS
-              value: "300000"
+              value: "600000"
             # SURFACE_RESIDUAL_V2 bootstrap calibration (OPB_V2_BOOTSTRAP_1 seed values; still
             # BOOTSTRAP_UNCALIBRATED — NOT fit from live samples). Only env names the code reads are
             # set; the broader calibration/governance knobs in the spec are not implemented yet.
@@ -84,8 +84,10 @@ spec:
               value: "0.38"
             - name: OPB_V2_TICK_WEIGHT
               value: "0.50"
+            - name: OPB_V2_TICK_SIZE
+              value: "0.05"
             - name: OPB_V2_WEIGHT_CAP
-              value: "125"
+              value: "150"
             - name: OPB_V2_DEAUTOCORR_BUCKET_MS
               value: "250"
             - name: OPB_V2_MIN_VOL
