@@ -71,18 +71,48 @@ spec:
               value: earliest
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
-            - name: OPB_V2_WINSOR_K
-              value: "7"
-            - name: OPB_V2_HALF_SPREAD_WEIGHT
-              value: "0.38"
-            - name: OPB_V2_WEIGHT_CAP
-              value: "125"
             - name: OPB_V2_Z_THRESHOLD
               value: "2.19"
+            - name: OPB_V2_RESIDUAL_FLOOR_VAR
+              value: "0.0004"
+            - name: OPB_V2_EWMA_HALFLIFE_MS
+              value: "300000"
+            - name: OPB_V2_Z_THRESHOLD
+              value: "2.19"
+            - name: OPB_V2_RESIDUAL_FLOOR_VAR
+              value: "0.0004"
+            - name: OPB_V2_EWMA_HALFLIFE_MS
+              value: "300000"
+            - name: OPB_V2_WINSOR_K
+              value: "7.0"
+            - name: OPB_V2_K_QUOTE_AGE
+              value: "0.12"
+            - name: OPB_V2_K_GREEK_AGE
+              value: "0.025"
+            - name: OPB_V2_HALF_SPREAD_WEIGHT
+              value: "0.38"
+            - name: OPB_V2_TICK_WEIGHT
+              value: "0.50"
+            - name: OPB_V2_WEIGHT_CAP
+              value: "125"
+            - name: OPB_V2_DEAUTOCORR_BUCKET_MS
+              value: "250"
+            - name: OPB_V2_MIN_VOL
+              value: "0.03"
+            - name: OPB_V2_MAX_VOL
+              value: "5.00"
+            - name: OPB_V2_TAU_MIN_SECONDS
+              value: "30"
+            - name: OPB_V2_MIN_MID
+              value: "0.05"
+            - name: OPB_V2_MAX_HALF_SPREAD
+              value: "1.00"
+            - name: OPB_V2_MAX_QUOTE_AGE_MS
+              value: "3000"
             - name: OPB_V2_MAX_SURFACE_AGE_MS
-              value: "900000"
+              value: "30000"
             - name: OPB_V2_MAX_FORWARD_AGE_MS
-              value: "900000"
+              value: "30000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms512m -Xmx2g
           envFrom:
