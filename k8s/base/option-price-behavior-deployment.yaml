@@ -64,7 +64,7 @@ spec:
             - name: OPB_V2_RESIDUAL_FLOOR_VAR
               value: "0.0004"
             - name: OPB_V2_EWMA_HALFLIFE_MS
-              value: "180000"
+              value: "300000"
             # SURFACE_RESIDUAL_V2 bootstrap calibration (OPB_V2_BOOTSTRAP_1 seed values; still
             # BOOTSTRAP_UNCALIBRATED — NOT fit from live samples). Only env names the code reads are
             # set; the broader calibration/governance knobs in the spec are not implemented yet.
@@ -81,16 +81,16 @@ spec:
             - name: OPB_V2_TICK_SIZE
               value: "0.05"
             - name: OPB_V2_WEIGHT_CAP
-              value: "150"
+              value: "125"
             # Operational status declaration (set by user; verification waived). NOTE: not read by
             # the service code today — the emitted event modelVersion is a hardcoded constant, so
             # this marks the DEPLOYMENT as live/calibrated, not each output event.
             - name: OPB_V2_CALIBRATION_STATUS
-              value: "LIVE_CALIBRATED"
+              value: "PRODUCTION_CANDIDATE"
             - name: OPB_V2_MODEL_VERSION
-              value: "OPB_V2_CALIBRATED_1"
+              value: "SPXW_0DTE_OPB_AGGRESSIVE_CANDIDATE_V2"
             - name: OPB_V2_DEAUTOCORR_BUCKET_MS
-              value: "250"
+              value: "1000"
             - name: OPB_V2_MIN_VOL
               value: "0.03"
             - name: OPB_V2_MAX_VOL
