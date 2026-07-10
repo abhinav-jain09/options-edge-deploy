@@ -1,0 +1,20 @@
+# DEV-ONLY: publish each strike's snapshot at most once per second (1000ms) instead of the 250ms
+# code default. Prod uses 2000ms (databento-feed-prod-patch.yaml) to relieve its single-core CPU
+# backpressure that runs ~5-6.5 min behind real-time; dev has more headroom, so 1s gives fresher
+# data while still cutting per-strike publish/serialize/Kafka work ~4x vs the 250ms default. An
+# explicit container env overrides the shared configmap's envFrom value, so this ships via the
+# per-service deploy (service-deploy) WITHOUT touching common-infra (the shared feed configmap is
+# also consumed by databento-gex and lives in the infra layer).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: options-edge-databento-feed
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: databento-feed
+          env:
+            - name: DATABENTO_PUBLISH_INTERVAL_MS
+              value: "1000"
