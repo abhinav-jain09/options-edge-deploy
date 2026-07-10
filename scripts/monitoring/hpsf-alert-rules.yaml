@@ -248,3 +248,26 @@ groups:
           service: delta-flow
         annotations:
           summary: "delta-flow >50% of positioning emits UNKNOWN on {{ $labels.instance }} (OI gap, R1)"
+
+  - name: strike-liquidity-heatmap
+    interval: 30s
+    rules:
+      # The strike-liquidity heatmap went dark on a market open while the pod was up and 0-restart:
+      # quotes were reaching the heatmap service but no frames came out. Catch that specific stall
+      # WITHOUT a market-hours calendar: fire only when quote input IS flowing (so the market is
+      # live, the feed is delivering, and the pod is scraping) yet ZERO frames are emitted. When the
+      # market is closed or the feed is dead, quote_events_seen is flat too, so this stays silent —
+      # a dead feed is the feed-liveness probe's job, not this alert's.
+      - alert: HeatmapFramesStalledWhileQuotesFlowing
+        expr: |
+          increase(options_edge_strike_liquidity_quote_events_seen_total{job="options-edge-strike-liquidity-heatmap-service"}[5m]) > 0
+          and
+          increase(options_edge_strike_liquidity_frame_emitted_total{job="options-edge-strike-liquidity-heatmap-service"}[5m]) == 0
+        for: 3m
+        labels:
+          severity: critical
+          service: strike-liquidity-heatmap
+          market_hours_only: "true"
+        annotations:
+          summary: "Liquidity heatmap emitting NO frames while quotes flow on {{ $labels.instance }} (heatmap dark)"
+          description: "options.databento quotes are reaching the strike-liquidity-heatmap service but frame_emitted has not advanced for 5m. The option-chain heatmap layer is dark despite live input — the streams topology is stuck (rekey/join, store, or serialization), not the feed. Check the heatmap pod logs and process_errors/rejected_total before the next open."
