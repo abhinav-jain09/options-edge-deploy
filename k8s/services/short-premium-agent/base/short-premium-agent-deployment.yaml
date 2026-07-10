@@ -66,9 +66,9 @@ spec:
             - {name: SP_QTY,            value: "1"}
             - {name: SP_SYMBOL,         value: "SPX"}
             # --- cadence (ramps into the close) ---
-            - {name: SP_CADENCE,        value: "300"}
-            - {name: SP_CADENCE_T10_5,  value: "60"}
-            - {name: SP_CADENCE_FINAL5, value: "30"}
+            - {name: SP_CADENCE,        value: "1800"}   # 30 min (was 5) — cost control
+            - {name: SP_CADENCE_T10_5,  value: "300"}    # 5 min (was 1) in T-10..T-5
+            - {name: SP_CADENCE_FINAL5, value: "120"}    # 2 min (was 30s) final 5
             # --- market gate / data integrity ---
             - {name: SP_OPEN,           value: "09:35"}
             - {name: SP_CLOSE,          value: "16:00"}
