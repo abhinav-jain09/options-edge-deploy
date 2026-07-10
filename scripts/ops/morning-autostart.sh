@@ -39,7 +39,7 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 
 # INTENTIONAL keep-at-0 set (enforced DOWN each morning). Space-separated.
 #   7 declared replicas:0 in the prod overlay:
-#     databento-maxpain-service, hpsf-stage-a-service, hpsf-stage-b-service,
+#     hpsf-stage-a-service, hpsf-stage-b-service,
 #     unusual-whales-gex-service, unusual-whales-gex-history-service,
 #     volume-sandwich-service, volume-sandwich-databento-service
 #   4 USER-directed off (also set replicas:0 in the prod overlay): volume-pace-service
@@ -47,7 +47,7 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   options-edge-integration-test (no continuous tests in prod), spx-mission-control-service
 #   (2026-07-09 USER: keep OFF on prod; databento-mission-sandwich-service stays UP),
 #   ibkr-feed-service (2026-07-09 USER: VIX moved to dev, prod no longer needs the IBKR VIX source).
-KEEP_DOWN="${KEEP_DOWN:-databento-maxpain-service hpsf-stage-a-service hpsf-stage-b-service unusual-whales-gex-service unusual-whales-gex-history-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service ibkr-feed-service}"
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service unusual-whales-gex-service unusual-whales-gex-history-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service ibkr-feed-service}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only
