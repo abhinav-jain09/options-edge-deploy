@@ -92,6 +92,31 @@ spec:
                       key: KAFKA_BOOTSTRAP_SERVERS
                 - name: RETENTION_MS
                   value: "43200000"     # 12h — matches KAFKA_CHANGELOG_RETENTION_MS
+                # Orphan-generation purge (self-maintaining against Streams app.id churn). The active
+                # app-id set + the dry-run flag come from the kafka-streams-active-appids ConfigMap, which
+                # the Jenkins `options-edge-kafka-cleanup` job refreshes from the live Deployments BEFORE
+                # each run. optional:false = fail-closed: if the ConfigMap is missing the pod won't start,
+                # so a stale/empty active set can never cause a wrong deletion.
+                - name: PURGE_ORPHAN_GENERATIONS
+                  value: "true"
+                - name: ACTIVE_STREAMS_APP_IDS
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kafka-streams-active-appids
+                      key: ACTIVE_STREAMS_APP_IDS
+                      optional: false
+                - name: PURGE_DRY_RUN
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kafka-streams-active-appids
+                      key: PURGE_DRY_RUN
+                      optional: false
+                - name: PURGE_PROFILE
+                  valueFrom:
+                    configMapKeyRef:
+                      name: kafka-streams-active-appids
+                      key: PURGE_PROFILE
+                      optional: false
                 # Discord notification target (optional). Create with:
                 #   kubectl -n options-edge create secret generic options-edge-discord \
                 #     --from-literal=webhook-url='https://discord.com/api/webhooks/...'
@@ -240,6 +265,90 @@ spec:
                   printf '[cleanup] summary: trimmed=%s skipped=%s failed=%s of %s candidates\n' \
                     "$TRIMMED" "$SKIPPED" "$FAILED" "$N"
 
+                  # ---- ORPHAN-GENERATION PURGE (self-maintaining against Streams app.id churn) ----
+                  # Kafka Streams changelog topics are cleanup.policy=compact, so the age-based trim above
+                  # SKIPS them (compact-only) and can never reclaim an ABANDONED generation. When a service
+                  # bumps its application.id (v2 -> v2r -> v2r2 -> v2r3 ...), the previous generation's
+                  # changelog + repartition topics are orphaned forever and pile up on the NVMe.
+                  #
+                  # This step DELETES any *-(changelog|repartition) topic whose app-id is NOT one of the
+                  # currently-CONFIGURED active app-ids. The active set comes from ACTIVE_STREAMS_APP_IDS
+                  # (a ConfigMap the Jenkins job refreshes from every live Deployment's *_APP_ID env) — it is
+                  # config-driven, NOT consumer-group liveness, so it stays correct when the active service is
+                  # scaled to 0 off-hours (whose group is Empty and would false-positive). A topic is KEPT iff
+                  # it starts with "<active-app-id>-" (trailing hyphen so v2 never matches v2r3). Fail-closed:
+                  # an empty/absent active set aborts the purge. PURGE_DRY_RUN=true logs without deleting.
+                  ORPHANS_DELETED=0; ORPHANS_DRYRUN=0; PURGE_FAILED=0
+                  if [ "${PURGE_ORPHAN_GENERATIONS:-false}" = "true" ]; then
+                    ACTIVE="$(printf '%s' "${ACTIVE_STREAMS_APP_IDS:-}" | tr ',' ' ' | tr -s '[:space:]' '\n' | sed '/^$/d' | sort -u)"
+                    if [ -z "$ACTIVE" ]; then
+                      echo "[purge] FATAL: ACTIVE_STREAMS_APP_IDS is empty — refusing to purge (fail-closed)." >&2
+                      exit 1
+                    fi
+                    echo "[purge] active configured app-ids ($(printf '%s' "$ACTIVE" | wc -l | tr -d ' ')):"
+                    printf '[purge]   %s\n' $ACTIVE
+                    # Owning-app-id resolution via the consumer-group list: Kafka Streams sets group.id ==
+                    # application.id, so every changelog/repartition topic is "<application.id>-<suffix>".
+                    # For each topic we pick the LONGEST group that prefixes it — that IS the exact app-id
+                    # (no hyphen-prefix shadowing: "X" never wins over "X-databento" for X-databento's topics).
+                    # KEEP iff that app-id equals an active configured app-id, or "<active>-<PROFILE>" (the
+                    # source-scoped runtime suffix, e.g. -prod). No owning group found => SKIP (never delete a
+                    # topic we cannot attribute). PROFILE comes from the ConfigMap (Jenkins, per ENVIRONMENT).
+                    # NOTE: variable is CG_LIST, NOT "GROUPS" — GROUPS is a bash special built-in array (the
+                    # current user's group ids), so assigning to it is clobbered and $GROUPS would read a GID.
+                    CG_LIST="$(kafka-consumer-groups --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list 2>/dev/null || true)"
+                    if [ -z "$CG_LIST" ]; then
+                      echo "[purge] FATAL: could not list consumer groups — refusing to purge (fail-closed)." >&2
+                      exit 1
+                    fi
+                    # SCOPE the purge to OptionsEdge-OWNED Streams topics only. Every OptionsEdge app-id is
+                    # option-*/options-* (option-price-behavior-*, options-edge-*, options-flow-*,
+                    # options-databento-*). ACTIVE_STREAMS_APP_IDS is built only from THIS namespace, so a topic
+                    # outside this owned prefix (another client/namespace on a shared broker) must NEVER be
+                    # judged an orphan and deleted. Foreign/unrecognized-prefix topics are simply not candidates.
+                    STREAMS_TOPICS="$(printf '%s\n' "$ALL" | grep -E '^options?-.*-(changelog|repartition)$' || true)"
+                    for T in $STREAMS_TOPICS; do
+                      G=""
+                      for g in $CG_LIST; do
+                        case "$T" in "${g}-"*) [ "${#g}" -gt "${#G}" ] && G="$g" ;; esac
+                      done
+                      keep=false
+                      if [ -n "$G" ]; then
+                        # Owning consumer group found -> EXACT app-id attribution (Streams group.id ==
+                        # application.id). Keep iff that app-id is an active configured id (or its
+                        # source-scoped runtime form "<active>-<profile>"). Handles hyphen-prefix overlap.
+                        for A in $ACTIVE; do
+                          if [ "$G" = "$A" ] || [ "$G" = "${A}-${PURGE_PROFILE:-prod}" ]; then keep=true; break; fi
+                        done
+                      else
+                        # No owning group — the generation's group already EXPIRED (offsets.retention). This
+                        # is the long-lived-orphan case the purge exists for. FALLBACK: keep iff the topic
+                        # starts with an active app-id prefix; otherwise it belongs to no active app -> purge.
+                        # Over-keep (safe) only on the rare hyphen-prefix-overlap whose group also expired;
+                        # this fallback NEVER deletes a topic that matches an active app-id.
+                        for A in $ACTIVE; do
+                          case "$T" in "${A}-"*) keep=true; break;; esac
+                        done
+                      fi
+                      [ "$keep" = "true" ] && continue
+                      if [ "${PURGE_DRY_RUN:-true}" = "true" ]; then
+                        echo "[purge] DRY-RUN would delete ORPHAN topic: $T"
+                        ORPHANS_DRYRUN=$((ORPHANS_DRYRUN+1))
+                      else
+                        if kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$T" 2>/tmp/del.err; then
+                          echo "[purge] DELETED ORPHAN topic: $T"
+                          ORPHANS_DELETED=$((ORPHANS_DELETED+1))
+                        else
+                          echo "[purge] WARN failed to delete $T: $(cat /tmp/del.err)" >&2
+                          PURGE_FAILED=$((PURGE_FAILED+1))
+                        fi
+                      fi
+                    done
+                    echo "[purge] summary: deleted=$ORPHANS_DELETED dryrun_would_delete=$ORPHANS_DRYRUN failed=$PURGE_FAILED (dry_run=${PURGE_DRY_RUN:-true})"
+                  else
+                    echo "[purge] PURGE_ORPHAN_GENERATIONS!=true — orphan purge disabled this run."
+                  fi
+
                   # Optional Discord notification (no-op if the secret/webhook or curl is absent).
                   if [ -n "${DISCORD_WEBHOOK_URL:-}" ] && command -v curl >/dev/null 2>&1; then
                     if [ "$FAILED" -eq 0 ]; then EMO="🧹"; else EMO="⚠️"; fi
@@ -252,4 +361,6 @@ spec:
                       || echo "[cleanup] WARN: Discord post failed" >&2
                   fi
 
-                  [ "$FAILED" -eq 0 ]
+                  # Job exit code: fail if EITHER the trim OR the orphan purge had any failure, so Jenkins
+                  # surfaces it (alert + retry) instead of reporting success with orphans left behind.
+                  [ "$FAILED" -eq 0 ] && [ "${PURGE_FAILED:-0}" -eq 0 ]

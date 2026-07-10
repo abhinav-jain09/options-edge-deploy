@@ -39,6 +39,8 @@ pipeline {
       description: 'Namespace of the CronJob / Jobs.')
     string(name: 'KEEP_JOBS', defaultValue: '5',
       description: 'How many most-recent cleanup Jobs to retain (older ones are pruned after each run).')
+    booleanParam(name: 'PURGE_DRY_RUN', defaultValue: true,
+      description: 'Orphan-generation purge: true = LOG which abandoned Streams changelog/repartition topics WOULD be deleted (no deletion). Set false to actually delete them. Default true — verify the dry-run list before deleting prod topics.')
   }
   // triggers {} — DISABLED. Retired in favour of the off-hours clean-slate (see
   // header). No cron: this job no longer self-fires; it is manual-only now.
@@ -51,8 +53,59 @@ pipeline {
     CRONJOB_NAME = "${params.CRONJOB_NAME}"
     NAMESPACE    = "${params.NAMESPACE}"
     KEEP_JOBS    = "${params.KEEP_JOBS}"
+    PURGE_DRY_RUN = "${params.PURGE_DRY_RUN}"
   }
   stages {
+    stage('Refresh active Streams app-ids') {
+      steps {
+        sh '''
+          set -euo pipefail
+          # Build the authoritative ACTIVE set of Kafka Streams application.ids from live workload CONFIG
+          # (not consumer-group liveness, so it is correct when a service is scaled to 0 off-hours). Scan
+          # ALL kinds that can run a Streams app: Deployments, StatefulSets, AND bare Pods (replay workloads
+          # run as Pods with HPSF_STREAMS_APPLICATION_ID). Deploy/STS keep containers under
+          # .spec.template.spec; a Pod keeps them under .spec — the jq below unions both shapes.
+          CONTAINERS='(.spec.template.spec.containers // .spec.containers // [])[]'
+          # Match ONLY real Kafka Streams application.id env vars: names ENDING in APP_ID / APPLICATION_ID
+          # (anchored). The trailing "$" excludes this cleanup Job's OWN bookkeeping env ACTIVE_STREAMS_APP_IDS
+          # (plural APP_IDS), whose completed Pods linger in the namespace (Codex review).
+          APPID_ENVS="( ${CONTAINERS}.env[]? | select(.name|test(\"(APP_ID|APPLICATION_ID)$\")) )"
+
+          # FAIL CLOSED on an app-id we cannot resolve to a literal value here (valueFrom). If it were missing
+          # from ACTIVE, a non-dry-run purge could delete that LIVE app's current changelog topics as "orphan".
+          # Abort and tell the operator to make it a literal env value. (envFrom is NOT rejected — shared
+          # ConfigMaps like options-edge-config are imported that way everywhere and never carry an app-id; a
+          # per-service app-id sourced via envFrom would surface in the dry-run list for the operator to catch.)
+          UNRESOLVED="$(kubectl -n "${NAMESPACE}" get deploy,statefulset,pod -o json \
+            | jq -r ".items[]? | ${APPID_ENVS} | select(has(\"value\")|not) | .name" | sort -u)"
+          if [ -n "${UNRESOLVED}" ]; then
+            echo "FATAL: these APP_ID env(s) are non-literal (valueFrom) — cannot resolve here; aborting so a" >&2
+            echo "       live app's topics are never misclassified as orphan. Make them literal env values:" >&2
+            printf '  %s\n' ${UNRESOLVED} >&2
+            exit 1
+          fi
+
+          ACTIVE="$(kubectl -n "${NAMESPACE}" get deploy,statefulset,pod -o json \
+            | jq -r ".items[]? | ${APPID_ENVS} | .value // empty" | sed '/^[[:space:]]*$/d' | sort -u)"
+          COUNT="$(printf '%s' "$ACTIVE" | grep -c . || true)"
+          echo "Active configured Streams app-ids (${COUNT}):"
+          printf '  %s\n' $ACTIVE
+          # FAIL CLOSED: never refresh a suspiciously-small active set (would let the Job purge live topics).
+          if [ "${COUNT}" -lt 3 ]; then
+            echo "FATAL: only ${COUNT} active app-ids found — refusing to refresh (fail-closed; expected many)." >&2
+            exit 1
+          fi
+          # Runtime source-scope suffix (application.id is "<configured>-<profile>"): production -> prod.
+          case "${ENVIRONMENT}" in production) PROFILE=prod;; *) PROFILE="${ENVIRONMENT}";; esac
+          kubectl -n "${NAMESPACE}" create configmap kafka-streams-active-appids \
+            --from-literal=ACTIVE_STREAMS_APP_IDS="$(printf '%s' "$ACTIVE" | tr '\n' ' ')" \
+            --from-literal=PURGE_DRY_RUN="${PURGE_DRY_RUN}" \
+            --from-literal=PURGE_PROFILE="${PROFILE}" \
+            --dry-run=client -o yaml | kubectl -n "${NAMESPACE}" apply -f -
+          echo "Refreshed kafka-streams-active-appids (PURGE_DRY_RUN=${PURGE_DRY_RUN}, PROFILE=${PROFILE})."
+        '''
+      }
+    }
     stage('Trigger kafka-changelog-cleanup') {
       steps {
         sh '''
