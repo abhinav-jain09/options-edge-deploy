@@ -74,11 +74,11 @@ spec:
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
             - name: OPB_V2_Z_THRESHOLD
-              value: "2.19"
+              value: "2.05"
             - name: OPB_V2_RESIDUAL_FLOOR_VAR
               value: "0.0004"
             - name: OPB_V2_EWMA_HALFLIFE_MS
-              value: "300000"
+              value: "600000"
             - name: OPB_V2_Z_THRESHOLD
               value: "2.19"
             - name: OPB_V2_RESIDUAL_FLOOR_VAR
@@ -95,8 +95,10 @@ spec:
               value: "0.38"
             - name: OPB_V2_TICK_WEIGHT
               value: "0.50"
+            - name: OPB_V2_TICK_SIZE
+              value: "0.05"
             - name: OPB_V2_WEIGHT_CAP
-              value: "125"
+              value: "150"
             - name: OPB_V2_DEAUTOCORR_BUCKET_MS
               value: "250"
             - name: OPB_V2_MIN_VOL
