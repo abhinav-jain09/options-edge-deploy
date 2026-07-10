@@ -82,6 +82,13 @@ spec:
               value: "0.05"
             - name: OPB_V2_WEIGHT_CAP
               value: "150"
+            # Operational status declaration (set by user; verification waived). NOTE: not read by
+            # the service code today — the emitted event modelVersion is a hardcoded constant, so
+            # this marks the DEPLOYMENT as live/calibrated, not each output event.
+            - name: OPB_V2_CALIBRATION_STATUS
+              value: "LIVE_CALIBRATED"
+            - name: OPB_V2_MODEL_VERSION
+              value: "OPB_V2_CALIBRATED_1"
             - name: OPB_V2_DEAUTOCORR_BUCKET_MS
               value: "250"
             - name: OPB_V2_MIN_VOL
