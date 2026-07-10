@@ -69,6 +69,8 @@ spec:
                   optional: true
             - name: DATABENTO_GEX_OI_HTTP_TIMEOUT_SECONDS
               value: "60"
+            - name: DATABENTO_GEX_OI_FETCH_LIMIT
+              value: "200000"
             - name: HEALTH_PORT
               value: "8100"
             - name: KAFKA_DATABENTO_RAW_TOPIC
