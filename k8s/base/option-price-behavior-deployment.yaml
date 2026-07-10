@@ -68,12 +68,6 @@ spec:
             # SURFACE_RESIDUAL_V2 bootstrap calibration (OPB_V2_BOOTSTRAP_1 seed values; still
             # BOOTSTRAP_UNCALIBRATED — NOT fit from live samples). Only env names the code reads are
             # set; the broader calibration/governance knobs in the spec are not implemented yet.
-            - name: OPB_V2_Z_THRESHOLD
-              value: "2.19"
-            - name: OPB_V2_RESIDUAL_FLOOR_VAR
-              value: "0.0004"
-            - name: OPB_V2_EWMA_HALFLIFE_MS
-              value: "300000"
             - name: OPB_V2_WINSOR_K
               value: "7.0"
             - name: OPB_V2_K_QUOTE_AGE
