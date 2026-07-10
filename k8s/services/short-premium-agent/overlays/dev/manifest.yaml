@@ -38,7 +38,7 @@ spec:
       containers:
         - env:
             - name: SP_ENABLED
-              value: "1"
+              value: "0"
             - name: SP_BACKEND
               value: sdk
             - name: SP_EMIT_KAFKA
@@ -121,7 +121,7 @@ spec:
             - --daemon
           env:
             - name: SP_ENABLED
-              value: "1"
+              value: "0"
             - name: SP_BACKEND
               value: sdk
             - name: SP_MODEL
