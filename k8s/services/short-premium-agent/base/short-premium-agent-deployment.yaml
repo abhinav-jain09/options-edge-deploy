@@ -27,7 +27,7 @@ metadata:
     app.kubernetes.io/component: short-premium-agent-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  replicas: 0
   strategy:
     type: Recreate
   selector:
