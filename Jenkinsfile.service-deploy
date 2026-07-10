@@ -20,7 +20,7 @@ pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
     choice(name: 'SERVICE', choices: [
-      'databento-feed', 'databento-gex', 'databento-gex-history', 'databento-mission-sandwich',
+      'databento-feed', 'databento-gex', 'databento-gex-history', 'databento-maxpain', 'databento-mission-sandwich',
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
       'directional-pressure', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
       'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',

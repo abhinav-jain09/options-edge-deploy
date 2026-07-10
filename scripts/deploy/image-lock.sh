@@ -30,6 +30,16 @@ STRIKE_FLOW_AVRO_ADAPTER_IMAGE
 GEX_DELTA_REDIS_WRITER_IMAGE
 IBKR_FEED_IMAGE
 EOF
+  # DEV-ONLY services (short-premium-agent, databento-maxpain) render only in the dev overlay and their
+  # images exist only in the dev registry. Include them in the image-var set ONLY for dev so the dev
+  # DEPLOY_TARGET=all pin loop finds them (env rewrite + lock-key allow), while prod/experiment never
+  # require or reference them (no empty-var lock failure under REQUIRE_IMAGE_LOCK).
+  if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+    cat <<'EOF'
+SHORT_PREMIUM_AGENT_IMAGE
+DATABENTO_MAXPAIN_IMAGE
+EOF
+  fi
 }
 
 target_image_vars() {
