@@ -69,8 +69,15 @@ spec:
               value: "true"
             - name: STRIKE_INTEL_ACTION_BIAS_ENABLED
               value: "true"
+            # Raised from -Xmx1024m / 1536Mi limit: strike-intelligence is a stateful Streams app with
+            # 5 RocksDB stores (strike-flow, delta-flow, price-behavior, gex, dashboard) whose OFF-heap
+            # native memory sits outside the JVM heap. Under market-hours volume — especially while the
+            # chain carries more than one expiry — the container was OOMKilled (exit 137) and crash-looped,
+            # so its spot global store never stabilized and ~60% of signals fell to INSUFFICIENT_DATA
+            # (spot missing/stale). 2Gi heap + 4Gi limit leaves ~2Gi for RocksDB off-heap + JVM overhead
+            # (matches the 4Gi tier #298 gave the other OOM-tight Streams services).
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms384m -Xmx1024m"
+              value: "-Xms512m -Xmx2048m"
           ports:
             - name: health
               containerPort: 8114
@@ -92,9 +99,9 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 512Mi
+              memory: 1Gi
             limits:
-              memory: 1536Mi
+              memory: 4Gi
       volumes:
         - name: kafka-streams-state
           emptyDir: {}

@@ -90,7 +90,7 @@ spec:
             - name: STRIKE_INTEL_ACTION_BIAS_ENABLED
               value: "true"
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms384m -Xmx1024m
+              value: -Xms512m -Xmx2048m
             - name: STRIKE_INTEL_ACK_UNTRUSTED_GEX
               value: "true"
           envFrom:
@@ -118,10 +118,10 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 1536Mi
+              memory: 4Gi
             requests:
               cpu: 100m
-              memory: 512Mi
+              memory: 1Gi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
               name: kafka-streams-state
