@@ -96,6 +96,20 @@ class DatabentoMaxPainDeployTest(unittest.TestCase):
         # Defined exactly once (the dev heredoc), never in the prod passthrough branch.
         self.assertEqual(resolve_sh.count("DATABENTO_MAXPAIN_IMAGE"), 1)
 
+    def test_not_in_dev_cleanup_disabled_set(self) -> None:
+        # maxpain is deployed + meant to RUN on dev, so it must NOT be in dev-cleanup's DISABLED_DEV set
+        # (whose morning start path scales matching deployments to 0 — it would kill the deployment).
+        cleanup = (ROOT / "scripts" / "ops" / "dev-cleanup.sh").read_text()
+        disabled_line = next(ln for ln in cleanup.splitlines() if ln.startswith("DISABLED_DEV="))
+        self.assertNotIn("databento-maxpain-service", disabled_line)
+
+    def test_monolith_dev_all_deploy_gates_maxpain(self) -> None:
+        # A dev DEPLOY_TARGET=all must preflight the dev-only image and wait for its rollout (dev-gated).
+        preflight = (ROOT / "scripts" / "deploy" / "image-preflight.sh").read_text()
+        apply_sh = (ROOT / "scripts" / "deploy" / "apply.sh").read_text()
+        self.assertIn("DATABENTO_MAXPAIN_IMAGE", preflight)
+        self.assertIn("rollout status deployment/databento-maxpain-service", apply_sh)
+
     def test_topics_include_maxpain_compacted(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
         # In the approved-topics whitelist at the 4-partition policy count.

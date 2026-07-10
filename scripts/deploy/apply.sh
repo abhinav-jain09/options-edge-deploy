@@ -373,4 +373,11 @@ EOF
           kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=600s
           kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=600s
           kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=600s
+          # DEV-ONLY services (short-premium-agent, databento-maxpain) render only in the dev overlay, so an
+          # unready/crashlooping dev-only rollout must fail the dev all-deploy too. Guarded to dev because
+          # these deployments do not exist in prod/experiment.
+          if [ "${ENVIRONMENT}" = "dev" ]; then
+            kubectl -n options-edge rollout status deployment/short-premium-agent-service --timeout=600s
+            kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=600s
+          fi
           scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
