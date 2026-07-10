@@ -92,7 +92,7 @@ spec:
             - name: OPB_V2_WEIGHT_CAP
               value: "125"
             - name: OPB_V2_CALIBRATION_STATUS
-              value: PRODUCTION_CANDIDATE
+              value: PRODUCTION_CALIBRATED
             - name: OPB_V2_MODEL_VERSION
               value: SPXW_0DTE_OPB_AGGRESSIVE_CANDIDATE_V2
             - name: OPB_V2_DEAUTOCORR_BUCKET_MS

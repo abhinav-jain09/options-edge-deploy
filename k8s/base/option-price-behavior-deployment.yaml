@@ -86,7 +86,7 @@ spec:
             # the service code today — the emitted event modelVersion is a hardcoded constant, so
             # this marks the DEPLOYMENT as live/calibrated, not each output event.
             - name: OPB_V2_CALIBRATION_STATUS
-              value: "PRODUCTION_CANDIDATE"
+              value: "PRODUCTION_CALIBRATED"
             - name: OPB_V2_MODEL_VERSION
               value: "SPXW_0DTE_OPB_AGGRESSIVE_CANDIDATE_V2"
             - name: OPB_V2_DEAUTOCORR_BUCKET_MS
