@@ -160,7 +160,7 @@
             IBKR_FEED_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE \
-            DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE; do
+            DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
@@ -172,12 +172,12 @@
               yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
             echo "pinned ${_img_var} -> ${_pinned}"
           done
-          # DEV-ONLY services (short-premium-agent, databento-maxpain) render ONLY in the dev overlay and
+          # DEV-ONLY service short-premium-agent renders ONLY in the dev overlay and
           # their images exist only in the dev registry. Pin them ONLY when ENVIRONMENT=dev so the dev
           # `DEPLOY_TARGET=all` render passes the digest gate below; prod/experiment never render them and
           # this block never runs there (so pin_ref is never asked to resolve a non-existent prod image).
           if [ "${ENVIRONMENT}" = "dev" ]; then
-            for _img_var in SHORT_PREMIUM_AGENT_IMAGE DATABENTO_MAXPAIN_IMAGE; do
+            for _img_var in SHORT_PREMIUM_AGENT_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1
@@ -346,6 +346,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/strike-flow-avro-adapter
           kubectl -n options-edge rollout restart deployment/gex-delta-redis-writer
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
+          kubectl -n options-edge rollout restart deployment/databento-maxpain-service
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=600s
           kubectl -n options-edge rollout status deployment/options-edge-web --timeout=600s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=600s
@@ -373,11 +374,11 @@ EOF
           kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=600s
           kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=600s
           kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=600s
-          # DEV-ONLY services (short-premium-agent, databento-maxpain) render only in the dev overlay, so an
+          kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=600s
+          # DEV-ONLY service short-premium-agent renders only in the dev overlay, so an
           # unready/crashlooping dev-only rollout must fail the dev all-deploy too. Guarded to dev because
           # these deployments do not exist in prod/experiment.
           if [ "${ENVIRONMENT}" = "dev" ]; then
             kubectl -n options-edge rollout status deployment/short-premium-agent-service --timeout=600s
-            kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=600s
           fi
           scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
