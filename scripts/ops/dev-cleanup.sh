@@ -26,7 +26,7 @@ KEEP='keycloak'                                          # deployments to leave 
 # DEV-disabled deployments — held at 0 by do_start (exact full-name match via grep -x). MUST include
 # databento-timewarp-snapshot-replay: if it boots even briefly it replays snapshots into
 # options.databento.raw and poisons the chain. Keep in sync with premarket-check.sh DISABLED (dev).
-DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-sandwich-service|volume-sandwich-databento-service|databento-maxpain-service|unusual-whales-gex-service|unusual-whales-gex-history-service|databento-timewarp-snapshot-replay|ibkr-feed-service|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service'
+DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-sandwich-service|volume-sandwich-databento-service|unusual-whales-gex-service|unusual-whales-gex-history-service|databento-timewarp-snapshot-replay|ibkr-feed-service|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service'
 # Topic source-of-truth = the deploy repo's scripts/kafka/topics.env (the SAME file the deploy's
 # apply-topics.sh uses), read from origin/main so it is the reviewed, versioned config — NOT an
 # autonomous live snapshot. dev-cleanup pre-creates ONLY these platform/feed topics; every service

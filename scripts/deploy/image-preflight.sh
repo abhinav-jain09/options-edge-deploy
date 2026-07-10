@@ -54,6 +54,17 @@
               ;;
           esac
 
+          # DEV-ONLY services (short-premium-agent, databento-maxpain) render only in the dev overlay and
+          # their images exist only in the dev registry. Preflight them ONLY for a dev all-deploy so a
+          # missing dev-only image is caught here (not later); prod/experiment never render or reference
+          # them, so they are never preflighted there.
+          if [ "${ENVIRONMENT:-dev}" = "dev" ] && [ "${DEPLOY_TARGET:-all}" = "all" ]; then
+            images="$images
+            SHORT_PREMIUM_AGENT_IMAGE=${SHORT_PREMIUM_AGENT_IMAGE:-}
+            DATABENTO_MAXPAIN_IMAGE=${DATABENTO_MAXPAIN_IMAGE:-}
+            "
+          fi
+
           image_exists_once() {
             local image="$1"
             local registry remainder repository reference tagged
