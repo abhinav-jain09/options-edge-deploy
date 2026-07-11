@@ -31,6 +31,10 @@ resources:
   - strike-invasion-service.yaml
   - invasion-postgres-writer-deployment.yaml
   - invasion-postgres-writer-service.yaml
+  - spread-skew-deployment.yaml
+  - spread-skew-service.yaml
+  - spread-skew-postgres-writer-deployment.yaml
+  - spread-skew-postgres-writer-service.yaml
   - strike-liquidity-heatmap-deployment.yaml
   - strike-liquidity-heatmap-service.yaml
   - unified-sr-deployment.yaml

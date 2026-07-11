@@ -548,12 +548,17 @@ if [ "$DB_WIPE" = "true" ]; then
   # them. The extra tablename guard is belt-and-suspenders: even if a regression ever created those
   # tables in `public`, this refuses to truncate them.
   CALIB_TABLES="'outcome_scored', 'calibration_state'"
-  TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($CALIB_TABLES)")
+  # spread_skew_sample EXEMPT — multi-session baseline (Gate-1 §4.2, USER-approved). The
+  # spread-skew z-score baseline accumulates across sessions and must SURVIVE the nightly
+  # wipe (unlike spread_skew_event, which is session-scoped and IS truncated by this
+  # all-public sweep — do NOT add it here).
+  EXEMPT_TABLES="$CALIB_TABLES, 'spread_skew_sample'"
+  TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES)")
   if [ -n "$TBL_LIST" ]; then
-    trunc_n=$(pg "select count(*) from pg_tables where schemaname='public' and tablename not in ($CALIB_TABLES)" | tr -d '[:space:]')
+    trunc_n=$(pg "select count(*) from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES)" | tr -d '[:space:]')
     pg "set lock_timeout='30s'; set statement_timeout='300s'; truncate table $TBL_LIST restart identity" \
       || die "TRUNCATE of flow DB failed"
-    log "truncated $trunc_n public tables in '$EXPECTED_DB' (incl. pin_session_close; calibration.* preserved)"
+    log "truncated $trunc_n public tables in '$EXPECTED_DB' (incl. pin_session_close + spread_skew_event; calibration.* + spread_skew_sample preserved)"
     # Prove the calibration corpus survived (visibility): approx row counts are untouched by the wipe.
     # Read the estimate from pg_stat_user_tables (never parse-errors if the table/schema is absent —
     # returns no row -> -1) so this is safe on a fresh DB before the service's first run.

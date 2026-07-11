@@ -44,6 +44,23 @@ patches:
     patch: |-
       - op: remove
         path: /spec/template/spec/nodeSelector
+  # spread-skew-service + spread-skew-postgres-writer are kept OFF (replicas:0) on experiment for the
+  # initial rollout (dev-only, mirrors the production keep-off). Re-enable = remove these patches and
+  # regenerate the standalone slices.
+  - target:
+      kind: Deployment
+      name: spread-skew-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  - target:
+      kind: Deployment
+      name: spread-skew-postgres-writer
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # (the prior ibkr-feed-service nodeSelector-removal patch was here; obsolete now that the
   # Deployment is excluded above — kustomize errors if a patch targets a deleted resource.)
   # EXPERIMENT-ONLY: serve the k8s web on the UNIQUE port :18090 (not dev :8090, not base :8094). The

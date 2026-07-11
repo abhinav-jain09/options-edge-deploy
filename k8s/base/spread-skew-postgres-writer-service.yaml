@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: spread-skew-postgres-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: spread-skew-postgres-writer
+    app.kubernetes.io/component: spread-skew-postgres-writer
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: spread-skew-postgres-writer
+  ports:
+    - name: health
+      port: 8123
+      targetPort: health
