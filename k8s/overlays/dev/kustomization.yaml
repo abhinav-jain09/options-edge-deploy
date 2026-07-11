@@ -200,6 +200,12 @@ images:
   - name: 192.168.100.252:5000/options-edge-strike-intelligence
     newName: host.docker.internal:5001/options-edge-strike-intelligence
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-strike-invasion
+    newName: host.docker.internal:5001/options-edge-strike-invasion
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-invasion-postgres-writer
+    newName: host.docker.internal:5001/options-edge-invasion-postgres-writer
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-strike-liquidity-heatmap
     newName: host.docker.internal:5001/options-edge-strike-liquidity-heatmap
     newTag: dev
