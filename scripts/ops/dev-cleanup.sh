@@ -6,7 +6,7 @@
 # MODES:
 #   dev-cleanup           # AUTO — what launchd calls every ~15 min. ET wall-clock gated:
 #                         #   20:30-20:59 ET nightly  -> full clean (logs + data wipe), leave dev DOWN
-#                         #   09:00-09:29 ET weekdays -> start (pre-create topics, scale apps up)
+#                         #   08:00-08:29 ET weekdays -> start (pre-create topics, scale apps up; ~90m before open)
 #   dev-cleanup now       # run the full clean right now (logs + data), ignoring the time gate
 #   dev-cleanup start     # bring dev up now
 #   dev-cleanup logs      # clean logs only (manual)
@@ -252,7 +252,7 @@ case "$MODE" in
     if [ "$HH" -ge 2030 ] && [ "$HH" -le 2059 ] && [ ! -f "$CLEAN_MARK" ]; then
       if [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: CLEAN slot -> do_clean (logs+data, leave down)"; \
       else do_clean >> "$LOG" 2>&1; : > "$CLEAN_MARK"; fi
-    elif [ "$HH" -ge 900 ] && [ "$HH" -le 929 ] && [ "$DOW" -le 5 ] && [ ! -f "$START_MARK" ] && ls /tmp/.dev-cleanup-clean-* >/dev/null 2>&1; then
+    elif [ "$HH" -ge 800 ] && [ "$HH" -le 829 ] && [ "$DOW" -le 5 ] && [ ! -f "$START_MARK" ] && ls /tmp/.dev-cleanup-clean-* >/dev/null 2>&1; then
       if [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: START slot -> do_start (bring dev up)"; \
       else do_start >> "$LOG" 2>&1; : > "$START_MARK"; fi
     else
