@@ -48,7 +48,13 @@ echo "rendered: $total_docs docs ($pvc_docs PVCs, $((total_docs - pvc_docs)) oth
 
 # --- Blast-radius sanity: infra must not carry app workloads -------------------------
 # (Keycloak's Deployment/StatefulSet are the sanctioned exception — it IS infra.)
+# NOTE: yq emits a bare '---' document separator BETWEEN multiple selected scalars, so with >=2
+# allowlisted workloads (oe-keycloak Deployment + oe-keycloak-postgres StatefulSet) the raw output is
+# "oe-keycloak\n---\noe-keycloak-postgres". Strip the '---' separators and blank lines FIRST, otherwise
+# the '---' survives the allowlist grep and false-trips this guard (it did, since the postgres StatefulSet
+# was added — every prod infra deploy failed). Only genuine non-keycloak workload names remain.
 unexpected="$(yq -r 'select(.kind == "Deployment" or .kind == "StatefulSet") | .metadata.name' "$RENDER" \
+  | { grep -vE '^(---)?$' || true; } \
   | { grep -vE '^(oe-keycloak|keycloak)' || true; })"
 if [ -n "$unexpected" ]; then
   echo "FATAL: infra overlay renders app workloads (belongs in a service slice or k8s/base):" >&2
