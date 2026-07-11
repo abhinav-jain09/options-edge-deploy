@@ -33,6 +33,10 @@ resources:
   - invasion-postgres-writer-service.yaml
   - strike-liquidity-heatmap-deployment.yaml
   - strike-liquidity-heatmap-service.yaml
+  - es-open-direction-deployment.yaml
+  - es-open-direction-service.yaml
+  - es-open-direction-postgres-writer-deployment.yaml
+  - es-open-direction-postgres-writer-service.yaml
   - unified-sr-deployment.yaml
   - unified-sr-service.yaml
   - strike-flow-avro-adapter-deployment.yaml

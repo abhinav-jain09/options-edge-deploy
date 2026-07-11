@@ -29,4 +29,6 @@ images:
   volume-pace-databento-service: 192.168.100.252:5000/options-edge-volume-pace:dev
   gex-delta-redis-writer: 192.168.100.252:5000/options-edge-gex-delta-redis-writer:dev
   hpsf-postgres-writer-service: 192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev
+  es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:dev
+  es-open-direction-postgres-writer: 192.168.100.252:5000/options-edge-es-open-direction-postgres-writer:dev
   web: host.docker.internal:5001/options-edge-web:dev

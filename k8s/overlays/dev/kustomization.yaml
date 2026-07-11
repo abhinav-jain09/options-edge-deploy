@@ -209,6 +209,12 @@ images:
   - name: 192.168.100.252:5000/options-edge-strike-liquidity-heatmap
     newName: host.docker.internal:5001/options-edge-strike-liquidity-heatmap
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-es-open-direction
+    newName: host.docker.internal:5001/options-edge-es-open-direction
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-es-open-direction-postgres-writer
+    newName: host.docker.internal:5001/options-edge-es-open-direction-postgres-writer
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-ibkr-feed
     newName: host.docker.internal:5001/options-edge-ibkr-feed
     newTag: dev
