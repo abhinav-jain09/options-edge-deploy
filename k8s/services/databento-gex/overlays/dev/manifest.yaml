@@ -87,6 +87,8 @@ spec:
               value: NAIVE_CALL_PLUS_PUT_MINUS
             - name: DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED
               value: "true"
+            - name: DATABENTO_GEX_MAX_QUOTE_AGE_MS
+              value: "600000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms1g -Xmx4g
           envFrom:
