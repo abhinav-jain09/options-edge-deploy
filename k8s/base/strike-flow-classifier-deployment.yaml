@@ -78,7 +78,7 @@ spec:
             - name: STRIKE_FLOW_INSTITUTIONAL_TICK_EPSILON
               value: "0.0"
             - name: STRIKE_FLOW_INSTITUTIONAL_FRESHNESS_MS
-              value: "1000"
+              value: "3000"
             - name: STRIKE_FLOW_WINDOWS_ENABLED
               value: "true"
             - name: STRIKE_FLOW_SWEEP_ENABLED
