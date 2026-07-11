@@ -42,6 +42,11 @@ spec:
           env:
             - name: APP_PROFILE
               value: "dev"
+            # DEV: auth OFF (public option-chain/paper-trades, as before). The base defaults it ON
+            # for prod; dev cannot rely on the Keycloak issuer IP (the Mac's DHCP LAN IP drifts), so
+            # SecurityConfig.jwtDecoder hard-fails startup when the issuer is unreachable. Keep dev public.
+            - name: VITE_AUTH_ENABLED
+              value: "false"
             - name: VITE_AUTH_ISSUER
               value: "http://192.168.100.102:8089/realms/optionsedge"
             # The browser's live WS talks to the dev feed-gateway at localhost:8093 — the gateway that
