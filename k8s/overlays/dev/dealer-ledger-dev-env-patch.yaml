@@ -1,0 +1,48 @@
+# DEV-ONLY dealer-ledger signal thresholds — "aggressive production candidate V1" (2026-07-10).
+# Activates the notional-fraction absorption (DEALER_LEDGER_ABSORB_MIN_FRACTION, code merged in #298)
+# plus the V1 arming/geometry/lifecycle knobs, for the market-hours firing test on dev ONLY. The prod
+# overlay is untouched, so production keeps the code defaults (ABSORB_MIN_FRACTION=1.0 == legacy
+# all-deltas rule == unchanged behaviour). Heatmap walls (150 / 5) already match the shipped values, so
+# no heatmap patch is needed. env merges by name over the base.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dealer-ledger-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: dealer-ledger
+          env:
+            # A. absorption (the new notional-fraction fire gate)
+            - { name: DEALER_LEDGER_ABSORB_MIN_FRACTION, value: "0.50" }
+            - { name: DEALER_LEDGER_ABSORB_MIN_NOTIONAL, value: "2000000" }
+            - { name: DEALER_LEDGER_ABSORB_MIN_WAVES, value: "2" }
+            # B. wave construction
+            - { name: DEALER_LEDGER_WAVE_MIN_NOTIONAL, value: "750000" }
+            - { name: DEALER_LEDGER_WAVE_GAP_MS, value: "90000" }
+            # C. arming / gamma
+            - { name: DEALER_LEDGER_UNWIND_ARM_MIN, value: "75000000" }
+            - { name: DEALER_LEDGER_FAST_GAMMA_MIN, value: "2500000" }
+            - { name: DEALER_LEDGER_CUSHION_GAMMA_MIN, value: "1500000" }
+            - { name: DEALER_LEDGER_REGIME_GAMMA_EPS, value: "1000000" }
+            - { name: DEALER_LEDGER_FAST_LIQUIDITY_MAX, value: "50" }
+            # D. defense / pin geometry
+            - { name: DEALER_LEDGER_DEFENSE_MIN_SELL_CONTRACTS, value: "350" }
+            - { name: DEALER_LEDGER_DEFENSE_TOUCH_BAND_PTS, value: "5.0" }
+            - { name: DEALER_LEDGER_PIN_RANGE_PTS, value: "40.0" }
+            - { name: DEALER_LEDGER_PIN_WINDOW_MS, value: "3600000" }
+            - { name: DEALER_LEDGER_CLUSTER_RANGE_PTS, value: "15.0" }
+            - { name: DEALER_LEDGER_CLUSTER_MEMBER_MIN_FRAC, value: "0.20" }
+            # E. lifecycle / stall / re-arm
+            - { name: DEALER_LEDGER_STALL_FLOW_USD, value: "750000" }
+            - { name: DEALER_LEDGER_STALL_MINUTES, value: "8" }
+            - { name: DEALER_LEDGER_UNWIND_SPENT_PCT, value: "0.80" }
+            - { name: DEALER_LEDGER_REARM_FLOW_USD, value: "3000000" }
+            - { name: DEALER_LEDGER_REARM_MINUTES, value: "12" }
+            - { name: DEALER_LEDGER_REARM_COOLOFF_MS, value: "600000" }
+            # F. quality
+            - { name: DEALER_LEDGER_MIN_LEDGER_NOTIONAL, value: "7500000" }
+            - { name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE, value: "MEDIUM" }
+            - { name: DEALER_LEDGER_GROSS_NET_MAX, value: "6.0" }

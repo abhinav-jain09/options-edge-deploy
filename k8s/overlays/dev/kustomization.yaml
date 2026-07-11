@@ -28,6 +28,8 @@ patches:
   - path: feed-gateway-dev-env-patch.yaml
   # DEV-ONLY: feed publish interval 1s (prod is 2s, code default 250ms) — see the patch header.
   - path: databento-feed-dev-patch.yaml
+  # DEV-ONLY: dealer-ledger aggressive candidate V1 (ABSORB_MIN_FRACTION=0.50). Prod untouched.
+  - path: dealer-ledger-dev-env-patch.yaml
   # The base web Deployment pins itself to the prod control-plane node
   # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
   # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,
