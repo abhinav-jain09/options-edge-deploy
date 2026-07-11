@@ -55,6 +55,56 @@ spec:
     spec:
       containers:
         - env:
+            - name: DEALER_LEDGER_ABSORB_MIN_FRACTION
+              value: "0.50"
+            - name: DEALER_LEDGER_ABSORB_MIN_NOTIONAL
+              value: "2000000"
+            - name: DEALER_LEDGER_ABSORB_MIN_WAVES
+              value: "2"
+            - name: DEALER_LEDGER_WAVE_MIN_NOTIONAL
+              value: "750000"
+            - name: DEALER_LEDGER_WAVE_GAP_MS
+              value: "90000"
+            - name: DEALER_LEDGER_UNWIND_ARM_MIN
+              value: "75000000"
+            - name: DEALER_LEDGER_FAST_GAMMA_MIN
+              value: "2500000"
+            - name: DEALER_LEDGER_CUSHION_GAMMA_MIN
+              value: "1500000"
+            - name: DEALER_LEDGER_REGIME_GAMMA_EPS
+              value: "1000000"
+            - name: DEALER_LEDGER_FAST_LIQUIDITY_MAX
+              value: "50"
+            - name: DEALER_LEDGER_DEFENSE_MIN_SELL_CONTRACTS
+              value: "350"
+            - name: DEALER_LEDGER_DEFENSE_TOUCH_BAND_PTS
+              value: "5.0"
+            - name: DEALER_LEDGER_PIN_RANGE_PTS
+              value: "40.0"
+            - name: DEALER_LEDGER_PIN_WINDOW_MS
+              value: "3600000"
+            - name: DEALER_LEDGER_CLUSTER_RANGE_PTS
+              value: "15.0"
+            - name: DEALER_LEDGER_CLUSTER_MEMBER_MIN_FRAC
+              value: "0.20"
+            - name: DEALER_LEDGER_STALL_FLOW_USD
+              value: "true"
+            - name: DEALER_LEDGER_STALL_MINUTES
+              value: "8"
+            - name: DEALER_LEDGER_UNWIND_SPENT_PCT
+              value: "0.80"
+            - name: DEALER_LEDGER_REARM_FLOW_USD
+              value: -Xms1024m -Xmx6144m
+            - name: DEALER_LEDGER_REARM_MINUTES
+              value: "12"
+            - name: DEALER_LEDGER_REARM_COOLOFF_MS
+              value: "600000"
+            - name: DEALER_LEDGER_MIN_LEDGER_NOTIONAL
+              value: "7500000"
+            - name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE
+              value: MEDIUM
+            - name: DEALER_LEDGER_GROSS_NET_MAX
+              value: "6.0"
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: HEALTH_PORT
@@ -88,13 +138,13 @@ spec:
             - name: DEALER_LEDGER_ENABLED
               value: "true"
             - name: DEALER_LEDGER_ADVISORY_ENABLED
-              value: "true"
+              value: "false"
             - name: DEALER_LEDGER_UI_VISIBLE
               value: "true"
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
               value: SHADOW
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms1024m -Xmx6144m
+              value: -Xms384m -Xmx1024m
           envFrom:
             - configMapRef:
                 name: options-edge-config
