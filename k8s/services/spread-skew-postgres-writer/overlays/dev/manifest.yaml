@@ -57,11 +57,11 @@ spec:
         - env:
             - name: HEALTH_PORT
               value: "8123"
-            - name: SPREAD_SKEW_WRITER_CURRENT_TOPIC
+            - name: SKEW_WRITER_CURRENT_TOPIC
               value: options.spx.spread-skew.current
-            - name: SPREAD_SKEW_WRITER_EVENTS_TOPIC
+            - name: SKEW_WRITER_EVENTS_TOPIC
               value: options.spx.spread-skew.events
-            - name: SPREAD_SKEW_WRITER_ENABLED
+            - name: SKEW_WRITER_ENABLED
               value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms128m -Xmx512m

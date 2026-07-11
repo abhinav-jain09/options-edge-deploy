@@ -39,6 +39,8 @@ spec:
             - name: HEALTH_PORT
               value: "8122"
             # --- input topics ---
+            - name: SPREAD_SKEW_INPUT_QUOTE_TOPIC
+              value: options.databento.events.raw
             - name: SPREAD_SKEW_INPUT_SPOT_TOPIC
               value: underlying.spx.price
             # --- output topics (consumed by feed-gateway / postgres-writer) ---
@@ -46,24 +48,9 @@ spec:
               value: options.spx.spread-skew.current
             - name: SPREAD_SKEW_OUTPUT_EVENTS_TOPIC
               value: options.spx.spread-skew.events
-            # --- Kafka Streams ---
-            - name: SPREAD_SKEW_STREAMS_APP_ID
-              value: options-edge-spread-skew-service-v1
-            - name: SPREAD_SKEW_STREAMS_COMMIT_INTERVAL_MS
-              value: "1000"
-            - name: SPREAD_SKEW_STREAMS_AUTO_OFFSET_RESET
-              value: latest
-            - name: SPREAD_SKEW_STREAMS_NUM_THREADS
-              value: "1"
-            - name: SPREAD_SKEW_EOS_ENABLED
-              value: "true"
-            - name: KAFKA_STREAMS_STATE_DIR
-              value: /var/lib/options-edge/kafka-streams
-            - name: SPREAD_SKEW_ENABLED
-              value: "true"
-            # Stateful Streams app: RocksDB stores hold off-heap native memory outside the
-            # JVM heap. 2Gi heap + 4Gi limit matches the tier given to the other OOM-tight
-            # per-strike Streams services (strike-intelligence, strike-invasion).
+            # --- consumer group (PLAIN consumer loop — deliberately NOT Kafka Streams) ---
+            - name: SPREAD_SKEW_CONSUMER_GROUP
+              value: spread-skew-service-v1
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx2048m"
           ports:
@@ -81,15 +68,9 @@ spec:
               port: health
             initialDelaySeconds: 30
             periodSeconds: 10
-          volumeMounts:
-            - name: kafka-streams-state
-              mountPath: /var/lib/options-edge/kafka-streams
           resources:
             requests:
               cpu: 100m
               memory: 1Gi
             limits:
               memory: 4Gi
-      volumes:
-        - name: kafka-streams-state
-          emptyDir: {}
