@@ -93,8 +93,10 @@ spec:
               value: "true"
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
               value: SHADOW
-            - name: JAVA_TOOL_OPTIONS
+            - name: DEALER_LEDGER_QUOTE_STALE_MS
               value: -Xms1024m -Xmx6144m
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms384m -Xmx1024m
           envFrom:
             - configMapRef:
                 name: options-edge-config

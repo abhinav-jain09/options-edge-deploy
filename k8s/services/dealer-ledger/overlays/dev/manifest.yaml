@@ -143,6 +143,8 @@ spec:
               value: "true"
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
               value: SHADOW
+            - name: DEALER_LEDGER_QUOTE_STALE_MS
+              value: "600000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms384m -Xmx1024m
           envFrom:
