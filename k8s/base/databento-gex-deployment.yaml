@@ -88,6 +88,14 @@ spec:
             # so a stray live env-drift can never silently disable it — without OI, GEX is all-zero.
             - name: DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED
               value: "true"
+            # Quote-age gate for the IV solve. Default 120s was rejecting ~54% of legs as STALE_QUOTE —
+            # incl. good, tight, present NEAR-MONEY quotes whose resting NBBO simply hadn't CHANGED in 2min —
+            # so IV/gamma never solved -> dealer-ledger inputQuality DEGRADED -> never armed -> 0 SignalFired
+            # (dev AND prod, 2026-07-10). Widened to 10min so greeks actually solve and the dealer-ledger can
+            # fire; to be reduced gradually once the feature is confirmed working (never below the observed
+            # near-money quote-refresh cadence). Both envs (base) intentionally — prod is meant to fire too.
+            - name: DATABENTO_GEX_MAX_QUOTE_AGE_MS
+              value: "600000"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms1g -Xmx4g"
           ports:
