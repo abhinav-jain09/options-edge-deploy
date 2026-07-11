@@ -56,7 +56,7 @@ spec:
             # OPEN-SOURCE backend: local Ollama (Qwen2.5) on the Mac host — $0/call, NO Claude.
             - {name: SP_BACKEND,        value: "ollama"}
             - {name: SP_OLLAMA_URL,     value: "http://host.docker.internal:11434"}
-            - {name: SP_OLLAMA_MODEL,   value: "qwen2.5:14b"}
+            - {name: SP_OLLAMA_MODEL,   value: "qwen2.5:72b"}
             - {name: SP_EMIT_KAFKA,     value: "1"}       # publish recs to the gateway topic
             - {name: SP_HEALTH_PORT,    value: "8130"}
             # --- model (SP_MODEL only used by anthropic backends; ollama uses SP_OLLAMA_MODEL) ---
@@ -116,7 +116,7 @@ spec:
             # OPEN-SOURCE backend (same as agent-a): local Ollama — $0/call, NO Claude.
             - {name: SP_BACKEND,   value: "ollama"}
             - {name: SP_OLLAMA_URL,   value: "http://host.docker.internal:11434"}
-            - {name: SP_OLLAMA_MODEL, value: "qwen2.5:14b"}
+            - {name: SP_OLLAMA_MODEL, value: "qwen2.5:72b"}
             - {name: SP_MODEL,     value: "claude-opus-4-8"}
             - {name: SP_SYMBOL,    value: "SPX"}
             - {name: SP_EOD_TIME,  value: "16:05"}
