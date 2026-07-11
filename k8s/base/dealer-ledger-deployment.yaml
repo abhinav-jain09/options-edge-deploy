@@ -78,6 +78,13 @@ spec:
               value: "true"
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
               value: SHADOW
+            # Quote-staleness for the greeks-quality gate. Default 30s flags STALE_QUOTE when a strike's
+            # resting NBBO quoteAt trails the chain watermark by >30s — which then degrades inputQuality
+            # and blocks arming, even for good, tight, present near-money quotes that simply haven't
+            # re-quoted in 30s. Widened to 10min (matching DATABENTO_GEX_MAX_QUOTE_AGE_MS) so a stable
+            # resting quote isn't thrown away; reduce gradually once firing is confirmed. Both envs (base).
+            - name: DEALER_LEDGER_QUOTE_STALE_MS
+              value: "600000"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms384m -Xmx1024m"
           ports:
