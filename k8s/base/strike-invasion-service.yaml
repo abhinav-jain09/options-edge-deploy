@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: strike-invasion-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: strike-invasion-service
+    app.kubernetes.io/component: strike-invasion-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: strike-invasion-service
+  ports:
+    - name: health
+      port: 8120
+      targetPort: health

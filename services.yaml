@@ -48,6 +48,8 @@ services:
   - { name: dealer-ledger,                managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-dealer-ledger,                deployments: [dealer-ledger-service] }
   - { name: dealer-ledger-calibration,    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-dealer-ledger-calibration,    deployments: [dealer-ledger-calibration-scorer, dealer-ledger-calibration-accumulator] }
   - { name: strike-intelligence,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-intelligence,          deployments: [strike-intelligence-service] }
+  - { name: strike-invasion,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-invasion,              deployments: [strike-invasion-service] }
+  - { name: invasion-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-invasion-postgres-writer,     deployments: [invasion-postgres-writer] }
   # short-premium-agent: ONE Deployment, TWO containers (Agent A live recommender + Agent B EOD advisor daemon).
   # DEV-ONLY (envs: [dev]) — not registered in k8s/base, referenced only from k8s/overlays/dev.
   - { name: short-premium-agent,          managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-short-premium-agent,          deployments: [short-premium-agent-service] }

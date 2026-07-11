@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: invasion-postgres-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: invasion-postgres-writer
+    app.kubernetes.io/component: invasion-postgres-writer
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: invasion-postgres-writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: invasion-postgres-writer
+        app.kubernetes.io/component: invasion-postgres-writer
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: invasion-postgres-writer
+          image: 192.168.100.252:5000/options-edge-invasion-postgres-writer:dev
+          imagePullPolicy: Always
+          # Shared platform config/secret provide POSTGRES_JDBC_URL/USER/PASSWORD +
+          # KAFKA_BOOTSTRAP_SERVERS (the writer's Settings fall back to these).
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8121"
+            - name: INVASION_WRITER_CURRENT_TOPIC
+              value: options.spx.strike-invasion.current
+            - name: INVASION_WRITER_ENABLED
+              value: "true"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx512m"
+          ports:
+            - name: health
+              containerPort: 8121
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            # /health/ready is 200 only when the consumer reaches RUNNING (503 while reconnecting)
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
