@@ -22,7 +22,7 @@ metadata:
   name: short-premium-agent-service
   namespace: options-edge
 spec:
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: short-premium-agent-service
@@ -38,9 +38,13 @@ spec:
       containers:
         - env:
             - name: SP_ENABLED
-              value: "0"
+              value: "1"
             - name: SP_BACKEND
-              value: sdk
+              value: ollama
+            - name: SP_OLLAMA_URL
+              value: http://host.docker.internal:11434
+            - name: SP_OLLAMA_MODEL
+              value: qwen2.5:14b
             - name: SP_EMIT_KAFKA
               value: "1"
             - name: SP_HEALTH_PORT
@@ -121,9 +125,13 @@ spec:
             - --daemon
           env:
             - name: SP_ENABLED
-              value: "0"
+              value: "1"
             - name: SP_BACKEND
-              value: sdk
+              value: ollama
+            - name: SP_OLLAMA_URL
+              value: http://host.docker.internal:11434
+            - name: SP_OLLAMA_MODEL
+              value: qwen2.5:14b
             - name: SP_MODEL
               value: claude-opus-4-8
             - name: SP_SYMBOL

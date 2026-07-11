@@ -27,7 +27,7 @@ metadata:
     app.kubernetes.io/component: short-premium-agent-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 0
+  replicas: 1
   strategy:
     type: Recreate
   selector:
@@ -52,11 +52,14 @@ spec:
                 name: options-edge-runtime-secrets  # ANTHROPIC_API_KEY (SP_BACKEND=sdk)
           env:
             # --- control (SP_ENABLED; DEV is ENABLED — self-gates market hours via SP_MARKET_GATE) ---
-            - {name: SP_ENABLED,        value: "0"}
-            - {name: SP_BACKEND,        value: "sdk"}
+            - {name: SP_ENABLED,        value: "1"}
+            # OPEN-SOURCE backend: local Ollama (Qwen2.5) on the Mac host — $0/call, NO Claude.
+            - {name: SP_BACKEND,        value: "ollama"}
+            - {name: SP_OLLAMA_URL,     value: "http://host.docker.internal:11434"}
+            - {name: SP_OLLAMA_MODEL,   value: "qwen2.5:14b"}
             - {name: SP_EMIT_KAFKA,     value: "1"}       # publish recs to the gateway topic
             - {name: SP_HEALTH_PORT,    value: "8130"}
-            # --- model ---
+            # --- model (SP_MODEL only used by anthropic backends; ollama uses SP_OLLAMA_MODEL) ---
             - {name: SP_MODEL,          value: "claude-opus-4-8"}
             - {name: SP_MAX_TOKENS,     value: "4000"}
             # --- strategy guardrails ---
@@ -109,8 +112,11 @@ spec:
             - secretRef:
                 name: options-edge-runtime-secrets
           env:
-            - {name: SP_ENABLED,   value: "0"}       # matches agent-a; daemon runs the EOD review when 1
-            - {name: SP_BACKEND,   value: "sdk"}
+            - {name: SP_ENABLED,   value: "1"}       # matches agent-a; daemon runs the EOD review when 1
+            # OPEN-SOURCE backend (same as agent-a): local Ollama — $0/call, NO Claude.
+            - {name: SP_BACKEND,   value: "ollama"}
+            - {name: SP_OLLAMA_URL,   value: "http://host.docker.internal:11434"}
+            - {name: SP_OLLAMA_MODEL, value: "qwen2.5:14b"}
             - {name: SP_MODEL,     value: "claude-opus-4-8"}
             - {name: SP_SYMBOL,    value: "SPX"}
             - {name: SP_EOD_TIME,  value: "16:05"}
