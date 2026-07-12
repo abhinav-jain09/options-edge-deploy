@@ -42,7 +42,7 @@ spec:
             - name: SP_OLLAMA_URL
               value: http://192.168.100.252:11434
             - name: SP_REQUIRE_REAL
-              value: "1"
+              value: "0"
             - name: SP_ENABLED
               value: "1"
             - name: SP_BACKEND

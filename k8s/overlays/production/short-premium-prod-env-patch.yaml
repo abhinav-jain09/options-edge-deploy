@@ -1,7 +1,11 @@
 # PROD short-premium-agent env overrides (strategic-merge, merges env by name).
 # - Model: qwen2.5:7b (fits the .252 T1000 8GB GPU fully → fast; the dev 72B won't run on this box).
 # - Ollama URL: the prod host's Ollama (192.168.100.252:11434), NOT host.docker.internal.
-# - SP_REQUIRE_REAL=1: SAFETY — refuse synthetic/stale data. Prod never trades on fake data.
+# - SP_REQUIRE_REAL=0: prod's FEED IS LIVE — spot is a DERIVED value (computed from the live chain)
+#   that carries the "SYNTHETIC" quality tag even though it's real, current market data. So we must
+#   NOT hard-refuse it, or the agent would sit idle on genuinely live data. The freshness gate
+#   (SP_MAX_AGE) still refuses STALE spot, so a dead feed is still caught. (⚠️the SYNTHETIC tag can't
+#   distinguish derived-from-live vs a true simulator; prod relies on its live feed, guarded by freshness.)
 # MUST MIRROR the standalone slice k8s/services/short-premium-agent/overlays/production (validate-services).
 apiVersion: apps/v1
 kind: Deployment
@@ -16,7 +20,7 @@ spec:
           env:
             - {name: SP_OLLAMA_MODEL,   value: "qwen2.5:7b"}
             - {name: SP_OLLAMA_URL,     value: "http://192.168.100.252:11434"}
-            - {name: SP_REQUIRE_REAL,   value: "1"}
+            - {name: SP_REQUIRE_REAL,   value: "0"}   # prod spot is DERIVED-from-live (tagged SYNTHETIC); freshness gate still guards a dead feed
         - name: agent-b
           env:
             - {name: SP_OLLAMA_MODEL,   value: "qwen2.5:7b"}
