@@ -563,7 +563,13 @@ if [ "$DB_WIPE" = "true" ]; then
   # They live in the dedicated `calibration` schema, so the schemaname='public' filter already excludes
   # them. The extra tablename guard is belt-and-suspenders: even if a regression ever created those
   # tables in `public`, this refuses to truncate them.
-  CALIB_TABLES="'outcome_scored', 'calibration_state'"
+  # es-open-direction (2026-07-12): the ES 09:15 forecast service's five tables are
+  # LONG-LIVED calibration/state data in `public` — session history (ATR + prev-day
+  # levels), break-volume baselines, the immutable forecast/outcome ledgers, and the
+  # idempotent publish guard. Truncating any of them resets the model's memory and
+  # destroys the §18.5 training ledger, so they are truncate-exempt like the
+  # dealer-ledger calibration tables.
+  CALIB_TABLES="'outcome_scored', 'calibration_state', 'es_session_history', 'es_level_break_history', 'es_open_direction_forecast', 'es_open_direction_outcome', 'es_open_direction_publication'"
   # spread_skew_sample EXEMPT — multi-session baseline (Gate-1 §4.2, USER-approved). The
   # spread-skew z-score baseline accumulates across sessions and must SURVIVE the nightly
   # wipe (unlike spread_skew_event, which is session-scoped and IS truncated by this
