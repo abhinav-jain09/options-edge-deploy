@@ -220,14 +220,20 @@ for p in json.load(sys.stdin)["items"]:
   #     See do_start() + TOPICS_ENV_REF. This removes the autonomous drift where a clean run silently
   #     re-learned whatever happened to be present.
 
-  # 4. delete ALL non-system topics — ONLY on a hard WIPE_KAFKA reset. Normally Kafka's 12h retention
-  #    expires data itself, so topics + Streams state PERSIST across the nightly run (no recreate churn).
+  # 4. CLEAN + RECREATE the topics — ONLY on a WIPE_KAFKA reset (default true, 2026-07-11). Retention is
+  #    now ETERNAL (-1), so data is deleted HERE (manual wipe), NOT by a TTL. After deleting every
+  #    non-system topic we RECREATE the deploy repo's platform/feed topics (ensure_topics) so they exist
+  #    empty with eternal retention; each service self-creates its own output + Streams-internal topics on
+  #    startup. (_schemas + __consumer_offsets/__transaction_state are never deleted.)
   if [ "$WIPE_KAFKA" != true ]; then
-    echo "4) keeping topics (Kafka 12h retention expires data itself — WIPE_KAFKA=false)"
+    echo "4) keeping topics (WIPE_KAFKA=false)"
   else
     echo "4) deleting all non-system topics ..."
     $KT --bootstrap-server $BS --list 2>/dev/null | grep -vE '^__|^_schemas' \
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
+    sleep 8   # let the deletions settle before recreating (avoid create-vs-delete races)
+    echo "4d) recreating platform topics (clean + recreate) ..."
+    ensure_topics
   fi
 
   # 4b. safe docker-ENGINE image housekeeping (build side only — NOT the k8s containerd store).
