@@ -26,6 +26,14 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
+      # Kafka Streams apps rebalance on roll; a full-fleet roll can take >600s (k8s
+      # default progressDeadlineSeconds) to report Available, failing the deploy even
+      # though pods go Ready shortly after. Raise the controller deadline to 1200s so
+      # the deploy tolerates the rebalance. apply.sh's `rollout status --timeout=1260s`
+      # is set just above it so the controller's "exceeded progress deadline" fires first.
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200
   # PROD dealer-ledger heap: -Xmx6144m (6GB, dev/prod parity — -Xmx1024m OOM'd on dev's day's-backlog
   # catch-up; prod runs the same SPX data). Container 8Gi leaves ~2Gi for RocksDB off-heap + JVM overhead.
   # .252 has 62Gi total / ~30Gi free, so 8Gi fits. env/16 = DEALER_LEDGER_ADVISORY_ENABLED → true

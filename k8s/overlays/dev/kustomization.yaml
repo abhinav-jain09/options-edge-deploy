@@ -76,6 +76,16 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Always
+      # Kafka Streams apps rebalance on roll; when the WHOLE fleet rolls at once
+      # (cold, pre-market) a pod can take >600s (k8s default progressDeadlineSeconds)
+      # to report Available, so `kubectl rollout status` fails the deploy even though
+      # every pod goes Ready ~1-2min later (state=REBALANCING->ready is normal). Raise
+      # the controller deadline to 1200s so the deploy tolerates the rebalance. The CLI
+      # `rollout status --timeout=1260s` (apply.sh) is set just above it so the
+      # controller's meaningful "exceeded progress deadline" fires first.
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200
   # DEV-ONLY: option-price-behavior uses Kafka Streams/RocksDB state. Its JVM heap is
   # 2g, so a 2Gi pod limit leaves no native/off-heap headroom and the kubelet OOM-kills
   # it during replay. Give the container enough room without changing service logic.
