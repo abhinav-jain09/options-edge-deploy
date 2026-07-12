@@ -574,13 +574,19 @@ if [ "$DB_WIPE" = "true" ]; then
   # spread-skew z-score baseline accumulates across sessions and must SURVIVE the nightly
   # wipe (unlike spread_skew_event, which is session-scoped and IS truncated by this
   # all-public sweep — do NOT add it here).
+  # ES-model tables EXEMPT (2026-07-11, USER): every es_* table is the ES open-direction model's MEMORY /
+  # immutable ledger / TRAINING corpus and must SURVIVE the nightly wipe — es_session_history (ATR + prev-day
+  # levels), es_level_break_history (trap-volume baselines), es_open_direction_forecast (immutable forecast
+  # ledger), es_open_direction_outcome (outcome/accuracy = training data), es_open_direction_publication
+  # (idempotent publish guard). Excluded by the `tablename !~ '^es_'` guard below.
   EXEMPT_TABLES="$CALIB_TABLES, 'spread_skew_sample'"
-  TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES)")
+  ES_EXCLUDE="tablename !~ '^es_'"
+  TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES) and $ES_EXCLUDE")
   if [ -n "$TBL_LIST" ]; then
-    trunc_n=$(pg "select count(*) from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES)" | tr -d '[:space:]')
+    trunc_n=$(pg "select count(*) from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES) and $ES_EXCLUDE" | tr -d '[:space:]')
     pg "set lock_timeout='30s'; set statement_timeout='300s'; truncate table $TBL_LIST restart identity" \
       || die "TRUNCATE of flow DB failed"
-    log "truncated $trunc_n public tables in '$EXPECTED_DB' (incl. pin_session_close + spread_skew_event; calibration.* + spread_skew_sample preserved)"
+    log "truncated $trunc_n public tables in '$EXPECTED_DB' (incl. pin_session_close + spread_skew_event; calibration.* + spread_skew_sample + es_* preserved)"
     # Prove the calibration corpus survived (visibility): approx row counts are untouched by the wipe.
     # Read the estimate from pg_stat_user_tables (never parse-errors if the table/schema is absent —
     # returns no row -> -1) so this is safe on a fresh DB before the service's first run.

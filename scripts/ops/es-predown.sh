@@ -20,6 +20,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd || echo "$SCRIPT_DIR/../jenkins")}"
 # The overnight ES services that shut down before the open. Keep in sync with dev-cleanup.sh ES_DOWN_SET.
 ES_DOWN_SET="${ES_DOWN_SET:-es-open-direction-service es-open-direction-postgres-writer}"
+# Transient ES Kafka topics CLEANED after the services go down (overnight ES data, no longer needed).
+# The Postgres es_* tables (session_history/level_break_history/forecast/outcome/publication) are the
+# model's memory / ledgers / TRAINING data and are NEVER touched (also excluded from the offhours DB truncate).
+ES_CLEAN_TOPICS="${ES_CLEAN_TOPICS:-es.open-direction.forecast es.open-direction.outcome es.open-direction.status underlying.es.trades}"
+KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/kafka_2.13-4.3.0/bin}"
+KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092}"
 
 log()  { printf '%s %s\n' "$(date '+%FT%T%z')" "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -66,7 +72,21 @@ for d in $ES_DOWN_SET; do
   fi
 done
 
-log "=== ES pre-open down complete (down=$down skipped=$skip failed=$failed) ==="
+# Clean the transient ES Kafka topics (services are down; nothing recreates them until close+15). The
+# Postgres es_* training/ledger tables are NOT touched. Best-effort; a missing/undeletable topic is fine.
+cleaned=0
+KT="$KAFKA_BIN/kafka-topics.sh"
+if [ "$ENABLED" = "true" ] && [ -x "$KT" ]; then
+  for t in $ES_CLEAN_TOPICS; do
+    if "$KT" --bootstrap-server "$KAFKA_BOOTSTRAP" --describe --topic "$t" >/dev/null 2>&1; then
+      "$KT" --bootstrap-server "$KAFKA_BOOTSTRAP" --delete --topic "$t" >/dev/null 2>&1 && { log "  cleaned topic: $t"; cleaned=$((cleaned+1)); }
+    fi
+  done
+elif [ "$ENABLED" != "true" ]; then
+  for t in $ES_CLEAN_TOPICS; do log "  [dry] would clean topic: $t"; done
+fi
+
+log "=== ES pre-open down complete (down=$down skipped=$skip failed=$failed topics-cleaned=$cleaned) ==="
 if [ "$failed" -eq 0 ]; then
   discord "🌙 ES pre-open down ($EXPECTED_ENV) — scaled **${down}** overnight ES service(s) to 0 before the open (feed-gateway/web untouched). · ${NOW_ET}"
 else
