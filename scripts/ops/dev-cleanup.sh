@@ -5,7 +5,7 @@
 #
 # MODES:
 #   dev-cleanup           # AUTO — what launchd calls every ~15 min. CALENDAR-aware ET slots (2026-07-11):
-#                         #   close+15 ET (16:15 normal / 13:15 early-close) -> full clean (WIPE topics) THEN
+#                         #   close+30 ET (16:30 normal / 13:30 early-close) -> full clean (WIPE topics) THEN
 #                         #                immediately bring up ONLY the overnight ES-tracking set ($OVERNIGHT_SET)
 #                         #   ~09:17 ET (window 09:15-09:29, weekdays) -> ESDOWN: scale the overnight ES services
 #                         #                ($ES_DOWN_SET) to 0 before the 09:30 SPX open (feed-gateway + web stay up)
@@ -31,7 +31,7 @@ KEEP='keycloak'                                          # deployments to leave 
 # databento-timewarp-snapshot-replay: if it boots even briefly it replays snapshots into
 # options.databento.raw and poisons the chain. Keep in sync with premarket-check.sh DISABLED (dev).
 DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-sandwich-service|volume-sandwich-databento-service|unusual-whales-gex-service|unusual-whales-gex-history-service|databento-timewarp-snapshot-replay|ibkr-feed-service|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service'
-# OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+15) clean,
+# OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+30) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 07:30 ET full start. (2026-07-11)
 OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web'
 # ES overnight-tracking services that SHUT DOWN at ~09:17 ET (before the 09:30 SPX open): the overnight ES
@@ -55,8 +55,8 @@ TOPICS_ENV_REF="${TOPICS_ENV_REF:-origin/main:scripts/kafka/topics.env}"
 # exclusion below keep the Schema Registry safe.) Set WIPE_KAFKA=false for a no-wipe run.
 WIPE_KAFKA="${WIPE_KAFKA:-true}"
 # Market calendar (close time, early-close, holidays) — shared with the prod scripts (scripts/jenkins/
-# market_calendar.py). Used to fire the CLEAN at close+15 ET on trading days (normal 16:00 -> 16:15;
-# early-close 13:00 -> 13:15).
+# market_calendar.py). Used to fire the CLEAN at close+30 ET on trading days (normal 16:00 -> 16:30;
+# early-close 13:00 -> 13:30).
 CALENDAR_DIR="${CALENDAR_DIR:-$DEPLOY_REPO/scripts/jenkins}"
 LOG=/Users/abhinav/oe-ops/dev-cleanup.log
 
@@ -131,7 +131,7 @@ do_es_down() {
       echo "  (absent, skipped): $d"
     fi
   done
-  # Clean the transient ES Kafka topics (services are down -> nothing recreates them until close+15).
+  # Clean the transient ES Kafka topics (services are down -> nothing recreates them until close+30).
   # Postgres es_* training/ledger tables are NOT touched.
   echo "ES-down: cleaning transient ES topics ($ES_CLEAN_TOPICS) ..."
   local t
@@ -316,8 +316,8 @@ case "$MODE" in
   now|clean) do_clean ;;
   auto)
     # Calendar-aware slots (ET), 2026-07-11. market_calendar.py gives the real close time so the CLEAN
-    # fires at close+15 on BOTH normal (16:00->16:15) and early-close (13:00->13:15) days:
-    #   CLEAN slot [close+15 .. close+44] on a trading day -> do_clean (WIPE) THEN overnight ES-tracking start.
+    # fires at close+30 on BOTH normal (16:00->16:30) and early-close (13:00->13:30) days:
+    #   CLEAN slot [close+30 .. close+59] on a trading day -> do_clean (WIPE) THEN overnight ES-tracking start.
     #   FULL  slot [07:30 .. 07:59]       on a trading day -> do_start (rest of the pipeline before the open).
     # launchd runs every 15 min so at least one tick lands in each 30-min window; markers keyed by the
     # trading-date make it idempotent. Dry-test: NOW_ET=1615 NOW_DATE=20260713 DKC_DRYRUN=1 dev-cleanup
@@ -345,7 +345,7 @@ if not cal.is_trading_day(d):
     print(f"SLOT=OFF TD={td} CLOSE=0000"); sys.exit(0)
 close = cal.close_time(d)
 close_dt = datetime.combine(d, close, tz)
-clean_lo = close_dt + timedelta(minutes=15); clean_hi = clean_lo + timedelta(minutes=29)
+clean_lo = close_dt + timedelta(minutes=30); clean_hi = clean_lo + timedelta(minutes=29)
 full_lo = datetime.combine(d, time(7, 30), tz); full_hi = full_lo + timedelta(minutes=29)
 # ESDOWN: ~09:17 ET, before the 09:30 open. 15-min window [09:15..09:29] so the every-15-min launchd
 # reliably lands a tick before the open; ends 09:29 so it never fires after the bell.
