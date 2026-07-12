@@ -33,7 +33,7 @@ spec:
     spec:
       containers:
         - name: es-feed
-          image: 192.168.100.252:5000/options-edge-databento-feed:dev
+          image: 192.168.100.252:5000/options-edge-databento-feed:prod
           envFrom:
             - secretRef:
                 name: options-edge-databento-feed-env   # DATABENTO_API_KEY (prod key; per-account session limits verified)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pin-and-apply.sh <manifest> <registry> [dry-run-flag]
 #
-# Digest-pin every image in the manifest against the registry, write the pinned
+# Digest-pin every image (any tag, e.g. :prod) in the manifest against the registry, write the pinned
 # render to .jenkins-tmp/, and kubectl apply it. A floating tag is NEVER applied
 # (Codex D4): if the digest cannot be resolved, this fails closed.
 
