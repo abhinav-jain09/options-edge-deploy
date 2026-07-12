@@ -324,12 +324,14 @@ pipeline {
     stage('Resolve Images') {
       steps {
         script {
-          // Image refs are set here via a loop (NOT 34 inline environment{} entries) to keep the
-          // pipeline under the Groovy CPS 64KB method limit ("Method too large"). Each ref =
-          // the caller's param override, else oeProfile.image(service,'production','prod').
-          // Only the prod (branch-2) resolve reads these; the dev resolve builds :dev refs from
-          // registry+tag and ignores them. Add new services to this map.
-          [
+          // Image refs are built via a loop and written to an env file to source (NOT 34 inline
+          // environment{} entries — that overflowed the Groovy CPS 64KB method limit; and NOT
+          // dynamic env[..]= — script-security blocks the putAt static method). Each ref = the
+          // caller's param override, else oeProfile.image(service,'production','prod'). Only
+          // resolve-images.sh's prod (branch-2) path reads these; the dev resolve builds :dev
+          // refs from registry+tag and ignores them; downstream stages read the
+          // options-edge-images.env that resolve-images.sh writes. Add new services to this map.
+          def _defaults = [
             'RAW_TO_DISPLAY_IMAGE': 'raw-to-display', 'WEB_IMAGE': 'web',
             'DATABENTO_VOLUME_AGGREGATOR_IMAGE': 'databento-volume-aggregator', 'DATABENTO_FEED_IMAGE': 'databento-feed',
             'DATABENTO_GEX_IMAGE': 'databento-gex', 'DATABENTO_MAXPAIN_IMAGE': 'databento-maxpain',
@@ -348,9 +350,10 @@ pipeline {
             'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE': 'es-open-direction-postgres-writer',
             'STRIKE_FLOW_AVRO_ADAPTER_IMAGE': 'strike-flow-avro-adapter', 'GEX_DELTA_REDIS_WRITER_IMAGE': 'gex-delta-redis-writer',
             'IBKR_FEED_IMAGE': 'ibkr-feed',
-          ].each { _v, _svc -> env[_v] = params[_v] ?: oeProfile.image(_svc, 'production', 'prod') }
+          ].collect { _v, _svc -> "export ${_v}=${params[_v] ?: oeProfile.image(_svc, 'production', 'prod')}" }.join('\n')
+          writeFile file: 'image-defaults.env', text: _defaults + '\n'
         }
-        sh 'bash -x scripts/deploy/resolve-images.sh'
+        sh '. ./image-defaults.env; bash -x scripts/deploy/resolve-images.sh'
       }
     }
     stage('Image Preflight') {
