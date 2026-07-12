@@ -1,0 +1,104 @@
+// ES4 DEPLOY — the self-contained ES-0DTE environment on 192.168.100.4 ("es4").
+//
+// Deliberately SEPARATE from Jenkinsfile.service-deploy (Codex decision D3, 2026-07-12):
+// zero changes to the SPX dev/production deploy path or its mirror-rule machinery.
+// Manifests live in k8s/es4/ (generated from the production slices by
+// scripts/es4/render_es4_manifests.py — reviewed + committed).
+//
+// ACTIONS:
+//   infra-sync     rsync infra/es4 + scripts/es4 to the box and run bootstrap-es4.sh
+//                  (k3s, registries.yaml, compose stack Kafka/SR/PG/Redis/MM2, topics,
+//                  namespace + pg secret). Idempotent.
+//   create-topics  run create-es-topics.sh on the box (idempotent).
+//   deploy-service apply ONE service from k8s/es4/services/<SERVICE>.yaml (digest-pinned).
+//   deploy-all     apply es4-common-env + every manifest in k8s/es4/services (digest-pinned).
+//   deploy-es-feed apply k8s/es4/prod/es-feed.yaml to the PROD cluster (the es-feed runs
+//                  on .252 next to prod Kafka, producing to es4 — Gate-2 rev 10 wiring).
+//
+// Image policy: every apply digest-pins the :dev tag against 192.168.100.252:5000 at
+// deploy time (Docker-Content-Digest) — a floating tag is never applied (Codex D4).
+pipeline {
+  agent { label 'local-mac' }
+  parameters {
+    choice(name: 'ACTION', choices: ['deploy-service', 'deploy-all', 'infra-sync', 'create-topics', 'deploy-es-feed'],
+      description: 'What to do (see header).')
+    choice(name: 'SERVICE', choices: [
+      'databento-gex', 'databento-gex-history', 'databento-maxpain', 'databento-mission-sandwich',
+      'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
+      'directional-pressure', 'gex-delta-redis-writer', 'option-price-behavior', 'pin-postgres-writer',
+      'pressure-postgres-writer', 'raw-to-display', 'strike-flow-avro-adapter', 'strike-flow-classifier',
+      'strike-liquidity-heatmap', 'volume-pace'
+    ], description: 'Service (deploy-service only).')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
+      description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
+    string(name: 'EXPECTED_FEED_DIGEST', defaultValue: '',
+      description: 'deploy-es-feed only: the sha256 digest the feed :dev tag MUST resolve to (paste from the options-edge-databento-feed-deploy build that contains the es-feed code). Fail-closed on mismatch — an old feed image can never be deployed as es-feed by accident.')
+  }
+  options { disableConcurrentBuilds(); timeout(time: 60, unit: 'MINUTES') }
+  environment {
+    ES4_HOST       = 'abhinav@192.168.100.4'
+    ES4_KUBECONFIG = '/Users/abhinav/.kube/es4.kubeconfig'
+    PROD_KUBECONFIG = '/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig'
+    REGISTRY       = '192.168.100.252:5000'
+  }
+  stages {
+    stage('Infra sync + bootstrap') {
+      when { expression { params.ACTION == 'infra-sync' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          ssh -o BatchMode=yes "$ES4_HOST" 'mkdir -p /home/es4/repo/infra /home/es4/repo/scripts'
+          rsync -az --delete infra/es4  "$ES4_HOST":/home/es4/repo/infra/
+          rsync -az --delete scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
+          ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/bootstrap-es4.sh'
+        '''
+      }
+    }
+    stage('Create topics') {
+      when { expression { params.ACTION == 'create-topics' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          rsync -az scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
+          ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
+        '''
+      }
+    }
+    stage('Deploy to es4') {
+      when { expression { params.ACTION == 'deploy-service' || params.ACTION == 'deploy-all' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          export KUBECONFIG="$ES4_KUBECONFIG"
+          DRY=""; [ "${DEPLOY_DRY_RUN:-false}" = "true" ] && DRY="--dry-run=server"
+          kubectl apply $DRY -f k8s/es4/es4-common-env.yaml
+          mkdir -p .jenkins-tmp
+          if [ "$ACTION" = "deploy-all" ]; then FILES=$(ls k8s/es4/services/*.yaml); else FILES="k8s/es4/services/${SERVICE}.yaml"; fi
+          for f in $FILES; do
+            bash scripts/es4/pin-and-apply.sh "$f" "$REGISTRY" "$DRY"
+          done
+          [ -n "$DRY" ] || kubectl -n options-edge get pods -o wide
+        '''
+      }
+    }
+    stage('Deploy es-feed to prod') {
+      when { expression { params.ACTION == 'deploy-es-feed' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          export KUBECONFIG="$PROD_KUBECONFIG"
+          DRY=""; [ "${DEPLOY_DRY_RUN:-false}" = "true" ] && DRY="--dry-run=server"
+          # enforceable prerequisite: the resolved feed digest must equal the one from
+          # the feed build that contains the es-feed code (Codex #12)
+          [ -n "${EXPECTED_FEED_DIGEST:-}" ] || { echo "EXPECTED_FEED_DIGEST is required for deploy-es-feed" >&2; exit 1; }
+          actual=$(curl -sfI -H 'Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json' \
+            "http://$REGISTRY/v2/options-edge-databento-feed/manifests/dev" | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}')
+          [ "$actual" = "$EXPECTED_FEED_DIGEST" ] || { echo "FEED DIGEST MISMATCH: registry=$actual expected=$EXPECTED_FEED_DIGEST" >&2; exit 1; }
+          bash scripts/es4/pin-and-apply.sh k8s/es4/prod/es-feed.yaml "$REGISTRY" "$DRY"
+          [ -n "$DRY" ] || kubectl -n options-edge rollout status deploy/es-feed --timeout=300s
+        '''
+      }
+    }
+  }
+  post { always { archiveArtifacts artifacts: '.jenkins-tmp/*.yaml', allowEmptyArchive: true } }
+}

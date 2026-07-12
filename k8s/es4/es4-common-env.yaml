@@ -1,0 +1,23 @@
+# es4-common-env — the environment-level knobs every es4 service shares.
+# (es4 = the self-contained ES-0DTE box, 192.168.100.4; Gate-2 GATE-2-SERVICE-DESIGNS.md §0.)
+#
+# THE es-prefix mechanism: TOPIC_PREFIX=es. — processing-common RuntimeProfileConfig
+# prefixes EVERY topic (compiled defaults AND env-supplied values) with "es.", and
+# KAFKA_APPLICATION_ID_SUFFIX namespaces every Streams application.id. APP_PROFILE=prod
+# enforces fail-loud config (no localhost, no default passwords) and an empty base prefix.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: es4-common-env
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/part-of: options-edge
+data:
+  APP_PROFILE: "prod"
+  TOPIC_PREFIX: "es."
+  KAFKA_APPLICATION_ID_SUFFIX: "-es4"
+  KAFKA_BOOTSTRAP_SERVERS: "192.168.100.4:9092"
+  SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"
+  KAFKA_SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"
+  POSTGRES_JDBC_URL: "jdbc:postgresql://192.168.100.4:5432/options_edge_es"
+  APP_MARKET_DATA_SOURCE: "DATABENTO"
