@@ -37,11 +37,11 @@ SPREAD_SKEW_POSTGRES_WRITER_IMAGE
 ES_OPEN_DIRECTION_IMAGE
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE
 EOF
-  # DEV-ONLY service short-premium-agent renders only in the dev overlay and its
-  # images exist only in the dev registry. Include them in the image-var set ONLY for dev so the dev
-  # DEPLOY_TARGET=all pin loop finds them (env rewrite + lock-key allow), while prod/experiment never
-  # require or reference them (no empty-var lock failure under REQUIRE_IMAGE_LOCK).
-  if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+  # short-premium-agent renders in dev+production (a standalone service that runs on prod too), NOT
+  # experiment. Include it in the image-var set for dev+production so their DEPLOY_TARGET=all pin loop
+  # finds it (env rewrite + lock-key allow), while experiment never requires or references it (no
+  # empty-var lock failure under REQUIRE_IMAGE_LOCK).
+  if [ "${ENVIRONMENT:-dev}" = "dev" ] || [ "${ENVIRONMENT:-dev}" = "production" ]; then
     cat <<'EOF'
 SHORT_PREMIUM_AGENT_IMAGE
 EOF

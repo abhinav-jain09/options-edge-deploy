@@ -62,11 +62,10 @@
               ;;
           esac
 
-          # DEV-ONLY service short-premium-agent renders only in the dev overlay and
-          # their images exist only in the dev registry. Preflight them ONLY for a dev all-deploy so a
-          # missing dev-only image is caught here (not later); prod/experiment never render or reference
-          # them, so they are never preflighted there.
-          if [ "${ENVIRONMENT:-dev}" = "dev" ] && [ "${DEPLOY_TARGET:-all}" = "all" ]; then
+          # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
+          # NOT experiment. Preflight it for a dev OR production all-deploy so a missing image is caught
+          # here (not later); experiment never renders it, so it is never preflighted there.
+          if { [ "${ENVIRONMENT:-dev}" = "dev" ] || [ "${ENVIRONMENT:-dev}" = "production" ]; } && [ "${DEPLOY_TARGET:-all}" = "all" ]; then
             images="$images
             SHORT_PREMIUM_AGENT_IMAGE=${SHORT_PREMIUM_AGENT_IMAGE:-}
             "

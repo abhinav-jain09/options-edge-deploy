@@ -71,12 +71,22 @@ _lock_vars() {
     f && /^[A-Z][A-Z0-9_]*_IMAGE$/{print}
     /^}/{f=0}' "$LOCK"
 }
-#   image-preflight.sh: the vars in the MAIN images list (before the DEPLOY_TARGET case).
+#   image-preflight.sh: the vars in the images list.
+# $1: 'main' (default) = only the MAIN list (before the DEPLOY_TARGET case); 'all' = whole file,
+#     which also captures the dev+production conditional block (e.g. short-premium-agent).
 _preflight_vars() {
-  sed '/case .*DEPLOY_TARGET/q' "$PREFLIGHT" | grep -oE '[A-Z][A-Z0-9_]*_IMAGE=' | tr -d '='
+  if [ "${1:-main}" = "all" ]; then
+    # main list + the post-case conditional block, but NOT the DEPLOY_TARGET single-service case
+    # body (else a var present only in a per-service target would false-pass the conditional check).
+    awk '/case .*DEPLOY_TARGET/{skip=1} skip && /^[[:space:]]*esac/{skip=0; next} !skip' "$PREFLIGHT" \
+      | grep -oE '[A-Z][A-Z0-9_]*_IMAGE=' | tr -d '='
+  else
+    sed '/case .*DEPLOY_TARGET/q' "$PREFLIGHT" | grep -oE '[A-Z][A-Z0-9_]*_IMAGE=' | tr -d '='
+  fi
 }
 APPLY_MAIN_VARS="$(_apply_pin_vars main)"; APPLY_ALL_VARS="$(_apply_pin_vars all)"
-LOCK_MAIN_VARS="$(_lock_vars main)"; LOCK_ALL_VARS="$(_lock_vars all)"; PREFLIGHT_VARS="$(_preflight_vars)"
+LOCK_MAIN_VARS="$(_lock_vars main)"; LOCK_ALL_VARS="$(_lock_vars all)"
+PREFLIGHT_VARS="$(_preflight_vars main)"; PREFLIGHT_ALL_VARS="$(_preflight_vars all)"
 in_list() { printf '%s\n' "$2" | grep -qx "$1"; }
 # fixed-string search of the Jenkinsfile with Groovy line-comments stripped (a commented-out
 # statement must not satisfy a wiring check). plain grep (not -q) to avoid pipefail SIGPIPE.
@@ -115,16 +125,23 @@ for pair in dev:dev production:prod; do
       fail=1
     fi
     miss=""
-    # A prod service MUST be in the main (all-env) pin loop / all_image_vars — production never
-    # runs the dev-only loop. A dev-only service may be in either (dev-only sections included).
+    # Three pin categories (structural — which loop the var lives in, not just where it renders):
+    #   dev-only (emitted for dev, NOT prod): conditional pin/lock loops; no prod preflight.
+    #   all-env  (in the MAIN pin loop): main pin/lock lists + main preflight.
+    #   dev+production (emitted for prod but NOT in the main loop, e.g. short-premium-agent — runs
+    #     on dev+prod, not experiment): the conditional pin/lock loops + the conditional preflight
+    #     block. It must NOT be in the main loop (that runs for experiment too, which never renders it).
     if is_dev_only "$var"; then
       in_list "$var" "$APPLY_ALL_VARS" || miss="$miss apply.sh(pin-loop)"
       in_list "$var" "$LOCK_ALL_VARS"  || miss="$miss image-lock.sh(all_image_vars)"
-    else
-      in_list "$var" "$APPLY_MAIN_VARS" || miss="$miss apply.sh(main-pin-loop)"
+    elif in_list "$var" "$APPLY_MAIN_VARS"; then
       in_list "$var" "$LOCK_MAIN_VARS"  || miss="$miss image-lock.sh(main-all_image_vars)"
       # Image Preflight verifies prod image existence before promotion — prod services only.
       in_list "$var" "$PREFLIGHT_VARS"  || miss="$miss image-preflight.sh(main-list)"
+    else
+      in_list "$var" "$APPLY_ALL_VARS"     || miss="$miss apply.sh(conditional-pin-loop)"
+      in_list "$var" "$LOCK_ALL_VARS"      || miss="$miss image-lock.sh(all_image_vars)"
+      in_list "$var" "$PREFLIGHT_ALL_VARS" || miss="$miss image-preflight.sh(conditional-list)"
     fi
     [ -z "$miss" ] || { echo "FAIL[$e]: image '$img' (var $var) not in the pin/preflight LIST of:$miss" >&2; fail=1; }
   done
@@ -163,8 +180,11 @@ else
     # provides the value.)
     if [ -f "$JF" ]; then
       jmiss=""; svc="${img#options-edge-}"
-      jf_has "name: '${var}', defaultValue"                            || jmiss="$jmiss param"
-      jf_has "${var} = \"\${params.${var} ?: oeProfile.image('${svc}'" || jmiss="$jmiss env-default(->${svc})"
+      jf_has "name: '${var}', defaultValue"  || jmiss="$jmiss param"
+      # The prod image-default is supplied by the 'Resolve Images' stage map, whose entries are
+      # `'VAR': 'svc',` collected into `export VAR=${params[VAR] ?: oeProfile.image(svc,...)}`.
+      # Require the var's map KEY (the string param above makes params[VAR] valid).
+      jf_has "'${var}': '${svc}'"            || jmiss="$jmiss env-default(->${svc})"
       [ -z "$jmiss" ] || { echo "FAIL[production/jenkins]: prod-rendered image '$img' (var $var) missing from active Jenkinsfile wiring:$jmiss" >&2; fail=1; }
     fi
   done
