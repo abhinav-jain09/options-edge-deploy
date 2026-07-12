@@ -41,14 +41,14 @@ pipeline {
       description: 'SSH target for ENVIRONMENT=dev (the docker-desktop Mac). Empty -> runs locally on the agent (when the agent IS the dev Mac).')
   }
   triggers {
-    // 2026-07-11: fire at close+15 ET so the clean+overnight-start runs 15m after close on BOTH normal
-    // (16:00->16:15) and early-close (13:00->13:15) days. Two ticks (13:15 + 16:15): the script's
-    // market-hours guard REFUSES the 13:15 tick during a normal session, and its once-per-trading-day
-    // marker makes the second tick a no-op — so exactly one clean runs per trading day, at close+15.
+    // 2026-07-11: fire at close+30 ET so the clean+overnight-start runs 30m after close on BOTH normal
+    // (16:00->16:30) and early-close (13:00->13:30) days. Two ticks (13:30 + 16:30): the script's
+    // market-hours guard REFUSES the 13:30 tick during a normal session, and its once-per-trading-day
+    // marker makes the second tick a no-op — so exactly one clean runs per trading day, at close+30.
     // NOTE: scheduled runs still use the DRY_RUN=true / WIPE_ENABLED=false defaults (log-only) until an
     // operator flips them live — see the params block. The calendar guard handles holidays.
     cron('''TZ=America/New_York
-15 13,16 * * 1-5''')
+30 13,16 * * 1-5''')
   }
   options {
     disableConcurrentBuilds()

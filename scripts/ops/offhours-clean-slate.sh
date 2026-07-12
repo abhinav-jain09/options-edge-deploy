@@ -83,7 +83,7 @@ OVERNIGHT_SET="${OVERNIGHT_SET:-es-open-direction-service es-open-direction-post
 # already knows the per-day close (incl. early-close days); we add a buffer so the
 # 16:15 ET options close (calendar NORMAL_CLOSE is the 16:00 equity close) and any
 # late settle is fully past before we are willing to wipe.
-CLOSE_BUFFER_MIN="${CLOSE_BUFFER_MIN:-15}"   # 2026-07-11: run at close+15 (was +30) so the wipe+overnight-start fires 15m after close
+CLOSE_BUFFER_MIN="${CLOSE_BUFFER_MIN:-30}"   # 2026-07-11: run at close+30 (was +15) so the wipe+overnight-start fires 30m after close
 
 # Environment identity (fail-closed for a LIVE wipe). Identity is the Kafka
 # cluster-id + DB host + DB name + connected role — NOT a free-text env string.
