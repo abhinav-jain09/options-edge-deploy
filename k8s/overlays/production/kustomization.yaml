@@ -10,6 +10,9 @@ resources:
   # (k8s/services/web/overlays/production) mirrors the prod patches — sync enforced by
   # scripts/ci/validate-services.sh render equivalence.
   - ../../services/web/base
+  # short-premium-agent runs on prod too (7B on the .252 GPU) — same base as dev, with the
+  # prod env patch below overriding model/Ollama-URL/SP_REQUIRE_REAL. Mirrors the web pattern.
+  - ../../services/short-premium-agent/base
 
 # Prod-only: the node already has the images cached, so re-pulling all ~26 at
 # once on every rollout trips the kubelet image-pull QPS limit ("pull QPS
@@ -60,6 +63,7 @@ patches:
           value: "true"
   # PROD: option-price-behavior V2 heap 3g + limit 5Gi (base 2g/2Gi OOMKilled —
   # heap == limit, no off-heap room). Re-enabled after the 2026-07-07 freeze.
+  - path: short-premium-prod-env-patch.yaml
   - path: option-price-behavior-prod-patch.yaml
   # PROD-ONLY: databento-feed 1s snapshot publish interval (explicit container env overrides the
   # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
@@ -114,6 +118,8 @@ patches:
 # entries resolved from the build (.images = [] first), so this mapping only hardens the
 # at-rest render. Tag-level ref here; the digest pin still happens fail-closed at deploy.
 images:
+  - name: 192.168.100.252:5000/options-edge-short-premium-agent
+    newTag: prod
   - name: 192.168.100.252:5000/options-edge-strike-liquidity-heatmap
     newName: ghcr.io/abhinav-jain09/options-edge-strike-liquidity-heatmap
     newTag: production
