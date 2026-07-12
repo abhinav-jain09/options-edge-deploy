@@ -48,10 +48,10 @@ SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$registry/options-edge-spread-skew-postgres-wr
 ES_OPEN_DIRECTION_IMAGE=$registry/options-edge-es-open-direction:$image_tag
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$registry/options-edge-es-open-direction-postgres-writer:$image_tag
 EOF
-            # DEV-ONLY service short-premium-agent: emit its image var ONLY for
-            # dev, never for a tag-based prod/experiment resolve — mirrors all_image_vars' dev-only set so
-            # the two never appear in a non-dev resolved env.
-            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
+            # NOT experiment. Emit its image var for a dev OR production tag-based resolve (mirrors
+            # all_image_vars' dev+prod set), never for experiment.
+            if [ "${ENVIRONMENT:-dev}" = "dev" ] || [ "${ENVIRONMENT:-dev}" = "production" ]; then
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$registry/options-edge-short-premium-agent:$image_tag
 EOF
@@ -93,6 +93,15 @@ SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$SPREAD_SKEW_POSTGRES_WRITER_IMAGE
 ES_OPEN_DIRECTION_IMAGE=$ES_OPEN_DIRECTION_IMAGE
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE
 EOF
+            # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its
+            # image var is caller-provided (Jenkinsfile image-defaults -> oeProfile.image), so emit it
+            # here too. Guarded to production so an experiment promoted resolve (which never renders it)
+            # does not require the var under set -u.
+            if [ "${ENVIRONMENT:-dev}" = "production" ]; then
+              cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
+SHORT_PREMIUM_AGENT_IMAGE=$SHORT_PREMIUM_AGENT_IMAGE
+EOF
+            fi
           fi
           . scripts/deploy/image-lock.sh
           . "$JENKINS_WORK_DIR/options-edge-images.env"

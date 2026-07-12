@@ -50,6 +50,7 @@ pipeline {
     string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', defaultValue: '', description: 'Strike-flow Avro adapter image (unified-sr FLOW producer)')
     string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', defaultValue: '', description: 'GEX delta Redis writer image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
+    string(name: 'SHORT_PREMIUM_AGENT_IMAGE', defaultValue: '', description: 'short-premium-agent image (dev+prod)')
     string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
     string(name: 'ANTHROPIC_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-anthropic-api-key', description: 'Jenkins secret-text credential containing the Anthropic API key (short-premium-agent SP_BACKEND=sdk)')
@@ -350,6 +351,10 @@ pipeline {
             'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE': 'es-open-direction-postgres-writer',
             'STRIKE_FLOW_AVRO_ADAPTER_IMAGE': 'strike-flow-avro-adapter', 'GEX_DELTA_REDIS_WRITER_IMAGE': 'gex-delta-redis-writer',
             'IBKR_FEED_IMAGE': 'ibkr-feed',
+            // short-premium-agent runs on prod too (standalone service, .252 GPU); provide its prod
+            // image default so resolve-images.sh branch-2 (promoted prod) can pin it. resolve-images
+            // itself guards emission to dev+production, so experiment never references it.
+            'SHORT_PREMIUM_AGENT_IMAGE': 'short-premium-agent',
           ].collect { _v, _svc -> "export ${_v}=${params[_v] ?: oeProfile.image(_svc, 'production', 'prod')}" }.join('\n')
           writeFile file: 'image-defaults.env', text: _defaults + '\n'
         }
@@ -736,7 +741,7 @@ void promoteToProduction() {
       'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'STRIKE_INVASION_IMAGE',
       'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE',
       'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
-      'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE',
+      'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE',
     ].collect { _n -> string(name: _n, value: params[_n]) } + [
       string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', value: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID),
       string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),

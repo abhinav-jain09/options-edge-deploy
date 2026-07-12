@@ -173,11 +173,11 @@
               yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
             echo "pinned ${_img_var} -> ${_pinned}"
           done
-          # DEV-ONLY service short-premium-agent renders ONLY in the dev overlay and
-          # their images exist only in the dev registry. Pin them ONLY when ENVIRONMENT=dev so the dev
-          # `DEPLOY_TARGET=all` render passes the digest gate below; prod/experiment never render them and
-          # this block never runs there (so pin_ref is never asked to resolve a non-existent prod image).
-          if [ "${ENVIRONMENT}" = "dev" ]; then
+          # short-premium-agent renders in the dev AND production overlays (a standalone service that
+          # runs on prod too — the .252 GPU), but NOT experiment. Pin it for dev+production so both
+          # `DEPLOY_TARGET=all` renders pass the digest gate below; experiment never renders it and this
+          # block is skipped there (so pin_ref is never asked to resolve a non-existent experiment image).
+          if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
             for _img_var in SHORT_PREMIUM_AGENT_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
@@ -376,10 +376,10 @@ EOF
           kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=1260s
           kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=1260s
-          # DEV-ONLY service short-premium-agent renders only in the dev overlay, so an
-          # unready/crashlooping dev-only rollout must fail the dev all-deploy too. Guarded to dev because
-          # these deployments do not exist in prod/experiment.
-          if [ "${ENVIRONMENT}" = "dev" ]; then
+          # short-premium-agent renders in dev+production, so an unready/crashlooping rollout must fail
+          # the all-deploy in both. Guarded to dev+production because this deployment does not exist in
+          # experiment.
+          if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
             kubectl -n options-edge rollout status deployment/short-premium-agent-service --timeout=1260s
           fi
           scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
