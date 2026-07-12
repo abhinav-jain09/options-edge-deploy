@@ -33,6 +33,11 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Always
+      # Mirror the monolith's all-Deployments progressDeadlineSeconds:1200 (raised so the
+      # controller deadline fires before apply.sh's rollout --timeout on a slow roll).
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: host.docker.internal:5001/options-edge-web
