@@ -38,14 +38,6 @@ REG=probe.registry.invalid
 fail=0
 PROBE="$(mktemp -d)"; trap 'rm -rf "$PROBE"' EXIT
 
-# Dev-only services from the AUTHORITATIVE registry (services.yaml entry declares envs WITHOUT
-# 'production'). Derived by grep/sed on the single-line flow-style entries — kustomize- AND
-# yq-version-independent (some CI kustomize versions wrongly render a dev-only service into the
-# production overlay, and some yq versions differ on `contains`; this must not demand prod wiring).
-DEV_ONLY_IMGS="$(grep 'image: options-edge-' services.yaml | grep 'envs:' | grep -v 'production' \
-  | sed -E 's/.*image: (options-edge-[a-z0-9-]+).*/\1/' || true)"
-is_dev_only() { printf '%s\n' "$DEV_ONLY_IMGS" | grep -qx "$1"; }
-
 img_to_var() { printf '%s_IMAGE' "$(printf '%s' "${1#options-edge-}" | tr 'a-z-' 'A-Z_')"; }
 rendered_images() {  # $1=env -> unique options-edge image basenames (registry prefix optional)
   kubectl kustomize "k8s/overlays/$1" 2>/dev/null \
@@ -90,21 +82,34 @@ in_list() { printf '%s\n' "$2" | grep -qx "$1"; }
 # statement must not satisfy a wiring check). plain grep (not -q) to avoid pipefail SIGPIPE.
 jf_has() { grep -v '^[[:space:]]*//' "$JF" | grep -F "$1" >/dev/null; }
 
-# --- (A1) branch-1 resolution: dev + tag-based prod, exact ref per rendered image -----------
-for pair in dev:dev production:prod; do
-  e="${pair%%:*}"; tag="${pair#*:}"; wd="$PROBE/b1-$e"; mkdir -p "$wd"
+# Run branch-1 resolution for BOTH envs up front and cache the env files. Dev-only status is
+# then derived from resolve-images.sh's OWN behavior — a var it emits for dev but NOT for prod
+# is dev-only by definition. This needs no services.yaml/yq/kustomize parsing, so it is immune
+# to CI kustomize/yq version differences (a dev-only service wrongly rendered into the prod
+# overlay by some kustomize version is still correctly treated as dev-only).
+declare EF_dev EF_production
+for e in dev production; do
+  tag=$([ "$e" = dev ] && echo dev || echo prod); wd="$PROBE/b1-$e"; mkdir -p "$wd"
   if ! ( set -euo pipefail
          export ENVIRONMENT="$e" IMAGE_TAG="$tag" OE_REGISTRY="$REG" \
                 JENKINS_WORK_DIR="$wd" REQUIRE_IMAGE_LOCK=false IMAGE_LOCK_FILE=""
          bash scripts/deploy/resolve-images.sh >/dev/null 2>&1 ); then
-    echo "FAIL: resolve-images.sh failed to run (branch 1) for ENVIRONMENT=$e" >&2; fail=1; continue
+    echo "FAIL: resolve-images.sh failed to run (branch 1) for ENVIRONMENT=$e" >&2; fail=1
   fi
-  ef="$wd/options-edge-images.env"; n=0
+  eval "EF_$e=\"$wd/options-edge-images.env\""
+done
+# var emitted for dev but not for prod == dev-only
+is_dev_only() { grep -q "^$1=" "$EF_dev" 2>/dev/null && ! grep -q "^$1=" "$EF_production" 2>/dev/null; }
+
+# --- (A1) branch-1 resolution: dev + tag-based prod, exact ref per rendered image -----------
+for pair in dev:dev production:prod; do
+  e="${pair%%:*}"; tag="${pair#*:}"; eval "ef=\"\$EF_$e\""; n=0
   for img in $(rendered_images "$e"); do
+    var="$(img_to_var "$img")"
     # dev-only services never render in production; some CI kustomize versions wrongly emit them
-    # there — skip them in any non-dev probe (services.yaml is authoritative).
-    [ "$e" != "dev" ] && is_dev_only "$img" && continue
-    n=$((n+1)); var="$(img_to_var "$img")"; want="$REG/$img:$tag"; got="$(emitted "$var" "$ef")"
+    # there — skip them in any non-dev probe (dev-only derived from resolve-images emission).
+    [ "$e" != "dev" ] && is_dev_only "$var" && continue
+    n=$((n+1)); want="$REG/$img:$tag"; got="$(emitted "$var" "$ef")"
     if [ "$got" != "$want" ]; then
       echo "FAIL[$e/branch1]: resolve-images.sh emitted '${got:-<none>}' for $var (expected '$want') — image '$img' is not correctly wired." >&2
       fail=1
@@ -112,7 +117,7 @@ for pair in dev:dev production:prod; do
     miss=""
     # A prod service MUST be in the main (all-env) pin loop / all_image_vars — production never
     # runs the dev-only loop. A dev-only service may be in either (dev-only sections included).
-    if is_dev_only "$img"; then
+    if is_dev_only "$var"; then
       in_list "$var" "$APPLY_ALL_VARS" || miss="$miss apply.sh(pin-loop)"
       in_list "$var" "$LOCK_ALL_VARS"  || miss="$miss image-lock.sh(all_image_vars)"
     else
@@ -142,8 +147,8 @@ if ! ( set -euo pipefail
   fail=1
 else
   for img in $(rendered_images production); do
-    is_dev_only "$img" && continue
-    var="$(img_to_var "$img")"; want="SENTINEL:$var"; got="$(emitted "$var" "$ef")"
+    var="$(img_to_var "$img")"; is_dev_only "$var" && continue
+    want="SENTINEL:$var"; got="$(emitted "$var" "$ef")"
     if [ "$got" != "$want" ]; then
       echo "FAIL[production/branch2]: promoted-path resolve did NOT echo $var (expected '$want' got '${got:-<none>}') — add it to resolve-images.sh's branch-2 heredoc AND the deploy Jenkinsfile (param+env+promotion)." >&2
       fail=1
