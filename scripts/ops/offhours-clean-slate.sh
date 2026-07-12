@@ -74,13 +74,16 @@ WIPE_ENABLED="${WIPE_ENABLED:-false}"
 # UI) and raced app boot. WIPE_KAFKA=false keeps topics + Streams state intact; the
 # nightly run still scales apps to 0 (off-hours footprint), truncates the flow DB, and
 # trims logs. Set WIPE_KAFKA=true for a hard, from-empty Kafka reset.
-WIPE_KAFKA="${WIPE_KAFKA:-false}"
+WIPE_KAFKA="${WIPE_KAFKA:-true}"
+# OVERNIGHT ES-tracking set — after the wipe, bring up ONLY these so ES futures are tracked overnight.
+# Everything else stays at 0 until morning-autostart (07:30 ET) brings the full pipeline up. (2026-07-11)
+OVERNIGHT_SET="${OVERNIGHT_SET:-es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web}"
 
 # Market-hours guard: refuse to run between open and close+buffer. The calendar
 # already knows the per-day close (incl. early-close days); we add a buffer so the
 # 16:15 ET options close (calendar NORMAL_CLOSE is the 16:00 equity close) and any
 # late settle is fully past before we are willing to wipe.
-CLOSE_BUFFER_MIN="${CLOSE_BUFFER_MIN:-30}"   # minutes after the calendar close before off-hours begins
+CLOSE_BUFFER_MIN="${CLOSE_BUFFER_MIN:-15}"   # 2026-07-11: run at close+15 (was +30) so the wipe+overnight-start fires 15m after close
 
 # Environment identity (fail-closed for a LIVE wipe). Identity is the Kafka
 # cluster-id + DB host + DB name + connected role — NOT a free-text env string.
@@ -388,6 +391,19 @@ fi
 # ===========================================================================
 # LIVE WIPE PATH (DRY_RUN=false, WIPE_ENABLED=true, all guards passed).
 # ===========================================================================
+# Once-per-trading-day guard (2026-07-11): the cron fires at BOTH 13:15 and 16:15 ET so close+15 is hit
+# on normal (16:00->16:15) AND early-close (13:00->13:15) days. Whichever passes the market-hours guard
+# first claims the day via a marker so the other cron tick is a no-op (no double wipe on early-close days).
+OFFHOURS_MARK_DIR="${OFFHOURS_MARK_DIR:-/tmp}"
+_TD=$(TZ='America/New_York' date '+%Y%m%d' 2>/dev/null || date '+%Y%m%d')
+OFFHOURS_MARK="$OFFHOURS_MARK_DIR/.offhours-clean-slate-$EXPECTED_ENV-$_TD"
+if [ -f "$OFFHOURS_MARK" ]; then
+  log "already ran the off-hours clean-slate for $EXPECTED_ENV today ($_TD) — skipping (once-per-trading-day)"
+  discord "⏭️ Off-hours clean-slate ($EXPECTED_ENV) — already ran today ($_TD); this cron tick is a no-op."
+  exit 0
+fi
+: > "$OFFHOURS_MARK" 2>/dev/null || true
+
 log ">>> LIVE WIPE BEGINS <<<"
 
 # System-topic retention guard: _schemas (the Schema Registry backing store) MUST be compact + INFINITE
@@ -578,19 +594,28 @@ else
   log "DB wipe SKIPPED (PG_DSN unset)"
 fi
 
-# ---- A.3 + B-post: scale apps back up so they rebuild empty state cleanly ----
-log "scaling deployments back up; waiting for rollout"
+# ---- A.3 + B-post: bring up ONLY the overnight ES-tracking set (2026-07-11) ----
+# For overnight ES-future tracking we do NOT restore the full pipeline here. We bring up ONLY
+# $OVERNIGHT_SET so ES is tracked overnight; everything else STAYS at 0 until morning-autostart
+# (07:30 ET) scales the full pipeline up before the open. (The EXIT restore_scale trap still restores
+# the full SNAP if we die BEFORE this point — a fail-up safety net.)
+log "overnight start: bringing up ES-tracking set only ($OVERNIGHT_SET); all others stay at 0 until 07:30 ET"
 SCALEBACK_OK=1
-while read -r name reps; do
+for name in $OVERNIGHT_SET; do
   [ -n "$name" ] || continue
-  kc scale deploy "$name" --replicas="${reps:-1}" >/dev/null 2>&1 \
-    || { log "WARN: scale-back command failed: $name"; SCALEBACK_OK=0; }
-done <<<"$SNAP"
-for d in $(printf '%s\n' "$SNAP" | awk '{print $1}'); do
-  kcr rollout status "deploy/$d" --timeout="${ROLLOUT_TIMEOUT}s" >/dev/null 2>&1 \
-    || { log "WARN: rollout slow/incomplete: $d"; SCALEBACK_OK=0; }
+  if kcr get deploy "$name" >/dev/null 2>&1; then
+    kc scale deploy "$name" --replicas=1 >/dev/null 2>&1 \
+      || { log "WARN: overnight scale-up failed: $name"; SCALEBACK_OK=0; }
+  else
+    log "  overnight set: deployment absent, skipped: $name"
+  fi
 done
-SCALED_DOWN=0   # scale-back issued for all; EXIT trap must not re-issue.
+for name in $OVERNIGHT_SET; do
+  kcr get deploy "$name" >/dev/null 2>&1 \
+    && { kcr rollout status "deploy/$name" --timeout="${ROLLOUT_TIMEOUT}s" >/dev/null 2>&1 \
+         || { log "WARN: overnight rollout slow/incomplete: $name"; SCALEBACK_OK=0; }; }
+done
+SCALED_DOWN=0   # overnight set scaled up; EXIT trap must NOT restore the full SNAP.
 
 # ---- D: logs + docker disk (truncate-in-place, NEVER rm) ----
 log_files=0

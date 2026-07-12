@@ -26,10 +26,11 @@ pipeline {
   }
 
   triggers {
-    // 08:00 America/New_York, Mon-Fri. The script's calendar guard additionally
-    // no-ops on market holidays, so a holiday Monday leaves prod down.
+    // 07:30 America/New_York, Mon-Fri (2026-07-11: moved 08:00 -> 07:30 for ~2h pre-market headroom;
+    // the overnight ES-tracking set is already up from the close+15 clean, so this brings up the REST of
+    // the pipeline). The script's calendar guard no-ops on market holidays, so a holiday Monday leaves prod down.
     cron('''TZ=America/New_York
-0 8 * * 1-5''')
+30 7 * * 1-5''')
   }
 
   options {
