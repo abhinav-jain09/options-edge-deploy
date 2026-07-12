@@ -49,6 +49,17 @@ kubectl apply ${DRY} -f "$OUT"
 # (the silent-stale-build trap: a green rollout is not proof — assert imageID==digest,
 # same guarantee as the org's build->deploy §13.3 gate; fail-closed on any mismatch).
 if [ -z "$DRY" ]; then
+  # Capture the Deployment list FIRST so a kubectl failure aborts (process substitution
+  # swallows the producer's exit status; Codex #1). A manifest with services must yield >=1.
+  # kubectl and grep must be separated: a piped `... | grep ... || true` would mask a
+  # kubectl failure (pipe exit = grep's; || true swallows it). Run kubectl first — a
+  # failure aborts here under set -e — then filter its captured output (grep no-match is fine).
+  applied_names=$(kubectl -n options-edge apply --dry-run=client -f "$OUT" -o name)
+  deploys=$(printf '%s\n' "$applied_names" | grep '^deployment' || true)
+  if [ -z "$deploys" ]; then
+    echo "IMAGE VERIFY FAILED: no Deployment found in $OUT (manifest has none)" >&2
+    exit 1
+  fi
   while read -r d; do
     kubectl -n options-edge rollout status "$d" --timeout=240s || {
       echo "ROLLOUT FAILED: $d (manifest $MANIFEST)" >&2; exit 1; }
@@ -65,5 +76,5 @@ if [ -z "$DRY" ]; then
       fi
     done
     echo "verified $name runs pinned digest $expected"
-  done < <(kubectl -n options-edge apply --dry-run=client -f "$OUT" -o name 2>/dev/null | grep '^deployment')
+  done <<< "$deploys"
 fi

@@ -33,9 +33,12 @@ if ! systemctl is-active --quiet k3s; then
   # systemd unit, no download.
   K3S_PIN="v1.35.5+k3s1"
   SKIP_DL="false"
-  if /usr/local/bin/k3s --version 2>/dev/null | grep -q "$K3S_PIN"; then
+  # EXACT token match (Codex #2: plain grep treats dots as wildcards and allows trailing
+  # text, so v1.35.5+k3s10 would false-match). Parse the version field and compare literally.
+  ONBOX_VER=$(/usr/local/bin/k3s --version 2>/dev/null | awk '/k3s version/ {print $3; exit}')
+  if [ "$ONBOX_VER" = "$K3S_PIN" ]; then
     SKIP_DL="true"
-    echo "existing k3s binary matches $K3S_PIN — skipping download"
+    echo "existing k3s binary is exactly $K3S_PIN — skipping download"
   fi
   curl -sfL https://get.k3s.io | sudo INSTALL_K3S_SKIP_DOWNLOAD="$SKIP_DL" \
     INSTALL_K3S_VERSION="$K3S_PIN" INSTALL_K3S_EXEC="server \
