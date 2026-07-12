@@ -1,0 +1,23 @@
+# PROD short-premium-agent env overrides (strategic-merge, merges env by name).
+# - Model: qwen2.5:7b (fits the .252 T1000 8GB GPU fully → fast; the dev 72B won't run on this box).
+# - Ollama URL: the prod host's Ollama (192.168.100.252:11434), NOT host.docker.internal.
+# - SP_REQUIRE_REAL=1: SAFETY — refuse synthetic/stale data. Prod never trades on fake data.
+# MUST MIRROR the standalone slice k8s/services/short-premium-agent/overlays/production (validate-services).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: short-premium-agent-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: agent-a
+          env:
+            - {name: SP_OLLAMA_MODEL,   value: "qwen2.5:7b"}
+            - {name: SP_OLLAMA_URL,     value: "http://192.168.100.252:11434"}
+            - {name: SP_REQUIRE_REAL,   value: "1"}
+        - name: agent-b
+          env:
+            - {name: SP_OLLAMA_MODEL,   value: "qwen2.5:7b"}
+            - {name: SP_OLLAMA_URL,     value: "http://192.168.100.252:11434"}
