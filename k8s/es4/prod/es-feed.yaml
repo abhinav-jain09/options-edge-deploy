@@ -60,8 +60,12 @@ spec:
             # ---- GLBX ES 0DTE options subscription ------------------------------
             - name: DATABENTO_DATASET
               value: "GLBX.MDP3"
+            - name: DATABENTO_SYMBOLOGY
+              value: "glbx-parent"   # ES.OPT parent resolution (new feed code; default "osi" = SPX path)
             - name: DATABENTO_SYMBOL
               value: "ES"
+            - name: DATABENTO_TRADING_CLASS
+              value: "ES"   # never the SPXW default (Codex blocker #2); glbx-parent resolution keys on symbol.OPT
             - name: DATABENTO_EXPIRY
               value: "AUTO"
             - name: DATABENTO_MIN_STRIKE

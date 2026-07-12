@@ -76,3 +76,17 @@ spec:
       - name: kafka-streams-state
         persistentVolumeClaim:
           claimName: volume-pace-databento-service-streams-state
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: volume-pace-databento-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/part-of: options-edge-es4
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi

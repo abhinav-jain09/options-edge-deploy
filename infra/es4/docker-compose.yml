@@ -21,12 +21,12 @@ name: es4-infra
 
 services:
   kafka:
-    image: confluentinc/cp-kafka:7.7.1
+    image: confluentinc/cp-kafka:7.7.1@sha256:653f49c51cfebcf8301938d01044efead6afbd8dd60acd2bcf1605d7c6494d3b
     container_name: es4-kafka
     restart: unless-stopped
     ports:
       - "9092:9092"          # EXTERNAL — advertised as 192.168.100.4:9092
-      - "9093:9093"          # CONTROLLER (KRaft, local only)
+      # controller (9093) stays on the compose network only — never published (Codex #8)
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -55,7 +55,7 @@ services:
       retries: 12
 
   schema-registry:
-    image: confluentinc/cp-schema-registry:7.7.1
+    image: confluentinc/cp-schema-registry:7.7.1@sha256:e8c6de70b76f78d33238f5f972da17fc93e5b96b00d08ffed07d9f5f03fbc1ce
     container_name: es4-schema-registry
     restart: unless-stopped
     depends_on:
@@ -75,7 +75,7 @@ services:
       retries: 12
 
   postgres:
-    image: postgres:16.6
+    image: postgres:16.6@sha256:557fea37a744d5f4c8faab304b0a90858b53ab119735a88c131fd19dab802f36
     container_name: es4-postgres
     restart: unless-stopped
     ports:
@@ -94,7 +94,7 @@ services:
       retries: 12
 
   redis:
-    image: redis:7.4.1
+    image: redis:7.4.1@sha256:bb142a9c18ac18a16713c1491d779697b4e107c22a97266616099d288237ef47
     container_name: es4-redis
     restart: unless-stopped
     ports:
@@ -102,13 +102,18 @@ services:
     volumes:
       - /home/es4/volumes/redis:/data
     command: ["redis-server", "--appendonly", "no", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
 
   # MirrorMaker 2 — ONE topic, prod -> es4. Source-cluster alias "es" makes
   # DefaultReplicationPolicy name the target topic "es.underlying.es.trades",
   # exactly what TOPIC_PREFIX=es. consumers expect. Bytes-through (JSON payloads;
   # the topic is HpsfJsonSerde JSON, no Schema Registry subjects involved).
   mm2:
-    image: confluentinc/cp-kafka:7.7.1
+    image: confluentinc/cp-kafka:7.7.1@sha256:653f49c51cfebcf8301938d01044efead6afbd8dd60acd2bcf1605d7c6494d3b
     container_name: es4-mm2
     restart: unless-stopped
     depends_on:

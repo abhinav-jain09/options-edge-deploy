@@ -31,6 +31,8 @@ pipeline {
     ], description: 'Service (deploy-service only).')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
+    string(name: 'EXPECTED_FEED_DIGEST', defaultValue: '',
+      description: 'deploy-es-feed only: the sha256 digest the feed :dev tag MUST resolve to (paste from the options-edge-databento-feed-deploy build that contains the es-feed code). Fail-closed on mismatch — an old feed image can never be deployed as es-feed by accident.')
   }
   options { disableConcurrentBuilds(); timeout(time: 60, unit: 'MINUTES') }
   environment {
@@ -86,6 +88,12 @@ pipeline {
           set -euo pipefail
           export KUBECONFIG="$PROD_KUBECONFIG"
           DRY=""; [ "${DEPLOY_DRY_RUN:-false}" = "true" ] && DRY="--dry-run=server"
+          # enforceable prerequisite: the resolved feed digest must equal the one from
+          # the feed build that contains the es-feed code (Codex #12)
+          [ -n "${EXPECTED_FEED_DIGEST:-}" ] || { echo "EXPECTED_FEED_DIGEST is required for deploy-es-feed" >&2; exit 1; }
+          actual=$(curl -sfI -H 'Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json' \
+            "http://$REGISTRY/v2/options-edge-databento-feed/manifests/dev" | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}')
+          [ "$actual" = "$EXPECTED_FEED_DIGEST" ] || { echo "FEED DIGEST MISMATCH: registry=$actual expected=$EXPECTED_FEED_DIGEST" >&2; exit 1; }
           bash scripts/es4/pin-and-apply.sh k8s/es4/prod/es-feed.yaml "$REGISTRY" "$DRY"
           [ -n "$DRY" ] || kubectl -n options-edge rollout status deploy/es-feed --timeout=300s
         '''

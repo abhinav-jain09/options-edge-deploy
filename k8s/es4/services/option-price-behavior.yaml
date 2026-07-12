@@ -52,7 +52,7 @@ spec:
         - name: OPTION_PRICE_BEHAVIOR_INPUT_GREEKS_TOPIC
           value: options.databento.gex.strike
         - name: OPTION_PRICE_BEHAVIOR_INPUT_UNDERLYING_TOPIC
-          value: underlying.spx.price
+          value: underlying.es.trades
         - name: OPTION_PRICE_BEHAVIOR_V2_BY_OPTION_TOPIC
           value: option-price-behavior-v2-by-option
         - name: OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC

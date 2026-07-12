@@ -57,23 +57,42 @@ cp -f "$SCRIPT_DIR/../../infra/es4/docker-compose.yml" "$INFRA_DIR/docker-compos
 mkdir -p "$INFRA_DIR/mm2"
 cp -f "$SCRIPT_DIR/../../infra/es4/mm2/mm2.properties" "$INFRA_DIR/mm2/mm2.properties"
 
-if [ ! -f "$INFRA_DIR/.env" ]; then
+# openssl, not tr|head: under pipefail head's early close can SIGPIPE tr and abort the
+# script AFTER the redirect created .env — leaving an empty file that skips regeneration
+# forever (Codex #4). Also self-heal such an empty/short .env from an earlier aborted run.
+if ! grep -qE '^ES4_POSTGRES_PASSWORD=.{16,}$' "$INFRA_DIR/.env" 2>/dev/null; then
   log "minting es4 postgres password (once; never committed)"
-  printf 'ES4_POSTGRES_PASSWORD=%s\n' "$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24)" > "$INFRA_DIR/.env"
+  printf 'ES4_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 16)" > "$INFRA_DIR/.env"
   chmod 600 "$INFRA_DIR/.env"
 fi
 
 log "docker compose up -d (kafka/schema-registry/postgres/redis/mm2)"
 (cd "$INFRA_DIR" && docker compose up -d)
 
-log "waiting for kafka + schema-registry health"
+log "waiting for kafka/schema-registry/postgres/redis health (fail-closed)"
+HEALTH_OK=false
 for i in $(seq 1 40); do
   ok_k=$(docker inspect -f '{{.State.Health.Status}}' es4-kafka 2>/dev/null || echo starting)
   ok_s=$(docker inspect -f '{{.State.Health.Status}}' es4-schema-registry 2>/dev/null || echo starting)
-  [ "$ok_k" = healthy ] && [ "$ok_s" = healthy ] && break
+  ok_p=$(docker inspect -f '{{.State.Health.Status}}' es4-postgres 2>/dev/null || echo starting)
+  ok_r=$(docker inspect -f '{{.State.Health.Status}}' es4-redis 2>/dev/null || echo starting)
+  if [ "$ok_k" = healthy ] && [ "$ok_s" = healthy ] && [ "$ok_p" = healthy ] && [ "$ok_r" = healthy ]; then
+    HEALTH_OK=true; break
+  fi
   sleep 5
 done
 docker ps --format '{{.Names}}\t{{.Status}}' | sed 's/^/  /'
+if [ "$HEALTH_OK" != true ]; then
+  echo "BOOTSTRAP FAILED: infra containers not healthy after 200s" >&2
+  (cd "$INFRA_DIR" && docker compose logs --tail 40) >&2 || true
+  exit 1
+fi
+# mm2 has no meaningful healthcheck endpoint — require the container to be running
+if [ "$(docker inspect -f '{{.State.Running}}' es4-mm2 2>/dev/null)" != "true" ]; then
+  echo "BOOTSTRAP FAILED: es4-mm2 not running" >&2
+  docker logs --tail 40 es4-mm2 >&2 || true
+  exit 1
+fi
 
 # ------------------------------------------------------------ 4. topics
 log "creating core es.* topics"

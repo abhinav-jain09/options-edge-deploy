@@ -28,23 +28,23 @@ TOPICS=(
   es.options.hpsf.dlq
   es.options.databento.control
   es.options.marketdata.selection
-  # mirrored from prod by MM2 (created by MM2 too; explicit here for config pinning)
+  # mirrored from prod by MM2 (also created by MM2; pinned here for explicit config)
   es.underlying.es.trades
-  # processing pipeline
+  # processing pipeline (names = es. + the values the generated manifests carry —
+  # extracted from k8s/es4/services/*.yaml; keep in sync when the renderer changes)
   es.options.databento.strike-flow
   es.options.databento.strike-flow.strike.avro
   es.options.databento.gex.strike
-  es.options.databento.gex.history
+  es.options.databento.gex.strike.history
   es.options.databento.pace
   es.options.databento.pace.mission
   es.options.databento.market-pressure.mission
   es.options.databento.sandwich.mission
   es.options.databento.directional-pressure
   es.options.databento.maxpain
-  es.display
-  es.display.volume.current
-  es.display.volume.sandwich.current
-  es.display.volume.sandwich.alerts
+  es.options.databento.display
+  es.options.databento.display.volume.current
+  es.options.databento.display.gamma.history
   es.options.databento.normalized
   es.options.databento.volume.state.compacted
 )
