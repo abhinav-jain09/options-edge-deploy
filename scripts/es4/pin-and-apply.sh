@@ -45,12 +45,25 @@ fi
 
 kubectl apply ${DRY} -f "$OUT"
 
-# wait for each Deployment in this manifest (skip on dry-run)
+# wait for each Deployment, then PROVE the running pods carry the pinned digest
+# (the silent-stale-build trap: a green rollout is not proof — assert imageID==digest,
+# same guarantee as the org's build->deploy §13.3 gate; fail-closed on any mismatch).
 if [ -z "$DRY" ]; then
-  kubectl -n options-edge apply --dry-run=client -f "$OUT" -o name 2>/dev/null \
-    | grep '^deployment' \
-    | while read -r d; do
-        kubectl -n options-edge rollout status "$d" --timeout=240s || {
-          echo "ROLLOUT FAILED: $d (manifest $MANIFEST)" >&2; exit 1; }
-      done
+  while read -r d; do
+    kubectl -n options-edge rollout status "$d" --timeout=240s || {
+      echo "ROLLOUT FAILED: $d (manifest $MANIFEST)" >&2; exit 1; }
+    name=${d#deployment.apps/}; name=${name#deployment/}
+    expected=$(grep -oE "image: [^ ]+@sha256:[0-9a-f]{64}" "$OUT" | head -1 | grep -oE "sha256:[0-9a-f]{64}")
+    running=$(kubectl -n options-edge get pods -l "app.kubernetes.io/name=${name}" \
+      -o jsonpath='{range .items[*]}{.status.containerStatuses[*].imageID}{"\n"}{end}' 2>/dev/null | grep -oE "sha256:[0-9a-f]{64}" | sort -u)
+    if [ -z "$running" ]; then
+      echo "IMAGE VERIFY FAILED: no running imageID found for $name" >&2; exit 1
+    fi
+    for r in $running; do
+      if [ "$r" != "$expected" ]; then
+        echo "IMAGE VERIFY FAILED: $name runs $r but pinned $expected (STALE IMAGE)" >&2; exit 1
+      fi
+    done
+    echo "verified $name runs pinned digest $expected"
+  done < <(kubectl -n options-edge apply --dry-run=client -f "$OUT" -o name 2>/dev/null | grep '^deployment')
 fi
