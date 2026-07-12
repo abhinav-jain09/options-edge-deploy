@@ -68,10 +68,11 @@ spec:
             - {name: SP_MAX_TRADES,     value: "2"}
             - {name: SP_QTY,            value: "1"}
             - {name: SP_SYMBOL,         value: "SPX"}
-            # --- cadence: flat every 60s (USER 2026-07-12: run once a minute, not 10-15s) ---
+            # --- cadence: 60s normal, ramps to 30s in the final 5 min into the close ---
+            #     (USER 2026-07-12: once a minute normally, faster into the close; not 10-15s)
             - {name: SP_CADENCE,        value: "60"}    # every 60s (free / local Ollama)
-            - {name: SP_CADENCE_T10_5,  value: "60"}
-            - {name: SP_CADENCE_FINAL5, value: "60"}
+            - {name: SP_CADENCE_T10_5,  value: "60"}    # T-10..T-5 → 60s
+            - {name: SP_CADENCE_FINAL5, value: "30"}    # final 5 min → 30s (0DTE resolves into close)
             # --- market gate / data integrity ---
             - {name: SP_OPEN,           value: "09:35"}
             - {name: SP_CLOSE,          value: "16:00"}
