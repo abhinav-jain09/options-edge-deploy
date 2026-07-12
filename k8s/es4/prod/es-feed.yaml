@@ -1,0 +1,95 @@
+# es-feed — the ES-0DTE-options Databento feed. Runs in the PROD cluster (.252, next to
+# prod Kafka) but produces EVERYTHING to the es4 box (192.168.100.4). Gate-2 rev 10 wiring:
+#   * subscribes GLBX.MDP3 ES 0DTE OPTIONS ONLY (the ES future's trades are subscribed
+#     exactly once, by the existing prod feed — never twice);
+#   * consumes prod's underlying.es.trades from prod Kafka (localhost network) to drive
+#     canonicalSpot = front-future price (carry pinned to zero via rate == div yield);
+#   * publishes es.-prefixed topics to es4 Kafka + registers Avro in es4's Schema Registry.
+#
+# The SPX feed deployment is NOT touched by this file. Same image as the SPX feed
+# (options-edge-databento-feed) — behavior is env-only + the es-feed code paths.
+# Deploy ONLY via Jenkinsfile.es4-deploy ACTION=deploy-es-feed (digest-pinned).
+# PREREQ: the feed repo es-feed changes must be merged + image rebuilt first.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-feed
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-feed
+    app.kubernetes.io/part-of: options-edge-es4
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-feed
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-feed
+        app.kubernetes.io/part-of: options-edge-es4
+    spec:
+      containers:
+        - name: es-feed
+          image: 192.168.100.252:5000/options-edge-databento-feed:dev
+          envFrom:
+            - secretRef:
+                name: options-edge-databento-feed-env   # DATABENTO_API_KEY (prod key; per-account session limits verified)
+          env:
+            # ---- outputs -> es4 -------------------------------------------------
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "192.168.100.4:9092"
+            - name: KAFKA_SCHEMA_REGISTRY_URL
+              value: "http://192.168.100.4:8081"
+            - name: KAFKA_DATABENTO_SNAPSHOT_TOPIC
+              value: "es.options.databento.raw"
+            - name: KAFKA_DATABENTO_EVENTS_TOPIC
+              value: "es.options.databento.events.raw"
+            - name: KAFKA_HPSF_TCBBO_TOPIC
+              value: "es.options.opra.tcbbo"
+            - name: KAFKA_HPSF_DLQ_TOPIC
+              value: "es.options.hpsf.dlq"
+            - name: KAFKA_DATABENTO_CONTROL_TOPIC
+              value: "es.options.databento.control"
+            - name: KAFKA_MARKET_DATA_SELECTION_TOPIC
+              value: "es.options.marketdata.selection"
+            - name: DATABENTO_CONTROL_GROUP_ID
+              value: "es-feed-control-v1"
+            # ---- GLBX ES 0DTE options subscription ------------------------------
+            - name: DATABENTO_DATASET
+              value: "GLBX.MDP3"
+            - name: DATABENTO_SYMBOL
+              value: "ES"
+            - name: DATABENTO_EXPIRY
+              value: "AUTO"
+            - name: DATABENTO_MIN_STRIKE
+              value: "5000"
+            - name: DATABENTO_MAX_STRIKE
+              value: "8000"
+            - name: DATABENTO_STRIKE_STEP
+              value: "5"
+            # ---- ES future's trades are NOT subscribed here (no double subscription)
+            - name: DATABENTO_HPSF_ES_TRADES_ENABLED
+              value: "false"
+            # ---- spot = front-future passthrough (carry pinned to zero) ---------
+            - name: DATABENTO_ES_ANNUAL_RATE
+              value: "0"
+            - name: DATABENTO_ES_ANNUAL_DIV_YIELD
+              value: "0"
+            # ---- ES price source: consume prod's underlying.es.trades (new code) -
+            - name: ES_TRADES_SOURCE_ENABLED
+              value: "true"
+            - name: ES_TRADES_SOURCE_BOOTSTRAP
+              value: "192.168.100.252:9092"
+            - name: ES_TRADES_SOURCE_TOPIC
+              value: "underlying.es.trades"
+            - name: ES_TRADES_SOURCE_GROUP_ID
+              value: "es-feed-spot-v1"
+            # ---- misc ------------------------------------------------------------
+            - name: APP_PROFILE
+              value: "prod"
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits:   { cpu: "1500m", memory: "1536Mi" }
