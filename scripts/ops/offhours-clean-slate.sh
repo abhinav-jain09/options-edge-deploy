@@ -75,6 +75,12 @@ WIPE_ENABLED="${WIPE_ENABLED:-false}"
 # nightly run still scales apps to 0 (off-hours footprint), truncates the flow DB, and
 # trims logs. Set WIPE_KAFKA=true for a hard, from-empty Kafka reset.
 WIPE_KAFKA="${WIPE_KAFKA:-true}"
+# 2026-07-11: WIPE_DB defaults to FALSE so prod matches dev — the dev cleanup (dev-cleanup.sh) wipes Kafka
+# + brings up the overnight ES set but NEVER truncates Postgres. So by default the offhours DB truncate
+# (step C) is SKIPPED here too; all flow-DB tables (incl. the es_* training corpus) persist. Set
+# WIPE_DB=true only for a deliberate full flow-DB reset (then the es_*/calibration/spread_skew exemptions
+# below still apply).
+WIPE_DB="${WIPE_DB:-false}"
 # OVERNIGHT ES-tracking set — after the wipe, bring up ONLY these so ES futures are tracked overnight.
 # Everything else stays at 0 until morning-autostart (07:30 ET) brings the full pipeline up. (2026-07-11)
 OVERNIGHT_SET="${OVERNIGHT_SET:-es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web}"
@@ -321,7 +327,8 @@ if [ -n "$PG_DSN" ]; then
     [ -z "$SRV" ] || [ "$SRV" = "$EXPECTED_DB_HOST" ] || die "DB server addr mismatch (got '$SRV', expected '$EXPECTED_DB_HOST')"
   fi
   log "Postgres identity verified (db=$DBN host=${SRV:-socket} role=$USR)"
-  DB_WIPE="true"
+  # WIPE_DB gate (default false, matches dev): only truncate the flow DB when explicitly requested.
+  if [ "$WIPE_DB" = "true" ]; then DB_WIPE="true"; else DB_WIPE="false"; log "WIPE_DB=false -> flow-DB truncate SKIPPED (Postgres preserved, matches dev)"; fi
 else
   if [ "$MUTATE" = "true" ]; then
     log "WARN: PG_DSN unset — DB wipe (step C) will be SKIPPED this run"
