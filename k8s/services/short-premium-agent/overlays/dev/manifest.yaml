@@ -64,11 +64,11 @@ spec:
             - name: SP_SYMBOL
               value: SPX
             - name: SP_CADENCE
-              value: "1800"
+              value: "15"
             - name: SP_CADENCE_T10_5
-              value: "300"
+              value: "15"
             - name: SP_CADENCE_FINAL5
-              value: "120"
+              value: "15"
             - name: SP_OPEN
               value: "09:35"
             - name: SP_CLOSE
