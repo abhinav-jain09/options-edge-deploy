@@ -101,43 +101,9 @@ pipeline {
     BUILD_PLATFORM = "${params.BUILD_PLATFORM ?: ''}"
     KAFKA_BOOTSTRAP_SERVERS = "${params.KAFKA_BOOTSTRAP_SERVERS ?: ''}"
     WEB_PUBLIC_URL = "${params.WEB_PUBLIC_URL ?: ''}"
-    RAW_TO_DISPLAY_IMAGE = "${params.RAW_TO_DISPLAY_IMAGE ?: oeProfile.image('raw-to-display', 'production', 'prod')}"
-    WEB_IMAGE = "${params.WEB_IMAGE ?: oeProfile.image('web', 'production', 'prod')}"
-    DATABENTO_VOLUME_AGGREGATOR_IMAGE = "${params.DATABENTO_VOLUME_AGGREGATOR_IMAGE ?: oeProfile.image('databento-volume-aggregator', 'production', 'prod')}"
-    DATABENTO_FEED_IMAGE = "${params.DATABENTO_FEED_IMAGE ?: oeProfile.image('databento-feed', 'production', 'prod')}"
-    DATABENTO_GEX_IMAGE = "${params.DATABENTO_GEX_IMAGE ?: oeProfile.image('databento-gex', 'production', 'prod')}"
-    DATABENTO_MAXPAIN_IMAGE = "${params.DATABENTO_MAXPAIN_IMAGE ?: oeProfile.image('databento-maxpain', 'production', 'prod')}"
-    OPTION_PRICE_BEHAVIOR_IMAGE = "${params.OPTION_PRICE_BEHAVIOR_IMAGE ?: oeProfile.image('option-price-behavior', 'production', 'prod')}"
-    DATABENTO_MISSION_SANDWICH_IMAGE = "${params.DATABENTO_MISSION_SANDWICH_IMAGE ?: oeProfile.image('databento-mission-sandwich', 'production', 'prod')}"
-    VOLUME_PACE_IMAGE = "${params.VOLUME_PACE_IMAGE ?: oeProfile.image('volume-pace', 'production', 'prod')}"
-    DIRECTIONAL_PRESSURE_IMAGE = "${params.DIRECTIONAL_PRESSURE_IMAGE ?: oeProfile.image('directional-pressure', 'production', 'prod')}"
-    DATABENTO_GEX_HISTORY_IMAGE = "${params.DATABENTO_GEX_HISTORY_IMAGE ?: oeProfile.image('databento-gex-history', 'production', 'prod')}"
-    RAW_POSTGRES_WRITER_IMAGE = "${params.RAW_POSTGRES_WRITER_IMAGE ?: oeProfile.image('raw-postgres-writer', 'production', 'prod')}"
-    PRESSURE_POSTGRES_WRITER_IMAGE = "${params.PRESSURE_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pressure-postgres-writer', 'production', 'prod')}"
     // pin-postgres-writer ships in k8s/base, so it is deployed in BOTH dev and prod. Its image is resolved,
     // digest-pinned, preflighted, and Ready-gated in every environment (see apply.sh / image-preflight.sh).
     // The prod image must therefore exist in the prod registry before promotion, or Image Preflight fails.
-    PIN_POSTGRES_WRITER_IMAGE = "${params.PIN_POSTGRES_WRITER_IMAGE ?: oeProfile.image('pin-postgres-writer', 'production', 'prod')}"
-    FEED_GATEWAY_IMAGE = "${params.FEED_GATEWAY_IMAGE ?: oeProfile.image('feed-gateway', 'production', 'prod')}"
-    HPSF_PROCESSING_IMAGE = "${params.HPSF_PROCESSING_IMAGE ?: oeProfile.image('hpsf-processing', 'production', 'prod')}"
-    HPSF_POSTGRES_WRITER_IMAGE = "${params.HPSF_POSTGRES_WRITER_IMAGE ?: oeProfile.image('hpsf-postgres-writer', 'production', 'prod')}"
-    SPX_MISSION_CONTROL_IMAGE = "${params.SPX_MISSION_CONTROL_IMAGE ?: oeProfile.image('spx-mission-control', 'production', 'prod')}"
-    STRIKE_FLOW_CLASSIFIER_IMAGE = "${params.STRIKE_FLOW_CLASSIFIER_IMAGE ?: oeProfile.image('strike-flow-classifier', 'production', 'prod')}"
-    DELTA_FLOW_IMAGE = "${params.DELTA_FLOW_IMAGE ?: oeProfile.image('delta-flow', 'production', 'prod')}"
-    DEALER_LEDGER_IMAGE = "${params.DEALER_LEDGER_IMAGE ?: oeProfile.image('dealer-ledger', 'production', 'prod')}"
-    DEALER_LEDGER_CALIBRATION_IMAGE = "${params.DEALER_LEDGER_CALIBRATION_IMAGE ?: oeProfile.image('dealer-ledger-calibration', 'production', 'prod')}"
-    STRIKE_LIQUIDITY_HEATMAP_IMAGE = "${params.STRIKE_LIQUIDITY_HEATMAP_IMAGE ?: oeProfile.image('strike-liquidity-heatmap', 'production', 'prod')}"
-    UNIFIED_SR_IMAGE = "${params.UNIFIED_SR_IMAGE ?: oeProfile.image('unified-sr', 'production', 'prod')}"
-    STRIKE_INTELLIGENCE_IMAGE = "${params.STRIKE_INTELLIGENCE_IMAGE ?: oeProfile.image('strike-intelligence', 'production', 'prod')}"
-    STRIKE_INVASION_IMAGE = "${params.STRIKE_INVASION_IMAGE ?: oeProfile.image('strike-invasion', 'production', 'prod')}"
-    INVASION_POSTGRES_WRITER_IMAGE = "${params.INVASION_POSTGRES_WRITER_IMAGE ?: oeProfile.image('invasion-postgres-writer', 'production', 'prod')}"
-    SPREAD_SKEW_IMAGE = "${params.SPREAD_SKEW_IMAGE ?: oeProfile.image('spread-skew', 'production', 'prod')}"
-    SPREAD_SKEW_POSTGRES_WRITER_IMAGE = "${params.SPREAD_SKEW_POSTGRES_WRITER_IMAGE ?: oeProfile.image('spread-skew-postgres-writer', 'production', 'prod')}"
-    ES_OPEN_DIRECTION_IMAGE = "${params.ES_OPEN_DIRECTION_IMAGE ?: oeProfile.image('es-open-direction', 'production', 'prod')}"
-    ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE = "${params.ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE ?: oeProfile.image('es-open-direction-postgres-writer', 'production', 'prod')}"
-    STRIKE_FLOW_AVRO_ADAPTER_IMAGE = "${params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE ?: oeProfile.image('strike-flow-avro-adapter', 'production', 'prod')}"
-    GEX_DELTA_REDIS_WRITER_IMAGE = "${params.GEX_DELTA_REDIS_WRITER_IMAGE ?: oeProfile.image('gex-delta-redis-writer', 'production', 'prod')}"
-    IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: oeProfile.image('ibkr-feed', 'production', 'prod')}"
     MARKET_DATA_SOURCE = "${params.MARKET_DATA_SOURCE ?: 'DATABENTO'}"
     RAW_TOPIC = "${params.RAW_TOPIC ?: ''}"
     IB_HOST = "${params.IB_HOST ?: '127.0.0.1'}"
@@ -357,6 +323,33 @@ pipeline {
     }
     stage('Resolve Images') {
       steps {
+        script {
+          // Image refs are set here via a loop (NOT 34 inline environment{} entries) to keep the
+          // pipeline under the Groovy CPS 64KB method limit ("Method too large"). Each ref =
+          // the caller's param override, else oeProfile.image(service,'production','prod').
+          // Only the prod (branch-2) resolve reads these; the dev resolve builds :dev refs from
+          // registry+tag and ignores them. Add new services to this map.
+          [
+            'RAW_TO_DISPLAY_IMAGE': 'raw-to-display', 'WEB_IMAGE': 'web',
+            'DATABENTO_VOLUME_AGGREGATOR_IMAGE': 'databento-volume-aggregator', 'DATABENTO_FEED_IMAGE': 'databento-feed',
+            'DATABENTO_GEX_IMAGE': 'databento-gex', 'DATABENTO_MAXPAIN_IMAGE': 'databento-maxpain',
+            'OPTION_PRICE_BEHAVIOR_IMAGE': 'option-price-behavior', 'DATABENTO_MISSION_SANDWICH_IMAGE': 'databento-mission-sandwich',
+            'VOLUME_PACE_IMAGE': 'volume-pace', 'DIRECTIONAL_PRESSURE_IMAGE': 'directional-pressure',
+            'DATABENTO_GEX_HISTORY_IMAGE': 'databento-gex-history', 'RAW_POSTGRES_WRITER_IMAGE': 'raw-postgres-writer',
+            'PRESSURE_POSTGRES_WRITER_IMAGE': 'pressure-postgres-writer', 'PIN_POSTGRES_WRITER_IMAGE': 'pin-postgres-writer',
+            'FEED_GATEWAY_IMAGE': 'feed-gateway', 'HPSF_PROCESSING_IMAGE': 'hpsf-processing',
+            'HPSF_POSTGRES_WRITER_IMAGE': 'hpsf-postgres-writer', 'SPX_MISSION_CONTROL_IMAGE': 'spx-mission-control',
+            'STRIKE_FLOW_CLASSIFIER_IMAGE': 'strike-flow-classifier', 'DELTA_FLOW_IMAGE': 'delta-flow',
+            'DEALER_LEDGER_IMAGE': 'dealer-ledger', 'DEALER_LEDGER_CALIBRATION_IMAGE': 'dealer-ledger-calibration',
+            'STRIKE_LIQUIDITY_HEATMAP_IMAGE': 'strike-liquidity-heatmap', 'UNIFIED_SR_IMAGE': 'unified-sr',
+            'STRIKE_INTELLIGENCE_IMAGE': 'strike-intelligence', 'STRIKE_INVASION_IMAGE': 'strike-invasion',
+            'INVASION_POSTGRES_WRITER_IMAGE': 'invasion-postgres-writer', 'SPREAD_SKEW_IMAGE': 'spread-skew',
+            'SPREAD_SKEW_POSTGRES_WRITER_IMAGE': 'spread-skew-postgres-writer', 'ES_OPEN_DIRECTION_IMAGE': 'es-open-direction',
+            'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE': 'es-open-direction-postgres-writer',
+            'STRIKE_FLOW_AVRO_ADAPTER_IMAGE': 'strike-flow-avro-adapter', 'GEX_DELTA_REDIS_WRITER_IMAGE': 'gex-delta-redis-writer',
+            'IBKR_FEED_IMAGE': 'ibkr-feed',
+          ].each { _v, _svc -> env[_v] = params[_v] ?: oeProfile.image(_svc, 'production', 'prod') }
+        }
         sh 'bash -x scripts/deploy/resolve-images.sh'
       }
     }
