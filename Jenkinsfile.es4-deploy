@@ -95,7 +95,16 @@ pipeline {
           actual=$(curl -sfI -H 'Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json' \
             "http://$REGISTRY/v2/options-edge-databento-feed/manifests/prod" | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}')
           [ "$actual" = "$EXPECTED_FEED_DIGEST" ] || { echo "FEED DIGEST MISMATCH: registry=$actual expected=$EXPECTED_FEED_DIGEST" >&2; exit 1; }
+          # HARD GUARD (USER requirement): this stage must NEVER touch the SPX feed.
+          # Capture the SPX feed deployment's generation+image before, verify unchanged after.
+          spx_before=$(kubectl -n options-edge get deploy options-edge-databento-feed -o jsonpath='{.metadata.generation}{" "}{.spec.template.spec.containers[0].image}' 2>/dev/null || echo absent)
           bash scripts/es4/pin-and-apply.sh k8s/es4/prod/es-feed.yaml "$REGISTRY" "$DRY"
+          spx_after=$(kubectl -n options-edge get deploy options-edge-databento-feed -o jsonpath='{.metadata.generation}{" "}{.spec.template.spec.containers[0].image}' 2>/dev/null || echo absent)
+          if [ "$spx_before" != "$spx_after" ]; then
+            echo "SPX FEED GUARD TRIPPED: options-edge-databento-feed changed during es-feed deploy (before='$spx_before' after='$spx_after')" >&2
+            exit 1
+          fi
+          echo "SPX feed guard: options-edge-databento-feed untouched ($spx_after)"
           [ -n "$DRY" ] || kubectl -n options-edge rollout status deploy/es-feed --timeout=300s
         '''
       }
