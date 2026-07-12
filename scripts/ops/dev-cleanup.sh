@@ -38,6 +38,11 @@ OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-
 # session is over, so these scale to 0. feed-gateway-service + options-edge-web STAY UP (they serve the
 # SPX day session). Fired by the ESDOWN calendar slot below.
 ES_DOWN_SET='es-open-direction-service es-open-direction-postgres-writer'
+# Transient ES Kafka topics CLEANED at 09:17 (overnight ES data, no longer needed once the session ends).
+# The Postgres es_* tables (session_history, level_break_history, forecast, outcome, publication) are the
+# model's MEMORY / immutable ledgers / TRAINING data — they are NEVER touched here or by the offhours DB
+# truncate (excluded there via `tablename !~ '^es_'`).
+ES_CLEAN_TOPICS='es.open-direction.forecast es.open-direction.outcome es.open-direction.status underlying.es.trades'
 # Topic source-of-truth = the deploy repo's scripts/kafka/topics.env (the SAME file the deploy's
 # apply-topics.sh uses), read from origin/main so it is the reviewed, versioned config — NOT an
 # autonomous live snapshot. dev-cleanup pre-creates ONLY these platform/feed topics; every service
@@ -126,7 +131,16 @@ do_es_down() {
       echo "  (absent, skipped): $d"
     fi
   done
-  echo "ES-down complete."
+  # Clean the transient ES Kafka topics (services are down -> nothing recreates them until close+15).
+  # Postgres es_* training/ledger tables are NOT touched.
+  echo "ES-down: cleaning transient ES topics ($ES_CLEAN_TOPICS) ..."
+  local t
+  for t in $ES_CLEAN_TOPICS; do
+    if $KT --bootstrap-server $BS --describe --topic "$t" >/dev/null 2>&1; then
+      $KT --bootstrap-server $BS --delete --topic "$t" >/dev/null 2>&1 && echo "  cleaned topic: $t"
+    fi
+  done
+  echo "ES-down complete (Postgres es_* training tables preserved)."
 }
 
 # ---------- FULL START: pre-create source topics, then scale ALL active apps up READY ----------
