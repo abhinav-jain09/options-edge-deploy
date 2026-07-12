@@ -7,6 +7,8 @@
 #   dev-cleanup           # AUTO — what launchd calls every ~15 min. CALENDAR-aware ET slots (2026-07-11):
 #                         #   close+15 ET (16:15 normal / 13:15 early-close) -> full clean (WIPE topics) THEN
 #                         #                immediately bring up ONLY the overnight ES-tracking set ($OVERNIGHT_SET)
+#                         #   ~09:17 ET (window 09:15-09:29, weekdays) -> ESDOWN: scale the overnight ES services
+#                         #                ($ES_DOWN_SET) to 0 before the 09:30 SPX open (feed-gateway + web stay up)
 #                         #   07:30-07:59 ET weekdays -> full start (bring the rest of the pipeline up before open)
 #   dev-cleanup now       # run the full clean right now (logs + data + topic WIPE), ignoring the time gate
 #   dev-cleanup start     # bring the FULL dev pipeline up now
@@ -32,6 +34,10 @@ DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volu
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+15) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 07:30 ET full start. (2026-07-11)
 OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web'
+# ES overnight-tracking services that SHUT DOWN at ~09:17 ET (before the 09:30 SPX open): the overnight ES
+# session is over, so these scale to 0. feed-gateway-service + options-edge-web STAY UP (they serve the
+# SPX day session). Fired by the ESDOWN calendar slot below.
+ES_DOWN_SET='es-open-direction-service es-open-direction-postgres-writer'
 # Topic source-of-truth = the deploy repo's scripts/kafka/topics.env (the SAME file the deploy's
 # apply-topics.sh uses), read from origin/main so it is the reviewed, versioned config — NOT an
 # autonomous live snapshot. dev-cleanup pre-creates ONLY these platform/feed topics; every service
@@ -106,6 +112,21 @@ do_start_overnight() {
     fi
   done
   echo "Overnight ES-tracking set up."
+}
+
+# ---------- ES DOWN: at ~09:17 ET (before the 09:30 open) scale the overnight ES services to 0 ----------
+# The overnight ES session is over; feed-gateway + web stay up for the SPX day session (untouched here).
+do_es_down() {
+  echo "ES-down (pre-open): scaling overnight ES services to 0 ($ES_DOWN_SET) ..."
+  local d
+  for d in $ES_DOWN_SET; do
+    if $KK get deploy "$d" >/dev/null 2>&1; then
+      $K scale deploy/"$d" --replicas=0 >/dev/null 2>&1 && echo "  down: $d"
+    else
+      echo "  (absent, skipped): $d"
+    fi
+  done
+  echo "ES-down complete."
 }
 
 # ---------- FULL START: pre-create source topics, then scale ALL active apps up READY ----------
@@ -277,6 +298,7 @@ case "$MODE" in
   logs)      clean_logs ;;
   start)     do_start ;;
   overnight) do_start_overnight ;;
+  es-down)   do_es_down ;;
   now|clean) do_clean ;;
   auto)
     # Calendar-aware slots (ET), 2026-07-11. market_calendar.py gives the real close time so the CLEAN
@@ -311,7 +333,13 @@ close = cal.close_time(d)
 close_dt = datetime.combine(d, close, tz)
 clean_lo = close_dt + timedelta(minutes=15); clean_hi = clean_lo + timedelta(minutes=29)
 full_lo = datetime.combine(d, time(7, 30), tz); full_hi = full_lo + timedelta(minutes=29)
-slot = "CLEAN" if clean_lo <= now <= clean_hi else ("FULL" if full_lo <= now <= full_hi else "OFF")
+# ESDOWN: ~09:17 ET, before the 09:30 open. 15-min window [09:15..09:29] so the every-15-min launchd
+# reliably lands a tick before the open; ends 09:29 so it never fires after the bell.
+esdown_lo = datetime.combine(d, time(9, 15), tz); esdown_hi = datetime.combine(d, time(9, 29), tz)
+if clean_lo <= now <= clean_hi: slot = "CLEAN"
+elif full_lo <= now <= full_hi: slot = "FULL"
+elif esdown_lo <= now <= esdown_hi: slot = "ESDOWN"
+else: slot = "OFF"
 print(f"SLOT={slot} TD={td} CLOSE={close.strftime('%H%M')}")
 PY
 )
@@ -319,6 +347,7 @@ PY
     TD=$(printf '%s' "$SLOTINFO" | grep -oE 'TD=[0-9]+' | cut -d= -f2)
     CLEAN_MARK=/tmp/.dev-cleanup-clean-$TD                     # idempotent, keyed by trading-date
     START_MARK=/tmp/.dev-cleanup-start-$TD
+    ESDOWN_MARK=/tmp/.dev-cleanup-esdown-$TD
     case "$SLOT" in
       CLEAN)
         if [ -f "$CLEAN_MARK" ]; then :
@@ -328,6 +357,10 @@ PY
         if [ -f "$START_MARK" ]; then :
         elif [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: FULL slot ($SLOTINFO) -> do_start (full pipeline)"
         else : > "$START_MARK"; do_start >> "$LOG" 2>&1; fi ;;
+      ESDOWN)
+        if [ -f "$ESDOWN_MARK" ]; then :
+        elif [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: ESDOWN slot ($SLOTINFO) -> do_es_down (scale $ES_DOWN_SET to 0)"
+        else : > "$ESDOWN_MARK"; do_es_down >> "$LOG" 2>&1; fi ;;
       *) [ "${DKC_DRYRUN:-0}" = 1 ] && echo "DRYRUN: off-slot ($SLOTINFO) -> nothing to do" ;;
     esac
     ;;
