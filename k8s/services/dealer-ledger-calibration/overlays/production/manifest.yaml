@@ -22,6 +22,7 @@ metadata:
   name: dealer-ledger-calibration-scorer
   namespace: options-edge
 spec:
+  progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:
@@ -96,6 +97,7 @@ metadata:
   name: dealer-ledger-calibration-accumulator
   namespace: options-edge
 spec:
+  progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:

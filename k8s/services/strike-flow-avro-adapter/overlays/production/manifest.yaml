@@ -41,6 +41,7 @@ metadata:
   name: strike-flow-avro-adapter
   namespace: options-edge
 spec:
+  progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:

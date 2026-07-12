@@ -44,6 +44,7 @@ metadata:
   name: strike-flow-classifier-databento
   namespace: options-edge
 spec:
+  progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:

@@ -39,6 +39,7 @@ metadata:
   name: unified-sr-service
   namespace: options-edge
 spec:
+  progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:

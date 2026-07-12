@@ -42,6 +42,7 @@ metadata:
   name: feed-gateway-service
   namespace: options-edge
 spec:
+  progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:
