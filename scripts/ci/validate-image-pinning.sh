@@ -38,6 +38,12 @@ REG=probe.registry.invalid
 fail=0
 PROBE="$(mktemp -d)"; trap 'rm -rf "$PROBE"' EXIT
 
+# Dev-only services from the AUTHORITATIVE registry (services.yaml envs lacks 'production').
+# services.yaml is kustomize-version-independent — some CI kustomize versions wrongly render a
+# dev-only service into the production overlay, which must NOT make us demand prod wiring for it.
+DEV_ONLY_IMGS="$(yq -r '.services[] | select(.envs != null and ([.envs[]] | contains(["production"]) | not)) | .image' services.yaml 2>/dev/null || true)"
+is_dev_only() { printf '%s\n' "$DEV_ONLY_IMGS" | grep -qx "$1"; }
+
 img_to_var() { printf '%s_IMAGE' "$(printf '%s' "${1#options-edge-}" | tr 'a-z-' 'A-Z_')"; }
 rendered_images() {  # $1=env -> unique options-edge image basenames (registry prefix optional)
   kubectl kustomize "k8s/overlays/$1" 2>/dev/null \
@@ -78,7 +84,6 @@ _preflight_vars() {
 APPLY_MAIN_VARS="$(_apply_pin_vars main)"; APPLY_ALL_VARS="$(_apply_pin_vars all)"
 LOCK_MAIN_VARS="$(_lock_vars main)"; LOCK_ALL_VARS="$(_lock_vars all)"; PREFLIGHT_VARS="$(_preflight_vars)"
 in_list() { printf '%s\n' "$2" | grep -qx "$1"; }
-PROD_IMGS="$(rendered_images production)"
 # fixed-string search of the Jenkinsfile with Groovy line-comments stripped (a commented-out
 # statement must not satisfy a wiring check). plain grep (not -q) to avoid pipefail SIGPIPE.
 jf_has() { grep -v '^[[:space:]]*//' "$JF" | grep -F "$1" >/dev/null; }
@@ -94,28 +99,25 @@ for pair in dev:dev production:prod; do
   fi
   ef="$wd/options-edge-images.env"; n=0
   for img in $(rendered_images "$e"); do
+    # dev-only services never render in production; some CI kustomize versions wrongly emit them
+    # there — skip them in any non-dev probe (services.yaml is authoritative).
+    [ "$e" != "dev" ] && is_dev_only "$img" && continue
     n=$((n+1)); var="$(img_to_var "$img")"; want="$REG/$img:$tag"; got="$(emitted "$var" "$ef")"
     if [ "$got" != "$want" ]; then
       echo "FAIL[$e/branch1]: resolve-images.sh emitted '${got:-<none>}' for $var (expected '$want') — image '$img' is not correctly wired." >&2
       fail=1
     fi
     miss=""
-    # A prod-rendered service MUST be in the main (all-env) pin loop — production never runs the
-    # dev-only loop. A dev-only service may be in either loop.
-    if in_list "$img" "$PROD_IMGS"; then
-      in_list "$var" "$APPLY_MAIN_VARS" || miss="$miss apply.sh(main-pin-loop)"
-    else
-      in_list "$var" "$APPLY_ALL_VARS"  || miss="$miss apply.sh(pin-loop)"
-    fi
-    if in_list "$img" "$PROD_IMGS"; then
-      in_list "$var" "$LOCK_MAIN_VARS" || miss="$miss image-lock.sh(main-all_image_vars)"
-    else
+    # A prod service MUST be in the main (all-env) pin loop / all_image_vars — production never
+    # runs the dev-only loop. A dev-only service may be in either (dev-only sections included).
+    if is_dev_only "$img"; then
+      in_list "$var" "$APPLY_ALL_VARS" || miss="$miss apply.sh(pin-loop)"
       in_list "$var" "$LOCK_ALL_VARS"  || miss="$miss image-lock.sh(all_image_vars)"
-    fi
-    # Image Preflight verifies prod image existence before promotion, so it applies ONLY to
-    # services that render in production (dev-only services never promote — absent by design).
-    if in_list "$img" "$PROD_IMGS"; then
-      in_list "$var" "$PREFLIGHT_VARS" || miss="$miss image-preflight.sh(main-list)"
+    else
+      in_list "$var" "$APPLY_MAIN_VARS" || miss="$miss apply.sh(main-pin-loop)"
+      in_list "$var" "$LOCK_MAIN_VARS"  || miss="$miss image-lock.sh(main-all_image_vars)"
+      # Image Preflight verifies prod image existence before promotion — prod services only.
+      in_list "$var" "$PREFLIGHT_VARS"  || miss="$miss image-preflight.sh(main-list)"
     fi
     [ -z "$miss" ] || { echo "FAIL[$e]: image '$img' (var $var) not in the pin/preflight LIST of:$miss" >&2; fail=1; }
   done
@@ -137,8 +139,8 @@ if ! ( set -euo pipefail
   echo "FAIL[production/branch2]: resolve-images.sh aborted on the promoted (IMAGE_TAG-unset) prod path — a branch-2 heredoc var is unbound (missing var, or one not backed by a rendered image)." >&2
   fail=1
 else
-  JF=Jenkinsfile
   for img in $(rendered_images production); do
+    is_dev_only "$img" && continue
     var="$(img_to_var "$img")"; want="SENTINEL:$var"; got="$(emitted "$var" "$ef")"
     if [ "$got" != "$want" ]; then
       echo "FAIL[production/branch2]: promoted-path resolve did NOT echo $var (expected '$want' got '${got:-<none>}') — add it to resolve-images.sh's branch-2 heredoc AND the deploy Jenkinsfile (param+env+promotion)." >&2
