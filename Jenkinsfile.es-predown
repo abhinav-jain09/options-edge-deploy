@@ -1,0 +1,68 @@
+// ES PRE-OPEN DOWN for OptionsEdge prod — at 09:17 ET (Mon-Fri, 13 min before the 09:30 SPX open) scale
+// the overnight ES-tracking services (es-open-direction-service + es-open-direction-postgres-writer) to 0.
+// The overnight ES-open-direction session is over; feed-gateway + web STAY UP for the SPX day session.
+// Mirror of the dev-cleanup.sh ESDOWN slot for prod.
+//
+// Runs scripts/ops/es-predown.sh ON the prod host over SSH — the SAME Jenkins->SSH model as
+// Jenkinsfile.morning-autostart. The script impersonates jenkins-deployer (--as) for the scale ops.
+// NON-DESTRUCTIVE: only scales the two ES Deployments to 0; never topics/PVCs/DB/logs, never gateway/web.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+
+  parameters {
+    booleanParam(name: 'ENABLED', defaultValue: true,
+      description: 'Actually scale. Uncheck for a dry log-only run (reports what it would do, changes nothing).')
+    choice(name: 'ENVIRONMENT', choices: ['prod'],
+      description: 'Target env. Prod only — dev has its own ESDOWN slot (dev-cleanup 09:15-09:29 ET launchd).')
+    string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
+      description: 'SSH target for prod (k3s is local there; scale ops impersonate jenkins-deployer).')
+  }
+
+  triggers {
+    // 09:17 America/New_York, Mon-Fri — 13 min before the 09:30 open. The script's calendar guard no-ops
+    // on market holidays (the cron already restricts to Mon-Fri).
+    cron('''TZ=America/New_York
+17 9 * * 1-5''')
+  }
+
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 10, unit: 'MINUTES')
+  }
+
+  environment {
+    ENABLED     = "${params.ENABLED}"
+    ENVIRONMENT = "${params.ENVIRONMENT}"
+  }
+
+  stages {
+    stage('ES pre-open down (prod)') {
+      when { expression { params.ENVIRONMENT == 'prod' } }
+      steps {
+        withCredentials([
+          string(credentialsId: 'offhours-discord-webhook', variable: 'DISCORD_WEBHOOK_URL'),
+        ]) {
+          sh '''
+            set -euo pipefail
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${PROD_HOST}" 'mkdir -p ~/autostart/jenkins ~/autostart/ops'
+            scp -o BatchMode=yes scripts/ops/es-predown.sh          "${PROD_HOST}:/home/abhinav/autostart/ops/es-predown.sh"
+            scp -o BatchMode=yes scripts/jenkins/market_calendar.py "${PROD_HOST}:/home/abhinav/autostart/jenkins/market_calendar.py"
+            echo "Running ES pre-open down on ${PROD_HOST} (ENABLED=${ENABLED})"
+            ssh -o BatchMode=yes "${PROD_HOST}" \
+              "chmod +x ~/autostart/ops/es-predown.sh && \
+               CALENDAR_DIR=~/autostart/jenkins \
+               ENABLED='${ENABLED}' EXPECTED_ENV='prod' \
+               DISCORD_WEBHOOK_URL='${DISCORD_WEBHOOK_URL:-}' \
+               ~/autostart/ops/es-predown.sh"
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    failure {
+      echo 'ES pre-open down failed or was aborted by a guard. Verify: kubectl -n options-edge get deploy | grep es-open-direction'
+    }
+  }
+}
