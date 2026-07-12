@@ -37,9 +37,9 @@ done < <(grep -oE "image: ${REGISTRY}/[a-z0-9._-]+:[a-zA-Z0-9._-]+" "$MANIFEST" 
 # belt-and-braces: EVERY image line in the pinned render must carry @sha256 —
 # regardless of registry or ref shape (Codex #11: the narrow regex above must
 # never be the only gate).
-if grep -E "^[[:space:]]*(- )?image:" "$OUT" | grep -v "@sha256:" | grep -q .; then
-  echo "FAIL-CLOSED: unpinned image ref remains in $OUT:" >&2
-  grep -nE "^[[:space:]]*(- )?image:" "$OUT" | grep -v "@sha256:" >&2
+if grep -E "^[[:space:]]*(- )?image:" "$OUT" | grep -vE "@sha256:[0-9a-f]{64}([\"']?)$" | grep -q .; then
+  echo "FAIL-CLOSED: image ref without a full anchored sha256 digest remains in $OUT:" >&2
+  grep -nE "^[[:space:]]*(- )?image:" "$OUT" | grep -vE "@sha256:[0-9a-f]{64}([\"']?)$" >&2
   exit 1
 fi
 
