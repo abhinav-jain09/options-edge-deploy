@@ -54,5 +54,8 @@ jobs:
       - name: Validate service registry (completeness + mirror + image name)
         run: scripts/ci/validate-services.sh
 
+      - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
+        run: scripts/ci/validate-image-pinning.sh
+
       - name: Validate deploy image locks
         run: scripts/deploy/validate-image-lock-ci.sh
