@@ -81,6 +81,14 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: Always
+      # Kafka Streams apps rebalance on roll; a full-fleet roll can take >600s (k8s
+      # default progressDeadlineSeconds) to report Available, failing the deploy even
+      # though pods go Ready shortly after. Raise the controller deadline to 1200s so
+      # the deploy tolerates the rebalance. apply.sh's `rollout status --timeout=1260s`
+      # is set just above it so the controller's "exceeded progress deadline" fires first.
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200
   # DEV-ONLY spx-mission-control auth: base points at the prod Keycloak
   # (https://auth.fullfunding.nl/realms/optionsedge) which dev cannot reach.
   # Override the issuer + JWKS URIs to the local Mac Keycloak (192.168.100.2:8089)

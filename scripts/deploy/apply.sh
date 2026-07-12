@@ -56,7 +56,7 @@
                 exit 0
               fi
               kubectl apply -f "$_target_render"
-              kubectl -n options-edge rollout status deployment/delta-flow-service --timeout=600s
+              kubectl -n options-edge rollout status deployment/delta-flow-service --timeout=1260s
               scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
               exit 0
               ;;
@@ -93,7 +93,7 @@
                 exit 0
               fi
               kubectl apply -f "$_target_render"
-              kubectl -n options-edge rollout status deployment/dealer-ledger-service --timeout=600s
+              kubectl -n options-edge rollout status deployment/dealer-ledger-service --timeout=1260s
               scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
               exit 0
               ;;
@@ -131,7 +131,7 @@
                 exit 0
               fi
               kubectl apply -f "$_target_render"
-              kubectl -n options-edge rollout status deployment/strike-liquidity-heatmap-service --timeout=600s
+              kubectl -n options-edge rollout status deployment/strike-liquidity-heatmap-service --timeout=1260s
               scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
               exit 0
               ;;
@@ -348,38 +348,38 @@ EOF
           kubectl -n options-edge rollout restart deployment/gex-delta-redis-writer
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout restart deployment/databento-maxpain-service
-          kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/options-edge-web --timeout=600s
-          kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=600s
-          kubectl -n options-edge rollout status deployment/databento-volume-aggregator --timeout=600s
-          kubectl -n options-edge rollout status deployment/databento-mission-sandwich-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/option-price-behavior-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/directional-pressure-databento-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/databento-gex-history-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=600s
-          kubectl -n options-edge rollout status deployment/pin-postgres-writer --timeout=600s
-          kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=600s
-          kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/hpsf-postgres-writer-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/strike-flow-classifier-databento --timeout=600s
-          kubectl -n options-edge rollout status deployment/delta-flow-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/dealer-ledger-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/strike-liquidity-heatmap-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/spx-mission-control-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/unified-sr-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/strike-intelligence-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=600s
-          kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=600s
-          kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=600s
-          kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=600s
+          kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/options-edge-web --timeout=1260s
+          kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=1260s
+          kubectl -n options-edge rollout status deployment/databento-volume-aggregator --timeout=1260s
+          kubectl -n options-edge rollout status deployment/databento-mission-sandwich-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/option-price-behavior-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/volume-pace-databento-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/directional-pressure-databento-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/databento-gex-history-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=1260s
+          kubectl -n options-edge rollout status deployment/pin-postgres-writer --timeout=1260s
+          kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=1260s
+          kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/hpsf-postgres-writer-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/strike-flow-classifier-databento --timeout=1260s
+          kubectl -n options-edge rollout status deployment/delta-flow-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/dealer-ledger-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/strike-liquidity-heatmap-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/spx-mission-control-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/unified-sr-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/strike-intelligence-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=1260s
+          kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=1260s
+          kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=1260s
           # DEV-ONLY service short-premium-agent renders only in the dev overlay, so an
           # unready/crashlooping dev-only rollout must fail the dev all-deploy too. Guarded to dev because
           # these deployments do not exist in prod/experiment.
           if [ "${ENVIRONMENT}" = "dev" ]; then
-            kubectl -n options-edge rollout status deployment/short-premium-agent-service --timeout=600s
+            kubectl -n options-edge rollout status deployment/short-premium-agent-service --timeout=1260s
           fi
           scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
