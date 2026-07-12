@@ -4,11 +4,13 @@
 # No 60-second log trimming, no separate scheduler wrapper — this one file + one launchd is the whole thing.
 #
 # MODES:
-#   dev-cleanup           # AUTO — what launchd calls every ~15 min. ET wall-clock gated:
-#                         #   20:30-20:59 ET nightly  -> full clean (logs + data wipe), leave dev DOWN
-#                         #   08:00-08:29 ET weekdays -> start (pre-create topics, scale apps up; ~90m before open)
-#   dev-cleanup now       # run the full clean right now (logs + data), ignoring the time gate
-#   dev-cleanup start     # bring dev up now
+#   dev-cleanup           # AUTO — what launchd calls every ~15 min. CALENDAR-aware ET slots (2026-07-11):
+#                         #   close+15 ET (16:15 normal / 13:15 early-close) -> full clean (WIPE topics) THEN
+#                         #                immediately bring up ONLY the overnight ES-tracking set ($OVERNIGHT_SET)
+#                         #   07:30-07:59 ET weekdays -> full start (bring the rest of the pipeline up before open)
+#   dev-cleanup now       # run the full clean right now (logs + data + topic WIPE), ignoring the time gate
+#   dev-cleanup start     # bring the FULL dev pipeline up now
+#   dev-cleanup overnight # bring up ONLY the overnight ES-tracking set now
 #   dev-cleanup logs      # clean logs only (manual)
 #
 # Full clean deletes every non-system topic + every *-streams-state PVC, trims the broker logs, and
@@ -27,17 +29,24 @@ KEEP='keycloak'                                          # deployments to leave 
 # databento-timewarp-snapshot-replay: if it boots even briefly it replays snapshots into
 # options.databento.raw and poisons the chain. Keep in sync with premarket-check.sh DISABLED (dev).
 DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-sandwich-service|volume-sandwich-databento-service|unusual-whales-gex-service|unusual-whales-gex-history-service|databento-timewarp-snapshot-replay|ibkr-feed-service|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service'
+# OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+15) clean,
+# so ES futures are tracked overnight. Everything else stays at 0 until the 07:30 ET full start. (2026-07-11)
+OVERNIGHT_SET='es-open-direction-postgres-writer feed-gateway-service options-edge-web'
 # Topic source-of-truth = the deploy repo's scripts/kafka/topics.env (the SAME file the deploy's
 # apply-topics.sh uses), read from origin/main so it is the reviewed, versioned config — NOT an
 # autonomous live snapshot. dev-cleanup pre-creates ONLY these platform/feed topics; every service
 # self-creates its own output + Kafka-Streams internal topics on startup, exactly like prod.
 DEPLOY_REPO="${DEPLOY_REPO:-/Users/abhinav/development/workspace/options-edge-deploy}"
 TOPICS_ENV_REF="${TOPICS_ENV_REF:-origin/main:scripts/kafka/topics.env}"
-# 2026-07-08: Kafka now self-expires data via a 12h broker retention (log.retention.ms=43200000),
-# so we NO LONGER delete+recreate topics or reset Streams-state PVCs nightly (that churn caused the
-# _schemas wipe + boot-order races). WIPE_KAFKA=false skips the topic-delete + PVC-reset; the nightly
-# run just scales apps down + trims logs/registry/snapshots. Set WIPE_KAFKA=true for a hard reset.
-WIPE_KAFKA="${WIPE_KAFKA:-false}"
+# 2026-07-11: for OVERNIGHT ES-future tracking the nightly clean WIPES all topics (except the sacred
+# _schemas/__consumer_offsets/__transaction_state) and the overnight-start recreates them fresh. So
+# WIPE_KAFKA defaults to TRUE again. (The _schemas guard in do_start's schema self-heal + the grep
+# exclusion below keep the Schema Registry safe.) Set WIPE_KAFKA=false for a no-wipe run.
+WIPE_KAFKA="${WIPE_KAFKA:-true}"
+# Market calendar (close time, early-close, holidays) — shared with the prod scripts (scripts/jenkins/
+# market_calendar.py). Used to fire the CLEAN at close+15 ET on trading days (normal 16:00 -> 16:15;
+# early-close 13:00 -> 13:15).
+CALENDAR_DIR="${CALENDAR_DIR:-$DEPLOY_REPO/scripts/jenkins}"
 LOG=/Users/abhinav/oe-ops/dev-cleanup.log
 
 # ---------- LOGS: safe, non-destructive (no topic/state data touched) ----------
@@ -60,10 +69,9 @@ clean_logs() {
   [ -d "$LOGDIR2" ] && find "$LOGDIR2" -name '*.log.20*' -type f -mtime +1 -delete 2>/dev/null
 }
 
-# ---------- START: pre-create source topics, then scale apps up READY ----------
-do_start() {
-  # Pre-create the platform topics from the deploy repo's topics.env (source of truth). Best-effort
-  # fetch so we pick up the latest reviewed config; if offline we use the last-fetched origin/main.
+# ensure_topics: pre-create the platform topics from the deploy repo's topics.env (source of truth).
+# Best-effort fetch so we pick up the latest reviewed config; if offline we use the last-fetched origin/main.
+ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
@@ -80,6 +88,29 @@ do_start() {
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $TOPICS_ENV_REF) — apps will create their topics on startup (slower to READY)."
   fi
+}
+
+# ---------- OVERNIGHT START: right after the clean, bring up ONLY the ES-tracking set ----------
+# Recreate topics, then scale up ONLY $OVERNIGHT_SET so ES futures are tracked overnight; every other
+# service stays at 0 until the 07:30 ET full start. (These persist/serve ES — they need a producer for
+# live ES data; see the note where OVERNIGHT_SET is defined.)
+do_start_overnight() {
+  ensure_topics
+  echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 07:30 ET."
+  local d
+  for d in $OVERNIGHT_SET; do
+    if $KK get deploy "$d" >/dev/null 2>&1; then
+      $K scale deploy/"$d" --replicas=1 >/dev/null 2>&1 && echo "  up: $d"
+    else
+      echo "  (absent, skipped): $d"
+    fi
+  done
+  echo "Overnight ES-tracking set up."
+}
+
+# ---------- FULL START: pre-create source topics, then scale ALL active apps up READY ----------
+do_start() {
+  ensure_topics
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
   # re-zeroed the disabled ones afterwards, databento-timewarp-snapshot-replay would come up in the gap
   # and REPLAY historical snapshots into options.databento.raw (its TIMEWARP_SNAPSHOT_TOPIC), poisoning
@@ -239,25 +270,60 @@ MODE=${1:-auto}
 case "$MODE" in
   logs)      clean_logs ;;
   start)     do_start ;;
+  overnight) do_start_overnight ;;
   now|clean) do_clean ;;
   auto)
-    # launchd has NO timezone -> compute ET wall-clock ourselves (DST-proof). Overridable for dry-testing:
-    #   NOW_ET=2035 NOW_DOW=3 DKC_DRYRUN=1 dev-cleanup   # dry-test the nightly clean slot
-    HHMM=${NOW_ET:-$(TZ=America/New_York date '+%H%M')}
-    DOW=${NOW_DOW:-$(TZ=America/New_York date '+%u')}          # 1=Mon .. 7=Sun
-    DATE=${NOW_DATE:-$(TZ=America/New_York date '+%Y%m%d')}
-    HH=$((10#$HHMM))                                           # strip leading zero (0900 would be octal)
-    CLEAN_MARK=/tmp/.dev-cleanup-clean-$DATE                   # idempotent: once per calendar day
-    START_MARK=/tmp/.dev-cleanup-start-$DATE
-    if [ "$HH" -ge 2030 ] && [ "$HH" -le 2059 ] && [ ! -f "$CLEAN_MARK" ]; then
-      if [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: CLEAN slot -> do_clean (logs+data, leave down)"; \
-      else do_clean >> "$LOG" 2>&1; : > "$CLEAN_MARK"; fi
-    elif [ "$HH" -ge 800 ] && [ "$HH" -le 829 ] && [ "$DOW" -le 5 ] && [ ! -f "$START_MARK" ] && ls /tmp/.dev-cleanup-clean-* >/dev/null 2>&1; then
-      if [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: START slot -> do_start (bring dev up)"; \
-      else do_start >> "$LOG" 2>&1; : > "$START_MARK"; fi
-    else
-      [ "${DKC_DRYRUN:-0}" = 1 ] && echo "DRYRUN: off-slot (ET=$HHMM DOW=$DOW) -> nothing to do"
-    fi
+    # Calendar-aware slots (ET), 2026-07-11. market_calendar.py gives the real close time so the CLEAN
+    # fires at close+15 on BOTH normal (16:00->16:15) and early-close (13:00->13:15) days:
+    #   CLEAN slot [close+15 .. close+44] on a trading day -> do_clean (WIPE) THEN overnight ES-tracking start.
+    #   FULL  slot [07:30 .. 07:59]       on a trading day -> do_start (rest of the pipeline before the open).
+    # launchd runs every 15 min so at least one tick lands in each 30-min window; markers keyed by the
+    # trading-date make it idempotent. Dry-test: NOW_ET=1615 NOW_DATE=20260713 DKC_DRYRUN=1 dev-cleanup
+    SLOTINFO=$(CALENDAR_DIR="$CALENDAR_DIR" NOW_ET="${NOW_ET:-}" NOW_DATE="${NOW_DATE:-}" python3 - <<'PY'
+import os, sys
+from datetime import datetime, timedelta, time, date
+from zoneinfo import ZoneInfo
+sys.path.insert(0, os.environ.get("CALENDAR_DIR", ""))
+try:
+    from market_calendar import MarketCalendar
+except Exception:
+    print("SLOT=OFF TD=00000000 CLOSE=0000 ERR=cal-import"); sys.exit(0)
+tz = ZoneInfo("America/New_York")
+rn = datetime.now(tz)
+d = rn.date()
+if os.environ.get("NOW_DATE"):
+    s = os.environ["NOW_DATE"]; d = date(int(s[0:4]), int(s[4:6]), int(s[6:8]))
+if os.environ.get("NOW_ET"):
+    hm = os.environ["NOW_ET"].zfill(4); now = datetime.combine(d, time(int(hm[0:2]), int(hm[2:4])), tz)
+else:
+    now = datetime.combine(d, rn.time(), tz)
+cal = MarketCalendar()
+td = cal.current_trading_date(now).strftime("%Y%m%d")
+if not cal.is_trading_day(d):
+    print(f"SLOT=OFF TD={td} CLOSE=0000"); sys.exit(0)
+close = cal.close_time(d)
+close_dt = datetime.combine(d, close, tz)
+clean_lo = close_dt + timedelta(minutes=15); clean_hi = clean_lo + timedelta(minutes=29)
+full_lo = datetime.combine(d, time(7, 30), tz); full_hi = full_lo + timedelta(minutes=29)
+slot = "CLEAN" if clean_lo <= now <= clean_hi else ("FULL" if full_lo <= now <= full_hi else "OFF")
+print(f"SLOT={slot} TD={td} CLOSE={close.strftime('%H%M')}")
+PY
+)
+    SLOT=$(printf '%s' "$SLOTINFO" | grep -oE 'SLOT=[A-Z]+' | cut -d= -f2)
+    TD=$(printf '%s' "$SLOTINFO" | grep -oE 'TD=[0-9]+' | cut -d= -f2)
+    CLEAN_MARK=/tmp/.dev-cleanup-clean-$TD                     # idempotent, keyed by trading-date
+    START_MARK=/tmp/.dev-cleanup-start-$TD
+    case "$SLOT" in
+      CLEAN)
+        if [ -f "$CLEAN_MARK" ]; then :
+        elif [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: CLEAN slot ($SLOTINFO) -> do_clean (WIPE) + overnight ES start"
+        else : > "$CLEAN_MARK"; { do_clean; echo "--- overnight ES-tracking start ---"; do_start_overnight; } >> "$LOG" 2>&1; fi ;;
+      FULL)
+        if [ -f "$START_MARK" ]; then :
+        elif [ "${DKC_DRYRUN:-0}" = 1 ]; then echo "DRYRUN: FULL slot ($SLOTINFO) -> do_start (full pipeline)"
+        else : > "$START_MARK"; do_start >> "$LOG" 2>&1; fi ;;
+      *) [ "${DKC_DRYRUN:-0}" = 1 ] && echo "DRYRUN: off-slot ($SLOTINFO) -> nothing to do" ;;
+    esac
     ;;
-  *) echo "usage: dev-cleanup [ | now | start | logs ]  (no arg = ET-gated auto for launchd)"; exit 2 ;;
+  *) echo "usage: dev-cleanup [ | now | start | overnight | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
 esac
