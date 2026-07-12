@@ -51,6 +51,12 @@ IMAGE_MAP = {
     ("strike-flow-avro-adapter", "strike-flow-avro-adapter"): "STRIKE_FLOW_AVRO_ADAPTER_IMAGE",
     ("gex-delta-redis-writer", "gex-delta-redis-writer"): "GEX_DELTA_REDIS_WRITER_IMAGE",
     ("ibkr-feed-service", "ibkr-feed"): "IBKR_FEED_IMAGE",
+    ("strike-invasion-service", "strike-invasion"): "STRIKE_INVASION_IMAGE",
+    ("invasion-postgres-writer", "invasion-postgres-writer"): "INVASION_POSTGRES_WRITER_IMAGE",
+    ("spread-skew-service", "spread-skew"): "SPREAD_SKEW_IMAGE",
+    ("spread-skew-postgres-writer", "spread-skew-postgres-writer"): "SPREAD_SKEW_POSTGRES_WRITER_IMAGE",
+    ("es-open-direction-service", "es-open-direction"): "ES_OPEN_DIRECTION_IMAGE",
+    ("es-open-direction-postgres-writer", "es-open-direction-postgres-writer"): "ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE",
 }
 
 if deploy_target == "all":

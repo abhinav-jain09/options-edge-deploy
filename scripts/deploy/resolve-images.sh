@@ -41,6 +41,12 @@ STRIKE_FLOW_AVRO_ADAPTER_IMAGE=$registry/options-edge-strike-flow-avro-adapter:$
 GEX_DELTA_REDIS_WRITER_IMAGE=$registry/options-edge-gex-delta-redis-writer:$image_tag
 IBKR_FEED_IMAGE=$registry/options-edge-ibkr-feed:$image_tag
 DATABENTO_MAXPAIN_IMAGE=$registry/options-edge-databento-maxpain:$image_tag
+STRIKE_INVASION_IMAGE=$registry/options-edge-strike-invasion:$image_tag
+INVASION_POSTGRES_WRITER_IMAGE=$registry/options-edge-invasion-postgres-writer:$image_tag
+SPREAD_SKEW_IMAGE=$registry/options-edge-spread-skew:$image_tag
+SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$registry/options-edge-spread-skew-postgres-writer:$image_tag
+ES_OPEN_DIRECTION_IMAGE=$registry/options-edge-es-open-direction:$image_tag
+ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$registry/options-edge-es-open-direction-postgres-writer:$image_tag
 EOF
             # DEV-ONLY service short-premium-agent: emit its image var ONLY for
             # dev, never for a tag-based prod/experiment resolve — mirrors all_image_vars' dev-only set so
@@ -80,6 +86,12 @@ STRIKE_FLOW_AVRO_ADAPTER_IMAGE=$STRIKE_FLOW_AVRO_ADAPTER_IMAGE
 GEX_DELTA_REDIS_WRITER_IMAGE=$GEX_DELTA_REDIS_WRITER_IMAGE
 IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
 DATABENTO_MAXPAIN_IMAGE=$DATABENTO_MAXPAIN_IMAGE
+STRIKE_INVASION_IMAGE=$STRIKE_INVASION_IMAGE
+INVASION_POSTGRES_WRITER_IMAGE=$INVASION_POSTGRES_WRITER_IMAGE
+SPREAD_SKEW_IMAGE=$SPREAD_SKEW_IMAGE
+SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$SPREAD_SKEW_POSTGRES_WRITER_IMAGE
+ES_OPEN_DIRECTION_IMAGE=$ES_OPEN_DIRECTION_IMAGE
+ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE
 EOF
           fi
           . scripts/deploy/image-lock.sh

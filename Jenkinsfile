@@ -41,6 +41,12 @@ pipeline {
     string(name: 'STRIKE_LIQUIDITY_HEATMAP_IMAGE', defaultValue: '', description: 'Strike liquidity heatmap service image')
     string(name: 'UNIFIED_SR_IMAGE', defaultValue: '', description: 'Unified S/R image')
     string(name: 'STRIKE_INTELLIGENCE_IMAGE', defaultValue: '', description: 'Strike intelligence service image')
+    string(name: 'STRIKE_INVASION_IMAGE', defaultValue: '', description: 'Strike invasion service image')
+    string(name: 'INVASION_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Strike-invasion postgres writer image')
+    string(name: 'SPREAD_SKEW_IMAGE', defaultValue: '', description: 'Spread-skew service image')
+    string(name: 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Spread-skew postgres writer image')
+    string(name: 'ES_OPEN_DIRECTION_IMAGE', defaultValue: '', description: 'ES open-direction service image')
+    string(name: 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'ES open-direction postgres writer image')
     string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', defaultValue: '', description: 'Strike-flow Avro adapter image (unified-sr FLOW producer)')
     string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', defaultValue: '', description: 'GEX delta Redis writer image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
@@ -123,6 +129,12 @@ pipeline {
     STRIKE_LIQUIDITY_HEATMAP_IMAGE = "${params.STRIKE_LIQUIDITY_HEATMAP_IMAGE ?: oeProfile.image('strike-liquidity-heatmap', 'production', 'prod')}"
     UNIFIED_SR_IMAGE = "${params.UNIFIED_SR_IMAGE ?: oeProfile.image('unified-sr', 'production', 'prod')}"
     STRIKE_INTELLIGENCE_IMAGE = "${params.STRIKE_INTELLIGENCE_IMAGE ?: oeProfile.image('strike-intelligence', 'production', 'prod')}"
+    STRIKE_INVASION_IMAGE = "${params.STRIKE_INVASION_IMAGE ?: oeProfile.image('strike-invasion', 'production', 'prod')}"
+    INVASION_POSTGRES_WRITER_IMAGE = "${params.INVASION_POSTGRES_WRITER_IMAGE ?: oeProfile.image('invasion-postgres-writer', 'production', 'prod')}"
+    SPREAD_SKEW_IMAGE = "${params.SPREAD_SKEW_IMAGE ?: oeProfile.image('spread-skew', 'production', 'prod')}"
+    SPREAD_SKEW_POSTGRES_WRITER_IMAGE = "${params.SPREAD_SKEW_POSTGRES_WRITER_IMAGE ?: oeProfile.image('spread-skew-postgres-writer', 'production', 'prod')}"
+    ES_OPEN_DIRECTION_IMAGE = "${params.ES_OPEN_DIRECTION_IMAGE ?: oeProfile.image('es-open-direction', 'production', 'prod')}"
+    ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE = "${params.ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE ?: oeProfile.image('es-open-direction-postgres-writer', 'production', 'prod')}"
     STRIKE_FLOW_AVRO_ADAPTER_IMAGE = "${params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE ?: oeProfile.image('strike-flow-avro-adapter', 'production', 'prod')}"
     GEX_DELTA_REDIS_WRITER_IMAGE = "${params.GEX_DELTA_REDIS_WRITER_IMAGE ?: oeProfile.image('gex-delta-redis-writer', 'production', 'prod')}"
     IBKR_FEED_IMAGE = "${params.IBKR_FEED_IMAGE ?: oeProfile.image('ibkr-feed', 'production', 'prod')}"
@@ -740,6 +752,12 @@ void promoteToProduction() {
       string(name: 'STRIKE_LIQUIDITY_HEATMAP_IMAGE', value: params.STRIKE_LIQUIDITY_HEATMAP_IMAGE),
       string(name: 'UNIFIED_SR_IMAGE', value: params.UNIFIED_SR_IMAGE),
       string(name: 'STRIKE_INTELLIGENCE_IMAGE', value: params.STRIKE_INTELLIGENCE_IMAGE),
+      string(name: 'STRIKE_INVASION_IMAGE', value: params.STRIKE_INVASION_IMAGE),
+      string(name: 'INVASION_POSTGRES_WRITER_IMAGE', value: params.INVASION_POSTGRES_WRITER_IMAGE),
+      string(name: 'SPREAD_SKEW_IMAGE', value: params.SPREAD_SKEW_IMAGE),
+      string(name: 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', value: params.SPREAD_SKEW_POSTGRES_WRITER_IMAGE),
+      string(name: 'ES_OPEN_DIRECTION_IMAGE', value: params.ES_OPEN_DIRECTION_IMAGE),
+      string(name: 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', value: params.ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE),
       string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', value: params.STRIKE_FLOW_AVRO_ADAPTER_IMAGE),
       string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', value: params.GEX_DELTA_REDIS_WRITER_IMAGE),
       string(name: 'IBKR_FEED_IMAGE', value: params.IBKR_FEED_IMAGE),
