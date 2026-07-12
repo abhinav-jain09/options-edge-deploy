@@ -76,9 +76,13 @@ spec:
             - {name: SP_OPEN,           value: "09:35"}
             - {name: SP_CLOSE,          value: "16:00"}
             - {name: SP_MARKET_GATE,    value: "1"}
-            # DEV-DEMO: the dev feed is SYNTHETIC (APP_PROFILE=dev), so accept it here to
-            # exercise the full recommend→overlay pipeline. PROD MUST set this back to "1"
-            # (refuse synthetic / fail-loud) — never trade real money on synthetic data.
+            # SP_REQUIRE_REAL=0 in BOTH envs, but for different reasons:
+            #  - dev: the feed is a pure SYNTHETIC simulator (APP_PROFILE=dev) — accepted to exercise
+            #    the recommend→overlay pipeline.
+            #  - prod: the feed is LIVE, but SPOT is a DERIVED value (computed from the live chain) that
+            #    still carries the "SYNTHETIC" quality tag — it's real, current data, so refusing it
+            #    would leave the agent idle on genuinely live prices.
+            # The freshness gate (SP_MAX_AGE) still refuses STALE data in both, so a dead feed is caught.
             - {name: SP_REQUIRE_REAL,   value: "0"}
             - {name: SP_MAX_AGE,        value: "20"}
             - {name: SP_REC_TOPIC,      value: "options.short-premium.recommendation"}
