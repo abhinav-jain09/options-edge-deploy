@@ -38,10 +38,12 @@ REG=probe.registry.invalid
 fail=0
 PROBE="$(mktemp -d)"; trap 'rm -rf "$PROBE"' EXIT
 
-# Dev-only services from the AUTHORITATIVE registry (services.yaml envs lacks 'production').
-# services.yaml is kustomize-version-independent — some CI kustomize versions wrongly render a
-# dev-only service into the production overlay, which must NOT make us demand prod wiring for it.
-DEV_ONLY_IMGS="$(yq -r '.services[] | select(.envs != null and ([.envs[]] | contains(["production"]) | not)) | .image' services.yaml 2>/dev/null || true)"
+# Dev-only services from the AUTHORITATIVE registry (services.yaml entry declares envs WITHOUT
+# 'production'). Derived by grep/sed on the single-line flow-style entries — kustomize- AND
+# yq-version-independent (some CI kustomize versions wrongly render a dev-only service into the
+# production overlay, and some yq versions differ on `contains`; this must not demand prod wiring).
+DEV_ONLY_IMGS="$(grep 'image: options-edge-' services.yaml | grep 'envs:' | grep -v 'production' \
+  | sed -E 's/.*image: (options-edge-[a-z0-9-]+).*/\1/' || true)"
 is_dev_only() { printf '%s\n' "$DEV_ONLY_IMGS" | grep -qx "$1"; }
 
 img_to_var() { printf '%s_IMAGE' "$(printf '%s' "${1#options-edge-}" | tr 'a-z-' 'A-Z_')"; }
