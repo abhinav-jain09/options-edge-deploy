@@ -47,7 +47,8 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          ssh -o BatchMode=yes "$ES4_HOST" 'mkdir -p /home/es4/repo/infra /home/es4/repo/scripts'
+          # /home is root-owned on the box — create the es4 home via passwordless sudo, owned by the deploy user
+          ssh -o BatchMode=yes "$ES4_HOST" 'sudo install -d -o "$(id -un)" -g "$(id -gn)" /home/es4 /home/es4/repo /home/es4/repo/infra /home/es4/repo/scripts'
           rsync -az --delete infra/es4  "$ES4_HOST":/home/es4/repo/infra/
           rsync -az --delete scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/bootstrap-es4.sh'
