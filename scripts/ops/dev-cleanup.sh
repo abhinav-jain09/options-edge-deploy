@@ -31,7 +31,7 @@ KEEP='keycloak'                                          # deployments to leave 
 DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-sandwich-service|volume-sandwich-databento-service|unusual-whales-gex-service|unusual-whales-gex-history-service|databento-timewarp-snapshot-replay|ibkr-feed-service|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+15) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 07:30 ET full start. (2026-07-11)
-OVERNIGHT_SET='es-open-direction-postgres-writer feed-gateway-service options-edge-web'
+OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web'
 # Topic source-of-truth = the deploy repo's scripts/kafka/topics.env (the SAME file the deploy's
 # apply-topics.sh uses), read from origin/main so it is the reviewed, versioned config — NOT an
 # autonomous live snapshot. dev-cleanup pre-creates ONLY these platform/feed topics; every service

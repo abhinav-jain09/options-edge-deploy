@@ -14,20 +14,20 @@ data:
   KAFKA_TOPIC_REPLICATION_FACTOR: "1"
   KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS: "1"
   KAFKA_TOPIC_PARTITIONS_DEFAULT: "32"
-  # Retention: 12h (43,200,000 ms) — matches the base + prod (uniform 12h everywhere,
-  # 2026-07-08). Kept explicit here (not inherited) so load-kafka-settings.sh derives
+  # Retention: -1 (ETERNAL, 2026-07-11) — matches base+prod. Data is wiped MANUALLY by the nightly
+  # clean (WIPE_KAFKA=true), not by TTL. Kept explicit so load-kafka-settings.sh derives
   # KAFKA_TOPIC_RETENTION_MS from this rendered per-env configmap for the Kafka Topics stage.
-  KAFKA_TOPIC_RETENTION_MS: "43200000"
-  # Universal retention CAP: 12h. load-kafka-settings.sh exports this, and the HPSF topic
+  KAFKA_TOPIC_RETENTION_MS: "-1"
+  # Universal retention CAP: -1 (no TTL cap). load-kafka-settings.sh exports this; the HPSF topic
   # create/verify scripts + the Kafka Internal Topics stage cap every topic's retention.ms
-  # at this value — so ALL Kafka topics (data, streams-internal, changelog,
-  # HPSF/opra/signal/dlq/audit) retain at most 12h. Same value in prod (base).
-  KAFKA_MAX_RETENTION_MS: "43200000"
-  # Kafka Streams internal/changelog retention: 12h. Consumed at RUNTIME by the Streams
+  # create/verify scripts + Internal Topics stage stamp every topic eternal (data,
+  # streams-internal, changelog, HPSF/opra/dlq/audit). Same value in prod (base).
+  KAFKA_MAX_RETENTION_MS: "-1"
+  # Kafka Streams internal/changelog retention: -1 (eternal). Consumed at RUNTIME by the Streams
   # pods (via the options-edge-config envFrom) when they (re)create their *-changelog /
   # *-repartition topics. Kept explicit so a topic-reset stage recreates them at 12h.
-  KAFKA_STREAMS_INTERNAL_RETENTION_MS: "43200000"
-  KAFKA_CHANGELOG_RETENTION_MS: "43200000"
+  KAFKA_STREAMS_INTERNAL_RETENTION_MS: "-1"
+  KAFKA_CHANGELOG_RETENTION_MS: "-1"
   POSTGRES_JDBC_URL: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
   POSTGRES_USER: options_flow
   POSTGRES_PASSWORD: Options#100

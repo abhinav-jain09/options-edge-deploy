@@ -77,7 +77,7 @@ WIPE_ENABLED="${WIPE_ENABLED:-false}"
 WIPE_KAFKA="${WIPE_KAFKA:-true}"
 # OVERNIGHT ES-tracking set — after the wipe, bring up ONLY these so ES futures are tracked overnight.
 # Everything else stays at 0 until morning-autostart (07:30 ET) brings the full pipeline up. (2026-07-11)
-OVERNIGHT_SET="${OVERNIGHT_SET:-es-open-direction-postgres-writer feed-gateway-service options-edge-web}"
+OVERNIGHT_SET="${OVERNIGHT_SET:-es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web}"
 
 # Market-hours guard: refuse to run between open and close+buffer. The calendar
 # already knows the per-day close (incl. early-close days); we add a buffer so the
