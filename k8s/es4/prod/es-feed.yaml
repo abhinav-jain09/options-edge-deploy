@@ -3,7 +3,8 @@
 #   * subscribes GLBX.MDP3 ES 0DTE OPTIONS ONLY (the ES future's trades are subscribed
 #     exactly once, by the existing prod feed — never twice);
 #   * consumes prod's underlying.es.trades from prod Kafka (localhost network) to drive
-#     canonicalSpot = front-future price (carry pinned to zero via rate == div yield);
+#     canonicalSpot = the ES future's own traded price, verbatim (DATABENTO_SPOT_SOURCE=ES_TRADE
+#     -> EsFutureSpotProvider; ES options settle on the future, so no carry/parity is applied);
 #   * publishes es.-prefixed topics to es4 Kafka + registers Avro in es4's Schema Registry.
 #
 # The SPX feed deployment is NOT touched by this file. Same image as the SPX feed
@@ -106,11 +107,15 @@ spec:
               value: "false"
             - name: KAFKA_UNDERLYING_PRICE_ENABLED
               value: "false"
-            # ---- spot = front-future passthrough (carry pinned to zero) ---------
-            - name: DATABENTO_ES_ANNUAL_RATE
-              value: "0"
-            - name: DATABENTO_ES_ANNUAL_DIV_YIELD
-              value: "0"
+            # ---- ES spot = the ES future's OWN traded price, verbatim -----------
+            # ES options settle on the ES future, so its last trade IS the underlying spot —
+            # no cost-of-carry, no put-call parity (that's the SPX ES-basis path). ES_TRADE
+            # selects EsFutureSpotProvider (proc feed PR#59): the ES-trades source below feeds
+            # it, and the price is stamped verbatim as canonicalSpot on the option snapshots.
+            # Without this the source defaulted to STATIC -> canonicalSpot 0 -> UI Spot 0.00
+            # and ATM stuck at the 5000 default.
+            - name: DATABENTO_SPOT_SOURCE
+              value: "ES_TRADE"
             # ---- ES price source: consume prod's underlying.es.trades (new code) -
             - name: ES_TRADES_SOURCE_ENABLED
               value: "true"
