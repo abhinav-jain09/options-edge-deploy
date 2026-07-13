@@ -27,7 +27,7 @@ pipeline {
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
       'directional-pressure', 'gex-delta-redis-writer', 'option-price-behavior', 'pin-postgres-writer',
       'pressure-postgres-writer', 'raw-to-display', 'strike-flow-avro-adapter', 'strike-flow-classifier',
-      'strike-liquidity-heatmap', 'volume-pace'
+      'strike-liquidity-heatmap', 'volume-pace', 'es-feed-gateway', 'es-web'
     ], description: 'Service (deploy-service only).')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
