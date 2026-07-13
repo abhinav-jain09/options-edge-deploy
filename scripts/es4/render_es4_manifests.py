@@ -38,7 +38,7 @@ SERVICES = [
     "databento-volume-aggregator", "dealer-ledger", "dealer-ledger-calibration", "delta-flow",
     "directional-pressure", "gex-delta-redis-writer", "option-price-behavior", "pin-postgres-writer",
     "pressure-postgres-writer", "raw-to-display", "strike-flow-avro-adapter", "strike-flow-classifier",
-    "strike-liquidity-heatmap", "volume-pace",
+    "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
 ]
 
 ES_ENV = {
@@ -59,6 +59,19 @@ ES_ENV = {
     # not the SPX cash-price topic (Codex finding #3, 2026-07-12).
     "option-price-behavior": [
         {"name": "OPTION_PRICE_BEHAVIOR_INPUT_UNDERLYING_TOPIC", "value": "underlying.es.trades", "_override": True},
+    ],
+    # spread-skew on ES: the label must say ES (SPREAD_SKEW_UNDERLYING, proc PR#316), the spot is the
+    # mirrored ES future-trades stream (same source OPB uses — Codex finding #3 applies identically),
+    # and the output topics say es not spx (TOPIC_PREFIX then makes es.options.es.spread-skew.*).
+    "spread-skew": [
+        {"name": "SPREAD_SKEW_UNDERLYING", "value": "ES"},
+        {"name": "SPREAD_SKEW_INPUT_SPOT_TOPIC", "value": "underlying.es.trades", "_override": True},
+        {"name": "SPREAD_SKEW_OUTPUT_CURRENT_TOPIC", "value": "options.es.spread-skew.current", "_override": True},
+        {"name": "SPREAD_SKEW_OUTPUT_EVENTS_TOPIC", "value": "options.es.spread-skew.events", "_override": True},
+    ],
+    "spread-skew-postgres-writer": [
+        {"name": "SKEW_WRITER_CURRENT_TOPIC", "value": "options.es.spread-skew.current", "_override": True},
+        {"name": "SKEW_WRITER_EVENTS_TOPIC", "value": "options.es.spread-skew.events", "_override": True},
     ],
 }
 

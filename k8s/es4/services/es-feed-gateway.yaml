@@ -52,6 +52,12 @@ spec:
         env:
         - name: APP_WEB_PORT
           value: "18091"
+        # spread-skew on es4 emits options.es.* (proc PR#316 relabel) — point the gateway's two skew
+        # subscriptions there (TOPIC_PREFIX then yields es.options.es.spread-skew.*).
+        - name: KAFKA_SPREAD_SKEW_TOPIC
+          value: options.es.spread-skew.current
+        - name: KAFKA_SPREAD_SKEW_EVENTS_TOPIC
+          value: options.es.spread-skew.events
         # es4 serves ES, not SPX: the gateway's active market-data selection symbol is IB_SYMBOL
         # (default SPX). Without this the selection is SPX and the ES option records (underlying=ES)
         # never match -> empty chain even at market open. IB_EXPIRY stays unset = AUTO (0DTE daily roll).
