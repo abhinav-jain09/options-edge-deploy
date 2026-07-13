@@ -15,7 +15,7 @@
 //   deploy-es-feed apply k8s/es4/prod/es-feed.yaml to the PROD cluster (the es-feed runs
 //                  on .252 next to prod Kafka, producing to es4 — Gate-2 rev 10 wiring).
 //
-// Image policy: every apply digest-pins the :dev tag against 192.168.100.252:5000 at
+// Image policy: every apply digest-pins the :prod tag against 192.168.100.252:5000 at
 // deploy time (Docker-Content-Digest) — a floating tag is never applied (Codex D4).
 pipeline {
   agent { label 'local-mac' }
@@ -32,7 +32,7 @@ pipeline {
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
     string(name: 'EXPECTED_FEED_DIGEST', defaultValue: '',
-      description: 'deploy-es-feed only: the sha256 digest the feed :dev tag MUST resolve to (paste from the options-edge-databento-feed-deploy build that contains the es-feed code). Fail-closed on mismatch — an old feed image can never be deployed as es-feed by accident.')
+      description: 'deploy-es-feed only: the sha256 digest the feed :prod tag MUST resolve to (paste from the options-edge-databento-feed-deploy build that contains the es-feed code). Fail-closed on mismatch — an old feed image can never be deployed as es-feed by accident.')
   }
   options { disableConcurrentBuilds(); timeout(time: 60, unit: 'MINUTES') }
   environment {
@@ -93,9 +93,18 @@ pipeline {
           # the feed build that contains the es-feed code (Codex #12)
           [ -n "${EXPECTED_FEED_DIGEST:-}" ] || { echo "EXPECTED_FEED_DIGEST is required for deploy-es-feed" >&2; exit 1; }
           actual=$(curl -sfI -H 'Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json' \
-            "http://$REGISTRY/v2/options-edge-databento-feed/manifests/dev" | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}')
+            "http://$REGISTRY/v2/options-edge-databento-feed/manifests/prod" | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}')
           [ "$actual" = "$EXPECTED_FEED_DIGEST" ] || { echo "FEED DIGEST MISMATCH: registry=$actual expected=$EXPECTED_FEED_DIGEST" >&2; exit 1; }
+          # HARD GUARD (USER requirement): this stage must NEVER touch the SPX feed.
+          # Capture the SPX feed deployment's generation+image before, verify unchanged after.
+          spx_before=$(kubectl -n options-edge get deploy options-edge-databento-feed -o jsonpath='{.metadata.generation}{" "}{.spec.template.spec.containers[0].image}' 2>/dev/null || echo absent)
           bash scripts/es4/pin-and-apply.sh k8s/es4/prod/es-feed.yaml "$REGISTRY" "$DRY"
+          spx_after=$(kubectl -n options-edge get deploy options-edge-databento-feed -o jsonpath='{.metadata.generation}{" "}{.spec.template.spec.containers[0].image}' 2>/dev/null || echo absent)
+          if [ "$spx_before" != "$spx_after" ]; then
+            echo "SPX FEED GUARD TRIPPED: options-edge-databento-feed changed during es-feed deploy (before='$spx_before' after='$spx_after')" >&2
+            exit 1
+          fi
+          echo "SPX feed guard: options-edge-databento-feed untouched ($spx_after)"
           [ -n "$DRY" ] || kubectl -n options-edge rollout status deploy/es-feed --timeout=300s
         '''
       }

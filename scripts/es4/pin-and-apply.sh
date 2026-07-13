@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pin-and-apply.sh <manifest> <registry> [dry-run-flag]
 #
-# Digest-pin every image in the manifest against the registry, write the pinned
+# Digest-pin every image (any tag, e.g. :prod) in the manifest against the registry, write the pinned
 # render to .jenkins-tmp/, and kubectl apply it. A floating tag is NEVER applied
 # (Codex D4): if the digest cannot be resolved, this fails closed.
 
@@ -45,12 +45,36 @@ fi
 
 kubectl apply ${DRY} -f "$OUT"
 
-# wait for each Deployment in this manifest (skip on dry-run)
+# wait for each Deployment, then PROVE the running pods carry the pinned digest
+# (the silent-stale-build trap: a green rollout is not proof — assert imageID==digest,
+# same guarantee as the org's build->deploy §13.3 gate; fail-closed on any mismatch).
 if [ -z "$DRY" ]; then
-  kubectl -n options-edge apply --dry-run=client -f "$OUT" -o name 2>/dev/null \
-    | grep '^deployment' \
-    | while read -r d; do
-        kubectl -n options-edge rollout status "$d" --timeout=240s || {
-          echo "ROLLOUT FAILED: $d (manifest $MANIFEST)" >&2; exit 1; }
-      done
+  # Capture the Deployment list FIRST so a kubectl failure aborts (process substitution
+  # swallows the producer's exit status; Codex #1). A manifest with services must yield >=1.
+  # kubectl and grep must be separated: a piped `... | grep ... || true` would mask a
+  # kubectl failure (pipe exit = grep's; || true swallows it). Run kubectl first — a
+  # failure aborts here under set -e — then filter its captured output (grep no-match is fine).
+  applied_names=$(kubectl -n options-edge apply --dry-run=client -f "$OUT" -o name)
+  deploys=$(printf '%s\n' "$applied_names" | grep '^deployment' || true)
+  if [ -z "$deploys" ]; then
+    echo "IMAGE VERIFY FAILED: no Deployment found in $OUT (manifest has none)" >&2
+    exit 1
+  fi
+  while read -r d; do
+    kubectl -n options-edge rollout status "$d" --timeout=240s || {
+      echo "ROLLOUT FAILED: $d (manifest $MANIFEST)" >&2; exit 1; }
+    name=${d#deployment.apps/}; name=${name#deployment/}
+    expected=$(grep -oE "image: [^ ]+@sha256:[0-9a-f]{64}" "$OUT" | head -1 | grep -oE "sha256:[0-9a-f]{64}")
+    running=$(kubectl -n options-edge get pods -l "app.kubernetes.io/name=${name}" \
+      -o jsonpath='{range .items[*]}{.status.containerStatuses[*].imageID}{"\n"}{end}' 2>/dev/null | grep -oE "sha256:[0-9a-f]{64}" | sort -u)
+    if [ -z "$running" ]; then
+      echo "IMAGE VERIFY FAILED: no running imageID found for $name" >&2; exit 1
+    fi
+    for r in $running; do
+      if [ "$r" != "$expected" ]; then
+        echo "IMAGE VERIFY FAILED: $name runs $r but pinned $expected (STALE IMAGE)" >&2; exit 1
+      fi
+    done
+    echo "verified $name runs pinned digest $expected"
+  done <<< "$deploys"
 fi

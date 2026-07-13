@@ -26,7 +26,22 @@ log() { printf '\n=== %s ===\n' "$*"; }
 # ---------------------------------------------------------------- 1. k3s
 if ! systemctl is-active --quiet k3s; then
   log "installing k3s (single node, unique CIDRs, no traefik)"
-  curl -sfL https://get.k3s.io | sudo INSTALL_K3S_EXEC="server \
+  # Version PINNED to prod's k3s (v1.35.5+k3s1): deterministic, bypasses the flaky
+  # get.k3s.io channel resolution that failed build #2. USE THE EXISTING BINARY when the
+  # box already has the exact pinned version (USER: use existing infra on .4 — the binary
+  # at /usr/local/bin/k3s is already v1.35.5+k3s1): the installer then only creates the
+  # systemd unit, no download.
+  K3S_PIN="v1.35.5+k3s1"
+  SKIP_DL="false"
+  # EXACT token match (Codex #2: plain grep treats dots as wildcards and allows trailing
+  # text, so v1.35.5+k3s10 would false-match). Parse the version field and compare literally.
+  ONBOX_VER=$(/usr/local/bin/k3s --version 2>/dev/null | awk '/k3s version/ {print $3; exit}')
+  if [ "$ONBOX_VER" = "$K3S_PIN" ]; then
+    SKIP_DL="true"
+    echo "existing k3s binary is exactly $K3S_PIN — skipping download"
+  fi
+  curl -sfL https://get.k3s.io | sudo INSTALL_K3S_SKIP_DOWNLOAD="$SKIP_DL" \
+    INSTALL_K3S_VERSION="$K3S_PIN" INSTALL_K3S_EXEC="server \
     --cluster-cidr=10.44.0.0/16 --service-cidr=10.45.0.0/16 \
     --disable=traefik --node-ip=${LAN_IP} --tls-san=${LAN_IP}" sh -
 else
