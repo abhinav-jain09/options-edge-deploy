@@ -56,6 +56,10 @@ spec:
     spec:
       containers:
         - env:
+            - name: DEALER_LEDGER_ADVISORY_ENABLED
+              value: "true"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms1024m -Xmx6144m
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: HEALTH_PORT
@@ -88,16 +92,12 @@ spec:
               value: /var/lib/options-edge/kafka-streams
             - name: DEALER_LEDGER_ENABLED
               value: "true"
-            - name: DEALER_LEDGER_ADVISORY_ENABLED
-              value: "true"
             - name: DEALER_LEDGER_UI_VISIBLE
               value: "true"
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
               value: SHADOW
             - name: DEALER_LEDGER_QUOTE_STALE_MS
-              value: -Xms1024m -Xmx6144m
-            - name: JAVA_TOOL_OPTIONS
-              value: -Xms384m -Xmx1024m
+              value: "600000"
           envFrom:
             - configMapRef:
                 name: options-edge-config

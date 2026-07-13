@@ -56,6 +56,10 @@ spec:
     spec:
       containers:
         - env:
+            - name: DEALER_LEDGER_ADVISORY_ENABLED
+              value: "true"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms1024m -Xmx6144m
             - name: DEALER_LEDGER_ABSORB_MIN_FRACTION
               value: "0.50"
             - name: DEALER_LEDGER_ABSORB_MIN_NOTIONAL
@@ -89,13 +93,13 @@ spec:
             - name: DEALER_LEDGER_CLUSTER_MEMBER_MIN_FRAC
               value: "0.20"
             - name: DEALER_LEDGER_STALL_FLOW_USD
-              value: "true"
+              value: "750000"
             - name: DEALER_LEDGER_STALL_MINUTES
               value: "8"
             - name: DEALER_LEDGER_UNWIND_SPENT_PCT
               value: "0.80"
             - name: DEALER_LEDGER_REARM_FLOW_USD
-              value: -Xms1024m -Xmx6144m
+              value: "3000000"
             - name: DEALER_LEDGER_REARM_MINUTES
               value: "12"
             - name: DEALER_LEDGER_REARM_COOLOFF_MS
@@ -138,16 +142,12 @@ spec:
               value: /var/lib/options-edge/kafka-streams
             - name: DEALER_LEDGER_ENABLED
               value: "true"
-            - name: DEALER_LEDGER_ADVISORY_ENABLED
-              value: "false"
             - name: DEALER_LEDGER_UI_VISIBLE
               value: "true"
             - name: DEALER_LEDGER_CALIBRATION_QUALITY
               value: SHADOW
             - name: DEALER_LEDGER_QUOTE_STALE_MS
               value: "600000"
-            - name: JAVA_TOOL_OPTIONS
-              value: -Xms384m -Xmx1024m
           envFrom:
             - configMapRef:
                 name: options-edge-config
