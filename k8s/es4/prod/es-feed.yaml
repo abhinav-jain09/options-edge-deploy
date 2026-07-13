@@ -62,6 +62,12 @@ spec:
               value: "GLBX.MDP3"
             - name: DATABENTO_SYMBOLOGY
               value: "glbx-parent"   # ES.OPT parent resolution (new feed code; default "osi" = SPX path)
+            # ES 0DTE/weekly options are NOT under ES.OPT (quarterly/monthly only) — they live under
+            # day-of-week weekly parents: Mon E1A-E5A, Tue E1B-E5B, Wed E1C-E5C, Thu E1D-E5D, Fri EW1-EW5,
+            # plus EOM EW. Resolve the whole set in one parent query (Databento ignores parents that
+            # don't list on a given day); the asset filter stays on DATABENTO_SYMBOL=ES.
+            - name: DATABENTO_OPTION_PARENTS
+              value: "ES,EW,E1A,E2A,E3A,E4A,E5A,E1B,E2B,E3B,E4B,E5B,E1C,E2C,E3C,E4C,E5C,E1D,E2D,E3D,E4D,E5D,EW1,EW2,EW3,EW4,EW5"
             - name: DATABENTO_SYMBOL
               value: "ES"
             # GLBX ES options trade the near-24h Globex session, but the feed's options
