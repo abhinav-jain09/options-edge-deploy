@@ -82,6 +82,11 @@ spec:
               value: earliest
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
+            # Single-key ("SPX") session stage runs on one thread; the 10s/1m/5m/15m rolling windows each
+            # re-serialise a full ~fifoCap window to the changelog per trade (~5x I/O), tipping this
+            # capacity-limited node into unbounded session lag. Keep only the SESSION window here.
+            - name: OPB_V2_ROLLING_WINDOWS_ENABLED
+              value: "false"
             - name: OPB_V2_Z_THRESHOLD
               value: "2.05"
             - name: OPB_V2_RESIDUAL_FLOOR_VAR
