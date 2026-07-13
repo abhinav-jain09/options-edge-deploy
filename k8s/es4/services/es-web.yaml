@@ -1,0 +1,98 @@
+# ES web UI on es4. Same options-edge-web binary as prod; env-only divergence — points at the ES
+# feed-gateway (NodePort 30091 on the .4 node) and the PRODUCTION Keycloak realm. Exposed on
+# NodePort 30080: open http://192.168.100.4:30080 on the LAN.
+# Deploy ONLY via Jenkinsfile.es4-deploy (digest-pins :prod before apply).
+apiVersion: v1
+kind: Service
+metadata:
+  name: es-web
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-web
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: NodePort
+  ports:
+  - name: http
+    port: 8080
+    targetPort: http
+    nodePort: 30080
+  selector:
+    app.kubernetes.io/name: es-web
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-web
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-web
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-web
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+      - name: web
+        image: 192.168.100.252:5000/options-edge-web:prod
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: APP_PROFILE
+          value: "prod"
+        - name: APP_WEB_PORT
+          value: "8080"
+        - name: APP_MARKET_DATA_SOURCE
+          value: "DATABENTO"
+        - name: DEALER_LEDGER_UI_VISIBLE
+          value: "true"
+        # PRODUCTION Keycloak auth (same realm + client + audience as prod).
+        - name: VITE_AUTH_ENABLED
+          value: "true"
+        - name: VITE_AUTH_ISSUER
+          value: "https://auth.fullfunding.nl/realms/optionsedge"
+        - name: VITE_AUTH_CLIENT_ID
+          value: "options-edge-web"
+        - name: VITE_AUTH_AUDIENCE
+          value: "options-edge-web"
+        - name: AUTH_AUDIENCE
+          value: "options-edge-web"
+        # Point the browser at the ES feed-gateway WS (NodePort 30091) + this UI's own base URL.
+        - name: APP_FEED_GATEWAY_WS_URL
+          value: "ws://192.168.100.4:30091/ws/events"
+        - name: VITE_WS_URL
+          value: "ws://192.168.100.4:30091/ws/events"
+        - name: APP_FEED_GATEWAY_HEALTH_URL
+          value: "http://192.168.100.4:30091/health"
+        - name: VITE_API_BASE_URL
+          value: "http://192.168.100.4:30080"
+        envFrom:
+        - configMapRef:
+            name: es4-base-env
+        - configMapRef:
+            name: es4-common-env
+        - secretRef:
+            name: es4-runtime-secrets
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1500m"
+            memory: "2Gi"
