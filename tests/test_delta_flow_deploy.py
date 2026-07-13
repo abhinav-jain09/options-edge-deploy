@@ -47,6 +47,19 @@ class DeltaFlowDeployTest(unittest.TestCase):
         self.assertIn('DEPLOY_TARGET:-all', preflight)
         self.assertIn("add_service_scrape delta-flow-service 8110", monitoring)
 
+    def test_es4_delta_flow_uses_native_side_and_it_is_es4_only(self):
+        # ES trades on GLBX/CME (true aggressor side): the rendered es4 delta-flow manifest MUST enable
+        # DELTA_FLOW_USE_NATIVE_SIDE, and it MUST be sourced from the renderer (not a hand-edit that the
+        # next render would erase).
+        renderer = (ROOT / "scripts" / "es4" / "render_es4_manifests.py").read_text()
+        es4_manifest = (ROOT / "k8s" / "es4" / "services" / "delta-flow.yaml").read_text()
+        self.assertIn('{"name": "DELTA_FLOW_USE_NATIVE_SIDE", "value": "true"}', renderer)
+        self.assertIn("DELTA_FLOW_USE_NATIVE_SIDE", es4_manifest)
+        # es4-only: the SPX/production slice must NOT carry the flag (SPX is OPRA, no true side).
+        prod_slice = (ROOT / "k8s" / "services" / "delta-flow" / "overlays"
+                      / "production" / "manifest.yaml").read_text()
+        self.assertNotIn("DELTA_FLOW_USE_NATIVE_SIDE", prod_slice)
+
 
 if __name__ == "__main__":
     unittest.main()

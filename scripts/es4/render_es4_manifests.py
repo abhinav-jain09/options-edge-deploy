@@ -59,6 +59,10 @@ ES_ENV = {
     "delta-flow": [
         {"name": "DELTA_FLOW_DEFAULT_CONTRACT_MULTIPLIER", "value": "50"},
         {"name": "DELTA_FLOW_VERIFIED_MULTIPLIERS", "value": "ES:50"},
+        # ES trades on GLBX/CME, which stamps the TRUE aggressor side (trades.side B/A). Use it instead of
+        # trade-vs-NBBO estimation. In-code GLBX-dataset provenance gate keeps it inert for non-GLBX data;
+        # SPX/OPRA (side='N') is untouched and keeps this OFF (its default).
+        {"name": "DELTA_FLOW_USE_NATIVE_SIDE", "value": "true"},
     ],
     # ES underlying is the mirrored future-trades topic (es.underlying.es.trades after prefix),
     # not the SPX cash-price topic (Codex finding #3, 2026-07-12).
