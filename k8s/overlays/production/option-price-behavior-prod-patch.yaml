@@ -26,13 +26,15 @@ spec:
           env:
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx3g"
-            # Single-key ("SPX") session stage runs on ONE thread regardless of NUM_THREADS; the
-            # 10s/1m/5m/15m rolling windows each re-serialise a full ~fifoCap window to the changelog per
-            # trade (~5x that thread's I/O), tipping this capacity-limited node into unbounded session lag
-            # (contrib p8 lag 271k, all other partitions 0). Keep only the SESSION window until the
-            # incremental O(1)-per-trade session aggregation ships, then re-enable.
+            # Incremental O(1)-per-trade session aggregation (app id v2r4): rolling windows are a few
+            # point-ops each, so they are back ON. The flag stays as an operational escape hatch for the
+            # single-key session thread.
             - name: OPB_V2_ROLLING_WINDOWS_ENABLED
-              value: "false"
+              value: "true"
+            # The incremental layout spans several store keys per logical update; exactly_once_v2 makes
+            # the changelog + emits commit transactionally (broker hosts __transaction_state).
+            - name: OPB_V2_EXACTLY_ONCE
+              value: "true"
           resources:
             limits:
               memory: 5Gi
