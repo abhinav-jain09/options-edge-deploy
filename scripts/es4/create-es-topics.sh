@@ -52,6 +52,10 @@ TOPICS_DELETE=(
   es.option-price-behavior-v2-by-option
   es.option-price-behavior-v2-session
   es.strike-liquidity-heatmap-dashboard
+  # -bucket is self-managed by the service, which fail-louds on boot unless it already
+  # carries delete/<=1d retention (design §7). Pre-create it compliant (12h) so the service
+  # never takes the heal path (whose immediate re-describe races on a fresh alter and crashes).
+  es.strike-liquidity-heatmap-bucket
 )
 
 # compacted topics (per scripts/kafka/topics.env OPTIONS_EDGE_COMPACTED_TOPICS,
