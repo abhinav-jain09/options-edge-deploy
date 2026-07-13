@@ -102,26 +102,36 @@ patches:
   # DEV-ONLY dealer-ledger heap: -Xmx1024m OOM'd (java.lang.OutOfMemoryError) on the day's-backlog
   # catch-up → StreamThread died → readiness 503 → rollout-wait timeout. Raise heap to -Xmx6144m and
   # the container limit to 8Gi so the 6GB heap + RocksDB off-heap (193 Kafka-Streams partitions) + JVM
-  # overhead can't be kernel-OOMKilled. Prod stays -Xmx1024m/3Gi (RAM-constrained single node — separate
-  # capacity check). env/16 = DEALER_LEDGER_ADVISORY_ENABLED (SHADOW-mode enable so it fires + accumulates
-  # calibration; still SHADOW = observe-only), env/19 = JAVA_TOOL_OPTIONS. In-place replace keeps env order.
+  # overhead can't be kernel-OOMKilled. DEALER_LEDGER_ADVISORY_ENABLED=true is SHADOW-mode enable so it
+  # fires + accumulates calibration (still SHADOW = observe-only). NAME-KEYED strategic merge (NOT env/N
+  # json6902): the prior index patch targeted env/19 for JAVA_TOOL_OPTIONS, but PR#364 inserted
+  # DEALER_LEDGER_QUOTE_STALE_MS ahead of it, shifting the index so the heap string landed on
+  # QUOTE_STALE_MS (=> 30s default) and JAVA_TOOL_OPTIONS reverted to the 1GB base default. Merging env by
+  # name is immune to future base env-array insertions.
   # MUST MIRROR the standalone slice k8s/services/dealer-ledger/overlays/dev (validate-services: mono==slice).
   - target:
       kind: Deployment
       name: dealer-ledger-service
     patch: |-
-      - op: replace
-        path: /spec/template/spec/containers/0/env/16/value
-        value: "true"
-      - op: replace
-        path: /spec/template/spec/containers/0/env/19/value
-        value: -Xms1024m -Xmx6144m
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
-        value: 8Gi
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/memory
-        value: 2Gi
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: dealer-ledger-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: dealer-ledger
+                env:
+                  - name: DEALER_LEDGER_ADVISORY_ENABLED
+                    value: "true"
+                  - name: JAVA_TOOL_OPTIONS
+                    value: -Xms1024m -Xmx6144m
+                resources:
+                  limits:
+                    memory: 8Gi
+                  requests:
+                    memory: 2Gi
   # DEV-ONLY spx-mission-control auth: base points at the prod Keycloak
   # (https://auth.fullfunding.nl/realms/optionsedge) which dev cannot reach.
   # Override the issuer + JWKS URIs to the local Mac Keycloak (192.168.100.102:8089)
