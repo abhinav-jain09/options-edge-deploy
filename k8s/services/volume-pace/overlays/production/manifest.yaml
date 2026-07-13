@@ -52,6 +52,12 @@ spec:
               value: "1048576"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms2g -Xmx6g
+            - name: PACE_TRAJ_HORIZON_MS
+              value: "24300000"
+            - name: PACE_TRAJ_GRID_MS
+              value: "300000"
+            - name: PACE_TRAJ_MAX_FLOOR_AGE_MS
+              value: "300000"
           envFrom:
             - configMapRef:
                 name: options-edge-config
