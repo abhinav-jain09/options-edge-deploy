@@ -46,6 +46,8 @@ spec:
               value: http://host.docker.internal:11434
             - name: SP_OLLAMA_MODEL
               value: qwen2.5:72b
+            - name: SP_OLLAMA_TIMEOUT
+              value: "300"
             - name: SP_EMIT_KAFKA
               value: "1"
             - name: SP_HEALTH_PORT
@@ -53,7 +55,7 @@ spec:
             - name: SP_MODEL
               value: claude-opus-4-8
             - name: SP_MAX_TOKENS
-              value: "4000"
+              value: "1200"
             - name: SP_WING
               value: "5"
             - name: SP_MIN_CREDIT
@@ -133,6 +135,8 @@ spec:
               value: http://host.docker.internal:11434
             - name: SP_OLLAMA_MODEL
               value: qwen2.5:72b
+            - name: SP_OLLAMA_TIMEOUT
+              value: "300"
             - name: SP_MODEL
               value: claude-opus-4-8
             - name: SP_SYMBOL
