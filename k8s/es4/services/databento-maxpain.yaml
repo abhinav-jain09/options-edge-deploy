@@ -32,6 +32,7 @@ metadata:
   name: databento-maxpain-service
   namespace: options-edge
 spec:
+  progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:
@@ -68,6 +69,8 @@ spec:
         - name: JAVA_TOOL_OPTIONS
           value: -Xms512m -Xmx2g
         envFrom:
+        - configMapRef:
+            name: es4-base-env
         - configMapRef:
             name: es4-common-env
         - secretRef:
