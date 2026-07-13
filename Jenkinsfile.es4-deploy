@@ -10,6 +10,10 @@
 //                  (k3s, registries.yaml, compose stack Kafka/SR/PG/Redis/MM2, topics,
 //                  namespace + pg secret). Idempotent.
 //   create-topics  run create-es-topics.sh on the box (idempotent).
+//   clean-reset    ATOMIC Kafka + Schema Registry wipe (cleanup-es4.sh): quiesce app -> wipe the
+//                  Kafka data volume (all topics + _schemas together) -> recreate topics ->
+//                  restart app. Fixes the dead-schema-id poison ("Malformed data. Length is
+//                  negative"). DESTRUCTIVE (drops all es4 Kafka data); honors DEPLOY_DRY_RUN.
 //   deploy-service apply ONE service from k8s/es4/services/<SERVICE>.yaml (digest-pinned).
 //   deploy-all     apply es4-common-env + every manifest in k8s/es4/services (digest-pinned).
 //   deploy-es-feed apply k8s/es4/prod/es-feed.yaml to the PROD cluster (the es-feed runs
@@ -20,7 +24,7 @@
 pipeline {
   agent { label 'local-mac' }
   parameters {
-    choice(name: 'ACTION', choices: ['deploy-service', 'deploy-all', 'infra-sync', 'create-topics', 'deploy-es-feed'],
+    choice(name: 'ACTION', choices: ['deploy-service', 'deploy-all', 'infra-sync', 'create-topics', 'deploy-es-feed', 'clean-reset'],
       description: 'What to do (see header).')
     choice(name: 'SERVICE', choices: [
       'databento-gex', 'databento-gex-history', 'databento-maxpain', 'databento-mission-sandwich',
@@ -62,6 +66,19 @@ pipeline {
           set -euo pipefail
           rsync -az scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
+        '''
+      }
+    }
+    stage('Clean reset (atomic Kafka + Schema Registry wipe)') {
+      // Wipe Kafka data (all topics + _schemas) TOGETHER so no message can outlive its schema
+      // id — the fix for the dead-schema-id poison ("Malformed data. Length is negative") that
+      // wedged the scorer. DESTRUCTIVE: drops all es4 Kafka data; honor DEPLOY_DRY_RUN to preview.
+      when { expression { params.ACTION == 'clean-reset' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          rsync -az scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
+          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN='${DEPLOY_DRY_RUN}' bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
         '''
       }
     }
