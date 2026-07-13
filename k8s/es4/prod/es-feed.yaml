@@ -77,6 +77,15 @@ spec:
             # ---- ES future's trades are NOT subscribed here (no double subscription)
             - name: DATABENTO_HPSF_ES_TRADES_ENABLED
               value: "false"
+            # ---- SPX publishers OFF: this is an ES options feed. Leaving the SPX price
+            #      publisher on defaults HPSF_SPX_SPOT_SOURCE to STATIC_DEV, which config.py
+            #      validate() forbids under APP_PROFILE=prod (feed refuses boot). The ES
+            #      underlying reaches processing via the mirrored es.underlying.es.trades +
+            #      the canonicalSpot embedded in option snapshots — no SPX spot is published.
+            - name: DATABENTO_HPSF_SPX_PRICE_ENABLED
+              value: "false"
+            - name: KAFKA_UNDERLYING_PRICE_ENABLED
+              value: "false"
             # ---- spot = front-future passthrough (carry pinned to zero) ---------
             - name: DATABENTO_ES_ANNUAL_RATE
               value: "0"
