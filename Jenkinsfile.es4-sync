@@ -1,0 +1,89 @@
+// ES4 SYNC — scheduled prod -> es4 image auto-sync.
+//
+// Every ~10 minutes, re-pin every es4 cluster service AND the es-feed to the CURRENT :prod digests,
+// so es4 automatically follows whatever production is running. es4 uses the SAME shared images as
+// prod (env-only differentiation), so this is just "converge es4 onto the current :prod tags".
+//
+// SAFETY / why this is low-risk:
+//   * IDEMPOTENT: scripts/es4/pin-and-apply.sh resolves :prod -> sha256 digest and applies the manifest
+//     pinned to that digest. When the digest is unchanged the kubectl apply is a no-op (no rollout), so
+//     only services whose :prod image actually CHANGED get rolled.
+//   * es4 follows images prod already built + gated + runs — this job never builds or promotes anything.
+//   * The SPX feed is NEVER touched (hard generation+image before/after guard, same as
+//     Jenkinsfile.es4-deploy ACTION=deploy-es-feed).
+//   * Best-effort per cluster service: one bad manifest does not block the rest; the next 10-min cycle retries.
+//
+// DECLARATIVE NOTE: pin-and-apply reconciles the WHOLE committed manifest, not just the image. es4 is
+// fully declarative (deploy-only-via-Jenkins): every service manifest is replicas:1 and there is no HPA,
+// so this never churns replicas. To DISABLE a service on es4, set replicas:0 in ITS manifest and commit —
+// do NOT hand-scale it, because this sync would revert a manual scale on the next cycle.
+//
+// This job does NOT change the manual es4-deploy job or the SPX dev/production deploy path.
+pipeline {
+  agent { label 'local-mac' }
+  triggers {
+    // Every ~10 minutes (hashed minute to avoid a fixed-second thundering herd).
+    cron('H/10 * * * *')
+  }
+  parameters {
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
+      description: 'true = digest-pin + kubectl apply --dry-run=server only (no rollout).')
+    booleanParam(name: 'SYNC_ES_FEED', defaultValue: true,
+      description: 'Also re-pin the prod-hosted es-feed to the current feed :prod digest.')
+  }
+  options { disableConcurrentBuilds(); timeout(time: 30, unit: 'MINUTES') }
+  environment {
+    ES4_KUBECONFIG  = '/Users/abhinav/.kube/es4.kubeconfig'
+    PROD_KUBECONFIG = '/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig'
+    REGISTRY        = '192.168.100.252:5000'
+  }
+  stages {
+    stage('Sync es4 cluster services') {
+      steps {
+        sh '''
+          set -uo pipefail
+          export KUBECONFIG="$ES4_KUBECONFIG"
+          DRY=""; [ "${DEPLOY_DRY_RUN:-false}" = "true" ] && DRY="--dry-run=server"
+          # Base + common env first (idempotent), then every service manifest digest-pinned to current :prod.
+          kubectl apply $DRY -f k8s/es4/es4-base-env.yaml
+          kubectl apply $DRY -f k8s/es4/es4-common-env.yaml
+          rc=0
+          for f in k8s/es4/services/*.yaml; do
+            # Best-effort: a single service failure must not abort the whole sync (the next cycle retries).
+            if ! bash scripts/es4/pin-and-apply.sh "$f" "$REGISTRY" "$DRY"; then
+              echo "WARN: es4-sync failed for $f (will retry next cycle)"; rc=1
+            fi
+          done
+          exit $rc
+        '''
+      }
+    }
+    stage('Sync es-feed (prod)') {
+      when { expression { params.SYNC_ES_FEED } }
+      steps {
+        sh '''
+          set -uo pipefail
+          export KUBECONFIG="$PROD_KUBECONFIG"
+          DRY=""; [ "${DEPLOY_DRY_RUN:-false}" = "true" ] && DRY="--dry-run=server"
+          # HARD GUARD (USER requirement): this stage must NEVER touch the SPX feed. Fail-CLOSED — because
+          # this runs unattended, a guard that cannot READ the SPX feed must abort, not pass. Capture the
+          # SPX feed deployment's generation+image BEFORE (require a successful read), apply the es-feed,
+          # then require the SAME successful read AND an unchanged value AFTER. (pin-and-apply only touches
+          # the es-feed deployment; this is defense-in-depth against a manifest mistake.)
+          spx_read() { kubectl -n options-edge get deploy options-edge-databento-feed \
+            -o jsonpath='{.metadata.generation}{" "}{.spec.template.spec.containers[0].image}' 2>/dev/null; }
+          spx_before=$(spx_read)
+          [ -n "$spx_before" ] || { echo "SPX feed guard: could NOT read options-edge-databento-feed before apply — aborting (fail-closed)" >&2; exit 1; }
+          bash scripts/es4/pin-and-apply.sh k8s/es4/prod/es-feed.yaml "$REGISTRY" "$DRY"
+          spx_after=$(spx_read)
+          [ -n "$spx_after" ] || { echo "SPX feed guard: could NOT read options-edge-databento-feed after apply — aborting (fail-closed)" >&2; exit 1; }
+          if [ "$spx_before" != "$spx_after" ]; then
+            echo "SPX FEED GUARD TRIPPED during es4-sync (before='$spx_before' after='$spx_after')" >&2
+            exit 1
+          fi
+          echo "SPX feed guard: options-edge-databento-feed untouched ($spx_after)"
+        '''
+      }
+    }
+  }
+}
