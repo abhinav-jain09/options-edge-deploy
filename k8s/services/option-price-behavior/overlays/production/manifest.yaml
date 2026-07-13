@@ -56,6 +56,8 @@ spec:
         - env:
             - name: JAVA_TOOL_OPTIONS
               value: -Xms512m -Xmx3g
+            - name: OPB_V2_ROLLING_WINDOWS_ENABLED
+              value: "false"
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: OPTION_PRICE_BEHAVIOR_INPUT_TCBBO_TOPIC
@@ -70,23 +72,12 @@ spec:
               value: option-price-behavior-v2-session
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_APP_ID
               value: option-price-behavior-service-v2r3
-            # Raised 1 -> 4: a single stream thread cannot keep up with SPX trade+surface volume
-            # across 32 partitions, so OPB ran ~12min behind. Because the surface store is latest-wins,
-            # every lagged trade matched a NEWER surface -> look-ahead guard rejected it -> baselines
-            # stored bootstrap -> ~73% NO_BASELINE_SURFACE -> zero price behavior -> directional roles
-            # (which require non-zero pricing) never fired -> no buy/sell. 4 threads parallelize the
-            # partitions so OPB catches up; requests.cpu raised to match (below).
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_NUM_THREADS
               value: "4"
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_AUTO_OFFSET_RESET
               value: earliest
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
-            # Single-key ("SPX") session stage runs on one thread; the 10s/1m/5m/15m rolling windows each
-            # re-serialise a full ~fifoCap window to the changelog per trade (~5x I/O), tipping this
-            # capacity-limited node into unbounded session lag. Keep only the SESSION window here.
-            - name: OPB_V2_ROLLING_WINDOWS_ENABLED
-              value: "false"
             - name: OPB_V2_Z_THRESHOLD
               value: "2.05"
             - name: OPB_V2_RESIDUAL_FLOOR_VAR
@@ -156,8 +147,6 @@ spec:
             limits:
               memory: 5Gi
             requests:
-              # Raised 250m -> 1 core to back the 4 stream threads (above): with a 250m reservation the
-              # extra threads would just be CPU-throttled on the shared/constrained node and never catch up.
               cpu: "1"
               memory: 768Mi
           volumeMounts:
