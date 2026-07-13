@@ -48,6 +48,10 @@ spec:
           value: '300000'
         - name: PACE_TRAJ_MAX_FLOOR_AGE_MS
           value: '300000'
+        # ES trades ~23h on CME Globex (Sun 18:00 ET - Fri 17:00 ET, daily 17:00-18:00 halt); the
+        # default spx-rth calendar wrongly forced SESSION_IDLE outside 09:30-16:15 ET on this box.
+        - name: PACE_SESSION_CALENDAR
+          value: es-globex
         envFrom:
         - configMapRef:
             name: es4-base-env
