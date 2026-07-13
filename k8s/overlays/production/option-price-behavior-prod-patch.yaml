@@ -5,6 +5,14 @@
 #   limit 5Gi      (was 2Gi)  -> ~2Gi for off-heap/overhead above the heap
 # dev/experiment keep the base 2g/their own limits. Re-enabled (replicas back to
 # base 1) after the 2026-07-07 freeze incident, per USER (heap 3g / limit 5Gi).
+#
+# NUM_THREADS 1->4 + requests.cpu 250m->1: a single stream thread could not keep up with
+# SPX trade+surface volume across 32 partitions, so OPB ran ~12min behind. Its surface store
+# is latest-wins, so every lagged trade matched a NEWER surface -> look-ahead guard rejected
+# it -> baselines stored bootstrap -> ~73% NO_BASELINE_SURFACE -> zero price behavior ->
+# strike-intel directional roles (which require non-zero pricing) never fired -> no buy/sell.
+# 4 threads parallelize the partitions; cpu request backs them. (Mirrors the standalone overlay
+# k8s/services/option-price-behavior/overlays/production/manifest.yaml.)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -21,3 +29,5 @@ spec:
           resources:
             limits:
               memory: 5Gi
+            requests:
+              cpu: "1"

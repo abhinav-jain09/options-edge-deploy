@@ -49,7 +49,7 @@ spec:
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_APP_ID
               value: option-price-behavior-service-v2r3
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_NUM_THREADS
-              value: "1"
+              value: "4"
             # First boot reads from earliest so the surface baselines are built before scoring
             # (design §8 bootstrap freshness); steady state advances on committed offsets.
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_AUTO_OFFSET_RESET
