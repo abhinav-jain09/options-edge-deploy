@@ -64,6 +64,13 @@ spec:
               value: "glbx-parent"   # ES.OPT parent resolution (new feed code; default "osi" = SPX path)
             - name: DATABENTO_SYMBOL
               value: "ES"
+            # GLBX ES options trade the near-24h Globex session, but the feed's options
+            # subscription is gated on the OPRA/equity calendar (9:30-16:00 ET) — so it idled
+            # ES overnight ("Market closed; idling both OPRA and ES"). Disable the equity-hours
+            # gate: always subscribe; Databento just goes quiet during the Globex maintenance
+            # break / weekend closure. This feed is GLBX-dedicated, so no OPRA session applies.
+            - name: DATABENTO_MARKET_HOURS_ENABLED
+              value: "false"
             - name: DATABENTO_TRADING_CLASS
               value: "ES"   # never the SPXW default (Codex blocker #2); glbx-parent resolution keys on symbol.OPT
             - name: DATABENTO_EXPIRY
