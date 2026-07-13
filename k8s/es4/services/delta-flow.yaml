@@ -70,6 +70,11 @@ spec:
           value: '50'
         - name: DELTA_FLOW_VERIFIED_MULTIPLIERS
           value: ES:50
+        # ES trades on GLBX/CME, which stamps the TRUE aggressor side (trades.side B/A). Use it instead of
+        # trade-vs-NBBO estimation. Gated additionally by GLBX-dataset provenance in-code, so this is inert
+        # for any non-GLBX data. SPX/OPRA (side='N') is untouched and keeps this flag OFF (its default).
+        - name: DELTA_FLOW_USE_NATIVE_SIDE
+          value: 'true'
         envFrom:
         - configMapRef:
             name: es4-base-env
