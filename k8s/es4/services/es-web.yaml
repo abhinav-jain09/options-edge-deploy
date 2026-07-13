@@ -58,6 +58,12 @@ spec:
         # selects ES and matches the gateway's ES selection.
         - name: IB_SYMBOL
           value: "ES"
+        # Roll the UI's default 0DTE expiry to the next trade date at 16:00 ET (ES expiry), matching
+        # the feed + gateway. Without this the web app's currentSessionExpiry flips only at midnight ET,
+        # so after 16:00 ET the UI defaults the Expiry picker to the just-expired contract and fresh
+        # browser loads show an empty chain all evening (options-edge PR#258). Empty on SPX (midnight).
+        - name: IB_EXPIRY_ROLL_AFTER
+          value: "16:00"
         - name: DEALER_LEDGER_UI_VISIBLE
           value: "true"
         # PRODUCTION Keycloak auth (same realm + client + audience as prod).
