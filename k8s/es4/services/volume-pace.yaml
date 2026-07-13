@@ -48,6 +48,8 @@ spec:
           value: '300000'
         - name: PACE_TRAJ_MAX_FLOOR_AGE_MS
           value: '300000'
+        - name: PACE_SESSION_CALENDAR
+          value: es-globex
         envFrom:
         - configMapRef:
             name: es4-base-env

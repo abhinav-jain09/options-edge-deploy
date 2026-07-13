@@ -51,6 +51,11 @@ ES_ENV = {
     "strike-flow-classifier": [
         {"name": "STRIKE_FLOW_CONTRACT_MULTIPLIER", "value": "50"},
     ],
+    # ES trades ~23h on CME Globex (Sun 18:00 ET - Fri 17:00 ET, daily 17:00-18:00 halt); the default
+    # spx-rth calendar wrongly forced the pace board + spot model to SESSION_IDLE outside 09:30-16:15 ET.
+    "volume-pace": [
+        {"name": "PACE_SESSION_CALENDAR", "value": "es-globex"},
+    ],
     "delta-flow": [
         {"name": "DELTA_FLOW_DEFAULT_CONTRACT_MULTIPLIER", "value": "50"},
         {"name": "DELTA_FLOW_VERIFIED_MULTIPLIERS", "value": "ES:50"},
