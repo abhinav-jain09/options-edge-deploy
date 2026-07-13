@@ -67,24 +67,24 @@ spec:
           value: "options-edge-web"
         - name: AUTH_AUDIENCE
           value: "options-edge-web"
-        # Point the browser at the ES feed-gateway WS (NodePort 30091) + this UI's own base URL.
+        # Browser-facing URLs go through the public edge (Cloudflare -> cloudflared -> ES svcs on .4),
+        # so they are https/wss on es.fullfunding.nl. TLS terminates at Cloudflare; the tunnel forwards
+        # /ws/events -> ES gateway and everything else -> ES web.
         - name: APP_FEED_GATEWAY_WS_URL
-          value: "ws://192.168.100.4:30091/ws/events"
+          value: "wss://es.fullfunding.nl/ws/events"
         - name: VITE_WS_URL
-          value: "ws://192.168.100.4:30091/ws/events"
+          value: "wss://es.fullfunding.nl/ws/events"
+        # Server-to-server gateway health stays on the in-cluster LAN address (both pods on .4).
         - name: APP_FEED_GATEWAY_HEALTH_URL
           value: "http://192.168.100.4:30091/health"
         - name: VITE_API_BASE_URL
-          value: "http://192.168.100.4:30080"
+          value: "https://es.fullfunding.nl"
         # Required-in-prod by RuntimeProfileConfig.validate(). No mission-control/replay backend runs
-        # on es4, so these point at the UI's own origin to satisfy validation (features are inert here).
+        # on es4, so these point at the UI's own https origin to satisfy validation (features inert).
         - name: VITE_MISSION_CONTROL_URL
-          value: "http://192.168.100.4:30080"
-        # RuntimeProfileConfig requires https for the replay-orchestrator (no cleartext bearer
-        # destination). No replay backend runs on es4, so this is a scheme-valid self URL — inert
-        # (a click would just fail TLS) and never sends a token to prod or over cleartext.
+          value: "https://es.fullfunding.nl"
         - name: VITE_REPLAY_ORCHESTRATOR_URL
-          value: "https://192.168.100.4:30080"
+          value: "https://es.fullfunding.nl"
         envFrom:
         - configMapRef:
             name: es4-base-env
