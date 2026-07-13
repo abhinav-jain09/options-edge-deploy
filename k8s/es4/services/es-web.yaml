@@ -80,8 +80,11 @@ spec:
         # on es4, so these point at the UI's own origin to satisfy validation (features are inert here).
         - name: VITE_MISSION_CONTROL_URL
           value: "http://192.168.100.4:30080"
+        # RuntimeProfileConfig requires https for the replay-orchestrator (no cleartext bearer
+        # destination). No replay backend runs on es4, so this is a scheme-valid self URL — inert
+        # (a click would just fail TLS) and never sends a token to prod or over cleartext.
         - name: VITE_REPLAY_ORCHESTRATOR_URL
-          value: "http://192.168.100.4:30080"
+          value: "https://192.168.100.4:30080"
         envFrom:
         - configMapRef:
             name: es4-base-env
