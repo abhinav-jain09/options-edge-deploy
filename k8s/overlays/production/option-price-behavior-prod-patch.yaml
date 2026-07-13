@@ -26,6 +26,13 @@ spec:
           env:
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx3g"
+            # Single-key ("SPX") session stage runs on ONE thread regardless of NUM_THREADS; the
+            # 10s/1m/5m/15m rolling windows each re-serialise a full ~fifoCap window to the changelog per
+            # trade (~5x that thread's I/O), tipping this capacity-limited node into unbounded session lag
+            # (contrib p8 lag 271k, all other partitions 0). Keep only the SESSION window until the
+            # incremental O(1)-per-trade session aggregation ships, then re-enable.
+            - name: OPB_V2_ROLLING_WINDOWS_ENABLED
+              value: "false"
           resources:
             limits:
               memory: 5Gi
