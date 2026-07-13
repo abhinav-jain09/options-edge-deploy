@@ -12,6 +12,7 @@ metadata:
   name: dealer-ledger-calibration-scorer
   namespace: options-edge
 spec:
+  progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:
@@ -44,6 +45,8 @@ spec:
         - name: SCORER_SESSION_GRACE_MS
           value: '120000'
         envFrom:
+        - configMapRef:
+            name: es4-base-env
         - configMapRef:
             name: es4-common-env
         - secretRef:
@@ -85,6 +88,7 @@ metadata:
   name: dealer-ledger-calibration-accumulator
   namespace: options-edge
 spec:
+  progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:
@@ -111,6 +115,8 @@ spec:
         - name: CALIBRATION_PRIMARY_HORIZON
           value: M15
         envFrom:
+        - configMapRef:
+            name: es4-base-env
         - configMapRef:
             name: es4-common-env
         - secretRef:

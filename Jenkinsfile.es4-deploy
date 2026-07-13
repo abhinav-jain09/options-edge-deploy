@@ -72,6 +72,7 @@ pipeline {
           set -euo pipefail
           export KUBECONFIG="$ES4_KUBECONFIG"
           DRY=""; [ "${DEPLOY_DRY_RUN:-false}" = "true" ] && DRY="--dry-run=server"
+          kubectl apply $DRY -f k8s/es4/es4-base-env.yaml
           kubectl apply $DRY -f k8s/es4/es4-common-env.yaml
           mkdir -p .jenkins-tmp
           if [ "$ACTION" = "deploy-all" ]; then FILES=$(ls k8s/es4/services/*.yaml); else FILES="k8s/es4/services/${SERVICE}.yaml"; fi

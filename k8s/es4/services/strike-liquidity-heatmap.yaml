@@ -30,6 +30,7 @@ metadata:
   name: strike-liquidity-heatmap-service
   namespace: options-edge
 spec:
+  progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:
@@ -66,6 +67,8 @@ spec:
         - name: JAVA_TOOL_OPTIONS
           value: -Xms256m -Xmx768m
         envFrom:
+        - configMapRef:
+            name: es4-base-env
         - configMapRef:
             name: es4-common-env
         - secretRef:

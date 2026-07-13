@@ -79,12 +79,15 @@ def transform_env_from(env_from):
         cm = ref.get("configMapRef", {}).get("name")
         sec = ref.get("secretRef", {}).get("name")
         if cm == "options-edge-config":
+            # base layer (full prod config incl. RF=1) THEN overrides — later envFrom wins
+            out.append({"configMapRef": {"name": "es4-base-env"}})
             out.append({"configMapRef": {"name": "es4-common-env"}})
         elif sec == "options-edge-runtime-secrets":
             out.append({"secretRef": {"name": "es4-runtime-secrets"}})
         # everything else (feed-env etc., all optional in prod) is intentionally dropped
-    if not any(r.get("configMapRef", {}).get("name") == "es4-common-env" for r in out):
-        out.insert(0, {"configMapRef": {"name": "es4-common-env"}})
+    names = [x.get("configMapRef", {}).get("name") for x in out]
+    if "es4-common-env" not in names:
+        out[:0] = [{"configMapRef": {"name": "es4-base-env"}}, {"configMapRef": {"name": "es4-common-env"}}]
     return out
 
 
