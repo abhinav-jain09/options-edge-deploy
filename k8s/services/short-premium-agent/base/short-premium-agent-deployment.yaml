@@ -57,11 +57,16 @@ spec:
             - {name: SP_BACKEND,        value: "ollama"}
             - {name: SP_OLLAMA_URL,     value: "http://host.docker.internal:11434"}
             - {name: SP_OLLAMA_MODEL,   value: "qwen2.5:72b"}
+            # 72B on the Mac generates ~10 tok/s → a full decision can take minutes; give it
+            # headroom (default 180s timed out every tick). Prod's 7B finishes well under this.
+            - {name: SP_OLLAMA_TIMEOUT, value: "300"}
             - {name: SP_EMIT_KAFKA,     value: "1"}       # publish recs to the gateway topic
             - {name: SP_HEALTH_PORT,    value: "8130"}
             # --- model (SP_MODEL only used by anthropic backends; ollama uses SP_OLLAMA_MODEL) ---
             - {name: SP_MODEL,          value: "claude-opus-4-8"}
-            - {name: SP_MAX_TOKENS,     value: "4000"}
+            # 1200 is plenty for the structured decision JSON; 4000 made the 72B generate for
+            # ~400s (timeout). Smaller cap = faster decisions on both models, no quality loss.
+            - {name: SP_MAX_TOKENS,     value: "1200"}
             # --- strategy guardrails ---
             - {name: SP_WING,           value: "5"}
             - {name: SP_MIN_CREDIT,     value: "2.50"}
@@ -122,6 +127,7 @@ spec:
             - {name: SP_BACKEND,   value: "ollama"}
             - {name: SP_OLLAMA_URL,   value: "http://host.docker.internal:11434"}
             - {name: SP_OLLAMA_MODEL, value: "qwen2.5:72b"}
+            - {name: SP_OLLAMA_TIMEOUT, value: "300"}   # 72B EOD brief needs headroom too
             - {name: SP_MODEL,     value: "claude-opus-4-8"}
             - {name: SP_SYMBOL,    value: "SPX"}
             - {name: SP_EOD_TIME,  value: "16:05"}
