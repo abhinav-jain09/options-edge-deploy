@@ -115,13 +115,13 @@ bash "$SCRIPT_DIR/create-es-topics.sh"
 
 # ------------------------------------------- 5. namespace + pg secret in k3s
 log "ensuring options-edge namespace + es4-runtime-secrets"
-sudo k3s kubectl get ns options-edge >/dev/null 2>&1 || sudo k3s kubectl create ns options-edge
+sudo /usr/local/bin/k3s kubectl get ns options-edge >/dev/null 2>&1 || sudo /usr/local/bin/k3s kubectl create ns options-edge
 PGPW=$(grep '^ES4_POSTGRES_PASSWORD=' "$INFRA_DIR/.env" | cut -d= -f2)
 # name MUST match the manifests' envFrom secretRef (render_es4_manifests.py)
-sudo k3s kubectl -n options-edge create secret generic es4-runtime-secrets \
+sudo /usr/local/bin/k3s kubectl -n options-edge create secret generic es4-runtime-secrets \
   --from-literal=POSTGRES_USER=options_edge_es \
   --from-literal=POSTGRES_PASSWORD="$PGPW" \
-  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+  --dry-run=client -o yaml | sudo /usr/local/bin/k3s kubectl apply -f -
 
 # ------------------------------------------ 6. remote-ready kubeconfig
 log "writing remote-ready kubeconfig to $ES4_HOME/es4.kubeconfig"
