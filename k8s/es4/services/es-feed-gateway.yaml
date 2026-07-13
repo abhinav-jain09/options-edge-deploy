@@ -61,9 +61,10 @@ spec:
           value: "https://auth.fullfunding.nl/realms/optionsedge"
         - name: WS_AUTH_AUDIENCE
           value: "options-edge-web"
-        # Browser origin of the ES web UI (NodePort 30080 on the .4 node).
+        # Browser origin of the ES web UI. Public edge origin first; the LAN NodePort origin is kept
+        # for direct-on-.4 debugging.
         - name: WS_ALLOWED_ORIGINS
-          value: "http://192.168.100.4:30080"
+          value: "https://es.fullfunding.nl,http://192.168.100.4:30080"
         # Multi-tenant session auth (Redis-backed) stays OFF — only the Keycloak WS bearer is used.
         - name: GATEWAY_AUTH_ENABLED
           value: "false"
