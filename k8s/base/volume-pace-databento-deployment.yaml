@@ -45,6 +45,15 @@ spec:
               value: "1048576"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms2g -Xmx6g"
+            # Pace-of-volume trajectory window = full RTH session (~6h45m) at a 5-min grid, so the popup
+            # spans the session. Grid coarse enough to keep the ring within the 256-bucket codec cap
+            # (24300/300 ≈ 81 buckets) and the emitted payload + per-strike state bounded (prod CPU-limited).
+            - name: PACE_TRAJ_HORIZON_MS
+              value: "24300000"
+            - name: PACE_TRAJ_GRID_MS
+              value: "300000"
+            - name: PACE_TRAJ_MAX_FLOOR_AGE_MS
+              value: "300000"
           ports:
             - name: health
               containerPort: 8080
