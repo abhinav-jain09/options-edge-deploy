@@ -58,7 +58,7 @@ TRUNCATE_TABLES="${TRUNCATE_TABLES:-\
 hpsf_signal hpsf_latest_signal hpsf_market_flow hpsf_strike_score hpsf_strike_flow \
 hpsf_exit_signal hpsf_dlq hpsf_writer_dlq \
 pin_strike_minute pin_uw_crosscheck_minute pin_self_gex_minute pin_market_minute pin_strike_fine \
-ibkr_option_raw_snapshot ibkr_option_raw_quarantine}"
+databento_option_raw_snapshot databento_option_raw_quarantine}"
 
 # HARD DENY: pin_session_close must never be truncated, even via a bad override.
 # (Belt to the role's braces — the premarket_reset role also lacks the grant.)

@@ -46,8 +46,8 @@ GRANT TRUNCATE ON
     public.pin_self_gex_minute,
     public.pin_market_minute,
     public.pin_strike_fine,
-    public.ibkr_option_raw_snapshot,
-    public.ibkr_option_raw_quarantine
+    public.databento_option_raw_snapshot,
+    public.databento_option_raw_quarantine
   TO premarket_reset;
 
 -- 4. Audit table in a SEPARATE schema so it survives the wipe it records, and is
