@@ -68,6 +68,11 @@ fi
 log "syncing compose stack into $INFRA_DIR"
 sudo mkdir -p "$INFRA_DIR" /home/es4/volumes/{kafka,postgres,redis}
 sudo chown -R "$(id -u):$(id -g)" "$ES4_HOME"
+# The postgres:16 image runs its daemon as uid 999; the recursive chown above hands the
+# bind-mounted PGDATA to the deploy user, so the daemon can't read its own 0600 data files
+# ("could not open file global/pg_filenode.map: Permission denied"). Hand PGDATA back to 999
+# so postgres owns its data whether initdb already ran or is about to (idempotent).
+sudo chown -R 999:999 /home/es4/volumes/postgres
 cp -f "$SCRIPT_DIR/../../infra/es4/docker-compose.yml" "$INFRA_DIR/docker-compose.yml"
 mkdir -p "$INFRA_DIR/mm2"
 cp -f "$SCRIPT_DIR/../../infra/es4/mm2/mm2.properties" "$INFRA_DIR/mm2/mm2.properties"
