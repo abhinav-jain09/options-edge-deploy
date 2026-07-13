@@ -70,6 +70,8 @@ spec:
           value: '50'
         - name: DELTA_FLOW_VERIFIED_MULTIPLIERS
           value: ES:50
+        - name: DELTA_FLOW_USE_NATIVE_SIDE
+          value: 'true'
         envFrom:
         - configMapRef:
             name: es4-base-env
