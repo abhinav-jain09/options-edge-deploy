@@ -83,7 +83,10 @@ WIPE_KAFKA="${WIPE_KAFKA:-true}"
 WIPE_DB="${WIPE_DB:-false}"
 # OVERNIGHT ES-tracking set — after the wipe, bring up ONLY these so ES futures are tracked overnight.
 # Everything else stays at 0 until morning-autostart (07:30 ET) brings the full pipeline up. (2026-07-11)
-OVERNIGHT_SET="${OVERNIGHT_SET:-es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web}"
+# 2026-07-13: oe-keycloak MUST be in this set — options-edge-web depends on the auth issuer at boot, and
+# with Keycloak down the whole site (incl. the Cloudflare tunnel origin) wedges → prod appears down. Keep
+# oe-keycloak first so auth is up before web starts.
+OVERNIGHT_SET="${OVERNIGHT_SET:-oe-keycloak es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web}"
 
 # Market-hours guard: refuse to run between open and close+buffer. The calendar
 # already knows the per-day close (incl. early-close days); we add a buffer so the
