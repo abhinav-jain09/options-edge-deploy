@@ -54,6 +54,10 @@ spec:
           value: "8080"
         - name: APP_MARKET_DATA_SOURCE
           value: "DATABENTO"
+        # es4 UI defaults to the ES symbol (AppConfig reads IB_SYMBOL, default SPX) so the chain
+        # selects ES and matches the gateway's ES selection.
+        - name: IB_SYMBOL
+          value: "ES"
         - name: DEALER_LEDGER_UI_VISIBLE
           value: "true"
         # PRODUCTION Keycloak auth (same realm + client + audience as prod).

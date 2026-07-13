@@ -52,6 +52,11 @@ spec:
         env:
         - name: APP_WEB_PORT
           value: "18091"
+        # es4 serves ES, not SPX: the gateway's active market-data selection symbol is IB_SYMBOL
+        # (default SPX). Without this the selection is SPX and the ES option records (underlying=ES)
+        # never match -> empty chain even at market open. IB_EXPIRY stays unset = AUTO (0DTE daily roll).
+        - name: IB_SYMBOL
+          value: "ES"
         - name: JAVA_TOOL_OPTIONS
           value: "-Xms256m -Xmx1536m"
         # WS handshake auth against the PRODUCTION Keycloak realm.
