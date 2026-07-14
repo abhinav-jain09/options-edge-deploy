@@ -27,7 +27,9 @@ metadata:
     app.kubernetes.io/component: short-premium-agent-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # OFF on BOTH dev + prod (USER 2026-07-13: bring the Qwen agent down). Pods terminated,
+  # no Ollama calls, no Kafka consumer. Re-enable by setting replicas back to 1 + service-deploy.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
