@@ -60,7 +60,8 @@ spec:
               value: es.reversal.final-summary
             - name: REVERSAL_OUTCOME_TOPIC
               value: es.reversal.outcome
-            # --- consumer group (PLAIN assigned consumer — lag visibility only) ---
+            # --- consumer group id (assign-mode, no commits: identifies the client in
+            #     tooling; committed-offset lag is not reported by design) ---
             - name: REVERSAL_GROUP_ID
               value: reversal-confirmation-v1
             - name: JAVA_TOOL_OPTIONS

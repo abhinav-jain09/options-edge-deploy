@@ -52,6 +52,10 @@ TOPICS_DELETE=(
   es.options.databento.display.gamma.history
   es.options.databento.normalized
   es.delta-flow-session
+  es.delta-flow-by-trade
+  # reversal-confirmation engine streams (7d/48h retention set by the service itself)
+  es.reversal.verdicts
+  es.reversal.strength
   es.dealer-ledger-profile
   es.dealer-ledger-state
   es.dealer-ledger-signal-fired
@@ -68,6 +72,9 @@ TOPICS_DELETE=(
 # compacted topics (per scripts/kafka/topics.env OPTIONS_EDGE_COMPACTED_TOPICS,
 # plus the compacted-by-design calibration state)
 TOPICS_COMPACT=(
+  # reversal-confirmation compacted calibration outputs (design v7 §10)
+  es.reversal.final-summary
+  es.reversal.outcome
   es.options.databento.pace.mission
   es.options.databento.market-pressure.mission
   es.options.databento.sandwich.mission
