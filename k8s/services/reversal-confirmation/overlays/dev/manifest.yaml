@@ -94,6 +94,8 @@ spec:
               value: "0.05"
             - name: REVERSAL_RV_PRIMARY_THRESHOLD
               value: "1.15"
+            - name: REVERSAL_RV_SECONDARY_THRESHOLD
+              value: "1.05"
             - name: REVERSAL_RV_WEIGHT_ES
               value: "0.60"
             - name: REVERSAL_RV_WEIGHT_OPTION_CONTRACTS
