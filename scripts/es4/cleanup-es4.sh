@@ -25,6 +25,7 @@ KAFKA_DATA=/home/es4/volumes/kafka
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY="${DEPLOY_DRY_RUN:-false}"
 STATE="$ES4_HOME/.es4-cleanup.state"          # durable (NOT /tmp): original replicas for resume
+PHASE="$ES4_HOME/.es4-cleanup.phase"          # WIPING | RESTORED — lets a resume tell "wipe not done" from "restore done"
 LOCKDIR="$ES4_HOME/.es4-cleanup.lock"         # flock target (kernel-released on any exit)
 KC="sudo -n /usr/local/bin/k3s kubectl -n options-edge"
 
@@ -67,6 +68,13 @@ fi
 # If a prior run was interrupted, $STATE already holds the ORIGINAL replica counts. NEVER
 # overwrite it while it exists (a re-capture now would read the scaled-to-0 counts and restore 0).
 # A resume re-runs the idempotent wipe using the preserved originals.
+if [ -s "$STATE" ] && [ "$(cat "$PHASE" 2>/dev/null || true)" = "RESTORED" ]; then
+  # A prior run finished RESTORE and was killed before clearing state. Re-wiping now would
+  # destroy data produced since restore. Only the state cleanup remained — do it and exit.
+  log "prior run already restored the app (phase=RESTORED); clearing leftover state, NO wipe"
+  [ "$DRY" = "true" ] || rm -f "$STATE" "$PHASE"
+  exit 0
+fi
 if [ -s "$STATE" ]; then
   log "resuming interrupted reset — reusing captured replica state $STATE (not re-capturing)"
 else
@@ -95,7 +103,10 @@ if [ "$DRY" != "true" ]; then
     # awk (not grep|wc): always emits a number, no pipefail exit-code coupling. bad = Deployments
     # whose status.replicas is present and != 0; pods = live pods (excl. terminating/completed).
     bad=$($KC get deploy -o jsonpath='{range .items[*]}{.status.replicas}{"\n"}{end}' 2>/dev/null | awk '$1!="" && $1!=0 {c++} END{print c+0}')
-    pods=$($KC get pods --no-headers 2>/dev/null | awk '!/Completed|Terminating/{c++} END{print c+0}')
+    # Require producer pods to be ACTUALLY DELETED — a Terminating pod still runs during its grace
+    # period and could reconnect + write cached schema ids. Count anything not in a terminal phase
+    # (Terminating pods are still present -> counted -> we keep waiting until they are gone).
+    pods=$($KC get pods --no-headers 2>/dev/null | awk '$3!="Completed" && $3!="Succeeded" {c++} END{print c+0}')
     if [ "${bad:-1}" = "0" ] && [ "${pods:-1}" = "0" ]; then ok=true; break; fi
     sleep 5
   done
@@ -103,6 +114,7 @@ if [ "$DRY" != "true" ]; then
 fi
 
 # ------------------------------------------------------- 3. offline coordinated wipe (kafka down)
+[ "$DRY" = "true" ] || echo WIPING > "$PHASE"   # mark: from here a resume must re-run the wipe
 log "docker compose down (broker offline — no producer can reach it)"
 run "(cd '$INFRA_DIR' && docker compose down)"
 log "wiping Kafka data volume CONTENTS ($KAFKA_DATA/* — all topics + _schemas), Kafka offline"
@@ -149,7 +161,8 @@ else
     [ "$got" = "$reps" ] || { echo "restore MISMATCH $name: want $reps got $got" >&2; fail=1; }
   done < "$STATE"
   [ "$fail" = 0 ] || die "restore incomplete — leaving $STATE for a resume (rerun to finish restore)"
-  rm -f "$STATE"                 # success: clear durable state so a later run captures fresh
+  echo RESTORED > "$PHASE"       # restore verified: an interrupt now must NOT re-wipe on resume
+  rm -f "$STATE" "$PHASE"        # success: clear durable state so a later run captures fresh
 fi
 
 log "es4 clean reset COMPLETE — Kafka + Schema Registry wiped and re-seeded atomically; app restored"

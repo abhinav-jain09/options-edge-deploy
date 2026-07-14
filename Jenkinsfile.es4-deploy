@@ -94,20 +94,23 @@ pipeline {
             exit 0
           fi
 
-          # ALWAYS restore the feed, even if the wipe aborts (never leave prod es-feed down).
-          restore_feed() { eval "$KP scale deploy/es-feed --replicas=$FEED_REP" || echo "WARN: es-feed restore failed — scale it back to $FEED_REP manually" >&2; }
+          # ALWAYS restore the feed, even if the wipe aborts (never leave prod es-feed down), and
+          # VERIFY it: if the feed can't be scaled back to its captured count, fail the build (a
+          # green run must never leave the prod es-feed at 0).
+          restore_feed() {
+            eval "$KP scale deploy/es-feed --replicas=$FEED_REP" || true
+            got=$(eval "$KP get deploy es-feed -o jsonpath='{.spec.replicas}'" 2>/dev/null || echo ERR)
+            [ "$got" = "$FEED_REP" ] || { echo "ERROR: prod es-feed NOT restored (want $FEED_REP got $got) — scale it back manually" >&2; exit 1; }
+          }
           trap restore_feed EXIT
 
-          echo "=== fencing prod es-feed (scale $FEED_REP -> 0, wait for pods gone) ==="
+          echo "=== fencing prod es-feed (scale $FEED_REP -> 0, wait for pods DELETED) ==="
           eval "$KP scale deploy/es-feed --replicas=0"
-          eval "$KP rollout status deploy/es-feed --timeout=120s" || true
-          # fail-closed: prove no es-feed pod remains before we let the box wipe
-          for i in $(seq 1 24); do
-            n=$(eval "$KP get pods -l app.kubernetes.io/name=es-feed --no-headers" 2>/dev/null | grep -vE 'Completed|Terminating' | wc -l | tr -d ' ')
-            [ "${n:-1}" = "0" ] && break; sleep 5
-          done
-          n=$(eval "$KP get pods -l app.kubernetes.io/name=es-feed --no-headers" 2>/dev/null | grep -vE 'Completed|Terminating' | wc -l | tr -d ' ')
-          [ "${n:-1}" = "0" ] || { echo "prod es-feed did not stop — aborting before wipe" >&2; exit 1; }
+          # wait for actual DELETION (a Terminating pod can still produce during its grace period);
+          # awk count (not grep|wc) so an empty result is not a pipefail-fatal exit.
+          eval "$KP wait --for=delete pod -l app.kubernetes.io/name=es-feed --timeout=150s" || true
+          n=$(eval "$KP get pods -l app.kubernetes.io/name=es-feed --no-headers" 2>/dev/null | awk 'END{print NR+0}')
+          [ "$n" = "0" ] || { echo "prod es-feed pods still present ($n) — aborting before wipe" >&2; exit 1; }
 
           echo "=== running on-box atomic wipe (feed fenced) ==="
           ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_FEED_FENCED=1 bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
