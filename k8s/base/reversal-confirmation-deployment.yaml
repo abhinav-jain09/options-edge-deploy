@@ -64,6 +64,19 @@ spec:
             #     tooling; committed-offset lag is not reported by design) ---
             - name: REVERSAL_GROUP_ID
               value: reversal-confirmation-v1
+            # --- detection sensitivity (2026-07-14 first-session retune) ---
+            # Defaults (12t decline / 4t bounce / 10s cooldown) produced 263
+            # candidates in one session on a tape with constant 3-5pt wiggles —
+            # pure noise, 0 confirmed. Config-only retune per design §14:
+            # 7pt declines over >=60s, 2pt bounce trigger, 60s cooldown.
+            - name: REVERSAL_MIN_DECLINE_TICKS
+              value: "28"
+            - name: REVERSAL_MIN_DECLINE_BUCKETS
+              value: "30"
+            - name: REVERSAL_BOUNCE_TRIGGER_TICKS
+              value: "8"
+            - name: REVERSAL_RESTART_COOLDOWN_BUCKETS
+              value: "30"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms256m -Xmx1024m"
           ports:
