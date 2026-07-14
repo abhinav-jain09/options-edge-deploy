@@ -84,6 +84,8 @@ spec:
           value: -Xms512m -Xmx2048m
         - name: STRIKE_INTEL_ACK_UNTRUSTED_GEX
           value: 'true'
+        - name: STRIKE_INTEL_ADAPTIVE_SCALE_ENABLED
+          value: 'true'
         envFrom:
         - configMapRef:
             name: es4-base-env
