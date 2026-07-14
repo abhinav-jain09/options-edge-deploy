@@ -174,8 +174,16 @@ if [ "$MUTATE" = "true" ]; then
 fi
 log "identity guards PASSED"
 
-# Candidate topics = everything except Kafka system topics.
-CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt || true)
+# Candidate topics = everything except Kafka system topics and the explicit
+# CALIBRATION keep-list. es.reversal.final-summary + es.reversal.outcome are
+# compacted, bounded corpora whose entire purpose is cross-day accumulation
+# (the reversal engine's ground-truth dataset, design §14 promotion gate) —
+# same preservation principle as the clean-slate dealer-ledger exemption.
+# Rolling streams (es.reversal.verdicts/strength) stay purgeable by design.
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$'
+N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
+log "calibration keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
+CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)
 NTOPICS=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
 log "topics to purge: $NTOPICS (system topics excluded)"
 
