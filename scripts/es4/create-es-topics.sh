@@ -74,6 +74,9 @@ TOPICS_COMPACT=(
   es.options.databento.volume.state.compacted
   es.options.databento.maxpain
   es.dealer-ledger-calibration-state
+  # Compacted ES-future spot price (feed ES_PRICE_ENABLED). strike-intelligence's spot global
+  # store reads this as a latest-per-symbol price topic (same shape/policy as underlying.spx.price).
+  es.underlying.es.price
 )
 
 kt() { docker exec es4-kafka kafka-topics --bootstrap-server "$BROKER" "$@"; }
