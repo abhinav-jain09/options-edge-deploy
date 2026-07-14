@@ -74,6 +74,14 @@ spec:
           value: 'true'
         - name: DELTA_FLOW_MIN_CONTRACTS
           value: '1'
+        - name: DELTA_FLOW_GREEK_MAX_AGE_MS
+          value: '30000'
+        - name: DELTA_FLOW_QUOTE_MAX_AGE_MS
+          value: '10000'
+        - name: DELTA_FLOW_GREEK_LOOKAHEAD_TOLERANCE_MS
+          value: '2000'
+        - name: DELTA_FLOW_QUOTE_LOOKAHEAD_TOLERANCE_MS
+          value: '2000'
         envFrom:
         - configMapRef:
             name: es4-base-env
