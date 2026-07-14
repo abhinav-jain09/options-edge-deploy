@@ -53,9 +53,6 @@ TOPICS_DELETE=(
   es.options.databento.normalized
   es.delta-flow-session
   es.delta-flow-by-trade
-  # reversal-confirmation engine streams (7d/48h retention set by the service itself)
-  es.reversal.verdicts
-  es.reversal.strength
   es.dealer-ledger-profile
   es.dealer-ledger-state
   es.dealer-ledger-signal-fired
@@ -72,9 +69,6 @@ TOPICS_DELETE=(
 # compacted topics (per scripts/kafka/topics.env OPTIONS_EDGE_COMPACTED_TOPICS,
 # plus the compacted-by-design calibration state)
 TOPICS_COMPACT=(
-  # reversal-confirmation compacted calibration outputs (design v7 §10)
-  es.reversal.final-summary
-  es.reversal.outcome
   es.options.databento.pace.mission
   es.options.databento.market-pressure.mission
   es.options.databento.sandwich.mission
@@ -113,6 +107,31 @@ ensure_topic() { # name cleanup(compact|delete)
   echo "$t cleanup=$cleanup created=$created"
 }
 
+# contract-specific topics (partitions/retention fixed by the owning service's
+# design and NOT subject to the generic 4-partition/12h policy)
+ensure_topic_custom() { # name cleanup partitions retention_ms(""=none)
+  local t=$1 cleanup=$2 parts=$3 retention=$4 created=no
+  if ! kt --describe --topic "$t" >/dev/null 2>&1; then
+    kt --create --topic "$t" --partitions "$parts" --replication-factor 1 >/dev/null
+    created=yes
+  fi
+  if [ "$cleanup" = compact ]; then
+    kc --alter --entity-type topics --entity-name "$t" \
+       --add-config "cleanup.policy=compact" >/dev/null
+  else
+    kc --alter --entity-type topics --entity-name "$t" \
+       --add-config "cleanup.policy=delete,retention.ms=${retention}" >/dev/null
+  fi
+  echo "$t cleanup=$cleanup partitions=$parts created=$created (contract-specific)"
+}
+
 for t in "${TOPICS_DELETE[@]}";  do ensure_topic "$t" delete;  done
 for t in "${TOPICS_COMPACT[@]}"; do ensure_topic "$t" compact; done
-echo "topics reconciled: $(( ${#TOPICS_DELETE[@]} + ${#TOPICS_COMPACT[@]} ))"
+
+# reversal-confirmation engine (options-edge-processing docs/reversal-confirmation/DESIGN.md v7 §10):
+# single partition (single-writer ordering), 7d verdicts / 48h strength, compacted calibration topics.
+ensure_topic_custom es.reversal.verdicts        delete  1 604800000
+ensure_topic_custom es.reversal.strength        delete  1 172800000
+ensure_topic_custom es.reversal.final-summary   compact 1 ""
+ensure_topic_custom es.reversal.outcome         compact 1 ""
+echo "topics reconciled: $(( ${#TOPICS_DELETE[@]} + ${#TOPICS_COMPACT[@]} + 4 ))"
