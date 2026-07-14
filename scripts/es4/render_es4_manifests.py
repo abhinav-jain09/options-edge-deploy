@@ -68,6 +68,16 @@ ES_ENV = {
         # cells stay blank. ES has a $50 multiplier and low lot counts, so a floor of 1 surfaces real flow
         # without meaningful noise. SPX keeps its default 5 (unaffected).
         {"name": "DELTA_FLOW_MIN_CONTRACTS", "value": "1"},
+        # ES 0DTE greek<->trade freshness widening: thin volume + jittery async event-time streams make
+        # the SPX-tuned gates (greek 5s / quote 2s, zero lookahead tolerance) reject a large chunk on
+        # STALE_GREEK/LOOKAHEAD_GREEK, starving by-strike delta-flow. Widen the accept window and allow a
+        # small lookahead (ordering jitter, not look-ahead bias). SPX keeps its defaults (5000/2000/0/0).
+        # The two MAX_AGE knobs already exist in the shipped code; the LOOKAHEAD tolerances take effect
+        # once the delta-flow image carrying proc PR#334 is deployed (inert / ignored on older images).
+        {"name": "DELTA_FLOW_GREEK_MAX_AGE_MS", "value": "30000"},
+        {"name": "DELTA_FLOW_QUOTE_MAX_AGE_MS", "value": "10000"},
+        {"name": "DELTA_FLOW_GREEK_LOOKAHEAD_TOLERANCE_MS", "value": "2000"},
+        {"name": "DELTA_FLOW_QUOTE_LOOKAHEAD_TOLERANCE_MS", "value": "2000"},
     ],
     # ES underlying is the mirrored future-trades topic (es.underlying.es.trades after prefix),
     # not the SPX cash-price topic (Codex finding #3, 2026-07-12).
