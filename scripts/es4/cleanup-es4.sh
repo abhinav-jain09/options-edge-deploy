@@ -71,8 +71,12 @@ fi
 # ATOMICALLY (temp+mv) so the phase is always consistent with its content — no second marker file
 # that could go stale and make a future reset silently skip the wipe. A resume keys off line 1.
 REPS() { tail -n +2 "$STATE"; }   # the replica lines (skip the phase header)
+# A legacy state file from a pre-single-file build would have a deployment row (not a phase word) on
+# line 1. Never misread that as a phase — fail closed and make the operator inspect/clear it.
+[ -e "$ES4_HOME/.es4-cleanup.phase" ] && die "legacy phase marker $ES4_HOME/.es4-cleanup.phase present — inspect + remove it (and $STATE) before rerunning"
 if [ -s "$STATE" ]; then
   ph=$(head -n1 "$STATE" 2>/dev/null || true)
+  case "$ph" in WIPING|RESTORED) ;; *) die "unrecognized state file $STATE (line 1='$ph', not WIPING/RESTORED) — legacy or corrupt; inspect + remove it before rerunning" ;; esac
   if [ "$ph" = "RESTORED" ]; then
     # A prior run verified RESTORE and was killed before clearing state. Re-wiping now would destroy
     # data produced since — only the state cleanup remained. Do it and exit (never re-wipe restored data).
