@@ -32,4 +32,5 @@ images:
   short-premium-agent-service: 192.168.100.252:5000/options-edge-short-premium-agent:prod
   spread-skew-service: 192.168.100.252:5000/options-edge-spread-skew:prod
   reversal-confirmation-service: 192.168.100.252:5000/options-edge-reversal-confirmation:prod
+  reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:prod
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:prod
