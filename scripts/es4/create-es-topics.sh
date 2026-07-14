@@ -33,6 +33,11 @@ TOPICS_DELETE=(
   es.options.marketdata.selection
   # mirrored from prod by MM2 (also created by MM2; pinned here for explicit config)
   es.underlying.es.trades
+  # strike-flow classifier bootstraps global store `underlying-spot-by-symbol` from this
+  # topic (HPSF_TOPIC_UNDERLYING_SPX_PRICE + TOPIC_PREFIX=es.). Stays EMPTY on es4 (es-feed
+  # SPX publishers are OFF) but MUST exist with partitions or the global thread dies on init
+  # (StreamsException: no partitions available) and the whole Streams app goes to ERROR.
+  es.underlying.spx.price
   # processing pipeline
   es.options.databento.strike-flow
   es.options.databento.strike-flow.strike.avro
