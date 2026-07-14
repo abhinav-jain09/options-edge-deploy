@@ -25,7 +25,6 @@ KAFKA_DATA=/home/es4/volumes/kafka
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY="${DEPLOY_DRY_RUN:-false}"
 STATE="$ES4_HOME/.es4-cleanup.state"          # durable (NOT /tmp): original replicas for resume
-PHASE="$ES4_HOME/.es4-cleanup.phase"          # WIPING | RESTORED — lets a resume tell "wipe not done" from "restore done"
 LOCKDIR="$ES4_HOME/.es4-cleanup.lock"         # flock target (kernel-released on any exit)
 KC="sudo -n /usr/local/bin/k3s kubectl -n options-edge"
 
@@ -68,25 +67,30 @@ fi
 # If a prior run was interrupted, $STATE already holds the ORIGINAL replica counts. NEVER
 # overwrite it while it exists (a re-capture now would read the scaled-to-0 counts and restore 0).
 # A resume re-runs the idempotent wipe using the preserved originals.
-if [ -s "$STATE" ] && [ "$(cat "$PHASE" 2>/dev/null || true)" = "RESTORED" ]; then
-  # A prior run finished RESTORE and was killed before clearing state. Re-wiping now would
-  # destroy data produced since restore. Only the state cleanup remained — do it and exit.
-  log "prior run already restored the app (phase=RESTORED); clearing leftover state, NO wipe"
-  [ "$DRY" = "true" ] || rm -f "$STATE" "$PHASE"
-  exit 0
-fi
+# ONE durable state file: line 1 = PHASE (WIPING|RESTORED), lines 2+ = "name replicas". Written
+# ATOMICALLY (temp+mv) so the phase is always consistent with its content — no second marker file
+# that could go stale and make a future reset silently skip the wipe. A resume keys off line 1.
+REPS() { tail -n +2 "$STATE"; }   # the replica lines (skip the phase header)
 if [ -s "$STATE" ]; then
-  log "resuming interrupted reset — reusing captured replica state $STATE (not re-capturing)"
+  ph=$(head -n1 "$STATE" 2>/dev/null || true)
+  if [ "$ph" = "RESTORED" ]; then
+    # A prior run verified RESTORE and was killed before clearing state. Re-wiping now would destroy
+    # data produced since — only the state cleanup remained. Do it and exit (never re-wipe restored data).
+    log "prior run already restored the app (phase=RESTORED); clearing leftover state, NO wipe"
+    [ "$DRY" = "true" ] || rm -f "$STATE"
+    exit 0
+  fi
+  log "resuming interrupted reset (phase=${ph:-WIPING}) — reusing captured replicas from $STATE"
 else
-  log "capturing es4 Deployment replica counts -> $STATE"
+  log "capturing es4 Deployment replica counts (phase WIPING) -> $STATE"
   if [ "$DRY" = "true" ]; then
     $KC get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas --no-headers 2>/dev/null || true
   else
     TMP="$STATE.tmp.$$"
-    $KC get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas --no-headers > "$TMP" \
+    { echo WIPING; $KC get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas --no-headers; } > "$TMP" \
       || die "could not enumerate Deployments — aborting BEFORE any wipe"
-    [ -s "$TMP" ] || die "no Deployments found (unexpected) — aborting before wipe"
-    mv -f "$TMP" "$STATE"          # atomic publish of the durable state
+    [ "$(wc -l < "$TMP")" -ge 2 ] || die "no Deployments found (unexpected) — aborting before wipe"
+    mv -f "$TMP" "$STATE"          # atomic publish: phase WIPING committed WITH the captured replicas
   fi
 fi
 
@@ -96,7 +100,7 @@ if [ "$DRY" != "true" ]; then
   while read -r name reps; do
     [ -n "$name" ] || continue
     $KC scale "deploy/$name" --replicas=0 >/dev/null || die "scale-to-0 failed for $name — aborting before wipe"
-  done < "$STATE"
+  done < <(REPS)
   # verify: every Deployment reports 0 replicas, and no pods remain (bounded poll; fail-closed).
   ok=false
   for _ in $(seq 1 30); do
@@ -114,7 +118,6 @@ if [ "$DRY" != "true" ]; then
 fi
 
 # ------------------------------------------------------- 3. offline coordinated wipe (kafka down)
-[ "$DRY" = "true" ] || echo WIPING > "$PHASE"   # mark: from here a resume must re-run the wipe
 log "docker compose down (broker offline — no producer can reach it)"
 run "(cd '$INFRA_DIR' && docker compose down)"
 log "wiping Kafka data volume CONTENTS ($KAFKA_DATA/* — all topics + _schemas), Kafka offline"
@@ -152,17 +155,20 @@ else
     [ -n "$name" ] || continue
     [ "$reps" = "<none>" ] && reps=1
     $KC scale "deploy/$name" --replicas="$reps" >/dev/null || { echo "restore scale FAILED for $name" >&2; fail=1; }
-  done < "$STATE"
+  done < <(REPS)
   # verify each Deployment's spec.replicas matches the captured value
   while read -r name reps; do
     [ -n "$name" ] || continue
     [ "$reps" = "<none>" ] && reps=1
     got=$($KC get "deploy/$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
     [ "$got" = "$reps" ] || { echo "restore MISMATCH $name: want $reps got $got" >&2; fail=1; }
-  done < "$STATE"
+  done < <(REPS)
   [ "$fail" = 0 ] || die "restore incomplete — leaving $STATE for a resume (rerun to finish restore)"
-  echo RESTORED > "$PHASE"       # restore verified: an interrupt now must NOT re-wipe on resume
-  rm -f "$STATE" "$PHASE"        # success: clear durable state so a later run captures fresh
+  # Atomically flip the SINGLE state file's phase to RESTORED, THEN unlink it. If killed between the
+  # flip and the unlink, a resume reads phase=RESTORED and only clears state — it never re-wipes. There
+  # is no second file to go stale, so a later fresh reset can never inherit a spurious RESTORED.
+  TMP="$STATE.tmp.$$"; { echo RESTORED; REPS; } > "$TMP" && mv -f "$TMP" "$STATE"
+  rm -f "$STATE"                # success: clear durable state so a later run captures fresh
 fi
 
 log "es4 clean reset COMPLETE — Kafka + Schema Registry wiped and re-seeded atomically; app restored"
