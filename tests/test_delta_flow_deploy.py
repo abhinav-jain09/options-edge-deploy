@@ -55,6 +55,10 @@ class DeltaFlowDeployTest(unittest.TestCase):
         es4_manifest = (ROOT / "k8s" / "es4" / "services" / "delta-flow.yaml").read_text()
         self.assertIn('{"name": "DELTA_FLOW_USE_NATIVE_SIDE", "value": "true"}', renderer)
         self.assertIn("DELTA_FLOW_USE_NATIVE_SIDE", es4_manifest)
+        # ES 0DTE is thin (1-4 lot prints); the SPX-tuned default floor of 5 rejects all ES flow. es4
+        # lowers DELTA_FLOW_MIN_CONTRACTS to 1 (via the renderer) so the delta cells populate. SPX keeps 5.
+        self.assertIn('{"name": "DELTA_FLOW_MIN_CONTRACTS", "value": "1"}', renderer)
+        self.assertIn("DELTA_FLOW_MIN_CONTRACTS", es4_manifest)
         # es4-only: the SPX/production slice must NOT carry the flag (SPX is OPRA, no true side).
         prod_slice = (ROOT / "k8s" / "services" / "delta-flow" / "overlays"
                       / "production" / "manifest.yaml").read_text()

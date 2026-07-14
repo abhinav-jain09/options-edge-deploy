@@ -72,6 +72,8 @@ spec:
           value: ES:50
         - name: DELTA_FLOW_USE_NATIVE_SIDE
           value: 'true'
+        - name: DELTA_FLOW_MIN_CONTRACTS
+          value: '1'
         envFrom:
         - configMapRef:
             name: es4-base-env

@@ -63,6 +63,11 @@ ES_ENV = {
         # trade-vs-NBBO estimation. In-code GLBX-dataset provenance gate keeps it inert for non-GLBX data;
         # SPX/OPRA (side='N') is untouched and keeps this OFF (its default).
         {"name": "DELTA_FLOW_USE_NATIVE_SIDE", "value": "true"},
+        # ES 0DTE is far thinner than SPX: prints are 1-4 lots, so the SPX-tuned default floor of 5
+        # (DELTA_FLOW_MIN_CONTRACTS) rejects essentially all ES flow (BELOW_MIN_CONTRACTS) and the delta
+        # cells stay blank. ES has a $50 multiplier and low lot counts, so a floor of 1 surfaces real flow
+        # without meaningful noise. SPX keeps its default 5 (unaffected).
+        {"name": "DELTA_FLOW_MIN_CONTRACTS", "value": "1"},
     ],
     # ES underlying is the mirrored future-trades topic (es.underlying.es.trades after prefix),
     # not the SPX cash-price topic (Codex finding #3, 2026-07-12).
