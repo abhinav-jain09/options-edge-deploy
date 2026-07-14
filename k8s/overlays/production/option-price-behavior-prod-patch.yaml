@@ -26,11 +26,15 @@ spec:
           env:
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx3g"
-            # Incremental O(1)-per-trade session aggregation (app id v2r4): rolling windows are a few
-            # point-ops each, so they are back ON. The flag stays as an operational escape hatch for the
-            # single-key session thread.
+            # EMERGENCY DISABLE (2026-07-14 incident): with rolling windows ON, the incremental
+            # aggregator's per-trade multi-key window updates under exactly_once tipped the single-key
+            # SESSION thread into CONCURRENT_TRANSACTIONS wedge -> processed_trades/emitted_events = 0,
+            # all OPB output frozen for ~1h during RTH. Keep only the SESSION window (this flag is the
+            # code's documented escape hatch) until the incremental rolling-window path is fixed +
+            # validated offline via the calibration-replay harness. app id stays v2r4 (inc store already
+            # backfilled); exactly_once stays ON (required by the incremental multi-key crash-consistency).
             - name: OPB_V2_ROLLING_WINDOWS_ENABLED
-              value: "true"
+              value: "false"
             # The incremental layout spans several store keys per logical update; exactly_once_v2 makes
             # the changelog + emits commit transactionally (broker hosts __transaction_state).
             - name: OPB_V2_EXACTLY_ONCE

@@ -57,7 +57,7 @@ spec:
             - name: JAVA_TOOL_OPTIONS
               value: -Xms512m -Xmx3g
             - name: OPB_V2_ROLLING_WINDOWS_ENABLED
-              value: "true"
+              value: "false"
             - name: OPB_V2_EXACTLY_ONCE
               value: "true"
             - name: APP_MARKET_DATA_SOURCE
