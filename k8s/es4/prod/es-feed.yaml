@@ -134,6 +134,14 @@ spec:
               value: "underlying.es.trades"
             - name: ES_TRADES_SOURCE_GROUP_ID
               value: "es-feed-spot-v1"
+            # ---- compacted ES spot-price topic (feed PR #63) ---------------------
+            # Republish the ES future price (from ES_TRADES_SOURCE above) as a compacted,
+            # "ES"-keyed es.underlying.es.price — the spot TOPIC an es4 strike-intelligence
+            # instance reads (its spot global store reads a price topic, not canonicalSpot).
+            - name: ES_PRICE_ENABLED
+              value: "true"
+            - name: ES_PRICE_TOPIC
+              value: "es.underlying.es.price"
             # ---- misc ------------------------------------------------------------
             - name: APP_PROFILE
               value: "prod"
