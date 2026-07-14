@@ -27,6 +27,11 @@ DRY="${DEPLOY_DRY_RUN:-false}"
 STATE="$ES4_HOME/.es4-cleanup.state"          # durable (NOT /tmp): original replicas for resume
 LOCKDIR="$ES4_HOME/.es4-cleanup.lock"         # flock target (kernel-released on any exit)
 KC="sudo -n /usr/local/bin/k3s kubectl -n options-edge"
+# es-web is a UI CONSUMER (it reads es.* topics for the browser feed; it does NOT produce Avro / register
+# schemas), so keeping it UP across the wipe cannot re-pollute the fresh cluster with cached schema ids.
+# Keep it running so es.fullfunding.nl never drops during a clean-reset. Excluded from scale-to-0, the
+# "all reached 0" quiesce proof, and restore. Space-separated deployment names. (2026-07-14)
+SCALE_EXCLUDE="es-web"
 
 log()  { printf '\n=== %s ===\n' "$*"; }
 die()  { echo "CLEANUP ABORT: $*" >&2; exit 1; }
@@ -70,7 +75,7 @@ fi
 # ONE durable state file: line 1 = PHASE (WIPING|RESTORED), lines 2+ = "name replicas". Written
 # ATOMICALLY (temp+mv) so the phase is always consistent with its content — no second marker file
 # that could go stale and make a future reset silently skip the wipe. A resume keys off line 1.
-REPS() { tail -n +2 "$STATE"; }   # the replica lines (skip the phase header)
+REPS() { tail -n +2 "$STATE" | awk -v ex="$SCALE_EXCLUDE" 'BEGIN{n=split(ex,a," ");for(i=1;i<=n;i++)x[a[i]]=1} !($1 in x)'; }   # replica lines (skip phase header) MINUS SCALE_EXCLUDE
 # A legacy state file from a pre-single-file build would have a deployment row (not a phase word) on
 # line 1. Never misread that as a phase — fail closed and make the operator inspect/clear it.
 [ -e "$ES4_HOME/.es4-cleanup.phase" ] && die "legacy phase marker $ES4_HOME/.es4-cleanup.phase present — inspect + remove it (and $STATE) before rerunning"
@@ -110,11 +115,11 @@ if [ "$DRY" != "true" ]; then
   for _ in $(seq 1 30); do
     # awk (not grep|wc): always emits a number, no pipefail exit-code coupling. bad = Deployments
     # whose status.replicas is present and != 0; pods = live pods (excl. terminating/completed).
-    bad=$($KC get deploy -o jsonpath='{range .items[*]}{.status.replicas}{"\n"}{end}' 2>/dev/null | awk '$1!="" && $1!=0 {c++} END{print c+0}')
+    bad=$($KC get deploy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.replicas}{"\n"}{end}' 2>/dev/null | awk -v ex="$SCALE_EXCLUDE" 'BEGIN{n=split(ex,a," ");for(i=1;i<=n;i++)x[a[i]]=1} !($1 in x) && $2!="" && $2!=0 {c++} END{print c+0}')
     # Require producer pods to be ACTUALLY DELETED — a Terminating pod still runs during its grace
     # period and could reconnect + write cached schema ids. Count anything not in a terminal phase
     # (Terminating pods are still present -> counted -> we keep waiting until they are gone).
-    pods=$($KC get pods --no-headers 2>/dev/null | awk '$3!="Completed" && $3!="Succeeded" {c++} END{print c+0}')
+    pods=$($KC get pods --no-headers 2>/dev/null | awk -v ex="$SCALE_EXCLUDE" 'BEGIN{n=split(ex,a," ")} {skip=0; for(i=1;i<=n;i++) if($1 ~ "^"a[i]"-") skip=1; if(!skip && $3!="Completed" && $3!="Succeeded") c++} END{print c+0}')
     if [ "${bad:-1}" = "0" ] && [ "${pods:-1}" = "0" ]; then ok=true; break; fi
     sleep 5
   done
