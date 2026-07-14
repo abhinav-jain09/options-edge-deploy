@@ -219,7 +219,7 @@
           kubectl -n options-edge delete deployment/databento-timewarp-snapshot-replay job/databento-timewarp-replay --ignore-not-found=true
           # Reconcile-delete the orphaned option-price-behavior 'v2' deployment. OPB is now V2-only (V1
           # deleted; no OPB_SERVICE_VARIANT). The canonical workload is `option-price-behavior-service`
-          # (app.id option-price-behavior-service-v2r3); the old separate `option-price-behavior-service-v2`
+          # (app.id option-price-behavior-service-v2r4); the old separate `option-price-behavior-service-v2`
           # deployment (app.id option-price-behavior-service-v2) is NOT in any overlay, so `apply -k` never
           # prunes it and it would run a duplicate V2 forever. Delete it here (idempotent, deployer-SA-scoped).
           kubectl -n options-edge delete deployment/option-price-behavior-service-v2 --ignore-not-found=true
