@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reversal-postgres-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: reversal-postgres-writer
+    app.kubernetes.io/component: reversal-postgres-writer
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reversal-postgres-writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reversal-postgres-writer
+        app.kubernetes.io/component: reversal-postgres-writer
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: reversal-postgres-writer
+          image: 192.168.100.252:5000/options-edge-reversal-postgres-writer:dev
+          imagePullPolicy: Always
+          # Durable calibration corpus: es.reversal.{final-summary,outcome,verdicts} -> Postgres
+          # es_reversal_* tables. Cross-broker by design (same as reversal-confirmation): the
+          # es.reversal.* topics live on the es4 broker, so the shared configmap's
+          # KAFKA_BOOTSTRAP_SERVERS is intentionally NOT used — the bootstrap is pinned below.
+          # Postgres refs follow es-open-direction-postgres-writer.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8080"
+            - name: REVERSAL_WRITER_BOOTSTRAP_SERVERS
+              value: 192.168.100.4:9092
+            # --- input topics (produced by reversal-confirmation-service on the es4 broker) ---
+            - name: KAFKA_REVERSAL_FINAL_SUMMARY_TOPIC
+              value: es.reversal.final-summary
+            - name: KAFKA_REVERSAL_OUTCOME_TOPIC
+              value: es.reversal.outcome
+            - name: KAFKA_REVERSAL_VERDICTS_TOPIC
+              value: es.reversal.verdicts
+            # --- Postgres: same source as es-open-direction-postgres-writer (options-edge-config
+            # carries POSTGRES_JDBC_URL/USER; options-edge-runtime-secrets carries the password) ---
+            - name: REVERSAL_WRITER_PG_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: REVERSAL_WRITER_PG_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: REVERSAL_WRITER_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx512m"
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
