@@ -88,6 +88,24 @@ spec:
               value: "8"
             - name: REVERSAL_RESTART_COOLDOWN_BUCKETS
               value: "30"
+            - name: REVERSAL_CONFIRM_MIN_CORE_GATES
+              value: "3"
+            - name: REVERSAL_MIN_BOUNCE_IMBALANCE
+              value: "0.05"
+            - name: REVERSAL_RV_PRIMARY_THRESHOLD
+              value: "1.15"
+            - name: REVERSAL_RV_WEIGHT_ES
+              value: "0.60"
+            - name: REVERSAL_RV_WEIGHT_OPTION_CONTRACTS
+              value: "0.20"
+            - name: REVERSAL_RV_WEIGHT_OPTION_PREMIUM
+              value: "0.20"
+            - name: REVERSAL_FLIP_POST_ALIGN
+              value: "0.15"
+            - name: REVERSAL_ALIGNED_STRONG_POST_ALIGN
+              value: "0.25"
+            - name: REVERSAL_POST_WINDOW_CAP_BUCKETS
+              value: "45"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx1024m
           envFrom:
