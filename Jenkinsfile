@@ -44,6 +44,7 @@ pipeline {
     string(name: 'STRIKE_INVASION_IMAGE', defaultValue: '', description: 'Strike invasion service image')
     string(name: 'INVASION_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Strike-invasion postgres writer image')
     string(name: 'SPREAD_SKEW_IMAGE', defaultValue: '', description: 'Spread-skew service image')
+    string(name: 'REVERSAL_CONFIRMATION_IMAGE', defaultValue: '', description: 'Reversal-confirmation service image')
     string(name: 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Spread-skew postgres writer image')
     string(name: 'ES_OPEN_DIRECTION_IMAGE', defaultValue: '', description: 'ES open-direction service image')
     string(name: 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'ES open-direction postgres writer image')
@@ -346,7 +347,7 @@ pipeline {
             'DEALER_LEDGER_IMAGE': 'dealer-ledger', 'DEALER_LEDGER_CALIBRATION_IMAGE': 'dealer-ledger-calibration',
             'STRIKE_LIQUIDITY_HEATMAP_IMAGE': 'strike-liquidity-heatmap', 'UNIFIED_SR_IMAGE': 'unified-sr',
             'STRIKE_INTELLIGENCE_IMAGE': 'strike-intelligence', 'STRIKE_INVASION_IMAGE': 'strike-invasion',
-            'INVASION_POSTGRES_WRITER_IMAGE': 'invasion-postgres-writer', 'SPREAD_SKEW_IMAGE': 'spread-skew',
+            'INVASION_POSTGRES_WRITER_IMAGE': 'invasion-postgres-writer', 'SPREAD_SKEW_IMAGE': 'spread-skew', 'REVERSAL_CONFIRMATION_IMAGE': 'reversal-confirmation',
             'SPREAD_SKEW_POSTGRES_WRITER_IMAGE': 'spread-skew-postgres-writer', 'ES_OPEN_DIRECTION_IMAGE': 'es-open-direction',
             'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE': 'es-open-direction-postgres-writer',
             'STRIKE_FLOW_AVRO_ADAPTER_IMAGE': 'strike-flow-avro-adapter', 'GEX_DELTA_REDIS_WRITER_IMAGE': 'gex-delta-redis-writer',
@@ -739,7 +740,7 @@ void promoteToProduction() {
       'FEED_GATEWAY_IMAGE', 'HPSF_PROCESSING_IMAGE', 'HPSF_POSTGRES_WRITER_IMAGE', 'SPX_MISSION_CONTROL_IMAGE',
       'STRIKE_FLOW_CLASSIFIER_IMAGE', 'DELTA_FLOW_IMAGE', 'DEALER_LEDGER_IMAGE', 'DEALER_LEDGER_CALIBRATION_IMAGE',
       'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'STRIKE_INVASION_IMAGE',
-      'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE',
+      'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE',
       'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
       'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE',
     ].collect { _n -> string(name: _n, value: params[_n]) } + [
