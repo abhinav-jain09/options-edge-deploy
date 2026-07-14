@@ -25,7 +25,7 @@ KAFKA_DATA=/home/es4/volumes/kafka
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY="${DEPLOY_DRY_RUN:-false}"
 STATE="$ES4_HOME/.es4-cleanup.state"          # durable (NOT /tmp): original replicas for resume
-LOCKDIR="$ES4_HOME/.es4-cleanup.lock"
+LOCKDIR="$ES4_HOME/.es4-cleanup.lock"         # flock target (kernel-released on any exit)
 KC="sudo -n /usr/local/bin/k3s kubectl -n options-edge"
 
 log()  { printf '\n=== %s ===\n' "$*"; }
@@ -43,17 +43,24 @@ log "preflight (no mutation happens unless every check passes)"
 [ -d "$KAFKA_DATA" ] && [ ! -L "$KAFKA_DATA" ] || die "Kafka data dir $KAFKA_DATA missing or is a symlink"
 CANON="$(cd "$KAFKA_DATA" && pwd -P)"
 [ "$CANON" = "$KAFKA_DATA" ] || die "Kafka data path is not canonical ($CANON != $KAFKA_DATA)"
-grep -qF "$KAFKA_DATA:/var/lib/kafka/data" "$INFRA_DIR/docker-compose.yml" \
-  || die "$KAFKA_DATA is not the compose Kafka bind source — refusing to delete"
+command -v docker >/dev/null || die "docker not found"
+# Validate the bind through the RENDERED compose config (a raw-file grep could match a comment
+# or a stale service). The Kafka data path must be the resolved bind SOURCE.
+(cd "$INFRA_DIR" && docker compose config 2>/dev/null) | grep -qE "(source: |[[:space:]])$KAFKA_DATA([[:space:]:]|\$)" \
+  || die "$KAFKA_DATA is not the compose-resolved Kafka bind source — refusing to delete"
 if [ "$DRY" != "true" ]; then
   $KC version >/dev/null 2>&1 || die "sudo -n k3s kubectl not usable (sudoers/kubeconfig) — fix before a destructive run"
+  # Preflight the DESTRUCTIVE command's sudo too (not just kubectl): a non-destructive probe of the
+  # same `sudo -n` rule, so we never scale the app to 0 and then discover the rm is unauthorized.
+  sudo -n test -d "$KAFKA_DATA" || die "sudo -n cannot access $KAFKA_DATA — the wipe would fail AFTER the app is down; fix sudoers first"
 fi
-command -v docker >/dev/null || die "docker not found"
 
-# single-instance lock (mkdir is atomic); trap removes it on exit
+# single-instance lock via flock: kernel-released when this process exits FOR ANY REASON
+# (including SIGKILL / reboot), so a hard-killed run never leaves a stale lock that blocks the
+# documented resume — unlike a mkdir/rmdir lock that only clears via the EXIT trap.
 if [ "$DRY" != "true" ]; then
-  mkdir "$LOCKDIR" 2>/dev/null || die "another cleanup is running (lock $LOCKDIR present) — refusing concurrent reset"
-  trap 'rmdir "$LOCKDIR" 2>/dev/null || true' EXIT
+  exec 9>"$LOCKDIR"
+  flock -n 9 || die "another cleanup holds the lock ($LOCKDIR) — refusing concurrent reset"
 fi
 
 # ------------------------------------------------------------ 1. capture / resume replica state
@@ -85,8 +92,10 @@ if [ "$DRY" != "true" ]; then
   # verify: every Deployment reports 0 replicas, and no pods remain (bounded poll; fail-closed).
   ok=false
   for _ in $(seq 1 30); do
-    bad=$($KC get deploy -o jsonpath='{range .items[*]}{.status.replicas}{"\n"}{end}' 2>/dev/null | grep -vE '^(0)?$' | wc -l | tr -d ' ')
-    pods=$($KC get pods --no-headers 2>/dev/null | grep -vE 'Completed|Terminating' | wc -l | tr -d ' ')
+    # awk (not grep|wc): always emits a number, no pipefail exit-code coupling. bad = Deployments
+    # whose status.replicas is present and != 0; pods = live pods (excl. terminating/completed).
+    bad=$($KC get deploy -o jsonpath='{range .items[*]}{.status.replicas}{"\n"}{end}' 2>/dev/null | awk '$1!="" && $1!=0 {c++} END{print c+0}')
+    pods=$($KC get pods --no-headers 2>/dev/null | awk '!/Completed|Terminating/{c++} END{print c+0}')
     if [ "${bad:-1}" = "0" ] && [ "${pods:-1}" = "0" ]; then ok=true; break; fi
     sleep 5
   done
@@ -98,8 +107,11 @@ log "docker compose down (broker offline — no producer can reach it)"
 run "(cd '$INFRA_DIR' && docker compose down)"
 log "wiping Kafka data volume CONTENTS ($KAFKA_DATA/* — all topics + _schemas), Kafka offline"
 run "sudo -n find '$KAFKA_DATA' -mindepth 1 -maxdepth 1 -exec rm -rf {} +"
-log "docker compose up -d (fresh kafka + empty SR)"
-run "(cd '$INFRA_DIR' && docker compose up -d)"
+# Start ONLY the datastores (kafka + schema-registry + postgres + redis) — NOT mm2 (a producer
+# that could auto-create topics before reconciliation). Topics are created next; mm2 + the app
+# producers start only AFTER topics exist, so nothing races topic reconciliation on the fresh cluster.
+log "docker compose up -d kafka schema-registry postgres redis (datastores first, mm2 held back)"
+run "(cd '$INFRA_DIR' && docker compose up -d kafka schema-registry postgres redis)"
 if [ "$DRY" != "true" ]; then
   log "waiting for kafka + schema-registry health (fail-closed)"
   ok=false
@@ -112,9 +124,11 @@ if [ "$DRY" != "true" ]; then
   [ "$ok" = true ] || die "kafka/SR not healthy after 200s — app left down (rerun resumes from $STATE)"
 fi
 
-# ------------------------------------------------------------ 4. recreate core topics
-log "recreating core es.* topics (create-es-topics.sh)"
+# ------------------------------------------------------------ 4. recreate core topics, THEN mm2
+log "recreating core es.* topics (create-es-topics.sh) before any producer starts"
 run "bash '$SCRIPT_DIR/create-es-topics.sh'"
+log "docker compose up -d (start mm2 + any remaining infra now that topics exist)"
+run "(cd '$INFRA_DIR' && docker compose up -d)"
 
 # ------------------------------------------------- 5. restore app (verified) then clear state
 log "restoring es4 Deployments to captured replica counts (verified) from $STATE"
