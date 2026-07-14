@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: reversal-postgres-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: reversal-postgres-writer
+    app.kubernetes.io/component: reversal-postgres-writer
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: reversal-postgres-writer
+  ports:
+    - name: health
+      port: 8080
+      targetPort: health

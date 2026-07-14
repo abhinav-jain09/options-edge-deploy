@@ -48,6 +48,7 @@ REVERSAL_CONFIRMATION_IMAGE=$registry/options-edge-reversal-confirmation:$image_
 SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$registry/options-edge-spread-skew-postgres-writer:$image_tag
 ES_OPEN_DIRECTION_IMAGE=$registry/options-edge-es-open-direction:$image_tag
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$registry/options-edge-es-open-direction-postgres-writer:$image_tag
+REVERSAL_POSTGRES_WRITER_IMAGE=$registry/options-edge-reversal-postgres-writer:$image_tag
 EOF
             # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
             # NOT experiment. Emit its image var for a dev OR production tag-based resolve (mirrors
@@ -94,6 +95,7 @@ REVERSAL_CONFIRMATION_IMAGE=$REVERSAL_CONFIRMATION_IMAGE
 SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$SPREAD_SKEW_POSTGRES_WRITER_IMAGE
 ES_OPEN_DIRECTION_IMAGE=$ES_OPEN_DIRECTION_IMAGE
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE
+REVERSAL_POSTGRES_WRITER_IMAGE=$REVERSAL_POSTGRES_WRITER_IMAGE
 EOF
             # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its
             # image var is caller-provided (Jenkinsfile image-defaults -> oeProfile.image), so emit it

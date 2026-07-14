@@ -37,6 +37,7 @@ REVERSAL_CONFIRMATION_IMAGE
 SPREAD_SKEW_POSTGRES_WRITER_IMAGE
 ES_OPEN_DIRECTION_IMAGE
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE
+REVERSAL_POSTGRES_WRITER_IMAGE
 EOF
   # short-premium-agent renders in dev+production (a standalone service that runs on prod too), NOT
   # experiment. Include it in the image-var set for dev+production so their DEPLOY_TARGET=all pin loop

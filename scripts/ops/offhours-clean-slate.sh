@@ -589,6 +589,9 @@ if [ "$DB_WIPE" = "true" ]; then
   # levels), es_level_break_history (trap-volume baselines), es_open_direction_forecast (immutable forecast
   # ledger), es_open_direction_outcome (outcome/accuracy = training data), es_open_direction_publication
   # (idempotent publish guard). Excluded by the `tablename !~ '^es_'` guard below.
+  # reversal-confirmation (2026-07-14): es_reversal_candidate / es_reversal_outcome /
+  # es_reversal_eval are the durable reversal calibration corpus (reversal-postgres-writer)
+  # and are likewise covered by the `^es_` prefix guard — cross-day by design, never truncate.
   EXEMPT_TABLES="$CALIB_TABLES, 'spread_skew_sample'"
   ES_EXCLUDE="tablename !~ '^es_'"
   TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES) and $ES_EXCLUDE")

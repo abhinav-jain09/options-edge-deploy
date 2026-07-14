@@ -55,6 +55,7 @@ services:
   - { name: spread-skew-postgres-writer,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew-postgres-writer,  deployments: [spread-skew-postgres-writer] }
   - { name: es-open-direction,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction,            deployments: [es-open-direction-service] }
   - { name: es-open-direction-postgres-writer, managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction-postgres-writer, deployments: [es-open-direction-postgres-writer] }
+  - { name: reversal-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-reversal-postgres-writer,     deployments: [reversal-postgres-writer] }
   # short-premium-agent: ONE Deployment, TWO containers (Agent A live recommender + Agent B EOD advisor daemon).
   # dev = 72B on the Mac's Ollama; prod = 7B on the .252 T1000 GPU (per-env patch overrides model/URL +
   # SP_REQUIRE_REAL). Referenced from BOTH overlays (like web), not k8s/base.
