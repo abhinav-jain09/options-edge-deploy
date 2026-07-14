@@ -33,6 +33,8 @@ resources:
   - invasion-postgres-writer-service.yaml
   - spread-skew-deployment.yaml
   - spread-skew-service.yaml
+  - reversal-confirmation-deployment.yaml
+  - reversal-confirmation-service.yaml
   - spread-skew-postgres-writer-deployment.yaml
   - spread-skew-postgres-writer-service.yaml
   - strike-liquidity-heatmap-deployment.yaml

@@ -10,6 +10,16 @@ resources:
   # scripts/ci/validate-services.sh render equivalence.
   - ../../services/web/base
 patches:
+  # reversal-confirmation is dev+production only (services.yaml envs) — the shared base
+  # would otherwise render it ON in experiment with the remote .252 image on an
+  # Apple-Silicon local cluster. Keep it OFF here (same pattern as other env-scoped services).
+  - target:
+      kind: Deployment
+      name: reversal-confirmation-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   - path: web-dev-env-patch.yaml
   # EXPERIMENT: give the k8s feed-gateway the .2 WS auth/origins/replay config, so the browser's live
   # WS (ws://localhost:18091, tunnel -> .2:8091) is accepted from the web origin http://localhost:18090.
