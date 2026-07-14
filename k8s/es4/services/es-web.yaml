@@ -95,11 +95,13 @@ spec:
           value: "https://es.fullfunding.nl"
         - name: VITE_REPLAY_ORCHESTRATOR_URL
           value: "https://es.fullfunding.nl"
-        # Per-strike delta-flow freshness TTL (ms). ES 0DTE overnight trades far more sparsely than SPX,
-        # so the 90s default blanks most strikes between prints. Raise it to keep a strike's last session
-        # flow visible ~10min; tune up if overnight coverage still looks thin. SPX keeps the 90s default.
+        # Per-strike delta-flow freshness TTL (ms). ES 0DTE overnight trades VERY sparsely (~a few prints
+        # per strike per session), so a short TTL blanks strikes between prints even though sessionNetDeltaFlow
+        # is a cumulative session total that stays valid all session. Raise to 4h so a strike's session flow
+        # stays visible through the long overnight gaps (10min was still too short). SPX keeps the 90s default
+        # (this env is es-web-only; SPX prod web never sets it).
         - name: DELTA_FLOW_STALE_MS
-          value: "600000"
+          value: "14400000"
         envFrom:
         - configMapRef:
             name: es4-base-env
