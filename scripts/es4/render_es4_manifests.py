@@ -105,6 +105,12 @@ ES_ENV = {
     # carries over from the prod slice and gets es.-prefixed to the es4 topics already flowing.
     "strike-intelligence": [
         {"name": "STRIKE_INTEL_INPUT_UNDERLYING_TOPIC", "value": "underlying.es.price", "_override": True},
+        # The static *_SCORE_SCALE divisors are SPX-calibrated (1e7/1e5/1e8); ES notional is 100-1000x
+        # smaller so every score collapses to ~0 and no role fires. Enable adaptive normalization
+        # (processing #337): volume/delta/gex are divided by a session-relative EWMA of recent active
+        # flow instead, so the fixed role thresholds keep selecting the strongest live strikes at ES
+        # magnitudes. Self-calibrating — no per-session scale numbers. SPX keeps the flag OFF (default).
+        {"name": "STRIKE_INTEL_ADAPTIVE_SCALE_ENABLED", "value": "true"},
     ],
 }
 
