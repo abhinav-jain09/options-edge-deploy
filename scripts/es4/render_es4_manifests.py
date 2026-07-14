@@ -39,6 +39,7 @@ SERVICES = [
     "directional-pressure", "gex-delta-redis-writer", "option-price-behavior", "pin-postgres-writer",
     "pressure-postgres-writer", "raw-to-display", "strike-flow-avro-adapter", "strike-flow-classifier",
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
+    "strike-intelligence",
 ]
 
 ES_ENV = {
@@ -96,6 +97,14 @@ ES_ENV = {
     "spread-skew-postgres-writer": [
         {"name": "SKEW_WRITER_CURRENT_TOPIC", "value": "options.es.spread-skew.current", "_override": True},
         {"name": "SKEW_WRITER_EVENTS_TOPIC", "value": "options.es.spread-skew.events", "_override": True},
+    ],
+    # strike-intelligence reads a latest-per-symbol spot PRICE topic (its underlying global store),
+    # not canonicalSpot. On es4 that is the compacted ES-future price the feed republishes
+    # (ES_PRICE_ENABLED -> es.underlying.es.price after the es. prefix), NOT the SPX cash topic.
+    # Every other input (strike-flow / delta-flow-by-strike / price-behavior / gex.flow.by-strike)
+    # carries over from the prod slice and gets es.-prefixed to the es4 topics already flowing.
+    "strike-intelligence": [
+        {"name": "STRIKE_INTEL_INPUT_UNDERLYING_TOPIC", "value": "underlying.es.price", "_override": True},
     ],
 }
 
