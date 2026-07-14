@@ -43,6 +43,22 @@ spec:
         app.kubernetes.io/name: es-feed-gateway
         app.kubernetes.io/part-of: options-edge
     spec:
+      # Durable fix for the boot-time "Timeout expired while fetching topic metadata" race: the gateway
+      # (k3s) can start before es4-kafka / schema-registry (docker-compose on the .4 HOST) are serving —
+      # e.g. after a host reboot where k3s comes up before the compose stack. Its Kafka consumers then
+      # time out on the first metadata fetch and recover only slowly (once left es.options.databento.gex.strike
+      # unsubscribed ~2h -> GEX blank on the ES UI). Gate startup on BOTH deps being ready so the first
+      # metadata fetch succeeds and every topic (incl. the 32-partition gex.strike) is subscribed at boot.
+      initContainers:
+      - name: wait-for-kafka-sr
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          until nc -z 192.168.100.4 9092; do echo "waiting for kafka 192.168.100.4:9092"; sleep 2; done
+          until wget -q -O /dev/null http://192.168.100.4:8081/subjects; do echo "waiting for schema-registry 192.168.100.4:8081"; sleep 2; done
+          echo "kafka + schema-registry reachable"
       containers:
       - name: feed-gateway
         image: 192.168.100.252:5000/options-edge-feed-gateway:prod
