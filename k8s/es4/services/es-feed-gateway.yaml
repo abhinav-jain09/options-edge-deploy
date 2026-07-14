@@ -50,14 +50,18 @@ spec:
       # unsubscribed ~2h -> GEX blank on the ES UI). Gate startup on BOTH deps being ready so the first
       # metadata fetch succeeds and every topic (incl. the 32-partition gex.strike) is subscribed at boot.
       initContainers:
+      # Reuse the gateway image (already present + digest-pinned by es4-deploy — a foreign image like
+      # busybox is NOT anchorable to a prod-registry sha256 and fail-closes the pin step). It ships
+      # bash + curl, so bash /dev/tcp checks the kafka broker port and curl checks SR /subjects (a 200
+      # implies kafka is up, since SR depends on it).
       - name: wait-for-kafka-sr
-        image: busybox:1.36
+        image: 192.168.100.252:5000/options-edge-feed-gateway:prod
         command:
-        - sh
+        - bash
         - -c
         - |
-          until nc -z 192.168.100.4 9092; do echo "waiting for kafka 192.168.100.4:9092"; sleep 2; done
-          until wget -q -O /dev/null http://192.168.100.4:8081/subjects; do echo "waiting for schema-registry 192.168.100.4:8081"; sleep 2; done
+          until (echo > /dev/tcp/192.168.100.4/9092) 2>/dev/null; do echo "waiting for kafka 192.168.100.4:9092"; sleep 2; done
+          until curl -sf -o /dev/null http://192.168.100.4:8081/subjects; do echo "waiting for schema-registry 192.168.100.4:8081"; sleep 2; done
           echo "kafka + schema-registry reachable"
       containers:
       - name: feed-gateway
