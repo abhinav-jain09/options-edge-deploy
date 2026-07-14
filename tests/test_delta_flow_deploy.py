@@ -48,17 +48,35 @@ class DeltaFlowDeployTest(unittest.TestCase):
         self.assertIn("add_service_scrape delta-flow-service 8110", monitoring)
 
     def test_es4_delta_flow_uses_native_side_and_it_is_es4_only(self):
-        # ES trades on GLBX/CME (true aggressor side): the rendered es4 delta-flow manifest MUST enable
-        # DELTA_FLOW_USE_NATIVE_SIDE, and it MUST be sourced from the renderer (not a hand-edit that the
-        # next render would erase).
+        # ES trades on GLBX/CME (true aggressor side, thin 0DTE). The rendered es4 delta-flow manifest MUST
+        # enable DELTA_FLOW_USE_NATIVE_SIDE=true and lower DELTA_FLOW_MIN_CONTRACTS=1, both sourced from the
+        # renderer (not hand-edits that the next render would erase). Assert the exact VALUES via YAML, and
+        # that the SPX/production slice overrides neither (es4-only; SPX is OPRA with an SPX-tuned floor).
+        import yaml
+
         renderer = (ROOT / "scripts" / "es4" / "render_es4_manifests.py").read_text()
-        es4_manifest = (ROOT / "k8s" / "es4" / "services" / "delta-flow.yaml").read_text()
         self.assertIn('{"name": "DELTA_FLOW_USE_NATIVE_SIDE", "value": "true"}', renderer)
-        self.assertIn("DELTA_FLOW_USE_NATIVE_SIDE", es4_manifest)
-        # es4-only: the SPX/production slice must NOT carry the flag (SPX is OPRA, no true side).
-        prod_slice = (ROOT / "k8s" / "services" / "delta-flow" / "overlays"
-                      / "production" / "manifest.yaml").read_text()
-        self.assertNotIn("DELTA_FLOW_USE_NATIVE_SIDE", prod_slice)
+        self.assertIn('{"name": "DELTA_FLOW_MIN_CONTRACTS", "value": "1"}', renderer)
+
+        es4_env = self._delta_flow_container_env(
+            ROOT / "k8s" / "es4" / "services" / "delta-flow.yaml", parser=yaml)
+        self.assertEqual("true", es4_env.get("DELTA_FLOW_USE_NATIVE_SIDE"))
+        self.assertEqual("1", es4_env.get("DELTA_FLOW_MIN_CONTRACTS"))
+
+        prod_env = self._delta_flow_container_env(
+            ROOT / "k8s" / "services" / "delta-flow" / "overlays" / "production" / "manifest.yaml", parser=yaml)
+        self.assertNotIn("DELTA_FLOW_USE_NATIVE_SIDE", prod_env)
+        self.assertNotIn("DELTA_FLOW_MIN_CONTRACTS", prod_env)
+
+    @staticmethod
+    def _delta_flow_container_env(manifest_path, parser):
+        """Return {envName: value} for the delta-flow Deployment's first container, from a YAML manifest."""
+        for doc in parser.safe_load_all(manifest_path.read_text()):
+            if not doc or doc.get("kind") != "Deployment":
+                continue
+            container = doc["spec"]["template"]["spec"]["containers"][0]
+            return {e["name"]: e.get("value") for e in container.get("env", [])}
+        raise AssertionError(f"no Deployment found in {manifest_path}")
 
 
 if __name__ == "__main__":
