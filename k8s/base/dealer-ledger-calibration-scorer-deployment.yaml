@@ -50,6 +50,14 @@ spec:
               value: "60000"
             - name: SCORER_SESSION_GRACE_MS
               value: "120000"
+            # Explicit heap so container-RAM growth is bounded + predictable (default was ~25% of the
+            # limit). The scorer replays the raw-spot backlog on restart, buffering a session's spot; that
+            # heap + RocksDB off-heap + the enlarged Kafka producer/consumer buffers OOMKilled the 1536Mi
+            # container in ~52s (exit 137, crash-loop). Raise the limit to 4Gi and pin -Xmx2560m, leaving
+            # ~1.5Gi for RocksDB/direct buffers/metaspace. The bounded-buffer code fix removes the root
+            # cause; this headroom is the belt-and-suspenders so a busy session can't OOM again.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms512m -Xmx2560m"
           livenessProbe:
             httpGet:
               path: /health/live
@@ -68,9 +76,9 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 512Mi
+              memory: 1Gi
             limits:
-              memory: 1536Mi
+              memory: 4Gi
       volumes:
         - name: kafka-streams-state
           emptyDir: {}
