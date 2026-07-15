@@ -9,13 +9,13 @@
 //   digest-pin → apply ONLY that workload → rollout each of its Deployments → health gate
 //   → rollback command in the log.
 //
-// Image builds: BUILD_IMAGES=true builds+pushes ONLY the selected service's image first
-// (options-edge-processing with BUILD_TARGET=<this service's image>, i.e. `mvn -pl <module> -am`
-// then build just that image — a few minutes, not the whole ~25-image reactor). Leave false to
-// deploy the image already in the env registry (the fastest path).
-// EXCEPTION databento-feed: its image builds in its OWN job
-// (options-edge-databento-feed-deploy) — run that first, then deploy here with
-// BUILD_IMAGES=false (the processing reactor has no feed module).
+// Image builds: BUILD_IMAGES=true builds+pushes ONLY the selected service's image first, then deploys.
+// Routing is by services.yaml `.buildJob`: most services build in the options-edge-processing Maven
+// reactor (BUILD_TARGET=<image>, `mvn -pl <module> -am` — a few minutes, not the whole ~25-image reactor);
+// feed-gateway and databento-feed build in their OWN repo jobs (option-edge-feed-gateway /
+// options-edge-databento-feed-deploy) — the reactor has no module for them, so service-deploy routes to
+// the buildJob (build+push only via DEPLOY_AND_VERIFY=false). Leave BUILD_IMAGES=false to deploy the image
+// already in the env registry (the fastest path).
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
@@ -30,7 +30,7 @@ pipeline {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
     booleanParam(name: 'BUILD_IMAGES', defaultValue: false,
-      description: 'Build+push ONLY the selected service\'s image first (options-edge-processing with BUILD_TARGET=<this service>, mvn -pl <module> -am — a few minutes, not the whole reactor). false = deploy the image already in the registry (fastest path).')
+      description: 'Build+push ONLY the selected service\'s image first, then deploy. Routes by services.yaml buildJob: the processing reactor (mvn -pl <module> -am) for most, or the service\'s own build job (feed-gateway, databento-feed). false = deploy the image already in the registry (fastest path).')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + server-side validate only; nothing changes.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
@@ -63,31 +63,52 @@ pipeline {
       steps {
         script {
           // Build ONLY the selected service's image (fast path), not the whole processing set.
-          // Resolve the service's image name from services.yaml and pass it as BUILD_TARGET; the
-          // processing job maps image->maven module and runs `mvn -pl <module> -am`, then builds+pushes
-          // just that image. SERVICE_PARAM is read by the shell (env), never Groovy-interpolated into the
-          // script text (injection-safe, matches the rest of these jobs).
-          // NOTE: databento-feed and feed-gateway have no processing module (they build in their own
-          // repos' jobs — options-edge-databento-feed-deploy and feed-gateway-deploy respectively);
-          // selecting either with BUILD_IMAGES=true fails fast in the processing job with the valid
-          // list. Build their image via the own-repo job first, then deploy here with BUILD_IMAGES=false.
-          def image = sh(
-            script: 'set -euo pipefail; yq -r ".services[] | select(.name == \\"$SERVICE_PARAM\\") | .image" services.yaml',
+          // MOST services build in the options-edge-processing Maven reactor (image->module,
+          // `mvn -pl <module> -am`, then build+push just that image). A few build in their OWN repo
+          // job — services.yaml records that as `buildJob` (feed-gateway -> option-edge-feed-gateway,
+          // databento-feed -> options-edge-databento-feed-deploy). The processing reactor has no module
+          // for those, so passing BUILD_TARGET=<their image> fails with "Unknown BUILD_TARGET". Route by
+          // the buildJob field. SERVICE_PARAM is read by the shell (env), never Groovy-interpolated
+          // (injection-safe, matches the rest of these jobs).
+          def buildJob = sh(
+            script: 'set -euo pipefail; yq -r ".services[] | select(.name == \\"$SERVICE_PARAM\\") | .buildJob // \\"\\"" services.yaml',
             returnStdout: true
           ).trim()
-          if (!image || image == 'null') {
-            error("service-deploy: could not resolve an image for SERVICE='${env.SERVICE_PARAM}' from services.yaml")
+          if (buildJob && buildJob != 'null') {
+            // Own-repo build job. DEPLOY_AND_VERIFY=false = build+push ONLY — CRITICAL: with the default
+            // (true) those jobs trigger service-deploy to roll+verify the dev pod, which would recurse
+            // back into THIS job. The Deploy stage below does the rollout. The child derives its registry
+            // + platform from ENVIRONMENT (oeProfile for the registry, arch per env) and defaults its
+            // REMOTE_BUILD_* to .252, so only ENVIRONMENT + the two build-only knobs are passed — both
+            // reachable buildJobs (option-edge-feed-gateway, options-edge-databento-feed-deploy) declare
+            // all three. (Minor: the databento job still refreshes its dev replay venv — harmless.)
+            echo "Building ${env.SERVICE_PARAM} via its own build job '${buildJob}' (build+push only)"
+            build job: buildJob,
+                  parameters: [
+                    string(name: 'ENVIRONMENT',         value: params.ENVIRONMENT),
+                    booleanParam(name: 'PUSH_IMAGE',        value: true),
+                    booleanParam(name: 'DEPLOY_AND_VERIFY', value: false)
+                  ],
+                  wait: true, propagate: true
+          } else {
+            def image = sh(
+              script: 'set -euo pipefail; yq -r ".services[] | select(.name == \\"$SERVICE_PARAM\\") | .image" services.yaml',
+              returnStdout: true
+            ).trim()
+            if (!image || image == 'null') {
+              error("service-deploy: could not resolve an image for SERVICE='${env.SERVICE_PARAM}' from services.yaml")
+            }
+            echo "Building ONLY ${env.SERVICE_PARAM} -> BUILD_TARGET=${image}"
+            build job: 'options-edge-processing',
+                  parameters: [
+                    string(name: 'ENVIRONMENT',        value: params.ENVIRONMENT),
+                    string(name: 'BUILD_TARGET',       value: image),
+                    string(name: 'PROCESSING_BRANCH',  value: 'main'),
+                    string(name: 'CONTRACTS_BRANCH',   value: 'main'),
+                    booleanParam(name: 'PUSH_IMAGES',  value: true)
+                  ],
+                  wait: true, propagate: true
           }
-          echo "Building ONLY ${env.SERVICE_PARAM} -> BUILD_TARGET=${image}"
-          build job: 'options-edge-processing',
-                parameters: [
-                  string(name: 'ENVIRONMENT',        value: params.ENVIRONMENT),
-                  string(name: 'BUILD_TARGET',       value: image),
-                  string(name: 'PROCESSING_BRANCH',  value: 'main'),
-                  string(name: 'CONTRACTS_BRANCH',   value: 'main'),
-                  booleanParam(name: 'PUSH_IMAGES',  value: true)
-                ],
-                wait: true, propagate: true
         }
       }
     }

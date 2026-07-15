@@ -38,7 +38,7 @@ services:
   # --- monolith (deployed by options-edge-deploy; migrate in batches) ------------------
   - { name: databento-feed,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-feed,               deployments: [options-edge-databento-feed], buildJob: options-edge-databento-feed-deploy }
   - { name: ibkr-feed,                    managedBy: monolith, image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service] }
-  - { name: feed-gateway,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-feed-gateway,                 deployments: [feed-gateway-service], buildJob: feed-gateway-deploy }
+  - { name: feed-gateway,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-feed-gateway,                 deployments: [feed-gateway-service], buildJob: option-edge-feed-gateway }
   - { name: raw-to-display,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-to-display,               deployments: [raw-to-display-service, raw-to-display-databento-service] }
   - { name: databento-volume-aggregator,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-volume-aggregator,  deployments: [databento-volume-aggregator] }
   - { name: databento-gex,                managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-gex,                deployments: [databento-gex-service] }
