@@ -79,6 +79,18 @@ patches:
         value:
           name: STRIKE_INTEL_ACK_UNTRUSTED_GEX
           value: "true"
+  # PROD-ONLY: §7a conflict bypass needs only 2-of-4 fresh agreement to clear a non-opposed
+  # (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; opposed runner-ups still veto regardless (PR #462).
+  # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/production (validate-services).
+  - target:
+      kind: Deployment
+      name: strike-intelligence-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
+          value: "2"
   # PROD: option-price-behavior V2 heap 3g + limit 5Gi (base 2g/2Gi OOMKilled —
   # heap == limit, no off-heap room). Re-enabled after the 2026-07-07 freeze.
   - path: short-premium-prod-env-patch.yaml
