@@ -2,7 +2,11 @@
 # limit (2Gi) == JVM heap (-Xmx2g), leaving ZERO room for Kafka-Streams RocksDB
 # off-heap + JVM overhead. Give the heap headroom AND off-heap headroom on prod:
 #   heap  -Xmx3g   (was 2g)
-#   limit 5Gi      (was 2Gi)  -> ~2Gi for off-heap/overhead above the heap
+#   limit 8Gi      (2026-07-15, per USER: OOMKilled again mid-RTH at ~5.2GB RSS with
+#                   limit 5Gi — RocksDB off-heap alone outgrew the ~2Gi that 5Gi left
+#                   above the 3g heap. Heap stays 3g: it was NOT the constraint, and a
+#                   bigger heap would only eat the new off-heap headroom. Host peers
+#                   already run 8-9Gi limits.)
 # dev/experiment keep the base 2g/their own limits. Re-enabled (replicas back to
 # base 1) after the 2026-07-07 freeze incident, per USER (heap 3g / limit 5Gi).
 #
@@ -41,6 +45,6 @@ spec:
               value: "true"
           resources:
             limits:
-              memory: 5Gi
+              memory: 8Gi
             requests:
               cpu: "1"
