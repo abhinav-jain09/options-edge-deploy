@@ -27,11 +27,12 @@ spec:
             # container env beats the shared configmap's envFrom value AND service-deploy rolls the
             # pod, so activation is deterministic (the common-infra configmap path neither restarts
             # the feed nor is currently unblocked). Prod stays SYNTHETIC (deliberate) — untouched.
-            # 2026-07-15: temporarily back to SYNTHETIC — CASCADED's per-ES-tick snapshot
-            # refresh (348 publishes + blocking flush inside _book_lock, gate only 0.05 spot
-            # delta) starves the OPRA read loop; dev tcbbo fell 30+ min behind and delta-flow
-            # rejected everything as stale. Re-flip to CASCADED once the feed ships a throttled
-            # refresh (min-interval + no per-tick flush).
+            # 2026-07-15: SYNTHETIC is the STANDING dev state (user directive) — do not
+            # re-flip to CASCADED. CASCADED's per-ES-tick snapshot refresh (348 publishes +
+            # blocking flush inside _book_lock, gate only 0.05 spot delta) starved the OPRA
+            # read loop; dev tcbbo fell 30+ min behind and delta-flow rejected everything as
+            # stale. If CASCADED is ever wanted again, land feed PR #69 (refresh throttle)
+            # first.
             - name: DATABENTO_SPOT_SOURCE
               value: SYNTHETIC
             # VIX-via-OPRA-parity, MIRRORS the prod enablement (feed
