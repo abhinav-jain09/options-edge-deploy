@@ -73,13 +73,10 @@ spec:
             # however, computes feedGatewayAvailable by probing APP_FEED_GATEWAY_HEALTH_URL — and a
             # pod must NOT health-check itself by round-tripping out to the public wss://fullfunding.nl
             # and back (fragile: depends on egress + Cloudflare + DNS just to know the in-cluster
-            # gateway is up). In a real cluster the gateway Service is directly pod-reachable, so probe
-            # it in-cluster. Without this, APP_FEED_GATEWAY_HEALTH_URL defaults to the browser WS URL
-            # (the public edge) — the exact browser-vs-pod conflation that broke dev. Dev overrides this
-            # to ws://localhost:8080 (docker-desktop pods can't reach the gateway); prod uses the real
-            # in-cluster Service for a genuine probe.
+            # gateway is up). The gateway Service is directly pod-reachable, so probe its stable
+            # cluster DNS name rather than hairpinning through the node's external address.
             - name: APP_FEED_GATEWAY_HEALTH_URL
-              value: "http://192.168.100.252:8091/health"
+              value: "http://feed-gateway-service:8091/health"
             - name: VITE_API_BASE_URL
               value: "https://fullfunding.nl"
             - name: VITE_MISSION_CONTROL_URL

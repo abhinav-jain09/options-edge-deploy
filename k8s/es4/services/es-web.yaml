@@ -84,9 +84,10 @@ spec:
           value: "wss://es.fullfunding.nl/ws/events"
         - name: VITE_WS_URL
           value: "wss://es.fullfunding.nl/ws/events"
-        # Server-to-server gateway health stays on the in-cluster LAN address (both pods on .4).
+        # Server-to-server health uses Kubernetes Service DNS. Avoid the node NodePort hairpin: a brief
+        # 500 ms failure there falsely returned feedGatewayAvailable=false and reset the browser board.
         - name: APP_FEED_GATEWAY_HEALTH_URL
-          value: "http://192.168.100.4:30091/health"
+          value: "http://es-feed-gateway:18091/health"
         - name: VITE_API_BASE_URL
           value: "https://es.fullfunding.nl"
         # Required-in-prod by RuntimeProfileConfig.validate(). No mission-control/replay backend runs
