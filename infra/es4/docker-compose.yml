@@ -41,7 +41,13 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
-      KAFKA_NUM_PARTITIONS: 4                      # org 4-partition policy
+      KAFKA_NUM_PARTITIONS: 32                     # es4 is 32-partition (NOT the org 4): every es4 data topic is
+                                                   # created at 32, so the broker default MUST also be 32. Otherwise a
+                                                   # topic the broker auto-creates (auto.create.topics.enable=true) —
+                                                   # e.g. a Streams repartition/changelog referenced before Streams'
+                                                   # AdminClient creates it, which happens after a clean-reset wipe —
+                                                   # gets the default and comes up at the wrong count, causing
+                                                   # "invalid partitions: expected 32; actual 4" topology failures.
       KAFKA_LOG_RETENTION_MS: 43200000             # 12h org retention policy
       KAFKA_LOG_SEGMENT_BYTES: 268435456           # 256MB segments (changelog-segment-I/O lesson: never 1GB)
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
