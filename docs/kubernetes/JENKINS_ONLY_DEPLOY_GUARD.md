@@ -172,7 +172,7 @@ Confirm a non-Jenkins user cannot modify a Secret:
 
 ```bash
 kubectl --kubeconfig /home/options-edge/config/kubeconfig \
-  -n options-edge patch secret options-edge-secrets \
+  -n options-edge patch secret options-edge-runtime-secrets \
   --type merge \
   --patch '{"metadata":{"annotations":{"manual-secret-test":"blocked"}}}'
 ```

@@ -156,29 +156,7 @@ data:
   # -v2: see databento-volume-aggregator-deployment.yaml — fresh namespace so the redeploy-resets-volume
   # fix lands without a manual Kafka reset. Keep in sync with the deployment env of the same name.
   KAFKA_DATABENTO_VOLUME_AGGREGATOR_APP_ID: options-flow-databento-volume-aggregator-v2
-  KAFKA_UNUSUAL_WHALES_GEX_TOPIC: options.ibkr.unusualwhales.gex.strike
-  KAFKA_UNUSUAL_WHALES_GEX_HISTORY_TOPIC: options.ibkr.unusualwhales.gex.strike.history
-  KAFKA_IBKR_UNUSUAL_WHALES_GEX_TOPIC: options.ibkr.unusualwhales.gex.strike
-  KAFKA_IBKR_UNUSUAL_WHALES_GEX_HISTORY_TOPIC: options.ibkr.unusualwhales.gex.strike.history
-  KAFKA_UNUSUAL_WHALES_GEX_HISTORY_STREAMS_APP_ID: options-flow-uw-gex-history-streams-v1
-  KAFKA_UNUSUAL_WHALES_GEX_HISTORY_STREAMS_NUM_THREADS: "1"
   KAFKA_STREAMS_STATE_DIR: /var/lib/options-edge/kafka-streams
-  UNUSUAL_WHALES_ENABLED: "true"
-  UNUSUAL_WHALES_BASE_URL: https://api.unusualwhales.com
-  UNUSUAL_WHALES_POLL_SECONDS: "60"
-  UNUSUAL_WHALES_STALE_AFTER_MS: "90000"
-  UNUSUAL_WHALES_SYMBOL: SPX
-  UNUSUAL_WHALES_EXPIRY: ""
-  UNUSUAL_WHALES_CONTROL_GROUP_ID: unusual-whales-gex-service-control
-  UNUSUAL_WHALES_QUIET_HOURS_ENABLED: "true"
-  UNUSUAL_WHALES_QUIET_START: "22:00"
-  UNUSUAL_WHALES_QUIET_END: "02:00"
-  UNUSUAL_WHALES_QUIET_ZONE: Europe/Amsterdam
-  UNUSUAL_WHALES_WEEKEND_PAUSE_ENABLED: "false"
-  UNUSUAL_WHALES_ES_CALENDAR_PAUSE_ENABLED: "true"
-  UNUSUAL_WHALES_ES_SESSION_ZONE: America/New_York
-  UNUSUAL_WHALES_ES_FULL_CLOSE_DATES: ""
-  UNUSUAL_WHALES_ES_EARLY_CLOSES: ""
   POSTGRES_ENABLED: "true"
   POSTGRES_JDBC_URL: jdbc:postgresql://192.168.100.252:5432/options_flow
   POSTGRES_USER: options_flow

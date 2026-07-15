@@ -79,7 +79,7 @@ Validate
 Resolve Databento Expiry
 Bootstrap Jenkins Kubernetes Guard
 Render
-Unusual Whales Secret
+Secrets
 Keycloak Secret
 Resolve Images
 Image Preflight

@@ -70,7 +70,7 @@ Keycloak, ops CronJob):
    approval gate** — review the diff from stage 1 before clicking *Apply to production*.
 
 ⚠️ The shared ConfigMaps re-apply from git: runtime-patched keys (`IB_EXPIRY`,
-`DATABENTO_EXPIRY`, `KAFKA_RAW_TOPIC`, `UNUSUAL_WHALES_EXPIRY`) reset to manifest
+`DATABENTO_EXPIRY`, `KAFKA_RAW_TOPIC`) reset to manifest
 values until the next monolithic deploy re-patches them. Prefer off-hours.
 
 ---

@@ -61,7 +61,7 @@ services.yaml                 # SERVICE REGISTRY — single source of truth
 
 * `common-infra-deploy` re-applies the shared ConfigMaps from git. Keys that the
   monolithic deploy patches at RUNTIME (`IB_EXPIRY`, `KAFKA_RAW_TOPIC`,
-  `DATABENTO_EXPIRY`, `UNUSUAL_WHALES_EXPIRY`, bootstrap/schema-registry URLs) will
+  `DATABENTO_EXPIRY`, bootstrap/schema-registry URLs) will
   reset to their static manifest values — the dry-run diff shows exactly this before
   you approve. Off-hours this is harmless (the next monolithic deploy re-patches);
   during market hours prefer deferring infra applies.

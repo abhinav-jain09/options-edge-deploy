@@ -53,7 +53,6 @@ pipeline {
     string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', defaultValue: '', description: 'GEX delta Redis writer image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
     string(name: 'SHORT_PREMIUM_AGENT_IMAGE', defaultValue: '', description: 'short-premium-agent image (dev+prod)')
-    string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-unusual-whales-api-key', description: 'Jenkins secret-text credential containing the Unusual Whales API key')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
     string(name: 'ANTHROPIC_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-anthropic-api-key', description: 'Jenkins secret-text credential containing the Anthropic API key (short-premium-agent SP_BACKEND=sdk)')
     string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-db-password', description: 'Jenkins secret-text credential with the prod Keycloak DB password (oe-keycloak-secrets POSTGRES_PASSWORD)')
@@ -228,7 +227,7 @@ pipeline {
         sh 'kubectl kustomize k8s/overlays/${ENVIRONMENT} >"$JENKINS_WORK_DIR/options-edge-${ENVIRONMENT}.yaml"'
       }
     }
-    stage('Unusual Whales Secret') {
+    stage('Secrets') {
       steps {
         script {
           // The smoke dummy-user password is OPTIONAL: if its credential is not yet
@@ -236,13 +235,11 @@ pipeline {
           // stage (and the deploy) doesn't break — only the synthetic auth check
           // fails until the credential exists. Bind it when present; otherwise skip.
           def baseBindings = [
-            string(credentialsId: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID, variable: 'UNUSUAL_WHALES_API_KEY'),
             string(credentialsId: env.DATABENTO_API_KEY_CREDENTIAL_ID_EFFECTIVE, variable: 'DATABENTO_API_KEY')
           ]
           def applySecrets = {
             sh '''
               set -euo pipefail
-              test -n "$UNUSUAL_WHALES_API_KEY"
               test -n "$DATABENTO_API_KEY"
               apply_args=""
               if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then
@@ -250,12 +247,8 @@ pipeline {
                 echo "DEPLOY_DRY_RUN=true: validating secret manifests without changing Kubernetes."
               fi
               kubectl create namespace options-edge --dry-run=client -o yaml | kubectl apply $apply_args -f -
-              kubectl -n options-edge create secret generic options-edge-secrets \
-                --from-literal=unusual-whales-api-key="$UNUSUAL_WHALES_API_KEY" \
-                --dry-run=client -o yaml | kubectl apply $apply_args -f -
               kubectl -n options-edge create secret generic options-edge-runtime-secrets \
                 --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-Options#100}" \
-                --from-literal=UNUSUAL_WHALES_API_KEY="$UNUSUAL_WHALES_API_KEY" \
                 --from-literal=SMOKE_AUTH_PASSWORD="${SMOKE_AUTH_PASSWORD:-}" \
                 --from-literal=ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
                 --dry-run=client -o yaml | kubectl apply $apply_args -f -
@@ -746,7 +739,6 @@ void promoteToProduction() {
       'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
       'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE',
     ].collect { _n -> string(name: _n, value: params[_n]) } + [
-      string(name: 'UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID', value: params.UNUSUAL_WHALES_API_KEY_CREDENTIAL_ID),
       string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
       string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID),
       string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID),
