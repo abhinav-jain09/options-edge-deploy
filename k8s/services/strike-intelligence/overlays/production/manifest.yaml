@@ -90,15 +90,16 @@ spec:
               value: "true"
             - name: STRIKE_INTEL_ACTION_BIAS_ENABLED
               value: "true"
-            # §7a conflict bypass: 2-of-4 fresh agreement is enough to clear a
-            # non-opposed (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; the engine still
-            # vetoes on any directionally-opposed runner-up regardless of this knob.
-            - name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
-              value: "2"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms512m -Xmx2048m
             - name: STRIKE_INTEL_ACK_UNTRUSTED_GEX
               value: "true"
+            # §7a conflict bypass: 2-of-4 fresh agreement is enough to clear a
+            # non-opposed (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; the engine still
+            # vetoes on any directionally-opposed runner-up regardless of this knob.
+            # MUST MIRROR the mono patch in k8s/overlays/production/kustomization.yaml.
+            - name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
+              value: "2"
           envFrom:
             - configMapRef:
                 name: options-edge-config
