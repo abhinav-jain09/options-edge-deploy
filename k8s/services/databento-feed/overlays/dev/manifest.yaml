@@ -58,8 +58,6 @@ spec:
         - env:
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "1000"
-            # 2026-07-15: SYNTHETIC is the STANDING dev state (user directive; no CASCADED
-            # re-flip) — see k8s/overlays/dev/databento-feed-dev-patch.yaml for the writeup.
             - name: DATABENTO_SPOT_SOURCE
               value: SYNTHETIC
             - name: DATABENTO_EXTRA_INSTRUMENTS

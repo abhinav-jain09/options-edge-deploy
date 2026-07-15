@@ -33,6 +33,19 @@ patches:
   # DEV-ONLY: delta-flow greek lookahead tolerance 3000ms (code default 0ms rejects 100% of trades
   # against dev's thin greek surface — see the patch header). Prod untouched.
   - path: delta-flow-dev-env-patch.yaml
+  # strike-intelligence §7a conflict bypass: 2-of-4 fresh agreement clears a non-opposed
+  # (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; opposed runner-ups still veto regardless. Dev/prod
+  # parity with the production overlay (PRs #462/#463 — engine default stays 3).
+  # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/dev (validate-services).
+  - target:
+      kind: Deployment
+      name: strike-intelligence-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
+          value: "2"
   # The base web Deployment pins itself to the prod control-plane node
   # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
   # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,
