@@ -30,6 +30,9 @@ patches:
   - path: databento-feed-dev-patch.yaml
   # DEV-ONLY: dealer-ledger aggressive candidate V1 (ABSORB_MIN_FRACTION=0.50). Prod untouched.
   - path: dealer-ledger-dev-env-patch.yaml
+  # DEV-ONLY: delta-flow greek lookahead tolerance 3000ms (code default 0ms rejects 100% of trades
+  # against dev's thin greek surface — see the patch header). Prod untouched.
+  - path: delta-flow-dev-env-patch.yaml
   # The base web Deployment pins itself to the prod control-plane node
   # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
   # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,
