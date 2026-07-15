@@ -38,16 +38,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd || echo "$SCRIPT_DIR/../jenkins")}"
 
 # INTENTIONAL keep-at-0 set (enforced DOWN each morning). Space-separated.
-#   7 declared replicas:0 in the prod overlay:
+#   declared replicas:0 in the prod overlay:
 #     hpsf-stage-a-service, hpsf-stage-b-service,
-#     unusual-whales-gex-service, unusual-whales-gex-history-service,
 #     volume-sandwich-service, volume-sandwich-databento-service
 #   4 USER-directed off (also set replicas:0 in the prod overlay): volume-pace-service
 #   (IBKR variant), strike-flow-classifier-ibkr (IBKR out of scope),
 #   options-edge-integration-test (no continuous tests in prod), spx-mission-control-service
 #   (2026-07-09 USER: keep OFF on prod; databento-mission-sandwich-service stays UP),
 #   ibkr-feed-service (2026-07-09 USER: VIX moved to dev, prod no longer needs the IBKR VIX source).
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service unusual-whales-gex-service unusual-whales-gex-history-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service ibkr-feed-service}"
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service ibkr-feed-service}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only

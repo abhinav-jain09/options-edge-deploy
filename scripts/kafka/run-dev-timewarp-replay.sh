@@ -153,7 +153,7 @@ restore_deployments() {
       options-edge-web|feed-gateway-service|options-edge-redis|raw-to-display-databento-service|databento-gex-service|databento-gex-history-service|gex-delta-redis-writer|option-price-behavior-service|strike-liquidity-heatmap-service|databento-mission-pace-service|databento-mission-pressure-service|databento-mission-sandwich-service|spx-mission-control-service|strike-flow-classifier-databento|strike-flow-avro-adapter|delta-flow-service|directional-pressure-databento-service|unified-sr-service)
         replicas=1
         ;;
-      *hpsf*|unusual-whales-*|strike-flow-classifier-ibkr|volume-pace-service|volume-sandwich-service)
+      *hpsf*|strike-flow-classifier-ibkr|volume-pace-service|volume-sandwich-service)
         replicas=0
         ;;
     esac

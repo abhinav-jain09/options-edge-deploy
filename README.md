@@ -87,7 +87,7 @@ Expected dev stage order:
 1. `Validate`
 2. `Bootstrap Jenkins Kubernetes Guard`
 3. `Render`
-4. `Unusual Whales Secret`
+4. `Secrets`
 5. `Resolve Images`
 6. `Image Preflight`
 7. Optional Kafka cleanup stages, only when cleanup flags are enabled

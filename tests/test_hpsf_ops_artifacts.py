@@ -221,9 +221,7 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
     def test_base_configmap_does_not_pin_expired_option_date(self) -> None:
         config = self.read("k8s/infra/base/configmap.yaml")
         self.assertIn('IB_EXPIRY: ""', config)
-        self.assertIn('UNUSUAL_WHALES_EXPIRY: ""', config)
         self.assertNotIn('IB_EXPIRY: "20260615"', config)
-        self.assertNotIn('UNUSUAL_WHALES_EXPIRY: "20260615"', config)
 
     def test_main_smoke_skips_live_ui_checks_outside_market_hours(self) -> None:
         script = self.read("scripts/smoke/check-k8s-services.sh")

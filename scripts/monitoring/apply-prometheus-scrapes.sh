@@ -89,7 +89,7 @@ EOF
 
 # Every deployed service that exposes an /metrics HTTP endpoint (app.kafka.ProcessingMetrics).
 # add_service_scrape skips gracefully if a service is absent, so entries for services that are
-# currently disabled/removed (mission-pressure, volume-pace, volume-sandwich, unusual-whales-gex)
+# currently disabled/removed (mission-pressure, volume-pace, volume-sandwich)
 # are harmless — they light up automatically if the service comes back.
 add_service_scrape raw-to-display-service 8080
 add_service_scrape options-edge-databento-feed 8010
@@ -100,7 +100,6 @@ add_service_scrape databento-mission-sandwich-service 8099
 add_service_scrape volume-pace-service 8080
 add_service_scrape directional-pressure-service 8080
 add_service_scrape volume-sandwich-service 8080
-add_service_scrape unusual-whales-gex-service 8080
 add_service_scrape raw-postgres-writer 8080
 add_service_scrape pressure-postgres-writer 8080
 add_service_scrape hpsf-postgres-writer-service 8080

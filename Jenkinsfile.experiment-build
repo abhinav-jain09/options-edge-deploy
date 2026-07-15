@@ -123,8 +123,6 @@ bp options-edge-volume-pace                 volume-pace-service/Dockerfile      
 bp options-edge-directional-pressure        directional-pressure-service/Dockerfile          directional-pressure-service         $P
 bp options-edge-strike-flow-classifier      strike-flow-classifier-service/Dockerfile        strike-flow-classifier-service       $P
 bp options-edge-volume-sandwich             volume-sandwich-service/Dockerfile               volume-sandwich-service              $P
-bp options-edge-unusual-whales-gex          unusual-whales-gex-service/Dockerfile            unusual-whales-gex-service           $P
-bp options-edge-unusual-whales-gex-history  unusual-whales-gex-history-service/Dockerfile    unusual-whales-gex-history-service   $P
 bp options-edge-raw-postgres-writer         raw-postgres-writer/Dockerfile                   raw-postgres-writer                  $P
 bp options-edge-pressure-postgres-writer    pressure-postgres-writer/Dockerfile              pressure-postgres-writer             $P
 bp options-edge-pin-postgres-writer         pin-postgres-writer/Dockerfile                   pin-postgres-writer                  $P
