@@ -18,3 +18,14 @@ spec:
           env:
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "1000"
+            # DEV-ONLY spot cascade: native SPX index (unwired stub) -> ES-basis (cost-of-carry from
+            # the ES front-month) -> synthetic put-call parity fallback (60s ES freshness gate). In
+            # practice ES-basis -> synthetic. Reuses the ES trade stream already ingested via base's
+            # DATABENTO_HPSF_ES_TRADES_ENABLED=true; no code change (CascadedSpotProvider shipped in
+            # options-edge-databento-feed PR #41). Set as a Deployment env override (NOT the infra
+            # configmap) so it is the reliable, deploy-durable knob applied by service-deploy — the
+            # container env beats the shared configmap's envFrom value AND service-deploy rolls the
+            # pod, so activation is deterministic (the common-infra configmap path neither restarts
+            # the feed nor is currently unblocked). Prod stays SYNTHETIC (deliberate) — untouched.
+            - name: DATABENTO_SPOT_SOURCE
+              value: CASCADED
