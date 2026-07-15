@@ -56,6 +56,9 @@ ES_ENV = {
     # spx-rth calendar wrongly forced the pace board + spot model to SESSION_IDLE outside 09:30-16:15 ET.
     "volume-pace": [
         {"name": "PACE_SESSION_CALENDAR", "value": "es-globex"},
+        # ES overnight per-strike updates arrive in bursts minutes apart; the SPX-tuned 15s staleness
+        # gate flags the board STALE between bursts and blanks the graph. 120s matches Globex cadence.
+        {"name": "PACE_STALE_MS", "value": "120000"},
     ],
     "delta-flow": [
         {"name": "DELTA_FLOW_DEFAULT_CONTRACT_MULTIPLIER", "value": "50"},

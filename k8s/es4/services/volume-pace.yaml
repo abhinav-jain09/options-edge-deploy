@@ -50,6 +50,8 @@ spec:
           value: '300000'
         - name: PACE_SESSION_CALENDAR
           value: es-globex
+        - name: PACE_STALE_MS
+          value: '120000'
         envFrom:
         - configMapRef:
             name: es4-base-env
