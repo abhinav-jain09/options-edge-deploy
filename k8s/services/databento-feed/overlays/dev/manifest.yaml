@@ -58,8 +58,10 @@ spec:
         - env:
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "1000"
+            # 2026-07-15: temporarily back to SYNTHETIC — see k8s/overlays/dev/
+            # databento-feed-dev-patch.yaml for the CASCADED starvation writeup.
             - name: DATABENTO_SPOT_SOURCE
-              value: CASCADED
+              value: SYNTHETIC
             - name: DATABENTO_EXTRA_INSTRUMENTS
               value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
