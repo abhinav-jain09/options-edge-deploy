@@ -1,0 +1,20 @@
+# DEV-ONLY delta-flow greek lookahead tolerance (2026-07-15). The validator default is 0ms
+# (DeltaFlowSettings: DELTA_FLOW_GREEK_LOOKAHEAD_TOLERANCE_MS), which requires a greek in
+# [tradeTime-5s, tradeTime] exactly. Prod's dense OPRA stream keeps ~170 strikes' greeks fresh so
+# enough trades pass; dev's thin feed (~15 strikes in the surface, sparse refresh) made the window
+# unsatisfiable — 0 of 13k trades accepted since the service was brought up, every delta-flow output
+# topic empty. 3000ms lets a trade use a greek computed up to 3s AFTER it, which is acceptable
+# lookahead for dev visibility while keeping the 5s staleness bound. Prod overlay untouched.
+# env merges by name over the base.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: delta-flow-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: delta-flow
+          env:
+            - { name: DELTA_FLOW_GREEK_LOOKAHEAD_TOLERANCE_MS, value: "3000" }
