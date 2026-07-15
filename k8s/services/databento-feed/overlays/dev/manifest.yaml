@@ -60,12 +60,14 @@ spec:
               value: "1000"
             - name: DATABENTO_SPOT_SOURCE
               value: CASCADED
+            - name: DATABENTO_EXTRA_INSTRUMENTS
+              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
+            - name: DATABENTO_VIX_PRICE_ENABLED
+              value: "true"
             - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
               value: "15"
             - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
               value: "90"
-            - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: ""
           envFrom:
             - configMapRef:
                 name: options-edge-databento-feed-config

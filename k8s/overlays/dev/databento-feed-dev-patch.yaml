@@ -29,3 +29,15 @@ spec:
             # the feed nor is currently unblocked). Prod stays SYNTHETIC (deliberate) — untouched.
             - name: DATABENTO_SPOT_SOURCE
               value: CASCADED
+            # VIX-via-OPRA-parity, MIRRORS the prod enablement (feed
+            # docs/vix-opra-parity-price/DESIGN.md v11, PR #65; prod enablement
+            # deploy PR #456; USER directive 2026-07-15: enable on dev as well).
+            # Same AUTO_VIX_MONTHLY instrument on the same OPRA session; the dev
+            # feed publishes underlying.vix.price to the DEV broker where the dev
+            # feed-gateway consumes it (KAFKA_IBKR_VIX_PRICE_TOPIC default), so
+            # the dev option-chain VixPriceCard lights up like prod's.
+            # Rollback = set "" / false here and redeploy.
+            - name: DATABENTO_EXTRA_INSTRUMENTS
+              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
+            - name: DATABENTO_VIX_PRICE_ENABLED
+              value: "true"
