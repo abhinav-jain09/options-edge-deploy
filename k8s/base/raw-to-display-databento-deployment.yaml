@@ -34,8 +34,12 @@ spec:
           env:
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
+            # Volume-normalized snapshots from databento-volume-aggregator (same OPTION_STRIKE_SNAPSHOT
+            # schema as options.databento.raw, call/put volume merged with the restart-proof aggregate
+            # state) — so displayed volume survives databento-feed restarts instead of zeroing to
+            # SINCE_SERVICE_START. Mirrors volume-pace / directional-pressure, which already read this topic.
             - name: KAFKA_RAW_TOPIC
-              value: options.databento.raw
+              value: options.databento.normalized
             - name: KAFKA_DISPLAY_TOPIC
               value: options.databento.display
             - name: KAFKA_DISPLAY_VOLUME_TOPIC
