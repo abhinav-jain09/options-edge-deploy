@@ -46,8 +46,15 @@ ES_ENV = {
     "databento-gex": [
         {"name": "DATABENTO_GEX_RISK_FREE_RATE", "value": "0.04"},
         {"name": "DATABENTO_GEX_DIVIDEND_YIELD", "value": "0.04"},   # q=r -> Black-76 on the future
+        # OI on ES rides live in the feed (GLBX statistics stat_type=9 -> openInterest on every record),
+        # NOT via the OPRA/OSI REST fetch (which can't parse CME symbols) -> keep the direct fetch OFF.
         {"name": "DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED", "value": "false"},
-        {"name": "DATABENTO_GEX_OI_BASELINE_BACKFILL_ENABLED", "value": "false"},
+        # ...but the feed holds that OI only in RAM, so a feed restart drops it to 0 (=> blank GEX) until the
+        # next daily publication. PERSIST the live OI to Postgres (databento_option_raw_snapshot) as it is
+        # observed, and BACKFILL from it when a later snapshot arrives with OI=0. Together these make ES GEX
+        # restart-durable using the same DB path SPX uses, without the GLBX symbology adapter.
+        {"name": "DATABENTO_GEX_OI_BASELINE_BACKFILL_ENABLED", "value": "true"},
+        {"name": "DATABENTO_GEX_OI_PERSIST_LIVE_ENABLED", "value": "true"},
     ],
     "strike-flow-classifier": [
         {"name": "STRIKE_FLOW_CONTRACT_MULTIPLIER", "value": "50"},

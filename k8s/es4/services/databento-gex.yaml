@@ -87,7 +87,9 @@ spec:
         - name: DATABENTO_GEX_DIVIDEND_YIELD
           value: '0.04'
         - name: DATABENTO_GEX_OI_BASELINE_BACKFILL_ENABLED
-          value: 'false'
+          value: 'true'
+        - name: DATABENTO_GEX_OI_PERSIST_LIVE_ENABLED
+          value: 'true'
         envFrom:
         - configMapRef:
             name: es4-base-env
