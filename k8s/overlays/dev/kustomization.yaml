@@ -46,6 +46,18 @@ patches:
         value:
           name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
           value: "2"
+  # strike-intelligence action band LOW — dev/prod parity with the production trial (PR #472):
+  # LOW-band (conf 0.25-0.50) directional roles emit BUY/SELL LEAN instead of gating to NONE.
+  # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/dev (validate-services).
+  - target:
+      kind: Deployment
+      name: strike-intelligence-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_ACTION_BIAS_MIN_BAND
+          value: LOW
   # The base web Deployment pins itself to the prod control-plane node
   # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
   # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,
