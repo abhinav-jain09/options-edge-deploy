@@ -1,11 +1,12 @@
-// ES PRE-OPEN DOWN for OptionsEdge prod — at 09:17 ET (Mon-Fri, 13 min before the 09:30 SPX open) scale
-// the overnight ES-tracking services (es-open-direction-service + es-open-direction-postgres-writer) to 0.
+// MANUAL ES PRE-OPEN DOWN for OptionsEdge prod — scale the overnight ES-tracking services
+// (es-open-direction-service + es-open-direction-postgres-writer) to 0.
 // The overnight ES-open-direction session is over; feed-gateway + web STAY UP for the SPX day session.
 // Mirror of the dev-cleanup.sh ESDOWN slot for prod.
 //
 // Runs scripts/ops/es-predown.sh ON the prod host over SSH — the SAME Jenkins->SSH model as
 // Jenkinsfile.morning-autostart. The script impersonates jenkins-deployer (--as) for the scale ops.
-// NON-DESTRUCTIVE: only scales the two ES Deployments to 0; never topics/PVCs/DB/logs, never gateway/web.
+// IMPORTANT: this is intentionally manual-only. The script also deletes the transient ES Kafka topics,
+// so this pipeline must not be restored to a timer while feed-gateway is subscribed to those topics.
 pipeline {
   agent { label 'hpsf-replay-mac' }
 
@@ -16,13 +17,6 @@ pipeline {
       description: 'Target env. Prod only — dev has its own ESDOWN slot (dev-cleanup 09:15-09:29 ET launchd).')
     string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
       description: 'SSH target for prod (k3s is local there; scale ops impersonate jenkins-deployer).')
-  }
-
-  triggers {
-    // 09:17 America/New_York, Mon-Fri — 13 min before the 09:30 open. The script's calendar guard no-ops
-    // on market holidays (the cron already restricts to Mon-Fri).
-    cron('''TZ=America/New_York
-17 9 * * 1-5''')
   }
 
   options {
