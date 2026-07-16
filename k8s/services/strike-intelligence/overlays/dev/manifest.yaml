@@ -94,6 +94,8 @@ spec:
               value: -Xms512m -Xmx2048m
             - name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
               value: "2"
+            - name: STRIKE_INTEL_ACTION_BIAS_MIN_BAND
+              value: LOW
           envFrom:
             - configMapRef:
                 name: options-edge-config
