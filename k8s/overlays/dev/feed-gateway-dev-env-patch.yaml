@@ -47,3 +47,7 @@ spec:
             # untouched, but give dev replay a stable window so the UI can render between replay bursts.
             - name: GATEWAY_LIQUIDITY_HEATMAP_TTL_MS
               value: "60000"
+            # The SPX dashboard topic is provisioned with 32 partitions in dev. Keep the gateway's
+            # topology guard aligned while ES retains the binary's four-partition default.
+            - name: HEATMAP_HISTORY_EXPECTED_PARTITIONS
+              value: "32"
