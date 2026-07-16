@@ -79,6 +79,8 @@ spec:
               value: 2026-11-27=13:00,2026-12-24=13:00
             - name: GATEWAY_LIQUIDITY_HEATMAP_TTL_MS
               value: "60000"
+            - name: HEATMAP_HISTORY_EXPECTED_PARTITIONS
+              value: "32"
             - name: APP_WEB_PORT
               value: "18091"
             - name: JAVA_TOOL_OPTIONS
