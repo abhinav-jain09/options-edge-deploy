@@ -91,6 +91,21 @@ patches:
         value:
           name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
           value: "2"
+  # PROD-ONLY TRIAL (2026-07-16): emit LOW-band directional signals as BUY/SELL LEAN. The
+  # 09:48 ET rip-bottom CALL_CHASE scored conf 0.38-0.43 (LOW) — deltaScore scale (1e5) and
+  # inception-zero gexScore structurally cap real move-start signals below the 0.50 MEDIUM
+  # floor. Trial pending a proper STRIKE_INTEL_DELTA_SCORE_SCALE recalibration; dev stays
+  # MEDIUM as reference. Revert = remove this patch.
+  # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/production (validate-services).
+  - target:
+      kind: Deployment
+      name: strike-intelligence-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_ACTION_BIAS_MIN_BAND
+          value: LOW
   # PROD: option-price-behavior V2 heap 3g + limit 5Gi (base 2g/2Gi OOMKilled —
   # heap == limit, no off-heap room). Re-enabled after the 2026-07-07 freeze.
   - path: short-premium-prod-env-patch.yaml
