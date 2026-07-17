@@ -98,6 +98,17 @@ spec:
               value: "600000"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms1g -Xmx4g"
+            # ---- Pre-open GEX (PREOPEN-GEX-GATE1-REQUIREMENT.md) ----
+            # DORMANT by default in BASE (prod stays off until dev proves it over a full
+            # capture@18:00 -> compute@08:00 cycle). Enabled on dev via the overlay patch. Both flags fail-soft:
+            # the in-service scheduler never crashes the live GEX pipeline, and Task B abstains (never publishes)
+            # when the capture snapshot or the prior-close canonical spot is missing.
+            - name: PREOPEN_GEX_ENABLED            # master switch: run the in-service capture+compute scheduler
+              value: "false"
+            - name: PREOPEN_GEX_PUBLISH_ENABLED    # Task B: transactional publish to the live gex.strike topic
+              value: "false"
+            - name: PREOPEN_GEX_SYMBOL
+              value: SPX
           ports:
             - name: health
               containerPort: 8100

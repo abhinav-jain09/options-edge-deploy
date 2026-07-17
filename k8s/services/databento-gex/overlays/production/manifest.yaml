@@ -92,6 +92,12 @@ spec:
               value: "600000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms1g -Xmx4g
+            - name: PREOPEN_GEX_ENABLED
+              value: "false"
+            - name: PREOPEN_GEX_PUBLISH_ENABLED
+              value: "false"
+            - name: PREOPEN_GEX_SYMBOL
+              value: SPX
           envFrom:
             - configMapRef:
                 name: options-edge-config
