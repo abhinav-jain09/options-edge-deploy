@@ -114,6 +114,20 @@ patches:
   # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
   # MUST MIRROR the standalone slice k8s/services/databento-feed/overlays/production (validate-services).
   - path: databento-feed-prod-patch.yaml
+  # PROD-ONLY: strike-liquidity-heatmap CPU request 100m -> 750m. At 100m the single stream
+  # thread stalled >10s under busy-open contention, tripping the EOS transaction timeout and
+  # fencing the producer (2026-07-16, twice; processing PR #356 raised the timeout to 60s as
+  # the backstop). 750m guarantees most of a core under CFS contention; node request headroom
+  # is ample (~32% of 24 cores requested). CPU limit stays absent per the base's no-throttle
+  # discipline. MUST MIRROR the standalone slice
+  # k8s/services/strike-liquidity-heatmap/overlays/production (validate-services: mono==slice).
+  - target:
+      kind: Deployment
+      name: strike-liquidity-heatmap-service
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 750m
   # spx-mission-control is kept OFF (replicas:0) in prod (USER 2026-07-09). MUST MIRROR the standalone
   # slice k8s/services/spx-mission-control/overlays/production (validate-services: mono==slice). Re-enable
   # by removing this patch AND setting the slice back to replicas:1.
