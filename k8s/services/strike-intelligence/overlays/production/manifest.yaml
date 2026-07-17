@@ -98,6 +98,14 @@ spec:
               value: "2"
             - name: STRIKE_INTEL_ACTION_BIAS_MIN_BAND
               value: LOW
+            - name: STRIKE_INTEL_MAX_UNDERLYING_AGE_MS
+              value: "300000"
+            - name: STRIKE_INTEL_MAX_DELTA_FLOW_AGE_MS
+              value: "300000"
+            - name: STRIKE_INTEL_MAX_GEX_FLOW_AGE_MS
+              value: "300000"
+            - name: STRIKE_INTEL_MAX_STRIKE_FLOW_AGE_MS
+              value: "300000"
           envFrom:
             - configMapRef:
                 name: options-edge-config

@@ -106,6 +106,36 @@ patches:
         value:
           name: STRIKE_INTEL_ACTION_BIAS_MIN_BAND
           value: LOW
+  # PROD LAG TOLERANCE (2026-07-17): the single-core SPX feed runs 3-4 min behind on heavy
+  # sessions, keeping spot/delta/gex above the 120s freshness gates -> all-day INSUFFICIENT_DATA
+  # (signal blackout during the most tradeable tape). Widen the gates to 5 min so a CONSISTENTLY
+  # lagged (coherent event-time) pipeline still signals — accepted trade-off: signals arrive
+  # ~lag-minutes late. Dev keeps 120s defaults (its feed keeps up). REVERT when the feed
+  # split/capacity fix lands. MUST MIRROR the standalone slice (validate-services).
+  - target:
+      kind: Deployment
+      name: strike-intelligence-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_MAX_UNDERLYING_AGE_MS
+          value: "300000"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_MAX_DELTA_FLOW_AGE_MS
+          value: "300000"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_MAX_GEX_FLOW_AGE_MS
+          value: "300000"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_MAX_STRIKE_FLOW_AGE_MS
+          value: "300000"
   # PROD: option-price-behavior V2 heap 3g + limit 5Gi (base 2g/2Gi OOMKilled —
   # heap == limit, no off-heap room). Re-enabled after the 2026-07-07 freeze.
   - path: short-premium-prod-env-patch.yaml
