@@ -33,7 +33,7 @@ class StrikeFlowIbkrDeployTest(unittest.TestCase):
         self.assertIn("value: options.ibkr.raw", deployment)
         self.assertIn("value: options.databento.strike-flow", deployment)
         self.assertIn("value: options.ibkr.strike-flow", deployment)
-        self.assertIn("value: options-edge-databento-strike-flow-classifier-v2", deployment)
+        self.assertIn("value: options-edge-databento-strike-flow-classifier-v5", deployment)
         self.assertIn("value: options-edge-ibkr-strike-flow-classifier-v1", deployment)
 
     def test_databento_classifier_uses_opra_tcbbo_json_contract(self) -> None:
@@ -53,12 +53,16 @@ class StrikeFlowIbkrDeployTest(unittest.TestCase):
             self.env_value(deployment, "strike-flow-classifier-databento", "KAFKA_STRIKE_FLOW_OUTPUT_TOPIC"),
         )
         self.assertEqual(
-            "options-edge-databento-strike-flow-classifier-v2",
+            "options-edge-databento-strike-flow-classifier-v5",
             self.env_value(deployment, "strike-flow-classifier-databento", "KAFKA_STRIKE_FLOW_STREAMS_APP_ID"),
+        )
+        self.assertEqual(
+            "latest",
+            self.env_value(deployment, "strike-flow-classifier-databento", "KAFKA_STRIKE_FLOW_STREAMS_AUTO_OFFSET_RESET"),
         )
         self.assertIn("KAFKA_STRIKE_FLOW_INPUT_TOPIC: options.opra.tcbbo", configmap)
         self.assertIn(
-            "KAFKA_STRIKE_FLOW_STREAMS_APP_ID: options-edge-databento-strike-flow-classifier-v2",
+            "KAFKA_STRIKE_FLOW_STREAMS_APP_ID: options-edge-databento-strike-flow-classifier-v5",
             configmap,
         )
         self.assertNotIn("KAFKA_STRIKE_FLOW_INPUT_TOPIC: options.databento.raw", configmap)
