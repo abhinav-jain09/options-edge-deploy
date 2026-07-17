@@ -64,6 +64,23 @@ patches:
         value:
           name: STRIKE_INTEL_ACTION_BIAS_MIN_BAND
           value: LOW
+  # §9b trail = FULL-SESSION board history (user 2026-07-17: "do not take away"): entries stay
+  # until the trading-date rollover purge instead of aging out after 15 min; cap raised to 50.
+  # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/* (validate-services).
+  - target:
+      kind: Deployment
+      name: strike-intelligence-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_RECENT_SIGNALS_WINDOW_MS
+          value: "86400000"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_RECENT_SIGNALS_MAX
+          value: "50"
   # The base web Deployment pins itself to the prod control-plane node
   # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
   # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,

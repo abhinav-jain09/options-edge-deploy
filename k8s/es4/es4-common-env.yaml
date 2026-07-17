@@ -20,6 +20,9 @@ data:
   # stack trades CME Globex (~23h/day), not NYSE RTH — gate the dead-engine restart window to the
   # Globex session (armed from 5 min before each open through 5 min past each close).
   LIVENESS_SESSION: "globex"
+  # §9b trail = full-session board history (user 2026-07-17), same as prod/dev overlays.
+  STRIKE_INTEL_RECENT_SIGNALS_WINDOW_MS: "86400000"
+  STRIKE_INTEL_RECENT_SIGNALS_MAX: "50"
   KAFKA_BOOTSTRAP_SERVERS: "192.168.100.4:9092"
   SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"
   KAFKA_SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"

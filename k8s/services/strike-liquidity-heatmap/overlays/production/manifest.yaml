@@ -103,8 +103,6 @@ spec:
             limits:
               memory: 2Gi
             requests:
-              # PROD-ONLY 100m -> 750m (busy-open stalls tripped the EOS transaction timeout,
-              # 2026-07-16). MUST MIRROR k8s/overlays/production (validate-services: mono==slice).
               cpu: 750m
               memory: 512Mi
           volumeMounts:
