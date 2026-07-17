@@ -88,6 +88,10 @@ pipeline {
           KP="KUBECONFIG=$PROD_KUBECONFIG kubectl -n options-edge"
           FEED_REP=$(eval "$KP get deploy es-feed -o jsonpath='{.spec.replicas}'" 2>/dev/null || echo 1)
           [ -n "$FEED_REP" ] || FEED_REP=1
+          # never "restore" to 0: if the feed is already fenced (e.g. a prior failed clean left it
+          # down), restoring the captured count would leave prod es-feed dead behind a green build
+          # — the 2026-07-17 overnight ES blackout. Same guard as the wrapper's RC_REP clamp.
+          [ "$FEED_REP" = "0" ] && FEED_REP=1
 
           if [ "${DEPLOY_DRY_RUN}" = "true" ]; then
             echo "DRY: would scale prod es-feed ($FEED_REP -> 0), run on-box wipe, restore es-feed to $FEED_REP"
