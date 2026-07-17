@@ -1,0 +1,21 @@
+# DEV-ONLY: enable the full pre-open GEX pipeline (PREOPEN-GEX-GATE1-REQUIREMENT.md) so a real
+# capture@18:00 -> compute@08:00 cycle can be verified on dev before production is enabled. BASE keeps both
+# flags "false" (prod dormant), so this patch is the ONLY place the feature is live. env merges by name over
+# base. Both flags are fail-soft: the in-service scheduler never crashes the live GEX pipeline, and Task B
+# abstains (never publishes) if the capture snapshot or the prior-close canonical spot is missing.
+#
+# DEPENDENCY: Task B's prior-close spot comes from databento_option_raw_snapshot.canonical_spot, written by
+# the raw-postgres-writer. If that writer is not persisting on dev, Task B fail-loud abstains (no publish).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-gex-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: databento-gex
+          env:
+            - { name: PREOPEN_GEX_ENABLED, value: "true" }
+            - { name: PREOPEN_GEX_PUBLISH_ENABLED, value: "true" }
