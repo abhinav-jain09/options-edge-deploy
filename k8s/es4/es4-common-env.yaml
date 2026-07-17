@@ -16,6 +16,10 @@ data:
   APP_PROFILE: "prod"
   TOPIC_PREFIX: "es."
   KAFKA_APPLICATION_ID_SUFFIX: "-es4"
+  # Fleet liveness market-hours gate (processing-common app.kafka.Liveness/MarketHours): the ES
+  # stack trades CME Globex (~23h/day), not NYSE RTH — gate the dead-engine restart window to the
+  # Globex session (armed from 5 min before each open through 5 min past each close).
+  LIVENESS_SESSION: "globex"
   KAFKA_BOOTSTRAP_SERVERS: "192.168.100.4:9092"
   SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"
   KAFKA_SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"
