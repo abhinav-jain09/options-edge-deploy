@@ -7,6 +7,7 @@ images:
   options-edge-databento-feed: 192.168.100.252:5000/options-edge-databento-feed:dev
   raw-postgres-writer: 192.168.100.252:5000/options-edge-raw-postgres-writer:dev
   pressure-postgres-writer: 192.168.100.252:5000/options-edge-pressure-postgres-writer:dev
+  invasion-postgres-writer: host.docker.internal:5001/options-edge-invasion-postgres-writer:dev
   pin-postgres-writer: 192.168.100.252:5000/options-edge-pin-postgres-writer:dev
   feed-gateway-service: 192.168.100.252:5000/options-edge-feed-gateway:dev
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:dev

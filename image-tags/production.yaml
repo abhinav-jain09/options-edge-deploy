@@ -17,6 +17,7 @@ images:
   dealer-ledger-calibration-accumulator: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:prod
   strike-intelligence-service: 192.168.100.252:5000/options-edge-strike-intelligence:prod
   strike-invasion-service: 192.168.100.252:5000/options-edge-strike-invasion:prod
+  invasion-postgres-writer: 192.168.100.252:5000/options-edge-invasion-postgres-writer:prod
   pin-postgres-writer: 192.168.100.252:5000/options-edge-pin-postgres-writer:prod
   strike-liquidity-heatmap-service: 192.168.100.252:5000/options-edge-strike-liquidity-heatmap:prod
   spx-mission-control-service: 192.168.100.252:5000/options-edge-spx-mission-control:prod
