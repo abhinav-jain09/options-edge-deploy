@@ -86,6 +86,13 @@ spec:
           value: 'true'
         - name: STRIKE_INTEL_ADAPTIVE_SCALE_ENABLED
           value: 'true'
+        # §7c premium floor (processing #371): the adaptive scaler rates the session's top slice
+        # at volumeScore 1.0 regardless of ABSOLUTE size — on thin Globex tape a $46k far-OTM
+        # trickle emitted BUY_CALL (2026-07-17 overnight, 7630). Below $100k the action gates to
+        # NONE ("below premium floor"); roles/dashboard stay informative. Tune from trail data:
+        # observed noise $31-46k, plausible signals $112k+.
+        - name: STRIKE_INTEL_ACTION_MIN_TOTAL_PREMIUM
+          value: '100000'
         envFrom:
         - configMapRef:
             name: es4-base-env
