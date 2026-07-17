@@ -95,7 +95,9 @@ spec:
             - name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
               value: "2"
             - name: STRIKE_INTEL_ACTION_BIAS_MIN_BAND
-              value: LOW
+              value: MEDIUM
+            - name: STRIKE_INTEL_TWO_SIDED_FLOW_MODE
+              value: require
             - name: STRIKE_INTEL_RECENT_SIGNALS_WINDOW_MS
               value: "86400000"
             - name: STRIKE_INTEL_RECENT_SIGNALS_MAX

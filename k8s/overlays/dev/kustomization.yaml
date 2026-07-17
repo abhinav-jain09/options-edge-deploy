@@ -63,7 +63,18 @@ patches:
         path: /spec/template/spec/containers/0/env/-
         value:
           name: STRIKE_INTEL_ACTION_BIAS_MIN_BAND
-          value: LOW
+          value: MEDIUM
+  # §7c STRONG-ONLY emission (user 2026-07-17: "suppress lean, only strong should be emitted"):
+  # one-sided directional actions gate to NONE entirely (two-sided story REQUIRED)...
+  - target:
+      kind: Deployment
+      name: strike-intelligence-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_TWO_SIDED_FLOW_MODE
+          value: require
   # §9b trail = FULL-SESSION board history (user 2026-07-17: "do not take away"): entries stay
   # until the trading-date rollover purge instead of aging out after 15 min; cap raised to 50.
   # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/* (validate-services).

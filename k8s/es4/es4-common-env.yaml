@@ -23,6 +23,9 @@ data:
   # §9b trail = full-session board history (user 2026-07-17), same as prod/dev overlays.
   STRIKE_INTEL_RECENT_SIGNALS_WINDOW_MS: "86400000"
   STRIKE_INTEL_RECENT_SIGNALS_MAX: "50"
+  # §7c STRONG-only emission (user 2026-07-17): two-sided story REQUIRED for any directional
+  # action; band floor is the engine default MEDIUM here, so everything emitted is STRONG.
+  STRIKE_INTEL_TWO_SIDED_FLOW_MODE: "require"
   KAFKA_BOOTSTRAP_SERVERS: "192.168.100.4:9092"
   SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"
   KAFKA_SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"
