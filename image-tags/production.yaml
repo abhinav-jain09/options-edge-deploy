@@ -18,7 +18,6 @@ images:
   strike-intelligence-service: 192.168.100.252:5000/options-edge-strike-intelligence:prod
   strike-invasion-service: 192.168.100.252:5000/options-edge-strike-invasion:prod
   pin-postgres-writer: 192.168.100.252:5000/options-edge-pin-postgres-writer:prod
-  pin-flow-explorer: 192.168.100.252:5000/options-edge-pin-flow-explorer:prod
   strike-liquidity-heatmap-service: 192.168.100.252:5000/options-edge-strike-liquidity-heatmap:prod
   spx-mission-control-service: 192.168.100.252:5000/options-edge-spx-mission-control:prod
   unified-sr-service: 192.168.100.252:5000/options-edge-unified-sr:prod

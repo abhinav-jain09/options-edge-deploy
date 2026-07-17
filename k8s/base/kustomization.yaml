@@ -69,8 +69,6 @@ resources:
   - raw-postgres-writer-service.yaml
   - pin-postgres-writer-deployment.yaml
   - pin-postgres-writer-service.yaml
-  - pin-flow-explorer-deployment.yaml
-  - pin-flow-explorer-service.yaml
   - volume-pace-databento-deployment.yaml
   - databento-gex-history-deployment.yaml
   - databento-gex-history-service.yaml

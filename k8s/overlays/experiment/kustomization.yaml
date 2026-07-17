@@ -151,9 +151,6 @@ images:
   - name: 192.168.100.252:5000/options-edge-pin-postgres-writer
     newName: host.docker.internal:5001/options-edge-pin-postgres-writer
     newTag: dev
-  - name: 192.168.100.252:5000/options-edge-pin-flow-explorer
-    newName: host.docker.internal:5001/options-edge-pin-flow-explorer
-    newTag: dev
   - name: 192.168.100.252:5000/options-edge-pressure-postgres-writer
     newName: host.docker.internal:5001/options-edge-pressure-postgres-writer
     newTag: dev
