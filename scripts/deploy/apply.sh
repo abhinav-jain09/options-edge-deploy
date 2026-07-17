@@ -157,7 +157,7 @@
           for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE OPTION_PRICE_BEHAVIOR_IMAGE \
             DATABENTO_MISSION_SANDWICH_IMAGE DATABENTO_VOLUME_AGGREGATOR_IMAGE \
             DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
-            IBKR_FEED_IMAGE PIN_POSTGRES_WRITER_IMAGE PIN_FLOW_EXPLORER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
+            IBKR_FEED_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE \
             DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE \
@@ -223,6 +223,10 @@
           # deployment (app.id option-price-behavior-service-v2) is NOT in any overlay, so `apply -k` never
           # prunes it and it would run a duplicate V2 forever. Delete it here (idempotent, deployer-SA-scoped).
           kubectl -n options-edge delete deployment/option-price-behavior-service-v2 --ignore-not-found=true
+          # Reconcile-delete the retired standalone `pin-flow-explorer` workload. It was a standalone internal
+          # web tool that has been dropped (rebuilt as an option-chain UI page instead), so it is no longer in
+          # any overlay and `apply -k` will not prune it. Delete it here (idempotent, deployer-SA-scoped).
+          kubectl -n options-edge delete deployment/pin-flow-explorer service/pin-flow-explorer --ignore-not-found=true
           kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
           market_data_source="${MARKET_DATA_SOURCE:-DATABENTO}"
           effective_raw_topic="${RAW_TOPIC:-}"
@@ -305,7 +309,6 @@ EOF
           kubectl -n options-edge set image deployment/databento-gex-history-service databento-gex-history="$DATABENTO_GEX_HISTORY_IMAGE"
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pin-postgres-writer pin-postgres-writer="$PIN_POSTGRES_WRITER_IMAGE"
-          kubectl -n options-edge set image deployment/pin-flow-explorer pin-flow-explorer="$PIN_FLOW_EXPLORER_IMAGE"
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/feed-gateway-service feed-gateway="$FEED_GATEWAY_IMAGE"
           kubectl -n options-edge set image deployment/hpsf-postgres-writer-service hpsf-postgres-writer="$HPSF_POSTGRES_WRITER_IMAGE"
@@ -332,7 +335,6 @@ EOF
           kubectl -n options-edge rollout restart deployment/databento-gex-history-service
           kubectl -n options-edge rollout restart deployment/raw-postgres-writer
           kubectl -n options-edge rollout restart deployment/pin-postgres-writer
-          kubectl -n options-edge rollout restart deployment/pin-flow-explorer
           kubectl -n options-edge rollout restart deployment/pressure-postgres-writer
           kubectl -n options-edge rollout restart deployment/feed-gateway-service
           kubectl -n options-edge rollout restart deployment/hpsf-postgres-writer-service
@@ -361,7 +363,6 @@ EOF
           kubectl -n options-edge rollout status deployment/databento-gex-history-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=1260s
           kubectl -n options-edge rollout status deployment/pin-postgres-writer --timeout=1260s
-          kubectl -n options-edge rollout status deployment/pin-flow-explorer --timeout=1260s
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=1260s
           kubectl -n options-edge rollout status deployment/feed-gateway-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/hpsf-postgres-writer-service --timeout=1260s

@@ -126,7 +126,6 @@ bp options-edge-volume-sandwich             volume-sandwich-service/Dockerfile  
 bp options-edge-raw-postgres-writer         raw-postgres-writer/Dockerfile                   raw-postgres-writer                  $P
 bp options-edge-pressure-postgres-writer    pressure-postgres-writer/Dockerfile              pressure-postgres-writer             $P
 bp options-edge-pin-postgres-writer         pin-postgres-writer/Dockerfile                   pin-postgres-writer                  $P
-bp options-edge-pin-flow-explorer           pin-flow-explorer/Dockerfile                     pin-flow-explorer                    $P
 bp options-edge-hpsf-processing             hpsf-processing-service/Dockerfile               hpsf-processing-service              $P
 bp options-edge-hpsf-postgres-writer        hpsf-postgres-writer/Dockerfile                  hpsf-postgres-writer                 $P
 bp options-edge-spx-mission-control         docker/spx-mission-control-service.Dockerfile    .                                    $P
