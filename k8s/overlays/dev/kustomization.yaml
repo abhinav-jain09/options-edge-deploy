@@ -36,6 +36,9 @@ patches:
   # DEV-ONLY: enable the full pre-open GEX pipeline (capture + transactional publish) for the overnight
   # verification cycle. Prod stays dormant (base flags false) until dev proves it. Prod untouched.
   - path: databento-gex-preopen-dev-patch.yaml
+  # DEV mirror of the standalone overlay: OPB rolling windows disabled on dev (matches #482, which
+  # touched only the standalone overlay and drifted the monolithic dev render). Prod already has it.
+  - path: option-price-behavior-dev-env-patch.yaml
   # strike-intelligence §7a conflict bypass: 2-of-4 fresh agreement clears a non-opposed
   # (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; opposed runner-ups still veto regardless. Dev/prod
   # parity with the production overlay (PRs #462/#463 — engine default stays 3).
