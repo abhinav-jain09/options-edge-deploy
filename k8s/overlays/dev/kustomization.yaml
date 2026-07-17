@@ -120,9 +120,9 @@ patches:
       - op: add
         path: /spec/progressDeadlineSeconds
         value: 1200
-  # DEV-ONLY: option-price-behavior uses Kafka Streams/RocksDB state. Its JVM heap is
-  # 2g, so a 2Gi pod limit leaves no native/off-heap headroom and the kubelet OOM-kills
-  # it during replay. Give the container enough room without changing service logic.
+  # DEV-ONLY: option-price-behavior uses Kafka Streams/RocksDB state. Four stream threads
+  # restoring 32 partitions repeatedly exceeded the 4Gi limit (exit 137). Match the stable
+  # production 8Gi envelope so the 3Gi heap and native/off-heap state have headroom.
   - target:
       kind: Deployment
       name: option-price-behavior-service
@@ -132,7 +132,7 @@ patches:
         value: 1Gi
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
-        value: 4Gi
+        value: 8Gi
   # DEV-ONLY dealer-ledger heap: -Xmx1024m OOM'd (java.lang.OutOfMemoryError) on the day's-backlog
   # catch-up → StreamThread died → readiness 503 → rollout-wait timeout. Raise heap to -Xmx6144m and
   # the container limit to 8Gi so the 6GB heap + RocksDB off-heap (193 Kafka-Streams partitions) + JVM

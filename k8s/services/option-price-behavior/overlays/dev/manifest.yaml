@@ -59,6 +59,12 @@ spec:
             # production; otherwise five window updates per print make the session output fall behind.
             - name: OPB_V2_ROLLING_WINDOWS_ENABLED
               value: "false"
+            - name: JAVA_TOOL_OPTIONS
+              # Kafka Streams keeps RocksDB block/index memory outside the Java heap. Four stream
+              # threads restoring 32 partitions exceeded the old 4Gi container limit even with a
+              # 2Gi heap, causing repeated exit-137 restarts and a blank OPB board. Match the stable
+              # production envelope so heap plus native RocksDB state has adequate headroom.
+              value: -Xms512m -Xmx3g
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: OPTION_PRICE_BEHAVIOR_INPUT_TCBBO_TOPIC
@@ -121,8 +127,6 @@ spec:
               value: "30000"
             - name: OPB_V2_MAX_FORWARD_AGE_MS
               value: "30000"
-            - name: JAVA_TOOL_OPTIONS
-              value: -Xms512m -Xmx2g
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -148,7 +152,7 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 4Gi
+              memory: 8Gi
             requests:
               cpu: 250m
               memory: 1Gi
