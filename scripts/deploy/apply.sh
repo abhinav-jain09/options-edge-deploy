@@ -223,6 +223,10 @@
           # deployment (app.id option-price-behavior-service-v2) is NOT in any overlay, so `apply -k` never
           # prunes it and it would run a duplicate V2 forever. Delete it here (idempotent, deployer-SA-scoped).
           kubectl -n options-edge delete deployment/option-price-behavior-service-v2 --ignore-not-found=true
+          # Reconcile-delete the retired standalone `pin-flow-explorer` workload. It was a standalone internal
+          # web tool that has been dropped (rebuilt as an option-chain UI page instead), so it is no longer in
+          # any overlay and `apply -k` will not prune it. Delete it here (idempotent, deployer-SA-scoped).
+          kubectl -n options-edge delete deployment/pin-flow-explorer service/pin-flow-explorer --ignore-not-found=true
           kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
           market_data_source="${MARKET_DATA_SOURCE:-DATABENTO}"
           effective_raw_topic="${RAW_TOPIC:-}"
