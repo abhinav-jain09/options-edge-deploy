@@ -96,6 +96,10 @@ spec:
               value: "2"
             - name: STRIKE_INTEL_ACTION_BIAS_MIN_BAND
               value: LOW
+            - name: STRIKE_INTEL_RECENT_SIGNALS_WINDOW_MS
+              value: "86400000"
+            - name: STRIKE_INTEL_RECENT_SIGNALS_MAX
+              value: "50"
           envFrom:
             - configMapRef:
                 name: options-edge-config
