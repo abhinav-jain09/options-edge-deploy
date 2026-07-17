@@ -1,0 +1,17 @@
+# DEV mirror of the standalone overlay (k8s/services/option-price-behavior/overlays/dev): the session
+# aggregate is keyed by symbol, so all SPX work lands on one Kafka partition. Keep the optional rolling tiles
+# disabled on the capacity-limited dev cluster just as in production; otherwise five window updates per print
+# make the session output fall behind. #482 added this to the standalone overlay only, drifting the monolithic
+# dev render — this patch restores mirror parity. env merges by name over the base.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: option-price-behavior-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: option-price-behavior
+          env:
+            - { name: OPB_V2_ROLLING_WINDOWS_ENABLED, value: "false" }
