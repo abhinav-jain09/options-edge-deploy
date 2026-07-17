@@ -145,6 +145,31 @@ spec:
             # ---- misc ------------------------------------------------------------
             - name: APP_PROFILE
               value: "prod"
+            # ---- data-freshness liveness (feed repo monitoring.py) ----------------
+            # ES trades on CME Globex ~23h/day; the default RTH session model left the
+            # freshness gate blind overnight — exactly when the 2026-07-17 half-wedge
+            # (options publisher dead, spot alive) went unrestarted. GLBX dataset already
+            # auto-selects the globex session; stale/grace are widened for the THIN
+            # overnight tape (quote gaps minutes long are normal at 3am ET) and the
+            # statistics-replay catch-up a fresh boot performs before first live publish.
+            - name: DATABENTO_FEED_LIVENESS_SESSION
+              value: "globex"
+            - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
+              value: "120"
+            - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
+              value: "300"
+          ports:
+            - name: metrics
+              containerPort: 8010
+          # Liveness was NEVER wired here — the feed exposed /health/live but no probe called
+          # it, so a wedged feed ran forever (fleet-liveness convention, 2026-07-17).
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: metrics
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
           resources:
             requests: { cpu: "250m", memory: "512Mi" }
             limits:   { memory: "1536Mi" }
