@@ -30,6 +30,7 @@ pipeline {
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pressure Postgres writer image')
     string(name: 'PIN_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pin Postgres writer image (deployed in dev AND prod; the prod image must exist before promotion)')
+    string(name: 'PIN_FLOW_EXPLORER_IMAGE', defaultValue: '', description: 'Pin flow explorer image (read-only internal web tool; deployed in dev AND prod; the prod image must exist before promotion)')
     string(name: 'FEED_GATEWAY_IMAGE', defaultValue: '', description: 'Feed gateway image')
     string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'HPSF Stage A/B processing image')
     string(name: 'HPSF_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'HPSF Postgres writer image')
@@ -335,6 +336,7 @@ pipeline {
             'VOLUME_PACE_IMAGE': 'volume-pace', 'DIRECTIONAL_PRESSURE_IMAGE': 'directional-pressure',
             'DATABENTO_GEX_HISTORY_IMAGE': 'databento-gex-history', 'RAW_POSTGRES_WRITER_IMAGE': 'raw-postgres-writer',
             'PRESSURE_POSTGRES_WRITER_IMAGE': 'pressure-postgres-writer', 'PIN_POSTGRES_WRITER_IMAGE': 'pin-postgres-writer',
+            'PIN_FLOW_EXPLORER_IMAGE': 'pin-flow-explorer',
             'FEED_GATEWAY_IMAGE': 'feed-gateway', 'HPSF_PROCESSING_IMAGE': 'hpsf-processing',
             'HPSF_POSTGRES_WRITER_IMAGE': 'hpsf-postgres-writer', 'SPX_MISSION_CONTROL_IMAGE': 'spx-mission-control',
             'STRIKE_FLOW_CLASSIFIER_IMAGE': 'strike-flow-classifier', 'DELTA_FLOW_IMAGE': 'delta-flow',
@@ -732,6 +734,7 @@ void promoteToProduction() {
       'DATABENTO_MAXPAIN_IMAGE', 'OPTION_PRICE_BEHAVIOR_IMAGE', 'DATABENTO_MISSION_SANDWICH_IMAGE',
       'VOLUME_PACE_IMAGE', 'DIRECTIONAL_PRESSURE_IMAGE', 'DATABENTO_GEX_HISTORY_IMAGE',
       'RAW_POSTGRES_WRITER_IMAGE', 'PRESSURE_POSTGRES_WRITER_IMAGE', 'PIN_POSTGRES_WRITER_IMAGE',
+      'PIN_FLOW_EXPLORER_IMAGE',
       'FEED_GATEWAY_IMAGE', 'HPSF_PROCESSING_IMAGE', 'HPSF_POSTGRES_WRITER_IMAGE', 'SPX_MISSION_CONTROL_IMAGE',
       'STRIKE_FLOW_CLASSIFIER_IMAGE', 'DELTA_FLOW_IMAGE', 'DEALER_LEDGER_IMAGE', 'DEALER_LEDGER_CALIBRATION_IMAGE',
       'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'STRIKE_INVASION_IMAGE',
