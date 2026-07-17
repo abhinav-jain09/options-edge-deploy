@@ -54,11 +54,6 @@ spec:
     spec:
       containers:
         - env:
-            # The session aggregate is keyed by symbol, so all SPX work lands on one Kafka partition.
-            # Keep the optional rolling tiles disabled on the capacity-limited dev cluster just as in
-            # production; otherwise five window updates per print make the session output fall behind.
-            - name: OPB_V2_ROLLING_WINDOWS_ENABLED
-              value: "false"
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: OPTION_PRICE_BEHAVIOR_INPUT_TCBBO_TOPIC
@@ -123,6 +118,11 @@ spec:
               value: "30000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms512m -Xmx2g
+            # The session aggregate is keyed by symbol, so all SPX work lands on one Kafka partition.
+            # Keep the optional rolling tiles disabled on the capacity-limited dev cluster just as in
+            # production; otherwise five window updates per print make the session output fall behind.
+            - name: OPB_V2_ROLLING_WINDOWS_ENABLED
+              value: "false"
           envFrom:
             - configMapRef:
                 name: options-edge-config
