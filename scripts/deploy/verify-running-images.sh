@@ -36,6 +36,7 @@ IMAGE_MAP = {
     ("databento-gex-history-service", "databento-gex-history"): "DATABENTO_GEX_HISTORY_IMAGE",
     ("raw-postgres-writer", "raw-postgres-writer"): "RAW_POSTGRES_WRITER_IMAGE",
     ("pin-postgres-writer", "pin-postgres-writer"): "PIN_POSTGRES_WRITER_IMAGE",
+    ("pin-flow-explorer", "pin-flow-explorer"): "PIN_FLOW_EXPLORER_IMAGE",
     ("pressure-postgres-writer", "pressure-postgres-writer"): "PRESSURE_POSTGRES_WRITER_IMAGE",
     ("feed-gateway-service", "feed-gateway"): "FEED_GATEWAY_IMAGE",
     ("hpsf-postgres-writer-service", "hpsf-postgres-writer"): "HPSF_POSTGRES_WRITER_IMAGE",
