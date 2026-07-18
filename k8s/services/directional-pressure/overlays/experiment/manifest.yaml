@@ -63,7 +63,7 @@ spec:
             - name: KAFKA_DIRECTIONAL_PRESSURE_TOPIC
               value: options.ibkr.directional-pressure
             - name: KAFKA_DIRECTIONAL_PRESSURE_STREAMS_APP_ID
-              value: options-flow-directional-pressure-streams-v4
+              value: options-flow-directional-pressure-streams
             - name: KAFKA_DIRECTIONAL_PRESSURE_STREAMS_COMMIT_INTERVAL_MS
               value: "1000"
           envFrom:
@@ -139,7 +139,7 @@ spec:
             - name: KAFKA_DIRECTIONAL_PRESSURE_TOPIC
               value: options.databento.directional-pressure
             - name: KAFKA_DIRECTIONAL_PRESSURE_STREAMS_APP_ID
-              value: options-flow-directional-pressure-streams-v4-databento
+              value: options-flow-directional-pressure-streams-databento
             - name: KAFKA_DIRECTIONAL_PRESSURE_STREAMS_COMMIT_INTERVAL_MS
               value: "1000"
           envFrom:

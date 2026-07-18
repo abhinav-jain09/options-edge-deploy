@@ -67,7 +67,7 @@ spec:
             - name: KAFKA_DATABENTO_MAXPAIN_TOPIC
               value: options.databento.maxpain
             - name: KAFKA_MAXPAIN_STREAMS_APP_ID
-              value: options-databento-maxpain-streams-v2
+              value: options-databento-maxpain-streams
             - name: KAFKA_MAXPAIN_STREAMS_NUM_THREADS
               value: "2"
             - name: DATABENTO_MAXPAIN_SETTLEMENT_ZONE

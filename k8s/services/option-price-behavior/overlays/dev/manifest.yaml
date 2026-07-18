@@ -71,7 +71,7 @@ spec:
             - name: OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC
               value: option-price-behavior-v2-session
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_APP_ID
-              value: option-price-behavior-service-v2r4
+              value: option-price-behavior-service
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_NUM_THREADS
               value: "4"
             - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_AUTO_OFFSET_RESET

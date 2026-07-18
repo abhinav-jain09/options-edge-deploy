@@ -63,7 +63,7 @@ spec:
             - name: STRIKE_LIQUIDITY_INPUT_STRIKE_FLOW_TOPIC
               value: options.databento.strike-flow
             - name: STRIKE_LIQUIDITY_STREAMS_APP_ID
-              value: options-edge-strike-liquidity-heatmap-v1
+              value: options-edge-strike-liquidity-heatmap
             - name: STRIKE_LIQUIDITY_STREAMS_COMMIT_INTERVAL_MS
               value: "1000"
             - name: STRIKE_LIQUIDITY_STREAMS_AUTO_OFFSET_RESET

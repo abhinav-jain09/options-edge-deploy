@@ -47,7 +47,7 @@ spec:
         - name: KAFKA_DATABENTO_GEX_HISTORY_TOPIC
           value: options.databento.gex.strike.history
         - name: KAFKA_DATABENTO_GEX_HISTORY_STREAMS_APP_ID
-          value: options-databento-gex-history-streams-v1
+          value: options-databento-gex-history-streams
         envFrom:
         - configMapRef:
             name: es4-base-env

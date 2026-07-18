@@ -43,7 +43,7 @@ spec:
             - name: KAFKA_PACE_TOPIC
               value: options.databento.pace
             - name: KAFKA_PACE_STREAMS_APP_ID
-              value: options-flow-pace-streams-v3-databento
+              value: options-flow-pace-streams-databento
             - name: KAFKA_PACE_STREAMS_COMMIT_INTERVAL_MS
               value: "1000"
             - name: KAFKA_PACE_STREAMS_NUM_THREADS

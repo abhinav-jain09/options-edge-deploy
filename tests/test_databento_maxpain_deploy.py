@@ -36,7 +36,7 @@ class DatabentoMaxPainDeployTest(unittest.TestCase):
         self.assertIn("options.databento.raw", deployment)
         self.assertIn("KAFKA_DATABENTO_MAXPAIN_TOPIC", deployment)
         self.assertIn("options.databento.maxpain", deployment)
-        self.assertIn("options-databento-maxpain-streams-v2", deployment)
+        self.assertIn("options-databento-maxpain-streams", deployment)
         self.assertIn("DATABENTO_MAXPAIN_SETTLEMENT_ZONE", deployment)
         # Independence: never references the GEX topic.
         self.assertNotIn("options.databento.gex.strike", deployment)

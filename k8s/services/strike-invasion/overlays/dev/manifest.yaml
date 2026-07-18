@@ -77,7 +77,7 @@ spec:
             - name: STRIKE_INVASION_OUTPUT_EVENTS_TOPIC
               value: options.spx.strike-invasion.events
             - name: STRIKE_INVASION_STREAMS_APP_ID
-              value: options-edge-strike-invasion-service-v1
+              value: options-edge-strike-invasion-service
             - name: STRIKE_INVASION_STREAMS_COMMIT_INTERVAL_MS
               value: "5000"
             - name: STRIKE_INVASION_STREAMS_AUTO_OFFSET_RESET

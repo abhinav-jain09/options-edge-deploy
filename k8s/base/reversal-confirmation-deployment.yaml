@@ -25,7 +25,7 @@ spec:
         - name: reversal-confirmation
           image: 192.168.100.252:5000/options-edge-reversal-confirmation:dev
           imagePullPolicy: Always
-          # SHADOW-mode ES reversal engine (design: reversal-confirmation-v1-2s-spec.md v6).
+          # SHADOW-mode ES reversal engine (design: reversal-confirmation-2s-spec.md v6).
           # Cross-broker by design: ES inputs + es.reversal.* outputs live on the es4
           # broker (.4); only the optional VIX diagnostic reads the local prod broker.
           # The shared configmap's KAFKA_BOOTSTRAP_SERVERS is intentionally NOT used —
@@ -63,7 +63,7 @@ spec:
             # --- consumer group id (assign-mode, no commits: identifies the client in
             #     tooling; committed-offset lag is not reported by design) ---
             - name: REVERSAL_GROUP_ID
-              value: reversal-confirmation-v1
+              value: reversal-confirmation
             # --- detection sensitivity (2026-07-14 first-session retune) ---
             # Defaults (12t decline / 4t bounce / 10s cooldown) produced 263
             # candidates in one session on a tape with constant 3-5pt wiggles —

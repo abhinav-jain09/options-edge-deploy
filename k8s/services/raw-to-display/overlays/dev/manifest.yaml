@@ -69,7 +69,7 @@ spec:
             - name: KAFKA_GAMMA_HISTORY_TOPIC
               value: options.ibkr.display.gamma.history
             - name: KAFKA_DISPLAY_STREAMS_APP_ID
-              value: options-flow-display-streams-v8
+              value: options-flow-display-streams
             - name: KAFKA_DISPLAY_STREAMS_NUM_THREADS
               value: "2"
             - name: KAFKA_DISPLAY_STREAMS_CACHE_MAX_BYTES_BUFFERING
@@ -153,7 +153,7 @@ spec:
             - name: KAFKA_GAMMA_HISTORY_TOPIC
               value: options.databento.display.gamma.history
             - name: KAFKA_DISPLAY_STREAMS_APP_ID
-              value: options-flow-display-streams-v8-databento
+              value: options-flow-display-streams-databento
             - name: KAFKA_DISPLAY_STREAMS_NUM_THREADS
               value: "2"
             - name: KAFKA_DISPLAY_STREAMS_CACHE_MAX_BYTES_BUFFERING

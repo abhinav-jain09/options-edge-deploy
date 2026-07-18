@@ -88,7 +88,7 @@ data:
   HPSF_TOPIC_WRITER_DLQ: options.hpsf.writer-dlq
   HPSF_TOPIC_EXIT_SIGNAL: options.hpsf.exit-signal
   HPSF_POSTGRES_WRITER_ENABLED: "true"
-  HPSF_POSTGRES_WRITER_GROUP_ID: options-hpsf-postgres-writer-v1
+  HPSF_POSTGRES_WRITER_GROUP_ID: options-hpsf-postgres-writer
   HPSF_POSTGRES_WRITER_AUTO_OFFSET_RESET: earliest
   HPSF_POSTGRES_WRITER_TOPICS: options.hpsf.signal,options.hpsf.latest-signal,options.hpsf.audit,options.hpsf.market-flow,options.hpsf.strike-score,options.hpsf.dlq,options.hpsf.writer-dlq,options.hpsf.exit-signal
   HPSF_ORDER_PLACEMENT_ENABLED: "false"
@@ -99,7 +99,7 @@ data:
   KAFKA_SPX_MISSION_SANDWICH_TOPIC: options.databento.sandwich.mission
   KAFKA_SPX_MISSION_PARTICIPANT_FLOW_TOPIC: options.spx.participant-flow
   KAFKA_SPX_MISSION_OUTPUT_TOPIC: options.spx.mission-control.current
-  KAFKA_SPX_MISSION_STREAMS_APP_ID: options-edge-spx-mission-control-v2
+  KAFKA_SPX_MISSION_STREAMS_APP_ID: options-edge-spx-mission-control
   KAFKA_SPX_MISSION_MAX_CHANGELOG_BYTES: "4194304"
   SPX_MISSION_ALLOW_LEGACY_PACE: "false"
   SPX_MISSION_ALLOW_LEGACY_PRESSURE: "false"
@@ -154,7 +154,7 @@ data:
   KAFKA_DATABENTO_VOLUME_SANDWICH_ALERTS_TOPIC: options.databento.volume-sandwich.alerts
   # -v2: see databento-volume-aggregator-deployment.yaml — fresh namespace so the redeploy-resets-volume
   # fix lands without a manual Kafka reset. Keep in sync with the deployment env of the same name.
-  KAFKA_DATABENTO_VOLUME_AGGREGATOR_APP_ID: options-flow-databento-volume-aggregator-v2
+  KAFKA_DATABENTO_VOLUME_AGGREGATOR_APP_ID: options-flow-databento-volume-aggregator
   KAFKA_STREAMS_STATE_DIR: /var/lib/options-edge/kafka-streams
   POSTGRES_ENABLED: "true"
   POSTGRES_JDBC_URL: jdbc:postgresql://192.168.100.252:5432/options_flow
