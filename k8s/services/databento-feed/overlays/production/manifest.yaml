@@ -62,10 +62,6 @@ spec:
               value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "true"
-            - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
-              value: "15"
-            - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
-              value: "90"
             # ES->SPX basis translation engine v2 (ES-SPX-TRANSLATION-ENGINE.md,
             # Codex-approved r7). Samples stay OFF until the A1 eventTime
             # verification records a PASS; until then v2 = anchor + projection.
@@ -76,6 +72,10 @@ spec:
               value: "abhinav"
             - name: ES_SPX_BASIS_ACK_PRINCIPALS
               value: "abhinav"
+            - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
+              value: "15"
+            - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
+              value: "90"
           envFrom:
             - configMapRef:
                 name: options-edge-databento-feed-config
