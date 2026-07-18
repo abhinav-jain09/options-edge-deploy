@@ -114,7 +114,7 @@ data:
   # ensureCompactedTopic (bypasses the KAFKA_MAX_RETENTION_MS cap), so it must be set to -1 too or the
   # code default (172800000/48h) comes back. Data is wiped manually by the nightly clean.
   KAFKA_STRIKE_FLOW_OUTPUT_RETENTION_MS: "-1"
-  KAFKA_STRIKE_FLOW_STREAMS_APP_ID: options-edge-databento-strike-flow-classifier-v4
+  KAFKA_STRIKE_FLOW_STREAMS_APP_ID: options-edge-databento-strike-flow-classifier-v5
   KAFKA_DATABENTO_STRIKE_FLOW_TOPIC: options.databento.strike-flow
   KAFKA_IBKR_STRIKE_FLOW_TOPIC: options.ibkr.strike-flow
   STRIKE_FLOW_ENABLED: "true"
