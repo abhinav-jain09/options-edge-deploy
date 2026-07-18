@@ -47,9 +47,6 @@ spec:
             # store — so a GEX/Redis failure can no longer take the classifier to ERROR (the 2026-06-29
             # incident). The lookup is fail-open: if Redis is unreachable the classifier logs a throttled
             # WARN and runs WITHOUT delta weighting. Kill-switch = "false".
-            # Re-enabled now that delta is read via a fail-open Redis lookup (no in-process global store):
-            # a GEX/Redis failure degrades to "no delta weighting", it can no longer take the classifier
-            # to ERROR like the 2026-06-29 incident. Kill-switch = "false".
             - name: STRIKE_FLOW_DELTA_OVERLAY_ENABLED
               # OFF while options-edge-redis is scaled to 0 (leaked 2026-07-01): with the overlay on and
               # Redis down, EVERY classified trade burns a fail-open connect timeout, capping classifier
