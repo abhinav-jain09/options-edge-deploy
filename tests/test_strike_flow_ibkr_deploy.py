@@ -12,8 +12,10 @@ class StrikeFlowDeployTest(unittest.TestCase):
 
     One Service One Identity Rule: the classifier has exactly one deployment
     (strike-flow-classifier-databento) and one stable, UNVERSIONED Streams
-    application id that comes from the CODE default — the manifests must not
-    pin KAFKA_STRIKE_FLOW_STREAMS_APP_ID (the v4 pin overriding the code
+    application id. The base manifest MUST pin KAFKA_STRIKE_FLOW_STREAMS_APP_ID
+    with a literal equal to the code default: the kafka-cleanup orphan purge
+    builds its ACTIVE set from literal *_APP_ID envs (fail-closed), so a
+    pin-less service would be purged as orphan (the OLD hazard — a v4 pin overriding the code
     default caused the 2026-07-18 stale-generation incident), and no
     version-suffixed identity may appear anywhere in the manifests.
     """

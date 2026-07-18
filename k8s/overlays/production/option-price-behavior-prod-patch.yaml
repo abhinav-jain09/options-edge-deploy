@@ -35,8 +35,8 @@ spec:
             # SESSION thread into CONCURRENT_TRANSACTIONS wedge -> processed_trades/emitted_events = 0,
             # all OPB output frozen for ~1h during RTH. Keep only the SESSION window (this flag is the
             # code's documented escape hatch) until the incremental rolling-window path is fixed +
-            # validated offline via the calibration-replay harness. app id stays v2r4 (inc store already
-            # backfilled); exactly_once stays ON (required by the incremental multi-key crash-consistency).
+            # validated offline via the calibration-replay harness. app id stays the stable unversioned
+            # identity (inc store already backfilled); exactly_once stays ON (required by the incremental multi-key crash-consistency).
             - name: OPB_V2_ROLLING_WINDOWS_ENABLED
               value: "false"
             # The incremental layout spans several store keys per logical update; exactly_once_v2 makes
