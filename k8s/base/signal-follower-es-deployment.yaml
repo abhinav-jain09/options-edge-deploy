@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signal-follower-es
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: signal-follower-es
+    app.kubernetes.io/component: signal-follower-es
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: signal-follower-es
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: signal-follower-es
+        app.kubernetes.io/component: signal-follower-es
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: signal-follower-es
+          image: 192.168.100.252:5000/options-edge-signal-follower:dev
+          imagePullPolicy: Always
+          # Hot-strike paper follower, ES instance (HOT-STRIKE-PAPER-FOLLOWER-GATE1 §3.1):
+          # runs IN the prod cluster (es4 has no spare capacity) but consumes the ES
+          # market from the es4 broker over LAN (same pattern as reversal-confirmation),
+          # and writes the SAME prod Postgres signal_ledger — Postgres is the
+          # cross-market bus. The explicit env vars below override the shared-config
+          # values from envFrom (Kubernetes precedence: env beats envFrom). es4 topics
+          # carry the es. profile prefix. G1 (§11): MERGE INERT — both flags false.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8080"
+            # G1 (§11): configuration-inert BY CONSTRUCTION — pinned here so a value
+            # landing in the shared ConfigMap can never flip a flag (env beats envFrom);
+            # later gates change THESE lines, per environment, deliberately.
+            - name: SIGNAL_FOLLOWER_DETECTOR_ENABLED
+              value: "false"
+            - name: SIGNAL_FOLLOWER_FOLLOWER_ENABLED
+              value: "false"
+            - name: SIGNAL_FOLLOWER_SYMBOL
+              value: ES
+            - name: LIVENESS_SESSION
+              value: globex
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: 192.168.100.4:9092
+            - name: SIGNAL_FOLLOWER_BY_STRIKE_TOPIC
+              value: es.strike-intelligence-by-strike
+            - name: SIGNAL_FOLLOWER_DASHBOARD_TOPIC
+              value: es.strike-intelligence-dashboard
+            - name: SIGNAL_FOLLOWER_PG_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: SIGNAL_FOLLOWER_PG_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: SIGNAL_FOLLOWER_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx512m"
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 768Mi

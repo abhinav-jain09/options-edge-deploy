@@ -20,6 +20,23 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
+  # signal-follower is dev+production only (services.yaml envs) — same reasoning and
+  # pattern as reversal-confirmation above: keep BOTH instances OFF in experiment
+  # (unremapped .252 image; the ES instance would otherwise reach the real es4 broker).
+  - target:
+      kind: Deployment
+      name: signal-follower-spx
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  - target:
+      kind: Deployment
+      name: signal-follower-es
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   - path: web-dev-env-patch.yaml
   # EXPERIMENT: give the k8s feed-gateway the .2 WS auth/origins/replay config, so the browser's live
   # WS (ws://localhost:18091, tunnel -> .2:8091) is accepted from the web origin http://localhost:18090.

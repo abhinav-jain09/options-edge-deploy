@@ -38,3 +38,4 @@ images:
   reversal-confirmation-service: 192.168.100.252:5000/options-edge-reversal-confirmation:dev
   reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:dev
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:dev
+  signal-follower: 192.168.100.252:5000/options-edge-signal-follower:dev
