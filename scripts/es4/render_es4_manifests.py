@@ -40,6 +40,20 @@ SERVICES = [
     "pressure-postgres-writer", "raw-to-display", "strike-flow-avro-adapter", "strike-flow-classifier",
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
     "strike-intelligence",
+    # Partial parity with service-deploy (USER 2026-07-15, TIERED per Codex review): only the services
+    # that actually function on es4 today. es-open-direction is ES-native; the two postgres-writers
+    # persist es.-prefixed topics already flowing on es4 (reversal-* is produced by the prod
+    # reversal-confirmation, which already writes to es4 Kafka). es-feed / feed-gateway keep their ES
+    # variants (es-feed / es-feed-gateway) and are intentionally excluded.
+    #
+    # DEFERRED — need upstream code / ES calibration, or would break the deploy (do NOT re-add blindly):
+    #   unified-sr (rejects ES records), strike-invasion (compile-time "SPX" symbol + SPXW-0DTE defaults),
+    #   invasion-postgres-writer (upstream degraded), reversal-confirmation (prod copy already on es4 Kafka
+    #   -> duplicate verdicts), hpsf-postgres-writer (no HPSF producer on es4), spx-mission-control +
+    #   short-premium-agent (replicas:0 -> pin-and-apply fails; short-premium hardcodes topics, ignores
+    #   TOPIC_PREFIX). See the es4-mirror memory for the full per-service disposition.
+    "es-open-direction", "es-open-direction-postgres-writer",
+    "raw-postgres-writer", "reversal-postgres-writer",
 ]
 
 ES_ENV = {
@@ -168,6 +182,24 @@ def transform(svc, docs):
                 claim_names.append(pvc)
         for c in doc["spec"]["template"]["spec"]["containers"]:
             c["envFrom"] = transform_env_from(c.get("envFrom"))
+            # Drop per-key env refs to the PROD config/secret. Some slices wire values via
+            # valueFrom.configMapKeyRef{name: options-edge-config} / secretKeyRef{name:
+            # options-edge-runtime-secrets} (e.g. es-open-direction's POSTGRES_JDBC_URL / USER /
+            # PASSWORD) instead of envFrom. Those names do not exist on es4, so the pod would fail
+            # CreateContainerConfigError. envFrom already stacks es4-base-env + es4-common-env +
+            # es4-runtime-secrets, which carry the es4 Postgres creds (POSTGRES_JDBC_URL from
+            # es4-common-env -> 192.168.100.4; POSTGRES_USER/PASSWORD provisioned into es4-runtime-secrets
+            # by bootstrap-es4.sh). The apps fall back from any service-specific alias to the generic
+            # POSTGRES_* runtime-profile values, so removing the stale explicit refs lets envFrom supply
+            # the correct es4 creds — exactly how the existing es4 postgres-writers (pin/pressure) run.
+            _STALE_ENV_REFS = {"options-edge-config", "options-edge-runtime-secrets"}
+            if c.get("env"):
+                c["env"] = [
+                    e for e in c["env"]
+                    if ((e.get("valueFrom") or {}).get("configMapKeyRef") or
+                        (e.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name")
+                    not in _STALE_ENV_REFS
+                ]
             # redis runs in the es4 compose stack on the HOST, not in-cluster
             for e in c.get("env") or []:
                 if e.get("value") == "options-edge-redis":
