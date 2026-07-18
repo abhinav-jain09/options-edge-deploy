@@ -55,7 +55,7 @@ spec:
               value: options.spx.strike-invasion.events
             # --- Kafka Streams ---
             - name: STRIKE_INVASION_STREAMS_APP_ID
-              value: options-edge-strike-invasion-service-v1
+              value: options-edge-strike-invasion-service
             - name: STRIKE_INVASION_STREAMS_COMMIT_INTERVAL_MS
               value: "5000"
             - name: STRIKE_INVASION_STREAMS_AUTO_OFFSET_RESET

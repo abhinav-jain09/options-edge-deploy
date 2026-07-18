@@ -49,7 +49,7 @@ spec:
             # v2 state-store format (feedEpochId-last codec). A fresh app id guarantees a clean state
             # store — the service has no prior deployment, so this is a clean start, not a migration.
             - name: KAFKA_MAXPAIN_STREAMS_APP_ID
-              value: options-databento-maxpain-streams-v2
+              value: options-databento-maxpain-streams
             - name: KAFKA_MAXPAIN_STREAMS_NUM_THREADS
               value: "2"
             # Settlement policy (AM/PM classification + reference timing). PM cash close 16:00 ET; the

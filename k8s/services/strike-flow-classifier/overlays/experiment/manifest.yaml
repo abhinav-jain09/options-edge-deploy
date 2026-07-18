@@ -92,6 +92,8 @@ spec:
               value: options.opra.tcbbo
             - name: KAFKA_STRIKE_FLOW_OUTPUT_TOPIC
               value: options.databento.strike-flow
+            - name: KAFKA_STRIKE_FLOW_STREAMS_APP_ID
+              value: options-edge-databento-strike-flow-classifier
             - name: KAFKA_STRIKE_FLOW_STREAMS_AUTO_OFFSET_RESET
               value: earliest
             - name: KAFKA_STRIKE_FLOW_STREAMS_NUM_THREADS

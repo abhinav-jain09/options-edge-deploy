@@ -53,7 +53,7 @@ spec:
               value: dealer-ledger-state
             # --- Kafka Streams ---
             - name: DEALER_LEDGER_STREAMS_APP_ID
-              value: options-edge-dealer-ledger-service-v1
+              value: options-edge-dealer-ledger-service
             - name: DEALER_LEDGER_STREAMS_COMMIT_INTERVAL_MS
               value: "1000"
             - name: DEALER_LEDGER_STREAMS_AUTO_OFFSET_RESET

@@ -50,7 +50,7 @@ spec:
               value: options.spx.spread-skew.events
             # --- consumer group (PLAIN consumer loop — deliberately NOT Kafka Streams) ---
             - name: SPREAD_SKEW_CONSUMER_GROUP
-              value: spread-skew-service-v1
+              value: spread-skew-service
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx2048m"
           ports:

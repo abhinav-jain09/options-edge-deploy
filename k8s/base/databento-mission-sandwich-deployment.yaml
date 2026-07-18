@@ -47,7 +47,7 @@ spec:
             - name: KAFKA_MISSION_SANDWICH_OUTPUT_TOPIC
               value: options.databento.sandwich.mission
             - name: KAFKA_MISSION_SANDWICH_STREAMS_APP_ID
-              value: options-edge-databento-mission-sandwich-v2
+              value: options-edge-databento-mission-sandwich
             - name: KAFKA_MISSION_SANDWICH_STREAMS_NUM_THREADS
               value: "4"
             - name: KAFKA_MISSION_SANDWICH_MAX_CHANGELOG_BYTES

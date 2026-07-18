@@ -68,7 +68,7 @@ spec:
             - name: KAFKA_DATABENTO_NORMALIZED_TOPIC
               value: options.databento.normalized
             - name: KAFKA_DATABENTO_VOLUME_AGGREGATOR_APP_ID
-              value: options-flow-databento-volume-aggregator-v2
+              value: options-flow-databento-volume-aggregator
             - name: KAFKA_DATABENTO_VOLUME_AGGREGATOR_STREAMS_NUM_THREADS
               value: "2"
             - name: KAFKA_DATABENTO_VOLUME_AGGREGATOR_CACHE_MAX_BYTES_BUFFERING

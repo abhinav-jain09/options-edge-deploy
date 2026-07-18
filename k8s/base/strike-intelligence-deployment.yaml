@@ -53,7 +53,7 @@ spec:
               value: strike-intelligence-dashboard
             # --- Kafka Streams ---
             - name: STRIKE_INTEL_STREAMS_APP_ID
-              value: options-edge-strike-intelligence-service-v1
+              value: options-edge-strike-intelligence-service
             - name: STRIKE_INTEL_STREAMS_COMMIT_INTERVAL_MS
               value: "1000"
             - name: STRIKE_INTEL_STREAMS_AUTO_OFFSET_RESET

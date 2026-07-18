@@ -12,8 +12,10 @@ class StrikeFlowDeployTest(unittest.TestCase):
 
     One Service One Identity Rule: the classifier has exactly one deployment
     (strike-flow-classifier-databento) and one stable, UNVERSIONED Streams
-    application id that comes from the CODE default — the manifests must not
-    pin KAFKA_STRIKE_FLOW_STREAMS_APP_ID (the v4 pin overriding the code
+    application id. The base manifest MUST pin KAFKA_STRIKE_FLOW_STREAMS_APP_ID
+    with a literal equal to the code default: the kafka-cleanup orphan purge
+    builds its ACTIVE set from literal *_APP_ID envs (fail-closed), so a
+    pin-less service would be purged as orphan (the OLD hazard — a v4 pin overriding the code
     default caused the 2026-07-18 stale-generation incident), and no
     version-suffixed identity may appear anywhere in the manifests.
     """
@@ -56,20 +58,21 @@ class StrikeFlowDeployTest(unittest.TestCase):
         self.assertNotIn("KAFKA_STRIKE_FLOW_INPUT_TOPIC: options.databento.raw", configmap)
         self.assertNotIn("value: options.databento.raw", deployment)
 
-    def test_app_id_is_never_pinned_and_never_versioned_repo_wide(self) -> None:
-        # The identity lives in the code default (StrikeFlowSettings.DEFAULT_APPLICATION_ID,
-        # unversioned). Pinning it in ANY manifest re-creates the drift that caused the
-        # 2026-07-18 stale-generation incident; versioning it violates the rulebook. Enforced
-        # over every yaml under k8s/, not a curated file list.
+    def test_app_id_is_pinned_unversioned_everywhere(self) -> None:
+        # One Service One Identity Rule + kafka-cleanup contract: the orphan purge builds its
+        # ACTIVE set from every live workload's LITERAL *_APP_ID env (fail-closed), so the base
+        # deployment MUST pin the app id — with exactly the unversioned identity, matching the
+        # code default. A version suffix anywhere under k8s/ violates the rulebook; an absent
+        # pin would let an armed purge classify the live changelogs as orphans.
         versioned = re.compile(r"strike-flow-classifier[-a-z]*-v\d")
+        base = (ROOT / "k8s" / "base" / "strike-flow-classifier-deployment.yaml").read_text()
+        self.assertIn(
+            "value: options-edge-databento-strike-flow-classifier\n", base,
+            "base must pin the UNVERSIONED app id (kafka-cleanup active-set contract)",
+        )
         for path in sorted((ROOT / "k8s").rglob("*.yaml")):
-            content = path.read_text()
-            self.assertNotIn(
-                "KAFKA_STRIKE_FLOW_STREAMS_APP_ID", content,
-                f"{path} must not pin the Streams app id (code default is the identity)",
-            )
             self.assertIsNone(
-                versioned.search(content),
+                versioned.search(path.read_text()),
                 f"{path} must not carry a version-suffixed classifier identity",
             )
 

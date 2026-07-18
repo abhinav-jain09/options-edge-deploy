@@ -63,7 +63,7 @@ spec:
             # --- consumer group id (assign-mode, no commits: identifies the client in
             #     tooling; committed-offset lag is not reported by design) ---
             - name: REVERSAL_GROUP_ID
-              value: reversal-confirmation-v1
+              value: reversal-confirmation
             # --- detection sensitivity (2026-07-14 first-session retune) ---
             # Defaults (12t decline / 4t bounce / 10s cooldown) produced 263
             # candidates in one session on a tape with constant 3-5pt wiggles —

@@ -79,7 +79,7 @@ spec:
             - name: REVERSAL_OUTCOME_TOPIC
               value: es.reversal.outcome
             - name: REVERSAL_GROUP_ID
-              value: reversal-confirmation-v1
+              value: reversal-confirmation
             - name: REVERSAL_MIN_DECLINE_TICKS
               value: "28"
             - name: REVERSAL_MIN_DECLINE_BUCKETS

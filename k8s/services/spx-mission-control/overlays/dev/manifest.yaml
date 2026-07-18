@@ -85,7 +85,7 @@ spec:
             - name: SPX_MISSION_ATM_DISTANCE_POINTS
               value: "5.0"
             - name: KAFKA_SPX_MISSION_STREAMS_APP_ID
-              value: options-edge-spx-mission-control-v2
+              value: options-edge-spx-mission-control
             - name: KAFKA_SPX_MISSION_STREAMS_COMMIT_INTERVAL_MS
               value: "1000"
             - name: KAFKA_SPX_MISSION_STREAMS_NUM_THREADS
