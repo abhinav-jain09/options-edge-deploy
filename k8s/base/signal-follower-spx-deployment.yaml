@@ -37,6 +37,13 @@ spec:
           env:
             - name: HEALTH_PORT
               value: "8080"
+            # G1 (§11): configuration-inert BY CONSTRUCTION — pinned here so a value
+            # landing in the shared ConfigMap can never flip a flag (env beats envFrom);
+            # later gates change THESE lines, per environment, deliberately.
+            - name: SIGNAL_FOLLOWER_DETECTOR_ENABLED
+              value: "false"
+            - name: SIGNAL_FOLLOWER_FOLLOWER_ENABLED
+              value: "false"
             - name: SIGNAL_FOLLOWER_SYMBOL
               value: SPX
             - name: LIVENESS_SESSION

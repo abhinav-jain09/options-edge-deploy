@@ -58,6 +58,10 @@ spec:
         - env:
             - name: HEALTH_PORT
               value: "8080"
+            - name: SIGNAL_FOLLOWER_DETECTOR_ENABLED
+              value: "false"
+            - name: SIGNAL_FOLLOWER_FOLLOWER_ENABLED
+              value: "false"
             - name: SIGNAL_FOLLOWER_SYMBOL
               value: SPX
             - name: LIVENESS_SESSION
@@ -155,6 +159,10 @@ spec:
         - env:
             - name: HEALTH_PORT
               value: "8080"
+            - name: SIGNAL_FOLLOWER_DETECTOR_ENABLED
+              value: "false"
+            - name: SIGNAL_FOLLOWER_FOLLOWER_ENABLED
+              value: "false"
             - name: SIGNAL_FOLLOWER_SYMBOL
               value: ES
             - name: LIVENESS_SESSION

@@ -39,7 +39,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: signal-follower-spx
@@ -56,6 +56,10 @@ spec:
         - env:
             - name: HEALTH_PORT
               value: "8080"
+            - name: SIGNAL_FOLLOWER_DETECTOR_ENABLED
+              value: "false"
+            - name: SIGNAL_FOLLOWER_FOLLOWER_ENABLED
+              value: "false"
             - name: SIGNAL_FOLLOWER_SYMBOL
               value: SPX
             - name: LIVENESS_SESSION
@@ -136,7 +140,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: signal-follower-es
@@ -153,6 +157,10 @@ spec:
         - env:
             - name: HEALTH_PORT
               value: "8080"
+            - name: SIGNAL_FOLLOWER_DETECTOR_ENABLED
+              value: "false"
+            - name: SIGNAL_FOLLOWER_FOLLOWER_ENABLED
+              value: "false"
             - name: SIGNAL_FOLLOWER_SYMBOL
               value: ES
             - name: LIVENESS_SESSION
