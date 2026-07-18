@@ -26,6 +26,10 @@ data:
   # §7c two-sided mode "strength" (STRONG-only briefly trialed 2026-07-17, rolled back same
   # evening — LEAN stays visible for data gathering; re-trial with "require" later).
   STRIKE_INTEL_TWO_SIDED_FLOW_MODE: "strength"
+  # Two-sided magnitude floor (processing #382): prod default 5000 is SPX-calibrated;
+  # ES delta flows run 100-1000x smaller, so the floor is OFF here until the first
+  # Globex sessions provide an ES calibration (else every ES story would demote).
+  STRIKE_INTEL_TWO_SIDED_MIN_ABS_FLOW: "0"
   KAFKA_BOOTSTRAP_SERVERS: "192.168.100.4:9092"
   SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"
   KAFKA_SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"
