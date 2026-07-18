@@ -171,6 +171,8 @@ spec:
               value: 192.168.100.4:9092
             - name: SIGNAL_FOLLOWER_BY_STRIKE_TOPIC
               value: es.strike-intelligence-by-strike
+            - name: SIGNAL_FOLLOWER_SPOT_TOPIC
+              value: es.underlying.es.trades
             - name: SIGNAL_FOLLOWER_DASHBOARD_TOPIC
               value: es.strike-intelligence-dashboard
             - name: SIGNAL_FOLLOWER_PG_URL
