@@ -75,6 +75,10 @@ resources:
   - option-price-behavior-deployment.yaml
   - option-price-behavior-service.yaml
   - feed-gateway-nightly-restart-cronjob.yaml
+  - signal-follower-spx-deployment.yaml
+  - signal-follower-spx-service.yaml
+  - signal-follower-es-deployment.yaml
+  - signal-follower-es-service.yaml
 
 patches:
   - path: kafka-streams-state-patches.yaml

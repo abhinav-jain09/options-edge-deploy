@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signal-follower-spx
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: signal-follower-spx
+    app.kubernetes.io/component: signal-follower-spx
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: signal-follower-spx
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: signal-follower-spx
+        app.kubernetes.io/component: signal-follower-spx
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: signal-follower-spx
+          image: 192.168.100.252:5000/options-edge-signal-follower:dev
+          imagePullPolicy: Always
+          # Hot-strike paper follower, SPX instance (HOT-STRIKE-PAPER-FOLLOWER-GATE1 §3.1):
+          # local (prod) broker via the shared platform config; writes the signal_ledger
+          # schema in this environment's Postgres. G1 (§11): MERGE INERT — both flags
+          # default false and the build refuses to start with either on.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8080"
+            - name: SIGNAL_FOLLOWER_SYMBOL
+              value: SPX
+            - name: LIVENESS_SESSION
+              value: rth
+            - name: SIGNAL_FOLLOWER_PG_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: SIGNAL_FOLLOWER_PG_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: SIGNAL_FOLLOWER_PG_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx512m"
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              memory: 768Mi

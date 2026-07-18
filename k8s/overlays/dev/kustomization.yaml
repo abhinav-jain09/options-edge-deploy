@@ -120,6 +120,16 @@ patches:
         value: 0
       - op: remove
         path: /spec/template/spec/nodeSelector
+  # signal-follower-es is PROD-ONLY: dev is SPX-only (no ES services on dev — USER rule
+  # 2026-07-17) and the ES instance reads the es4 broker, unreachable/meaningless from dev.
+  # Base stays replicas:1 so PROD runs it; this dev-overlay patch forces it to 0 on dev.
+  - target:
+      kind: Deployment
+      name: signal-follower-es
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # DEV-ONLY: serve the k8s web on :8090 (not the base :8094). The legacy host web that
   # owned :8090 is retired, so :8090 is free; and the feed-gateway WS_ALLOWED_ORIGINS
   # already trusts http://localhost:8090, so the browser's live WS is accepted with no
@@ -308,6 +318,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-reversal-postgres-writer
     newName: host.docker.internal:5001/options-edge-reversal-postgres-writer
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-signal-follower
+    newName: host.docker.internal:5001/options-edge-signal-follower
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-ibkr-feed
     newName: host.docker.internal:5001/options-edge-ibkr-feed
