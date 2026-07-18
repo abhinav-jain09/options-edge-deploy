@@ -51,7 +51,10 @@ spec:
             # a GEX/Redis failure degrades to "no delta weighting", it can no longer take the classifier
             # to ERROR like the 2026-06-29 incident. Kill-switch = "false".
             - name: STRIKE_FLOW_DELTA_OVERLAY_ENABLED
-              value: "true"
+              # OFF while options-edge-redis is scaled to 0 (leaked 2026-07-01): with the overlay on and
+              # Redis down, EVERY classified trade burns a fail-open connect timeout, capping classifier
+              # throughput far below OPRA rate. Re-enable together with restoring redis + the writer.
+              value: "false"
             # ONE-TIME state recovery for THIS migration. The previous image registered a gex-delta-by-strike
             # GLOBAL store; this image removes it (delta now comes from Redis). The persistent RocksDB state
             # dir still holds that orphaned global-store state, so GlobalStateManagerImpl.initialize() would
