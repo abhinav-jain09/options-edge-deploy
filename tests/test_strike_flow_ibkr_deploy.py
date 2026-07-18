@@ -56,20 +56,13 @@ class StrikeFlowDeployTest(unittest.TestCase):
         self.assertNotIn("KAFKA_STRIKE_FLOW_INPUT_TOPIC: options.databento.raw", configmap)
         self.assertNotIn("value: options.databento.raw", deployment)
 
-    def test_app_id_is_never_pinned_and_never_versioned(self) -> None:
+    def test_app_id_is_never_pinned_and_never_versioned_repo_wide(self) -> None:
         # The identity lives in the code default (StrikeFlowSettings.DEFAULT_APPLICATION_ID,
-        # unversioned). Pinning it in a manifest re-creates the drift that caused the
-        # 2026-07-18 stale-generation incident; versioning it violates the rulebook.
+        # unversioned). Pinning it in ANY manifest re-creates the drift that caused the
+        # 2026-07-18 stale-generation incident; versioning it violates the rulebook. Enforced
+        # over every yaml under k8s/, not a curated file list.
         versioned = re.compile(r"strike-flow-classifier[-a-z]*-v\d")
-        for path in [
-            ROOT / "k8s" / "base" / "strike-flow-classifier-deployment.yaml",
-            ROOT / "k8s" / "infra" / "base" / "configmap.yaml",
-            ROOT / "k8s" / "es4" / "es4-base-env.yaml",
-            ROOT / "k8s" / "es4" / "services" / "strike-flow-classifier.yaml",
-            ROOT / "k8s" / "services" / "strike-flow-classifier" / "overlays" / "dev" / "manifest.yaml",
-            ROOT / "k8s" / "services" / "strike-flow-classifier" / "overlays" / "production" / "manifest.yaml",
-            ROOT / "k8s" / "services" / "strike-flow-classifier" / "overlays" / "experiment" / "manifest.yaml",
-        ]:
+        for path in sorted((ROOT / "k8s").rglob("*.yaml")):
             content = path.read_text()
             self.assertNotIn(
                 "KAFKA_STRIKE_FLOW_STREAMS_APP_ID", content,
@@ -79,6 +72,20 @@ class StrikeFlowDeployTest(unittest.TestCase):
                 versioned.search(content),
                 f"{path} must not carry a version-suffixed classifier identity",
             )
+
+    def test_each_overlay_renders_exactly_one_classifier_deployment(self) -> None:
+        # One service, one deployment, every environment.
+        for env in ["dev", "production", "experiment"]:
+            manifest = (
+                ROOT / "k8s" / "services" / "strike-flow-classifier" / "overlays" / env / "manifest.yaml"
+            ).read_text()
+            deployments = re.findall(r"^kind: Deployment$", manifest, flags=re.MULTILINE)
+            self.assertEqual(
+                1, len(deployments),
+                f"{env} overlay must render exactly one classifier Deployment",
+            )
+            self.assertIn("name: strike-flow-classifier-databento", manifest)
+            self.assertNotIn("strike-flow-classifier-ibkr", manifest)
 
     def test_service_deploy_owns_the_classifier_rollout(self) -> None:
         # Rollouts are driven by services.yaml + scripts/deploy/service-deploy.sh (the service-deploy
