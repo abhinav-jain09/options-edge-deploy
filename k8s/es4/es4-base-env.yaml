@@ -127,7 +127,6 @@ data:
   KAFKA_STRIKE_FLOW_INPUT_TOPIC: "options.opra.tcbbo"
   KAFKA_STRIKE_FLOW_OUTPUT_RETENTION_MS: "-1"
   KAFKA_STRIKE_FLOW_OUTPUT_TOPIC: "options.databento.strike-flow"
-  KAFKA_STRIKE_FLOW_STREAMS_APP_ID: "options-edge-databento-strike-flow-classifier-v5"
   KAFKA_TOPIC_CLEANUP_POLICY: "delete"
   KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS: "1"
   KAFKA_TOPIC_PARTITIONS_DEFAULT: "32"
