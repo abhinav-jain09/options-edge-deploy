@@ -67,7 +67,7 @@ spec:
             - name: STRIKE_FLOW_ENABLED
               value: "true"
             - name: STRIKE_FLOW_DELTA_OVERLAY_ENABLED
-              value: "true"
+              value: "false"
             - name: KAFKA_STREAMS_CLEANUP_ON_START
               value: "true"
             - name: STRIKE_FLOW_DELTA_REDIS_HOST
