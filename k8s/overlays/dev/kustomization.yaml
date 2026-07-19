@@ -120,6 +120,10 @@ patches:
         value: 0
       - op: remove
         path: /spec/template/spec/nodeSelector
+  # G2 DEV SOAK (§11, 2026-07-19): signal-follower-spx flags TRUE on dev (LEDGER mode).
+  # MUST MIRROR the standalone slice k8s/services/signal-follower/overlays/dev
+  # (validate-services: mono==slice).
+  - path: signal-follower-dev-env-patch.yaml
   # signal-follower-es is PROD-ONLY: dev is SPX-only (no ES services on dev — USER rule
   # 2026-07-17) and the ES instance reads the es4 broker, unreachable/meaningless from dev.
   # Base stays replicas:1 so PROD runs it; this dev-overlay patch forces it to 0 on dev.
