@@ -48,6 +48,8 @@ spec:
     type: Recreate
   template:
     metadata:
+      annotations:
+        oe/config-nonce: 2026-07-19-expiry-roll-1730
       labels:
         app.kubernetes.io/name: options-edge-databento-feed
         app.kubernetes.io/part-of: options-edge
