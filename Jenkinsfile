@@ -443,6 +443,10 @@ pipeline {
           export KAFKA_RECREATE_MISMATCHED_TOPICS="${KAFKA_CLEANUP_TOPICS}"
           scripts/kafka/apply-topics.sh
           scripts/kafka/verify-topics.sh
+          # vix-option-inteligence current-topic reconcile + zero-orphan prune of the
+          # retired zero-dte identity — same script the service-deploy job runs, so the
+          # monolith path deploys the identical Kafka contract.
+          scripts/kafka/ensure-vix-option-inteligence-topic.sh
           scripts/kafka/create-hpsf-topics.sh
           scripts/kafka/verify-hpsf-topics.sh
         '''

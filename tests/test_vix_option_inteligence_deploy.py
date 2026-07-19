@@ -29,6 +29,10 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         self.assertIn("cleanup.policy=compact", reconciler)
         service_job = (ROOT / "Jenkinsfile.service-deploy").read_text()
         self.assertIn("ensure-vix-option-inteligence-topic.sh", service_job)
+        # The monolithic deploy job must apply the identical Kafka contract (reconcile +
+        # zero-orphan prune), not only the per-service job.
+        monolith_job = (ROOT / "Jenkinsfile").read_text()
+        self.assertIn("ensure-vix-option-inteligence-topic.sh", monolith_job)
         gateway = (ROOT / "k8s/base/feed-gateway-deployment.yaml").read_text()
         self.assertIn("KAFKA_VIX_OPTION_INTELIGENCE_TOPIC", gateway)
         self.assertIn("options.spx.vix-option-inteligence-service.current", gateway)
