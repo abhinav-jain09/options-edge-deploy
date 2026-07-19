@@ -43,6 +43,7 @@ TOPICS_DELETE=(
   es.options.databento.strike-flow.strike.avro
   es.options.databento.gex.strike
   es.options.databento.gex.strike.history
+  es.options.databento.gex.spxbridge
   es.options.es.spread-skew.current
   es.options.es.spread-skew.events
   es.options.databento.pace
