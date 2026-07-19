@@ -12,6 +12,12 @@ data:
   # Align the SPX 0DTE roll to the ES roll (17:30 ET) instead of midnight, so the SPX chain
   # flips to the next expiry when es4 does and the mapped ES gamma shows immediately (not until 00:00 ET).
   DATABENTO_EXPIRY_ROLL_AFTER: "17:30"
+  # Off-hours STRIKE LADDER (definitions only): when OPRA is closed, resolve the target expiry
+  # from the Databento definition schema (SPXW parent) and publish the strike ladder so the chain
+  # is not empty overnight and the gateway can form its active selection (symbol+expiry) — without
+  # it the gateway drops the es-gex aligned books as "inactive" (no selection). No quotes/marks/OI
+  # are fabricated; GEX skips unquoted legs.
+  DATABENTO_OFFHOURS_STRIKE_LADDER_ENABLED: "true"
   DATABENTO_MIN_STRIKE: "7000"
   DATABENTO_MAX_STRIKE: "8000"
   DATABENTO_STRIKE_STEP: "5"
