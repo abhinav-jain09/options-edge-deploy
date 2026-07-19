@@ -32,6 +32,7 @@ resources:
   - invasion-postgres-writer-deployment.yaml
   - invasion-postgres-writer-service.yaml
   - spread-skew-deployment.yaml
+  - es-gex-spx-align-deployment.yaml
   - spread-skew-service.yaml
   - reversal-confirmation-deployment.yaml
   - reversal-confirmation-service.yaml

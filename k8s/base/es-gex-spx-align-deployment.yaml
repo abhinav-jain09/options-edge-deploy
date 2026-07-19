@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-gex-spx-align-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-gex-spx-align-service
+    app.kubernetes.io/component: es-gex-spx-align-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-gex-spx-align-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-gex-spx-align-service
+        app.kubernetes.io/component: es-gex-spx-align-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: es-gex-spx-align
+          image: 192.168.100.252:5000/options-edge-es-gex-spx-align:dev
+          imagePullPolicy: Always
+          # Runs on the SPX cluster. Consumes the MM2-mirrored ES-GEX bridge topic + the native basis-bearing
+          # ES index-price, emits the SPX-aligned whole-book. Shared config provides KAFKA_BOOTSTRAP_SERVERS.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # DEFAULT OFF — the whole ES-GEX-on-SPX feature ships dark. Flip to "true" (with the es4 bridge +
+            # gateway flags + the MM2 es4->spx mirror) to enable.
+            - name: ES_GEX_ALIGN_ENABLED
+              value: "false"
+            - name: HEALTH_PORT
+              value: "8140"
+            # Mirrored ES-GEX bridge topic (MM2 target on this SPX cluster).
+            - name: KAFKA_ES_GEX_SPXBRIDGE_MIRRORED_TOPIC
+              value: es4.es.options.databento.gex.spxbridge
+            # Basis-bearing ES index-price (native on the SPX cluster).
+            - name: KAFKA_ES_TRADES_TOPIC
+              value: underlying.es.trades
+            # Output: compacted SPX-aligned whole-book.
+            - name: KAFKA_ES_GEX_SPX_ALIGNED_TOPIC
+              value: options.es-gex-spx-aligned
+            - name: ES_ALIGN_TARGET_SYMBOL
+              value: SPX
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms512m -Xmx2048m"
+          ports:
+            - name: health
+              containerPort: 8140
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              memory: 4Gi

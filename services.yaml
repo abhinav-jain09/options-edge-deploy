@@ -51,6 +51,7 @@ services:
   - { name: strike-invasion,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-invasion,              deployments: [strike-invasion-service] }
   - { name: invasion-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-invasion-postgres-writer,     deployments: [invasion-postgres-writer] }
   - { name: spread-skew,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew,                  deployments: [spread-skew-service] }
+  - { name: es-gex-spx-align,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-gex-spx-align,             deployments: [es-gex-spx-align-service] }
   - { name: reversal-confirmation,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-reversal-confirmation,        deployments: [reversal-confirmation-service] }
   - { name: spread-skew-postgres-writer,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew-postgres-writer,  deployments: [spread-skew-postgres-writer] }
   - { name: es-open-direction,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction,            deployments: [es-open-direction-service] }
