@@ -149,3 +149,14 @@ ensure_topic_custom es.signal-follower.hot-strike delete 1 604800000
 ensure_topic_custom es.options.spx.greek-move-auth.current  compact 4 ""
 ensure_topic_custom es.options.spx.greek-move-auth.events   delete  4 43200000
 echo "topics reconciled: $(( ${#TOPICS_DELETE[@]} + ${#TOPICS_COMPACT[@]} + CONTRACT_TOPIC_COUNT ))"
+
+# ---- zero-orphan prune of the retired vix-option-inteligence identity (es4 mirror) ----
+# Single implementation: scripts/kafka/prune-retired-zero-dte-identity.lib.sh. This box
+# only supplies broker-local docker-exec wrappers — the shared prod reconciler script
+# itself (32-partition ensure, host CLIs) must not run against this 4-partition broker.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../kafka/prune-retired-zero-dte-identity.lib.sh"
+prune_kt() { docker exec es4-kafka kafka-topics --bootstrap-server "$BROKER" "$@"; }
+prune_kg() { docker exec es4-kafka kafka-consumer-groups --bootstrap-server "$BROKER" "$@"; }
+prune_retired_zero_dte_identity "es.options.spx.0dte.intelligence.current"

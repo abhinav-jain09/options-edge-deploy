@@ -37,3 +37,14 @@ config="$(kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe
 printf '%s\n' "$config" | grep -q 'cleanup.policy=compact' \
   || { echo "FATAL: $TOPIC is not compacted" >&2; exit 1; }
 echo "$TOPIC reconciled partitions=$verified cleanup=compact retention.ms=$RETENTION_MS"
+
+
+# ---- zero-orphan prune of the retired identity (One Service One Identity Rule) ----
+# Single implementation lives in prune-retired-zero-dte-identity.lib.sh (shared with the
+# es4 mirror in scripts/es4/create-es-topics.sh, which supplies docker-exec wrappers).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/prune-retired-zero-dte-identity.lib.sh"
+prune_kt() { kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
+prune_kg() { kafka-consumer-groups --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" "$@"; }
+prune_retired_zero_dte_identity "${TOPIC_PREFIX:-}options.spx.0dte.intelligence.current"

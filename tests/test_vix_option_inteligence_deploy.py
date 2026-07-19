@@ -29,6 +29,10 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         self.assertIn("cleanup.policy=compact", reconciler)
         service_job = (ROOT / "Jenkinsfile.service-deploy").read_text()
         self.assertIn("ensure-vix-option-inteligence-topic.sh", service_job)
+        # The monolithic deploy job must apply the identical Kafka contract (reconcile +
+        # zero-orphan prune), not only the per-service job.
+        monolith_job = (ROOT / "Jenkinsfile").read_text()
+        self.assertIn("ensure-vix-option-inteligence-topic.sh", monolith_job)
         gateway = (ROOT / "k8s/base/feed-gateway-deployment.yaml").read_text()
         self.assertIn("KAFKA_VIX_OPTION_INTELIGENCE_TOPIC", gateway)
         self.assertIn("options.spx.vix-option-inteligence-service.current", gateway)
@@ -51,6 +55,26 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         es_job = (ROOT / "Jenkinsfile.es4-deploy").read_text()
         self.assertIn("'vix-option-inteligence'", service_job)
         self.assertIn("'vix-option-inteligence'", es_job)
+
+    def test_both_callers_invoke_the_single_prune_implementation(self):
+        # Zero-orphan rule: ONE implementation (the lib) with fail-closed discovery,
+        # fail-loud deletes, and terminal verification; both production callers source it
+        # and supply broker-appropriate wrappers.
+        lib = (ROOT / "scripts/kafka/prune-retired-zero-dte-identity.lib.sh").read_text()
+        self.assertIn('prefix="zero-dte-intelligence-service-v1"', lib)
+        self.assertIn("refusing to prune (fail-closed)", lib)
+        self.assertIn("FATAL: failed to delete retired consumer group", lib)
+        self.assertIn("FATAL: retired groups still present after delete", lib)
+        self.assertIn("while IFS= read -r g", lib)
+        reconciler = (ROOT / "scripts/kafka/ensure-vix-option-inteligence-topic.sh").read_text()
+        self.assertIn("prune-retired-zero-dte-identity.lib.sh", reconciler)
+        self.assertIn(
+            'prune_retired_zero_dte_identity "${TOPIC_PREFIX:-}options.spx.0dte.intelligence.current"',
+            reconciler)
+        es4 = (ROOT / "scripts/es4/create-es-topics.sh").read_text()
+        self.assertIn("prune-retired-zero-dte-identity.lib.sh", es4)
+        self.assertIn('prune_retired_zero_dte_identity "es.options.spx.0dte.intelligence.current"', es4)
+        self.assertIn("docker exec es4-kafka kafka-consumer-groups", es4)
 
     def test_rename_removes_legacy_workload_only_after_replacement(self):
         scoped = (ROOT / "scripts/deploy/service-deploy.sh").read_text()
