@@ -28,6 +28,8 @@ class ZeroDteIntelligenceDeployTest(unittest.TestCase):
         self.assertIn("value: ES", manifest)
         mm2 = (ROOT / "infra/es4/mm2/mm2.properties").read_text()
         self.assertIn("underlying.es.trades,underlying.vix.price", mm2)
+        bootstrap = (ROOT / "scripts/es4/bootstrap-es4.sh").read_text()
+        self.assertIn("docker compose up -d --force-recreate mm2", bootstrap)
         topic_script = (ROOT / "scripts/es4/create-es-topics.sh").read_text()
         self.assertIn("es.underlying.vix.price", topic_script)
         self.assertIn("es.options.spx.0dte.intelligence.current", topic_script)
