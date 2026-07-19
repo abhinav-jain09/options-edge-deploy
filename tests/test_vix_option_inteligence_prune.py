@@ -60,8 +60,10 @@ case "$cmd" in
     cat "$S/groups.txt" ;;
   delete)
     [ -f "$S/fail_group_delete" ] && exit 1
-    grep -Fxv "$group" "$S/groups.txt" > "$S/g.tmp" || true
-    mv "$S/g.tmp" "$S/groups.txt" ;;
+    if [ ! -f "$S/group_delete_noop" ]; then
+      grep -Fxv "$group" "$S/groups.txt" > "$S/g.tmp" || true
+      mv "$S/g.tmp" "$S/groups.txt"
+    fi ;;
 esac
 exit 0
 """
@@ -161,6 +163,17 @@ class PruneScriptTest(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("FATAL: failed to delete retired consumer group", result.stderr)
+
+    def test_group_surviving_a_successful_delete_fails_terminal_verification(self):
+        # The broker acknowledges the delete but the group persists (eventual consistency /
+        # misbehaving broker): the terminal zero-orphan re-list must turn this into FATAL.
+        result = self.run_script(
+            topics=[NEW_TOPIC],
+            groups=["zero-dte-intelligence-service-v1"],
+            flags=["group_delete_noop"],
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FATAL: retired groups still present after delete", result.stderr)
 
     def test_unverified_topic_delete_fails_after_bounded_wait(self):
         result = self.run_script(

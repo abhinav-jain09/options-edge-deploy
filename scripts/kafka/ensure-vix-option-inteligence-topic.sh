@@ -60,16 +60,20 @@ list_groups() {
 
 # Capture-first, never pipe the listing into a test: a failed listing inside a negated
 # pipeline would read as "absent" — the exact fail-open this section forbids. A failed
-# capture aborts via set -e after the function prints its FATAL.
+# capture aborts via set -e after the function prints its FATAL. Matching uses grep
+# WITHOUT -q into a captured variable: grep -q exits at the first match, which can
+# SIGPIPE the producer under pipefail and falsely report absence on large listings.
 TOPICS_NOW="$(list_topics)"
-if printf '%s\n' "$TOPICS_NOW" | grep -Fxq "$LEGACY_TOPIC"; then
+present="$(printf '%s\n' "$TOPICS_NOW" | grep -Fx "$LEGACY_TOPIC" || true)"
+if [ -n "$present" ]; then
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$LEGACY_TOPIC" \
     || { echo "FATAL: failed to delete retired topic $LEGACY_TOPIC" >&2; exit 1; }
   # Topic deletion is asynchronous — verify terminal absence within a bounded wait.
   deleted=false
   for _ in $(seq 1 "$DELETE_WAIT"); do
     TOPICS_NOW="$(list_topics)"
-    if ! printf '%s\n' "$TOPICS_NOW" | grep -Fxq "$LEGACY_TOPIC"; then deleted=true; break; fi
+    still="$(printf '%s\n' "$TOPICS_NOW" | grep -Fx "$LEGACY_TOPIC" || true)"
+    if [ -z "$still" ]; then deleted=true; break; fi
     sleep 1
   done
   [ "$deleted" = "true" ] || { echo "FATAL: $LEGACY_TOPIC still present ${DELETE_WAIT}s after delete" >&2; exit 1; }

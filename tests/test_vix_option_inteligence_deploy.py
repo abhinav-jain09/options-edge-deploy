@@ -62,6 +62,16 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         self.assertIn("--delete --group", reconciler)
         self.assertIn("FATAL: failed to delete retired consumer group", reconciler)
 
+    def test_es4_mirror_prunes_the_retired_kafka_identity(self):
+        topic_script = (ROOT / "scripts/es4/create-es-topics.sh").read_text()
+        # The es4 broker gets its own broker-local prune (the shared prod reconciler must not
+        # run there — different partition policy and docker-exec CLIs), with the same
+        # fail-closed/fail-loud/terminal-verification contract.
+        self.assertIn("LEGACY_TOPIC=es.options.spx.0dte.intelligence.current", topic_script)
+        self.assertIn("LEGACY_GROUP_PREFIX=zero-dte-intelligence-service-v1", topic_script)
+        self.assertIn("refusing to prune (fail-closed)", topic_script)
+        self.assertIn("FATAL: retired groups still present after delete", topic_script)
+
     def test_rename_removes_legacy_workload_only_after_replacement(self):
         scoped = (ROOT / "scripts/deploy/service-deploy.sh").read_text()
         monolith = (ROOT / "scripts/deploy/apply.sh").read_text()
