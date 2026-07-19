@@ -72,6 +72,8 @@ spec:
         env:
         - name: APP_WEB_PORT
           value: "18091"
+        - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
+          value: options.spx.vix-option-inteligence-service.current
         # spread-skew on es4 emits options.es.* (proc PR#316 relabel) — point the gateway's two skew
         # subscriptions there (TOPIC_PREFIX then yields es.options.es.spread-skew.*).
         - name: KAFKA_SPREAD_SKEW_TOPIC

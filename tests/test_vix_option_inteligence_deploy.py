@@ -18,16 +18,21 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
 
     def test_current_topic_is_explicit_and_compacted(self):
         topics = (ROOT / "scripts/kafka/topics.env").read_text()
-        self.assertIn("options.spx.0dte.intelligence.current:32", topics)
+        deployment = (ROOT / "k8s/base/vix-option-inteligence-deployment.yaml").read_text()
+        self.assertIn("options.spx.vix-option-inteligence-service.current:32", topics)
         compacted = topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1]
-        self.assertIn("options.spx.0dte.intelligence.current", compacted)
-        # The service was renamed, but the existing Kafka contract deliberately keeps its 0DTE
-        # topic name so the gateway/UI and retained current state remain uninterrupted.
-        reconciler = (ROOT / "scripts/kafka/ensure-zero-dte-intelligence-topic.sh").read_text()
+        self.assertIn("options.spx.vix-option-inteligence-service.current", compacted)
+        # The active Kafka contract carries the exact service identity; the legacy 0DTE topic is
+        # intentionally absent from all producer/consumer configuration.
+        reconciler = (ROOT / "scripts/kafka/ensure-vix-option-inteligence-topic.sh").read_text()
         self.assertIn("PARTITIONS=32", reconciler)
         self.assertIn("cleanup.policy=compact", reconciler)
         service_job = (ROOT / "Jenkinsfile.service-deploy").read_text()
-        self.assertIn("ensure-zero-dte-intelligence-topic.sh", service_job)
+        self.assertIn("ensure-vix-option-inteligence-topic.sh", service_job)
+        gateway = (ROOT / "k8s/base/feed-gateway-deployment.yaml").read_text()
+        self.assertIn("KAFKA_VIX_OPTION_INTELIGENCE_TOPIC", gateway)
+        self.assertIn("options.spx.vix-option-inteligence-service.current", gateway)
+        self.assertNotIn("options.spx.0dte.intelligence.current", topics + deployment + gateway)
 
     def test_es4_uses_es_symbol_and_mirrors_vix(self):
         manifest = (ROOT / "k8s/es4/services/vix-option-inteligence.yaml").read_text()
@@ -39,7 +44,7 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         self.assertIn("docker compose up -d --force-recreate mm2", bootstrap)
         topic_script = (ROOT / "scripts/es4/create-es-topics.sh").read_text()
         self.assertIn("es.underlying.vix.price", topic_script)
-        self.assertIn("es.options.spx.0dte.intelligence.current", topic_script)
+        self.assertIn("es.options.spx.vix-option-inteligence-service.current", topic_script)
 
     def test_all_three_jenkins_paths_include_service(self):
         service_job = (ROOT / "Jenkinsfile.service-deploy").read_text()

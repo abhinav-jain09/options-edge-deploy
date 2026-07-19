@@ -63,8 +63,8 @@ spec:
               value: options.databento.events.raw
             - name: ZERO_DTE_VIX_TOPIC
               value: underlying.vix.price
-            - name: ZERO_DTE_INTELLIGENCE_TOPIC
-              value: options.spx.0dte.intelligence.current
+            - name: VIX_OPTION_INTELIGENCE_TOPIC
+              value: options.spx.vix-option-inteligence-service.current
             - name: ZERO_DTE_DIRECTION_PERSISTENCE_MS
               value: "20000"
             - name: ZERO_DTE_REVERSAL_PERSISTENCE_MS

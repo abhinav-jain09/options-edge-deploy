@@ -80,7 +80,7 @@ TOPICS_COMPACT=(
   es.underlying.es.price
   # Mirrored prod VIX latest value and the live broad-direction output.
   es.underlying.vix.price
-  es.options.spx.0dte.intelligence.current
+  es.options.spx.vix-option-inteligence-service.current
 )
 
 kt() { docker exec es4-kafka kafka-topics --bootstrap-server "$BROKER" "$@"; }
