@@ -85,11 +85,11 @@ spec:
         # never match -> empty chain even at market open. IB_EXPIRY stays unset = AUTO (0DTE daily roll).
         - name: IB_SYMBOL
           value: "ES"
-        # Roll the AUTO 0DTE expiry to the next trade date at today's 16:00 ET expiry (mirrors the
-        # es-feed). Without this the gateway keeps activeSelection on the just-expired date and drops
-        # the feed's next-expiry records until midnight ET, freezing the chain all evening (gateway PR#74).
+        # Roll the AUTO 0DTE expiry to the next trade date at 17:30 ET (mirrors the es-feed + SPX).
+        # Without this the gateway keeps activeSelection on the just-expired date and drops the feed's
+        # next-expiry records until midnight ET, freezing the chain all evening (gateway PR#74).
         - name: IB_EXPIRY_ROLL_AFTER
-          value: "16:00"
+          value: "17:30"
         - name: JAVA_TOOL_OPTIONS
           value: "-Xms256m -Xmx1536m"
         # WS handshake auth against the PRODUCTION Keycloak realm.

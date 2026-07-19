@@ -89,15 +89,17 @@ spec:
               value: "ES"   # never the SPXW default (Codex blocker #2); glbx-parent resolution keys on symbol.OPT
             - name: DATABENTO_EXPIRY
               value: "AUTO"
-            # Roll the ES 0DTE expiry to the next trade date the instant today's 0DTE EXPIRES
-            # (16:00 ET), NOT at midnight ET and NOT at the 18:00 ET session reopen. Rolling at
+            # Roll the ES 0DTE expiry to the next trade date at 17:30 ET — inside the 17:00-18:00 ET
+            # CME maintenance break, so ES + SPX flip together (SPX now also rolls at 17:30) and are
+            # ready before the 18:00 ET Globex reopen. (Trade-off: 16:00-17:30 the just-expired 0DTE
+            # is still shown for ~90 min.) NOT at midnight ET and NOT at the 18:00 ET session reopen.
             # expiry (a) never freezes the chain on the dead contracts, and (b) gives the feed the
             # full 16:00->18:00 ET window (incl. the 17:00-18:00 ET CME maintenance break) to
             # re-resolve + resubscribe the next 0DTE, so it is READY before the session reopens
             # rather than resetting the book mid-open. Feed PR#60. Empty on SPX (whose 9:30-16:00 ET
-            # session never crosses midnight, so midnight-ET rollover is correct there).
+            # session never crosses midnight; SPX now aligns to this same 17:30 roll for ES-gamma-on-SPX).
             - name: DATABENTO_EXPIRY_ROLL_AFTER
-              value: "16:00"
+              value: "17:30"
             - name: DATABENTO_MIN_STRIKE
               value: "5000"
             - name: DATABENTO_MAX_STRIKE

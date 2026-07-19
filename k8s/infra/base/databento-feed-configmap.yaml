@@ -9,6 +9,9 @@ data:
   DATABENTO_SYMBOL: SPX
   DATABENTO_TRADING_CLASS: SPXW
   DATABENTO_EXPIRY: ""
+  # Align the SPX 0DTE roll to the ES roll (17:30 ET) instead of midnight, so the SPX chain
+  # flips to the next expiry when es4 does and the mapped ES gamma shows immediately (not until 00:00 ET).
+  DATABENTO_EXPIRY_ROLL_AFTER: "17:30"
   DATABENTO_MIN_STRIKE: "7000"
   DATABENTO_MAX_STRIKE: "8000"
   DATABENTO_STRIKE_STEP: "5"
