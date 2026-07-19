@@ -101,6 +101,15 @@ spec:
           value: "7000"
         - name: PIN_FLOW_STRIKE_HI
           value: "7800"
+        # ES trades 18:00 ET -> 17:00 ET the NEXT day. The gateway's default pin-flow window is the SPX
+        # cash session (09:30..16:01 ET), so an ES request in the evening resolved to a window where ES
+        # was CLOSED (zero rows) and the Flow Explorer showed nothing for ES's main trading hours. These
+        # make the window span midnight; the gateway rolls the end to date+1 and resolves the live
+        # session date (gateway PR #90).
+        - name: PIN_FLOW_SESSION_START
+          value: "18:00"
+        - name: PIN_FLOW_SESSION_END
+          value: "17:00"
         # WS handshake auth against the PRODUCTION Keycloak realm.
         - name: WS_AUTH_ENABLED
           value: "true"
