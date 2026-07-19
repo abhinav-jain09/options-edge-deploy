@@ -330,6 +330,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-spread-skew
     newName: host.docker.internal:5001/options-edge-spread-skew
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-es-gex-spx-align
+    newName: host.docker.internal:5001/options-edge-es-gex-spx-align
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-reversal-confirmation
     newName: host.docker.internal:5001/options-edge-reversal-confirmation
     newTag: dev
