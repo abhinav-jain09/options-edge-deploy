@@ -192,6 +192,11 @@ for dep in $DEPLOYMENTS; do
   DESIRED_TOTAL=$((DESIRED_TOTAL + ${r:-0}))
 done
 if [ "$DESIRED_TOTAL" -eq 0 ]; then
+  if [ "$SERVICE" = "vix-option-inteligence" ]; then
+    echo "Removing legacy zero-dte-intelligence Kubernetes identity after replacement spec applied."
+    kubectl -n "$NAMESPACE" delete deployment zero-dte-intelligence-service --ignore-not-found
+    kubectl -n "$NAMESPACE" delete service zero-dte-intelligence-service --ignore-not-found
+  fi
   echo "  service is scaled to 0 (temporarily disabled) — spec applied, no pods to gate."
   echo "=== $SERVICE deployed to $ENVIRONMENT (replicas 0): $PINNED_IMAGE ==="
   exit 0
@@ -261,5 +266,13 @@ done <"$PREV_FILE"
 if [ "$gate_fail" -ne 0 ]; then
   echo "FATAL: health gate failed after rollout — use the rollback command above." >&2
   exit 1
+fi
+if [ "$SERVICE" = "vix-option-inteligence" ]; then
+  # Rename migration: delete the old identity only after the replacement passed its digest,
+  # restart and health gates. This prevents duplicate consumers while preserving rollback
+  # safety during the new rollout itself.
+  echo "Removing legacy zero-dte-intelligence Kubernetes identity after successful replacement."
+  kubectl -n "$NAMESPACE" delete deployment zero-dte-intelligence-service --ignore-not-found
+  kubectl -n "$NAMESPACE" delete service zero-dte-intelligence-service --ignore-not-found
 fi
 echo "=== $SERVICE deployed to $ENVIRONMENT: $PINNED_IMAGE ==="

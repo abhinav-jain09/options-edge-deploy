@@ -39,7 +39,7 @@ SERVICES = [
     "directional-pressure", "gex-delta-redis-writer", "option-price-behavior", "pin-postgres-writer",
     "pressure-postgres-writer", "raw-to-display", "strike-flow-avro-adapter", "strike-flow-classifier",
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
-    "strike-intelligence", "zero-dte-intelligence",
+    "strike-intelligence", "vix-option-inteligence",
 ]
 
 ES_ENV = {
@@ -122,7 +122,7 @@ ES_ENV = {
         # magnitudes. Self-calibrating — no per-session scale numbers. SPX keeps the flag OFF (default).
         {"name": "STRIKE_INTEL_ADAPTIVE_SCALE_ENABLED", "value": "true"},
     ],
-    "zero-dte-intelligence": [
+    "vix-option-inteligence": [
         # On es4 the same deterministic engine analyzes the ES 0DTE option tape. TOPIC_PREFIX
         # still isolates all input/output topics on the .4 broker.
         {"name": "ZERO_DTE_SYMBOL", "value": "ES", "_override": True},

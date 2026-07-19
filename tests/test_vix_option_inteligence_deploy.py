@@ -5,12 +5,12 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-class ZeroDteIntelligenceDeployTest(unittest.TestCase):
+class VixOptionInteligenceDeployTest(unittest.TestCase):
     def test_live_service_is_registered_for_dev_and_prod(self):
         registry = (ROOT / "services.yaml").read_text()
-        self.assertIn("name: zero-dte-intelligence", registry)
+        self.assertIn("name: vix-option-inteligence", registry)
         self.assertIn("envs: [dev, production]", registry)
-        deployment = (ROOT / "k8s/base/zero-dte-intelligence-deployment.yaml").read_text()
+        deployment = (ROOT / "k8s/base/vix-option-inteligence-deployment.yaml").read_text()
         self.assertIn("ZERO_DTE_INTELLIGENCE_ENABLED", deployment)
         self.assertIn('value: "true"', deployment)
         self.assertIn("ZERO_DTE_MIN_DIRECTION_HOLD_MS", deployment)
@@ -21,6 +21,8 @@ class ZeroDteIntelligenceDeployTest(unittest.TestCase):
         self.assertIn("options.spx.0dte.intelligence.current:32", topics)
         compacted = topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1]
         self.assertIn("options.spx.0dte.intelligence.current", compacted)
+        # The service was renamed, but the existing Kafka contract deliberately keeps its 0DTE
+        # topic name so the gateway/UI and retained current state remain uninterrupted.
         reconciler = (ROOT / "scripts/kafka/ensure-zero-dte-intelligence-topic.sh").read_text()
         self.assertIn("PARTITIONS=32", reconciler)
         self.assertIn("cleanup.policy=compact", reconciler)
@@ -28,7 +30,7 @@ class ZeroDteIntelligenceDeployTest(unittest.TestCase):
         self.assertIn("ensure-zero-dte-intelligence-topic.sh", service_job)
 
     def test_es4_uses_es_symbol_and_mirrors_vix(self):
-        manifest = (ROOT / "k8s/es4/services/zero-dte-intelligence.yaml").read_text()
+        manifest = (ROOT / "k8s/es4/services/vix-option-inteligence.yaml").read_text()
         self.assertIn("name: ZERO_DTE_SYMBOL", manifest)
         self.assertIn("value: ES", manifest)
         mm2 = (ROOT / "infra/es4/mm2/mm2.properties").read_text()
@@ -42,8 +44,16 @@ class ZeroDteIntelligenceDeployTest(unittest.TestCase):
     def test_all_three_jenkins_paths_include_service(self):
         service_job = (ROOT / "Jenkinsfile.service-deploy").read_text()
         es_job = (ROOT / "Jenkinsfile.es4-deploy").read_text()
-        self.assertIn("'zero-dte-intelligence'", service_job)
-        self.assertIn("'zero-dte-intelligence'", es_job)
+        self.assertIn("'vix-option-inteligence'", service_job)
+        self.assertIn("'vix-option-inteligence'", es_job)
+
+    def test_rename_removes_legacy_workload_only_after_replacement(self):
+        scoped = (ROOT / "scripts/deploy/service-deploy.sh").read_text()
+        monolith = (ROOT / "scripts/deploy/apply.sh").read_text()
+        es_job = (ROOT / "Jenkinsfile.es4-deploy").read_text()
+        for deployment_path in (scoped, monolith, es_job):
+            self.assertIn("delete deployment zero-dte-intelligence-service --ignore-not-found", deployment_path)
+            self.assertIn("delete service zero-dte-intelligence-service --ignore-not-found", deployment_path)
 
 
 if __name__ == "__main__":

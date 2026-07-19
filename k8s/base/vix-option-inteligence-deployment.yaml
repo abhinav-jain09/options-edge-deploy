@@ -1,11 +1,11 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: zero-dte-intelligence-service
+  name: vix-option-inteligence-service
   namespace: options-edge
   labels:
-    app.kubernetes.io/name: zero-dte-intelligence-service
-    app.kubernetes.io/component: zero-dte-intelligence-service
+    app.kubernetes.io/name: vix-option-inteligence-service
+    app.kubernetes.io/component: vix-option-inteligence-service
     app.kubernetes.io/part-of: options-edge
 spec:
   replicas: 1
@@ -13,17 +13,17 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: zero-dte-intelligence-service
+      app.kubernetes.io/name: vix-option-inteligence-service
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: zero-dte-intelligence-service
-        app.kubernetes.io/component: zero-dte-intelligence-service
+        app.kubernetes.io/name: vix-option-inteligence-service
+        app.kubernetes.io/component: vix-option-inteligence-service
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
-        - name: zero-dte-intelligence
-          image: 192.168.100.252:5000/options-edge-zero-dte-intelligence:dev
+        - name: vix-option-inteligence
+          image: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev
           imagePullPolicy: Always
           envFrom:
             - configMapRef:

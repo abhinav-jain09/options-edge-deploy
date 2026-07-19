@@ -41,8 +41,8 @@ resources:
   - strike-liquidity-heatmap-service.yaml
   - es-open-direction-deployment.yaml
   - es-open-direction-service.yaml
-  - zero-dte-intelligence-deployment.yaml
-  - zero-dte-intelligence-service.yaml
+  - vix-option-inteligence-deployment.yaml
+  - vix-option-inteligence-service.yaml
   - es-open-direction-postgres-writer-deployment.yaml
   - es-open-direction-postgres-writer-service.yaml
   - reversal-postgres-writer-deployment.yaml
