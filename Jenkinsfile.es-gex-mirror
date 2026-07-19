@@ -24,9 +24,12 @@ pipeline {
   options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
   environment {
     KBIN  = '/Users/abhinav/development/confluent-7.3.1/bin'
-    MDIR  = '/Users/abhinav/oe-ops/es-gex-mirror'
-    LABEL = 'com.optionsedge.esgex-mirror'
-    PLIST = '/Users/abhinav/Library/LaunchAgents/com.optionsedge.esgex-mirror.plist'
+    // Per-TARGET identity so multiple env mirrors (dev 127.0.0.1, prod 192.168.100.252, ...) coexist as
+    // independent launchd units on this agent instead of overwriting one shared label/dir (each env mirrors .4).
+    SLUG  = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
+    MDIR  = "/Users/abhinav/oe-ops/es-gex-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
+    LABEL = "com.optionsedge.esgex-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
+    PLIST = "/Users/abhinav/Library/LaunchAgents/com.optionsedge.esgex-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}.plist"
     SRC   = "${params.SOURCE_ES_CLUSTER_IP}:${params.SOURCE_PORT}"
     TGT   = "${params.TARGET_SPX_CLUSTER_IP}:${params.TARGET_PORT}"
   }
