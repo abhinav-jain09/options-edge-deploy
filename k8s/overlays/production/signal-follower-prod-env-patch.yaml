@@ -1,0 +1,37 @@
+# PROD FLAG FLIP (USER decision 2026-07-19, r19 amendment: DETECTOR/FOLLOWER flags
+# stay EQUAL across envs): both prod signal-follower instances go live in LEDGER
+# mode — detector publishes hot-strike cards (gold mark appears on the chain from
+# the first computation) and the follower opens paper positions in signal_ledger.
+# EXECUTION_MODE remains LEDGER on prod until sustained IBKR paper results on dev
+# (r19); the dev IBKR_PAPER flip is the separate Tuesday gate.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signal-follower-spx
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: signal-follower-spx
+          env:
+            - name: SIGNAL_FOLLOWER_DETECTOR_ENABLED
+              value: "true"
+            - name: SIGNAL_FOLLOWER_FOLLOWER_ENABLED
+              value: "true"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signal-follower-es
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: signal-follower-es
+          env:
+            - name: SIGNAL_FOLLOWER_DETECTOR_ENABLED
+              value: "true"
+            - name: SIGNAL_FOLLOWER_FOLLOWER_ENABLED
+              value: "true"
