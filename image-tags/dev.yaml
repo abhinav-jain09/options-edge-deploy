@@ -33,6 +33,7 @@ images:
   hpsf-postgres-writer-service: 192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev
   es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:dev
   vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev
+  greek-move-authenticity-service: 192.168.100.252:5000/options-edge-greek-move-authenticity:dev
   es-open-direction-postgres-writer: 192.168.100.252:5000/options-edge-es-open-direction-postgres-writer:dev
   web: host.docker.internal:5001/options-edge-web:dev
   spread-skew-service: 192.168.100.252:5000/options-edge-spread-skew:dev
