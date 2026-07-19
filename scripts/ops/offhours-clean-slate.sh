@@ -596,6 +596,11 @@ if [ "$DB_WIPE" = "true" ]; then
   ES_EXCLUDE="tablename !~ '^es_'"
   TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES) and $ES_EXCLUDE")
   if [ -n "$TBL_LIST" ]; then
+    # Belt-and-suspenders: the query already restricts to schemaname='public', but ASSERT it so a future
+    # edit can never let a non-public schema (notably `calibration` — the corpus/state that must survive)
+    # into the truncate list. Any non-"public" table in the list aborts the entire wipe, fail-closed.
+    NONPUBLIC_IN_LIST=$(printf '%s' "$TBL_LIST" | grep -oE '"[^"]+"\.' | grep -vxE '"public"\.' | sort -u | tr '\n' ' ')
+    [ -z "$NONPUBLIC_IN_LIST" ] || die "REFUSING truncate: non-public schema(s) in the truncate list: $NONPUBLIC_IN_LIST"
     trunc_n=$(pg "select count(*) from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES) and $ES_EXCLUDE" | tr -d '[:space:]')
     pg "set lock_timeout='30s'; set statement_timeout='300s'; truncate table $TBL_LIST restart identity" \
       || die "TRUNCATE of flow DB failed"
