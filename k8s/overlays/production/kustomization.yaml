@@ -224,6 +224,8 @@ patches:
 # entries resolved from the build (.images = [] first), so this mapping only hardens the
 # at-rest render. Tag-level ref here; the digest pin still happens fail-closed at deploy.
 images:
+  - name: 192.168.100.252:5000/options-edge-es-gex-spx-align
+    newTag: prod
   - name: 192.168.100.252:5000/options-edge-short-premium-agent
     newTag: prod
   - name: 192.168.100.252:5000/options-edge-strike-liquidity-heatmap
