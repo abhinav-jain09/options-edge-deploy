@@ -36,3 +36,13 @@ spec:
               value: "abhinav"
             - name: ES_SPX_BASIS_ACK_PRINCIPALS
               value: "abhinav"
+            # A1 verification (feed #81): evidence pairs onto spx.basis.a1.evidence
+            # (pre-created, delete/3d). SAMPLES_ENABLED=true is SAFE pre-certificate:
+            # the engine keeps samples off (fail-honest WARN at boot) until the
+            # A1:<date> PASS record for the running SYNTHETIC_CALC_VERSION lands —
+            # tools/a1_verify.py after Monday's session commits it; samples then
+            # activate without another deploy. A FAIL revokes.
+            - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
+              value: "true"
+            - name: ES_SPX_BASIS_SAMPLES_ENABLED
+              value: "true"
