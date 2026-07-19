@@ -88,6 +88,10 @@ fi
 
 log "docker compose up -d (kafka/schema-registry/postgres/redis/mm2)"
 (cd "$INFRA_DIR" && docker compose up -d)
+# mm2.properties is bind-mounted. `compose up -d` does not recreate the container when only
+# the file contents change, so MirrorMaker would keep its old topic allow-list indefinitely.
+# Recreate only MM2 on every explicit infra-sync; Kafka/SR/Postgres/Redis remain untouched.
+(cd "$INFRA_DIR" && docker compose up -d --force-recreate mm2)
 
 log "waiting for kafka/schema-registry/postgres/redis health (fail-closed)"
 HEALTH_OK=false
