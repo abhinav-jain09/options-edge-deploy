@@ -109,8 +109,10 @@ ensure_topic() { # name cleanup(compact|delete)
 
 # contract-specific topics (partitions/retention fixed by the owning service's
 # design and NOT subject to the generic 4-partition/12h policy)
+CONTRACT_TOPIC_COUNT=0
 ensure_topic_custom() { # name cleanup partitions retention_ms(""=none)
   local t=$1 cleanup=$2 parts=$3 retention=$4 created=no
+  CONTRACT_TOPIC_COUNT=$(( CONTRACT_TOPIC_COUNT + 1 ))
   if ! kt --describe --topic "$t" >/dev/null 2>&1; then
     kt --create --topic "$t" --partitions "$parts" --replication-factor 1 >/dev/null
     created=yes
@@ -134,4 +136,9 @@ ensure_topic_custom es.reversal.verdicts        delete  1 604800000
 ensure_topic_custom es.reversal.strength        delete  1 172800000
 ensure_topic_custom es.reversal.final-summary   compact 1 ""
 ensure_topic_custom es.reversal.outcome         compact 1 ""
-echo "topics reconciled: $(( ${#TOPICS_DELETE[@]} + ${#TOPICS_COMPACT[@]} + 4 ))"
+# Hot Strike of the Day snapshots (signal-follower-service, design §4.4): 1 partition,
+# RF = broker count (1 on this single-node cluster — stated limitation; Postgres is the
+# durable copy), 7d retention, no compaction. The ES follower instance (a prod-cluster
+# pod) produces here; the es4 gateway (TOPIC_PREFIX=es.) consumes and forwards.
+ensure_topic_custom es.signal-follower.hot-strike delete 1 604800000
+echo "topics reconciled: $(( ${#TOPICS_DELETE[@]} + ${#TOPICS_COMPACT[@]} + CONTRACT_TOPIC_COUNT ))"
