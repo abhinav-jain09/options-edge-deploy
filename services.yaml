@@ -54,6 +54,7 @@ services:
   - { name: reversal-confirmation,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-reversal-confirmation,        deployments: [reversal-confirmation-service] }
   - { name: spread-skew-postgres-writer,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew-postgres-writer,  deployments: [spread-skew-postgres-writer] }
   - { name: es-open-direction,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction,            deployments: [es-open-direction-service] }
+  - { name: zero-dte-intelligence,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-zero-dte-intelligence,        deployments: [zero-dte-intelligence-service] }
   - { name: es-open-direction-postgres-writer, managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction-postgres-writer, deployments: [es-open-direction-postgres-writer] }
   - { name: reversal-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-reversal-postgres-writer,     deployments: [reversal-postgres-writer] }
   # Hot-strike paper follower (HOT-STRIKE-PAPER-FOLLOWER-GATE1 §3.1): ONE image, TWO per-market

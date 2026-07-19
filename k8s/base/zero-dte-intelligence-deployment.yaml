@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zero-dte-intelligence-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: zero-dte-intelligence-service
+    app.kubernetes.io/component: zero-dte-intelligence-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: zero-dte-intelligence-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zero-dte-intelligence-service
+        app.kubernetes.io/component: zero-dte-intelligence-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: zero-dte-intelligence
+          image: 192.168.100.252:5000/options-edge-zero-dte-intelligence:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8080"
+            - name: ZERO_DTE_INTELLIGENCE_ENABLED
+              value: "true"
+            - name: ZERO_DTE_SYMBOL
+              value: SPX
+            - name: ZERO_DTE_OPTION_EVENTS_TOPIC
+              value: options.databento.events.raw
+            - name: ZERO_DTE_VIX_TOPIC
+              value: underlying.vix.price
+            - name: ZERO_DTE_INTELLIGENCE_TOPIC
+              value: options.spx.0dte.intelligence.current
+            # Broad-view anti-blink policy: 20s entry, 30s reversal confirmation and 2m hold.
+            - name: ZERO_DTE_DIRECTION_PERSISTENCE_MS
+              value: "20000"
+            - name: ZERO_DTE_REVERSAL_PERSISTENCE_MS
+              value: "30000"
+            - name: ZERO_DTE_MIN_DIRECTION_HOLD_MS
+              value: "120000"
+            - name: ZERO_DTE_UNUSUAL_PERSISTENCE_MS
+              value: "10000"
+            - name: ZERO_DTE_UNUSUAL_HOLD_MS
+              value: "60000"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms128m -Xmx384m
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet: { path: /health/live, port: health }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            httpGet: { path: /health/ready, port: health }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
