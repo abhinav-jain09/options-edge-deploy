@@ -167,6 +167,10 @@ patches:
   # PROD: option-price-behavior V2 heap 3g + limit 5Gi (base 2g/2Gi OOMKilled —
   # heap == limit, no off-heap room). Re-enabled after the 2026-07-07 freeze.
   - path: short-premium-prod-env-patch.yaml
+  # PROD FLAG FLIP (USER 2026-07-19, r19: flags equal across envs): both signal-follower
+  # instances DETECTOR+FOLLOWER true, LEDGER. MUST MIRROR the standalone slice
+  # k8s/services/signal-follower/overlays/production (validate-services: mono==slice).
+  - path: signal-follower-prod-env-patch.yaml
   - path: option-price-behavior-prod-patch.yaml
   # PROD-ONLY: databento-feed 1s snapshot publish interval (explicit container env overrides the
   # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
