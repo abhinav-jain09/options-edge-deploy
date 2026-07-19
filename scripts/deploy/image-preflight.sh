@@ -70,6 +70,7 @@
           if { [ "${ENVIRONMENT:-dev}" = "dev" ] || [ "${ENVIRONMENT:-dev}" = "production" ]; } && [ "${DEPLOY_TARGET:-all}" = "all" ]; then
             images="$images
             SHORT_PREMIUM_AGENT_IMAGE=${SHORT_PREMIUM_AGENT_IMAGE:-}
+            SIGNAL_FOLLOWER_IMAGE=${SIGNAL_FOLLOWER_IMAGE:-}
             "
           fi
 
