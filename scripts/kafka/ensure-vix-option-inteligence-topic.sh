@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Reconcile the live 0DTE current-state topic without touching any other Kafka topic.
+# Reconcile the live vix-option-inteligence-service current-state topic without touching any other Kafka topic.
 set -euo pipefail
 
 : "${KAFKA_BOOTSTRAP_SERVERS:?load scripts/kafka/load-kafka-settings.sh first}"
-TOPIC="${TOPIC_PREFIX:-}options.spx.0dte.intelligence.current"
+TOPIC="${TOPIC_PREFIX:-}options.spx.vix-option-inteligence-service.current"
 PARTITIONS=32
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 RETENTION_MS="${KAFKA_TOPIC_RETENTION_MS:--1}"
