@@ -1,0 +1,21 @@
+# G2 DEV SOAK (design §11, started 2026-07-19): both flags TRUE on dev —
+# detector computes hot-strike cards and the follower opens LEDGER paper
+# positions on the dev SPX feed. EXECUTION_MODE stays LEDGER (IBKR_PAPER is a
+# separate, later gate — the Tuesday drill). Prod flags remain false until G2
+# evidence (rollout/G2-checklist.md) is signed; per the r19 amendment the
+# eventual DETECTOR/FOLLOWER prod flip happens in both envs together.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signal-follower-spx
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: signal-follower-spx
+          env:
+            - name: SIGNAL_FOLLOWER_DETECTOR_ENABLED
+              value: "true"
+            - name: SIGNAL_FOLLOWER_FOLLOWER_ENABLED
+              value: "true"
