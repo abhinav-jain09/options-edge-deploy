@@ -52,6 +52,16 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         self.assertIn("'vix-option-inteligence'", service_job)
         self.assertIn("'vix-option-inteligence'", es_job)
 
+    def test_reconciler_prunes_the_retired_kafka_identity(self):
+        reconciler = (ROOT / "scripts/kafka/ensure-vix-option-inteligence-topic.sh").read_text()
+        # Zero-orphan rule: the retired topic and retired v1 consumer groups are pruned by the
+        # sanctioned reconcile stage, prefix-aware for the es4 mirror, and a still-active
+        # retired group fails the deploy loudly instead of being skipped.
+        self.assertIn('LEGACY_TOPIC="${TOPIC_PREFIX:-}options.spx.0dte.intelligence.current"', reconciler)
+        self.assertIn('LEGACY_GROUP_PREFIX="zero-dte-intelligence-service-v1"', reconciler)
+        self.assertIn("--delete --group", reconciler)
+        self.assertIn("FATAL: failed to delete retired consumer group", reconciler)
+
     def test_rename_removes_legacy_workload_only_after_replacement(self):
         scoped = (ROOT / "scripts/deploy/service-deploy.sh").read_text()
         monolith = (ROOT / "scripts/deploy/apply.sh").read_text()

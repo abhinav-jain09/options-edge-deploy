@@ -37,3 +37,33 @@ config="$(kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe
 printf '%s\n' "$config" | grep -q 'cleanup.policy=compact' \
   || { echo "FATAL: $TOPIC is not compacted" >&2; exit 1; }
 echo "$TOPIC reconciled partitions=$verified cleanup=compact retention.ms=$RETENTION_MS"
+
+# ---- zero-orphan prune of the retired identity (One Service One Identity Rule) ----
+# The service formerly published ${TOPIC_PREFIX:-}options.spx.0dte.intelligence.current under
+# consumer group zero-dte-intelligence-service-v1[-profile]. Both were retired by the
+# service-aligned rename. Prune them wherever they still exist — exact topic name and exact
+# group prefix only; nothing else is ever a candidate. Idempotent: absent means done.
+LEGACY_TOPIC="${TOPIC_PREFIX:-}options.spx.0dte.intelligence.current"
+if kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$LEGACY_TOPIC" >/dev/null 2>&1; then
+  kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$LEGACY_TOPIC"
+  echo "$LEGACY_TOPIC deleted (retired identity)"
+else
+  echo "$LEGACY_TOPIC absent (nothing to prune)"
+fi
+
+LEGACY_GROUP_PREFIX="zero-dte-intelligence-service-v1"
+LEGACY_GROUPS="$(kafka-consumer-groups --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list 2>/dev/null \
+  | grep -E "^${LEGACY_GROUP_PREFIX}(-|\$)" || true)"
+if [ -z "$LEGACY_GROUPS" ]; then
+  echo "no ${LEGACY_GROUP_PREFIX}* consumer groups remain (nothing to prune)"
+fi
+for g in $LEGACY_GROUPS; do
+  # --delete refuses a group with live members; that would mean the retired identity is
+  # still running somewhere, which must fail the deploy loudly, never be skipped.
+  if kafka-consumer-groups --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --group "$g"; then
+    echo "consumer group $g deleted (retired identity)"
+  else
+    echo "FATAL: failed to delete retired consumer group $g (still active?)" >&2
+    exit 1
+  fi
+done
