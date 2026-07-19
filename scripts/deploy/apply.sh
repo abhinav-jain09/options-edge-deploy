@@ -160,7 +160,7 @@
             IBKR_FEED_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE \
-            DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE ZERO_DTE_INTELLIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE \
+            DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE VIX_OPTION_INTELIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE \
             STRIKE_INVASION_IMAGE INVASION_POSTGRES_WRITER_IMAGE SPREAD_SKEW_IMAGE SPREAD_SKEW_POSTGRES_WRITER_IMAGE REVERSAL_CONFIRMATION_IMAGE ES_OPEN_DIRECTION_IMAGE ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE REVERSAL_POSTGRES_WRITER_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
@@ -319,7 +319,7 @@ EOF
           kubectl -n options-edge set image deployment/spx-mission-control-service spx-mission-control="$SPX_MISSION_CONTROL_IMAGE"
           kubectl -n options-edge set image deployment/unified-sr-service unified-sr="$UNIFIED_SR_IMAGE"
           kubectl -n options-edge set image deployment/strike-intelligence-service strike-intelligence="$STRIKE_INTELLIGENCE_IMAGE"
-          kubectl -n options-edge set image deployment/zero-dte-intelligence-service zero-dte-intelligence="$ZERO_DTE_INTELLIGENCE_IMAGE"
+          kubectl -n options-edge set image deployment/vix-option-inteligence-service vix-option-inteligence="$VIX_OPTION_INTELIGENCE_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-avro-adapter strike-flow-avro-adapter="$STRIKE_FLOW_AVRO_ADAPTER_IMAGE"
           kubectl -n options-edge set image deployment/gex-delta-redis-writer gex-delta-redis-writer="$GEX_DELTA_REDIS_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
@@ -346,6 +346,7 @@ EOF
           kubectl -n options-edge rollout restart deployment/spx-mission-control-service
           kubectl -n options-edge rollout restart deployment/unified-sr-service
           kubectl -n options-edge rollout restart deployment/strike-intelligence-service
+          kubectl -n options-edge rollout restart deployment/vix-option-inteligence-service
           kubectl -n options-edge rollout restart deployment/strike-flow-avro-adapter
           kubectl -n options-edge rollout restart deployment/gex-delta-redis-writer
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
@@ -374,6 +375,7 @@ EOF
           kubectl -n options-edge rollout status deployment/spx-mission-control-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/unified-sr-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/strike-intelligence-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/vix-option-inteligence-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=1260s
           kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=1260s
           kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=1260s
@@ -385,3 +387,8 @@ EOF
             kubectl -n options-edge rollout status deployment/short-premium-agent-service --timeout=1260s
           fi
           scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
+          # Identity migration cleanup occurs only after the replacement has rolled out and
+          # passed the digest verification above. A failed replacement therefore leaves the
+          # legacy workload available for rollback instead of creating an outage.
+          kubectl -n options-edge delete deployment zero-dte-intelligence-service --ignore-not-found
+          kubectl -n options-edge delete service zero-dte-intelligence-service --ignore-not-found

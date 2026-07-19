@@ -296,8 +296,8 @@ images:
   - name: 192.168.100.252:5000/options-edge-strike-intelligence
     newName: host.docker.internal:5001/options-edge-strike-intelligence
     newTag: dev
-  - name: 192.168.100.252:5000/options-edge-zero-dte-intelligence
-    newName: host.docker.internal:5001/options-edge-zero-dte-intelligence
+  - name: 192.168.100.252:5000/options-edge-vix-option-inteligence
+    newName: host.docker.internal:5001/options-edge-vix-option-inteligence
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-strike-invasion
     newName: host.docker.internal:5001/options-edge-strike-invasion
