@@ -91,6 +91,19 @@ pipeline {
         }
       }
     }
+    stage('Reconcile 0DTE current topic') {
+      when {
+        expression { params.SERVICE == 'zero-dte-intelligence' && !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-zero-dte-intelligence-topic.sh
+        '''
+      }
+    }
     stage('Deploy (service-scoped)') {
       steps {
         sh '''

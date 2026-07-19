@@ -18,9 +18,14 @@ class ZeroDteIntelligenceDeployTest(unittest.TestCase):
 
     def test_current_topic_is_explicit_and_compacted(self):
         topics = (ROOT / "scripts/kafka/topics.env").read_text()
-        self.assertIn("options.spx.0dte.intelligence.current:4", topics)
+        self.assertIn("options.spx.0dte.intelligence.current:32", topics)
         compacted = topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1]
         self.assertIn("options.spx.0dte.intelligence.current", compacted)
+        reconciler = (ROOT / "scripts/kafka/ensure-zero-dte-intelligence-topic.sh").read_text()
+        self.assertIn("PARTITIONS=32", reconciler)
+        self.assertIn("cleanup.policy=compact", reconciler)
+        service_job = (ROOT / "Jenkinsfile.service-deploy").read_text()
+        self.assertIn("ensure-zero-dte-intelligence-topic.sh", service_job)
 
     def test_es4_uses_es_symbol_and_mirrors_vix(self):
         manifest = (ROOT / "k8s/es4/services/zero-dte-intelligence.yaml").read_text()
