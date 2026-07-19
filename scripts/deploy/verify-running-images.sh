@@ -48,6 +48,7 @@ IMAGE_MAP = {
     ("spx-mission-control-service", "spx-mission-control"): "SPX_MISSION_CONTROL_IMAGE",
     ("unified-sr-service", "unified-sr"): "UNIFIED_SR_IMAGE",
     ("strike-intelligence-service", "strike-intelligence"): "STRIKE_INTELLIGENCE_IMAGE",
+    ("zero-dte-intelligence-service", "zero-dte-intelligence"): "ZERO_DTE_INTELLIGENCE_IMAGE",
     ("strike-flow-avro-adapter", "strike-flow-avro-adapter"): "STRIKE_FLOW_AVRO_ADAPTER_IMAGE",
     ("gex-delta-redis-writer", "gex-delta-redis-writer"): "GEX_DELTA_REDIS_WRITER_IMAGE",
     ("ibkr-feed-service", "ibkr-feed"): "IBKR_FEED_IMAGE",
