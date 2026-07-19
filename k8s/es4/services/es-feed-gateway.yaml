@@ -92,6 +92,15 @@ spec:
           value: "17:30"
         - name: JAVA_TOOL_OPTIONS
           value: "-Xms256m -Xmx1536m"
+        # Flow Explorer (/api/pin-flow) default strike band. The gateway's built-in default is a
+        # hardcoded SPX-era 7490..7590 — only 100 points wide and NOT centred on spot, so on ES
+        # (spot ~7500, strikes 6850..7755) it started AT the spot and looked only upward: ~28% of
+        # rows, with every put below the spot excluded. Widen to cover the live ES strike ladder
+        # (gateway caps band width at 1000). Superseded once the band is derived from spot.
+        - name: PIN_FLOW_STRIKE_LO
+          value: "7000"
+        - name: PIN_FLOW_STRIKE_HI
+          value: "7800"
         # WS handshake auth against the PRODUCTION Keycloak realm.
         - name: WS_AUTH_ENABLED
           value: "true"
