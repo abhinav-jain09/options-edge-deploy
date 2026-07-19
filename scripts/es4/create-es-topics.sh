@@ -144,4 +144,8 @@ ensure_topic_custom es.reversal.outcome         compact 1 ""
 # durable copy), 7d retention, no compaction. The ES follower instance (a prod-cluster
 # pod) produces here; the es4 gateway (TOPIC_PREFIX=es.) consumes and forwards.
 ensure_topic_custom es.signal-follower.hot-strike delete 1 604800000
+# greek-move-authenticity (ES): compacted latest verdict + delete-retention transition events.
+# names are <es.> + the SPX defaults (runtime TOPIC_PREFIX=es. on es4). RF=1 (single node).
+ensure_topic_custom es.options.spx.greek-move-auth.current  compact 4 ""
+ensure_topic_custom es.options.spx.greek-move-auth.events   delete  4 43200000
 echo "topics reconciled: $(( ${#TOPICS_DELETE[@]} + ${#TOPICS_COMPACT[@]} + CONTRACT_TOPIC_COUNT ))"

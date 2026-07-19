@@ -39,7 +39,7 @@ SERVICES = [
     "directional-pressure", "gex-delta-redis-writer", "option-price-behavior", "pin-postgres-writer",
     "pressure-postgres-writer", "raw-to-display", "strike-flow-avro-adapter", "strike-flow-classifier",
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
-    "strike-intelligence", "vix-option-inteligence",
+    "strike-intelligence", "vix-option-inteligence", "greek-move-authenticity",
 ]
 
 ES_ENV = {
@@ -126,6 +126,17 @@ ES_ENV = {
         # On es4 the same deterministic engine analyzes the ES 0DTE option tape. TOPIC_PREFIX
         # still isolates all input/output topics on the .4 broker.
         {"name": "ZERO_DTE_SYMBOL", "value": "ES", "_override": True},
+    ],
+    # greek-move-authenticity on es4: the SAME engine measures ES greeks to authenticate ES moves
+    # (design §18). ENABLED here (owner scope); the robust-Z baselines are session-relative so no
+    # SPX-vs-ES scale flag is needed (they self-normalize to ES magnitude, unlike strike-intel's
+    # fixed divisors). Spot = the compacted ES-future price topic (same as strike-intelligence uses);
+    # gex.strike + delta-flow-by-strike carry over from the prod slice and get es.-prefixed to the
+    # es4 topics already flowing. ES runs advisory/SHADOW until an es4 calibration session (§18.4).
+    "greek-move-authenticity": [
+        {"name": "GREEK_MOVE_AUTH_ENABLED", "value": "true", "_override": True},
+        {"name": "GREEK_MOVE_AUTH_SYMBOL", "value": "ES", "_override": True},
+        {"name": "GREEK_MOVE_AUTH_INPUT_SPOT_TOPIC", "value": "underlying.es.price", "_override": True},
     ],
 }
 
