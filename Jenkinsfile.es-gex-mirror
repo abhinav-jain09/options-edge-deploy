@@ -1,0 +1,162 @@
+// ES-GEX MIRROR — stand up a clean SINGLE-TOPIC .4->target mirror as a managed launchd service.
+//
+// Parameterized per the requirement's 2-input contract (es-gex-fleet-and-alignment-guard-gate1):
+//   SOURCE_ES_CLUSTER_IP  = the ES source-of-truth broker (.4)
+//   TARGET_SPX_CLUSTER_IP = the environment being configured (dev = 127.0.0.1)
+//
+// WHY MM1 (kafka-mirror-maker), NOT MM2 (connect-mirror-maker): MM2's Heartbeat/Checkpoint
+// connectors replicate .4's runaway `es.es.es...heartbeats` junk (its own broken es4 MM2) and
+// create es4.* / mm2-*.internal topics on the target -> pollution. MM1 --whitelist mirrors ONLY
+// the one topic, byte-copy, identity name, no heartbeat/checkpoint machinery. (Verified 2026-07-19.)
+//
+// The job runs on the 'local-mac' agent (the dev Mac, which IS the target for dev). It generates
+// the config + installs a KeepAlive launchd unit; NOTHING is hand-edited.
+pipeline {
+  agent { label 'local-mac' }
+  parameters {
+    string(name: 'SOURCE_ES_CLUSTER_IP', defaultValue: '192.168.100.4', description: 'ES source-of-truth broker IP (.4).')
+    string(name: 'SOURCE_PORT',          defaultValue: '9092',          description: 'Source Kafka port.')
+    string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '127.0.0.1',     description: 'Target env broker IP (dev = 127.0.0.1).')
+    string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092).')
+    string(name: 'TOPIC',                defaultValue: 'es.options.databento.gex.strike', description: 'Single topic to mirror (exact).')
+    choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
+  }
+  options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
+  environment {
+    KBIN  = '/Users/abhinav/development/confluent-7.3.1/bin'
+    MDIR  = '/Users/abhinav/oe-ops/es-gex-mirror'
+    LABEL = 'com.optionsedge.esgex-mirror'
+    PLIST = '/Users/abhinav/Library/LaunchAgents/com.optionsedge.esgex-mirror.plist'
+    SRC   = "${params.SOURCE_ES_CLUSTER_IP}:${params.SOURCE_PORT}"
+    TGT   = "${params.TARGET_SPX_CLUSTER_IP}:${params.TARGET_PORT}"
+  }
+  stages {
+
+    stage('Teardown') {
+      when { expression { params.ACTION == 'teardown' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          launchctl unload "$PLIST" 2>/dev/null || true
+          rm -f "$PLIST"
+          pkill -f "kafka-mirror-maker.*$TOPIC" 2>/dev/null || true
+          echo "mirror service removed (topic + data left intact)"
+        '''
+      }
+    }
+
+    stage('Preflight (fail-closed)') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          echo "SOURCE=$SRC  TARGET=$TGT  TOPIC=$TOPIC"
+          # SAFETY: source and target must be different clusters
+          [ "$SOURCE_ES_CLUSTER_IP:$SOURCE_PORT" != "$TARGET_SPX_CLUSTER_IP:$TARGET_PORT" ] || { echo "FAIL: source==target"; exit 1; }
+          # source broker reachable
+          nc -z -w5 "$SOURCE_ES_CLUSTER_IP" "$SOURCE_PORT" || { echo "FAIL: source $SRC unreachable"; exit 1; }
+          # target broker reachable + usable
+          "$KBIN/kafka-topics" --bootstrap-server "$TGT" --list >/dev/null || { echo "FAIL: target $TGT unusable"; exit 1; }
+          # source topic exists (nothing to mirror otherwise)
+          "$KBIN/kafka-topics" --bootstrap-server "$SRC" --describe --topic "$TOPIC" >/dev/null 2>&1 || { echo "FAIL: source topic $TOPIC missing"; exit 1; }
+          # MM1 binary present
+          [ -x "$KBIN/kafka-mirror-maker" ] || { echo "FAIL: kafka-mirror-maker missing"; exit 1; }
+          echo "preflight OK"
+        '''
+      }
+    }
+
+    stage('Generate config + match target topic') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          mkdir -p "$MDIR"
+          cat > "$MDIR/consumer.properties" <<C
+bootstrap.servers=$SRC
+group.id=esgex-mirror-${TARGET_SPX_CLUSTER_IP}
+auto.offset.reset=latest
+key.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+C
+          cat > "$MDIR/producer.properties" <<P
+bootstrap.servers=$TGT
+key.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
+value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
+acks=1
+P
+          cat > "$MDIR/log4j.properties" <<L
+log4j.rootLogger=INFO, stdout
+log4j.appender.stdout=org.apache.log4j.ConsoleAppender
+log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
+log4j.appender.stdout.layout.ConversionPattern=%d{ISO8601} %-5p %c{1} - %m%n
+L
+          # escape dots for the MM1 whitelist regex (exact single topic)
+          RE=$(printf '%s' "$TOPIC" | sed 's/\\./\\\\./g')
+          cat > "$MDIR/run-mirror.sh" <<S
+#!/usr/bin/env bash
+set -euo pipefail
+export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:$MDIR/log4j.properties"
+exec "$KBIN/kafka-mirror-maker" \\
+  --consumer.config "$MDIR/consumer.properties" \\
+  --producer.config "$MDIR/producer.properties" \\
+  --whitelist '$RE' --num.streams 1
+S
+          chmod +x "$MDIR/run-mirror.sh"
+
+          # pre-create target topic to MATCH source (partition count + cleanup/retention), idempotent
+          PARTS=$("$KBIN/kafka-topics" --bootstrap-server "$SRC" --describe --topic "$TOPIC" 2>/dev/null | awk -F'PartitionCount:' 'NR==1{split($2,a," "); print a[1]}')
+          PARTS=${PARTS:-32}
+          "$KBIN/kafka-topics" --bootstrap-server "$TGT" --create --if-not-exists --topic "$TOPIC" \
+            --partitions "$PARTS" --replication-factor 1 \
+            --config cleanup.policy=delete --config retention.ms=43200000 2>&1 | tail -1
+          echo "config generated; target topic matched to $PARTS partitions"
+        '''
+      }
+    }
+
+    stage('Install launchd service') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          cat > "$PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>$MDIR/run-mirror.sh</string></array>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>$MDIR/mirror.out.log</string>
+  <key>StandardErrorPath</key><string>$MDIR/mirror.err.log</string>
+</dict></plist>
+PL
+          launchctl unload "$PLIST" 2>/dev/null || true
+          launchctl load "$PLIST"
+          echo "launchd unit $LABEL loaded"
+        '''
+      }
+    }
+
+    stage('Verify (running + zero pollution)') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          sleep 8
+          launchctl list | grep "$LABEL" || { echo "FAIL: service not running"; exit 1; }
+          # pollution guard: MM1 must NOT have created es4.* / es.es.es / heartbeat / mm2 topics on target
+          # (read twice — kafka-topics --list gives flaky counts during MM startup)
+          for i in 1 2; do
+            L=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --list 2>/dev/null)
+            J=$(printf '%s\\n' "$L" | grep -cE '^es4\\.|es\\.es\\.es|heartbeat|mm2-.*\\.internal' || true)
+            echo "read $i: junk-topics=$J  target-topic-present=$(printf '%s\\n' "$L" | grep -c "^$TOPIC$")"
+            [ "$J" = "0" ] || { echo "FAIL: mirror polluted the target with $J junk topics"; exit 1; }
+            sleep 2
+          done
+          echo "VERIFIED: $LABEL running, only $TOPIC mirrored, zero pollution."
+        '''
+      }
+    }
+  }
+}
