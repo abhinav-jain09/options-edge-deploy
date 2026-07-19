@@ -134,4 +134,9 @@ ensure_topic_custom es.reversal.verdicts        delete  1 604800000
 ensure_topic_custom es.reversal.strength        delete  1 172800000
 ensure_topic_custom es.reversal.final-summary   compact 1 ""
 ensure_topic_custom es.reversal.outcome         compact 1 ""
+# Hot Strike of the Day snapshots (signal-follower-service, design §4.4): 1 partition,
+# RF = broker count (1 on this single-node cluster — stated limitation; Postgres is the
+# durable copy), 7d retention, no compaction. The ES follower instance (a prod-cluster
+# pod) produces here; the es4 gateway (TOPIC_PREFIX=es.) consumes and forwards.
+ensure_topic_custom es.signal-follower.hot-strike delete 1 604800000
 echo "topics reconciled: $(( ${#TOPICS_DELETE[@]} + ${#TOPICS_COMPACT[@]} + 4 ))"
