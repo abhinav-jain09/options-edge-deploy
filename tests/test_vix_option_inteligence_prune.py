@@ -75,6 +75,14 @@ esac
 exit 0
 """
 
+# Emulates `docker exec <container> <cmd> [args...]` by exec-ing <cmd> from PATH, which
+# resolves to the kafka stubs above — this lets the REAL es4 script run end to end.
+DOCKER_STUB = """#!/usr/bin/env bash
+[ "$1" = exec ] || exit 1
+shift 2
+exec "$@"
+"""
+
 
 class PruneScriptTest(unittest.TestCase):
     def setUp(self):
@@ -88,6 +96,7 @@ class PruneScriptTest(unittest.TestCase):
             ("kafka-topics", KAFKA_TOPICS_STUB),
             ("kafka-consumer-groups", KAFKA_CONSUMER_GROUPS_STUB),
             ("kafka-configs", KAFKA_CONFIGS_STUB),
+            ("docker", DOCKER_STUB),
         ):
             path = self.bin / name
             path.write_text(body)
@@ -96,7 +105,7 @@ class PruneScriptTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_script(self, topics, groups, flags=(), extra_env=None):
+    def run_script(self, topics, groups, flags=(), extra_env=None, script=SCRIPT):
         (self.state / "topics.txt").write_text("".join(t + "\n" for t in topics))
         (self.state / "groups.txt").write_text("".join(g + "\n" for g in groups))
         for flag in flags:
@@ -109,7 +118,7 @@ class PruneScriptTest(unittest.TestCase):
             "KAFKA_TOPIC_DELETE_WAIT_SECONDS": "2",
         })
         env.update(extra_env or {})
-        return subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+        return subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
 
     def topics(self):
         return (self.state / "topics.txt").read_text().split()
@@ -194,6 +203,45 @@ class PruneScriptTest(unittest.TestCase):
         self.assertNotIn("es." + LEGACY_TOPIC, self.topics())
         # The unprefixed prod topic is NOT this mirror's identity; it must survive here.
         self.assertIn(LEGACY_TOPIC, self.topics())
+
+    def test_whitespace_bearing_group_is_deleted_as_one_unit(self):
+        # Group ids are not guaranteed whitespace-free; word splitting would have turned
+        # this into a deletion request against the unrelated group "team".
+        result = self.run_script(
+            topics=[NEW_TOPIC],
+            groups=[
+                "zero-dte-intelligence-service-v1-blue team",
+                "team",
+                "zero-dte-intelligence-service-v10",
+            ],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            (self.state / "groups.txt").read_text().splitlines(),
+            ["team", "zero-dte-intelligence-service-v10"])
+
+    def test_es4_script_executes_the_prune_end_to_end(self):
+        # Run the REAL es4 script (docker stub resolves `docker exec es4-kafka <cmd>` back to
+        # the kafka stubs): the mirrored legacy topic and retired groups are pruned, the
+        # near-miss group and unprefixed prod topic survive.
+        es4_script = ROOT / "scripts/es4/create-es-topics.sh"
+        result = self.run_script(
+            topics=["es." + LEGACY_TOPIC, LEGACY_TOPIC],
+            groups=["zero-dte-intelligence-service-v1-prod", "zero-dte-intelligence-service-v10"],
+            script=es4_script,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("es." + LEGACY_TOPIC, self.topics())
+        self.assertIn(LEGACY_TOPIC, self.topics())
+        self.assertEqual(self.groups(), ["zero-dte-intelligence-service-v10"])
+        self.assertIn("zero-orphan verified", result.stdout)
+
+    def test_es4_script_fails_closed_when_group_listing_fails(self):
+        es4_script = ROOT / "scripts/es4/create-es-topics.sh"
+        result = self.run_script(
+            topics=[], groups=[], flags=["fail_groups_list"], script=es4_script)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FATAL: could not list consumer groups", result.stderr)
 
 
 if __name__ == "__main__":

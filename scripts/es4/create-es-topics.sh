@@ -147,51 +147,12 @@ ensure_topic_custom es.signal-follower.hot-strike delete 1 604800000
 echo "topics reconciled: $(( ${#TOPICS_DELETE[@]} + ${#TOPICS_COMPACT[@]} + CONTRACT_TOPIC_COUNT ))"
 
 # ---- zero-orphan prune of the retired vix-option-inteligence identity (es4 mirror) ----
-# Mirrors scripts/kafka/ensure-vix-option-inteligence-topic.sh. Duplicated here rather than
-# invoked, because this box runs broker-local docker-exec CLIs under the es4 4-partition
-# policy — the shared prod reconciler (32 partitions, host CLIs) must not run against this
-# broker. Same contract: exact names, fail-closed discovery, fail-loud deletes, terminal
-# verification. The zero-dte-intelligence-service-v1 namespace is contractually retired
-# (One Service One Identity Rule bans version-suffixed identities).
-kg() { docker exec es4-kafka kafka-consumer-groups --bootstrap-server "$BROKER" "$@"; }
-LEGACY_TOPIC=es.options.spx.0dte.intelligence.current
-LEGACY_GROUP_PREFIX=zero-dte-intelligence-service-v1
-DELETE_WAIT="${KAFKA_TOPIC_DELETE_WAIT_SECONDS:-90}"
-
-TOPICS_NOW="$(kt --list)" \
-  || { echo "FATAL: could not list topics — refusing to prune (fail-closed)" >&2; exit 1; }
-present="$(printf '%s\n' "$TOPICS_NOW" | grep -Fx "$LEGACY_TOPIC" || true)"
-if [ -n "$present" ]; then
-  kt --delete --topic "$LEGACY_TOPIC" >/dev/null \
-    || { echo "FATAL: failed to delete retired topic $LEGACY_TOPIC" >&2; exit 1; }
-  deleted=false
-  for _ in $(seq 1 "$DELETE_WAIT"); do
-    TOPICS_NOW="$(kt --list)" \
-      || { echo "FATAL: could not re-list topics during delete verification" >&2; exit 1; }
-    still="$(printf '%s\n' "$TOPICS_NOW" | grep -Fx "$LEGACY_TOPIC" || true)"
-    if [ -z "$still" ]; then deleted=true; break; fi
-    sleep 1
-  done
-  [ "$deleted" = "true" ] || { echo "FATAL: $LEGACY_TOPIC still present ${DELETE_WAIT}s after delete" >&2; exit 1; }
-  echo "$LEGACY_TOPIC deleted and verified absent (retired identity)"
-else
-  echo "$LEGACY_TOPIC absent (nothing to prune)"
-fi
-
-GROUPS_NOW="$(kg --list)" \
-  || { echo "FATAL: could not list consumer groups — refusing to prune (fail-closed)" >&2; exit 1; }
-LEGACY_GROUPS="$(printf '%s\n' "$GROUPS_NOW" | grep -E "^${LEGACY_GROUP_PREFIX}(-|\$)" || true)"
-if [ -z "$LEGACY_GROUPS" ]; then
-  echo "no ${LEGACY_GROUP_PREFIX}* consumer groups remain (nothing to prune)"
-else
-  for g in $LEGACY_GROUPS; do
-    kg --delete --group "$g" >/dev/null \
-      || { echo "FATAL: failed to delete retired consumer group $g (still active?)" >&2; exit 1; }
-    echo "consumer group $g deleted (retired identity)"
-  done
-  GROUPS_NOW="$(kg --list)" \
-    || { echo "FATAL: could not re-list consumer groups during verification" >&2; exit 1; }
-  REMAINING="$(printf '%s\n' "$GROUPS_NOW" | grep -E "^${LEGACY_GROUP_PREFIX}(-|\$)" || true)"
-  [ -z "$REMAINING" ] || { echo "FATAL: retired groups still present after delete: $REMAINING" >&2; exit 1; }
-  echo "zero-orphan verified: no ${LEGACY_GROUP_PREFIX}* consumer groups remain"
-fi
+# Single implementation: scripts/kafka/prune-retired-zero-dte-identity.lib.sh. This box
+# only supplies broker-local docker-exec wrappers — the shared prod reconciler script
+# itself (32-partition ensure, host CLIs) must not run against this 4-partition broker.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../kafka/prune-retired-zero-dte-identity.lib.sh"
+prune_kt() { docker exec es4-kafka kafka-topics --bootstrap-server "$BROKER" "$@"; }
+prune_kg() { docker exec es4-kafka kafka-consumer-groups --bootstrap-server "$BROKER" "$@"; }
+prune_retired_zero_dte_identity "es.options.spx.0dte.intelligence.current"

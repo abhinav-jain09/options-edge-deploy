@@ -52,25 +52,25 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         self.assertIn("'vix-option-inteligence'", service_job)
         self.assertIn("'vix-option-inteligence'", es_job)
 
-    def test_reconciler_prunes_the_retired_kafka_identity(self):
+    def test_both_callers_invoke_the_single_prune_implementation(self):
+        # Zero-orphan rule: ONE implementation (the lib) with fail-closed discovery,
+        # fail-loud deletes, and terminal verification; both production callers source it
+        # and supply broker-appropriate wrappers.
+        lib = (ROOT / "scripts/kafka/prune-retired-zero-dte-identity.lib.sh").read_text()
+        self.assertIn('prefix="zero-dte-intelligence-service-v1"', lib)
+        self.assertIn("refusing to prune (fail-closed)", lib)
+        self.assertIn("FATAL: failed to delete retired consumer group", lib)
+        self.assertIn("FATAL: retired groups still present after delete", lib)
+        self.assertIn("while IFS= read -r g", lib)
         reconciler = (ROOT / "scripts/kafka/ensure-vix-option-inteligence-topic.sh").read_text()
-        # Zero-orphan rule: the retired topic and retired v1 consumer groups are pruned by the
-        # sanctioned reconcile stage, prefix-aware for the es4 mirror, and a still-active
-        # retired group fails the deploy loudly instead of being skipped.
-        self.assertIn('LEGACY_TOPIC="${TOPIC_PREFIX:-}options.spx.0dte.intelligence.current"', reconciler)
-        self.assertIn('LEGACY_GROUP_PREFIX="zero-dte-intelligence-service-v1"', reconciler)
-        self.assertIn("--delete --group", reconciler)
-        self.assertIn("FATAL: failed to delete retired consumer group", reconciler)
-
-    def test_es4_mirror_prunes_the_retired_kafka_identity(self):
-        topic_script = (ROOT / "scripts/es4/create-es-topics.sh").read_text()
-        # The es4 broker gets its own broker-local prune (the shared prod reconciler must not
-        # run there — different partition policy and docker-exec CLIs), with the same
-        # fail-closed/fail-loud/terminal-verification contract.
-        self.assertIn("LEGACY_TOPIC=es.options.spx.0dte.intelligence.current", topic_script)
-        self.assertIn("LEGACY_GROUP_PREFIX=zero-dte-intelligence-service-v1", topic_script)
-        self.assertIn("refusing to prune (fail-closed)", topic_script)
-        self.assertIn("FATAL: retired groups still present after delete", topic_script)
+        self.assertIn("prune-retired-zero-dte-identity.lib.sh", reconciler)
+        self.assertIn(
+            'prune_retired_zero_dte_identity "${TOPIC_PREFIX:-}options.spx.0dte.intelligence.current"',
+            reconciler)
+        es4 = (ROOT / "scripts/es4/create-es-topics.sh").read_text()
+        self.assertIn("prune-retired-zero-dte-identity.lib.sh", es4)
+        self.assertIn('prune_retired_zero_dte_identity "es.options.spx.0dte.intelligence.current"', es4)
+        self.assertIn("docker exec es4-kafka kafka-consumer-groups", es4)
 
     def test_rename_removes_legacy_workload_only_after_replacement(self):
         scoped = (ROOT / "scripts/deploy/service-deploy.sh").read_text()
