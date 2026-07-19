@@ -57,7 +57,7 @@ spec:
       containers:
         - env:
             - name: GREEK_MOVE_AUTH_ENABLED
-              value: "false"
+              value: "true"
             - name: HEALTH_PORT
               value: "8130"
             - name: JAVA_TOOL_OPTIONS
