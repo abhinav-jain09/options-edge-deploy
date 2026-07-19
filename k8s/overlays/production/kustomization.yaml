@@ -40,6 +40,17 @@ patches:
                 env:
                   - name: GREEK_MOVE_AUTH_ENABLED
                     value: "true"
+                  # Bootstrap the robust-Z baseline from the CURRENT session (the dev default).
+                  # baselineReady() counts prior-session samples, plus current-session samples ONLY
+                  # when this is true. On a freshly-deployed service `prior` is empty, so with the
+                  # prod default (false) n==0 forever and EVERY frame is DATA_DEGRADED /
+                  # MOVE_BASELINE_NOT_READY for the entire first session — observed live on es4 at
+                  # the 2026-07-19 globex open (364 verdicts, all MOVE_BASELINE_NOT_READY).
+                  # Trade-off: an in-session baseline is statistically weaker early on (it self-
+                  # corrects as samples accumulate) — the alternative is a dead first session.
+                  # REVERT = drop this env entry (falls back to prior-session-only baselines).
+                  - name: GREEK_MOVE_AUTH_BOOTSTRAP_IN_SESSION
+                    value: "true"
   - target:
       kind: Deployment
     patch: |-

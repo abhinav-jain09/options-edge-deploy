@@ -58,6 +58,8 @@ spec:
         - env:
             - name: GREEK_MOVE_AUTH_ENABLED
               value: "true"
+            - name: GREEK_MOVE_AUTH_BOOTSTRAP_IN_SESSION
+              value: "true"
             - name: HEALTH_PORT
               value: "8130"
             - name: JAVA_TOOL_OPTIONS
