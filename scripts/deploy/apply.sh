@@ -173,12 +173,12 @@
               yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
             echo "pinned ${_img_var} -> ${_pinned}"
           done
-          # short-premium-agent renders in the dev AND production overlays (a standalone service that
-          # runs on prod too — the .252 GPU), but NOT experiment. Pin it for dev+production so both
+          # short-premium-agent AND signal-follower render in the dev AND production overlays
+          # (standalone services that run on prod too), but NOT experiment. Pin it for dev+production so both
           # `DEPLOY_TARGET=all` renders pass the digest gate below; experiment never renders it and this
           # block is skipped there (so pin_ref is never asked to resolve a non-existent experiment image).
           if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
-            for _img_var in SHORT_PREMIUM_AGENT_IMAGE; do
+            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1

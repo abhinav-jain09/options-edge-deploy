@@ -46,6 +46,7 @@ EOF
   if [ "${ENVIRONMENT:-dev}" = "dev" ] || [ "${ENVIRONMENT:-dev}" = "production" ]; then
     cat <<'EOF'
 SHORT_PREMIUM_AGENT_IMAGE
+SIGNAL_FOLLOWER_IMAGE
 EOF
   fi
 }

@@ -56,6 +56,7 @@ EOF
             if [ "${ENVIRONMENT:-dev}" = "dev" ] || [ "${ENVIRONMENT:-dev}" = "production" ]; then
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$registry/options-edge-short-premium-agent:$image_tag
+SIGNAL_FOLLOWER_IMAGE=$registry/options-edge-signal-follower:$image_tag
 EOF
             fi
           else
@@ -104,6 +105,7 @@ EOF
             if [ "${ENVIRONMENT:-dev}" = "production" ]; then
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$SHORT_PREMIUM_AGENT_IMAGE
+SIGNAL_FOLLOWER_IMAGE=$SIGNAL_FOLLOWER_IMAGE
 EOF
             fi
           fi
