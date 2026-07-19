@@ -36,7 +36,7 @@ spec:
             # DEFAULT OFF — the whole ES-GEX-on-SPX feature ships dark. Flip to "true" (with the es4 bridge +
             # gateway flags + the es-gex-mirror Jenkins job pointed at es.options.databento.gex.spxbridge) to enable.
             - name: ES_GEX_ALIGN_ENABLED
-              value: "false"
+              value: "true"
             - name: HEALTH_PORT
               value: "8140"
             # Mirrored ES-GEX bridge JSON topic. Byte-copy identity name from the es-gex-mirror Jenkins job (MM1,

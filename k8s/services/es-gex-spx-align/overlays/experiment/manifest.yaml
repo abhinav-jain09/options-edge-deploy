@@ -37,7 +37,7 @@ spec:
       containers:
         - env:
             - name: ES_GEX_ALIGN_ENABLED
-              value: "false"
+              value: "true"
             - name: HEALTH_PORT
               value: "8140"
             - name: KAFKA_ES_GEX_SPXBRIDGE_MIRRORED_TOPIC

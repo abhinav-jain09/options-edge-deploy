@@ -83,6 +83,8 @@ spec:
               value: "32"
             - name: APP_WEB_PORT
               value: "18091"
+            - name: GATEWAY_ES_GEX_ENABLED
+              value: "true"
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS
