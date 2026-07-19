@@ -41,7 +41,7 @@ spec:
             - name: HEALTH_PORT
               value: "8140"
             - name: KAFKA_ES_GEX_SPXBRIDGE_MIRRORED_TOPIC
-              value: es4.es.options.databento.gex.spxbridge
+              value: es.options.databento.gex.spxbridge
             - name: KAFKA_ES_TRADES_TOPIC
               value: underlying.es.trades
             - name: KAFKA_ES_GEX_SPX_ALIGNED_TOPIC
