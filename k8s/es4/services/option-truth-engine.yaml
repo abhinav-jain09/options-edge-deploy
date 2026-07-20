@@ -56,7 +56,7 @@ spec:
         - name: OPTION_TRUTH_STREAMS_APP_ID
           value: options-edge-option-truth-engine-service
         - name: OPTION_TRUTH_PRICING_MODEL
-          value: SPOT_BLACK_SCHOLES
+          value: FUTURES_BLACK_76
         - name: OPTION_TRUTH_EXCLUDE_ZERO_BID
           value: 'true'
         - name: OPTION_TRUTH_EOS_ENABLED
