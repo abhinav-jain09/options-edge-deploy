@@ -162,8 +162,23 @@ pipeline {
             # retired identity, so there is nothing to pause.
             echo "no $DEP yet; nothing to pause."
           else
-            PREV="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>/dev/null)"
-            case "$PREV" in ''|*[!0-9]*) PREV=1 ;; esac
+            PREV_ERR="$(mktemp)"
+            PREV="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>"$PREV_ERR")"
+            PREV_RC=$?
+            # Refused, not defaulted to 1. This value is the ONLY record of what to restore to;
+            # guessing it and then scaling to zero means the un-pause would bring the service
+            # back at the wrong size -- or, if the deployment runs more than one replica, quietly
+            # shrink it. If we cannot read it, we must not scale at all.
+            case "$PREV" in
+              ''|*[!0-9]*) PREV_RC=1 ;;
+            esac
+            if [ "$PREV_RC" -ne 0 ]; then
+              echo "FATAL: could not read current replicas for $DEP: [$PREV] $(cat "$PREV_ERR")" >&2
+              echo "Refusing to pause: without the current replica count the restore would guess." >&2
+              rm -f "$PREV_ERR"
+              exit 1
+            fi
+            rm -f "$PREV_ERR"
             # Written BEFORE scaling: if the scale half-succeeds and the step then dies, post{}
             # must still know a restore is owed.
             printf '%s\\n' "$PREV" > "$MARK"
