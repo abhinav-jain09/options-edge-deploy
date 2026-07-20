@@ -316,6 +316,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-strike-intelligence
     newName: host.docker.internal:5001/options-edge-strike-intelligence
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-option-truth-engine
+    newName: host.docker.internal:5001/options-edge-option-truth-engine
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-vix-option-inteligence
     newName: host.docker.internal:5001/options-edge-vix-option-inteligence
   - name: 192.168.100.252:5000/options-edge-greek-move-authenticity
