@@ -44,8 +44,6 @@ resources:
   - es-open-direction-service.yaml
   - vix-option-inteligence-deployment.yaml
   - vix-option-inteligence-service.yaml
-  - greek-move-authenticity-deployment.yaml
-  - greek-move-authenticity-service.yaml
   - es-open-direction-postgres-writer-deployment.yaml
   - es-open-direction-postgres-writer-service.yaml
   - reversal-postgres-writer-deployment.yaml
