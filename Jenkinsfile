@@ -44,6 +44,7 @@ pipeline {
     string(name: 'STRIKE_INTELLIGENCE_IMAGE', defaultValue: '', description: 'Strike intelligence service image')
     string(name: 'OPTION_TRUTH_ENGINE_IMAGE', defaultValue: '', description: 'Option truth engine service image')
     string(name: 'MARKET_CARRY_IMAGE', defaultValue: '', description: 'SPX market carry service image')
+    string(name: 'ES_GEX_SPX_ALIGN_IMAGE', defaultValue: '', description: 'ES-GEX-on-SPX alignment service image')
     string(name: 'VIX_OPTION_INTELIGENCE_IMAGE', defaultValue: '', description: 'Live 0DTE volatility intelligence image')
     string(name: 'STRIKE_INVASION_IMAGE', defaultValue: '', description: 'Strike invasion service image')
     string(name: 'INVASION_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Strike-invasion postgres writer image')
@@ -347,7 +348,7 @@ pipeline {
             'STRIKE_LIQUIDITY_HEATMAP_IMAGE': 'strike-liquidity-heatmap', 'UNIFIED_SR_IMAGE': 'unified-sr',
             'STRIKE_INTELLIGENCE_IMAGE': 'strike-intelligence', 'STRIKE_INVASION_IMAGE': 'strike-invasion',
             'OPTION_TRUTH_ENGINE_IMAGE': 'option-truth-engine',
-            'MARKET_CARRY_IMAGE': 'market-carry', 'DATABENTO_SR3_FEED_IMAGE': 'databento-sr3-feed',
+            'MARKET_CARRY_IMAGE': 'market-carry', 'ES_GEX_SPX_ALIGN_IMAGE': 'es-gex-spx-align', 'DATABENTO_SR3_FEED_IMAGE': 'databento-sr3-feed',
             'VIX_OPTION_INTELIGENCE_IMAGE': 'vix-option-inteligence',
             'INVASION_POSTGRES_WRITER_IMAGE': 'invasion-postgres-writer', 'SPREAD_SKEW_IMAGE': 'spread-skew', 'REVERSAL_CONFIRMATION_IMAGE': 'reversal-confirmation',
             'SPREAD_SKEW_POSTGRES_WRITER_IMAGE': 'spread-skew-postgres-writer', 'ES_OPEN_DIRECTION_IMAGE': 'es-open-direction',
@@ -748,7 +749,7 @@ void promoteToProduction() {
       'RAW_POSTGRES_WRITER_IMAGE', 'PRESSURE_POSTGRES_WRITER_IMAGE', 'PIN_POSTGRES_WRITER_IMAGE',
       'FEED_GATEWAY_IMAGE', 'HPSF_PROCESSING_IMAGE', 'HPSF_POSTGRES_WRITER_IMAGE', 'SPX_MISSION_CONTROL_IMAGE',
       'STRIKE_FLOW_CLASSIFIER_IMAGE', 'DELTA_FLOW_IMAGE', 'DEALER_LEDGER_IMAGE', 'DEALER_LEDGER_CALIBRATION_IMAGE',
-      'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'OPTION_TRUTH_ENGINE_IMAGE', 'MARKET_CARRY_IMAGE', 'DATABENTO_SR3_FEED_IMAGE', 'VIX_OPTION_INTELIGENCE_IMAGE', 'STRIKE_INVASION_IMAGE',
+      'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'OPTION_TRUTH_ENGINE_IMAGE', 'MARKET_CARRY_IMAGE', 'ES_GEX_SPX_ALIGN_IMAGE', 'DATABENTO_SR3_FEED_IMAGE', 'VIX_OPTION_INTELIGENCE_IMAGE', 'STRIKE_INVASION_IMAGE',
       'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE',
       'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
       'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',

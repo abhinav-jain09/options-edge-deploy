@@ -107,13 +107,23 @@ create_topic() {
     --topic "$topic" \
     --partitions "$partitions" \
     --replication-factor "$REPLICATION_FACTOR" \
-    --config "retention.ms=$RETENTION_MS" \
+    --config "retention.ms=$(topic_retention_ms "$topic")" \
     --config "cleanup.policy=$cleanup_policy" \
     --config "min.insync.replicas=$MIN_ISR"
 }
 
 topic_cleanup_policy() {
   local topic="$1"
+  # PURE-compact topics keep the latest value per key FOREVER. They must not get the
+  # "compact,delete" policy, because the delete half would drop the record once the
+  # global retention elapses (spx.basis.state holds the ES-SPX anchor: losing it puts
+  # the basis engine back to UNAVAILABLE and fail-closes the ES-on-SPX overlay).
+  for pure_topic in ${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-}; do
+    if [[ "$topic" == "$pure_topic" ]]; then
+      echo "compact"
+      return
+    fi
+  done
   for compacted_topic in ${OPTIONS_EDGE_COMPACTED_TOPICS:-}; do
     if [[ "$topic" == "$compacted_topic" ]]; then
       echo "${KAFKA_COMPACTED_TOPIC_CLEANUP_POLICY:-compact,delete}"
@@ -121,6 +131,31 @@ topic_cleanup_policy() {
     fi
   done
   echo "$CLEANUP_POLICY"
+}
+
+# Topics whose partition count must be EXACT, not "at least". The default policy treats extra
+# partitions as harmless (more parallelism), but a topic read via an explicit
+# assign(TopicPartition(topic, 0)) is only correct at exactly 1 partition — any record that hashes
+# to another partition is invisible. Kafka cannot shrink a topic, so repairing these is DESTRUCTIVE
+# (delete + recreate) and therefore still gated behind KAFKA_RECREATE_MISMATCHED_TOPICS=true.
+topic_requires_exact_partitions() {
+  local topic="$1" t
+  for t in ${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-}; do
+    [[ "$topic" == "$t" ]] && return 0
+  done
+  return 1
+}
+
+# Per-topic retention override (ms), e.g. "spx.basis.state=-1". Unlisted topics use $RETENTION_MS.
+topic_retention_ms() {
+  local topic="$1" entry
+  for entry in ${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-}; do
+    if [[ "${entry%%=*}" == "$topic" ]]; then
+      echo "${entry#*=}"
+      return
+    fi
+  done
+  echo "$RETENTION_MS"
 }
 
 kafka_config_value() {
@@ -142,7 +177,7 @@ alter_topic_config() {
   for ((i = 1; i <= attempts; i++)); do
     if kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
       --entity-type topics --entity-name "$topic" --alter \
-      --add-config "retention.ms=$RETENTION_MS,cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR"; then
+      --add-config "retention.ms=$(topic_retention_ms "$topic"),cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR"; then
       return 0
     fi
     sleep 1
@@ -167,7 +202,25 @@ for entry in $OPTIONS_EDGE_TOPICS; do
       exit 1
     fi
 
-    if (( current_partitions < partitions )) || (( current_replication_factor < REPLICATION_FACTOR )); then
+    exact_partition_mismatch=false
+    if topic_requires_exact_partitions "$topic" && (( current_partitions != partitions )); then
+      exact_partition_mismatch=true
+    fi
+
+    if [[ "$exact_partition_mismatch" == "true" ]]; then
+      if [[ "$RECREATE_MISMATCHED" != "true" ]]; then
+        echo "Topic $topic exists with partitions=$current_partitions but requires EXACTLY $partitions (single-partition read contract)." >&2
+        echo "Kafka cannot shrink partitions: this needs a destructive delete+recreate." >&2
+        echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
+        echo "NOTE: recreating $topic DISCARDS its records — any bootstrap state it held must be re-seeded afterwards." >&2
+        exit 1
+      fi
+      echo "Repairing EXACT-partition topic $topic: partitions=$current_partitions -> $partitions (destructive delete+recreate; records discarded)"
+      kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --delete --topic "$topic"
+      wait_for_topic_absent "$topic"
+      create_topic "$topic" "$partitions"
+      wait_for_topic_shape "$topic" "$partitions" "$REPLICATION_FACTOR"
+    elif (( current_partitions < partitions )) || (( current_replication_factor < REPLICATION_FACTOR )); then
       if [[ "$RECREATE_MISMATCHED" != "true" ]]; then
         if (( current_partitions < partitions )); then
           echo "Topic $topic exists with partitions=$current_partitions replicationFactor=$current_replication_factor; expected at least partitions=$partitions replicationFactor=$REPLICATION_FACTOR" >&2

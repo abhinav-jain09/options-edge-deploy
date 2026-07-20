@@ -80,6 +80,10 @@ spec:
           value: options.es.spread-skew.current
         - name: KAFKA_SPREAD_SKEW_EVENTS_TOPIC
           value: options.es.spread-skew.events
+        # Option Truth emits an ES-labelled base topic on this cluster. TOPIC_PREFIX from
+        # es4-common-env then isolates it as es.options.es.option-truth-engine-service.by-strike.
+        - name: KAFKA_OPTION_TRUTH_BY_STRIKE_TOPIC
+          value: options.es.option-truth-engine-service.by-strike
         # es4 serves ES, not SPX: the gateway's active market-data selection symbol is IB_SYMBOL
         # (default SPX). Without this the selection is SPX and the ES option records (underlying=ES)
         # never match -> empty chain even at market open. IB_EXPIRY stays unset = AUTO (0DTE daily roll).
