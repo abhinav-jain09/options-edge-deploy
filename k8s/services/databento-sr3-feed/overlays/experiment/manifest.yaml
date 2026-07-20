@@ -54,8 +54,8 @@ spec:
               value: GLBX.MDP3
             - name: SR3_DATABENTO_SCHEMA
               value: mbp-1
-            - name: SR3_CONTINUOUS_SYMBOLS
-              value: SR3.c.0,SR3.c.1,SR3.c.2,SR3.c.3
+            - name: SR3_STYPE_IN
+              value: raw_symbol
             - name: SR3_OUTPUT_TOPIC
               value: rates.sofr.databento-sr3-feed-service.current
             - name: HEALTH_PORT
