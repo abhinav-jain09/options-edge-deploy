@@ -16,7 +16,9 @@ data:
   IB_PORT: "4001"
   IB_CLIENT_ID: "212"
   IB_SYMBOL: SPX
-  IB_EXPIRY: ""
+  # AUTO is the only safe shared default: the gateway resolves the DST-aware ET trading date and
+  # rolls it at IB_EXPIRY_ROLL_AFTER. Blank is an invalid literal expiry and drops the live chain.
+  IB_EXPIRY: "AUTO"
   # Roll the SPX chain expiry at 17:30 ET (matches es4 + the SPX feed) instead of midnight.
   IB_EXPIRY_ROLL_AFTER: "17:30"
   IB_CURRENCY: USD
