@@ -98,6 +98,28 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          # Pause this service before pruning its retired consumer group, exactly as the
+          # monolith Jenkinsfile pauses the runtime before 'Kafka Cleanup'. Retiring an
+          # identity while a pod still holds it cannot converge: the prune deletes the group
+          # and the live consumer rejoins immediately, so the zero-orphan verification fails
+          # every time. Scoped to this one deployment rather than --all, since this pipeline
+          # deploys one service. The Deploy stage below brings it back on the new identity.
+          # '|| true' as the monolith does: kubectl scale has no --ignore-not-found, and a first
+          # deploy into a fresh environment has no deployment to scale down yet.
+          kubectl -n options-edge scale deployment/vix-option-inteligence-service --replicas=0 || true
+          for i in $(seq 1 60); do
+            pod_count="$(kubectl -n options-edge get pods -l app.kubernetes.io/name=vix-option-inteligence-service --no-headers 2>/dev/null | awk '$3 !~ /^(Completed|Succeeded|Error|Failed)$/ { print }' | wc -l | tr -d ' ')"
+            [ "$pod_count" = "0" ] && break
+            echo "Waiting for vix-option-inteligence-service pods to stop; remaining=$pod_count"
+            sleep 3
+          done
+          if [ "$(kubectl -n options-edge get pods -l app.kubernetes.io/name=vix-option-inteligence-service --no-headers 2>/dev/null | awk '$3 !~ /^(Completed|Succeeded|Error|Failed)$/ { print }' | wc -l | tr -d ' ')" != "0" ]; then
+            echo "Timed out waiting for vix-option-inteligence-service pods to stop before Kafka reconcile." >&2
+            kubectl -n options-edge get pods -l app.kubernetes.io/name=vix-option-inteligence-service || true
+            exit 1
+          fi
+          echo "vix-option-inteligence-service paused; no consumer can hold the retired identity."
+
           export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
           . scripts/kafka/load-kafka-settings.sh
           scripts/kafka/ensure-vix-option-inteligence-topic.sh
