@@ -121,11 +121,21 @@ pipeline {
               | awk '$3 !~ /^(Completed|Succeeded|Error|Failed)$/ { print }' | wc -l | tr -d ' '
           }
 
-          if ! kubectl -n options-edge get "$DEP" >/dev/null 2>&1; then
+          # ABSENT and UNKNOWN are different answers. 'kubectl get' failing on RBAC, a timeout or
+          # an API error is not proof the deployment is missing, and treating it as such would
+          # skip the pause and prune against a service that is still consuming -- the exact bug
+          # this stage exists to fix. Only an explicit NotFound is taken as absent.
+          set +e
+          probe="$(kubectl -n options-edge get "$DEP" -o name 2>&1)"
+          probe_rc=$?
+          set -e
+          if [ "$probe_rc" -ne 0 ] && ! printf '%s' "$probe" | grep -q 'NotFound'; then
+            echo "FATAL: could not determine whether $DEP exists: $probe" >&2
+            exit 1
+          fi
+          if [ "$probe_rc" -ne 0 ]; then
             # A first deploy into an environment that has no workload yet: nothing holds the
-            # retired identity, so there is nothing to pause. This is the ONLY tolerated reason
-            # for skipping the scale -- a blanket '|| true' would also swallow a real RBAC or
-            # API failure and let the prune run against a service that is still consuming.
+            # retired identity, so there is nothing to pause.
             echo "no $DEP yet; nothing to pause."
           else
             PREV="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>/dev/null)"
@@ -182,13 +192,38 @@ pipeline {
         [ -f "$MARK" ] || exit 0
         DEP=deployment/vix-option-inteligence-service
         PREV="$(cat "$MARK")"
-        NOW="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>/dev/null)"
+
+        # An unreadable state is NOT a restored state. If this read fails, an empty NOW would
+        # otherwise fall through to "no restore needed" and delete the marker -- turning a lost
+        # answer into a silent, permanent outage. Read failure means: try the restore anyway,
+        # and if that cannot be confirmed, keep the marker and fail loudly.
+        NOW="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>&1)"
+        read_rc=$?
+
+        if [ "$read_rc" -ne 0 ]; then
+          if printf '%s' "$NOW" | grep -q 'NotFound'; then
+            echo "$DEP no longer exists; nothing to restore."
+            rm -f "$MARK"
+            exit 0
+          fi
+          echo "WARNING: could not read $DEP replicas ($NOW); attempting restore to $PREV regardless." >&2
+          if kubectl -n options-edge scale "$DEP" --replicas="$PREV"; then
+            echo "Restored $DEP to $PREV despite the unreadable state."
+            rm -f "$MARK"
+            exit 0
+          fi
+          echo "FATAL: $DEP state unreadable AND restore failed -- the service may be DOWN at zero replicas. Marker kept at $MARK for the next run." >&2
+          exit 1
+        fi
+
         if [ "$NOW" = "0" ]; then
           echo "Deploy did not restore $DEP; scaling back to $PREV so the pause cannot strand it."
-          kubectl -n options-edge scale "$DEP" --replicas="$PREV" \
-            || echo "WARNING: could not restore $DEP to $PREV replicas -- it is STILL DOWN and needs manual attention." >&2
+          if ! kubectl -n options-edge scale "$DEP" --replicas="$PREV"; then
+            echo "FATAL: could not restore $DEP to $PREV replicas -- it is STILL DOWN and needs manual attention. Marker kept at $MARK." >&2
+            exit 1
+          fi
         else
-          echo "$DEP is at ${NOW:-absent} replicas; no restore needed."
+          echo "$DEP is at $NOW replicas; no restore needed."
         fi
         rm -f "$MARK"
       '''
