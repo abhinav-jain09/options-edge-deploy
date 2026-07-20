@@ -21,6 +21,8 @@ class DeltaFlowDeployTest(unittest.TestCase):
         self.assertIn("options.opra.tcbbo", deployment)
         self.assertIn("DELTA_FLOW_INPUT_GEX_TOPIC", deployment)
         self.assertIn("options.databento.gex.strike", deployment)
+        self.assertIn("DELTA_FLOW_GREEK_MAX_AGE_MS", deployment)
+        self.assertIn('value: "15000"', deployment)
         self.assertIn("port: 8110", service)
         self.assertIn("host.docker.internal:5001/options-edge-delta-flow", dev_overlay)
 
