@@ -47,7 +47,7 @@ ES_ENV = {
         {"name": "DATABENTO_GEX_DIVIDEND_YIELD", "value": "0.04"},   # q=r -> Black-76 on the future
         # OI on ES rides live in the feed (GLBX statistics stat_type=9 -> openInterest on every record),
         # NOT via the OPRA/OSI REST fetch (which can't parse CME symbols) -> keep the direct fetch OFF.
-        {"name": "DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED", "value": "false"},
+        {"name": "DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED", "value": "false", "_override": True},
         # ...but the feed holds that OI only in RAM, so a feed restart drops it to 0 (=> blank GEX) until the
         # next daily publication. PERSIST the live OI to Postgres (databento_option_raw_snapshot) as it is
         # observed, and BACKFILL from it when a later snapshot arrives with OI=0. Together these make ES GEX

@@ -40,6 +40,26 @@ class DatabentoGexTopicsTest(unittest.TestCase):
         self.assertNotIn("options.databento.gex.magnet", compacted)
         self.assertNotIn("options.databento.gex.flow", compacted)
 
+    def test_es4_disables_opra_oi_fetch_with_an_explicit_override(self) -> None:
+        import yaml
+
+        renderer = (ROOT / "scripts" / "es4" / "render_es4_manifests.py").read_text()
+        self.assertIn(
+            '{"name": "DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED", "value": "false", "_override": True}',
+            renderer,
+            "the production slice already defines true, so the ES value must be an override",
+        )
+
+        manifest = ROOT / "k8s" / "es4" / "services" / "databento-gex.yaml"
+        for doc in yaml.safe_load_all(manifest.read_text()):
+            if doc and doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "databento-gex-service":
+                env = {item["name"]: item.get("value")
+                       for item in doc["spec"]["template"]["spec"]["containers"][0].get("env", [])}
+                self.assertEqual("false", env.get("DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED"))
+                break
+        else:
+            self.fail("databento-gex-service Deployment missing from the ES4 manifest")
+
 
 if __name__ == "__main__":
     unittest.main()
