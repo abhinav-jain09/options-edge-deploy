@@ -15,8 +15,8 @@
 # fenced, so no message can outlive its schema id.
 #
 # Safety: preflight before ANY mutation; fail-closed quiescence (verified, not best-effort);
-# durable resume state (survives interruption without losing the original replica counts);
-# single-instance lock; canonical-path-guarded delete. Honors DEPLOY_DRY_RUN=true (no mutation).
+# durable deployment + topic snapshots (survive interruption); single-instance lock;
+# canonical-path-guarded deletes. Honors DEPLOY_DRY_RUN=true (no mutation).
 set -euo pipefail
 
 ES4_HOME=/home/es4
@@ -25,13 +25,10 @@ KAFKA_DATA=/home/es4/volumes/kafka
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY="${DEPLOY_DRY_RUN:-false}"
 STATE="$ES4_HOME/.es4-cleanup.state"          # durable (NOT /tmp): original replicas for resume
+TOPIC_STATE="$ES4_HOME/.es4-cleanup.topics"  # application topic definitions for the same run
 LOCKDIR="$ES4_HOME/.es4-cleanup.lock"         # flock target (kernel-released on any exit)
 KC="sudo -n /usr/local/bin/k3s kubectl -n options-edge"
-# es-web is a UI CONSUMER (it reads es.* topics for the browser feed; it does NOT produce Avro / register
-# schemas), so keeping it UP across the wipe cannot re-pollute the fresh cluster with cached schema ids.
-# Keep it running so es.fullfunding.nl never drops during a clean-reset. Excluded from scale-to-0, the
-# "all reached 0" quiesce proof, and restore. Space-separated deployment names. (2026-07-14)
-SCALE_EXCLUDE="es-web"
+# A clean reset has no exclusions: snapshot and stop every Deployment, including es-web.
 
 log()  { printf '\n=== %s ===\n' "$*"; }
 die()  { echo "CLEANUP ABORT: $*" >&2; exit 1; }
@@ -58,6 +55,9 @@ if [ "$DRY" != "true" ]; then
   # Preflight the DESTRUCTIVE command's sudo too (not just kubectl): a non-destructive probe of the
   # same `sudo -n` rule, so we never scale the app to 0 and then discover the rm is unauthorized.
   sudo -n test -d "$KAFKA_DATA" || die "sudo -n cannot access $KAFKA_DATA — the wipe would fail AFTER the app is down; fix sudoers first"
+  sudo -n test -d /var/log/pods || die "sudo -n cannot access /var/log/pods — service-log cleanup would fail"
+  sudo -n test -d /var/log/containers || die "sudo -n cannot access /var/log/containers — service-log cleanup would fail"
+  sudo -n test -d /var/lib/rancher/k3s/storage || die "sudo -n cannot access k3s local-path storage — Streams-state cleanup would fail"
 fi
 
 # single-instance lock via flock: kernel-released when this process exits FOR ANY REASON
@@ -69,13 +69,17 @@ if [ "$DRY" != "true" ]; then
 fi
 
 # ------------------------------------------------------------ 1. capture / resume replica state
-# If a prior run was interrupted, $STATE already holds the ORIGINAL replica counts. NEVER
-# overwrite it while it exists (a re-capture now would read the scaled-to-0 counts and restore 0).
-# A resume re-runs the idempotent wipe using the preserved originals.
+# If a prior run was interrupted, $STATE already holds the ORIGINAL replica counts. Never replace
+# those counts with current values: a re-capture could read scaled-to-0 Deployments and restore 0.
+# Before resuming, reconcile the capture by name with the current cluster: preserve original counts
+# for existing names, append services created after the capture using their current desired count,
+# and drop services that no longer exist. This keeps every current producer inside the quiesce proof
+# even when a WIPING file survives across deployments. A successful resume marks RESTORED and clears
+# the state normally; blind/manual deletion of a WIPING capture is neither needed nor safe.
 # ONE durable state file: line 1 = PHASE (WIPING|RESTORED), lines 2+ = "name replicas". Written
 # ATOMICALLY (temp+mv) so the phase is always consistent with its content — no second marker file
 # that could go stale and make a future reset silently skip the wipe. A resume keys off line 1.
-REPS() { tail -n +2 "$STATE" | awk -v ex="$SCALE_EXCLUDE" 'BEGIN{n=split(ex,a," ");for(i=1;i<=n;i++)x[a[i]]=1} !($1 in x)'; }   # replica lines (skip phase header) MINUS SCALE_EXCLUDE
+REPS() { tail -n +2 "$STATE" | awk 'NF >= 2'; } # replica lines (skip phase header)
 # A legacy state file from a pre-single-file build would have a deployment row (not a phase word) on
 # line 1. Never misread that as a phase — fail closed and make the operator inspect/clear it.
 [ -e "$ES4_HOME/.es4-cleanup.phase" ] && die "legacy phase marker $ES4_HOME/.es4-cleanup.phase present — inspect + remove it (and $STATE) before rerunning"
@@ -86,10 +90,29 @@ if [ -s "$STATE" ]; then
     # A prior run verified RESTORE and was killed before clearing state. Re-wiping now would destroy
     # data produced since — only the state cleanup remained. Do it and exit (never re-wipe restored data).
     log "prior run already restored the app (phase=RESTORED); clearing leftover state, NO wipe"
-    [ "$DRY" = "true" ] || rm -f "$STATE"
+    [ "$DRY" = "true" ] || rm -f "$STATE" "$TOPIC_STATE"
     exit 0
   fi
-  log "resuming interrupted reset (phase=${ph:-WIPING}) — reusing captured replicas from $STATE"
+  log "resuming interrupted reset (phase=${ph:-WIPING}) — reconciling captured replicas with current Deployments"
+  tail -n +2 "$STATE" | awk 'NF != 2 || ($2 != "<none>" && $2 !~ /^[0-9]+$/) { exit 1 }' \
+    || die "invalid captured Deployment replica data — refusing to alter $STATE"
+  CURRENT_DATA=$($KC get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas --no-headers) \
+    || die "could not enumerate current Deployments while reconciling $STATE"
+  [ "$(printf '%s\n' "$CURRENT_DATA" | awk 'NF >= 2 { count++ } END { print count+0 }')" -ge 1 ] \
+    || die "no current Deployments found while reconciling $STATE"
+  printf '%s\n' "$CURRENT_DATA" | awk 'NF != 2 || ($2 != "<none>" && $2 !~ /^[0-9]+$/) { exit 1 }' \
+    || die "invalid current Deployment replica data — refusing to alter $STATE"
+  if [ "$DRY" = "true" ]; then
+    echo "DRY: reconciled WIPING state preview (durable state remains unchanged)"
+    awk -f "$SCRIPT_DIR/reconcile-cleanup-state.awk" "$STATE" <(printf '%s\n' "$CURRENT_DATA")
+  else
+    TMP="$STATE.tmp.$$"
+    awk -f "$SCRIPT_DIR/reconcile-cleanup-state.awk" "$STATE" <(printf '%s\n' "$CURRENT_DATA") > "$TMP" \
+      || die "failed to reconcile current Deployments into $STATE"
+    [ "$(wc -l < "$TMP")" -ge 2 ] || die "reconciled state contains no Deployments — refusing to replace $STATE"
+    mv -f "$TMP" "$STATE"
+    log "reconciled WIPING state now covers every current Deployment; original captured counts preserved"
+  fi
 else
   log "capturing es4 Deployment replica counts (phase WIPING) -> $STATE"
   if [ "$DRY" = "true" ]; then
@@ -101,6 +124,48 @@ else
     [ "$(wc -l < "$TMP")" -ge 2 ] || die "no Deployments found (unexpected) — aborting before wipe"
     mv -f "$TMP" "$STATE"          # atomic publish: phase WIPING committed WITH the captured replicas
   fi
+fi
+
+# Snapshot real ES application topics before stopping Kafka. Kafka/SR internals, Kafka Streams
+# changelog/repartition state, and old recursive es.es... MM2 heartbeats are deliberately excluded.
+# Streams recreates its own internal topics after its local state has been wiped.
+snapshot_topics() {
+  local tmp="$TOPIC_STATE.tmp.$$"
+  : > "$tmp"
+  docker exec es4-kafka kafka-topics --bootstrap-server localhost:29092 --describe 2>/dev/null \
+    | awk '
+      function wanted(t) {
+        return t ~ /^es\./ && t !~ /^es\.es\./ && t !~ /(^|\.)heartbeats$/ &&
+               t !~ /-changelog($|-)/ && t !~ /-repartition($|-)/
+      }
+      /^Topic: / && /PartitionCount: / && wanted($2) { print "T\t" $2 "\t" $6 }
+    ' | LC_ALL=C sort -u > "$tmp"
+  docker exec es4-kafka kafka-configs --bootstrap-server localhost:29092 \
+    --describe --entity-type topics 2>/dev/null \
+    | awk '
+      function wanted(t) {
+        return t ~ /^es\./ && t !~ /^es\.es\./ && t !~ /(^|\.)heartbeats$/ &&
+               t !~ /-changelog($|-)/ && t !~ /-repartition($|-)/
+      }
+      /^Dynamic configs for topic / { topic=$5; keep=wanted(topic); next }
+      keep && /^  [^ ]+=/ {
+        line=$0; sub(/^  /,"",line); sub(/ sensitive=.*/,"",line)
+        p=index(line,"=")
+        if (p>1) print "C\t" topic "\t" substr(line,1,p-1) "\t" substr(line,p+1)
+      }
+    ' >> "$tmp"
+  [ "$(awk -F'\t' '$1=="T"{n++} END{print n+0}' "$tmp")" -gt 0 ] \
+    || die "topic snapshot is empty — refusing destructive reset"
+  mv -f "$tmp" "$TOPIC_STATE"
+}
+
+if [ "$DRY" = "true" ]; then
+  echo "DRY: would snapshot all ES application topics, partitions and dynamic configs -> $TOPIC_STATE"
+elif [ ! -s "$TOPIC_STATE" ]; then
+  log "capturing Kafka application-topic definitions -> $TOPIC_STATE"
+  snapshot_topics
+else
+  log "reusing durable Kafka topic snapshot from interrupted reset -> $TOPIC_STATE"
 fi
 
 # ------------------------------------------------------------ 2. quiesce app (fail-closed + verified)
@@ -115,11 +180,11 @@ if [ "$DRY" != "true" ]; then
   for _ in $(seq 1 30); do
     # awk (not grep|wc): always emits a number, no pipefail exit-code coupling. bad = Deployments
     # whose status.replicas is present and != 0; pods = live pods (excl. terminating/completed).
-    bad=$($KC get deploy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.replicas}{"\n"}{end}' 2>/dev/null | awk -v ex="$SCALE_EXCLUDE" 'BEGIN{n=split(ex,a," ");for(i=1;i<=n;i++)x[a[i]]=1} !($1 in x) && $2!="" && $2!=0 {c++} END{print c+0}')
+    bad=$($KC get deploy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.replicas}{"\n"}{end}' 2>/dev/null | awk '$2!="" && $2!=0 {c++} END{print c+0}')
     # Require producer pods to be ACTUALLY DELETED — a Terminating pod still runs during its grace
     # period and could reconnect + write cached schema ids. Count anything not in a terminal phase
     # (Terminating pods are still present -> counted -> we keep waiting until they are gone).
-    pods=$($KC get pods --no-headers 2>/dev/null | awk -v ex="$SCALE_EXCLUDE" 'BEGIN{n=split(ex,a," ")} {skip=0; for(i=1;i<=n;i++) if($1 ~ "^"a[i]"-") skip=1; if(!skip && $3!="Completed" && $3!="Succeeded") c++} END{print c+0}')
+    pods=$($KC get pods --no-headers 2>/dev/null | awk '$3!="Completed" && $3!="Succeeded" {c++} END{print c+0}')
     if [ "${bad:-1}" = "0" ] && [ "${pods:-1}" = "0" ]; then ok=true; break; fi
     sleep 5
   done
@@ -127,10 +192,40 @@ if [ "$DRY" != "true" ]; then
 fi
 
 # ------------------------------------------------------- 3. offline coordinated wipe (kafka down)
-log "docker compose down (broker offline — no producer can reach it)"
+log "docker compose down (Kafka and all local infra stopped; Docker container logs removed)"
 run "(cd '$INFRA_DIR' && docker compose down)"
 log "wiping Kafka data volume CONTENTS ($KAFKA_DATA/* — all topics + _schemas), Kafka offline"
 run "sudo -n find '$KAFKA_DATA' -mindepth 1 -maxdepth 1 -exec rm -rf {} +"
+
+# EmptyDir state vanished with the pods. Empty each persistent Kafka Streams PVC in place so its
+# claim remains bound. Refuse any PV path outside k3s local-path storage.
+log "wiping persistent Kafka Streams state stores used by snapshotted services"
+if [ "$DRY" = "true" ]; then
+  echo "DRY: would resolve snapshot Deployment PVCs and empty their guarded local-path directories"
+else
+  while IFS= read -r claim; do
+    [ -n "$claim" ] || continue
+    pv=$($KC get pvc "$claim" -o jsonpath='{.spec.volumeName}' 2>/dev/null || true)
+    [ -n "$pv" ] || die "PVC $claim has no bound PV"
+    path=$(sudo -n /usr/local/bin/k3s kubectl get pv "$pv" -o jsonpath='{.spec.local.path}' 2>/dev/null || true)
+    if [ -z "$path" ]; then
+      path=$(sudo -n /usr/local/bin/k3s kubectl get pv "$pv" -o jsonpath='{.spec.hostPath.path}' 2>/dev/null || true)
+    fi
+    [ -d "$path" ] && [ ! -L "$path" ] || die "PV $pv path missing or symlink ($path)"
+    canon=$(cd "$path" && pwd -P)
+    case "$canon" in /var/lib/rancher/k3s/storage/*) ;; *) die "PV $pv path outside guarded k3s storage root: $canon" ;; esac
+    sudo -n find "$canon" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    echo "wiped state PVC $claim ($canon)"
+  done < <(
+    while read -r name _; do
+      $KC get "deploy/$name" -o jsonpath='{range .spec.template.spec.volumes[*]}{.persistentVolumeClaim.claimName}{"\n"}{end}' 2>/dev/null || true
+    done < <(REPS) | awk 'NF' | LC_ALL=C sort -u
+  )
+fi
+
+log "deleting options-edge Kubernetes service logs"
+run "sudo -n find /var/log/containers -mindepth 1 -maxdepth 1 -type l -name '*_options-edge_*.log' -delete"
+run "sudo -n find /var/log/pods -mindepth 1 -maxdepth 1 -type d -name 'options-edge_*' -exec rm -rf {} +"
 # Start ONLY the datastores (kafka + schema-registry + postgres + redis) — NOT mm2 (a producer
 # that could auto-create topics before reconciliation). Topics are created next; mm2 + the app
 # producers start only AFTER topics exist, so nothing races topic reconciliation on the fresh cluster.
@@ -148,8 +243,24 @@ if [ "$DRY" != "true" ]; then
   [ "$ok" = true ] || die "kafka/SR not healthy after 200s — app left down (rerun resumes from $STATE)"
 fi
 
-# ------------------------------------------------------------ 4. recreate core topics, THEN mm2
-log "recreating core es.* topics (create-es-topics.sh) before any producer starts"
+# ------------------------------------------------------------ 4. recreate snapshotted topics, THEN mm2
+log "recreating every snapshotted application topic before any producer starts"
+if [ "$DRY" = "true" ]; then
+  echo "DRY: would recreate topics/configs from $TOPIC_STATE"
+else
+  while IFS=$'\t' read -r kind topic value _; do
+    [ "$kind" = T ] || continue
+    docker exec es4-kafka kafka-topics --bootstrap-server localhost:29092 --create --if-not-exists \
+      --topic "$topic" --partitions "$value" --replication-factor 1 >/dev/null
+  done < "$TOPIC_STATE"
+  while IFS=$'\t' read -r kind topic key value; do
+    [ "$kind" = C ] || continue
+    if [[ "$value" == *,* ]]; then value="[$value]"; fi
+    docker exec es4-kafka kafka-configs --bootstrap-server localhost:29092 --alter \
+      --entity-type topics --entity-name "$topic" --add-config "$key=$value" >/dev/null
+  done < "$TOPIC_STATE"
+fi
+log "reconciling required core es.* topic contracts (create-es-topics.sh)"
 run "bash '$SCRIPT_DIR/create-es-topics.sh'"
 log "docker compose up -d (start mm2 + any remaining infra now that topics exist)"
 run "(cd '$INFRA_DIR' && docker compose up -d)"
@@ -172,12 +283,29 @@ else
     got=$($KC get "deploy/$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
     [ "$got" = "$reps" ] || { echo "restore MISMATCH $name: want $reps got $got" >&2; fail=1; }
   done < <(REPS)
+  ready=false
+  for _ in $(seq 1 60); do
+    missing=0
+    while read -r name reps; do
+      [ "$reps" = "<none>" ] && reps=1
+      [ "$reps" -gt 0 ] || continue
+      avail=$($KC get "deploy/$name" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
+      [ "${avail:-0}" -ge "$reps" ] || missing=$((missing + 1))
+    done < <(REPS)
+    if [ "$missing" = 0 ]; then ready=true; break; fi
+    sleep 5
+  done
+  [ "$ready" = true ] || fail=1
   [ "$fail" = 0 ] || die "restore incomplete — leaving $STATE for a resume (rerun to finish restore)"
   # Atomically flip the SINGLE state file's phase to RESTORED, THEN unlink it. If killed between the
   # flip and the unlink, a resume reads phase=RESTORED and only clears state — it never re-wipes. There
   # is no second file to go stale, so a later fresh reset can never inherit a spurious RESTORED.
   TMP="$STATE.tmp.$$"; { echo RESTORED; REPS; } > "$TMP" && mv -f "$TMP" "$STATE"
-  rm -f "$STATE"                # success: clear durable state so a later run captures fresh
+  rm -f "$STATE" "$TOPIC_STATE" # success: next run captures fresh service/topic inventories
 fi
 
-log "es4 clean reset COMPLETE — Kafka + Schema Registry wiped and re-seeded atomically; app restored"
+if [ "$DRY" = "true" ]; then
+  log "es4 clean reset DRY RUN COMPLETE — no services, data, state or logs were changed"
+else
+  log "es4 clean reset COMPLETE — service/topic snapshot restored after Kafka/SR, Streams state and logs were wiped"
+fi

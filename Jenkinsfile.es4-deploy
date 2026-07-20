@@ -10,10 +10,10 @@
 //                  (k3s, registries.yaml, compose stack Kafka/SR/PG/Redis/MM2, topics,
 //                  namespace + pg secret). Idempotent.
 //   create-topics  run create-es-topics.sh on the box (idempotent).
-//   clean-reset    ATOMIC Kafka + Schema Registry wipe (cleanup-es4.sh): quiesce app -> wipe the
-//                  Kafka data volume (all topics + _schemas together) -> recreate topics ->
-//                  restart app. Fixes the dead-schema-id poison ("Malformed data. Length is
-//                  negative"). DESTRUCTIVE (drops all es4 Kafka data); honors DEPLOY_DRY_RUN.
+//   clean-reset    Snapshot every es4 Deployment + application topic, stop all services/infra,
+//                  wipe Kafka/SR, Streams state stores and service logs, recreate snapshotted
+//                  topics, then start only the snapshotted services at captured replicas.
+//                  DESTRUCTIVE (drops all es4 Kafka data); honors DEPLOY_DRY_RUN.
 //   deploy-service apply ONE service from k8s/es4/services/<SERVICE>.yaml (digest-pinned).
 //   deploy-all     apply es4-common-env + every manifest in k8s/es4/services (digest-pinned).
 //   deploy-es-feed apply k8s/es4/prod/es-feed.yaml to the PROD cluster (the es-feed runs
@@ -55,7 +55,9 @@ pipeline {
           # /home is root-owned on the box — create the es4 home via passwordless sudo, owned by the deploy user
           ssh -o BatchMode=yes "$ES4_HOST" 'sudo install -d -o "$(id -un)" -g "$(id -gn)" /home/es4 /home/es4/repo /home/es4/repo/infra /home/es4/repo/scripts'
           rsync -az --delete infra/es4  "$ES4_HOST":/home/es4/repo/infra/
-          rsync -az --delete scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
+          # ES helpers call shared siblings under scripts/kafka. Sync the complete repo-owned
+          # scripts tree so an on-box cleanup never runs with a partial dependency graph.
+          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/bootstrap-es4.sh'
         '''
       }
@@ -65,7 +67,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          rsync -az scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
+          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
         '''
       }
@@ -83,7 +85,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          rsync -az scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
+          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
 
           KP="KUBECONFIG=$PROD_KUBECONFIG kubectl -n options-edge"
           FEED_REP=$(eval "$KP get deploy es-feed -o jsonpath='{.spec.replicas}'" 2>/dev/null || echo 1)
