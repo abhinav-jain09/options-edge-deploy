@@ -10,10 +10,10 @@
 //                  (k3s, registries.yaml, compose stack Kafka/SR/PG/Redis/MM2, topics,
 //                  namespace + pg secret). Idempotent.
 //   create-topics  run create-es-topics.sh on the box (idempotent).
-//   clean-reset    ATOMIC Kafka + Schema Registry wipe (cleanup-es4.sh): quiesce app -> wipe the
-//                  Kafka data volume (all topics + _schemas together) -> recreate topics ->
-//                  restart app. Fixes the dead-schema-id poison ("Malformed data. Length is
-//                  negative"). DESTRUCTIVE (drops all es4 Kafka data); honors DEPLOY_DRY_RUN.
+//   clean-reset    Snapshot every es4 Deployment + application topic, stop all services/infra,
+//                  wipe Kafka/SR, Streams state stores and service logs, recreate snapshotted
+//                  topics, then start only the snapshotted services at captured replicas.
+//                  DESTRUCTIVE (drops all es4 Kafka data); honors DEPLOY_DRY_RUN.
 //   deploy-service apply ONE service from k8s/es4/services/<SERVICE>.yaml (digest-pinned).
 //   deploy-all     apply es4-common-env + every manifest in k8s/es4/services (digest-pinned).
 //   deploy-es-feed apply k8s/es4/prod/es-feed.yaml to the PROD cluster (the es-feed runs
