@@ -185,7 +185,10 @@ pipeline {
                 return 1
               fi
               rm -f "$errf"
-              out="${out:-0}"
+              # NO '${out:-0}' default here. Defaulting empty to 0 would let an empty -- i.e.
+              # unknown -- response satisfy the "desired replicas are zero" test, which is the
+              # very unknown-as-zero class this function exists to stop. A Deployment always
+              # carries a defaulted spec.replicas, so empty means something is wrong.
               case "$out" in
                 ''|*[!0-9]*) echo "FATAL: unreadable desired replicas for $DEP: [$out]" >&2; return 1 ;;
               esac
