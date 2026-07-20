@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-sr3-feed-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: databento-sr3-feed-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: databento-sr3-feed-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: databento-sr3-feed-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: databento-sr3-feed
+          image: 192.168.100.252:5000/options-edge-databento-sr3-feed:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-databento-feed-env
+          env:
+            - name: SR3_DATABENTO_DATASET
+              value: GLBX.MDP3
+            - name: SR3_DATABENTO_SCHEMA
+              value: mbp-1
+            - name: SR3_STYPE_IN
+              value: raw_symbol
+            - name: SR3_OUTPUT_TOPIC
+              value: rates.sofr.databento-sr3-feed-service.current
+            - name: HEALTH_PORT
+              value: "8011"
+            - name: READINESS_PORT
+              value: "8012"
+          ports:
+            - name: metrics
+              containerPort: 8011
+            - name: health
+              containerPort: 8012
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi

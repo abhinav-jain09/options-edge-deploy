@@ -5,6 +5,8 @@
 resources:
   - databento-feed-deployment.yaml
   - databento-feed-service.yaml
+  - databento-sr3-feed-deployment.yaml
+  - databento-sr3-feed-service.yaml
   - ibkr-feed-deployment.yaml
   - ibkr-feed-service.yaml
   - feed-gateway-deployment.yaml
@@ -44,6 +46,10 @@ resources:
   - es-open-direction-service.yaml
   - vix-option-inteligence-deployment.yaml
   - vix-option-inteligence-service.yaml
+  - option-truth-engine-deployment.yaml
+  - option-truth-engine-service.yaml
+  - market-carry-deployment.yaml
+  - market-carry-service.yaml
   - es-open-direction-postgres-writer-deployment.yaml
   - es-open-direction-postgres-writer-service.yaml
   - reversal-postgres-writer-deployment.yaml

@@ -13,85 +13,84 @@
 apiVersion: v1
 kind: Service
 metadata:
-  annotations:
-    prometheus.io/path: /metrics
-    prometheus.io/port: "8010"
-    prometheus.io/scrape: "true"
-  labels:
-    app.kubernetes.io/name: options-edge-databento-feed
-    app.kubernetes.io/part-of: options-edge
-  name: options-edge-databento-feed
+  name: databento-sr3-feed-service
   namespace: options-edge
 spec:
   ports:
     - name: metrics
-      port: 8010
+      port: 8011
       targetPort: metrics
+    - name: health
+      port: 8012
+      targetPort: health
   selector:
-    app.kubernetes.io/name: options-edge-databento-feed
+    app.kubernetes.io/name: databento-sr3-feed-service
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   labels:
-    app.kubernetes.io/name: options-edge-databento-feed
+    app.kubernetes.io/name: databento-sr3-feed-service
     app.kubernetes.io/part-of: options-edge
-  name: options-edge-databento-feed
+  name: databento-sr3-feed-service
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: options-edge-databento-feed
+      app.kubernetes.io/name: databento-sr3-feed-service
   strategy:
     type: Recreate
   template:
     metadata:
-      annotations:
-        oe/config-nonce: 2026-07-19-dev-basis-anchor-resume-2
       labels:
-        app.kubernetes.io/name: options-edge-databento-feed
+        app.kubernetes.io/name: databento-sr3-feed-service
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
         - env:
-            - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
-              value: "15"
-            - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
-              value: "90"
-            - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: ""
+            - name: SR3_DATABENTO_DATASET
+              value: GLBX.MDP3
+            - name: SR3_DATABENTO_SCHEMA
+              value: mbp-1
+            - name: SR3_STYPE_IN
+              value: raw_symbol
+            - name: SR3_OUTPUT_TOPIC
+              value: rates.sofr.databento-sr3-feed-service.current
+            - name: HEALTH_PORT
+              value: "8011"
+            - name: READINESS_PORT
+              value: "8012"
           envFrom:
             - configMapRef:
-                name: options-edge-databento-feed-config
+                name: options-edge-config
             - secretRef:
                 name: options-edge-databento-feed-env
-          image: host.docker.internal:5001/options-edge-databento-feed:dev
+          image: 192.168.100.252:5000/options-edge-databento-sr3-feed:dev
           imagePullPolicy: Always
           livenessProbe:
-            failureThreshold: 2
             httpGet:
               path: /health/live
-              port: metrics
-            initialDelaySeconds: 45
+              port: health
+            initialDelaySeconds: 15
             periodSeconds: 15
-          name: databento-feed
+          name: databento-sr3-feed
           ports:
-            - containerPort: 8010
+            - containerPort: 8011
               name: metrics
+            - containerPort: 8012
+              name: health
           readinessProbe:
-            failureThreshold: 12
+            failureThreshold: 30
             httpGet:
-              path: /metrics
-              port: metrics
-            initialDelaySeconds: 20
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 10
             periodSeconds: 10
           resources:
             limits:
-              memory: 2Gi
-            requests:
-              cpu: 250m
               memory: 512Mi
-      dnsPolicy: Default
-      hostNetwork: true
+            requests:
+              cpu: 100m
+              memory: 128Mi

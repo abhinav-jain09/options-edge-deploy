@@ -51,7 +51,7 @@ spec:
   template:
     metadata:
       annotations:
-        oe/config-nonce: 2026-07-19-offhours-strike-ladder
+        oe/config-nonce: 2026-07-19-dev-basis-anchor-resume-2
       labels:
         app.kubernetes.io/name: options-edge-databento-feed
         app.kubernetes.io/part-of: options-edge

@@ -36,7 +36,7 @@ OUT_DIR = "k8s/es4/services"
 SERVICES = [
     "databento-gex", "databento-gex-history", "databento-maxpain", "databento-mission-sandwich",
     "databento-volume-aggregator", "dealer-ledger", "dealer-ledger-calibration", "delta-flow",
-    "directional-pressure", "gex-delta-redis-writer", "option-price-behavior", "pin-postgres-writer",
+    "directional-pressure", "gex-delta-redis-writer", "option-price-behavior", "option-truth-engine", "pin-postgres-writer",
     "pressure-postgres-writer", "raw-to-display", "strike-flow-avro-adapter", "strike-flow-classifier",
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
 ]
@@ -93,6 +93,9 @@ ES_ENV = {
     # not the SPX cash-price topic (Codex finding #3, 2026-07-12).
     "option-price-behavior": [
         {"name": "OPTION_PRICE_BEHAVIOR_INPUT_UNDERLYING_TOPIC", "value": "underlying.es.trades", "_override": True},
+    ],
+    "option-truth-engine": [
+        {"name": "OPTION_TRUTH_OUTPUT_TOPIC", "value": "options.es.option-truth-engine-service.by-strike", "_override": True},
     ],
     # spread-skew on ES: the label must say ES (SPREAD_SKEW_UNDERLYING, proc PR#316), the spot is the
     # mirrored ES future-trades stream (same source OPB uses — Codex finding #3 applies identically),
