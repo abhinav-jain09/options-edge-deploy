@@ -116,9 +116,21 @@ pipeline {
           mkdir -p "$WORKSPACE/.jenkins-tmp"
           MARK="$WORKSPACE/.jenkins-tmp/vix-paused-replicas"
 
+          # Counts live pods, or FAILS. Piping a failed 'kubectl get' into wc -l yields 0, which
+          # reads as 'no pods running' -- an unknown state masquerading as a verified-empty one,
+          # the same mistake as treating a failed lookup as 'deployment absent'. Callers must
+          # check the return code, not just the number.
           live_pods() {
-            kubectl -n options-edge get pods -l "$SEL" --no-headers 2>/dev/null \
-              | awk '$3 !~ /^(Completed|Succeeded|Error|Failed)$/ { print }' | wc -l | tr -d ' '
+            local out rc
+            out="$(kubectl -n options-edge get pods -l "$SEL" --no-headers 2>&1)"
+            rc=$?
+            if [ "$rc" -ne 0 ]; then
+              # An empty selection is exit 0 with empty stdout; a real error is not.
+              echo "FATAL: could not list pods for $SEL: $out" >&2
+              return 1
+            fi
+            printf '%s\n' "$out" \
+              | awk '$3 !~ /^(Completed|Succeeded|Error|Failed)$/ && NF { print }' | wc -l | tr -d ' '
           }
 
           # ABSENT and UNKNOWN are different answers. 'kubectl get' failing on RBAC, a timeout or
@@ -145,17 +157,32 @@ pipeline {
             printf '%s\\n' "$PREV" > "$MARK"
             kubectl -n options-edge scale "$DEP" --replicas=0
 
+            # Both conditions are read through explicit return codes: an unreadable desired-replica
+            # count or an unreadable pod list must stop the pause, never satisfy it.
+            desired_replicas() {
+              local out rc
+              out="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>&1)"
+              rc=$?
+              if [ "$rc" -ne 0 ]; then
+                echo "FATAL: could not read desired replicas for $DEP: $out" >&2
+                return 1
+              fi
+              printf '%s' "${out:-0}"
+            }
+
             for i in $(seq 1 60); do
-              want="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>/dev/null)"
-              [ "$want" = "0" ] && [ "$(live_pods)" = "0" ] && break
-              echo "Waiting for $DEP to stop; desired=${want:-?} pods=$(live_pods)"
+              want="$(desired_replicas)" || exit 1
+              pods="$(live_pods)"        || exit 1
+              [ "$want" = "0" ] && [ "$pods" = "0" ] && break
+              echo "Waiting for $DEP to stop; desired=$want pods=$pods"
               sleep 3
             done
             # Both conditions, deliberately: zero pods alone does not prove desired replicas are
             # zero -- a controller could be about to create one back.
-            want="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>/dev/null)"
-            if [ "$want" != "0" ] || [ "$(live_pods)" != "0" ]; then
-              echo "Timed out pausing $DEP before the identity prune; desired=${want:-?} pods=$(live_pods)" >&2
+            want="$(desired_replicas)" || exit 1
+            pods="$(live_pods)"        || exit 1
+            if [ "$want" != "0" ] || [ "$pods" != "0" ]; then
+              echo "Timed out pausing $DEP before the identity prune; desired=$want pods=$pods" >&2
               kubectl -n options-edge get pods -l "$SEL" || true
               exit 1
             fi
