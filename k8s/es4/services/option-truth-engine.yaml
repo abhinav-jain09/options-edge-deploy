@@ -50,7 +50,7 @@ spec:
         - name: OPTION_TRUTH_ENABLED
           value: 'true'
         - name: OPTION_TRUTH_INPUT_TOPIC
-          value: options.databento.gex.flow.by-strike
+          value: options.databento.gex.strike
         - name: OPTION_TRUTH_OUTPUT_TOPIC
           value: options.es.option-truth-engine-service.by-strike
         - name: OPTION_TRUTH_STREAMS_APP_ID
