@@ -56,7 +56,7 @@ spec:
             - name: MARKET_CARRY_OPTIONS_TOPIC
               value: options.databento.raw
             - name: MARKET_CARRY_SR3_TOPIC
-              value: rates.sofr.databento-sr3-feed-service.current
+              value: rates.sofr.databento-sr3-feed-service.history
             - name: MARKET_CARRY_CURRENT_TOPIC
               value: market.spx.market-carry-service.current
             - name: MARKET_CARRY_HISTORY_TOPIC

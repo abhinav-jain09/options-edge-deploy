@@ -58,6 +58,8 @@ spec:
               value: raw_symbol
             - name: SR3_OUTPUT_TOPIC
               value: rates.sofr.databento-sr3-feed-service.current
+            - name: SR3_HISTORY_TOPIC
+              value: rates.sofr.databento-sr3-feed-service.history
             - name: HEALTH_PORT
               value: "8011"
             - name: READINESS_PORT
