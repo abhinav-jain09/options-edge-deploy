@@ -232,21 +232,35 @@ pipeline {
         # Structural absence test first, for the same reason as in the stage: a real failure whose
         # message merely contains 'NotFound' must not be read as "the workload is gone, nothing to
         # restore" -- that would delete the marker and leave the service down for good.
-        set +e
+        # NOTE: this block deliberately runs WITHOUT 'set -e' (see 'set -uo pipefail' above).
+        # Every kubectl here is expected to be able to fail; the whole point is to react to that
+        # rather than abort. An earlier version paired 'set +e' with 'set -e', which switched -e
+        # ON for the rest of the block -- so a failing replica read killed the script instantly
+        # and the "attempt the restore anyway" branch below never ran. The guarantee this block
+        # exists to provide was silently absent.
         exists="$(kubectl -n options-edge get "$DEP" --ignore-not-found -o name 2>/dev/null)"
         exists_rc=$?
-        set -e
         if [ "$exists_rc" -eq 0 ] && [ -z "$exists" ]; then
           echo "$DEP no longer exists; nothing to restore."
           rm -f "$MARK"
           exit 0
         fi
 
-        NOW="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>&1)"
+        # stderr is captured SEPARATELY, and the value must be digits. With '2>&1' a successful
+        # read of "0" accompanied by any warning becomes "0\nWarning: ..." -- not equal to "0",
+        # so it would fall through to "no restore needed", delete the marker, and leave the
+        # service at zero replicas. A value that is not a plain number is an unreadable value,
+        # not a non-zero one.
+        ERRF="$(mktemp)"
+        NOW="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>"$ERRF")"
         read_rc=$?
+        NOW_ERR="$(cat "$ERRF")"; rm -f "$ERRF"
+        case "$NOW" in
+          ''|*[!0-9]*) read_rc=1; NOW_ERR="unreadable replica value '$NOW' ${NOW_ERR:+($NOW_ERR)}" ;;
+        esac
 
         if [ "$read_rc" -ne 0 ]; then
-          echo "WARNING: could not read $DEP replicas ($NOW); attempting restore to $PREV regardless." >&2
+          echo "WARNING: could not read $DEP replicas ($NOW_ERR); attempting restore to $PREV regardless." >&2
           if kubectl -n options-edge scale "$DEP" --replicas="$PREV"; then
             echo "Restored $DEP to $PREV despite the unreadable state."
             rm -f "$MARK"
