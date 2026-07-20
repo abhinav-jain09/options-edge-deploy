@@ -37,6 +37,7 @@ services:
 
   # --- monolith (deployed by options-edge-deploy; migrate in batches) ------------------
   - { name: databento-feed,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-feed,               deployments: [options-edge-databento-feed], buildJob: options-edge-databento-feed-deploy }
+  - { name: databento-sr3-feed,           managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-sr3-feed,           deployments: [databento-sr3-feed-service], buildJob: options-edge-databento-sr3-feed-deploy }
   - { name: ibkr-feed,                    managedBy: monolith, image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service] }
   - { name: feed-gateway,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-feed-gateway,                 deployments: [feed-gateway-service], buildJob: feed-gateway-deploy }
   - { name: raw-to-display,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-to-display,               deployments: [raw-to-display-service, raw-to-display-databento-service] }
@@ -49,6 +50,7 @@ services:
   - { name: dealer-ledger-calibration,    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-dealer-ledger-calibration,    deployments: [dealer-ledger-calibration-scorer, dealer-ledger-calibration-accumulator] }
   - { name: strike-intelligence,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-intelligence,          deployments: [strike-intelligence-service] }
   - { name: option-truth-engine,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-truth-engine,          deployments: [option-truth-engine-service] }
+  - { name: market-carry,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-market-carry,                 deployments: [market-carry-service] }
   - { name: strike-invasion,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-invasion,              deployments: [strike-invasion-service] }
   - { name: invasion-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-invasion-postgres-writer,     deployments: [invasion-postgres-writer] }
   - { name: spread-skew,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew,                  deployments: [spread-skew-service] }

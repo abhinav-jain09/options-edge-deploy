@@ -49,6 +49,8 @@ IMAGE_MAP = {
     ("unified-sr-service", "unified-sr"): "UNIFIED_SR_IMAGE",
     ("strike-intelligence-service", "strike-intelligence"): "STRIKE_INTELLIGENCE_IMAGE",
     ("option-truth-engine-service", "option-truth-engine"): "OPTION_TRUTH_ENGINE_IMAGE",
+    ("market-carry-service", "market-carry"): "MARKET_CARRY_IMAGE",
+    ("databento-sr3-feed-service", "databento-sr3-feed"): "DATABENTO_SR3_FEED_IMAGE",
     ("vix-option-inteligence-service", "vix-option-inteligence"): "VIX_OPTION_INTELIGENCE_IMAGE",
     ("strike-flow-avro-adapter", "strike-flow-avro-adapter"): "STRIKE_FLOW_AVRO_ADAPTER_IMAGE",
     ("gex-delta-redis-writer", "gex-delta-redis-writer"): "GEX_DELTA_REDIS_WRITER_IMAGE",

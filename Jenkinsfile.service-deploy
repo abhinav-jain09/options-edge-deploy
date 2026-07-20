@@ -20,10 +20,10 @@ pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
     choice(name: 'SERVICE', choices: [
-      'databento-feed', 'databento-gex', 'databento-gex-history', 'databento-maxpain', 'databento-mission-sandwich',
+      'databento-feed', 'databento-sr3-feed', 'databento-gex', 'databento-gex-history', 'databento-maxpain', 'databento-mission-sandwich',
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
       'directional-pressure', 'es-open-direction', 'es-open-direction-postgres-writer', 'vix-option-inteligence', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
-      'option-truth-engine', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
+      'option-truth-engine', 'market-carry', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
       'invasion-postgres-writer', 'reversal-confirmation', 'reversal-postgres-writer', 'short-premium-agent', 'spread-skew', 'es-gex-spx-align', 'spread-skew-postgres-writer', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
       'unified-sr', 'volume-pace', 'signal-follower', 'greek-move-authenticity'
     ], description: 'Which service to deploy (dir under k8s/services; kept in sync with services.yaml standalone entries — added dealer-ledger + feed-gateway + short-premium-agent + strike-invasion + invasion-postgres-writer + spread-skew + spread-skew-postgres-writer + es-open-direction + es-open-direction-postgres-writer + reversal-postgres-writer, dropped 14-disabled-service leftovers per #288).')
@@ -67,7 +67,7 @@ pipeline {
           // processing job maps image->maven module and runs `mvn -pl <module> -am`, then builds+pushes
           // just that image. SERVICE_PARAM is read by the shell (env), never Groovy-interpolated into the
           // script text (injection-safe, matches the rest of these jobs).
-          // NOTE: databento-feed and feed-gateway have no processing module (they build in their own
+          // NOTE: databento-feed, databento-sr3-feed and feed-gateway have no processing module (they build in their own
           // repos' jobs — options-edge-databento-feed-deploy and feed-gateway-deploy respectively);
           // selecting either with BUILD_IMAGES=true fails fast in the processing job with the valid
           // list. Build their image via the own-repo job first, then deploy here with BUILD_IMAGES=false.
