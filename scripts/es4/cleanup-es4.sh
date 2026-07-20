@@ -69,9 +69,13 @@ if [ "$DRY" != "true" ]; then
 fi
 
 # ------------------------------------------------------------ 1. capture / resume replica state
-# If a prior run was interrupted, $STATE already holds the ORIGINAL replica counts. NEVER
-# overwrite it while it exists (a re-capture now would read the scaled-to-0 counts and restore 0).
-# A resume re-runs the idempotent wipe using the preserved originals.
+# If a prior run was interrupted, $STATE already holds the ORIGINAL replica counts. Never replace
+# those counts with current values: a re-capture could read scaled-to-0 Deployments and restore 0.
+# Before resuming, reconcile the capture by name with the current cluster: preserve original counts
+# for existing names, append services created after the capture using their current desired count,
+# and drop services that no longer exist. This keeps every current producer inside the quiesce proof
+# even when a WIPING file survives across deployments. A successful resume marks RESTORED and clears
+# the state normally; blind/manual deletion of a WIPING capture is neither needed nor safe.
 # ONE durable state file: line 1 = PHASE (WIPING|RESTORED), lines 2+ = "name replicas". Written
 # ATOMICALLY (temp+mv) so the phase is always consistent with its content — no second marker file
 # that could go stale and make a future reset silently skip the wipe. A resume keys off line 1.
@@ -89,7 +93,26 @@ if [ -s "$STATE" ]; then
     [ "$DRY" = "true" ] || rm -f "$STATE"
     exit 0
   fi
-  log "resuming interrupted reset (phase=${ph:-WIPING}) — reusing captured replicas from $STATE"
+  log "resuming interrupted reset (phase=${ph:-WIPING}) — reconciling captured replicas with current Deployments"
+  tail -n +2 "$STATE" | awk 'NF != 2 || ($2 != "<none>" && $2 !~ /^[0-9]+$/) { exit 1 }' \
+    || die "invalid captured Deployment replica data — refusing to alter $STATE"
+  CURRENT_DATA=$($KC get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas --no-headers) \
+    || die "could not enumerate current Deployments while reconciling $STATE"
+  [ "$(printf '%s\n' "$CURRENT_DATA" | awk 'NF >= 2 { count++ } END { print count+0 }')" -ge 1 ] \
+    || die "no current Deployments found while reconciling $STATE"
+  printf '%s\n' "$CURRENT_DATA" | awk 'NF != 2 || ($2 != "<none>" && $2 !~ /^[0-9]+$/) { exit 1 }' \
+    || die "invalid current Deployment replica data — refusing to alter $STATE"
+  if [ "$DRY" = "true" ]; then
+    echo "DRY: reconciled WIPING state preview (durable state remains unchanged)"
+    awk -f "$SCRIPT_DIR/reconcile-cleanup-state.awk" "$STATE" <(printf '%s\n' "$CURRENT_DATA")
+  else
+    TMP="$STATE.tmp.$$"
+    awk -f "$SCRIPT_DIR/reconcile-cleanup-state.awk" "$STATE" <(printf '%s\n' "$CURRENT_DATA") > "$TMP" \
+      || die "failed to reconcile current Deployments into $STATE"
+    [ "$(wc -l < "$TMP")" -ge 2 ] || die "reconciled state contains no Deployments — refusing to replace $STATE"
+    mv -f "$TMP" "$STATE"
+    log "reconciled WIPING state now covers every current Deployment; original captured counts preserved"
+  fi
 else
   log "capturing es4 Deployment replica counts (phase WIPING) -> $STATE"
   if [ "$DRY" = "true" ]; then

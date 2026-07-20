@@ -55,7 +55,9 @@ pipeline {
           # /home is root-owned on the box — create the es4 home via passwordless sudo, owned by the deploy user
           ssh -o BatchMode=yes "$ES4_HOST" 'sudo install -d -o "$(id -un)" -g "$(id -gn)" /home/es4 /home/es4/repo /home/es4/repo/infra /home/es4/repo/scripts'
           rsync -az --delete infra/es4  "$ES4_HOST":/home/es4/repo/infra/
-          rsync -az --delete scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
+          # ES helpers call shared siblings under scripts/kafka. Sync the complete repo-owned
+          # scripts tree so an on-box cleanup never runs with a partial dependency graph.
+          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/bootstrap-es4.sh'
         '''
       }
@@ -65,7 +67,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          rsync -az scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
+          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
         '''
       }
@@ -83,7 +85,7 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          rsync -az scripts/es4 "$ES4_HOST":/home/es4/repo/scripts/
+          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
 
           KP="KUBECONFIG=$PROD_KUBECONFIG kubectl -n options-edge"
           FEED_REP=$(eval "$KP get deploy es-feed -o jsonpath='{.spec.replicas}'" 2>/dev/null || echo 1)
