@@ -179,9 +179,27 @@ pipeline {
               exit 1
             fi
             rm -f "$PREV_ERR"
-            # Written BEFORE scaling: if the scale half-succeeds and the step then dies, post{}
-            # must still know a restore is owed.
-            printf '%s\\n' "$PREV" > "$MARK"
+
+            # An EXISTING marker is never overwritten. It records the size from before an earlier
+            # pause that was never undone, and it is the only surviving record of it. Overwriting
+            # would be worst exactly where it matters most: a previous run pauses at 3, its
+            # restore fails, the service sits at 0; this run reads PREV=0, stamps 0 over the 3,
+            # "restores" to 0, and the correct size is gone for good.
+            if [ -f "$MARK" ]; then
+              STRANDED="$(cat "$MARK")"
+              case "$STRANDED" in
+                ''|*[!0-9]*)
+                  echo "FATAL: recovery marker $MARK holds an unusable value [$STRANDED]." >&2
+                  echo "Resolve it by hand -- the correct replica count cannot be guessed." >&2
+                  exit 1 ;;
+              esac
+              echo "Recovery marker from an earlier run found (replicas=$STRANDED); keeping it rather than stamping the current $PREV over it."
+              PREV="$STRANDED"
+            else
+              # Written BEFORE scaling: if the scale half-succeeds and the step then dies, post{}
+              # must still know a restore is owed.
+              printf '%s\n' "$PREV" > "$MARK"
+            fi
             kubectl -n options-edge scale "$DEP" --replicas=0
 
             # Both conditions are read through explicit return codes: an unreadable desired-replica
