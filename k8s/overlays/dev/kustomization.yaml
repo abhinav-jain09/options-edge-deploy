@@ -52,26 +52,6 @@ patches:
         value:
           name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
           value: "2"
-  # greek-move-authenticity: ENABLED on DEV (the SPX proving ground — advisory-only, in-session
-  # baseline bootstrap). Strategic-merge on env name (namespace required for the dev overlay).
-  # MUST MIRROR the standalone slice k8s/services/greek-move-authenticity/overlays/dev (validate-services).
-  - target:
-      kind: Deployment
-      name: greek-move-authenticity-service
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: greek-move-authenticity-service
-        namespace: options-edge
-      spec:
-        template:
-          spec:
-            containers:
-              - name: greek-move-authenticity
-                env:
-                  - name: GREEK_MOVE_AUTH_ENABLED
-                    value: "true"
   # strike-intelligence action band LOW — dev/prod parity with the production trial (PR #472):
   # LOW-band (conf 0.25-0.50) directional roles emit BUY/SELL LEAN instead of gating to NONE.
   # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/dev (validate-services).
@@ -327,8 +307,6 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-vix-option-inteligence
     newName: host.docker.internal:5001/options-edge-vix-option-inteligence
-  - name: 192.168.100.252:5000/options-edge-greek-move-authenticity
-    newName: host.docker.internal:5001/options-edge-greek-move-authenticity
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-strike-invasion
     newName: host.docker.internal:5001/options-edge-strike-invasion

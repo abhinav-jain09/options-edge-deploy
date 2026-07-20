@@ -59,7 +59,6 @@ services:
   - { name: spread-skew-postgres-writer,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew-postgres-writer,  deployments: [spread-skew-postgres-writer] }
   - { name: es-open-direction,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction,            deployments: [es-open-direction-service] }
   - { name: vix-option-inteligence,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-vix-option-inteligence,        deployments: [vix-option-inteligence-service] }
-  - { name: greek-move-authenticity,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-greek-move-authenticity,       deployments: [greek-move-authenticity-service] }
   - { name: es-open-direction-postgres-writer, managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction-postgres-writer, deployments: [es-open-direction-postgres-writer] }
   - { name: reversal-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-reversal-postgres-writer,     deployments: [reversal-postgres-writer] }
   # Hot-strike paper follower (HOT-STRIKE-PAPER-FOLLOWER-GATE1 §3.1): ONE image, TWO per-market

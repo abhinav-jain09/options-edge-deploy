@@ -33,7 +33,6 @@ images:
   hpsf-postgres-writer-service: 192.168.100.252:5000/options-edge-hpsf-postgres-writer:prod
   es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:prod
   vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:prod
-  greek-move-authenticity-service: 192.168.100.252:5000/options-edge-greek-move-authenticity:prod
   es-open-direction-postgres-writer: 192.168.100.252:5000/options-edge-es-open-direction-postgres-writer:prod
   web: 192.168.100.252:5000/options-edge-web:prod
   short-premium-agent-service: 192.168.100.252:5000/options-edge-short-premium-agent:prod
