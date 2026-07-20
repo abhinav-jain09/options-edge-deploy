@@ -97,6 +97,9 @@ ES_ENV = {
     ],
     "option-truth-engine": [
         {"name": "OPTION_TRUTH_OUTPUT_TOPIC", "value": "options.es.option-truth-engine-service.by-strike", "_override": True},
+        # ES options are options on a futures contract. The engine deliberately fails closed when
+        # an ES record is paired with the SPX spot model, so select Black-76 for this environment.
+        {"name": "OPTION_TRUTH_PRICING_MODEL", "value": "FUTURES_BLACK_76", "_override": True},
     ],
     # spread-skew on ES: the label must say ES (SPREAD_SKEW_UNDERLYING, proc PR#316), the spot is the
     # mirrored ES future-trades stream (same source OPB uses — Codex finding #3 applies identically),
