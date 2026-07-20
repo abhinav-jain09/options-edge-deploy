@@ -25,7 +25,7 @@ pipeline {
       'directional-pressure', 'es-open-direction', 'es-open-direction-postgres-writer', 'vix-option-inteligence', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
       'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
       'invasion-postgres-writer', 'reversal-confirmation', 'reversal-postgres-writer', 'short-premium-agent', 'spread-skew', 'es-gex-spx-align', 'spread-skew-postgres-writer', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
-      'unified-sr', 'volume-pace', 'signal-follower', 'greek-move-authenticity'
+      'unified-sr', 'volume-pace', 'signal-follower'
     ], description: 'Which service to deploy (dir under k8s/services; kept in sync with services.yaml standalone entries — added dealer-ledger + feed-gateway + short-premium-agent + strike-invasion + invasion-postgres-writer + spread-skew + spread-skew-postgres-writer + es-open-direction + es-open-direction-postgres-writer + reversal-postgres-writer, dropped 14-disabled-service leftovers per #288).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')

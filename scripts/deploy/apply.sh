@@ -226,6 +226,12 @@
           # web tool that has been dropped (rebuilt as an option-chain UI page instead), so it is no longer in
           # any overlay and `apply -k` will not prune it. Delete it here (idempotent, deployer-SA-scoped).
           kubectl -n options-edge delete deployment/pin-flow-explorer service/pin-flow-explorer --ignore-not-found=true
+          # Reconcile-delete the retired greek-move-authenticity-service. Its sign-voting model was
+          # replaced by the option-truth engine (endpoint repricing), so it is removed from every
+          # overlay in this same commit. `apply -k` never prunes, so without this line the pods would
+          # keep running forever: still consuming from Kafka with a live consumer-group, still
+          # publishing verdicts the UI no longer reads. Delete it here (idempotent, deployer-SA-scoped).
+          kubectl -n options-edge delete deployment/greek-move-authenticity-service service/greek-move-authenticity-service --ignore-not-found=true
           kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
           market_data_source="${MARKET_DATA_SOURCE:-DATABENTO}"
           effective_raw_topic="${RAW_TOPIC:-}"

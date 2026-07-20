@@ -126,15 +126,6 @@ ES_ENV = {
         # still isolates all input/output topics on the .4 broker.
         {"name": "ZERO_DTE_SYMBOL", "value": "ES", "_override": True},
     ],
-    # (design §18). ENABLED here (owner scope); the robust-Z baselines are session-relative so no
-    # SPX-vs-ES scale flag is needed (they self-normalize to ES magnitude, unlike strike-intel's
-    # fixed divisors). Spot = the compacted ES-future price topic (same as strike-intelligence uses);
-    # gex.strike + delta-flow-by-strike carry over from the prod slice and get es.-prefixed to the
-    # es4 topics already flowing. ES runs advisory/SHADOW until an es4 calibration session (§18.4).
-        {"name": "GREEK_MOVE_AUTH_ENABLED", "value": "true", "_override": True},
-        {"name": "GREEK_MOVE_AUTH_SYMBOL", "value": "ES", "_override": True},
-        {"name": "GREEK_MOVE_AUTH_INPUT_SPOT_TOPIC", "value": "underlying.es.price", "_override": True},
-    ],
 }
 
 # IBKR-variant workloads have no place in the ES pipeline (Codex finding #5).
