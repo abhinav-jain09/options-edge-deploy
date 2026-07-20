@@ -100,8 +100,19 @@ spec:
               value: "600000"
             # Live, expiry-specific r/q supplied by market-carry-service. Fail closed when the
             # carry record is absent, stale, future-dated, or not quality=GOOD.
+            #
+            # DISABLED 2026-07-20. market-carry-service publishes NOTHING: both
+            # market.spx.market-carry-service.current and .history are at 0 records on dev AND prod,
+            # even though both of its inputs flow (options.databento.raw, and the SR3 rates topic at
+            # ~9.8M records). With this flag true, calculatorFor() returns null for every record
+            # (DatabentoGexBridge: `String json = marketCarryStore.get(key); if (json == null) return null;`)
+            # and the caller counts it as DROPPED_NO_RESULT — so 100% of LIVE gex records were dropped
+            # fleet-wide and options.databento.gex.strike carried ONLY bootstrap cache re-emits.
+            # Measured on dev: dropped_no_result +9,626/min vs bootstrap_republished +123/min, and a
+            # 100s all-partition window on gex.strike contained 0 live ticks.
+            # Re-enable ONLY after market-carry-service is verified publishing quality=GOOD records.
             - name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED
-              value: "true"
+              value: "false"
             - name: DATABENTO_GEX_MARKET_CARRY_TOPIC
               value: market.spx.market-carry-service.current
             - name: DATABENTO_GEX_DYNAMIC_CARRY_MAX_AGE_MS
