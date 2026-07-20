@@ -18,7 +18,7 @@ spec:
       annotations:
         # Bump to force a pod roll so envFrom picks up changed shared ConfigMap values
         # (k8s does NOT restart pods when a ConfigMap changes). Set for the 17:30 expiry roll.
-        oe/config-nonce: "2026-07-19-expiry-roll-1730"
+        oe/config-nonce: "2026-07-20-expiry-auto"
       labels:
         app.kubernetes.io/name: feed-gateway-service
         app.kubernetes.io/part-of: options-edge
@@ -56,7 +56,7 @@ spec:
             # replay orchestrator + approval gate that prod does not run — see MtSessionSecurityInvariant).
             # WS_ALLOWED_ORIGINS MUST be an explicit allow-list (not '*') once auth is on or the gateway
             # fails closed. The oc.bearer default Selection (IB_SYMBOL/IB_EXPIRY/APP_MARKET_DATA_SOURCE)
-            # comes from options-edge-config (IB_EXPIRY is filled to a weekday date by the deploy pipeline). ---
+            # comes from options-edge-config (IB_EXPIRY=AUTO resolves and rolls the ET trading date). ---
             - name: WS_AUTH_ENABLED
               value: "true"
             - name: WS_AUTH_ISSUER_URI

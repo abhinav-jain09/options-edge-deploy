@@ -111,6 +111,33 @@ pipeline {
         }
       }
     }
+    stage('Reconcile feed-gateway expiry') {
+      when { expression { params.SERVICE == 'feed-gateway' } }
+      steps {
+        // The standalone slice intentionally contains only this service's workload, not the shared
+        // ConfigMap. Reconcile the one gateway-owned selection key before rolling the pod so envFrom
+        // can never revive a blank literal expiry and drop the entire live option chain.
+        sh '''
+          set -euo pipefail
+          current="$(kubectl -n options-edge get configmap options-edge-config \
+            -o jsonpath='{.data.IB_EXPIRY}')"
+          if [ "$current" = "AUTO" ]; then
+            echo "options-edge-config IB_EXPIRY is already AUTO."
+          elif [ "${DEPLOY_DRY_RUN_PARAM:-false}" = "true" ]; then
+            echo "[dry-run] would change options-edge-config IB_EXPIRY from [$current] to AUTO."
+          else
+            kubectl -n options-edge patch configmap options-edge-config --type=merge \
+              --patch '{"data":{"IB_EXPIRY":"AUTO"}}'
+            observed="$(kubectl -n options-edge get configmap options-edge-config \
+              -o jsonpath='{.data.IB_EXPIRY}')"
+            [ "$observed" = "AUTO" ] || {
+              echo "FATAL: IB_EXPIRY reconcile did not persist AUTO (observed [$observed])." >&2
+              exit 1
+            }
+          fi
+        '''
+      }
+    }
     stage('Reconcile VIX option intelligence current topic') {
       when {
         expression { params.SERVICE == 'vix-option-inteligence' && !params.DEPLOY_DRY_RUN }
