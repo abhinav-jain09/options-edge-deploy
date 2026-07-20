@@ -68,6 +68,20 @@ pipeline {
       when { expression { params.BUILD_IMAGES && !params.DEPLOY_DRY_RUN } }
       steps {
         script {
+          // Fail here, not three jobs downstream. These services build in their own repos' jobs,
+          // so options-edge-processing rejects them during its own 'Resolve profile' -- safe, but
+          // the operator only learns why after a queued downstream build starts and dies. Say it
+          // immediately, and name the job that actually builds the image.
+          def ownJob = [
+            'databento-feed'    : 'options-edge-databento-feed-deploy',
+            'databento-sr3-feed': 'options-edge-databento-sr3-feed-deploy',
+            'feed-gateway'      : 'feed-gateway-deploy',
+            'web'               : 'options-edge-web-deploy'
+          ]
+          if (ownJob.containsKey(params.SERVICE)) {
+            error("service-deploy: ${params.SERVICE} does not build in the processing reactor. " +
+                  "Build it in ${ownJob[params.SERVICE]} first, then deploy here with BUILD_IMAGES=false.")
+          }
           // Build ONLY the selected service's image (fast path), not the whole processing set.
           // Resolve the service's image name from services.yaml and pass it as BUILD_TARGET; the
           // processing job maps image->maven module and runs `mvn -pl <module> -am`, then builds+pushes
@@ -266,6 +280,32 @@ pipeline {
           export SERVICE="${SERVICE_PARAM:?}"
           export DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN_PARAM:-false}"
           WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/service-deploy.sh
+        '''
+      }
+    }
+    stage('Verify web UI (post-rollout)') {
+      when {
+        expression { params.SERVICE == 'web' && !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        // The web image is built by options-edge-web-deploy, whose Selenium smoke runs there --
+        // i.e. BEFORE this job rolls the image. That smoke therefore exercises the PREVIOUSLY
+        // deployed UI, never the one this job just deployed. Without this stage the recommended
+        // build-then-deploy sequence could go green having verified nothing but a readiness probe.
+        //
+        // Same smoke the monolith runs in 'Verify OptionsEdge Web App', same URLs, so a
+        // service-scoped web deploy is checked exactly as a full deploy is. The script is
+        // auth-on/off portable: public "/" and "/option-chain" must be 200 while /api/** may
+        // legitimately be 401 behind Keycloak.
+        sh '''
+          set -euo pipefail
+          if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+            WEB_PUBLIC_URL="${WEB_PUBLIC_URL:-http://localhost:8090}" \
+              scripts/smoke/check-options-edge-web.sh
+          else
+            WEB_PUBLIC_URL="${PROD_WEB_PUBLIC_URL:-http://192.168.100.252:8094}" \
+              scripts/smoke/check-options-edge-web.sh
+          fi
         '''
       }
     }
