@@ -136,16 +136,21 @@ pipeline {
           # ABSENT and UNKNOWN are different answers. 'kubectl get' failing on RBAC, a timeout or
           # an API error is not proof the deployment is missing, and treating it as such would
           # skip the pause and prune against a service that is still consuming -- the exact bug
-          # this stage exists to fix. Only an explicit NotFound is taken as absent.
+          # this stage exists to fix.
+          #
+          # The absence test is STRUCTURAL, not a substring search of stderr: '--ignore-not-found
+          # -o name' exits 0 with empty stdout when the object is absent, 0 with its name when it
+          # exists, and non-zero for any real failure. Grepping the combined output for 'NotFound'
+          # would misread an RBAC or transport error that merely happens to carry that token.
           set +e
-          probe="$(kubectl -n options-edge get "$DEP" -o name 2>&1)"
+          probe="$(kubectl -n options-edge get "$DEP" --ignore-not-found -o name 2>/dev/null)"
           probe_rc=$?
           set -e
-          if [ "$probe_rc" -ne 0 ] && ! printf '%s' "$probe" | grep -q 'NotFound'; then
-            echo "FATAL: could not determine whether $DEP exists: $probe" >&2
+          if [ "$probe_rc" -ne 0 ]; then
+            echo "FATAL: could not determine whether $DEP exists (kubectl exit $probe_rc)" >&2
             exit 1
           fi
-          if [ "$probe_rc" -ne 0 ]; then
+          if [ -z "$probe" ]; then
             # A first deploy into an environment that has no workload yet: nothing holds the
             # retired identity, so there is nothing to pause.
             echo "no $DEP yet; nothing to pause."
@@ -224,15 +229,23 @@ pipeline {
         # otherwise fall through to "no restore needed" and delete the marker -- turning a lost
         # answer into a silent, permanent outage. Read failure means: try the restore anyway,
         # and if that cannot be confirmed, keep the marker and fail loudly.
+        # Structural absence test first, for the same reason as in the stage: a real failure whose
+        # message merely contains 'NotFound' must not be read as "the workload is gone, nothing to
+        # restore" -- that would delete the marker and leave the service down for good.
+        set +e
+        exists="$(kubectl -n options-edge get "$DEP" --ignore-not-found -o name 2>/dev/null)"
+        exists_rc=$?
+        set -e
+        if [ "$exists_rc" -eq 0 ] && [ -z "$exists" ]; then
+          echo "$DEP no longer exists; nothing to restore."
+          rm -f "$MARK"
+          exit 0
+        fi
+
         NOW="$(kubectl -n options-edge get "$DEP" -o jsonpath='{.spec.replicas}' 2>&1)"
         read_rc=$?
 
         if [ "$read_rc" -ne 0 ]; then
-          if printf '%s' "$NOW" | grep -q 'NotFound'; then
-            echo "$DEP no longer exists; nothing to restore."
-            rm -f "$MARK"
-            exit 0
-          fi
           echo "WARNING: could not read $DEP replicas ($NOW); attempting restore to $PREV regardless." >&2
           if kubectl -n options-edge scale "$DEP" --replicas="$PREV"; then
             echo "Restored $DEP to $PREV despite the unreadable state."
