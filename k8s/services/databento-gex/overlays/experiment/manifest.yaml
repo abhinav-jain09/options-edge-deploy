@@ -88,6 +88,12 @@ spec:
               value: "true"
             - name: DATABENTO_GEX_MAX_QUOTE_AGE_MS
               value: "600000"
+            - name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED
+              value: "true"
+            - name: DATABENTO_GEX_MARKET_CARRY_TOPIC
+              value: market.spx.market-carry-service.current
+            - name: DATABENTO_GEX_DYNAMIC_CARRY_MAX_AGE_MS
+              value: "120000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms1g -Xmx4g
             - name: PREOPEN_GEX_ENABLED
