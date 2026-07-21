@@ -12,6 +12,27 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/topics.env"
 
+# TOPIC_SET selects WHICH declared set to apply. Default (empty) = the SPX dev/prod set, i.e.
+# byte-for-byte the previous behaviour. TOPIC_SET=es4 applies the es4 (192.168.100.4) set instead.
+# es4 must NOT get the SPX set: that would create ~50 unrelated options.* topics on its broker.
+TOPIC_SET="${TOPIC_SET:-}"
+case "$TOPIC_SET" in
+  "")
+    ;;
+  es4)
+    : "${OPTIONS_EDGE_ES4_TOPICS:?OPTIONS_EDGE_ES4_TOPICS missing from topics.env}"
+    OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_ES4_TOPICS"
+    OPTIONS_EDGE_COMPACTED_TOPICS="${OPTIONS_EDGE_ES4_COMPACTED_TOPICS:-}"
+    OPTIONS_EDGE_PURE_COMPACT_TOPICS="${OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS:-}"
+    OPTIONS_EDGE_EXACT_PARTITION_TOPICS="${OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS:-}"
+    OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="${OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES:-}"
+    ;;
+  *)
+    echo "Unknown TOPIC_SET '$TOPIC_SET' (expected empty for dev/prod, or 'es4')" >&2
+    exit 1
+    ;;
+esac
+
 describe_topic() {
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$1" 2>/dev/null | sed -n '/^Topic:/p' || true
 }

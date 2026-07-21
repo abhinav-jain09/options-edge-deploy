@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# PATH shim: proxy 'kafka-reassign-partitions' into the es4-kafka container so the SHARED
+# scripts/kafka/apply-topics.sh runs unmodified on the es4 box (no CLI on the host).
+# sudo -n: non-interactive, matching the rest of the es4 tooling. Fail loudly, never silently.
+set -euo pipefail
+exec sudo -n docker exec -i "${ES4_KAFKA_CONTAINER:-es4-kafka}" kafka-reassign-partitions "$@"
