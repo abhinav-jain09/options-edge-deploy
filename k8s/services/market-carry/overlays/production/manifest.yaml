@@ -34,7 +34,7 @@ metadata:
   name: market-carry-service
   namespace: options-edge
 spec:
-  progressDeadlineSeconds: 3600
+  progressDeadlineSeconds: 7200
   replicas: 1
   selector:
     matchLabels:
