@@ -21,6 +21,31 @@ resources:
   # deploy whenever the image/config changed; and re-running a historical replay on every
   # deploy risks polluting live topics. Keep replay a separate, deliberate action.
 patches:
+  # market-carry restores the SR3 history as a GlobalKTable. Keep the same
+  # memory envelope as production: the 1Gi/768Mi profile is OOM-killed by
+  # RocksDB/native restore memory before the service can publish carry.
+  - target:
+      kind: Deployment
+      name: market-carry-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: market-carry-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: market-carry
+                env:
+                  - name: JAVA_TOOL_OPTIONS
+                    value: -Xms512m -Xmx2048m
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 2Gi
+                  limits:
+                    memory: 5Gi
   - path: streams-processing-guarantee-dev-patch.yaml
   - path: web-dev-env-patch.yaml
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
