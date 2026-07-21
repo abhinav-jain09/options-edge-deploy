@@ -49,7 +49,9 @@ spec:
             # It is an ISOLATED extra entry keyed by (symbol, expiry), so the primary 0DTE track
             # (expiry_mode FEED) is untouched -- that isolation is exactly what feed #82 built,
             # after the earlier config-level separation was found not to be failure isolation.
-            # Same OPRA session, no new Databento subscription.
+            # Same OPRA session and the SAME db.Live client -- the existing subscription's symbol
+            # set expands; no new Databento client/session is created, which is what the
+            # one-live-client-per-key constraint actually cares about.
             # Rollback = drop the second object here and redeploy.
             - name: DATABENTO_EXTRA_INSTRUMENTS
               # Strike range MIRRORS the primary 0DTE track exactly (configmap
