@@ -26,12 +26,21 @@
 #   KUBECONFIG       deployer kubeconfig (set by the Jenkins job from oeProfile)
 #   DEPLOY_PLATFORM  image platform for digest resolution (default: env-derived)
 #   REGISTRY_SCHEME  http for the insecure local registries (default http)
+#   ROLLOUT_TIMEOUT  kubectl rollout timeout override (default 600s; production
+#                    market-carry defaults to 3660s for its 4.3M-record restore)
 #   WORK_DIR         scratch dir (default: mktemp)
 set -euo pipefail
 
 SERVICE="${SERVICE:?SERVICE must be set (a dir under k8s/services)}"
 ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT must be set (dev|production|experiment)}"
 DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}"
+if [ -z "${ROLLOUT_TIMEOUT:-}" ]; then
+  if [ "$SERVICE" = "market-carry" ] && [ "$ENVIRONMENT" = "production" ]; then
+    ROLLOUT_TIMEOUT="3660s"
+  else
+    ROLLOUT_TIMEOUT="600s"
+  fi
+fi
 WORK_DIR="${WORK_DIR:-$(mktemp -d)}"
 mkdir -p "$WORK_DIR"
 NAMESPACE="options-edge"
@@ -180,7 +189,7 @@ echo "=== apply (service-scoped) ==="
 kubectl apply -f "$RENDER"
 echo "=== rollout (all deployments of this service) ==="
 for dep in $DEPLOYMENTS; do
-  kubectl -n "$NAMESPACE" rollout status "deployment/$dep" --timeout=600s
+  kubectl -n "$NAMESPACE" rollout status "deployment/$dep" --timeout="$ROLLOUT_TIMEOUT"
 done
 
 # --- §13.3 post-rollout health gate ---------------------------------------------------
