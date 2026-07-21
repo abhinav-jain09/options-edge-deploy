@@ -43,7 +43,21 @@ spec:
             # feed-gateway consumes it (KAFKA_IBKR_VIX_PRICE_TOPIC default), so
             # the dev option-chain VixPriceCard lights up like prod's.
             # Rollback = set "" / false here and redeploy.
+            # SECOND extra instrument: the 1DTE SPXW track (feed PR #82, AUTO_NEXT_SESSION).
+            # The 0DTE volatility engine's constant-one-day-vol needs the NEXT session's chain;
+            # without this the feature has no live input at all and the engine abstains on it.
+            # It is an ISOLATED extra entry keyed by (symbol, expiry), so the primary 0DTE track
+            # (expiry_mode FEED) is untouched -- that isolation is exactly what feed #82 built,
+            # after the earlier config-level separation was found not to be failure isolation.
+            # Same OPRA session and the SAME db.Live client -- the existing subscription's symbol
+            # set expands; no new Databento client/session is created, which is what the
+            # one-live-client-per-key constraint actually cares about.
+            # Rollback = drop the second object here and redeploy.
             - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
+              # Strike range MIRRORS the primary 0DTE track exactly (configmap
+              # DATABENTO_MIN_STRIKE/MAX_STRIKE/STRIKE_STEP = 7000/8000/5). The two tracks must
+              # cover the same strikes or the 0DTE and 1DTE surfaces are not comparable and
+              # constant-one-day-vol interpolates across a hole.
+              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"},{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "true"
