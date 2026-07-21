@@ -49,6 +49,8 @@ spec:
     spec:
       containers:
         - env:
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms512m -Xmx2048m
             - name: HEALTH_PORT
               value: "8132"
             - name: MARKET_CARRY_ENABLED
@@ -69,8 +71,6 @@ spec:
               value: "true"
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
-            - name: JAVA_TOOL_OPTIONS
-              value: -Xms256m -Xmx768m
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -96,10 +96,10 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 1Gi
+              memory: 5Gi
             requests:
               cpu: 200m
-              memory: 512Mi
+              memory: 2Gi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
               name: kafka-streams-state

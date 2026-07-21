@@ -20,6 +20,32 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # Restoring the 4.3M-record SR3 GlobalKTable needs substantial RocksDB/native
+  # headroom in addition to the Java heap. The previous 1Gi cgroup with a 768Mi
+  # heap was OOM-killed during restore and left the pod-local store corrupted.
+  # Keep the heap at 2Gi and reserve the remaining ~3Gi for RocksDB, direct
+  # buffers, class metadata, and restore bursts.
+  - target:
+      kind: Deployment
+      name: market-carry-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: market-carry-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: market-carry
+                env:
+                  - name: JAVA_TOOL_OPTIONS
+                    value: -Xms512m -Xmx2048m
+                resources:
+                  limits:
+                    memory: 5Gi
+                  requests:
+                    memory: 2Gi
   # PROD SAFETY: dynamic carry was promoted before its producer had a proven readiness/output
   # contract. Keep GEX on its configured static r/q until market-carry publishes fresh GOOD
   # records reliably for a full session and the promotion gate explicitly flips this back on.
