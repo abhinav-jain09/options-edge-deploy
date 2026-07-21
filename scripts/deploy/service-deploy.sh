@@ -27,7 +27,7 @@
 #   DEPLOY_PLATFORM  image platform for digest resolution (default: env-derived)
 #   REGISTRY_SCHEME  http for the insecure local registries (default http)
 #   ROLLOUT_TIMEOUT  kubectl rollout timeout override (default 600s; production
-#                    market-carry defaults to 3660s for its 4.3M-record restore)
+#                    market-carry defaults to 7260s for its 4.3M-record restore)
 #   WORK_DIR         scratch dir (default: mktemp)
 set -euo pipefail
 
@@ -36,7 +36,7 @@ ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT must be set (dev|production|experiment)}
 DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}"
 if [ -z "${ROLLOUT_TIMEOUT:-}" ]; then
   if [ "$SERVICE" = "market-carry" ] && [ "$ENVIRONMENT" = "production" ]; then
-    ROLLOUT_TIMEOUT="3660s"
+    ROLLOUT_TIMEOUT="7260s"
   else
     ROLLOUT_TIMEOUT="600s"
   fi

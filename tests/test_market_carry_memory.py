@@ -29,7 +29,7 @@ class MarketCarryMemoryTest(unittest.TestCase):
         container = deployment["spec"]["template"]["spec"]["containers"][0]
         env = {item["name"]: item["value"] for item in container["env"]}
 
-        self.assertEqual(3600, deployment["spec"]["progressDeadlineSeconds"])
+        self.assertEqual(7200, deployment["spec"]["progressDeadlineSeconds"])
         self.assertEqual("-Xms512m -Xmx2048m", env["JAVA_TOOL_OPTIONS"])
         self.assertEqual("5Gi", container["resources"]["limits"]["memory"])
         self.assertEqual("2Gi", container["resources"]["requests"]["memory"])
@@ -39,7 +39,7 @@ class MarketCarryMemoryTest(unittest.TestCase):
 
         self.assertIn('[ "$SERVICE" = "market-carry" ]', script)
         self.assertIn('[ "$ENVIRONMENT" = "production" ]', script)
-        self.assertIn('ROLLOUT_TIMEOUT="3660s"', script)
+        self.assertIn('ROLLOUT_TIMEOUT="7260s"', script)
         self.assertIn('--timeout="$ROLLOUT_TIMEOUT"', script)
 
 

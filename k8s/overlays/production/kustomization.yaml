@@ -87,7 +87,7 @@ patches:
     patch: |-
       - op: replace
         path: /spec/progressDeadlineSeconds
-        value: 3600
+        value: 7200
   # PROD dealer-ledger heap: -Xmx6144m (6GB, dev/prod parity — -Xmx1024m OOM'd on dev's day's-backlog
   # catch-up; prod runs the same SPX data). Container 8Gi leaves ~2Gi for RocksDB off-heap + JVM overhead.
   # .252 has 62Gi total / ~30Gi free, so 8Gi fits. DEALER_LEDGER_ADVISORY_ENABLED=true is SHADOW-mode
