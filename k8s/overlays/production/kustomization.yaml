@@ -46,25 +46,6 @@ patches:
                     memory: 5Gi
                   requests:
                     memory: 2Gi
-  # PROD SAFETY: dynamic carry was promoted before its producer had a proven readiness/output
-  # contract. Keep GEX on its configured static r/q until market-carry publishes fresh GOOD
-  # records reliably for a full session and the promotion gate explicitly flips this back on.
-  - target:
-      kind: Deployment
-      name: databento-gex-service
-    patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: databento-gex-service
-      spec:
-        template:
-          spec:
-            containers:
-              - name: databento-gex
-                env:
-                  - name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED
-                    value: "false"
   - target:
       kind: Deployment
     patch: |-

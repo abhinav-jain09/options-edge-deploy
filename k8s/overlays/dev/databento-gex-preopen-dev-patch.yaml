@@ -19,8 +19,3 @@ spec:
           env:
             - { name: PREOPEN_GEX_ENABLED, value: "true" }
             - { name: PREOPEN_GEX_PUBLISH_ENABLED, value: "true" }
-            # Mirrors the production overlay's override of the base "true". The carry gate fails
-            # CLOSED, so while market-carry-service is not publishing (it OOMKills rebuilding its
-            # 32-partition state store after a clean-slate PVC recreate) GEX emits nothing and
-            # options.databento.gex.strike stays empty. Re-enable alongside production.
-            - { name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED, value: "false" }
