@@ -25,7 +25,6 @@ KAFKA_DATA=/home/es4/volumes/kafka
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY="${DEPLOY_DRY_RUN:-false}"
 STATE="$ES4_HOME/.es4-cleanup.state"          # durable (NOT /tmp): original replicas for resume
-TOPIC_STATE="$ES4_HOME/.es4-cleanup.topics"  # application topic definitions for the same run
 LOCKDIR="$ES4_HOME/.es4-cleanup.lock"         # flock target (kernel-released on any exit)
 KC="sudo -n /usr/local/bin/k3s kubectl -n options-edge"
 # A clean reset has no exclusions: snapshot and stop every Deployment, including es-web.
@@ -90,7 +89,7 @@ if [ -s "$STATE" ]; then
     # A prior run verified RESTORE and was killed before clearing state. Re-wiping now would destroy
     # data produced since — only the state cleanup remained. Do it and exit (never re-wipe restored data).
     log "prior run already restored the app (phase=RESTORED); clearing leftover state, NO wipe"
-    [ "$DRY" = "true" ] || rm -f "$STATE" "$TOPIC_STATE"
+    [ "$DRY" = "true" ] || rm -f "$STATE"
     exit 0
   fi
   log "resuming interrupted reset (phase=${ph:-WIPING}) — reconciling captured replicas with current Deployments"
@@ -129,44 +128,7 @@ fi
 # Snapshot real ES application topics before stopping Kafka. Kafka/SR internals, Kafka Streams
 # changelog/repartition state, and old recursive es.es... MM2 heartbeats are deliberately excluded.
 # Streams recreates its own internal topics after its local state has been wiped.
-snapshot_topics() {
-  local tmp="$TOPIC_STATE.tmp.$$"
-  : > "$tmp"
-  docker exec es4-kafka kafka-topics --bootstrap-server localhost:29092 --describe 2>/dev/null \
-    | awk '
-      function wanted(t) {
-        return t ~ /^es\./ && t !~ /^es\.es\./ && t !~ /(^|\.)heartbeats$/ &&
-               t !~ /-changelog($|-)/ && t !~ /-repartition($|-)/
-      }
-      /^Topic: / && /PartitionCount: / && wanted($2) { print "T\t" $2 "\t" $6 }
-    ' | LC_ALL=C sort -u > "$tmp"
-  docker exec es4-kafka kafka-configs --bootstrap-server localhost:29092 \
-    --describe --entity-type topics 2>/dev/null \
-    | awk '
-      function wanted(t) {
-        return t ~ /^es\./ && t !~ /^es\.es\./ && t !~ /(^|\.)heartbeats$/ &&
-               t !~ /-changelog($|-)/ && t !~ /-repartition($|-)/
-      }
-      /^Dynamic configs for topic / { topic=$5; keep=wanted(topic); next }
-      keep && /^  [^ ]+=/ {
-        line=$0; sub(/^  /,"",line); sub(/ sensitive=.*/,"",line)
-        p=index(line,"=")
-        if (p>1) print "C\t" topic "\t" substr(line,1,p-1) "\t" substr(line,p+1)
-      }
-    ' >> "$tmp"
-  [ "$(awk -F'\t' '$1=="T"{n++} END{print n+0}' "$tmp")" -gt 0 ] \
-    || die "topic snapshot is empty — refusing destructive reset"
-  mv -f "$tmp" "$TOPIC_STATE"
-}
 
-if [ "$DRY" = "true" ]; then
-  echo "DRY: would snapshot all ES application topics, partitions and dynamic configs -> $TOPIC_STATE"
-elif [ ! -s "$TOPIC_STATE" ]; then
-  log "capturing Kafka application-topic definitions -> $TOPIC_STATE"
-  snapshot_topics
-else
-  log "reusing durable Kafka topic snapshot from interrupted reset -> $TOPIC_STATE"
-fi
 
 # ------------------------------------------------------------ 2. quiesce app (fail-closed + verified)
 log "scaling es4 Deployments to 0 and PROVING every one reached 0 replicas"
@@ -244,22 +206,12 @@ if [ "$DRY" != "true" ]; then
 fi
 
 # ------------------------------------------------------------ 4. recreate snapshotted topics, THEN mm2
-log "recreating every snapshotted application topic before any producer starts"
-if [ "$DRY" = "true" ]; then
-  echo "DRY: would recreate topics/configs from $TOPIC_STATE"
-else
-  while IFS=$'\t' read -r kind topic value _; do
-    [ "$kind" = T ] || continue
-    docker exec es4-kafka kafka-topics --bootstrap-server localhost:29092 --create --if-not-exists \
-      --topic "$topic" --partitions "$value" --replication-factor 1 >/dev/null
-  done < "$TOPIC_STATE"
-  while IFS=$'\t' read -r kind topic key value; do
-    [ "$kind" = C ] || continue
-    if [[ "$value" == *,* ]]; then value="[$value]"; fi
-    docker exec es4-kafka kafka-configs --bootstrap-server localhost:29092 --alter \
-      --entity-type topics --entity-name "$topic" --add-config "$key=$value" >/dev/null
-  done < "$TOPIC_STATE"
-fi
+# TOPIC KNOWLEDGE LIVES IN scripts/kafka/topics.env — NOT in this script.
+# Previously the reset snapshotted the live broker and replayed it, which meant the environment
+# rebuilt whatever happened to exist, including orphan topics from services that do not run on es4
+# (ibkr.*, hpsf.*, mission-control, strike-invasion, strike-sr, open-direction, volume-sandwich).
+# Now the single source of truth is topics.env, applied by the SAME scripts/kafka/apply-topics.sh
+# Jenkins uses, scoped to the es4 set. This script is deliberately DUMB about topics.
 log "reconciling required core es.* topic contracts (create-es-topics.sh)"
 run "bash '$SCRIPT_DIR/create-es-topics.sh'"
 log "docker compose up -d (start mm2 + any remaining infra now that topics exist)"
@@ -301,7 +253,7 @@ else
   # flip and the unlink, a resume reads phase=RESTORED and only clears state — it never re-wipes. There
   # is no second file to go stale, so a later fresh reset can never inherit a spurious RESTORED.
   TMP="$STATE.tmp.$$"; { echo RESTORED; REPS; } > "$TMP" && mv -f "$TMP" "$STATE"
-  rm -f "$STATE" "$TOPIC_STATE" # success: next run captures fresh service/topic inventories
+  rm -f "$STATE" # success: next run captures fresh service/topic inventories
 fi
 
 if [ "$DRY" = "true" ]; then
