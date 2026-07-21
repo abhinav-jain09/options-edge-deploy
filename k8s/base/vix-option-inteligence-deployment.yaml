@@ -68,5 +68,8 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
+            # cpu request 100m -> 500m (prod 2026-07-21): at the open every service on the
+            # node bursts and CFS shares starved this single-threaded consumer — its input
+            # frame fell ~84min behind and only recovered midday. No cpu limit (burstable).
+            requests: { cpu: 500m, memory: 256Mi }
             limits: { memory: 512Mi }
