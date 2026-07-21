@@ -43,6 +43,8 @@ spec:
     type: Recreate
   template:
     metadata:
+      annotations:
+        optionsedge.io/state-restore-generation: "2"
       labels:
         app.kubernetes.io/name: market-carry-service
         app.kubernetes.io/part-of: options-edge
