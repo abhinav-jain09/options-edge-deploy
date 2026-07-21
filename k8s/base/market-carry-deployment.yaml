@@ -15,6 +15,10 @@ spec:
       app.kubernetes.io/name: market-carry-service
   template:
     metadata:
+      annotations:
+        # Increment only after an intentional source-history reset. This forces a clean
+        # emptyDir/state-store pod even when the image digest itself is unchanged.
+        optionsedge.io/state-restore-generation: "2"
       labels:
         app.kubernetes.io/name: market-carry-service
         app.kubernetes.io/part-of: options-edge
