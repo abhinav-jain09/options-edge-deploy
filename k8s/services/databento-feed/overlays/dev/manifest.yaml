@@ -63,7 +63,7 @@ spec:
             - name: DATABENTO_SPOT_SOURCE
               value: SYNTHETIC
             - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
+              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"},{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "true"
             - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
