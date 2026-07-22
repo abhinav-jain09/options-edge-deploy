@@ -51,6 +51,12 @@ spec:
               value: "true"
             - name: MARKET_CARRY_EOS_ENABLED
               value: "true"
+            # Carry is slow-moving; one snapshot per 5 minutes per (symbol, expiry) is analytically
+            # equivalent to the old 1s cadence and lets the service skip the full-chain parity scan
+            # on >99% of records. Consumers must keep their staleness gates above this interval
+            # (gex: DATABENTO_GEX_DYNAMIC_CARRY_MAX_AGE_MS=660000).
+            - name: MARKET_CARRY_MIN_PUBLISH_INTERVAL_MS
+              value: "300000"
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
             - name: JAVA_TOOL_OPTIONS

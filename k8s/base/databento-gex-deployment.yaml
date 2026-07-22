@@ -104,8 +104,12 @@ spec:
               value: "true"
             - name: DATABENTO_GEX_MARKET_CARRY_TOPIC
               value: market.spx.market-carry-service.current
+            # market-carry publishes on a 5-minute cadence (MARKET_CARRY_MIN_PUBLISH_INTERVAL_MS):
+            # carry (r, q) is slow-moving, so per-second snapshots bought nothing. The age gate must
+            # tolerate one full interval plus scheduling slack — 2 x 300s + 60s — or every snapshot
+            # would be declared stale mid-interval.
             - name: DATABENTO_GEX_DYNAMIC_CARRY_MAX_AGE_MS
-              value: "120000"
+              value: "660000"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms1g -Xmx4g"
             # ---- Pre-open GEX (PREOPEN-GEX-GATE1-REQUIREMENT.md) ----

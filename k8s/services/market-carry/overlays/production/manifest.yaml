@@ -71,6 +71,8 @@ spec:
               value: "true"
             - name: MARKET_CARRY_EOS_ENABLED
               value: "true"
+            - name: MARKET_CARRY_MIN_PUBLISH_INTERVAL_MS
+              value: "300000"
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
           envFrom:
