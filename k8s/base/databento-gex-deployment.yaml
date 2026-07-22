@@ -110,6 +110,13 @@ spec:
             # would be declared stale mid-interval.
             - name: DATABENTO_GEX_DYNAMIC_CARRY_MAX_AGE_MS
               value: "660000"
+            # USER requirement 2026-07-23: gex must NOT fail because carry now arrives every 5 minutes.
+            # If a snapshot is late/stale beyond the 660s gate, price with the STATIC configured carry
+            # (regime STATIC_FALLBACK, PR #464) instead of suppressing the strike. Provenance is stamped
+            # on every record and carry_unavailable_reason_total still counts the cause, so this is
+            # fail-loud degradation, not a silent mask.
+            - name: DATABENTO_GEX_CARRY_STATIC_FALLBACK_ENABLED
+              value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms1g -Xmx4g"
             # ---- Pre-open GEX (PREOPEN-GEX-GATE1-REQUIREMENT.md) ----
