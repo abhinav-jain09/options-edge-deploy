@@ -1,0 +1,99 @@
+# ES-only continuous futures aggressor analysis. Deploy via Jenkinsfile.es4-deploy.
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: '8130'
+    prometheus.io/scrape: 'true'
+  labels:
+    app.kubernetes.io/name: es-aggressor-flow-service
+    app.kubernetes.io/part-of: options-edge
+  name: es-aggressor-flow-service
+  namespace: options-edge
+spec:
+  ports:
+  - name: health
+    port: 8130
+    targetPort: health
+  selector:
+    app.kubernetes.io/name: es-aggressor-flow-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: es-aggressor-flow-service
+    app.kubernetes.io/part-of: options-edge
+  name: es-aggressor-flow-service
+  namespace: options-edge
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-aggressor-flow-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-aggressor-flow-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+      - name: es-aggressor-flow
+        image: 192.168.100.252:5000/options-edge-es-aggressor-flow:prod
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -Xms128m -Xmx768m
+        - name: HEALTH_PORT
+          value: '8130'
+        - name: ES_AGGRESSOR_BOOTSTRAP_SERVERS
+          value: 192.168.100.4:9092
+        - name: KAFKA_ES_TRADES_TOPIC
+          value: underlying.es.trades
+        - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
+          value: futures.aggressor-flow
+        - name: ES_AGGRESSOR_GROUP_ID
+          value: es-aggressor-flow-service-es4-v1
+        - name: ES_AGGRESSOR_SYMBOL
+          value: ES.v.0
+        - name: ES_AGGRESSOR_SESSION_ZONE
+          value: America/New_York
+        - name: ES_AGGRESSOR_SESSION_START
+          value: '18:00'
+        - name: ES_AGGRESSOR_PUBLISH_INTERVAL_MS
+          value: '1000'
+        - name: ES_AGGRESSOR_REPLAY_LOOKBACK_HOURS
+          value: '24'
+        - name: ES_AGGRESSOR_STALE_AFTER_MS
+          value: '5000'
+        envFrom:
+        - configMapRef:
+            name: es4-base-env
+        - configMapRef:
+            name: es4-common-env
+        - secretRef:
+            name: es4-runtime-secrets
+        ports:
+        - containerPort: 8130
+          name: health
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi

@@ -32,7 +32,7 @@ pipeline {
       'directional-pressure', 'gex-delta-redis-writer', 'option-price-behavior', 'option-truth-engine', 'pin-postgres-writer',
       'pressure-postgres-writer', 'raw-to-display', 'strike-flow-avro-adapter', 'strike-flow-classifier',
       'strike-liquidity-heatmap', 'volume-pace', 'spread-skew', 'spread-skew-postgres-writer',
-      'strike-intelligence', 'vix-option-inteligence', 'es-feed-gateway', 'es-web'
+      'strike-intelligence', 'vix-option-inteligence', 'es-aggressor-flow', 'es-feed-gateway', 'es-web'
     ], description: 'Service (deploy-service only).')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
