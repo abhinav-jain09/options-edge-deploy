@@ -450,49 +450,27 @@ PYEOF
           if (compat != 0) {
             error("options-edge-processing's definition at PROCESSING_PERMITTED_SHA could not be confirmed to run the permitted-commit guard (rc=${compat}) — not triggering it. Nothing was triggered.")
           }
-          // Fail here, not three jobs downstream. These services build in their own repos' jobs,
-          // so options-edge-processing rejects them during its own 'Resolve profile' -- safe, but
-          // the operator only learns why after a queued downstream build starts and dies. Say it
-          // immediately, and name the job that actually builds the image.
-          def ownJob = [
-            'databento-feed'    : 'options-edge-databento-feed-deploy',
-            // databento-vix-feed REUSES the databento-feed image (VIX feed separation PR-2:
-            // command override selects the vix role) — build that image's own job first.
-            'databento-vix-feed': 'options-edge-databento-feed-deploy',
-            'databento-sr3-feed': 'options-edge-databento-sr3-feed-deploy',
-            'feed-gateway'      : 'feed-gateway-deploy',
-            'web'               : 'options-edge-web-deploy',
-            'stock-gex-close-scheduler': 'oe-close-batch',
-            'ibkr-feed'         : 'options-edge-ibkr-feed',
-            // thetadata-feed REUSES the ibkr-feed image (same shaded jar, a command override
-            // selects ThetaDataFeedApplication as the main class instead of the default
-            // entrypoint) — build that image's own job first, same shape as databento-vix-feed.
-            'thetadata-feed'    : 'options-edge-ibkr-feed',
-            // stock-gex ships in the options-edge-databento-feed repo (Dockerfile.stockgex), the
-            // same shape as the sr3 feed — it has no processing-reactor module.
-            'stock-gex'         : 'options-edge-stock-gex-deploy',
-            // Both approach services are standalone repos with their own pipelines, not modules of
-            // the processing reactor — same shape as ibkr-feed. Naming them here means the operator
-            // is told which job builds the image instead of watching a queued downstream build
-            // start and die.
-            'approach-monitor'  : 'options-edge-approach-monitor',
-            'approach-position-publisher': 'options-edge-approach-position-publisher'
-          ]
-          if (ownJob.containsKey(params.SERVICE)) {
-            error("service-deploy: ${params.SERVICE} does not build in the processing reactor. " +
-                  "Build it in ${ownJob[params.SERVICE]} first, then deploy here with BUILD_IMAGES=false.")
+          // Fail here, not three jobs downstream. A service with a `buildJob` in services.yaml builds
+          // in its OWN repo's job (feed-gateway, databento-feed, databento-sr3-feed, short-premium-agent,
+          // web, …) — the processing reactor has NO module for it, so BUILD_IMAGES=true would otherwise
+          // die deep in a queued downstream build with "Unknown BUILD_TARGET" (the #353 failure). Detect
+          // it up front FROM services.yaml — NO hardcoded service list to drift out of sync (that drift is
+          // exactly how short-premium-agent slipped past the old hardcoded list) — and name the build job.
+          // SERVICE_PARAM is read by the shell (env), never Groovy-interpolated (injection-safe).
+          def buildJob = sh(
+            script: 'set -euo pipefail; yq -r ".services[] | select(.name == strenv(SERVICE_PARAM)) | .buildJob // \\"\\"" services.yaml',
+            returnStdout: true
+          ).trim()
+          if (buildJob) {
+            error("service-deploy: '${params.SERVICE}' builds in its own repo's job, not the processing reactor. " +
+                  "Build it in the '${buildJob}' job first (register that job if it does not exist yet), " +
+                  "then re-run this deploy with BUILD_IMAGES=false.")
           }
-          // Build ONLY the selected service's image (fast path), not the whole processing set.
-          // Resolve the service's image name from services.yaml and pass it as BUILD_TARGET; the
-          // processing job maps image->maven module and runs `mvn -pl <module> -am`, then builds+pushes
-          // just that image. SERVICE_PARAM is read by the shell (env), never Groovy-interpolated into the
-          // script text (injection-safe, matches the rest of these jobs).
-          // NOTE: databento-feed, databento-sr3-feed and feed-gateway have no processing module (they build in their own
-          // repos' jobs — options-edge-databento-feed-deploy and feed-gateway-deploy respectively);
-          // selecting either with BUILD_IMAGES=true fails fast in the processing job with the valid
-          // list. Build their image via the own-repo job first, then deploy here with BUILD_IMAGES=false.
+          // Otherwise: built by the options-edge-processing reactor. Resolve the service's image name from
+          // services.yaml and pass it as BUILD_TARGET; the processing job maps image->maven module and runs
+          // `mvn -pl <module> -am`, then builds+pushes just that image.
           def image = sh(
-            script: 'set -euo pipefail; yq -r ".services[] | select(.name == \\"$SERVICE_PARAM\\") | .image" services.yaml',
+            script: 'set -euo pipefail; yq -r ".services[] | select(.name == strenv(SERVICE_PARAM)) | .image" services.yaml',
             returnStdout: true
           ).trim()
           if (!image || image == 'null') {
