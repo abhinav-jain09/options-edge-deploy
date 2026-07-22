@@ -32,7 +32,7 @@ spec:
           env:
             - name: APP_WEB_PORT
               value: "18091"
-            # ES-GEX-on-SPX: consume the align service's options.es-gex-spx-aligned book + emit the es-gex event.
+            # ES-GEX-on-SPX (es-spx-align service): consume the align service's options.es-gex-spx-aligned book + emit the es-gex event.
             - name: GATEWAY_ES_GEX_ENABLED
               value: "true"
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC

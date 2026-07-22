@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-spx-align-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-spx-align-service
+    app.kubernetes.io/component: es-spx-align-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-spx-align-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-spx-align-service
+        app.kubernetes.io/component: es-spx-align-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: es-spx-align
+          image: 192.168.100.252:5000/options-edge-es-spx-align:dev
+          imagePullPolicy: Always
+          # Runs on the SPX cluster. Aligns ES data types onto SPX strikes via one shared basis truth: the
+          # ES-GEX whole-book (live) and ES strike-intelligence signals. Consumes the MM1-mirrored ES bridge
+          # topics + the native basis-bearing ES index-price. Shared config provides KAFKA_BOOTSTRAP_SERVERS.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # Service master switch (renamed from ES_GEX_ALIGN_ENABLED with the es-gex→es-spx rename; the
+            # image still reads the legacy key as a fallback during the transition).
+            - name: ES_SPX_ALIGN_ENABLED
+              value: "true"
+            - name: HEALTH_PORT
+              value: "8140"
+            # ── GEX data type (live) ─────────────────────────────────────────────────────────────────────
+            # Mirrored ES-GEX bridge JSON topic. Byte-copy identity name from the es-gex-mirror Jenkins job
+            # (MM1, kafka-mirror-maker) — NOT the old MM2 es4.-prefixed name. Every env mirrors .4 the same way.
+            - name: KAFKA_ES_GEX_SPXBRIDGE_MIRRORED_TOPIC
+              value: es.options.databento.gex.spxbridge
+            # Output: compacted SPX-aligned whole-book.
+            - name: KAFKA_ES_GEX_SPX_ALIGNED_TOPIC
+              value: options.es-gex-spx-aligned
+            # ── strike-intel data type (SHIPS DARK) ──────────────────────────────────────────────────────
+            # Project every ES strike-intelligence signal onto its translated SPX strike (all roles), keyed by
+            # the native ES identity, with wall-clock withdrawal. Input is the es-strike-intel-mirror MM1 job's
+            # byte-copy of es4's es.strike-intelligence-by-strike (identity name, same convention as the GEX
+            # bridge). Output is a dedicated compacted topic the gateway binds as the ES overlay layer; the
+            # service self-provisions it compacted at boot (ensureCompactedTopic — same pattern as the live GEX
+            # aligned topic, which is likewise not in the topics.env SSOT).
+            # DEFAULT OFF: flip to "true" per-env ONLY after the es-strike-intel-mirror job is running for that
+            # env and es.strike-intelligence-by-strike is present on that cluster. See
+            # docs/es-spx-align-cutover-runbook.md. Enabling it dark-first keeps the rename cutover independent
+            # of the new data path's prerequisites.
+            - name: ES_SPX_ALIGN_STRIKE_INTEL_ENABLED
+              value: "false"
+            - name: KAFKA_ES_STRIKE_INTEL_MIRRORED_TOPIC
+              value: es.strike-intelligence-by-strike
+            - name: KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC
+              value: options.es-strike-intel-spx-aligned
+            # ── shared ───────────────────────────────────────────────────────────────────────────────────
+            # Basis-bearing ES index-price (native on the SPX cluster); the single basis truth for both types.
+            - name: KAFKA_ES_TRADES_TOPIC
+              value: underlying.es.trades
+            - name: ES_ALIGN_TARGET_SYMBOL
+              value: SPX
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms512m -Xmx2048m"
+          ports:
+            - name: health
+              containerPort: 8140
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              memory: 4Gi

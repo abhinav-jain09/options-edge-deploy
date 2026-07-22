@@ -126,6 +126,14 @@ pipeline {
       steps {
         sh '''
           set -eu
+          # CUTOVER DELETE-FIRST: es-gex-spx-align-service was renamed to es-spx-align-service (One Service
+          # One Identity). Both byte-copy the ES-GEX book to the SAME options.es-gex-spx-aligned, so the old
+          # workload MUST be gone BEFORE the new one is applied — otherwise `apply -k` creates the new
+          # producer while the old still runs and their competing emitEventTimeMs stamps flicker the live
+          # overlay. This monolith path never runs scripts/deploy/apply.sh, so do the delete-first here.
+          # Idempotent (--ignore-not-found): a no-op once the cluster is on the new identity.
+          kubectl --kubeconfig "$KUBECONFIG" -n "$NAMESPACE" delete --ignore-not-found=true \
+            deployment/es-gex-spx-align-service
           # Apply the full experiment overlay (creates ns + all ~26 services from the :dev images the
           # build jobs pushed to .2's local registry). rollout restart forces a re-pull of :dev on redeploys
           # (imagePullPolicy: Always); on a first apply the pods pull :dev immediately and the restart is a no-op.

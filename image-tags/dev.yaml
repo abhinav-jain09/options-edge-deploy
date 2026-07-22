@@ -39,7 +39,7 @@ images:
   es-open-direction-postgres-writer: 192.168.100.252:5000/options-edge-es-open-direction-postgres-writer:dev
   web: host.docker.internal:5001/options-edge-web:dev
   spread-skew-service: 192.168.100.252:5000/options-edge-spread-skew:dev
-  es-gex-spx-align-service: 192.168.100.252:5000/options-edge-es-gex-spx-align:dev
+  es-spx-align-service: 192.168.100.252:5000/options-edge-es-spx-align:dev
   reversal-confirmation-service: 192.168.100.252:5000/options-edge-reversal-confirmation:dev
   reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:dev
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:dev
