@@ -7,7 +7,11 @@ metadata:
     app.kubernetes.io/name: volume-pace-databento-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # DISABLED until further notice (USER 2026-07-23): volume-pace-databento-service held at 0 in
+  # all monolith envs (dev + production). Re-enable = set back to 1 and re-run
+  # scripts/deploy/generate-service-slices.sh. es4 slice (k8s/es4/services/volume-pace.yaml) is
+  # separate and intentionally untouched.
+  replicas: 0
   strategy:
     type: Recreate
   selector:

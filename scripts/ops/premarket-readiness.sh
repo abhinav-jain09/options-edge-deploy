@@ -71,7 +71,8 @@ is_optional() { case " $OPTIONAL_SERVICES " in *" $1 "*) return 0;; *) return 1;
 # H:hpsf-stage-b-service removed from the required
 # list — their replicas are pinned to 0 in k8s/base (temporarily not deployed),
 # and line ~234 hard-fails any non-optional service at 0 desired replicas.
-# volume-pace-databento-service RE-ENABLED 2026-07-02.
+# volume-pace-databento-service DISABLED until further notice 2026-07-23 (per Abhinav) — pinned to 0 in
+# k8s/base; removed from the required list below so readiness does not FAIL on it being 0/desired.
 # volume-pace-service DISABLED again 2026-07-06 (per Abhinav) — IBKR volume-pace variant, pinned to 0 in
 # k8s/base (PR #270); removed from the required list so readiness does not FAIL / the Discord card does
 # not complain about it. strike-flow-classifier-ibkr + options-edge-integration-test also disabled
@@ -81,7 +82,6 @@ is_optional() { case " $OPTIONAL_SERVICES " in *" $1 "*) return 0;; *) return 1;
 PIPELINE_SERVICES="${PIPELINE_SERVICES:-\
 T1:options-edge-databento-feed T1:databento-volume-aggregator \
 T2:strike-flow-classifier-databento T2:raw-to-display-databento-service T2:directional-pressure-databento-service \
-T2:volume-pace-databento-service \
 T2:databento-gex-service T2:databento-gex-history-service T2:databento-maxpain-service \
 T3:databento-mission-pace-service T3:databento-mission-pressure-service T3:databento-mission-sandwich-service \
 T3:spx-mission-control-service T3:strike-liquidity-heatmap-service T3:feed-gateway-service T3:options-edge-web \
