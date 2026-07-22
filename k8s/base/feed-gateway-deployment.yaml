@@ -35,6 +35,12 @@ spec:
             # ES-GEX-on-SPX (es-spx-align service): consume the align service's options.es-gex-spx-aligned book + emit the es-gex event.
             - name: GATEWAY_ES_GEX_ENABLED
               value: "true"
+            # ES strike-intel on SPX (es-spx-align service): consume options.es-strike-intel-spx-aligned and emit
+            # the es-strike-intel overlay event (a separate ES-origin layer on the SPX board).
+            - name: GATEWAY_ES_STRIKE_INTEL_ENABLED
+              value: "true"
+            - name: KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC
+              value: options.es-strike-intel-spx-aligned
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS

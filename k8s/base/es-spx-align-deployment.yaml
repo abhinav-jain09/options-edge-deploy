@@ -48,19 +48,16 @@ spec:
             # Output: compacted SPX-aligned whole-book.
             - name: KAFKA_ES_GEX_SPX_ALIGNED_TOPIC
               value: options.es-gex-spx-aligned
-            # ── strike-intel data type (SHIPS DARK) ──────────────────────────────────────────────────────
+            # ── strike-intel data type (ENABLED) ─────────────────────────────────────────────────────────
             # Project every ES strike-intelligence signal onto its translated SPX strike (all roles), keyed by
-            # the native ES identity, with wall-clock withdrawal. Input is the es-strike-intel-mirror MM1 job's
-            # byte-copy of es4's es.strike-intelligence-by-strike (identity name, same convention as the GEX
-            # bridge). Output is a dedicated compacted topic the gateway binds as the ES overlay layer; the
-            # service self-provisions it compacted at boot (ensureCompactedTopic — same pattern as the live GEX
-            # aligned topic, which is likewise not in the topics.env SSOT).
-            # DEFAULT OFF: flip to "true" per-env ONLY after the es-strike-intel-mirror job is running for that
-            # env and es.strike-intelligence-by-strike is present on that cluster. See
-            # docs/es-spx-align-cutover-runbook.md. Enabling it dark-first keeps the rename cutover independent
-            # of the new data path's prerequisites.
+            # the native ES identity, with wall-clock withdrawal (NORMAL marker). Input is the
+            # es-strike-intel-mirror MM1 job's byte-copy of es4's es.strike-intelligence-by-strike (identity
+            # name, same convention as the GEX bridge). Output options.es-strike-intel-spx-aligned is
+            # provisioned compact,delete from the topics.env SSOT AND self-ensured by the service at boot.
+            # Prerequisite for live signals: the es-strike-intel-mirror must be running + es4 producing (until
+            # then the service idles safely on an empty input). See docs/es-spx-align-cutover-runbook.md.
             - name: ES_SPX_ALIGN_STRIKE_INTEL_ENABLED
-              value: "false"
+              value: "true"
             - name: KAFKA_ES_STRIKE_INTEL_MIRRORED_TOPIC
               value: es.strike-intelligence-by-strike
             - name: KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC

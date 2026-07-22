@@ -63,6 +63,10 @@ spec:
               value: "18091"
             - name: GATEWAY_ES_GEX_ENABLED
               value: "true"
+            - name: GATEWAY_ES_STRIKE_INTEL_ENABLED
+              value: "true"
+            - name: KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC
+              value: options.es-strike-intel-spx-aligned
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS

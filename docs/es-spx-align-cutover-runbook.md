@@ -5,8 +5,9 @@ schedules**:
 
 1. **The rename** (`es-gex-spx-align-service` → `es-spx-align-service`) — cut over immediately; the live
    ES-GEX-on-SPX overlay must not break.
-2. **The new strike-intel data type** — ships **dark** (`ES_SPX_ALIGN_STRIKE_INTEL_ENABLED=false`); enable
-   per-env only after its mirror + input topic are verified.
+2. **The new strike-intel data type** — now **ENABLED** in dev + prod
+   (`ES_SPX_ALIGN_STRIKE_INTEL_ENABLED=true`, `GATEWAY_ES_STRIKE_INTEL_ENABLED=true`). Live signals require the
+   input mirror running + es4 producing; until then the service idles safely on an empty input (Part 2).
 
 The processing image (`options-edge-es-spx-align`) rotates the Streams `application.id` to
 `es-spx-align-service`, so the new workload starts with fresh state and rebuilds the GEX book from the live
@@ -58,9 +59,10 @@ kafka-topics --bootstrap-server <spx-broker> --list | grep '^es-gex-spx-align-se
 kafka-topics --bootstrap-server <spx-broker> --delete --topic 'es-gex-spx-align-service-.*'
 ```
 
-## Part 2 — enable strike-intel per env (only after prerequisites pass)
+## Part 2 — strike-intel live-signal prerequisites (the flags are already `true`)
 
-Ships `ES_SPX_ALIGN_STRIKE_INTEL_ENABLED=false`. Do NOT flip it on until, for the target env's SPX cluster:
+`ES_SPX_ALIGN_STRIKE_INTEL_ENABLED=true`. The service idles safely until these are true for the env's SPX cluster
+(so enabling ahead of them is harmless — no output, no crash):
 
 1. **Mirror running**: an `es-strike-intel-mirror` job (MM1 `kafka-mirror-maker`, same shape as
    `es-gex-mirror`) byte-copies `es.strike-intelligence-by-strike` from es4 → the env's SPX cluster with the
@@ -70,16 +72,26 @@ Ships `ES_SPX_ALIGN_STRIKE_INTEL_ENABLED=false`. Do NOT flip it on until, for th
    ```
 2. **Input topic present**: `es.strike-intelligence-by-strike` exists on that cluster (the mirror creates it;
    partitions/retention track the es4 source — delete-policy, like the gateway's native strike-intel input).
-3. **Output topic**: `options.es-strike-intel-spx-aligned` is self-provisioned COMPACTED by the service at
-   boot (`ensureCompactedTopic`), the same way the live `options.es-gex-spx-aligned` is (neither is in the
-   topics.env SSOT — the align service owns its output contract).
+3. **Output topic**: `options.es-strike-intel-spx-aligned` is provisioned from the topics.env SSOT
+   (`OPTIONS_EDGE_TOPICS` = `:4` partitions + `OPTIONS_EDGE_COMPACTED_TOPICS`) AND self-ensured by the service
+   at boot (`ensureCompactedTopic`). Both apply `cleanup.policy=compact,delete` (KafkaTopics.ensureCompactedTopic
+   stamps `compact,delete`), so there is no policy drift. The live `options.es-gex-spx-aligned` still relies on
+   the service self-ensure only, so this is strictly stronger.
 
-### Enable
-Flip `ES_SPX_ALIGN_STRIKE_INTEL_ENABLED` to `"true"` for the env (base value for all, or a per-overlay patch
-for a single env), redeploy `es-spx-align`, then verify:
-- `es-spx-align-service` logs `strikeIntel[enabled=true …]`, output topic exists + is compacted;
-- the gateway `es-strike-intel` overlay (Stage 3) renders ES signals at translated SPX strikes and withdraws
-  on tombstone.
+### Enable (ORDER MATTERS — align before gateway)
+`ES_SPX_ALIGN_STRIKE_INTEL_ENABLED` + `GATEWAY_ES_STRIKE_INTEL_ENABLED` are true. The output topic
+`options.es-strike-intel-spx-aligned` is now in the compacted SSOT (`OPTIONS_EDGE_COMPACTED_TOPICS`) so the
+topic-provisioning step creates it **compacted**. To also cover the standalone `service-deploy` path (which
+does not run topic provisioning), roll it out in this order so the gateway can never auto-create the topic
+non-compacted before the align service's `ensureCompactedTopic` runs:
+
+1. **Provision the compacted topic** (or confirm it): `kafka-topics --create --if-not-exists --topic
+   options.es-strike-intel-spx-aligned --config cleanup.policy=compact,delete …` on the target cluster.
+2. **Deploy `es-spx-align` FIRST**; wait for READY + its log `strikeIntel[enabled=true …]` and confirm the
+   output topic is compacted (`kafka-configs --describe … cleanup.policy=compact,delete`).
+3. **Then deploy `feed-gateway`** (it now finds the compacted topic already there) and `web`.
+4. Verify: the gateway `es-strike-intel` overlay renders ES signals at translated SPX strikes and clears on
+   the NORMAL withdrawal marker.
 
 ### Rollback
 Flip back to `"false"` + redeploy. The dedicated `options.es-strike-intel-spx-aligned` topic can be purged
