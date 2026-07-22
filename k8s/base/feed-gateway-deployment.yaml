@@ -41,6 +41,13 @@ spec:
               value: "true"
             - name: KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC
               value: options.es-strike-intel-spx-aligned
+            # ES futures aggressor-flow card (es-aggressor-flow-service on es4, mirrored here as
+            # es.futures.aggressor-flow by Jenkinsfile.es-futures-flow-mirror). Opt-in flag; the
+            # topic is the mirrored es.-prefixed name on dev+prod (es4 itself uses futures.aggressor-flow).
+            - name: GATEWAY_ES_AGGRESSOR_FLOW_ENABLED
+              value: "true"
+            - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
+              value: es.futures.aggressor-flow
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS
