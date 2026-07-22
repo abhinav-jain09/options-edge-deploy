@@ -263,7 +263,7 @@ images:
     newTag: prod
   - name: 192.168.100.252:5000/options-edge-databento-sr3-feed
     newTag: prod
-  - name: 192.168.100.252:5000/options-edge-es-gex-spx-align
+  - name: 192.168.100.252:5000/options-edge-es-spx-align
     newTag: prod
   - name: 192.168.100.252:5000/options-edge-short-premium-agent
     newTag: prod
