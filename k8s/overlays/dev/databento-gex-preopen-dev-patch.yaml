@@ -19,3 +19,10 @@ spec:
           env:
             - { name: PREOPEN_GEX_ENABLED, value: "true" }
             - { name: PREOPEN_GEX_PUBLISH_ENABLED, value: "true" }
+            # DEV-ONLY: disable the live market-carry dependency. BASE turns it on (real SPX SR3-based
+            # forward carry for prod accuracy), and the gex-service FAIL-CLOSES when carry is stale/absent.
+            # On dev the synthetic feed can't feed the carry engine (market-carry drops its quotes as
+            # malformed -> carry topic empty), which blanks ALL dev GEX. Fall back to the static risk-free
+            # rate here so dev GEX keeps producing. Prod keeps dynamic carry (BASE "true"). Removed once the
+            # gex-service degrades gracefully instead of fail-closing (permanent fix).
+            - { name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED, value: "false" }
