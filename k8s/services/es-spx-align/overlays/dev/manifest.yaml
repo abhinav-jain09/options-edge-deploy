@@ -47,7 +47,7 @@ spec:
             - name: KAFKA_ES_GEX_SPX_ALIGNED_TOPIC
               value: options.es-gex-spx-aligned
             - name: ES_SPX_ALIGN_STRIKE_INTEL_ENABLED
-              value: "false"
+              value: "true"
             - name: KAFKA_ES_STRIKE_INTEL_MIRRORED_TOPIC
               value: es.strike-intelligence-by-strike
             - name: KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC
