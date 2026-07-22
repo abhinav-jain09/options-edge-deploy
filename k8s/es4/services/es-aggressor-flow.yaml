@@ -63,6 +63,8 @@ spec:
           value: America/New_York
         - name: ES_AGGRESSOR_SESSION_START
           value: '18:00'
+        - name: ES_AGGRESSOR_EXPIRY_ROLL
+          value: '17:30'
         - name: ES_AGGRESSOR_PUBLISH_INTERVAL_MS
           value: '1000'
         - name: ES_AGGRESSOR_REPLAY_LOOKBACK_HOURS
