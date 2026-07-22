@@ -306,6 +306,7 @@ pipeline {
           set -euo pipefail
           export SERVICE="${SERVICE_PARAM:?}"
           export DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN_PARAM:-false}"
+          bash scripts/deploy/remove-retired-workloads.sh
           WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/service-deploy.sh
         '''
       }
