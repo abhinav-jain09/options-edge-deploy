@@ -84,6 +84,12 @@ spec:
         # es4-common-env then isolates it as es.options.es.option-truth-engine-service.by-strike.
         - name: KAFKA_OPTION_TRUTH_BY_STRIKE_TOPIC
           value: options.es.option-truth-engine-service.by-strike
+        # ES-only continuous native futures buyer/seller flow card. The gateway code keeps this opt-in
+        # so the SPX production cluster never requires the ES-only topic.
+        - name: GATEWAY_ES_AGGRESSOR_FLOW_ENABLED
+          value: "true"
+        - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
+          value: futures.aggressor-flow
         # es4 serves ES, not SPX: the gateway's active market-data selection symbol is IB_SYMBOL
         # (default SPX). Without this the selection is SPX and the ES option records (underlying=ES)
         # never match -> empty chain even at market open. IB_EXPIRY stays unset = AUTO (0DTE daily roll).
