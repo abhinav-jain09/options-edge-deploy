@@ -103,6 +103,12 @@ spec:
         # (this env is es-web-only; SPX prod web never sets it).
         - name: DELTA_FLOW_STALE_MS
           value: "14400000"
+        # Risk Reversal page reference line: ES prior settle via Yahoo ES=F (SPX default is ^GSPC).
+        - name: PRIOR_CLOSE_YAHOO_SYMBOL
+          value: "ES=F"
+        # Globex session rolls at 18:00 ET — the cached prior close invalidates at the reopen.
+        - name: PRIOR_CLOSE_SESSION_ROLL_HOUR_ET
+          value: "18"
         envFrom:
         - configMapRef:
             name: es4-base-env
