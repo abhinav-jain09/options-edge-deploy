@@ -100,6 +100,29 @@ patches:
                     memory: 8Gi
                   requests:
                     memory: 2Gi
+  # PROD enable of the top-N gate (proc PR #466/#467, requirement 2026-07-22; dev-verified first per
+  # rollout decision): fade (gamma-flow) + lifecycle (EMERGING/STICKY/FADING) compute ONLY the top-3
+  # |netGex| strikes per chain — the rest are gated BEFORE those calculations. Stage-1 per-strike netGex
+  # (gex.strike, UI board, magnet, strike-intel input) is UNCHANGED. Enabling switches fade+lifecycle to
+  # isolated "-topn" store lineages: ONE-TIME fade/lifecycle state reset at rollout (by design; fade
+  # windows re-seed within minutes). NAME-KEYED strategic merge like the dealer-ledger patch above.
+  # MUST MIRROR the standalone slice k8s/services/databento-gex/overlays/production (validate-services).
+  - target:
+      kind: Deployment
+      name: databento-gex-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: databento-gex-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: databento-gex
+                env:
+                  - name: DATABENTO_GEX_FLOW_TOP_N
+                    value: "3"
   # PROD-ONLY: strike-intelligence GEX Step-0 acknowledgment. The service is fail-closed in prod
   # (refuses to boot) unless this is set, because gex.flow.by-strike lacks the OI-trust metadata
   # (Step 0). true = deliberate, logged opt-out to run with GEX capped below HIGH until Step 0 ships.
