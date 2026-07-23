@@ -41,8 +41,8 @@ log "preflight (no mutation happens unless every check passes)"
 [ -f "$INFRA_DIR/docker-compose.yml" ] || die "no compose file in $INFRA_DIR"
 # canonical-path guard for the destructive rm: KAFKA_DATA must be the exact compose bind source,
 # a real directory (not a symlink), and match the compose file — never delete anything else.
-[ -d "$KAFKA_DATA" ] && [ ! -L "$KAFKA_DATA" ] || die "Kafka data dir $KAFKA_DATA missing or is a symlink"
-CANON="$(cd "$KAFKA_DATA" && pwd -P)"
+sudo -n test -d "$KAFKA_DATA" && ! sudo -n test -L "$KAFKA_DATA" || die "Kafka data dir $KAFKA_DATA missing or is a symlink"
+CANON="$(sudo -n readlink -f "$KAFKA_DATA")"
 [ "$CANON" = "$KAFKA_DATA" ] || die "Kafka data path is not canonical ($CANON != $KAFKA_DATA)"
 command -v docker >/dev/null || die "docker not found"
 # Validate the bind through the RENDERED compose config (a raw-file grep could match a comment
@@ -173,8 +173,11 @@ else
     if [ -z "$path" ]; then
       path=$(sudo -n /usr/local/bin/k3s kubectl get pv "$pv" -o jsonpath='{.spec.hostPath.path}' 2>/dev/null || true)
     fi
-    [ -d "$path" ] && [ ! -L "$path" ] || die "PV $pv path missing or symlink ($path)"
-    canon=$(cd "$path" && pwd -P)
+    # k3s local-path storage lives under a root:root 0700 parent, so a non-root
+    # `[ -d ]`/`cd` can't traverse it and would FALSE-abort ("missing or symlink")
+    # even though the dir is a real directory. Probe as root (rm below already does).
+    sudo -n test -d "$path" && ! sudo -n test -L "$path" || die "PV $pv path missing or symlink ($path)"
+    canon=$(sudo -n readlink -f "$path")
     case "$canon" in /var/lib/rancher/k3s/storage/*) ;; *) die "PV $pv path outside guarded k3s storage root: $canon" ;; esac
     sudo -n find "$canon" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
     echo "wiped state PVC $claim ($canon)"
