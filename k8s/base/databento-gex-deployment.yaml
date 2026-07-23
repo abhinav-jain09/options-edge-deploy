@@ -98,14 +98,26 @@ spec:
             # near-money quote-refresh cadence). Both envs (base) intentionally — prod is meant to fire too.
             - name: DATABENTO_GEX_MAX_QUOTE_AGE_MS
               value: "600000"
-            # Live, expiry-specific r/q supplied by market-carry-service. Fail closed when the
-            # carry record is absent, stale, future-dated, or not quality=GOOD.
+            # Live, expiry-specific r/q supplied by market-carry-service. A carry record that is
+            # absent, stale, future-dated, or not quality=GOOD is rejected — and then priced via the
+            # STATIC_FALLBACK regime below instead of suppressing the strike.
             - name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED
               value: "true"
             - name: DATABENTO_GEX_MARKET_CARRY_TOPIC
               value: market.spx.market-carry-service.current
+            # market-carry publishes on a 5-minute cadence (MARKET_CARRY_MIN_PUBLISH_INTERVAL_MS):
+            # carry (r, q) is slow-moving, so a 5-minute cadence is operationally sufficient. The age gate must
+            # tolerate one MISSED scheduled publication — i.e. two cadence periods since the last good
+            # snapshot — plus 60s scheduling slack: 2 x 300s + 60s = 660s.
             - name: DATABENTO_GEX_DYNAMIC_CARRY_MAX_AGE_MS
-              value: "120000"
+              value: "660000"
+            # USER requirement 2026-07-23: gex must NOT fail because carry now arrives every 5 minutes.
+            # If a snapshot is late/stale beyond the 660s gate, price with the STATIC configured carry
+            # (regime STATIC_FALLBACK, PR #464) instead of suppressing the strike. Provenance is stamped
+            # on every record and carry_unavailable_reason_total still counts the cause, so this is
+            # fail-loud degradation, not a silent mask.
+            - name: DATABENTO_GEX_CARRY_STATIC_FALLBACK_ENABLED
+              value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms1g -Xmx4g"
             # ---- Pre-open GEX (PREOPEN-GEX-GATE1-REQUIREMENT.md) ----
