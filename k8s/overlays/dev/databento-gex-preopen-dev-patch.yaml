@@ -26,3 +26,9 @@ spec:
             # rate here so dev GEX keeps producing. Prod keeps dynamic carry (BASE "true"). Removed once the
             # gex-service degrades gracefully instead of fail-closing (permanent fix).
             - { name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED, value: "false" }
+            # DEV-FIRST rollout of the top-N gate (proc PR #466, requirement 2026-07-22): fade (gamma-flow)
+            # + lifecycle (EMERGING/STICKY/FADING) compute ONLY the top-3 |netGex| strikes per chain; the
+            # rest are gated before those calculations. Stage-1 per-strike netGex is unchanged. Enabling
+            # switches the fade branch to isolated "-topn" stores (one-time fade-state reset, by design).
+            # Prod stays 0 (default, byte-identical) until explicitly enabled after dev verification.
+            - { name: DATABENTO_GEX_FLOW_TOP_N, value: "3" }
