@@ -230,7 +230,7 @@ ensure_topic delta-flow-session 32 delete
 ensure_topic delta-flow-by-strike 32 delete
 ensure_topic delta-flow-dashboard 32 compact,delete
 ensure_topic delta-flow-diagnostics 32 delete
-ensure_topic options-edge-strike-liquidity-heatmap-v1-dev-chain-rekey 32 delete
+ensure_topic options-edge-strike-liquidity-heatmap-dev-chain-rekey 32 delete
 
 echo "[replay] allowing Monday-session replay timestamps on derived output topics"
 for topic in \
@@ -266,7 +266,7 @@ for topic in \
   delta-flow-dashboard \
   delta-flow-diagnostics \
   options.spx.strike-sr.current \
-  options-edge-strike-liquidity-heatmap-v1-dev-chain-rekey; do
+  options-edge-strike-liquidity-heatmap-dev-chain-rekey; do
   allow_future_timestamps "$topic"
 done
 

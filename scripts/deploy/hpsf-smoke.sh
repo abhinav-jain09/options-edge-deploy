@@ -19,7 +19,7 @@ scripts/kafka/create-hpsf-topics.sh
 scripts/kafka/verify-hpsf-topics.sh
 restore_stage_b_release_runtime() {
   kubectl -n "$NAMESPACE" set env deployment/hpsf-stage-b-service \
-    HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-v2-1 \
+    HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b \
     HPSF_STAGE_B_EVALUATION_MODE- \
     HPSF_STAGE_B_PUNCTUATION_TYPE- \
     HPSF_ALLOW_DEBUG_EVALUATION_IN_LIVE- || true
@@ -29,7 +29,7 @@ restore_stage_b_release_runtime() {
 trap 'rc=$?; restore_stage_b_release_runtime; exit $rc' EXIT
 scripts/kafka/create-hpsf-topics.sh
 scripts/smoke/check-hpsf-deployment.sh
-stage_b_smoke_app_id="options-edge-hpsf-stage-b-v2-1-smoke-${BUILD_NUMBER:-manual}"
+stage_b_smoke_app_id="options-edge-hpsf-stage-b-smoke-${BUILD_NUMBER:-manual}"
 echo "Using isolated Stage B Kafka Streams application id for deploy smoke: ${stage_b_smoke_app_id}"
 kubectl -n "$NAMESPACE" set env deployment/hpsf-stage-b-service \
   HPSF_STREAMS_APPLICATION_ID="${stage_b_smoke_app_id}" \

@@ -479,7 +479,7 @@ pipeline {
           fi
           export KAFKA_BOOTSTRAP_SERVERS
           export TOPIC_PREFIX
-          export HPSF_STAGE_B_STREAMS_APPLICATION_ID="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b-v2-1}"
+          export HPSF_STAGE_B_STREAMS_APPLICATION_ID="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b}"
 
           kubectl -n options-edge scale deployment/hpsf-stage-b-service --replicas=0 || true
           for i in $(seq 1 60); do
