@@ -82,8 +82,6 @@ spec:
           value: 'true'
         - name: JAVA_TOOL_OPTIONS
           value: -Xms512m -Xmx2048m
-        - name: STRIKE_INTEL_ACK_UNTRUSTED_GEX
-          value: 'true'
         - name: STRIKE_INTEL_ADAPTIVE_SCALE_ENABLED
           value: 'true'
         # §7c premium floor (processing #371): the adaptive scaler rates the session's top slice

@@ -123,20 +123,6 @@ patches:
                 env:
                   - name: DATABENTO_GEX_FLOW_TOP_N
                     value: "3"
-  # PROD-ONLY: strike-intelligence GEX Step-0 acknowledgment. The service is fail-closed in prod
-  # (refuses to boot) unless this is set, because gex.flow.by-strike lacks the OI-trust metadata
-  # (Step 0). true = deliberate, logged opt-out to run with GEX capped below HIGH until Step 0 ships.
-  # REMOVE this patch when Step 0 lands so prod runs with trusted GEX.
-  # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/production (validate-services).
-  - target:
-      kind: Deployment
-      name: strike-intelligence-service
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
-          name: STRIKE_INTEL_ACK_UNTRUSTED_GEX
-          value: "true"
   # PROD-ONLY: §7a conflict bypass needs only 2-of-4 fresh agreement to clear a non-opposed
   # (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; opposed runner-ups still veto regardless (PR #462).
   # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/production (validate-services).
