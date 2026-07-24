@@ -61,6 +61,7 @@ IMAGE_MAP = {
     ("spread-skew-postgres-writer", "spread-skew-postgres-writer"): "SPREAD_SKEW_POSTGRES_WRITER_IMAGE",
     ("es-open-direction-service", "es-open-direction"): "ES_OPEN_DIRECTION_IMAGE",
     ("es-open-direction-postgres-writer", "es-open-direction-postgres-writer"): "ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE",
+    ("close-direction-service", "close-direction"): "CLOSE_DIRECTION_IMAGE",
     ("reversal-postgres-writer", "reversal-postgres-writer"): "REVERSAL_POSTGRES_WRITER_IMAGE",
 }
 

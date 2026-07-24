@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: close-direction-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: close-direction-service
+    app.kubernetes.io/component: close-direction-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Single-writer invariant (design CLOSE-DIRECTION-GATE1 §6.4/CD-R38): the verdict outbox
+  # is fenced by replicas=1 + Recreate — never scale this deployment above 1.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: close-direction-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: close-direction-service
+        app.kubernetes.io/component: close-direction-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: close-direction
+          image: 192.168.100.252:5000/options-edge-close-direction:dev
+          imagePullPolicy: Always
+          # Shared platform config/secret provide KAFKA_BOOTSTRAP_SERVERS (+ the rest of the
+          # platform defaults) exactly like every sibling service.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8117"
+            # --- inputs (design §3): dealer-ledger profile + ES trades for the impact lambda ---
+            - name: KAFKA_DEALER_LEDGER_PROFILE_TOPIC
+              value: dealer-ledger-profile
+            - name: KAFKA_HPSF_ES_TRADES_TOPIC
+              value: underlying.es.trades
+            # --- outputs (design §6.1) ---
+            - name: KAFKA_CLOSE_DIRECTION_SIGNAL_TOPIC
+              value: close.direction.signal
+            - name: KAFKA_CLOSE_DIRECTION_STATE_TOPIC
+              value: close.direction.state
+            # Gate-1 ships uncalibrated (Stage-A backtest updates this to BACKTEST_<id>).
+            - name: CLOSE_DIRECTION_CALIBRATION
+              value: "UNCALIBRATED"
+            # Heap below the container limit (single-chain in-memory state, no RocksDB).
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx512m"
+          ports:
+            - name: health
+              containerPort: 8117
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          # Provisional sizing per CD-R38 (measured RSS after the first live session decides
+          # any change). CPU limit intentionally absent, matching every sibling service.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi

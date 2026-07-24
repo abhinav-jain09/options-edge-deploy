@@ -32,6 +32,7 @@ images:
   gex-delta-redis-writer: 192.168.100.252:5000/options-edge-gex-delta-redis-writer:prod
   hpsf-postgres-writer-service: 192.168.100.252:5000/options-edge-hpsf-postgres-writer:prod
   es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:prod
+  close-direction-service: 192.168.100.252:5000/options-edge-close-direction:prod
   vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:prod
   es-open-direction-postgres-writer: 192.168.100.252:5000/options-edge-es-open-direction-postgres-writer:prod
   web: 192.168.100.252:5000/options-edge-web:prod
