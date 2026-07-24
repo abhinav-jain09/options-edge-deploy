@@ -67,6 +67,14 @@ ES_ENV = {
         # Mirrors prod so ES badges land on the SAME top-gamma strikes the board highlights. Enabling
         # switches fade+lifecycle to isolated "-topn" store lineages (one-time state reset, by design).
         {"name": "DATABENTO_GEX_FLOW_TOP_N", "value": "3"},
+        # ES-GEX-on-SPX bridge (DatabentoGexBridge, behind ES_GEX_SPXBRIDGE_ENABLED): republish the raw
+        # es gex.strike as self-describing JSON on KAFKA_ES_GEX_SPXBRIDGE_TOPIC (default
+        # options.databento.gex.spxbridge -> es.options.databento.gex.spxbridge via TOPIC_PREFIX). The
+        # per-target MM1 mirror carries it to prod .252 where es-spx-align-service joins it against the
+        # basis into options.es-gex-spx-aligned (the SPX-chain ES-gamma overlay). es4-ONLY: the SPX prod
+        # gex-service leaves this OFF (its bridge output would be a pointless SPX->spx echo). Without this
+        # the whole ES-gamma-band pipeline idles on an empty input (the align service fail-closes to blank).
+        {"name": "ES_GEX_SPXBRIDGE_ENABLED", "value": "true"},
     ],
     "strike-flow-classifier": [
         {"name": "STRIKE_FLOW_CONTRACT_MULTIPLIER", "value": "50"},
