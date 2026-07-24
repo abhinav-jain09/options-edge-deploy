@@ -259,9 +259,10 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
-  # spread-skew-service + spread-skew-postgres-writer: ON in prod (USER 2026-07-12 "deploy dev and
-  # prod both"). Keep-off patches removed; base replicas:1 renders as-is. Standalone slices mirror this
-  # (validate-services: mono==slice).
+  # spread-skew-service + spread-skew-postgres-writer: RETIRED all envs (USER 2026-07-24 — the
+  # mirrored-pair strike/Mid coloring feature is not wanted). Base replicas:0 renders as-is; the
+  # standalone slices mirror it (validate-services: mono==slice) and both are in morning-autostart
+  # KEEP_DOWN + dev-cleanup DISABLED_DEV so the daily lifecycle never re-ups them.
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.
