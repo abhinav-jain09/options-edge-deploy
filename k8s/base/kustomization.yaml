@@ -44,6 +44,8 @@ resources:
   - strike-liquidity-heatmap-service.yaml
   - es-open-direction-deployment.yaml
   - es-open-direction-service.yaml
+  - close-direction-deployment.yaml
+  - close-direction-service.yaml
   - vix-option-inteligence-deployment.yaml
   - vix-option-inteligence-service.yaml
   - option-truth-engine-deployment.yaml

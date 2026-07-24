@@ -34,6 +34,7 @@ OUT_DIR = "k8s/es4/services"
 # es4 core set (Gate-2 v1 scope; hpsf/replay/unified-sr descoped; mission-pace/pressure
 # have no standalone slices yet — follow-up; ibkr/raw-postgres-writer out of the ES path).
 SERVICES = [
+    "close-direction",
     "databento-gex", "databento-gex-history", "databento-maxpain", "databento-mission-sandwich",
     "databento-volume-aggregator", "dealer-ledger", "dealer-ledger-calibration", "delta-flow",
     "directional-pressure", "gex-delta-redis-writer", "option-price-behavior", "option-truth-engine", "pin-postgres-writer",
@@ -42,6 +43,13 @@ SERVICES = [
 ]
 
 ES_ENV = {
+    "close-direction": [
+        # es4 chains carry symbol "ES" (the es-prefixed dealer-ledger profile stream); the
+        # engine's 0DTE chain selector must match it, not the SPX default. Topics prefix via
+        # TOPIC_PREFIX at runtime like every sibling. CME ES daily options settle 16:00 ET,
+        # so the SPX session calendar's close times hold for the es4 shadow too.
+        {"name": "SIGNAL_SYMBOL", "value": "ES", "_override": True},
+    ],
     "databento-gex": [
         {"name": "DATABENTO_GEX_RISK_FREE_RATE", "value": "0.04"},
         {"name": "DATABENTO_GEX_DIVIDEND_YIELD", "value": "0.04"},   # q=r -> Black-76 on the future

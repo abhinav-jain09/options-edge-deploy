@@ -35,6 +35,7 @@ images:
   gex-delta-redis-writer: 192.168.100.252:5000/options-edge-gex-delta-redis-writer:dev
   hpsf-postgres-writer-service: 192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev
   es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:dev
+  close-direction-service: 192.168.100.252:5000/options-edge-close-direction:dev
   vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev
   es-open-direction-postgres-writer: 192.168.100.252:5000/options-edge-es-open-direction-postgres-writer:dev
   web: host.docker.internal:5001/options-edge-web:dev
