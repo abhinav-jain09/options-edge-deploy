@@ -57,7 +57,7 @@ spec:
             - name: KAFKA_MARKET_DATA_SELECTION_TOPIC
               value: "es.options.marketdata.selection"
             - name: DATABENTO_CONTROL_GROUP_ID
-              value: "es-feed-control-v1"
+              value: "es-feed-control"
             # ---- GLBX ES 0DTE options subscription ------------------------------
             - name: DATABENTO_DATASET
               value: "GLBX.MDP3"
@@ -135,7 +135,7 @@ spec:
             - name: ES_TRADES_SOURCE_TOPIC
               value: "underlying.es.trades"
             - name: ES_TRADES_SOURCE_GROUP_ID
-              value: "es-feed-spot-v1"
+              value: "es-feed-spot"
             # ---- compacted ES spot-price topic (feed PR #63) ---------------------
             # Republish the ES future price (from ES_TRADES_SOURCE above) as a compacted,
             # "ES"-keyed es.underlying.es.price — the spot TOPIC an es4 strike-intelligence

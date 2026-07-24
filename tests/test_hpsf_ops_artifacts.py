@@ -120,7 +120,8 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
         script = ROOT / "scripts/kafka/reset-hpsf-stage-b-internal-topics.sh"
         subprocess.run(["bash", "-n", str(script)], check=True)
         text = script.read_text()
-        self.assertIn("options-edge-hpsf-stage-b-v2-1", text)
+        self.assertIn("options-edge-hpsf-stage-b", text)
+        self.assertNotIn("options-edge-hpsf-stage-b-v2-1", text)  # v2-1 must never return
         self.assertIn("-repartition", text)
         self.assertIn("-changelog", text)
         self.assertIn('"^" prefix "smoke-"', text)
@@ -173,7 +174,7 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "scripts/smoke/check-hpsf-deployment.sh",
             "scripts/kafka/verify-hpsf-topics.sh",
             "kubectl apply -f k8s/base/hpsf-stage-a-deployment.yaml",
-            "options-edge-hpsf-stage-b-v2-1-smoke-${BUILD_NUMBER:-manual}",
+            "options-edge-hpsf-stage-b-smoke-${BUILD_NUMBER:-manual}",
             "set env deployment/hpsf-stage-b-service HPSF_STREAMS_APPLICATION_ID",
             'kubectl -n "$NAMESPACE" rollout restart deployment/hpsf-stage-b-service',
         ]:
@@ -210,8 +211,8 @@ class HpsfOpsArtifactsTest(unittest.TestCase):
             "stage('HPSF Smoke')",
             "scripts/smoke/check-hpsf-deployment.sh",
             "restore_stage_b_release_runtime",
-            "HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b-v2-1",
-            "options-edge-hpsf-stage-b-v2-1-smoke-${BUILD_NUMBER:-manual}",
+            "HPSF_STREAMS_APPLICATION_ID=options-edge-hpsf-stage-b",
+            "options-edge-hpsf-stage-b-smoke-${BUILD_NUMBER:-manual}",
             "HPSF_STAGE_B_EVALUATION_MODE=SCHEDULED",
             "HPSF_STAGE_B_PUNCTUATION_TYPE=WALL_CLOCK_TIME",
             "scripts/smoke/check-hpsf-stage-b-runtime.sh",

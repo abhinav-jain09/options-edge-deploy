@@ -30,7 +30,7 @@ spec:
             - { name: GEX_FLOW_READINESS_GATE, value: "false" }
             # Deliberately reset the dev Streams application after enabling market carry so old static-carry
             # state cannot be replayed into the new calculation regime.
-            - { name: KAFKA_GEX_STREAMS_APP_ID, value: "options-databento-gex-streams-carry-v3" }
+            - { name: KAFKA_GEX_STREAMS_APP_ID, value: "options-databento-gex-streams" }
             # DEV-FIRST rollout of the top-N gate (proc PR #466, requirement 2026-07-22): fade (gamma-flow)
             # + lifecycle (EMERGING/STICKY/FADING) compute ONLY the top-3 |netGex| strikes per chain; the
             # rest are gated before those calculations. Stage-1 per-strike netGex is unchanged. Enabling

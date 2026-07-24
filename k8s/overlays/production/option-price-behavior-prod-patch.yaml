@@ -37,11 +37,11 @@ spec:
             # code's documented escape hatch) until the incremental rolling-window path is fixed +
             # validated offline via the calibration-replay harness. app id stays the stable unversioned
             # identity (inc store already backfilled); exactly_once stays ON (required by the incremental multi-key crash-consistency).
-            - name: OPB_V2_ROLLING_WINDOWS_ENABLED
+            - name: OPB_ROLLING_WINDOWS_ENABLED
               value: "false"
             # The incremental layout spans several store keys per logical update; exactly_once_v2 makes
             # the changelog + emits commit transactionally (broker hosts __transaction_state).
-            - name: OPB_V2_EXACTLY_ONCE
+            - name: OPB_EXACTLY_ONCE
               value: "true"
           resources:
             limits:

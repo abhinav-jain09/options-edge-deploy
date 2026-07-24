@@ -67,7 +67,7 @@ spec:
             - name: GEX_FLOW_READINESS_GATE
               value: "false"
             - name: KAFKA_GEX_STREAMS_APP_ID
-              value: options-databento-gex-streams-carry-v3
+              value: options-databento-gex-streams
             - name: DATABENTO_GEX_FLOW_TOP_N
               value: "3"
             - name: APP_MARKET_DATA_SOURCE

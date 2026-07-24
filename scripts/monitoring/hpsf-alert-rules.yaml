@@ -1,5 +1,5 @@
 groups:
-  - name: optionedge-hpsf-v2-1
+  - name: optionedge-hpsf
     interval: 30s
     rules:
       - alert: HpsfKafkaDiskAbove75Percent

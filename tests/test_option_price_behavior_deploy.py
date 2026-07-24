@@ -38,16 +38,39 @@ class OptionPriceBehaviorDeployTest(unittest.TestCase):
         # V1 is gone: no variant switch declared (the image only runs V2). The comment may mention the
         # retired var by name, so assert on the env *declaration* form, not a bare substring.
         self.assertNotIn("- name: OPB_SERVICE_VARIANT", deployment)
-        self.assertIn("OPTION_PRICE_BEHAVIOR_V2_BY_OPTION_TOPIC", deployment)
-        self.assertIn("option-price-behavior-v2-by-option", deployment)
-        self.assertIn("OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC", deployment)
-        self.assertIn("option-price-behavior-v2-session", deployment)
+        self.assertIn("OPTION_PRICE_BEHAVIOR_BY_OPTION_TOPIC", deployment)
+        self.assertIn("option-price-behavior-by-option", deployment)
+        self.assertIn("OPTION_PRICE_BEHAVIOR_SESSION_TOPIC", deployment)
+        self.assertIn("option-price-behavior-session", deployment)
         # calibrated constants (results ledger §4)
-        self.assertIn("OPB_V2_WINSOR_K", deployment)
-        self.assertIn("OPB_V2_WEIGHT_CAP", deployment)
-        self.assertIn("OPB_V2_Z_THRESHOLD", deployment)
+        self.assertIn("OPB_WINSOR_K", deployment)
+        self.assertIn("OPB_WEIGHT_CAP", deployment)
+        self.assertIn("OPB_Z_THRESHOLD", deployment)
         # V1 is gone: no dashboard topic, no separate v2 deployment file.
         self.assertNotIn("OPTION_PRICE_BEHAVIOR_DASHBOARD_TOPIC", deployment)
+        # LATEST-ONLY GUARD: retired versioned identities must never reappear anywhere in the
+        # base deployment, the generated overlays, the es4 manifest, or the topic registry.
+        overlay_root = ROOT / "k8s" / "services" / "option-price-behavior" / "overlays"
+        surfaces = {
+            "base deployment": deployment,
+            "es4 manifest": (ROOT / "k8s" / "es4" / "services" / "option-price-behavior.yaml").read_text(),
+            "topics.env": (ROOT / "scripts" / "kafka" / "topics.env").read_text(),
+        }
+        for env_name in ("dev", "experiment", "production"):
+            surfaces[f"{env_name} overlay"] = (overlay_root / env_name / "manifest.yaml").read_text()
+        for retired in ("OPTION_PRICE_BEHAVIOR_V2_", "OPB_V2_", "option-price-behavior-v2-"):
+            for label, text in surfaces.items():
+                self.assertNotIn(retired, text, f"retired identity {retired} reappeared in {label}")
+        # Companion group renames stay unversioned too.
+        es_feed = (ROOT / "k8s" / "es4" / "prod" / "es-feed.yaml").read_text()
+        self.assertIn('value: "es-feed-control"', es_feed)
+        self.assertIn('value: "es-feed-spot"', es_feed)
+        self.assertNotIn("es-feed-control-v1", es_feed)
+        self.assertNotIn("es-feed-spot-v1", es_feed)
+        es_aggr = (ROOT / "k8s" / "es4" / "services" / "es-aggressor-flow.yaml").read_text()
+        self.assertIn("value: es-aggressor-flow-service", es_aggr)
+        self.assertNotIn("es-aggressor-flow-service-es4-v1", es_aggr)
+
         self.assertNotIn("option-price-behavior-v2-deployment.yaml", kustomization)
         self.assertFalse((base / "option-price-behavior-v2-deployment.yaml").exists())
 
@@ -59,7 +82,7 @@ class OptionPriceBehaviorDeployTest(unittest.TestCase):
         monitoring = (ROOT / "scripts" / "monitoring" / "apply-prometheus-scrapes.sh").read_text()
 
         self.assertIn("string(name: 'OPTION_PRICE_BEHAVIOR_IMAGE'", jenkinsfile)
-        self.assertIn("OPTION_PRICE_BEHAVIOR_IMAGE = ", jenkinsfile)
+        self.assertIn("'OPTION_PRICE_BEHAVIOR_IMAGE': 'option-price-behavior'", jenkinsfile)
         self.assertIn("options-edge-option-price-behavior:$image_tag", resolve_images)
         self.assertIn("OPTION_PRICE_BEHAVIOR_IMAGE=$OPTION_PRICE_BEHAVIOR_IMAGE", resolve_images)
         self.assertIn("OPTION_PRICE_BEHAVIOR_IMAGE=$OPTION_PRICE_BEHAVIOR_IMAGE", preflight)
@@ -71,10 +94,7 @@ class OptionPriceBehaviorDeployTest(unittest.TestCase):
         self.assertIn("rollout restart deployment/option-price-behavior-service", apply_script)
         self.assertIn("rollout status deployment/option-price-behavior-service", apply_script)
         self.assertIn("add_service_scrape option-price-behavior-service 8080", monitoring)
-        self.assertIn(
-            "string(name: 'OPTION_PRICE_BEHAVIOR_IMAGE', value: params.OPTION_PRICE_BEHAVIOR_IMAGE)",
-            jenkinsfile,
-        )
+        self.assertIn("'OPTION_PRICE_BEHAVIOR_IMAGE',", jenkinsfile)  # promote pass-through list form
         # The orphaned separate option-price-behavior-service-v2 deployment (old app.id, not in any
         # overlay) is reconcile-deleted on every deploy so a duplicate V2 can't linger.
         self.assertIn("delete deployment/option-price-behavior-service-v2", apply_script)

@@ -56,7 +56,7 @@ spec:
         - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
           value: futures.aggressor-flow
         - name: ES_AGGRESSOR_GROUP_ID
-          value: es-aggressor-flow-service-es4-v1
+          value: es-aggressor-flow-service
         - name: ES_AGGRESSOR_SYMBOL
           value: ES.v.0
         - name: ES_AGGRESSOR_SESSION_ZONE

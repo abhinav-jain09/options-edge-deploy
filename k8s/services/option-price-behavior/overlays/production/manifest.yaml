@@ -56,9 +56,9 @@ spec:
         - env:
             - name: JAVA_TOOL_OPTIONS
               value: -Xms512m -Xmx3g
-            - name: OPB_V2_ROLLING_WINDOWS_ENABLED
+            - name: OPB_ROLLING_WINDOWS_ENABLED
               value: "false"
-            - name: OPB_V2_EXACTLY_ONCE
+            - name: OPB_EXACTLY_ONCE
               value: "true"
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
@@ -68,59 +68,59 @@ spec:
               value: options.databento.gex.strike
             - name: OPTION_PRICE_BEHAVIOR_INPUT_UNDERLYING_TOPIC
               value: underlying.spx.price
-            - name: OPTION_PRICE_BEHAVIOR_V2_BY_OPTION_TOPIC
-              value: option-price-behavior-v2-by-option
-            - name: OPTION_PRICE_BEHAVIOR_V2_SESSION_TOPIC
-              value: option-price-behavior-v2-session
-            - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_APP_ID
+            - name: OPTION_PRICE_BEHAVIOR_BY_OPTION_TOPIC
+              value: option-price-behavior-by-option
+            - name: OPTION_PRICE_BEHAVIOR_SESSION_TOPIC
+              value: option-price-behavior-session
+            - name: OPTION_PRICE_BEHAVIOR_STREAMS_APP_ID
               value: option-price-behavior-service
-            - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_NUM_THREADS
+            - name: OPTION_PRICE_BEHAVIOR_STREAMS_NUM_THREADS
               value: "4"
-            - name: OPTION_PRICE_BEHAVIOR_V2_STREAMS_AUTO_OFFSET_RESET
+            - name: OPTION_PRICE_BEHAVIOR_STREAMS_AUTO_OFFSET_RESET
               value: earliest
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
-            - name: OPB_V2_Z_THRESHOLD
+            - name: OPB_Z_THRESHOLD
               value: "2.05"
-            - name: OPB_V2_RESIDUAL_FLOOR_VAR
+            - name: OPB_RESIDUAL_FLOOR_VAR
               value: "0.0004"
-            - name: OPB_V2_EWMA_HALFLIFE_MS
+            - name: OPB_EWMA_HALFLIFE_MS
               value: "300000"
-            - name: OPB_V2_WINSOR_K
+            - name: OPB_WINSOR_K
               value: "7.0"
-            - name: OPB_V2_K_QUOTE_AGE
+            - name: OPB_K_QUOTE_AGE
               value: "0.12"
-            - name: OPB_V2_K_GREEK_AGE
+            - name: OPB_K_GREEK_AGE
               value: "0.025"
-            - name: OPB_V2_HALF_SPREAD_WEIGHT
+            - name: OPB_HALF_SPREAD_WEIGHT
               value: "0.38"
-            - name: OPB_V2_TICK_WEIGHT
+            - name: OPB_TICK_WEIGHT
               value: "0.50"
-            - name: OPB_V2_TICK_SIZE
+            - name: OPB_TICK_SIZE
               value: "0.05"
-            - name: OPB_V2_WEIGHT_CAP
+            - name: OPB_WEIGHT_CAP
               value: "125"
-            - name: OPB_V2_CALIBRATION_STATUS
+            - name: OPB_CALIBRATION_STATUS
               value: PRODUCTION_CALIBRATED
-            - name: OPB_V2_MODEL_VERSION
+            - name: OPB_MODEL_VERSION
               value: SPXW_0DTE_OPB_AGGRESSIVE_CANDIDATE_V2
-            - name: OPB_V2_DEAUTOCORR_BUCKET_MS
+            - name: OPB_DEAUTOCORR_BUCKET_MS
               value: "1000"
-            - name: OPB_V2_MIN_VOL
+            - name: OPB_MIN_VOL
               value: "0.03"
-            - name: OPB_V2_MAX_VOL
+            - name: OPB_MAX_VOL
               value: "5.00"
-            - name: OPB_V2_TAU_MIN_SECONDS
+            - name: OPB_TAU_MIN_SECONDS
               value: "30"
-            - name: OPB_V2_MIN_MID
+            - name: OPB_MIN_MID
               value: "0.05"
-            - name: OPB_V2_MAX_HALF_SPREAD
+            - name: OPB_MAX_HALF_SPREAD
               value: "1.00"
-            - name: OPB_V2_MAX_QUOTE_AGE_MS
+            - name: OPB_MAX_QUOTE_AGE_MS
               value: "3000"
-            - name: OPB_V2_MAX_SURFACE_AGE_MS
+            - name: OPB_MAX_SURFACE_AGE_MS
               value: "30000"
-            - name: OPB_V2_MAX_FORWARD_AGE_MS
+            - name: OPB_MAX_FORWARD_AGE_MS
               value: "30000"
           envFrom:
             - configMapRef:

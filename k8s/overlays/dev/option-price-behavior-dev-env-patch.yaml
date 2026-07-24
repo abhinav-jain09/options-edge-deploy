@@ -14,5 +14,5 @@ spec:
       containers:
         - name: option-price-behavior
           env:
-            - { name: OPB_V2_ROLLING_WINDOWS_ENABLED, value: "false" }
+            - { name: OPB_ROLLING_WINDOWS_ENABLED, value: "false" }
             - { name: JAVA_TOOL_OPTIONS, value: "-Xms512m -Xmx3g" }
