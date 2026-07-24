@@ -46,6 +46,8 @@ spec:
     spec:
       containers:
       - env:
+        - name: DATABENTO_GEX_FLOW_TOP_N
+          value: '3'
         - name: APP_MARKET_DATA_SOURCE
           value: DATABENTO
         - name: DATABENTO_DATASET
@@ -71,7 +73,7 @@ spec:
         - name: KAFKA_DATABENTO_GEX_TOPIC
           value: options.databento.gex.strike
         - name: KAFKA_GEX_STREAMS_APP_ID
-          value: options-databento-gex-streams
+          value: options-databento-gex-streams-carry-v2
         - name: KAFKA_GEX_STREAMS_NUM_THREADS
           value: '8'
         - name: DATABENTO_GEX_DEALER_SIGN_MODEL
@@ -80,8 +82,22 @@ spec:
           value: 'false'
         - name: DATABENTO_GEX_MAX_QUOTE_AGE_MS
           value: '600000'
+        - name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED
+          value: 'true'
+        - name: DATABENTO_GEX_MARKET_CARRY_TOPIC
+          value: market.spx.market-carry-service.current
+        - name: DATABENTO_GEX_DYNAMIC_CARRY_MAX_AGE_MS
+          value: '660000'
+        - name: DATABENTO_GEX_CARRY_STATIC_FALLBACK_ENABLED
+          value: 'true'
         - name: JAVA_TOOL_OPTIONS
           value: -Xms1g -Xmx4g
+        - name: PREOPEN_GEX_ENABLED
+          value: 'false'
+        - name: PREOPEN_GEX_PUBLISH_ENABLED
+          value: 'false'
+        - name: PREOPEN_GEX_SYMBOL
+          value: SPX
         - name: DATABENTO_GEX_RISK_FREE_RATE
           value: '0.04'
         - name: DATABENTO_GEX_DIVIDEND_YIELD
@@ -89,11 +105,6 @@ spec:
         - name: DATABENTO_GEX_OI_BASELINE_BACKFILL_ENABLED
           value: 'true'
         - name: DATABENTO_GEX_OI_PERSIST_LIVE_ENABLED
-          value: 'true'
-        # ES-GEX-on-SPX JSON bridge (Gate-1 §3.1): tee each ES GexStrikeSnapshot to a self-describing JSON
-        # record on es.options.databento.gex.spxbridge (es4 prefix). ARMED so it flows as soon as ES gex flows.
-        # Consumed (mirrored) by the es-spx-align service. Additive; independent of the gex computation.
-        - name: ES_GEX_SPXBRIDGE_ENABLED
           value: 'true'
         envFrom:
         - configMapRef:

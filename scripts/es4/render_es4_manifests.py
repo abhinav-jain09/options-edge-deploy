@@ -54,6 +54,11 @@ ES_ENV = {
         # restart-durable using the same DB path SPX uses, without the GLBX symbology adapter.
         {"name": "DATABENTO_GEX_OI_BASELINE_BACKFILL_ENABLED", "value": "true"},
         {"name": "DATABENTO_GEX_OI_PERSIST_LIVE_ENABLED", "value": "true"},
+        # Top-3 fade/lifecycle gate (proc #466/#467; dev deploy #584, prod deploy #585+#813): fade +
+        # lifecycle publish only the top-3 |netGex| strikes per chain; stage-1 per-strike netGex unchanged.
+        # Mirrors prod so ES badges land on the SAME top-gamma strikes the board highlights. Enabling
+        # switches fade+lifecycle to isolated "-topn" store lineages (one-time state reset, by design).
+        {"name": "DATABENTO_GEX_FLOW_TOP_N", "value": "3"},
     ],
     "strike-flow-classifier": [
         {"name": "STRIKE_FLOW_CONTRACT_MULTIPLIER", "value": "50"},
