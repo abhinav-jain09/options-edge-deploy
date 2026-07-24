@@ -84,6 +84,8 @@ spec:
           value: options.opra.tcbbo
         - name: KAFKA_STRIKE_FLOW_OUTPUT_TOPIC
           value: options.databento.strike-flow
+        - name: KAFKA_SELLER_ACTIVITY_TOPIC
+          value: options.databento.seller-activity
         - name: KAFKA_STRIKE_FLOW_STREAMS_AUTO_OFFSET_RESET
           value: earliest
         - name: KAFKA_STRIKE_FLOW_STREAMS_NUM_THREADS
