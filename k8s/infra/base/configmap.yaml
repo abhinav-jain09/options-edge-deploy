@@ -114,11 +114,13 @@ data:
   STRIKE_FLOW_SOURCE: DATABENTO
   KAFKA_STRIKE_FLOW_INPUT_TOPIC: options.opra.tcbbo
   KAFKA_STRIKE_FLOW_OUTPUT_TOPIC: options.databento.strike-flow
+  KAFKA_SELLER_ACTIVITY_TOPIC: options.databento.seller-activity
   # ETERNAL (2026-07-11): the strike-flow classifier stamps this on its output topic via a DIRECT
   # ensureCompactedTopic (bypasses the KAFKA_MAX_RETENTION_MS cap), so it must be set to -1 too or the
   # code default (172800000/48h) comes back. Data is wiped manually by the nightly clean.
   KAFKA_STRIKE_FLOW_OUTPUT_RETENTION_MS: "-1"
   KAFKA_DATABENTO_STRIKE_FLOW_TOPIC: options.databento.strike-flow
+  KAFKA_DATABENTO_SELLER_ACTIVITY_TOPIC: options.databento.seller-activity
   KAFKA_IBKR_STRIKE_FLOW_TOPIC: options.ibkr.strike-flow
   STRIKE_FLOW_ENABLED: "true"
   STRIKE_FLOW_SYMBOL: SPX
