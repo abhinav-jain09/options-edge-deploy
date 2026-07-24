@@ -19,13 +19,18 @@ spec:
           env:
             - { name: PREOPEN_GEX_ENABLED, value: "true" }
             - { name: PREOPEN_GEX_PUBLISH_ENABLED, value: "true" }
-            # DEV-ONLY: disable the live market-carry dependency. BASE turns it on (real SPX SR3-based
-            # forward carry for prod accuracy), and the gex-service FAIL-CLOSES when carry is stale/absent.
-            # On dev the synthetic feed can't feed the carry engine (market-carry drops its quotes as
-            # malformed -> carry topic empty), which blanks ALL dev GEX. Fall back to the static risk-free
-            # rate here so dev GEX keeps producing. Prod keeps dynamic carry (BASE "true"). Removed once the
-            # gex-service degrades gracefully instead of fail-closing (permanent fix).
-            - { name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED, value: "false" }
+            # Dev now receives the same market-derived carry as production. Static carry remains an explicit
+            # fallback below, so a delayed carry publication degrades loudly instead of blanking all strikes.
+            - { name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED, value: "true" }
+            # A single missed 5-minute publication must not disappear from the UI. Keep strike records usable
+            # for 15 minutes, matching production, while the producer catches up.
+            - { name: DATABENTO_GEX_STALE_AFTER_MS, value: "900000" }
+            # Gamma-flow is an optional derivative of core per-strike GEX. Its startup must never remove the
+            # healthy core stream from Service endpoints; flow health remains visible in its own metrics.
+            - { name: GEX_FLOW_READINESS_GATE, value: "false" }
+            # Deliberately reset the dev Streams application after enabling market carry so old static-carry
+            # state cannot be replayed into the new calculation regime.
+            - { name: KAFKA_GEX_STREAMS_APP_ID, value: "options-databento-gex-streams-carry-v3" }
             # DEV-FIRST rollout of the top-N gate (proc PR #466, requirement 2026-07-22): fade (gamma-flow)
             # + lifecycle (EMERGING/STICKY/FADING) compute ONLY the top-3 |netGex| strikes per chain; the
             # rest are gated before those calculations. Stage-1 per-strike netGex is unchanged. Enabling

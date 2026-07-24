@@ -54,6 +54,9 @@ jobs:
       - name: Validate service registry (completeness + mirror + image name)
         run: scripts/ci/validate-services.sh
 
+      - name: Validate dev GEX availability safeguards
+        run: bash scripts/ci/validate-gex-dev-safety.sh
+
       - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
         run: scripts/ci/validate-image-pinning.sh
 

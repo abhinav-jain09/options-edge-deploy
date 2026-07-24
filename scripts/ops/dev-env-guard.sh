@@ -251,12 +251,21 @@ check_gateway_health() {
   [ "$running" = "true" ] && ok "feed gateway running" || fail "feed gateway running=false"
   [ "$state" = "true" ] && ok "feed gateway state cache caught up" || fail "feed gateway state cache not caught up"
   [ "$avro" = "true" ] && ok "feed gateway avro cache caught up" || fail "feed gateway avro cache not caught up"
-  [ "${gex:-0}" -gt 0 ] && ok "gateway has GEX cache ($gex)" || warn "gateway GEX cache empty"
+  [ "${gex:-0}" -gt 0 ] && ok "gateway has GEX cache ($gex)" || fail "gateway GEX cache empty"
   [ "${mission:-0}" -gt 0 ] && ok "gateway has mission pace cache ($mission)" || warn "gateway mission pace cache empty"
 }
 
 check_gex_logs() {
   have kubectl || return 0
+  local ready
+  ready="$(kubectl --context "$KUBECTL_CONTEXT" -n "$NS" exec deployment/databento-gex-service -- \
+    sh -c 'wget -qO- http://127.0.0.1:8100/health/ready' 2>/dev/null || true)"
+  if printf '%s' "$ready" | jq -e '.status == "READY" and .streamState == "RUNNING"' >/dev/null 2>&1; then
+    ok "databento-gex-service health is READY/RUNNING"
+  else
+    fail "databento-gex-service health is not READY/RUNNING: ${ready:-unreachable}"
+  fi
+
   local logs
   logs="$(kubectl --context "$KUBECTL_CONTEXT" -n "$NS" logs deployment/databento-gex-service --tail=200 2>/dev/null || true)"
   if printf '%s\n' "$logs" | rg 'OI baseline unavailable|Connection refused|Could not initialize PostgreSQL' >/dev/null; then
