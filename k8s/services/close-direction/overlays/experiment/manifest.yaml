@@ -13,6 +13,10 @@
 apiVersion: v1
 kind: Service
 metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8117"
+    prometheus.io/scrape: "true"
   labels:
     app.kubernetes.io/component: close-direction-service
     app.kubernetes.io/name: close-direction-service

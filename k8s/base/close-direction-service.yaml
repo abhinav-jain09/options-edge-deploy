@@ -7,6 +7,10 @@ metadata:
     app.kubernetes.io/name: close-direction-service
     app.kubernetes.io/component: close-direction-service
     app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8117"
 spec:
   type: ClusterIP
   selector:
