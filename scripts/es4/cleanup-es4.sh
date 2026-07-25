@@ -47,8 +47,17 @@ log "preflight (no mutation happens unless every check passes)"
 # credential entirely. Verifying the Jenkins-side kubeconfig therefore proves nothing about the
 # target. Bind them: the caller passes the pinned UID and we refuse unless the local cluster matches.
 if [ "${ES4_EXPECTED_NS_UID:-}" != "" ]; then
-  actual_uid=$($KC get namespace options-edge -o jsonpath='{.metadata.uid}' 2>/dev/null || echo "")
-  [ -n "$actual_uid" ] || die "cannot read the local options-edge namespace UID — refusing to wipe an unidentified cluster"
+  # Capture the status explicitly. `$( ... || echo "" )` masks it: a kubectl that exits non-zero but
+  # still writes to stdout would yield a non-empty value and could compare equal, letting a failed
+  # safety-critical query authorise a wipe. Same class of masking as the pod-count and grep-pipeline
+  # defects found earlier in this review.
+  set +e
+  actual_uid=$($KC get namespace options-edge -o jsonpath='{.metadata.uid}' 2>&1)
+  uid_rc=$?
+  set -e
+  [ "$uid_rc" -eq 0 ] || die "cannot read the local options-edge namespace UID (rc=$uid_rc: $actual_uid) — refusing to wipe an unidentified cluster"
+  [ -n "$actual_uid" ] || die "empty local options-edge namespace UID — refusing to wipe an unidentified cluster"
+  case "$actual_uid" in *[!0-9a-fA-F-]*) die "implausible local namespace UID '$actual_uid' — refusing to wipe";; esac
   [ "$actual_uid" = "$ES4_EXPECTED_NS_UID" ] || die "LOCAL CLUSTER IS NOT es4: options-edge namespace UID is $actual_uid, expected $ES4_EXPECTED_NS_UID — refusing to wipe"
   log "local cluster identity confirmed ($actual_uid)"
 elif [ "$DRY" != "true" ]; then
@@ -185,8 +194,8 @@ else
   fi
 fi
 
-# Snapshot real ES application topics before stopping Kafka. Kafka/SR internals, Kafka Streams
-# changelog/repartition state, and old recursive es.es... MM2 heartbeats are deliberately excluded.
+# NOTE: topics are NOT snapshotted from the live broker. They are reconciled from the topics.env
+# SSOT in step 4, so undeclared topics that happen to exist are NOT preserved across a reset.
 # Streams recreates its own internal topics after its local state has been wiped.
 
 
@@ -268,7 +277,7 @@ if [ "$DRY" != "true" ]; then
   [ "$ok" = true ] || die "kafka/SR not healthy after 200s — app left down (rerun resumes from $STATE)"
 fi
 
-# ------------------------------------------------------------ 4. recreate snapshotted topics, THEN mm2
+# ------------------------------------------------- 4. reconcile topics from topics.env, THEN mm2
 # TOPIC KNOWLEDGE LIVES IN scripts/kafka/topics.env — NOT in this script.
 # Previously the reset snapshotted the live broker and replayed it, which meant the environment
 # rebuilt whatever happened to exist, including orphan topics from services that do not run on es4
