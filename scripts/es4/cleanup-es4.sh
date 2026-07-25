@@ -2,9 +2,15 @@
 # cleanup-es4.sh — ATOMIC es4 Kafka + Schema-Registry reset (the "cleanup v2").
 #
 # Runs ON the es4 box (rsync'd by es4-deploy, CLEAN_RESET action). The Jenkins stage MUST
-# quiesce the cross-cluster prod `es-feed` producer (options-edge/es-feed on .252, publishing to
-# 192.168.100.4:9092 + :8081) BEFORE invoking this and restore it AFTER — this script cannot reach
-# the prod cluster. It refuses to run unless told the external feed is fenced (ES4_FEED_FENCED=1).
+# prove the cross-cluster prod `es-feed` producer cannot publish BEFORE invoking this — this script
+# cannot reach the prod cluster. It refuses to run unless told so (ES4_FEED_FENCED=1).
+# ⚠️ Since DBP-R33 (2026-07-25) the prod es-feed is RETIRED rather than fenced-and-restored, and the
+# Jenkins stage proves its ABSENCE (scripts/es4/assert-prod-es-feed-absent.sh) before passing
+# ES4_FEED_FENCED=1 — that flag is an assertion, so something must actually check it.
+# es-feed is NEVER restored by this script — it is always left at 0, whatever the snapshot captured.
+# It owns a Databento live session on a shared key and DBP-R22 reserves starting it to the separate
+# activate action. This also removes the interrupted-run hazard: a durable snapshot holding a stale
+# `es-feed 1` can no longer start a session nobody asked for. Re-start it with activate-es-feed.
 #
 # WHY: the scorer/gex hit "AvroRuntimeException: Malformed data. Length is negative" —
 # a message framed with Confluent schema id=N (written when id=N meant schema A) survived a
@@ -15,7 +21,8 @@
 # fenced, so no message can outlive its schema id.
 #
 # Safety: preflight before ANY mutation; fail-closed quiescence (verified, not best-effort);
-# durable deployment + topic snapshots (survive interruption); single-instance lock;
+# durable deployment snapshot (survives interruption); topics come from the topics.env SSOT,
+#         NOT from a live-broker snapshot; single-instance lock;
 # canonical-path-guarded deletes. Honors DEPLOY_DRY_RUN=true (no mutation).
 set -euo pipefail
 
@@ -35,8 +42,29 @@ run()  { if [ "$DRY" = "true" ]; then echo "DRY: $*"; else eval "$*"; fi; }
 
 # ------------------------------------------------------------ 0. PREFLIGHT (before any mutation)
 log "preflight (no mutation happens unless every check passes)"
+# ⚠️ THIS is the cluster that actually gets wiped. The Jenkins stage verifies its ES4_KUBECONFIG,
+# but the destructive work runs HERE over SSH against the host's own k3s context — a different
+# credential entirely. Verifying the Jenkins-side kubeconfig therefore proves nothing about the
+# target. Bind them: the caller passes the pinned UID and we refuse unless the local cluster matches.
+if [ "${ES4_EXPECTED_NS_UID:-}" != "" ]; then
+  # Capture the status explicitly. `$( ... || echo "" )` masks it: a kubectl that exits non-zero but
+  # still writes to stdout would yield a non-empty value and could compare equal, letting a failed
+  # safety-critical query authorise a wipe. Same class of masking as the pod-count and grep-pipeline
+  # defects found earlier in this review.
+  set +e
+  actual_uid=$($KC get namespace options-edge -o jsonpath='{.metadata.uid}' 2>&1)
+  uid_rc=$?
+  set -e
+  [ "$uid_rc" -eq 0 ] || die "cannot read the local options-edge namespace UID (rc=$uid_rc: $actual_uid) — refusing to wipe an unidentified cluster"
+  [ -n "$actual_uid" ] || die "empty local options-edge namespace UID — refusing to wipe an unidentified cluster"
+  case "$actual_uid" in *[!0-9a-fA-F-]*) die "implausible local namespace UID '$actual_uid' — refusing to wipe";; esac
+  [ "$actual_uid" = "$ES4_EXPECTED_NS_UID" ] || die "LOCAL CLUSTER IS NOT es4: options-edge namespace UID is $actual_uid, expected $ES4_EXPECTED_NS_UID — refusing to wipe"
+  log "local cluster identity confirmed ($actual_uid)"
+elif [ "$DRY" != "true" ]; then
+  die "ES4_EXPECTED_NS_UID not supplied — a destructive run must bind to a verified cluster identity"
+fi
 [ "${ES4_FEED_FENCED:-0}" = "1" ] || [ "$DRY" = "true" ] || \
-  die "external prod es-feed not fenced (ES4_FEED_FENCED!=1) — the Jenkins clean-reset stage must scale options-edge/es-feed to 0 on .252 first, else it re-pollutes the fresh cluster with cached schema ids"
+  die "external prod es-feed not proven absent (ES4_FEED_FENCED!=1) — the Jenkins clean-reset stage must run scripts/es4/assert-prod-es-feed-absent.sh first (DBP-R33 deleted the prod es-feed; it is no longer scaled and restored), else a surviving external producer re-pollutes the fresh cluster with cached schema ids"
 [ -d "$INFRA_DIR" ] || die "no $INFRA_DIR — run bootstrap-es4.sh (infra-sync) first"
 [ -f "$INFRA_DIR/docker-compose.yml" ] || die "no compose file in $INFRA_DIR"
 # canonical-path guard for the destructive rm: KAFKA_DATA must be the exact compose bind source,
@@ -88,8 +116,49 @@ if [ -s "$STATE" ]; then
   if [ "$ph" = "RESTORED" ]; then
     # A prior run verified RESTORE and was killed before clearing state. Re-wiping now would destroy
     # data produced since — only the state cleanup remained. Do it and exit (never re-wipe restored data).
-    log "prior run already restored the app (phase=RESTORED); clearing leftover state, NO wipe"
-    [ "$DRY" = "true" ] || rm -f "$STATE"
+    #
+    # ⚠️ But that prior run may have executed an OLDER build of this script, which restored es-feed to
+    # its captured count — possibly 1. Exiting here without checking would let an interrupted reset
+    # leave a Databento session running that DBP-R22 says only ACTION=activate-es-feed may start.
+    # So enforce the invariant on this path too before clearing state.
+    if [ "$DRY" = "true" ]; then
+      echo "DRY: would force deploy/es-feed to 0 (DBP-R22) and clear $STATE"
+    else
+      # Existence query: capture the exit status directly. `$KC ... | grep -q .` masks kubectl's
+      # status behind grep's, so an API failure would have read as "no Deployment" and skipped the
+      # enforcement entirely.
+      set +e
+      es_out=$($KC get deploy es-feed --ignore-not-found -o name 2>&1)
+      es_rc=$?
+      set -e
+      [ "$es_rc" -eq 0 ] || die "phase=RESTORED but the es-feed Deployment query failed (rc=$es_rc: $es_out) — refusing to clear state while the feed's state is unknown"
+      if [ -n "$es_out" ]; then
+        cur=$($KC get deploy es-feed -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+        [ "$cur" != "ERR" ] || die "phase=RESTORED but es-feed replicas are unreadable — refusing to clear state while the feed's state is unknown"
+        if [ "$cur" != "0" ]; then
+          log "phase=RESTORED left es-feed at $cur (an older build restored the captured count) — forcing 0; use activate-es-feed to start it"
+          $KC scale deploy/es-feed --replicas=0 >/dev/null || die "could not force es-feed to 0 on the RESTORED resume path"
+          # VERIFY the scale actually took: an unverified scale is not an enforcement.
+          after=$($KC get deploy es-feed -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+          [ "$after" = "0" ] || die "es-feed still at '$after' after scaling to 0 on the RESTORED path"
+        fi
+      fi
+      # A missing Deployment does not mean nothing is running: pods can outlive it, and a terminating
+      # pod still produces. Check regardless of whether the Deployment existed.
+      set +e
+      pods_out=$($KC get pods -l app.kubernetes.io/name=es-feed -o name 2>&1)
+      pods_rc=$?
+      set -e
+      # `-o name` prints nothing at all for an empty result, so the informational "No resources
+      # found" line that --no-headers emits on stderr can no longer be miscounted as a pod. And any
+      # non-zero rc is a real failure: accepting one because its text happened to contain "no
+      # resources found" masked a safety-critical query.
+      [ "$pods_rc" -eq 0 ] || die "phase=RESTORED but the es-feed pod query failed (rc=$pods_rc: $pods_out) — failing closed"
+      n=$(printf '%s\n' "$pods_out" | awk '/^pod\// {c++} END {print c+0}')
+      [ "$n" = "0" ] || die "phase=RESTORED but $n es-feed pod(s) are still present — refusing to clear state while a Databento session may be live"
+      rm -f "$STATE"
+    fi
+    log "prior run already restored the app (phase=RESTORED); leftover state cleared, NO wipe"
     exit 0
   fi
   log "resuming interrupted reset (phase=${ph:-WIPING}) — reconciling captured replicas with current Deployments"
@@ -125,8 +194,8 @@ else
   fi
 fi
 
-# Snapshot real ES application topics before stopping Kafka. Kafka/SR internals, Kafka Streams
-# changelog/repartition state, and old recursive es.es... MM2 heartbeats are deliberately excluded.
+# NOTE: topics are NOT snapshotted from the live broker. They are reconciled from the topics.env
+# SSOT in step 4, so undeclared topics that happen to exist are NOT preserved across a reset.
 # Streams recreates its own internal topics after its local state has been wiped.
 
 
@@ -208,7 +277,7 @@ if [ "$DRY" != "true" ]; then
   [ "$ok" = true ] || die "kafka/SR not healthy after 200s — app left down (rerun resumes from $STATE)"
 fi
 
-# ------------------------------------------------------------ 4. recreate snapshotted topics, THEN mm2
+# ------------------------------------------------- 4. reconcile topics from topics.env, THEN mm2
 # TOPIC KNOWLEDGE LIVES IN scripts/kafka/topics.env — NOT in this script.
 # Previously the reset snapshotted the live broker and replayed it, which meant the environment
 # rebuilt whatever happened to exist, including orphan topics from services that do not run on es4
@@ -223,18 +292,33 @@ run "(cd '$INFRA_DIR' && docker compose up -d)"
 # ------------------------------------------------- 5. restore app (verified) then clear state
 log "restoring es4 Deployments to captured replica counts (verified) from $STATE"
 if [ "$DRY" = "true" ]; then
-  echo "DRY: would restore replicas from $STATE and verify"
+  echo "DRY: would restore replicas from $STATE and verify (es-feed always forced to 0 — DBP-R22)"
 else
   fail=0
   while read -r name reps; do
     [ -n "$name" ] || continue
     [ "$reps" = "<none>" ] && reps=1
+    # es-feed is special: it owns a Databento live session on a shared API key, so its replica count
+    # must never be raised by a restore. The snapshot is durable and survives an interrupted run, so
+    # an earlier capture of 1 would otherwise be restored long after the operator took the feed down
+    # — silently starting a Databento session nobody asked for. Requirement DBP-R21/R22.
+    if [ "$name" = "es-feed" ]; then
+      # es-feed is NEVER restored by a reset. It owns a Databento live session on a shared API key,
+      # and DBP-R22 says only the separate activate action may raise it. Restoring a captured 1 --
+      # or a stale 1 from a durable snapshot that survived an interrupted run -- would make
+      # clean-reset an activation path, which is exactly the class of side effect that caused the
+      # 2026-07-24 incident. After a reset, start it deliberately with ACTION=activate-es-feed.
+      [ "$reps" = "0" ] || log "es-feed: captured replicas=$reps IGNORED — a reset never activates the feed (DBP-R22); use activate-es-feed"
+      reps=0
+    fi
     $KC scale "deploy/$name" --replicas="$reps" >/dev/null || { echo "restore scale FAILED for $name" >&2; fail=1; }
   done < <(REPS)
   # verify each Deployment's spec.replicas matches the captured value
   while read -r name reps; do
     [ -n "$name" ] || continue
     [ "$reps" = "<none>" ] && reps=1
+    # same override as the scale loop above, or verification would compare against the stale capture
+    if [ "$name" = "es-feed" ]; then reps=0; fi   # must match the restore loop above
     got=$($KC get "deploy/$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
     [ "$got" = "$reps" ] || { echo "restore MISMATCH $name: want $reps got $got" >&2; fail=1; }
   done < <(REPS)
@@ -243,6 +327,7 @@ else
     missing=0
     while read -r name reps; do
       [ "$reps" = "<none>" ] && reps=1
+      if [ "$name" = "es-feed" ]; then reps=0; fi   # must match the restore loop above
       [ "$reps" -gt 0 ] || continue
       avail=$($KC get "deploy/$name" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
       [ "${avail:-0}" -ge "$reps" ] || missing=$((missing + 1))
@@ -262,5 +347,5 @@ fi
 if [ "$DRY" = "true" ]; then
   log "es4 clean reset DRY RUN COMPLETE — no services, data, state or logs were changed"
 else
-  log "es4 clean reset COMPLETE — service/topic snapshot restored after Kafka/SR, Streams state and logs were wiped"
+  log "es4 clean reset COMPLETE — service snapshot restored and topics reconciled from topics.env after Kafka/SR, Streams state and logs were wiped"
 fi
