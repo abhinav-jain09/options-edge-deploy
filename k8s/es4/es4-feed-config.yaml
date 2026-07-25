@@ -1,0 +1,62 @@
+# es-feed's OWN Databento configmap — es4 cluster.
+#
+# WHY THIS FILE EXISTS (2026-07-25 incident, requirement DBP-R1/R2):
+# es-feed previously mounted ONLY the API-key secret (`envFrom: secretRef` with no
+# configMapRef), so it silently inherited the feed library's CODE DEFAULTS for every
+# tuning knob. Two of those defaults caused the Databento slow-consumer complaint:
+#   * DATABENTO_USE_LIVE_REPLAY defaults to TRUE  -> a statistics replay anchored at
+#     06:00 ET on EVERY start (prod SPX sets false via its own configmap);
+#   * DATABENTO_PUBLISH_INTERVAL_MS defaults to 250 -> 8x prod's snapshot work across
+#     ~660 ES contracts.
+# On 2026-07-24 that combination produced 8 liveness-SIGKILL cycles, each abandoning a
+# Databento session mid-replay with an unread receive buffer.
+#
+# RULE (DBP-R1): every operationally significant knob is set EXPLICITLY here. Absence
+# means "inherit a library default", which is exactly the bug. A CI gate (DBP-R4) must
+# fail any deployment of the options-edge-databento-feed image that leaves one unset.
+#
+# ⚠️ DO NOT replace this with `configMapRef: options-edge-databento-feed-config` — that
+# configmap carries SPX values (DATABENTO_DATASET=OPRA.PILLAR, DATABENTO_SYMBOL=SPX,
+# strikes 7000-8000). Container env does win over envFrom, but any key ES failed to
+# override would silently take an SPX value: one silent-default bug traded for another.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: es-feed-databento-config
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-feed
+    app.kubernetes.io/part-of: options-edge-es4
+data:
+  # ---- replay window -------------------------------------------------------
+  # ⚠️ INTERIM (Phase 1): replay stays ENABLED because es4 GEX deliberately depends on
+  # LIVE open interest — k8s/es4/services/databento-gex.yaml sets
+  # DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED=false with OI_PERSIST_LIVE_ENABLED=true.
+  # Turning replay off here would break ES OI/GEX on any start after the daily OI
+  # publication. Phase 2 replaces this with a bounded out-of-band OI request
+  # (requirement DBP-R5/R6) and only then can this become "false".
+  DATABENTO_USE_LIVE_REPLAY: "true"
+  # Non-statistics schemas keep a deliberately small window.
+  DATABENTO_REPLAY_START_MINUTES: "5"
+  # Statistics snap-back anchor, stated explicitly rather than inherited.
+  DATABENTO_STATISTICS_REPLAY_LOCAL_TIME: "06:00"
+  DATABENTO_STATISTICS_REPLAY_TIMEZONE: "America/New_York"
+  # Hard bound on the snap-back. The library default is 48h — far outside intent and
+  # unbounded enough to be dangerous after a long outage.
+  DATABENTO_STATISTICS_REPLAY_MAX_LOOKBACK_HOURS: "12"
+  # ---- publish cadence -----------------------------------------------------
+  # USER decision 2026-07-25: ES matches prod SPX at 2000 ms ("ES also make 2 sec and
+  # if it does not work then we increase"). Escalation is a MEASURED ladder
+  # 2000 -> 3000 -> 4000 ms capped at 4000 (design ESM-R23), never a judgement call.
+  DATABENTO_PUBLISH_INTERVAL_MS: "2000"
+  # ---- schema enablement (drives wire volume; never inherited) -------------
+  DATABENTO_ENABLE_CBBO: "true"
+  DATABENTO_ENABLE_TCBBO: "true"
+  DATABENTO_ENABLE_TRADES: "true"
+  DATABENTO_ENABLE_STATISTICS: "true"
+  # ---- reconnect shaping ---------------------------------------------------
+  # The client's own reconnect_policy defaults to "none"; the feed's internal loop is
+  # what reconnects, so these three are the real backoff controls.
+  DATABENTO_RECONNECT_INITIAL_SECONDS: "5"
+  DATABENTO_RECONNECT_MAX_SECONDS: "60"
+  DATABENTO_RECONNECT_RESET_SECONDS: "300"

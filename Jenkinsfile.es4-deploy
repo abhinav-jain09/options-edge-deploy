@@ -33,10 +33,13 @@ pipeline {
       'directional-pressure', 'gex-delta-redis-writer', 'option-price-behavior', 'option-truth-engine', 'pin-postgres-writer',
       'pressure-postgres-writer', 'raw-to-display', 'strike-flow-avro-adapter', 'strike-flow-classifier',
       'strike-liquidity-heatmap', 'volume-pace', 'spread-skew', 'spread-skew-postgres-writer',
-      'strike-intelligence', 'vix-option-inteligence', 'es-aggressor-flow', 'es-feed-gateway', 'es-web'
-    ], description: 'Service (deploy-service only).')
+      'strike-intelligence', 'vix-option-inteligence', 'es-aggressor-flow', 'es-feed-gateway', 'es-web',
+      'es-feed'
+    ], description: 'Service (deploy-service only). NOTE: es-feed is the RELOCATED ES options feed now running on the es4 cluster; it deploys at replicas 0 unless ES_FEED_ACTIVE=true.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
+    booleanParam(name: 'ES_FEED_ACTIVE', defaultValue: false,
+      description: 'DECLARED ACTIVATION INTENT for es-feed. false (default) = es-feed is meant to be DOWN: clean-reset preserves a captured 0 instead of forcing it to 1, and deploy-service es-feed refuses to start it. true = es-feed is meant to be LIVE: the 2026-07-17 "never leave the feed down behind a green build" protection applies. One shared Databento API key cannot carry two concurrent ES option-chain sessions, so this must be true for AT MOST ONE location (prod OR es4) at any time.')
     string(name: 'EXPECTED_FEED_DIGEST', defaultValue: '',
       description: 'deploy-es-feed only: the sha256 digest the feed :prod tag MUST resolve to (paste from the options-edge-databento-feed-deploy build that contains the es-feed code). Fail-closed on mismatch — an old feed image can never be deployed as es-feed by accident.')
   }
@@ -89,12 +92,23 @@ pipeline {
           rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
 
           KP="KUBECONFIG=$PROD_KUBECONFIG kubectl -n options-edge"
-          FEED_REP=$(eval "$KP get deploy es-feed -o jsonpath='{.spec.replicas}'" 2>/dev/null || echo 1)
-          [ -n "$FEED_REP" ] || FEED_REP=1
-          # never "restore" to 0: if the feed is already fenced (e.g. a prior failed clean left it
-          # down), restoring the captured count would leave prod es-feed dead behind a green build
-          # — the 2026-07-17 overnight ES blackout. Same guard as the wrapper's RC_REP clamp.
-          [ "$FEED_REP" = "0" ] && FEED_REP=1
+          FEED_REP=$(eval "$KP get deploy es-feed -o jsonpath='{.spec.replicas}'" 2>/dev/null || echo 0)
+          [ -n "$FEED_REP" ] || FEED_REP=0
+          # Restore semantics are gated on DECLARED INTENT (requirement DBP-R21), not on a blanket
+          # 0 -> 1 rewrite.
+          #   ES_FEED_ACTIVE=true  -> the feed is MEANT to be live, so the original protection
+          #     applies: never leave it down behind a green build (the 2026-07-17 overnight ES
+          #     blackout). A captured 0 is clamped to 1.
+          #   ES_FEED_ACTIVE=false -> the feed is MEANT to be down (the state since 2026-07-24, and
+          #     the intended state now that the live location is the es4 cluster). The captured
+          #     count is preserved verbatim, INCLUDING 0. The old unconditional clamp is exactly
+          #     what re-raised es-feed into its SIGKILL loop as a deploy side effect.
+          if [ "${ES_FEED_ACTIVE:-false}" = "true" ]; then
+            [ "$FEED_REP" = "0" ] && FEED_REP=1
+            echo "es-feed activation intent: ACTIVE -> will restore to $FEED_REP"
+          else
+            echo "es-feed activation intent: INACTIVE -> will restore captured count $FEED_REP verbatim (0 stays 0)"
+          fi
 
           if [ "${DEPLOY_DRY_RUN}" = "true" ]; then
             echo "DRY: would scale prod es-feed ($FEED_REP -> 0), run on-box wipe, restore es-feed to $FEED_REP"
@@ -135,8 +149,61 @@ pipeline {
           DRY=""; [ "${DEPLOY_DRY_RUN:-false}" = "true" ] && DRY="--dry-run=server"
           kubectl apply $DRY -f k8s/es4/es4-base-env.yaml
           kubectl apply $DRY -f k8s/es4/es4-common-env.yaml
+          # es-feed's OWN Databento configmap. Applied for every es4 deploy so the feed can
+          # never run against inherited library defaults again (requirement DBP-R1/R2).
+          kubectl apply $DRY -f k8s/es4/es4-feed-config.yaml
           mkdir -p .jenkins-tmp
-          if [ "$ACTION" = "deploy-all" ]; then FILES=$(ls k8s/es4/services/*.yaml); else FILES="k8s/es4/services/${SERVICE}.yaml"; fi
+
+          # ---- es-feed preflight: fail CLOSED before anything is applied ----------------
+          # Three independent hazards, each of which has already bitten us:
+          #  (1) the shared Databento API key cannot carry two concurrent ES option-chain
+          #      sessions — if the prod es-feed is still up, starting the es4 one would put
+          #      two ES sessions on one key and can degrade the SPX OPRA session that shares
+          #      it (that is the account-scope question still open with Databento);
+          #  (2) the API-key secret does not exist in the es4 cluster yet — a missing secret
+          #      must be a loud failure, not a CrashLoop;
+          #  (3) activation must never be a deploy side effect (requirement DBP-R22).
+          if [ "$ACTION" = "deploy-service" ] && [ "$SERVICE" = "es-feed" ]; then
+            if ! kubectl -n options-edge get secret options-edge-databento-feed-env >/dev/null 2>&1; then
+              echo "ES-FEED PREFLIGHT FAILED: secret options-edge-databento-feed-env is absent in the es4 cluster." >&2
+              echo "  Provision it there first (it carries DATABENTO_API_KEY). Refusing to deploy." >&2
+              exit 1
+            fi
+            # Distinguish "absent" from "could not determine". A kubectl/auth failure must FAIL
+            # CLOSED: treating it as absent would let both locations run on the one shared key.
+            if KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge get deploy es-feed >/dev/null 2>&1; then
+              prod_rep=$(KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge get deploy es-feed -o jsonpath='{.spec.replicas}')
+              [ -n "$prod_rep" ] || { echo "ES-FEED PREFLIGHT FAILED: could not read prod es-feed replicas" >&2; exit 1; }
+              if [ "$prod_rep" != "0" ]; then
+                echo "ES-FEED PREFLIGHT FAILED: prod cluster es-feed is at replicas=$prod_rep." >&2
+                echo "  One shared Databento key cannot carry two concurrent ES option-chain sessions," >&2
+                echo "  and a second ES session can degrade the SPX OPRA session sharing that key." >&2
+                echo "  Scale the prod es-feed to 0 and confirm its pods are DELETED before deploying here." >&2
+                exit 1
+              fi
+              # Replicas 0 is not enough — a terminating pod still holds the Databento session.
+              live=$(KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge get pods -l app.kubernetes.io/name=es-feed --no-headers 2>/dev/null | wc -l | tr -d ' ')
+              [ "$live" = "0" ] || { echo "ES-FEED PREFLIGHT FAILED: $live prod es-feed pod(s) still present; wait for deletion" >&2; exit 1; }
+            elif ! KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge get deploy >/dev/null 2>&1; then
+              echo "ES-FEED PREFLIGHT FAILED: cannot reach the prod cluster to verify es-feed is down." >&2
+              echo "  Refusing to deploy rather than assuming it is safe." >&2
+              exit 1
+            else
+              prod_rep=absent
+            fi
+            echo "es-feed preflight OK (secret present; prod es-feed replicas=$prod_rep, no prod pods)"
+          fi
+          # es-feed is EXCLUDED from deploy-all on purpose. It owns a Databento live session on a
+          # shared API key, so it must only ever be deployed as a deliberate, individually
+          # preflighted action (ACTION=deploy-service SERVICE=es-feed) — never swept in by a
+          # bulk deploy that would bypass the preflight below. Requirement DBP-R22.
+          if [ "$ACTION" = "deploy-all" ]; then
+            FILES=$(ls k8s/es4/services/*.yaml | { grep -v '/es-feed\.yaml$' || true; })
+            [ -n "$FILES" ] || { echo "deploy-all: no service manifests resolved" >&2; exit 1; }
+            echo "deploy-all: es-feed intentionally EXCLUDED (deploy it explicitly with SERVICE=es-feed)"
+          else
+            FILES="k8s/es4/services/${SERVICE}.yaml"
+          fi
           for f in $FILES; do
             bash scripts/es4/pin-and-apply.sh "$f" "$REGISTRY" "$DRY"
           done
@@ -154,11 +221,29 @@ pipeline {
             kubectl -n options-edge delete deployment greek-move-authenticity-service --ignore-not-found
             kubectl -n options-edge delete service greek-move-authenticity-service --ignore-not-found
           fi
+          # ---- es-feed activation is a SEPARATE, DECLARED action ------------------------
+          # The manifest always carries replicas: 0, so `apply` alone can never start the feed.
+          # Scaling up requires ES_FEED_ACTIVE=true, and is re-checked against the prod side so
+          # the two locations can never both be live on the one shared key.
+          if [ -z "$DRY" ] && [ "$ACTION" = "deploy-service" ] && [ "$SERVICE" = "es-feed" ]; then
+            if [ "${ES_FEED_ACTIVE:-false}" = "true" ]; then
+              KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge get deploy >/dev/null 2>&1 || {
+                echo "REFUSING TO ACTIVATE: cannot reach the prod cluster to verify es-feed is down" >&2; exit 1; }
+              prod_rep=$(KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge get deploy es-feed -o jsonpath='{.spec.replicas}' 2>/dev/null || echo absent)
+              [ "$prod_rep" = "0" ] || [ "$prod_rep" = "absent" ] || {
+                echo "REFUSING TO ACTIVATE: prod es-feed replicas=$prod_rep (must be 0)" >&2; exit 1; }
+              echo "ES_FEED_ACTIVE=true -> scaling es4 es-feed to 1"
+              kubectl -n options-edge scale deploy/es-feed --replicas=1
+              kubectl -n options-edge rollout status deploy/es-feed --timeout=600s
+            else
+              echo "ES_FEED_ACTIVE=false -> es4 es-feed left at replicas 0 (deploy only, no activation)"
+            fi
+          fi
           [ -n "$DRY" ] || kubectl -n options-edge get pods -o wide
         '''
       }
     }
-    stage('Deploy es-feed to prod') {
+    stage('Deploy es-feed to prod (LEGACY location — rollback only)') {
       when { expression { params.ACTION == 'deploy-es-feed' } }
       steps {
         sh '''
@@ -181,7 +266,16 @@ pipeline {
             exit 1
           fi
           echo "SPX feed guard: options-edge-databento-feed untouched ($spx_after)"
-          [ -n "$DRY" ] || kubectl -n options-edge rollout status deploy/es-feed --timeout=300s
+          # The prod manifest is now replicas: 0 (Phase 0 — this location is rollback-only), so a
+          # rollout wait is only meaningful when something is actually expected to run.
+          if [ -z "$DRY" ]; then
+            want=$(kubectl -n options-edge get deploy es-feed -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0)
+            if [ "${want:-0}" = "0" ]; then
+              echo "prod es-feed applied at replicas 0 (rollback-only location) — no rollout to wait for"
+            else
+              kubectl -n options-edge rollout status deploy/es-feed --timeout=300s
+            fi
+          fi
         '''
       }
     }
