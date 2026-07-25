@@ -62,7 +62,7 @@ pipeline {
     string(name: 'SIGNAL_FOLLOWER_IMAGE', defaultValue: '', description: 'signal-follower image (dev+prod)')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
     string(name: 'ANTHROPIC_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-anthropic-api-key', description: 'Jenkins secret-text credential containing the Anthropic API key (short-premium-agent SP_BACKEND=sdk)')
-    string(name: 'OE_WATCH_READER_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-watch-reader-password', description: 'Jenkins secret-text credential holding the oe_watch_reader password (System Status page ledger read). Missing/blank => the key is written EMPTY and the page reports LEDGER UNAVAILABLE.')
+    string(name: 'OE_WATCH_READER_PASSWORD_CREDENTIAL_ID', defaultValue: '', description: 'Jenkins secret-text credential holding the oe_watch_reader password (System Status page ledger read). BLANK resolves per environment: oe-watch-reader-password-dev for dev, oe-watch-reader-password for production — each env has its own role on its own Postgres. Missing credential => the key is written EMPTY and the page reports LEDGER UNAVAILABLE.')
     string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-db-password', description: 'Jenkins secret-text credential with the prod Keycloak DB password (oe-keycloak-secrets POSTGRES_PASSWORD)')
     string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-admin-password', description: 'Jenkins secret-text credential with the prod Keycloak bootstrap admin password')
     string(name: 'SMOKE_AUTH_PASSWORD_CREDENTIAL_ID', defaultValue: 'options-edge-smoke-password', description: 'Jenkins secret-text credential with the read-only smoke dummy user (oe-smoke) password. Optional: if absent the runtime secret is created with an empty SMOKE_AUTH_PASSWORD and the synthetic auth check fails until it exists.')
@@ -285,6 +285,12 @@ pipeline {
             }
           }
           def watchReaderId = params.OE_WATCH_READER_PASSWORD_CREDENTIAL_ID?.trim()
+          if (!watchReaderId) {
+            // Per-env default: the two ledgers are different servers with different passwords, so a
+            // single shared credential would authenticate against exactly one of them.
+            watchReaderId = (params.ENVIRONMENT == 'production')
+              ? 'oe-watch-reader-password' : 'oe-watch-reader-password-dev'
+          }
           if (watchReaderId) {
             try {
               withCredentials([string(credentialsId: watchReaderId, variable: 'OE_WATCH_READER_PASSWORD')]) { /* probe */ }
