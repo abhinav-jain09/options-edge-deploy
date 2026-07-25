@@ -94,8 +94,25 @@ if [ -s "$STATE" ]; then
   if [ "$ph" = "RESTORED" ]; then
     # A prior run verified RESTORE and was killed before clearing state. Re-wiping now would destroy
     # data produced since — only the state cleanup remained. Do it and exit (never re-wipe restored data).
-    log "prior run already restored the app (phase=RESTORED); clearing leftover state, NO wipe"
-    [ "$DRY" = "true" ] || rm -f "$STATE"
+    #
+    # ⚠️ But that prior run may have executed an OLDER build of this script, which restored es-feed to
+    # its captured count — possibly 1. Exiting here without checking would let an interrupted reset
+    # leave a Databento session running that DBP-R22 says only ACTION=activate-es-feed may start.
+    # So enforce the invariant on this path too before clearing state.
+    if [ "$DRY" = "true" ]; then
+      echo "DRY: would force deploy/es-feed to 0 (DBP-R22) and clear $STATE"
+    else
+      if $KC get deploy es-feed --ignore-not-found -o name | grep -q .; then
+        cur=$($KC get deploy es-feed -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+        [ "$cur" != "ERR" ] || die "phase=RESTORED but es-feed replicas are unreadable — refusing to clear state while the feed's state is unknown"
+        if [ "$cur" != "0" ]; then
+          log "phase=RESTORED left es-feed at $cur (an older build restored the captured count) — forcing 0; use activate-es-feed to start it"
+          $KC scale deploy/es-feed --replicas=0 >/dev/null || die "could not force es-feed to 0 on the RESTORED resume path"
+        fi
+      fi
+      rm -f "$STATE"
+    fi
+    log "prior run already restored the app (phase=RESTORED); leftover state cleared, NO wipe"
     exit 0
   fi
   log "resuming interrupted reset (phase=${ph:-WIPING}) — reconciling captured replicas with current Deployments"
@@ -229,7 +246,7 @@ run "(cd '$INFRA_DIR' && docker compose up -d)"
 # ------------------------------------------------- 5. restore app (verified) then clear state
 log "restoring es4 Deployments to captured replica counts (verified) from $STATE"
 if [ "$DRY" = "true" ]; then
-  echo "DRY: would restore replicas from $STATE and verify"
+  echo "DRY: would restore replicas from $STATE and verify (es-feed always forced to 0 — DBP-R22)"
 else
   fail=0
   while read -r name reps; do

@@ -32,15 +32,15 @@ KUBECONFIG="$PROD_KUBECONFIG_PATH" kubectl -n "$NS" get deploy >/dev/null 2>&1 \
   || fail "cannot reach the prod cluster namespace $NS via $PROD_KUBECONFIG_PATH"
 
 # --- Deployment: distinguish not-found from a failed query; anything else fails closed -----------
+# --ignore-not-found removes the text-matching entirely: rc=0 with EMPTY output means absent, rc=0
+# with output means present, and any non-zero rc is a real failure. Matching on "not found" text was
+# ambiguous — other API errors can contain those words.
 set +e
-dep_out=$(KUBECONFIG="$PROD_KUBECONFIG_PATH" kubectl -n "$NS" get deploy es-feed -o name 2>&1)
+dep_out=$(KUBECONFIG="$PROD_KUBECONFIG_PATH" kubectl -n "$NS" get deploy es-feed --ignore-not-found -o name 2>&1)
 dep_rc=$?
 set -e
-if [ "$dep_rc" -eq 0 ]; then
-  fail "prod $NS still has a Deployment es-feed. DBP-R33 requires it DELETED, not parked at 0 — run an es4 deploy so the reconcile-delete removes it."
-elif ! printf '%s' "$dep_out" | grep -qiE 'not ?found'; then
-  fail "could not determine whether prod $NS has an es-feed Deployment (rc=$dep_rc: $dep_out) — failing closed"
-fi
+[ "$dep_rc" -eq 0 ] || fail "could not query prod $NS for an es-feed Deployment (rc=$dep_rc: $dep_out) — failing closed"
+[ -z "$dep_out" ] || fail "prod $NS still has a Deployment es-feed ($dep_out). DBP-R33 requires it DELETED, not parked at 0 — run an es4 deploy so the reconcile-delete removes it."
 
 # --- Pods: a Deployment can be gone while a pod is still terminating, and a terminating pod keeps
 #     producing to es4 Kafka for its whole grace period. Check by label AND by name prefix, so a

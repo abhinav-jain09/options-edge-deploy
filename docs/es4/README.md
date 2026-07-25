@@ -32,7 +32,6 @@ resource-limited; the SPX feed Deployment is not modified).
 
 ## Operating notes
 
-* Prod's 20:30 ET off-hours lifecycle is OFF (USER 2026-07-12). **If it is ever
   re-enabled, `es-feed` must join its keep-alive list** or ES data dies mid-session.
 * `.4` firewalld is off and its IP is DHCP-assigned — reserve `192.168.100.4` on the
   router and revisit hardening (tracked follow-up).

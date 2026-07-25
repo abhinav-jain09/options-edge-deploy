@@ -22,7 +22,7 @@
 # residual TOCTOU window is accepted because there is no second Deployment to race with.
 set -euo pipefail
 
-ES4_KUBECONFIG=${1:?usage: assert-es-feed-exclusive.sh <es4-kubeconfig> <prod-kubeconfig> <target: es4|prod>}
+ES4_KUBECONFIG=${1:?usage: assert-es-feed-exclusive.sh <es4-kubeconfig> <prod-kubeconfig> <target: es4>}
 PROD_KUBECONFIG=${2:?missing prod kubeconfig}
 TARGET=${3:?missing target (es4|prod)}
 
