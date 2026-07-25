@@ -7,100 +7,123 @@
 # multi-hour statistics replay on every start and was killed 8 times by its own liveness probe,
 # abandoning a Databento session mid-replay each time.
 #
-# WHAT IT CHECKS: for every Deployment manifest that runs the options-edge-databento-feed image, the
-# FULLY RENDERED environment must set each mandatory key explicitly — resolving `env` (which wins)
-# over `envFrom` configMapRef, exactly as Kubernetes does. "The value exists in some configmap" is
-# not enough: it only counts if the pod actually mounts that configmap.
+# WHAT IT CHECKS: for every Deployment manifest running the feed image, the FULLY RENDERED
+# environment must set each mandatory key explicitly — resolving `envFrom` sources in order and then
+# `env` (which wins), exactly as Kubernetes does. "The value exists in some ConfigMap" is not
+# enough: it counts only if the pod actually mounts that ConfigMap.
 #
-# Absence is the failure mode, so this gate is about presence. Two keys additionally have a REQUIRED
-# VALUE because the requirement fixes them (DBP-R1/R3).
+# SCOPE: es-feed deployments are ENFORCED. Other feed deployments (the SPX feed) carry pre-existing
+# gaps of the same kind — real and worth seeing, but not introduced by this requirement — so they are
+# REPORTED as warnings. A gate that is expected to be red teaches people to ignore it.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-FEED_IMAGE_SUBSTR="options-edge-databento-feed"
-
-MANDATORY_KEYS="
-DATABENTO_USE_LIVE_REPLAY
-DATABENTO_REPLAY_START_MINUTES
-DATABENTO_STATISTICS_REPLAY_LOCAL_TIME
-DATABENTO_STATISTICS_REPLAY_TIMEZONE
-DATABENTO_STATISTICS_REPLAY_MAX_LOOKBACK_HOURS
-DATABENTO_ENABLE_STATISTICS
-DATABENTO_ENABLE_CBBO
-DATABENTO_ENABLE_TCBBO
-DATABENTO_ENABLE_TRADES
-DATABENTO_CBBO_SCHEMA
-DATABENTO_TCBBO_SCHEMA
-DATABENTO_PUBLISH_INTERVAL_MS
-DATABENTO_RECONNECT_INITIAL_SECONDS
-DATABENTO_RECONNECT_MAX_SECONDS
-DATABENTO_RECONNECT_RESET_SECONDS
-DATABENTO_MARKET_HOURS_ENABLED
-DATABENTO_FEED_LIVENESS_SESSION
-DATABENTO_FEED_LIVENESS_STALE_SECONDS
-DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
-"
-
-# Deployments that must satisfy the gate, paired with the configmap files whose data may be mounted.
-# Kept as an explicit list so a NEW deployment of this image is a deliberate addition here (the
-# alternative — globbing — would let a new deployment pass silently, which is the original bug).
-TARGETS="
-k8s/es4/services/es-feed.yaml|k8s/es4/es4-feed-config.yaml
-k8s/es4/prod/es-feed.yaml|k8s/es4/prod/es-feed-config.yaml
-"
-
-python3 - "$FEED_IMAGE_SUBSTR" "$MANDATORY_KEYS" "$TARGETS" <<'PY'
+python3 - <<'PY'
 import sys, yaml, pathlib
-image_substr, keys_blob, targets_blob = sys.argv[1], sys.argv[2], sys.argv[3]
-mandatory = [k for k in keys_blob.split() if k]
-required_values = {
-    # DBP-R1: replay must be off; DBP-R3: cadence matches prod SPX (USER decision 2026-07-25).
+
+IMAGE_SUBSTR = "options-edge-databento-feed"
+
+# Names verified against options-edge-databento-feed/src/options_edge_databento_feed/config.py.
+MANDATORY = [
+    "DATABENTO_USE_LIVE_REPLAY",
+    "DATABENTO_REPLAY_START_MINUTES",
+    "DATABENTO_STATISTICS_REPLAY_LOCAL_TIME",
+    "DATABENTO_STATISTICS_REPLAY_TIMEZONE",
+    "DATABENTO_STATISTICS_REPLAY_MAX_LOOKBACK_HOURS",
+    "DATABENTO_ENABLE_STATISTICS",
+    "DATABENTO_ENABLE_CBBO",
+    "DATABENTO_ENABLE_TCBBO",
+    "DATABENTO_ENABLE_TRADES",
+    "DATABENTO_CBBO_SCHEMA",
+    "DATABENTO_TCBBO_SCHEMA",
+    "DATABENTO_PUBLISH_INTERVAL_MS",
+    "DATABENTO_RECONNECT_INITIAL_SECONDS",
+    "DATABENTO_RECONNECT_MAX_SECONDS",
+    "DATABENTO_RECONNECT_RESET_SECONDS",
+    "DATABENTO_MARKET_HOURS_ENABLED",
+    "DATABENTO_FEED_LIVENESS_SESSION",
+    "DATABENTO_FEED_LIVENESS_STALE_SECONDS",
+    "DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS",
+]
+
+# es-feed-specific fixed values. DBP-R1 fixes replay off; DBP-R3 fixes the cadence (USER decision
+# 2026-07-25). Deliberately NOT applied to the SPX feed — dev SPX legitimately publishes at 1000 ms.
+REQUIRED_VALUES = {
     "DATABENTO_USE_LIVE_REPLAY": "false",
     "DATABENTO_PUBLISH_INTERVAL_MS": "2000",
 }
-failures, checked = [], 0
-for line in targets_blob.split():
-    if "|" not in line:
-        continue
-    dep_path, cm_path = line.split("|", 1)
-    dep = yaml.safe_load(pathlib.Path(dep_path).read_text())
-    cms = {}
-    cm_doc = yaml.safe_load(pathlib.Path(cm_path).read_text())
-    cms[cm_doc["metadata"]["name"]] = {k: str(v) for k, v in (cm_doc.get("data") or {}).items()}
 
-    spec = dep["spec"]["template"]["spec"]
-    for c in spec["containers"]:
-        if image_substr not in c.get("image", ""):
+def docs_of(path):
+    try:
+        return [d for d in yaml.safe_load_all(path.read_text()) if isinstance(d, dict)]
+    except Exception:
+        return []
+
+manifests = sorted(pathlib.Path("k8s").rglob("*.yaml"))
+
+# Index every ConfigMap this repo defines. A manifest mounting one we do not define is a failure:
+# the gate cannot prove those keys are set.
+configmaps = {}
+for f in manifests:
+    for d in docs_of(f):
+        if d.get("kind") == "ConfigMap":
+            name = (d.get("metadata") or {}).get("name")
+            if name:
+                configmaps.setdefault(name, {}).update(
+                    {k: str(v) for k, v in (d.get("data") or {}).items()})
+
+failures, warnings, checked, enforced = [], [], 0, 0
+
+for f in manifests:
+    for dep in docs_of(f):
+        if dep.get("kind") != "Deployment":
             continue
-        checked += 1
-        # Resolve exactly as Kubernetes does: envFrom sources first (in order), then `env` wins.
-        rendered = {}
-        for src in c.get("envFrom", []) or []:
-            ref = src.get("configMapRef")
-            if not ref:
-                continue  # secretRef contents are not visible here and carry no tuning knobs
-            name = ref["name"]
-            if name not in cms:
-                failures.append(f"{dep_path}: mounts configMapRef '{name}' but this gate has no file for it — add it to TARGETS")
+        pod = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
+        for c in pod.get("containers") or []:
+            if IMAGE_SUBSTR not in (c.get("image") or ""):
                 continue
-            rendered.update(cms[name])
-        for e in c.get("env", []) or []:
-            if "value" in e:
-                rendered[e["name"]] = str(e["value"])
-            else:
-                rendered[e["name"]] = "<from-ref>"
-        missing = [k for k in mandatory if k not in rendered]
-        if missing:
-            failures.append(f"{dep_path} ({c['name']}): {len(missing)} mandatory key(s) NOT explicitly set -> would inherit a library default: {', '.join(missing)}")
-        for k, want in required_values.items():
-            got = rendered.get(k)
-            if got is not None and got != want:
-                failures.append(f"{dep_path} ({c['name']}): {k}={got!r} but the requirement fixes it at {want!r}")
+            checked += 1
+            where = f"{f} ({c.get('name')})"
+            strict = ((dep.get("metadata") or {}).get("name") == "es-feed"
+                      or c.get("name") == "es-feed")
+            if strict:
+                enforced += 1
+            sink = failures if strict else warnings
+
+            rendered = {}
+            for src in c.get("envFrom") or []:
+                if "configMapRef" in src:
+                    name = src["configMapRef"]["name"]
+                    if name not in configmaps:
+                        sink.append(f"{where}: mounts configMapRef '{name}' which no manifest under k8s/ defines")
+                        continue
+                    rendered.update(configmaps[name])
+                # secretRef contents are correctly absent from the repo, so a Secret can never be
+                # shown to supply a tuning knob. Tuning belongs in a ConfigMap; credentials in the
+                # Secret. A knob only a Secret might set is therefore still "not explicit".
+            for e in c.get("env") or []:
+                # `valueFrom` is an explicit intent even though the literal is not visible here.
+                rendered[e["name"]] = str(e["value"]) if "value" in e else "<valueFrom>"
+
+            missing = [k for k in MANDATORY if k not in rendered]
+            if missing:
+                sink.append(f"{where}: {len(missing)} mandatory key(s) NOT explicitly set -> would inherit a library default: {', '.join(missing)}")
+            if strict:
+                for k, want in REQUIRED_VALUES.items():
+                    got = rendered.get(k)
+                    if got is not None and got not in (want, "<valueFrom>"):
+                        failures.append(f"{where}: {k}={got!r} but the requirement fixes it at {want!r}")
+
 if checked == 0:
-    failures.append("no feed containers were checked — TARGETS or the image substring is wrong")
-for f in failures:
-    print("FAIL:", f)
-print(f"checked {checked} feed container(s)")
+    failures.append("no feed containers were discovered — the image substring is wrong")
+if enforced == 0:
+    failures.append("no es-feed container was discovered — the gate would enforce nothing")
+
+for w in warnings:
+    print("WARN (pre-existing, not enforced by this requirement):", w)
+for x in failures:
+    print("FAIL:", x)
+print(f"checked {checked} feed container(s); {enforced} enforced as es-feed")
 sys.exit(1 if failures else 0)
 PY
 echo "=== validate-feed-config-explicit: OK ==="

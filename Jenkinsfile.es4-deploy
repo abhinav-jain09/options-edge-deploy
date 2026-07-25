@@ -105,8 +105,12 @@ pipeline {
           #     verbatim, including 0, and a stray 1 is forced DOWN to 0 so a clean-reset can never
           #     leave two ES sessions live on the one shared key.
           if [ "${ES_FEED_LOCATION:-none}" = "prod" ]; then
-            [ "$FEED_REP" = "0" ] && FEED_REP=1
-            echo "es-feed declared location=prod -> prod will be restored to $FEED_REP"
+            # ⚠️ Deliberately does NOT clamp 0 -> 1. The 2026-07-17 protection was "never leave a
+            # RUNNING feed down behind a green build", which is satisfied by restoring the captured
+            # count verbatim. Raising a feed that was already at 0 would make clean-reset an
+            # activation path, which DBP-R22 forbids — that is precisely the class of side effect
+            # that caused the 2026-07-24 incident. If prod should be live, run activate-es-feed.
+            echo "es-feed declared location=prod -> prod will be restored to its captured count $FEED_REP (0 stays 0; use activate-es-feed to start it)"
           else
             if [ "$FEED_REP" != "0" ]; then
               echo "es-feed declared location=${ES_FEED_LOCATION:-none} but prod es-feed is at $FEED_REP — forcing prod restore target to 0"
@@ -186,7 +190,36 @@ pipeline {
           if { [ "$ACTION" = "deploy-service" ] && [ "$SERVICE" = "es-feed" ]; } || [ "$ACTION" = "activate-es-feed" ]; then
             bash scripts/es4/assert-es-feed-exclusive.sh "$ES4_KUBECONFIG" "$PROD_KUBECONFIG" es4
           fi
-          # es-feed is NEVER started by a deploy. The manifest always carries replicas 0 and this
+          # es-feed is EXCLUDED from deploy-all on purpose: it owns a Databento live session on a
+          # shared API key, so it must only ever be applied as a deliberate, individually preflighted
+          # action (SERVICE=es-feed) — never swept in by a bulk deploy that bypasses the preflight
+          # above. `|| true` because grep exits 1 when it filters nothing, which under
+          # `set -euo pipefail` would abort the whole deploy.
+          if [ "$ACTION" = "deploy-all" ]; then
+            FILES=$(ls k8s/es4/services/*.yaml | { grep -v '/es-feed\.yaml$' || true; })
+            [ -n "$FILES" ] || { echo "deploy-all: no service manifests resolved" >&2; exit 1; }
+            echo "deploy-all: es-feed intentionally EXCLUDED (apply it explicitly with SERVICE=es-feed)"
+          else
+            FILES="k8s/es4/services/${SERVICE}.yaml"
+          fi
+          for f in $FILES; do
+            bash scripts/es4/pin-and-apply.sh "$f" "$REGISTRY" "$DRY"
+          done
+          if [ -z "$DRY" ] && { [ "$ACTION" = "deploy-all" ] || [ "$SERVICE" = "vix-option-inteligence" ]; }; then
+            # Remove the legacy identity only after pin-and-apply has completed the replacement
+            # rollout, avoiding duplicate consumers on the isolated ES broker.
+            kubectl -n options-edge delete deployment zero-dte-intelligence-service --ignore-not-found
+            kubectl -n options-edge delete service zero-dte-intelligence-service --ignore-not-found
+          fi
+          if [ -z "$DRY" ] && [ "$ACTION" = "deploy-all" ]; then
+            # Reconcile-delete the retired greek-move-authenticity-service on es4. Same reason as the
+            # dev/prod path in scripts/deploy/apply.sh: `kubectl apply -f` never prunes, and the es4
+            # service manifest is removed in this same commit, so the pod would otherwise run forever
+            # against the isolated ES broker. deploy-all only — there is no longer a per-SERVICE file.
+            kubectl -n options-edge delete deployment greek-move-authenticity-service --ignore-not-found
+            kubectl -n options-edge delete service greek-move-authenticity-service --ignore-not-found
+          fi
+          # es-feed is NEVER started by a deploy: the manifest always carries replicas 0 and this
           # path performs no scaling at all — activation is its own ACTION (requirement DBP-R22).
           if [ "$ACTION" = "deploy-service" ] && [ "$SERVICE" = "es-feed" ]; then
             echo "es-feed manifest applied at replicas 0. To start it: ACTION=activate-es-feed"

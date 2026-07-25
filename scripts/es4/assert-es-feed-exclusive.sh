@@ -50,15 +50,24 @@ key_len=$(KUBECONFIG="$self_kc" kubectl -n options-edge get secret options-edge-
 KUBECONFIG="$other_kc" kubectl -n options-edge get deploy >/dev/null 2>&1 \
   || fail "cannot reach the $other_name cluster to prove es-feed is down there — refusing rather than assuming"
 
-if KUBECONFIG="$other_kc" kubectl -n options-edge get deploy es-feed >/dev/null 2>&1; then
-  other_rep=$(KUBECONFIG="$other_kc" kubectl -n options-edge get deploy es-feed -o jsonpath='{.spec.replicas}') \
-    || fail "could not read $other_name es-feed replicas (reachable cluster, failed GET) — failing closed"
+# Distinguish the three outcomes explicitly. A bare `if kubectl get ...` collapses
+# "does not exist" and "call failed" into one branch, which is fail-open: a transient API or RBAC
+# error would be read as "the other location is absent, go ahead".
+set +e
+other_out=$(KUBECONFIG="$other_kc" kubectl -n options-edge get deploy es-feed -o jsonpath='{.spec.replicas}' 2>&1)
+other_rc=$?
+set -e
+if [ "$other_rc" -eq 0 ]; then
+  other_rep=$other_out
   [ -n "$other_rep" ] || fail "empty replica count for $other_name es-feed — failing closed"
+  case "$other_rep" in (*[!0-9]*) fail "unparseable replica count '$other_rep' for $other_name es-feed — failing closed";; esac
   [ "$other_rep" = "0" ] || fail "$other_name es-feed is at replicas=$other_rep; one shared Databento key cannot carry two concurrent ES option-chain sessions (and a second ES session can degrade the SPX OPRA session sharing that key)"
-else
-  # Deployment absent is acceptable, but pods are still checked below: a Deployment can be
-  # deleted while its pods are still terminating, and an orphaned pod still holds the session.
+elif printf '%s' "$other_out" | grep -qiE 'not ?found'; then
+  # Genuinely absent. Pods are still checked below: a Deployment can be deleted while its pods are
+  # still terminating, and an orphaned pod still holds the Databento session.
   echo "es-feed exclusivity: no es-feed Deployment in $other_name (checking for stray pods anyway)"
+else
+  fail "could not determine $other_name es-feed state (kubectl rc=$other_rc: $other_out) — failing closed rather than assuming it is down"
 fi
 
 # Pods are checked UNCONDITIONALLY — replicas 0 does not mean "no pod", and neither does a
