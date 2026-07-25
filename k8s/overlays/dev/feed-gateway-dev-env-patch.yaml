@@ -70,6 +70,13 @@ spec:
                   optional: true
             - name: OE_ENV
               value: "dev"
+            # This Postgres has no TLS ("server does not support SSL"), and every other service
+            # already talks to it unencrypted on the same host/LAN. Accept plaintext EXPLICITLY: the
+            # endpoint then reports ledger.transport=PLAINTEXT_ACCEPTED and the page shows a
+            # "LEDGER LINK UNENCRYPTED" chip, so the posture stays visible. Enabling TLS on the
+            # Postgres servers is the real fix and is tracked separately.
+            - name: OE_WATCH_ALLOW_PLAINTEXT
+              value: "true"
             # Mirror of ~/oe-ops/freshness-topics.conf: the EXPECTED topic universe. A registered topic
             # with no ledger evidence renders NO_EVIDENCE — it can never silently vanish from the page.
             - name: OE_SYSTEM_STATUS_TOPICS

@@ -62,6 +62,7 @@ pipeline {
     string(name: 'SIGNAL_FOLLOWER_IMAGE', defaultValue: '', description: 'signal-follower image (dev+prod)')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
     string(name: 'ANTHROPIC_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-anthropic-api-key', description: 'Jenkins secret-text credential containing the Anthropic API key (short-premium-agent SP_BACKEND=sdk)')
+    string(name: 'OE_WATCH_READER_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-watch-reader-password', description: 'Jenkins secret-text credential holding the oe_watch_reader password (System Status page ledger read). Missing/blank => the key is written EMPTY and the page reports LEDGER UNAVAILABLE.')
     string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-db-password', description: 'Jenkins secret-text credential with the prod Keycloak DB password (oe-keycloak-secrets POSTGRES_PASSWORD)')
     string(name: 'KEYCLOAK_ADMIN_PASSWORD_CREDENTIAL_ID', defaultValue: 'oe-keycloak-admin-password', description: 'Jenkins secret-text credential with the prod Keycloak bootstrap admin password')
     string(name: 'SMOKE_AUTH_PASSWORD_CREDENTIAL_ID', defaultValue: 'options-edge-smoke-password', description: 'Jenkins secret-text credential with the read-only smoke dummy user (oe-smoke) password. Optional: if absent the runtime secret is created with an empty SMOKE_AUTH_PASSWORD and the synthetic auth check fails until it exists.')
@@ -250,7 +251,6 @@ pipeline {
             // PIPELINE-STALL-REJECT-ALERTING-DESIGN.md 3.4/3.5). It is OPTIONAL: with an empty
             // value the gateway still starts and the page reports LEDGER UNAVAILABLE instead of a
             // falsely-healthy screen. Dev keeps the local default; prod must supply a credential.
-            withEnv(["OE_WATCH_READER_PASSWORD=${env.OE_WATCH_READER_PASSWORD ?: (params.ENVIRONMENT == 'dev' ? 'devreaderpw' : '')}"]) {
             sh '''
               set -euo pipefail
               test -n "$DATABENTO_API_KEY"
@@ -270,7 +270,6 @@ pipeline {
                 --from-literal=DATABENTO_API_KEY="$DATABENTO_API_KEY" \
                 --dry-run=client -o yaml | kubectl apply $apply_args -f -
             '''
-            }
           }
           // Optional credentials: bind each ONLY if it resolves, so a missing one degrades to an
           // empty literal (see applySecrets' ${VAR:-}) instead of breaking the whole secret stage.
@@ -283,6 +282,15 @@ pipeline {
               optionalBindings << string(credentialsId: smokeId, variable: 'SMOKE_AUTH_PASSWORD')
             } catch (ignored) {
               echo "WARN: smoke-auth credential '${smokeId}' not found; creating options-edge-runtime-secrets with an EMPTY SMOKE_AUTH_PASSWORD. The synthetic auth check will fail until the credential is created."
+            }
+          }
+          def watchReaderId = params.OE_WATCH_READER_PASSWORD_CREDENTIAL_ID?.trim()
+          if (watchReaderId) {
+            try {
+              withCredentials([string(credentialsId: watchReaderId, variable: 'OE_WATCH_READER_PASSWORD')]) { /* probe */ }
+              optionalBindings << string(credentialsId: watchReaderId, variable: 'OE_WATCH_READER_PASSWORD')
+            } catch (ignored) {
+              echo "WARN: oe_watch reader credential '${watchReaderId}' not found; creating options-edge-runtime-secrets with an EMPTY OE_WATCH_READER_PASSWORD. The System Status page reports LEDGER UNAVAILABLE until the credential exists — no other service is affected."
             }
           }
           def anthropicId = params.ANTHROPIC_API_KEY_CREDENTIAL_ID?.trim()

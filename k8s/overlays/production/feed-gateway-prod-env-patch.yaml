@@ -1,0 +1,46 @@
+# PROD-ONLY: System Status page wiring (PIPELINE-STALL-REJECT-ALERTING-DESIGN.md §3.5/§3.6).
+#
+# The gateway reads the freshness watcher's oe_watch verification ledger, which lives in this same
+# Postgres (options_flow on .252 — migration 001 applied 2026-07-25) with the dedicated read-only role
+# oe_watch_reader (SELECT on the oe_watch views only; the migration FAILS if that role can reach
+# anything outside the schema).
+#
+# ⚠️ This Postgres has NO TLS — it answers "server does not support SSL", and every other service in
+# the estate already talks to it unencrypted. Plaintext is therefore accepted EXPLICITLY via
+# OE_WATCH_ALLOW_PLAINTEXT: the endpoint reports ledger.transport=PLAINTEXT_ACCEPTED and the page shows
+# a "LEDGER LINK UNENCRYPTED" chip, so the posture stays visible rather than silently forgotten.
+# Enabling TLS on the Postgres servers is the real hardening and is tracked separately.
+#
+# Everything here is optional at runtime: without the secret key the gateway still starts and the page
+# reports LEDGER UNAVAILABLE instead of a falsely-healthy screen.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feed-gateway-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: feed-gateway
+          env:
+            - name: OE_WATCH_JDBC_URL
+              value: "jdbc:postgresql://192.168.100.252:5432/options_flow"
+            - name: OE_WATCH_DB_USER
+              value: "oe_watch_reader"
+            - name: OE_WATCH_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: OE_WATCH_READER_PASSWORD
+                  optional: true
+            - name: OE_WATCH_ALLOW_PLAINTEXT
+              value: "true"
+            - name: OE_ENV
+              value: "prod"
+            # Mirror of ~/oe-ops/freshness-topics.conf (prod rows): the EXPECTED topic universe, so a
+            # registered topic with no ledger evidence renders NO_EVIDENCE instead of vanishing.
+            - name: OE_SYSTEM_STATUS_TOPICS
+              value: "underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard,market.spx.market-carry-service.current"
+            - name: OE_SYSTEM_STATUS_LAG_REGISTRY
+              value: "databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo"

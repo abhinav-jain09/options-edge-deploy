@@ -59,6 +59,24 @@ spec:
     spec:
       containers:
         - env:
+            - name: OE_WATCH_JDBC_URL
+              value: jdbc:postgresql://192.168.100.252:5432/options_flow
+            - name: OE_WATCH_DB_USER
+              value: oe_watch_reader
+            - name: OE_WATCH_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: OE_WATCH_READER_PASSWORD
+                  name: options-edge-runtime-secrets
+                  optional: true
+            - name: OE_WATCH_ALLOW_PLAINTEXT
+              value: "true"
+            - name: OE_ENV
+              value: prod
+            - name: OE_SYSTEM_STATUS_TOPICS
+              value: underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard,market.spx.market-carry-service.current
+            - name: OE_SYSTEM_STATUS_LAG_REGISTRY
+              value: databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo
             - name: APP_WEB_PORT
               value: "18091"
             - name: GATEWAY_ES_GEX_ENABLED
