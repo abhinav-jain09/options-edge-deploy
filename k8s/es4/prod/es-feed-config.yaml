@@ -1,4 +1,10 @@
-# es-feed's OWN Databento configmap — es4 cluster.
+# es-feed's OWN Databento configmap — PROD cluster copy (rollback location).
+#
+# Identical content to k8s/es4/es4-feed-config.yaml. It exists so the retained prod-cluster
+# es-feed deployment is a USABLE rollback target: without it, rolling back would mount only the
+# API-key secret again and silently inherit USE_LIVE_REPLAY=true + PUBLISH_INTERVAL_MS=250 — the
+# exact configuration of the 2026-07-24 incident. Keep the two files in lockstep; the CI gate
+# scripts/ci/validate-feed-config-explicit.sh checks both.
 #
 # WHY THIS FILE EXISTS (2026-07-25 incident, requirement DBP-R1/R2):
 # es-feed previously mounted ONLY the API-key secret (`envFrom: secretRef` with no

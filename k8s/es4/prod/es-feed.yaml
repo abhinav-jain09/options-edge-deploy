@@ -26,7 +26,7 @@ spec:
   # each cycle abandoning a Databento session mid-replay with an unread receive buffer.
   # This deployment is now RETAINED FOR ROLLBACK ONLY; the live location is the es4 cluster
   # (k8s/es4/services/es-feed.yaml). Activation is a separate, explicitly authorized action —
-  # see ES_FEED_ACTIVE in Jenkinsfile.es4-deploy. Never raise this from a manifest inference.
+  # see ACTION=activate-es-feed + ES_FEED_LOCATION in Jenkinsfile.es4-deploy. Never raise this from a manifest inference.
   replicas: 0
   selector:
     matchLabels:
@@ -43,8 +43,15 @@ spec:
         - name: es-feed
           image: 192.168.100.252:5000/options-edge-databento-feed:prod
           envFrom:
+            # Rollback target must carry the SAME explicit configuration as the es4 location, or a
+            # rollback silently reinstates the incident defaults. See k8s/es4/prod/es-feed-config.yaml.
+            - configMapRef:
+                name: es-feed-databento-config
             - secretRef:
-                name: options-edge-databento-feed-env   # DATABENTO_API_KEY (prod key; per-account session limits verified)
+                # ⚠️ "per-account session limits verified" was asserted here previously; it is NOT
+                # verified — whether Databento's gateway backpressure is per key/account or per
+                # session is still an open question with the vendor (DBP-Q7 / ESM-Q6).
+                name: options-edge-databento-feed-env   # DATABENTO_API_KEY
           env:
             # ---- outputs -> es4 -------------------------------------------------
             - name: KAFKA_BOOTSTRAP_SERVERS

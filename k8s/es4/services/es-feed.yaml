@@ -10,8 +10,11 @@
 #     cross-host schema-ID poisoning class disappears (DBP-R24);
 #   * no cross-LAN produce under acks=all + idempotence on the socket hot path — the
 #     .4:9092 / .4:8081 hops are now node-local;
-#   * ~1 core of contended CPU is returned on .252 to the SPX OPRA feed, which is the
-#     client behind Databento's standing "consistently too slow" complaint.
+#   * contended CPU is returned on .252 to the SPX OPRA feed, which is the client behind
+#     Databento's standing "consistently too slow" complaint. ⚠️ The magnitude is NOT measured
+#     — an earlier "~1 core" figure was wrong (the feed is not a single-GIL-thread process: the
+#     Databento client owns an event-loop thread, the service starts worker threads, and the
+#     librdkafka producers are native). Size it from measurement, not from this comment.
 #
 # ⚠️ WHAT THIS DOES **NOT** FIX. Intake and processing are still coupled in one process
 # and there is NO durable relay, so DBP-R13/R15 remain open. This reduces exposure; it
@@ -25,7 +28,7 @@
 #    concurrent ES option-chain sessions, and the prod es-feed deployment still exists
 #    (also at 0) for rollback. Activation is a separate, explicitly authorized action —
 #    never a side effect of a deploy, a clean-reset, or an autostart. See the
-#    ES_FEED_ACTIVE parameter in Jenkinsfile.es4-deploy.
+#    ACTION=activate-es-feed + ES_FEED_LOCATION parameters in Jenkinsfile.es4-deploy.
 #
 # PREREQ: the `options-edge-databento-feed-env` secret must exist in the es4 cluster
 # (namespace options-edge). It does not exist there yet and must be provisioned by a
@@ -197,19 +200,19 @@ spec:
               value: "globex"
             - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
               value: "120"
-            # ⚠️ INTERIM (Phase 1) — 300s was the exact budget that killed this pod 8 times on
-            # 2026-07-24: grace 300s + 3 x 30s probe failures = 390s, while the statistics
-            # catch-up had not yet produced its first quote publish. 2000 ms publishing (down
-            # from the inherited 250 ms) cuts that catch-up work ~8x, but the probe must not be
-            # able to SIGKILL mid-catch-up. Widened to 1800s.
-            # ⚠️ This is NOT the real fix, and on its own it is the failure mode requirement
-            # DBP-R12 explicitly rejects: a wider grace can mask a client that is hours behind
-            # and still back-pressuring Databento. It is acceptable ONLY because (a) this
-            # deployment sits at replicas 0 pending authorized validation, and (b) source-age
-            # alerting (DBP-R9/R11) is a Phase-2 deliverable that must land before sustained
-            # running. Do not treat "no restarts" as health.
+            # 300s was the exact budget that killed this pod 8 times on 2026-07-24: grace 300s +
+            # 3 x 30s probe failures = 390s, while a multi-hour statistics replay had not yet
+            # produced its first quote publish. That trigger is GONE — this deployment sets
+            # DATABENTO_USE_LIVE_REPLAY=false, so there is no replay burst to survive.
+            # 600s is kept (rather than the original 300s) for the genuinely thin GLBX overnight
+            # tape plus ~71s of contract resolution at boot, not to mask a backlog.
+            # ⚠️ A widened grace is NOT a remedy for lag and requirement DBP-R12 rejects it as one:
+            # this probe measures wall-clock time since our last publish, not source age from
+            # ts_recv, so it can still look healthy while the client is behind. Source-age
+            # alerting (DBP-R9/R11) must land before sustained running. Never read "no restarts"
+            # as health.
             - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
-              value: "1800"
+              value: "600"
           ports:
             - name: metrics
               containerPort: 8010
