@@ -102,13 +102,36 @@ if [ -s "$STATE" ]; then
     if [ "$DRY" = "true" ]; then
       echo "DRY: would force deploy/es-feed to 0 (DBP-R22) and clear $STATE"
     else
-      if $KC get deploy es-feed --ignore-not-found -o name | grep -q .; then
+      # Existence query: capture the exit status directly. `$KC ... | grep -q .` masks kubectl's
+      # status behind grep's, so an API failure would have read as "no Deployment" and skipped the
+      # enforcement entirely.
+      set +e
+      es_out=$($KC get deploy es-feed --ignore-not-found -o name 2>&1)
+      es_rc=$?
+      set -e
+      [ "$es_rc" -eq 0 ] || die "phase=RESTORED but the es-feed Deployment query failed (rc=$es_rc: $es_out) — refusing to clear state while the feed's state is unknown"
+      if [ -n "$es_out" ]; then
         cur=$($KC get deploy es-feed -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
         [ "$cur" != "ERR" ] || die "phase=RESTORED but es-feed replicas are unreadable — refusing to clear state while the feed's state is unknown"
         if [ "$cur" != "0" ]; then
           log "phase=RESTORED left es-feed at $cur (an older build restored the captured count) — forcing 0; use activate-es-feed to start it"
           $KC scale deploy/es-feed --replicas=0 >/dev/null || die "could not force es-feed to 0 on the RESTORED resume path"
+          # VERIFY the scale actually took: an unverified scale is not an enforcement.
+          after=$($KC get deploy es-feed -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+          [ "$after" = "0" ] || die "es-feed still at '$after' after scaling to 0 on the RESTORED path"
         fi
+      fi
+      # A missing Deployment does not mean nothing is running: pods can outlive it, and a terminating
+      # pod still produces. Check regardless of whether the Deployment existed.
+      set +e
+      pods_out=$($KC get pods -l app.kubernetes.io/name=es-feed --no-headers 2>&1)
+      pods_rc=$?
+      set -e
+      if [ "$pods_rc" -eq 0 ]; then
+        n=$(printf '%s\n' "$pods_out" | awk 'NF {c++} END {print c+0}')
+        [ "$n" = "0" ] || die "phase=RESTORED but $n es-feed pod(s) are still present — refusing to clear state while a Databento session may be live"
+      elif ! printf '%s' "$pods_out" | grep -qiE 'no resources found'; then
+        die "phase=RESTORED but the es-feed pod query failed (rc=$pods_rc: $pods_out) — failing closed"
       fi
       rm -f "$STATE"
     fi

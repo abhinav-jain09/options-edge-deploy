@@ -32,7 +32,6 @@ resource-limited; the SPX feed Deployment is not modified).
 
 ## Operating notes
 
-  re-enabled, `es-feed` must join its keep-alive list** or ES data dies mid-session.
 * `.4` firewalld is off and its IP is DHCP-assigned — reserve `192.168.100.4` on the
   router and revisit hardening (tracked follow-up).
 * gex OI direct-fetch is disabled on es4 (`DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED=false`):

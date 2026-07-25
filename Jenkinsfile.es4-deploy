@@ -112,6 +112,12 @@ pipeline {
           # Deployments to their CAPTURED replica counts, which is blind to ES_FEED_LOCATION. If es4
           # es-feed is live while the declared location is not es4, that restore brings it back
           # against intent. Fail closed BEFORE the wipe.
+          # Prove BOTH kubeconfigs are the clusters we think they are before anything else. Without
+          # this on the clean-reset path, swapped kubeconfigs would let the absence check inspect the
+          # wrong cluster and pass.
+          bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
+          bash scripts/es4/assert-cluster-identity.sh "$ES4_KUBECONFIG"  es4  "$ES4_NS_UID"
+
           # (a) The on-box cleanup treats ES4_FEED_FENCED=1 as PROOF that the cross-cluster prod
           #     es-feed producer was quiesced. Since this stage no longer fences prod, that value
           #     would otherwise be an unchecked assertion — and a prod es-feed that still exists can
@@ -231,8 +237,11 @@ pipeline {
             echo "      yields NO ES open interest, and es4 GEX is fail-closed on OI (ESM-Q4)." >&2
             echo "  (2) Real .4 headroom must be MEASURED with the full es4 fleet running (DBP-V10)." >&2
             exit 1; }
-          # Activation does not pass through the deploy stage that reconcile-deletes prod, so prove
-          # retirement here too — otherwise es4 could be started while a prod Deployment still exists.
+          # Activation does not pass through the deploy stage, so prove BOTH cluster identity and
+          # prod retirement here too — otherwise a swapped kubeconfig or a surviving prod Deployment
+          # would let es4 start alongside a second location.
+          bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
+          bash scripts/es4/assert-cluster-identity.sh "$ES4_KUBECONFIG"  es4  "$ES4_NS_UID"
           bash scripts/es4/assert-prod-es-feed-absent.sh "$PROD_KUBECONFIG"
           bash scripts/es4/assert-es-feed-exclusive.sh "$ES4_KUBECONFIG" "$PROD_KUBECONFIG" "$ES_FEED_LOCATION"
           KC="$ES4_KUBECONFIG"
