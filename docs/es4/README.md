@@ -27,7 +27,7 @@ carries GLBX data — the "opra" token is the consumers' compiled default; cosme
 
 This environment touches **zero** SPX deploy files: no `services.yaml` change, no
 `k8s/services/**` change, no `Jenkinsfile.service-deploy` change, no shared-profile
-change. The only prod-cluster addition is the NEW `es-feed` Deployment (own pod,
+change. The prod cluster holds NO es4 component: the es-feed Deployment that used to live there was deleted 2026-07-25 (DBP-R33). Previously it ran there (own pod,
 resource-limited; the SPX feed Deployment is not modified).
 
 ## Operating notes

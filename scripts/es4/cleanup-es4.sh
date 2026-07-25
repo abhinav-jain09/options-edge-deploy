@@ -7,9 +7,10 @@
 # ⚠️ Since DBP-R33 (2026-07-25) the prod es-feed is RETIRED rather than fenced-and-restored, and the
 # Jenkins stage proves its ABSENCE (scripts/es4/assert-prod-es-feed-absent.sh) before passing
 # ES4_FEED_FENCED=1 — that flag is an assertion, so something must actually check it.
-# ES_FEED_DESIRED_REPLICAS (optional): declared intent for es-feed, which OVERRIDES the captured
-# replica count on restore. The capture is durable and survives an interrupted run, so without this
-# a stale capture of 1 could start a Databento session after the operator declared the feed down.
+# es-feed is NEVER restored by this script — it is always left at 0, whatever the snapshot captured.
+# It owns a Databento live session on a shared key and DBP-R22 reserves starting it to the separate
+# activate action. This also removes the interrupted-run hazard: a durable snapshot holding a stale
+# `es-feed 1` can no longer start a session nobody asked for. Re-start it with activate-es-feed.
 #
 # WHY: the scorer/gex hit "AvroRuntimeException: Malformed data. Length is negative" —
 # a message framed with Confluent schema id=N (written when id=N meant schema A) survived a
@@ -41,7 +42,7 @@ run()  { if [ "$DRY" = "true" ]; then echo "DRY: $*"; else eval "$*"; fi; }
 # ------------------------------------------------------------ 0. PREFLIGHT (before any mutation)
 log "preflight (no mutation happens unless every check passes)"
 [ "${ES4_FEED_FENCED:-0}" = "1" ] || [ "$DRY" = "true" ] || \
-  die "external prod es-feed not fenced (ES4_FEED_FENCED!=1) — the Jenkins clean-reset stage must scale options-edge/es-feed to 0 on .252 first, else it re-pollutes the fresh cluster with cached schema ids"
+  die "external prod es-feed not proven absent (ES4_FEED_FENCED!=1) — the Jenkins clean-reset stage must run scripts/es4/assert-prod-es-feed-absent.sh first (DBP-R33 deleted the prod es-feed; it is no longer scaled and restored), else a surviving external producer re-pollutes the fresh cluster with cached schema ids"
 [ -d "$INFRA_DIR" ] || die "no $INFRA_DIR — run bootstrap-es4.sh (infra-sync) first"
 [ -f "$INFRA_DIR/docker-compose.yml" ] || die "no compose file in $INFRA_DIR"
 # canonical-path guard for the destructive rm: KAFKA_DATA must be the exact compose bind source,
@@ -235,16 +236,17 @@ else
     [ -n "$name" ] || continue
     [ "$reps" = "<none>" ] && reps=1
     # es-feed is special: it owns a Databento live session on a shared API key, so its replica count
-    # is a DECLARED INTENT (ES_FEED_DESIRED_REPLICAS, passed in by the Jenkins clean-reset stage from
-    # ES_FEED_LOCATION), not something to be inferred from a snapshot. The snapshot is durable and
-    # survives an interrupted run, so without this an earlier capture of 1 would be restored long
-    # after the operator declared the feed should be down — silently starting a Databento session
-    # nobody asked for. Requirement DBP-R21/R22.
-    if [ "$name" = "es-feed" ] && [ -n "${ES_FEED_DESIRED_REPLICAS:-}" ]; then
-      if [ "$reps" != "$ES_FEED_DESIRED_REPLICAS" ]; then
-        log "es-feed: captured replicas=$reps overridden by declared intent ES_FEED_DESIRED_REPLICAS=$ES_FEED_DESIRED_REPLICAS"
-      fi
-      reps="$ES_FEED_DESIRED_REPLICAS"
+    # must never be raised by a restore. The snapshot is durable and survives an interrupted run, so
+    # an earlier capture of 1 would otherwise be restored long after the operator took the feed down
+    # — silently starting a Databento session nobody asked for. Requirement DBP-R21/R22.
+    if [ "$name" = "es-feed" ]; then
+      # es-feed is NEVER restored by a reset. It owns a Databento live session on a shared API key,
+      # and DBP-R22 says only the separate activate action may raise it. Restoring a captured 1 --
+      # or a stale 1 from a durable snapshot that survived an interrupted run -- would make
+      # clean-reset an activation path, which is exactly the class of side effect that caused the
+      # 2026-07-24 incident. After a reset, start it deliberately with ACTION=activate-es-feed.
+      [ "$reps" = "0" ] || log "es-feed: captured replicas=$reps IGNORED — a reset never activates the feed (DBP-R22); use activate-es-feed"
+      reps=0
     fi
     $KC scale "deploy/$name" --replicas="$reps" >/dev/null || { echo "restore scale FAILED for $name" >&2; fail=1; }
   done < <(REPS)
@@ -253,7 +255,7 @@ else
     [ -n "$name" ] || continue
     [ "$reps" = "<none>" ] && reps=1
     # same override as the scale loop above, or verification would compare against the stale capture
-    if [ "$name" = "es-feed" ] && [ -n "${ES_FEED_DESIRED_REPLICAS:-}" ]; then reps="$ES_FEED_DESIRED_REPLICAS"; fi
+    if [ "$name" = "es-feed" ]; then reps=0; fi   # must match the restore loop above
     got=$($KC get "deploy/$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
     [ "$got" = "$reps" ] || { echo "restore MISMATCH $name: want $reps got $got" >&2; fail=1; }
   done < <(REPS)
@@ -262,7 +264,7 @@ else
     missing=0
     while read -r name reps; do
       [ "$reps" = "<none>" ] && reps=1
-      if [ "$name" = "es-feed" ] && [ -n "${ES_FEED_DESIRED_REPLICAS:-}" ]; then reps="$ES_FEED_DESIRED_REPLICAS"; fi
+      if [ "$name" = "es-feed" ]; then reps=0; fi   # must match the restore loop above
       [ "$reps" -gt 0 ] || continue
       avail=$($KC get "deploy/$name" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
       [ "${avail:-0}" -ge "$reps" ] || missing=$((missing + 1))

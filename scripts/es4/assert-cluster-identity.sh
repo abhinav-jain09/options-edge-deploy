@@ -1,42 +1,51 @@
 #!/usr/bin/env bash
-# assert-cluster-identity.sh — prove a kubeconfig points at the cluster you think it does,
-# BEFORE running a destructive command against it.
+# assert-cluster-identity.sh — prove two kubeconfigs address DIFFERENT clusters before running a
+# cross-cluster destructive command.
 #
-# WHY THIS EXISTS: the es4 pipeline runs destructive kubectl against TWO clusters in one job
-# (ES4_KUBECONFIG and PROD_KUBECONFIG). Nothing previously verified they were actually different
-# clusters. If PROD_KUBECONFIG were ever edited, copied, or regenerated to point at .4, a
-# "delete the prod es-feed" step would silently delete the LIVE es4 es-feed instead — and the
-# ConfigMap applied moments earlier in the same stage.
+# WHY: the es4 pipeline runs destructive kubectl against two clusters in one job. If PROD_KUBECONFIG
+# were ever regenerated to point at .4, a "delete the prod es-feed" step would delete the LIVE es4
+# feed instead. Nothing previously checked.
 #
-# The check is fail-closed and uses a positive discriminator rather than a URL string match,
-# because a URL can be an alias while still resolving to the same API server:
-#   * prod  MUST contain Deployment `options-edge-databento-feed`  (the SPX feed — prod only)
-#   * es4   MUST NOT contain it
-# Both clusters share the `options-edge` namespace and both host(ed) an `es-feed`, so es-feed
-# itself is NOT a usable discriminator; the SPX feed is.
+# ⚠️ An earlier version discriminated by "does the SPX Deployment exist here". That was rejected in
+# review for two sound reasons: it is MUTABLE (deleting the SPX Deployment for any reason would
+# deadlock every es4 deploy, activation and clean-reset), and a named-GET that failed for RBAC or
+# timeout reasons was read as proof of the opposite cluster — fail-open on the exact check meant to
+# authorise a deletion.
+#
+# This version uses the UID of the `options-edge` NAMESPACE: assigned at namespace creation, stable
+# for its life, and not mutable by any application deploy. Two kubeconfigs resolving to the same UID
+# are the same cluster, whatever their server URLs say (a URL can alias). Every error path fails
+# closed — an unreadable UID is never treated as "different".
+#
+# ⚠️ It deliberately does NOT use the kube-system namespace, which would be the more conventional
+# cluster identifier: the Jenkins deploy identity is namespace-scoped
+# (system:serviceaccount:options-edge:jenkins-deployer) and is Forbidden from reading kube-system.
+# That was found by running this guard against the real kubeconfigs, not by inspection — a
+# kube-system-based check would have failed closed on every single build.
 set -euo pipefail
 
-KUBECONFIG_PATH=${1:?usage: assert-cluster-identity.sh <kubeconfig> <expect: prod|es4>}
-EXPECT=${2:?missing expectation (prod|es4)}
+A_KUBECONFIG=${1:?usage: assert-cluster-identity.sh <kubeconfig-a> <kubeconfig-b> <label-a> <label-b>}
+B_KUBECONFIG=${2:?missing second kubeconfig}
+A_LABEL=${3:-A}
+B_LABEL=${4:-B}
 
 fail() { echo "CLUSTER IDENTITY CHECK FAILED: $*" >&2; exit 1; }
 
-KUBECONFIG="$KUBECONFIG_PATH" kubectl -n options-edge get deploy >/dev/null 2>&1 \
-  || fail "cannot reach the cluster via $KUBECONFIG_PATH"
+cluster_uid() {
+  local kc=$1 label=$2 out rc
+  set +e
+  out=$(KUBECONFIG="$kc" kubectl get namespace options-edge -o jsonpath='{.metadata.uid}' 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "cannot read the cluster identity of $label ($kc): rc=$rc: $out"
+  [ -n "$out" ] || fail "empty cluster identity for $label ($kc)"
+  case "$out" in *[!0-9a-fA-F-]*) fail "implausible cluster identity for $label ($kc): '$out'";; esac
+  printf '%s' "$out"
+}
 
-set +e
-KUBECONFIG="$KUBECONFIG_PATH" kubectl -n options-edge get deploy options-edge-databento-feed >/dev/null 2>&1
-spx_rc=$?
-set -e
+a_uid=$(cluster_uid "$A_KUBECONFIG" "$A_LABEL")
+b_uid=$(cluster_uid "$B_KUBECONFIG" "$B_LABEL")
 
-case "$EXPECT" in
-  prod)
-    [ "$spx_rc" -eq 0 ] || fail "$KUBECONFIG_PATH was expected to be the PROD cluster, but Deployment options-edge-databento-feed (the SPX feed) is absent. Refusing to run a destructive command against an unidentified cluster."
-    ;;
-  es4)
-    [ "$spx_rc" -ne 0 ] || fail "$KUBECONFIG_PATH was expected to be the ES4 cluster, but Deployment options-edge-databento-feed (the SPX feed) is present — this looks like the PROD cluster."
-    ;;
-  *) fail "expectation must be prod or es4 (got '$EXPECT')" ;;
-esac
+[ "$a_uid" != "$b_uid" ] || fail "$A_LABEL and $B_LABEL resolve to the SAME cluster (options-edge namespace uid $a_uid). Refusing to run a cross-cluster destructive command."
 
-echo "cluster identity OK: $KUBECONFIG_PATH is the $EXPECT cluster"
+echo "cluster identity OK: $A_LABEL and $B_LABEL are distinct clusters"

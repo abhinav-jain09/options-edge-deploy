@@ -26,10 +26,11 @@ ES4_KUBECONFIG=${1:?usage: assert-es-feed-exclusive.sh <es4-kubeconfig> <prod-ku
 PROD_KUBECONFIG=${2:?missing prod kubeconfig}
 TARGET=${3:?missing target (es4|prod)}
 
+# DBP-R33 removed prod as a location entirely, so target=prod is no longer a legal request. Leaving
+# it accepted contradicted the very guarantee this script is supposed to enforce.
 case "$TARGET" in
-  es4)  other_kc="$PROD_KUBECONFIG"; other_name="prod";  self_kc="$ES4_KUBECONFIG" ;;
-  prod) other_kc="$ES4_KUBECONFIG";  other_name="es4";   self_kc="$PROD_KUBECONFIG" ;;
-  *) echo "assert-es-feed-exclusive: target must be es4 or prod (got '$TARGET')" >&2; exit 1 ;;
+  es4) other_kc="$PROD_KUBECONFIG"; other_name="prod"; self_kc="$ES4_KUBECONFIG" ;;
+  *) echo "assert-es-feed-exclusive: target must be es4 (got '$TARGET'); prod was retired by DBP-R33" >&2; exit 1 ;;
 esac
 
 fail() { echo "ES-FEED EXCLUSIVITY CHECK FAILED: $*" >&2; exit 1; }

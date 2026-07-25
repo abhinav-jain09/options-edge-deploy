@@ -41,7 +41,7 @@ pipeline {
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
     choice(name: 'ES_FEED_LOCATION', choices: ['none', 'es4'],
-      description: 'DECLARED location of the single live es-feed. es4 is the ONLY option: the prod-cluster es-feed was retired 2026-07-25 (DBP-R33) so two copies cannot exist at all, rather than being prevented by convention. none = es-feed must be DOWN. Rollback to prod is deliberately not a one-click path any more - it would mean restoring k8s/es4/prod/es-feed.yaml from git history and re-adding a deploy path.')
+      description: 'DECLARED location of the single live es-feed. es4 is the ONLY option: the prod-cluster es-feed was retired 2026-07-25 (DBP-R33) so two copies cannot exist at all, rather than being prevented by convention. none = es-feed must be DOWN. Rollback to prod is deliberately not a one-click path any more - it requires a full revert of the retirement commits (both prod manifests, the deploy stage, the digest check, the prod activation branch and the cross-cluster fencing), not just restoring one file.')
     booleanParam(name: 'ES_FEED_ACK_OI_AND_CAPACITY', defaultValue: false,
       description: 'activate-es-feed only. Explicit acknowledgement of the two preconditions the requirement will not let a deploy assume: (1) the ES-OI consequence of DATABENTO_USE_LIVE_REPLAY=false has been resolved (ESM-Q4 — either es4 GEX moved to direct OI fetch, or the bounded out-of-band OI request landed), and (2) real .4 headroom has been MEASURED with the full es4 fleet running (DBP-V10/ESM-V6). Activation refuses to proceed without this.')
   }
@@ -109,45 +109,21 @@ pipeline {
           #     publish straight through the wipe and recreate the dead-schema-id poison. Prove it.
           bash scripts/es4/assert-prod-es-feed-absent.sh "$PROD_KUBECONFIG"
 
-          # (b) The cleanup restores es4 Deployments to their CAPTURED replica counts, which is blind
-          #     to ES_FEED_LOCATION. Two ways that can start es-feed against intent:
-          #       - a live es4 es-feed is captured at 1 and restored at 1;
-          #       - an INTERRUPTED earlier reset left a durable WIPING snapshot holding the original
-          #         count, so a later run sees current=0, passes a naive check, and then the script
-          #         restores the stale 1.
-          #     So the intent is passed INTO the cleanup (ES_FEED_DESIRED_REPLICAS) and enforced
-          #     there, and the pre-check below distinguishes not-found from a failed query rather
-          #     than collapsing both to 0.
-          if [ "${ES_FEED_LOCATION:-none}" = "es4" ]; then
-            ES_FEED_DESIRED_REPLICAS=1
-          else
-            ES_FEED_DESIRED_REPLICAS=0
-            set +e
-            es4_out=$(KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge get deploy es-feed -o jsonpath='{.spec.replicas}' 2>&1)
-            es4_rc=$?
-            set -e
-            if [ "$es4_rc" -eq 0 ]; then
-              case "$es4_out" in
-                0) : ;;
-                ''|*[!0-9]*) echo "CLEAN-RESET REFUSED: unreadable es4 es-feed replica count '$es4_out'" >&2; exit 1 ;;
-                *) echo "CLEAN-RESET REFUSED: es4 es-feed is at replicas=$es4_out but ES_FEED_LOCATION=${ES_FEED_LOCATION:-none}." >&2
-                   echo "  Run ACTION=deactivate-es-feed first, or set ES_FEED_LOCATION=es4 if it should stay live." >&2
-                   exit 1 ;;
-              esac
-            elif ! printf '%s' "$es4_out" | grep -qiE 'not ?found'; then
-              echo "CLEAN-RESET REFUSED: could not read es4 es-feed state (rc=$es4_rc: $es4_out) — failing closed" >&2
-              exit 1
-            fi
-          fi
+          # (b) The cleanup no longer restores es-feed at all — it is always left at 0, whatever the
+          #     snapshot captured, because DBP-R22 reserves starting it to the separate activate
+          #     action. An earlier attempt passed a desired-replica count in instead; review showed
+          #     that turned clean-reset INTO an activation path when the declared location was es4,
+          #     and left an unset/arbitrary value unsafe. Not restoring it at all has neither hazard.
+          #     After a reset, start the feed deliberately with ACTION=activate-es-feed.
 
           if [ "${DEPLOY_DRY_RUN}" = "true" ]; then
             echo "DRY: would run the on-box wipe (no prod es-feed to fence — retired per DBP-R33)"
-            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_FEED_FENCED=1 ES_FEED_DESIRED_REPLICAS=$ES_FEED_DESIRED_REPLICAS bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_FEED_FENCED=1 bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
             exit 0
           fi
 
           echo "=== running on-box atomic wipe ==="
-          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_FEED_FENCED=1 ES_FEED_DESIRED_REPLICAS=$ES_FEED_DESIRED_REPLICAS bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_FEED_FENCED=1 bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
         '''
       }
     }
@@ -175,8 +151,7 @@ pipeline {
             # Prove the kubeconfig really is the PROD cluster before deleting anything through it.
             # Without this, a PROD_KUBECONFIG that had been regenerated to point at .4 would delete
             # the LIVE es4 es-feed and the ConfigMap applied moments earlier in this same stage.
-            bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod
-            bash scripts/es4/assert-cluster-identity.sh "$KUBECONFIG" es4
+            bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" "$ES4_KUBECONFIG" prod es4
             KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge delete deployment es-feed --ignore-not-found
             KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge delete configmap es-feed-databento-config --ignore-not-found
           fi
@@ -272,7 +247,17 @@ pipeline {
             loc=${pair%%:*}; kc=${pair#*:}
             KUBECONFIG="$kc" kubectl -n options-edge get deploy >/dev/null 2>&1 || {
               echo "DEACTIVATE FAILED: cannot reach the $loc cluster" >&2; exit 1; }
-            KUBECONFIG="$kc" kubectl -n options-edge get deploy es-feed >/dev/null 2>&1 || { echo "$loc: no es-feed deployment"; continue; }
+            set +e
+            dep_out=$(KUBECONFIG="$kc" kubectl -n options-edge get deploy es-feed -o name 2>&1)
+            dep_rc=$?
+            set -e
+            if [ "$dep_rc" -ne 0 ]; then
+              # An RBAC or API error must NOT read as "absent" — that would leave a legacy session
+              # running behind a green deactivation, on the key the SPX feed shares.
+              printf '%s' "$dep_out" | grep -qiE 'not ?found' || {
+                echo "DEACTIVATE FAILED: cannot determine $loc es-feed state (rc=$dep_rc: $dep_out)" >&2; exit 1; }
+              echo "$loc: no es-feed deployment"; continue
+            fi
             if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then echo "DRY: would scale $loc es-feed to 0"; continue; fi
             KUBECONFIG="$kc" kubectl -n options-edge scale deploy/es-feed --replicas=0
             for _ in $(seq 1 60); do
