@@ -20,6 +20,24 @@ data:
   # stack trades CME Globex (~23h/day), not NYSE RTH — gate the dead-engine restart window to the
   # Globex session (armed from 5 min before each open through 5 min past each close).
   LIVENESS_SESSION: "globex"
+  # ── System Status page (PIPELINE-STALL-REJECT-ALERTING-DESIGN.md §3.5/§3.6) ──
+  # es4 writes its watcher evidence into the SAME oe_watch ledger as dev/prod (rows carry env), so
+  # there is ONE verification point; this gateway reads it back with the read-only oe_watch_reader
+  # role. .4 reaches .252:5432 (verified). That Postgres has NO TLS, so plaintext is accepted
+  # EXPLICITLY and the page renders a "LEDGER LINK UNENCRYPTED" chip — visible, not silent.
+  # The password arrives via the es4-runtime-secrets envFrom (key OE_WATCH_DB_PASSWORD); without it
+  # the gateway still starts and the page reports LEDGER UNAVAILABLE.
+  OE_WATCH_JDBC_URL: "jdbc:postgresql://192.168.100.252:5432/options_flow"
+  OE_WATCH_DB_USER: "oe_watch_reader"
+  OE_WATCH_ALLOW_PLAINTEXT: "true"
+  OE_ENV: "es4"
+  # Mirror of the es4 rows in ~/oe-ops/freshness-topics.conf — the EXPECTED topic universe, so a
+  # registered topic with no evidence renders NO_EVIDENCE instead of vanishing. NB these are the
+  # FULL topic names: TOPIC_PREFIX is applied by the gateway to *_TOPIC settings, not to this list.
+  OE_SYSTEM_STATUS_TOPICS: "es.underlying.es.trades,es.options.databento.raw,es.options.databento.gex.strike,es.options.databento.gex.magnet,es.options.databento.gex.flow.by-strike,es.delta-flow-by-strike,es.strike-liquidity-heatmap-dashboard,es.market.spx.market-carry-service.current"
+  # Consumer-group ids VERIFIED against the live .4 broker (kafka list_consumer_groups) — guessing
+  # them yields NO_COMMITS for a healthy service, which is worse than showing nothing.
+  OE_SYSTEM_STATUS_LAG_REGISTRY: "databento-gex-service:options-databento-gex-streams-es4:es.options.databento.raw;strike-intelligence-service:options-edge-strike-intelligence-service-es4:es.options.databento.gex.strike;delta-flow-service:options-edge-delta-flow-service-es4-r2:es.options.opra.tcbbo"
   # §9b trail = full-session board history (user 2026-07-17), same as prod/dev overlays.
   STRIKE_INTEL_RECENT_SIGNALS_WINDOW_MS: "86400000"
   STRIKE_INTEL_RECENT_SIGNALS_MAX: "50"
