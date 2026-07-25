@@ -51,3 +51,29 @@ spec:
             # topology guard aligned while ES retains the binary's four-partition default.
             - name: HEATMAP_HISTORY_EXPECTED_PARTITIONS
               value: "32"
+            # ── System Status page (PIPELINE-STALL-REJECT-ALERTING-DESIGN.md §3.5/§3.6) ──
+            # Read-only view of the freshness watcher's oe_watch verification ledger, which on dev lives
+            # in the Mac's options_flow_dev (host.docker.internal from inside docker-desktop). All of
+            # this is OPTIONAL: with none of it set the gateway behaves exactly as before and the page
+            # reports LEDGER UNAVAILABLE / NOT CONFIGURED rather than a falsely-healthy screen.
+            # NB loopback/host.docker.internal is exempt from the endpoint's verify-full TLS enforcement
+            # (dev Postgres has no server cert); prod must reach the ledger over TLS or an ssh tunnel.
+            - name: OE_WATCH_JDBC_URL
+              value: "jdbc:postgresql://host.docker.internal:5432/options_flow_dev"
+            - name: OE_WATCH_DB_USER
+              value: "oe_watch_reader"
+            - name: OE_WATCH_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: OE_WATCH_READER_PASSWORD
+                  optional: true
+            - name: OE_ENV
+              value: "dev"
+            # Mirror of ~/oe-ops/freshness-topics.conf: the EXPECTED topic universe. A registered topic
+            # with no ledger evidence renders NO_EVIDENCE — it can never silently vanish from the page.
+            - name: OE_SYSTEM_STATUS_TOPICS
+              value: "underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard"
+            # service:consumer-group:input-topics — lag is computed ONLY for allowlisted services.
+            - name: OE_SYSTEM_STATUS_LAG_REGISTRY
+              value: "databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo"

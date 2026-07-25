@@ -83,6 +83,22 @@ spec:
               value: "60000"
             - name: HEATMAP_HISTORY_EXPECTED_PARTITIONS
               value: "32"
+            - name: OE_WATCH_JDBC_URL
+              value: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
+            - name: OE_WATCH_DB_USER
+              value: oe_watch_reader
+            - name: OE_WATCH_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: OE_WATCH_READER_PASSWORD
+                  name: options-edge-runtime-secrets
+                  optional: true
+            - name: OE_ENV
+              value: dev
+            - name: OE_SYSTEM_STATUS_TOPICS
+              value: underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard
+            - name: OE_SYSTEM_STATUS_LAG_REGISTRY
+              value: databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo
             - name: APP_WEB_PORT
               value: "18091"
             - name: GATEWAY_ES_GEX_ENABLED
