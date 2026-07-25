@@ -245,6 +245,12 @@ pipeline {
             string(credentialsId: env.DATABENTO_API_KEY_CREDENTIAL_ID_EFFECTIVE, variable: 'DATABENTO_API_KEY')
           ]
           def applySecrets = {
+            // OE_WATCH_READER_PASSWORD feeds the System Status page's READ-ONLY ledger role
+            // (oe_watch_reader, SELECT on oe_watch views only — see
+            // PIPELINE-STALL-REJECT-ALERTING-DESIGN.md 3.4/3.5). It is OPTIONAL: with an empty
+            // value the gateway still starts and the page reports LEDGER UNAVAILABLE instead of a
+            // falsely-healthy screen. Dev keeps the local default; prod must supply a credential.
+            withEnv(["OE_WATCH_READER_PASSWORD=${env.OE_WATCH_READER_PASSWORD ?: (params.ENVIRONMENT == 'dev' ? 'devreaderpw' : '')}"]) {
             sh '''
               set -euo pipefail
               test -n "$DATABENTO_API_KEY"
@@ -258,11 +264,13 @@ pipeline {
                 --from-literal=POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-Options#100}" \
                 --from-literal=SMOKE_AUTH_PASSWORD="${SMOKE_AUTH_PASSWORD:-}" \
                 --from-literal=ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+                --from-literal=OE_WATCH_READER_PASSWORD="${OE_WATCH_READER_PASSWORD:-}" \
                 --dry-run=client -o yaml | kubectl apply $apply_args -f -
               kubectl -n options-edge create secret generic options-edge-databento-feed-env \
                 --from-literal=DATABENTO_API_KEY="$DATABENTO_API_KEY" \
                 --dry-run=client -o yaml | kubectl apply $apply_args -f -
             '''
+            }
           }
           // Optional credentials: bind each ONLY if it resolves, so a missing one degrades to an
           // empty literal (see applySecrets' ${VAR:-}) instead of breaking the whole secret stage.
