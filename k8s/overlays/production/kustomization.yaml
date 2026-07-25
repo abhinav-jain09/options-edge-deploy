@@ -220,6 +220,11 @@ patches:
   # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
   # MUST MIRROR the standalone slice k8s/services/databento-feed/overlays/production (validate-services).
   - path: databento-feed-prod-patch.yaml
+  # PROD-ONLY: System Status page — the gateway reads the freshness watcher's oe_watch ledger from
+  # this same Postgres with the read-only oe_watch_reader role, and reports the link as
+  # PLAINTEXT_ACCEPTED because that server has no TLS (visible on the page, not silent).
+  # MUST MIRROR the standalone slice k8s/services/feed-gateway/overlays/production (validate-services).
+  - path: feed-gateway-prod-env-patch.yaml
   # PROD-ONLY: strike-liquidity-heatmap CPU request 100m -> 750m. At 100m the single stream
   # thread stalled >10s under busy-open contention, tripping the EOS transaction timeout and
   # fencing the producer (2026-07-16, twice; processing PR #356 raised the timeout to 60s as
