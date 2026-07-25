@@ -103,24 +103,51 @@ pipeline {
           # Deployments to their CAPTURED replica counts, which is blind to ES_FEED_LOCATION. If es4
           # es-feed is live while the declared location is not es4, that restore brings it back
           # against intent. Fail closed BEFORE the wipe.
-          if [ "${ES_FEED_LOCATION:-none}" != "es4" ]; then
-            es4_rep=$(KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge get deploy es-feed -o jsonpath='{.spec.replicas}' 2>/dev/null || echo 0)
-            if [ "${es4_rep:-0}" != "0" ]; then
-              echo "CLEAN-RESET REFUSED: es4 es-feed is at replicas=$es4_rep but ES_FEED_LOCATION=${ES_FEED_LOCATION:-none}." >&2
-              echo "  The on-box cleanup restores captured es4 replica counts and would bring it back." >&2
-              echo "  Run ACTION=deactivate-es-feed first, or set ES_FEED_LOCATION=es4 if it should stay live." >&2
+          # (a) The on-box cleanup treats ES4_FEED_FENCED=1 as PROOF that the cross-cluster prod
+          #     es-feed producer was quiesced. Since this stage no longer fences prod, that value
+          #     would otherwise be an unchecked assertion — and a prod es-feed that still exists can
+          #     publish straight through the wipe and recreate the dead-schema-id poison. Prove it.
+          bash scripts/es4/assert-prod-es-feed-absent.sh "$PROD_KUBECONFIG"
+
+          # (b) The cleanup restores es4 Deployments to their CAPTURED replica counts, which is blind
+          #     to ES_FEED_LOCATION. Two ways that can start es-feed against intent:
+          #       - a live es4 es-feed is captured at 1 and restored at 1;
+          #       - an INTERRUPTED earlier reset left a durable WIPING snapshot holding the original
+          #         count, so a later run sees current=0, passes a naive check, and then the script
+          #         restores the stale 1.
+          #     So the intent is passed INTO the cleanup (ES_FEED_DESIRED_REPLICAS) and enforced
+          #     there, and the pre-check below distinguishes not-found from a failed query rather
+          #     than collapsing both to 0.
+          if [ "${ES_FEED_LOCATION:-none}" = "es4" ]; then
+            ES_FEED_DESIRED_REPLICAS=1
+          else
+            ES_FEED_DESIRED_REPLICAS=0
+            set +e
+            es4_out=$(KUBECONFIG="$ES4_KUBECONFIG" kubectl -n options-edge get deploy es-feed -o jsonpath='{.spec.replicas}' 2>&1)
+            es4_rc=$?
+            set -e
+            if [ "$es4_rc" -eq 0 ]; then
+              case "$es4_out" in
+                0) : ;;
+                ''|*[!0-9]*) echo "CLEAN-RESET REFUSED: unreadable es4 es-feed replica count '$es4_out'" >&2; exit 1 ;;
+                *) echo "CLEAN-RESET REFUSED: es4 es-feed is at replicas=$es4_out but ES_FEED_LOCATION=${ES_FEED_LOCATION:-none}." >&2
+                   echo "  Run ACTION=deactivate-es-feed first, or set ES_FEED_LOCATION=es4 if it should stay live." >&2
+                   exit 1 ;;
+              esac
+            elif ! printf '%s' "$es4_out" | grep -qiE 'not ?found'; then
+              echo "CLEAN-RESET REFUSED: could not read es4 es-feed state (rc=$es4_rc: $es4_out) — failing closed" >&2
               exit 1
             fi
           fi
 
           if [ "${DEPLOY_DRY_RUN}" = "true" ]; then
             echo "DRY: would run the on-box wipe (no prod es-feed to fence — retired per DBP-R33)"
-            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_FEED_FENCED=1 bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_FEED_FENCED=1 ES_FEED_DESIRED_REPLICAS=$ES_FEED_DESIRED_REPLICAS bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
             exit 0
           fi
 
           echo "=== running on-box atomic wipe ==="
-          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_FEED_FENCED=1 bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_FEED_FENCED=1 ES_FEED_DESIRED_REPLICAS=$ES_FEED_DESIRED_REPLICAS bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
         '''
       }
     }
@@ -145,6 +172,11 @@ pipeline {
           # it. Two copies cannot exist if only one location has a Deployment at all - which is why
           # this replaces the publisher-lease work (DBP-R28) rather than complementing it.
           if [ -z "$DRY" ]; then
+            # Prove the kubeconfig really is the PROD cluster before deleting anything through it.
+            # Without this, a PROD_KUBECONFIG that had been regenerated to point at .4 would delete
+            # the LIVE es4 es-feed and the ConfigMap applied moments earlier in this same stage.
+            bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod
+            bash scripts/es4/assert-cluster-identity.sh "$KUBECONFIG" es4
             KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge delete deployment es-feed --ignore-not-found
             KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge delete configmap es-feed-databento-config --ignore-not-found
           fi
@@ -214,6 +246,9 @@ pipeline {
             echo "      yields NO ES open interest, and es4 GEX is fail-closed on OI (ESM-Q4)." >&2
             echo "  (2) Real .4 headroom must be MEASURED with the full es4 fleet running (DBP-V10)." >&2
             exit 1; }
+          # Activation does not pass through the deploy stage that reconcile-deletes prod, so prove
+          # retirement here too — otherwise es4 could be started while a prod Deployment still exists.
+          bash scripts/es4/assert-prod-es-feed-absent.sh "$PROD_KUBECONFIG"
           bash scripts/es4/assert-es-feed-exclusive.sh "$ES4_KUBECONFIG" "$PROD_KUBECONFIG" "$ES_FEED_LOCATION"
           KC="$ES4_KUBECONFIG"
           if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then

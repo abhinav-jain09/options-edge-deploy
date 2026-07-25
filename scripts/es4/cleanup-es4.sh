@@ -2,9 +2,14 @@
 # cleanup-es4.sh — ATOMIC es4 Kafka + Schema-Registry reset (the "cleanup v2").
 #
 # Runs ON the es4 box (rsync'd by es4-deploy, CLEAN_RESET action). The Jenkins stage MUST
-# quiesce the cross-cluster prod `es-feed` producer (options-edge/es-feed on .252, publishing to
-# 192.168.100.4:9092 + :8081) BEFORE invoking this and restore it AFTER — this script cannot reach
-# the prod cluster. It refuses to run unless told the external feed is fenced (ES4_FEED_FENCED=1).
+# prove the cross-cluster prod `es-feed` producer cannot publish BEFORE invoking this — this script
+# cannot reach the prod cluster. It refuses to run unless told so (ES4_FEED_FENCED=1).
+# ⚠️ Since DBP-R33 (2026-07-25) the prod es-feed is RETIRED rather than fenced-and-restored, and the
+# Jenkins stage proves its ABSENCE (scripts/es4/assert-prod-es-feed-absent.sh) before passing
+# ES4_FEED_FENCED=1 — that flag is an assertion, so something must actually check it.
+# ES_FEED_DESIRED_REPLICAS (optional): declared intent for es-feed, which OVERRIDES the captured
+# replica count on restore. The capture is durable and survives an interrupted run, so without this
+# a stale capture of 1 could start a Databento session after the operator declared the feed down.
 #
 # WHY: the scorer/gex hit "AvroRuntimeException: Malformed data. Length is negative" —
 # a message framed with Confluent schema id=N (written when id=N meant schema A) survived a
@@ -229,12 +234,26 @@ else
   while read -r name reps; do
     [ -n "$name" ] || continue
     [ "$reps" = "<none>" ] && reps=1
+    # es-feed is special: it owns a Databento live session on a shared API key, so its replica count
+    # is a DECLARED INTENT (ES_FEED_DESIRED_REPLICAS, passed in by the Jenkins clean-reset stage from
+    # ES_FEED_LOCATION), not something to be inferred from a snapshot. The snapshot is durable and
+    # survives an interrupted run, so without this an earlier capture of 1 would be restored long
+    # after the operator declared the feed should be down — silently starting a Databento session
+    # nobody asked for. Requirement DBP-R21/R22.
+    if [ "$name" = "es-feed" ] && [ -n "${ES_FEED_DESIRED_REPLICAS:-}" ]; then
+      if [ "$reps" != "$ES_FEED_DESIRED_REPLICAS" ]; then
+        log "es-feed: captured replicas=$reps overridden by declared intent ES_FEED_DESIRED_REPLICAS=$ES_FEED_DESIRED_REPLICAS"
+      fi
+      reps="$ES_FEED_DESIRED_REPLICAS"
+    fi
     $KC scale "deploy/$name" --replicas="$reps" >/dev/null || { echo "restore scale FAILED for $name" >&2; fail=1; }
   done < <(REPS)
   # verify each Deployment's spec.replicas matches the captured value
   while read -r name reps; do
     [ -n "$name" ] || continue
     [ "$reps" = "<none>" ] && reps=1
+    # same override as the scale loop above, or verification would compare against the stale capture
+    if [ "$name" = "es-feed" ] && [ -n "${ES_FEED_DESIRED_REPLICAS:-}" ]; then reps="$ES_FEED_DESIRED_REPLICAS"; fi
     got=$($KC get "deploy/$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
     [ "$got" = "$reps" ] || { echo "restore MISMATCH $name: want $reps got $got" >&2; fail=1; }
   done < <(REPS)
@@ -243,6 +262,7 @@ else
     missing=0
     while read -r name reps; do
       [ "$reps" = "<none>" ] && reps=1
+      if [ "$name" = "es-feed" ] && [ -n "${ES_FEED_DESIRED_REPLICAS:-}" ]; then reps="$ES_FEED_DESIRED_REPLICAS"; fi
       [ "$reps" -gt 0 ] || continue
       avail=$($KC get "deploy/$name" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
       [ "${avail:-0}" -ge "$reps" ] || missing=$((missing + 1))

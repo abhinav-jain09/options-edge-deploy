@@ -15,12 +15,11 @@
 #     Deployment itself is gone -> FAIL (a terminating or orphaned pod still holds the session)
 #   * a Secret that exists but carries no non-empty DATABENTO_API_KEY -> FAIL
 #
-# ⚠️ WHAT THIS IS NOT: an atomic lease. There remains a time-of-check/time-of-use window, and
-# nothing here prevents a second Jenkins job, a manual `kubectl scale`, or another controller from
-# starting the other location a moment later. `disableConcurrentBuilds()` only serialises THIS
-# job. Requirement DBP-R28 / design ESM-R40 call for an external publisher lease with a fencing
-# token; until that exists this script is a best-effort observation, and that limitation must not
-# be described as a guarantee.
+# ⚠️ WHAT THIS IS NOT: an atomic lease. There remains a time-of-check/time-of-use window.
+# DBP-R28 (a publisher lease with a fencing token) was SUPERSEDED by DBP-R33: rather than arbitrate
+# between two locations, the prod-cluster es-feed is deleted so only one location exists. This script
+# therefore now ENFORCES that absence for prod rather than tolerating a parked Deployment. The
+# residual TOCTOU window is accepted because there is no second Deployment to race with.
 set -euo pipefail
 
 ES4_KUBECONFIG=${1:?usage: assert-es-feed-exclusive.sh <es4-kubeconfig> <prod-kubeconfig> <target: es4|prod>}
@@ -57,7 +56,11 @@ set +e
 other_out=$(KUBECONFIG="$other_kc" kubectl -n options-edge get deploy es-feed -o jsonpath='{.spec.replicas}' 2>&1)
 other_rc=$?
 set -e
-if [ "$other_rc" -eq 0 ]; then
+if [ "$other_rc" -eq 0 ] && [ "$other_name" = "prod" ]; then
+  # DBP-R33: prod must not have an es-feed Deployment AT ALL, not merely one at replicas 0.
+  # Accepting a parked prod Deployment is what allowed activation while two locations still existed.
+  fail "prod still has an es-feed Deployment (replicas=$other_out). DBP-R33 requires it deleted, not parked at 0 — run a deploy so the reconcile-delete removes it."
+elif [ "$other_rc" -eq 0 ]; then
   other_rep=$other_out
   [ -n "$other_rep" ] || fail "empty replica count for $other_name es-feed — failing closed"
   case "$other_rep" in (*[!0-9]*) fail "unparseable replica count '$other_rep' for $other_name es-feed — failing closed";; esac
@@ -77,4 +80,4 @@ stray=$(KUBECONFIG="$other_kc" kubectl -n options-edge get pods -l app.kubernete
 [ "${stray:-0}" = "0" ] || fail "$stray es-feed pod(s) still present in $other_name; wait for deletion before starting $TARGET"
 
 echo "es-feed exclusivity OK: target=$TARGET, $other_name has no es-feed replicas and no es-feed pods, target secret usable"
-echo "  NOTE: this is a point-in-time observation, not an atomic lease (see DBP-R28 / ESM-R40)."
+echo "  NOTE: point-in-time observation. Safety rests on DBP-R33 — only one location has a Deployment at all."
