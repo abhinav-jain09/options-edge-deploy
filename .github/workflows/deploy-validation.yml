@@ -60,5 +60,13 @@ jobs:
       - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
         run: scripts/ci/validate-image-pinning.sh
 
+      # DBP-R4 drift gate. The 2026-07-24 Databento incident was caused by a feed deployment that
+      # mounted only its API-key Secret and therefore inherited library code defaults
+      # (DATABENTO_USE_LIVE_REPLAY=true, DATABENTO_PUBLISH_INTERVAL_MS=250). This resolves the FULL
+      # rendered environment (env over envFrom, as Kubernetes does) and fails on any mandatory key
+      # that is left to a default.
+      - name: Validate feed configuration is fully explicit (no inherited library defaults)
+        run: bash scripts/ci/validate-feed-config-explicit.sh
+
       - name: Validate deploy image locks
         run: scripts/deploy/validate-image-lock-ci.sh

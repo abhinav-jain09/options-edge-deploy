@@ -61,9 +61,22 @@ if [ -z "$DRY" ]; then
     exit 1
   fi
   while read -r d; do
+    name=${d#deployment.apps/}; name=${name#deployment/}
+    # Read the DESIRED replica count once, fail-closed. An INTENTIONALLY zero-replica Deployment
+    # has no pods, so there is neither a rollout to wait for nor a running imageID to prove.
+    # Without this branch the `running=` assignment below yields empty and the check fail-closes
+    # AFTER `kubectl apply` has already mutated the cluster — which would (a) make every
+    # zero-replica deploy exit red, and (b) scale an already-running Deployment to zero and then
+    # abort, leaving a wanted workload down. The digest guarantee is NOT weakened: the manifest was
+    # already proven fully digest-pinned above, and nothing is running that could be stale.
+    want=$(kubectl -n options-edge get "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
+    case "$want" in
+      0) echo "image verify: $name is at replicas 0 by design — manifest is digest-pinned, no rollout or running pod to assert"
+         continue ;;
+      ''|*[!0-9]*) echo "IMAGE VERIFY FAILED: cannot read desired replicas for $name (got '$want')" >&2; exit 1 ;;
+    esac
     kubectl -n options-edge rollout status "$d" --timeout=240s || {
       echo "ROLLOUT FAILED: $d (manifest $MANIFEST)" >&2; exit 1; }
-    name=${d#deployment.apps/}; name=${name#deployment/}
     expected=$(grep -oE "image: [^ ]+@sha256:[0-9a-f]{64}" "$OUT" | head -1 | grep -oE "sha256:[0-9a-f]{64}")
     running=$(kubectl -n options-edge get pods -l "app.kubernetes.io/name=${name}" \
       -o jsonpath='{range .items[*]}{.status.containerStatuses[*].imageID}{"\n"}{end}' 2>/dev/null | grep -oE "sha256:[0-9a-f]{64}" | sort -u)

@@ -1,16 +1,38 @@
-# es-feed — the ES-0DTE-options Databento feed. Runs in the PROD cluster (.252, next to
-# prod Kafka) but produces EVERYTHING to the es4 box (192.168.100.4). Gate-2 rev 10 wiring:
-#   * subscribes GLBX.MDP3 ES 0DTE OPTIONS ONLY (the ES future's trades are subscribed
-#     exactly once, by the existing prod feed — never twice);
-#   * consumes prod's underlying.es.trades from prod Kafka (localhost network) to drive
-#     canonicalSpot = the ES future's own traded price, verbatim (DATABENTO_SPOT_SOURCE=ES_TRADE
-#     -> EsFutureSpotProvider; ES options settle on the future, so no carry/parity is applied);
-#   * publishes es.-prefixed topics to es4 Kafka + registers Avro in es4's Schema Registry.
+# es-feed — the ES-0DTE-options Databento feed. RUNS ON THE ES4 CLUSTER (192.168.100.4),
+# next to es4 Kafka and es4 Schema Registry.
 #
-# The SPX feed deployment is NOT touched by this file. Same image as the SPX feed
-# (options-edge-databento-feed) — behavior is env-only + the es-feed code paths.
-# Deploy ONLY via Jenkinsfile.es4-deploy ACTION=deploy-es-feed (digest-pinned).
-# PREREQ: the feed repo es-feed changes must be merged + image rebuilt first.
+# RELOCATED from the prod cluster 2026-07-25 (USER: "in any case we need to move the es feed
+# to es env"). Requirement: DATABENTO-BACKPRESSURE-REMEDIATION-GATE1.md rev 6, DBP-R26;
+# design: ES-FEED-MIGRATION-AND-INGESTION-DESIGN.md rev 5, "Phase 1 lift-and-shift".
+#
+# What relocation buys (and it is structural, not a mitigation):
+#   * final Avro records are produced LOCALLY against es4's own Schema Registry, so the
+#     cross-host schema-ID poisoning class disappears (DBP-R24);
+#   * no cross-LAN produce under acks=all + idempotence on the socket hot path — the
+#     .4:9092 / .4:8081 hops are now node-local;
+#   * contended CPU is returned on .252 to the SPX OPRA feed, which is the client behind
+#     Databento's standing "consistently too slow" complaint. ⚠️ The magnitude is NOT measured
+#     — an earlier "~1 core" figure was wrong (the feed is not a single-GIL-thread process: the
+#     Databento client owns an event-loop thread, the service starts worker threads, and the
+#     librdkafka producers are native). Size it from measurement, not from this comment.
+#
+# ⚠️ WHAT THIS DOES **NOT** FIX. Intake and processing are still coupled in one process
+# and there is NO durable relay, so DBP-R13/R15 remain open. This reduces exposure; it
+# does not remove the failure class. That is Phase 2 (log-native intake/builder split),
+# which is proven on the prod SPX feed FIRST.
+#
+# ⚠️ The SPX feed (options-edge-databento-feed, prod cluster) is NOT touched by this file.
+#    This manifest is applied with the ES4 kubeconfig and cannot reach the prod cluster.
+#
+# ⚠️ replicas: 0 IS THE INTENDED STATE. One shared Databento API key cannot carry two
+#    concurrent ES option-chain sessions, and the prod es-feed deployment still exists
+#    (also at 0) for rollback. Activation is a separate, explicitly authorized action —
+#    never a side effect of a deploy, a clean-reset, or an autostart. See the
+#    ACTION=activate-es-feed + ES_FEED_LOCATION parameters in Jenkinsfile.es4-deploy.
+#
+# PREREQ: the `options-edge-databento-feed-env` secret must exist in the es4 cluster
+# (namespace options-edge). It does not exist there yet and must be provisioned by a
+# human — this file only references it. The deploy stage fails closed if it is absent.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,13 +42,7 @@ metadata:
     app.kubernetes.io/name: es-feed
     app.kubernetes.io/part-of: options-edge-es4
 spec:
-  # ⭐0 IS THE INTENDED STATE (Phase 0, requirement DBP-R20). This used to say `replicas: 1`,
-  # which meant ANY `ACTION=deploy-es-feed` run re-raised the feed as a side effect — that is
-  # exactly how it came up mid-RTH on 2026-07-24 and entered an 8-cycle liveness-SIGKILL loop,
-  # each cycle abandoning a Databento session mid-replay with an unread receive buffer.
-  # This deployment is now RETAINED FOR ROLLBACK ONLY; the live location is the es4 cluster
-  # (k8s/es4/services/es-feed.yaml). Activation is a separate, explicitly authorized action —
-  # see ACTION=activate-es-feed + ES_FEED_LOCATION in Jenkinsfile.es4-deploy. Never raise this from a manifest inference.
+  # 0 = intended. See the replicas note in the header; activation is a separate action.
   replicas: 0
   selector:
     matchLabels:
@@ -43,17 +59,20 @@ spec:
         - name: es-feed
           image: 192.168.100.252:5000/options-edge-databento-feed:prod
           envFrom:
-            # Rollback target must carry the SAME explicit configuration as the es4 location, or a
-            # rollback silently reinstates the incident defaults. See k8s/es4/prod/es-feed-config.yaml.
+            # es-feed's OWN configmap (k8s/es4/es4-feed-config.yaml). Fixes the root cause of
+            # the 2026-07-24 incident: a secret-only envFrom silently inherited the library's
+            # code defaults (USE_LIVE_REPLAY=true, PUBLISH_INTERVAL_MS=250). DBP-R1/R2.
+            # ⚠️ NEVER add configMapRef: options-edge-databento-feed-config here — it carries
+            #    SPX values (OPRA.PILLAR / SPX / strikes 7000-8000).
             - configMapRef:
                 name: es-feed-databento-config
             - secretRef:
-                # ⚠️ "per-account session limits verified" was asserted here previously; it is NOT
-                # verified — whether Databento's gateway backpressure is per key/account or per
-                # session is still an open question with the vendor (DBP-Q7 / ESM-Q6).
                 name: options-edge-databento-feed-env   # DATABENTO_API_KEY
           env:
-            # ---- outputs -> es4 -------------------------------------------------
+            # ---- outputs -> es4 (NODE-LOCAL after the relocation) ----------------
+            # Kafka and Schema Registry run on the es4 HOST, not as pods, so the pod must
+            # still address them by node IP — but the hop is now node-local rather than
+            # crossing the LAN from .252.
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: "192.168.100.4:9092"
             - name: KAFKA_SCHEMA_REGISTRY_URL
@@ -141,13 +160,22 @@ spec:
             # and ATM stuck at the 5000 default.
             - name: DATABENTO_SPOT_SOURCE
               value: "ES_TRADE"
-            # ---- ES price source: consume prod's underlying.es.trades (new code) -
+            # ---- ES price source: consume prod's underlying.es.trades ------------
+            # ⚠️ This is now the ONLY cross-LAN dependency, and it is a CONSUME (single
+            # partition, ~3M records) rather than a produce under acks=all — the favourable
+            # direction of the trade (design ESM-R29). The ES future's trades are still
+            # subscribed from Databento exactly ONCE, by the prod SPX feed, never twice.
             - name: ES_TRADES_SOURCE_ENABLED
               value: "true"
             - name: ES_TRADES_SOURCE_BOOTSTRAP
               value: "192.168.100.252:9092"
             - name: ES_TRADES_SOURCE_TOPIC
               value: "underlying.es.trades"
+            # Group id is INTENTIONALLY unchanged from the prod-cluster deployment: on cutover the
+            # relocated feed resumes from the committed offset instead of re-consuming ~3M records
+            # or skipping a gap. Because the group is shared, the two locations must never run
+            # concurrently — they would split the single partition and only one would see trades.
+            # The deploy preflight in Jenkinsfile.es4-deploy enforces that.
             - name: ES_TRADES_SOURCE_GROUP_ID
               value: "es-feed-spot"
             # ---- compacted ES spot-price topic (feed PR #63) ---------------------
@@ -172,8 +200,19 @@ spec:
               value: "globex"
             - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
               value: "120"
+            # 300s was the exact budget that killed this pod 8 times on 2026-07-24: grace 300s +
+            # 3 x 30s probe failures = 390s, while a multi-hour statistics replay had not yet
+            # produced its first quote publish. That trigger is GONE — this deployment sets
+            # DATABENTO_USE_LIVE_REPLAY=false, so there is no replay burst to survive.
+            # 600s is kept (rather than the original 300s) for the genuinely thin GLBX overnight
+            # tape plus ~71s of contract resolution at boot, not to mask a backlog.
+            # ⚠️ A widened grace is NOT a remedy for lag and requirement DBP-R12 rejects it as one:
+            # this probe measures wall-clock time since our last publish, not source age from
+            # ts_recv, so it can still look healthy while the client is behind. Source-age
+            # alerting (DBP-R9/R11) must land before sustained running. Never read "no restarts"
+            # as health.
             - name: DATABENTO_FEED_LIVENESS_STARTUP_GRACE_SECONDS
-              value: "300"
+              value: "600"
           ports:
             - name: metrics
               containerPort: 8010
