@@ -21,7 +21,8 @@
 # fenced, so no message can outlive its schema id.
 #
 # Safety: preflight before ANY mutation; fail-closed quiescence (verified, not best-effort);
-# durable deployment + topic snapshots (survive interruption); single-instance lock;
+# durable deployment snapshot (survives interruption); topics come from the topics.env SSOT,
+#         NOT from a live-broker snapshot; single-instance lock;
 # canonical-path-guarded deletes. Honors DEPLOY_DRY_RUN=true (no mutation).
 set -euo pipefail
 
@@ -41,6 +42,18 @@ run()  { if [ "$DRY" = "true" ]; then echo "DRY: $*"; else eval "$*"; fi; }
 
 # ------------------------------------------------------------ 0. PREFLIGHT (before any mutation)
 log "preflight (no mutation happens unless every check passes)"
+# ⚠️ THIS is the cluster that actually gets wiped. The Jenkins stage verifies its ES4_KUBECONFIG,
+# but the destructive work runs HERE over SSH against the host's own k3s context — a different
+# credential entirely. Verifying the Jenkins-side kubeconfig therefore proves nothing about the
+# target. Bind them: the caller passes the pinned UID and we refuse unless the local cluster matches.
+if [ "${ES4_EXPECTED_NS_UID:-}" != "" ]; then
+  actual_uid=$($KC get namespace options-edge -o jsonpath='{.metadata.uid}' 2>/dev/null || echo "")
+  [ -n "$actual_uid" ] || die "cannot read the local options-edge namespace UID — refusing to wipe an unidentified cluster"
+  [ "$actual_uid" = "$ES4_EXPECTED_NS_UID" ] || die "LOCAL CLUSTER IS NOT es4: options-edge namespace UID is $actual_uid, expected $ES4_EXPECTED_NS_UID — refusing to wipe"
+  log "local cluster identity confirmed ($actual_uid)"
+elif [ "$DRY" != "true" ]; then
+  die "ES4_EXPECTED_NS_UID not supplied — a destructive run must bind to a verified cluster identity"
+fi
 [ "${ES4_FEED_FENCED:-0}" = "1" ] || [ "$DRY" = "true" ] || \
   die "external prod es-feed not proven absent (ES4_FEED_FENCED!=1) — the Jenkins clean-reset stage must run scripts/es4/assert-prod-es-feed-absent.sh first (DBP-R33 deleted the prod es-feed; it is no longer scaled and restored), else a surviving external producer re-pollutes the fresh cluster with cached schema ids"
 [ -d "$INFRA_DIR" ] || die "no $INFRA_DIR — run bootstrap-es4.sh (infra-sync) first"
@@ -124,15 +137,16 @@ if [ -s "$STATE" ]; then
       # A missing Deployment does not mean nothing is running: pods can outlive it, and a terminating
       # pod still produces. Check regardless of whether the Deployment existed.
       set +e
-      pods_out=$($KC get pods -l app.kubernetes.io/name=es-feed --no-headers 2>&1)
+      pods_out=$($KC get pods -l app.kubernetes.io/name=es-feed -o name 2>&1)
       pods_rc=$?
       set -e
-      if [ "$pods_rc" -eq 0 ]; then
-        n=$(printf '%s\n' "$pods_out" | awk 'NF {c++} END {print c+0}')
-        [ "$n" = "0" ] || die "phase=RESTORED but $n es-feed pod(s) are still present — refusing to clear state while a Databento session may be live"
-      elif ! printf '%s' "$pods_out" | grep -qiE 'no resources found'; then
-        die "phase=RESTORED but the es-feed pod query failed (rc=$pods_rc: $pods_out) — failing closed"
-      fi
+      # `-o name` prints nothing at all for an empty result, so the informational "No resources
+      # found" line that --no-headers emits on stderr can no longer be miscounted as a pod. And any
+      # non-zero rc is a real failure: accepting one because its text happened to contain "no
+      # resources found" masked a safety-critical query.
+      [ "$pods_rc" -eq 0 ] || die "phase=RESTORED but the es-feed pod query failed (rc=$pods_rc: $pods_out) — failing closed"
+      n=$(printf '%s\n' "$pods_out" | awk '/^pod\// {c++} END {print c+0}')
+      [ "$n" = "0" ] || die "phase=RESTORED but $n es-feed pod(s) are still present — refusing to clear state while a Databento session may be live"
       rm -f "$STATE"
     fi
     log "prior run already restored the app (phase=RESTORED); leftover state cleared, NO wipe"
@@ -324,5 +338,5 @@ fi
 if [ "$DRY" = "true" ]; then
   log "es4 clean reset DRY RUN COMPLETE — no services, data, state or logs were changed"
 else
-  log "es4 clean reset COMPLETE — service/topic snapshot restored after Kafka/SR, Streams state and logs were wiped"
+  log "es4 clean reset COMPLETE — service snapshot restored and topics reconciled from topics.env after Kafka/SR, Streams state and logs were wiped"
 fi

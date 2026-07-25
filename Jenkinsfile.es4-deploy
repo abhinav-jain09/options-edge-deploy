@@ -10,9 +10,10 @@
 //                  (k3s, registries.yaml, compose stack Kafka/SR/PG/Redis/MM2, topics,
 //                  namespace + pg secret). Idempotent.
 //   create-topics  run create-es-topics.sh on the box (idempotent).
-//   clean-reset    Snapshot every es4 Deployment + application topic, stop all services/infra,
-//                  wipe Kafka/SR, Streams state stores and service logs, recreate snapshotted
-//                  topics, then start only the snapshotted services at captured replicas —
+//   clean-reset    Snapshot every es4 Deployment, stop all services/infra, wipe Kafka/SR, Streams
+//                  state stores and service logs, reconcile topics from the topics.env SSOT (NOT
+//                  from a live-broker snapshot — undeclared topics are NOT preserved), then start
+//                  only the snapshotted services at captured replicas —
 //                  EXCEPT es-feed, which is always left at 0 (DBP-R22 reserves starting it to
 //                  ACTION=activate-es-feed, so no reset can raise a Databento session).
 //                  DESTRUCTIVE (drops all es4 Kafka data); honors DEPLOY_DRY_RUN.
@@ -133,12 +134,12 @@ pipeline {
 
           if [ "${DEPLOY_DRY_RUN}" = "true" ]; then
             echo "DRY: would run the on-box wipe (no prod es-feed to fence — retired per DBP-R33)"
-            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_FEED_FENCED=1 bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
             exit 0
           fi
 
           echo "=== running on-box atomic wipe ==="
-          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_FEED_FENCED=1 bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
         '''
       }
     }
@@ -149,6 +150,11 @@ pipeline {
           set -euo pipefail
           export KUBECONFIG="$ES4_KUBECONFIG"
           DRY=""; [ "${DEPLOY_DRY_RUN:-false}" = "true" ] && DRY="--dry-run=server"
+          # Identity FIRST: this stage mutates through $KUBECONFIG (es4). Proving identity after the
+          # first apply would mean a mispointed kubeconfig had already written to the wrong cluster.
+          bash scripts/es4/assert-cluster-identity.sh "$KUBECONFIG"      es4  "$ES4_NS_UID"
+          bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
+
           kubectl apply $DRY -f k8s/es4/es4-base-env.yaml
           kubectl apply $DRY -f k8s/es4/es4-common-env.yaml
           # es-feed's OWN Databento configmap. Applied for every es4 deploy so the feed can
@@ -166,8 +172,6 @@ pipeline {
             # Prove the kubeconfig really is the PROD cluster before deleting anything through it.
             # Without this, a PROD_KUBECONFIG that had been regenerated to point at .4 would delete
             # the LIVE es4 es-feed and the ConfigMap applied moments earlier in this same stage.
-            bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
-            bash scripts/es4/assert-cluster-identity.sh "$ES4_KUBECONFIG"  es4  "$ES4_NS_UID"
             KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge delete deployment es-feed --ignore-not-found
             KUBECONFIG="$PROD_KUBECONFIG" kubectl -n options-edge delete configmap es-feed-databento-config --ignore-not-found
           fi
@@ -260,6 +264,10 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          # Identity first: without it, two kubeconfigs both pointing at prod would let this action
+          # report success while es4 stayed live.
+          bash scripts/es4/assert-cluster-identity.sh "$ES4_KUBECONFIG"  es4  "$ES4_NS_UID"
+          bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
           # Scale BOTH locations to 0 and wait for pods to disappear. Deactivation is always safe
           # to over-apply, and doing both removes any ambiguity about which one was live.
           for pair in "es4:$ES4_KUBECONFIG" "prod:$PROD_KUBECONFIG"; do
@@ -276,9 +284,15 @@ pipeline {
               # running behind a green deactivation, on the key the SPX feed shares.
               echo "DEACTIVATE FAILED: cannot determine $loc es-feed state (rc=$dep_rc: $dep_out)" >&2; exit 1
             fi
-            [ -n "$dep_out" ] || { echo "$loc: no es-feed deployment"; continue; }
-            if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then echo "DRY: would scale $loc es-feed to 0"; continue; fi
-            KUBECONFIG="$kc" kubectl -n options-edge scale deploy/es-feed --replicas=0
+            if [ "${DEPLOY_DRY_RUN:-false}" = "true" ]; then echo "DRY: would scale $loc es-feed to 0 and wait for pods"; continue; fi
+            # A pod can outlive its Deployment and keep the Databento session, so the pod wait below
+            # runs even when there is no Deployment to scale. Reporting success without it would be
+            # the same fail-open the RESTORED and prod-absence paths already reject.
+            if [ -n "$dep_out" ]; then
+              KUBECONFIG="$kc" kubectl -n options-edge scale deploy/es-feed --replicas=0
+            else
+              echo "$loc: no es-feed deployment — still checking for stray pods"
+            fi
             for _ in $(seq 1 60); do
               n=$(KUBECONFIG="$kc" kubectl -n options-edge get pods -l app.kubernetes.io/name=es-feed --no-headers 2>/dev/null | wc -l | tr -d ' ')
               [ "${n:-0}" = "0" ] && break
