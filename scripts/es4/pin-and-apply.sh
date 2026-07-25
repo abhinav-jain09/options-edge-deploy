@@ -62,28 +62,22 @@ if [ -z "$DRY" ]; then
   fi
   while read -r d; do
     name=${d#deployment.apps/}; name=${name#deployment/}
-    # `rollout status` on a scaled-to-zero Deployment is meaningless (and can be misleading), so
-    # the desired-replica check below is evaluated FIRST for the zero case.
-    want_pre=$(kubectl -n options-edge get "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
-    if [ "${want_pre}" != "0" ]; then
-      kubectl -n options-edge rollout status "$d" --timeout=240s || {
-        echo "ROLLOUT FAILED: $d (manifest $MANIFEST)" >&2; exit 1; }
-    fi
-    expected=$(grep -oE "image: [^ ]+@sha256:[0-9a-f]{64}" "$OUT" | head -1 | grep -oE "sha256:[0-9a-f]{64}")
-    # An INTENTIONALLY zero-replica Deployment has no pods, so there is no running imageID to
-    # prove. Without this branch the assignment below yields empty and the function fail-closes
+    # Read the DESIRED replica count once, fail-closed. An INTENTIONALLY zero-replica Deployment
+    # has no pods, so there is neither a rollout to wait for nor a running imageID to prove.
+    # Without this branch the `running=` assignment below yields empty and the check fail-closes
     # AFTER `kubectl apply` has already mutated the cluster — which would (a) make every
     # zero-replica deploy exit red, and (b) scale an already-running Deployment to zero and then
-    # abort, leaving a wanted workload down. The digest guarantee is NOT weakened: the manifest
-    # was already proven fully digest-pinned above, and nothing is running to be stale.
+    # abort, leaving a wanted workload down. The digest guarantee is NOT weakened: the manifest was
+    # already proven fully digest-pinned above, and nothing is running that could be stale.
     want=$(kubectl -n options-edge get "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
-    if [ "$want" = "ERR" ]; then
-      echo "IMAGE VERIFY FAILED: cannot read desired replicas for $name" >&2; exit 1
-    fi
-    if [ "${want:-0}" = "0" ]; then
-      echo "image verify: $name is at replicas 0 by design — manifest is digest-pinned, no running pod to assert"
-      continue
-    fi
+    case "$want" in
+      0) echo "image verify: $name is at replicas 0 by design — manifest is digest-pinned, no rollout or running pod to assert"
+         continue ;;
+      ''|*[!0-9]*) echo "IMAGE VERIFY FAILED: cannot read desired replicas for $name (got '$want')" >&2; exit 1 ;;
+    esac
+    kubectl -n options-edge rollout status "$d" --timeout=240s || {
+      echo "ROLLOUT FAILED: $d (manifest $MANIFEST)" >&2; exit 1; }
+    expected=$(grep -oE "image: [^ ]+@sha256:[0-9a-f]{64}" "$OUT" | head -1 | grep -oE "sha256:[0-9a-f]{64}")
     running=$(kubectl -n options-edge get pods -l "app.kubernetes.io/name=${name}" \
       -o jsonpath='{range .items[*]}{.status.containerStatuses[*].imageID}{"\n"}{end}' 2>/dev/null | grep -oE "sha256:[0-9a-f]{64}" | sort -u)
     if [ -z "$running" ]; then
