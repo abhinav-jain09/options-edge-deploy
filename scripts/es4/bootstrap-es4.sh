@@ -127,9 +127,14 @@ log "ensuring options-edge namespace + es4-runtime-secrets"
 sudo /usr/local/bin/k3s kubectl get ns options-edge >/dev/null 2>&1 || sudo /usr/local/bin/k3s kubectl create ns options-edge
 PGPW=$(grep '^ES4_POSTGRES_PASSWORD=' "$INFRA_DIR/.env" | cut -d= -f2)
 # name MUST match the manifests' envFrom secretRef (render_es4_manifests.py)
+# OE_WATCH_DB_PASSWORD: read-only oe_watch_reader on the SHARED ledger (.252/options_flow) for the
+# System Status page. Optional — an empty value still applies cleanly and the page reports
+# LEDGER UNAVAILABLE rather than a falsely-healthy screen. Sourced from the infra .env when present.
+OEWATCHPW=$(grep '^OE_WATCH_READER_PASSWORD=' "$INFRA_DIR/.env" 2>/dev/null | cut -d= -f2 || true)
 sudo /usr/local/bin/k3s kubectl -n options-edge create secret generic es4-runtime-secrets \
   --from-literal=POSTGRES_USER=options_edge_es \
   --from-literal=POSTGRES_PASSWORD="$PGPW" \
+  --from-literal=OE_WATCH_DB_PASSWORD="${OEWATCHPW:-}" \
   --dry-run=client -o yaml | sudo /usr/local/bin/k3s kubectl apply -f -
 
 # ------------------------------------------ 6. remote-ready kubeconfig
