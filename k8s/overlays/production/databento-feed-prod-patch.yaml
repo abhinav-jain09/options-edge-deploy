@@ -14,6 +14,11 @@ spec:
     spec:
       containers:
         - name: databento-feed
+          # Reserve one production core. Keep this in the source overlay so
+          # monolithic and generated standalone deployments preserve it.
+          resources:
+            requests:
+              cpu: "1"
           env:
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "2000"

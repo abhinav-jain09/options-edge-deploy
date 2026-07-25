@@ -105,7 +105,7 @@ spec:
             limits:
               memory: 2Gi
             requests:
-              cpu: 250m
+              cpu: "1"
               memory: 512Mi
       dnsPolicy: Default
       hostNetwork: true
