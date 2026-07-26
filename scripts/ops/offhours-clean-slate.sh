@@ -25,7 +25,8 @@
 #        freshly-emptied changelogs (BufferUnderflowException / codec mismatch),
 #        so clearing the local state is MANDATORY, not optional.
 #   C. Postgres (flow DB `options_flow` ONLY — Keycloak is NEVER touched)
-#      - TRUNCATE every table in the public schema (incl. pin_session_close), then
+#      - TRUNCATE every table in the public schema EXCEPT the cross-day corpora
+#        (pin_session_close labels, calibration.*, es_*, zerodte_*, spread_skew_sample), then
 #        CHECKPOINT (+ VACUUM) to recycle WAL and actually return disk.
 #   D. Logs + docker disk (truncate-in-place, NEVER rm)
 #      - Kafka broker server.log, Postgres server logs, docker container json-logs
@@ -385,7 +386,7 @@ if [ "$MUTATE" = "false" ]; then
     log "  A+B. Kafka topic wipe + Streams-state PVC reset: SKIPPED (WIPE_KAFKA=false — 12h broker retention self-expires the ${N_PURGE} data + ${N_STATE} state topics; topics + $N_PVCS PVCs persist)"
   fi
   if [ "$DB_WIPE" = "true" ]; then
-    log "  C. Postgres: TRUNCATE all public tables in '$EXPECTED_DB' (incl. pin_session_close) + CHECKPOINT + VACUUM"
+    log "  C. Postgres: TRUNCATE public tables in '$EXPECTED_DB' EXCEPT cross-day corpora (pin_session_close, calibration.*, es_*, zerodte_*) + CHECKPOINT + VACUUM"
     TBLS=$(pg "select count(*) from pg_tables where schemaname='public'" 2>/dev/null | tr -d '[:space:]')
     log "     public tables that would be truncated: ${TBLS:-?}"
   else
@@ -565,7 +566,7 @@ if [ "$DB_WIPE" = "true" ]; then
   done
   [ "$DBN_NOW" = "$EXPECTED_DB" ] || die "DB name changed to '$DBN_NOW' — REFUSING truncate"
   # Discover every public table and TRUNCATE them all in one statement (no CASCADE
-  # needed within a single all-tables truncate). pin_session_close IS included.
+  # needed within a single all-tables truncate).
   #
   # PRESERVE the dealer-ledger CALIBRATION corpus across the wipe: calibration.outcome_scored +
   # calibration.calibration_state hold the accumulated Wilson evidence that must survive daily (they
@@ -601,7 +602,20 @@ if [ "$DB_WIPE" = "true" ]; then
   # zerodte_schema_version — losing that would make the writer re-run its DESTRUCTIVE reconciling
   # DDL on the next boot, dropping and recreating constraints while other instances write.
   ZERODTE_EXCLUDE="tablename !~ '^zerodte_'"
-  EXEMPT_TABLES="$CALIB_TABLES, 'spread_skew_sample'"
+  # pin_session_close EXEMPT (2026-07-26). It is the LABEL table of the backtest/training store
+  # (PinPostgresSchema, DESIGN 17.2): one realized close per (trade_date, expiry), with the raw
+  # close, an independent option-parity cross-check, the divergence, a QA status, a content hash
+  # and the fetch time. The other pin_* tables are FEATURES and can be rebuilt by replay; a label
+  # cannot. Once truncated, a past session's realized close has to be re-fetched from an external
+  # source, and the provenance that made it auditable — raw_payload, content_hash, fetched_at — is
+  # gone for good.
+  #
+  # This job used to truncate it while premarket-reset.sh REFUSES to (hard deny + the reset role
+  # holds no grant on it). The two disagreed. premarket-reset landed 2026-06-28 with the reasoning
+  # "preserve realized-close labels"; this job landed 2026-06-30 and merely DESCRIBED the table as
+  # "incl. pin_session_close" — a parenthetical noting what an all-public sweep catches, with no
+  # argument anywhere for reversing the earlier decision. The reasoned position wins.
+  EXEMPT_TABLES="$CALIB_TABLES, 'spread_skew_sample', 'pin_session_close'"
   ES_EXCLUDE="tablename !~ '^es_'"
   TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES) and $ES_EXCLUDE and $ZERODTE_EXCLUDE")
   if [ -n "$TBL_LIST" ]; then
@@ -610,6 +624,19 @@ if [ "$DB_WIPE" = "true" ]; then
     # into the truncate list. Any non-"public" table in the list aborts the entire wipe, fail-closed.
     NONPUBLIC_IN_LIST=$(printf '%s' "$TBL_LIST" | grep -oE '"[^"]+"\.' | grep -vxE '"public"\.' | sort -u | tr '\n' ' ')
     [ -z "$NONPUBLIC_IN_LIST" ] || die "REFUSING truncate: non-public schema(s) in the truncate list: $NONPUBLIC_IN_LIST"
+    # Same idea, applied to the cross-day corpora by NAME. The filter above already excludes them;
+    # this re-reads the finished list and refuses if any slipped back in. It is not redundant with
+    # the filter — it protects against a future edit to the filter, which is exactly how
+    # pin_session_close came to be truncated here in the first place. premarket-reset.sh guards the
+    # same table three ways (script deny, no role grant, explicit REVOKE TRUNCATE); this job runs
+    # as the flow-DB owner, so a REVOKE cannot help and the check has to live here.
+    for guarded in pin_session_close zerodte_feature_frame zerodte_prediction zerodte_outcome \
+                   zerodte_schema_version outcome_scored calibration_state spread_skew_sample; do
+      case ",${TBL_LIST//\"/}," in
+        *",public.$guarded,"*|*"public.$guarded,"*|*", public.$guarded,"*)
+          die "REFUSING truncate: cross-day corpus '$guarded' is in the truncate list — a label/evidence table that cannot be rebuilt" ;;
+      esac
+    done
     # Counted from the LIST that is actually truncated, not from a second query that repeats the
     # filter. Repeating it is how the two drift: the es_/zerodte_ guards would have to be added in
     # both places, and a miss there does not truncate the wrong table — it just reports the wrong
@@ -617,7 +644,7 @@ if [ "$DB_WIPE" = "true" ]; then
     trunc_n=$(printf '%s' "$TBL_LIST" | tr ',' '\n' | grep -c '[^[:space:]]')
     pg "set lock_timeout='30s'; set statement_timeout='300s'; truncate table $TBL_LIST restart identity" \
       || die "TRUNCATE of flow DB failed"
-    log "truncated $trunc_n public tables in '$EXPECTED_DB' (incl. pin_session_close + spread_skew_event; calibration.* + spread_skew_sample + es_* preserved)"
+    log "truncated $trunc_n public tables in '$EXPECTED_DB' (incl. spread_skew_event; pin_session_close + calibration.* + spread_skew_sample + es_* + zerodte_* preserved)"
     # Prove the calibration corpus survived (visibility): approx row counts are untouched by the wipe.
     # Read the estimate from pg_stat_user_tables (never parse-errors if the table/schema is absent —
     # returns no row -> -1) so this is safe on a fresh DB before the service's first run.
