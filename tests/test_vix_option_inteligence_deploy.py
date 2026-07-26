@@ -1,4 +1,5 @@
 import pathlib
+import os
 import unittest
 
 
@@ -43,12 +44,44 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         self.assertIn("name: ZERO_DTE_SYMBOL", manifest)
         self.assertIn("value: ES", manifest)
         mm2 = (ROOT / "infra/es4/mm2/mm2.properties").read_text()
-        self.assertIn("underlying.es.trades,underlying.vix.price", mm2)
+        # This mirror is VIX-ONLY since DBP-R32 (2026-07-26). It used to also carry
+        # underlying.es.trades prod->es4, but the ES-futures subscription moved to es4, so es4
+        # produces es.underlying.es.trades natively and the traffic now flows the OTHER way
+        # (es4 -> prod, over the renaming bridge — MM2 cannot rename a topic).
+        # ⭐Assert the EFFECTIVE topic list, not the file text. A whole-file assertNotIn is wrong
+        # here: this file legitimately mentions underlying.es.trades in the comment explaining WHY
+        # it was removed, so a blunt check fails on its own documentation.
+        topic_lines = [
+            ln.strip()
+            for ln in mm2.splitlines()
+            if ln.strip().startswith("es->es4.topics") and not ln.strip().startswith("#")
+        ]
+        self.assertEqual(
+            ["es->es4.topics = underlying.vix.price"],
+            [ln for ln in topic_lines if ".exclude" not in ln],
+            "the prod->es4 mirror must carry VIX only",
+        )
+        # Pin the LOOP-SAFETY property: both directions live for one logical topic is exactly what
+        # produced the 2026-07-24 `es.es.es...` runaway. es4 now PRODUCES ES trades and the bridge
+        # carries them es4->prod, so re-adding them here would close the cycle.
+        self.assertNotIn(
+            "underlying.es.trades",
+            " ".join(ln for ln in topic_lines if ".exclude" not in ln),
+            "MM2 must not mirror ES trades prod->es4",
+        )
         bootstrap = (ROOT / "scripts/es4/bootstrap-es4.sh").read_text()
         self.assertIn("docker compose up -d --force-recreate mm2", bootstrap)
+        # Topic definitions moved to the SSOT (scripts/kafka/topics.env, applied by
+        # scripts/kafka/apply-topics.sh); create-es-topics.sh now only SELECTS the es4 set and
+        # supplies the broker + CLI shim. This assertion still named the old inline location and
+        # had been failing on main — assert the SSOT, and assert the delegation separately, so the
+        # test tracks where the truth actually lives.
+        topics_env = (ROOT / "scripts/kafka/topics.env").read_text()
+        self.assertIn("es.underlying.vix.price", topics_env)
+        self.assertIn("es.options.spx.vix-option-inteligence-service.current", topics_env)
         topic_script = (ROOT / "scripts/es4/create-es-topics.sh").read_text()
-        self.assertIn("es.underlying.vix.price", topic_script)
-        self.assertIn("es.options.spx.vix-option-inteligence-service.current", topic_script)
+        self.assertIn("TOPIC_SET=es4", topic_script)
+        self.assertIn("apply-topics.sh", topic_script)
 
     def test_all_three_jenkins_paths_include_service(self):
         service_job = (ROOT / "Jenkinsfile.service-deploy").read_text()
@@ -74,7 +107,16 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         es4 = (ROOT / "scripts/es4/create-es-topics.sh").read_text()
         self.assertIn("prune-retired-zero-dte-identity.lib.sh", es4)
         self.assertIn('prune_retired_zero_dte_identity "es.options.spx.0dte.intelligence.current"', es4)
-        self.assertIn("docker exec es4-kafka kafka-consumer-groups", es4)
+        # The docker-exec now lives in the PATH SHIM, not inline in create-es-topics.sh — the es4
+        # host has no Kafka CLI, so every call is proxied through scripts/es4/kafka-cli-shim.
+        # This assertion used to look for it inline and was therefore describing the old shape.
+        self.assertIn("prune_kg()", es4)
+        self.assertIn("SHIM_DIR", es4)
+        shim = ROOT / "scripts/es4/kafka-cli-shim/kafka-consumer-groups"
+        self.assertTrue(shim.exists(), "prune_kg() calls kafka-consumer-groups; the shim must exist")
+        self.assertTrue(os.access(shim, os.X_OK), "the shim must be executable or PATH lookup fails")
+        self.assertIn("docker exec -i", shim.read_text())
+        self.assertIn("kafka-consumer-groups", shim.read_text())
 
     def test_rename_removes_legacy_workload_only_after_replacement(self):
         scoped = (ROOT / "scripts/deploy/service-deploy.sh").read_text()

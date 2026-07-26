@@ -139,9 +139,21 @@ spec:
               value: "8000"
             - name: DATABENTO_STRIKE_STEP
               value: "5"
-            # ---- ES future's trades are NOT subscribed here (no double subscription)
+            # ---- ES future's trades ARE subscribed here (DBP-R32): the es env is the SOLE
+            # owner of every ES Databento subscription; prod consumes them over the bridge.
+            # This costs +0 concurrent sessions: _use_separate_es_live_client() opens an extra
+            # Databento session only when hpsf_es_dataset != databento_dataset, and BOTH are
+            # GLBX.MDP3 here — so the ES-future trades ride the option feed's existing live
+            # client. On prod they were OPRA.PILLAR vs GLBX.MDP3, i.e. a whole extra session,
+            # which turning this on here lets prod turn OFF (−1 session against the shared key).
             - name: DATABENTO_HPSF_ES_TRADES_ENABLED
-              value: "false"
+              value: "true"
+            # Explicit, es.-prefixed: es4 services resolve topics through TOPIC_PREFIX=es., so
+            # this must be the SAME name the prod->es4 MM2 mirror used to create, or every es4
+            # ES-trades consumer silently reads an empty topic. The feed does NOT auto-prefix —
+            # every other topic on this Deployment is spelled out for the same reason.
+            - name: KAFKA_HPSF_ES_TRADES_TOPIC
+              value: "es.underlying.es.trades"
             # ---- SPX publishers OFF: this is an ES options feed. Leaving the SPX price
             #      publisher on defaults HPSF_SPX_SPOT_SOURCE to STATIC_DEV, which config.py
             #      validate() forbids under APP_PROFILE=prod (feed refuses boot). The ES
@@ -160,24 +172,14 @@ spec:
             # and ATM stuck at the 5000 default.
             - name: DATABENTO_SPOT_SOURCE
               value: "ES_TRADE"
-            # ---- ES price source: consume prod's underlying.es.trades ------------
-            # ⚠️ This is now the ONLY cross-LAN dependency, and it is a CONSUME (single
-            # partition, ~3M records) rather than a produce under acks=all — the favourable
-            # direction of the trade (design ESM-R29). The ES future's trades are still
-            # subscribed from Databento exactly ONCE, by the prod SPX feed, never twice.
+            # ---- ES price source: OFF — this feed now PRODUCES ES trades (DBP-R32) ------
+            # Before the flip this consumed prod's underlying.es.trades over the LAN. The
+            # direction is now reversed: the subscription lives here, so consuming would be a
+            # loop (this feed reading its own output). DATABENTO_SPOT_SOURCE=ES_TRADE above is
+            # still satisfied — _publish_hpsf_es_trade drives _apply_es_trade_to_cascade on the
+            # native path exactly as the Kafka-source path did, so the ES spot is unchanged.
             - name: ES_TRADES_SOURCE_ENABLED
-              value: "true"
-            - name: ES_TRADES_SOURCE_BOOTSTRAP
-              value: "192.168.100.252:9092"
-            - name: ES_TRADES_SOURCE_TOPIC
-              value: "underlying.es.trades"
-            # Group id is INTENTIONALLY unchanged from the prod-cluster deployment: on cutover the
-            # relocated feed resumes from the committed offset instead of re-consuming ~3M records
-            # or skipping a gap. Because the group is shared, the two locations must never run
-            # concurrently — they would split the single partition and only one would see trades.
-            # The deploy preflight in Jenkinsfile.es4-deploy enforces that.
-            - name: ES_TRADES_SOURCE_GROUP_ID
-              value: "es-feed-spot"
+              value: "false"
             # ---- compacted ES spot-price topic (feed PR #63) ---------------------
             # Republish the ES future price (from ES_TRADES_SOURCE above) as a compacted,
             # "ES"-keyed es.underlying.es.price — the spot TOPIC an es4 strike-intelligence
@@ -225,6 +227,26 @@ spec:
             initialDelaySeconds: 60
             periodSeconds: 30
             failureThreshold: 3
+          # Readiness was MISSING entirely, so k8s marked the pod Ready the instant the container
+          # started — while contract resolution and subscription were still running (~145s on the
+          # 2026-07-26 es4 boot). `rollout status`, and therefore service-deploy's health gate,
+          # then reported success over a feed that could not serve anything yet.
+          #
+          # /health/ready is a SEPARATE endpoint from /health/live on purpose. The liveness paths
+          # (/health/live, /healthz, /health) are all the same STALENESS check, so pointing
+          # readiness at them would flap a perfectly healthy feed out of service every quiet
+          # market. /health/ready latches once contracts are registered and never un-readies.
+          #
+          # failureThreshold 30 x 10s = 5 minutes of grace, comfortably over the measured ~145s
+          # resolve, because being slow to go Ready costs only rollout time whereas going Ready
+          # early is what made every deploy of this service dishonest.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30
           resources:
             requests: { cpu: "250m", memory: "512Mi" }
             limits:   { memory: "1536Mi" }

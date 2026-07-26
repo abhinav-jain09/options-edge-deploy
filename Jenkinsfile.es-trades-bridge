@@ -1,0 +1,481 @@
+// ES-TRADES BRIDGE — es4 (.4) -> prod (.252), WITH a topic rename, as a managed launchd service.
+//
+// DBP-R32: the es env is the sole owner of every ES Databento subscription. es4's feed now
+// produces the ES-future trades natively as `es.underlying.es.trades` (es4 services resolve
+// topics through TOPIC_PREFIX=es.). Prod needs the SAME records under its own unprefixed name
+// `underlying.es.trades`, which is what every prod consumer already reads:
+//   close-direction, es-open-direction, es-spx-align, and the SPX feed itself (ES_TRADES_SOURCE).
+// Bridging with a rename is what lets ALL of them stay untouched.
+//
+// WHY A BRIDGE, NOT MirrorMaker: neither MM1 nor MM2 can RENAME a topic. MM1 is identity-name;
+// MM2's DefaultReplicationPolicy would write `es4.es.underlying.es.trades` on prod. Piping
+// console-consumer -> console-producer is the pattern already proven in production by
+// com.optionsedge.spx-es4-bridge (2026-07-23), which does the mirror-image rename
+// underlying.spx.price -> es.underlying.spx.price. Same tools, same launchd envelope.
+//
+// WHY THE JVM CLI, NOT kcat: under launchd, kcat/librdkafka fails "No route to host" to .252/.4
+// (interactive kcat is fine); the JVM Kafka CLI works under launchd. Proven by the sibling
+// es-gex-mirror / es-futures-flow-mirror units and by spx-es4-bridge.
+//
+// DIRECTION SAFETY: prod->es4 MM2 no longer mirrors underlying.es.trades (infra/es4/mm2/
+// mm2.properties now lists only underlying.vix.price). Both directions live for one logical
+// topic is exactly what produced the 2026-07-24 `es.es.es...` runaway — do not re-add it.
+// The Preflight ALLOW-LIST below is the mechanical guard: every endpoint and topic here is a
+// parameter, so "source != target" alone does not stop an operator installing the REVERSE path.
+//
+// DELIVERY GUARANTEE (read before trusting this with anything that must not gap):
+//   The consumer runs in a DURABLE consumer group (es-trades-bridge-<slug>) with auto-commit, so
+//   a launchd restart RESUMES from the last committed offset instead of jumping to the log end.
+//   That closes the "everything produced while the bridge was down is skipped forever" hole.
+//   What remains is a bounded, unavoidable window for the console-pipe design: the consumer
+//   commits its READ position, not the producer's WRITE position, so a hard kill can drop the
+//   records still sitting in the pipe/producer buffer (order of one batch). acks=all +
+//   enable.idempotence=true below make everything that IS sent durable and in-order. A truly
+//   gap-free bridge needs a small custom consumer that commits only after producer.flush();
+//   that is deliberately NOT done here (see the report on this change) because it would leave
+//   the launchd/JVM-CLI envelope that is the only thing proven to work on this host.
+pipeline {
+  agent { label 'local-mac' }
+  parameters {
+    string(name: 'SOURCE_ES_CLUSTER_IP', defaultValue: '192.168.100.4',   description: 'ES source-of-truth broker IP (.4) — where es-feed publishes.')
+    string(name: 'SOURCE_PORT',          defaultValue: '9092',            description: 'Source Kafka port.')
+    string(name: 'SOURCE_TOPIC',         defaultValue: 'es.underlying.es.trades', description: 'Topic on the SOURCE cluster (es.-prefixed).')
+    string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '192.168.100.252', description: 'Target env broker IP (prod = 192.168.100.252).')
+    string(name: 'TARGET_PORT',          defaultValue: '9092',            description: 'Target Kafka port.')
+    string(name: 'TARGET_TOPIC',         defaultValue: 'underlying.es.trades', description: 'Topic on the TARGET cluster (unprefixed) — the rename.')
+    choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the bridge; teardown = stop+remove it.')
+    // auto.offset.reset only applies when the durable group has NO committed offset: the very
+    // first install, or after the group has been deleted / its offsets expired. Restart
+    // continuity does NOT depend on it. Default 'latest' on purpose: 'earliest' would dump up
+    // to a full retention window (12h) of stale ES trades into a LIVE prod market-data topic,
+    // where close-direction / es-open-direction / es-spx-align would consume them as current.
+    choice(name: 'OFFSET_RESET', choices: ['latest', 'earliest'], description: 'Where a BRAND-NEW consumer group starts. Ignored once the group has committed offsets. Pick earliest only for a deliberate backfill into an idle target.')
+  }
+  options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
+  environment {
+    CONFLUENT = '/Users/abhinav/development/confluent-7.3.1'
+    // Per-TARGET identity so a second environment can run its own bridge without overwriting
+    // this one. NOTE the sibling es-futures-flow-mirror keys its slug on target ONLY, so running
+    // that job with a different TOPIC silently replaces its unit — this job is deliberately a
+    // SEPARATE job rather than a re-parameterisation of it, for exactly that reason. The same
+    // slug also names the consumer group, so one target == one durable reading position; the
+    // Preflight allow-list is what guarantees a slug can only ever mean ONE source topic.
+    SLUG  = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
+  }
+  stages {
+
+    stage('Teardown') {
+      when { expression { params.ACTION == 'teardown' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          LABEL="com.optionsedge.es-trades-bridge-${SLUG}"
+          PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+          MDIR="$HOME/oe-ops/es-trades-bridge-${SLUG}"
+          launchctl unload "$PLIST" 2>/dev/null || true
+          rm -f "$PLIST"
+          rm -rf "$MDIR"
+          # The consumer group is deliberately LEFT IN PLACE: it is the bridge's durable reading
+          # position. A teardown+reinstall (host move, config fix) resumes exactly where it
+          # stopped. Delete it by hand only when you intend to abandon the backlog.
+          echo "torn down ${LABEL} (consumer group es-trades-bridge-${SLUG} retained)"
+        '''
+      }
+    }
+
+    stage('Preflight') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          SRC="${SOURCE_ES_CLUSTER_IP}:${SOURCE_PORT}"
+          TGT="${TARGET_SPX_CLUSTER_IP}:${TARGET_PORT}"
+          GROUP="es-trades-bridge-${SLUG}"
+          T="/tmp/es-trades-bridge-${SLUG}"
+
+          # ---------------------------------------------------------------------------------
+          # 1. DIRECTION ALLOW-LIST. Every endpoint and topic on this job is a parameter, so the
+          #    old "source != target" guard happily accepted a REVERSE install (prod -> es4),
+          #    which is the exact shape that produced the 2026-07-24 es.es.es... runaway. Only
+          #    paths written out below may be installed; add a line here (in review) to add one.
+          # ---------------------------------------------------------------------------------
+          cat > "$T.approved" <<'PATHS'
+192.168.100.4:9092/es.underlying.es.trades -> 192.168.100.252:9092/underlying.es.trades
+PATHS
+          REQUESTED="${SRC}/${SOURCE_TOPIC} -> ${TGT}/${TARGET_TOPIC}"
+          REVERSED="${TGT}/${TARGET_TOPIC} -> ${SRC}/${SOURCE_TOPIC}"
+          if grep -qxF "$REVERSED" "$T.approved"; then
+            echo "FAIL: refusing to install the REVERSE of an approved path."
+            echo "      requested: $REQUESTED"
+            echo "      approved : $REVERSED"
+            echo "      prod must never write ES trades back to es4 — es4 is the sole producer (DBP-R32)."
+            exit 1
+          fi
+          if ! grep -qxF "$REQUESTED" "$T.approved"; then
+            echo "FAIL: path not on the approved list."
+            echo "      requested: $REQUESTED"
+            echo "      approved:"
+            sed 's/^/        /' "$T.approved"
+            exit 1
+          fi
+          echo "  approved path: $REQUESTED"
+
+          # Kept as a cheap structural sanity check on top of the allow-list.
+          [ "$SOURCE_TOPIC" != "$TARGET_TOPIC" ] || { echo "FAIL: source and target topic are identical ($SOURCE_TOPIC) — use es-futures-flow-mirror for identity copies, this job exists to RENAME"; exit 1; }
+          [ "$SRC" != "$TGT" ] || { echo "FAIL: source and target broker are identical ($SRC) — a same-cluster bridge would loop"; exit 1; }
+
+          for hp in "$SRC" "$TGT"; do
+            h=${hp%:*}; p=${hp#*:}
+            nc -z -G 5 "$h" "$p" || { echo "FAIL: broker $hp unreachable"; exit 1; }
+            echo "  reachable: $hp"
+          done
+
+          JH="$(/usr/libexec/java_home 2>/dev/null || true)"
+          [ -n "$JH" ] || { echo "FAIL: no JDK found for the Kafka CLI"; exit 1; }
+          export JAVA_HOME="$JH"; export PATH="$JAVA_HOME/bin:$PATH"
+
+          # ---------------------------------------------------------------------------------
+          # 2. The offset helper. Shared with Verify so BOTH stages fail loud the same way.
+          #    Written here rather than duplicated so there is exactly one implementation.
+          # ---------------------------------------------------------------------------------
+          cat > "$WORKSPACE/es-trades-bridge-lib.sh" <<'LIB'
+# GENERATED by Jenkinsfile.es-trades-bridge — sourced by the Preflight and Verify stages.
+#
+# kafka_end_offset <bootstrap> <topic>
+#   stdout : "<summed-end-offset> <partition-count>"
+#   return : 0 only when the broker actually answered with at least one parseable
+#            "topic:partition:offset" line for THIS topic.
+#
+# WHY THIS EXISTS: the previous one-liner was
+#     GetOffsetShell ... 2>/dev/null | awk -F: '{s+=$3} END {print s+0}'
+# under `set -eu` (no pipefail). awk exits 0 and prints 0 no matter how badly the query
+# failed, so a dead broker, a missing topic and a genuinely empty topic were all "0" —
+# and "0 -> 0" still passed the stage. Every failure mode below is now distinguishable.
+kafka_end_offset() {
+  keo_bs="$1"; keo_topic="$2"
+  # GetOffsetShell treats --topic as a Java regex matched in full, so escape the dots with a
+  # character class ([.] rather than a backslash: backslash-dot inside a Groovy triple-quoted
+  # string has broken this repo's Jenkinsfiles before).
+  keo_re=$(printf '%s' "$keo_topic" | sed 's/[.]/[.]/g')
+  keo_rc=0
+  keo_raw=$("$CONFLUENT/bin/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$keo_bs" --topic "$keo_re" --time latest 2>&1) || keo_rc=$?
+  if [ "$keo_rc" -ne 0 ]; then
+    echo "FAIL: GetOffsetShell($keo_bs, $keo_topic) exited $keo_rc" >&2
+    printf '%s\\n' "$keo_raw" | sed 's/^/      /' >&2
+    return 1
+  fi
+  if [ -z "$keo_raw" ]; then
+    echo "FAIL: GetOffsetShell($keo_bs, $keo_topic) returned NO output (expected topic:partition:offset)" >&2
+    return 1
+  fi
+  keo_rc=0
+  keo_sum=$(printf '%s\\n' "$keo_raw" | awk -F: -v t="$keo_topic" '
+        NF == 3 && $1 == t && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { n++; s += $3 }
+        END { if (n == 0) exit 3; printf "%d %d\\n", s, n }') || keo_rc=$?
+  if [ "$keo_rc" -ne 0 ]; then
+    echo "FAIL: GetOffsetShell($keo_bs, $keo_topic) produced no usable partition line" >&2
+    echo "      (blank offsets, a different topic, or an error message — raw output follows)" >&2
+    printf '%s\\n' "$keo_raw" | sed 's/^/      /' >&2
+    return 1
+  fi
+  printf '%s\\n' "$keo_sum"
+}
+
+# kafka_assert_writable <bootstrap> <topic> — topic must EXIST and every partition must have a
+# real leader. A partition with "Leader: -1" / "Leader: none" rejects produce, so this is the
+# necessary precondition for the producer half of the bridge.
+#
+# We deliberately do NOT canary-produce a probe record: the target is a LIVE prod market-data
+# topic whose consumers deserialize every record as an UnderlyingTradeEvent.
+kafka_assert_writable() {
+  kaw_bs="$1"; kaw_topic="$2"; kaw_tmp="$3"
+  "$CONFLUENT/bin/kafka-topics" --bootstrap-server "$kaw_bs" --list > "$kaw_tmp.list"
+  grep -qxF "$kaw_topic" "$kaw_tmp.list" || {
+    echo "FAIL: topic '$kaw_topic' does not exist on $kaw_bs — create it with the env's topic script first; this bridge must not rely on broker auto-create" >&2
+    return 1
+  }
+  "$CONFLUENT/bin/kafka-topics" --bootstrap-server "$kaw_bs" --describe --topic "$kaw_topic" > "$kaw_tmp.describe"
+  kaw_parts=$(awk '/Partition:/ { n++ } END { print n+0 }' "$kaw_tmp.describe")
+  [ "$kaw_parts" -ge 1 ] || {
+    echo "FAIL: '$kaw_topic' on $kaw_bs described with ZERO partition lines" >&2
+    sed 's/^/      /' "$kaw_tmp.describe" >&2
+    return 1
+  }
+  kaw_bad=$(awk '/Partition:/ { for (i = 1; i <= NF; i++) if ($i == "Leader:" && $(i+1) !~ /^[0-9]+$/) b++ } END { print b+0 }' "$kaw_tmp.describe")
+  [ "$kaw_bad" -eq 0 ] || {
+    echo "FAIL: '$kaw_topic' on $kaw_bs has $kaw_bad partition(s) with no leader — writes would be rejected" >&2
+    sed 's/^/      /' "$kaw_tmp.describe" >&2
+    return 1
+  }
+  echo "  writable: $kaw_bs/$kaw_topic ($kaw_parts partition(s), all led)"
+}
+LIB
+          . "$WORKSPACE/es-trades-bridge-lib.sh"
+
+          # ---------------------------------------------------------------------------------
+          # 3. Prove the SOURCE is readable and the TARGET is writable. Reachability + "the
+          #    source topic is in --list" (the old check) proves neither.
+          # ---------------------------------------------------------------------------------
+          kafka_assert_writable "$SRC" "$SOURCE_TOPIC" "$T.src" || exit 1
+          kafka_assert_writable "$TGT" "$TARGET_TOPIC" "$T.tgt" || exit 1
+
+          # listOffsets against BOTH ends: the source answer is the read path the consumer will
+          # take, and a source topic that has never had a leader/offset means the es4 feed was
+          # never deployed with DATABENTO_HPSF_ES_TRADES_ENABLED=true.
+          SRC_OFF=$(kafka_end_offset "$SRC" "$SOURCE_TOPIC")
+          TGT_OFF=$(kafka_end_offset "$TGT" "$TARGET_TOPIC")
+          echo "  readable: $SRC/$SOURCE_TOPIC end-offset ${SRC_OFF%% *}"
+          echo "  baseline: $TGT/$TARGET_TOPIC end-offset ${TGT_OFF%% *}"
+
+          # ---------------------------------------------------------------------------------
+          # 4. Report the durable group's current position BEFORE we touch anything, so the
+          #    build log records what a restart will resume from.
+          # ---------------------------------------------------------------------------------
+          GRC=0
+          GD=$("$CONFLUENT/bin/kafka-consumer-groups" --bootstrap-server "$SRC" --describe --group "$GROUP" --offsets 2>&1) || GRC=$?
+          if [ "$GRC" -ne 0 ]; then
+            echo "FAIL: cannot query consumer group '$GROUP' on $SRC (exit $GRC)"
+            printf '%s\\n' "$GD" | sed 's/^/      /'
+            exit 1
+          fi
+          printf '%s\\n' "$GD" > "$T.group.before"
+          PRIOR=$(awk -v g="$GROUP" -v t="$SOURCE_TOPIC" '$1 == g && $2 == t && $4 ~ /^[0-9]+$/ { n++ } END { print n+0 }' "$T.group.before")
+          if [ "$PRIOR" -ge 1 ]; then
+            echo "  consumer group '$GROUP' already has committed offsets on $PRIOR partition(s) — this install RESUMES, OFFSET_RESET=${OFFSET_RESET} is ignored"
+            sed 's/^/      /' "$T.group.before"
+          else
+            echo "  consumer group '$GROUP' is NEW — it will start at OFFSET_RESET=${OFFSET_RESET}"
+          fi
+        '''
+      }
+    }
+
+    stage('Install') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          LABEL="com.optionsedge.es-trades-bridge-${SLUG}"
+          PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+          MDIR="$HOME/oe-ops/es-trades-bridge-${SLUG}"
+
+          launchctl unload "$PLIST" 2>/dev/null || true
+          mkdir -p "$MDIR"
+
+          cat > "$MDIR/run.sh" <<EOS
+#!/usr/bin/env bash
+# GENERATED by Jenkinsfile.es-trades-bridge — do not hand-edit; re-run the job instead.
+# es4 -> prod ES-trades bridge WITH rename (DBP-R32).
+set -uo pipefail
+
+CONFLUENT=${CONFLUENT}
+SRC=${SOURCE_ES_CLUSTER_IP}:${SOURCE_PORT}
+TGT=${TARGET_SPX_CLUSTER_IP}:${TARGET_PORT}
+SRC_TOPIC=${SOURCE_TOPIC}
+DST_TOPIC=${TARGET_TOPIC}
+# DURABLE consumer group. Without it kafka-console-consumer invents console-consumer-<random>
+# on every launchd restart and defaults to auto.offset.reset=latest, so everything produced
+# while the bridge was down is skipped PERMANENTLY. With it, a restart resumes from the last
+# committed offset and OFFSET_RESET only ever applies to a brand-new group.
+GROUP=es-trades-bridge-${SLUG}
+OFFSET_RESET=${OFFSET_RESET}
+LOG=${MDIR}/bridge.log
+TAB=\\$'\\t'
+
+# launchd has a minimal PATH/env: resolve a JDK explicitly for the confluent CLI.
+if [ -z "\\${JAVA_HOME:-}" ]; then
+  JAVA_HOME="\\$(/usr/libexec/java_home 2>/dev/null || true)"
+  [ -z "\\$JAVA_HOME" ] && for j in /Library/Java/JavaVirtualMachines/*/Contents/Home /opt/homebrew/opt/openjdk*/libexec/openjdk.jdk/Contents/Home; do [ -x "\\$j/bin/java" ] && JAVA_HOME="\\$j" && break; done
+fi
+export JAVA_HOME
+export PATH="\\$JAVA_HOME/bin:/usr/bin:/bin:\\$PATH"
+
+echo "[\\$(date '+%Y-%m-%d %H:%M:%S')] starting es-trades bridge \\$SRC/\\$SRC_TOPIC -> \\$TGT/\\$DST_TOPIC (group=\\$GROUP reset=\\$OFFSET_RESET JAVA_HOME=\\$JAVA_HOME)" >> "\\$LOG"
+[ -x "\\$JAVA_HOME/bin/java" ] || { echo "[\\$(date '+%F %T')] ERROR: no JDK found" >> "\\$LOG"; exit 2; }
+
+# Consume es4 as key<TAB>value; produce to prod splitting on TAB. The UnderlyingTradeEvent
+# payload is compact single-line JSON with no tabs, so TAB is an unambiguous delimiter, and
+# print.key/parse.key preserve the record key (the instrument key the topic is keyed on).
+#
+# Consumer properties (verified against confluent-7.3.1 kafka.tools.ConsoleConsumer):
+#   --group                 sets group.id; it ALSO stops ConsoleConsumer from forcing
+#                           enable.auto.commit=false, which it only does for its own
+#                           generated group. Offsets are therefore actually committed.
+#   auto.offset.reset       explicit; ConsoleConsumer only defaults it (to latest, or to
+#                           earliest with --from-beginning) when it is NOT already set.
+#   enable.auto.commit /    stated rather than inherited, so the commit cadence that bounds
+#   auto.commit.interval.ms the replay window on restart is visible here.
+# Producer properties: acks=all makes an accepted record durable past a leader failure, and
+# enable.idempotence=true keeps retries from reordering or duplicating within a session.
+exec "\\$CONFLUENT/bin/kafka-console-consumer" \\\\
+      --bootstrap-server "\\$SRC" --topic "\\$SRC_TOPIC" \\\\
+      --group "\\$GROUP" \\\\
+      --consumer-property auto.offset.reset="\\$OFFSET_RESET" \\\\
+      --consumer-property enable.auto.commit=true \\\\
+      --consumer-property auto.commit.interval.ms=5000 \\\\
+      --property print.key=true --property key.separator="\\$TAB" 2>>"\\$LOG" \\\\
+  | "\\$CONFLUENT/bin/kafka-console-producer" \\\\
+      --bootstrap-server "\\$TGT" --topic "\\$DST_TOPIC" \\\\
+      --producer-property acks=all \\\\
+      --producer-property enable.idempotence=true \\\\
+      --property parse.key=true --property key.separator="\\$TAB" 2>>"\\$LOG"
+EOS
+          chmod +x "$MDIR/run.sh"
+
+          cat > "$PLIST" <<EOS
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>${MDIR}/run.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <!-- Match the sibling mirrors: a crash-looping bridge must not respawn faster than the
+       group coordinator can evict the dead member (session.timeout.ms default 45s). -->
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>${MDIR}/bridge.out.log</string>
+  <key>StandardErrorPath</key><string>${MDIR}/bridge.err.log</string>
+</dict>
+</plist>
+EOS
+
+          launchctl load "$PLIST"
+          echo "installed ${LABEL}"
+        '''
+      }
+    }
+
+    stage('Verify') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          LABEL="com.optionsedge.es-trades-bridge-${SLUG}"
+          MDIR="$HOME/oe-ops/es-trades-bridge-${SLUG}"
+          GROUP="es-trades-bridge-${SLUG}"
+          SRC="${SOURCE_ES_CLUSTER_IP}:${SOURCE_PORT}"
+          TGT="${TARGET_SPX_CLUSTER_IP}:${TARGET_PORT}"
+          T="/tmp/es-trades-bridge-${SLUG}"
+
+          [ -r "$WORKSPACE/es-trades-bridge-lib.sh" ] || { echo "FAIL: $WORKSPACE/es-trades-bridge-lib.sh missing — Preflight did not run"; exit 1; }
+          . "$WORKSPACE/es-trades-bridge-lib.sh"
+
+          JH="$(/usr/libexec/java_home 2>/dev/null || true)"
+          [ -n "$JH" ] || { echo "FAIL: no JDK found for the Kafka CLI"; exit 1; }
+          export JAVA_HOME="$JH"; export PATH="$JAVA_HOME/bin:$PATH"
+
+          # grep through a FILE, never a pipe: `producer | grep -q` makes grep exit on first
+          # match, the writer takes SIGPIPE, and under `set -o pipefail` the stage fails for
+          # no reason at all.
+          launchctl list > "$T.launchctl"
+          grep -qF "$LABEL" "$T.launchctl" || { echo "FAIL: launchd unit $LABEL not loaded"; exit 1; }
+          echo "  launchd unit loaded: $LABEL"
+
+          # A loaded unit is NOT proof of flow. Sample BOTH ends across the same window:
+          #   target advanced                      -> FLOWING (pass)
+          #   target flat AND source flat          -> INCONCLUSIVE, Globex closed (pass, noisy)
+          #   target flat AND source advanced      -> the bridge is dropping records (FAIL)
+          # Any query that cannot be answered is a FAIL, never a silent zero — kafka_end_offset
+          # returns non-zero and `set -e` takes the stage down.
+          SRC0=$(kafka_end_offset "$SRC" "$SOURCE_TOPIC"); SRC0=${SRC0%% *}
+          TGT0=$(kafka_end_offset "$TGT" "$TARGET_TOPIC"); TGT0=${TGT0%% *}
+          sleep 45
+          SRC1=$(kafka_end_offset "$SRC" "$SOURCE_TOPIC"); SRC1=${SRC1%% *}
+          TGT1=$(kafka_end_offset "$TGT" "$TARGET_TOPIC"); TGT1=${TGT1%% *}
+          echo "  source $SOURCE_TOPIC end-offset ${SRC0} -> ${SRC1}"
+          echo "  target $TARGET_TOPIC end-offset ${TGT0} -> ${TGT1}"
+
+          # RESTART CONTINUITY: the durable group must exist AND hold a committed offset on the
+          # source topic. Without this the bridge is back to a throwaway group that skips every
+          # record produced while it was down, which is invisible in the offset numbers above.
+          GRC=0
+          GD=$("$CONFLUENT/bin/kafka-consumer-groups" --bootstrap-server "$SRC" --describe --group "$GROUP" --offsets 2>&1) || GRC=$?
+          if [ "$GRC" -ne 0 ]; then
+            echo "FAIL: cannot query consumer group '$GROUP' on $SRC (exit $GRC)"
+            printf '%s\\n' "$GD" | sed 's/^/      /'
+            exit 1
+          fi
+          printf '%s\\n' "$GD" > "$T.group.after"
+          COMMITTED=$(awk -v g="$GROUP" -v t="$SOURCE_TOPIC" '$1 == g && $2 == t && $4 ~ /^[0-9]+$/ { n++ } END { print n+0 }' "$T.group.after")
+          if [ "$COMMITTED" -lt 1 ]; then
+            echo "FAIL: consumer group '$GROUP' has NO committed offset on $SOURCE_TOPIC after 45s."
+            echo "      The bridge is not joined to its durable group, so a restart would skip"
+            echo "      every record produced while it was down. Check ${MDIR}/bridge.log"
+            sed 's/^/      /' "$T.group.after"
+            exit 1
+          fi
+          echo "  restart continuity OK: '$GROUP' holds committed offsets on $COMMITTED partition(s)"
+          sed 's/^/      /' "$T.group.after"
+
+          # Machine-readable TRI-STATE. A green build must mean "flow proven", so the
+          # no-traffic case is written out and turned into UNSTABLE by the script block below —
+          # not swallowed as success. Off-hours is a legitimate outcome, but it is NOT proof.
+          # ⚠️ AN ADVANCING TARGET OFFSET IS NOT PROOF THE BRIDGE DELIVERED IT.
+          # During the DBP-R32 cutover prod may still hold its own ES subscription and be writing
+          # to this very topic, so the target advances whether or not a single byte crossed the
+          # bridge. Offsets alone would report FLOWING for a completely dead bridge — the most
+          # dangerous possible false green, because it is the signal the prod flip is gated on.
+          #
+          # DECISIVE PROOF: take fresh records from the SOURCE and find those exact payloads on
+          # the TARGET. Only the bridge can put an es4-produced record onto prod's topic.
+          if [ "$TGT1" -gt "$TGT0" ]; then
+            "$CONFLUENT/bin/kafka-console-consumer" --bootstrap-server "$SRC" --topic "$SOURCE_TOPIC" \
+              --max-messages 5 --timeout-ms 20000 > "$T.src.sample" 2>/dev/null || true
+            MATCHED=0
+            if [ -s "$T.src.sample" ]; then
+              "$CONFLUENT/bin/kafka-console-consumer" --bootstrap-server "$TGT" --topic "$TARGET_TOPIC" \
+                --max-messages 200 --timeout-ms 25000 > "$T.tgt.sample" 2>/dev/null || true
+              while IFS= read -r line; do
+                [ -n "$line" ] || continue
+                if grep -qxF "$line" "$T.tgt.sample" 2>/dev/null; then
+                  MATCHED=$((MATCHED+1))
+                fi
+              done < "$T.src.sample"
+            fi
+            if [ "$MATCHED" -eq 0 ]; then
+              echo "FAIL: ${TARGET_TOPIC} advanced by $((TGT1-TGT0)) records, but NONE of the sampled"
+              echo "      source records were found on the target. The target is being written by"
+              echo "      something else (prod's own ES subscription during cutover overlap) and the"
+              echo "      bridge is NOT delivering. Offsets alone would have called this FLOWING."
+              echo NOT_DELIVERING > "$T.verdict"
+              exit 1
+            fi
+            echo "  BRIDGE FLOWING: ${TARGET_TOPIC} advanced by $((TGT1-TGT0)) records, and"
+            echo "  ${MATCHED} sampled SOURCE record(s) were found byte-for-byte on the TARGET."
+            echo FLOWING > "$T.verdict"
+          elif [ "$SRC1" -gt "$SRC0" ]; then
+            echo "FAIL: source produced $((SRC1-SRC0)) records in 45s but the target did not advance."
+            echo "      The bridge is loaded but NOT delivering — check ${MDIR}/bridge.log"
+            echo DROPPING > "$T.verdict"
+            exit 1
+          else
+            echo "  INCONCLUSIVE: neither end advanced in 45s — no ES trades were produced at all,"
+            echo "  which is expected while Globex is closed. Re-run during RTH to assert flow."
+            echo INCONCLUSIVE > "$T.verdict"
+          fi
+        '''
+        script {
+          // The shell cannot set a Jenkins result, so the verdict crosses the boundary as a file.
+          // INCONCLUSIVE => UNSTABLE: the bridge is installed and its restart continuity is proven,
+          // but NO DATA was observed crossing it. Reporting that as SUCCESS is what would let a
+          // closed-market install be mistaken for a validated cutover — the whole reason the
+          // cutover's final step is gated on an open Globex session.
+          def verdictFile = "/tmp/es-trades-bridge-${env.SLUG}.verdict"
+          def verdict = sh(script: "cat '${verdictFile}' 2>/dev/null || echo MISSING", returnStdout: true).trim()
+          echo "bridge verify verdict: ${verdict}"
+          if (verdict == 'INCONCLUSIVE') {
+            currentBuild.result = 'UNSTABLE'
+            currentBuild.description = 'bridge installed; flow NOT proven (no ES trades in window)'
+          } else if (verdict == 'FLOWING') {
+            currentBuild.description = 'bridge installed and flow proven'
+          } else {
+            // A missing verdict means the shell exited before writing one; never call that success.
+            error("bridge verify produced no verdict (${verdict}) — treat as unverified")
+          }
+        }
+      }
+    }
+  }
+}

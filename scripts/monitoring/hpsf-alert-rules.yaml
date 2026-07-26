@@ -29,6 +29,103 @@ groups:
         annotations:
           summary: "Underlying lag too high"
           description: "ES/SPX source lag is above threshold. HPSF must not emit BUY signals."
+      # --- DBP-R32: prod takes ES trades from es4 over a LAN bridge -------------------------
+      # After the ES-futures Databento subscription moved to the es env, these trades drive the
+      # A1-certified ES->SPX basis, so prod now depends on another box, a bridge process and the
+      # LAN. Without an alert the failure is SILENT: the last basis sits on a COMPACTED topic
+      # looking perfectly valid, because a silent source publishes no new record to replace it.
+      #
+      # `> 0` on the timestamp is REQUIRED, not decorative: the age gauge is NaN until the first
+      # trade of the process, and the timestamp is 0. Alerting on the age alone would never fire
+      # for a feed that never received anything at all — the worst case.
+      - alert: EsTradesSourceSilent
+        # ⚠️ SEVERITY IS `warning`, NOT `critical`, AND THAT IS DELIBERATE.
+        # The gate below uses market_calendar.is_globex_open(), whose OWN docstring says it
+        # "intentionally do[es] NOT model early-close cutoff times" — it was built to keep ES
+        # subscriptions alive across halts, where coarseness is harmless. It models full-closure
+        # holidays, Saturday, the Sunday 18:00 reopen, the Friday 17:00 close and the Mon-Thu
+        # 17:00-18:00 maintenance break, but treats holiday early closes and the intraday
+        # equity-index halt as OPEN. Paging CRITICAL off a session model that is documented as
+        # approximate would fire on known, scheduled quiet windows — and an alert that pages on
+        # schedule is one people mute, which is worse than no alert.
+        # To promote these to critical (and tighten the threshold toward the ~1-2 minutes this
+        # dependency deserves), model early closes + the intraday halt in is_globex_open first.
+        # SESSION GATED. Globex is legitimately closed ~Fri 17:00 ET -> ~Sun 18:00 ET, so an
+        # ungated rule pages critically every weekend — which trains people to ignore it, the
+        # exact opposite of fail-loud. The gate uses the feed's own session gauge, evaluated from
+        # the same is_globex_open() the liveness probe uses — so both read ONE calendar. They still
+        # evaluate it independently at their own moments, so they can differ across a session
+        # boundary or during a rollout: shared logic, not an impossibility guarantee.
+        expr: >-
+          options_edge_databento_feed_globex_session_open == 1
+          and
+          options_edge_databento_feed_es_trades_source_timestamp_seconds > 0
+          and
+          (time() - options_edge_databento_feed_es_trades_source_timestamp_seconds) > 600
+        # THRESHOLD IS DELIBERATELY CONSERVATIVE, and this is a known trade-off rather than an
+        # oversight. 10m + for:5m means ~15 minutes to page, which IS slow for an A1-certified
+        # input: ES front-contract trades are frequent during RTH, so a 10-minute gap is already
+        # extraordinary. Tightening to ~1-2 minutes is the right end state — but ONLY once the
+        # scheduled equity-index halt (~16:15-16:30 ET) is modelled in is_globex_open(), which it
+        # currently is NOT: the model covers holidays, Saturday, the Sunday 18:00 reopen, the
+        # Friday 17:00 close and the Mon-Thu 17:00-18:00 maintenance break, but treats the
+        # afternoon halt as OPEN. A 60-120s threshold would page every weekday through that halt,
+        # and an alert that fires daily is one people mute. Tighten after modelling the halt.
+        for: 5m
+        labels:
+          severity: warning
+          service: databento-feed
+        annotations:
+          summary: "ES trades from es4 have stopped reaching prod"
+          description: >-
+            No usable ES trade has arrived over the ES-trades Kafka source for more than 10
+            minutes. The ES->SPX basis is driven by these records, and a silent source does NOT
+            republish an UNAVAILABLE state — the last value stays on the compacted topic looking
+            valid. Check the es4 feed, the es-trades bridge launchd unit on the ops Mac, and the
+            LAN path to 192.168.100.4.
+      # Never-received is a DISTINCT failure from went-silent, and the alert above cannot see it
+      # (timestamp stays 0, so the guard excludes it). A feed that has been up well past its
+      # startup grace and has still never received one ES trade is misconfigured or disconnected.
+      - alert: EsTradesSourceNeverReceived
+        # Also session gated, for the same reason: a feed that boots on a Saturday has legitimately
+        # never received an ES trade, and saying so at 03:00 helps nobody.
+        #
+        # ALSO scoped to feeds that are CONFIGURED to consume the Kafka source. Without this it
+        # fires on every feed that legitimately has no ES-trades source at all — es4, which is the
+        # native PRODUCER after DBP-R32, and dev. "This feed has never received something it was
+        # never asked to receive" is pure noise, and noise is what gets alerts muted.
+        expr: >-
+          options_edge_databento_feed_es_trades_source_configured == 1
+          and
+          options_edge_databento_feed_globex_session_open == 1
+          and
+          options_edge_databento_feed_es_trades_source_timestamp_seconds == 0
+        for: 30m
+        labels:
+          severity: warning
+          service: databento-feed
+        annotations:
+          summary: "ES-trades source has never delivered a record"
+          description: >-
+            This feed has been running for 30 minutes with the ES-trades Kafka source enabled and
+            has never received a usable ES trade. Check ES_TRADES_SOURCE_BOOTSTRAP/_TOPIC and that
+            the es4->prod bridge is installed and flowing.
+      # ⚠️ SAFETY NET for the two session-gated rules above. They gate on a gauge exported BY THE
+      # FEED ITSELF, so if the feed dies the gauge DISAPPEARS, `... == 1 and ...` matches nothing,
+      # and neither rule can fire — the gate silently disarms exactly when things are worst.
+      # absent() is the complement: it fires when the series is missing entirely.
+      - alert: EsFeedMetricsAbsent
+        expr: absent(options_edge_databento_feed_globex_session_open)
+        for: 10m
+        labels:
+          severity: critical
+          service: databento-feed
+        annotations:
+          summary: "databento-feed is not exporting metrics at all"
+          description: >-
+            The feed's own session gauge is absent, so it is not being scraped — the process is
+            down, wedged, or unreachable. This also means the session-gated ES-source alerts CANNOT
+            fire, because they gate on this same series. Treat this as covering both.
       - alert: HpsfEvaluationDurationTooHigh
         expr: hpsf_evaluation_duration_ms > 1000
         for: 2m
