@@ -72,6 +72,12 @@ spec:
         env:
         - name: APP_WEB_PORT
           value: "18091"
+        # The es4 heatmap service creates its dashboard topic with the 32-partition default
+        # (KAFKA_TOPIC_PARTITIONS_DEFAULT=32), and topics.env (OPTIONS_EDGE_ES4_TOPICS) declares it
+        # at 32 too. Calibrate the gateway's liquidity-history topology guard to expect 32 so it does
+        # not WARN a false 4-vs-actual policy drift.
+        - name: HEATMAP_HISTORY_EXPECTED_PARTITIONS
+          value: "32"
         - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
           value: options.spx.vix-option-inteligence-service.current
         # spread-skew on es4 emits options.es.* (proc PR#316 relabel) — point the gateway's two skew

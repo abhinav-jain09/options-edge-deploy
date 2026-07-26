@@ -95,3 +95,28 @@ def test_single_partition_contracts_are_enforced_exactly():
     for t in ("es.reversal.verdicts", "es.reversal.strength", "es.signal-follower.hot-strike"):
         assert t in exact, f"{t} must be exact-partition"
         assert entries[t] == "1", f"{t} must be 1 partition, got {entries[t]}"
+
+
+def test_heatmap_topics_declared_at_the_services_default_partition_count():
+    """Incident guard (2026-07-19/07-26): the strike-liquidity-heatmap service creates its
+    dashboard/bucket topics at the 32-partition default. If the SSOT declares them lower (e.g. 4),
+    the topic is born at 4 and the service grows it to 32 AFTER boot; if es-feed-gateway snapshots
+    the partition count in between, LiquidityHistoryStore trips a STICKY topology alarm and 503s ALL
+    /api/liquidity-history requests until restart. Declaring them at 32 makes the service's
+    ensureTopic a no-op so the count never changes post-boot."""
+    entries = dict(e.rsplit(":", 1) for e in _var("OPTIONS_EDGE_ES4_TOPICS"))
+    for t in ("es.strike-liquidity-heatmap-dashboard", "es.strike-liquidity-heatmap-bucket"):
+        assert entries.get(t) == "32", (
+            f"{t} must be declared at 32 partitions to match the heatmap service default "
+            f"(KAFKA_TOPIC_PARTITIONS_DEFAULT=32); got {entries.get(t)}. A lower value re-opens the "
+            f"4->32 boot race that 503s the liquidity-history endpoint."
+        )
+
+
+def test_es4_gateway_topology_guard_is_calibrated_to_32():
+    """The gateway's liquidity-history topology guard defaults to expecting 4 partitions; on es4 the
+    heatmap dashboard topic is 32, so the guard must be told 32 or it WARNs a false policy drift."""
+    manifest = (REPO / "k8s" / "es4" / "services" / "es-feed-gateway.yaml").read_text()
+    assert re.search(
+        r'name:\s*HEATMAP_HISTORY_EXPECTED_PARTITIONS\s*\n\s*value:\s*"32"', manifest
+    ), "es-feed-gateway.yaml must set HEATMAP_HISTORY_EXPECTED_PARTITIONS=32 for the 32-partition es4 heatmap topic"
