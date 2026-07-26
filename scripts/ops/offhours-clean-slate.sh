@@ -592,16 +592,29 @@ if [ "$DB_WIPE" = "true" ]; then
   # reversal-confirmation (2026-07-14): es_reversal_candidate / es_reversal_outcome /
   # es_reversal_eval are the durable reversal calibration corpus (reversal-postgres-writer)
   # and are likewise covered by the `^es_` prefix guard — cross-day by design, never truncate.
+  # zerodte_* EXEMPT (2026-07-26): the Gate-3 research evidence store. Its ENTIRE PURPOSE is to
+  # accrue across sessions — predictions made on one day are labelled by outcomes on later days,
+  # and a gate cannot be promoted from a single session's rows. Truncating it nightly would not
+  # merely lose data; it would make the store permanently incapable of the thing it exists for,
+  # silently, because each morning it would look correctly empty. It is the same category as the
+  # dealer-ledger corpus and the es_* ledgers above, so it gets the same treatment. Includes
+  # zerodte_schema_version — losing that would make the writer re-run its DESTRUCTIVE reconciling
+  # DDL on the next boot, dropping and recreating constraints while other instances write.
+  ZERODTE_EXCLUDE="tablename !~ '^zerodte_'"
   EXEMPT_TABLES="$CALIB_TABLES, 'spread_skew_sample'"
   ES_EXCLUDE="tablename !~ '^es_'"
-  TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES) and $ES_EXCLUDE")
+  TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES) and $ES_EXCLUDE and $ZERODTE_EXCLUDE")
   if [ -n "$TBL_LIST" ]; then
     # Belt-and-suspenders: the query already restricts to schemaname='public', but ASSERT it so a future
     # edit can never let a non-public schema (notably `calibration` — the corpus/state that must survive)
     # into the truncate list. Any non-"public" table in the list aborts the entire wipe, fail-closed.
     NONPUBLIC_IN_LIST=$(printf '%s' "$TBL_LIST" | grep -oE '"[^"]+"\.' | grep -vxE '"public"\.' | sort -u | tr '\n' ' ')
     [ -z "$NONPUBLIC_IN_LIST" ] || die "REFUSING truncate: non-public schema(s) in the truncate list: $NONPUBLIC_IN_LIST"
-    trunc_n=$(pg "select count(*) from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES) and $ES_EXCLUDE" | tr -d '[:space:]')
+    # Counted from the LIST that is actually truncated, not from a second query that repeats the
+    # filter. Repeating it is how the two drift: the es_/zerodte_ guards would have to be added in
+    # both places, and a miss there does not truncate the wrong table — it just reports the wrong
+    # number, which is worse, because the log is the only record anyone reads afterwards.
+    trunc_n=$(printf '%s' "$TBL_LIST" | tr ',' '\n' | grep -c '[^[:space:]]')
     pg "set lock_timeout='30s'; set statement_timeout='300s'; truncate table $TBL_LIST restart identity" \
       || die "TRUNCATE of flow DB failed"
     log "truncated $trunc_n public tables in '$EXPECTED_DB' (incl. pin_session_close + spread_skew_event; calibration.* + spread_skew_sample + es_* preserved)"
