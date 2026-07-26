@@ -39,6 +39,17 @@ groups:
       # trade of the process, and the timestamp is 0. Alerting on the age alone would never fire
       # for a feed that never received anything at all — the worst case.
       - alert: EsTradesSourceSilent
+        # ⚠️ SEVERITY IS `warning`, NOT `critical`, AND THAT IS DELIBERATE.
+        # The gate below uses market_calendar.is_globex_open(), whose OWN docstring says it
+        # "intentionally do[es] NOT model early-close cutoff times" — it was built to keep ES
+        # subscriptions alive across halts, where coarseness is harmless. It models full-closure
+        # holidays, Saturday, the Sunday 18:00 reopen, the Friday 17:00 close and the Mon-Thu
+        # 17:00-18:00 maintenance break, but treats holiday early closes and the intraday
+        # equity-index halt as OPEN. Paging CRITICAL off a session model that is documented as
+        # approximate would fire on known, scheduled quiet windows — and an alert that pages on
+        # schedule is one people mute, which is worse than no alert.
+        # To promote these to critical (and tighten the threshold toward the ~1-2 minutes this
+        # dependency deserves), model early closes + the intraday halt in is_globex_open first.
         # SESSION GATED. Globex is legitimately closed ~Fri 17:00 ET -> ~Sun 18:00 ET, so an
         # ungated rule pages critically every weekend — which trains people to ignore it, the
         # exact opposite of fail-loud. The gate uses the feed's own session gauge, evaluated from
@@ -60,7 +71,7 @@ groups:
         # and an alert that fires daily is one people mute. Tighten after modelling the halt.
         for: 5m
         labels:
-          severity: critical
+          severity: warning
           service: databento-feed
         annotations:
           summary: "ES trades from es4 have stopped reaching prod"
@@ -82,7 +93,7 @@ groups:
           options_edge_databento_feed_es_trades_source_timestamp_seconds == 0
         for: 30m
         labels:
-          severity: critical
+          severity: warning
           service: databento-feed
         annotations:
           summary: "ES-trades source has never delivered a record"
