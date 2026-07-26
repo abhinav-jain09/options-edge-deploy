@@ -412,8 +412,38 @@ EOS
           # Machine-readable TRI-STATE. A green build must mean "flow proven", so the
           # no-traffic case is written out and turned into UNSTABLE by the script block below —
           # not swallowed as success. Off-hours is a legitimate outcome, but it is NOT proof.
+          # ⚠️ AN ADVANCING TARGET OFFSET IS NOT PROOF THE BRIDGE DELIVERED IT.
+          # During the DBP-R32 cutover prod may still hold its own ES subscription and be writing
+          # to this very topic, so the target advances whether or not a single byte crossed the
+          # bridge. Offsets alone would report FLOWING for a completely dead bridge — the most
+          # dangerous possible false green, because it is the signal the prod flip is gated on.
+          #
+          # DECISIVE PROOF: take fresh records from the SOURCE and find those exact payloads on
+          # the TARGET. Only the bridge can put an es4-produced record onto prod's topic.
           if [ "$TGT1" -gt "$TGT0" ]; then
-            echo "  BRIDGE FLOWING: ${TARGET_TOPIC} advanced by $((TGT1-TGT0)) records"
+            "$CONFLUENT/bin/kafka-console-consumer" --bootstrap-server "$SRC" --topic "$SOURCE_TOPIC" \
+              --max-messages 5 --timeout-ms 20000 > "$T.src.sample" 2>/dev/null || true
+            MATCHED=0
+            if [ -s "$T.src.sample" ]; then
+              "$CONFLUENT/bin/kafka-console-consumer" --bootstrap-server "$TGT" --topic "$TARGET_TOPIC" \
+                --max-messages 200 --timeout-ms 25000 > "$T.tgt.sample" 2>/dev/null || true
+              while IFS= read -r line; do
+                [ -n "$line" ] || continue
+                if grep -qxF "$line" "$T.tgt.sample" 2>/dev/null; then
+                  MATCHED=$((MATCHED+1))
+                fi
+              done < "$T.src.sample"
+            fi
+            if [ "$MATCHED" -eq 0 ]; then
+              echo "FAIL: ${TARGET_TOPIC} advanced by $((TGT1-TGT0)) records, but NONE of the sampled"
+              echo "      source records were found on the target. The target is being written by"
+              echo "      something else (prod's own ES subscription during cutover overlap) and the"
+              echo "      bridge is NOT delivering. Offsets alone would have called this FLOWING."
+              echo NOT_DELIVERING > "$T.verdict"
+              exit 1
+            fi
+            echo "  BRIDGE FLOWING: ${TARGET_TOPIC} advanced by $((TGT1-TGT0)) records, and"
+            echo "  ${MATCHED} sampled SOURCE record(s) were found byte-for-byte on the TARGET."
             echo FLOWING > "$T.verdict"
           elif [ "$SRC1" -gt "$SRC0" ]; then
             echo "FAIL: source produced $((SRC1-SRC0)) records in 45s but the target did not advance."

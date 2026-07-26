@@ -1,4 +1,5 @@
 import pathlib
+import os
 import unittest
 
 
@@ -106,7 +107,16 @@ class VixOptionInteligenceDeployTest(unittest.TestCase):
         es4 = (ROOT / "scripts/es4/create-es-topics.sh").read_text()
         self.assertIn("prune-retired-zero-dte-identity.lib.sh", es4)
         self.assertIn('prune_retired_zero_dte_identity "es.options.spx.0dte.intelligence.current"', es4)
-        self.assertIn("docker exec es4-kafka kafka-consumer-groups", es4)
+        # The docker-exec now lives in the PATH SHIM, not inline in create-es-topics.sh — the es4
+        # host has no Kafka CLI, so every call is proxied through scripts/es4/kafka-cli-shim.
+        # This assertion used to look for it inline and was therefore describing the old shape.
+        self.assertIn("prune_kg()", es4)
+        self.assertIn("SHIM_DIR", es4)
+        shim = ROOT / "scripts/es4/kafka-cli-shim/kafka-consumer-groups"
+        self.assertTrue(shim.exists(), "prune_kg() calls kafka-consumer-groups; the shim must exist")
+        self.assertTrue(os.access(shim, os.X_OK), "the shim must be executable or PATH lookup fails")
+        self.assertIn("docker exec -i", shim.read_text())
+        self.assertIn("kafka-consumer-groups", shim.read_text())
 
     def test_rename_removes_legacy_workload_only_after_replacement(self):
         scoped = (ROOT / "scripts/deploy/service-deploy.sh").read_text()
