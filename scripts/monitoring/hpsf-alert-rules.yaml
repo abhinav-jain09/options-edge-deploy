@@ -29,6 +29,48 @@ groups:
         annotations:
           summary: "Underlying lag too high"
           description: "ES/SPX source lag is above threshold. HPSF must not emit BUY signals."
+      # --- DBP-R32: prod takes ES trades from es4 over a LAN bridge -------------------------
+      # After the ES-futures Databento subscription moved to the es env, these trades drive the
+      # A1-certified ES->SPX basis, so prod now depends on another box, a bridge process and the
+      # LAN. Without an alert the failure is SILENT: the last basis sits on a COMPACTED topic
+      # looking perfectly valid, because a silent source publishes no new record to replace it.
+      #
+      # `> 0` on the timestamp is REQUIRED, not decorative: the age gauge is NaN until the first
+      # trade of the process, and the timestamp is 0. Alerting on the age alone would never fire
+      # for a feed that never received anything at all — the worst case.
+      - alert: EsTradesSourceSilent
+        expr: >-
+          options_edge_databento_feed_es_trades_source_timestamp_seconds > 0
+          and
+          (time() - options_edge_databento_feed_es_trades_source_timestamp_seconds) > 600
+        for: 5m
+        labels:
+          severity: critical
+          service: databento-feed
+        annotations:
+          summary: "ES trades from es4 have stopped reaching prod"
+          description: >-
+            No usable ES trade has arrived over the ES-trades Kafka source for more than 10
+            minutes. The ES->SPX basis is driven by these records, and a silent source does NOT
+            republish an UNAVAILABLE state — the last value stays on the compacted topic looking
+            valid. Check the es4 feed, the es-trades bridge launchd unit on the ops Mac, and the
+            LAN path to 192.168.100.4.
+      # Never-received is a DISTINCT failure from went-silent, and the alert above cannot see it
+      # (timestamp stays 0, so the guard excludes it). A feed that has been up well past its
+      # startup grace and has still never received one ES trade is misconfigured or disconnected.
+      - alert: EsTradesSourceNeverReceived
+        expr: >-
+          options_edge_databento_feed_es_trades_source_timestamp_seconds == 0
+        for: 30m
+        labels:
+          severity: critical
+          service: databento-feed
+        annotations:
+          summary: "ES-trades source has never delivered a record"
+          description: >-
+            This feed has been running for 30 minutes with the ES-trades Kafka source enabled and
+            has never received a usable ES trade. Check ES_TRADES_SOURCE_BOOTSTRAP/_TOPIC and that
+            the es4->prod bridge is installed and flowing.
       - alert: HpsfEvaluationDurationTooHigh
         expr: hpsf_evaluation_duration_ms > 1000
         for: 2m

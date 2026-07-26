@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# PATH shim: proxy 'kafka-consumer-groups' into the es4-kafka container so the SHARED
+# scripts/kafka/prune-retired-zero-dte-identity.lib.sh runs unmodified on the es4 box
+# (no CLI on the host).
+#
+# This shim was MISSING while create-es-topics.sh already called the prune library, whose
+# prune_kg() wrapper needs exactly this binary. Group discovery therefore ended in
+# command-not-found, and under `set -euo pipefail` that killed the script at its last step —
+# so the whole zero-orphan prune could never run on es4.
+#
+# sudo -n: non-interactive, matching the rest of the es4 tooling. Fail loudly, never silently.
+set -euo pipefail
+exec sudo -n docker exec -i "${ES4_KAFKA_CONTAINER:-es4-kafka}" kafka-consumer-groups "$@"

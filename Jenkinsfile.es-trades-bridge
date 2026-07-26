@@ -409,17 +409,42 @@ EOS
           echo "  restart continuity OK: '$GROUP' holds committed offsets on $COMMITTED partition(s)"
           sed 's/^/      /' "$T.group.after"
 
+          # Machine-readable TRI-STATE. A green build must mean "flow proven", so the
+          # no-traffic case is written out and turned into UNSTABLE by the script block below —
+          # not swallowed as success. Off-hours is a legitimate outcome, but it is NOT proof.
           if [ "$TGT1" -gt "$TGT0" ]; then
             echo "  BRIDGE FLOWING: ${TARGET_TOPIC} advanced by $((TGT1-TGT0)) records"
+            echo FLOWING > "$T.verdict"
           elif [ "$SRC1" -gt "$SRC0" ]; then
             echo "FAIL: source produced $((SRC1-SRC0)) records in 45s but the target did not advance."
             echo "      The bridge is loaded but NOT delivering — check ${MDIR}/bridge.log"
+            echo DROPPING > "$T.verdict"
             exit 1
           else
             echo "  INCONCLUSIVE: neither end advanced in 45s — no ES trades were produced at all,"
             echo "  which is expected while Globex is closed. Re-run during RTH to assert flow."
+            echo INCONCLUSIVE > "$T.verdict"
           fi
         '''
+        script {
+          // The shell cannot set a Jenkins result, so the verdict crosses the boundary as a file.
+          // INCONCLUSIVE => UNSTABLE: the bridge is installed and its restart continuity is proven,
+          // but NO DATA was observed crossing it. Reporting that as SUCCESS is what would let a
+          // closed-market install be mistaken for a validated cutover — the whole reason the
+          // cutover's final step is gated on an open Globex session.
+          def verdictFile = "/tmp/es-trades-bridge-${env.SLUG}.verdict"
+          def verdict = sh(script: "cat '${verdictFile}' 2>/dev/null || echo MISSING", returnStdout: true).trim()
+          echo "bridge verify verdict: ${verdict}"
+          if (verdict == 'INCONCLUSIVE') {
+            currentBuild.result = 'UNSTABLE'
+            currentBuild.description = 'bridge installed; flow NOT proven (no ES trades in window)'
+          } else if (verdict == 'FLOWING') {
+            currentBuild.description = 'bridge installed and flow proven'
+          } else {
+            // A missing verdict means the shell exited before writing one; never call that success.
+            error("bridge verify produced no verdict (${verdict}) — treat as unverified")
+          }
+        }
       }
     }
   }

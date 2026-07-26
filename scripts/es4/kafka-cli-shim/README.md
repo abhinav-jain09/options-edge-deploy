@@ -1,7 +1,7 @@
 # es4 Kafka CLI shim
 
 `scripts/kafka/apply-topics.sh` — the SINGLE topic-applier Jenkins uses for dev and prod — invokes the
-Kafka CLI directly (`kafka-topics`, `kafka-configs`, `kafka-broker-api-versions`,
+Kafka CLI directly (`kafka-topics`, `kafka-consumer-groups`, `kafka-configs`, `kafka-broker-api-versions`,
 `kafka-reassign-partitions`). On the es4 box those binaries do **not** exist on the host: Kafka runs as
 the `es4-kafka` Docker container and the CLI lives inside it.
 
