@@ -46,7 +46,9 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   options-edge-integration-test (no continuous tests in prod), spx-mission-control-service
 #   (2026-07-09 USER: keep OFF on prod; databento-mission-sandwich-service stays UP),
 #   ibkr-feed-service (2026-07-09 USER: VIX moved to dev, prod no longer needs the IBKR VIX source).
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service ibkr-feed-service short-premium-agent-service}"
+#   spread-skew-service + spread-skew-postgres-writer (2026-07-26 USER hold:
+#   disabled in every environment until further notice).
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service ibkr-feed-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only

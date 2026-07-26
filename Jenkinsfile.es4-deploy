@@ -37,7 +37,7 @@ pipeline {
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
       'directional-pressure', 'gex-delta-redis-writer', 'option-price-behavior', 'option-truth-engine', 'pin-postgres-writer',
       'pressure-postgres-writer', 'raw-to-display', 'strike-flow-avro-adapter', 'strike-flow-classifier',
-      'strike-liquidity-heatmap', 'volume-pace', 'spread-skew', 'spread-skew-postgres-writer',
+      'strike-liquidity-heatmap', 'volume-pace',
       'strike-intelligence', 'vix-option-inteligence', 'es-aggressor-flow', 'es-feed-gateway', 'es-web',
       'es-feed'
     ], description: 'Service (deploy-service only). NOTE: es-feed is the RELOCATED ES options feed now running on the es4 cluster; it always deploys at replicas 0 — starting it is a separate ACTION=activate-es-feed.')
@@ -194,9 +194,12 @@ pipeline {
           # above. `|| true` because grep exits 1 when it filters nothing, which under
           # `set -euo pipefail` would abort the whole deploy.
           if [ "$ACTION" = "deploy-all" ]; then
-            FILES=$(ls k8s/es4/services/*.yaml | { grep -v '/es-feed[.]yaml$' || true; })
+            # The spread-skew stack is under an operator hold (2026-07-26): bulk
+            # deploys must not even apply it, in addition to its manifests being
+            # pinned at replicas 0.
+            FILES=$(ls k8s/es4/services/*.yaml | { grep -Ev '/(es-feed|spread-skew|spread-skew-postgres-writer)[.]yaml$' || true; })
             [ -n "$FILES" ] || { echo "deploy-all: no service manifests resolved" >&2; exit 1; }
-            echo "deploy-all: es-feed intentionally EXCLUDED (apply it explicitly with SERVICE=es-feed)"
+            echo "deploy-all: es-feed and the held spread-skew stack intentionally EXCLUDED"
           else
             FILES="k8s/es4/services/${SERVICE}.yaml"
           fi
