@@ -20,3 +20,37 @@ data:
   APP_PROFILE: dev
   DATABENTO_SPOT_SOURCE: SYNTHETIC
   HPSF_SPX_SPOT_SOURCE: SYNTHETIC_OPTION_SPOT
+
+  # ---- DBP-R32: prod stops holding its own ES Databento subscription (2026-07-26) ----------
+  #
+  # PRODUCTION-ONLY ON PURPOSE. These keys must NOT go in k8s/infra/base — dev inherits that
+  # base and would then (a) lose the ES trade stream its cascade comment says it "reuses via
+  # base's DATABENTO_HPSF_ES_TRADES_ENABLED=true", and (b) inherit the bootstrap below and start
+  # consuming from the PRODUCTION broker. Both silent.
+  #
+  # WHERE THE SESSION SAVING COMES FROM: _use_separate_es_live_client() opens an EXTRA Databento
+  # live client only when hpsf_es_dataset != databento_dataset. Prod is OPRA.PILLAR vs GLBX.MDP3
+  # -> a whole extra concurrent session on the shared key. es4 is GLBX.MDP3 vs GLBX.MDP3 -> the
+  # same subscription there costs +0. Net effect of the flip: -1 concurrent session.
+  DATABENTO_HPSF_ES_TRADES_ENABLED: "false"
+  #
+  # ES trades now arrive over Kafka instead. LOCAL bootstrap on purpose: the es4->prod bridge
+  # (Jenkinsfile.es-trades-bridge) already made the single cross-LAN hop and renamed
+  # es.underlying.es.trades -> underlying.es.trades on THIS cluster, so the feed reads it like
+  # any other local topic. One hop, not two, and every existing prod consumer of
+  # underlying.es.trades (close-direction, es-open-direction, es-spx-align, ...) is untouched.
+  #
+  # ⚠️ These four are read WITHOUT a DATABENTO_ prefix (config.py:520-523), unlike almost every
+  # other key here. A DATABENTO_-prefixed spelling parses as absent and the consumer stays
+  # silently OFF — which would take the ES->SPX basis dark with no error at all.
+  #
+  # REQUIRES feed >= c599296 (PR #96), which makes the Kafka-source path drive the basis engine
+  # exactly as the native subscription did. Deployed to prod 2026-07-25 (service-deploy #878,
+  # digest sha256:2abf0418). Without it this flip silently kills the A1-certified ES->SPX basis,
+  # because the enrichment is best-effort and never fails a publish.
+  ES_TRADES_SOURCE_ENABLED: "true"
+  ES_TRADES_SOURCE_BOOTSTRAP: 192.168.100.252:9092
+  ES_TRADES_SOURCE_TOPIC: underlying.es.trades
+  # Distinct from es4's historic "es-feed-spot" group: those committed offsets belong to a
+  # different consumer on a different cluster; inheriting them would skip or replay records.
+  ES_TRADES_SOURCE_GROUP_ID: prod-feed-es-spot

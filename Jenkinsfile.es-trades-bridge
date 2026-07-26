@@ -1,0 +1,190 @@
+// ES-TRADES BRIDGE — es4 (.4) -> prod (.252), WITH a topic rename, as a managed launchd service.
+//
+// DBP-R32: the es env is the sole owner of every ES Databento subscription. es4's feed now
+// produces the ES-future trades natively as `es.underlying.es.trades` (es4 services resolve
+// topics through TOPIC_PREFIX=es.). Prod needs the SAME records under its own unprefixed name
+// `underlying.es.trades`, which is what every prod consumer already reads:
+//   close-direction, es-open-direction, es-spx-align, and the SPX feed itself (ES_TRADES_SOURCE).
+// Bridging with a rename is what lets ALL of them stay untouched.
+//
+// WHY A BRIDGE, NOT MirrorMaker: neither MM1 nor MM2 can RENAME a topic. MM1 is identity-name;
+// MM2's DefaultReplicationPolicy would write `es4.es.underlying.es.trades` on prod. Piping
+// console-consumer -> console-producer is the pattern already proven in production by
+// com.optionsedge.spx-es4-bridge (2026-07-23), which does the mirror-image rename
+// underlying.spx.price -> es.underlying.spx.price. Same tools, same launchd envelope.
+//
+// WHY THE JVM CLI, NOT kcat: under launchd, kcat/librdkafka fails "No route to host" to .252/.4
+// (interactive kcat is fine); the JVM Kafka CLI works under launchd. Proven by the sibling
+// es-gex-mirror / es-futures-flow-mirror units and by spx-es4-bridge.
+//
+// DIRECTION SAFETY: prod->es4 MM2 no longer mirrors underlying.es.trades (infra/es4/mm2/
+// mm2.properties now lists only underlying.vix.price). Both directions live for one logical
+// topic is exactly what produced the 2026-07-24 `es.es.es...` runaway — do not re-add it.
+pipeline {
+  agent { label 'local-mac' }
+  parameters {
+    string(name: 'SOURCE_ES_CLUSTER_IP', defaultValue: '192.168.100.4',   description: 'ES source-of-truth broker IP (.4) — where es-feed publishes.')
+    string(name: 'SOURCE_PORT',          defaultValue: '9092',            description: 'Source Kafka port.')
+    string(name: 'SOURCE_TOPIC',         defaultValue: 'es.underlying.es.trades', description: 'Topic on the SOURCE cluster (es.-prefixed).')
+    string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '192.168.100.252', description: 'Target env broker IP (prod = 192.168.100.252).')
+    string(name: 'TARGET_PORT',          defaultValue: '9092',            description: 'Target Kafka port.')
+    string(name: 'TARGET_TOPIC',         defaultValue: 'underlying.es.trades', description: 'Topic on the TARGET cluster (unprefixed) — the rename.')
+    choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the bridge; teardown = stop+remove it.')
+  }
+  options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
+  environment {
+    CONFLUENT = '/Users/abhinav/development/confluent-7.3.1'
+    // Per-TARGET identity so a second environment can run its own bridge without overwriting
+    // this one. NOTE the sibling es-futures-flow-mirror keys its slug on target ONLY, so running
+    // that job with a different TOPIC silently replaces its unit — this job is deliberately a
+    // SEPARATE job rather than a re-parameterisation of it, for exactly that reason.
+    SLUG  = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
+  }
+  stages {
+
+    stage('Teardown') {
+      when { expression { params.ACTION == 'teardown' } }
+      steps {
+        sh '''
+          set -eu
+          LABEL="com.optionsedge.es-trades-bridge-${SLUG}"
+          PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+          MDIR="$HOME/oe-ops/es-trades-bridge-${SLUG}"
+          launchctl unload "$PLIST" 2>/dev/null || true
+          rm -f "$PLIST"
+          rm -rf "$MDIR"
+          echo "torn down ${LABEL}"
+        '''
+      }
+    }
+
+    stage('Preflight') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -eu
+          SRC="${SOURCE_ES_CLUSTER_IP}:${SOURCE_PORT}"
+          TGT="${TARGET_SPX_CLUSTER_IP}:${TARGET_PORT}"
+
+          # Fail closed on the two things that silently produce an empty bridge.
+          [ "$SOURCE_TOPIC" != "$TARGET_TOPIC" ] || { echo "FAIL: source and target topic are identical ($SOURCE_TOPIC) — use es-futures-flow-mirror for identity copies, this job exists to RENAME"; exit 1; }
+          [ "$SRC" != "$TGT" ] || { echo "FAIL: source and target broker are identical ($SRC) — a same-cluster bridge would loop"; exit 1; }
+
+          for hp in "$SRC" "$TGT"; do
+            h=${hp%:*}; p=${hp#*:}
+            nc -z -G 5 "$h" "$p" || { echo "FAIL: broker $hp unreachable"; exit 1; }
+            echo "  reachable: $hp"
+          done
+
+          # The source topic must EXIST and be non-empty-capable before we install a KeepAlive
+          # unit; otherwise launchd would respawn a bridge that can never produce anything.
+          JH="$(/usr/libexec/java_home 2>/dev/null || true)"
+          [ -n "$JH" ] || { echo "FAIL: no JDK found for the Kafka CLI"; exit 1; }
+          export JAVA_HOME="$JH"; export PATH="$JAVA_HOME/bin:$PATH"
+          "$CONFLUENT/bin/kafka-topics" --bootstrap-server "$SRC" --list > /tmp/es-trades-bridge-src-topics.txt
+          grep -qx "$SOURCE_TOPIC" /tmp/es-trades-bridge-src-topics.txt || { echo "FAIL: source topic '$SOURCE_TOPIC' does not exist on $SRC — deploy the es4 feed with DATABENTO_HPSF_ES_TRADES_ENABLED=true first"; exit 1; }
+          echo "  source topic present: $SOURCE_TOPIC"
+        '''
+      }
+    }
+
+    stage('Install') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -eu
+          LABEL="com.optionsedge.es-trades-bridge-${SLUG}"
+          PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+          MDIR="$HOME/oe-ops/es-trades-bridge-${SLUG}"
+
+          launchctl unload "$PLIST" 2>/dev/null || true
+          mkdir -p "$MDIR"
+
+          cat > "$MDIR/run.sh" <<EOS
+#!/usr/bin/env bash
+# GENERATED by Jenkinsfile.es-trades-bridge — do not hand-edit; re-run the job instead.
+# es4 -> prod ES-trades bridge WITH rename (DBP-R32).
+set -uo pipefail
+
+CONFLUENT=${CONFLUENT}
+SRC=${SOURCE_ES_CLUSTER_IP}:${SOURCE_PORT}
+TGT=${TARGET_SPX_CLUSTER_IP}:${TARGET_PORT}
+SRC_TOPIC=${SOURCE_TOPIC}
+DST_TOPIC=${TARGET_TOPIC}
+LOG=${MDIR}/bridge.log
+TAB=\\$'\\t'
+
+# launchd has a minimal PATH/env: resolve a JDK explicitly for the confluent CLI.
+if [ -z "\\${JAVA_HOME:-}" ]; then
+  JAVA_HOME="\\$(/usr/libexec/java_home 2>/dev/null || true)"
+  [ -z "\\$JAVA_HOME" ] && for j in /Library/Java/JavaVirtualMachines/*/Contents/Home /opt/homebrew/opt/openjdk*/libexec/openjdk.jdk/Contents/Home; do [ -x "\\$j/bin/java" ] && JAVA_HOME="\\$j" && break; done
+fi
+export JAVA_HOME
+export PATH="\\$JAVA_HOME/bin:/usr/bin:/bin:\\$PATH"
+
+echo "[\\$(date '+%Y-%m-%d %H:%M:%S')] starting es-trades bridge \\$SRC/\\$SRC_TOPIC -> \\$TGT/\\$DST_TOPIC (JAVA_HOME=\\$JAVA_HOME)" >> "\\$LOG"
+[ -x "\\$JAVA_HOME/bin/java" ] || { echo "[\\$(date '+%F %T')] ERROR: no JDK found" >> "\\$LOG"; exit 2; }
+
+# Consume es4 as key<TAB>value; produce to prod splitting on TAB. The UnderlyingTradeEvent
+# payload is compact single-line JSON with no tabs, so TAB is an unambiguous delimiter, and
+# print.key/parse.key preserve the record key (the instrument key the topic is keyed on).
+exec "\\$CONFLUENT/bin/kafka-console-consumer" \\\\
+      --bootstrap-server "\\$SRC" --topic "\\$SRC_TOPIC" \\\\
+      --property print.key=true --property key.separator="\\$TAB" 2>>"\\$LOG" \\\\
+  | "\\$CONFLUENT/bin/kafka-console-producer" \\\\
+      --bootstrap-server "\\$TGT" --topic "\\$DST_TOPIC" \\\\
+      --property parse.key=true --property key.separator="\\$TAB" 2>>"\\$LOG"
+EOS
+          chmod +x "$MDIR/run.sh"
+
+          cat > "$PLIST" <<EOS
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>${MDIR}/run.sh</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>${MDIR}/bridge.out.log</string>
+  <key>StandardErrorPath</key><string>${MDIR}/bridge.err.log</string>
+</dict>
+</plist>
+EOS
+
+          launchctl load "$PLIST"
+          echo "installed ${LABEL}"
+        '''
+      }
+    }
+
+    stage('Verify') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -eu
+          LABEL="com.optionsedge.es-trades-bridge-${SLUG}"
+          MDIR="$HOME/oe-ops/es-trades-bridge-${SLUG}"
+          TGT="${TARGET_SPX_CLUSTER_IP}:${TARGET_PORT}"
+
+          launchctl list | grep -q "$LABEL" || { echo "FAIL: launchd unit $LABEL not loaded"; exit 1; }
+          echo "  launchd unit loaded: $LABEL"
+
+          # A loaded unit is NOT proof of flow. Assert the target topic's end offset ADVANCES.
+          # Off-hours (no ES trades) this legitimately cannot advance, so report rather than fail.
+          JH="$(/usr/libexec/java_home 2>/dev/null || true)"
+          export JAVA_HOME="$JH"; export PATH="$JAVA_HOME/bin:$PATH"
+          off() { "$CONFLUENT/bin/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$TGT" --topic "$TARGET_TOPIC" 2>/dev/null | awk -F: '{s+=$3} END {print s+0}'; }
+          A=$(off); sleep 45; B=$(off)
+          echo "  target end-offset ${A} -> ${B}"
+          if [ "$B" -gt "$A" ]; then
+            echo "  BRIDGE FLOWING: ${TARGET_TOPIC} advanced by $((B-A)) records"
+          else
+            echo "  NOTE: no advance in 45s. Expected while Globex is closed; if the market is OPEN this is a FAILURE — check ${MDIR}/bridge.log"
+          fi
+        '''
+      }
+    }
+  }
+}
