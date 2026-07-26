@@ -45,4 +45,20 @@ KAFKA_TOPIC_RETENTION_MS="${RETENTION_MS:-43200000}" \
 TOPIC_SET=es4 \
   bash "$SCRIPT_DIR/../kafka/apply-topics.sh"
 
+# ---- zero-orphan prune of the retired identity (One Service One Identity Rule) ----
+# This call had NO `source` for the library that defines it: under `set -euo pipefail` that is a
+# hard "command not found" failure at the very end of the script, so create-es-topics.sh could
+# never complete. The sourcing was lost when topic creation was refactored to delegate to
+# scripts/kafka/apply-topics.sh; the library's own header still says this caller "supplies
+# docker-exec wrappers", which is exactly the half that went missing.
+#
+# Caught by tests/test_vix_option_inteligence_deploy.py, which had been failing on main — a red
+# test that was describing a real breakage, not test drift.
+#
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/../kafka/prune-retired-zero-dte-identity.lib.sh"
+# The es4 host has no Kafka CLI — everything goes through the shims, so the wrappers must carry
+# the shim PATH the same way the apply-topics.sh invocation above does.
+prune_kt() { PATH="$SHIM_DIR:$PATH" kafka-topics --bootstrap-server "$BROKER" "$@"; }
+prune_kg() { PATH="$SHIM_DIR:$PATH" kafka-consumer-groups --bootstrap-server "$BROKER" "$@"; }
 prune_retired_zero_dte_identity "es.options.spx.0dte.intelligence.current"

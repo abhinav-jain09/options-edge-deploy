@@ -51,7 +51,7 @@ spec:
   template:
     metadata:
       annotations:
-        oe/config-nonce: 2026-07-19-dev-basis-anchor-resume-2
+        oe/config-nonce: 2026-07-26-es-trades-from-es4-dbp-r32
       labels:
         app.kubernetes.io/name: options-edge-databento-feed
         app.kubernetes.io/part-of: options-edge

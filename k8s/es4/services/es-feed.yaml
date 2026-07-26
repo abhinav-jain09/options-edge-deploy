@@ -227,6 +227,26 @@ spec:
             initialDelaySeconds: 60
             periodSeconds: 30
             failureThreshold: 3
+          # Readiness was MISSING entirely, so k8s marked the pod Ready the instant the container
+          # started — while contract resolution and subscription were still running (~145s on the
+          # 2026-07-26 es4 boot). `rollout status`, and therefore service-deploy's health gate,
+          # then reported success over a feed that could not serve anything yet.
+          #
+          # /health/ready is a SEPARATE endpoint from /health/live on purpose. The liveness paths
+          # (/health/live, /healthz, /health) are all the same STALENESS check, so pointing
+          # readiness at them would flap a perfectly healthy feed out of service every quiet
+          # market. /health/ready latches once contracts are registered and never un-readies.
+          #
+          # failureThreshold 30 x 10s = 5 minutes of grace, comfortably over the measured ~145s
+          # resolve, because being slow to go Ready costs only rollout time whereas going Ready
+          # early is what made every deploy of this service dishonest.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30
           resources:
             requests: { cpu: "250m", memory: "512Mi" }
             limits:   { memory: "1536Mi" }
