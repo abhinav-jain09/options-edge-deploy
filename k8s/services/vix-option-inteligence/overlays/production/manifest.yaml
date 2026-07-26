@@ -59,6 +59,8 @@ spec:
               value: "8080"
             - name: ZERO_DTE_INTELLIGENCE_ENABLED
               value: "true"
+            - name: ZERODTE_RESEARCH_ENABLED
+              value: "false"
             - name: ZERO_DTE_SYMBOL
               value: SPX
             - name: ZERO_DTE_OPTION_EVENTS_TOPIC

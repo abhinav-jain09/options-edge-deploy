@@ -1,0 +1,18 @@
+# DEV-ONLY: turn the Gate-3 research evidence store ON.
+#
+# Base is OFF and carries NO url on purpose. The writer takes POSTGRES_JDBC_URL, which is already
+# per-environment, so dev writes to options_flow_dev and no environment can reach production's
+# database by missing an override. Prod stays off until switched on deliberately.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vix-option-inteligence-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: vix-option-inteligence
+          env:
+            - name: ZERODTE_RESEARCH_ENABLED
+              value: "true"

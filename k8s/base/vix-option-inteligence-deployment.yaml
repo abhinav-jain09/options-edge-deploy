@@ -35,6 +35,15 @@ spec:
               value: "8080"
             - name: ZERO_DTE_INTELLIGENCE_ENABLED
               value: "true"
+            # Gate-3 research evidence store (0DTE-RESEARCH-WRITER-REQUIREMENT rev 18 §5).
+            # OFF in base, switched on per environment. There is deliberately NO URL here: the
+            # writer takes POSTGRES_JDBC_URL, which is already per-environment, so no environment
+            # can inherit another's database by missing an override. Credentials likewise come
+            # from the POSTGRES_USER/POSTGRES_PASSWORD the container already receives.
+            # The writer creates its own schema on first start; version-gated, so an ordinary
+            # restart applies nothing and takes no table locks.
+            - name: ZERODTE_RESEARCH_ENABLED
+              value: "false"
             - name: ZERO_DTE_SYMBOL
               value: SPX
             - name: ZERO_DTE_OPTION_EVENTS_TOPIC
