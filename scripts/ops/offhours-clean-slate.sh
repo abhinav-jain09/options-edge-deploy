@@ -333,12 +333,6 @@ if [ -n "$PG_DSN" ]; then
   log "Postgres identity verified (db=$DBN host=${SRV:-socket} role=$USR)"
   # WIPE_DB gate (default false, matches dev): only truncate the flow DB when explicitly requested.
   if [ "$WIPE_DB" = "true" ]; then DB_WIPE="true"; else DB_WIPE="false"; log "WIPE_DB=false -> flow-DB truncate SKIPPED (Postgres preserved, matches dev)"; fi
-  # Fail CLOSED on classification. An empty TO_TRUNCATE from a failed or skipped classification is
-  # indistinguishable from a legitimately empty plan, and "nothing to do" is the most dangerous
-  # thing a destructive job can conclude by accident.
-  if [ "$DB_WIPE" = "true" ] && [ "$CLASSIFICATION_OK" != "true" ]; then
-    DB_WIPE="false"; log "flow-DB truncate SKIPPED: classification did not complete cleanly (fail-closed)"
-  fi
 else
   if [ "$MUTATE" = "true" ]; then
     log "WARN: PG_DSN unset — DB wipe (step C) will be SKIPPED this run"
@@ -515,6 +509,19 @@ if [ -n "$PG_DSN" ]; then
   log "flow-DB plan: truncate=$(echo $TO_TRUNCATE | wc -w | tr -d ' ') protected=$(echo $PROTECTED | wc -w | tr -d ' ') unclassified=$(echo $UNCLASSIFIED | wc -w | tr -d ' ')"
 else
   log "PG_DSN unset — flow-DB classification skipped (no DB to inspect)"
+fi
+
+# Fail CLOSED on classification. An empty TO_TRUNCATE from a failed or skipped classification is
+# indistinguishable from a legitimately empty plan, and "nothing to do" is the most dangerous
+# conclusion a destructive job can reach by accident.
+#
+# This MUST sit after the classification above. It was originally written up beside the WIPE_DB
+# decision, which runs BEFORE classification — so CLASSIFICATION_OK was read before it existed and
+# the Postgres phase would have been skipped on every single run, silently doing half the job.
+# Third ordering mistake in this file today; hence the explicit note.
+if [ "$DB_WIPE" = "true" ] && [ "$CLASSIFICATION_OK" != "true" ]; then
+  DB_WIPE="false"
+  log "flow-DB truncate SKIPPED: classification did not complete cleanly (fail-closed)"
 fi
 
 # ===========================================================================
@@ -735,10 +742,21 @@ if [ "$DB_WIPE" = "true" ]; then
   #     premarket-reset.sh has refused to touch it since 2026-06-28 for exactly this reason.
 
 
-  # Let Postgres quote the identifiers (format %I) instead of pasting names into SQL from the
-  # shell. Today's names are simple, which is exactly why a shell-built list looks fine right up
-  # until a table is named with a capital or a hyphen.
-  TRUNC_IN=$(for t in $TO_TRUNCATE; do printf "'%s'," "$t"; done | sed "s/,$//")
+  # SQL safety, in two parts, because the first attempt only did half the job: format('%I') quotes
+  # the identifiers this query RETURNS, but the names going IN were still pasted into '...'
+  # literals straight from the shell, so a name containing a quote would break out of the IN-list.
+  #
+  # These are tables this repository owns, so a name outside [A-Za-z0-9_] is not a case to escape
+  # — it is a case that should never exist, and letting it through quietly is how a quoting bug
+  # becomes an injection. Anything that does not match is REFUSED rather than sanitised. Then the
+  # surviving names are passed through format('%L') server-side, so even the literals are quoted
+  # by Postgres rather than by printf.
+  for t in $TO_TRUNCATE; do
+    case "$t" in
+      *[!A-Za-z0-9_]*|"") die "REFUSING truncate: table name '$t' contains characters outside [A-Za-z0-9_] — refusing to build SQL from it" ;;
+    esac
+  done
+  TRUNC_IN=$(pg "select string_agg(format('%L', x), ',') from unnest(string_to_array('$(echo $TO_TRUNCATE | tr -s ' ' ',')', ',')) as x")
   TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ' order by tablename) from pg_tables where schemaname='public' and tablename in ($TRUNC_IN)")
   if [ -n "$TBL_LIST" ]; then
     # Final gate, kept from the deny-list era and still worth having: re-read the FINISHED list and
