@@ -473,7 +473,13 @@ if [ -n "$PG_DSN" ]; then
     || die "flow-DB classification query failed"
   [ -n "$ALL_PUBLIC" ] || die "flow-DB classification returned NO public tables — refusing to guess"
   for t in $ALL_PUBLIC; do
-    case "$t" in es_*|zerodte_*)          PROTECTED="$PROTECTED $t";     continue ;; esac
+    # Lower-cased before the prefix test. PostgreSQL folds unquoted identifiers to lower case, but
+    # a table created with a QUOTED name keeps its case — and "ES_forecast" would then miss the
+    # es_* test. That is safe today only by accident: it falls through to UNCLASSIFIED, which
+    # skips the whole Postgres phase. Accidental protection is not protection, so match it
+    # deliberately.
+    tl=$(printf '%s' "$t" | tr 'A-Z' 'a-z')
+    case "$tl" in es_*|zerodte_*)         PROTECTED="$PROTECTED $t";     continue ;; esac
     case " $KNOWN_KEEP "     in *" $t "*) PROTECTED="$PROTECTED $t";     continue ;; esac
     case " $TRUNCATE_ALLOW " in *" $t "*) TO_TRUNCATE="$TO_TRUNCATE $t"; continue ;; esac
     UNCLASSIFIED="$UNCLASSIFIED $t"
@@ -484,7 +490,7 @@ if [ -n "$PG_DSN" ]; then
   # of two case statements decides another. Say so and stop.
   for t in $TRUNCATE_ALLOW; do
     case " $KNOWN_KEEP " in *" $t "*) die "'$t' is in BOTH TRUNCATE_ALLOW and KNOWN_KEEP — contradictory intent, refusing to pick one" ;; esac
-    case "$t" in es_*|zerodte_*) die "'$t' is in TRUNCATE_ALLOW but matches a PROTECTED prefix — refusing" ;; esac
+    case "$(printf '%s' "$t" | tr 'A-Z' 'a-z')" in es_*|zerodte_*) die "'$t' is in TRUNCATE_ALLOW but matches a PROTECTED prefix — refusing" ;; esac
   done
   CLASSIFICATION_OK=true
 
@@ -751,6 +757,14 @@ if [ "$DB_WIPE" = "true" ]; then
   # becomes an injection. Anything that does not match is REFUSED rather than sanitised. Then the
   # surviving names are passed through format('%L') server-side, so even the literals are quoted
   # by Postgres rather than by printf.
+  #
+  # Note precisely what this does NOT refuse: UPPER CASE is allowed, deliberately. A quoted
+  # mixed-case table is legal in PostgreSQL and format('%I') quotes it correctly on the way out
+  # (verified: public."MixedCase_Probe"), so refusing it would kill the job over a legitimately
+  # named table rather than prevent anything. An earlier version of this comment claimed capitals
+  # were refused; the pattern above plainly permits them, and the claim was the thing that was
+  # wrong. What is refused is anything that could terminate a literal or an identifier — quotes,
+  # semicolons, spaces, hyphens, backslashes.
   for t in $TO_TRUNCATE; do
     case "$t" in
       *[!A-Za-z0-9_]*|"") die "REFUSING truncate: table name '$t' contains characters outside [A-Za-z0-9_] — refusing to build SQL from it" ;;
@@ -774,7 +788,7 @@ if [ "$DB_WIPE" = "true" ]; then
     # them meant a new zerodte_/es_ table was unprotected at this gate the day it was created,
     # which is precisely when nobody is looking at this file.
     for t in $TO_TRUNCATE; do
-      case "$t" in
+      case "$(printf '%s' "$t" | tr 'A-Z' 'a-z')" in
         es_*|zerodte_*) die "REFUSING truncate: '$t' matches a PROTECTED prefix but reached the truncate list" ;;
       esac
     done
