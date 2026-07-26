@@ -25,8 +25,8 @@
 #        freshly-emptied changelogs (BufferUnderflowException / codec mismatch),
 #        so clearing the local state is MANDATORY, not optional.
 #   C. Postgres (flow DB `options_flow` ONLY — Keycloak is NEVER touched)
-#      - TRUNCATE every table in the public schema EXCEPT the cross-day corpora
-#        (pin_session_close labels, calibration.*, es_*, zerodte_*, spread_skew_sample), then
+#      - TRUNCATE only the ALLOW-LISTED session tables (TRUNCATE_ALLOW). Everything else is
+#        left intact; anything on neither list is reported as UNCLASSIFIED, never destroyed. Then
 #        CHECKPOINT (+ VACUUM) to recycle WAL and actually return disk.
 #   D. Logs + docker disk (truncate-in-place, NEVER rm)
 #      - Kafka broker server.log, Postgres server logs, docker container json-logs
@@ -372,6 +372,93 @@ STATE_PVCS=$(kcr get pvc -l app.kubernetes.io/component=kafka-streams-state \
 N_PVCS=$(printf '%s\n' "$STATE_PVCS" | grep -c . || true)
 log "streams-state PVCs discovered: $N_PVCS"
 
+# ---------------------------------------------------------------------------------------
+# ALLOW-LIST (2026-07-26). This job used to work the other way round: truncate EVERY public
+# table except a handful of named exemptions. That default is destroy, and it failed twice in
+# one day — the Gate-3 zerodte_* evidence store and the pin_session_close realized-close LABELS
+# were both being swept up, each silently, because a missing exemption looks exactly like an
+# empty table the next morning. A third was found while writing this: preopen_option_nbbo and
+# preopen_gex_run hold the post-close NBBO capture that the NEXT morning's pre-open GEX reads,
+# and Task A writes them with retries until 20:00 ET — thirty minutes before this job runs.
+#
+# A deny-list gets those wrong by DEFAULT: every table added to the schema in future is
+# destroyed unless somebody remembers this file. So the polarity is inverted, matching
+# premarket-reset.sh, which has always worked this way.
+#
+# The honest cost of inverting it: an allow-list's failure mode is the opposite one — a new
+# SESSION table nobody lists is never wiped and grows without bound, and the whole point of this
+# job is a near-zero off-hours footprint. Silent disk growth would just be the other silent
+# failure. So unknown tables are neither truncated NOR ignored: they are reported, loudly, in
+# the log and in Discord, and left intact until someone classifies them. Unsafe-and-silent
+# becomes safe-and-noisy.
+#
+# TO ADD A TABLE: put it here ONLY if losing it costs nothing but the current session — i.e. a
+# replay or the next session rebuilds it. If it is a label, an outcome, a baseline, a ledger, a
+# run guard or any accumulating corpus, leave it OFF and it will simply be reported.
+#
+# The first 15 are premarket-reset.sh's own list, unchanged: that set was reviewed and has been
+# truncated every trading morning, which is the strongest evidence available that losing them
+# costs nothing beyond the session.
+TRUNCATE_ALLOW="${TRUNCATE_ALLOW:-\
+hpsf_signal hpsf_latest_signal hpsf_market_flow hpsf_strike_score hpsf_strike_flow \
+hpsf_exit_signal hpsf_dlq hpsf_writer_dlq \
+pin_strike_minute pin_uw_crosscheck_minute pin_self_gex_minute pin_market_minute pin_strike_fine \
+databento_option_raw_snapshot databento_option_raw_quarantine \
+pin_spot_minute strike_invasion_snapshot spread_skew_event directional_pressure_snapshot}"
+# pin_spot_minute            — per-minute spot FEATURE, same family/lifetime as the pin_*_minute above
+# strike_invasion_snapshot   — intraday invasion state keyed per event-millisecond; 1.7M rows in dev,
+#                              the single biggest footprint contributor, and pure session telemetry
+# spread_skew_event          — session-scoped by the previous comment's own words (its sibling
+#                              spread_skew_sample is the multi-session baseline and stays OFF)
+# directional_pressure_snapshot — per-session snapshot (its _outcome and _threshold_set siblings are
+#                              deliberately NOT here: outcomes and thresholds are accumulating)
+
+# Tables we KNOW must survive. Not strictly needed once the allow-list decides what dies — but
+# naming them keeps the report honest, so a protected table shows as PROTECTED rather than as
+# UNCLASSIFIED and buries the genuinely unknown ones in noise.
+KNOWN_KEEP="${KNOWN_KEEP:-\
+pin_session_close spread_skew_sample outcome_scored calibration_state \
+preopen_gex_run preopen_option_nbbo market_carry_history}"
+# pin_session_close   — realized-close LABELS; a replay cannot rebuild a label (DESIGN 17.2)
+# preopen_*           — post-close NBBO capture + once-per-day run ledger, read the NEXT morning
+# market_carry_history— carry/implied-forward history keyed by (symbol, expiry, event ms)
+# es_* and zerodte_*  — matched by PREFIX in the classifier below, not listed one by one
+
+# ===========================================================================
+# Flow-DB classification — READ-ONLY, and deliberately OUTSIDE both the DRY_RUN
+# gate and the WIPE_DB gate.
+#
+# It has to run on EVERY invocation. The nightly scheduled run is DRY_RUN=true and
+# WIPE_DB defaults to false, so anything computed inside the truncate branch would, in
+# ordinary operation, never execute — an alarm wired to a circuit that is normally open.
+# The UNCLASSIFIED report is the thing that makes an allow-list safe; if it only fires on
+# the rare full-wipe run, the allow-list is silently unguarded the rest of the time.
+# This is only SELECTs against pg_tables, so it is safe to do before any latch.
+# ===========================================================================
+TO_TRUNCATE=""; PROTECTED=""; UNCLASSIFIED=""
+if [ -n "$PG_DSN" ]; then
+  # Build the three sets from what is ACTUALLY in the database, not from a hand-maintained idea of
+  # it. Anything not in exactly one of them is, by definition, unclassified.
+  ALL_PUBLIC=$(pg "select tablename from pg_tables where schemaname='public' order by 1")
+  for t in $ALL_PUBLIC; do
+    case " $TRUNCATE_ALLOW " in *" $t "*) TO_TRUNCATE="$TO_TRUNCATE $t"; continue ;; esac
+    case " $KNOWN_KEEP "     in *" $t "*) PROTECTED="$PROTECTED $t";     continue ;; esac
+    case "$t" in es_*|zerodte_*)          PROTECTED="$PROTECTED $t";     continue ;; esac
+    UNCLASSIFIED="$UNCLASSIFIED $t"
+  done
+
+  if [ -n "$UNCLASSIFIED" ]; then
+    # NOT an error — the wipe proceeds. But it must never pass unnoticed, because an unclassified
+    # table is either evidence about to be lost or disk about to fill, and which one it is can
+    # only be settled by a person.
+    log "UNCLASSIFIED public tables (left INTACT — classify them in TRUNCATE_ALLOW or KNOWN_KEEP):$UNCLASSIFIED"
+    discord "⚠️ Off-hours clean-slate ($EXPECTED_ENV): $(echo $UNCLASSIFIED | wc -w | tr -d ' ') unclassified table(s) left intact —$UNCLASSIFIED"
+  fi
+  log "flow-DB plan: truncate=$(echo $TO_TRUNCATE | wc -w | tr -d ' ') protected=$(echo $PROTECTED | wc -w | tr -d ' ') unclassified=$(echo $UNCLASSIFIED | wc -w | tr -d ' ')"
+else
+  log "PG_DSN unset — flow-DB classification skipped (no DB to inspect)"
+fi
+
 # ===========================================================================
 # DRY-RUN: log the full plan and exit WITHOUT touching anything.
 # ===========================================================================
@@ -386,7 +473,7 @@ if [ "$MUTATE" = "false" ]; then
     log "  A+B. Kafka topic wipe + Streams-state PVC reset: SKIPPED (WIPE_KAFKA=false — 12h broker retention self-expires the ${N_PURGE} data + ${N_STATE} state topics; topics + $N_PVCS PVCs persist)"
   fi
   if [ "$DB_WIPE" = "true" ]; then
-    log "  C. Postgres: TRUNCATE public tables in '$EXPECTED_DB' EXCEPT cross-day corpora (pin_session_close, calibration.*, es_*, zerodte_*) + CHECKPOINT + VACUUM"
+    log "  C. Postgres: TRUNCATE only the ALLOW-LISTED session tables in '$EXPECTED_DB' + CHECKPOINT + VACUUM (everything else, incl. anything unclassified, is left intact)"
     TBLS=$(pg "select count(*) from pg_tables where schemaname='public'" 2>/dev/null | tr -d '[:space:]')
     log "     public tables that would be truncated: ${TBLS:-?}"
   else
@@ -565,76 +652,42 @@ if [ "$DB_WIPE" = "true" ]; then
     [ "$DBN_NOW" = "$kdb" ] && die "DB became Keycloak '$kdb' — REFUSING truncate"
   done
   [ "$DBN_NOW" = "$EXPECTED_DB" ] || die "DB name changed to '$DBN_NOW' — REFUSING truncate"
-  # Discover every public table and TRUNCATE them all in one statement (no CASCADE
-  # needed within a single all-tables truncate).
-  #
-  # PRESERVE the dealer-ledger CALIBRATION corpus across the wipe: calibration.outcome_scored +
-  # calibration.calibration_state hold the accumulated Wilson evidence that must survive daily (they
-  # self-heal via CalibrationStore.ensureSchema, but the DATA must persist to ever reach LIVE_CALIBRATED).
-  # They live in the dedicated `calibration` schema, so the schemaname='public' filter already excludes
-  # them. The extra tablename guard is belt-and-suspenders: even if a regression ever created those
-  # tables in `public`, this refuses to truncate them.
-  # es-open-direction (2026-07-12): the ES 09:15 forecast service's five tables are
-  # LONG-LIVED calibration/state data in `public` — session history (ATR + prev-day
-  # levels), break-volume baselines, the immutable forecast/outcome ledgers, and the
-  # idempotent publish guard. Truncating any of them resets the model's memory and
-  # destroys the §18.5 training ledger, so they are truncate-exempt like the
-  # dealer-ledger calibration tables.
-  CALIB_TABLES="'outcome_scored', 'calibration_state', 'es_session_history', 'es_level_break_history', 'es_open_direction_forecast', 'es_open_direction_outcome', 'es_open_direction_publication'"
-  # spread_skew_sample EXEMPT — multi-session baseline (Gate-1 §4.2, USER-approved). The
-  # spread-skew z-score baseline accumulates across sessions and must SURVIVE the nightly
-  # wipe (unlike spread_skew_event, which is session-scoped and IS truncated by this
-  # all-public sweep — do NOT add it here).
-  # ES-model tables EXEMPT (2026-07-11, USER): every es_* table is the ES open-direction model's MEMORY /
-  # immutable ledger / TRAINING corpus and must SURVIVE the nightly wipe — es_session_history (ATR + prev-day
-  # levels), es_level_break_history (trap-volume baselines), es_open_direction_forecast (immutable forecast
-  # ledger), es_open_direction_outcome (outcome/accuracy = training data), es_open_direction_publication
-  # (idempotent publish guard). Excluded by the `tablename !~ '^es_'` guard below.
-  # reversal-confirmation (2026-07-14): es_reversal_candidate / es_reversal_outcome /
-  # es_reversal_eval are the durable reversal calibration corpus (reversal-postgres-writer)
-  # and are likewise covered by the `^es_` prefix guard — cross-day by design, never truncate.
-  # zerodte_* EXEMPT (2026-07-26): the Gate-3 research evidence store. Its ENTIRE PURPOSE is to
-  # accrue across sessions — predictions made on one day are labelled by outcomes on later days,
-  # and a gate cannot be promoted from a single session's rows. Truncating it nightly would not
-  # merely lose data; it would make the store permanently incapable of the thing it exists for,
-  # silently, because each morning it would look correctly empty. It is the same category as the
-  # dealer-ledger corpus and the es_* ledgers above, so it gets the same treatment. Includes
-  # zerodte_schema_version — losing that would make the writer re-run its DESTRUCTIVE reconciling
-  # DDL on the next boot, dropping and recreating constraints while other instances write.
-  ZERODTE_EXCLUDE="tablename !~ '^zerodte_'"
-  # pin_session_close EXEMPT (2026-07-26). It is the LABEL table of the backtest/training store
-  # (PinPostgresSchema, DESIGN 17.2): one realized close per (trade_date, expiry), with the raw
-  # close, an independent option-parity cross-check, the divergence, a QA status, a content hash
-  # and the fetch time. The other pin_* tables are FEATURES and can be rebuilt by replay; a label
-  # cannot. Once truncated, a past session's realized close has to be re-fetched from an external
-  # source, and the provenance that made it auditable — raw_payload, content_hash, fetched_at — is
-  # gone for good.
-  #
-  # This job used to truncate it while premarket-reset.sh REFUSES to (hard deny + the reset role
-  # holds no grant on it). The two disagreed. premarket-reset landed 2026-06-28 with the reasoning
-  # "preserve realized-close labels"; this job landed 2026-06-30 and merely DESCRIBED the table as
-  # "incl. pin_session_close" — a parenthetical noting what an all-public sweep catches, with no
-  # argument anywhere for reversing the earlier decision. The reasoned position wins.
-  EXEMPT_TABLES="$CALIB_TABLES, 'spread_skew_sample', 'pin_session_close'"
-  ES_EXCLUDE="tablename !~ '^es_'"
-  TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ') from pg_tables where schemaname='public' and tablename not in ($EXEMPT_TABLES) and $ES_EXCLUDE and $ZERODTE_EXCLUDE")
+  # Decide what dies from an ALLOW-list (below), not from "everything except". The historical
+  # exemption notes are kept because they record WHY each corpus must live, and that reasoning
+  # still applies — it is now expressed by leaving them OFF the allow-list:
+  #   calibration.outcome_scored / calibration_state — dealer-ledger Wilson evidence; must persist
+  #     to ever reach LIVE_CALIBRATED. They live in the `calibration` schema, so a public-only
+  #     sweep never saw them anyway; they are named in the final assertion as belt-and-suspenders
+  #     in case a regression ever creates them in `public`.
+  #   es_* (2026-07-12) — the ES 09:15 forecast model's MEMORY: session history (ATR + prev-day
+  #     levels), break-volume baselines, the immutable forecast/outcome ledgers (the 18.5 training
+  #     corpus) and the idempotent publish guard. Plus es_reversal_* (2026-07-14), the durable
+  #     reversal calibration corpus. Truncating any of them resets the model's memory.
+  #   spread_skew_sample — multi-session z-score baseline (Gate-1 4.2, USER-approved). Its sibling
+  #     spread_skew_event IS session-scoped and IS on the allow-list.
+  #   zerodte_* (2026-07-26) — the Gate-3 research evidence store. It accrues ACROSS sessions by
+  #     design: predictions on one day are labelled by outcomes on later days, so a nightly
+  #     truncate would not merely lose rows, it would make the store permanently incapable of the
+  #     one thing it exists for — silently, since each morning it would look correctly empty.
+  #     Includes zerodte_schema_version: losing that makes the writer re-run its DESTRUCTIVE
+  #     reconciling DDL on next boot, dropping and recreating constraints while others write.
+  #   pin_session_close (2026-07-26) — realized-close LABELS (DESIGN 17.2). Every other pin_* table
+  #     is a FEATURE that replay rebuilds; a label cannot be rebuilt. Once truncated the close must
+  #     be re-fetched externally and raw_payload / content_hash / fetched_at are gone for good.
+  #     premarket-reset.sh has refused to touch it since 2026-06-28 for exactly this reason.
+
+
+  TBL_LIST=$(for t in $TO_TRUNCATE; do printf 'public.%s, ' "$t"; done | sed 's/, $//')
   if [ -n "$TBL_LIST" ]; then
-    # Belt-and-suspenders: the query already restricts to schemaname='public', but ASSERT it so a future
-    # edit can never let a non-public schema (notably `calibration` — the corpus/state that must survive)
-    # into the truncate list. Any non-"public" table in the list aborts the entire wipe, fail-closed.
-    NONPUBLIC_IN_LIST=$(printf '%s' "$TBL_LIST" | grep -oE '"[^"]+"\.' | grep -vxE '"public"\.' | sort -u | tr '\n' ' ')
-    [ -z "$NONPUBLIC_IN_LIST" ] || die "REFUSING truncate: non-public schema(s) in the truncate list: $NONPUBLIC_IN_LIST"
-    # Same idea, applied to the cross-day corpora by NAME. The filter above already excludes them;
-    # this re-reads the finished list and refuses if any slipped back in. It is not redundant with
-    # the filter — it protects against a future edit to the filter, which is exactly how
-    # pin_session_close came to be truncated here in the first place. premarket-reset.sh guards the
-    # same table three ways (script deny, no role grant, explicit REVOKE TRUNCATE); this job runs
-    # as the flow-DB owner, so a REVOKE cannot help and the check has to live here.
+    # Final gate, kept from the deny-list era and still worth having: re-read the FINISHED list and
+    # refuse if a cross-day corpus is in it. Under an allow-list that should be impossible — which
+    # is exactly when a wrong assumption goes unnoticed, so it is asserted rather than assumed.
     for guarded in pin_session_close zerodte_feature_frame zerodte_prediction zerodte_outcome \
-                   zerodte_schema_version outcome_scored calibration_state spread_skew_sample; do
-      case ",${TBL_LIST//\"/}," in
-        *",public.$guarded,"*|*"public.$guarded,"*|*", public.$guarded,"*)
-          die "REFUSING truncate: cross-day corpus '$guarded' is in the truncate list — a label/evidence table that cannot be rebuilt" ;;
+                   zerodte_schema_version outcome_scored calibration_state spread_skew_sample \
+                   preopen_gex_run preopen_option_nbbo market_carry_history; do
+      case " $TO_TRUNCATE " in
+        *" $guarded "*)
+          die "REFUSING truncate: cross-day corpus '$guarded' reached the truncate list — a label/evidence/ledger table that cannot be rebuilt" ;;
       esac
     done
     # Counted from the LIST that is actually truncated, not from a second query that repeats the
@@ -644,7 +697,8 @@ if [ "$DB_WIPE" = "true" ]; then
     trunc_n=$(printf '%s' "$TBL_LIST" | tr ',' '\n' | grep -c '[^[:space:]]')
     pg "set lock_timeout='30s'; set statement_timeout='300s'; truncate table $TBL_LIST restart identity" \
       || die "TRUNCATE of flow DB failed"
-    log "truncated $trunc_n public tables in '$EXPECTED_DB' (incl. spread_skew_event; pin_session_close + calibration.* + spread_skew_sample + es_* + zerodte_* preserved)"
+    log "truncated $trunc_n allow-listed session tables in '$EXPECTED_DB':$TO_TRUNCATE"
+    log "protected (untouched):$PROTECTED"
     # Prove the calibration corpus survived (visibility): approx row counts are untouched by the wipe.
     # Read the estimate from pg_stat_user_tables (never parse-errors if the table/schema is absent —
     # returns no row -> -1) so this is safe on a fresh DB before the service's first run.
