@@ -333,6 +333,12 @@ if [ -n "$PG_DSN" ]; then
   log "Postgres identity verified (db=$DBN host=${SRV:-socket} role=$USR)"
   # WIPE_DB gate (default false, matches dev): only truncate the flow DB when explicitly requested.
   if [ "$WIPE_DB" = "true" ]; then DB_WIPE="true"; else DB_WIPE="false"; log "WIPE_DB=false -> flow-DB truncate SKIPPED (Postgres preserved, matches dev)"; fi
+  # Fail CLOSED on classification. An empty TO_TRUNCATE from a failed or skipped classification is
+  # indistinguishable from a legitimately empty plan, and "nothing to do" is the most dangerous
+  # thing a destructive job can conclude by accident.
+  if [ "$DB_WIPE" = "true" ] && [ "$CLASSIFICATION_OK" != "true" ]; then
+    DB_WIPE="false"; log "flow-DB truncate SKIPPED: classification did not complete cleanly (fail-closed)"
+  fi
 else
   if [ "$MUTATE" = "true" ]; then
     log "WARN: PG_DSN unset — DB wipe (step C) will be SKIPPED this run"
@@ -404,24 +410,48 @@ hpsf_signal hpsf_latest_signal hpsf_market_flow hpsf_strike_score hpsf_strike_fl
 hpsf_exit_signal hpsf_dlq hpsf_writer_dlq \
 pin_strike_minute pin_uw_crosscheck_minute pin_self_gex_minute pin_market_minute pin_strike_fine \
 databento_option_raw_snapshot databento_option_raw_quarantine \
-pin_spot_minute strike_invasion_snapshot spread_skew_event directional_pressure_snapshot}"
+pin_spot_minute strike_invasion_snapshot spread_skew_event}"
 # pin_spot_minute            — per-minute spot FEATURE, same family/lifetime as the pin_*_minute above
 # strike_invasion_snapshot   — intraday invasion state keyed per event-millisecond; 1.7M rows in dev,
 #                              the single biggest footprint contributor, and pure session telemetry
 # spread_skew_event          — session-scoped by the previous comment's own words (its sibling
 #                              spread_skew_sample is the multi-session baseline and stays OFF)
-# directional_pressure_snapshot — per-session snapshot (its _outcome and _threshold_set siblings are
-#                              deliberately NOT here: outcomes and thresholds are accumulating)
+# directional_pressure_snapshot was on this list and has been REMOVED. Codex asked for consumer
+# evidence rather than a plausible name, and the evidence says the opposite:
+# DirectionalPressureThresholdCalibrator joins it to directional_pressure_outcome on snapshot_id
+# over DIRECTIONAL_PRESSURE_THRESHOLD_LOOKBACK_DAYS (default 5) and needs 500 samples minimum,
+# 2000 preferred, with auto-activate on. Truncating it nightly leaves under one day of samples,
+# so the thresholds would never calibrate and every outcome row would be orphaned.
+#
+# strike_invasion_snapshot earns its place by the same standard, in the other direction: searched
+# every repo for a reader and there is NONE, and the writer never prunes it - so it is write-only
+# telemetry that grows without bound and nothing else will ever clear it.
 
 # Tables we KNOW must survive. Not strictly needed once the allow-list decides what dies — but
 # naming them keeps the report honest, so a protected table shows as PROTECTED rather than as
 # UNCLASSIFIED and buries the genuinely unknown ones in noise.
 KNOWN_KEEP="${KNOWN_KEEP:-\
 pin_session_close spread_skew_sample outcome_scored calibration_state \
-preopen_gex_run preopen_option_nbbo market_carry_history}"
+preopen_gex_run preopen_option_nbbo market_carry_history \
+directional_pressure_snapshot directional_pressure_outcome directional_pressure_threshold_set \
+hpsf_audit hpsf_candidate_snapshot hpsf_config_snapshot hpsf_decision_event hpsf_exit_evaluation \
+hpsf_human_review hpsf_market_snapshot hpsf_rejected_action hpsf_selected_strike_snapshot \
+hpsf_source_offset_snapshot hpsf_validation_outcome}"
 # pin_session_close   — realized-close LABELS; a replay cannot rebuild a label (DESIGN 17.2)
 # preopen_*           — post-close NBBO capture + once-per-day run ledger, read the NEXT morning
-# market_carry_history— carry/implied-forward history keyed by (symbol, expiry, event ms)
+# market_carry_history— carry/implied-forward history keyed by (symbol, expiry, event ms). NOTE:
+#                       no reader found in any repo today. Kept because the key is longitudinal
+#                       and it is 64 rows, so keeping it is free and losing it is not reversible.
+#                       This is the WEAKEST justification in this file; if a reader is ever
+#                       identified, record its required retention window here.
+# directional_pressure_* — snapshot+outcome are the threshold calibrator's feature/label pair over
+#                       a 5-day lookback (500 samples min, auto-activate); threshold_set is the
+#                       calibrated output. All three accumulate.
+# hpsf_* (the 13 below) — the ledger/audit/review side of HPSF. premarket-reset.sh truncates only
+#                       the 8 session tables and deliberately leaves these, which is the same
+#                       judgement. Listed EXPLICITLY rather than left unclassified so the
+#                       unclassified count is normally ZERO - a permanently noisy alarm is not an
+#                       alarm, and a genuinely new table has to stand out on its own.
 # es_* and zerodte_*  — matched by PREFIX in the classifier below, not listed one by one
 
 # ===========================================================================
@@ -435,24 +465,52 @@ preopen_gex_run preopen_option_nbbo market_carry_history}"
 # the rare full-wipe run, the allow-list is silently unguarded the rest of the time.
 # This is only SELECTs against pg_tables, so it is safe to do before any latch.
 # ===========================================================================
-TO_TRUNCATE=""; PROTECTED=""; UNCLASSIFIED=""
+TO_TRUNCATE=""; PROTECTED=""; UNCLASSIFIED=""; CLASSIFICATION_OK=false
 if [ -n "$PG_DSN" ]; then
   # Build the three sets from what is ACTUALLY in the database, not from a hand-maintained idea of
   # it. Anything not in exactly one of them is, by definition, unclassified.
-  ALL_PUBLIC=$(pg "select tablename from pg_tables where schemaname='public' order by 1")
+  # PROTECTION IS CHECKED FIRST. The obvious order — allow, then keep, then prefixes — lets a
+  # mistake in the CONFIGURABLE list beat a deliberate protection: put es_new_table or
+  # zerodte_new_table in TRUNCATE_ALLOW (or override it via the environment) and it is truncated,
+  # because the allow branch matched before the prefix branch was ever reached. Protection is not
+  # a fallback for things the allow-list forgot; it is the stronger claim, so it is evaluated
+  # first and nothing downstream can overrule it.
+  ALL_PUBLIC=$(pg "select tablename from pg_tables where schemaname='public' order by 1") \
+    || die "flow-DB classification query failed"
+  [ -n "$ALL_PUBLIC" ] || die "flow-DB classification returned NO public tables — refusing to guess"
   for t in $ALL_PUBLIC; do
-    case " $TRUNCATE_ALLOW " in *" $t "*) TO_TRUNCATE="$TO_TRUNCATE $t"; continue ;; esac
-    case " $KNOWN_KEEP "     in *" $t "*) PROTECTED="$PROTECTED $t";     continue ;; esac
     case "$t" in es_*|zerodte_*)          PROTECTED="$PROTECTED $t";     continue ;; esac
+    case " $KNOWN_KEEP "     in *" $t "*) PROTECTED="$PROTECTED $t";     continue ;; esac
+    case " $TRUNCATE_ALLOW " in *" $t "*) TO_TRUNCATE="$TO_TRUNCATE $t"; continue ;; esac
     UNCLASSIFIED="$UNCLASSIFIED $t"
   done
+
+  # A table named in BOTH lists is a contradiction, not something to resolve by precedence. Silent
+  # resolution is how the bug above would have hidden: the operator believes one thing, the order
+  # of two case statements decides another. Say so and stop.
+  for t in $TRUNCATE_ALLOW; do
+    case " $KNOWN_KEEP " in *" $t "*) die "'$t' is in BOTH TRUNCATE_ALLOW and KNOWN_KEEP — contradictory intent, refusing to pick one" ;; esac
+    case "$t" in es_*|zerodte_*) die "'$t' is in TRUNCATE_ALLOW but matches a PROTECTED prefix — refusing" ;; esac
+  done
+  CLASSIFICATION_OK=true
 
   if [ -n "$UNCLASSIFIED" ]; then
     # NOT an error — the wipe proceeds. But it must never pass unnoticed, because an unclassified
     # table is either evidence about to be lost or disk about to fill, and which one it is can
     # only be settled by a person.
+    # The normal baseline is ZERO unclassified — every table in both databases is named in one
+    # list or the other. So this firing means something genuinely NEW appeared, and nobody has
+    # decided yet whether it is session data or evidence.
+    #
+    # The Postgres phase is then SKIPPED entirely rather than partially applied. Truncating "the
+    # ones we do understand" while an unknown sits there is how classification debt gets
+    # normalised: the wipe looks successful every night and the unknown is never resolved. Kafka,
+    # the Streams PVCs and the logs are untouched by this — a Postgres classification gap must not
+    # suppress the rest of the off-hours cleanup.
     log "UNCLASSIFIED public tables (left INTACT — classify them in TRUNCATE_ALLOW or KNOWN_KEEP):$UNCLASSIFIED"
-    discord "⚠️ Off-hours clean-slate ($EXPECTED_ENV): $(echo $UNCLASSIFIED | wc -w | tr -d ' ') unclassified table(s) left intact —$UNCLASSIFIED"
+    log "flow-DB truncate SKIPPED this run because of the unclassified table(s) above"
+    discord "⚠️ Off-hours clean-slate ($EXPECTED_ENV): flow-DB truncate SKIPPED — $(echo $UNCLASSIFIED | wc -w | tr -d ' ') unclassified table(s):$UNCLASSIFIED"
+    CLASSIFICATION_OK=false
   fi
   log "flow-DB plan: truncate=$(echo $TO_TRUNCATE | wc -w | tr -d ' ') protected=$(echo $PROTECTED | wc -w | tr -d ' ') unclassified=$(echo $UNCLASSIFIED | wc -w | tr -d ' ')"
 else
@@ -473,9 +531,9 @@ if [ "$MUTATE" = "false" ]; then
     log "  A+B. Kafka topic wipe + Streams-state PVC reset: SKIPPED (WIPE_KAFKA=false — 12h broker retention self-expires the ${N_PURGE} data + ${N_STATE} state topics; topics + $N_PVCS PVCs persist)"
   fi
   if [ "$DB_WIPE" = "true" ]; then
-    log "  C. Postgres: TRUNCATE only the ALLOW-LISTED session tables in '$EXPECTED_DB' + CHECKPOINT + VACUUM (everything else, incl. anything unclassified, is left intact)"
-    TBLS=$(pg "select count(*) from pg_tables where schemaname='public'" 2>/dev/null | tr -d '[:space:]')
-    log "     public tables that would be truncated: ${TBLS:-?}"
+    log "  C. Postgres: TRUNCATE only the ALLOW-LISTED session tables in '$EXPECTED_DB' + CHECKPOINT + VACUUM"
+    log "     session tables that would be truncated ($(echo $TO_TRUNCATE | wc -w | tr -d ' ')):$TO_TRUNCATE"
+    log "     protected (untouched):$PROTECTED"
   else
     log "  C. Postgres: SKIPPED (PG_DSN unset)"
   fi
@@ -677,7 +735,11 @@ if [ "$DB_WIPE" = "true" ]; then
   #     premarket-reset.sh has refused to touch it since 2026-06-28 for exactly this reason.
 
 
-  TBL_LIST=$(for t in $TO_TRUNCATE; do printf 'public.%s, ' "$t"; done | sed 's/, $//')
+  # Let Postgres quote the identifiers (format %I) instead of pasting names into SQL from the
+  # shell. Today's names are simple, which is exactly why a shell-built list looks fine right up
+  # until a table is named with a capital or a hyphen.
+  TRUNC_IN=$(for t in $TO_TRUNCATE; do printf "'%s'," "$t"; done | sed "s/,$//")
+  TBL_LIST=$(pg "select string_agg(format('%I.%I', schemaname, tablename), ', ' order by tablename) from pg_tables where schemaname='public' and tablename in ($TRUNC_IN)")
   if [ -n "$TBL_LIST" ]; then
     # Final gate, kept from the deny-list era and still worth having: re-read the FINISHED list and
     # refuse if a cross-day corpus is in it. Under an allow-list that should be impossible — which
@@ -688,6 +750,14 @@ if [ "$DB_WIPE" = "true" ]; then
       case " $TO_TRUNCATE " in
         *" $guarded "*)
           die "REFUSING truncate: cross-day corpus '$guarded' reached the truncate list — a label/evidence/ledger table that cannot be rebuilt" ;;
+      esac
+    done
+    # ...and the PREFIX families generically, not as four enumerated zerodte_ names. Enumerating
+    # them meant a new zerodte_/es_ table was unprotected at this gate the day it was created,
+    # which is precisely when nobody is looking at this file.
+    for t in $TO_TRUNCATE; do
+      case "$t" in
+        es_*|zerodte_*) die "REFUSING truncate: '$t' matches a PROTECTED prefix but reached the truncate list" ;;
       esac
     done
     # Counted from the LIST that is actually truncated, not from a second query that repeats the
