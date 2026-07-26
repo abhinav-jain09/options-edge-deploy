@@ -8,7 +8,9 @@ metadata:
     app.kubernetes.io/component: spread-skew-postgres-writer
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # OPERATOR HOLD 2026-07-26: the writer is part of the disabled spread-skew
+  # stack and must remain down in every environment until explicitly re-approved.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
