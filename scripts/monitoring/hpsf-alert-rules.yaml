@@ -39,7 +39,13 @@ groups:
       # trade of the process, and the timestamp is 0. Alerting on the age alone would never fire
       # for a feed that never received anything at all — the worst case.
       - alert: EsTradesSourceSilent
+        # SESSION GATED. Globex is legitimately closed ~Fri 17:00 ET -> ~Sun 18:00 ET, so an
+        # ungated rule pages critically every weekend — which trains people to ignore it, the
+        # exact opposite of fail-loud. The gate uses the feed's own session gauge, evaluated from
+        # the same is_globex_open() the liveness probe uses, so alert and probe cannot disagree.
         expr: >-
+          options_edge_databento_feed_globex_session_open == 1
+          and
           options_edge_databento_feed_es_trades_source_timestamp_seconds > 0
           and
           (time() - options_edge_databento_feed_es_trades_source_timestamp_seconds) > 600
@@ -59,7 +65,11 @@ groups:
       # (timestamp stays 0, so the guard excludes it). A feed that has been up well past its
       # startup grace and has still never received one ES trade is misconfigured or disconnected.
       - alert: EsTradesSourceNeverReceived
+        # Also session gated, for the same reason: a feed that boots on a Saturday has legitimately
+        # never received an ES trade, and saying so at 03:00 helps nobody.
         expr: >-
+          options_edge_databento_feed_globex_session_open == 1
+          and
           options_edge_databento_feed_es_trades_source_timestamp_seconds == 0
         for: 30m
         labels:
