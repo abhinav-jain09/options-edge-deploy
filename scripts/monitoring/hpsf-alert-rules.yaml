@@ -53,7 +53,9 @@ groups:
         # SESSION GATED. Globex is legitimately closed ~Fri 17:00 ET -> ~Sun 18:00 ET, so an
         # ungated rule pages critically every weekend — which trains people to ignore it, the
         # exact opposite of fail-loud. The gate uses the feed's own session gauge, evaluated from
-        # the same is_globex_open() the liveness probe uses, so alert and probe cannot disagree.
+        # the same is_globex_open() the liveness probe uses — so both read ONE calendar. They still
+        # evaluate it independently at their own moments, so they can differ across a session
+        # boundary or during a rollout: shared logic, not an impossibility guarantee.
         expr: >-
           options_edge_databento_feed_globex_session_open == 1
           and
@@ -87,7 +89,14 @@ groups:
       - alert: EsTradesSourceNeverReceived
         # Also session gated, for the same reason: a feed that boots on a Saturday has legitimately
         # never received an ES trade, and saying so at 03:00 helps nobody.
+        #
+        # ALSO scoped to feeds that are CONFIGURED to consume the Kafka source. Without this it
+        # fires on every feed that legitimately has no ES-trades source at all — es4, which is the
+        # native PRODUCER after DBP-R32, and dev. "This feed has never received something it was
+        # never asked to receive" is pure noise, and noise is what gets alerts muted.
         expr: >-
+          options_edge_databento_feed_es_trades_source_configured == 1
+          and
           options_edge_databento_feed_globex_session_open == 1
           and
           options_edge_databento_feed_es_trades_source_timestamp_seconds == 0
