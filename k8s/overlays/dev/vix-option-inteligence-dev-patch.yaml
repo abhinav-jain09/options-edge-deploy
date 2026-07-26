@@ -1,8 +1,17 @@
-# DEV-ONLY: turn the Gate-3 research evidence store ON.
+# DEV-ONLY: turn the Gate-3 research evidence store ON, and say WHERE in the same breath.
 #
-# Base is OFF and carries NO url on purpose. The writer takes POSTGRES_JDBC_URL, which is already
-# per-environment, so dev writes to options_flow_dev and no environment can reach production's
-# database by missing an override. Prod stays off until switched on deliberately.
+# Both variables are set here TOGETHER, deliberately. The switch alone would be enough — the
+# writer falls back to POSTGRES_JDBC_URL — but that fallback resolves through the shared
+# options-edge-config, whose BASE value is production (k8s/infra/base/configmap.yaml:
+# jdbc:postgresql://192.168.100.252:5432/options_flow). dev is correct today only because a
+# SEPARATE file, configmap-dev-local-patch.yaml, overrides it. If that override were ever dropped,
+# renamed, or left out of a new overlay, this pod would come up ENABLED and pointed at the
+# PRODUCTION database — writing research evidence into it.
+#
+# So enablement and destination live in one file: nothing can turn the writer on in dev without
+# also stating the dev database, and the two cannot drift apart in separate reviews. The URL below
+# is intentionally the same value the dev configmap patch carries; if they ever disagree, this one
+# wins and the writer is still in the right database.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,3 +25,5 @@ spec:
           env:
             - name: ZERODTE_RESEARCH_ENABLED
               value: "true"
+            - name: ZERODTE_RESEARCH_JDBC_URL
+              value: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
