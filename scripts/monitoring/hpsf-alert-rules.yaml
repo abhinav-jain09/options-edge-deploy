@@ -49,6 +49,15 @@ groups:
           options_edge_databento_feed_es_trades_source_timestamp_seconds > 0
           and
           (time() - options_edge_databento_feed_es_trades_source_timestamp_seconds) > 600
+        # THRESHOLD IS DELIBERATELY CONSERVATIVE, and this is a known trade-off rather than an
+        # oversight. 10m + for:5m means ~15 minutes to page, which IS slow for an A1-certified
+        # input: ES front-contract trades are frequent during RTH, so a 10-minute gap is already
+        # extraordinary. Tightening to ~1-2 minutes is the right end state — but ONLY once the
+        # scheduled equity-index halt (~16:15-16:30 ET) is modelled in is_globex_open(), which it
+        # currently is NOT: the model covers holidays, Saturday, the Sunday 18:00 reopen, the
+        # Friday 17:00 close and the Mon-Thu 17:00-18:00 maintenance break, but treats the
+        # afternoon halt as OPEN. A 60-120s threshold would page every weekday through that halt,
+        # and an alert that fires daily is one people mute. Tighten after modelling the halt.
         for: 5m
         labels:
           severity: critical
@@ -81,6 +90,22 @@ groups:
             This feed has been running for 30 minutes with the ES-trades Kafka source enabled and
             has never received a usable ES trade. Check ES_TRADES_SOURCE_BOOTSTRAP/_TOPIC and that
             the es4->prod bridge is installed and flowing.
+      # ⚠️ SAFETY NET for the two session-gated rules above. They gate on a gauge exported BY THE
+      # FEED ITSELF, so if the feed dies the gauge DISAPPEARS, `... == 1 and ...` matches nothing,
+      # and neither rule can fire — the gate silently disarms exactly when things are worst.
+      # absent() is the complement: it fires when the series is missing entirely.
+      - alert: EsFeedMetricsAbsent
+        expr: absent(options_edge_databento_feed_globex_session_open)
+        for: 10m
+        labels:
+          severity: critical
+          service: databento-feed
+        annotations:
+          summary: "databento-feed is not exporting metrics at all"
+          description: >-
+            The feed's own session gauge is absent, so it is not being scraped — the process is
+            down, wedged, or unreachable. This also means the session-gated ES-source alerts CANNOT
+            fire, because they gate on this same series. Treat this as covering both.
       - alert: HpsfEvaluationDurationTooHigh
         expr: hpsf_evaluation_duration_ms > 1000
         for: 2m
