@@ -35,6 +35,19 @@ spec:
               value: "8080"
             - name: ZERO_DTE_INTELLIGENCE_ENABLED
               value: "true"
+            # Gate-3 research evidence store (0DTE-RESEARCH-WRITER-REQUIREMENT rev 18 §5).
+            # OFF in base; each environment that wants it must turn it on AND name its own
+            # database in the same patch. There is deliberately no URL here, but note what that
+            # does and does not buy: the writer's fallback is POSTGRES_JDBC_URL, whose BASE value
+            # in options-edge-config IS production. Absent a URL of its own an overlay would
+            # inherit production's database, so "no url in base" is not by itself a safeguard —
+            # the safeguard is that this stays "false" and the overlay that flips it also states
+            # its destination. Credentials come from the POSTGRES_USER/POSTGRES_PASSWORD the
+            # container already receives, so no password is duplicated into a ConfigMap.
+            # The writer creates its own schema on first start; version-gated, so an ordinary
+            # restart applies nothing and takes no table locks.
+            - name: ZERODTE_RESEARCH_ENABLED
+              value: "false"
             - name: ZERO_DTE_SYMBOL
               value: SPX
             - name: ZERO_DTE_OPTION_EVENTS_TOPIC

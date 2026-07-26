@@ -55,6 +55,10 @@ spec:
     spec:
       containers:
         - env:
+            - name: ZERODTE_RESEARCH_ENABLED
+              value: "true"
+            - name: ZERODTE_RESEARCH_JDBC_URL
+              value: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
             - name: HEALTH_PORT
               value: "8080"
             - name: ZERO_DTE_INTELLIGENCE_ENABLED
