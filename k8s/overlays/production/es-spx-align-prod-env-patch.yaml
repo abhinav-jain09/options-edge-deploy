@@ -1,0 +1,32 @@
+# PROD-ONLY: point es-spx-align's basis source at underlying.es.price (DBP-R32 gap fix,
+# 2026-07-27). Since the flip, prod's underlying.es.trades arrives UNENRICHED from the
+# es4 bridge (es-feed has no SPX leg, so it stamps no spxBasis* fields) and the align
+# service's basis global store — fed exclusively by those enrichment fields — starved:
+# zero today-keyed records on options.es-*-spx-aligned, ES->SPX mapping dark.
+#
+# The prod feed now computes the basis locally on every bridged ES trade (feed PR #96)
+# and, with ES_PRICE_ENABLED=true (databento-feed-prod-patch.yaml — ships together with
+# this patch), stamps it on the compacted underlying.es.price record. That record carries
+# the same spxBasis*/eventTime shape AlignJson.parseBasis reads (verified: parseBasis
+# needs spxBasisState + spxBasis + spxBasisMeasuredAtMs + eventTime, all in the feed's
+# _ES_SPX_BASIS_PASSTHROUGH_KEYS/local_basis output), so this is a pure re-point.
+#
+# KAFKA_ES_TRADES_TOPIC is used by es-spx-align ONLY as EsSpxAlignSettings.basisTopic()
+# (verified single use on main) — despite the name, for this service it means "the topic
+# carrying the basis enrichment", which is now the ES price topic.
+#
+# Dev/experiment keep the base value (underlying.es.trades): their feeds still hold the
+# native ES subscription and enrich the trades topic directly.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-spx-align-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: es-spx-align
+          env:
+            - name: KAFKA_ES_TRADES_TOPIC
+              value: underlying.es.price

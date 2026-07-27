@@ -51,3 +51,17 @@ spec:
               value: "true"
             - name: ES_SPX_BASIS_SAMPLES_ENABLED
               value: "true"
+            # DBP-R32 gap fix (2026-07-27): since the flip, prod's underlying.es.trades
+            # arrives UNENRICHED from the es4 bridge (es-feed has no SPX leg, stamps no
+            # spxBasis*), so es-spx-align's basis global store — which read exactly those
+            # enrichment fields — starved and the ES->SPX mapping went dark. The feed's
+            # Kafka-source path (PR #96) computes local_basis on every bridged trade but
+            # its ONLY sink is _publish_es_price, off by default. Enable it: the compacted
+            # underlying.es.price record carries the locally-computed spxBasis* fields
+            # (local_basis wins over the empty producer passthrough), and es-spx-align's
+            # basis topic re-points there (es-spx-align-prod-env-patch.yaml — the two
+            # changes ship together). Read UNPREFIXED (config.py: ES_PRICE_ENABLED), like
+            # the ES_TRADES_SOURCE_* keys; config validation requires
+            # ES_TRADES_SOURCE_ENABLED=true, which prod's infra configmap sets.
+            - name: ES_PRICE_ENABLED
+              value: "true"
