@@ -75,6 +75,22 @@ ES_ENV = {
         # gex-service leaves this OFF (its bridge output would be a pointless SPX->spx echo). Without this
         # the whole ES-gamma-band pipeline idles on an empty input (the align service fail-closes to blank).
         {"name": "ES_GEX_SPXBRIDGE_ENABLED", "value": "true"},
+        # --- OI session identity + audit fixes (audit 2026-07-25, P0/P1/P2) ---------------------
+        # P0: the durable OI identity must be keyed by the CME TRADE DATE, not the UTC calendar
+        # date. Globex opens 18:00 ET and the session crosses both midnights; under UTC keying one
+        # session split into two OI rows, so a post-midnight feed/GEX restart looked up the new UTC
+        # day, found nothing, and held ES GEX NOT_READY (the documented 00:00-06:00 ET OI loss).
+        # 18:00-ET rollover = timestamps at/after Globex open belong to the NEXT trade date.
+        {"name": "DATABENTO_GEX_OI_SESSION_ROLL_AFTER", "value": "18:00"},
+        # P2: ES contract multiplier is 50 (E-mini), not the SPX 100 the persist SQL used to
+        # hardcode; live rows now stamp the snapshot's own multiplier and this covers any path
+        # that has no per-record value. Existing same-key rows self-heal on the next upsert.
+        {"name": "DATABENTO_GEX_CONTRACT_MULTIPLIER", "value": "50"},
+        # P1: the OI watchdog watched [SPX] on the ES pod (prefetch-symbols default), so an ES OI
+        # outage could never raise OI_MISSING. Watch the actual instrument; the eager prefetch
+        # stays OFF because it can only drive the (disabled-on-ES) OPRA direct fetch.
+        {"name": "DATABENTO_GEX_OI_EAGER_PREFETCH_SYMBOLS", "value": "ES", "_override": True},
+        {"name": "DATABENTO_GEX_OI_EAGER_PREFETCH_ENABLED", "value": "false", "_override": True},
     ],
     "strike-flow-classifier": [
         {"name": "STRIKE_FLOW_CONTRACT_MULTIPLIER", "value": "50", "_override": True},
