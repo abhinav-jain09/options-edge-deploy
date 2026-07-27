@@ -53,6 +53,16 @@ ES_ENV = {
     "databento-gex": [
         {"name": "DATABENTO_GEX_RISK_FREE_RATE", "value": "0.04"},
         {"name": "DATABENTO_GEX_DIVIDEND_YIELD", "value": "0.04"},   # q=r -> Black-76 on the future
+        # es4 has NO market-carry-service (it is an SPX put-call-parity service; the SERVICES list
+        # correctly omits it), so nothing produces the market-carry topic here. The prod slice runs
+        # dynamic carry ON (long-standing; PR #582 later widened the age gate to 660s for the 5-min
+        # cadence and enabled STATIC_FALLBACK) — without this pin a re-render flips es4 gex to a
+        # GlobalKTable over a producer-less auto-created topic and parks every record on the
+        # STATIC_FALLBACK rescue path (observed live: 3.07M fallback-priced records after the
+        # 2026-07-25 re-render deploy). es4 gex intentionally prices with the static Black-76 carry
+        # above (regime STATIC_CONFIG); with dynamic carry off, gex does not even build the carry
+        # GlobalKTable.
+        {"name": "DATABENTO_GEX_DYNAMIC_CARRY_ENABLED", "value": "false", "_override": True},
         # OI on ES rides live in the feed (GLBX statistics stat_type=9 -> openInterest on every record),
         # NOT via the OPRA/OSI REST fetch (which can't parse CME symbols) -> keep the direct fetch OFF.
         {"name": "DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED", "value": "false", "_override": True},
