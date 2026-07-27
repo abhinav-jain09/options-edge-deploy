@@ -77,7 +77,7 @@ ES_ENV = {
         {"name": "ES_GEX_SPXBRIDGE_ENABLED", "value": "true"},
     ],
     "strike-flow-classifier": [
-        {"name": "STRIKE_FLOW_CONTRACT_MULTIPLIER", "value": "50"},
+        {"name": "STRIKE_FLOW_CONTRACT_MULTIPLIER", "value": "50", "_override": True},
     ],
     # ES trades ~23h on CME Globex (Sun 18:00 ET - Fri 17:00 ET, daily 17:00-18:00 halt); the default
     # spx-rth calendar wrongly forced the pace board + spot model to SESSION_IDLE outside 09:30-16:15 ET.
@@ -105,7 +105,7 @@ ES_ENV = {
         # small lookahead (ordering jitter, not look-ahead bias). SPX keeps its defaults (5000/2000/0/0).
         # The two MAX_AGE knobs already exist in the shipped code; the LOOKAHEAD tolerances take effect
         # once the delta-flow image carrying proc PR#334 is deployed (inert / ignored on older images).
-        {"name": "DELTA_FLOW_GREEK_MAX_AGE_MS", "value": "30000"},
+        {"name": "DELTA_FLOW_GREEK_MAX_AGE_MS", "value": "30000", "_override": True},
         {"name": "DELTA_FLOW_QUOTE_MAX_AGE_MS", "value": "10000"},
         {"name": "DELTA_FLOW_GREEK_LOOKAHEAD_TOLERANCE_MS", "value": "2000"},
         {"name": "DELTA_FLOW_QUOTE_LOOKAHEAD_TOLERANCE_MS", "value": "2000"},
@@ -251,6 +251,39 @@ def transform(svc, docs):
     return docs
 
 
+def assert_no_silent_prod_wins(svc, docs):
+    """An ES_ENV entry without _override LOSES to a differing prod value — fail instead.
+
+    The transform only inserts a non-override entry when the prod slice does not already define
+    that name. So the moment prod starts setting the same knob with a different value, the es4
+    intent is dropped and nothing says so. That is not theoretical: prod added
+    DELTA_FLOW_GREEK_MAX_AGE_MS=15000 and STRIKE_FLOW_CONTRACT_MULTIPLIER=100.0, and es4 silently
+    inherited both — the second one had es4's strike-flow computing every ES notional at the SPX
+    multiplier, i.e. DOUBLE, live on the box.
+
+    Whether prod or es4 should win is a real decision, so it has to be made explicitly (add
+    _override, or drop the entry). A build failure is the only way that decision cannot be skipped.
+    """
+    prod = {}
+    for d in docs:
+        if not isinstance(d, dict) or d.get("kind") != "Deployment":
+            continue
+        for c in d["spec"]["template"]["spec"]["containers"]:
+            for e in c.get("env") or []:
+                if "value" in e:
+                    prod[e["name"]] = e["value"]
+    for item in ES_ENV.get(svc, []):
+        if item.get("_override"):
+            continue
+        name = item["name"]
+        if name in prod and str(prod[name]) != str(item["value"]):
+            sys.exit(
+                f"ES_ENV COLLISION in {svc}: {name} — es4 wants {item['value']!r} but the "
+                f"production slice sets {prod[name]!r}, so the render would silently use prod's "
+                f"value. Add \"_override\": True if es4's value must win, or delete the ES_ENV "
+                f"entry if prod's is now correct for es4 too.")
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     for svc in SERVICES:
@@ -259,6 +292,7 @@ def main():
             sys.exit(f"MISSING slice: {src}")
         with open(src) as f:
             docs = [d for d in yaml.safe_load_all(f) if d is not None]
+        assert_no_silent_prod_wins(svc, docs)      # before transform: compare against RAW prod env
         docs = transform(svc, docs)
         buf = io.StringIO()
         yaml.safe_dump_all(docs, buf, sort_keys=False, default_flow_style=False)

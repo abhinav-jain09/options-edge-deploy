@@ -57,7 +57,7 @@ spec:
         - name: STRIKE_FLOW_ENABLED
           value: 'true'
         - name: STRIKE_FLOW_DELTA_OVERLAY_ENABLED
-          value: 'true'
+          value: 'false'
         - name: KAFKA_STREAMS_CLEANUP_ON_START
           value: 'true'
         - name: STRIKE_FLOW_DELTA_REDIS_HOST
@@ -86,6 +86,8 @@ spec:
           value: options.databento.strike-flow
         - name: KAFKA_SELLER_ACTIVITY_TOPIC
           value: options.databento.seller-activity
+        - name: KAFKA_STRIKE_FLOW_STREAMS_APP_ID
+          value: options-edge-databento-strike-flow-classifier
         - name: KAFKA_STRIKE_FLOW_STREAMS_AUTO_OFFSET_RESET
           value: earliest
         - name: KAFKA_STRIKE_FLOW_STREAMS_NUM_THREADS
@@ -97,7 +99,7 @@ spec:
         - name: STRIKE_FLOW_BIAS_RATIO
           value: '1.20'
         - name: STRIKE_FLOW_CONTRACT_MULTIPLIER
-          value: '100.0'
+          value: '50'
         - name: HEALTH_PORT
           value: '8097'
         - name: JAVA_TOOL_OPTIONS
