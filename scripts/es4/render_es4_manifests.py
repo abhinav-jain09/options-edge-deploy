@@ -193,6 +193,10 @@ ES4_KEEP_DOWN = {
     "directional-pressure-databento-service",
     "option-price-behavior-service",
     "strike-liquidity-heatmap-service",
+    # USER 2026-07-27: disable the skew service on es4. The feature is RETIRED; the postgres writer
+    # goes down with its producer (nothing to consume, and the es4 box has no spare capacity).
+    "spread-skew-service",
+    "spread-skew-postgres-writer",
 }
 
 HEADER = """\
