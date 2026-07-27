@@ -92,11 +92,6 @@ spec:
           value: earliest
         - name: KAFKA_STRIKE_FLOW_STREAMS_NUM_THREADS
           value: '8'
-        # Authoritative instrument allow-list since processing PR#494: the classifier derives each trade's
-        # symbol from the payload's `underlying` field, which is "ES" for every GLBX ES-option record on
-        # es.options.opra.tcbbo (weekly roots E1A..E4E/EW arrive as `product`, NOT as the symbol). The stale
-        # "SPX" here predated the es4 ES-ification (multiplier 50 below) and, once the allow-list became
-        # authoritative, rejected 100% of es4 input (rejected_symbol_total 1073+, processed 0, 2026-07-27).
         - name: STRIKE_FLOW_SYMBOL
           value: ES
         - name: STRIKE_FLOW_OUTPUT_INTERVAL_MS

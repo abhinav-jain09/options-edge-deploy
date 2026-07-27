@@ -94,6 +94,12 @@ ES_ENV = {
     ],
     "strike-flow-classifier": [
         {"name": "STRIKE_FLOW_CONTRACT_MULTIPLIER", "value": "50", "_override": True},
+        # STRIKE_FLOW_SYMBOL is an AUTHORITATIVE allow-list since processing PR#494. The classifier
+        # derives each trade's symbol from the payload `underlying` field, which is "ES" for every GLBX
+        # ES-option record (weekly roots E1A..E4E/EW arrive as `product`, not the symbol). The inherited
+        # production "SPX" rejected 100% of es4 input once the allow-list went live (2026-07-27 outage:
+        # rejected_symbol_total 1073+, processed 0) — this override is the durable fix.
+        {"name": "STRIKE_FLOW_SYMBOL", "value": "ES", "_override": True},
     ],
     # ES trades ~23h on CME Globex (Sun 18:00 ET - Fri 17:00 ET, daily 17:00-18:00 halt); the default
     # spx-rth calendar wrongly forced the pace board + spot model to SESSION_IDLE outside 09:30-16:15 ET.
