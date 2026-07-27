@@ -170,6 +170,7 @@ ES4_KEEP_DOWN = {
     "volume-pace-databento-service",
     "directional-pressure-databento-service",
     "option-price-behavior-service",
+    "strike-liquidity-heatmap-service",
 }
 
 HEADER = """\
