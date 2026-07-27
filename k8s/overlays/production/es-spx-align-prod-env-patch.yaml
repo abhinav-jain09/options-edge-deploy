@@ -5,11 +5,18 @@
 # zero today-keyed records on options.es-*-spx-aligned, ES->SPX mapping dark.
 #
 # The prod feed now computes the basis locally on every bridged ES trade (feed PR #96)
-# and, with ES_PRICE_ENABLED=true (databento-feed-prod-patch.yaml — ships together with
-# this patch), stamps it on the compacted underlying.es.price record. That record carries
-# the same spxBasis*/eventTime shape AlignJson.parseBasis reads (verified: parseBasis
-# needs spxBasisState + spxBasis + spxBasisMeasuredAtMs + eventTime, all in the feed's
-# _ES_SPX_BASIS_PASSTHROUGH_KEYS/local_basis output), so this is a pure re-point.
+# and, with ES_PRICE_ENABLED=true (databento-feed-prod-patch.yaml), stamps it on the
+# underlying.es.price record (broker-auto-created: delete cleanup, 12h retention — NOT
+# compacted like es4's es.underlying.es.price; fine, the store only trusts records
+# fresher than ES_BASIS_STALE_MS=30s). That record carries the same spxBasis*/eventTime
+# shape AlignJson.parseBasis reads (verified: parseBasis needs spxBasisState + spxBasis
+# + spxBasisMeasuredAtMs + eventTime, all in the feed's local_basis output), so this is
+# a pure re-point.
+#
+# ⚠️ DEPLOY ORDER: databento-feed FIRST (with its ES_PRICE_ENABLED patch AND a feed
+# image whose engine gate accepts the Kafka ES source), THEN es-spx-align. service-deploy
+# applies one slice at a time; align re-pointed first would read an empty/nonexistent
+# topic — same dark state, no error.
 #
 # KAFKA_ES_TRADES_TOPIC is used by es-spx-align ONLY as EsSpxAlignSettings.basisTopic()
 # (verified single use on main) — despite the name, for this service it means "the topic
