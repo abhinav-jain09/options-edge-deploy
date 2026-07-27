@@ -51,7 +51,13 @@ pipeline {
   options { disableConcurrentBuilds(); timeout(time: 60, unit: 'MINUTES') }
   environment {
     ES4_HOST       = 'abhinav@192.168.100.4'
-    ES4_KUBECONFIG = '/Users/abhinav/.kube/es4.kubeconfig'
+    // The es4 DEPLOYER identity, not the cluster admin. es4.kubeconfig authenticates as
+    // system:admin (group system:masters) — the same principal a human gets from `sudo k3s kubectl`
+    // on the box — which made "only Jenkins may change es4" impossible to enforce: an admission
+    // policy keys off the username, and the two were the same user. This SA is what
+    // k8s/es4/security/jenkins-only-workload-admission.yaml exempts; everyone else is denied.
+    // RBAC: k8s/es4/security/jenkins-deployer-rbac.yaml.
+    ES4_KUBECONFIG = '/Users/abhinav/.kube/es4-jenkins-deployer.kubeconfig'
     PROD_KUBECONFIG = '/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig'
     REGISTRY       = '192.168.100.252:5000'
     // PINNED cluster identities: the UID of each cluster's `options-edge` namespace. These
