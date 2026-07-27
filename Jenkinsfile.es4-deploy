@@ -39,7 +39,11 @@ pipeline {
       'pressure-postgres-writer', 'raw-to-display', 'strike-flow-avro-adapter', 'strike-flow-classifier',
       'strike-liquidity-heatmap', 'volume-pace',
       'strike-intelligence', 'vix-option-inteligence', 'es-aggressor-flow', 'es-feed-gateway', 'es-web',
-      'es-feed'
+      'es-feed',
+      // The held spread-skew stack is deploy-service-only ON PURPOSE: deploy-all excludes it, so the
+      // ONLY sanctioned way to reconcile the ES4_KEEP_DOWN replicas:0 hold onto live pods (or to ever
+      // deliberately re-apply the stack) is an explicit per-service run of each of these two.
+      'spread-skew', 'spread-skew-postgres-writer'
     ], description: 'Service (deploy-service only). NOTE: es-feed is the RELOCATED ES options feed now running on the es4 cluster; it always deploys at replicas 0 — starting it is a separate ACTION=activate-es-feed.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
