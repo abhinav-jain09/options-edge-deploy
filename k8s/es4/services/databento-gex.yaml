@@ -108,6 +108,14 @@ spec:
           value: 'true'
         - name: ES_GEX_SPXBRIDGE_ENABLED
           value: 'true'
+        - name: DATABENTO_GEX_OI_SESSION_ROLL_AFTER
+          value: '18:00'
+        - name: DATABENTO_GEX_CONTRACT_MULTIPLIER
+          value: '50'
+        - name: DATABENTO_GEX_OI_EAGER_PREFETCH_SYMBOLS
+          value: ES
+        - name: DATABENTO_GEX_OI_EAGER_PREFETCH_ENABLED
+          value: 'false'
         envFrom:
         - configMapRef:
             name: es4-base-env
