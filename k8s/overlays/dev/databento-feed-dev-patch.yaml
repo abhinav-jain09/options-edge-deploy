@@ -61,3 +61,22 @@ spec:
               value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"},{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "true"
+            # ---- ES->SPX basis engine on DEV, mirrored from prod (2026-07-27) --------------
+            # Dev's feed has BOTH engine legs in-process (base DATABENTO_HPSF_ES_TRADES_ENABLED
+            # =true native ES + the SPX leg), so the engine already ran here — but with samples
+            # and A1 evidence UNSET it could never measure and stamped every dev es.trade with
+            # UNAVAILABLE/COLD_START forever, which keeps dev's es-spx-align fail-closed (no
+            # ES->SPX translation on dev). Same certification discipline as prod: samples stay
+            # OFF until the A1:<session_date> PASS cert lands on DEV's spx.basis.state —
+            # committed by the same launchd automation that certifies prod
+            # (~/oe-ops/a1-cert-daily.sh, per-env targets), so this is standing/daily, not a
+            # one-shot. Dev align keeps reading underlying.es.trades (dev enriches the trades
+            # topic directly on the native path — no es.price re-point needed here).
+            - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
+              value: "true"
+            - name: ES_SPX_BASIS_SAMPLES_ENABLED
+              value: "true"
+            - name: ES_SPX_BASIS_CLOSE_PRINCIPALS
+              value: "abhinav"
+            - name: ES_SPX_BASIS_ACK_PRINCIPALS
+              value: "abhinav"
