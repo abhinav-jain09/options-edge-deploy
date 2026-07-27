@@ -38,6 +38,8 @@ spec:
     spec:
       containers:
         - env:
+            - name: KAFKA_ES_TRADES_TOPIC
+              value: underlying.es.price
             - name: ES_SPX_ALIGN_ENABLED
               value: "true"
             - name: HEALTH_PORT
@@ -54,8 +56,6 @@ spec:
               value: options.es-strike-intel-spx-aligned
             - name: ES_CLOCK_SKEW_MS
               value: "30000"
-            - name: KAFKA_ES_TRADES_TOPIC
-              value: underlying.es.trades
             - name: ES_ALIGN_TARGET_SYMBOL
               value: SPX
             - name: JAVA_TOOL_OPTIONS
