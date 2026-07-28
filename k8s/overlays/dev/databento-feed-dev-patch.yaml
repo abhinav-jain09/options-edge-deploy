@@ -27,14 +27,15 @@ spec:
             # container env beats the shared configmap's envFrom value AND service-deploy rolls the
             # pod, so activation is deterministic (the common-infra configmap path neither restarts
             # the feed nor is currently unblocked). Prod stays SYNTHETIC (deliberate) — untouched.
-            # 2026-07-15: SYNTHETIC is the STANDING dev state (user directive) — do not
-            # re-flip to CASCADED. CASCADED's per-ES-tick snapshot refresh (348 publishes +
-            # blocking flush inside _book_lock, gate only 0.05 spot delta) starved the OPRA
-            # read loop; dev tcbbo fell 30+ min behind and delta-flow rejected everything as
-            # stale. If CASCADED is ever wanted again, land feed PR #69 (refresh throttle)
-            # first.
+            # 2026-07-29 (USER decision, IBKR-SPX-INDEX-PRIORITY-SPOT-REQUIREMENT.md rev4):
+            # CASCADED so the IBKR SPX cash index (tier-1, via the SPX_INDEX_SOURCE_* consumer
+            # in the feed configmap) is the priority-1 spot; absent/stale/DELAYED falls back
+            # automatically and recovers automatically. The 2026-07-15 starvation incident's
+            # prerequisite fix (refresh throttle, feed PR #69) is MERGED and pinned explicitly
+            # via DATABENTO_CASCADE_REFRESH_MIN_INTERVAL_MS in the feed configmap.
+            # Kill switch: set this back to SYNTHETIC.
             - name: DATABENTO_SPOT_SOURCE
-              value: SYNTHETIC
+              value: CASCADED
             # VIX-via-OPRA-parity, MIRRORS the prod enablement (feed
             # docs/vix-opra-parity-price/DESIGN.md v11, PR #65; prod enablement
             # deploy PR #456; USER directive 2026-07-15: enable on dev as well).

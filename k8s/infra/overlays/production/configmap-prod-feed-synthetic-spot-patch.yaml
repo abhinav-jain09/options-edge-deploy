@@ -18,8 +18,23 @@ metadata:
   namespace: options-edge
 data:
   APP_PROFILE: dev
-  DATABENTO_SPOT_SOURCE: SYNTHETIC
-  HPSF_SPX_SPOT_SOURCE: SYNTHETIC_OPTION_SPOT
+  # ---- IBKR SPX index = priority-1 spot (2026-07-29, IBKR-SPX-INDEX-PRIORITY-SPOT rev4) ----
+  # CASCADED: tier-1 = IBKR SPX cash index (SPX_INDEX_SOURCE_* consumer below, LIVE-only,
+  # 10s freshness), tier-2 = ES-basis (live on prod via the es4 underlying.es.trades flow),
+  # tier-3 = synthetic parity. Fallback and recovery are automatic per tick.
+  # Kill switch: DATABENTO_SPOT_SOURCE/HPSF_SPX_SPOT_SOURCE back to
+  # SYNTHETIC/SYNTHETIC_OPTION_SPOT.
+  DATABENTO_SPOT_SOURCE: CASCADED
+  HPSF_SPX_SPOT_SOURCE: CASCADED
+  # ⚠️ Read UNPREFIXED like ES_TRADES_SOURCE_* — a DATABENTO_-prefixed spelling is silently
+  # absent. LOCAL bootstrap: ibkr-feed (dev k8s) dual-produces the hop topic to THIS cluster.
+  SPX_INDEX_SOURCE_ENABLED: "true"
+  SPX_INDEX_SOURCE_BOOTSTRAP: 192.168.100.252:9092
+  SPX_INDEX_SOURCE_TOPIC: underlying.spx.index.price
+  SPX_INDEX_SOURCE_GROUP_ID: prod-feed-spx-index
+  # Starvation-incident guard (2026-07-15 class): bound the cascade's full-book snapshot
+  # refresh so tier-1/tier-2 ticks cannot starve the OPRA read loop.
+  DATABENTO_CASCADE_REFRESH_MIN_INTERVAL_MS: "250"
 
   # ---- DBP-R32: prod stops holding its own ES Databento subscription (2026-07-26) ----------
   #
