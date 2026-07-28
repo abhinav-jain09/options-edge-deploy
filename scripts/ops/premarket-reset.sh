@@ -180,7 +180,19 @@ log "identity guards PASSED"
 # (the reversal engine's ground-truth dataset, design §14 promotion gate) —
 # same preservation principle as the clean-slate dealer-ledger exemption.
 # Rolling streams (es.reversal.verdicts/strength) stay purgeable by design.
-PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$'
+#
+# spx.basis.state (2026-07-28) is the ES->SPX basis engine's CROSS-DAY durable
+# state by design (retention.ms=-1: STATE_CURRENT restart authority, per-
+# generation STATE history, daily close anchors/acks, A1 certificates —
+# ES-SPX-TRANSLATION-ENGINE.md §3.3/§4). Purging it cold-starts the basis every
+# morning: the feed's boot scan finds no STATE_CURRENT, the engine serves
+# UNAVAILABLE/COLD_START instead of PROJECTED off yesterday's measurement, and
+# the ES-chain "SPX ≈" mapping is dark from open until the day's A1 cert +
+# first fresh measurement (~30-40 min into the session). The topic is tiny
+# (one partition, a few MB/day of state records) — nothing here needs a
+# pre-market wipe. Found 2026-07-28: this purge was why the mapping vanished
+# overnight after the 07-27 restoration.
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^spx\.basis\.state$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
 log "calibration keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
 CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)
