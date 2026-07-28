@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # validate-durable-topic-preservation.sh — CI invariant (2026-07-28):
 #
-#   Every topic DECLARED cross-day durable in scripts/kafka/topics.env
-#   (OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES entry "<topic>=-1") MUST be preserved
-#   by BOTH destructive reset paths:
+#   Every topic DECLARED cross-day durable in scripts/kafka/topics.env — a
+#   "<topic>=-1" entry in ANY *_TOPIC_RETENTION_OVERRIDES variable (base,
+#   prod-only, es4) — MUST be preserved by BOTH destructive reset paths:
 #     * scripts/ops/premarket-reset.sh    — its PRESERVE_TOPICS_REGEX must match it
-#     * scripts/ops/offhours-clean-slate.sh — its classification must keep it
-#       (an exact "<topic>)" case arm ahead of the purge wildcards)
+#     * scripts/ops/offhours-clean-slate.sh — an ANCHORED case arm
+#       "^[[:space:]]*<topic>)" that appears BEFORE the purge wildcard arm
 #
 # WHY AT CI, NOT RUNTIME: the live broker is useless as the source of durability
 # here — measured 2026-07-28, ~200 prod topics report retention.ms=-1 because the
@@ -16,6 +16,12 @@
 # IMPOSSIBLE to merge a new durable topic without also preserving it — the failure
 # class behind the 2026-07-28 incident (spx.basis.state wiped every pre-market,
 # ES->SPX basis cold-started every morning, mapping dark until ~10:00 ET).
+#
+# Codex r1: P1 — scan EVERY *_TOPIC_RETENTION_OVERRIDES var (the prod-only one
+# declared underlying.vix.price=-1 and escaped the first draft); P2 — the case-arm
+# check is anchored and position-checked against the purge wildcard, so a comment
+# or an arm after "*)" cannot satisfy it. topics.env is PARSED, not sourced (no
+# variable collisions with this validator).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -24,21 +30,33 @@ PREMARKET="scripts/ops/premarket-reset.sh"
 CLEANSLATE="scripts/ops/offhours-clean-slate.sh"
 fail=0
 
-# shellcheck disable=SC1090
-. "$TOPICS_ENV"   # defines OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES (and friends)
-
-DURABLE=$(for kv in ${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-}; do
-  case "$kv" in *=-1) echo "${kv%=-1}" ;; esac
-done)
+# All "<topic>=-1" entries across every retention-overrides declaration, without
+# sourcing the file: pull the quoted value of each *_TOPIC_RETENTION_OVERRIDES
+# assignment, split on whitespace, keep the =-1 pairs.
+DURABLE=$(sed -n 's/^[A-Z_]*TOPIC_RETENTION_OVERRIDES="\(.*\)"$/\1/p' "$TOPICS_ENV" \
+  | tr ' ' '\n' | sed -n 's/=-1$//p' | sort -u)
 
 if [ -z "$DURABLE" ]; then
   echo "=== validate-durable-topic-preservation: OK (no retention=-1 declarations) ==="
   exit 0
 fi
 
-# The regex premarket-reset actually uses (first assignment wins; strip quotes).
-REGEX=$(grep -m1 "^PRESERVE_TOPICS_REGEX=" "$PREMARKET" | sed "s/^PRESERVE_TOPICS_REGEX='//; s/'$//")
-[ -n "$REGEX" ] || { echo "FAIL: PRESERVE_TOPICS_REGEX not found in $PREMARKET"; exit 1; }
+# The regex premarket-reset actually uses (first single-quoted assignment; the
+# `|| true` keeps set -e from eating the diagnostic when it is missing).
+REGEX=$( { grep -m1 "^PRESERVE_TOPICS_REGEX=" "$PREMARKET" || true; } | sed "s/^PRESERVE_TOPICS_REGEX='//; s/'$//")
+if [ -z "$REGEX" ]; then
+  echo "FAIL: PRESERVE_TOPICS_REGEX not found (or not a single-quoted assignment) in $PREMARKET"
+  exit 1
+fi
+
+# Line number of the clean-slate purge wildcard arm — every preserve arm must
+# precede it or it never matches. The wildcard line is the one filling
+# PURGE_TOPICS from "*)".
+WILDCARD_LINE=$( { grep -nE '^\s*\*\)\s+PURGE_TOPICS=' "$CLEANSLATE" || true; } | head -1 | cut -d: -f1)
+if [ -z "$WILDCARD_LINE" ]; then
+  echo "FAIL: purge wildcard arm ('*)  PURGE_TOPICS=...') not found in $CLEANSLATE — layout changed, update this validator"
+  exit 1
+fi
 
 for t in $DURABLE; do
   if ! printf '%s\n' "$t" | grep -qE "$REGEX"; then
@@ -46,9 +64,11 @@ for t in $DURABLE; do
     echo "      PRESERVE_TOPICS_REGEX in $PREMARKET — the pre-market reset would wipe it."
     fail=1
   fi
-  if ! grep -qF "$t)" "$CLEANSLATE"; then
-    echo "FAIL: durable topic '$t' (topics.env retention=-1) has no preserve case arm"
-    echo "      ('$t)') in $CLEANSLATE — the clean-slate would purge it."
+  t_esc=$(printf '%s' "$t" | sed 's/[.[\*^$()+?{}|]/\\&/g')
+  ARM_LINE=$( { grep -nE "^[[:space:]]*${t_esc}\)" "$CLEANSLATE" || true; } | head -1 | cut -d: -f1)
+  if [ -z "$ARM_LINE" ] || [ "$ARM_LINE" -ge "$WILDCARD_LINE" ]; then
+    echo "FAIL: durable topic '$t' (topics.env retention=-1) has no ANCHORED preserve case arm"
+    echo "      before the purge wildcard (line $WILDCARD_LINE) in $CLEANSLATE."
     fail=1
   fi
 done
