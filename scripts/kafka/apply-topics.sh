@@ -33,6 +33,41 @@ case "$TOPIC_SET" in
     ;;
 esac
 
+# --- PROD-ONLY topic sets (VIX feed separation design §6 — prod-scoped, fail-closed) ---
+# Exact predicate (r2 finding 7): the prod-only sets are merged iff ENVIRONMENT is
+# EXPLICITLY 'production' AND TOPIC_SET is the default (non-es4) set. If ENVIRONMENT is
+# unset/empty this fails CLOSED: the prod-only sets are SKIPPED with a loud notice. We
+# never rely on load-kafka-settings.sh's default-to-production and never infer the
+# environment from a broker address. Dev's topic set and policies are untouched.
+if [[ -z "$TOPIC_SET" ]]; then
+  if [[ "${ENVIRONMENT:-}" == "production" ]]; then
+    echo "[apply-topics] ENVIRONMENT=production: merging prod-only topic sets (${OPTIONS_EDGE_PROD_ONLY_TOPICS:-<none>})"
+    OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_TOPICS ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}"
+    OPTIONS_EDGE_PURE_COMPACT_TOPICS="${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-} ${OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS:-}"
+    OPTIONS_EDGE_EXACT_PARTITION_TOPICS="${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-} ${OPTIONS_EDGE_PROD_ONLY_EXACT_PARTITION_TOPICS:-}"
+    OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-} ${OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES:-}"
+  else
+    echo "=================================================================================="
+    echo "[apply-topics] NOTICE: PROD-ONLY topic sets SKIPPED (fail-closed)."
+    echo "  ENVIRONMENT='${ENVIRONMENT:-<unset>}' is not EXPLICITLY 'production'."
+    echo "  The prod-only declarations (${OPTIONS_EDGE_PROD_ONLY_TOPICS:-<none>} + policy/"
+    echo "  retention memberships) were NOT applied. If this IS a production run, export"
+    echo "  ENVIRONMENT=production explicitly — the load-kafka-settings.sh default is"
+    echo "  deliberately not trusted here (VIX feed separation design §6)."
+    echo "=================================================================================="
+  fi
+fi
+
+# NEVER-RECREATE guard (VFS-R8): topics whose records must never be destroyed by the
+# destructive exact-partition repair, no matter what operator flags are set.
+topic_never_recreate() {
+  local topic="$1" t
+  for t in ${OPTIONS_EDGE_NEVER_RECREATE_TOPICS:-}; do
+    [[ "$topic" == "$t" ]] && return 0
+  done
+  return 1
+}
+
 describe_topic() {
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$1" 2>/dev/null | sed -n '/^Topic:/p' || true
 }
@@ -229,6 +264,18 @@ for entry in $OPTIONS_EDGE_TOPICS; do
     fi
 
     if [[ "$exact_partition_mismatch" == "true" ]]; then
+      # NEVER-RECREATE (VIX feed separation design §6): a global cleanup flag
+      # (KAFKA_CLEANUP_TOPICS -> KAFKA_RECREATE_MISMATCHED_TOPICS) must NOT be able to
+      # delete+recreate these topics — that would destroy the compacted price history.
+      # Hard error EVEN IF KAFKA_RECREATE_MISMATCHED_TOPICS=true; repairing a listed
+      # topic requires an explicit, human-run migration, never this script.
+      if topic_never_recreate "$topic"; then
+        echo "HARD ERROR: topic $topic has partitions=$current_partitions but requires EXACTLY $partitions," >&2
+        echo "and it is listed in OPTIONS_EDGE_NEVER_RECREATE_TOPICS: the destructive delete+recreate repair" >&2
+        echo "is FORBIDDEN for this topic even with KAFKA_RECREATE_MISMATCHED_TOPICS=true (its compacted" >&2
+        echo "records must never be destroyed by a global operator flag). Fix this topic manually." >&2
+        exit 1
+      fi
       if [[ "$RECREATE_MISMATCHED" != "true" ]]; then
         echo "Topic $topic exists with partitions=$current_partitions but requires EXACTLY $partitions (single-partition read contract)." >&2
         echo "Kafka cannot shrink partitions: this needs a destructive delete+recreate." >&2

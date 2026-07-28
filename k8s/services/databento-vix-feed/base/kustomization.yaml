@@ -1,0 +1,13 @@
+# SERVICE SLICE — databento-vix-feed (VIX feed separation PR-2). Owns ONLY this
+# service's workload: Deployment + Service. No PVCs, no shared ConfigMaps/Secrets, no
+# topics — those are common infra (§13.5 blast-radius rule).
+#
+# PROD-ONLY: referenced from k8s/overlays/production (NOT k8s/base), so dev/experiment
+# never render it — dev keeps its in-process VIX path (design §11). The generated
+# production slice (../overlays/production) mirrors the monolith production render of
+# this base (scripts/deploy/generate-service-slices.sh).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - databento-vix-feed-deployment.yaml
+  - databento-vix-feed-service.yaml

@@ -1,0 +1,127 @@
+# databento-vix-feed — the STANDALONE VIX OPRA feed (VIX feed separation).
+# Requirement: VIX-FEED-SEPARATION-REQUIREMENT.md rev 3 (APPROVED 2026-07-27);
+# design: VIX-FEED-SEPARATION-DESIGN.md rev 4 §5 (D5). This is deploy PR-2.
+#
+# PROD-ONLY BY DESIGN: referenced from k8s/overlays/production/kustomization.yaml only
+# (never k8s/base), so dev/experiment never render it — dev keeps its in-process VIX
+# path (design §11 explicitly RETAINS it).
+#
+# IMAGE REUSE: the SAME image as the SPX feed (options-edge-databento-feed). The
+# `command` below replaces the image ENTRYPOINT with the standalone VIX role's console
+# script (feed PR-1, `options-edge-vix-feed` = vix_feed:main — design §1 D1), so no new
+# image, registry entry, or pinning wiring is needed (DATABENTO_FEED_IMAGE covers it).
+#
+# ⚠️ replicas: 0 IS THE INTENDED PR-2 STATE (pre-evidence default). VFS-R1 is the hard
+#    session gate: the shared Databento key must not carry a second OPRA session (shadow
+#    included) until the concurrency evidence is recorded. Every phase transition is a
+#    COMMITTED manifest change deployed via Jenkins (design §5 — service-deploy applies
+#    the committed render verbatim, so a hand-scale would be reverted by the next apply):
+#      * shadow commit:  replicas 1 + KAFKA_VIX_PRICE_TOPIC=underlying.vix.price.shadow
+#        + morning-autostart KEEP_DOWN entry REMOVED (the two are mutually exclusive);
+#      * cutover commit: real topic (two ORDERED service-deploy runs — design §7.4);
+#      * rollback:       replicas 0 FIRST, then re-enable the SPX-side block.
+#    Until the shadow commit, morning-autostart KEEP_DOWN also lists this deployment
+#    (belt and braces: neither apply nor autostart can raise a pre-evidence pod).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-vix-feed
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: databento-vix-feed
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # 0 = intended pre-evidence default; see the replicas note in the header.
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: databento-vix-feed
+  strategy:
+    type: Recreate
+  # Matches the fleet-wide production overlay patch (which sets the same value on every
+  # Deployment); explicit here so the base is self-consistent.
+  progressDeadlineSeconds: 1200
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: databento-vix-feed
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      # NO hostNetwork (design §5): the load-bearing wiring is the Service targetPort +
+      # the Prometheus scrape path, so there is no host-port collision class at all.
+      containers:
+        - name: databento-vix-feed
+          image: 192.168.100.252:5000/options-edge-databento-feed:prod
+          imagePullPolicy: IfNotPresent
+          # Replaces the image ENTRYPOINT with the standalone VIX role (design §1):
+          # pyproject console script `options-edge-vix-feed` -> vix_feed:main.
+          command: ["options-edge-vix-feed"]
+          envFrom:
+            # ONLY the secret (DATABENTO_API_KEY). The VIX role's env surface is the
+            # EXPLICIT profile below — VixFeedConfig.from_env() builds the full role
+            # Settings with every shared-resource field inert (design §2).
+            # ⚠️ NEVER add configMapRef: options-edge-databento-feed-config here — it
+            #    carries the SPX role's values (SPX strikes 7000-8000, publish interval,
+            #    replay/liveness knobs for the saturated SPX dispatch path). A shared
+            #    configmap would silently re-couple the two feeds this separation exists
+            #    to split — the exact env-inheritance failure class the es-feed manifest
+            #    documents (k8s/es4/services/es-feed.yaml).
+            - secretRef:
+                name: options-edge-databento-feed-env   # DATABENTO_API_KEY
+          env:
+            # ---- explicit VIX role profile (design §2 — ONLY knobs the vix_feed role
+            #      reads; do not add SPX-feed knobs here) --------------------------------
+            - name: DATABENTO_DATASET
+              value: "OPRA.PILLAR"
+            # extra-instruments shape, single VIX entry: strikes 12-45 @0.5,
+            # AUTO_VIX_MONTHLY + trading_class=VIX enforced by the role validation.
+            - name: VIX_FEED_INSTRUMENT
+              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "192.168.100.252:9092"
+            # SHADOW FIRST (design §7): the shadow phase publishes to the .shadow topic;
+            # the cutover commit flips this to the real underlying.vix.price. The
+            # at-most-one CI assertion (scripts/ci/validate-vix-single-publisher.sh)
+            # treats "replicas > 0 AND topic missing-or-equal underlying.vix.price" as
+            # standalone ownership — this value is part of that contract.
+            - name: KAFKA_VIX_PRICE_TOPIC
+              value: "underlying.vix.price.shadow"
+            # broker-side attribution during the shadow phase (design §2)
+            - name: VIX_FEED_KAFKA_CLIENT_ID
+              value: "vix-feed"
+            - name: METRICS_PORT
+              value: "8013"
+            # resolution window opens open-150min ET (role default, made explicit)
+            - name: DATABENTO_VIX_RESOLVE_PREOPEN_LEAD_MINUTES
+              value: "150"
+          ports:
+            - name: metrics
+              containerPort: 8013
+          # Probe policy (design §4/D4): liveness restarts a no-record pod ~315-330s after
+          # process start (the in-role 300s startup grace dominates, not initialDelay).
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: metrics
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            failureThreshold: 2
+          # /health/ready is the role's explicit health state machine (design §4.1); the
+          # failureThreshold is for flapping, not a grace window — a new pod is simply
+          # unready until its first successful check.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            # PLACEHOLDER pending the pre-shadow capacity measurement (design §9,
+            # VFS-R15: values DERIVE from the measurement, never precede it). The shadow
+            # commit revises these WITH the measurement attached: CPU request =
+            # max(100m, 25% of the measured SPX-feed RTH p95) capped at 500m; memory is
+            # bounded by the VIX state's known small footprint (134 legs). Post-shadow,
+            # promotion recalibrates to measured vix-feed p95 + 30%.
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits:   { memory: "1Gi" }

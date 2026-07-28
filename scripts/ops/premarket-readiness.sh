@@ -224,6 +224,50 @@ if have curl; then
   fi
 fi
 
+# clock_offset — host NTP health, FAIL level for the feed tier (VFS-R12, VIX feed
+# separation design §4). Relative producer-clock skew between the two VIX publishers is
+# zero by construction (single-node .252 — both pods share the kernel clock), so the
+# load-bearing check is the HOST's absolute NTP offset: chronyc tracking first, fallback
+# timedatectl; |offset| >= CLOCK_OFFSET_MAX_S (1.0s default) is a FAIL, and if NEITHER
+# tool can answer this FAILS CLOSED — an unmeasurable clock must not read as GO. This is
+# separate from (and stricter than) the HTTP-Date advisory above, which is unchanged.
+CLOCK_OFFSET_MAX_S="${CLOCK_OFFSET_MAX_S:-1.0}"
+NTP_OFFSET_S=""
+NTP_OFFSET_SRC=""
+if have chronyc; then
+  # "System time     : 0.000123456 seconds fast of NTP time" — field 4 is the magnitude.
+  CHRONY_LINE=$(chronyc tracking 2>/dev/null | grep -i '^System time') || CHRONY_LINE=""
+  if [ -n "$CHRONY_LINE" ]; then
+    NTP_OFFSET_S=$(echo "$CHRONY_LINE" | awk '{print $4}')
+    NTP_OFFSET_SRC="chronyc tracking"
+  fi
+fi
+if [ -z "$NTP_OFFSET_S" ] && have timedatectl; then
+  # Fallback: "Offset: +1.2ms" (systemd-timesyncd). Normalize the unit suffix to seconds.
+  TD_RAW=$(timedatectl timesync-status 2>/dev/null | grep -i 'Offset:' | head -1 | awk '{print $2}') || TD_RAW=""
+  if [ -n "$TD_RAW" ]; then
+    NTP_OFFSET_S=$(printf '%s' "$TD_RAW" | python3 -c '
+import re, sys
+raw = sys.stdin.read().strip()
+m = re.fullmatch(r"([+-]?[0-9]*\.?[0-9]+)(us|ms|s|min|h)?", raw)
+if not m:
+    sys.exit(1)
+scale = {"us": 1e-6, "ms": 1e-3, "s": 1.0, "min": 60.0, "h": 3600.0}[m.group(2) or "s"]
+print(abs(float(m.group(1)) * scale))
+' 2>/dev/null) || NTP_OFFSET_S=""
+    [ -n "$NTP_OFFSET_S" ] && NTP_OFFSET_SRC="timedatectl timesync-status"
+  fi
+fi
+if [ -n "$NTP_OFFSET_S" ]; then
+  if awk -v o="$NTP_OFFSET_S" -v m="$CLOCK_OFFSET_MAX_S" 'BEGIN { o += 0; if (o < 0) o = -o; exit !(o < m) }'; then
+    ok "[T1] clock_offset ${NTP_OFFSET_S}s vs NTP (< ${CLOCK_OFFSET_MAX_S}s, via $NTP_OFFSET_SRC)"
+  else
+    fail "[T1] clock_offset ${NTP_OFFSET_S}s vs NTP (>= ${CLOCK_OFFSET_MAX_S}s, via $NTP_OFFSET_SRC) — feed-tier clock health (VFS-R12)"
+  fi
+else
+  fail "[T1] clock_offset UNMEASURABLE — neither chronyc nor timedatectl produced an offset (fail-closed, VFS-R12)"
+fi
+
 # ---------------------------------------------------------------------------
 # 3. Tier 1-4 + HPSF — Deployment readiness (readyReplicas == desired)
 # ---------------------------------------------------------------------------

@@ -1,0 +1,20 @@
+# databento-vix-feed metrics Service (VIX feed separation PR-2, design §5).
+# ClusterIP only — no hostNetwork on the pod, so this Service targetPort + the
+# Prometheus scrape entry (scripts/monitoring/apply-prometheus-scrapes.sh, which
+# resolves this Service's ClusterIP) are the load-bearing metrics wiring.
+apiVersion: v1
+kind: Service
+metadata:
+  name: databento-vix-feed
+  namespace: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8013"
+    prometheus.io/path: /metrics
+spec:
+  selector:
+    app.kubernetes.io/name: databento-vix-feed
+  ports:
+    - name: metrics
+      port: 8013
+      targetPort: metrics

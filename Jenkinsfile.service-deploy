@@ -26,7 +26,7 @@ pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
     choice(name: 'SERVICE', choices: [
-      'databento-feed', 'databento-sr3-feed', 'databento-gex', 'databento-gex-history', 'databento-maxpain', 'databento-mission-sandwich',
+      'databento-feed', 'databento-sr3-feed', 'databento-vix-feed', 'databento-gex', 'databento-gex-history', 'databento-maxpain', 'databento-mission-sandwich',
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
       'directional-pressure', 'es-open-direction', 'es-open-direction-postgres-writer', 'close-direction', 'vix-option-inteligence', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
       'option-truth-engine', 'market-carry', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
@@ -74,6 +74,9 @@ pipeline {
           // immediately, and name the job that actually builds the image.
           def ownJob = [
             'databento-feed'    : 'options-edge-databento-feed-deploy',
+            // databento-vix-feed REUSES the databento-feed image (VIX feed separation PR-2:
+            // command override selects the vix role) — build that image's own job first.
+            'databento-vix-feed': 'options-edge-databento-feed-deploy',
             'databento-sr3-feed': 'options-edge-databento-sr3-feed-deploy',
             'feed-gateway'      : 'feed-gateway-deploy',
             'web'               : 'options-edge-web-deploy'

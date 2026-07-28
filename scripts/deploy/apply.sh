@@ -316,6 +316,12 @@ EOF
           kubectl -n options-edge set image deployment/options-edge-web web="$WEB_IMAGE"
           kubectl -n options-edge set image deployment/raw-to-display-databento-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-databento-feed databento-feed="$DATABENTO_FEED_IMAGE"
+          # databento-vix-feed (VIX feed separation PR-2): IMAGE REUSE — same image as the
+          # SPX feed, different entrypoint. Renders ONLY in the production overlay, so the
+          # dev monolith deploy must not touch it (the deployment does not exist there).
+          if [ "${ENVIRONMENT:-dev}" = "production" ]; then
+            kubectl -n options-edge set image deployment/databento-vix-feed databento-vix-feed="$DATABENTO_FEED_IMAGE"
+          fi
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
           kubectl -n options-edge set image deployment/option-price-behavior-service option-price-behavior="$OPTION_PRICE_BEHAVIOR_IMAGE"
@@ -347,6 +353,11 @@ EOF
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
           kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
           kubectl -n options-edge rollout restart deployment/options-edge-databento-feed
+          # databento-vix-feed: production-only (see the set-image note above). A restart on
+          # the committed replicas:0 state is a no-op template bump — safe pre-evidence.
+          if [ "${ENVIRONMENT:-dev}" = "production" ]; then
+            kubectl -n options-edge rollout restart deployment/databento-vix-feed
+          fi
           kubectl -n options-edge rollout restart deployment/databento-volume-aggregator
           kubectl -n options-edge rollout restart deployment/databento-mission-sandwich-service
           kubectl -n options-edge rollout restart deployment/databento-gex-service
@@ -379,6 +390,11 @@ EOF
           kubectl -n options-edge rollout status deployment/options-edge-web --timeout=1260s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=1260s
+          # databento-vix-feed: production-only (see the set-image note above); at the
+          # committed replicas:0 state `rollout status` returns success immediately.
+          if [ "${ENVIRONMENT:-dev}" = "production" ]; then
+            kubectl -n options-edge rollout status deployment/databento-vix-feed --timeout=1260s
+          fi
           kubectl -n options-edge rollout status deployment/databento-volume-aggregator --timeout=1260s
           kubectl -n options-edge rollout status deployment/databento-mission-sandwich-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=1260s
