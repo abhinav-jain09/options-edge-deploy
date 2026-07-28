@@ -45,8 +45,10 @@ services:
   # ibkr-feed: DEV-ONLY since 2026-07-29 (IBKR SPX index priority-1 spot, requirement rev4) —
   # runs on the dev cluster next to the Mac-hosted IB Gateway and dual-produces the
   # underlying.spx.index.price hop topic to BOTH brokers. Prod overlay keeps it at 0, so the
-  # standalone slice is dev-only. Image builds in the options-edge-ibkr-feed job.
-  - { name: ibkr-feed,                    managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service], buildJob: options-edge-ibkr-feed }
+  # standalone slice renders replicas:1 on dev and replicas:0 on production (prod never runs
+  # the pod but the slice stays declared + mirror-validated; a production service-deploy is a
+  # harmless 0-replica apply). Image builds in the options-edge-ibkr-feed job.
+  - { name: ibkr-feed,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service], buildJob: options-edge-ibkr-feed }
   - { name: feed-gateway,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-feed-gateway,                 deployments: [feed-gateway-service], buildJob: feed-gateway-deploy }
   - { name: raw-to-display,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-to-display,               deployments: [raw-to-display-service, raw-to-display-databento-service] }
   - { name: databento-volume-aggregator,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-volume-aggregator,  deployments: [databento-volume-aggregator] }
