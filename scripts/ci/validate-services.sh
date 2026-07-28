@@ -111,4 +111,11 @@ if [ "$fail" -ne 0 ]; then
   echo "=== validate-services: FAILED ===" >&2
   exit 1
 fi
+
+echo "=== 5) at-most-one VIX publisher (VIX feed separation design §7) ==="
+# Runs here so BOTH the PR CI pass and the service-deploy validation stage
+# (Jenkinsfile.service-deploy runs this script before any apply) enforce the
+# assertion; the monolith path gets it via scripts/deploy/validate-platform.sh.
+bash scripts/ci/validate-vix-single-publisher.sh
+
 echo "=== validate-services: OK ==="

@@ -38,6 +38,10 @@ services:
   # --- monolith (deployed by options-edge-deploy; migrate in batches) ------------------
   - { name: databento-feed,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-feed,               deployments: [options-edge-databento-feed], buildJob: options-edge-databento-feed-deploy }
   - { name: databento-sr3-feed,           managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-sr3-feed,           deployments: [databento-sr3-feed-service], buildJob: options-edge-databento-sr3-feed-deploy }
+  # databento-vix-feed: STANDALONE VIX OPRA feed (VIX feed separation PR-2). PROD-ONLY;
+  # IMAGE REUSE — same image as databento-feed (command override selects the vix role),
+  # so it builds in options-edge-databento-feed-deploy and needs no new pinning wiring.
+  - { name: databento-vix-feed,           managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-databento-feed,               deployments: [databento-vix-feed], buildJob: options-edge-databento-feed-deploy }
   - { name: ibkr-feed,                    managedBy: monolith, image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service] }
   - { name: feed-gateway,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-feed-gateway,                 deployments: [feed-gateway-service], buildJob: feed-gateway-deploy }
   - { name: raw-to-display,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-to-display,               deployments: [raw-to-display-service, raw-to-display-databento-service] }

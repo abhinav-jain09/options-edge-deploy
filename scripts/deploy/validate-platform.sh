@@ -38,3 +38,8 @@ case "$effective_build_platform" in
 esac
 printf 'EFFECTIVE_BUILD_PLATFORM=%s\n' "$effective_build_platform" >"$JENKINS_WORK_DIR/options-edge-build.env"
 echo "Effective build/deploy image platform: $effective_build_platform"
+# At-most-one VIX publisher assertion (VIX feed separation design §7): the MONOLITH
+# deploy path must also refuse a render where both the SPX in-process VIX block and the
+# standalone databento-vix-feed would publish the real underlying.vix.price — this
+# stage precedes the deploy stage, so a violating commit never reaches kubectl.
+bash scripts/ci/validate-vix-single-publisher.sh

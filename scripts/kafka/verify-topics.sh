@@ -26,3 +26,108 @@ for entry in $OPTIONS_EDGE_TOPICS; do
   fi
   kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --entity-type topics --entity-name "$topic" --describe
 done
+
+# --- PROD-ONLY contract enforcement (VIX feed separation design §6.6, r2 finding 14) ---
+# Same exact predicate as apply-topics.sh: ENVIRONMENT EXPLICITLY 'production' AND the
+# default (non-es4) topic set. Unset/empty ENVIRONMENT fails CLOSED (checks skipped with
+# a notice) — the load-kafka-settings.sh default is deliberately not trusted here.
+# Under the predicate this stage FAILS (exit 1) on: a prod-only topic absent; partition
+# count != declared for the exact-partition topics; cleanup.policy of a pure-compact
+# topic not 'compact'; a retention override not matching. Everything else keeps the
+# existing at-least/tolerant behavior above.
+if [[ -z "${TOPIC_SET:-}" && "${ENVIRONMENT:-}" == "production" ]]; then
+  echo "[verify-topics] ENVIRONMENT=production: enforcing the prod-only topic contract"
+  prod_only_fail=0
+  ALL_DECLARED_TOPICS="$OPTIONS_EDGE_TOPICS ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}"
+
+  declared_partitions() {
+    local t="$1" e
+    for e in $ALL_DECLARED_TOPICS; do
+      if [[ "${e%%:*}" == "$t" ]]; then echo "${e##*:}"; return 0; fi
+    done
+    return 1
+  }
+  describe_partitions() {
+    kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$1" 2>/dev/null \
+      | head -1 | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p'
+  }
+  topic_config_value() {
+    # First match wins: the dynamic per-topic config line, e.g. "cleanup.policy=compact".
+    # No comma in the exclusion set — "compact,delete" must come back whole.
+    kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --entity-type topics \
+      --entity-name "$1" --describe 2>/dev/null | grep -oE "$2=[^ ]*" | head -1 | cut -d= -f2
+  }
+
+  for entry in ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}; do
+    topic="${entry%%:*}"
+    if ! kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$topic" >/dev/null 2>&1; then
+      echo "FAIL: prod-only topic $topic is ABSENT" >&2
+      prod_only_fail=1
+    fi
+  done
+
+  for topic in ${OPTIONS_EDGE_PROD_ONLY_EXACT_PARTITION_TOPICS:-}; do
+    if ! expected_exact="$(declared_partitions "$topic")"; then
+      echo "FAIL: $topic is in the prod-only exact-partition list but has no declared partition count" >&2
+      prod_only_fail=1
+      continue
+    fi
+    actual="$(describe_partitions "$topic")"
+    if [[ -z "$actual" ]]; then
+      echo "FAIL: exact-partition topic $topic is ABSENT (expected EXACTLY $expected_exact partitions)" >&2
+      prod_only_fail=1
+    elif [[ "$actual" != "$expected_exact" ]]; then
+      echo "FAIL: topic $topic has partitions=$actual but requires EXACTLY $expected_exact (single-partition read contract)" >&2
+      prod_only_fail=1
+    fi
+  done
+
+  for topic in ${OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS:-}; do
+    policy="$(topic_config_value "$topic" 'cleanup\.policy')"
+    if [[ "$policy" != "compact" ]]; then
+      echo "FAIL: topic $topic cleanup.policy='${policy:-<none>}' but must be exactly 'compact' (pure compact — latest value survives forever)" >&2
+      prod_only_fail=1
+    fi
+  done
+
+  # Independent DELETE-policy enforcement for the non-compacted prod-only topics (Codex
+  # round-1 finding 3): the shadow topic must be plain 'delete' — a compacted shadow
+  # would silently keep last-value-per-key forever and no longer be the throwaway
+  # differential stream design §6 declares. Any prod-only topic NOT in a compact list
+  # must verify as cleanup.policy=delete.
+  is_prod_only_compact() {
+    local t="$1" c
+    for c in ${OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS:-} ${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-} ${OPTIONS_EDGE_COMPACTED_TOPICS:-}; do
+      [[ "$t" == "$c" ]] && return 0
+    done
+    return 1
+  }
+  for entry in ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}; do
+    topic="${entry%%:*}"
+    if ! is_prod_only_compact "$topic"; then
+      policy="$(topic_config_value "$topic" 'cleanup\.policy')"
+      if [[ "$policy" != "delete" ]]; then
+        echo "FAIL: topic $topic cleanup.policy='${policy:-<none>}' but must be exactly 'delete' (non-compacted prod-only topic)" >&2
+        prod_only_fail=1
+      fi
+    fi
+  done
+
+  for entry in ${OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES:-}; do
+    topic="${entry%%=*}"
+    expected_ms="${entry#*=}"
+    actual_ms="$(topic_config_value "$topic" 'retention\.ms')"
+    if [[ "$actual_ms" != "$expected_ms" ]]; then
+      echo "FAIL: topic $topic retention.ms='${actual_ms:-<none>}' but the prod-only override declares '$expected_ms'" >&2
+      prod_only_fail=1
+    fi
+  done
+
+  if [[ "$prod_only_fail" -ne 0 ]]; then
+    echo "[verify-topics] prod-only topic contract FAILED" >&2
+    exit 1
+  fi
+  echo "[verify-topics] prod-only topic contract OK"
+else
+  echo "[verify-topics] prod-only contract checks SKIPPED (ENVIRONMENT='${ENVIRONMENT:-<unset>}' not explicitly 'production', or TOPIC_SET='${TOPIC_SET:-}' non-default) — fail-closed by design (VIX feed separation §6)"
+fi

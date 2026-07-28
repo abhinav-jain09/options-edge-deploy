@@ -13,6 +13,12 @@ resources:
   # short-premium-agent runs on prod too (7B on the .252 GPU) — same base as dev, with the
   # prod env patch below overriding model/Ollama-URL/SP_REQUIRE_REAL. Mirrors the web pattern.
   - ../../services/short-premium-agent/base
+  # databento-vix-feed: the STANDALONE VIX OPRA feed (VIX feed separation PR-2, design §5).
+  # PROD-ONLY by design — dev keeps its in-process VIX path, so this base is referenced
+  # here and nowhere else. Committed replicas: 0 until the VFS-R1 session evidence is
+  # recorded (the shadow commit flips it); image reuse (options-edge-databento-feed) with
+  # a `command` override selecting the vix role — no new images entry needed.
+  - ../../services/databento-vix-feed/base
 
 # Prod-only: the node already has the images cached, so re-pulling all ~26 at
 # once on every rollout trips the kubelet image-pull QPS limit ("pull QPS

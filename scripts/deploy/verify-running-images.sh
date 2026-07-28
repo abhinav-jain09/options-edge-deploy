@@ -25,6 +25,9 @@ IMAGE_MAP = {
     ("options-edge-web", "web"): "WEB_IMAGE",
     ("raw-to-display-databento-service", "raw-to-display"): "RAW_TO_DISPLAY_IMAGE",
     ("options-edge-databento-feed", "databento-feed"): "DATABENTO_FEED_IMAGE",
+    # databento-vix-feed (VIX feed separation PR-2): image reuse — same image var as the
+    # SPX feed. The deployment exists only on production; absent deployments are skipped.
+    ("databento-vix-feed", "databento-vix-feed"): "DATABENTO_FEED_IMAGE",
     ("databento-volume-aggregator", "databento-volume-aggregator"): "DATABENTO_VOLUME_AGGREGATOR_IMAGE",
     ("databento-gex-service", "databento-gex"): "DATABENTO_GEX_IMAGE",
     ("databento-maxpain-service", "databento-maxpain"): "DATABENTO_MAXPAIN_IMAGE",
