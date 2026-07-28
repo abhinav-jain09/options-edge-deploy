@@ -50,3 +50,16 @@ data:
   DATABENTO_MARKET_OPEN_ALIGNMENT: "true"
   KAFKA_BOOTSTRAP_SERVERS: host.docker.internal:19092
   KAFKA_SCHEMA_REGISTRY_URL: http://host.docker.internal:8082
+  # ---- IBKR SPX index = priority-1 spot (2026-07-29, requirement rev4) --------------------
+  # The deployment env pins DATABENTO_SPOT_SOURCE=CASCADED (databento-feed-dev-patch.yaml);
+  # these keys wire the tier-1 consumer to the LOCAL dev copy of the hop topic, which
+  # ibkr-feed (running on dev k8s) dual-produces to both clusters. ⚠️ Read UNPREFIXED, like
+  # the ES_TRADES_SOURCE_* family — a DATABENTO_-prefixed spelling is silently absent.
+  SPX_INDEX_SOURCE_ENABLED: "true"
+  SPX_INDEX_SOURCE_BOOTSTRAP: host.docker.internal:19092
+  SPX_INDEX_SOURCE_TOPIC: underlying.spx.index.price
+  SPX_INDEX_SOURCE_GROUP_ID: dev-feed-spx-index
+  HPSF_SPX_SPOT_SOURCE: CASCADED
+  # Starvation-incident guard (2026-07-15 class): bound the cascade's full-book snapshot
+  # refresh so tier-1/tier-2 ticks cannot starve the OPRA read loop.
+  DATABENTO_CASCADE_REFRESH_MIN_INTERVAL_MS: "250"

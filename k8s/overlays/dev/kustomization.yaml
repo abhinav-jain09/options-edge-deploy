@@ -131,22 +131,47 @@ patches:
     patch: |-
       - op: remove
         path: /spec/template/spec/nodeSelector
-  # ibkr-feed is PROD-ONLY and INTENTIONALLY scaled to 0 on dev — DO NOT bring it up on dev.
-  # It is the live IBKR VIX source and needs the prod IB Gateway (co-located on the prod
-  # control-plane node); dev has no IB feed and instead receives underlying.vix.price via the
-  # prod->dev vix-bridge (scripts/vix-bridge/). The base Deployment stays replicas:1 so PROD
-  # runs it; this dev-overlay patch forces it to 0 for dev only. The nodeSelector removal below
-  # is harmless with 0 replicas but kept so a manual dev scale-up still schedules on the single
-  # docker-desktop node (whose control-plane label is "" not "true"), never Pending.
+  # ibkr-feed is now DEV-ONLY (2026-07-29, IBKR-SPX-INDEX-PRIORITY-SPOT-REQUIREMENT.md rev4):
+  # the IB Gateway lives on the dev Mac, and this ONE instance streams the SPX cash index
+  # (chain OFF, VIX OFF — VIX stays OPRA-parity from the databento feed) and dual-produces
+  # underlying.spx.index.price to BOTH clusters via per-cluster dispatcher threads
+  # (IBKR_SPX_KAFKA_TARGETS). Prod overlay keeps ibkr-feed at 0 — prod consumes the hop topic
+  # the dev-hosted pod produces into the prod broker (established cross-env-into-prod pattern,
+  # like the es4 es-trades bridge). hostNetwork/dnsPolicy are removed on dev: those exist for
+  # the prod control-plane co-location; on docker-desktop a NORMAL pod network is what resolves
+  # host.docker.internal (the Gateway and the dev broker both live on the Mac host).
   - target:
       kind: Deployment
       name: ibkr-feed-service
     patch: |-
       - op: replace
         path: /spec/replicas
-        value: 0
+        value: 1
       - op: remove
         path: /spec/template/spec/nodeSelector
+      - op: remove
+        path: /spec/template/spec/hostNetwork
+      - op: remove
+        path: /spec/template/spec/dnsPolicy
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: IB_HOST
+            value: host.docker.internal
+          - name: IB_USE_DELAYED_DATA
+            value: "false"
+          - name: IBKR_SPX_PRICE_ENABLED
+            value: "true"
+          - name: KAFKA_IBKR_SPX_PRICE_TOPIC
+            value: underlying.spx.index.price
+          - name: IBKR_SPX_KAFKA_TARGETS
+            value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
+          - name: IBKR_VIX_PRICE_ENABLED
+            value: "false"
+          - name: MARKET_DATA_SELECTION_ENABLED
+            value: "false"
+          - name: POSTGRES_ENABLED
+            value: "false"
   # G2 DEV SOAK (§11, 2026-07-19): signal-follower-spx flags TRUE on dev (LEDGER mode).
   # MUST MIRROR the standalone slice k8s/services/signal-follower/overlays/dev
   # (validate-services: mono==slice).

@@ -18,7 +18,7 @@ spec:
       annotations:
         # Bump to force a pod roll so envFrom picks up changed shared ConfigMap values
         # (k8s does NOT restart pods on ConfigMap change). Set for the 17:30 expiry roll.
-        oe/config-nonce: "2026-07-26-es-trades-from-es4-dbp-r32"
+        oe/config-nonce: "2026-07-29-ibkr-spx-index-tier1"
       labels:
         app.kubernetes.io/name: options-edge-databento-feed
         app.kubernetes.io/part-of: options-edge
