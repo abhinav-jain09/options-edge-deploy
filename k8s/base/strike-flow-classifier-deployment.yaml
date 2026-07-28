@@ -111,7 +111,9 @@ spec:
             # CPU-oversubscribed. Each strike's cumulative state is forwarded at most once per this
             # interval (code default 1000); 3000 cuts by-market inflow ~3x. Cumulative totals are
             # unaffected; the visible cost is per-strike market-view cadence (incl. seller-activity
-            # per-strike emits) bounded at ~3s instead of ~1s. OUTPUT_INTERVAL_MS stays 500 on purpose.
+            # per-strike emits) at a NOMINAL ~3s instead of ~1s — a target, not a hard bound: the trailing
+            # flush is a wall-clock punctuator, so under CPU starvation (this incident's very condition)
+            # flushes can lag further. OUTPUT_INTERVAL_MS stays 500 on purpose.
             - name: STRIKE_FLOW_STRIKE_FORWARD_INTERVAL_MS
               value: "3000"
             - name: STRIKE_FLOW_BIAS_RATIO
