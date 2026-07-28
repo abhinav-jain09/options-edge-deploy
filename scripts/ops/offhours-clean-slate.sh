@@ -353,10 +353,21 @@ log "guards PASSED (mutate=$MUTATE db_wipe=$DB_WIPE)"
 STATE_TOPICS=""   # *-changelog / *-repartition -> DELETE
 PURGE_TOPICS=""   # everything else non-system -> delete-records to 0
 KEEP_SYS=0
+KEEP_DURABLE=0
 while read -r t; do
   [ -n "$t" ] || continue
   if is_system_topic "$t"; then KEEP_SYS=$((KEEP_SYS+1)); continue; fi
   case "$t" in
+    # spx.basis.state = the ES->SPX basis engine's CROSS-DAY durable state
+    # (retention.ms=-1: STATE_CURRENT restart authority, close anchors, A1
+    # certificates — ES-SPX-TRANSLATION-ENGINE.md §3.3/§4). Wiping it cold-
+    # starts the basis on the next feed boot and keeps the ES->SPX mapping
+    # dark until the day's A1 cert + first fresh measurement. Same
+    # preservation principle as the premarket-reset calibration keep-list.
+    spx.basis.state)
+      KEEP_DURABLE=$((KEEP_DURABLE+1))
+      log "PRESERVE: $t (cross-day basis-engine state — never wiped)"
+      ;;
     *-changelog|*-repartition) STATE_TOPICS="$STATE_TOPICS $t" ;;
     *)                         PURGE_TOPICS="$PURGE_TOPICS $t" ;;
   esac
@@ -364,7 +375,7 @@ done </tmp/ohcs-all-topics.txt
 N_STATE=$(echo $STATE_TOPICS | wc -w | tr -d ' ')
 N_PURGE=$(echo $PURGE_TOPICS | wc -w | tr -d ' ')
 TOTAL_TOPICS=$(grep -c . /tmp/ohcs-all-topics.txt | tr -d ' ')
-log "topics: total=$TOTAL_TOPICS  delete(state)=$N_STATE  purge(data)=$N_PURGE  keep(system)=$KEEP_SYS"
+log "topics: total=$TOTAL_TOPICS  delete(state)=$N_STATE  purge(data)=$N_PURGE  keep(system)=$KEEP_SYS  keep(durable)=$KEEP_DURABLE"
 
 # Streams apps = those that own a *-streams-state PVC (the on-disk state to clear).
 STATE_PVCS=$(kcr get pvc -l app.kubernetes.io/component=kafka-streams-state \
