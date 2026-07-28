@@ -321,6 +321,8 @@ EOF
           # dev monolith deploy must not touch it (the deployment does not exist there).
           if [ "${ENVIRONMENT:-dev}" = "production" ]; then
             kubectl -n options-edge set image deployment/databento-vix-feed databento-vix-feed="$DATABENTO_FEED_IMAGE"
+          else
+            echo "NOTICE: skipping set image deployment/databento-vix-feed — ENVIRONMENT='${ENVIRONMENT:-dev}' != production (this deployment renders only in the production overlay)"
           fi
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
@@ -357,6 +359,8 @@ EOF
           # the committed replicas:0 state is a no-op template bump — safe pre-evidence.
           if [ "${ENVIRONMENT:-dev}" = "production" ]; then
             kubectl -n options-edge rollout restart deployment/databento-vix-feed
+          else
+            echo "NOTICE: skipping rollout restart deployment/databento-vix-feed — ENVIRONMENT='${ENVIRONMENT:-dev}' != production (this deployment renders only in the production overlay)"
           fi
           kubectl -n options-edge rollout restart deployment/databento-volume-aggregator
           kubectl -n options-edge rollout restart deployment/databento-mission-sandwich-service
@@ -394,6 +398,8 @@ EOF
           # committed replicas:0 state `rollout status` returns success immediately.
           if [ "${ENVIRONMENT:-dev}" = "production" ]; then
             kubectl -n options-edge rollout status deployment/databento-vix-feed --timeout=1260s
+          else
+            echo "NOTICE: skipping rollout status deployment/databento-vix-feed — ENVIRONMENT='${ENVIRONMENT:-dev}' != production (this deployment renders only in the production overlay)"
           fi
           kubectl -n options-edge rollout status deployment/databento-volume-aggregator --timeout=1260s
           kubectl -n options-edge rollout status deployment/databento-mission-sandwich-service --timeout=1260s

@@ -39,6 +39,9 @@ esac
 # unset/empty this fails CLOSED: the prod-only sets are SKIPPED with a loud notice. We
 # never rely on load-kafka-settings.sh's default-to-production and never infer the
 # environment from a broker address. Dev's topic set and policies are untouched.
+if [[ -n "$TOPIC_SET" ]]; then
+  echo "[apply-topics] NOTICE: TOPIC_SET='$TOPIC_SET' — prod-only topic sets (${OPTIONS_EDGE_PROD_ONLY_TOPICS:-<none>}) do NOT apply to this topic set and were skipped (VIX feed separation §6: default SPX set on production only)."
+fi
 if [[ -z "$TOPIC_SET" ]]; then
   if [[ "${ENVIRONMENT:-}" == "production" ]]; then
     echo "[apply-topics] ENVIRONMENT=production: merging prod-only topic sets (${OPTIONS_EDGE_PROD_ONLY_TOPICS:-<none>})"

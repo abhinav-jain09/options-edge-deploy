@@ -234,38 +234,56 @@ fi
 CLOCK_OFFSET_MAX_S="${CLOCK_OFFSET_MAX_S:-1.0}"
 NTP_OFFSET_S=""
 NTP_OFFSET_SRC=""
+# FAIL-CLOSED PARSING (Codex round-1 finding 4): only a value that verifies as a finite
+# decimal number (optional sign/exponent) is ever compared — awk's `o += 0` coerces
+# garbage to 0, which would turn a mangled chronyc line into a false OK. Non-numeric
+# extractions are DISCARDED (so the fallback runs, and if nothing numeric survives the
+# check FAILs closed below).
+is_finite_number() {
+  case "$1" in (*[!0-9eE+.-]*|""|.|-|+) return 1;; esac
+  printf '%s' "$1" | grep -Eq '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$'
+}
 if have chronyc; then
   # "System time     : 0.000123456 seconds fast of NTP time" — field 4 is the magnitude.
   CHRONY_LINE=$(chronyc tracking 2>/dev/null | grep -i '^System time') || CHRONY_LINE=""
   if [ -n "$CHRONY_LINE" ]; then
-    NTP_OFFSET_S=$(echo "$CHRONY_LINE" | awk '{print $4}')
-    NTP_OFFSET_SRC="chronyc tracking"
+    CHRONY_VAL=$(echo "$CHRONY_LINE" | awk '{print $4}')
+    if is_finite_number "$CHRONY_VAL"; then
+      NTP_OFFSET_S="$CHRONY_VAL"
+      NTP_OFFSET_SRC="chronyc tracking"
+    else
+      warn "clock_offset: chronyc tracking gave non-numeric offset '${CHRONY_VAL}' — discarded (trying fallback)"
+    fi
   fi
 fi
 if [ -z "$NTP_OFFSET_S" ] && have timedatectl; then
-  # Fallback: "Offset: +1.2ms" (systemd-timesyncd). Normalize the unit suffix to seconds.
+  # Fallback: "Offset: +1.2ms" (systemd-timesyncd). Normalize the unit suffix (incl. ns)
+  # to seconds; the python helper exits non-zero on anything non-numeric (fail-closed).
   TD_RAW=$(timedatectl timesync-status 2>/dev/null | grep -i 'Offset:' | head -1 | awk '{print $2}') || TD_RAW=""
   if [ -n "$TD_RAW" ]; then
     NTP_OFFSET_S=$(printf '%s' "$TD_RAW" | python3 -c '
-import re, sys
+import math, re, sys
 raw = sys.stdin.read().strip()
-m = re.fullmatch(r"([+-]?[0-9]*\.?[0-9]+)(us|ms|s|min|h)?", raw)
+m = re.fullmatch(r"([+-]?[0-9]*\.?[0-9]+)(ns|us|ms|s|min|h)?", raw)
 if not m:
     sys.exit(1)
-scale = {"us": 1e-6, "ms": 1e-3, "s": 1.0, "min": 60.0, "h": 3600.0}[m.group(2) or "s"]
-print(abs(float(m.group(1)) * scale))
+scale = {"ns": 1e-9, "us": 1e-6, "ms": 1e-3, "s": 1.0, "min": 60.0, "h": 3600.0}[m.group(2) or "s"]
+value = abs(float(m.group(1)) * scale)
+if not math.isfinite(value):
+    sys.exit(1)
+print(value)
 ' 2>/dev/null) || NTP_OFFSET_S=""
     [ -n "$NTP_OFFSET_S" ] && NTP_OFFSET_SRC="timedatectl timesync-status"
   fi
 fi
-if [ -n "$NTP_OFFSET_S" ]; then
+if [ -n "$NTP_OFFSET_S" ] && is_finite_number "$NTP_OFFSET_S"; then
   if awk -v o="$NTP_OFFSET_S" -v m="$CLOCK_OFFSET_MAX_S" 'BEGIN { o += 0; if (o < 0) o = -o; exit !(o < m) }'; then
     ok "[T1] clock_offset ${NTP_OFFSET_S}s vs NTP (< ${CLOCK_OFFSET_MAX_S}s, via $NTP_OFFSET_SRC)"
   else
     fail "[T1] clock_offset ${NTP_OFFSET_S}s vs NTP (>= ${CLOCK_OFFSET_MAX_S}s, via $NTP_OFFSET_SRC) — feed-tier clock health (VFS-R12)"
   fi
 else
-  fail "[T1] clock_offset UNMEASURABLE — neither chronyc nor timedatectl produced an offset (fail-closed, VFS-R12)"
+  fail "[T1] clock_offset UNMEASURABLE — neither chronyc nor timedatectl produced a numeric offset (fail-closed, VFS-R12)"
 fi
 
 # ---------------------------------------------------------------------------

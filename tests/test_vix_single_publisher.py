@@ -13,20 +13,32 @@ VIX_INSTRUMENTS = (
     '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,'
     '"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
 )
+VIX_INSTRUMENTS_LOWERCASE = VIX_INSTRUMENTS.replace(
+    "AUTO_VIX_MONTHLY", "auto_vix_monthly"
+)
 
 
-def spx_deployment(vix_enabled: bool) -> str:
-    """Minimal rendered SPX-feed Deployment; vix_enabled toggles the VIX block."""
+def spx_deployment(enable_flag=None, instruments=None) -> str:
+    """Minimal rendered SPX-feed Deployment.
+
+    enable_flag: literal string value for DATABENTO_VIX_PRICE_ENABLED, or None to omit.
+    instruments: literal string value for DATABENTO_EXTRA_INSTRUMENTS, or None to omit.
+    The two arms are independent so each ownership predicate is tested on its own
+    (Codex round-1 finding 5).
+    """
     env_lines = [
-        '            - name: DATABENTO_PUBLISH_INTERVAL_MS',
+        "            - name: DATABENTO_PUBLISH_INTERVAL_MS",
         '              value: "2000"',
     ]
-    if vix_enabled:
+    if instruments is not None:
         env_lines += [
             "            - name: DATABENTO_EXTRA_INSTRUMENTS",
-            f"              value: '{VIX_INSTRUMENTS}'",
+            f"              value: '{instruments}'",
+        ]
+    if enable_flag is not None:
+        env_lines += [
             "            - name: DATABENTO_VIX_PRICE_ENABLED",
-            '              value: "true"',
+            f'              value: "{enable_flag}"',
         ]
     return textwrap.dedent(
         """\
@@ -44,6 +56,16 @@ def spx_deployment(vix_enabled: bool) -> str:
                   env:
         """
     ) + "\n".join(env_lines) + "\n"
+
+
+def spx_on() -> str:
+    """The real prod shape: enable flag AND the AUTO_VIX_MONTHLY instrument."""
+    return spx_deployment(enable_flag="true", instruments=VIX_INSTRUMENTS)
+
+
+def spx_off() -> str:
+    """SPX feed with the whole VIX block removed (cutover/steady state)."""
+    return spx_deployment()
 
 
 def vix_deployment(replicas, topic) -> str:
@@ -86,9 +108,10 @@ def vix_deployment(replicas, topic) -> str:
 class VixSinglePublisherTest(unittest.TestCase):
     """At-most-one VIX publisher assertion (VIX feed separation design rev 4 §7).
 
-    Every planned rollout state must PASS; the both-owners state and the fail-closed
-    states (duplicate env, malformed JSON, unreadable replicas) must FAIL. The five
-    planned states are explicit design test cases (design §7, at-most-one section).
+    Every planned rollout state must PASS; the both-owners states, the fail-closed
+    states (missing Deployment, duplicate env, malformed JSON, unreadable replicas),
+    and the runtime-equivalent adversarial spellings ("y", lowercase expiry mode —
+    exactly what the real feed parser accepts) must FAIL.
     """
 
     def _run(self, *docs: str) -> subprocess.CompletedProcess:
@@ -123,23 +146,24 @@ class VixSinglePublisherTest(unittest.TestCase):
     # --- the five planned states (design §7) --------------------------------------
 
     def test_state_pr2_default_passes(self):
-        # SPX enabled; standalone committed at replicas 0 with the shadow topic.
+        # PR-2 committed state (approved phase model): SPX enabled; standalone at
+        # replicas 0 with the REAL topic explicitly set. One owner (SPX).
         self.assert_pass(self._run(
-            spx_deployment(vix_enabled=True),
-            vix_deployment(replicas=0, topic="underlying.vix.price.shadow"),
+            spx_on(),
+            vix_deployment(replicas=0, topic="underlying.vix.price"),
         ))
 
     def test_state_shadow_passes(self):
-        # SPX still enabled; standalone at 1 replica publishing the SHADOW topic only.
+        # Shadow commit: SPX still enabled; standalone at 1 replica on the SHADOW topic.
         self.assert_pass(self._run(
-            spx_deployment(vix_enabled=True),
+            spx_on(),
             vix_deployment(replicas=1, topic="underlying.vix.price.shadow"),
         ))
 
     def test_state_cutover_intermediate_passes(self):
         # Step A applied: SPX block removed, standalone not yet raised (0 -> 1).
         self.assert_pass(self._run(
-            spx_deployment(vix_enabled=False),
+            spx_off(),
             vix_deployment(replicas=0, topic="underlying.vix.price"),
         ))
 
@@ -147,14 +171,14 @@ class VixSinglePublisherTest(unittest.TestCase):
         # Steady state: SPX disabled; standalone owns the real topic (env omitted =
         # the code-default real topic).
         self.assert_pass(self._run(
-            spx_deployment(vix_enabled=False),
+            spx_off(),
             vix_deployment(replicas=1, topic=None),
         ))
 
     def test_state_rollback_passes(self):
         # Rollback: standalone parked at 0 (real topic still configured); SPX re-enabled.
         self.assert_pass(self._run(
-            spx_deployment(vix_enabled=True),
+            spx_on(),
             vix_deployment(replicas=0, topic="underlying.vix.price"),
         ))
 
@@ -162,40 +186,88 @@ class VixSinglePublisherTest(unittest.TestCase):
 
     def test_both_owners_fails(self):
         self.assert_fail(self._run(
-            spx_deployment(vix_enabled=True),
+            spx_on(),
             vix_deployment(replicas=1, topic="underlying.vix.price"),
         ))
 
     def test_both_owners_via_default_topic_fails(self):
         self.assert_fail(self._run(
-            spx_deployment(vix_enabled=True),
+            spx_on(),
             vix_deployment(replicas=1, topic=None),
+        ))
+
+    # --- independent SPX arms + runtime-equivalent spellings (finding 5) -----------
+    # The runtime truthy set is {"1","true","yes","on","y"} case-insensitive
+    # (feed config.py:49) and expiry_mode is normalized strip().upper()
+    # (config.py:143) — each arm ALONE must activate SPX ownership.
+
+    def test_spx_enable_flag_alone_owns(self):
+        # enable flag only, no extra-instruments entry at all.
+        self.assert_fail(self._run(
+            spx_deployment(enable_flag="true", instruments=None),
+            vix_deployment(replicas=1, topic="underlying.vix.price"),
+        ))
+
+    def test_spx_enable_flag_y_spelling_owns(self):
+        # "y" is truthy to the real parser — the assertion must agree.
+        self.assert_fail(self._run(
+            spx_deployment(enable_flag="y", instruments=None),
+            vix_deployment(replicas=1, topic="underlying.vix.price"),
+        ))
+
+    def test_spx_instrument_json_alone_owns(self):
+        # AUTO_VIX_MONTHLY instrument only, no enable flag.
+        self.assert_fail(self._run(
+            spx_deployment(enable_flag=None, instruments=VIX_INSTRUMENTS),
+            vix_deployment(replicas=1, topic="underlying.vix.price"),
+        ))
+
+    def test_spx_instrument_lowercase_spelling_owns(self):
+        # lowercase auto_vix_monthly is upper()d by the runtime — must still own.
+        self.assert_fail(self._run(
+            spx_deployment(enable_flag=None, instruments=VIX_INSTRUMENTS_LOWERCASE),
+            vix_deployment(replicas=1, topic="underlying.vix.price"),
+        ))
+
+    def test_spx_enable_flag_false_alone_does_not_own(self):
+        # An explicit false flag with no instrument is NOT ownership: standalone may
+        # own the real topic (this is the steady-state shape with a leftover flag).
+        self.assert_pass(self._run(
+            spx_deployment(enable_flag="false", instruments=None),
+            vix_deployment(replicas=1, topic="underlying.vix.price"),
         ))
 
     # --- fail-closed states --------------------------------------------------------
 
+    def test_missing_spx_deployment_fails_closed(self):
+        self.assert_fail(self._run(
+            vix_deployment(replicas=0, topic="underlying.vix.price"),
+        ))
+
+    def test_missing_standalone_deployment_fails_closed(self):
+        self.assert_fail(self._run(
+            spx_on(),
+        ))
+
     def test_unreadable_replicas_fails_closed(self):
         self.assert_fail(self._run(
-            spx_deployment(vix_enabled=False),
-            vix_deployment(replicas=None, topic="underlying.vix.price.shadow"),
+            spx_off(),
+            vix_deployment(replicas=None, topic="underlying.vix.price"),
         ))
 
     def test_malformed_extra_instruments_json_fails_closed(self):
-        broken = spx_deployment(vix_enabled=True).replace(
-            VIX_INSTRUMENTS, '[{"symbol":"VIX", NOT-JSON'
-        )
         self.assert_fail(self._run(
-            broken,
-            vix_deployment(replicas=0, topic="underlying.vix.price.shadow"),
+            spx_deployment(enable_flag="true", instruments='[{"symbol":"VIX", NOT-JSON'),
+            vix_deployment(replicas=0, topic="underlying.vix.price"),
         ))
 
     def test_duplicate_env_entry_fails_closed(self):
-        doc = vix_deployment(replicas=0, topic="underlying.vix.price.shadow")
+        doc = vix_deployment(replicas=0, topic="underlying.vix.price")
         doc += (
             "            - name: KAFKA_VIX_PRICE_TOPIC\n"
-            '              value: "underlying.vix.price"\n'
+            '              value: "underlying.vix.price.shadow"\n'
         )
-        self.assert_fail(self._run(spx_deployment(vix_enabled=True), doc))
+        self.assert_fail(self._run(spx_on(), doc))
 
     # --- the real committed render (PR-2 state) ------------------------------------
 

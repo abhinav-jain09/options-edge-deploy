@@ -62,7 +62,7 @@ spec:
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: 192.168.100.252:9092
             - name: KAFKA_VIX_PRICE_TOPIC
-              value: underlying.vix.price.shadow
+              value: underlying.vix.price
             - name: VIX_FEED_KAFKA_CLIENT_ID
               value: vix-feed
             - name: METRICS_PORT

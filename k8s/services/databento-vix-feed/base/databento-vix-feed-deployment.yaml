@@ -79,13 +79,17 @@ spec:
               value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: "192.168.100.252:9092"
-            # SHADOW FIRST (design §7): the shadow phase publishes to the .shadow topic;
-            # the cutover commit flips this to the real underlying.vix.price. The
-            # at-most-one CI assertion (scripts/ci/validate-vix-single-publisher.sh)
-            # treats "replicas > 0 AND topic missing-or-equal underlying.vix.price" as
-            # standalone ownership — this value is part of that contract.
+            # PR-2 ships the REAL topic + replicas 0 (the approved phase model, design
+            # §7: "PR-2 (standalone 0 replicas + real-topic default + SPX enabled = one
+            # owner)"). The SHADOW COMMIT is the one commit that atomically sets
+            # replicas 1 + flips this to underlying.vix.price.shadow + removes the
+            # morning-autostart KEEP_DOWN entry; the cutover commit flips it back to
+            # the real topic. The at-most-one CI assertion
+            # (scripts/ci/validate-vix-single-publisher.sh) treats "replicas > 0 AND
+            # topic missing-or-equal underlying.vix.price" as standalone ownership —
+            # safe here because replicas is 0.
             - name: KAFKA_VIX_PRICE_TOPIC
-              value: "underlying.vix.price.shadow"
+              value: "underlying.vix.price"
             # broker-side attribution during the shadow phase (design §2)
             - name: VIX_FEED_KAFKA_CLIENT_ID
               value: "vix-feed"

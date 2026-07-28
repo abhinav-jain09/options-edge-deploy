@@ -90,6 +90,29 @@ if [[ -z "${TOPIC_SET:-}" && "${ENVIRONMENT:-}" == "production" ]]; then
     fi
   done
 
+  # Independent DELETE-policy enforcement for the non-compacted prod-only topics (Codex
+  # round-1 finding 3): the shadow topic must be plain 'delete' — a compacted shadow
+  # would silently keep last-value-per-key forever and no longer be the throwaway
+  # differential stream design §6 declares. Any prod-only topic NOT in a compact list
+  # must verify as cleanup.policy=delete.
+  is_prod_only_compact() {
+    local t="$1" c
+    for c in ${OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS:-} ${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-} ${OPTIONS_EDGE_COMPACTED_TOPICS:-}; do
+      [[ "$t" == "$c" ]] && return 0
+    done
+    return 1
+  }
+  for entry in ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}; do
+    topic="${entry%%:*}"
+    if ! is_prod_only_compact "$topic"; then
+      policy="$(topic_config_value "$topic" 'cleanup\.policy')"
+      if [[ "$policy" != "delete" ]]; then
+        echo "FAIL: topic $topic cleanup.policy='${policy:-<none>}' but must be exactly 'delete' (non-compacted prod-only topic)" >&2
+        prod_only_fail=1
+      fi
+    fi
+  done
+
   for entry in ${OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES:-}; do
     topic="${entry%%=*}"
     expected_ms="${entry#*=}"

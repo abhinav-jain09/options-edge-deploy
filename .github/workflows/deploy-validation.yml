@@ -54,6 +54,14 @@ jobs:
       - name: Validate service registry (completeness + mirror + image name)
         run: scripts/ci/validate-services.sh
 
+      # VIX feed separation §7: validate-services.sh already runs the single-publisher
+      # assertion against the REAL render; this additionally exercises the assertion's
+      # full predicate matrix (five planned rollout states, both-owners violations,
+      # runtime-equivalent spellings, fail-closed states) against crafted fixtures, so
+      # a predicate regression cannot hide behind a currently-green render.
+      - name: VIX single-publisher assertion test matrix
+        run: python3 -m unittest -v tests.test_vix_single_publisher
+
       - name: Validate dev GEX availability safeguards
         run: bash scripts/ci/validate-gex-dev-safety.sh
 
