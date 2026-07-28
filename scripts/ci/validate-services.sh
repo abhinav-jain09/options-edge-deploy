@@ -118,4 +118,10 @@ echo "=== 5) at-most-one VIX publisher (VIX feed separation design §7) ==="
 # assertion; the monolith path gets it via scripts/deploy/validate-platform.sh.
 bash scripts/ci/validate-vix-single-publisher.sh
 
+echo "=== 6) durable topics are preserved by the destructive resets ==="
+# A topic declared retention=-1 in topics.env that the pre-market / clean-slate
+# resets would still wipe is the 2026-07-28 basis-cold-start incident class —
+# make that drift unmergeable rather than discoverable at 09:00 ET.
+bash scripts/ci/validate-durable-topic-preservation.sh
+
 echo "=== validate-services: OK ==="

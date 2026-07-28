@@ -192,7 +192,10 @@ log "identity guards PASSED"
 # (one partition, a few MB/day of state records) — nothing here needs a
 # pre-market wipe. Found 2026-07-28: this purge was why the mapping vanished
 # overnight after the 07-27 restoration.
-PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^spx\.basis\.state$'
+# underlying.vix.price added 2026-07-28: declared retention=-1 in topics.env
+# (prod-only overrides, VIX feed separation) — declared-durable topics must never
+# be purged; drift is now unmergeable (scripts/ci/validate-durable-topic-preservation.sh).
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
 log "calibration keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
 CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)

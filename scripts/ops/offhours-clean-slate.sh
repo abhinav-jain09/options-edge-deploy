@@ -368,6 +368,13 @@ while read -r t; do
       KEEP_DURABLE=$((KEEP_DURABLE+1))
       log "PRESERVE: $t (cross-day basis-engine state — never wiped)"
       ;;
+    # Declared retention=-1 in topics.env (prod-only overrides, VIX feed
+    # separation) — declared-durable topics must never be purged; drift is
+    # unmergeable via scripts/ci/validate-durable-topic-preservation.sh.
+    underlying.vix.price)
+      KEEP_DURABLE=$((KEEP_DURABLE+1))
+      log "PRESERVE: $t (declared retention=-1 — never wiped)"
+      ;;
     *-changelog|*-repartition) STATE_TOPICS="$STATE_TOPICS $t" ;;
     *)                         PURGE_TOPICS="$PURGE_TOPICS $t" ;;
   esac
