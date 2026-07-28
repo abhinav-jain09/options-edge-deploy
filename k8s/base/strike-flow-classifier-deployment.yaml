@@ -106,6 +106,14 @@ spec:
               value: SPX
             - name: STRIKE_FLOW_OUTPUT_INTERVAL_MS
               value: "500"
+            # Market-stage backpressure mitigation (2026-07-27 prod incident): the by-market stage is a
+            # single hot partition (one thread) and fell ~2h behind on a heavy 0DTE Monday with .252
+            # CPU-oversubscribed. Each strike's cumulative state is forwarded at most once per this
+            # interval (code default 1000); 3000 cuts by-market inflow ~3x. Cumulative totals are
+            # unaffected; the visible cost is per-strike market-view cadence (incl. seller-activity
+            # per-strike emits) bounded at ~3s instead of ~1s. OUTPUT_INTERVAL_MS stays 500 on purpose.
+            - name: STRIKE_FLOW_STRIKE_FORWARD_INTERVAL_MS
+              value: "3000"
             - name: STRIKE_FLOW_BIAS_RATIO
               value: "1.20"
             - name: STRIKE_FLOW_CONTRACT_MULTIPLIER

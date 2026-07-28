@@ -106,6 +106,8 @@ spec:
               value: SPX
             - name: STRIKE_FLOW_OUTPUT_INTERVAL_MS
               value: "500"
+            - name: STRIKE_FLOW_STRIKE_FORWARD_INTERVAL_MS
+              value: "3000"
             - name: STRIKE_FLOW_BIAS_RATIO
               value: "1.20"
             - name: STRIKE_FLOW_CONTRACT_MULTIPLIER
