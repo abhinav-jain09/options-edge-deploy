@@ -79,7 +79,8 @@ pipeline {
             'databento-vix-feed': 'options-edge-databento-feed-deploy',
             'databento-sr3-feed': 'options-edge-databento-sr3-feed-deploy',
             'feed-gateway'      : 'feed-gateway-deploy',
-            'web'               : 'options-edge-web-deploy'
+            'web'               : 'options-edge-web-deploy',
+            'ibkr-feed'         : 'options-edge-ibkr-feed'
           ]
           if (ownJob.containsKey(params.SERVICE)) {
             error("service-deploy: ${params.SERVICE} does not build in the processing reactor. " +
