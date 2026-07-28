@@ -362,10 +362,12 @@ EOF
             # raised the fenced deployment and it crash-looped — the :prod image does not
             # carry the vix-feed entrypoint until the shadow-commit promotion). EVERY
             # bring-up-all / monolith pass forces the deployment back to the committed
-            # replicas:0, no matter who scaled it up out-of-band. The SHADOW COMMIT
-            # (design §7 phase 3) DELETES this line together with the KEEP_DOWN entry —
-            # the single-publisher assertion (validate-vix-single-publisher.sh) fails the
-            # build if this fence and a real-topic replicas>0 state ever coexist.
+            # replicas:0, no matter who scaled it up out-of-band. REMOVING THIS LINE IS
+            # AN EXPLICIT SHADOW-TRANSITION OBLIGATION (design §7 phase 3, together with
+            # the KEEP_DOWN entry) — if left behind, this fence would silently scale the
+            # legitimately-running standalone feed back to zero on every monolith pass.
+            # (The single-publisher assertion separately guards dual real-topic
+            # ownership; it does NOT inspect this fence.)
             kubectl -n options-edge scale deployment/databento-vix-feed --replicas=0
             kubectl -n options-edge rollout restart deployment/databento-vix-feed
           else
