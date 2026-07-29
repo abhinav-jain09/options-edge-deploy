@@ -77,6 +77,8 @@ spec:
               value: "2"
             - name: KAFKA_DATABENTO_VOLUME_AGGREGATOR_CACHE_MAX_BYTES_BUFFERING
               value: "0"
+            - name: KAFKA_STREAMS_CLEANUP_ON_START
+              value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: -Xmx1536m
           envFrom:
