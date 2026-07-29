@@ -11,7 +11,10 @@ spec:
   # (no OptionPriceBehaviorStreams / launcher / OPB_SERVICE_VARIANT), so the image runs V2 directly. It
   # reads tcbbo/greeks/underlying and writes the option-price-behavior-* topics + the per-strike
   # option-price-behavior-by-strike compatibility aggregate that strike-intelligence consumes.
-  replicas: 1
+  # DISABLED until further notice (USER 2026-07-29): option-price-behavior-service held at 0
+  # in dev + production. Re-enable = replicas 1 + re-run generate-service-slices.sh + drop from
+  # morning-autostart KEEP_DOWN and dev-cleanup DISABLED_DEV.
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: option-price-behavior-service
