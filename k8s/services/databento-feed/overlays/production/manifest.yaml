@@ -58,9 +58,6 @@ spec:
     spec:
       containers:
         - env:
-            # 2026-07-29 USER directive: 2000 -> 5000 (see the monolithic overlay patch
-            # k8s/overlays/production/databento-feed-prod-patch.yaml for the rationale).
-            # Keep this value in lockstep with that patch — both paths deploy this pod.
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "5000"
             - name: DATABENTO_EXTRA_INSTRUMENTS

@@ -58,6 +58,8 @@ spec:
         - env:
             - name: IB_HOST
               value: host.docker.internal
+            - name: IB_PORT
+              value: "4002"
             - name: IB_USE_DELAYED_DATA
               value: "false"
             - name: IBKR_SPX_PRICE_ENABLED
