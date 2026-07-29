@@ -1,7 +1,7 @@
-# DEV-ONLY: publish each strike's snapshot at most once per second (1000ms) instead of the 250ms
-# code default. Prod uses 5000ms (databento-feed-prod-patch.yaml) to relieve its single-core CPU
-# backpressure that runs minutes behind real-time; dev has more headroom, so 1s gives fresher
-# data while still cutting per-strike publish/serialize/Kafka work ~4x vs the 250ms default. An
+# DEV-ONLY: publish each strike's snapshot at most once every 5s (5000ms) instead of the 250ms
+# code default — the same cadence prod uses (databento-feed-prod-patch.yaml). Dev ran 1000ms until
+# 2026-07-29; the "dev has more headroom" assumption behind that value was wrong once the volume is
+# followed downstream, where it lands on the single 0DTE repartition partition (see the env comment). An
 # explicit container env overrides the shared configmap's envFrom value, so this ships via the
 # per-service deploy (service-deploy) WITHOUT touching common-infra (the shared feed configmap is
 # also consumed by databento-gex and lives in the infra layer).
@@ -16,8 +16,13 @@ spec:
       containers:
         - name: databento-feed
           env:
+            # 2026-07-29: 1000 -> 5000, matching prod SPX. At 1000ms dev was producing 5x prod's
+            # snapshot volume, and every one of those snapshots becomes a gex.strike record and then a
+            # repartition record on the SINGLE partition that carries the whole 0DTE chain — the one
+            # measured ~1.1M records behind and growing at +6849/min. Dev has no wings-coverage
+            # requirement to trade off, so the cheapest real relief is to stop generating the volume.
             - name: DATABENTO_PUBLISH_INTERVAL_MS
-              value: "1000"
+              value: "5000"
             # DEV-ONLY spot cascade: native SPX index (unwired stub) -> ES-basis (cost-of-carry from
             # the ES front-month) -> synthetic put-call parity fallback (60s ES freshness gate). In
             # practice ES-basis -> synthetic. Reuses the ES trade stream already ingested via base's
