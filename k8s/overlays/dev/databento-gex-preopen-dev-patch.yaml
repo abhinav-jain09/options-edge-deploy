@@ -16,6 +16,17 @@ spec:
     spec:
       containers:
         - name: databento-gex
+          # DEV-ONLY CPU request (2026-07-29). Base reserves 250m for a Streams app configured with
+          # KAFKA_GEX_STREAMS_NUM_THREADS=8, so under load the scheduler gives it almost nothing while
+          # the dev node (docker-desktop, 16 cores / 93 GB) sits idle. Measured symptom: the 0DTE chain's
+          # repartition partition fell ~1.1M records behind and was still GROWING at +6849/min during RTH,
+          # which froze the 0DTE gex.magnet ~90 minutes behind while the 1DTE track stayed current.
+          # NOT changed in base: prod runs the same deployment on a node measured at 90% CPU / loadavg 36
+          # on 24 threads, where a larger reservation would take cores from the SPX feed it is starving on.
+          # This raises the floor only; it does not remove the single-partition ceiling (see PR body).
+          resources:
+            requests:
+              cpu: "2"
           env:
             - { name: PREOPEN_GEX_ENABLED, value: "true" }
             - { name: PREOPEN_GEX_PUBLISH_ENABLED, value: "true" }

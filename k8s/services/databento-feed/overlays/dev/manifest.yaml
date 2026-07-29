@@ -58,8 +58,10 @@ spec:
     spec:
       containers:
         - env:
+            # 2026-07-29: 1000 -> 5000 (rationale in k8s/overlays/dev/databento-feed-dev-patch.yaml).
+            # Keep in lockstep with that patch — validate-services enforces the mirror.
             - name: DATABENTO_PUBLISH_INTERVAL_MS
-              value: "1000"
+              value: "5000"
             - name: DATABENTO_SPOT_SOURCE
               value: CASCADED
             - name: DATABENTO_EXTRA_INSTRUMENTS
