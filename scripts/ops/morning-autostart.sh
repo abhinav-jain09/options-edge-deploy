@@ -45,13 +45,15 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   (IBKR variant), strike-flow-classifier-ibkr (IBKR out of scope),
 #   options-edge-integration-test (no continuous tests in prod), spx-mission-control-service
 #   (2026-07-09 USER: keep OFF on prod; databento-mission-sandwich-service stays UP),
-#   ibkr-feed-service (2026-07-09 USER: VIX moved to dev, prod no longer needs the IBKR VIX source).
+#   ibkr-feed-service REMOVED from KEEP_DOWN 2026-07-29: it is now the priority-1 SPX+VIX
+#   index source for BOTH envs (IBKR-SPX-INDEX-PRIORITY-SPOT-REQUIREMENT §3/§12) — the
+#   single IB client on dev fans out to both clusters, so autostart MUST bring it up.
 #   spread-skew-service + spread-skew-postgres-writer (2026-07-26 USER hold:
 #   disabled in every environment until further notice).
 #   databento-vix-feed (VIX feed separation PR-2): pre-evidence default; the shadow
 #   commit removes this — replicas:1 and a KEEP_DOWN entry are mutually exclusive
 #   (autostart would scale the shadow to 0 at 07:30 mid-session; design §5).
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service ibkr-feed-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer}"
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only
