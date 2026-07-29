@@ -55,7 +55,7 @@ patches:
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
   # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
   - path: feed-gateway-dev-env-patch.yaml
-  # DEV-ONLY: feed publish interval 1s (prod is 2s, code default 250ms) — see the patch header.
+  # DEV-ONLY: feed publish interval 1s (prod is 5s, code default 250ms) — see the patch header.
   - path: databento-feed-dev-patch.yaml
   - path: databento-vix-feed-dev-patch.yaml
   # DEV-ONLY: Gate-3 research evidence store ON (base is OFF and carries no URL — see the patch).

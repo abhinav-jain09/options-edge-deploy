@@ -222,7 +222,7 @@ patches:
   # k8s/services/signal-follower/overlays/production (validate-services: mono==slice).
   - path: signal-follower-prod-env-patch.yaml
   - path: option-price-behavior-prod-patch.yaml
-  # PROD-ONLY: databento-feed 1s snapshot publish interval (explicit container env overrides the
+  # PROD-ONLY: databento-feed 5s snapshot publish interval (explicit container env overrides the
   # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
   # MUST MIRROR the standalone slice k8s/services/databento-feed/overlays/production (validate-services).
   - path: databento-feed-prod-patch.yaml
