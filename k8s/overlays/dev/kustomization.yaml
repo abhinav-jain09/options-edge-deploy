@@ -163,6 +163,12 @@ patches:
         value:
           - name: IB_HOST
             value: host.docker.internal
+          # IB Gateway on the dev Mac runs the PAPER profile, whose API listener is 4002
+          # (verified 2026-07-29: only *:4002 LISTEN; 4001 closed → the pod crash-looped
+          # "Couldn't connect to TWS"). The shared configmap's IB_PORT=4001 is the LIVE
+          # port and stays for prod; dev overrides it here.
+          - name: IB_PORT
+            value: "4002"
           - name: IB_USE_DELAYED_DATA
             value: "false"
           - name: IBKR_SPX_PRICE_ENABLED
