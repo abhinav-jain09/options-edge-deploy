@@ -16,4 +16,8 @@ spec:
               value: host.docker.internal:19092
             - name: VIX_FEED_RUNTIME_PROFILE
               value: dev
+            # IBKR VIX hop topic lives on THIS env's local broker (ibkr-feed fans out
+            # to both clusters) — same env-local rule as KAFKA_BOOTSTRAP_SERVERS.
+            - name: VIX_INDEX_SOURCE_BOOTSTRAP
+              value: host.docker.internal:19092
           image: host.docker.internal:5001/options-edge-databento-feed:dev
