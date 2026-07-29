@@ -1,9 +1,9 @@
-# PROD-ONLY: publish each strike's snapshot at most once per second (dev keeps the 250ms default).
-# An explicit container env overrides the shared configmap's envFrom value, so this ships via the
-# per-service deploy (service-deploy) WITHOUT touching common-infra (the shared feed configmap is
-# consumed by databento-gex too and lives in the infra layer). Cuts the feed's per-strike publish/
-# serialize/Kafka work ~4x to relieve the single-core CPU backpressure that runs prod ~5-6.5 min
-# behind real-time. 1s is ample freshness for GEX.
+# PROD-ONLY: publish each strike's snapshot at most once every 5s (dev runs 1000ms; the code
+# default is 250ms). An explicit container env overrides the shared configmap's envFrom value, so
+# this ships via the per-service deploy (service-deploy) WITHOUT touching common-infra (the shared
+# feed configmap is consumed by databento-gex too and lives in the infra layer). Cuts the feed's
+# per-strike publish/serialize/Kafka work to relieve the single-core CPU backpressure that runs
+# prod minutes behind real-time.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,8 +20,19 @@ spec:
             requests:
               cpu: "1"
           env:
+            # 2026-07-29 USER directive: 2000 -> 5000. Prod is CPU-saturated during RTH
+            # (node 90% CPU, loadavg ~36 on 24 threads; feed pegged at ~1.05 cores = its
+            # single-threaded GIL ceiling) and `options.databento.events.raw` runs 5-7 min
+            # behind live, which fail-closes vix-option-inteligence (INPUT_STALE) and lags
+            # the strike-flow classifier. snapshots_due() publishes a dirty strike at most
+            # once per interval, so 5s cuts snapshot Avro-serialize + produce volume ~60%
+            # in the feed AND the same factor of consumed volume across every downstream
+            # snapshot consumer (gex-service, classifier, heatmap, unified-sr).
+            # Trade-off accepted: chain/GEX/UI now refresh every 5s instead of 2s.
+            # NB this does NOT directly throttle events.raw (published per record) — the
+            # events.raw improvement is indirect, via freed host CPU.
             - name: DATABENTO_PUBLISH_INTERVAL_MS
-              value: "2000"
+              value: "5000"
             # VIX CUTOVER (VIX-FEED-SEPARATION, USER directive 2026-07-28: direct
             # cutover, no shadow): the standalone databento-vix-feed now owns
             # underlying.vix.price. The in-SPX VIX track is OFF — at-most-one
