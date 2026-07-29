@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ibkr-trades-feed
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: ibkr-trades-feed
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /health/live
+    prometheus.io/port: "8080"
+spec:
+  selector:
+    app.kubernetes.io/name: ibkr-trades-feed
+  ports:
+    - name: health
+      port: 8080
+      targetPort: health

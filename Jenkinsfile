@@ -58,6 +58,8 @@ pipeline {
     string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', defaultValue: '', description: 'Strike-flow Avro adapter image (unified-sr FLOW producer)')
     string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', defaultValue: '', description: 'GEX delta Redis writer image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
+    string(name: 'IBKR_TRADES_FEED_IMAGE', defaultValue: '', description: 'ibkr-trades-feed image (options-edge-ibkr-trades repo; dev+prod, prod dark)')
+    string(name: 'IBKR_TRADES_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'ibkr-trades-postgres-writer image (options-edge-ibkr-trades repo; dev+prod, prod dark)')
     string(name: 'SHORT_PREMIUM_AGENT_IMAGE', defaultValue: '', description: 'short-premium-agent image (dev+prod)')
     string(name: 'SIGNAL_FOLLOWER_IMAGE', defaultValue: '', description: 'signal-follower image (dev+prod)')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
@@ -380,6 +382,8 @@ pipeline {
             'REVERSAL_POSTGRES_WRITER_IMAGE': 'reversal-postgres-writer',
             'STRIKE_FLOW_AVRO_ADAPTER_IMAGE': 'strike-flow-avro-adapter', 'GEX_DELTA_REDIS_WRITER_IMAGE': 'gex-delta-redis-writer',
             'IBKR_FEED_IMAGE': 'ibkr-feed',
+            'IBKR_TRADES_FEED_IMAGE': 'ibkr-trades-feed',
+            'IBKR_TRADES_POSTGRES_WRITER_IMAGE': 'ibkr-trades-postgres-writer',
             // short-premium-agent runs on prod too (standalone service, .252 GPU); provide its prod
             // image default so resolve-images.sh branch-2 (promoted prod) can pin it. resolve-images
             // itself guards emission to dev+production, so experiment never references it.
@@ -776,7 +780,7 @@ void promoteToProduction() {
       'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'OPTION_TRUTH_ENGINE_IMAGE', 'MARKET_CARRY_IMAGE', 'ES_SPX_ALIGN_IMAGE', 'DATABENTO_SR3_FEED_IMAGE', 'VIX_OPTION_INTELIGENCE_IMAGE', 'STRIKE_INVASION_IMAGE',
       'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE',
       'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'CLOSE_DIRECTION_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
-      'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',
+      'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'IBKR_TRADES_FEED_IMAGE', 'IBKR_TRADES_POSTGRES_WRITER_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',
     ].collect { _n -> string(name: _n, value: params[_n]) } + [
       string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
       string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID),

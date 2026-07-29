@@ -157,7 +157,7 @@
           for _img_var in DATABENTO_FEED_IMAGE DATABENTO_GEX_IMAGE OPTION_PRICE_BEHAVIOR_IMAGE \
             DATABENTO_MISSION_SANDWICH_IMAGE DATABENTO_VOLUME_AGGREGATOR_IMAGE \
             DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
-            IBKR_FEED_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
+            IBKR_FEED_IMAGE IBKR_TRADES_FEED_IMAGE IBKR_TRADES_POSTGRES_WRITER_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE \
             DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE OPTION_TRUTH_ENGINE_IMAGE MARKET_CARRY_IMAGE ES_SPX_ALIGN_IMAGE DATABENTO_SR3_FEED_IMAGE VIX_OPTION_INTELIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE \
@@ -348,6 +348,8 @@ EOF
           kubectl -n options-edge set image deployment/strike-flow-avro-adapter strike-flow-avro-adapter="$STRIKE_FLOW_AVRO_ADAPTER_IMAGE"
           kubectl -n options-edge set image deployment/gex-delta-redis-writer gex-delta-redis-writer="$GEX_DELTA_REDIS_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
+          kubectl -n options-edge set image deployment/ibkr-trades-feed ibkr-trades-feed="$IBKR_TRADES_FEED_IMAGE"
+          kubectl -n options-edge set image deployment/ibkr-trades-postgres-writer ibkr-trades-postgres-writer="$IBKR_TRADES_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
           kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
           kubectl -n options-edge rollout restart deployment/options-edge-databento-feed
@@ -380,6 +382,8 @@ EOF
           kubectl -n options-edge rollout restart deployment/strike-flow-avro-adapter
           kubectl -n options-edge rollout restart deployment/gex-delta-redis-writer
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
+          kubectl -n options-edge rollout restart deployment/ibkr-trades-feed
+          kubectl -n options-edge rollout restart deployment/ibkr-trades-postgres-writer
           kubectl -n options-edge rollout restart deployment/databento-maxpain-service
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/options-edge-web --timeout=1260s
@@ -419,6 +423,8 @@ EOF
           kubectl -n options-edge rollout status deployment/strike-flow-avro-adapter --timeout=1260s
           kubectl -n options-edge rollout status deployment/gex-delta-redis-writer --timeout=1260s
           kubectl -n options-edge rollout status deployment/ibkr-feed-service --timeout=1260s
+          kubectl -n options-edge rollout status deployment/ibkr-trades-feed --timeout=1260s
+          kubectl -n options-edge rollout status deployment/ibkr-trades-postgres-writer --timeout=1260s
           kubectl -n options-edge rollout status deployment/databento-maxpain-service --timeout=1260s
           # short-premium-agent renders in dev+production, so an unready/crashlooping rollout must fail
           # the all-deploy in both. Guarded to dev+production because this deployment does not exist in

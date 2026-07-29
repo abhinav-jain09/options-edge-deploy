@@ -177,6 +177,36 @@ patches:
             value: "false"
           - name: POSTGRES_ENABLED
             value: "false"
+  # ibkr-trades-feed / ibkr-trades-postgres-writer (options-edge-ibkr-trades repo, onboarded
+  # 2026-07-29): net-new TWS API trade-execution + order-lifecycle capture, dev is LIVE-READY
+  # (explicit go-ahead given for dev only — see that repo's README "Dark-deploy posture").
+  # Production stays dark (base replicas:0, no override here) pending a separate, explicit
+  # decision — see the production overlay's patch for why IBKR_TRADES_HOST/PORT/CLIENT_ID are
+  # deliberately NOT set there. IBKR_TRADES_CLIENT_ID=950 is deliberately far from the existing
+  # SPX feed's IB_CLIENT_ID=112 on the same dev-Mac Gateway (client-id collision avoidance).
+  - target:
+      kind: Deployment
+      name: ibkr-trades-feed
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: IBKR_TRADES_HOST
+            value: host.docker.internal
+          - name: IBKR_TRADES_PORT
+            value: "4002"
+          - name: IBKR_TRADES_CLIENT_ID
+            value: "950"
+  - target:
+      kind: Deployment
+      name: ibkr-trades-postgres-writer
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
   # G2 DEV SOAK (§11, 2026-07-19): signal-follower-spx flags TRUE on dev (LEDGER mode).
   # MUST MIRROR the standalone slice k8s/services/signal-follower/overlays/dev
   # (validate-services: mono==slice).
@@ -402,6 +432,12 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-ibkr-feed
     newName: host.docker.internal:5001/options-edge-ibkr-feed
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-ibkr-trades-feed
+    newName: host.docker.internal:5001/options-edge-ibkr-trades-feed
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-ibkr-trades-postgres-writer
+    newName: host.docker.internal:5001/options-edge-ibkr-trades-postgres-writer
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-web
     newName: host.docker.internal:5001/options-edge-web

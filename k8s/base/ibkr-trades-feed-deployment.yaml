@@ -1,0 +1,70 @@
+# ibkr-trades-feed: net-new service (options-edge-ibkr-trades repo) that captures IBKR account
+# trade executions + full order lifecycle via the TWS API and publishes options.ibkr.executions /
+# options.ibkr.orders. Dials its OWN TWS API session, distinct from options-edge-ibkr-feed's live
+# SPX feed (IB_CLIENT_ID=112) — this service uses IBKR_TRADES_CLIENT_ID (default 950, see
+# options-edge-ibkr-trades/README.md "Client-ID collision risk"). MUST stay distinct from every
+# other live client id on the same Gateway.
+#
+# DARK-DEPLOY POSTURE: replicas is 0 here. No IBKR_TRADES_HOST/PORT/CLIENT_ID env is set at this
+# level on purpose — FeedConfig's own default host (127.0.0.1) is REJECTED by its prod validation
+# guard, so this fails loud rather than silently dialing the wrong Gateway if production replicas
+# is ever bumped without the per-env overrides below being added first. The dev overlay adds the
+# real dev values; production stays without them until a separate, explicit decision sets them.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ibkr-trades-feed
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: ibkr-trades-feed
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 0
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ibkr-trades-feed
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibkr-trades-feed
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: ibkr-trades-feed
+          image: 192.168.100.252:5000/options-edge-ibkr-trades-feed:dev
+          imagePullPolicy: Always
+          # Shared platform config/secret: APP_PROFILE, TOPIC_PREFIX (""  — envs are separated by
+          # Kafka bootstrap, not a topic prefix, matching every other service here), KAFKA_BOOTSTRAP_SERVERS.
+          # IBKR_TRADES_HOST/PORT/CLIENT_ID are NOT in the shared configmap (this service's own
+          # connection identity) — added per-env below.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi

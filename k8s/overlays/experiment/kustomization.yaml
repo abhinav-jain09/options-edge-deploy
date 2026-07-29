@@ -59,6 +59,38 @@ patches:
         name: ibkr-feed-service
         namespace: options-edge
       $patch: delete
+  # EXPERIMENT-ONLY: drop ibkr-trades-feed / ibkr-trades-postgres-writer too (options-edge-ibkr-trades
+  # onboarding, 2026-07-29) — same reasoning as ibkr-feed above: no experiment build job produces a
+  # :dev image for either (services.yaml declares envs:[dev, production] only), so leaving the base
+  # workload in this overlay would sit in ImagePullBackOff on .2.
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ibkr-trades-feed
+        namespace: options-edge
+      $patch: delete
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ibkr-trades-feed
+        namespace: options-edge
+      $patch: delete
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ibkr-trades-postgres-writer
+        namespace: options-edge
+      $patch: delete
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ibkr-trades-postgres-writer
+        namespace: options-edge
+      $patch: delete
   # The base web Deployment pins itself to the prod control-plane node
   # (nodeSelector node-role.kubernetes.io/control-plane: "true") because the
   # .4 failover node has intermittent DNS. Dev is single-node docker-desktop,

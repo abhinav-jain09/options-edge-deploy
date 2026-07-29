@@ -11,6 +11,8 @@ images:
   pin-postgres-writer: 192.168.100.252:5000/options-edge-pin-postgres-writer:dev
   feed-gateway-service: 192.168.100.252:5000/options-edge-feed-gateway:dev
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:dev
+  ibkr-trades-feed: 192.168.100.252:5000/options-edge-ibkr-trades-feed:dev
+  ibkr-trades-postgres-writer: 192.168.100.252:5000/options-edge-ibkr-trades-postgres-writer:dev
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:dev
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:dev
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:dev

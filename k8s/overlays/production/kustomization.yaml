@@ -271,6 +271,31 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
+  # ibkr-trades-feed / ibkr-trades-postgres-writer: kept OFF (replicas:0, matching base) in
+  # production — dark pending a separate, explicit user decision (options-edge-ibkr-trades
+  # onboarding, 2026-07-29). This explicit patch is a no-op today (base is already 0) but is
+  # added for the same auditability reason as the ibkr-feed patch above: a single grep-able place
+  # documenting "production stays dark on purpose", and a single place to flip when that decision
+  # is made. Before ever setting replicas > 0 here: (1) add IBKR_TRADES_HOST/PORT/CLIENT_ID env
+  # (the base Deployment deliberately carries none — FeedConfig's prod validation guard rejects
+  # the code default and fails loud instead of silently dialing a wrong/local Gateway), and
+  # (2) confirm IBKR_TRADES_CLIENT_ID is distinct from every other live client id on that Gateway
+  # (options-edge-ibkr-feed's IB_CLIENT_ID=112; dev's ibkr-trades-feed uses 950 — production must
+  # pick its own value, verified unused, not copy dev's).
+  - target:
+      kind: Deployment
+      name: ibkr-trades-feed
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  - target:
+      kind: Deployment
+      name: ibkr-trades-postgres-writer
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # spread-skew-service + spread-skew-postgres-writer: RETIRED all envs (USER 2026-07-24 — the
   # mirrored-pair strike/Mid coloring feature is not wanted). Base replicas:0 renders as-is; the
   # standalone slices mirror it (validate-services: mono==slice) and both are in morning-autostart

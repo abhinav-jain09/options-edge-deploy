@@ -49,6 +49,11 @@ services:
   # the pod but the slice stays declared + mirror-validated; a production service-deploy is a
   # harmless 0-replica apply). Image builds in the options-edge-ibkr-feed job.
   - { name: ibkr-feed,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service], buildJob: options-edge-ibkr-feed }
+  # ibkr-trades-feed / ibkr-trades-postgres-writer (options-edge-ibkr-trades repo, onboarded 2026-07-29):
+  # net-new TWS API trade-execution + order-lifecycle capture, dev live-ready / production dark. Each
+  # builds in its own Jenkins job (own repo, own Jenkinsfile per module — see that repo's README "Jenkins").
+  - { name: ibkr-trades-feed,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-ibkr-trades-feed,             deployments: [ibkr-trades-feed], buildJob: options-edge-ibkr-trades-feed }
+  - { name: ibkr-trades-postgres-writer,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-ibkr-trades-postgres-writer,  deployments: [ibkr-trades-postgres-writer], buildJob: options-edge-ibkr-trades-postgres-writer }
   - { name: feed-gateway,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-feed-gateway,                 deployments: [feed-gateway-service], buildJob: feed-gateway-deploy }
   - { name: raw-to-display,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-to-display,               deployments: [raw-to-display-service, raw-to-display-databento-service] }
   - { name: databento-volume-aggregator,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-volume-aggregator,  deployments: [databento-volume-aggregator] }

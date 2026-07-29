@@ -1,0 +1,64 @@
+# ibkr-trades-postgres-writer: consumes options.ibkr.executions / options.ibkr.orders (published by
+# ibkr-trades-feed) and archives them into the shared options_flow Postgres instance
+# (ibkr_executions / ibkr_orders tables — see options-edge-ibkr-trades README for schema/idempotency
+# notes). Plain Kafka consumer + JDBC writer, no TWS API session of its own — no client-id
+# collision risk for this module.
+#
+# DARK-DEPLOY POSTURE: replicas is 0 here. Shared platform config/secret already carries
+# POSTGRES_JDBC_URL/USER/PASSWORD + KAFKA_BOOTSTRAP_SERVERS + APP_PROFILE + TOPIC_PREFIX, so no
+# per-service env overrides are needed at any level (dev and production both resolve entirely from
+# options-edge-config / options-edge-runtime-secrets).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ibkr-trades-postgres-writer
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: ibkr-trades-postgres-writer
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 0
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ibkr-trades-postgres-writer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ibkr-trades-postgres-writer
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: ibkr-trades-postgres-writer
+          image: 192.168.100.252:5000/options-edge-ibkr-trades-postgres-writer:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi

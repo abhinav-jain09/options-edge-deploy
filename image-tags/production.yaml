@@ -10,6 +10,8 @@ images:
   pressure-postgres-writer: 192.168.100.252:5000/options-edge-pressure-postgres-writer:prod
   feed-gateway-service: 192.168.100.252:5000/options-edge-feed-gateway:prod
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:prod
+  ibkr-trades-feed: 192.168.100.252:5000/options-edge-ibkr-trades-feed:prod
+  ibkr-trades-postgres-writer: 192.168.100.252:5000/options-edge-ibkr-trades-postgres-writer:prod
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:prod
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:prod
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:prod
