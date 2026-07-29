@@ -35,6 +35,9 @@ data:
   # Starvation-incident guard (2026-07-15 class): bound the cascade's full-book snapshot
   # refresh so tier-1/tier-2 ticks cannot starve the OPRA read loop.
   DATABENTO_CASCADE_REFRESH_MIN_INTERVAL_MS: "250"
+  # USER rule 2026-07-29: first IBKR, second SYNTHETIC, third ES-basis (the crude
+  # cost-of-carry tier is last resort — review F3's ~10pt discrepancy source).
+  DATABENTO_CASCADE_TIER_ORDER: NATIVE,SYNTHETIC,ES_BASIS
 
   # ---- DBP-R32: prod stops holding its own ES Databento subscription (2026-07-26) ----------
   #
