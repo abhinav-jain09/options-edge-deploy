@@ -59,9 +59,9 @@ spec:
               # DATABENTO_MIN_STRIKE/MAX_STRIKE/STRIKE_STEP = 7000/8000/5). The two tracks must
               # cover the same strikes or the 0DTE and 1DTE surfaces are not comparable and
               # constant-one-day-vol interpolates across a hole.
-              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"},{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
+              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
-              value: "true"
+              value: "false"
             # ---- ES->SPX basis engine on DEV, mirrored from prod (2026-07-27) --------------
             # Dev's feed has BOTH engine legs in-process (base DATABENTO_HPSF_ES_TRADES_ENABLED
             # =true native ES + the SPX leg), so the engine already ran here — but with samples
