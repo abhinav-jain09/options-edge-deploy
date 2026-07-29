@@ -32,7 +32,7 @@ KEEP='keycloak'                                          # deployments to leave 
 # DEV-disabled deployments — held at 0 by do_start (exact full-name match via grep -x). MUST include
 # databento-timewarp-snapshot-replay: if it boots even briefly it replays snapshots into
 # options.databento.raw and poisons the chain. Keep in sync with premarket-check.sh DISABLED (dev).
-DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|dealer-ledger-service|dealer-ledger-calibration-scorer|option-price-behavior-service'
+DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|dealer-ledger-service|dealer-ledger-calibration-scorer|option-price-behavior-service|dealer-ledger-calibration-accumulator'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+30) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 07:30 ET full start. (2026-07-11)
 OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web'
