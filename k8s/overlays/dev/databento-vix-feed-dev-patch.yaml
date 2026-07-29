@@ -1,0 +1,19 @@
+# databento-vix-feed DEV overrides (VIX-FEED-SEPARATION §12 dev phase, USER-directed
+# simultaneous cutover 2026-07-28): dev broker + dev runtime profile. Everything else
+# (instrument, topic, port, probes) inherits the role base unchanged.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-vix-feed
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: databento-vix-feed
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: host.docker.internal:19092
+            - name: VIX_FEED_RUNTIME_PROFILE
+              value: dev
+          image: host.docker.internal:5001/options-edge-databento-feed:dev

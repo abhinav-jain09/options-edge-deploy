@@ -316,14 +316,10 @@ EOF
           kubectl -n options-edge set image deployment/options-edge-web web="$WEB_IMAGE"
           kubectl -n options-edge set image deployment/raw-to-display-databento-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-databento-feed databento-feed="$DATABENTO_FEED_IMAGE"
-          # databento-vix-feed (VIX feed separation PR-2): IMAGE REUSE — same image as the
-          # SPX feed, different entrypoint. Renders ONLY in the production overlay, so the
-          # dev monolith deploy must not touch it (the deployment does not exist there).
-          if [ "${ENVIRONMENT:-dev}" = "production" ]; then
-            kubectl -n options-edge set image deployment/databento-vix-feed databento-vix-feed="$DATABENTO_FEED_IMAGE"
-          else
-            echo "NOTICE: skipping set image deployment/databento-vix-feed — ENVIRONMENT='${ENVIRONMENT:-dev}' != production (this deployment renders only in the production overlay)"
-          fi
+          # databento-vix-feed (VIX feed separation): IMAGE REUSE — same image as the
+          # SPX feed, different entrypoint. Renders in BOTH envs since the 2026-07-28
+          # cutover commit (dev overlay added).
+          kubectl -n options-edge set image deployment/databento-vix-feed databento-vix-feed="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
           kubectl -n options-edge set image deployment/option-price-behavior-service option-price-behavior="$OPTION_PRICE_BEHAVIOR_IMAGE"
@@ -355,24 +351,8 @@ EOF
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
           kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
           kubectl -n options-edge rollout restart deployment/options-edge-databento-feed
-          # databento-vix-feed: production-only (see the set-image note above). A restart on
-          # the committed replicas:0 state is a no-op template bump — safe pre-evidence.
-          if [ "${ENVIRONMENT:-dev}" = "production" ]; then
-            # PRE-EVIDENCE FENCE RE-ASSERT (2026-07-28, incident: a manual/bring-up path
-            # raised the fenced deployment and it crash-looped — the :prod image does not
-            # carry the vix-feed entrypoint until the shadow-commit promotion). EVERY
-            # bring-up-all / monolith pass forces the deployment back to the committed
-            # replicas:0, no matter who scaled it up out-of-band. REMOVING THIS LINE IS
-            # AN EXPLICIT SHADOW-TRANSITION OBLIGATION (design §7 phase 3, together with
-            # the KEEP_DOWN entry) — if left behind, this fence would silently scale the
-            # legitimately-running standalone feed back to zero on every monolith pass.
-            # (The single-publisher assertion separately guards dual real-topic
-            # ownership; it does NOT inspect this fence.)
-            kubectl -n options-edge scale deployment/databento-vix-feed --replicas=0
-            kubectl -n options-edge rollout restart deployment/databento-vix-feed
-          else
-            echo "NOTICE: skipping rollout restart deployment/databento-vix-feed — ENVIRONMENT='${ENVIRONMENT:-dev}' != production (this deployment renders only in the production overlay)"
-          fi
+          # databento-vix-feed: renders in BOTH envs since the 2026-07-28 cutover commit.
+          kubectl -n options-edge rollout restart deployment/databento-vix-feed
           kubectl -n options-edge rollout restart deployment/databento-volume-aggregator
           kubectl -n options-edge rollout restart deployment/databento-mission-sandwich-service
           kubectl -n options-edge rollout restart deployment/databento-gex-service

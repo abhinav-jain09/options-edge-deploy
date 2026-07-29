@@ -22,17 +22,17 @@ spec:
           env:
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "2000"
-            # VIX-via-OPRA-parity (feed docs/vix-opra-parity-price/DESIGN.md v11, PR #65;
-            # USER directive 2026-07-15: deploy ENABLED, manual verification via the
-            # option-chain VixPriceCard). The AUTO_VIX_MONTHLY instrument joins the SAME
-            # OPRA session (no new Databento session); underlying.vix.price is published
-            # by the feed's dedicated isolated producer to the prod broker where the
-            # feed-gateway already consumes it (KAFKA_IBKR_VIX_PRICE_TOPIC default).
-            # Rollback = set "" / false here and redeploy.
+            # VIX CUTOVER (VIX-FEED-SEPARATION, USER directive 2026-07-28: direct
+            # cutover, no shadow): the standalone databento-vix-feed now owns
+            # underlying.vix.price. The in-SPX VIX track is OFF — at-most-one
+            # publisher (validate-vix-single-publisher.sh enforces this in CI).
+            # ROLLBACK = scale databento-vix-feed to 0 FIRST, then restore here:
+            # EXTRA_INSTRUMENTS='[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
+            # and DATABENTO_VIX_PRICE_ENABLED="true", then redeploy databento-feed.
             - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
+              value: ""
             - name: DATABENTO_VIX_PRICE_ENABLED
-              value: "true"
+              value: "false"
             # ES->SPX basis engine (ES-SPX-TRANSLATION-ENGINE.md, Codex-approved).
             # ONE engine, no version knob (feed #79): it runs structurally on the
             # instance publishing both legs. Samples stay OFF until the A1

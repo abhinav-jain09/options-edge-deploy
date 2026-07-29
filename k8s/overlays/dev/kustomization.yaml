@@ -20,6 +20,10 @@ resources:
   # pod template is immutable, so re-applying it inside the monolith aborted the whole
   # deploy whenever the image/config changed; and re-running a historical replay on every
   # deploy risks polluting live topics. Keep replay a separate, deliberate action.
+  # databento-vix-feed: standalone VIX OPRA feed — dev leg of the USER-directed
+  # simultaneous cutover (2026-07-28). Same base as production; dev patch overrides
+  # broker/profile/image.
+  - ../../services/databento-vix-feed/base
 patches:
   # market-carry restores the SR3 history as a GlobalKTable. Keep the same
   # memory envelope as production: the 1Gi/768Mi profile is OOM-killed by
@@ -53,6 +57,7 @@ patches:
   - path: feed-gateway-dev-env-patch.yaml
   # DEV-ONLY: feed publish interval 1s (prod is 2s, code default 250ms) — see the patch header.
   - path: databento-feed-dev-patch.yaml
+  - path: databento-vix-feed-dev-patch.yaml
   # DEV-ONLY: Gate-3 research evidence store ON (base is OFF and carries no URL — see the patch).
   - path: vix-option-inteligence-dev-patch.yaml
   # DEV-ONLY: dealer-ledger aggressive candidate V1 (ABSORB_MIN_FRACTION=0.50). Prod untouched.

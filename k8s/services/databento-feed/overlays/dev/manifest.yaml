@@ -63,9 +63,9 @@ spec:
             - name: DATABENTO_SPOT_SOURCE
               value: CASCADED
             - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"},{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
+              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
-              value: "true"
+              value: "false"
             - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
               value: "true"
             - name: ES_SPX_BASIS_SAMPLES_ENABLED

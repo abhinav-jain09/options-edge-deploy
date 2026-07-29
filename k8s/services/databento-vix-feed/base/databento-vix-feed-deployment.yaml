@@ -2,19 +2,20 @@
 # Requirement: VIX-FEED-SEPARATION-REQUIREMENT.md rev 3 (APPROVED 2026-07-27);
 # design: VIX-FEED-SEPARATION-DESIGN.md rev 4 §5 (D5). This is deploy PR-2.
 #
-# PROD-ONLY BY DESIGN: referenced from k8s/overlays/production/kustomization.yaml only
-# (never k8s/base), so dev/experiment never render it — dev keeps its in-process VIX
-# path (design §11 explicitly RETAINS it).
+# RENDERS IN DEV + PRODUCTION (cutover commit 2026-07-28; experiment never renders it).
+# The dev overlay patches broker/profile/image (databento-vix-feed-dev-patch.yaml).
 #
 # IMAGE REUSE: the SAME image as the SPX feed (options-edge-databento-feed). The
 # `command` below replaces the image ENTRYPOINT with the standalone VIX role's console
 # script (feed PR-1, `options-edge-vix-feed` = vix_feed:main — design §1 D1), so no new
 # image, registry entry, or pinning wiring is needed (DATABENTO_FEED_IMAGE covers it).
 #
-# ⚠️ replicas: 0 IS THE INTENDED PR-2 STATE (pre-evidence default). VFS-R1 is the hard
-#    session gate: the shared Databento key must not carry a second OPRA session (shadow
-#    included) until the concurrency evidence is recorded. Every phase transition is a
-#    COMMITTED manifest change deployed via Jenkins (design §5 — service-deploy applies
+# ⚠️ CUTOVER STATE (2026-07-28, USER-directed direct cutover, no shadow): replicas 1 and
+#    the standalone feed OWNS underlying.vix.price (VFS-R1 evidence PASS recorded in the
+#    requirement, 2026-07-28 RTH). ROLLBACK: replicas 0 FIRST (this file), deploy; then
+#    restore the SPX-side VIX block (databento-feed patches) and deploy databento-feed
+#    (design §7 rollback ordering — never both owners at once; CI assertion enforces).
+#    Every phase transition is a COMMITTED manifest change deployed via Jenkins (
 #    the committed render verbatim, so a hand-scale would be reverted by the next apply):
 #      * shadow commit:  replicas 1 + KAFKA_VIX_PRICE_TOPIC=underlying.vix.price.shadow
 #        + morning-autostart KEEP_DOWN entry REMOVED (the two are mutually exclusive);
@@ -31,8 +32,8 @@ metadata:
     app.kubernetes.io/name: databento-vix-feed
     app.kubernetes.io/part-of: options-edge
 spec:
-  # 0 = intended pre-evidence default; see the replicas note in the header.
-  replicas: 0
+  # 1 = cutover state; see the header note. Rollback = 0 FIRST, then re-enable in-SPX.
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: databento-vix-feed
@@ -79,15 +80,10 @@ spec:
               value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: "192.168.100.252:9092"
-            # PR-2 ships the REAL topic + replicas 0 (the approved phase model, design
-            # §7: "PR-2 (standalone 0 replicas + real-topic default + SPX enabled = one
-            # owner)"). The SHADOW COMMIT is the one commit that atomically sets
-            # replicas 1 + flips this to underlying.vix.price.shadow + removes the
-            # morning-autostart KEEP_DOWN entry; the cutover commit flips it back to
-            # the real topic. The at-most-one CI assertion
-            # (scripts/ci/validate-vix-single-publisher.sh) treats "replicas > 0 AND
-            # topic missing-or-equal underlying.vix.price" as standalone ownership —
-            # safe here because replicas is 0.
+            # CUTOVER STATE: the standalone feed OWNS the real topic (replicas 1 above;
+            # the SPX-side VIX block is OFF in both env patches). The at-most-one CI
+            # assertion (scripts/ci/validate-vix-single-publisher.sh) fails any render
+            # where both owners are enabled.
             - name: KAFKA_VIX_PRICE_TOPIC
               value: "underlying.vix.price"
             # broker-side attribution during the shadow phase (design §2)
