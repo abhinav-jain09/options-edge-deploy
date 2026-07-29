@@ -8,7 +8,10 @@ metadata:
     app.kubernetes.io/component: dealer-ledger-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # DISABLED until further notice (USER 2026-07-29): dealer-ledger-service held at 0 in
+  # dev + production. Re-enable = set back to 1 and re-run scripts/deploy/generate-service-slices.sh,
+  # and drop it from morning-autostart KEEP_DOWN + dev-cleanup DISABLED_DEV.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
