@@ -69,6 +69,14 @@ spec:
               value: "8013"
             - name: DATABENTO_VIX_RESOLVE_PREOPEN_LEAD_MINUTES
               value: "150"
+            - name: VIX_INDEX_SOURCE_ENABLED
+              value: "true"
+            - name: VIX_INDEX_SOURCE_BOOTSTRAP
+              value: 192.168.100.252:9092
+            - name: VIX_INDEX_SOURCE_TOPIC
+              value: underlying.vix.index.price
+            - name: VIX_INDEX_SOURCE_GROUP_ID
+              value: vix-feed-ibkr-index
           envFrom:
             - secretRef:
                 name: options-edge-databento-feed-env

@@ -94,6 +94,20 @@ spec:
             # resolution window opens open-150min ET (role default, made explicit)
             - name: DATABENTO_VIX_RESOLVE_PREOPEN_LEAD_MINUTES
               value: "150"
+            # ---- IBKR VIX-index priority (requirement §12, feed#107) ------------------
+            # Priority-1 = IBKR cash-index ticks from the hop topic (produced by
+            # ibkr-feed's per-cluster fan-out); parity auto-falls-back when the stream
+            # is absent/stale/DELAYED and auto-resumes suppression when it returns.
+            # Bootstrap = THIS env's local broker (dev patch overrides), same pattern
+            # as KAFKA_BOOTSTRAP_SERVERS above.
+            - name: VIX_INDEX_SOURCE_ENABLED
+              value: "true"
+            - name: VIX_INDEX_SOURCE_BOOTSTRAP
+              value: "192.168.100.252:9092"
+            - name: VIX_INDEX_SOURCE_TOPIC
+              value: "underlying.vix.index.price"
+            - name: VIX_INDEX_SOURCE_GROUP_ID
+              value: "vix-feed-ibkr-index"
           ports:
             - name: metrics
               containerPort: 8013
