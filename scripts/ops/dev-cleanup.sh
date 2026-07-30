@@ -103,6 +103,51 @@ ensure_topics() {
   fi
 }
 
+# apply_internal_topic_configs: give every Streams changelog/repartition topic its
+# compaction + retention policy, the SAME way the monolith deploy does.
+#
+# Why this exists (2026-07-30): the deploy's Jenkinsfile runs
+# scripts/kafka/apply-internal-topic-configs.sh, but a dev *clean* does not — and a
+# clean is what recreates the topics. Streams internal topics therefore came back
+# with nothing but broker defaults (cleanup.policy=delete, log.retention.hours=24,
+# log.segment.bytes=1G) and stayed that way until the next full deploy, which can be
+# days. Measured cost on 2026-07-30: ALL 52 dev changelogs were plain `delete`, dev
+# Kafka grew at 176.8 GB/hour (2.19 GB pre-open -> 29.5 GB by 10:05 ET), and the disk
+# was ~2.3 h from full. Applying compaction dropped it to ~6 GB/hour.
+#
+# Runs the reviewed script from origin/main rather than a local copy (same source of
+# truth as ensure_topics), through a PATH shim because that script calls the bare
+# `kafka-topics` / `kafka-configs` names that exist inside the deploy image but not
+# on the Mac. Best-effort: never fail a clean over this.
+apply_internal_topic_configs() {
+  local script shim
+  script="$(mktemp -t oe-internal-topics)" || return 0
+  git -C "$DEPLOY_REPO" show "${INTERNAL_TOPIC_SCRIPT_REF:-origin/main:scripts/kafka/apply-internal-topic-configs.sh}" \
+    > "$script" 2>/dev/null
+  if [ ! -s "$script" ]; then
+    echo "  WARNING: could not read apply-internal-topic-configs.sh from $DEPLOY_REPO — Streams internal topics keep broker defaults (delete policy, 1 GB segments). Dev Kafka will grow fast."
+    rm -f "$script"; return 0
+  fi
+  shim="$(mktemp -d -t oe-kafka-shim)" || { rm -f "$script"; return 0; }
+  ln -sf "$(dirname "$KT")/kafka-topics.sh"  "$shim/kafka-topics"
+  ln -sf "$(dirname "$KT")/kafka-configs.sh" "$shim/kafka-configs"
+  echo "Applying Streams internal-topic policy (compaction + 1h segments) ..."
+  # 10h retention = dev's KAFKA_MAX_RETENTION_MS cap (the Jenkinsfile derives the same
+  # value from the rendered configmap); 1h segments so compaction/retention/Streams'
+  # own repartition purge can actually reclaim — none of them touch the ACTIVE segment,
+  # which at the 1 GB broker default means nothing is reclaimable in-session.
+  PATH="$shim:$PATH" \
+  KAFKA_BOOTSTRAP_SERVERS="$BS" \
+  KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1 \
+  KAFKA_CHANGELOG_RETENTION_MS="${DEV_CHANGELOG_RETENTION_MS:-36000000}" \
+  KAFKA_STREAMS_INTERNAL_RETENTION_MS="${DEV_CHANGELOG_RETENTION_MS:-36000000}" \
+  KAFKA_STREAMS_INTERNAL_SEGMENT_MS=3600000 \
+  KAFKA_CHANGELOG_DELETE_RETENTION_MS=3600000 \
+  KAFKA_CHANGELOG_MIN_CLEANABLE_DIRTY_RATIO=0.01 \
+    bash "$script" 2>&1 | tail -3 | sed 's/^/  /'
+  rm -rf "$shim" "$script"
+}
+
 # ---------- OVERNIGHT START: right after the clean, bring up ONLY the ES-tracking set ----------
 # Recreate topics, then scale up ONLY $OVERNIGHT_SET so ES futures are tracked overnight; every other
 # service stays at 0 until the 07:30 ET full start. (These persist/serve ES — they need a producer for
@@ -194,6 +239,7 @@ do_start() {
   # blank UI (dev-schema-registry-wipe-gateway-wedge). Enforce compact + retention.ms=-1 every start.
   /Users/abhinav/kafka-4.3.0/bin/kafka-configs.sh --bootstrap-server "$BS" --alter --entity-type topics \
     --entity-name _schemas --add-config "retention.ms=-1,cleanup.policy=compact" >/dev/null 2>&1 || true
+  apply_internal_topic_configs
   local gwerr; gwerr=$($KK logs deploy/feed-gateway-service --since=60s 2>/dev/null | grep -cE '40403|Schema .* not found' || true)
   if [ "${gwerr:-0}" -gt 0 ]; then
     echo "  ⚠ gateway has $gwerr schema-deserialization errors — SR lost schemas; re-registering producers"

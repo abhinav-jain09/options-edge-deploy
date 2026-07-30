@@ -60,7 +60,14 @@ while read -r topic; do
       found=true
       apply_changelog_config "$topic"
       ;;
-    *-repartition)
+    # Streams names a repartition topic after the operator that created it, so the
+    # `-repartition` suffix is only the DEFAULT. Anything built with an explicit
+    # Repartitioned.as("chain-rekey") / .as("repart-flow") name lands on `-rekey` or
+    # `-repart-<x>` instead and used to fall through this case with NO config at all —
+    # on dev that was 11 topics (5 `-rekey`, 6 `-repart-*`), including the
+    # dealer-ledger and strike-liquidity-heatmap chain rekeys, which are among the
+    # largest partitions on the broker. (2026-07-30)
+    *-repartition|*-rekey|*-repart-*)
       found=true
       apply_repartition_config "$topic"
       ;;
