@@ -12,7 +12,10 @@ metadata:
     app.kubernetes.io/name: databento-mission-sandwich-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # DISABLED until further notice (USER 2026-07-30): held at 0 in every monolith env
+  # (dev + production). Re-enable = replicas 1 + re-run generate-service-slices.sh +
+  # revert the ops-tooling entries.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
