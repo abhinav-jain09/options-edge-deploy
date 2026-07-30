@@ -8,8 +8,7 @@ metadata:
     app.kubernetes.io/component: dealer-ledger-calibration-scorer
     app.kubernetes.io/part-of: options-edge
 spec:
-  # DISABLED until further notice (USER 2026-07-29): calibration scorer held at 0 in dev + production.
-  replicas: 0
+  replicas: 1
   strategy:
     type: Recreate
   selector:
