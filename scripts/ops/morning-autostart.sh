@@ -53,7 +53,7 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   databento-vix-feed (VIX feed separation PR-2): pre-evidence default; the shadow
 #   commit removes this — replicas:1 and a KEEP_DOWN entry are mutually exclusive
 #   (autostart would scale the shadow to 0 at 07:30 mid-session; design §5).
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer dealer-ledger-service dealer-ledger-calibration-scorer option-price-behavior-service dealer-ledger-calibration-accumulator}"
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer dealer-ledger-service dealer-ledger-calibration-scorer option-price-behavior-service dealer-ledger-calibration-accumulator directional-pressure-databento-service}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only
