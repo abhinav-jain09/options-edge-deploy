@@ -58,11 +58,20 @@ spec:
             - name: DEALER_LEDGER_STREAMS_APP_ID
               value: options-edge-dealer-ledger-service
             - name: DEALER_LEDGER_STREAMS_COMMIT_INTERVAL_MS
-              value: "1000"
+              # EOS is ON, so every commit is a Kafka transaction. At 1s the hot task pays that
+              # cost 60x a minute while its own recompute backlog is the thing to protect. 3s
+              # keeps end-to-end latency well inside the 1-per-minute cadence every consumer of
+              # dealer-ledger-profile actually samples at.
+              value: "3000"
             - name: DEALER_LEDGER_STREAMS_AUTO_OFFSET_RESET
               value: latest
             - name: DEALER_LEDGER_STREAMS_NUM_THREADS
-              value: "1"
+              # The rekey sub-topology reads the four raw input topics (4 partitions each) and is
+              # embarrassingly parallel - JSON parse + forward, no state. The ledger sub-topology
+              # stays single-task by construction and is unaffected by this. 4 threads let the
+              # rekey stage keep up during the open/close bursts instead of feeding the ledger
+              # thread in fits.
+              value: "4"
             - name: DEALER_LEDGER_EOS_ENABLED
               value: "true"
             - name: KAFKA_STREAMS_STATE_DIR
@@ -110,7 +119,14 @@ spec:
               mountPath: /var/lib/options-edge/kafka-streams
           resources:
             requests:
-              cpu: 100m
+              # The ledger stage is a SINGLE Kafka Streams task (every input is rekeyed to
+              # symbol|expiry, so one SPX chain = one partition = one thread) and it carries the
+              # whole session: ~2.6M records measured on 2026-06-18, each triggering a full
+              # per-strike state read + profile recompute. A 100m request means the scheduler
+              # guarantees a tenth of a core for that thread, so under any node contention the
+              # chain falls seconds behind and every downstream consumer sees stale analytics.
+              # Request two cores: enough for the hot thread plus the rekey/punctuator threads.
+              cpu: "2"
               memory: 512Mi
             limits:
               memory: 1536Mi
