@@ -137,6 +137,28 @@ if [ "$ENABLED" = "true" ] && [ "$up" -gt 0 ]; then
     [ "$(date +%s)" -ge "$deadline" ] && { log "WARN: ${notready} deployments not Ready after ${ROLLOUT_WAIT}s"; break; }
     sleep 5
   done
+
+  # SELF-HEAL boot-order stragglers (parity with dev-cleanup's start path).
+  # On a box reboot k3s starts the pods while Kafka (systemd) is still coming up, so
+  # Streams/runtime services die at startup with "Timeout expired while fetching topic
+  # metadata" / "Connection refused" / "timeout creating source topic ...". Their MAIN
+  # THREAD dies but the container stays Running, so kubelet never restarts them and they
+  # sit 0/1 FOREVER — an env that looks "up" but silently has no close-direction,
+  # delta-flow, strike-intelligence or heatmap. Bounce whatever is still short of its
+  # desired replicas; by now Kafka is up, so the restart succeeds.
+  healed=0
+  for d in $(kcr get deploy -l "$SELECTOR" -o name 2>/dev/null | sed 's#.*/##'); do
+    skip=0
+    for k in $KEEP_DOWN; do [ "$d" = "$k" ] && skip=1 && break; done
+    [ "$skip" = 1 ] && continue
+    des=$(kcr get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+    rr=$(kcr get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+    if [ "${des:-0}" -gt 0 ] && [ "${rr:-0}" -lt "${des:-0}" ]; then
+      log "boot-order straggler: $d (${rr:-0}/${des}) — restarting"
+      kc rollout restart deploy/"$d" >/dev/null 2>&1 && healed=$((healed+1))
+    fi
+  done
+  [ "$healed" -gt 0 ] && log "self-heal restarted ${healed} straggler(s)" || log "self-heal: no stragglers"
 fi
 
 if [ "$failed" -eq 0 ]; then
