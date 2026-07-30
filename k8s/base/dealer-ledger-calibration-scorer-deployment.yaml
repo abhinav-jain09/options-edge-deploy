@@ -75,8 +75,9 @@ spec:
             # rebuilt from the compacted topic. Affected horizons are then CENSORED (mostly
             # CENSORED_DATA_GAP; CENSORED_SESSION_END past the close, and gaps inside the 120s oracle
             # tolerance still score normally) — labels are LOST, never wrong. The scorer logs a
-            # SPOT-COVERAGE line whenever a flushed session has a coverage hole at or beyond that
-            # tolerance; alert on it.
+            # SPOT-COVERAGE line whenever a flushed session has a coverage hole that EXCEEDS that
+            # tolerance; a hole of exactly the tolerance is still scored by the oracle and stays quiet
+            # on purpose, so any SPOT-COVERAGE line is a real defect. Alert on it.
             #
             # ROLLOUT — the internal <app-id>-rekey topic is NOT reset by this change and keeps whatever
             # backlog it already has (prod partition 24 was ~1.3M records behind at cutover). Lag relief is
