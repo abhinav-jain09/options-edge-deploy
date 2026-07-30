@@ -285,7 +285,17 @@ fi
 # Now the single source of truth is topics.env, applied by the SAME scripts/kafka/apply-topics.sh
 # Jenkins uses, scoped to the es4 set. This script is deliberately DUMB about topics.
 log "reconciling required core es.* topic contracts (create-es-topics.sh)"
-run "bash '$SCRIPT_DIR/create-es-topics.sh'"
+# A clean-reset IS the "approved destructive cleanup deployment" that
+  # KAFKA_RECREATE_MISMATCHED_TOPICS gates: the wipe just deleted every topic, so anything
+  # that reappeared before this line was AUTO-CREATED by a racing client (a consumer's
+  # metadata request, MM2, or prod's reversal-confirmation-service) with broker-default
+  # partitions instead of the contract's. Without the flag create-es-topics.sh REFUSES to
+  # repair those and exits non-zero, so the reconcile stops at the FIRST mismatched topic
+  # and every contract after it is never created — services then boot against a missing
+  # topic, die in main() and sit 0/1 forever (observed: strike-intelligence dying on
+  # "cannot enforce delete/<=1d retention on es.strike-intelligence-by-strike ->
+  # UnknownTopicOrPartitionException", taking the whole strike-flow chain down).
+  run "KAFKA_RECREATE_MISMATCHED_TOPICS=true bash '$SCRIPT_DIR/create-es-topics.sh'"
 log "docker compose up -d (start mm2 + any remaining infra now that topics exist)"
 run "(cd '$INFRA_DIR' && docker compose up -d)"
 
@@ -342,6 +352,23 @@ else
   # is no second file to go stale, so a later fresh reset can never inherit a spurious RESTORED.
   TMP="$STATE.tmp.$$"; { echo RESTORED; REPS; } > "$TMP" && mv -f "$TMP" "$STATE"
   rm -f "$STATE" # success: next run captures fresh service/topic inventories
+
+  # SELF-HEAL boot-order stragglers (parity with morning-autostart and dev-cleanup).
+  # Services restarted by the restore race Kafka/SR/topic creation; the losers die in
+  # main() while their container stays Running, so kubelet never restarts them and they
+  # sit 0/1 FOREVER — the fleet looks restored while a whole chain is dead. By now the
+  # infra and every topic contract exist, so a bounce succeeds.
+  log "self-healing boot-order stragglers"
+  healed=0
+  for d in $($KC get deploy -o name 2>/dev/null | sed 's#.*/##'); do
+    des=$($KC get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+    rr=$($KC get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+    if [ "${des:-0}" -gt 0 ] && [ "${rr:-0}" -lt "${des:-0}" ]; then
+      log "  boot-order straggler: $d (${rr:-0}/${des}) — restarting"
+      $KC rollout restart deploy/"$d" >/dev/null 2>&1 && healed=$((healed+1))
+    fi
+  done
+  log "self-heal restarted ${healed} straggler(s)"
 fi
 
 if [ "$DRY" = "true" ]; then
