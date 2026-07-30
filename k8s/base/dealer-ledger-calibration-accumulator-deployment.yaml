@@ -8,10 +8,7 @@ metadata:
     app.kubernetes.io/component: dealer-ledger-calibration-accumulator
     app.kubernetes.io/part-of: options-edge
 spec:
-  # DISABLED until further notice (USER 2026-07-29): completes the dealer-ledger stack shutdown
-  # (service + scorer disabled in #646). Re-enable = replicas 1 + generate-service-slices.sh +
-  # drop from morning-autostart KEEP_DOWN and dev-cleanup DISABLED_DEV.
-  replicas: 0
+  replicas: 1
   strategy:
     type: Recreate
   selector:
