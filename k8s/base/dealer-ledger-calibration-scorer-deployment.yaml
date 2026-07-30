@@ -37,11 +37,12 @@ spec:
               value: scorer
             - name: HEALTH_PORT
               value: "8080"
-            # inputs: the audit SignalFired stream + the canonical-spot SSOT (Avro raw); output topic.
+            # inputs: the audit SignalFired stream + the canonical-spot SSOT (the dedicated JSON spot
+            # stream, NOT the option-snapshot firehose it used to mine canonicalSpot out of); output topic.
             - name: SCORER_INPUT_SIGNAL_FIRED_TOPIC
               value: dealer-ledger-signal-fired
-            - name: SCORER_INPUT_RAW_TOPIC
-              value: options.databento.raw
+            - name: SCORER_INPUT_SPOT_TOPIC
+              value: underlying.spx.price
             - name: SCORER_OUTPUT_OUTCOME_SCORED_TOPIC
               value: dealer-ledger-outcome-scored
             - name: KAFKA_STREAMS_STATE_DIR
@@ -52,11 +53,20 @@ spec:
             - name: SCORER_SESSION_GRACE_MS
               value: "120000"
             # Explicit heap so container-RAM growth is bounded + predictable (default was ~25% of the
-            # limit). The scorer replays the raw-spot backlog on restart, buffering a session's spot; that
-            # heap + RocksDB off-heap + the enlarged Kafka producer/consumer buffers OOMKilled the 1536Mi
-            # container in ~52s (exit 137, crash-loop). Raise the limit to 4Gi and pin -Xmx2560m, leaving
-            # ~1.5Gi for RocksDB/direct buffers/metaspace. The bounded-buffer code fix removes the root
-            # cause; this headroom is the belt-and-suspenders so a busy session can't OOM again.
+            # limit). The scorer buffers a session's spot in memory; that heap + RocksDB off-heap + the
+            # enlarged Kafka producer/consumer buffers OOMKilled the 1536Mi container in ~52s (exit 137,
+            # crash-loop) back when every option-strike snapshot carried a duplicate spot. Raise the limit
+            # to 4Gi and pin -Xmx2560m, leaving ~1.5Gi for RocksDB/direct buffers/metaspace. The
+            # bounded-buffer code fix removes the root cause; this headroom is the belt-and-suspenders.
+            #
+            # NOTE: the scorer no longer "replays the spot backlog on restart" — it cannot. The spot source
+            # underlying.spx.price is cleanup.policy=compact, so the broker keeps only the current segment
+            # (measured on prod 2026-07-30: 277 records retained against log-end offset 585,102). The
+            # session history lives in the changelogged scorer-session-buffer store, NOT in the topic.
+            # Ordinary restarts and rebalances are safe; do NOT change SCORER_STREAMS_APP_ID or wipe the
+            # kafka-streams-state PVC on a live session — the day's spot path cannot be rebuilt and every
+            # fire before the resume point scores CENSORED_DATA_GAP. The scorer logs SPOT-COVERAGE when
+            # that happens.
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx2560m"
           livenessProbe:
