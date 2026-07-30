@@ -33,7 +33,16 @@ metadata:
     app.kubernetes.io/part-of: options-edge
 spec:
   # 1 = cutover state; see the header note. Rollback = 0 FIRST, then re-enable in-SPX.
-  replicas: 1
+  # DISABLED until further notice (USER 2026-07-30): the container's command,
+  # `options-edge-vix-feed`, does NOT exist in the options-edge-databento-feed image —
+  # pyproject [project.scripts] ships only options-edge-databento-feed,
+  # options-edge-databento-sr3-feed and the replay CLIs. So it can never start:
+  #   exec: "options-edge-vix-feed": executable file not found in $PATH (exitCode 128)
+  # It is already in KEEP_DOWN, but replicas:1 still had kubelet create a pod that
+  # crash-looped (24 restarts on prod) and the autostart self-heal (#651) bounced it
+  # every run. Re-enable = ship the entrypoint in the feed image (or delete this
+  # orphan Deployment), then set replicas back to 1.
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: databento-vix-feed
