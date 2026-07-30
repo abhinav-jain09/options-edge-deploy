@@ -54,6 +54,7 @@ services:
   - { name: databento-volume-aggregator,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-volume-aggregator,  deployments: [databento-volume-aggregator] }
   - { name: databento-gex,                managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-gex,                deployments: [databento-gex-service] }
   - { name: databento-gex-history,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-gex-history,        deployments: [databento-gex-history-service] }
+  - { name: gamma-migration,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-gamma-migration,             deployments: [gamma-migration-service] }
   - { name: databento-mission-sandwich,   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-mission-sandwich,   deployments: [databento-mission-sandwich-service] }
   - { name: delta-flow,                   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-delta-flow,                   deployments: [delta-flow-service] }
   - { name: dealer-ledger,                managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-dealer-ledger,                deployments: [dealer-ledger-service] }
