@@ -58,11 +58,27 @@ spec:
             - name: DEALER_LEDGER_STREAMS_APP_ID
               value: options-edge-dealer-ledger-service
             - name: DEALER_LEDGER_STREAMS_COMMIT_INTERVAL_MS
-              value: "1000"
+              # EOS is ON, so every commit is a Kafka transaction. At 1s the hot task pays that
+              # cost 60x a minute while its own recompute backlog is the thing to protect. 3s
+              # keeps end-to-end latency well inside the 1-per-minute cadence every consumer of
+              # dealer-ledger-profile actually samples at.
+              value: "3000"
             - name: DEALER_LEDGER_STREAMS_AUTO_OFFSET_RESET
               value: latest
             - name: DEALER_LEDGER_STREAMS_NUM_THREADS
-              value: "1"
+              # Evidence, from the rendered topology (Topology.describe()):
+              #   sub-topology 0: sources flow-in / greeks-in / snapshot-in / heatmap-in ->
+              #                   rekey-json + rekey-avro (stores: []) -> sink chain-rekey
+              #   sub-topology 1: source chain-in (chain-rekey) -> ledger (all six state stores)
+              #   sub-topology 2: deltaflow-in            sub-topology 3: global store (no tasks)
+              # So the rekey stage is stateless and its tasks are per input partition, while EVERY
+              # ledger state store belongs to the single "ledger" processor. All records for one
+              # symbol|expiry hash to one chain-rekey partition, so the SPX chain remains exactly
+              # one task and extra threads cannot execute it concurrently - Streams never runs one
+              # task on two threads. What 4 threads buy is that the stateless rekey tasks and the
+              # deltaflow task run alongside the ledger task instead of queueing behind it during
+              # open/close bursts. It does not, and cannot, parallelise the chain itself.
+              value: "4"
             - name: DEALER_LEDGER_EOS_ENABLED
               value: "true"
             - name: KAFKA_STREAMS_STATE_DIR
@@ -110,7 +126,19 @@ spec:
               mountPath: /var/lib/options-edge/kafka-streams
           resources:
             requests:
-              cpu: 100m
+              # The ledger stage is a SINGLE Kafka Streams task (every input is rekeyed to
+              # symbol|expiry, so one SPX chain = one partition = one thread) and it carries the
+              # whole session: ~2.6M records measured on 2026-06-18, each triggering a full
+              # per-strike state read + profile recompute. A 100m request means the scheduler
+              # guarantees a tenth of a core for that thread, so under any node contention the
+              # chain falls seconds behind and every downstream consumer sees stale analytics.
+              # Headroom evidence (production .252, measured 2026-07-25): node capacity and
+              # allocatable are both 24 CPU; summing the cpu requests of all 57 workloads at one
+              # replica each gives 10.97 cores, so this raise (0.1 -> 2) leaves ~11 cores of
+              # request headroom and cannot make the pod Pending. Note requests are scheduling
+              # weights, not a reservation of two physical cores; there is deliberately no cpu
+              # limit, so the pod may burst above 2 when the node is idle.
+              cpu: "2"
               memory: 512Mi
             limits:
               memory: 1536Mi
