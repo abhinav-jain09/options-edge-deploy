@@ -74,6 +74,12 @@ spec:
               value: "8"
             - name: GAMMA_MIGRATION_JUDGE_FLIP_MIN_FRACTION
               value: "0.05"
+            - name: GAMMA_MIGRATION_COMPLETE_MIN_FRACTION
+              value: "0.80"
+            - name: GAMMA_MIGRATION_WIDTH_DECAY_MS
+              value: "1800000"
+            - name: GAMMA_MIGRATION_CHAIN_IDLE_MS
+              value: "2700000"
             - name: KAFKA_GAMMA_MIGRATION_TOPIC_PARTITIONS
               value: "4"
             - name: KAFKA_GAMMA_MIGRATION_NUM_THREADS

@@ -78,6 +78,18 @@ spec:
             # between two clusters that never moved.
             - name: GAMMA_MIGRATION_JUDGE_FLIP_MIN_FRACTION
               value: "0.05"
+            # Fraction of its own recent high-water width the ladder must still have to count as a
+            # complete board. Below this the service takes NO reading — "the oldest surviving
+            # strike is fresh" is vacuous, because pruning removes the stale ones first.
+            - name: GAMMA_MIGRATION_COMPLETE_MIN_FRACTION
+              value: "0.80"
+            - name: GAMMA_MIGRATION_WIDTH_DECAY_MS
+              value: "1800000"
+            # A chain silent this long is over (an expiry rolled off) and its state is released.
+            # Without eviction every chain the pod ever saw keeps its full history for the life of
+            # the process.
+            - name: GAMMA_MIGRATION_CHAIN_IDLE_MS
+              value: "2700000"
             # NOT the shared KAFKA_TOPIC_PARTITIONS_DEFAULT (32 in every env's ConfigMap): the
             # service creates its own topics, and after the re-key one chain is ONE key, so 32
             # would leave 28 empty logs per topic — and Kafka can add partitions, never remove
@@ -111,8 +123,10 @@ spec:
           # one double into a map — and its only periodic work is one pass over a ~156-strike
           # ladder per second. The request is what the scheduler charges the node, and prod's node
           # was measured at 90% CPU, so it is set to the peer's number rather than padded.
-          # Memory is bounded by construction: history is one 32-byte-ish sample per second per
-          # chain over a 65-minute window, well under 1 MB per chain.
+          # Memory, measured rather than asserted: a 156-strike chain holding 3,901 one-second
+          # samples and 81 fifteen-second ladder snapshots retains ~567 KiB. That is bounded PER
+          # CHAIN; the total is bounded by GAMMA_MIGRATION_CHAIN_IDLE_MS evicting chains that have
+          # gone quiet, without which every expiry the pod ever saw would keep its full footprint.
           resources:
             requests:
               cpu: 100m
