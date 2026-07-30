@@ -7,7 +7,11 @@ metadata:
     app.kubernetes.io/name: ibkr-feed-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # DISABLED until further notice (USER 2026-07-30): ibkr-feed-service must NEVER be
+  # deployed to production. IBKR is out of scope; VIX comes from vix-option-inteligence
+  # + the vix bridge. Held at 0 in every monolith env (dev + production).
+  # Re-enable = replicas 1 + re-run generate-service-slices.sh + revert the ops entries.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
