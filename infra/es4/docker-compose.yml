@@ -44,7 +44,7 @@ services:
       KAFKA_NUM_PARTITIONS: 4                      # org 4-partition policy
       KAFKA_LOG_RETENTION_MS: 43200000             # 12h org retention policy
       KAFKA_LOG_SEGMENT_BYTES: 268435456           # 256MB segments (changelog-segment-I/O lesson: never 1GB)
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"   # see topics.env — every topic is contract-created
       KAFKA_HEAP_OPTS: "-Xms2g -Xmx6g"             # ES-only load is light vs the SPX firehose
     volumes:
       - /home/es4/volumes/kafka:/var/lib/kafka/data
