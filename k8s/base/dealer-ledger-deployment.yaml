@@ -66,11 +66,18 @@ spec:
             - name: DEALER_LEDGER_STREAMS_AUTO_OFFSET_RESET
               value: latest
             - name: DEALER_LEDGER_STREAMS_NUM_THREADS
-              # The rekey sub-topology reads the four raw input topics (4 partitions each) and is
-              # embarrassingly parallel - JSON parse + forward, no state. The ledger sub-topology
-              # stays single-task by construction and is unaffected by this. 4 threads let the
-              # rekey stage keep up during the open/close bursts instead of feeding the ledger
-              # thread in fits.
+              # Evidence, from the rendered topology (Topology.describe()):
+              #   sub-topology 0: sources flow-in / greeks-in / snapshot-in / heatmap-in ->
+              #                   rekey-json + rekey-avro (stores: []) -> sink chain-rekey
+              #   sub-topology 1: source chain-in (chain-rekey) -> ledger (all six state stores)
+              #   sub-topology 2: deltaflow-in            sub-topology 3: global store (no tasks)
+              # So the rekey stage is stateless and its tasks are per input partition, while EVERY
+              # ledger state store belongs to the single "ledger" processor. All records for one
+              # symbol|expiry hash to one chain-rekey partition, so the SPX chain remains exactly
+              # one task and extra threads cannot execute it concurrently - Streams never runs one
+              # task on two threads. What 4 threads buy is that the stateless rekey tasks and the
+              # deltaflow task run alongside the ledger task instead of queueing behind it during
+              # open/close bursts. It does not, and cannot, parallelise the chain itself.
               value: "4"
             - name: DEALER_LEDGER_EOS_ENABLED
               value: "true"
@@ -125,7 +132,12 @@ spec:
               # per-strike state read + profile recompute. A 100m request means the scheduler
               # guarantees a tenth of a core for that thread, so under any node contention the
               # chain falls seconds behind and every downstream consumer sees stale analytics.
-              # Request two cores: enough for the hot thread plus the rekey/punctuator threads.
+              # Headroom evidence (production .252, measured 2026-07-25): node capacity and
+              # allocatable are both 24 CPU; summing the cpu requests of all 57 workloads at one
+              # replica each gives 10.97 cores, so this raise (0.1 -> 2) leaves ~11 cores of
+              # request headroom and cannot make the pod Pending. Note requests are scheduling
+              # weights, not a reservation of two physical cores; there is deliberately no cpu
+              # limit, so the pod may burst above 2 when the node is idle.
               cpu: "2"
               memory: 512Mi
             limits:
