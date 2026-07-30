@@ -36,11 +36,12 @@ spec:
               value: scorer
             - name: HEALTH_PORT
               value: "8080"
-            # inputs: the audit SignalFired stream + the canonical-spot SSOT (Avro raw); output topic.
+            # inputs: the audit SignalFired stream + the canonical-spot SSOT (the dedicated JSON spot
+            # stream, NOT the option-snapshot firehose it used to mine canonicalSpot out of); output topic.
             - name: SCORER_INPUT_SIGNAL_FIRED_TOPIC
               value: dealer-ledger-signal-fired
-            - name: SCORER_INPUT_RAW_TOPIC
-              value: options.databento.raw
+            - name: SCORER_INPUT_SPOT_TOPIC
+              value: underlying.spx.price
             - name: SCORER_OUTPUT_OUTCOME_SCORED_TOPIC
               value: dealer-ledger-outcome-scored
             - name: KAFKA_STREAMS_STATE_DIR
@@ -51,11 +52,38 @@ spec:
             - name: SCORER_SESSION_GRACE_MS
               value: "120000"
             # Explicit heap so container-RAM growth is bounded + predictable (default was ~25% of the
-            # limit). The scorer replays the raw-spot backlog on restart, buffering a session's spot; that
-            # heap + RocksDB off-heap + the enlarged Kafka producer/consumer buffers OOMKilled the 1536Mi
-            # container in ~52s (exit 137, crash-loop). Raise the limit to 4Gi and pin -Xmx2560m, leaving
-            # ~1.5Gi for RocksDB/direct buffers/metaspace. The bounded-buffer code fix removes the root
-            # cause; this headroom is the belt-and-suspenders so a busy session can't OOM again.
+            # limit). The scorer buffers a session's spot in memory; that heap + RocksDB off-heap + the
+            # enlarged Kafka producer/consumer buffers OOMKilled the 1536Mi container in ~52s (exit 137,
+            # crash-loop) back when every option-strike snapshot carried a duplicate spot. Raise the limit
+            # to 4Gi and pin -Xmx2560m, leaving ~1.5Gi for RocksDB/direct buffers/metaspace. The
+            # bounded-buffer code fix removes the root cause; this headroom is the belt-and-suspenders.
+            #
+            # RECOVERY BOUNDARY — read before any scorer intervention.
+            # The scorer no longer "replays the spot backlog on restart"; it cannot. The spot source
+            # underlying.spx.price is cleanup.policy=compact, so the broker keeps only the current segment
+            # (measured on prod 2026-07-30: 277 records retained against log-end offset 585,102). A
+            # session's spot path lives in the CHANGELOGGED scorer-session-buffer store.
+            #
+            # SAFE — local state is disposable. kafka-streams-state below is an emptyDir, so every pod
+            # recreation already discards it, and Kafka Streams restores the store from its changelog
+            # topic. Restarts, rollout-restarts, rebalances, evictions and node moves are all safe.
+            #
+            # DESTRUCTIVE — anything that loses the CHANGELOG: changing SCORER_STREAMS_APP_ID (a new app id
+            # mints a new changelog topic and starts empty), or deleting/resetting the changelog topic, the
+            # consumer group, or the app's internal state. After any of those the day's spot path cannot be
+            # rebuilt from the compacted topic. Affected horizons are then CENSORED (mostly
+            # CENSORED_DATA_GAP; CENSORED_SESSION_END past the close, and gaps inside the 120s oracle
+            # tolerance still score normally) — labels are LOST, never wrong. The scorer logs a
+            # SPOT-COVERAGE line whenever a flushed session has a coverage hole that EXCEEDS that
+            # tolerance; a hole of exactly the tolerance is still scored by the oracle and stays quiet
+            # on purpose, so any SPOT-COVERAGE line is a real defect. Alert on it.
+            #
+            # ROLLOUT — the internal <app-id>-rekey topic is NOT reset by this change and keeps whatever
+            # backlog it already has (prod partition 24 was ~1.3M records behind at cutover). Lag relief is
+            # therefore not immediate: the new low-volume spot source stops the backlog GROWING, but the
+            # queued records still have to drain. Accept the rollout on drained rekey lag plus a clean
+            # SPOT-COVERAGE log, not on the cutover alone. Do not "fix" the lag by resetting the group or
+            # the app id — that is the destructive path above.
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx2560m"
           livenessProbe:
