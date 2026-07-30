@@ -12,7 +12,10 @@ metadata:
     app.kubernetes.io/name: directional-pressure-databento-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # DISABLED until further notice (USER 2026-07-30): held at 0 in every monolith env
+  # (dev + production). Re-enable = set back to 1, re-run generate-service-slices.sh,
+  # and revert the ops-tooling entries (KEEP_DOWN / DISABLED_DEV / premarket / smoke).
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: directional-pressure-databento-service

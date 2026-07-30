@@ -81,7 +81,7 @@ is_optional() { case " $OPTIONAL_SERVICES " in *" $1 "*) return 0;; *) return 1;
 # Restore them below when the services are re-enabled.
 PIPELINE_SERVICES="${PIPELINE_SERVICES:-\
 T1:options-edge-databento-feed T1:databento-volume-aggregator \
-T2:strike-flow-classifier-databento T2:raw-to-display-databento-service T2:directional-pressure-databento-service \
+T2:strike-flow-classifier-databento T2:raw-to-display-databento-service \
 T2:databento-gex-service T2:databento-gex-history-service T2:databento-maxpain-service \
 T3:databento-mission-pace-service T3:databento-mission-pressure-service T3:databento-mission-sandwich-service \
 T3:spx-mission-control-service T3:strike-liquidity-heatmap-service T3:feed-gateway-service T3:options-edge-web \
