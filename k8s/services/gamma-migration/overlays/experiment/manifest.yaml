@@ -66,6 +66,16 @@ spec:
               value: "0.012"
             - name: GAMMA_MIGRATION_ATM_EPSILON_PTS
               value: "2.5"
+            - name: GAMMA_MIGRATION_STALE_STRIKE_MS
+              value: "300000"
+            - name: GAMMA_MIGRATION_LADDER_INTERVAL_MS
+              value: "15000"
+            - name: GAMMA_MIGRATION_MIN_STRIKES
+              value: "8"
+            - name: GAMMA_MIGRATION_JUDGE_FLIP_MIN_FRACTION
+              value: "0.05"
+            - name: KAFKA_GAMMA_MIGRATION_TOPIC_PARTITIONS
+              value: "4"
             - name: KAFKA_GAMMA_MIGRATION_NUM_THREADS
               value: "1"
           envFrom:

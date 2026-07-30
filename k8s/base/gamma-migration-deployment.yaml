@@ -59,6 +59,31 @@ spec:
             # the board — into one side would dominate the skew on its own.
             - name: GAMMA_MIGRATION_ATM_EPSILON_PTS
               value: "2.5"
+            # A strike the feed stops refreshing leaves the ladder after this. The per-strike GEX
+            # topic never tombstones a strike that stops trading, so without ageing, a strike that
+            # went quiet at the open would still be weighting a side at the close.
+            - name: GAMMA_MIGRATION_STALE_STRIKE_MS
+              value: "300000"
+            # Cadence of the full-ladder snapshots the ANCHORED rates compare against. Those are
+            # the rates the regime fires on: holding the above/below divider at an older spot is
+            # what stops price crossing a frozen ladder from being reported as gamma rotating.
+            - name: GAMMA_MIGRATION_LADDER_INTERVAL_MS
+              value: "15000"
+            # A real SPX chain is ~156 strikes. Eight is the floor below which there is no board
+            # to read and the service stays silent rather than answering from nothing.
+            - name: GAMMA_MIGRATION_MIN_STRIKES
+              value: "8"
+            # |net|/gross the board must reach before the judged cluster switches sign. Near
+            # net-zero the choice is arbitrary and would flap, teleporting the published peak
+            # between two clusters that never moved.
+            - name: GAMMA_MIGRATION_JUDGE_FLIP_MIN_FRACTION
+              value: "0.05"
+            # NOT the shared KAFKA_TOPIC_PARTITIONS_DEFAULT (32 in every env's ConfigMap): the
+            # service creates its own topics, and after the re-key one chain is ONE key, so 32
+            # would leave 28 empty logs per topic — and Kafka can add partitions, never remove
+            # them, so the default would silently override what topics.env declares.
+            - name: KAFKA_GAMMA_MIGRATION_TOPIC_PARTITIONS
+              value: "4"
             # ONE stream thread. After the re-key a chain is one key on one partition, so extra
             # threads mostly idle, and prod's node measured 90% CPU / loadavg 36 on 24 threads.
             - name: KAFKA_GAMMA_MIGRATION_NUM_THREADS
