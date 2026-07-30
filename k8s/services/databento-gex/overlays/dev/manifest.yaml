@@ -142,9 +142,6 @@ spec:
             limits:
               memory: 5Gi
             requests:
-              # 2026-07-29: 250m -> 2 on DEV ONLY (rationale in
-              # k8s/overlays/dev/databento-gex-preopen-dev-patch.yaml). Prod keeps 250m — its node
-              # is already at 90% CPU. Keep in lockstep with that patch; validate-services enforces it.
               cpu: "2"
               memory: 1Gi
           volumeMounts:

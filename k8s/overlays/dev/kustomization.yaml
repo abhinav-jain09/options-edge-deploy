@@ -401,6 +401,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-close-direction
     newName: host.docker.internal:5001/options-edge-close-direction
+  - name: 192.168.100.252:5000/options-edge-oi-shadow
+    newName: host.docker.internal:5001/options-edge-oi-shadow
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-es-open-direction
     newName: host.docker.internal:5001/options-edge-es-open-direction
     newTag: dev

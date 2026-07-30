@@ -46,6 +46,8 @@ resources:
   - es-open-direction-service.yaml
   - close-direction-deployment.yaml
   - close-direction-service.yaml
+  - oi-shadow-deployment.yaml
+  - oi-shadow-service.yaml
   - vix-option-inteligence-deployment.yaml
   - vix-option-inteligence-service.yaml
   - option-truth-engine-deployment.yaml

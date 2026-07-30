@@ -12,6 +12,7 @@ images:
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:prod
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:prod
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:prod
+  oi-shadow-service: 192.168.100.252:5000/options-edge-oi-shadow:prod
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:prod
   dealer-ledger-calibration-scorer: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:prod
   dealer-ledger-calibration-accumulator: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:prod

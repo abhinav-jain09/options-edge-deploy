@@ -13,6 +13,7 @@ images:
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:dev
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:dev
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:dev
+  oi-shadow-service: host.docker.internal:5001/options-edge-oi-shadow:dev
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:dev
   dealer-ledger-calibration-scorer: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:dev
   dealer-ledger-calibration-accumulator: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:dev
