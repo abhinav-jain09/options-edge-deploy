@@ -380,7 +380,7 @@ check_databento_mission_pressure
 check_databento_mission_sandwich
 check_deployment volume-pace-service 18081
 # DISABLED until further notice 2026-07-23 (svc scaled to 0, not deployed): check_deployment volume-pace-databento-service 18091
-check_deployment directional-pressure-service 18084
+# DISABLED until further notice 2026-07-30 (svc at 0): check_deployment directional-pressure-service 18084
 # DISABLED until further notice 2026-07-30 (svc at 0): check_deployment directional-pressure-databento-service 18092
 # DISABLED until further notice (svc scaled to 0, not deployed): check_deployment volume-sandwich-service 18083
 # DISABLED until further notice (svc scaled to 0, not deployed): check_deployment volume-sandwich-databento-service 18093
