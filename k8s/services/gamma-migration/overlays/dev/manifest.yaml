@@ -54,6 +54,8 @@ spec:
               value: options.databento.gex.strike
             - name: KAFKA_GAMMA_MIGRATION_OUTPUT_TOPIC
               value: options.spx.gamma-migration.current
+            - name: KAFKA_GAMMA_MIGRATION_SCORING_TOPIC
+              value: options.spx.gamma-migration.scoring
             - name: GAMMA_MIGRATION_EMIT_INTERVAL_MS
               value: "1000"
             - name: GAMMA_MIGRATION_PARKED_DWELL_MS
@@ -64,6 +66,10 @@ spec:
               value: "900000"
             - name: GAMMA_MIGRATION_ROTATION_MIN_SKEW_RATE
               value: "0.012"
+            - name: GAMMA_MIGRATION_ATM_EPSILON_PTS
+              value: "2.5"
+            - name: KAFKA_GAMMA_MIGRATION_NUM_THREADS
+              value: "1"
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -91,7 +97,7 @@ spec:
             limits:
               memory: 1536Mi
             requests:
-              cpu: 200m
+              cpu: 100m
               memory: 512Mi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams

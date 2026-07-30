@@ -34,6 +34,12 @@ spec:
               value: options.databento.gex.strike
             - name: KAFKA_GAMMA_MIGRATION_OUTPUT_TOPIC
               value: options.spx.gamma-migration.current
+            # GMS-R9, the falsification record: one record per directional call per 5/15/30-minute
+            # horizon, saying what price actually did. Separate topic from the live snapshot — it
+            # is low-cardinality and meant to be ACCUMULATED across sessions, where the snapshot is
+            # one record per second and only ever read live.
+            - name: KAFKA_GAMMA_MIGRATION_SCORING_TOPIC
+              value: options.spx.gamma-migration.scoring
             # 1s emission: the phenomenon this measures moved 50 points in 34 minutes on
             # 2026-07-30 and the 15-minute archive caught it as two samples.
             - name: GAMMA_MIGRATION_EMIT_INTERVAL_MS
@@ -48,6 +54,15 @@ spec:
               value: "900000"
             - name: GAMMA_MIGRATION_ROTATION_MIN_SKEW_RATE
               value: "0.012"
+            # Half SPX's 5-point strike step. A strike inside this of spot belongs to NEITHER side
+            # and is split evenly; dumping the at-the-money wall — usually the largest number on
+            # the board — into one side would dominate the skew on its own.
+            - name: GAMMA_MIGRATION_ATM_EPSILON_PTS
+              value: "2.5"
+            # ONE stream thread. After the re-key a chain is one key on one partition, so extra
+            # threads mostly idle, and prod's node measured 90% CPU / loadavg 36 on 24 threads.
+            - name: KAFKA_GAMMA_MIGRATION_NUM_THREADS
+              value: "1"
           ports:
             - name: health
               containerPort: 8080
@@ -66,9 +81,16 @@ spec:
           volumeMounts:
             - name: kafka-streams-state
               mountPath: /var/lib/options-edge/kafka-streams
+          # Sized against delta-flow, the closest peer: it consumes the SAME per-strike GEX topic
+          # and requests 100m. This service does strictly less per record — the projection keeps
+          # one double into a map — and its only periodic work is one pass over a ~156-strike
+          # ladder per second. The request is what the scheduler charges the node, and prod's node
+          # was measured at 90% CPU, so it is set to the peer's number rather than padded.
+          # Memory is bounded by construction: history is one 32-byte-ish sample per second per
+          # chain over a 65-minute window, well under 1 MB per chain.
           resources:
             requests:
-              cpu: 200m
+              cpu: 100m
               memory: 512Mi
             limits:
               memory: 1536Mi
