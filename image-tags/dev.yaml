@@ -14,6 +14,10 @@ images:
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:dev
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:dev
   oi-shadow-service: host.docker.internal:5001/options-edge-oi-shadow:dev
+  # host.docker.internal:5001 and 192.168.100.252:5000 are the same local registry by two names;
+  # the dev image build pushes to the FORMER, and a deployment whose entry is missing here falls
+  # back to the base manifest's ref (the .252 spelling) and then cannot resolve a digest.
+  gamma-migration-service: host.docker.internal:5001/options-edge-gamma-migration:dev
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:dev
   dealer-ledger-calibration-scorer: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:dev
   dealer-ledger-calibration-accumulator: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:dev
