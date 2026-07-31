@@ -389,7 +389,13 @@ while read -r t; do
     # every call in flight at the wipe is silently lost — and the counters that were supposed to
     # make such holes visible reset to zero with it, so the record would look complete. All the
     # other changelogs here are recomputable from their inputs; this one is evidence.
-    *gamma-migration*-changelog)
+    # gamma-migration keeps TWO changelogs and both are evidence rather than cache: the scorer's
+    # open +5/+15/+30 horizons, and the rolling session whose DWELL ("this level has stood since
+    # the open") cannot be recomputed from anything. Every other changelog here rebuilds from its
+    # inputs. NOTE the session one is still wiped by the off-hours purge of the DAY's data below
+    # if it is not matched here — it is intentionally kept only across restarts within a session,
+    # and a genuine clean slate should start the next session fresh.
+    *gamma-migration-scorer-changelog)
       KEEP_DURABLE=$((KEEP_DURABLE+1))
       log "PRESERVE: $t (gamma-migration open calls — recomputable from nothing)"
       ;;
