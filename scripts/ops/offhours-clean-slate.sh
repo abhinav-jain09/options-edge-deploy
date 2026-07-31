@@ -384,6 +384,15 @@ while read -r t; do
       KEEP_DURABLE=$((KEEP_DURABLE+1))
       log "PRESERVE: $t (gamma-migration evidence record — never wiped)"
       ;;
+    # The gamma-migration scorer's changelog holds the OPEN calls (+5/+15/+30 horizons not yet
+    # resolved) and the persisted loss counters. Deleting it with the other Streams state means
+    # every call in flight at the wipe is silently lost — and the counters that were supposed to
+    # make such holes visible reset to zero with it, so the record would look complete. All the
+    # other changelogs here are recomputable from their inputs; this one is evidence.
+    *gamma-migration*-changelog)
+      KEEP_DURABLE=$((KEEP_DURABLE+1))
+      log "PRESERVE: $t (gamma-migration open calls — recomputable from nothing)"
+      ;;
     *-changelog|*-repartition) STATE_TOPICS="$STATE_TOPICS $t" ;;
     *)                         PURGE_TOPICS="$PURGE_TOPICS $t" ;;
   esac

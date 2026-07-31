@@ -198,7 +198,9 @@ log "identity guards PASSED"
 # options.spx.gamma-migration.scoring added 2026-07-31: declared retention=-1 in topics.env. It
 # is the gamma-migration falsification record (GMS-R9), accumulated ACROSS sessions — purging it
 # nightly would leave it permanently one session deep, which is the same as not having it.
-PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring$'
+# The gamma-migration scorer changelog is preserved for the same reason as the scoring topic
+# itself: it holds the open +5/+15/+30 horizons, which are recomputable from nothing.
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring$|gamma-migration.*-changelog$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
 log "calibration keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
 CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)
