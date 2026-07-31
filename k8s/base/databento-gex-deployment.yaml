@@ -60,6 +60,23 @@ spec:
             # exist, ~19k). Both envs. This was the root cause of recurring "missing GEX on strikes".
             - name: DATABENTO_GEX_OI_FETCH_LIMIT
               value: "200000"
+            # The DEFINITION query's own limit, deliberately NOT sharing DATABENTO_GEX_OI_FETCH_LIMIT.
+            # Two queries with different response sizes and different growth do not belong on one
+            # knob. The universe fetch was refused on every attempt while it inherited a 10,000
+            # default against a ~20,200-record definition response, so no anchor manifest could
+            # ever be built.
+            - name: DATABENTO_GEX_OI_DEFINITION_FETCH_LIMIT
+              value: "200000"
+            # OI anchor manifest. Reconciles the settled open-interest statistics response against
+            # an independent instrument-definition universe and publishes ONE immutable manifest per
+            # session to options.databento.oi.anchor-manifest.
+            #
+            # OFF in base, ON in the dev overlay only. Its sole consumer, oi-shadow-service, is a
+            # shadow experiment with no downstream readers, and this flag runs inside the process
+            # that produces the live gamma surface -- so it is enabled where it can be watched
+            # before anywhere it cannot.
+            - name: OI_ANCHOR_MANIFEST_ENABLED
+              value: "false"
             - name: HEALTH_PORT
               value: "8100"
             - name: KAFKA_DATABENTO_RAW_TOPIC

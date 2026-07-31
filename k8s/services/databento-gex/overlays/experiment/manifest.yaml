@@ -72,6 +72,10 @@ spec:
               value: "60"
             - name: DATABENTO_GEX_OI_FETCH_LIMIT
               value: "200000"
+            - name: DATABENTO_GEX_OI_DEFINITION_FETCH_LIMIT
+              value: "200000"
+            - name: OI_ANCHOR_MANIFEST_ENABLED
+              value: "false"
             - name: HEALTH_PORT
               value: "8100"
             - name: KAFKA_DATABENTO_RAW_TOPIC
