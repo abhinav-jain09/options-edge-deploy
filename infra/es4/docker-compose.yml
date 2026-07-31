@@ -41,7 +41,18 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
-      KAFKA_NUM_PARTITIONS: 4                      # org 4-partition policy
+      # FALLBACK ONLY — not a policy knob. With KAFKA_AUTO_CREATE_TOPICS_ENABLE=false (below)
+      # the broker never conjures a topic, and every declared topic is created by
+      # apply-topics.sh, which always passes an explicit --partitions from topics.env. The one
+      # remaining consumer of this default is Kafka Streams creating its OWN internal topics
+      # (repartition/changelog) when a boot race leaves it unable to resolve its source topic's
+      # partition count. At 4 it built 4-partition internals for 32-partition applications and
+      # every one of them then died with:
+      #   StreamsException: Existing internal topic ...-repartition has invalid partitions:
+      #   expected: 32; actual: 4                                       (es4, 2026-07-31)
+      # es4's topics are overwhelmingly 32 partitions (114 of 166), so 32 is the fallback that
+      # is right when the race happens. Declared topics are unaffected either way.
+      KAFKA_NUM_PARTITIONS: 32
       KAFKA_LOG_RETENTION_MS: 43200000             # 12h org retention policy
       KAFKA_LOG_SEGMENT_BYTES: 268435456           # 256MB segments (changelog-segment-I/O lesson: never 1GB)
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"   # see topics.env — every topic is contract-created
