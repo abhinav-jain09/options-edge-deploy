@@ -1,0 +1,140 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gamma-migration-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: gamma-migration-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gamma-migration-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gamma-migration-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: gamma-migration
+          image: 192.168.100.252:5000/options-edge-gamma-migration:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # Per-strike ladder in; migration snapshot out. The thesis under test is about gamma
+            # mass moving BETWEEN the two sides of spot, which only the full ladder can express —
+            # the chain-level magnet fields cannot (design GAMMA-MIGRATION-SERVICE-GATE1 §3.A).
+            - name: KAFKA_GAMMA_MIGRATION_INPUT_TOPIC
+              value: options.databento.gex.strike
+            - name: KAFKA_GAMMA_MIGRATION_OUTPUT_TOPIC
+              value: options.spx.gamma-migration.current
+            # GMS-R9, the falsification record: one record per directional call per 5/15/30-minute
+            # horizon, saying what price actually did. Separate topic from the live snapshot — it
+            # is low-cardinality and meant to be ACCUMULATED across sessions, where the snapshot is
+            # one record per second and only ever read live.
+            - name: KAFKA_GAMMA_MIGRATION_SCORING_TOPIC
+              value: options.spx.gamma-migration.scoring
+            # 1s emission: the phenomenon this measures moved 50 points in 34 minutes on
+            # 2026-07-30 and the 15-minute archive caught it as two samples.
+            - name: GAMMA_MIGRATION_EMIT_INTERVAL_MS
+              value: "1000"
+            # Thresholds MEASURED from that session, not guessed — see the calculator's javadoc.
+            # ⚠️ Fitted to ONE session; GMS-Q1 requires refitting once several exist.
+            - name: GAMMA_MIGRATION_PARKED_DWELL_MS
+              value: "600000"
+            - name: GAMMA_MIGRATION_MIN_PTS
+              value: "7.5"
+            - name: GAMMA_MIGRATION_WINDOW_MS
+              value: "900000"
+            - name: GAMMA_MIGRATION_ROTATION_MIN_SKEW_RATE
+              value: "0.012"
+            # Half SPX's 5-point strike step. A strike inside this of spot belongs to NEITHER side
+            # and is split evenly; dumping the at-the-money wall — usually the largest number on
+            # the board — into one side would dominate the skew on its own.
+            - name: GAMMA_MIGRATION_ATM_EPSILON_PTS
+              value: "2.5"
+            # A strike the feed stops refreshing leaves the ladder after this. The per-strike GEX
+            # topic never tombstones a strike that stops trading, so without ageing, a strike that
+            # went quiet at the open would still be weighting a side at the close.
+            - name: GAMMA_MIGRATION_STALE_STRIKE_MS
+              value: "300000"
+            # Cadence of the full-ladder snapshots the ANCHORED rates compare against. Those are
+            # the rates the regime fires on: holding the above/below divider at an older spot is
+            # what stops price crossing a frozen ladder from being reported as gamma rotating.
+            - name: GAMMA_MIGRATION_LADDER_INTERVAL_MS
+              value: "15000"
+            # A real SPX chain is ~156 strikes. Eight is the floor below which there is no board
+            # to read. The service does not go silent there — the output topic is compacted, so
+            # silence would leave the last confident snapshot standing as the current truth — it
+            # publishes an explicit WARMING_UP naming the counts.
+            - name: GAMMA_MIGRATION_MIN_STRIKES
+              value: "8"
+            # |net|/gross the board must reach before the judged cluster switches sign. Near
+            # net-zero the choice is arbitrary and would flap, teleporting the published peak
+            # between two clusters that never moved.
+            - name: GAMMA_MIGRATION_JUDGE_FLIP_MIN_FRACTION
+              value: "0.05"
+            # Fraction of its own recent high-water width the ladder must still have to count as a
+            # complete board. Below this the service takes NO reading — "the oldest surviving
+            # strike is fresh" is vacuous, because pruning removes the stale ones first.
+            - name: GAMMA_MIGRATION_COMPLETE_MIN_FRACTION
+              value: "0.80"
+            - name: GAMMA_MIGRATION_WIDTH_DECAY_MS
+              value: "1800000"
+            # A chain silent this long is over (an expiry rolled off) and its state is released.
+            # Without eviction every chain the pod ever saw keeps its full history for the life of
+            # the process.
+            - name: GAMMA_MIGRATION_CHAIN_IDLE_MS
+              value: "2700000"
+            # NOT the shared KAFKA_TOPIC_PARTITIONS_DEFAULT (32 in every env's ConfigMap): the
+            # service creates its own topics, and after the re-key one chain is ONE key, so 32
+            # would leave 28 empty logs per topic — and Kafka can add partitions, never remove
+            # them, so the default would silently override what topics.env declares.
+            - name: KAFKA_GAMMA_MIGRATION_TOPIC_PARTITIONS
+              value: "4"
+            # ONE stream thread. After the re-key a chain is one key on one partition, so extra
+            # threads mostly idle, and prod's node measured 90% CPU / loadavg 36 on 24 threads.
+            - name: KAFKA_GAMMA_MIGRATION_NUM_THREADS
+              value: "1"
+          ports:
+            - name: health
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+          # Sized against delta-flow, the closest peer: it consumes the SAME per-strike GEX topic
+          # and requests 100m. This service does strictly less per record — the projection keeps
+          # one double into a map — and its only periodic work is one pass over a ~156-strike
+          # ladder per second. The request is what the scheduler charges the node, and prod's node
+          # was measured at 90% CPU, so it is set to the peer's number rather than padded.
+          # Memory, measured rather than asserted: a 156-strike chain holding 3,901 one-second
+          # samples and 81 fifteen-second ladder snapshots retains ~567 KiB. That is bounded PER
+          # CHAIN; the total is bounded by GAMMA_MIGRATION_CHAIN_IDLE_MS evicting chains that have
+          # gone quiet, without which every expiry the pod ever saw would keep its full footprint.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1536Mi
+      volumes:
+        - name: kafka-streams-state
+          emptyDir: {}

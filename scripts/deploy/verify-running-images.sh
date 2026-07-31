@@ -37,6 +37,7 @@ IMAGE_MAP = {
     ("directional-pressure-service", "directional-pressure"): "DIRECTIONAL_PRESSURE_IMAGE",
     ("directional-pressure-databento-service", "directional-pressure"): "DIRECTIONAL_PRESSURE_IMAGE",
     ("databento-gex-history-service", "databento-gex-history"): "DATABENTO_GEX_HISTORY_IMAGE",
+    ("gamma-migration-service", "gamma-migration"): "GAMMA_MIGRATION_IMAGE",
     ("raw-postgres-writer", "raw-postgres-writer"): "RAW_POSTGRES_WRITER_IMAGE",
     ("pin-postgres-writer", "pin-postgres-writer"): "PIN_POSTGRES_WRITER_IMAGE",
     ("pressure-postgres-writer", "pressure-postgres-writer"): "PRESSURE_POSTGRES_WRITER_IMAGE",

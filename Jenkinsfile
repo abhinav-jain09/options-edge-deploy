@@ -28,6 +28,7 @@ pipeline {
     string(name: 'VOLUME_PACE_IMAGE', defaultValue: '', description: 'Volume-pace image')
     string(name: 'DIRECTIONAL_PRESSURE_IMAGE', defaultValue: '', description: 'Directional-pressure image')
     string(name: 'DATABENTO_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Databento GEX history image')
+    string(name: 'GAMMA_MIGRATION_IMAGE', defaultValue: '', description: 'Gamma migration image')
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pressure Postgres writer image')
     string(name: 'PIN_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pin Postgres writer image (deployed in dev AND prod; the prod image must exist before promotion)')
@@ -364,6 +365,7 @@ pipeline {
             'OPTION_PRICE_BEHAVIOR_IMAGE': 'option-price-behavior', 'DATABENTO_MISSION_SANDWICH_IMAGE': 'databento-mission-sandwich',
             'VOLUME_PACE_IMAGE': 'volume-pace', 'DIRECTIONAL_PRESSURE_IMAGE': 'directional-pressure',
             'DATABENTO_GEX_HISTORY_IMAGE': 'databento-gex-history', 'RAW_POSTGRES_WRITER_IMAGE': 'raw-postgres-writer',
+            'GAMMA_MIGRATION_IMAGE': 'gamma-migration',
             'PRESSURE_POSTGRES_WRITER_IMAGE': 'pressure-postgres-writer', 'PIN_POSTGRES_WRITER_IMAGE': 'pin-postgres-writer',
             'FEED_GATEWAY_IMAGE': 'feed-gateway', 'HPSF_PROCESSING_IMAGE': 'hpsf-processing',
             'HPSF_POSTGRES_WRITER_IMAGE': 'hpsf-postgres-writer', 'SPX_MISSION_CONTROL_IMAGE': 'spx-mission-control',
@@ -771,7 +773,7 @@ void promoteToProduction() {
       // under the Groovy CPS 64KB bytecode limit ("Method too large"). Add new services here.
       'RAW_TO_DISPLAY_IMAGE', 'WEB_IMAGE', 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', 'DATABENTO_GEX_IMAGE',
       'DATABENTO_MAXPAIN_IMAGE', 'OPTION_PRICE_BEHAVIOR_IMAGE', 'DATABENTO_MISSION_SANDWICH_IMAGE',
-      'VOLUME_PACE_IMAGE', 'DIRECTIONAL_PRESSURE_IMAGE', 'DATABENTO_GEX_HISTORY_IMAGE',
+      'VOLUME_PACE_IMAGE', 'DIRECTIONAL_PRESSURE_IMAGE', 'DATABENTO_GEX_HISTORY_IMAGE', 'GAMMA_MIGRATION_IMAGE',
       'RAW_POSTGRES_WRITER_IMAGE', 'PRESSURE_POSTGRES_WRITER_IMAGE', 'PIN_POSTGRES_WRITER_IMAGE',
       'FEED_GATEWAY_IMAGE', 'HPSF_PROCESSING_IMAGE', 'HPSF_POSTGRES_WRITER_IMAGE', 'SPX_MISSION_CONTROL_IMAGE',
       'STRIKE_FLOW_CLASSIFIER_IMAGE', 'DELTA_FLOW_IMAGE', 'DEALER_LEDGER_IMAGE', 'DEALER_LEDGER_CALIBRATION_IMAGE',

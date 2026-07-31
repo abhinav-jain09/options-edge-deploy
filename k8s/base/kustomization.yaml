@@ -84,7 +84,9 @@ resources:
   - pin-postgres-writer-service.yaml
   - volume-pace-databento-deployment.yaml
   - databento-gex-history-deployment.yaml
+  - gamma-migration-deployment.yaml
   - databento-gex-history-service.yaml
+  - gamma-migration-service.yaml
   - option-price-behavior-deployment.yaml
   - option-price-behavior-service.yaml
   - feed-gateway-nightly-restart-cronjob.yaml

@@ -159,7 +159,7 @@
             DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
             IBKR_FEED_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
-            VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE \
+            VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE GAMMA_MIGRATION_IMAGE \
             DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE OPTION_TRUTH_ENGINE_IMAGE MARKET_CARRY_IMAGE ES_SPX_ALIGN_IMAGE DATABENTO_SR3_FEED_IMAGE VIX_OPTION_INTELIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE \
             STRIKE_INVASION_IMAGE INVASION_POSTGRES_WRITER_IMAGE SPREAD_SKEW_IMAGE SPREAD_SKEW_POSTGRES_WRITER_IMAGE REVERSAL_CONFIRMATION_IMAGE ES_OPEN_DIRECTION_IMAGE ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE CLOSE_DIRECTION_IMAGE OI_SHADOW_IMAGE REVERSAL_POSTGRES_WRITER_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
@@ -328,6 +328,7 @@ EOF
           kubectl -n options-edge set image deployment/directional-pressure-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-databento-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-history-service databento-gex-history="$DATABENTO_GEX_HISTORY_IMAGE"
+          kubectl -n options-edge set image deployment/gamma-migration-service gamma-migration="$GAMMA_MIGRATION_IMAGE"
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pin-postgres-writer pin-postgres-writer="$PIN_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
