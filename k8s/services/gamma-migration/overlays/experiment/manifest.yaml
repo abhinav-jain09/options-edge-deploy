@@ -80,6 +80,8 @@ spec:
               value: "1800000"
             - name: GAMMA_MIGRATION_CHAIN_IDLE_MS
               value: "2700000"
+            - name: GAMMA_MIGRATION_SESSION_SAVE_INTERVAL_MS
+              value: "30000"
             - name: KAFKA_GAMMA_MIGRATION_TOPIC_PARTITIONS
               value: "4"
             - name: KAFKA_GAMMA_MIGRATION_NUM_THREADS

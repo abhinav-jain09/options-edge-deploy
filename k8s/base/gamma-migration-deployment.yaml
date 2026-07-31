@@ -92,6 +92,13 @@ spec:
             # the process.
             - name: GAMMA_MIGRATION_CHAIN_IDLE_MS
               value: "2700000"
+            # How often the rolling session is written down so a restart or an outage resumes
+            # where it left off. Dwell — "the peak has been at 7400 for three and a half hours" —
+            # is the whole basis for calling something a level and cannot be recomputed from
+            # anything; without this a pod restarted at 14:00 said "parked 10 min" about a level
+            # that had stood since the open. 30s bounds what a crash costs to half a minute.
+            - name: GAMMA_MIGRATION_SESSION_SAVE_INTERVAL_MS
+              value: "30000"
             # NOT the shared KAFKA_TOPIC_PARTITIONS_DEFAULT (32 in every env's ConfigMap): the
             # service creates its own topics, and after the re-key one chain is ONE key, so 32
             # would leave 28 empty logs per topic — and Kafka can add partitions, never remove
