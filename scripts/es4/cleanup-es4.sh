@@ -67,6 +67,33 @@ fi
   die "external prod es-feed not proven absent (ES4_FEED_FENCED!=1) — the Jenkins clean-reset stage must run scripts/es4/assert-prod-es-feed-absent.sh first (DBP-R33 deleted the prod es-feed; it is no longer scaled and restored), else a surviving external producer re-pollutes the fresh cluster with cached schema ids"
 [ -d "$INFRA_DIR" ] || die "no $INFRA_DIR — run bootstrap-es4.sh (infra-sync) first"
 [ -f "$INFRA_DIR/docker-compose.yml" ] || die "no compose file in $INFRA_DIR"
+
+# --- broker-contract drift guard (2026-07-31) --------------------------------------------
+# The live compose is $INFRA_DIR/docker-compose.yml, but es4-deploy rsyncs the repo to
+# $ES4_HOME/repo/infra/es4/. NOTHING runs the rsynced copy, so repo changes to the broker
+# contract silently never reach the broker: PR #656 set AUTO_CREATE_TOPICS_ENABLE=false in
+# the repo on 2026-07-12 and the LIVE broker was still "true" on 2026-07-31 — which let the
+# broker keep re-creating exact-partition topics mid-clean (three failed clean-resets) and let
+# Kafka Streams fall back to num.partitions=4 for 32-partition apps
+# ("invalid partitions: expected: 32; actual: 4").
+# Compare the keys that decide topic shape and FAIL LOUD rather than wipe against a stale
+# contract. Warn-only (never blocks) for keys the repo copy does not carry.
+REPO_COMPOSE="$ES4_HOME/repo/infra/es4/docker-compose.yml"
+if [ -f "$REPO_COMPOSE" ]; then
+  for key in KAFKA_AUTO_CREATE_TOPICS_ENABLE KAFKA_NUM_PARTITIONS; do
+    live=$(grep -E "^[[:space:]]*$key:" "$INFRA_DIR/docker-compose.yml" | head -1 | sed -E 's/.*:[[:space:]]*//; s/[[:space:]]*#.*//; s/"//g' | tr -d ' ')
+    repo=$(grep -E "^[[:space:]]*$key:" "$REPO_COMPOSE"                 | head -1 | sed -E 's/.*:[[:space:]]*//; s/[[:space:]]*#.*//; s/"//g' | tr -d ' ')
+    [ -n "$repo" ] || continue
+    if [ "$live" != "$repo" ]; then
+      log "  BROKER CONTRACT DRIFT: $key live='$live' repo='$repo'"
+      log "  live=$INFRA_DIR/docker-compose.yml  repo=$REPO_COMPOSE"
+      die "es4 broker contract has drifted from the repo — reconcile before wiping (a clean against a stale contract recreates topics with the wrong shape)"
+    fi
+  done
+  log "broker contract matches the repo (auto-create + num.partitions)"
+else
+  log "  WARNING: $REPO_COMPOSE absent — cannot verify the live broker contract against the repo"
+fi
 # canonical-path guard for the destructive rm: KAFKA_DATA must be the exact compose bind source,
 # a real directory (not a symlink), and match the compose file — never delete anything else.
 sudo -n test -d "$KAFKA_DATA" && ! sudo -n test -L "$KAFKA_DATA" || die "Kafka data dir $KAFKA_DATA missing or is a symlink"
