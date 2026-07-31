@@ -195,7 +195,10 @@ log "identity guards PASSED"
 # underlying.vix.price added 2026-07-28: declared retention=-1 in topics.env
 # (prod-only overrides, VIX feed separation) — declared-durable topics must never
 # be purged; drift is now unmergeable (scripts/ci/validate-durable-topic-preservation.sh).
-PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$'
+# options.spx.gamma-migration.scoring added 2026-07-31: declared retention=-1 in topics.env. It
+# is the gamma-migration falsification record (GMS-R9), accumulated ACROSS sessions — purging it
+# nightly would leave it permanently one session deep, which is the same as not having it.
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
 log "calibration keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
 CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)

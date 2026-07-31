@@ -70,7 +70,9 @@ spec:
             - name: GAMMA_MIGRATION_LADDER_INTERVAL_MS
               value: "15000"
             # A real SPX chain is ~156 strikes. Eight is the floor below which there is no board
-            # to read and the service stays silent rather than answering from nothing.
+            # to read. The service does not go silent there — the output topic is compacted, so
+            # silence would leave the last confident snapshot standing as the current truth — it
+            # publishes an explicit WARMING_UP naming the counts.
             - name: GAMMA_MIGRATION_MIN_STRIKES
               value: "8"
             # |net|/gross the board must reach before the judged cluster switches sign. Near

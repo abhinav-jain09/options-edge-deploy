@@ -375,6 +375,15 @@ while read -r t; do
       KEEP_DURABLE=$((KEEP_DURABLE+1))
       log "PRESERVE: $t (declared retention=-1 — never wiped)"
       ;;
+    # The gamma-migration falsification record (GMS-R9): one record per directional
+    # call per 5/15/30-minute horizon, declared retention=-1 in topics.env and meant
+    # to be ACCUMULATED ACROSS SESSIONS. Its whole purpose is refitting the thresholds
+    # from more than the one session they were seeded on; a nightly wipe leaves it
+    # permanently one session deep, which is the same as not having built it.
+    options.spx.gamma-migration.scoring)
+      KEEP_DURABLE=$((KEEP_DURABLE+1))
+      log "PRESERVE: $t (gamma-migration evidence record — never wiped)"
+      ;;
     *-changelog|*-repartition) STATE_TOPICS="$STATE_TOPICS $t" ;;
     *)                         PURGE_TOPICS="$PURGE_TOPICS $t" ;;
   esac
