@@ -52,7 +52,7 @@ spec:
   template:
     metadata:
       annotations:
-        oe/config-nonce: 2026-07-20-expiry-auto
+        oe/config-nonce: 2026-07-31-heatmap-saturation
       labels:
         app.kubernetes.io/name: feed-gateway-service
         app.kubernetes.io/part-of: options-edge
