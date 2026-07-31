@@ -70,6 +70,8 @@ spec:
               value: options-databento-gex-streams
             - name: DATABENTO_GEX_FLOW_TOP_N
               value: "3"
+            - name: OI_ANCHOR_MANIFEST_ENABLED
+              value: "true"
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: DATABENTO_DATASET
@@ -87,6 +89,8 @@ spec:
             - name: DATABENTO_GEX_OI_HTTP_TIMEOUT_SECONDS
               value: "60"
             - name: DATABENTO_GEX_OI_FETCH_LIMIT
+              value: "200000"
+            - name: DATABENTO_GEX_OI_DEFINITION_FETCH_LIMIT
               value: "200000"
             - name: HEALTH_PORT
               value: "8100"
