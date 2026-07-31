@@ -207,6 +207,11 @@ ES4_KEEP_DOWN = {
     # goes down with its producer (nothing to consume, and the es4 box has no spare capacity).
     "spread-skew-service",
     "spread-skew-postgres-writer",
+    # USER 2026-07-31: "disable truth service on es env until further notice."
+    # Already OFF on production (base replicas:0 + morning-autostart KEEP_DOWN); es4 was still
+    # running it. Listing it here is the load-bearing part: a hand-set replicas:0 on the box is
+    # undone by the next re-render, and es4 has no morning-autostart to hold it down.
+    "option-truth-engine-service",
 }
 
 HEADER = """\
