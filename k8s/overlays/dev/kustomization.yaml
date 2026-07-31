@@ -299,6 +299,12 @@ patches:
 images:
   - name: 192.168.100.252:5000/options-edge-raw-to-display
     newName: host.docker.internal:5001/options-edge-raw-to-display
+  # The dev cluster is docker-desktop on this Mac and pulls from the LOCAL registry; the .252
+  # registry is a different machine's and is where production images live. A service missing from
+  # this list renders with the .252 ref, and the deploy's digest lookup 404s against a registry
+  # that never had the image.
+  - name: 192.168.100.252:5000/options-edge-gamma-migration
+    newName: host.docker.internal:5001/options-edge-gamma-migration
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-volume-aggregator
     newName: host.docker.internal:5001/options-edge-databento-volume-aggregator
