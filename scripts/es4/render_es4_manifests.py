@@ -202,7 +202,13 @@ ES4_KEEP_DOWN = {
     "volume-pace-databento-service",
     "directional-pressure-databento-service",
     "option-price-behavior-service",
-    "strike-liquidity-heatmap-service",
+    # USER 2026-07-30: strike-liquidity-heatmap RE-ENABLED on es4 to evaluate the wall-line /
+    # buy-bubble overlay against the ES chain. Measured headroom before removing it: .4 was at
+    # 8251m/12 cores (68%) live with 39Gi memory available, so its 750m/512Mi request fits.
+    # KNOWN AND ACCEPTED (USER decided after being shown the measurement): es.options.databento.
+    # strike-flow held only 37 records at the time, so the ribbon colour and wall line (both fed by
+    # es.options.databento.events.raw, verified 100% cbbo-1s) will render but the trade bubbles will
+    # not until that topic is populated. See the es4 strike-flow wiring follow-up.
     # USER 2026-07-27: disable the skew service on es4. The feature is RETIRED; the postgres writer
     # goes down with its producer (nothing to consume, and the es4 box has no spare capacity).
     "spread-skew-service",
