@@ -86,7 +86,13 @@ pipeline {
           if [ "$MARKER" = "DEPLOY_STAGE_STARTED" ] || [ "$RESULT" = "MISSING" ]; then
             echo "HUMAN REQUIRED: prior build $BN reached the deploy stage (or its record is gone) without a receipt — a half-applied deploy may exist. Mark the claim FAILED after verifying the cluster digest, then resubmit."; exit 1
           fi
-          # terminal non-success, marker absent: provably died pre-deploy -> SUPERSEDE
+          if [ "$RESULT" = "SUCCESS" ]; then
+            # Codex round 1: CLAIMED + terminal SUCCESS is INCONSISTENT — success without the
+            # marker means the ledger writes are not being reached, and "provably pre-deploy"
+            # cannot be claimed about a build that succeeded. Never supersede an inconsistency.
+            echo "HUMAN REQUIRED: build $BN is SUCCESS but its claim never left CLAIMED — ledger and reality disagree; verify the cluster digest and repair the claim by hand."; exit 1
+          fi
+          # terminal FAILED/ABORTED, marker absent: provably died pre-deploy -> SUPERSEDE
           echo "superseding failed pre-deploy claim of build $BN"
         fi
         python3 - "$CLAIM" "$BUILD_NUMBER" <<'PYEOF'
