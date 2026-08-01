@@ -122,8 +122,15 @@ spec:
               value: "100.0"
             - name: HEALTH_PORT
               value: "8097"
+            # Heap right-size (2026-08-01): with -Xmx4g the pod sat at ~4.2 GiB RSS — G1 expands to Xmx
+            # under the classifier's JSON parse/serialize churn and never gives it back, while LIVE state
+            # is only tens of MB (chain of a few hundred strikes x ~17KB states). 3g caps RSS ~1 GiB lower;
+            # CPU headroom for the extra GC is benchmark-proven (steady-state pure-CPU ~5% of one core,
+            # MarketStageEmitBenchmarkTest 2026-07-27). Xms1g so startup doesn't pin 2 GiB it may not need.
+            # Watch-item: on a heavy 0DTE open a tight heap could GC-thrash into by-market lag (the
+            # 2026-07-27 failure mode) — if the 09:35 ET open check shows sustained lag, raise Xmx back.
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms2g -Xmx4g"
+              value: "-Xms1g -Xmx3g"
           ports:
             - name: http
               containerPort: 8097
@@ -142,6 +149,9 @@ spec:
           resources:
             requests:
               cpu: "1"
-              memory: 3Gi
+              # Scheduler honesty: typical in-session RSS is ~3.2-3.5 GiB under the 3g heap (was observed
+              # at 4.2 GiB under the old 4g heap against a 3Gi request). Limit stays 8Gi for the
+              # restart-restore burst (CLEANUP_ON_START=true rebuilds multi-GiB changelogs).
+              memory: 3.5Gi
             limits:
               memory: 8Gi
