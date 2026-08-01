@@ -122,13 +122,16 @@ spec:
               value: "100.0"
             - name: HEALTH_PORT
               value: "8097"
-            # Heap right-size (2026-08-01): with -Xmx4g the pod sat at ~4.2 GiB RSS — G1 expands to Xmx
-            # under the classifier's JSON parse/serialize churn and never gives it back, while LIVE state
-            # is only tens of MB (chain of a few hundred strikes x ~17KB states). 3g caps RSS ~1 GiB lower;
-            # CPU headroom for the extra GC is benchmark-proven (steady-state pure-CPU ~5% of one core,
-            # MarketStageEmitBenchmarkTest 2026-07-27). Xms1g so startup doesn't pin 2 GiB it may not need.
-            # Watch-item: on a heavy 0DTE open a tight heap could GC-thrash into by-market lag (the
-            # 2026-07-27 failure mode) — if the 09:35 ET open check shows sustained lag, raise Xmx back.
+            # Heap right-size (2026-08-01): with -Xmx4g the pod was OBSERVED at ~4.2 GiB RSS — G1 expands
+            # to Xmx under the classifier's JSON parse/serialize churn and does not give it back, while
+            # LIVE state is only tens of MB (chain of a few hundred strikes x ~17KB states). 3g lowers the
+            # heap ceiling by 1 GiB BY CONSTRUCTION (max RSS ~= Xmx + JVM/native overhead); the RSS under
+            # load is a prediction, not yet a measurement. Known evidence: MarketStageEmitBenchmarkTest
+            # (2026-07-27) measured the emit-path pure CPU at ~5% of one core — it did NOT measure GC
+            # behavior or peak allocation rate under a heavy 0DTE open. Xms1g so startup doesn't pin 2 GiB.
+            # CANARY + ROLLBACK (first heavy-open verification still pending): at the next 09:35 ET open
+            # check, sustained by-market repartition lag growth over 10 minutes (the 2026-07-27 failure
+            # mode) => raise Xmx back to 4g via this env var (no code change) and redeploy.
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms1g -Xmx3g"
           ports:
@@ -149,9 +152,11 @@ spec:
           resources:
             requests:
               cpu: "1"
-              # Scheduler honesty: typical in-session RSS is ~3.2-3.5 GiB under the 3g heap (was observed
-              # at 4.2 GiB under the old 4g heap against a 3Gi request). Limit stays 8Gi for the
-              # restart-restore burst (CLEANUP_ON_START=true rebuilds multi-GiB changelogs).
+              # Scheduler honesty: observed in-session RSS was 4.2 GiB against a 3Gi request (under the
+              # old 4g heap); with the 3g ceiling the JVM's upper bound is ~Xmx + overhead, so 3.5Gi is
+              # the honest request. Limit stays 8Gi as headroom for the CLEANUP_ON_START=true restore
+              # burst — restore streams changelog batches into RocksDB, so its footprint is mostly
+              # native/page-cache (outside Xmx), which the limit, not the heap, must cover.
               memory: 3.5Gi
             limits:
               memory: 8Gi
