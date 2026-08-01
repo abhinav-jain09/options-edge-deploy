@@ -122,8 +122,18 @@ spec:
               value: "100.0"
             - name: HEALTH_PORT
               value: "8097"
+            # Heap right-size (2026-08-01): with -Xmx4g the pod was OBSERVED at ~4.2 GiB RSS — G1 expands
+            # to Xmx under the classifier's JSON parse/serialize churn and does not give it back, while
+            # LIVE state is only tens of MB (chain of a few hundred strikes x ~17KB states). 3g lowers the
+            # heap ceiling by 1 GiB BY CONSTRUCTION (max RSS ~= Xmx + JVM/native overhead); the RSS under
+            # load is a prediction, not yet a measurement. Known evidence: MarketStageEmitBenchmarkTest
+            # (2026-07-27) measured the emit-path pure CPU at ~5% of one core — it did NOT measure GC
+            # behavior or peak allocation rate under a heavy 0DTE open. Xms1g so startup doesn't pin 2 GiB.
+            # CANARY + ROLLBACK (first heavy-open verification still pending): at the next 09:35 ET open
+            # check, sustained by-market repartition lag growth over 10 minutes (the 2026-07-27 failure
+            # mode) => raise Xmx back to 4g via this env var (no code change) and redeploy.
             - name: JAVA_TOOL_OPTIONS
-              value: "-Xms2g -Xmx4g"
+              value: "-Xms1g -Xmx3g"
           ports:
             - name: http
               containerPort: 8097
@@ -142,6 +152,11 @@ spec:
           resources:
             requests:
               cpu: "1"
-              memory: 3Gi
+              # Scheduler honesty: observed in-session RSS was 4.2 GiB against a 3Gi request (under the
+              # old 4g heap); with the 3g ceiling the JVM's upper bound is ~Xmx + overhead, so 3.5Gi is
+              # the honest request. Limit stays 8Gi as headroom for the CLEANUP_ON_START=true restore
+              # burst — restore streams changelog batches into RocksDB, so its footprint is mostly
+              # native/page-cache (outside Xmx), which the limit, not the heap, must cover.
+              memory: 3.5Gi
             limits:
               memory: 8Gi
