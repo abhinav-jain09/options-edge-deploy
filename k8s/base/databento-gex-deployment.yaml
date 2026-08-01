@@ -70,6 +70,16 @@ spec:
               value: options-databento-gex-streams-v1
             - name: KAFKA_GEX_STREAMS_NUM_THREADS
               value: "8"
+            # gex-flow streams thread count. WITHOUT this the flow topology (gex.strike ->
+            # GammaFlowProcessor -> 7 flow topics) runs at the code default of 2 threads over the
+            # 32-partition gex.strike input. During heavy market flow each record does 3 RocksDB
+            # state-store writes (LATEST/SESSION/WINDOW) + a 7-topic produce fan-out with record
+            # cache disabled, so the 2 threads block on state/produce I/O and lag climbs into the
+            # millions while CPU stays idle (verified prod 2026-08-01: 10.6M lag evenly across all
+            # 32 partitions, CPU available). 8 matches the main compute stage above and quadruples
+            # the flow drain parallelism. Both envs; env-overridable (DatabentoGexBridge#flowStreamsProperties).
+            - name: KAFKA_GEX_FLOW_STREAMS_NUM_THREADS
+              value: "8"
             # Dealer-positioning sign: NAIVE (call +1 / put -1).
             # The 1-year SPXW 0DTE backtest (gex-backtest, run phase3-1w-...-b10, 252 days /
             # 7,541 samples) ranked the three models NAIVE ~= V2 >> V1(FLOW_ADJUSTED):
