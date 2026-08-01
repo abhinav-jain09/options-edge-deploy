@@ -100,6 +100,13 @@ spec:
               value: options.databento.gex.strike
             - name: KAFKA_GEX_STREAMS_NUM_THREADS
               value: "8"
+            # gex-flow streams threads — mirrors k8s/base/databento-gex-deployment.yaml. Flow topology
+            # (gex.strike -> GammaFlowProcessor -> 7 topics) defaults to 2 threads over 32 partitions;
+            # each record does 3 RocksDB writes + 7-topic produce (cache off) so it blocks on I/O and
+            # lags into the millions with CPU idle (prod 2026-08-01: 10.6M even across 32 parts). 8 matches
+            # the main compute stage. Env-overridable (DatabentoGexBridge#flowStreamsProperties).
+            - name: KAFKA_GEX_FLOW_STREAMS_NUM_THREADS
+              value: "8"
             - name: DATABENTO_GEX_DEALER_SIGN_MODEL
               value: NAIVE_CALL_PLUS_PUT_MINUS
             - name: DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED
