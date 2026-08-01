@@ -53,19 +53,23 @@ class DatabentoMaxPainDeployTest(unittest.TestCase):
         # resolve-images emits it in BOTH the dev heredoc and the prod passthrough.
         self.assertEqual(resolve.count("DATABENTO_MAXPAIN_IMAGE=$registry/options-edge-databento-maxpain"), 1)
         self.assertIn("DATABENTO_MAXPAIN_IMAGE=$DATABENTO_MAXPAIN_IMAGE", resolve)
-        # image-lock main var set (NOT the dev-only conditional).
-        self.assertIn("\nDATABENTO_MAXPAIN_IMAGE\nEOF", lock)
-        # apply.sh: in the main pin loop and the main rollout list.
-        self.assertIn("GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE; do", apply_sh)
+        # image-lock main var set (NOT the dev-only conditional). The list has grown past
+        # maxpain, so anchor on the entry itself, not the heredoc EOF.
+        self.assertIn("\nDATABENTO_MAXPAIN_IMAGE\n", lock.split("EOF", 2)[1])
+        # apply.sh: in the main pin loop and the main rollout list. The loop list has grown
+        # past maxpain, so anchor on the entry inside the loop, not on terminating "; do".
+        self.assertIn("GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE", apply_sh)
         self.assertIn("rollout status deployment/databento-maxpain-service", apply_sh)
         # It must NOT be in the dev-gated pin loop anymore.
         self.assertNotIn("SHORT_PREMIUM_AGENT_IMAGE DATABENTO_MAXPAIN_IMAGE; do", apply_sh)
         # image-preflight main list.
         self.assertIn("DATABENTO_MAXPAIN_IMAGE=$DATABENTO_MAXPAIN_IMAGE", preflight)
-        # Jenkinsfile param + env(oeProfile) + sub-job propagation.
+        # Jenkinsfile param + prod-defaults map + sub-job propagation list. The per-service
+        # oeProfile.image(...) literals were refactored into the _defaults map (CPS 64KB limit),
+        # so anchor on the map entry and the programmatic pass-through list instead.
         self.assertIn("string(name: 'DATABENTO_MAXPAIN_IMAGE'", jenkins)
-        self.assertIn("oeProfile.image('databento-maxpain', 'production', 'prod')", jenkins)
-        self.assertIn("value: params.DATABENTO_MAXPAIN_IMAGE", jenkins)
+        self.assertIn("'DATABENTO_MAXPAIN_IMAGE': 'databento-maxpain'", jenkins)
+        self.assertIn("'DATABENTO_MAXPAIN_IMAGE', 'OPTION_PRICE_BEHAVIOR_IMAGE'", jenkins)
 
     def test_image_tags_dev_and_prod(self) -> None:
         dev = (ROOT / "image-tags" / "dev.yaml").read_text()
@@ -84,10 +88,21 @@ class DatabentoMaxPainDeployTest(unittest.TestCase):
         prod_manifest = (SVC / "overlays" / "production" / "manifest.yaml").read_text()
         self.assertIn("name: databento-maxpain-service", prod_manifest)
 
-    def test_not_in_dev_cleanup_disabled_set(self) -> None:
+    def test_prod_only_replica_state(self) -> None:
+        # PROD-ONLY (USER 2026-08-01): dev-cleanup keeps dev down, the production overlay
+        # patches replicas -> 1, base stays 0, and the prod wake-up must NOT keep it down.
         cleanup = (ROOT / "scripts" / "ops" / "dev-cleanup.sh").read_text()
         disabled_line = next(ln for ln in cleanup.splitlines() if ln.startswith("DISABLED_DEV="))
-        self.assertNotIn("databento-maxpain-service", disabled_line)
+        self.assertIn("databento-maxpain-service", disabled_line)
+        autostart = (ROOT / "scripts" / "ops" / "morning-autostart.sh").read_text()
+        keep_down_line = next(ln for ln in autostart.splitlines() if ln.startswith("KEEP_DOWN="))
+        self.assertNotIn("databento-maxpain-service", keep_down_line)
+        base = (ROOT / "k8s" / "base" / "databento-maxpain-deployment.yaml").read_text()
+        self.assertIn("replicas: 0", base)
+        prod_manifest = (SVC / "overlays" / "production" / "manifest.yaml").read_text()
+        self.assertIn("replicas: 1", prod_manifest)
+        dev_manifest = (SVC / "overlays" / "dev" / "manifest.yaml").read_text()
+        self.assertIn("replicas: 0", dev_manifest)
 
     def test_topics_include_maxpain_compacted(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()

@@ -271,6 +271,18 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
+  # databento-maxpain is ON in prod ONLY (USER 2026-08-01: "turn on prod only"; supersedes the
+  # 2026-07-30 all-env hold, PR #652). Base stays replicas:0 so dev/experiment render it down;
+  # this patch flips prod to 1. Also removed from morning-autostart.sh KEEP_DOWN (prod wake-up)
+  # and re-added to premarket-readiness PIPELINE_SERVICES; dev-cleanup DISABLED_DEV still lists
+  # it so dev stays down. Disable again = remove this patch + revert those two script entries.
+  - target:
+      kind: Deployment
+      name: databento-maxpain-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
   # spread-skew-service + spread-skew-postgres-writer: RETIRED all envs (USER 2026-07-24 — the
   # mirrored-pair strike/Mid coloring feature is not wanted). Base replicas:0 renders as-is; the
   # standalone slices mirror it (validate-services: mono==slice) and both are in morning-autostart
