@@ -28,7 +28,7 @@ pipeline {
     choice(name: 'SERVICE', choices: [
       'databento-feed', 'databento-sr3-feed', 'databento-vix-feed', 'databento-gex', 'databento-gex-history', 'gamma-migration', 'databento-maxpain', 'databento-mission-sandwich',
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
-      'directional-pressure', 'es-open-direction', 'es-open-direction-postgres-writer', 'close-direction', 'vix-option-inteligence', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
+      'directional-pressure', 'es-open-direction', 'es-open-direction-postgres-writer', 'close-direction', 'spot-vol-regime', 'vix-option-inteligence', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
       'option-truth-engine', 'market-carry', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
       'invasion-postgres-writer', 'reversal-confirmation', 'reversal-postgres-writer', 'short-premium-agent', 'es-spx-align', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
       'oi-shadow', 'unified-sr', 'volume-pace', 'signal-follower', 'web', 'ibkr-feed'
