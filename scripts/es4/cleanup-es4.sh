@@ -323,6 +323,14 @@ log "reconciling required core es.* topic contracts (create-es-topics.sh)"
   # "cannot enforce delete/<=1d retention on es.strike-intelligence-by-strike ->
   # UnknownTopicOrPartitionException", taking the whole strike-flow chain down).
   run "KAFKA_RECREATE_MISMATCHED_TOPICS=true bash '$SCRIPT_DIR/create-es-topics.sh'"
+# ⭐The apps are still at 0 here, so "declared == live" is an exact invariant, not a race. This is
+# the ONLY point in the reset where an under-declared topic can still be caught for free: seconds
+# later the services come up, widen whatever the contract under-sized, and any Streams app that read
+# metadata in that window is permanently wedged behind a green 1/1 pod (2026-08-02:
+# strike-flow-classifier, 0 records for 3h). Fail here rather than hand the operator a healthy-
+# looking fleet with a dead topology.
+log "verifying declared topic partition contract (exact, apps still down)"
+run "bash '$SCRIPT_DIR/verify-topic-partition-contract.sh'"
 log "docker compose up -d (start mm2 + any remaining infra now that topics exist)"
 run "(cd '$INFRA_DIR' && docker compose up -d)"
 
@@ -396,6 +404,33 @@ else
     fi
   done
   log "self-heal restarted ${healed} straggler(s)"
+
+  # ⭐GREEN-POD / DEAD-TOPOLOGY DETECTOR. Every readiness signal above is satisfied by a Kafka
+  # Streams app whose StreamThreads have all died: the health port keeps answering, availableReplicas
+  # stays at desired, restarts stay 0, and the app processes nothing forever. The 2026-08-02 reset
+  # ended "23/23 ready" with strike-flow-classifier in exactly that state. The failure is not
+  # inferable from k8s at all — but Streams says it in one unmistakable line, so read that.
+  #
+  # Advisory, NOT fatal: by this point the reset has already completed successfully and the wedge is
+  # repairable without another wipe. Failing here would strand a finished reset in an ERROR build and
+  # tempt a second destructive run. Loud output + a non-zero count in the summary is the right level.
+  log "scanning for wedged Streams topologies (green pod, dead threads)"
+  wedged=""
+  for d in $($KC get deploy -o name 2>/dev/null | sed 's#.*/##'); do
+    des=$($KC get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+    [ "${des:-0}" -gt 0 ] || continue
+    if $KC logs "deploy/$d" --tail=2000 2>/dev/null | grep -q 'invalid partitions: expected'; then
+      wedged="$wedged $d"
+    fi
+  done
+  if [ -n "$wedged" ]; then
+    echo "WEDGED STREAMS TOPOLOGIES (pods are Ready but process nothing):$wedged" >&2
+    echo "Kafka cannot shrink a topic, so each one needs: scale to 0 -> delete its *-repartition and" >&2
+    echo "*-changelog topics -> scale back to 1. Then fix the offending entry in topics.env, because" >&2
+    echo "an under-declared source topic is what builds the internal topics at the wrong size." >&2
+  else
+    log "  no wedged topologies detected"
+  fi
 fi
 
 if [ "$DRY" = "true" ]; then

@@ -95,6 +95,10 @@ pipeline {
           set -euo pipefail
           rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
+          # An under-declared partition count is invisible at creation time and only becomes an
+          # incident hours later, behind a green pod (see verify-topic-partition-contract.sh).
+          # Running create-topics WITHOUT this audit is what let topics.env drift on 24 topics.
+          ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/verify-topic-partition-contract.sh'
         '''
       }
     }
