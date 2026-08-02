@@ -323,10 +323,22 @@ log "reconciling required core es.* topic contracts (create-es-topics.sh)"
   # "cannot enforce delete/<=1d retention on es.strike-intelligence-by-strike ->
   # UnknownTopicOrPartitionException", taking the whole strike-flow chain down).
   run "KAFKA_RECREATE_MISMATCHED_TOPICS=true bash '$SCRIPT_DIR/create-es-topics.sh'"
+# Proves reconciliation actually produced the declared world: every declared topic exists and none
+# is NARROWER than declared (a client that raced in ahead of apply-topics). It deliberately does NOT
+# claim to validate the partition counts themselves — these topics were just created FROM
+# topics.env, so comparing them back to it is close to a tautology, and it would have passed at
+# 19:19 on 2026-08-02 with `tcbbo:4` in the file. The check that catches an UNDER-DECLARED contract
+# is the steady-state audit after the apps are up (see below), where the owners' own contracts make
+# the broker an independent source of truth.
+log "verifying declared topics were created (missing/narrower are fatal; apps still down)"
+run "bash '$SCRIPT_DIR/verify-topic-partition-contract.sh' created"
 log "docker compose up -d (start mm2 + any remaining infra now that topics exist)"
 run "(cd '$INFRA_DIR' && docker compose up -d)"
 
 # ------------------------------------------------- 5. restore app (verified) then clear state
+# Marks the start of the window the post-restore wedge scan reads logs over. SECONDS is bash's own
+# monotonic counter since this shell started — no clock, timezone or container-TZ arithmetic.
+RESTORE_T0=$SECONDS
 log "restoring es4 Deployments to captured replica counts (verified) from $STATE"
 if [ "$DRY" = "true" ]; then
   echo "DRY: would restore replicas from $STATE and verify (es-feed always forced to 0 — DBP-R22)"
@@ -387,15 +399,141 @@ else
   # infra and every topic contract exist, so a bounce succeeds.
   log "self-healing boot-order stragglers"
   healed=0
+  healed_names=""
   for d in $($KC get deploy -o name 2>/dev/null | sed 's#.*/##'); do
     des=$($KC get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
     rr=$($KC get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
     if [ "${des:-0}" -gt 0 ] && [ "${rr:-0}" -lt "${des:-0}" ]; then
       log "  boot-order straggler: $d (${rr:-0}/${des}) — restarting"
-      $KC rollout restart deploy/"$d" >/dev/null 2>&1 && healed=$((healed+1))
+      # Record WHICH ones were bounced: the post-restore wait must follow those exact rollouts,
+      # not a fleet-wide availability count that old pods can satisfy on their own.
+      $KC rollout restart deploy/"$d" >/dev/null 2>&1 && { healed=$((healed+1)); healed_names="$healed_names $d"; }
     fi
   done
   log "self-heal restarted ${healed} straggler(s)"
+
+  # ⭐POST-RESTORE AUDITS. Everything above is satisfied by a Kafka Streams app whose StreamThreads
+  # have all died: the health port keeps answering, availableReplicas stays at desired, restarts stay
+  # 0, and the app processes nothing forever. The 2026-08-02 reset ended "23/23 ready" with
+  # strike-flow-classifier in exactly that state. Two independent checks run here, and BOTH are
+  # fatal — a reset that knowingly leaves a dead pipeline must not report green.
+  #
+  # The state file was already cleared above, so exiting non-zero here cannot make a resume
+  # destructive. It does mean a blind rerun would re-WIPE, which is why the messages say plainly:
+  # repair the named app, do NOT rerun clean-reset.
+  #
+  # Neither audit means anything until the apps the self-heal just restarted are actually back and
+  # have applied their own topic contracts. Elapsed time alone does not establish that, so WAIT ON
+  # THE ROLLOUTS first and only then add a short settle for the group join that follows readiness.
+  post_fail=0
+  settle="${ES4_POST_RESTORE_SETTLE_SECONDS:-90}"
+  case "$settle" in
+    ''|*[!0-9]*) die "ES4_POST_RESTORE_SETTLE_SECONDS must be a non-negative integer (got '$settle') — the reset itself COMPLETED and state is cleared; re-run only the post-restore audits" ;;
+  esac
+  [ "$settle" -le 3600 ] || die "ES4_POST_RESTORE_SETTLE_SECONDS=$settle exceeds the 3600s bound — the reset itself COMPLETED and state is cleared; fix the value and re-run only the post-restore audits, do NOT rerun clean-reset"
+
+  if [ "$healed" -gt 0 ]; then
+    # `rollout status` on the NAMED deployments, not a fleet-wide availableReplicas poll. During a
+    # rolling restart the OLD ReplicaSet can keep availableReplicas at desired while the new one is
+    # stalled, so that poll would return "ready" instantly and the audits would run against pods
+    # that never applied their contracts. rollout status tracks the restart's own generation and
+    # exits non-zero on timeout, which is the fail-closed behaviour this needs.
+    rollout_wait="${ES4_ROLLOUT_WAIT_SECONDS:-300}"
+    # Validated for the same reason as the settle: `0` (or a negative) tells kubectl to wait
+    # FOREVER, which turns this gate into a hang, and a bare non-numeric would abort with no
+    # diagnostic after the state file is already gone.
+    case "$rollout_wait" in
+      ''|*[!0-9]*) die "ES4_ROLLOUT_WAIT_SECONDS must be a positive integer (got '$rollout_wait') — the reset itself COMPLETED and state is cleared; fix the value and re-run only the post-restore audits, do NOT rerun clean-reset" ;;
+    esac
+    { [ "$rollout_wait" -ge 1 ] && [ "$rollout_wait" -le 1800 ]; } \
+      || die "ES4_ROLLOUT_WAIT_SECONDS=$rollout_wait outside 1..1800 (0 would make kubectl wait forever) — the reset itself COMPLETED and state is cleared; do NOT rerun clean-reset"
+    log "waiting up to ${rollout_wait}s for the rollout of:${healed_names}"
+    for d in $healed_names; do
+      $KC rollout status deploy/"$d" --timeout="${rollout_wait}s" >/dev/null 2>&1 \
+        || die "rollout of $d did not complete — the post-restore audits below cannot mean anything until it does. The reset itself COMPLETED and state is cleared: investigate $d, then re-run the audits; do NOT rerun clean-reset"
+    done
+  fi
+  log "settling ${settle}s so restarted apps can rejoin their consumer groups"
+  sleep "$settle"
+
+  # (1) Steady-state contract audit. topics.env is the EXACT desired shape for es4 (a reset recreates
+  # the world from it, so anything the file does not say is not preserved). A live topic that differs
+  # from its declaration is therefore a DISAGREEMENT that has to be adjudicated, not a shrug: either
+  # the widening was deliberate — in which case the file must record it or the next reset silently
+  # drops it back and rebuilds the 2026-08-02 wedge — or it was not, in which case the topic is
+  # wrong. Both remedies are printed; the audit does not guess which one applies.
+  log "auditing steady-state topic partition contract (any disagreement is fatal)"
+  if ! run "bash '$SCRIPT_DIR/verify-topic-partition-contract.sh' steady"; then
+    post_fail=1
+  fi
+
+  # (2) Green-pod / dead-topology scan. k8s cannot see this at all, but Streams says it in one
+  # unmistakable line. Read per POD (a Deployment's `logs` reaches one pod only), keep the command's
+  # exit status, and never let a failed log read pass as "no wedge".
+  # Cover everything since the restore began, plus a minute of slack. RESTORE_T0 is bash's own
+  # SECONDS counter, so this needs no clock arithmetic and cannot be skewed by the host's timezone.
+  log "scanning for wedged Streams topologies (green pod, dead threads; window opens at restore)"
+  wedged=""
+  scan_errors=""
+  # Pod DISCOVERY is evidence too. `for p in $(kubectl get pods ...)` swallows an RBAC/API/transport
+  # failure into an empty word list, and `set -e` does not fire on a substitution that only supplies
+  # loop words — the scan would then find nothing and report "no wedged topologies detected".
+  # --request-timeout on BOTH kubectl calls: it defaults to no timeout, so an API-server, kubelet
+  # or transport stall would hang this gate forever instead of failing it.
+  set +e
+  pod_list="$($KC get pods --field-selector=status.phase=Running -o name --request-timeout=30s 2>/dev/null)"
+  pods_status=$?
+  set -e
+  [ "$pods_status" -eq 0 ] || die "cannot list pods to scan for wedged topologies (kubectl exited $pods_status) — the reset itself COMPLETED and state is cleared; do NOT rerun clean-reset, re-run the audit"
+  pod_list="$(printf '%s\n' "$pod_list" | sed 's#.*/##')"
+  [ -n "$pod_list" ] || die "pod list came back EMPTY while deployments are running — treating as an unreadable cluster, not as 'nothing wedged'"
+  for p in $pod_list; do
+    # Capture the log body and its EXIT STATUS separately. `kubectl logs | grep -q` is wrong twice
+    # over: -q closes the pipe early so kubectl dies of SIGPIPE and, under `set -o pipefail`, a real
+    # MATCH is reported as failure; and a kubectl error would be indistinguishable from "no match".
+    # TIME-bounded, not line-bounded. The StreamsException is emitted once, during the first
+    # assignment after startup; a chatty app can push it past any fixed --tail long before the scan
+    # runs. --since covers the whole restore window, and --limit-bytes truncates from the START of
+    # that window, which is exactly where the fatal line lives.
+    # RECOMPUTED per pod: --since is relative to the instant THAT request runs, so one window
+    # computed up front would creep forward with every sequential read and could drop the fatal
+    # line for the pods scanned last.
+    scan_window=$(( SECONDS - RESTORE_T0 + 60 ))
+    set +e
+    pod_logs="$($KC logs "$p" --all-containers --since="${scan_window}s" --limit-bytes=8000000 --request-timeout=60s 2>/dev/null)"
+    logs_status=$?
+    set -e
+    if [ "$logs_status" -ne 0 ]; then
+      scan_errors="$scan_errors $p"
+    else
+      # Pure-bash match: no pipeline, so nothing here can be confused by SIGPIPE or pipefail.
+      case "$pod_logs" in
+        *"invalid partitions: expected"*) wedged="$wedged $p" ;;
+      esac
+    fi
+  done
+  if [ -n "$wedged" ]; then
+    echo "WEDGED STREAMS TOPOLOGIES (pods are Ready but process nothing):$wedged" >&2
+    echo "REPAIR EACH ONE — do NOT rerun clean-reset (that would wipe again for no reason):" >&2
+    echo "  scale that app to 0 -> delete ONLY the topics whose names start with its Streams" >&2
+    echo "  application.id (its *-repartition and *-changelog topics; never a broker-wide wildcard)" >&2
+    echo "  -> scale back to 1. Kafka cannot shrink a topic, so there is no gentler path." >&2
+    echo "Then correct the under-declared source topic in topics.env, or the next reset rebuilds it." >&2
+    post_fail=1
+  fi
+  # Reported INDEPENDENTLY of the wedge list: a run that finds one wedge and cannot read three other
+  # pods has an incomplete repair picture, and hiding the unreadable ones behind the wedges would
+  # make the operator think the named list is the whole job.
+  if [ -n "$scan_errors" ]; then
+    echo "WEDGE SCAN INCONCLUSIVE — could not read logs for:$scan_errors" >&2
+    echo "An unreadable pod is an UNKNOWN, not a pass. Re-run the scan or check these by hand." >&2
+    post_fail=1
+  fi
+  if [ -z "$wedged" ] && [ -z "$scan_errors" ]; then
+    log "  no wedged topologies detected"
+  fi
+
+  [ "$post_fail" = 0 ] || die "post-restore audit FAILED — the reset finished and state is already cleared, so fix what is named above; do NOT rerun clean-reset"
 fi
 
 if [ "$DRY" = "true" ]; then
