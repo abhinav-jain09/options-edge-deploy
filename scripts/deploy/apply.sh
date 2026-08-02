@@ -226,10 +226,6 @@
           # web tool that has been dropped (rebuilt as an option-chain UI page instead), so it is no longer in
           # any overlay and `apply -k` will not prune it. Delete it here (idempotent, deployer-SA-scoped).
           kubectl -n options-edge delete deployment/pin-flow-explorer service/pin-flow-explorer --ignore-not-found=true
-          # replaced by the option-truth engine (endpoint repricing), so it is removed from every
-          # overlay in this same commit. `apply -k` never prunes, so without this line the pods would
-          # keep running forever: still consuming from Kafka with a live consumer-group, still
-          # publishing verdicts the UI no longer reads. Delete it here (idempotent, deployer-SA-scoped).
           # Reconcile-delete the pre-rename es-gex-spx-align-service. It was renamed to es-spx-align-service
           # in this same commit (One Service One Identity). Both byte-copy the ES-GEX book to the SAME
           # options.es-gex-spx-aligned topic, so leaving the old one running would put TWO producers on the
