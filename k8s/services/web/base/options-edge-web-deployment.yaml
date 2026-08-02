@@ -90,12 +90,6 @@ spec:
             # dealer-ledger-service base UI_VISIBLE=true + CALIBRATION_QUALITY=SHADOW.
             - name: DEALER_LEDGER_UI_VISIBLE
               value: "true"
-            # Greek-move-authenticity green/red move-authenticity track render gate, served to the
-            # browser as config.greekMoveAuthVisible. In the BASE (env-independent) so dev and prod are
-            # IDENTICAL. Pairs with the greek-move-authenticity service (CHARM_SIGN pinned, #409) +
-            # feed-gateway greek-move-auth relay (#88). Ships the track visible.
-            - name: GREEK_MOVE_AUTH_UI_VISIBLE
-              value: "true"
           envFrom:
             # Provides KAFKA_BOOTSTRAP_SERVERS (required, non-loopback), schema registry, and the prod
             # Postgres coordinates (POSTGRES_JDBC_URL=.../options_flow, POSTGRES_USER=options_flow,
