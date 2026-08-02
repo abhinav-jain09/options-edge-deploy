@@ -353,6 +353,17 @@ pipeline {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
         }
         sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
+        // cleanup-es4.sh's broker-contract drift guard compares the LIVE compose against this
+        // rsynced reference copy. Only ACTION=infra-sync used to sync it, so on a box where
+        // infra-sync had not run since bootstrap the guard compared today's broker against a
+        // months-old reference and aborted every clean-reset on a drift that did not exist
+        // (2026-08-02, build #402: live auto-create=false vs a 2026-07-12 reference of "true").
+        // The reference must travel with the guard that reads it.
+        sh 'ssh -o BatchMode=yes "${ES4_HOST}" mkdir -p /home/es4/repo/infra'
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete infra/es4 "${ES4_HOST}:/home/es4/repo/infra/"'
         sh '''
           set -euo pipefail
           # The prod-cluster es-feed is RETIRED (DBP-R33), so there is no prod feed to fence around
