@@ -36,8 +36,10 @@ spec:
             - secretRef:
                 name: options-edge-runtime-secrets
           env:
-            # Inert by DEFAULT (design §13 rollout). dev + es4 overlays enable it; prod stays
-            # shadow (false) until baseline-warmed + calibrated, then flipped like the hot-strike follower.
+            # Inert by DEFAULT (design §13 rollout). Every environment overlay flips it on: the dev
+            # and production overlay patches and the es4 renderer all set GREEK_MOVE_AUTH_ENABLED=true.
+            # Production is go-live (advisory-only, CHARM_SIGN pinned by the Gate-1 fixture, #409); the
+            # base default stays false so a brand-new environment starts inert until its overlay enables it.
             - name: GREEK_MOVE_AUTH_ENABLED
               value: "false"
             - name: HEALTH_PORT
