@@ -300,7 +300,38 @@ def test_wedges_and_unreadable_pods_are_reported_independently():
     assert "elif" not in between, "the two findings must not be mutually exclusive"
 
 
-def test_audits_wait_for_restarted_rollouts_first():
-    """Elapsed time alone does not establish that the owners are back and have applied their
-    contracts — the self-heal restarts pods after the earlier readiness check."""
-    assert "waiting for the ${healed} restarted deployment(s) to become available again" in CLEANUP
+def test_audits_wait_on_the_named_rollouts_and_die_on_timeout():
+    """availableReplicas can stay at desired during a rolling restart because the OLD ReplicaSet
+    still satisfies it, so a fleet-wide poll returns 'ready' instantly. Track the restart's own
+    generation with `rollout status` on the deployments actually bounced, and treat a timeout as
+    fatal — an audit that runs before the owners are back proves nothing."""
+    assert "healed_names" in CLEANUP
+    assert "rollout status" in CLEANUP
+    assert "rollout of $d did not complete" in CLEANUP
+    after_heal = CLEANUP.split("self-heal restarted")[1]
+    assert "jsonpath='{.status.availableReplicas}'" not in after_heal, (
+        "the post-restore wait must not fall back to a fleet-wide availability poll"
+    )
+
+
+def test_scan_window_is_recomputed_per_pod():
+    """--since is relative to the moment each request runs; one window computed up front creeps
+    forward with every sequential read and can drop the fatal line for the last pods scanned."""
+    scan_block = CLEANUP[CLEANUP.index("scanning for wedged Streams topologies"):]
+    assert scan_block.count("scan_window=$(( SECONDS - RESTORE_T0 + 60 ))") == 1
+    assert scan_block.index("for p in $pod_list") < scan_block.index("scan_window=$((")
+
+
+def test_jenkins_uses_the_same_neutral_semantics_as_the_verifier():
+    """The pipeline comment must not assert 'the contract under-declares it' — that is the
+    inference the exact-shape policy replaced with adjudication."""
+    assert "means the contract under-declares it" not in JENKINS
+    assert "ADJUDICATE" in JENKINS
+
+
+def test_all_duplicate_declarations_are_rejected_not_just_conflicting_ones():
+    """An identical repeat is still two places to edit, and the next edit to one of them creates
+    the conflicting case. The header promises every duplicate fails, so the code must."""
+    text = VERIFY.read_text()
+    assert "DUPLICATE declaration for" in text
+    assert "CONFLICTING duplicate" not in text

@@ -98,8 +98,10 @@ for entry in $OPTIONS_EDGE_ES4_TOPICS; do
   fi
   name="${BASH_REMATCH[1]}"
   count="${BASH_REMATCH[2]}"
-  if [ -n "${DECLARED[$name]:-}" ] && [ "${DECLARED[$name]}" != "$count" ]; then
-    echo "CONFLICTING duplicate declaration for $name: ${DECLARED[$name]} vs $count" >&2
+  # ALL duplicates, not only conflicting ones. An identical repeat is still two places to edit,
+  # and the next person to change one of them creates the conflicting case this guards against.
+  if [ -n "${DECLARED[$name]:-}" ]; then
+    echo "DUPLICATE declaration for $name: ${DECLARED[$name]} then $count (declare each topic once)" >&2
     exit 1
   fi
   DECLARED[$name]="$count"

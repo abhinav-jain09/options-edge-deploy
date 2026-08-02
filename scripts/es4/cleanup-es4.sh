@@ -399,12 +399,15 @@ else
   # infra and every topic contract exist, so a bounce succeeds.
   log "self-healing boot-order stragglers"
   healed=0
+  healed_names=""
   for d in $($KC get deploy -o name 2>/dev/null | sed 's#.*/##'); do
     des=$($KC get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
     rr=$($KC get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
     if [ "${des:-0}" -gt 0 ] && [ "${rr:-0}" -lt "${des:-0}" ]; then
       log "  boot-order straggler: $d (${rr:-0}/${des}) — restarting"
-      $KC rollout restart deploy/"$d" >/dev/null 2>&1 && healed=$((healed+1))
+      # Record WHICH ones were bounced: the post-restore wait must follow those exact rollouts,
+      # not a fleet-wide availability count that old pods can satisfy on their own.
+      $KC rollout restart deploy/"$d" >/dev/null 2>&1 && { healed=$((healed+1)); healed_names="$healed_names $d"; }
     fi
   done
   log "self-heal restarted ${healed} straggler(s)"
@@ -427,23 +430,19 @@ else
   case "$settle" in
     ''|*[!0-9]*) die "ES4_POST_RESTORE_SETTLE_SECONDS must be a non-negative integer (got '$settle') — the reset itself COMPLETED and state is cleared; re-run only the post-restore audits" ;;
   esac
-  [ "$settle" -le 3600 ] || die "ES4_POST_RESTORE_SETTLE_SECONDS=$settle exceeds the 3600s bound"
+  [ "$settle" -le 3600 ] || die "ES4_POST_RESTORE_SETTLE_SECONDS=$settle exceeds the 3600s bound — the reset itself COMPLETED and state is cleared; fix the value and re-run only the post-restore audits, do NOT rerun clean-reset"
 
   if [ "$healed" -gt 0 ]; then
-    log "waiting for the ${healed} restarted deployment(s) to become available again"
-    rolled=false
-    for _ in $(seq 1 60); do
-      notready=0
-      for d in $($KC get deploy -o name 2>/dev/null | sed 's#.*/##'); do
-        des=$($KC get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
-        [ "${des:-0}" -gt 0 ] || continue
-        av=$($KC get deploy "$d" -o jsonpath='{.status.availableReplicas}' 2>/dev/null)
-        [ "${av:-0}" -ge "${des}" ] || notready=$((notready + 1))
-      done
-      if [ "$notready" = 0 ]; then rolled=true; break; fi
-      sleep 5
+    # `rollout status` on the NAMED deployments, not a fleet-wide availableReplicas poll. During a
+    # rolling restart the OLD ReplicaSet can keep availableReplicas at desired while the new one is
+    # stalled, so that poll would return "ready" instantly and the audits would run against pods
+    # that never applied their contracts. rollout status tracks the restart's own generation and
+    # exits non-zero on timeout, which is the fail-closed behaviour this needs.
+    log "waiting for the rollout of:${healed_names}"
+    for d in $healed_names; do
+      $KC rollout status deploy/"$d" --timeout="${ES4_ROLLOUT_WAIT_SECONDS:-300}s" >/dev/null 2>&1 \
+        || die "rollout of $d did not complete — the post-restore audits below cannot mean anything until it does. The reset itself COMPLETED and state is cleared: investigate $d, then re-run the audits; do NOT rerun clean-reset"
     done
-    [ "$rolled" = true ] || log "  WARNING: some deployments are still not available — auditing anyway (findings below are still real)"
   fi
   log "settling ${settle}s so restarted apps can rejoin their consumer groups"
   sleep "$settle"
@@ -464,8 +463,7 @@ else
   # exit status, and never let a failed log read pass as "no wedge".
   # Cover everything since the restore began, plus a minute of slack. RESTORE_T0 is bash's own
   # SECONDS counter, so this needs no clock arithmetic and cannot be skewed by the host's timezone.
-  scan_window=$(( SECONDS - RESTORE_T0 + 60 ))
-  log "scanning for wedged Streams topologies (green pod, dead threads; window ${scan_window}s)"
+  log "scanning for wedged Streams topologies (green pod, dead threads; window opens at restore)"
   wedged=""
   scan_errors=""
   # Pod DISCOVERY is evidence too. `for p in $(kubectl get pods ...)` swallows an RBAC/API/transport
@@ -486,6 +484,10 @@ else
     # assignment after startup; a chatty app can push it past any fixed --tail long before the scan
     # runs. --since covers the whole restore window, and --limit-bytes truncates from the START of
     # that window, which is exactly where the fatal line lives.
+    # RECOMPUTED per pod: --since is relative to the instant THAT request runs, so one window
+    # computed up front would creep forward with every sequential read and could drop the fatal
+    # line for the pods scanned last.
+    scan_window=$(( SECONDS - RESTORE_T0 + 60 ))
     set +e
     pod_logs="$($KC logs "$p" --all-containers --since="${scan_window}s" --limit-bytes=8000000 2>/dev/null)"
     logs_status=$?
