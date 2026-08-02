@@ -136,11 +136,19 @@ def test_verify_passes_when_live_matches_the_contract():
         assert r.returncode == 0, f"{mode} failed on a clean broker: {r.stdout}{r.stderr}"
 
 
-def test_steady_mode_fails_on_under_declaration():
+def test_steady_mode_fails_on_a_wider_than_declared_topic():
     """The 2026-08-02 signal: the owning service widened the topic past the contract."""
     r = _run_verify("steady", _describe_all({"es.options.opra.tcbbo": "64"}))
-    assert r.returncode != 0, "under-declaration must fail the steady audit"
-    assert "UNDER-DECLARED" in r.stderr
+    assert r.returncode != 0, "a live-vs-declared disagreement must fail the steady audit"
+    assert "WIDER-THAN-DECLARED" in r.stderr
+
+
+def test_steady_failure_names_both_remedies_rather_than_guessing():
+    """live > declared does not by itself prove which side is wrong, so the audit must not assert
+    that it does — it must make the operator adjudicate."""
+    r = _run_verify("steady", _describe_all({"es.options.opra.tcbbo": "64"}))
+    assert "deliberate" in r.stderr and "record the live count" in r.stderr
+    assert "was not deliberate" in r.stderr
 
 
 def test_created_mode_does_not_adjudicate_width():
@@ -252,3 +260,47 @@ def test_create_topics_job_runs_the_steady_audit():
     assert "verify-topic-partition-contract.sh steady" in JENKINS, (
         "ACTION=create-topics runs against a live es4 — that is the steady-state contract audit"
     )
+
+
+# ---------------------------------------------------- the reset's post-restore wiring
+# These assert on cleanup-es4.sh's source: the script drives a whole cluster wipe and restore, so it
+# cannot be executed here. The checks are written to pin the exact defects Codex found, each of which
+# is a specific line shape rather than a vibe.
+
+def test_settle_seconds_is_validated_not_passed_straight_to_sleep():
+    """A non-numeric value would abort under `set -e` AFTER the state file is cleared, with no
+    diagnostic — the worst possible moment to exit silently."""
+    assert "ES4_POST_RESTORE_SETTLE_SECONDS must be a non-negative integer" in CLEANUP
+    assert "exceeds the 3600s bound" in CLEANUP
+
+
+def test_pod_discovery_failure_is_fatal():
+    """`for p in $(kubectl get pods ...)` turns an RBAC/API failure into an empty list, and `set -e`
+    does not fire on a substitution that only supplies loop words — the scan would find nothing and
+    report success."""
+    assert "pods_status" in CLEANUP
+    assert "cannot list pods to scan for wedged topologies" in CLEANUP
+    assert "pod list came back EMPTY" in CLEANUP
+    assert "for p in $($KC get pods" not in CLEANUP
+
+
+def test_wedge_scan_is_time_bounded_not_line_bounded():
+    """The StreamsException is emitted once at startup; a chatty app pushes it past any fixed tail
+    during the settle window."""
+    assert '--since="${scan_window}s"' in CLEANUP
+    assert "RESTORE_T0" in CLEANUP
+    assert "--tail=5000" not in CLEANUP
+
+
+def test_wedges_and_unreadable_pods_are_reported_independently():
+    """An `elif` would hide unreadable pods whenever any wedge was found, understating the repair."""
+    wedge_block = CLEANUP.index("WEDGED STREAMS TOPOLOGIES")
+    inconclusive = CLEANUP.index("WEDGE SCAN INCONCLUSIVE")
+    between = CLEANUP[wedge_block:inconclusive]
+    assert "elif" not in between, "the two findings must not be mutually exclusive"
+
+
+def test_audits_wait_for_restarted_rollouts_first():
+    """Elapsed time alone does not establish that the owners are back and have applied their
+    contracts — the self-heal restarts pods after the earlier readiness check."""
+    assert "waiting for the ${healed} restarted deployment(s) to become available again" in CLEANUP

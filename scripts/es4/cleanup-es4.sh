@@ -336,6 +336,9 @@ log "docker compose up -d (start mm2 + any remaining infra now that topics exist
 run "(cd '$INFRA_DIR' && docker compose up -d)"
 
 # ------------------------------------------------- 5. restore app (verified) then clear state
+# Marks the start of the window the post-restore wedge scan reads logs over. SECONDS is bash's own
+# monotonic counter since this shell started — no clock, timezone or container-TZ arithmetic.
+RESTORE_T0=$SECONDS
 log "restoring es4 Deployments to captured replica counts (verified) from $STATE"
 if [ "$DRY" = "true" ]; then
   echo "DRY: would restore replicas from $STATE and verify (es-feed always forced to 0 — DBP-R22)"
@@ -416,18 +419,42 @@ else
   # destructive. It does mean a blind rerun would re-WIPE, which is why the messages say plainly:
   # repair the named app, do NOT rerun clean-reset.
   #
-  # The wedge only appears after the app has joined its group and tried to assign tasks, and the
-  # self-heal above may have just restarted pods, so give it a bounded settle window first.
+  # Neither audit means anything until the apps the self-heal just restarted are actually back and
+  # have applied their own topic contracts. Elapsed time alone does not establish that, so WAIT ON
+  # THE ROLLOUTS first and only then add a short settle for the group join that follows readiness.
   post_fail=0
   settle="${ES4_POST_RESTORE_SETTLE_SECONDS:-90}"
-  log "waiting ${settle}s for restarted apps to rejoin their consumer groups before auditing"
+  case "$settle" in
+    ''|*[!0-9]*) die "ES4_POST_RESTORE_SETTLE_SECONDS must be a non-negative integer (got '$settle') — the reset itself COMPLETED and state is cleared; re-run only the post-restore audits" ;;
+  esac
+  [ "$settle" -le 3600 ] || die "ES4_POST_RESTORE_SETTLE_SECONDS=$settle exceeds the 3600s bound"
+
+  if [ "$healed" -gt 0 ]; then
+    log "waiting for the ${healed} restarted deployment(s) to become available again"
+    rolled=false
+    for _ in $(seq 1 60); do
+      notready=0
+      for d in $($KC get deploy -o name 2>/dev/null | sed 's#.*/##'); do
+        des=$($KC get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+        [ "${des:-0}" -gt 0 ] || continue
+        av=$($KC get deploy "$d" -o jsonpath='{.status.availableReplicas}' 2>/dev/null)
+        [ "${av:-0}" -ge "${des}" ] || notready=$((notready + 1))
+      done
+      if [ "$notready" = 0 ]; then rolled=true; break; fi
+      sleep 5
+    done
+    [ "$rolled" = true ] || log "  WARNING: some deployments are still not available — auditing anyway (findings below are still real)"
+  fi
+  log "settling ${settle}s so restarted apps can rejoin their consumer groups"
   sleep "$settle"
 
-  # (1) Steady-state contract audit. Now that every owner has applied its OWN topic contract, the
-  # broker is an independent source of truth: live > declared means topics.env under-declares that
-  # topic and the NEXT reset would rebuild the same trap. This is the check that had teeth on
-  # 2026-08-02 — and the only one of the two that prevents a recurrence rather than reporting it.
-  log "auditing steady-state topic partition contract (under-declaration is fatal)"
+  # (1) Steady-state contract audit. topics.env is the EXACT desired shape for es4 (a reset recreates
+  # the world from it, so anything the file does not say is not preserved). A live topic that differs
+  # from its declaration is therefore a DISAGREEMENT that has to be adjudicated, not a shrug: either
+  # the widening was deliberate — in which case the file must record it or the next reset silently
+  # drops it back and rebuilds the 2026-08-02 wedge — or it was not, in which case the topic is
+  # wrong. Both remedies are printed; the audit does not guess which one applies.
+  log "auditing steady-state topic partition contract (any disagreement is fatal)"
   if ! run "bash '$SCRIPT_DIR/verify-topic-partition-contract.sh' steady"; then
     post_fail=1
   fi
@@ -435,15 +462,32 @@ else
   # (2) Green-pod / dead-topology scan. k8s cannot see this at all, but Streams says it in one
   # unmistakable line. Read per POD (a Deployment's `logs` reaches one pod only), keep the command's
   # exit status, and never let a failed log read pass as "no wedge".
-  log "scanning for wedged Streams topologies (green pod, dead threads)"
+  # Cover everything since the restore began, plus a minute of slack. RESTORE_T0 is bash's own
+  # SECONDS counter, so this needs no clock arithmetic and cannot be skewed by the host's timezone.
+  scan_window=$(( SECONDS - RESTORE_T0 + 60 ))
+  log "scanning for wedged Streams topologies (green pod, dead threads; window ${scan_window}s)"
   wedged=""
   scan_errors=""
-  for p in $($KC get pods --field-selector=status.phase=Running -o name 2>/dev/null | sed 's#.*/##'); do
+  # Pod DISCOVERY is evidence too. `for p in $(kubectl get pods ...)` swallows an RBAC/API/transport
+  # failure into an empty word list, and `set -e` does not fire on a substitution that only supplies
+  # loop words — the scan would then find nothing and report "no wedged topologies detected".
+  set +e
+  pod_list="$($KC get pods --field-selector=status.phase=Running -o name 2>/dev/null)"
+  pods_status=$?
+  set -e
+  [ "$pods_status" -eq 0 ] || die "cannot list pods to scan for wedged topologies (kubectl exited $pods_status) — the reset itself COMPLETED and state is cleared; do NOT rerun clean-reset, re-run the audit"
+  pod_list="$(printf '%s\n' "$pod_list" | sed 's#.*/##')"
+  [ -n "$pod_list" ] || die "pod list came back EMPTY while deployments are running — treating as an unreadable cluster, not as 'nothing wedged'"
+  for p in $pod_list; do
     # Capture the log body and its EXIT STATUS separately. `kubectl logs | grep -q` is wrong twice
     # over: -q closes the pipe early so kubectl dies of SIGPIPE and, under `set -o pipefail`, a real
     # MATCH is reported as failure; and a kubectl error would be indistinguishable from "no match".
+    # TIME-bounded, not line-bounded. The StreamsException is emitted once, during the first
+    # assignment after startup; a chatty app can push it past any fixed --tail long before the scan
+    # runs. --since covers the whole restore window, and --limit-bytes truncates from the START of
+    # that window, which is exactly where the fatal line lives.
     set +e
-    pod_logs="$($KC logs "$p" --all-containers --tail=5000 2>/dev/null)"
+    pod_logs="$($KC logs "$p" --all-containers --since="${scan_window}s" --limit-bytes=8000000 2>/dev/null)"
     logs_status=$?
     set -e
     if [ "$logs_status" -ne 0 ]; then
@@ -463,11 +507,16 @@ else
     echo "  -> scale back to 1. Kafka cannot shrink a topic, so there is no gentler path." >&2
     echo "Then correct the under-declared source topic in topics.env, or the next reset rebuilds it." >&2
     post_fail=1
-  elif [ -n "$scan_errors" ]; then
+  fi
+  # Reported INDEPENDENTLY of the wedge list: a run that finds one wedge and cannot read three other
+  # pods has an incomplete repair picture, and hiding the unreadable ones behind the wedges would
+  # make the operator think the named list is the whole job.
+  if [ -n "$scan_errors" ]; then
     echo "WEDGE SCAN INCONCLUSIVE — could not read logs for:$scan_errors" >&2
     echo "An unreadable pod is an UNKNOWN, not a pass. Re-run the scan or check these by hand." >&2
     post_fail=1
-  else
+  fi
+  if [ -z "$wedged" ] && [ -z "$scan_errors" ]; then
     log "  no wedged topologies detected"
   fi
 

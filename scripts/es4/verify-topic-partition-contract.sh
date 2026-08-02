@@ -27,11 +27,18 @@
 #             real job is narrower and still worth doing: prove reconciliation actually created
 #             every declared topic, and catch a client that raced in and made one NARROWER.
 #
-#   steady    ⭐THE MODE THAT CATCHES UNDER-DECLARATION. Run after the apps are restored and have
-#             settled. By then every owner has applied its own topic contract, so the broker — not
-#             the file — is the independent source of truth. live > declared now means exactly one
-#             thing: topics.env under-declares that topic and the next clean-reset will rebuild the
-#             same trap. This is the check that would have failed at 19:22:39 on 2026-08-02.
+#   steady    ⭐THE MODE WITH TEETH. Run after the apps are restored and have settled, and by the
+#             create-topics action against a live es4. By then every owner has applied its own topic
+#             contract, so the broker — not the file — supplies the numbers.
+#
+#             ⭐POLICY, NOT INFERENCE: for the es4 set, topics.env is the EXACT desired shape, not a
+#             floor. A clean-reset recreates the world from this file, so a partition count the file
+#             does not record is NOT preserved — it silently reverts on the next reset and rebuilds
+#             the wedge. `live != declared` is therefore reported as a DISAGREEMENT to adjudicate,
+#             with both remedies printed: record the widening in topics.env if it was deliberate, or
+#             fix the topic if it was not. The audit does not claim to know which. (This is why
+#             out-of-band widening of an es4 topic is not a supported operation: it does not
+#             survive.) This is the state that existed at 19:22:39 on 2026-08-02.
 #
 # FAIL-CLOSED. Every unknown is a failure, in BOTH modes:
 #   * describe exits non-zero, or returns nothing         -> FAIL (never "assume the shape is fine")
@@ -39,11 +46,14 @@
 #   * an unparseable describe line                        -> FAIL (an empty parse is not a match)
 #   * a malformed or duplicated topics.env entry          -> FAIL (before any broker call)
 #   * live < declared                                     -> FAIL (in both modes)
-#   * live > declared                                     -> FAIL in `steady`; reported and tolerated
-#                                                            in `created` only for topics the reset
-#                                                            did not create (see WIDER_OK below)
+#   * live > declared                                     -> FAIL in `steady` (exact-shape policy);
+#                                                            reported but not adjudicated in
+#                                                            `created`, where the owners have not
+#                                                            applied their contracts yet
 #
 # ESCAPE HATCH: ES4_ALLOW_PARTITION_DRIFT=true downgrades ONLY validated wider-than-declared drift.
+# It is the "yes, I widened it deliberately and I am about to record it" button — not a way to live
+# with the disagreement.
 # Missing topics, narrower topics, malformed output, malformed declarations and an unreachable
 # broker stay fatal — those are not "drift I accept", they are "I do not know what is true".
 # Using it means topics.env is WRONG and must be corrected in the same session.
@@ -140,12 +150,12 @@ for topic in "${!DECLARED[@]}"; do
     echo "NARROWER: $topic declared=$declared live=$live" >&2
     fatal=$((fatal + 1))
   elif [ "$live" -gt "$declared" ]; then
-    echo "UNDER-DECLARED: $topic declared=$declared live=$live" >&2
+    echo "WIDER-THAN-DECLARED: $topic declared=$declared live=$live" >&2
     wider=$((wider + 1))
   fi
 done
 
-echo "verify-topic-partition-contract[$MODE]: checked $checked declared topics (under-declared=$wider fatal=$fatal)"
+echo "verify-topic-partition-contract[$MODE]: checked $checked declared topics (wider-than-declared=$wider fatal=$fatal)"
 
 if [ "$fatal" -gt 0 ]; then
   echo "es4 TOPIC CONTRACT: $fatal topic(s) missing, narrower than declared, or unreadable — fail-closed." >&2
@@ -168,26 +178,32 @@ fi
 
 cat >&2 <<EOF
 
-es4 TOPIC PARTITION CONTRACT UNDER-DECLARES $wider TOPIC(S).
+es4 TOPIC PARTITION CONTRACT DISAGREES WITH THE BROKER ON $wider TOPIC(S).
 
-Each one above is live-WIDER than topics.env declares. That is never cosmetic here: on the next
-clean-reset apply-topics.sh will create it at the SMALL declared size, the owning service will widen
-it seconds later, and any Kafka Streams app that reads its metadata in between builds its
-repartition/changelog topics at the small size. Those apps then come up 1/1 Running and healthy and
-process nothing, forever (2026-08-02: strike-flow-classifier, 0 records for 3h).
+Each one above is live-WIDER than scripts/kafka/topics.env declares. For the es4 set that file is the
+EXACT desired shape, because a clean-reset rebuilds the world from it: a width it does not record is
+not preserved. So this state cannot simply be left alone — ADJUDICATE it:
 
-FIX (do this, do not skip it):
-  1. Correct each topic's entry in scripts/kafka/topics.env (OPTIONS_EDGE_ES4_TOPICS) to the live
-     count printed above, and merge it. The contract is the fix — widening on the broker is not.
-  2. If an app is already wedged, repair it per the runbook: scale that ONE app to 0, delete only
-     the internal topics whose names start with its Kafka Streams application.id (its
-     *-repartition and *-changelog topics — never a broker-wide wildcard), then scale back to 1.
+  (a) the widening was deliberate -> record the live count in topics.env (OPTIONS_EDGE_ES4_TOPICS)
+      and merge, otherwise the next reset drops the topic back to the declared size; or
+  (b) it was not deliberate -> the topic is wrong, and it was almost certainly widened by its owning
+      service because the contract under-declared it.
 
-To proceed anyway (incident only): ES4_ALLOW_PARTITION_DRIFT=true
+Either way the failure mode if it is ignored is the same one this check exists for: the next reset
+creates the topic at the SMALL declared size, the owner widens it seconds later, and any Kafka
+Streams app that reads its metadata in between builds its repartition/changelog topics at the small
+size. Those apps then come up 1/1 Running and healthy and process nothing, forever (2026-08-02:
+strike-flow-classifier, 0 records for 3h).
+
+If an app is already wedged, repair it per the runbook: scale that ONE app to 0, delete only the
+internal topics whose names start with its Kafka Streams application.id (its *-repartition and
+*-changelog topics — never a broker-wide wildcard), then scale back to 1.
+
+To proceed anyway (deliberate widening, recording it now): ES4_ALLOW_PARTITION_DRIFT=true
 EOF
 
 if [ "$ALLOW_DRIFT" = "true" ]; then
-  echo "ES4_ALLOW_PARTITION_DRIFT=true — continuing despite $wider under-declared topic(s) (topics.env is still wrong)" >&2
+  echo "ES4_ALLOW_PARTITION_DRIFT=true — continuing despite $wider wider-than-declared topic(s); topics.env still has to be updated or the next reset reverts them" >&2
   exit 0
 fi
 exit 1
