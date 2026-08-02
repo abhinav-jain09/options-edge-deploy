@@ -66,6 +66,7 @@ IMAGE_MAP = {
     ("es-open-direction-service", "es-open-direction"): "ES_OPEN_DIRECTION_IMAGE",
     ("es-open-direction-postgres-writer", "es-open-direction-postgres-writer"): "ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE",
     ("close-direction-service", "close-direction"): "CLOSE_DIRECTION_IMAGE",
+    ("spot-vol-regime-service", "spot-vol-regime"): "SPOT_VOL_REGIME_IMAGE",
     ("oi-shadow-service", "oi-shadow"): "OI_SHADOW_IMAGE",
     ("reversal-postgres-writer", "reversal-postgres-writer"): "REVERSAL_POSTGRES_WRITER_IMAGE",
 }

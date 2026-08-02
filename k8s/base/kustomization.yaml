@@ -46,6 +46,8 @@ resources:
   - es-open-direction-service.yaml
   - close-direction-deployment.yaml
   - close-direction-service.yaml
+  - spot-vol-regime-deployment.yaml
+  - spot-vol-regime-service.yaml
   - oi-shadow-deployment.yaml
   - oi-shadow-service.yaml
   - vix-option-inteligence-deployment.yaml

@@ -70,6 +70,7 @@ services:
   - { name: spread-skew-postgres-writer,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew-postgres-writer,  deployments: [spread-skew-postgres-writer] }
   - { name: es-open-direction,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction,            deployments: [es-open-direction-service] }
   - { name: close-direction,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-close-direction,              deployments: [close-direction-service] }
+  - { name: spot-vol-regime,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spot-vol-regime,              deployments: [spot-vol-regime-service] }
   # SPXW session-close open-interest shadow experiment. Ships DISABLED (OI_SHADOW_ENABLED=false):
   # the requirement's observation calendar starts at a NAMED session, so being deployed must not
   # be the same thing as having started. No consumers by design.

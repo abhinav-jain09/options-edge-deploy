@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: spot-vol-regime-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: spot-vol-regime-service
+    app.kubernetes.io/component: spot-vol-regime-service
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8133"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: spot-vol-regime-service
+  ports:
+    - name: health
+      port: 8133
+      targetPort: health

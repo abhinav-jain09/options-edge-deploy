@@ -56,6 +56,7 @@ SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$registry/options-edge-spread-skew-postgres-wr
 ES_OPEN_DIRECTION_IMAGE=$registry/options-edge-es-open-direction:$image_tag
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$registry/options-edge-es-open-direction-postgres-writer:$image_tag
 CLOSE_DIRECTION_IMAGE=$registry/options-edge-close-direction:$image_tag
+SPOT_VOL_REGIME_IMAGE=$registry/options-edge-spot-vol-regime:$image_tag
 OI_SHADOW_IMAGE=$registry/options-edge-oi-shadow:$image_tag
 REVERSAL_POSTGRES_WRITER_IMAGE=$registry/options-edge-reversal-postgres-writer:$image_tag
 EOF
@@ -113,6 +114,7 @@ SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$SPREAD_SKEW_POSTGRES_WRITER_IMAGE
 ES_OPEN_DIRECTION_IMAGE=$ES_OPEN_DIRECTION_IMAGE
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE
 CLOSE_DIRECTION_IMAGE=$CLOSE_DIRECTION_IMAGE
+SPOT_VOL_REGIME_IMAGE=$SPOT_VOL_REGIME_IMAGE
 OI_SHADOW_IMAGE=$OI_SHADOW_IMAGE
 REVERSAL_POSTGRES_WRITER_IMAGE=$REVERSAL_POSTGRES_WRITER_IMAGE
 EOF
