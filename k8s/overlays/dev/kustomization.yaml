@@ -25,6 +25,26 @@ resources:
   # broker/profile/image.
   - ../../services/databento-vix-feed/base
 patches:
+  # greek-move-authenticity: ENABLED on DEV (the SPX proving ground — advisory-only, in-session
+  # baseline bootstrap). Strategic-merge on env name (namespace required for the dev overlay).
+  # MUST MIRROR the standalone slice k8s/services/greek-move-authenticity/overlays/dev (validate-services).
+  - target:
+      kind: Deployment
+      name: greek-move-authenticity-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: greek-move-authenticity-service
+        namespace: options-edge
+      spec:
+        template:
+          spec:
+            containers:
+              - name: greek-move-authenticity
+                env:
+                  - name: GREEK_MOVE_AUTH_ENABLED
+                    value: "true"
   # market-carry restores the SR3 history as a GlobalKTable. Keep the same
   # memory envelope as production: the 1Gi/768Mi profile is OOM-killed by
   # RocksDB/native restore memory before the service can publish carry.
@@ -383,6 +403,8 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-vix-option-inteligence
     newName: host.docker.internal:5001/options-edge-vix-option-inteligence
+  - name: 192.168.100.252:5000/options-edge-greek-move-authenticity
+    newName: host.docker.internal:5001/options-edge-greek-move-authenticity
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-strike-invasion
     newName: host.docker.internal:5001/options-edge-strike-invasion
