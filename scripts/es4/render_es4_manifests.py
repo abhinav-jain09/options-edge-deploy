@@ -40,6 +40,7 @@ SERVICES = [
     "directional-pressure", "gex-delta-redis-writer", "option-price-behavior", "option-truth-engine", "pin-postgres-writer",
     "pressure-postgres-writer", "raw-to-display", "strike-flow-avro-adapter", "strike-flow-classifier",
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
+    "greek-move-authenticity",
 ]
 
 ES_ENV = {
