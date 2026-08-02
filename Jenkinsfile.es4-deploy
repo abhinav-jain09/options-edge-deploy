@@ -230,8 +230,6 @@ pipeline {
             kubectl -n options-edge delete deployment zero-dte-intelligence-service --ignore-not-found
             kubectl -n options-edge delete service zero-dte-intelligence-service --ignore-not-found
           fi
-          if [ -z "$DRY" ] && [ "$ACTION" = "deploy-all" ]; then
-          fi
           # es-feed is NEVER started by a deploy: the manifest always carries replicas 0 and this
           # path performs no scaling at all — activation is its own ACTION (requirement DBP-R22).
           if [ "$ACTION" = "deploy-service" ] && [ "$SERVICE" = "es-feed" ]; then
