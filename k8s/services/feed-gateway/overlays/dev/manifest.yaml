@@ -98,7 +98,7 @@ spec:
             - name: OE_WATCH_ALLOW_PLAINTEXT
               value: "true"
             - name: OE_SYSTEM_STATUS_TOPICS
-              value: underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard
+              value: underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard,option-price-behavior-session,option-price-behavior-by-option,option-price-behavior-by-strike
             - name: OE_SYSTEM_STATUS_LAG_REGISTRY
               value: databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo
             - name: APP_WEB_PORT

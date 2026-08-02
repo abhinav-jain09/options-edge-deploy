@@ -40,7 +40,12 @@ spec:
               value: "prod"
             # Mirror of ~/oe-ops/freshness-topics.conf (prod rows): the EXPECTED topic universe, so a
             # registered topic with no ledger evidence renders NO_EVIDENCE instead of vanishing.
+            # 2026-08-02: re-synced to the watcher registry. underlying.vix.price was watched by
+            # NOBODY — it went dark at the 2026-07-29 close (single-publisher cutover left
+            # databento-vix-feed at replicas 0) and two whole sessions passed unnoticed. The three
+            # option-price-behavior rows were added to the watcher on 2026-07-30 but never mirrored
+            # here, so this list had silently drifted out of "mirror" — the same invisibility class.
             - name: OE_SYSTEM_STATUS_TOPICS
-              value: "underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard,market.spx.market-carry-service.current"
+              value: "underlying.spx.price,underlying.vix.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard,market.spx.market-carry-service.current,option-price-behavior-session,option-price-behavior-by-option,option-price-behavior-by-strike"
             - name: OE_SYSTEM_STATUS_LAG_REGISTRY
               value: "databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo"
