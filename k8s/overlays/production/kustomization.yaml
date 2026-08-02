@@ -26,6 +26,37 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # greek-move-authenticity: ENABLED on PROD (go-live — advisory-only, CHARM_SIGN pinned by the
+  # Gate-1 fixture, options-edge-processing #409). Strategic-merge on env name (namespace required).
+  # MUST MIRROR the standalone slice k8s/services/greek-move-authenticity/overlays/production (validate-services).
+  - target:
+      kind: Deployment
+      name: greek-move-authenticity-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: greek-move-authenticity-service
+        namespace: options-edge
+      spec:
+        template:
+          spec:
+            containers:
+              - name: greek-move-authenticity
+                env:
+                  - name: GREEK_MOVE_AUTH_ENABLED
+                    value: "true"
+                  # Bootstrap the robust-Z baseline from the CURRENT session (the dev default).
+                  # baselineReady() counts prior-session samples, plus current-session samples ONLY
+                  # when this is true. On a freshly-deployed service `prior` is empty, so with the
+                  # prod default (false) n==0 forever and EVERY frame is DATA_DEGRADED /
+                  # MOVE_BASELINE_NOT_READY for the entire first session — observed live on es4 at
+                  # the 2026-07-19 globex open (364 verdicts, all MOVE_BASELINE_NOT_READY).
+                  # Trade-off: an in-session baseline is statistically weaker early on (it self-
+                  # corrects as samples accumulate) — the alternative is a dead first session.
+                  # REVERT = drop this env entry (falls back to prior-session-only baselines).
+                  - name: GREEK_MOVE_AUTH_BOOTSTRAP_IN_SESSION
+                    value: "true"
   # Restoring the 4.3M-record SR3 GlobalKTable needs substantial RocksDB/native
   # headroom in addition to the Java heap. The previous 1Gi cgroup with a 768Mi
   # heap was OOM-killed during restore and left the pod-local store corrupted.

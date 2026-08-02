@@ -180,6 +180,12 @@ ES_ENV = {
         # magnitudes. Self-calibrating — no per-session scale numbers. SPX keeps the flag OFF (default).
         {"name": "STRIKE_INTEL_ADAPTIVE_SCALE_ENABLED", "value": "true"},
     ],
+    # greek-move-authenticity on es4: the SAME engine measures ES greeks to authenticate ES moves.
+    "greek-move-authenticity": [
+        {"name": "GREEK_MOVE_AUTH_ENABLED", "value": "true", "_override": True},
+        {"name": "GREEK_MOVE_AUTH_SYMBOL", "value": "ES", "_override": True},
+        {"name": "GREEK_MOVE_AUTH_INPUT_SPOT_TOPIC", "value": "underlying.es.price", "_override": True},
+    ],
     "vix-option-inteligence": [
         # On es4 the same deterministic engine analyzes the ES 0DTE option tape. TOPIC_PREFIX
         # still isolates all input/output topics on the .4 broker.
