@@ -323,14 +323,15 @@ log "reconciling required core es.* topic contracts (create-es-topics.sh)"
   # "cannot enforce delete/<=1d retention on es.strike-intelligence-by-strike ->
   # UnknownTopicOrPartitionException", taking the whole strike-flow chain down).
   run "KAFKA_RECREATE_MISMATCHED_TOPICS=true bash '$SCRIPT_DIR/create-es-topics.sh'"
-# ⭐The apps are still at 0 here, so "declared == live" is an exact invariant, not a race. This is
-# the ONLY point in the reset where an under-declared topic can still be caught for free: seconds
-# later the services come up, widen whatever the contract under-sized, and any Streams app that read
-# metadata in that window is permanently wedged behind a green 1/1 pod (2026-08-02:
-# strike-flow-classifier, 0 records for 3h). Fail here rather than hand the operator a healthy-
-# looking fleet with a dead topology.
-log "verifying declared topic partition contract (exact, apps still down)"
-run "bash '$SCRIPT_DIR/verify-topic-partition-contract.sh'"
+# Proves reconciliation actually produced the declared world: every declared topic exists and none
+# is NARROWER than declared (a client that raced in ahead of apply-topics). It deliberately does NOT
+# claim to validate the partition counts themselves — these topics were just created FROM
+# topics.env, so comparing them back to it is close to a tautology, and it would have passed at
+# 19:19 on 2026-08-02 with `tcbbo:4` in the file. The check that catches an UNDER-DECLARED contract
+# is the steady-state audit after the apps are up (see below), where the owners' own contracts make
+# the broker an independent source of truth.
+log "verifying declared topics were created (missing/narrower are fatal; apps still down)"
+run "bash '$SCRIPT_DIR/verify-topic-partition-contract.sh' created"
 log "docker compose up -d (start mm2 + any remaining infra now that topics exist)"
 run "(cd '$INFRA_DIR' && docker compose up -d)"
 
@@ -405,32 +406,72 @@ else
   done
   log "self-heal restarted ${healed} straggler(s)"
 
-  # ⭐GREEN-POD / DEAD-TOPOLOGY DETECTOR. Every readiness signal above is satisfied by a Kafka
-  # Streams app whose StreamThreads have all died: the health port keeps answering, availableReplicas
-  # stays at desired, restarts stay 0, and the app processes nothing forever. The 2026-08-02 reset
-  # ended "23/23 ready" with strike-flow-classifier in exactly that state. The failure is not
-  # inferable from k8s at all — but Streams says it in one unmistakable line, so read that.
+  # ⭐POST-RESTORE AUDITS. Everything above is satisfied by a Kafka Streams app whose StreamThreads
+  # have all died: the health port keeps answering, availableReplicas stays at desired, restarts stay
+  # 0, and the app processes nothing forever. The 2026-08-02 reset ended "23/23 ready" with
+  # strike-flow-classifier in exactly that state. Two independent checks run here, and BOTH are
+  # fatal — a reset that knowingly leaves a dead pipeline must not report green.
   #
-  # Advisory, NOT fatal: by this point the reset has already completed successfully and the wedge is
-  # repairable without another wipe. Failing here would strand a finished reset in an ERROR build and
-  # tempt a second destructive run. Loud output + a non-zero count in the summary is the right level.
+  # The state file was already cleared above, so exiting non-zero here cannot make a resume
+  # destructive. It does mean a blind rerun would re-WIPE, which is why the messages say plainly:
+  # repair the named app, do NOT rerun clean-reset.
+  #
+  # The wedge only appears after the app has joined its group and tried to assign tasks, and the
+  # self-heal above may have just restarted pods, so give it a bounded settle window first.
+  post_fail=0
+  settle="${ES4_POST_RESTORE_SETTLE_SECONDS:-90}"
+  log "waiting ${settle}s for restarted apps to rejoin their consumer groups before auditing"
+  sleep "$settle"
+
+  # (1) Steady-state contract audit. Now that every owner has applied its OWN topic contract, the
+  # broker is an independent source of truth: live > declared means topics.env under-declares that
+  # topic and the NEXT reset would rebuild the same trap. This is the check that had teeth on
+  # 2026-08-02 — and the only one of the two that prevents a recurrence rather than reporting it.
+  log "auditing steady-state topic partition contract (under-declaration is fatal)"
+  if ! run "bash '$SCRIPT_DIR/verify-topic-partition-contract.sh' steady"; then
+    post_fail=1
+  fi
+
+  # (2) Green-pod / dead-topology scan. k8s cannot see this at all, but Streams says it in one
+  # unmistakable line. Read per POD (a Deployment's `logs` reaches one pod only), keep the command's
+  # exit status, and never let a failed log read pass as "no wedge".
   log "scanning for wedged Streams topologies (green pod, dead threads)"
   wedged=""
-  for d in $($KC get deploy -o name 2>/dev/null | sed 's#.*/##'); do
-    des=$($KC get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
-    [ "${des:-0}" -gt 0 ] || continue
-    if $KC logs "deploy/$d" --tail=2000 2>/dev/null | grep -q 'invalid partitions: expected'; then
-      wedged="$wedged $d"
+  scan_errors=""
+  for p in $($KC get pods --field-selector=status.phase=Running -o name 2>/dev/null | sed 's#.*/##'); do
+    # Capture the log body and its EXIT STATUS separately. `kubectl logs | grep -q` is wrong twice
+    # over: -q closes the pipe early so kubectl dies of SIGPIPE and, under `set -o pipefail`, a real
+    # MATCH is reported as failure; and a kubectl error would be indistinguishable from "no match".
+    set +e
+    pod_logs="$($KC logs "$p" --all-containers --tail=5000 2>/dev/null)"
+    logs_status=$?
+    set -e
+    if [ "$logs_status" -ne 0 ]; then
+      scan_errors="$scan_errors $p"
+    else
+      # Pure-bash match: no pipeline, so nothing here can be confused by SIGPIPE or pipefail.
+      case "$pod_logs" in
+        *"invalid partitions: expected"*) wedged="$wedged $p" ;;
+      esac
     fi
   done
   if [ -n "$wedged" ]; then
     echo "WEDGED STREAMS TOPOLOGIES (pods are Ready but process nothing):$wedged" >&2
-    echo "Kafka cannot shrink a topic, so each one needs: scale to 0 -> delete its *-repartition and" >&2
-    echo "*-changelog topics -> scale back to 1. Then fix the offending entry in topics.env, because" >&2
-    echo "an under-declared source topic is what builds the internal topics at the wrong size." >&2
+    echo "REPAIR EACH ONE — do NOT rerun clean-reset (that would wipe again for no reason):" >&2
+    echo "  scale that app to 0 -> delete ONLY the topics whose names start with its Streams" >&2
+    echo "  application.id (its *-repartition and *-changelog topics; never a broker-wide wildcard)" >&2
+    echo "  -> scale back to 1. Kafka cannot shrink a topic, so there is no gentler path." >&2
+    echo "Then correct the under-declared source topic in topics.env, or the next reset rebuilds it." >&2
+    post_fail=1
+  elif [ -n "$scan_errors" ]; then
+    echo "WEDGE SCAN INCONCLUSIVE — could not read logs for:$scan_errors" >&2
+    echo "An unreadable pod is an UNKNOWN, not a pass. Re-run the scan or check these by hand." >&2
+    post_fail=1
   else
     log "  no wedged topologies detected"
   fi
+
+  [ "$post_fail" = 0 ] || die "post-restore audit FAILED — the reset finished and state is already cleared, so fix what is named above; do NOT rerun clean-reset"
 fi
 
 if [ "$DRY" = "true" ]; then

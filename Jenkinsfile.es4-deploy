@@ -95,10 +95,12 @@ pipeline {
           set -euo pipefail
           rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
-          # An under-declared partition count is invisible at creation time and only becomes an
-          # incident hours later, behind a green pod (see verify-topic-partition-contract.sh).
-          # Running create-topics WITHOUT this audit is what let topics.env drift on 24 topics.
-          ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/verify-topic-partition-contract.sh'
+          # STEADY-state audit: this action runs against a LIVE es4, so every owner has already
+          # applied its own topic contract and the broker is an independent source of truth. A topic
+          # that is live-WIDER than topics.env declares means the contract under-declares it and the
+          # next clean-reset would rebuild the 2026-08-02 wedge. Running create-topics WITHOUT this
+          # audit is exactly how topics.env drifted on 24 topics unnoticed.
+          ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/verify-topic-partition-contract.sh steady'
         '''
       }
     }

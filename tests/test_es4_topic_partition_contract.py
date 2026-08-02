@@ -1,19 +1,24 @@
-"""Regression lock for the 2026-08-02/03 es4 wedge: an UNDER-declared topic partition count in
-scripts/kafka/topics.env is created small, widened moments later by the owning service, and any
-Kafka Streams app that read metadata in that window builds its repartition/changelog topics at the
-small size — then dies on every rebalance ("invalid partitions: expected: 32; actual: 4") behind a
-pod that still reports 1/1 Running. strike-flow-classifier processed 0 records for 3h that way.
+"""Regression lock for the 2026-08-02/03 es4 wedge.
 
-Two things must hold forever: the declared shapes are the REAL shapes, and a guard re-proves that
-on every topic reconciliation instead of trusting the file."""
+An UNDER-declared topic partition count in scripts/kafka/topics.env is created small, widened moments
+later by the owning service, and any Kafka Streams app that read metadata in that window builds its
+repartition/changelog topics at the small size — then dies on every rebalance ("invalid partitions:
+expected: 32; actual: 4") behind a pod that still reports 1/1 Running. strike-flow-classifier
+processed 0 records for 3h that way.
+
+The verifier is EXECUTED here against a fake kafka-topics CLI, not grepped for reassuring strings:
+the first version of it passed a source-text test while carrying two fail-open paths."""
+import os
 import re
+import stat
 import subprocess
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 ENV = (REPO / "scripts" / "kafka" / "topics.env").read_text()
 CLEANUP = (REPO / "scripts" / "es4" / "cleanup-es4.sh").read_text()
-VERIFY_PATH = REPO / "scripts" / "es4" / "verify-topic-partition-contract.sh"
+VERIFY = REPO / "scripts" / "es4" / "verify-topic-partition-contract.sh"
 JENKINS = (REPO / "Jenkinsfile.es4-deploy").read_text()
 
 # Verified 2026-08-03 against BOTH the live es4 broker and prod's shape for the same topic
@@ -46,18 +51,27 @@ WIDENED_TO_32 = (
 )
 
 
-def _es4_entries():
-    m = re.search(r'^OPTIONS_EDGE_ES4_TOPICS="([^"]*)"', ENV, re.M)
-    assert m, "OPTIONS_EDGE_ES4_TOPICS missing"
-    return dict(e.rsplit(":", 1) for e in m.group(1).split())
+def _declared():
+    """Every OPTIONS_EDGE_ES4_TOPICS assignment, in order — the second one appends to the first."""
+    out = {}
+    for m in re.finditer(r'^OPTIONS_EDGE_ES4_TOPICS="([^"]*)"', ENV, re.M):
+        for entry in m.group(1).split():
+            if entry.startswith("$"):
+                continue
+            name, count = entry.rsplit(":", 1)
+            out[name] = count
+    assert out, "OPTIONS_EDGE_ES4_TOPICS missing"
+    return out
 
+
+# --------------------------------------------------------------------------- the contract itself
 
 def test_incident_topics_are_declared_at_their_real_shape():
-    entries = _es4_entries()
+    declared = _declared()
     for topic in WIDENED_TO_32:
-        assert topic in entries, f"{topic} dropped from the es4 contract"
-        assert entries[topic] == "32", (
-            f"{topic} declared at {entries[topic]}, but its real shape is 32. Declaring it smaller "
+        assert topic in declared, f"{topic} dropped from the es4 contract"
+        assert declared[topic] == "32", (
+            f"{topic} declared at {declared[topic]}, but its real shape is 32. Declaring it smaller "
             "recreates the strike-flow-classifier wedge on the next clean-reset."
         )
 
@@ -65,47 +79,176 @@ def test_incident_topics_are_declared_at_their_real_shape():
 def test_source_topic_of_the_wedged_classifier_is_not_under_declared():
     """The single entry that caused the incident, called out on its own so a bulk edit cannot
     quietly revert it."""
-    assert _es4_entries()["es.options.opra.tcbbo"] == "32"
+    assert _declared()["es.options.opra.tcbbo"] == "32"
 
 
-def test_verify_script_exists_and_is_executable():
-    assert VERIFY_PATH.exists(), "verify-topic-partition-contract.sh missing"
-    assert VERIFY_PATH.stat().st_mode & 0o111, "verify-topic-partition-contract.sh not executable"
+def test_every_declaration_is_well_formed_and_unique():
+    seen = {}
+    for m in re.finditer(r'^OPTIONS_EDGE_ES4_TOPICS="([^"]*)"', ENV, re.M):
+        for entry in m.group(1).split():
+            if entry.startswith("$"):
+                continue
+            assert re.fullmatch(r"[^:\s]+:[1-9][0-9]*", entry), f"malformed entry: {entry}"
+            name, count = entry.rsplit(":", 1)
+            assert seen.get(name, count) == count, f"conflicting duplicate declaration for {name}"
+            seen[name] = count
 
 
-def test_verify_script_is_fail_closed():
-    text = VERIFY_PATH.read_text()
-    # unreachable broker, missing topic and unparseable describe must all be failures, never a pass
-    assert "exit 1" in text
-    assert "fail-closed" in text.lower()
-    assert 'ALLOW_DRIFT="${ES4_ALLOW_PARTITION_DRIFT:-false}"' in text, (
-        "the drift escape hatch must default to OFF"
-    )
-    # an exact comparison, not the '>=' tolerance that hid the drift in apply-topics.sh
-    assert '[ "$live" != "$declared" ]' in text
+# ------------------------------------------------------------------- the verifier, actually run
+
+def _run_verify(mode, describe_stdout, describe_status=0, env=None):
+    """Execute the real script with a fake kafka-topics on PATH."""
+    with tempfile.TemporaryDirectory() as tmp:
+        fake = Path(tmp) / "kafka-topics"
+        fake.write_text(
+            "#!/usr/bin/env bash\n"
+            f"cat <<'DESCRIBE_EOF'\n{describe_stdout}\nDESCRIBE_EOF\n"
+            f"exit {describe_status}\n"
+        )
+        fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+        environ = dict(os.environ)
+        environ["PATH"] = f"{tmp}:{environ['PATH']}"
+        environ.pop("ES4_ALLOW_PARTITION_DRIFT", None)
+        environ.update(env or {})
+        return subprocess.run(
+            ["bash", str(VERIFY), mode],
+            capture_output=True, text=True, env=environ, cwd=str(REPO),
+        )
 
 
-def test_verify_script_syntax():
-    subprocess.run(["bash", "-n", str(VERIFY_PATH)], check=True)
+def _describe_all(overrides=None):
+    """A describe body for every declared topic, at its declared shape unless overridden."""
+    overrides = overrides or {}
+    lines = []
+    for name, count in _declared().items():
+        if overrides.get(name) == "OMIT":
+            continue
+        shown = overrides.get(name, count)
+        lines.append(
+            f"Topic: {name}\tTopicId: fake\tPartitionCount: {shown}\tReplicationFactor: 1\tConfigs:"
+        )
+    return "\n".join(lines)
 
 
-def test_clean_reset_verifies_before_restoring_the_apps():
-    """The audit is only exact while every app is at 0 replicas. After the restore the services
-    widen topics themselves and the check becomes a race."""
-    reconcile = CLEANUP.index("create-es-topics.sh")
-    verify = CLEANUP.index("verify-topic-partition-contract.sh")
+def test_verify_passes_when_live_matches_the_contract():
+    for mode in ("created", "steady"):
+        r = _run_verify(mode, _describe_all())
+        assert r.returncode == 0, f"{mode} failed on a clean broker: {r.stdout}{r.stderr}"
+
+
+def test_steady_mode_fails_on_under_declaration():
+    """The 2026-08-02 signal: the owning service widened the topic past the contract."""
+    r = _run_verify("steady", _describe_all({"es.options.opra.tcbbo": "64"}))
+    assert r.returncode != 0, "under-declaration must fail the steady audit"
+    assert "UNDER-DECLARED" in r.stderr
+
+
+def test_created_mode_does_not_adjudicate_width():
+    """Right after reconciliation a pre-existing wider topic is not proof of a contract defect;
+    the verdict belongs to the steady-state audit."""
+    r = _run_verify("created", _describe_all({"es.options.opra.tcbbo": "64"}))
+    assert r.returncode == 0
+    assert "deferring the verdict" in r.stderr
+
+
+def test_missing_topic_is_fatal_in_both_modes():
+    for mode in ("created", "steady"):
+        r = _run_verify(mode, _describe_all({"es.options.opra.tcbbo": "OMIT"}))
+        assert r.returncode != 0, f"{mode} passed with a declared topic absent"
+        assert "MISSING" in r.stderr
+
+
+def test_narrower_topic_is_fatal_in_both_modes():
+    for mode in ("created", "steady"):
+        r = _run_verify(mode, _describe_all({"es.options.opra.tcbbo": "4"}))
+        assert r.returncode != 0, f"{mode} passed with a topic narrower than declared"
+        assert "NARROWER" in r.stderr
+
+
+def test_describe_failure_is_fatal_even_with_partial_output():
+    """A CLI/shim/docker failure that still prints plausible stdout must never read as a pass."""
+    r = _run_verify("steady", _describe_all(), describe_status=1)
+    assert r.returncode != 0
+    assert "UNREACHABLE" in r.stderr
+
+
+def test_empty_describe_is_fatal():
+    r = _run_verify("steady", "")
+    assert r.returncode != 0
+    assert "UNREACHABLE" in r.stderr
+
+
+def test_unparseable_describe_line_is_fatal():
+    body = _describe_all({"es.options.opra.tcbbo": "OMIT"})
+    body += "\nTopic: es.options.opra.tcbbo\tTopicId: fake\tPartitionCount: many\tConfigs:"
+    r = _run_verify("steady", body)
+    assert r.returncode != 0
+    assert "UNPARSEABLE" in r.stderr
+
+
+def test_escape_hatch_covers_drift_only():
+    allow = {"ES4_ALLOW_PARTITION_DRIFT": "true"}
+    # drift: tolerated
+    r = _run_verify("steady", _describe_all({"es.options.opra.tcbbo": "64"}), env=allow)
+    assert r.returncode == 0, "the hatch must cover validated wider-than-declared drift"
+    # everything else: still fatal
+    for overrides, label in (
+        ({"es.options.opra.tcbbo": "OMIT"}, "missing"),
+        ({"es.options.opra.tcbbo": "4"}, "narrower"),
+    ):
+        r = _run_verify("steady", _describe_all(overrides), env=allow)
+        assert r.returncode != 0, f"the hatch must NOT suppress a {label} topic"
+    r = _run_verify("steady", _describe_all(), describe_status=1, env=allow)
+    assert r.returncode != 0, "the hatch must NOT suppress an unreachable broker"
+
+
+def test_topic_name_matching_is_anchored():
+    """es.options.databento.strike-flow must not be validated against the shape of
+    es.options.databento.strike-flow.strike.avro."""
+    r = _run_verify("steady", _describe_all({"es.options.databento.strike-flow": "OMIT"}))
+    assert r.returncode != 0
+    assert "MISSING: declared topic es.options.databento.strike-flow does not exist" in r.stderr
+
+
+def test_unknown_mode_is_rejected():
+    r = _run_verify("", _describe_all())
+    assert r.returncode != 0
+    r = subprocess.run(["bash", str(VERIFY), "whatever"], capture_output=True, text=True)
+    assert r.returncode != 0
+
+
+def test_verify_script_syntax_and_permissions():
+    subprocess.run(["bash", "-n", str(VERIFY)], check=True)
+    assert VERIFY.stat().st_mode & 0o111, "verify-topic-partition-contract.sh not executable"
+
+
+# ------------------------------------------------------------------------ wiring into the reset
+
+def test_clean_reset_runs_created_before_restore_and_steady_after():
+    created = CLEANUP.index("verify-topic-partition-contract.sh' created")
     restore = CLEANUP.index("restoring es4 Deployments")
-    assert reconcile < verify < restore, "verify must run after topic reconcile, before app restore"
-
-
-def test_clean_reset_detects_wedged_topologies_after_restore():
-    assert "invalid partitions: expected" in CLEANUP, (
-        "the green-pod/dead-topology scan is the only signal that survives a wedge — k8s readiness "
-        "cannot see it"
+    steady = CLEANUP.index("verify-topic-partition-contract.sh' steady")
+    assert created < restore < steady, (
+        "the tautological creation check belongs before the restore; the audit with teeth only "
+        "works once the owners have applied their own contracts"
     )
 
 
-def test_create_topics_job_runs_the_audit():
-    assert "verify-topic-partition-contract.sh" in JENKINS, (
-        "ACTION=create-topics must audit what it just created"
+def test_post_restore_findings_are_fatal_not_advisory():
+    """A reset that knowingly leaves a dead pipeline must not exit green."""
+    assert "post_fail=1" in CLEANUP
+    assert "post-restore audit FAILED" in CLEANUP
+
+
+def test_wedge_scan_cannot_read_an_error_as_a_pass():
+    assert "WEDGE SCAN INCONCLUSIVE" in CLEANUP, "an unreadable pod is an UNKNOWN, not a pass"
+    assert "logs_status" in CLEANUP, "the log read's exit status must be captured separately"
+    assert "grep -q 'invalid partitions" not in CLEANUP, (
+        "grep -q makes kubectl die of SIGPIPE, so under pipefail a MATCH reads as failure"
+    )
+
+
+def test_create_topics_job_runs_the_steady_audit():
+    assert "verify-topic-partition-contract.sh steady" in JENKINS, (
+        "ACTION=create-topics runs against a live es4 — that is the steady-state contract audit"
     )
