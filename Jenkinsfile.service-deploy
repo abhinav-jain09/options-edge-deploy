@@ -25,6 +25,8 @@
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
+    string(name: 'INTENT_ID', defaultValue: '',
+      description: 'Optional idempotency key (0DTE pipeline automation). Empty = normal manual build. With a value: at most ONE build per intent ever reaches the deploy stages — a second submission aborts as NOOP_DUPLICATE (intent-dedup.json artifact names the winner).')
     choice(name: 'SERVICE', choices: [
       'databento-feed', 'databento-sr3-feed', 'databento-vix-feed', 'databento-gex', 'databento-gex-history', 'gamma-migration', 'databento-maxpain', 'databento-mission-sandwich',
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
@@ -56,6 +58,68 @@ pipeline {
     DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
   }
   stages {
+    stage('Intent dedup') {
+      when { expression { params.INTENT_ID?.trim() } }
+      steps { script {
+        def rc = sh(returnStatus: true, script: '''
+        set -euo pipefail
+        # Serialized by disableConcurrentBuilds(): at most one build EXECUTES at a time, so this
+        # claim step cannot race another executor. Durable ledger outside the workspace (plan
+        # rev 7): survives workspace wipes; cleanup jobs never touch ~/oe-ops.
+        LEDGER=/Users/abhinav/oe-ops/zerodte-audit/jenkins-intents
+        mkdir -p "$LEDGER"
+        CLAIM="$LEDGER/${INTENT_ID}.json"
+        if [ -f "$CLAIM" ]; then
+          STATE=$(python3 -c "import json;print(json.load(open('$CLAIM')).get('state'))")
+          BN=$(python3 -c "import json;print(json.load(open('$CLAIM')).get('buildNumber'))")
+          if [ "$STATE" = "DEPLOYED" ]; then
+            echo "{\"intentId\":\"$INTENT_ID\",\"winner\":$BN}" > intent-dedup.json
+            echo "NOOP_DUPLICATE: intent already DEPLOYED by build $BN"; exit 42
+          fi
+          # CLAIMED or DEPLOY_STAGE_STARTED by another build: resolve via our own API record.
+          RESULT=$(curl -sf -u "admin:Options#100" "$JENKINS_URL/job/service-deploy/$BN/api/json" | python3 -c "import sys,json;print(json.load(sys.stdin).get('result'))" || echo MISSING)
+          if [ "$RESULT" = "None" ] || [ "$RESULT" = "null" ]; then
+            echo "{\"intentId\":\"$INTENT_ID\",\"winner\":$BN}" > intent-dedup.json
+            echo "NOOP_DUPLICATE: build $BN still running for this intent"; exit 42
+          fi
+          MARKER=$(python3 -c "import json;print(json.load(open('$CLAIM')).get('state'))")
+          if [ "$MARKER" = "DEPLOY_STAGE_STARTED" ] || [ "$RESULT" = "MISSING" ]; then
+            echo "HUMAN REQUIRED: prior build $BN reached the deploy stage (or its record is gone) without a receipt — a half-applied deploy may exist. Mark the claim FAILED after verifying the cluster digest, then resubmit."; exit 1
+          fi
+          if [ "$RESULT" = "SUCCESS" ]; then
+            # Codex round 1: CLAIMED + terminal SUCCESS is INCONSISTENT — success without the
+            # marker means the ledger writes are not being reached, and "provably pre-deploy"
+            # cannot be claimed about a build that succeeded. Never supersede an inconsistency.
+            echo "HUMAN REQUIRED: build $BN is SUCCESS but its claim never left CLAIMED — ledger and reality disagree; verify the cluster digest and repair the claim by hand."; exit 1
+          fi
+          # terminal FAILED/ABORTED, marker absent: provably died pre-deploy -> SUPERSEDE
+          echo "superseding failed pre-deploy claim of build $BN"
+        fi
+        python3 - "$CLAIM" "$BUILD_NUMBER" <<'PYEOF'
+import json,os,sys
+path,bn=sys.argv[1],int(sys.argv[2])
+tmp=path+".tmp"
+prev=json.load(open(path)) if os.path.exists(path) else {}
+rec={"intentId":os.environ["INTENT_ID"],"buildNumber":bn,"state":"CLAIMED",
+     "version":prev.get("version",0)+1,"supersedes":prev.get("buildNumber")}
+with open(tmp,"w") as f: json.dump(rec,f); f.flush(); os.fsync(f.fileno())
+os.rename(tmp,path)
+d=os.open(os.path.dirname(path),os.O_RDONLY); os.fsync(d); os.close(d)
+PYEOF
+        echo "intent $INTENT_ID claimed by build $BUILD_NUMBER"
+      ''')
+        if (rc == 42) {
+          // NOOP_DUPLICATE: the machine-readable truth is intent-dedup.json (+ the durable
+          // ledger, which the deployer reads exclusively); the Jenkins result is NOT_BUILT set
+          // here, then the abort. The deployer never keys off build results for dedup decisions.
+          if (fileExists('intent-dedup.json')) { archiveArtifacts artifacts: 'intent-dedup.json' }
+          currentBuild.result = 'NOT_BUILT'
+          error('NOOP_DUPLICATE — another build owns this intent (see intent-dedup.json)')
+        } else if (rc != 0) {
+          error("intent dedup failed rc=${rc} — human required (half-applied deploy possible)")
+        }
+      } }
+    }
     stage('Validate service registry') {
       steps {
         sh '''
@@ -306,6 +370,20 @@ pipeline {
     }
     stage('Deploy (service-scoped)') {
       steps {
+        script { if (params.INTENT_ID?.trim()) { sh '''
+          # DEPLOY_STAGE_STARTED — the durable pre-deploy boundary (plan rev 8/9): fsync file,
+          # rename, fsync DIRECTORY, and only then mutate the cluster. If this write cannot be
+          # made durable the build FAILS here, before anything is applied.
+          python3 - "/Users/abhinav/oe-ops/zerodte-audit/jenkins-intents/${INTENT_ID}.json" <<'PYEOF'
+import json,os,sys
+path=sys.argv[1]; rec=json.load(open(path))
+rec["state"]="DEPLOY_STAGE_STARTED"; rec["version"]+=1
+tmp=path+".tmp"
+with open(tmp,"w") as f: json.dump(rec,f); f.flush(); os.fsync(f.fileno())
+os.rename(tmp,path)
+d=os.open(os.path.dirname(path),os.O_RDONLY); os.fsync(d); os.close(d)
+PYEOF
+        ''' } }
         sh '''
           set -euo pipefail
           export SERVICE="${SERVICE_PARAM:?}"
@@ -313,6 +391,18 @@ pipeline {
           bash scripts/deploy/remove-retired-workloads.sh
           WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/service-deploy.sh
         '''
+        script { if (params.INTENT_ID?.trim()) { sh '''
+          # DEPLOYED — terminal claim state, written only after service-deploy.sh returned 0.
+          python3 - "/Users/abhinav/oe-ops/zerodte-audit/jenkins-intents/${INTENT_ID}.json" <<'PYEOF'
+import json,os,sys
+path=sys.argv[1]; rec=json.load(open(path))
+rec["state"]="DEPLOYED"; rec["version"]+=1
+tmp=path+".tmp"
+with open(tmp,"w") as f: json.dump(rec,f); f.flush(); os.fsync(f.fileno())
+os.rename(tmp,path)
+d=os.open(os.path.dirname(path),os.O_RDONLY); os.fsync(d); os.close(d)
+PYEOF
+        ''' } }
       }
     }
     stage('Verify web UI (post-rollout)') {

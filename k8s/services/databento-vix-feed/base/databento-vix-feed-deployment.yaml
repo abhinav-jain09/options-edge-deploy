@@ -33,16 +33,15 @@ metadata:
     app.kubernetes.io/part-of: options-edge
 spec:
   # 1 = cutover state; see the header note. Rollback = 0 FIRST, then re-enable in-SPX.
-  # DISABLED until further notice (USER 2026-07-30): the container's command,
-  # `options-edge-vix-feed`, does NOT exist in the options-edge-databento-feed image —
-  # pyproject [project.scripts] ships only options-edge-databento-feed,
-  # options-edge-databento-sr3-feed and the replay CLIs. So it can never start:
-  #   exec: "options-edge-vix-feed": executable file not found in $PATH (exitCode 128)
-  # It is already in KEEP_DOWN, but replicas:1 still had kubelet create a pod that
-  # crash-looped (24 restarts on prod) and the autostart self-heal (#651) bounced it
-  # every run. Re-enable = ship the entrypoint in the feed image (or delete this
-  # orphan Deployment), then set replicas back to 1.
-  replicas: 0
+  # RE-ENABLED 2026-08-02: the 2026-07-30 hold ("options-edge-vix-feed executable not
+  # found") no longer applies — the entrypoint ships in the current :prod image
+  # (prod-219-a26dda2c7e8a, built 2026-07-31 from feed commit a26dda2, whose pyproject
+  # [project.scripts] includes options-edge-vix-feed = vix_feed:main). Since the hold,
+  # underlying.vix.price has had NO publisher (single-publisher cutover 2026-07-29 cut
+  # the SPX-side block first) — canonical VIX spot dark since 07-29 close. This commit
+  # restores the cutover state: replicas 1 here + KEEP_DOWN entry removed together
+  # (base-header rule: the two are mutually exclusive with the hold).
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: databento-vix-feed
