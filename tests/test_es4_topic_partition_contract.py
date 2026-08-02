@@ -329,9 +329,60 @@ def test_jenkins_uses_the_same_neutral_semantics_as_the_verifier():
     assert "ADJUDICATE" in JENKINS
 
 
-def test_all_duplicate_declarations_are_rejected_not_just_conflicting_ones():
-    """An identical repeat is still two places to edit, and the next edit to one of them creates
-    the conflicting case. The header promises every duplicate fails, so the code must."""
-    text = VERIFY.read_text()
-    assert "DUPLICATE declaration for" in text
-    assert "CONFLICTING duplicate" not in text
+def _run_verify_with_declaration(declaration, mode="steady"):
+    """Execute the verifier against a REWRITTEN topics.env, by mirroring the two files it resolves
+    (scripts/es4/<script> and scripts/kafka/topics.env) into a temp tree. No production-facing
+    override knob is introduced just to make this testable."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "scripts" / "es4").mkdir(parents=True)
+        (root / "scripts" / "kafka").mkdir(parents=True)
+        script = root / "scripts" / "es4" / VERIFY.name
+        script.write_text(VERIFY.read_text())
+        script.chmod(0o755)
+        (root / "scripts" / "kafka" / "topics.env").write_text(
+            f'OPTIONS_EDGE_ES4_TOPICS="{declaration}"\n'
+        )
+        fake = root / "kafka-topics"
+        fake.write_text("#!/usr/bin/env bash\necho 'Topic: es.a\tTopicId: f\tPartitionCount: 4'\n")
+        fake.chmod(0o755)
+        environ = dict(os.environ)
+        environ["PATH"] = f"{root}:{environ['PATH']}"
+        environ.pop("ES4_ALLOW_PARTITION_DRIFT", None)
+        return subprocess.run(
+            ["bash", str(script), mode], capture_output=True, text=True, env=environ
+        )
+
+
+def test_identical_duplicate_declaration_is_rejected_when_executed():
+    """Not a source grep: run it. An identical repeat is still two places to edit, and the next
+    edit to one of them creates the conflicting case."""
+    r = _run_verify_with_declaration("es.a:4 es.a:4")
+    assert r.returncode != 0, "an identical duplicate must be rejected"
+    assert "DUPLICATE declaration for es.a" in r.stderr
+
+
+def test_conflicting_duplicate_declaration_is_rejected_when_executed():
+    r = _run_verify_with_declaration("es.a:4 es.a:32")
+    assert r.returncode != 0
+    assert "DUPLICATE declaration for es.a" in r.stderr
+
+
+def test_malformed_declaration_is_rejected_before_any_broker_call():
+    for bad in ("es.a", "es.a:", "es.a:0", "es.a:-4", "es.a:many"):
+        r = _run_verify_with_declaration(bad)
+        assert r.returncode != 0, f"accepted malformed entry {bad!r}"
+        assert "MALFORMED declaration" in r.stderr
+
+
+def test_a_single_well_formed_declaration_still_passes():
+    """Guards the three tests above against passing for the wrong reason."""
+    r = _run_verify_with_declaration("es.a:4")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_rollout_timeout_is_validated():
+    """kubectl treats --timeout=0s as 'wait forever', so an unvalidated 0 turns the post-reset
+    gate into a hang."""
+    assert "ES4_ROLLOUT_WAIT_SECONDS must be a positive integer" in CLEANUP
+    assert "outside 1..1800" in CLEANUP

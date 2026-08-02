@@ -438,9 +438,18 @@ else
     # stalled, so that poll would return "ready" instantly and the audits would run against pods
     # that never applied their contracts. rollout status tracks the restart's own generation and
     # exits non-zero on timeout, which is the fail-closed behaviour this needs.
-    log "waiting for the rollout of:${healed_names}"
+    rollout_wait="${ES4_ROLLOUT_WAIT_SECONDS:-300}"
+    # Validated for the same reason as the settle: `0` (or a negative) tells kubectl to wait
+    # FOREVER, which turns this gate into a hang, and a bare non-numeric would abort with no
+    # diagnostic after the state file is already gone.
+    case "$rollout_wait" in
+      ''|*[!0-9]*) die "ES4_ROLLOUT_WAIT_SECONDS must be a positive integer (got '$rollout_wait') — the reset itself COMPLETED and state is cleared; fix the value and re-run only the post-restore audits, do NOT rerun clean-reset" ;;
+    esac
+    { [ "$rollout_wait" -ge 1 ] && [ "$rollout_wait" -le 1800 ]; } \
+      || die "ES4_ROLLOUT_WAIT_SECONDS=$rollout_wait outside 1..1800 (0 would make kubectl wait forever) — the reset itself COMPLETED and state is cleared; do NOT rerun clean-reset"
+    log "waiting up to ${rollout_wait}s for the rollout of:${healed_names}"
     for d in $healed_names; do
-      $KC rollout status deploy/"$d" --timeout="${ES4_ROLLOUT_WAIT_SECONDS:-300}s" >/dev/null 2>&1 \
+      $KC rollout status deploy/"$d" --timeout="${rollout_wait}s" >/dev/null 2>&1 \
         || die "rollout of $d did not complete — the post-restore audits below cannot mean anything until it does. The reset itself COMPLETED and state is cleared: investigate $d, then re-run the audits; do NOT rerun clean-reset"
     done
   fi
