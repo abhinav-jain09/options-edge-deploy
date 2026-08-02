@@ -478,8 +478,10 @@ else
   # Pod DISCOVERY is evidence too. `for p in $(kubectl get pods ...)` swallows an RBAC/API/transport
   # failure into an empty word list, and `set -e` does not fire on a substitution that only supplies
   # loop words — the scan would then find nothing and report "no wedged topologies detected".
+  # --request-timeout on BOTH kubectl calls: it defaults to no timeout, so an API-server, kubelet
+  # or transport stall would hang this gate forever instead of failing it.
   set +e
-  pod_list="$($KC get pods --field-selector=status.phase=Running -o name 2>/dev/null)"
+  pod_list="$($KC get pods --field-selector=status.phase=Running -o name --request-timeout=30s 2>/dev/null)"
   pods_status=$?
   set -e
   [ "$pods_status" -eq 0 ] || die "cannot list pods to scan for wedged topologies (kubectl exited $pods_status) — the reset itself COMPLETED and state is cleared; do NOT rerun clean-reset, re-run the audit"
@@ -498,7 +500,7 @@ else
     # line for the pods scanned last.
     scan_window=$(( SECONDS - RESTORE_T0 + 60 ))
     set +e
-    pod_logs="$($KC logs "$p" --all-containers --since="${scan_window}s" --limit-bytes=8000000 2>/dev/null)"
+    pod_logs="$($KC logs "$p" --all-containers --since="${scan_window}s" --limit-bytes=8000000 --request-timeout=60s 2>/dev/null)"
     logs_status=$?
     set -e
     if [ "$logs_status" -ne 0 ]; then

@@ -381,6 +381,17 @@ def test_a_single_well_formed_declaration_still_passes():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+def test_every_scan_kubectl_call_is_request_bounded():
+    """kubectl's request timeout defaults to NONE, so an API-server or kubelet stall would hang the
+    post-restore gate rather than failing it."""
+    scan_block = CLEANUP[CLEANUP.index("scanning for wedged Streams topologies"):]
+    assert scan_block.count("--request-timeout=") >= 2, (
+        "both the pod listing and each log read must carry a bounded request timeout"
+    )
+    assert "get pods --field-selector=status.phase=Running -o name --request-timeout=30s" in CLEANUP
+    assert "--request-timeout=60s" in CLEANUP
+
+
 def test_rollout_timeout_is_validated():
     """kubectl treats --timeout=0s as 'wait forever', so an unvalidated 0 turns the post-reset
     gate into a hang."""
