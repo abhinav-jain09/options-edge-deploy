@@ -161,7 +161,7 @@
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE GAMMA_MIGRATION_IMAGE \
             DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE OPTION_TRUTH_ENGINE_IMAGE MARKET_CARRY_IMAGE ES_SPX_ALIGN_IMAGE DATABENTO_SR3_FEED_IMAGE VIX_OPTION_INTELIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE \
-            STRIKE_INVASION_IMAGE INVASION_POSTGRES_WRITER_IMAGE SPREAD_SKEW_IMAGE SPREAD_SKEW_POSTGRES_WRITER_IMAGE REVERSAL_CONFIRMATION_IMAGE ES_OPEN_DIRECTION_IMAGE ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE CLOSE_DIRECTION_IMAGE OI_SHADOW_IMAGE REVERSAL_POSTGRES_WRITER_IMAGE; do
+            STRIKE_INVASION_IMAGE INVASION_POSTGRES_WRITER_IMAGE SPREAD_SKEW_IMAGE SPREAD_SKEW_POSTGRES_WRITER_IMAGE REVERSAL_CONFIRMATION_IMAGE ES_OPEN_DIRECTION_IMAGE ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE CLOSE_DIRECTION_IMAGE OI_SHADOW_IMAGE REVERSAL_POSTGRES_WRITER_IMAGE GREEK_MOVE_AUTHENTICITY_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
@@ -226,16 +226,6 @@
           # web tool that has been dropped (rebuilt as an option-chain UI page instead), so it is no longer in
           # any overlay and `apply -k` will not prune it. Delete it here (idempotent, deployer-SA-scoped).
           kubectl -n options-edge delete deployment/pin-flow-explorer service/pin-flow-explorer --ignore-not-found=true
-          # Reconcile-delete the retired greek-move-authenticity-service. Its sign-voting model was
-          # replaced by the option-truth engine (endpoint repricing), so it is removed from every
-          # overlay in this same commit. `apply -k` never prunes, so without this line the pods would
-          # keep running forever: still consuming from Kafka with a live consumer-group, still
-          # publishing verdicts the UI no longer reads. Delete it here (idempotent, deployer-SA-scoped).
-          kubectl -n options-edge delete deployment/greek-move-authenticity-service service/greek-move-authenticity-service --ignore-not-found=true
-          # replaced by the option-truth engine (endpoint repricing), so it is removed from every
-          # overlay in this same commit. `apply -k` never prunes, so without this line the pods would
-          # keep running forever: still consuming from Kafka with a live consumer-group, still
-          # publishing verdicts the UI no longer reads. Delete it here (idempotent, deployer-SA-scoped).
           # Reconcile-delete the pre-rename es-gex-spx-align-service. It was renamed to es-spx-align-service
           # in this same commit (One Service One Identity). Both byte-copy the ES-GEX book to the SAME
           # options.es-gex-spx-aligned topic, so leaving the old one running would put TWO producers on the
@@ -346,6 +336,7 @@ EOF
           kubectl -n options-edge set image deployment/es-spx-align-service es-spx-align="$ES_SPX_ALIGN_IMAGE"
           kubectl -n options-edge set image deployment/databento-sr3-feed-service databento-sr3-feed="$DATABENTO_SR3_FEED_IMAGE"
           kubectl -n options-edge set image deployment/vix-option-inteligence-service vix-option-inteligence="$VIX_OPTION_INTELIGENCE_IMAGE"
+          kubectl -n options-edge set image deployment/greek-move-authenticity-service greek-move-authenticity="$GREEK_MOVE_AUTHENTICITY_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-avro-adapter strike-flow-avro-adapter="$STRIKE_FLOW_AVRO_ADAPTER_IMAGE"
           kubectl -n options-edge set image deployment/gex-delta-redis-writer gex-delta-redis-writer="$GEX_DELTA_REDIS_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
