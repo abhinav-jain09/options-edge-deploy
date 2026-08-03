@@ -11,6 +11,17 @@ behavior.
 **Repos:** options-edge-deploy (realm bootstrap, `bugzilla-req` images + compose, Jenkins job)
 **Hosts:** 192.168.100.252 (prod)
 
+> ⚠️ **HOSTING MODEL SUPERSEDED IN PART (2026-08-04) — read
+> [`fullfunding-namespace-gate1.md`](./fullfunding-namespace-gate1.md) first.** The user has
+> since required this portal to run **inside the prod k3s cluster, in a dedicated `fullfunding`
+> namespace**, not as a host Docker-Compose stack. That Gate-1 document carries a normative
+> requirement-by-requirement disposition table (its §4): REQ-3, REQ-5a (mechanism only), REQ-8,
+> REQ-9, REQ-10a and REQ-10b are **superseded** there; every other requirement below — the realm
+> design, the OIDC client, the identity/claim contract pinned to `276673ab6`, the authorization
+> matrix, the isolation proofs and the risk register — remains authoritative and unchanged. Where
+> the two documents differ on **where containers run**, the Gate-1 document governs; where they
+> differ on **what the portal must enforce**, this document governs.
+
 **rev 11 changes (from Codex rounds 7–10):** (1) **the email-claim contract no longer
 over-promises.** mod_auth_openidc can match a MEMBER of a claim array, so `Require claim "email~…"`
 alone does not establish scalar type. REQ-5a now states an explicit two-layer contract: absent /
