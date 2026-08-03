@@ -77,7 +77,7 @@ spec:
             - name: GAMMA_MIGRATION_JUDGE_FLIP_MIN_FRACTION
               value: "0.05"
             - name: GAMMA_MIGRATION_COMPLETE_MIN_FRACTION
-              value: "0.80"
+              value: "0.55"
             - name: GAMMA_MIGRATION_WIDTH_DECAY_MS
               value: "1800000"
             - name: GAMMA_MIGRATION_CHAIN_IDLE_MS
