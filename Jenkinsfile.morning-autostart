@@ -1,5 +1,5 @@
 // Morning AUTOSTART for OptionsEdge prod — brings the stack back UP on trading-day
-// mornings (08:00 ET, Mon-Fri, ~90 min before the 09:30 open). It is the inverse of
+// mornings (06:15 ET, Mon-Fri, ~3h15m before the 09:30 open). It is the inverse of
 // Jenkinsfile.offhours-clean-slate's scale-DOWN and closes the gap where prod, once
 // scaled to a clean slate off-hours, stayed dead through the weekend with nothing to
 // bring it back.
@@ -20,17 +20,19 @@ pipeline {
     booleanParam(name: 'ENABLED', defaultValue: true,
       description: 'Actually scale. Uncheck for a dry log-only run (reports what it would do, changes nothing).')
     choice(name: 'ENVIRONMENT', choices: ['prod'],
-      description: 'Target env. Prod only — dev has its own bring-up (dev-cleanup start / 09:00 ET launchd).')
+      description: 'Target env. Prod only — dev has its own bring-up (dev-cleanup auto FULL slot 06:15 ET via launchd; see scripts/ops/dev-cleanup.sh).')
     string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
       description: 'SSH target for prod (k3s is local there; scale ops impersonate jenkins-deployer).')
   }
 
   triggers {
-    // 07:30 America/New_York, Mon-Fri (2026-07-11: moved 08:00 -> 07:30 for ~2h pre-market headroom;
-    // the overnight ES-tracking set is already up from the close+15 clean, so this brings up the REST of
-    // the pipeline). The script's calendar guard no-ops on market holidays, so a holiday Monday leaves prod down.
+    // 06:15 America/New_York, Mon-Fri (2026-08-03: moved 07:30 -> 06:15 per the USER D13
+    // directive in OVERNIGHT-IBKR-GEX-GATE1-REQUIREMENT.md — the pre-open IBKR GEX window
+    // opens at 06:15 ET, so the gex-service must be up for the whole discovery/arm phase;
+    // 2026-07-11: 08:00 -> 07:30). The script's calendar guard no-ops on market holidays,
+    // so a holiday Monday leaves prod down.
     cron('''TZ=America/New_York
-30 7 * * 1-5''')
+15 6 * * 1-5''')
   }
 
   options {

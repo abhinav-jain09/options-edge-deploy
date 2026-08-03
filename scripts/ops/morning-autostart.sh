@@ -52,7 +52,7 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   disabled in every environment until further notice).
 #   databento-vix-feed (VIX feed separation PR-2): pre-evidence default; the shadow
 #   commit removes this — replicas:1 and a KEEP_DOWN entry are mutually exclusive
-#   (autostart would scale the shadow to 0 at 07:30 mid-session; design §5).
+#   (autostart would scale the shadow to 0 at 06:15 mid-session; design §5).
 #   databento-maxpain-service REMOVED from KEEP_DOWN 2026-08-01 (USER: "turn on prod
 #   only") — prod overlay patches replicas:1; dev stays down via dev-cleanup DISABLED_DEV.
 KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service}"
@@ -91,7 +91,7 @@ esac
 # --- MUTUAL EXCLUSION with the off-hours clean-slate wipe -----------------------
 # The off-hours wipe (scripts/ops/offhours-clean-slate.sh) deletes/purges Kafka
 # topics + PVCs + DB while apps are at 0. If a manual/delayed live wipe overlapped
-# this 08:00 run we could scale apps to 1 MID-WIPE (corrupt/half-empty state). Both
+# this 06:15 run we could scale apps to 1 MID-WIPE (corrupt/half-empty state). Both
 # jobs now contend the SAME lock file: whoever holds it wins, the other backs off.
 # We hold it for our whole run (offhours' own `flock -n 9` on this file then exits).
 SHARED_LOCK="${SHARED_LOCK:-/tmp/offhours-clean-slate.lock}"

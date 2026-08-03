@@ -83,7 +83,7 @@ WIPE_KAFKA="${WIPE_KAFKA:-true}"
 # below still apply).
 WIPE_DB="${WIPE_DB:-false}"
 # OVERNIGHT ES-tracking set — after the wipe, bring up ONLY these so ES futures are tracked overnight.
-# Everything else stays at 0 until morning-autostart (07:30 ET) brings the full pipeline up. (2026-07-11)
+# Everything else stays at 0 until morning-autostart (06:15 ET) brings the full pipeline up. (2026-07-11)
 # 2026-07-13: oe-keycloak MUST be in this set — options-edge-web depends on the auth issuer at boot, and
 # with Keycloak down the whole site (incl. the Cloudflare tunnel origin) wedges → prod appears down. Keep
 # oe-keycloak first so auth is up before web starts.
@@ -865,9 +865,9 @@ fi
 # ---- A.3 + B-post: bring up ONLY the overnight ES-tracking set (2026-07-11) ----
 # For overnight ES-future tracking we do NOT restore the full pipeline here. We bring up ONLY
 # $OVERNIGHT_SET so ES is tracked overnight; everything else STAYS at 0 until morning-autostart
-# (07:30 ET) scales the full pipeline up before the open. (The EXIT restore_scale trap still restores
+# (06:15 ET) scales the full pipeline up before the open. (The EXIT restore_scale trap still restores
 # the full SNAP if we die BEFORE this point — a fail-up safety net.)
-log "overnight start: bringing up ES-tracking set only ($OVERNIGHT_SET); all others stay at 0 until 07:30 ET"
+log "overnight start: bringing up ES-tracking set only ($OVERNIGHT_SET); all others stay at 0 until 06:15 ET"
 SCALEBACK_OK=1
 for name in $OVERNIGHT_SET; do
   [ -n "$name" ] || continue
