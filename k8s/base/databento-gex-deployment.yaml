@@ -71,10 +71,12 @@ spec:
             # an independent instrument-definition universe and publishes ONE immutable manifest per
             # session to options.databento.oi.anchor-manifest.
             #
-            # OFF in base, ON in the dev overlay only. Its sole consumer, oi-shadow-service, is a
-            # shadow experiment with no downstream readers, and this flag runs inside the process
-            # that produces the live gamma surface -- so it is enabled where it can be watched
-            # before anywhere it cannot.
+            # OFF in base, ON in the dev AND production overlays (production 2026-08-03, after
+            # two watched dev sessions). Nothing reads what it produces: oi-shadow-service, the
+            # only consumer, stays at zero replicas. It is enabled on production because the
+            # capture must not miss sessions -- the record's whole value is the day-over-day
+            # difference, and dev is brought up by hand each morning, so a late start leaves a
+            # permanent hole in the series.
             - name: OI_ANCHOR_MANIFEST_ENABLED
               value: "false"
             - name: HEALTH_PORT

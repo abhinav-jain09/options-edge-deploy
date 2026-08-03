@@ -399,6 +399,15 @@ while read -r t; do
       KEEP_DURABLE=$((KEEP_DURABLE+1))
       log "PRESERVE: $t (gamma-migration open calls — recomputable from nothing)"
       ;;
+    # The settled open-interest print for a session, published once and never rewritten. It is an
+    # OBSERVATION of what the exchange said that morning, not state derived from the day's flow, so
+    # nothing can rebuild it: re-fetching later returns a LATER print, and the exchange does not
+    # serve the old one back. The record's whole value is the difference against the next session's,
+    # which a wipe destroys in exactly the way that leaves no trace it ever existed.
+    options.databento.oi.anchor-manifest)
+      KEEP_DURABLE=$((KEEP_DURABLE+1))
+      log "PRESERVE: $t (settled OI print — re-fetching returns a later one, never this one)"
+      ;;
     *-changelog|*-repartition) STATE_TOPICS="$STATE_TOPICS $t" ;;
     *)                         PURGE_TOPICS="$PURGE_TOPICS $t" ;;
   esac
