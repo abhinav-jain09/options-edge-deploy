@@ -160,6 +160,19 @@ patches:
                 env:
                   - name: DATABENTO_GEX_FLOW_TOP_N
                     value: "3"
+                  # PROD capture of the daily settled open-interest print (2026-08-03). Writes ONE
+                  # immutable manifest per session to options.databento.oi.anchor-manifest and to
+                  # calibration.oi_anchor_manifest, and is read by NOTHING — oi-shadow-service stays
+                  # at zero replicas. GEX is untouched: the work runs on its own daemon thread
+                  # behind a bounded queue, and a full queue drops rather than blocks the caller.
+                  #
+                  # Enabled on prod because the capture must not miss sessions. Dev is brought up by
+                  # hand each morning, so any morning it is late past 09:25 ET leaves a permanent
+                  # hole in the series, and the whole point of the record is the day-over-day
+                  # difference. Verified on dev 07-31 and 08-03: 2534 and 2494 legs, both sound,
+                  # both surviving the nightly wipe.
+                  - name: OI_ANCHOR_MANIFEST_ENABLED
+                    value: "true"
   # PROD-ONLY: §7a conflict bypass needs only 2-of-4 fresh agreement to clear a non-opposed
   # (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; opposed runner-ups still veto regardless (PR #462).
   # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/production (validate-services).

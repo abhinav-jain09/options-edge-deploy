@@ -206,6 +206,24 @@ PYEOF
         '''
       }
     }
+    stage('Verify OI anchor manifest topic') {
+      // BEFORE the rollout, not after: the point is to stop a producer reaching a topic that does
+      // not exist yet. apply-topics lives in a different job, and two manually sequenced jobs are
+      // not an ordering guarantee -- skip it, run it against the wrong environment, or have it
+      // fail quietly, and the broker auto-creates the topic with cluster defaults that drop each
+      // session's record 24h later while still looking configured.
+      when {
+        expression { params.SERVICE == 'databento-gex' && !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-oi-anchor-topic.sh
+        '''
+      }
+    }
     stage('Reconcile VIX option intelligence current topic') {
       when {
         expression { params.SERVICE == 'vix-option-inteligence' && !params.DEPLOY_DRY_RUN }

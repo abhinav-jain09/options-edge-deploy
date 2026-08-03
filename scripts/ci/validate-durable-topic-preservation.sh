@@ -73,9 +73,33 @@ for t in $DURABLE; do
   fi
 done
 
+# The two reset scripts are not the only destructive paths. cleanup-topics.sh runs from the
+# monolithic pipeline with KAFKA_CLEANUP_MODE defaulting to delete-recreate, and BOTH its modes
+# iterate the APPROVED topic list -- where every durable topic also appears. PROTECTED_TOPIC_REGEX
+# does not save them: it is consulted only for UNWANTED topics. A durable declaration that survives
+# the resets and is then deleted by cleanup is not durable, so assert the exemption exists here too.
+CLEANUP="scripts/kafka/cleanup-topics.sh"
+if [ ! -f "$CLEANUP" ]; then
+  echo "FAIL: $CLEANUP not found — layout changed, update this validator"
+  exit 1
+fi
+# Counting is_durable guards was a proxy and a bad one: a fourth destructive path leaves the count
+# at three and passes while it deletes data. Run the executable test instead -- it drives the real
+# script with mocked kafka CLIs and asserts on the calls it actually makes, so an unguarded path
+# fails however it is written.
+CLEANUP_TEST="scripts/kafka/cleanup-topics-durable-test.sh"
+if [ ! -x "$CLEANUP_TEST" ]; then
+  echo "FAIL: $CLEANUP_TEST missing or not executable — the durability guarantee has no test"
+  fail=1
+elif ! bash "$CLEANUP_TEST" > /tmp/cleanup-durable-test.out 2>&1; then
+  echo "FAIL: $CLEANUP_TEST — cleanup-topics.sh does not preserve durable topics:"
+  sed 's/^/      /' /tmp/cleanup-durable-test.out
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "=== validate-durable-topic-preservation: FAILED ==="
   exit 1
 fi
-echo "checked $(echo "$DURABLE" | wc -w | tr -d ' ') durable topic(s) against both reset scripts"
+echo "checked $(echo "$DURABLE" | wc -w | tr -d ' ') durable topic(s) against both reset scripts + cleanup-topics"
 echo "=== validate-durable-topic-preservation: OK ==="
