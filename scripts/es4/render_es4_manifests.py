@@ -93,12 +93,13 @@ ES_ENV = {
         # day, found nothing, and held ES GEX NOT_READY (the documented 00:00-06:00 ET OI loss).
         # 18:00-ET rollover = timestamps at/after Globex open belong to the NEXT trade date.
         {"name": "DATABENTO_GEX_OI_SESSION_ROLL_AFTER", "value": "18:00"},
-        # ES overnight prior-session OI carry (es-overnight-oi-carry-gate1.md, PR#543): overnight the current
-        # session has no published OI (rolls at 18:00), so serve the most-recent prior session's settled OI —
-        # labelled CARRIED_PRIOR_SESSION — instead of fail-closed/blank. ES-ONLY, provider guard is hard ES.
-        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_ENABLED", "value": "true"},
-        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_SYMBOLS", "value": "ES"},
-        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_MAX_CALENDAR_DAYS", "value": "4"},
+        # Overnight OI carry (PR#543) is DISABLED here (USER 2026-08-03): the ES feed stamps live GLBX
+        # open interest onto every snapshot, so ES's OI source is the FEED, not the Postgres baseline —
+        # and the es4 persist-live table only ever holds each session's own 0DTE expiry, so a prior-session
+        # row for TODAY's expiry never exists (0DTE: yesterday's expiry died yesterday). The carry could
+        # never fire usefully here; leaving it enabled just adds a dead DB probe per chain. The code stays
+        # merged (flag-off default) for expiring-later products / other envs if ever needed.
+        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_ENABLED", "value": "false"},
         # P2: ES contract multiplier is 50 (E-mini), not the SPX 100 the persist SQL used to
         # hardcode; live rows now stamp the snapshot's own multiplier and this covers any path
         # that has no per-record value. Existing same-key rows self-heal on the next upsert.
