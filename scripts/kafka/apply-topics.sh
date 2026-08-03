@@ -301,7 +301,7 @@ for entry in $OPTIONS_EDGE_TOPICS; do
         exit 1
       fi
       if [[ "$RECREATE_MISMATCHED" != "true" ]]; then
-        echo "Topic $topic exists with partitions=$current_partitions but requires EXACTLY $partitions (single-partition read contract)." >&2
+        echo "Topic $topic exists with partitions=$current_partitions but requires EXACTLY $partitions (exact-partition contract: fixed assign() reads or fixed key->partition mapping)." >&2
         echo "Kafka cannot shrink partitions: this needs a destructive delete+recreate." >&2
         echo "Set KAFKA_RECREATE_MISMATCHED_TOPICS=true only for approved destructive cleanup deployments." >&2
         echo "NOTE: recreating $topic DISCARDS its records — any bootstrap state it held must be re-seeded afterwards." >&2

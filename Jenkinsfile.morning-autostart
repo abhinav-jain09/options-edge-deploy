@@ -20,7 +20,7 @@ pipeline {
     booleanParam(name: 'ENABLED', defaultValue: true,
       description: 'Actually scale. Uncheck for a dry log-only run (reports what it would do, changes nothing).')
     choice(name: 'ENVIRONMENT', choices: ['prod'],
-      description: 'Target env. Prod only — dev has its own bring-up (dev-cleanup start / 09:00 ET launchd).')
+      description: 'Target env. Prod only — dev has its own bring-up (dev-cleanup auto FULL slot 06:15 ET via launchd; see scripts/ops/dev-cleanup.sh).')
     string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
       description: 'SSH target for prod (k3s is local there; scale ops impersonate jenkins-deployer).')
   }
