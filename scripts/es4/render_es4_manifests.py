@@ -207,15 +207,13 @@ DROP_WORKLOADS = {"raw-to-display-service", "directional-pressure-service"}
 # Rendered at replicas:0 on es4 ONLY — still defined, still deployable, just not running.
 # USER 2026-07-26, "until further notice": the .4 box was carrying load average 18.4 on 12 cores
 # with CPU limits unset cluster-wide, and these two were its heaviest tenants
-# (dealer-ledger ~1015m/1088Mi, directional-pressure ~697m/867Mi, volume-pace ~401m/2434Mi,
-# option-price-behavior ~80m/1563Mi — that one is a memory tenant rather than a CPU one).
+# (dealer-ledger ~1015m/1088Mi, directional-pressure ~697m/867Mi, volume-pace ~401m/2434Mi).
 # Prod and dev are NOT affected by this
 # list. Re-enable = delete the name here, re-render, deploy that service.
 ES4_KEEP_DOWN = {
     "dealer-ledger-service",
     "volume-pace-databento-service",
     "directional-pressure-databento-service",
-    "option-price-behavior-service",
     # USER 2026-07-30: strike-liquidity-heatmap RE-ENABLED on es4 to evaluate the wall-line /
     # buy-bubble overlay against the ES chain. Measured headroom before removing it: .4 was at
     # 8251m/12 cores (68%) live with 39Gi memory available, so its 750m/512Mi request fits.
