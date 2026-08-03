@@ -104,6 +104,22 @@ patches:
         value:
           name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
           value: "2"
+  # GMT Stage-1 SHADOW — DEV-FIRST enable (GAMMA-MIGRATION-TILT-STAGE1-GATE1.md rev 11, Codex
+  # design + code-review APPROVE; proc commit 95641009). Pure shadow: records whether the
+  # gamma-migration regime agreed with each actionable signal (additive fields + the
+  # strike-intel.gamma-tilt.shadow evidence ledger); ZERO effect on emitted decisions (verified
+  # by the OFF/ON decision-projection topology test). Code default is OFF; this flag is the only
+  # enable. Prod/es4 stay off until the shadow record justifies Stage 2.
+  # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/dev (validate-services).
+  - target:
+      kind: Deployment
+      name: strike-intelligence-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_GAMMA_MIGRATION_SHADOW
+          value: "true"
   # strike-intelligence action band LOW — dev/prod parity with the production trial (PR #472):
   # LOW-band (conf 0.25-0.50) directional roles emit BUY/SELL LEAN instead of gating to NONE.
   # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/dev (validate-services).
