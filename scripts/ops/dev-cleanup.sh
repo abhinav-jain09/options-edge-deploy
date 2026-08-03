@@ -9,7 +9,7 @@
 #                         #                immediately bring up ONLY the overnight ES-tracking set ($OVERNIGHT_SET)
 #                         #   ~09:17 ET (window 09:15-09:29, weekdays) -> ESDOWN: scale the overnight ES services
 #                         #                ($ES_DOWN_SET) to 0 before the 09:30 SPX open (feed-gateway + web stay up)
-#                         #   07:30-07:59 ET weekdays -> full start (bring the rest of the pipeline up before open)
+#                         #   06:15-06:44 ET weekdays -> full start (bring the rest of the pipeline up before the pre-open window)
 #   dev-cleanup now       # run the full clean right now (logs + data + topic WIPE), ignoring the time gate
 #   dev-cleanup start     # bring the FULL dev pipeline up now
 #   dev-cleanup overnight # bring up ONLY the overnight ES-tracking set now
@@ -34,7 +34,7 @@ KEEP='keycloak'                                          # deployments to leave 
 # options.databento.raw and poisons the chain. Keep in sync with premarket-check.sh DISABLED (dev).
 DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|databento-vix-feed'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+30) clean,
-# so ES futures are tracked overnight. Everything else stays at 0 until the 07:30 ET full start. (2026-07-11)
+# so ES futures are tracked overnight. Everything else stays at 0 until the 06:15 ET full start. (2026-08-03: was 07:30)
 OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web'
 # ES overnight-tracking services that SHUT DOWN at ~09:17 ET (before the 09:30 SPX open): the overnight ES
 # session is over, so these scale to 0. feed-gateway-service + options-edge-web STAY UP (they serve the
@@ -150,11 +150,11 @@ apply_internal_topic_configs() {
 
 # ---------- OVERNIGHT START: right after the clean, bring up ONLY the ES-tracking set ----------
 # Recreate topics, then scale up ONLY $OVERNIGHT_SET so ES futures are tracked overnight; every other
-# service stays at 0 until the 07:30 ET full start. (These persist/serve ES — they need a producer for
+# service stays at 0 until the 06:15 ET full start. (These persist/serve ES — they need a producer for
 # live ES data; see the note where OVERNIGHT_SET is defined.)
 do_start_overnight() {
   ensure_topics
-  echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 07:30 ET."
+  echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 06:15 ET."
   local d
   for d in $OVERNIGHT_SET; do
     if $KK get deploy "$d" >/dev/null 2>&1; then
@@ -366,7 +366,9 @@ case "$MODE" in
     # Calendar-aware slots (ET), 2026-07-11. market_calendar.py gives the real close time so the CLEAN
     # fires at close+30 on BOTH normal (16:00->16:30) and early-close (13:00->13:30) days:
     #   CLEAN slot [close+30 .. close+59] on a trading day -> do_clean (WIPE) THEN overnight ES-tracking start.
-    #   FULL  slot [07:30 .. 07:59]       on a trading day -> do_start (rest of the pipeline before the open).
+    #   FULL  slot [06:15 .. 06:44]       on a trading day -> do_start (2026-08-03: 07:30 -> 06:15 per
+    #   USER D13/D15 in OVERNIGHT-IBKR-GEX-GATE1-REQUIREMENT.md — the dev Mac hosts the IBKR feed
+    #   whose pre-open window opens at 06:15 ET, and prod's chain data hops FROM dev).
     # launchd runs every 15 min so at least one tick lands in each 30-min window; markers keyed by the
     # trading-date make it idempotent. Dry-test: NOW_ET=1615 NOW_DATE=20260713 DKC_DRYRUN=1 dev-cleanup
     SLOTINFO=$(CALENDAR_DIR="$CALENDAR_DIR" NOW_ET="${NOW_ET:-}" NOW_DATE="${NOW_DATE:-}" python3 - <<'PY'
@@ -394,7 +396,7 @@ if not cal.is_trading_day(d):
 close = cal.close_time(d)
 close_dt = datetime.combine(d, close, tz)
 clean_lo = close_dt + timedelta(minutes=30); clean_hi = clean_lo + timedelta(minutes=29)
-full_lo = datetime.combine(d, time(7, 30), tz); full_hi = full_lo + timedelta(minutes=29)
+full_lo = datetime.combine(d, time(6, 15), tz); full_hi = full_lo + timedelta(minutes=29)
 # ESDOWN: ~09:17 ET, before the 09:30 open. 15-min window [09:15..09:29] so the every-15-min launchd
 # reliably lands a tick before the open; ends 09:29 so it never fires after the bell.
 esdown_lo = datetime.combine(d, time(9, 15), tz); esdown_hi = datetime.combine(d, time(9, 29), tz)

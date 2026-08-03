@@ -161,6 +161,12 @@ create_topic() {
   local cleanup_policy
   cleanup_policy="$(topic_cleanup_policy "$topic")"
 
+  local delete_retention
+  delete_retention="$(topic_delete_retention_ms "$topic")"
+  local extra_configs=()
+  if [[ -n "$delete_retention" ]]; then
+    extra_configs+=(--config "delete.retention.ms=$delete_retention")
+  fi
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --create \
     --topic "$topic" \
@@ -168,7 +174,8 @@ create_topic() {
     --replication-factor "$REPLICATION_FACTOR" \
     --config "retention.ms=$(topic_retention_ms "$topic")" \
     --config "cleanup.policy=$cleanup_policy" \
-    --config "min.insync.replicas=$MIN_ISR"
+    --config "min.insync.replicas=$MIN_ISR" \
+    "${extra_configs[@]}"
 }
 
 topic_cleanup_policy() {
@@ -205,6 +212,19 @@ topic_requires_exact_partitions() {
   return 1
 }
 
+# Per-topic delete.retention.ms override (tombstone survival for compacted control topics,
+# e.g. "options.ibkr.gex.status=172800000"). Empty for unlisted topics (broker default).
+topic_delete_retention_ms() {
+  local topic="$1" entry
+  for entry in ${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}; do
+    if [[ "${entry%%=*}" == "$topic" ]]; then
+      echo "${entry#*=}"
+      return
+    fi
+  done
+  echo ""
+}
+
 # Per-topic retention override (ms), e.g. "spx.basis.state=-1". Unlisted topics use $RETENTION_MS.
 topic_retention_ms() {
   local topic="$1" entry
@@ -236,7 +256,8 @@ alter_topic_config() {
   for ((i = 1; i <= attempts; i++)); do
     if kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
       --entity-type topics --entity-name "$topic" --alter \
-      --add-config "retention.ms=$(topic_retention_ms "$topic"),cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR"; then
+      --add-config "retention.ms=$(topic_retention_ms "$topic"),cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR$( \
+        dr="$(topic_delete_retention_ms "$topic")"; [[ -n "$dr" ]] && echo ",delete.retention.ms=$dr")"; then
       return 0
     fi
     sleep 1

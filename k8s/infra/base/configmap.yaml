@@ -48,8 +48,9 @@ data:
   # consume=false means the gex-service allocates NOTHING for this path (off-identity);
   # publish additionally requires consume (legality matrix R-FLAGS). Stage "shadow" pins the
   # output topic to options.ibkr.gex.strike.shadow via a boot-refusing allowlist — the live
-  # topic (options.databento.gex.strike) is only reachable by an explicit stage flip at gate
-  # gamma. The status topic is SINGLE-partition by contract (control ordering + the service's
+  # topic (options.databento.gex.strike) is reached by an explicit stage flip at gate BETA
+  # (live-dark: values on the live topic, UI still dark); gate GAMMA is user visibility only
+  # (R-ROLL). The status topic is SINGLE-partition by contract (control ordering + the service's
   # generation mint-above probe reads partition 0) — see scripts/kafka/topics.env.
   IBKR_GEX_CONSUME_ENABLED: "false"
   IBKR_GEX_PUBLISH_ENABLED: "false"
