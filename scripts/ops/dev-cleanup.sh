@@ -88,13 +88,20 @@ ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
-    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS)=')"
-    local n=0 spec name parts pol
+    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|TOPIC_DELETE_RETENTION_OVERRIDES)=')"
+    local n=0 spec name parts pol extra dr entry
     for spec in $OPTIONS_EDGE_TOPICS; do
       name="${spec%%:*}"; parts="${spec##*:}"; pol=delete
       case " $OPTIONS_EDGE_COMPACTED_TOPICS " in *" $name "*) pol=compact ;; esac
+      # Tombstone survival (R-WIRE.2): the recreate path must honour the SAME per-topic
+      # delete.retention.ms contract the canonical applier (apply-topics.sh) enforces —
+      # without this, every nightly wipe silently stripped the 48h guarantee.
+      extra=""
+      for entry in ${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}; do
+        if [ "${entry%%=*}" = "$name" ]; then dr="${entry#*=}"; extra="--config delete.retention.ms=$dr"; fi
+      done
       $KT --bootstrap-server $BS --create --if-not-exists --topic "$name" \
-        --partitions "${parts:-32}" --replication-factor 1 --config cleanup.policy="$pol" >/dev/null 2>&1 && n=$((n+1))
+        --partitions "${parts:-32}" --replication-factor 1 --config cleanup.policy="$pol" $extra >/dev/null 2>&1 && n=$((n+1))
     done
     echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
     echo "  topics present now: $($KT --bootstrap-server $BS --list 2>/dev/null | grep -vcE '^__|^_schemas')"
