@@ -57,7 +57,9 @@ spec:
       containers:
         - env:
             - name: DATABENTO_GEX_FLOW_TOP_N
-              value: "3"
+              value: "40"
+            - name: GEX_SMILE_IV_FALLBACK
+              value: "true"
             - name: OI_ANCHOR_MANIFEST_ENABLED
               value: "true"
             - name: APP_MARKET_DATA_SOURCE

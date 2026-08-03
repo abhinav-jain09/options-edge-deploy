@@ -158,8 +158,26 @@ patches:
             containers:
               - name: databento-gex
                 env:
+                  # RAISED 3 -> 40 (2026-08-03, with the smile-IV fallback below): measured on dev,
+                  # strike-intelligence's ONLY GEX input is options.databento.gex.flow.by-strike —
+                  # the topic THIS gate feeds — so top-3 starved every other strike's GEX component
+                  # (dev: 38k gated vs 1.1k forwarded; near-ATM stuck at GEX-missing/NORMAL). The
+                  # original comment's claim that strike-intel input is unchanged by the gate was
+                  # wrong. 40 restored dev near-ATM coverage 70%->15% missing with zero streams lag.
+                  # PROD CPU WATCH: this node runs hot — if gex lag or feed CPU degrades after
+                  # rollout, drop this back to 3 and split strike-intel onto gex.strike instead.
                   - name: DATABENTO_GEX_FLOW_TOP_N
-                    value: "3"
+                    value: "40"
+                  # EXPERIMENTAL smile-IV fallback (proc 3fe1a2f7, Codex round-3 APPROVE; code
+                  # default OFF, this flag is the only enable). Rebuilds short-dated legs whose IV
+                  # solve failed on the measured BELOW-INTRINSIC branch (100% of 0DTE failures; the
+                  # ITM mark sits at intrinsic while the worthless OTM twin has no usable quote, so
+                  # parity recovery starves and the strike drops — silently removing ~half the
+                  # near-ATM 0DTE ladder). Rebuilt legs are flagged SMILE_IV_FALLBACK, excluded
+                  # from netGexStrict, never anchor-eligible. Dev-validated 2026-08-03 before this
+                  # prod enable. Watch options_edge_databento_gex_smile_fallback_total.
+                  - name: GEX_SMILE_IV_FALLBACK
+                    value: "true"
                   # PROD capture of the daily settled open-interest print (2026-08-03). Writes ONE
                   # immutable manifest per session to options.databento.oi.anchor-manifest and to
                   # calibration.oi_anchor_manifest, and is read by NOTHING — oi-shadow-service stays
