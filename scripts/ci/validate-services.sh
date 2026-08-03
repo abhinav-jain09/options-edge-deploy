@@ -127,7 +127,8 @@ bash scripts/ci/validate-durable-topic-preservation.sh
 # The OI anchor topic barrier: its parser, and the shipped script end to end against mocked CLIs.
 # Wired here because a regression test nothing runs is not a test -- and this particular parser has
 # already shipped one hole (it accepted "compact,delete", the exact policy it exists to reject).
-for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure-oi-anchor-topic-e2e-test.sh; do
+for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure-oi-anchor-topic-e2e-test.sh \
+         scripts/kafka/verify-topics-pure-compact-test.sh; do
   if [ ! -x "$t" ]; then
     echo "FAIL: $t missing or not executable"
     exit 1
@@ -138,6 +139,6 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
     exit 1
   fi
 done
-echo "oi-anchor topic barrier: parser + end-to-end tests passed"
+echo "topic contracts: oi-anchor barrier (parser + e2e) and pure-compact verification passed"
 
 echo "=== validate-services: OK ==="

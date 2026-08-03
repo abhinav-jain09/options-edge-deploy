@@ -27,6 +27,58 @@ for entry in $OPTIONS_EDGE_TOPICS; do
   kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --entity-type topics --entity-name "$topic" --describe
 done
 
+# --- PURE-COMPACT enforcement, EVERY environment ---
+# The pure-compact check below was written only for OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS,
+# so the BASE list -- spx.basis.state and the OI anchor manifest -- was verified NOWHERE, on any
+# environment. That is how spx.basis.state came to sit at cleanup.policy=delete on both dev and
+# production while topics.env declared it pure compact, undetected: apply-topics reconciles the
+# policy, but nothing ever checked that it had.
+#
+# The consequence is not theoretical. signal-follower's CacheConsumer seekToBeginning()s that
+# topic with the comment "compacted: the CURRENT state is history" and then keeps only the
+# STATE_CURRENT key. Without compaction it replays every basis update ever written on every
+# restart, and that replay grows for as long as the topic exists.
+#
+# Unconditional on purpose. A contract that only holds on production is not a contract, and the
+# environment where this was caught was dev.
+# Resolved by TOPIC_SET, the same switch apply-topics.sh makes. Without this the SPX list would
+# be verified against the es4 broker -- es4 declares its own topics and, today, NO pure-compact
+# ones at all, so the correct es4 behaviour is to check nothing rather than to check the wrong
+# cluster's contract. (es4 currently reaches apply-topics via scripts/es4/create-es-topics.sh and
+# never runs this script, but a check that is only correct because nobody calls it is not correct.)
+case "${TOPIC_SET:-}" in
+  "")   PURE_COMPACT_LIST="${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-}" ;;
+  es4)  PURE_COMPACT_LIST="${OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS:-}" ;;
+  *)    echo "FAIL: unknown TOPIC_SET='$TOPIC_SET' — refusing to verify against an unresolved declaration" >&2
+        exit 1 ;;
+esac
+
+pure_compact_fail=0
+pure_compact_policy() {
+  kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --entity-type topics \
+    --entity-name "$1" --describe 2>/dev/null \
+    | { grep -oE "(^|[[:space:],])cleanup\\.policy=[^ ]*" || true; } | head -1 | sed -E 's/.*cleanup\.policy=//'
+}
+for topic in $PURE_COMPACT_LIST; do
+  if ! kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$topic" >/dev/null 2>&1; then
+    echo "FAIL: pure-compact topic $topic is ABSENT" >&2
+    pure_compact_fail=1
+    continue
+  fi
+  policy="$(pure_compact_policy "$topic")"
+  if [[ "$policy" != "compact" ]]; then
+    echo "FAIL: topic $topic cleanup.policy='${policy:-<none, inherits the broker default>}' but topics.env" >&2
+    echo "      declares it PURE COMPACT. 'delete' means it is never compacted, so a consumer that" >&2
+    echo "      reads it from the beginning replays a log that grows without bound." >&2
+    pure_compact_fail=1
+  fi
+done
+if [[ "$pure_compact_fail" -ne 0 ]]; then
+  echo "[verify-topics] pure-compact contract FAILED" >&2
+  exit 1
+fi
+echo "[verify-topics] pure-compact contract OK ($(echo $PURE_COMPACT_LIST | wc -w | tr -d ' ') topic(s), TOPIC_SET='${TOPIC_SET:-default}')"
+
 # --- PROD-ONLY contract enforcement (VIX feed separation design §6.6, r2 finding 14) ---
 # Same exact predicate as apply-topics.sh: ENVIRONMENT EXPLICITLY 'production' AND the
 # default (non-es4) topic set. Unset/empty ENVIRONMENT fails CLOSED (checks skipped with
