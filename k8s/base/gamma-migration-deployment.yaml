@@ -80,11 +80,21 @@ spec:
             # between two clusters that never moved.
             - name: GAMMA_MIGRATION_JUDGE_FLIP_MIN_FRACTION
               value: "0.05"
-            # Fraction of its own recent high-water width the ladder must still have to count as a
-            # complete board. Below this the service takes NO reading — "the oldest surviving
-            # strike is fresh" is vacuous, because pruning removes the stale ones first.
+            # Fraction of its own recent high-water width that must be BOTH usable and fresh
+            # (freshUsableStrikeCount, the intersection — see MigrationState.java) to count as a
+            # complete board; below this the service takes NO reading. Was 0.80, which real
+            # production SPX 0DTE boards routinely never reach: far-OTM strikes genuinely and
+            # continuously fail WIDE_SPREAD/IV_SOLVER_FAILED/STALE_ZERO_BID_MARK (thin/no real
+            # liquidity, not a pipeline defect), so sustained achievable coverage measured live on
+            # both dev and prod is ~58-75%, not 80%+. Retuned to 0.55 (2026-08-03, USER-approved
+            # after a Codex calibration consult): admits that normal far-OTM attrition while still
+            # decisively rejecting a genuinely collapsed board (8/150, 30/150, even 60/150 all
+            # still fail). Interim calibration, not a scientifically fitted constant — Codex
+            # recommended real telemetry (freshUsable/expected ratio, pass-rate by session phase,
+            # coverage above/below spot, scorer re-entry counts) before a longer-term, topology-
+            # aware redesign of the denominator itself.
             - name: GAMMA_MIGRATION_COMPLETE_MIN_FRACTION
-              value: "0.80"
+              value: "0.55"
             - name: GAMMA_MIGRATION_WIDTH_DECAY_MS
               value: "1800000"
             # A chain silent this long is over (an expiry rolled off) and its state is released.
