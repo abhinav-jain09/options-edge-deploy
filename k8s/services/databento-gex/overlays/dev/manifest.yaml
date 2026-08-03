@@ -72,6 +72,8 @@ spec:
               value: "3"
             - name: OI_ANCHOR_MANIFEST_ENABLED
               value: "true"
+            - name: GEX_SMILE_IV_FALLBACK
+              value: "true"
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: DATABENTO_DATASET

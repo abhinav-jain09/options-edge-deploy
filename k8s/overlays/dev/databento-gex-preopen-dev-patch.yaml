@@ -67,3 +67,13 @@ spec:
             # Fail-soft: the work runs on its own daemon thread behind a bounded queue, so it cannot make
             # the live gamma surface wait on it. Its only consumer, oi-shadow-service, stays disabled.
             - { name: OI_ANCHOR_MANIFEST_ENABLED, value: "true" }
+            # DEV-FIRST validation of the EXPERIMENTAL smile-IV fallback (proc commit 3fe1a2f7,
+            # Codex round-3 APPROVE): rebuild short-dated legs whose IV solve failed on the measured
+            # BELOW-INTRINSIC branch from the freshest near-ATM solved IV. The measured 0DTE failure
+            # mode drops ~half the near-ATM ladder (100% SD_IV_FAIL_BELOW_INTRINSIC; parity recovery
+            # starved). Rebuilt legs are flagged SMILE_IV_FALLBACK, excluded from netGexStrict, and
+            # never anchor-eligible; default in code is OFF, this flag is the only enable. Prod stays
+            # off until dev shows near-ATM coverage recovery without flip-level artifacts. Watch
+            # options_edge_databento_gex_smile_fallback_total{event=...} and the near-ATM GEX-missing
+            # share in strike-intelligence.
+            - { name: GEX_SMILE_IV_FALLBACK, value: "true" }
