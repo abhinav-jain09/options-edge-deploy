@@ -111,11 +111,7 @@ spec:
         - name: DATABENTO_GEX_OI_SESSION_ROLL_AFTER
           value: '18:00'
         - name: DATABENTO_GEX_OI_OVERNIGHT_CARRY_ENABLED
-          value: 'true'
-        - name: DATABENTO_GEX_OI_OVERNIGHT_CARRY_SYMBOLS
-          value: ES
-        - name: DATABENTO_GEX_OI_OVERNIGHT_CARRY_MAX_CALENDAR_DAYS
-          value: '4'
+          value: 'false'
         - name: DATABENTO_GEX_CONTRACT_MULTIPLIER
           value: '50'
         - name: DATABENTO_GEX_OI_EAGER_PREFETCH_SYMBOLS
