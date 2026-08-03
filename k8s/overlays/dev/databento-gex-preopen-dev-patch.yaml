@@ -47,7 +47,13 @@ spec:
             # rest are gated before those calculations. Stage-1 per-strike netGex is unchanged. Enabling
             # switches the fade branch to isolated "-topn" stores (one-time fade-state reset, by design).
             # Prod stays 0 (default, byte-identical) until explicitly enabled after dev verification.
-            - { name: DATABENTO_GEX_FLOW_TOP_N, value: "3" }
+            # RAISED 3 -> 40 (2026-08-03): strike-intelligence's ONLY GEX input is the flow topic this
+            # gate feeds, so top-3 starved every other strike's GEX component (measured: 38k gated vs
+            # 1.1k forwarded; near-ATM strikes stuck at GEX-missing/NORMAL even after the smile-IV
+            # fallback restored their netGex in gex.strike). 40 covers the tradeable near-ATM ladder
+            # while still bounding the 0DTE fade/lifecycle compute the gate was introduced for
+            # (prod runs ungated, TOP_N=0). Watch gex CPU + the 0DTE repartition lag after this.
+            - { name: DATABENTO_GEX_FLOW_TOP_N, value: "40" }
             # DEV-FIRST: turn the OI anchor manifest on where it can be watched (OI-SHADOW-EXECUTION-PLAN
             # step 2). It reconciles the morning settled open-interest response against an independent
             # instrument-definition universe and publishes ONE immutable manifest per session.
