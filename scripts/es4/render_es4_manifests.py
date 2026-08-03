@@ -73,11 +73,11 @@ ES_ENV = {
         # restart-durable using the same DB path SPX uses, without the GLBX symbology adapter.
         {"name": "DATABENTO_GEX_OI_BASELINE_BACKFILL_ENABLED", "value": "true"},
         {"name": "DATABENTO_GEX_OI_PERSIST_LIVE_ENABLED", "value": "true"},
-        # Top-3 fade/lifecycle gate (proc #466/#467; dev deploy #584, prod deploy #585+#813): fade +
-        # lifecycle publish only the top-3 |netGex| strikes per chain; stage-1 per-strike netGex unchanged.
-        # Mirrors prod so ES badges land on the SAME top-gamma strikes the board highlights. Enabling
-        # switches fade+lifecycle to isolated "-topn" store lineages (one-time state reset, by design).
-        {"name": "DATABENTO_GEX_FLOW_TOP_N", "value": "3"},
+        # DATABENTO_GEX_FLOW_TOP_N: es4 now INHERITS the production slice's value (40 as of
+        # 2026-08-03). The former es4 pin of 3 (proc #466/#467 rollout) starved strike-intelligence
+        # — its ONLY GEX input is the flow topic this gate feeds, so top-3 left ~65% of the es4
+        # near-ATM ladder GEX-missing (measured on es.strike-intelligence-by-strike). Dev+prod both
+        # run 40 with zero streams lag. Watch es4 gex lag after rollout; the rollback is a pin here.
         # ES-GEX-on-SPX bridge (DatabentoGexBridge, behind ES_GEX_SPXBRIDGE_ENABLED): republish the raw
         # es gex.strike as self-describing JSON on KAFKA_ES_GEX_SPXBRIDGE_TOPIC (default
         # options.databento.gex.spxbridge -> es.options.databento.gex.spxbridge via TOPIC_PREFIX). The

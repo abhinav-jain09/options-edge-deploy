@@ -47,7 +47,11 @@ spec:
       containers:
       - env:
         - name: DATABENTO_GEX_FLOW_TOP_N
-          value: '3'
+          value: '40'
+        - name: GEX_SMILE_IV_FALLBACK
+          value: 'true'
+        - name: OI_ANCHOR_MANIFEST_ENABLED
+          value: 'true'
         - name: APP_MARKET_DATA_SOURCE
           value: DATABENTO
         - name: DATABENTO_DATASET
@@ -66,6 +70,8 @@ spec:
           value: '60'
         - name: DATABENTO_GEX_OI_FETCH_LIMIT
           value: '200000'
+        - name: DATABENTO_GEX_OI_DEFINITION_FETCH_LIMIT
+          value: '200000'
         - name: HEALTH_PORT
           value: '8100'
         - name: KAFKA_DATABENTO_RAW_TOPIC
@@ -75,6 +81,8 @@ spec:
         - name: KAFKA_GEX_STREAMS_APP_ID
           value: options-databento-gex-streams
         - name: KAFKA_GEX_STREAMS_NUM_THREADS
+          value: '8'
+        - name: KAFKA_GEX_FLOW_STREAMS_NUM_THREADS
           value: '8'
         - name: DATABENTO_GEX_DEALER_SIGN_MODEL
           value: NAIVE_CALL_PLUS_PUT_MINUS
