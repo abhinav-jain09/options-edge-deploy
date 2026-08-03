@@ -70,6 +70,14 @@ data:
   DATABENTO_ENABLE_TCBBO: "true"
   DATABENTO_ENABLE_TRADES: "true"
   DATABENTO_ENABLE_STATISTICS: "true"
+  # ES overnight OI bootstrap (feed PR#112, ESM-Q4): on a weekend/expiry-roll reopen the live
+  # statistics replay cannot reach the last OI publication (Friday, ~60h back vs the 12h window
+  # above), so the feed seeds OI from HISTORICAL statistics for the resolved symbols — fill-only
+  # (never overwrites newer live OI), wall-clock bounded, fail-soft. Measured 2026-08-03: Friday
+  # published 371,834 contracts of real OI for that night expiry that the live replay missed.
+  DATABENTO_OI_HISTORICAL_BOOTSTRAP_ENABLED: "true"
+  DATABENTO_OI_HISTORICAL_BOOTSTRAP_LOOKBACK_DAYS: "4"
+  DATABENTO_OI_HISTORICAL_BOOTSTRAP_TIMEOUT_SECONDS: "45"
   # ---- reconnect shaping ---------------------------------------------------
   # The client's own reconnect_policy defaults to "none"; the feed's internal loop is
   # what reconnects, so these three are the real backoff controls.
