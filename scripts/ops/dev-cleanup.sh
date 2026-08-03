@@ -136,8 +136,24 @@ apply_internal_topic_configs() {
     rm -f "$script"; return 0
   fi
   shim="$(mktemp -d -t oe-kafka-shim)" || { rm -f "$script"; return 0; }
-  ln -sf "$(dirname "$KT")/kafka-topics.sh"  "$shim/kafka-topics"
-  ln -sf "$(dirname "$KT")/kafka-configs.sh" "$shim/kafka-configs"
+  # Wrappers, NOT symlinks. Kafka's CLI scripts resolve their sibling kafka-run-class.sh from
+  # their OWN directory ($(dirname $0)), so a symlink into a temp dir makes them look for
+  # kafka-run-class.sh inside the shim, where it does not exist:
+  #   oe-kafka-shim.XXXX/kafka-topics: line 17: .../kafka-run-class.sh: No such file or directory
+  # The failure was quiet — the script then reported "No Kafka Streams internal topics found yet"
+  # and the clean finished green while EVERY changelog kept broker defaults (delete policy,
+  # 1 GB segments), which is the 177 GB/hour growth this function exists to prevent.
+  # Observed on the 2026-08-03 dev clean. Exec'ing the real path keeps $0 correct.
+  for tool in kafka-topics kafka-configs; do
+    printf '#!/usr/bin/env bash\nexec "%s/%s.sh" "$@"\n' "$(dirname "$KT")" "$tool" > "$shim/$tool"
+    chmod +x "$shim/$tool"
+  done
+  # Prove the shim actually works before trusting it — a broken wrapper must fail LOUD, not
+  # silently leave every changelog unconfigured.
+  if ! "$shim/kafka-topics" --bootstrap-server "$BS" --list >/dev/null 2>&1; then
+    echo "  WARNING: kafka CLI shim is not functional — Streams internal topics keep broker defaults (delete policy, 1 GB segments). Dev Kafka will grow fast."
+    rm -rf "$shim" "$script"; return 0
+  fi
   echo "Applying Streams internal-topic policy (compaction + 1h segments) ..."
   # 10h retention = dev's KAFKA_MAX_RETENTION_MS cap (the Jenkinsfile derives the same
   # value from the rendered configmap); 1h segments so compaction/retention/Streams'
