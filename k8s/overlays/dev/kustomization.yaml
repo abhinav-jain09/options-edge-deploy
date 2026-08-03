@@ -197,6 +197,11 @@ patches:
             value: underlying.spx.index.price
           - name: IBKR_SPX_KAFKA_TARGETS
             value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
+          # Pre-open option-chain raw fan-out (OVERNIGHT-IBKR-GEX rev13 R-CHAIN.1): DARK —
+          # read only when IBKR_CHAIN_ENABLED=true. Explicit rather than relying on the
+          # IBKR_SPX_KAFKA_TARGETS fallback so the chain contract is visible here.
+          - name: IBKR_CHAIN_KAFKA_TARGETS
+            value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
           - name: IBKR_VIX_PRICE_ENABLED
             value: "true"
           # HOP topic + fan-out targets (requirement §12): raw IBKR VIX ticks go to the
