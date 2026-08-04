@@ -12,12 +12,30 @@ set -uo pipefail
 PROD_HOST=${PROD_HOST:-192.168.100.252}
 PROD_SSH=${PROD_SSH:-abhinav@${PROD_HOST}}
 ADMIN_URL=${ADMIN_URL:-http://127.0.0.1:8095}
+DB_CONTAINER=${DB_CONTAINER:-options-edge-bugzilla-req-db}
+WEB_CONTAINER=${WEB_CONTAINER:-options-edge-bugzilla-req-web}
+DB_NAME=${DB_NAME:-bugzilla_req}
 
 FAILED=0
 pass() { echo "  PASS  $*"; }
 fail() { echo "  FAIL  $*"; FAILED=1; }
 
 rget() { ssh -o BatchMode=yes -o ConnectTimeout=20 "$PROD_SSH" "curl -s -m 15 '${ADMIN_URL}$1'"; }
+
+# Run one SQL statement against the portal database WITHOUT putting the password in argv.
+# `mysql -p"$PW"` would expose it through /proc/*/cmdline to every process on the host; the
+# credential is written to a 0600 defaults-file inside the container and removed immediately.
+dbq() {
+  local sql=$1
+  ssh -o BatchMode=yes -o ConnectTimeout=20 "$PROD_SSH" \
+    "docker exec ${DB_CONTAINER} sh -c '
+       set -eu; umask 077
+       D=\$(mktemp)
+       printf \"[client]\\nuser=root\\npassword=%s\\n\" \"\$MARIADB_ROOT_PASSWORD\" > \"\$D\"
+       trap \"rm -f \\\"\$D\\\"\" EXIT
+       mysql --defaults-file=\"\$D\" -BN -e \"$sql\" ${DB_NAME}
+     '" 2>/dev/null | tr -d '\r'
+}
 
 echo "== REQ-5d postconditions against ${ADMIN_URL} (admin listener, loopback) =="
 
@@ -52,7 +70,7 @@ sys.exit(rc)
 # The parameters the REST API will not show anonymously are asserted directly against the live
 # params file in the running container — the same state checksetup wrote.
 LIVE=$(ssh -o BatchMode=yes -o ConnectTimeout=20 "$PROD_SSH" \
-  "docker exec options-edge-bugzilla-req-web cat /var/www/html/data/params.json 2>/dev/null")
+  "docker exec ${WEB_CONTAINER} cat /var/www/html/data/params.json 2>/dev/null")
 echo "$LIVE" | python3 -c '
 import json, sys
 raw = sys.stdin.read().strip()
@@ -73,6 +91,7 @@ expected = {
     "useqacontact": 0,
     "usetargetmilestone": 0,
     "urlbase": "https://req.fullfunding.nl/",
+    "maxattachmentsize": 10240,
 }
 rc = 0
 for k, want in expected.items():
@@ -87,18 +106,14 @@ sys.exit(rc)
 # --- products / components --------------------------------------------------------------------
 # Asserted against the database rather than the API: an unauthenticated caller cannot enumerate
 # products, and `requirelogin` is on precisely so it cannot.
-PRODUCTS=$(ssh -o BatchMode=yes -o ConnectTimeout=20 "$PROD_SSH" \
-  "docker exec options-edge-bugzilla-req-db sh -c 'mysql -uroot -p\"\$MARIADB_ROOT_PASSWORD\" -BN -e \
-   \"SELECT name FROM products ORDER BY name\" bugzilla_req' 2>/dev/null" | tr -d '\r')
+PRODUCTS=$(dbq "SELECT name FROM products ORDER BY name")
 if [ "$PRODUCTS" = "Requirements" ]; then
   pass "exactly one product, named Requirements"
 else
   fail "products should be exactly 'Requirements', got: $(echo "$PRODUCTS" | tr '\n' ',')"
 fi
 
-COMPONENTS=$(ssh -o BatchMode=yes -o ConnectTimeout=20 "$PROD_SSH" \
-  "docker exec options-edge-bugzilla-req-db sh -c 'mysql -uroot -p\"\$MARIADB_ROOT_PASSWORD\" -BN -e \
-   \"SELECT name FROM components\" bugzilla_req' 2>/dev/null" | tr -d '\r')
+COMPONENTS=$(dbq "SELECT name FROM components")
 if [ "$COMPONENTS" = "General" ]; then
   pass "exactly one component, named General"
 else
@@ -108,27 +123,24 @@ fi
 # --- flag types (must be none) ------------------------------------------------------------------
 # Bugzilla lets any user who can see a bug set a flag (Bug.pm:4567-4570), so the matrix's flag DENY
 # row is only true while zero flag types exist. This is the check that keeps that row honest.
-FLAGS=$(ssh -o BatchMode=yes -o ConnectTimeout=20 "$PROD_SSH" \
-  "docker exec options-edge-bugzilla-req-db sh -c 'mysql -uroot -p\"\$MARIADB_ROOT_PASSWORD\" -BN -e \
-   \"SELECT COUNT(*) FROM flagtypes\" bugzilla_req' 2>/dev/null" | tr -d '\r')
+FLAGS=$(dbq "SELECT COUNT(*) FROM flagtypes")
 [ "$FLAGS" = "0" ] && pass "no flag types defined" || fail "expected 0 flag types, got '${FLAGS}'"
 
 # --- privileged group membership ----------------------------------------------------------------
 # Every membership of a privileged group must belong to the single admin account. An external user
 # appearing here would silently invalidate most DENY cells in the matrix.
-PRIV=$(ssh -o BatchMode=yes -o ConnectTimeout=20 "$PROD_SSH" \
-  "docker exec options-edge-bugzilla-req-db sh -c 'mysql -uroot -p\"\$MARIADB_ROOT_PASSWORD\" -BN -e \
-   \"SELECT p.login_name, g.name FROM user_group_map m \
-     JOIN profiles p ON p.userid=m.user_id JOIN groups g ON g.id=m.group_id \
-     WHERE g.name IN (\\\"admin\\\",\\\"editbugs\\\",\\\"canconfirm\\\",\\\"creategroups\\\", \
-                      \\\"editcomponents\\\",\\\"editclassifications\\\",\\\"bz_sudoers\\\")\" \
-   bugzilla_req' 2>/dev/null" | tr -d '\r')
+PRIV=$(dbq "SELECT p.login_name, g.name FROM user_group_map m JOIN profiles p ON p.userid=m.user_id JOIN groups g ON g.id=m.group_id WHERE g.name IN ('admin','editbugs','canconfirm','creategroups','editcomponents','editclassifications','bz_sudoers')")
 ADMIN_EMAIL=${BZ_ADMIN_EMAIL:-abhinav@fullfunding.nl}
 UNEXPECTED=$(echo "$PRIV" | awk -v a="$ADMIN_EMAIL" 'NF && $1 != a {print}')
-if [ -z "$UNEXPECTED" ]; then
-  pass "only ${ADMIN_EMAIL} holds privileged groups"
-else
+# An EMPTY result must not pass: that would mean the admin account is missing or holds no admin
+# group, which is a different broken state, not a clean one. Assert positively first.
+ADMIN_HAS_ADMIN=$(echo "$PRIV" | awk -v a="$ADMIN_EMAIL" 'NF && $1 == a && $2 == "admin" {c++} END{print c+0}')
+if [ "$ADMIN_HAS_ADMIN" -lt 1 ]; then
+  fail "${ADMIN_EMAIL} does not hold the 'admin' group — expected exactly one administrator"
+elif [ -n "$UNEXPECTED" ]; then
   fail "non-admin accounts hold privileged groups:"; echo "$UNEXPECTED"
+else
+  pass "only ${ADMIN_EMAIL} holds privileged groups, and it does hold 'admin'"
 fi
 
 echo

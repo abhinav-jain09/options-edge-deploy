@@ -1,5 +1,11 @@
 # Portal application state — versioned runbook (REQ-5d)
 
+> **Hosting model:** this runbook is deliberately mechanism-independent. It says nothing about
+> whether the portal runs as a host Compose stack or as pods in the `fullfunding` k3s namespace,
+> because REQ-5d is UNCHANGED under `fullfunding-namespace-gate1.md`'s §4 disposition. The only
+> mechanism-specific detail is how you reach the admin listener; substitute `kubectl port-forward`
+> for the `ssh -L` tunnel once the namespace model lands.
+
 **Version: 1** — bump on every change, and record the version in each backup generation's manifest
 (REQ-10a) so a restored database can be matched to the runbook that produced it.
 

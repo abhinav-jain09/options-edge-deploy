@@ -101,7 +101,12 @@ RUN a2dissite 000-default \
 
 # Upstream housekeeping: keep Docker droppings out of the web root, and make the data dir writable
 # by the app (it is a bind mount at runtime).
-RUN rm -rf /var/www/html/docker* /var/www/html/Dockerfile* /var/www/html/oidc \
+# The build context is a git CLONE of upstream, so `COPY . /var/www/html` also brings `.git` (full
+# repository objects) and the build-context markers into the DOCUMENT ROOT. Even where Apache would
+# deny them, an image should not carry them at all — this is the one cleanup line that is a security
+# fix rather than housekeeping.
+RUN rm -rf /var/www/html/.git /var/www/html/.upstream-commit /var/www/html/.dockerignore \
+ && rm -rf /var/www/html/docker* /var/www/html/Dockerfile* /var/www/html/oidc \
  && rm -f  /var/www/html/docker-compose.yml /var/www/html/RUNBOOK-app-state.md \
  && rm -rf /var/www/html/data /var/www/html/localconfig /var/www/html/index.html \
  && mkdir /var/www/html/data
