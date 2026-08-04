@@ -45,6 +45,16 @@ spec:
             # The settled anchor, and the ONLY admissible source of open interest: without a
             # COMPLETE manifest, "the exchange published zero" and "we never saw this leg" cannot
             # be told apart.
+            # DECLARED, not defaulted. OiShadowSettings falls back to KafkaSettings.rawTopic(),
+            # which is the IBKR topic -- and on dev that topic holds ZERO records while
+            # options.databento.raw holds four million. The service came up healthy, joined its
+            # consumer group, reported no error, and would have read an empty topic forever.
+            #
+            # It has to be the Databento topic for a second reason: the anchor manifest below is
+            # keyed off the Databento chain, so an IBKR-sourced volume would be matched against
+            # anchors it has no relationship to.
+            - name: KAFKA_RAW_TOPIC
+              value: options.databento.raw
             - name: KAFKA_OI_ANCHOR_MANIFEST_TOPIC
               value: options.databento.oi.anchor-manifest
             - name: KAFKA_OI_SHADOW_TOPIC
