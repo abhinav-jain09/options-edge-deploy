@@ -107,11 +107,12 @@ RUN a2dissite 000-default \
 # fix rather than housekeeping.
 RUN rm -rf /var/www/html/.git /var/www/html/.upstream-commit /var/www/html/.dockerignore \
  && rm -rf /var/www/html/docker* /var/www/html/Dockerfile* /var/www/html/oidc \
- && rm -f  /var/www/html/docker-compose.yml /var/www/html/RUNBOOK-app-state.md \
+ && rm -f  /var/www/html/RUNBOOK-app-state.md \
  && rm -rf /var/www/html/data /var/www/html/localconfig /var/www/html/index.html \
  && mkdir /var/www/html/data
 RUN a2enmod expires && a2enmod rewrite && a2dismod mpm_event && a2enmod mpm_prefork
 
-# 80 = public (OIDC-protected), 81 = admin (native login, no ingress ever points at it).
+# 80 = public (OIDC-protected), 81 = admin (native login). Exposing or denying either is the
+# deployment mechanism's job — see fullfunding-namespace-gate1.md §4.
 EXPOSE 80/tcp 81/tcp
 CMD ["/root/docker/entrypoint.sh"]

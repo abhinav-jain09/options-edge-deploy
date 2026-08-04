@@ -1,24 +1,20 @@
 # Portal application state — versioned runbook (REQ-5d)
 
-> **Hosting model:** this runbook is deliberately mechanism-independent. It says nothing about
-> whether the portal runs as a host Compose stack or as pods in the `fullfunding` k3s namespace,
-> because REQ-5d is UNCHANGED under `fullfunding-namespace-gate1.md`'s §4 disposition. The only
-> mechanism-specific detail is how you reach the admin listener; substitute `kubectl port-forward`
-> for the `ssh -L` tunnel once the namespace model lands.
+> **Hosting model:** REQ-5d is UNCHANGED under `fullfunding-namespace-gate1.md` §4, so the *state*
+> this runbook describes is mechanism-independent. Reaching the admin listener is NOT: under the
+> namespace model it is a `kubectl port-forward` to the portal pod's port 81, and the host-Compose
+> `ssh -L` form is superseded. Commands below therefore name the listener, not the transport.
 
 **Version: 1** — bump on every change, and record the version in each backup generation's manifest
 (REQ-10a) so a restored database can be matched to the runbook that produced it.
 
-The compose artifact is reproducible; the resulting *service* is not, unless the params, product and
-permission state are applied deterministically and their postconditions checked. That is what this
-file is for. Every step below is applied through the **admin listener** (`ssh -L` tunnel, REQ-5a) —
-never through the public listener, which is OIDC-protected and never carries native login.
+The deployment artifact is reproducible; the resulting *service* is not, unless the params, product
+and permission state are applied deterministically and their postconditions checked. That is what
+this file is for. Every step below is applied through the **admin listener** (container port 81,
+REQ-5a) — never through the public listener, which is OIDC-protected and never carries native login.
 
-```bash
-# open the admin tunnel from your workstation (nothing here is reachable from the LAN)
-ssh -L 8095:127.0.0.1:8095 abhinav@192.168.100.252
-# then browse http://127.0.0.1:8095/  (native login, break-glass path R-7)
-```
+Open a forward to the portal's **admin listener (container port 81)** using whatever the deployed
+mechanism provides, then browse it: native login, break-glass path R-7.
 
 ## 1. Parameters — applied automatically, NOT by hand
 
@@ -45,17 +41,11 @@ here, the spelling is verified, never guessed.
 These are not expressible in a checksetup answers file, so they are applied once through the admin
 listener and then asserted by the postcondition script in section 4.
 
-```bash
-# Admin access is loopback-only (REQ-5a). Nothing below is reachable from the LAN.
-ssh -L 8095:127.0.0.1:8095 abhinav@192.168.100.252
-# then browse http://127.0.0.1:8095/  (native login, break-glass path R-7)
-```
-
 1. **Delete** the default `TestProduct` (Administration → Products → TestProduct → Delete). Deleting,
    not disabling: a disabled product still exists as a surface the authorization matrix would have to
    govern, and the postcondition asserts exactly one product.
 2. Create product **Requirements**, one component **General**, default assignee the admin account
-   `BZ_ADMIN_EMAIL` (the account checksetup created — the same address the compose file passes).
+   `BZ_ADMIN_EMAIL` (the account checksetup created, from the non-secret setting the deployment supplies).
 3. Groups: external users hold **no** groups. Do not add anyone to `editbugs`, `canconfirm`,
    `creategroups`, `editcomponents`, `editclassifications`, `admin` or `bz_sudoers`. The sole admin
    is the checksetup-created account.
@@ -78,17 +68,17 @@ revision — never a quiet edit of the expected value in the as-built record.
 
 ## 4. Postconditions — assert, do not eyeball
 
-Run `scripts/deploy/portal-postconditions.sh` (from the CI agent, over the admin tunnel). It
-**exits non-zero** on any mismatch; it does not pretty-print for a human to squint at. It asserts:
+The postcondition CHECKS are fixed here; their transport is not, so the script that runs them ships
+with the deployment mechanism (superseded for host-Compose; to be written against the namespace
+model). Whatever runs them must **exit non-zero** on any mismatch rather than pretty-print for a
+human to squint at, and must assert:
 
-- every REQ-5d parameter equals its expected value;
+- every REQ-5d parameter equals its expected value (read from the live `params.json`, since
+  `requirelogin=1` means an unauthenticated REST caller cannot enumerate them);
 - exactly one product exists, named `Requirements`, with exactly one component `General`;
 - zero flag types are defined;
-- the admin account is the only member of any privileged group.
-
-```bash
-bash scripts/deploy/portal-postconditions.sh    # exit 0 = state matches the contract
-```
+- the admin account holds `admin` AND is the only member of any privileged group — asserted
+  positively, because an empty query result means a missing admin, not a clean one.
 
 Record the output in the tracking bug. A **rebuild-from-empty rehearsal** — fresh stack → this
 runbook → postconditions exit 0 — is required once before launch (REQ-5d) and is what proves the

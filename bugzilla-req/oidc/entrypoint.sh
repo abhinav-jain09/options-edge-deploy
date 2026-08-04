@@ -6,9 +6,10 @@
 #   1. ORDERING — upstream starts Apache BEFORE checksetup, so on an upgrade the public listener
 #      could serve while the schema/params were still being migrated. Here Apache starts LAST.
 #   2. SECRET SCOPE — sourcing the secret file with `set -a` would export every credential into the
-#      environment of Apache, mod_perl and every CGI, i.e. into /proc/*/environ. Here each secret is
-#      read in a scoped subshell and reaches its consumer through a 0600 FILE, never the shared
-#      environment and never argv (REQ-9's authorized-location model).
+#      environment of Apache, mod_perl and every CGI, i.e. into /proc/*/environ. Here every consumer
+#      reads the projected secret FILE directly: the Apache fragment is rendered from it, the mysql
+#      client gets a 0600 defaults-file, and the answers renderer is handed the file path. No secret
+#      is placed in the environment or in argv (REQ-9's authorized-location model).
 #   3. LOG HYGIENE — upstream prints an "Admin password:" banner. We never print it, so no redaction
 #      filter is needed (and no secret ever appears in a sed argv, which would itself be a leak).
 set -euo pipefail
@@ -93,10 +94,10 @@ unset MARIADB_ROOT_PASSWORD
 # instead of by a human following a checklist. Written 0600 and removed by the EXIT trap.
 log "rendering checksetup answers"
 umask 077
-# The two secrets are passed to THIS child process only (command-scoped assignments), so they never
-# enter Apache's or any CGI's environment — that is the whole point of not using `set -a` here.
-PORTAL_ADMIN_PASSWORD="$BZ_ADMIN_PASSWORD" PORTAL_DB_PASS="$BZ_DB_PASS" \
-python3 /root/docker/render-answers.py "$TMPL" "$ANSWERS"
+# The renderer reads the two secrets straight from the projected secret FILE. They are not passed
+# through the environment at all — not even a command-scoped assignment, which would still be
+# readable in /proc/<pid>/environ while the renderer runs — and not through argv.
+python3 /root/docker/render-answers.py "$TMPL" "$ANSWERS" "$SECRET_FILE"
 chmod 600 "$ANSWERS"
 
 log "running checksetup (schema + REQ-5d parameters)"
