@@ -239,6 +239,11 @@ patches:
             # production effect. The D15 prod fan-out lands with the PROD gate, together with
             # raw-to-display's own disposition.
             value: dev=host.docker.internal:19092|http://host.docker.internal:8082
+          # The chain window opens at the PINNED 06:15 (R-OPS/D13) — never the feed's own
+          # 06:00 default. The 06:15 cleanup/autostart schedule is a convenience, not a
+          # safety fence: a manifest applied between 06:00 and 06:15 must not arm early.
+          - name: IB_CHAIN_WINDOW_START
+            value: "06:15"
           - name: IBKR_VIX_PRICE_ENABLED
             value: "true"
           # HOP topic + fan-out targets (requirement §12): raw IBKR VIX ticks go to the
