@@ -17,39 +17,31 @@ approved_file="$(mktemp)"
 trap 'rm -f "$approved_file"' EXIT
 for entry in $OPTIONS_EDGE_TOPICS; do echo "${entry%%:*}" >> "$approved_file"; done
 
-# Topics declared retention.ms=-1 are DURABLE: they hold observations that cannot be rebuilt, and
-# this script's destructive modes must skip them.
+# Topics declared RESET-PRESERVED hold data that cannot be rebuilt, and this script's destructive
+# modes must skip them.
 #
-# PROTECTED_TOPIC_REGEX does NOT cover this: it is consulted only when deleting UNWANTED topics.
-# Both destructive paths below iterate the APPROVED list, where every durable topic also appears,
-# so without this they delete exactly the records the -1 declaration promises to keep. For the
-# anchor manifest that is unrecoverable in a way a rebuild cannot fix: re-fetching the settled
-# open-interest print later returns a LATER print, never the one that was destroyed.
+# Driven by OPTIONS_EDGE_RESET_PRESERVED_TOPICS, NOT by retention.ms=-1. The two are different
+# claims: retention=-1 says "do not age this out by time", preservation says "this cannot be
+# reconstructed". options.spx.spot-vol-regime.current needs the first and must NOT get the second --
+# it is live state its service republishes seconds after starting, and inferring preservation from
+# retention would have made dev unable to wipe it.
 #
-# Resolved for the ACTIVE environment: the prod-only sets merge ONLY when ENVIRONMENT is
-# explicitly "production", the same condition apply-topics.sh uses. Deriving from every
-# *_TOPIC_RETENTION_OVERRIDES line in topics.env instead would exempt underlying.vix.price --
-# durable on production only -- from dev's retention cleanup too, quietly stranding dev data on a
-# topic that is supposed to be swept.
+# PROTECTED_TOPIC_REGEX does not cover this: it is consulted only when deleting UNWANTED topics.
+# Both destructive paths below iterate the APPROVED list, where every preserved topic also appears.
 #
 # TOPIC_SET is REFUSED rather than handled. approved_file above is built from the default
 # OPTIONS_EDGE_TOPICS with no topic-set switching, so under TOPIC_SET=es4 this script would iterate
-# the SPX topics against an es4 broker -- deleting the wrong cluster's data. Reading the es4
-# retention overrides here would have implied a capability the rest of the script does not have.
+# the SPX topics against an es4 broker -- deleting the wrong cluster's data.
 if [[ -n "${TOPIC_SET:-}" ]]; then
   echo "Refusing cleanup with TOPIC_SET='$TOPIC_SET': this script only handles the default topic set." >&2
   echo "Its approved-topic list comes from OPTIONS_EDGE_TOPICS and does not switch on TOPIC_SET." >&2
   exit 1
 fi
-DURABLE_OVERRIDES="${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-}"
-if [[ "${ENVIRONMENT:-}" == "production" ]]; then
-  DURABLE_OVERRIDES="$DURABLE_OVERRIDES ${OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES:-}"
-fi
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/reset-preserved-topics.sh"
 durable_file="$(mktemp)"
 trap 'rm -f "$approved_file" "$durable_file"' EXIT
-for entry in $DURABLE_OVERRIDES; do
-  if [[ "${entry#*=}" == "-1" ]]; then echo "${entry%%=*}"; fi
-done | sort -u > "$durable_file"
+printf '%s\n' $RESET_PRESERVED_TOPICS | sort -u > "$durable_file"
 is_durable() { grep -qx "$1" "$durable_file"; }
 if [[ -s "$durable_file" ]]; then
   echo "Durable topics exempt from destructive cleanup: $(tr '\n' ' ' < "$durable_file")"

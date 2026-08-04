@@ -128,6 +128,24 @@ KCL="$KAFKA_BIN/kafka-cluster.sh"
 # ===========================================================================
 # Exact-match list (NOT a prefix): only these three survive the topic sweep.
 SYSTEM_TOPICS="__consumer_offsets __transaction_state _schemas"
+# Topics declared RESET-PRESERVED: data that cannot be rebuilt, so this job must not touch it.
+#
+# Sourced from the shared helper rather than parsed here, so the list this job HONOURS and the list
+# CI VALIDATES come from the same executable code. It used to be a set of case arms duplicating the
+# declaration, which forced the validator to infer preservation by parsing this file's layout -- a
+# check an ordinary comment could silently defeat.
+#
+# What is in there and why it cannot be rebuilt:
+#   spx.basis.state                      the ES->SPX basis engine's STATE_CURRENT restart authority
+#   options.spx.gamma-migration.scoring  the falsification record, accumulated across sessions
+#   options.databento.oi.anchor-manifest the settled OI print; re-fetching returns a LATER one
+#   underlying.vix.price                 (production only)
+#
+# The helper fails closed on an unreadable or partial declaration, and this runs before any
+# destructive work.
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/../kafka/reset-preserved-topics.sh"
+
 is_system_topic() {
   local t="$1"
   case " $SYSTEM_TOPICS " in *" $t "*) return 0 ;; *) return 1 ;; esac
@@ -357,38 +375,12 @@ KEEP_DURABLE=0
 while read -r t; do
   [ -n "$t" ] || continue
   if is_system_topic "$t"; then KEEP_SYS=$((KEEP_SYS+1)); continue; fi
+  if is_reset_preserved "$t"; then
+    KEEP_DURABLE=$((KEEP_DURABLE+1))
+    log "PRESERVE: $t (declared RESET-PRESERVED in topics.env — cannot be rebuilt)"
+    continue
+  fi
   case "$t" in
-    # spx.basis.state = the ES->SPX basis engine's CROSS-DAY durable state
-    # (retention.ms=-1: STATE_CURRENT restart authority, close anchors, A1
-    # certificates — ES-SPX-TRANSLATION-ENGINE.md §3.3/§4). Wiping it cold-
-    # starts the basis on the next feed boot and keeps the ES->SPX mapping
-    # dark until the day's A1 cert + first fresh measurement. Same
-    # preservation principle as the premarket-reset calibration keep-list.
-    spx.basis.state)
-      KEEP_DURABLE=$((KEEP_DURABLE+1))
-      log "PRESERVE: $t (cross-day basis-engine state — never wiped)"
-      ;;
-    # Declared retention=-1 in topics.env (prod-only overrides, VIX feed
-    # separation) — declared-durable topics must never be purged; drift is
-    # unmergeable via scripts/ci/validate-durable-topic-preservation.sh.
-    underlying.vix.price)
-      KEEP_DURABLE=$((KEEP_DURABLE+1))
-      log "PRESERVE: $t (declared retention=-1 — never wiped)"
-      ;;
-    # The gamma-migration falsification record (GMS-R9): one record per directional
-    # call per 5/15/30-minute horizon, declared retention=-1 in topics.env and meant
-    # to be ACCUMULATED ACROSS SESSIONS. Its whole purpose is refitting the thresholds
-    # from more than the one session they were seeded on; a nightly wipe leaves it
-    # permanently one session deep, which is the same as not having built it.
-    options.spx.gamma-migration.scoring)
-      KEEP_DURABLE=$((KEEP_DURABLE+1))
-      log "PRESERVE: $t (gamma-migration evidence record — never wiped)"
-      ;;
-    # The gamma-migration scorer's changelog holds the OPEN calls (+5/+15/+30 horizons not yet
-    # resolved) and the persisted loss counters. Deleting it with the other Streams state means
-    # every call in flight at the wipe is silently lost — and the counters that were supposed to
-    # make such holes visible reset to zero with it, so the record would look complete. All the
-    # other changelogs here are recomputable from their inputs; this one is evidence.
     # gamma-migration keeps TWO changelogs and both are evidence rather than cache: the scorer's
     # open +5/+15/+30 horizons, and the rolling session whose DWELL ("this level has stood since
     # the open") cannot be recomputed from anything. Every other changelog here rebuilds from its
@@ -398,15 +390,6 @@ while read -r t; do
     *gamma-migration-scorer-changelog)
       KEEP_DURABLE=$((KEEP_DURABLE+1))
       log "PRESERVE: $t (gamma-migration open calls — recomputable from nothing)"
-      ;;
-    # The settled open-interest print for a session, published once and never rewritten. It is an
-    # OBSERVATION of what the exchange said that morning, not state derived from the day's flow, so
-    # nothing can rebuild it: re-fetching later returns a LATER print, and the exchange does not
-    # serve the old one back. The record's whole value is the difference against the next session's,
-    # which a wipe destroys in exactly the way that leaves no trace it ever existed.
-    options.databento.oi.anchor-manifest)
-      KEEP_DURABLE=$((KEEP_DURABLE+1))
-      log "PRESERVE: $t (settled OI print — re-fetching returns a later one, never this one)"
       ;;
     *-changelog|*-repartition) STATE_TOPICS="$STATE_TOPICS $t" ;;
     *)                         PURGE_TOPICS="$PURGE_TOPICS $t" ;;

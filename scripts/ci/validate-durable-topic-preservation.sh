@@ -1,27 +1,36 @@
 #!/usr/bin/env bash
-# validate-durable-topic-preservation.sh — CI invariant (2026-07-28):
+# validate-durable-topic-preservation.sh — CI invariant.
 #
-#   Every topic DECLARED cross-day durable in scripts/kafka/topics.env — a
-#   "<topic>=-1" entry in ANY *_TOPIC_RETENTION_OVERRIDES variable (base,
-#   prod-only, es4) — MUST be preserved by BOTH destructive reset paths:
-#     * scripts/ops/premarket-reset.sh    — its PRESERVE_TOPICS_REGEX must match it
-#     * scripts/ops/offhours-clean-slate.sh — an ANCHORED case arm
-#       "^[[:space:]]*<topic>)" that appears BEFORE the purge wildcard arm
+# Every topic declared retention.ms=-1 in scripts/kafka/topics.env must be CLASSIFIED into exactly
+# one of:
 #
-# WHY AT CI, NOT RUNTIME: the live broker is useless as the source of durability
-# here — measured 2026-07-28, ~200 prod topics report retention.ms=-1 because the
-# broker default is unlimited (the nightly resets ARE the retention mechanism), so
-# "derive the keep-list from the broker" would either no-op the reset or preserve
-# nothing. The intent-level declaration lives in topics.env; this check makes it
-# IMPOSSIBLE to merge a new durable topic without also preserving it — the failure
-# class behind the 2026-07-28 incident (spx.basis.state wiped every pre-market,
+#   OPTIONS_EDGE_RESET_PRESERVED_TOPICS   — cannot be rebuilt; BOTH destructive reset paths must
+#     skip it, and cleanup-topics.sh reads this same list
+#   OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS — the producing service reconstructs it; the resets may
+#     destroy it freely
+#
+# WHY THE CLASSIFICATION IS EXPLICIT. Until 2026-08-03 this validator DERIVED preservation from
+# retention.ms=-1. That conflated two different statements:
+#
+#   retention.ms=-1 = "do not age this out by time"  (a Kafka storage knob)
+#   reset-preserved = "this cannot be reconstructed" (a claim about the data)
+#
+# options.spx.spot-vol-regime.current is the case that separates them. It is a single-key ("SPX")
+# latest-regime view, so the 24h delete half destroyed the one record it exists to serve over any
+# gap longer than a day — every weekend. It needs retention=-1. It must NOT be reset-preserved: the
+# service republishes it seconds after starting. Under the derived rule it would have been
+# force-preserved on dev.
+#
+# Requiring EXACTLY ONE classification is what keeps the explicit lists honest. A derived rule
+# cannot miss a topic; an explicit list can, so a -1 topic in neither list — or in both — FAILS.
+#
+# WHY AT CI, NOT RUNTIME: the live broker is useless as the source of durability here — measured
+# 2026-07-28, ~200 prod topics report retention.ms=-1 because the broker default is unlimited (the
+# nightly resets ARE the retention mechanism). The intent-level declaration lives in topics.env.
+# This is the failure class behind the 2026-07-28 incident (spx.basis.state wiped every pre-market,
 # ES->SPX basis cold-started every morning, mapping dark until ~10:00 ET).
 #
-# Codex r1: P1 — scan EVERY *_TOPIC_RETENTION_OVERRIDES var (the prod-only one
-# declared underlying.vix.price=-1 and escaped the first draft); P2 — the case-arm
-# check is anchored and position-checked against the purge wildcard, so a comment
-# or an arm after "*)" cannot satisfy it. topics.env is PARSED, not sourced (no
-# variable collisions with this validator).
+# topics.env is PARSED, not sourced (no variable collisions with this validator).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -33,13 +42,60 @@ fail=0
 # All "<topic>=-1" entries across every retention-overrides declaration, without
 # sourcing the file: pull the quoted value of each *_TOPIC_RETENTION_OVERRIDES
 # assignment, split on whitespace, keep the =-1 pairs.
-DURABLE=$(sed -n 's/^[A-Z_]*TOPIC_RETENTION_OVERRIDES="\(.*\)"$/\1/p' "$TOPICS_ENV" \
-  | tr ' ' '\n' | sed -n 's/=-1$//p' | sort -u)
+# The RESET-PRESERVED declaration, not everything at retention=-1. Those are different claims --
+# "do not age this out by time" versus "this cannot be rebuilt" -- and the previous rule conflated
+# them, which would have force-preserved options.spx.spot-vol-regime.current on dev the moment it
+# got the retention=-1 it genuinely needs.
+list_of() { # variable-name-suffix -> whitespace-split values
+  { sed -nE "s/^OPTIONS_EDGE_(PROD_ONLY_)?$1=\"(.*)\"$/\\2/p" "$TOPICS_ENV" | tr ' ' '\n' | grep -v '^$' || true; } | sort -u
+}
+PRESERVED=$(list_of RESET_PRESERVED_TOPICS)
+REBUILDABLE=$(list_of RESET_REBUILDABLE_TOPICS)
+MINUS_ONE=$( { sed -nE 's/^[A-Z_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
+  | tr ' ' '\n' | grep -- '=-1$' || true; } | cut -d= -f1 | sort -u)
 
-if [ -z "$DURABLE" ]; then
-  echo "=== validate-durable-topic-preservation: OK (no retention=-1 declarations) ==="
-  exit 0
-fi
+in_list() { printf '%s\n' "$2" | grep -qx "$1"; }
+
+# EXACTLY ONE classification. Neither list is allowed to be the default.
+for topic in $MINUS_ONE; do
+  p=no; r=no
+  in_list "$topic" "$PRESERVED"   && p=yes
+  in_list "$topic" "$REBUILDABLE" && r=yes
+  if [ "$p" = no ] && [ "$r" = no ]; then
+    echo "FAIL: '$topic' is declared retention.ms=-1 but appears in NEITHER"
+    echo "      OPTIONS_EDGE_RESET_PRESERVED_TOPICS nor OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS."
+    echo "      Decide, on the record, whether losing it to a reset costs anything."
+    fail=1
+  elif [ "$p" = yes ] && [ "$r" = yes ]; then
+    echo "FAIL: '$topic' is declared BOTH reset-preserved and reset-rebuildable."
+    fail=1
+  fi
+done
+
+# Preservation without retention=-1 is pointless: the resets would spare the topic and time
+# retention would delete it anyway. (The converse is the conflation this design removed.)
+for topic in $PRESERVED; do
+  if ! in_list "$topic" "$MINUS_ONE"; then
+    echo "FAIL: '$topic' is declared RESET-PRESERVED but has no retention.ms=-1 override — the"
+    echo "      resets would spare it and time retention would delete it anyway."
+    fail=1
+  fi
+done
+
+# Symmetric, so neither list becomes a dumping ground: classifying a topic that has no -1 override
+# says nothing about anything.
+for topic in $REBUILDABLE; do
+  if ! in_list "$topic" "$MINUS_ONE"; then
+    echo "FAIL: '$topic' is declared RESET-REBUILDABLE but has no retention.ms=-1 override —"
+    echo "      the classification only means something for topics that carry one."
+    fail=1
+  fi
+done
+
+# NOT an early exit. An empty PRESERVED list used to short-circuit to OK while every preserve arm
+# stayed wired in the reset scripts, so deleting the declarations passed the gate.
+DURABLE="$PRESERVED"
+
 
 # The regex premarket-reset actually uses (first single-quoted assignment; the
 # `|| true` keeps set -e from eating the diagnostic when it is missing).
@@ -52,23 +108,11 @@ fi
 # Line number of the clean-slate purge wildcard arm — every preserve arm must
 # precede it or it never matches. The wildcard line is the one filling
 # PURGE_TOPICS from "*)".
-WILDCARD_LINE=$( { grep -nE '^\s*\*\)\s+PURGE_TOPICS=' "$CLEANSLATE" || true; } | head -1 | cut -d: -f1)
-if [ -z "$WILDCARD_LINE" ]; then
-  echo "FAIL: purge wildcard arm ('*)  PURGE_TOPICS=...') not found in $CLEANSLATE — layout changed, update this validator"
-  exit 1
-fi
 
 for t in $DURABLE; do
   if ! printf '%s\n' "$t" | grep -qE "$REGEX"; then
-    echo "FAIL: durable topic '$t' (topics.env retention=-1) is NOT matched by"
+    echo "FAIL: '$t' is declared RESET-PRESERVED but is NOT matched by"
     echo "      PRESERVE_TOPICS_REGEX in $PREMARKET — the pre-market reset would wipe it."
-    fail=1
-  fi
-  t_esc=$(printf '%s' "$t" | sed 's/[.[\*^$()+?{}|]/\\&/g')
-  ARM_LINE=$( { grep -nE "^[[:space:]]*${t_esc}\)" "$CLEANSLATE" || true; } | head -1 | cut -d: -f1)
-  if [ -z "$ARM_LINE" ] || [ "$ARM_LINE" -ge "$WILDCARD_LINE" ]; then
-    echo "FAIL: durable topic '$t' (topics.env retention=-1) has no ANCHORED preserve case arm"
-    echo "      before the purge wildcard (line $WILDCARD_LINE) in $CLEANSLATE."
     fail=1
   fi
 done
@@ -94,6 +138,40 @@ if [ ! -x "$CLEANUP_TEST" ]; then
 elif ! bash "$CLEANUP_TEST" > /tmp/cleanup-durable-test.out 2>&1; then
   echo "FAIL: $CLEANUP_TEST — cleanup-topics.sh does not preserve durable topics:"
   sed 's/^/      /' /tmp/cleanup-durable-test.out
+  fail=1
+fi
+
+# The REVERSE direction. An explicit list has one weakness the old retention=-1 rule did not: it
+# cannot notice a topic somebody FORGOT to declare. So require the converse -- every topic that the
+# reset scripts already go out of their way to preserve must be declared here. Someone who adds a
+# preserve arm without declaring it, or deletes a declaration while the arm stays, fails this.
+#
+# Wildcard arms (*gamma-migration-scorer-changelog) are patterns rather than declared topics and
+# are skipped: they preserve Streams-internal changelogs, which topics.env does not name.
+# The keep-list parser now lives in ONE executable helper that both destructive scripts source, so
+# the mechanism is tested by running it (scripts/kafka/reset-preserved-topics-test.sh) rather than
+# by pattern-matching its callers. What is left to assert here is that the callers still USE it.
+#
+# Comments are STRIPPED before matching. The previous version grepped raw text, and deleting the
+# live call while leaving the function definition and its comment block kept CI green -- the exact
+# bypass this now closes.
+HELPER="scripts/kafka/reset-preserved-topics.sh"
+if [ ! -x "$HELPER" ]; then
+  echo "FAIL: $HELPER missing or not executable — nothing defines what may not be purged"
+  fail=1
+fi
+for caller in "$CLEANSLATE" scripts/kafka/cleanup-topics.sh; do
+  code=$(sed 's/#.*//' "$caller")
+  if ! printf '%s' "$code" | grep -q 'reset-preserved-topics.sh'; then
+    echo "FAIL: $caller does not source $HELPER — it would purge topics the declaration says"
+    echo "      cannot be rebuilt."
+    fail=1
+  fi
+done
+code=$(sed 's/#.*//' "$CLEANSLATE")
+if ! printf '%s' "$code" | grep -qE 'if[[:space:]]+is_reset_preserved'; then
+  echo "FAIL: $CLEANSLATE sources the keep-list but never BRANCHES on is_reset_preserved —"
+  echo "      the list is loaded and then ignored."
   fail=1
 fi
 
