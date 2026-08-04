@@ -12,6 +12,17 @@
 #      is placed in the environment or in argv (REQ-9's authorized-location model).
 #   3. LOG HYGIENE — upstream prints an "Admin password:" banner. We never print it, so no redaction
 #      filter is needed (and no secret ever appears in a sed argv, which would itself be a leak).
+#
+# DERIVED SECRET LOCATIONS — stated plainly, because REQ-9's allowlist is only honest if it names
+# every copy, not just the projected mount:
+#   * /etc/apache2/conf-portal-secret/oidc-secret.conf — root:root 0400, PERSISTS for the container's
+#     lifetime by design (Apache reads it at every start/reload).
+#   * a mysql defaults-file under /tmp — 0600, TRANSIENT, removed as soon as the DB work finishes.
+#   * /root/docker/portal-answers.txt — 0600, TRANSIENT, removed after checksetup.
+# The two transient files are also removed by an EXIT trap, but a SIGKILL/OOM/node failure can leave
+# residue: /tmp is tmpfs (gone on restart), while the answers file lives on the container's writable
+# layer and is re-created 0600 on the next boot. V10's "absent everywhere else" must be read against
+# THIS list.
 set -euo pipefail
 
 SECRET_FILE=${PORTAL_SECRET_FILE:-/run/secrets/bugzilla-req.env}
@@ -29,23 +40,34 @@ log() { echo "[portal] $*"; }
 [ -L "$SECRET_FILE" ] && { echo "FATAL: $SECRET_FILE is a symlink" >&2; exit 1; }
 [ -r "$SECRET_FILE" ] || { echo "FATAL: $SECRET_FILE is not readable" >&2; exit 1; }
 
-# Read the values ONCE, in this shell only. They are never exported.
-# shellcheck disable=SC1090
-OIDC_CLIENT_SECRET=$(. "$SECRET_FILE" >/dev/null 2>&1; printf '%s' "${OIDC_CLIENT_SECRET:-}")
-OIDC_CRYPTO_PASSPHRASE=$(. "$SECRET_FILE" >/dev/null 2>&1; printf '%s' "${OIDC_CRYPTO_PASSPHRASE:-}")
-BZ_DB_PASS=$(.        "$SECRET_FILE" >/dev/null 2>&1; printf '%s' "${BZ_DB_PASS:-}")
-BZ_ADMIN_PASSWORD=$(. "$SECRET_FILE" >/dev/null 2>&1; printf '%s' "${BZ_ADMIN_PASSWORD:-}")
-MARIADB_ROOT_PASSWORD=$(. "$SECRET_FILE" >/dev/null 2>&1; printf '%s' "${MARIADB_ROOT_PASSWORD:-}")
+# Read the values as DATA. The file is never sourced: `.` would execute whatever it contains, and a
+# projected Secret is not trusted shell code — a stray `$(...)` would run before any validation
+# could reject it. `read-secret` uses the same strict KEY=VALUE parse as render-answers.py, so the
+# shell and the renderer can never disagree about quoting, comments, whitespace or duplicate keys.
+read_secret() {
+  python3 /root/docker/read-secret.py "$SECRET_FILE" "$1"
+}
+
+OIDC_CLIENT_SECRET=$(read_secret OIDC_CLIENT_SECRET) || exit 1
+OIDC_CRYPTO_PASSPHRASE=$(read_secret OIDC_CRYPTO_PASSPHRASE) || exit 1
+MARIADB_ROOT_PASSWORD=$(read_secret MARIADB_ROOT_PASSWORD) || exit 1
+BZ_DB_PASS=$(read_secret BZ_DB_PASS) || exit 1
+BZ_ADMIN_PASSWORD=$(read_secret BZ_ADMIN_PASSWORD) || exit 1
 
 for v in OIDC_CLIENT_SECRET OIDC_CRYPTO_PASSPHRASE BZ_DB_PASS BZ_ADMIN_PASSWORD MARIADB_ROOT_PASSWORD; do
   [ -n "${!v}" ] || { echo "FATAL: $v missing from $SECRET_FILE" >&2; exit 1; }
-  # Enforce a safe alphabet. The generator emits hex, and this is what makes the Apache-fragment
-  # rendering below injection-proof: a value containing a quote, backslash or newline could
-  # otherwise terminate a directive early and alter the generated configuration.
+  # Safe alphabet. The generator emits hex; this is what makes rendering into quoted Apache
+  # directives and into the Perl answers file injection-proof.
   case "${!v}" in
     *[!0-9a-zA-Z_-]*) echo "FATAL: $v contains characters outside the safe alphabet" >&2; exit 1 ;;
   esac
 done
+
+# Non-secret settings are validated per their own grammar, not merely for quotes: they are
+# interpolated into SQL identifiers and into unquoted Perl source, where a wrong shape is a defect.
+case "$BZ_DB_NAME" in ''|*[!0-9a-zA-Z_]*) echo "FATAL: BZ_DB_NAME must be [0-9a-zA-Z_]" >&2; exit 1 ;; esac
+case "$BZ_DB_USER" in ''|*[!0-9a-zA-Z_]*) echo "FATAL: BZ_DB_USER must be [0-9a-zA-Z_]" >&2; exit 1 ;; esac
+case "$BZ_DB_PORT" in ''|*[!0-9]*)        echo "FATAL: BZ_DB_PORT must be numeric" >&2; exit 1 ;; esac
 
 # ---------------------------------------------------------------------------------------------
 log "rendering the OIDC secret fragment (root-owned 0400)"
@@ -76,16 +98,31 @@ printf '[client]\nhost=%s\nport=%s\nuser=root\npassword=%s\n' \
   "$BZ_DB_HOST" "$BZ_DB_PORT" "$MARIADB_ROOT_PASSWORD" > "$DEFAULTS"
 trap 'rm -f "$DEFAULTS" "$ANSWERS"' EXIT
 
-if [ -z "$(printf "show databases like '%s'" "$BZ_DB_NAME" | mysql --defaults-file="$DEFAULTS" -BN)" ]; then
-  log "creating database ${BZ_DB_NAME} and its app user"
-  printf "CREATE DATABASE \`%s\`;
-GRANT SELECT, INSERT, UPDATE, DELETE, INDEX, ALTER, CREATE, LOCK TABLES,
-CREATE TEMPORARY TABLES, DROP, REFERENCES ON \`%s\`.* TO '%s'@'%%%%' IDENTIFIED BY '%s';
-FLUSH PRIVILEGES;\n" "$BZ_DB_NAME" "$BZ_DB_NAME" "$BZ_DB_USER" "$BZ_DB_PASS" \
-    | mysql --defaults-file="$DEFAULTS" -BN
+# Reconcile the database, the app account, its password and its grants on EVERY boot — not only
+# when the database is absent. An existing database whose user was dropped, whose password was
+# rotated, or whose grants drifted would otherwise be left broken with no signal. All three
+# statements are idempotent.
+#
+# The existence test uses an exact-match query rather than SHOW DATABASES LIKE, which would treat
+# `%` and `_` in the name as wildcards.
+EXISTS=$(printf "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='%s'" "$BZ_DB_NAME" \
+         | mysql --defaults-file="$DEFAULTS" -BN)
+if [ "${EXISTS:-0}" = "0" ]; then
+  log "creating database ${BZ_DB_NAME}"
+  printf "CREATE DATABASE \`%s\`;\n" "$BZ_DB_NAME" | mysql --defaults-file="$DEFAULTS" -BN
 else
   log "database ${BZ_DB_NAME} already present"
 fi
+
+log "reconciling the ${BZ_DB_USER} account and its grants"
+printf "CREATE USER IF NOT EXISTS '%s'@'%%' IDENTIFIED BY '%s';
+ALTER USER '%s'@'%%' IDENTIFIED BY '%s';
+GRANT SELECT, INSERT, UPDATE, DELETE, INDEX, ALTER, CREATE, LOCK TABLES,
+CREATE TEMPORARY TABLES, DROP, REFERENCES ON \`%s\`.* TO '%s'@'%%';
+FLUSH PRIVILEGES;\n" \
+  "$BZ_DB_USER" "$BZ_DB_PASS" "$BZ_DB_USER" "$BZ_DB_PASS" "$BZ_DB_NAME" "$BZ_DB_USER" \
+  | mysql --defaults-file="$DEFAULTS" -BN
+
 rm -f "$DEFAULTS"
 unset MARIADB_ROOT_PASSWORD
 

@@ -92,12 +92,14 @@ COPY ./oidc/000-portal-public.conf /etc/apache2/sites-available/000-portal-publi
 COPY ./oidc/001-portal-admin.conf /etc/apache2/sites-available/001-portal-admin.conf
 COPY ./oidc/entrypoint.sh          /root/docker/entrypoint.sh
 COPY ./oidc/render-answers.py     /root/docker/render-answers.py
+COPY ./oidc/read-secret.py        /root/docker/read-secret.py
+COPY ./oidc/render_answers_parse.py /root/docker/render_answers_parse.py
 COPY ./oidc/checksetup-answers.tmpl /root/docker/checksetup-answers.tmpl
 
 RUN a2dissite 000-default \
  && a2ensite 000-portal-public \
  && a2ensite 001-portal-admin \
- && chmod 0755 /root/docker/entrypoint.sh /root/docker/render-answers.py
+ && chmod 0755 /root/docker/entrypoint.sh /root/docker/render-answers.py /root/docker/read-secret.py
 
 # Upstream housekeeping: keep Docker droppings out of the web root, and make the data dir writable
 # by the app (it is a bind mount at runtime).

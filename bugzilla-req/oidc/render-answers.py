@@ -12,17 +12,7 @@ out of the Perl string quoting, and any placeholder left unsubstituted.
 import os
 import sys
 
-def read_secret_file(path: str) -> dict:
-    """Parse KEY=VALUE lines from the projected secret file. Never logs a value."""
-    out = {}
-    with open(path, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            out[k.strip()] = v.strip()
-    return out
+from render_answers_parse import parse_secret_file
 
 
 def main() -> int:
@@ -30,7 +20,7 @@ def main() -> int:
         return fail("usage: render-answers.py <template> <output> <secret-file>")
     tmpl, out, secret_file = sys.argv[1], sys.argv[2], sys.argv[3]
 
-    secrets = read_secret_file(secret_file)
+    secrets = parse_secret_file(secret_file)
     for required in ("BZ_ADMIN_PASSWORD", "BZ_DB_PASS"):
         if not secrets.get(required):
             return fail(f"{required} missing from the secret file")
