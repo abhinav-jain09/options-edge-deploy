@@ -1,7 +1,18 @@
 # Gate-1 — `fullfunding` tenant namespace on the prod k3s node, and the req-portal's migration into it
 
-**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 4. AWAITING USER APPROVAL (gatekeeping Gate-1).
+**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 6. AWAITING USER APPROVAL (gatekeeping Gate-1).
 Not implemented.**
+
+**USER DECISIONS RECORDED 2026-08-04 — D-1, D-3 and D-7 are CLOSED:**
+1. **D-3 → the host reservation wins.** `system-reserved` keeps the full measured host requirement
+   (≈13 Gi), and the **tenant's `requests.memory` is fixed at 2.25 Gi**, not 4 Gi. NS-8's entire
+   workload budget is re-sized to that envelope; the web tier loses its rollout surge.
+2. **D-1 → Bugzilla stays on MariaDB** (rev-11's pinning, image and backup design untouched), and
+   **Postgres is additionally provisioned** as the namespace platform database. A named consumer for
+   Postgres must still be recorded before Gate 2.
+3. **D-7 → literal zero on `/`.** `/var/lib/kubelet` and `/var/log/pods` are relocated onto `/home`
+   (**NS-21**), so nothing of the tenant's — not even rotated container logs — is stored on the root
+   filesystem. This also benefits OptionsEdge, since `/` has only 38 GiB free.
 
 **Revision history.** rev 1 → Codex REQUEST_CHANGES (15 blockers); rev 2 → REQUEST_CHANGES (18);
 rev 3 → REQUEST_CHANGES (12 + corrections). **rev 4 implements every rev-3 finding**, the material
@@ -75,7 +86,7 @@ Anything requiring defence against a hostile deployer needs a separate cluster, 
 | CPU | Bounded scheduler weight and ceiling | NS-2 | Zero interference: up to 6 CPU of burst on a 24 CPU node, by design |
 | Memory | Hard ceiling on the tenant; tenant preferred as eviction victim | NS-2, NS-3, NS-4 | A guarantee that OptionsEdge is never the victim (NS-3) |
 | Persistent disk | Hard ceiling (a separate, preallocated filesystem) | NS-7 | Fair sharing *within* the tenant — one PVC can consume the whole image (R-23) |
-| Ephemeral disk on `/` | **Nothing of the tenant's is stored on `/`** except kernel-rotated container logs capped at ≈0.9 GiB — disk-medium `emptyDir` denied, root filesystems read-only | **NS-20**, NS-15(6)(11) | Literal zero, until D-7 relocates the pod-log directory |
+| Ephemeral disk on `/` | **Nothing of the tenant's is stored on `/` at all** — disk-medium `emptyDir` denied, root filesystems read-only, and kubelet state + pod logs relocated to `/home` | **NS-20 + NS-21** (D-7 closed), NS-15(6)(11) | Nothing outstanding once NS-21 lands; before then the interim residue is ≤0.9 GiB of rotated logs |
 | Node-level escape | Blocked at admission | NS-15 | Protection against a cluster-admin, the host root, or the node itself |
 | Network | Default-deny, port-specific, platform-owned | NS-6, NS-9 | Protection of shared Keycloak/traefik/cloudflared/registry capacity (R-19) |
 | Availability | — | — | **Nothing.** One node, one kernel, one k3s (NS-13) |
@@ -222,7 +233,7 @@ unattributed objects; no tenant-plane credential holds any platform-plane verb.
 
 ```yaml
 requests.cpu: "1"                 limits.cpu: "6"
-requests.memory: <see NS-4>       limits.memory: 12Gi
+requests.memory: 2304Mi           limits.memory: 10Gi   # 2.25Gi — fixed by D-3, see NS-4
 requests.ephemeral-storage: 256Mi limits.ephemeral-storage: 1Gi   # NS-20: nothing belongs on /
 pods: "18"
 count/services: "8"
@@ -344,11 +355,21 @@ a new service, a replica increase, a raised request — that would otherwise be 
 | 13 Gi | 2.26 Gi |
 | 14 Gi | 1.26 Gi |
 
-**Therefore the tenant's `requests.memory` is not fixed in this document.** It is set at §6 step 1
-from the measured `R`, capped at 4 Gi. **If `R > 11.25 Gi`, the user must choose** between a smaller
-tenant budget, a smaller reservation (accepting less host protection), or a second machine. Launch
-is blocked until that choice is recorded. (rev 2's "≈4.3 Gi slack" omitted the eviction reserve;
-rev 3's "R ≤ 12 Gi" omitted `P_platform`. Both are withdrawn.)
+**D-3 is closed: the reservation wins and the tenant shrinks.** The user chose to keep the full
+measured host reservation rather than trim it for the tenant's benefit. With `R = 13 Gi` (the
+off-hours floor, to be confirmed by the §6 step 1 measurement) the formula yields
+
+```
+tenant_requests_memory  ≤  19.26 − 13 − 4  =  2.26 Gi
+```
+
+so the tenant's `requests.memory` is **fixed at 2.25 Gi (2304Mi)**, and NS-8's workload budget is
+sized to that envelope rather than to the 4 Gi rev 4 assumed. **If the measured `R` exceeds 13 Gi,
+launch is blocked** and returns to the user with the same three options (smaller tenant / smaller
+reservation / second machine); if it comes in below 12.75 Gi the tenant may be raised toward 2.5 Gi,
+which is a recorded change, not an automatic one. (rev 2's "≈4.3 Gi slack" omitted the eviction
+reserve; rev 3 omitted `P_platform`; rev 4's 4 Gi tenant assumed a reservation the user has now
+declined. All withdrawn.)
 
 Companion headroom, all recomputed and recorded at NS-V6, each including `P_platform`:
 - **CPU:** allocatable `24 − 4 − 1 = 19`; `− 14.07 − 0.4 − 1.0 = 3.53` slack.
@@ -499,24 +520,30 @@ web Deployment surges, and that surge is the budgeted transient below. (`Recreat
 Deployment-only fields and are deliberately not used for the StatefulSets.) Every per-pod figure in
 the table is stated per pod **and** as a row total, so the totals cannot be misread.
 
+**Re-sized for D-3's 2.25 Gi envelope.** Every figure is per pod; row totals are stated so they
+cannot be misread.
+
 | Workload | kind | requests (cpu/mem) | limits (cpu/mem) | PVC |
 |---|---|---|---|---|
-| `bugzilla-req-db` (**MariaDB**, rev-11 pinned) | StatefulSet ×1 | 100m / 512Mi | 1 / 2Gi | 20 Gi |
-| `postgres` (tenant platform DB) | StatefulSet ×1 | 100m / 512Mi | 1 / 2Gi | 15 Gi |
-| `kafka` (KRaft, combined, 1 broker) | StatefulSet ×1 | 200m / 1Gi | 1 / 2Gi | 20 Gi |
-| `bugzilla-req-web` | Deployment ×1 | 200m / 768Mi | 1 / 2Gi | — |
-| app pods — **2 pods, each 100m/256Mi requests and 500m/1Gi limits** | Deployment ×2 | **200m / 512Mi (both pods)** | **1 / 2Gi (both pods)** | — |
+| `bugzilla-req-db` (**MariaDB**, rev-11 pinned — D-1) | StatefulSet ×1 | 100m / 384Mi | 1 / 2Gi | 20 Gi |
+| `postgres` (tenant platform DB — D-1) | StatefulSet ×1 | 100m / 320Mi | 1 / 2Gi | 15 Gi |
+| `kafka` (KRaft, combined, 1 broker) | StatefulSet ×1 | 200m / 640Mi | 1 / 2Gi | 20 Gi |
+| `bugzilla-req-web` | Deployment ×1, **`Recreate`** | 150m / 448Mi | 1 / 2Gi | — |
+| app pod | Deployment ×1 | 100m / 192Mi | 500m / 1Gi | — |
 | backups PVC | — | — | — | 20 Gi |
-| **steady state** | | **0.8 CPU / 3.25 Gi** | **5 CPU / 10 Gi** | **75 Gi of the 80 Gi quota** |
-| **+ exactly ONE transient**, the largest being the web rollout surge (`maxSurge: 1`); the others are the backup Job and a debug Job | | **+0.2 CPU / +0.75 Gi** | **+1 CPU / +2 Gi** | — |
-| **peak** | | **1.0 CPU / 4.0 Gi** | **6 CPU / 12 Gi** | |
+| **steady state** | | **650m / 1984Mi (1.94 Gi)** | **4.5 CPU / 9 Gi** | **75 Gi of the 80 Gi quota** |
+| **+ ONE transient** — the backup Job **or** a debug Job | | **+100m / +256Mi** | **+0.5 CPU / +1 Gi** | — |
+| **peak** | | **750m / 2240Mi (2.19 Gi)** — inside the 2304Mi quota | **5 CPU / 10 Gi** | |
 
-rev 3's table summed to 1.2 CPU / 4.5 Gi requests and 7 CPU / 14 Gi limits — above its own quota,
-i.e. not admissible. The correction is structural, not cosmetic: **the quota admits steady state
-plus one transient, and the quota itself is the enforcement of that mutual exclusion.** The
-consequence is stated rather than hidden — during a web rollout a backup or debug Job will sit
-**Pending** until the surge pod is gone, which is why NS-18 alerts on a Job pending or missed for
-more than 15 minutes.
+Three consequences of the smaller envelope, stated rather than discovered later:
+- **The web tier loses its rollout surge.** `bugzilla-req-web` uses **`Recreate`**, so an image
+  update causes a brief outage instead of a rolling handover. For an internal requirement-intake
+  portal that is an acceptable trade, and it is the honest price of D-3.
+- **One application pod, not two.** A second app pod requires re-opening the NS-4 arithmetic.
+- **ResourceQuota does not *reserve* a slot for the backup Job.** It admits any combination that
+  fits the remaining aggregate; the "one transient" shape is what the numbers permit, not something
+  the quota guarantees. If a debug Job is running when the backup fires, the backup Job sits
+  **Pending** — which is why NS-18 alerts on a Job pending or missed for more than 15 minutes.
 
 **Kinds are specified because the update strategy depends on them:** the three data services are
 **StatefulSets at 1 replica**, whose rolling update terminates before it creates and therefore never
@@ -720,8 +747,10 @@ policy that fails open is worse than none).
   as the completion marker, 14-day retention, secrets excluded — rev-11 REQ-10a's structure.
   **"One atomic generation" means atomic *publication*** (write to a temp directory on the same
   filesystem, then rename), **not a transactionally consistent snapshot across the two databases** —
-  independent `mysqldump` and `pg_dump` runs cannot provide that, and no such consistency is claimed. The job has reserved quota (NS-8) and `ttlSecondsAfterFinished` +
-  history limits (NS-2).
+  independent `mysqldump` and `pg_dump` runs cannot provide that, and no such consistency is claimed. The job's resources are budgeted in NS-8 as the single
+  transient — **not "reserved", since a ResourceQuota cannot reserve a slot** — with
+  `ttlSecondsAfterFinished` and history limits (NS-2) and the NS-18 pending/missed alert as the
+  recovery signal.
 - **Transport off the tenant volume — implementable, because the CronJob cannot do it.** Under
   NS-6/NS-15 the job has no `hostPath`, no non-tenant PVC and no egress beyond DNS and the
   databases. The copy is therefore performed by a **host-platform backup agent** (systemd timer,
@@ -800,23 +829,47 @@ Requirements:
 2. **`readOnlyRootFilesystem: true`** is required on every tenant container (NS-15(11)). All
    writable state goes to a `fullfunding-storage` PVC. This is stricter than PSA `restricted`, which
    does not require it.
-3. **Container logs are the one unavoidable `/` residue**, because kubelet writes every pod's
-   stdout to `/var/log/pods` regardless of namespace. It is **bounded, not unbounded**: the live
-   kubelet config is `containerLogMaxSize: 10Mi` × `containerLogMaxFiles: 5` = **50 MiB per
-   container**, so 18 tenant pods cap at **≈0.9 GiB** of rotated logs on a filesystem with 37 GiB
-   free. Literal zero requires **D-7**.
+3. **Container logs would otherwise be the one unavoidable `/` residue**, because kubelet writes
+   every pod's stdout to `/var/log/pods` regardless of namespace (bounded by the live
+   `containerLogMaxSize: 10Mi` × `containerLogMaxFiles: 5` = 50 MiB per container, so ≈0.9 GiB for
+   18 tenant pods). **D-7 is closed in favour of eliminating it rather than bounding it: NS-21
+   relocates the directory onto `/home`, so the residue becomes zero.** Until NS-21 is executed,
+   the 0.9 GiB bound is the interim state and NS-20 is not yet satisfied.
 4. Consequently the tenant's ephemeral-storage quota drops to a token allowance —
    `requests.ephemeral-storage: 256Mi`, `limits.ephemeral-storage: 1Gi` (NS-2) — since with (1) and
    (2) there is nothing legitimate left to write to `/`. Anything approaching that limit is a defect
    to investigate, not headroom to use.
-5. **NS-V30** proves it empirically rather than by argument: after the tenant is running, a
-   host-side scan attributes every byte under `/var/lib/kubelet` and `/var/log/pods` to a namespace,
-   and the tenant's share is **rotated container logs only**, with no `emptyDir` and no other
-   tenant-owned path anywhere on `/`.
+5. **NS-V30** proves it empirically rather than by argument: after the tenant is running and NS-21
+   is in place, a host-side scan finds **zero tenant-owned bytes anywhere on `/`** — no `emptyDir`,
+   no logs, no writable layer — with kubelet's own state and every pod log resident on `/home`.
 
-**R-22 is downgraded accordingly:** the `/`-exhaustion vector shrinks from "an unbounded write burst
-can overshoot eviction detection" to "≤0.9 GiB of kernel-rotated log files", which no longer depends
-on kubelet reacting in time.
+**R-22 is closed rather than downgraded once NS-21 lands:** with disk-medium `emptyDir` denied,
+root filesystems read-only, and kubelet's state and logs relocated to `/home`, the tenant has no
+write path to `/` at all. The `/`-exhaustion risk reverts to being an OptionsEdge/host concern that
+NS-21 also improves.
+
+### NS-21 — Relocate kubelet state and pod logs off `/` (D-7)
+
+**Host-platform change (NS-1(3)), node-wide, and valuable in its own right:** `/` is 70 GiB with
+**38 GiB free and falling**, and it currently holds kubelet's entire pod state and every container's
+rotated logs for **both** projects. k3s's `--data-dir` already moved the rancher/containerd data to
+`/home` (imagefs = `/home`, measured), but `/var/lib/kubelet` and `/var/log/pods` were left behind.
+
+- Relocation is by **bind mount declared in fstab** (`/home/k8s/kubelet` → `/var/lib/kubelet`,
+  `/home/k8s/pod-logs` → `/var/log/pods`), not by symlink, because kubelet resolves and mounts
+  paths beneath these directories.
+- **k3s must be stopped and every pod terminated for the move**, since `/var/lib/kubelet` holds live
+  volume mounts. It is therefore a full maintenance window — the largest single operation in this
+  plan — and it is scheduled at **§6 step 1.5**, immediately after the measurement step and
+  **before** the node reservation, so the two node-level changes share one window and one restart.
+- **Ordering is a hard requirement:** the mount units must be active **before** k3s starts, or
+  kubelet recreates the directories on `/` and the relocation is silently undone.
+- **Rollback:** remove the fstab entries, stop k3s, move the directories back, restart. The
+  pre-change state (directory sizes, inode counts, `findmnt` output) is captured first.
+- **Post-change gate:** all 55 OptionsEdge deployments Ready, `df /` shows the reclaimed space, and
+  `stats/summary` reports **nodefs = `/home`**, not `/`.
+**Acceptance:** NS-V31 — nodefs is `/home` after the change; NS-V30 then finds zero tenant bytes on
+`/`; OptionsEdge health gate green before the window closes.
 
 ## 4. Disposition of the rev-11 req-portal requirements
 
@@ -879,7 +932,13 @@ change nothing.
    sessions → `R`; **and** maximum pid count per OptionsEdge pod → the D-6 value (NS-4). **Then
    apply NS-4's feasibility formula and record the tenant `requests.memory`; if `R > 11.25 Gi`, stop
    and obtain the user's decision.** Resolves D-3 and D-6. *(Blocks step 2.)*
-2. **Node reservation** (NS-4) — config + restart in the window; NS-V6. Valuable standalone.
+1.5. **Relocate kubelet state and pod logs off `/`** (NS-21, D-7) — full maintenance window: stop
+   k3s, move `/var/lib/kubelet` and `/var/log/pods` to `/home`, add fstab bind mounts, verify the
+   mounts are active **before** k3s starts. NS-V31 + the OptionsEdge health gate. **Shares the same
+   window and restart as step 2.**
+2. **Node reservation** (NS-4) — config + restart in the window; NS-V6. Valuable standalone. An
+   enumerated rollback (restore the previous `config.yaml`, restart, re-verify allocatable) and an
+   **OptionsEdge health gate — all 55 deployments Ready and pipeline lag nominal** — close this step.
 3. **Storage wall** (NS-7) — preallocated image, mount unit, immutable underlying directory,
    provisioner, StorageClass; NS-V10, NS-V23, NS-V29 rehearsed on a **scratch 1 GiB image**.
 4. **Admission + guardrails** (NS-1, NS-2, NS-3, NS-9, NS-15) — namespace, PSA labels, quota,
@@ -939,7 +998,8 @@ public exposure and teardown is private (NS-14).
 | NS-V26 | restore | both databases restored into a scratch namespace and verified with **service-specific fixtures** (MariaDB: known ticket, attachment checksum, identity mapping; Postgres: named table/row) |
 | NS-V27 | alerting | every alert **rule** exercised by synthetic metric injection; only safe faults induced for real; inducing node pressure, evictions or an OptionsEdge OOM is prohibited |
 | NS-V28 | traceability | every rev-11 clause and V-row mapped; zero unaccounted rows |
-| NS-V30 | nothing on `/` (NS-20) | a host-side scan attributes every byte under `/var/lib/kubelet` and `/var/log/pods` to a namespace: the tenant's share is **rotated container logs only** (≤50 MiB per container), with **zero** `emptyDir` directories and no other tenant-owned path anywhere on `/`; `readOnlyRootFilesystem` asserted on every tenant container |
+| NS-V31 | kubelet state and pod logs off `/` (NS-21) | after the change `stats/summary` reports **nodefs = `/home`**; `/var/lib/kubelet` and `/var/log/pods` are active bind mounts present **before** k3s starts; `df /` shows the reclaimed space; all 55 OptionsEdge deployments Ready |
+| NS-V30 | nothing on `/` (NS-20) | after NS-21, a host-side scan finds **zero tenant-owned bytes anywhere on `/`** — no `emptyDir`, no logs, no writable layer; `readOnlyRootFilesystem` asserted on every tenant container |
 | NS-V29 | mount-loss fail-closed | on the scratch image: with the mount absent, the host UUID check fails, the provisioner refuses (missing sentinel), new backing paths cannot be created (immutable mode-0000 directory), the independent guard executes the full quiescence procedure — CronJobs suspended, Deployments/StatefulSets scaled to 0, remaining Jobs and Pods deleted — the alert fires, and **no bytes land on `/home`**. Recovery re-mounts, re-verifies SOURCE+UUID and the sentinel, then restores in that order |
 
 ## 8. Accepted-risk register (additions to rev-11 R-1…R-11, R-13; R-12 superseded)
@@ -963,12 +1023,12 @@ public exposure and teardown is private (NS-14).
 
 | id | Decision | Status / recommendation |
 |---|---|---|
-| **D-1** | Bugzilla's database engine: **MariaDB** (rev-11 pinned, Codex-approved) or **Postgres** as the requirement's wording suggests? | **OPEN — needs the user.** Recommend keeping MariaDB for Bugzilla and running the requested Postgres as the platform DB, with a **named consumer recorded before Gate 2** |
+| **D-1** | Bugzilla's database engine | **CLOSED (user, 2026-08-04): Bugzilla stays on MariaDB; Postgres is additionally provisioned as the namespace platform DB.** rev-11's REQ-4 pinning and REQ-10a backup design are untouched. **Still required before Gate 2: a named consumer for Postgres**, or it is an unused database |
 | **D-2** | Kafka at launch | **RESOLVED: one broker at 1 replica** — the requirement states the project needs its own Kafka; a zero-replica placeholder is rejected |
-| **D-3** | `system-reserved` `R`, and the tenant `requests.memory` that follows from it | **OPEN — resolved by measurement** at §6 step 1. **If `R > 11.25 Gi` the 4 Gi tenant budget is infeasible and the user must choose** (smaller tenant / smaller reservation / second machine). Note the off-hours floor is already ≈13 Gi, so this choice is **expected**, not hypothetical |
+| **D-3** | `system-reserved` `R`, and the tenant `requests.memory` | **CLOSED (user, 2026-08-04): keep the full host reservation (≈13 Gi) and shrink the tenant to 2.25 Gi.** `R` is still confirmed by the §6 step 1 measurement; **if it exceeds 13 Gi, launch is blocked** and returns to the user |
 | **D-4** | Tenant egress to the public internet | Default **no**; any runtime need becomes an explicit allowlist entry with its own risk row |
 | **D-5** | OIDC back-channel under default-deny egress | **Split front/back-channel (option ii)**, conditional on verifying the packaged module's endpoint overrides and Keycloak's issuer behaviour; fallback (i) is broad outbound HTTPS and must be recorded as such |
-| **D-7** | NS-20 literal zero on `/`: accept the ≈0.9 GiB bound of kernel-rotated container logs, or eliminate it? | Two ways to reach literal zero: **(a)** relocate `/var/log/pods` and `/var/lib/kubelet` onto `/home` by bind mount — node-wide, needs a k3s restart, and **benefits OptionsEdge too** since `/` has only 37 GiB free; or **(b)** require tenant containers to log to a file on their PVC and emit nothing on stdout, which costs `kubectl logs`. **Recommend (a)** as a separate, independently valuable host change; accept the 0.9 GiB bound in the meantime |
+| **D-7** | NS-20 literal zero on `/` | **CLOSED (user, 2026-08-04): relocate `/var/lib/kubelet` and `/var/log/pods` onto `/home`** — option (a). Specified as **NS-21**, executed at §6 step 1.5. Node-wide and independently valuable, since `/` has only 38 GiB free |
 | **D-6** | `pod-max-pids` value `P` | Set from the RTH measurement at §6 step 1, **or dropped entirely** — with the PID vector then removed from every isolation claim rather than claimed unenforced |
 
 ## 10. Gate status
