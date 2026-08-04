@@ -60,10 +60,12 @@ spec:
     spec:
       containers:
         - env:
+            - name: OI_SHADOW_ENABLED
+              value: "true"
+            - name: OI_SHADOW_SEED_COEFFICIENTS_ENABLED
+              value: "true"
             - name: HEALTH_PORT
               value: "8150"
-            - name: OI_SHADOW_ENABLED
-              value: "false"
             - name: OI_SHADOW_SYMBOL
               value: SPX
             - name: KAFKA_OI_ANCHOR_MANIFEST_TOPIC
