@@ -623,10 +623,19 @@ wording governs). KC realm-only corrections via inverse kcadm ops; KC DB restore
 
 ## 9. Requirement reconciliation (authoritative state; all gated on the §6 step-8 onboarding gate)
 
+**As-built note (2026-08-04):** the design merged as `1fb2dd6`. PR-A implements REQ-1 + REQ-2 only
+(`k8s/keycloak/keycloak-realm-configmap.yaml` adds the `req-realm.json` key; the KC Deployment gains
+an `oe/config-nonce` so the plain ConfigMap change actually rolls the pod, since `--import-realm`
+runs only at container start). Deviation recorded per the Implemented-Code Documentation Accuracy
+Rule: the client does NOT declare `defaultClientScopes` — it inherits the realm defaults exactly as
+`options-edge-web` does, because `openid` is not a Keycloak client scope and naming a non-existent
+scope would be a guess; REQ-2's live kcadm + decoded-ID-token check remains the authority for the
+`email`/`profile` claims.
+
 | Id | State | Evidence / gate |
 |---|---|---|
-| REQ-1 | TRACKED-PENDING | PR-A + rollout + V1/V2/V9 + reconciliation + onboarding gate |
-| REQ-2 | TRACKED-PENDING | kcadm live + V2b + V4 claim check + onboarding gate |
+| REQ-1 | IMPLEMENTING | PR-A (realm JSON + nonce) open; becomes IMPLEMENTED only after merge + KC rollout + V1/V2/V9 + live reconciliation + onboarding gate |
+| REQ-2 | IMPLEMENTING | PR-A (client JSON) open; becomes IMPLEMENTED only after merge + kcadm live inspection + V2b + V4 claim check + onboarding gate |
 | REQ-3 | TRACKED-PENDING | ordering + V3/V8 + V-rollback + onboarding gate |
 | REQ-4 | TRACKED-PENDING | PR-B + dual digests + onboarding gate |
 | REQ-5a | TRACKED-PENDING | V-lan/V3/V6b/V-env + onboarding gate |
