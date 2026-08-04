@@ -76,3 +76,65 @@ data:
         }
       ]
     }
+  # ---------------------------------------------------------------------------------------------
+  # Requirement-intake portal realm (docs/req-portal-bugzilla-keycloak-sso.md, REQ-1 + REQ-2).
+  #
+  # Deliberately ISOLATED from `optionsedge`: a `req` user has no account in the trading realm, so
+  # they can never authenticate at https://fullfunding.nl, and the trading web client/API accept
+  # only the `optionsedge` issuer. Nothing in this key touches the realm above.
+  #
+  # Import is CREATION-ONLY — `start --import-realm` skips a realm that already exists. This file is
+  # the desired state, not a reconciler: after any later edit, the live realm/client must be
+  # reconciled with kcadm and this file updated in the same change (REQ-1).
+  #
+  # No client secret is committed. Keycloak generates one for the confidential `bugzilla-web` client
+  # at import; it is transferred server-side into the portal's secret file (REQ-9) and never appears
+  # in Git, Jenkins logs, or an image layer.
+  #
+  # Session/token lifetimes below are load-bearing for offboarding (REQ-5b): the portal's Apache
+  # session is independent of Keycloak once established, so disabling a user is always paired with a
+  # `bugzilla-req-web` restart. These values bound the window; the restart closes it.
+  #
+  # `defaultClientScopes` is deliberately NOT declared: the client inherits the realm's default
+  # client scopes (same as `options-edge-web` above), which is what supplies the `email`/`profile`
+  # scopes REQ-5c's identity contract needs. Per REQ-2 that is verified LIVE — kcadm scope/mapper
+  # inspection plus a decoded ID token in V4 — rather than assumed from this file.
+  req-realm.json: |
+    {
+      "realm": "req",
+      "enabled": true,
+      "sslRequired": "external",
+      "registrationAllowed": false,
+      "registrationEmailAsUsername": false,
+      "resetPasswordAllowed": false,
+      "verifyEmail": false,
+      "loginWithEmailAllowed": true,
+      "duplicateEmailsAllowed": false,
+      "bruteForceProtected": true,
+      "permanentLockout": false,
+      "maxFailureWaitSeconds": 900,
+      "failureFactor": 10,
+      "passwordPolicy": "length(12)",
+      "accessTokenLifespan": 300,
+      "ssoSessionIdleTimeout": 1800,
+      "ssoSessionMaxLifespan": 36000,
+      "clients": [
+        {
+          "clientId": "bugzilla-web",
+          "name": "Requirement intake portal (Bugzilla)",
+          "protocol": "openid-connect",
+          "enabled": true,
+          "publicClient": false,
+          "bearerOnly": false,
+          "standardFlowEnabled": true,
+          "implicitFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "redirectUris": ["https://req.fullfunding.nl/oidc-callback"],
+          "webOrigins": ["https://req.fullfunding.nl"],
+          "attributes": {
+            "pkce.code.challenge.method": "S256"
+          }
+        }
+      ]
+    }
