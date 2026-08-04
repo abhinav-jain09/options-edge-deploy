@@ -92,7 +92,12 @@ patches:
   # gateway relays its status stream. Turns the legacy PREOPEN publisher OFF (mutually
   # exclusive by construction). Prod untouched — base flags stay false.
   - path: ibkr-preopen-gate-dev-patch.yaml
-  - path: ibkr-preopen-gateway-dev-patch.yaml
+  # The gateway relay (and with it the browser-visible window) is deliberately NOT enabled in
+  # this PR: R-ROLL orders beta (values live, UI dark) BEFORE gamma (user-visible), and the
+  # conforming UI (option-chain handler + IBKR palette + truthful provenance) must be deployed
+  # first — otherwise the existing UI would render IBKR values labelled Databento. The
+  # gateway patch file ships here so the gamma flip is a one-line kustomization change.
+  # - path: ibkr-preopen-gateway-dev-patch.yaml
   # DEV mirror of the standalone overlay: OPB rolling windows disabled on dev (matches #482, which
   # touched only the standalone overlay and drifted the monolithic dev render). Prod already has it.
   - path: option-price-behavior-dev-env-patch.yaml
@@ -227,7 +232,13 @@ patches:
             # label=bootstrap|schemaRegistry — registry IDs are REGISTRY-LOCAL, so each
             # cluster's producer registers against ITS OWN registry (feed
             # fix/chain-per-target-registry).
-            value: prod=192.168.100.252:9092|http://192.168.100.252:8082,dev=host.docker.internal:19092|http://host.docker.internal:8082
+            #
+            # DEV-ONLY FAN-OUT for the gate-beta proving run: prod's raw-to-display-service
+            # runs at 1 replica and CONSUMES options.ibkr.raw, so fanning the chain to the
+            # prod broker would activate the legacy chain-display pipeline there — a real
+            # production effect. The D15 prod fan-out lands with the PROD gate, together with
+            # raw-to-display's own disposition.
+            value: dev=host.docker.internal:19092|http://host.docker.internal:8082
           - name: IBKR_VIX_PRICE_ENABLED
             value: "true"
           # HOP topic + fan-out targets (requirement §12): raw IBKR VIX ticks go to the
