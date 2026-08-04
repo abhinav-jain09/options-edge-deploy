@@ -7,7 +7,7 @@
 #
 # The upstream Bugzilla tree is NOT vendored here. The Jenkins job clones
 # github.com/bugzilla/bugzilla at the pinned commit into this build context first
-# (scripts/deploy/bugzilla-req-build.sh), so `COPY . /var/www/html` below is that exact tree — the
+# (scripts/deploy/bugzilla-req.sh), so `COPY . /var/www/html` below is that exact tree — the
 # same commit the internal instance runs, which is what makes the REQ-5c source-pinned auth
 # behaviour apply to this image too.
 #
@@ -66,7 +66,8 @@ RUN apt-get -y install \
  libgd-dev \
  libmysqlclient-dev \
  graphviz \
- vim-common
+ vim-common \
+ python3
 
 # Ubuntu 22.04 does not ship new enough versions of these, so they come from CPAN (upstream does the
 # same). This is an unpinned network fetch — the honest limit on this image's traceability, and the
@@ -89,21 +90,23 @@ COPY ./docker /root/docker
 COPY ./oidc/ports.conf /etc/apache2/ports.conf
 COPY ./oidc/000-portal-public.conf /etc/apache2/sites-available/000-portal-public.conf
 COPY ./oidc/001-portal-admin.conf /etc/apache2/sites-available/001-portal-admin.conf
-COPY ./oidc/render-oidc-secrets.sh /usr/local/bin/render-oidc-secrets.sh
-COPY ./oidc/startup-portal.sh /root/docker/startup-portal.sh
+COPY ./oidc/entrypoint.sh          /root/docker/entrypoint.sh
+COPY ./oidc/render-answers.py     /root/docker/render-answers.py
+COPY ./oidc/checksetup-answers.tmpl /root/docker/checksetup-answers.tmpl
 
 RUN a2dissite 000-default \
  && a2ensite 000-portal-public \
  && a2ensite 001-portal-admin \
- && chmod 0755 /usr/local/bin/render-oidc-secrets.sh /root/docker/startup-portal.sh
+ && chmod 0755 /root/docker/entrypoint.sh /root/docker/render-answers.py
 
 # Upstream housekeeping: keep Docker droppings out of the web root, and make the data dir writable
 # by the app (it is a bind mount at runtime).
 RUN rm -rf /var/www/html/docker* /var/www/html/Dockerfile* /var/www/html/oidc \
+ && rm -f  /var/www/html/docker-compose.yml /var/www/html/RUNBOOK-app-state.md \
  && rm -rf /var/www/html/data /var/www/html/localconfig /var/www/html/index.html \
  && mkdir /var/www/html/data
 RUN a2enmod expires && a2enmod rewrite && a2dismod mpm_event && a2enmod mpm_prefork
 
 # 80 = public (OIDC-protected), 81 = admin (native login, no ingress ever points at it).
 EXPOSE 80/tcp 81/tcp
-CMD ["/root/docker/startup-portal.sh"]
+CMD ["/root/docker/entrypoint.sh"]

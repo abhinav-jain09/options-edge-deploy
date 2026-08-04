@@ -25,7 +25,7 @@ pipeline {
     timeout(time: 60, unit: 'MINUTES')   // the upstream image build (apt + CPAN) is slow
   }
   environment {
-    BUILD_TAG_OE             = "${env.BUILD_NUMBER}-${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'nosha'}"
+    BUILD_TAG_OE             = "prod-${env.BUILD_NUMBER}-${env.GIT_COMMIT ? env.GIT_COMMIT.take(7) : 'nosha'}"
     DEPLOY_DRY_RUN           = "${params.DEPLOY_DRY_RUN}"
     BUGZILLA_UPSTREAM_COMMIT = "${params.BUGZILLA_UPSTREAM_COMMIT}"
   }
@@ -35,12 +35,14 @@ pipeline {
         sh '''
           set -euo pipefail
           # Production deploys come only from main (Tiered Environment-Branch Deployment Rule).
-          BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
           SHA=$(git rev-parse HEAD)
-          echo "checked out: $BRANCH ($SHA)"
           git fetch -q origin main
-          if ! git merge-base --is-ancestor "$SHA" origin/main; then
-            echo "FATAL: HEAD is not an ancestor of origin/main — refusing to deploy the portal" >&2
+          MAIN=$(git rev-parse origin/main)
+          echo "checked out $SHA; origin/main is $MAIN"
+          # Must be main's TIP, not merely an ancestor of it: an ancestor check would happily
+          # redeploy an old revision, including one whose vulnerability was already fixed on main.
+          if [ "$SHA" != "$MAIN" ]; then
+            echo "FATAL: HEAD is not origin/main's tip — refusing to deploy the portal" >&2
             exit 1
           fi
         '''
@@ -57,6 +59,18 @@ pipeline {
         '''
       }
     }
+    stage('REQ-6 internal-Bugzilla fingerprint (before)') {
+      steps {
+        sh '''
+          set -euo pipefail
+          # The internal instance must be a strict no-op. A fingerprint is taken before and after and
+          # compared: image digests, mounts and compose config hash. A drift here fails the job even
+          # if the portal itself deployed perfectly.
+          bash scripts/deploy/internal-bugzilla-fingerprint.sh > internal-before.txt
+          cat internal-before.txt
+        '''
+      }
+    }
     stage('Build + Deploy') {
       steps {
         sh '''
@@ -67,6 +81,19 @@ pipeline {
     }
   }
   post {
+    always {
+      sh '''
+        set -euo pipefail
+        if [ -f internal-before.txt ]; then
+          bash scripts/deploy/internal-bugzilla-fingerprint.sh > internal-after.txt || true
+          if ! diff -u internal-before.txt internal-after.txt; then
+            echo "FATAL: the internal Bugzilla stack CHANGED during this deploy — REQ-6 violated" >&2
+            exit 1
+          fi
+          echo "REQ-6 OK: internal Bugzilla fingerprint unchanged"
+        fi
+      '''
+    }
     success {
       echo "Portal stack deployed. Rollback: re-run this job, or re-point .env at the digests in " +
            "/home/options-edge/deploy/bugzilla-req/last-known-good.env.prev — never rebuild to roll back."
