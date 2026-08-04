@@ -88,6 +88,11 @@ patches:
   # DEV-ONLY: enable the full pre-open GEX pipeline (capture + transactional publish) for the overnight
   # verification cycle. Prod stays dormant (base flags false) until dev proves it. Prod untouched.
   - path: databento-gex-preopen-dev-patch.yaml
+  # DEV-ONLY gate β/γ: the pre-open IBKR GEX window publishes onto the live topic and the
+  # gateway relays its status stream. Turns the legacy PREOPEN publisher OFF (mutually
+  # exclusive by construction). Prod untouched — base flags stay false.
+  - path: ibkr-preopen-gate-dev-patch.yaml
+  - path: ibkr-preopen-gateway-dev-patch.yaml
   # DEV mirror of the standalone overlay: OPB rolling windows disabled on dev (matches #482, which
   # touched only the standalone overlay and drifted the monolithic dev render). Prod already has it.
   - path: option-price-behavior-dev-env-patch.yaml
@@ -216,6 +221,8 @@ patches:
           # Pre-open option-chain raw fan-out (OVERNIGHT-IBKR-GEX rev13 R-CHAIN.1): DARK —
           # read only when IBKR_CHAIN_ENABLED=true. Explicit rather than relying on the
           # IBKR_SPX_KAFKA_TARGETS fallback so the chain contract is visible here.
+          - name: IBKR_CHAIN_ENABLED
+            value: "true"
           - name: IBKR_CHAIN_KAFKA_TARGETS
             # label=bootstrap|schemaRegistry — registry IDs are REGISTRY-LOCAL, so each
             # cluster's producer registers against ITS OWN registry (feed

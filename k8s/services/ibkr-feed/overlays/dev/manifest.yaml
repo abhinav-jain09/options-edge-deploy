@@ -68,6 +68,8 @@ spec:
               value: underlying.spx.index.price
             - name: IBKR_SPX_KAFKA_TARGETS
               value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
+            - name: IBKR_CHAIN_ENABLED
+              value: "true"
             - name: IBKR_CHAIN_KAFKA_TARGETS
               value: prod=192.168.100.252:9092|http://192.168.100.252:8082,dev=host.docker.internal:19092|http://host.docker.internal:8082
             - name: IBKR_VIX_PRICE_ENABLED
