@@ -68,6 +68,8 @@ spec:
               value: "8150"
             - name: OI_SHADOW_SYMBOL
               value: SPX
+            - name: KAFKA_RAW_TOPIC
+              value: options.databento.raw
             - name: KAFKA_OI_ANCHOR_MANIFEST_TOPIC
               value: options.databento.oi.anchor-manifest
             - name: KAFKA_OI_SHADOW_TOPIC
