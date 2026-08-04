@@ -19,6 +19,10 @@
 #     lifetime by design (Apache reads it at every start/reload).
 #   * a mysql defaults-file under /tmp — 0600, TRANSIENT, removed as soon as the DB work finishes.
 #   * /root/docker/portal-answers.txt — 0600, TRANSIENT, removed after checksetup.
+#   * /var/www/html/localconfig — written by checksetup and holding the database password. PERSISTS
+#     for the container's lifetime by necessity (Bugzilla reads it on every request), and it lands
+#     on the data volume, so it is also inside any volume backup. This is the copy easiest to
+#     forget, and the one most likely to be missed by a naive V10 sweep.
 # The two transient files are also removed by an EXIT trap, but a SIGKILL/OOM/node failure can leave
 # residue: /tmp is tmpfs (gone on restart), while the answers file lives on the container's writable
 # layer and is re-created 0600 on the next boot. V10's "absent everywhere else" must be read against
@@ -142,6 +146,13 @@ cd /var/www/html
 perl checksetup.pl "$ANSWERS"
 rm -f "$ANSWERS"
 unset BZ_ADMIN_PASSWORD BZ_DB_PASS
+
+# checksetup's answers file seeds a FRESH install only: Bugzilla/Config.pm:121-131 @ 276673ab6
+# consults the answers hash inside `unless (exists $param->{$name})`, so an answer is ignored once
+# the param exists in data/params.json. Convergence therefore needs an explicit pass, or a value
+# changed by hand — or changed later in our template — would silently never take effect.
+log "converging REQ-5d parameters"
+perl /root/docker/reconcile-params.pl
 
 log "checksetup complete"
 

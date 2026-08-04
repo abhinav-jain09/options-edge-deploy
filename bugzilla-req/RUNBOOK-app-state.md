@@ -18,13 +18,22 @@ mechanism provides, then browse it: native login, break-glass path R-7.
 
 ## 1. Parameters — applied automatically, NOT by hand
 
-**Every parameter in the REQ-5d table is baked into `oidc/checksetup-answers.tmpl` and applied by
-`checksetup.pl` on every container start.** `checksetup` is idempotent, so the container — not a
-human following a checklist — is what makes the portal's parameter state deterministic, and it is
-why a rebuild-from-empty rehearsal converges to the same state.
+**Every parameter in the REQ-5d table is applied by the container, not by a human.** Two mechanisms,
+because one is not enough:
 
-Do not set these through the admin UI: a UI change would drift from the template and be silently
-reverted on the next boot. To change one, edit the template, open a PR, and redeploy.
+1. `oidc/checksetup-answers.tmpl` seeds a **fresh** install. It is not a convergence mechanism:
+   verified in source, `Bugzilla/Config.pm:121-131` @ `276673ab6` consults the answers hash only
+   inside `unless (exists $param->{$name})`, so an answer applies on first boot and is ignored on
+   every boot afterwards.
+2. `oidc/reconcile-params.pl` runs after checksetup on **every** boot and sets any param whose live
+   value differs from the contract, logging each change. This is what actually makes the template
+   the source of truth, and what a rebuild-from-empty rehearsal converges against.
+
+Keep the two in lockstep — the template seeds, the reconciler converges, and they must not disagree.
+
+Do not set these through the admin UI: the reconciler will revert the change on the next boot and
+log that it did. To change one, edit BOTH the template and the reconciler's `%REQUIRED` hash, open a
+PR, and redeploy.
 
 The template documents each value's purpose inline. The load-bearing ones: `user_info_class=Env,CGI`,
 `auth_env_id=OIDC_CLAIM_sub` (identity keyed on the immutable `sub`, never on mutable email),

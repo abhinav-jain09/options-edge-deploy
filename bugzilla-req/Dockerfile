@@ -95,11 +95,12 @@ COPY ./oidc/render-answers.py     /root/docker/render-answers.py
 COPY ./oidc/read-secret.py        /root/docker/read-secret.py
 COPY ./oidc/render_answers_parse.py /root/docker/render_answers_parse.py
 COPY ./oidc/checksetup-answers.tmpl /root/docker/checksetup-answers.tmpl
+COPY ./oidc/reconcile-params.pl   /root/docker/reconcile-params.pl
 
 RUN a2dissite 000-default \
  && a2ensite 000-portal-public \
  && a2ensite 001-portal-admin \
- && chmod 0755 /root/docker/entrypoint.sh /root/docker/render-answers.py /root/docker/read-secret.py
+ && chmod 0755 /root/docker/entrypoint.sh /root/docker/render-answers.py /root/docker/read-secret.py /root/docker/reconcile-params.pl
 
 # Upstream housekeeping: keep Docker droppings out of the web root, and make the data dir writable
 # by the app (it is a bind mount at runtime).
