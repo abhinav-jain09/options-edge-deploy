@@ -1,10 +1,24 @@
 # Gate-1 — `fullfunding` tenant namespace on the prod k3s node, and the req-portal's migration into it
 
-**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 3. AWAITING USER APPROVAL (gatekeeping Gate-1).
+**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 4. AWAITING USER APPROVAL (gatekeeping Gate-1).
 Not implemented.**
 
-**Revision history.** rev 1 → Codex 3-bar REQUEST_CHANGES (15 blockers). rev 2 implemented them →
-Codex 3-bar REQUEST_CHANGES (18 findings). **rev 3 implements every rev-2 finding**, the material
+**Revision history.** rev 1 → Codex REQUEST_CHANGES (15 blockers); rev 2 → REQUEST_CHANGES (18);
+rev 3 → REQUEST_CHANGES (12 + corrections). **rev 4 implements every rev-3 finding**, the material
+ones being: the Ingress quota is raised to 1 (a `0` quota would have rejected the platform-owned
+Ingress it was meant to protect); NS-4 gains an explicit **`P_platform`** term and the feasibility
+threshold tightens to **R ≤ 11.5 Gi**; NS-8's arithmetic is corrected and restructured as
+**steady state + exactly one transient**, which the quota itself enforces; the direct-Pod denial is
+re-expressed on the **requesting identity** (as this cluster's existing policy already does) so
+controller-created Pods are unaffected and the rule is unforgeable, and it is extended to
+`options-edge` so the CPU-limit prohibition has no Pod-level bypass; the disk-wall guard becomes an
+**independent host timer verifying the loop device by UUID** with an enumerated quiescence
+procedure; every operational identity is enumerated (nine, not five); Secret rollback is explicitly
+excluded with its consequence stated; **NS-19's clause map is delivered now as Appendix A** and
+moved to step 0.5; NS-V16 gains a bounded pilot load so RTH coexistence evidence is not vacuous;
+and NS-18 gains a budgeted, policy-compatible telemetry path.
+
+**rev 3 implemented every rev-2 finding**, the material
 ones being: the NS-4 arithmetic is corrected (it omitted the eviction reserve — the real slack at a
 14 Gi reservation is **2.26 Gi, not 4.3 Gi**) and is now expressed as a **feasibility formula with a
 quantified margin**, which surfaces the document's most important result — **the tenant's 4 Gi
@@ -195,11 +209,12 @@ unattributed objects; no tenant-plane credential holds any platform-plane verb.
   values explicitly (NS-15(5)).
 
 ```yaml
-requests.cpu: "2"                 limits.cpu: "6"
+requests.cpu: "1"                 limits.cpu: "6"
 requests.memory: <see NS-4>       limits.memory: 12Gi
 requests.ephemeral-storage: 2Gi   limits.ephemeral-storage: 6Gi
 pods: "18"
-count/services: "8"   count/ingresses.networking.k8s.io: "0"   # Ingress is platform-owned
+count/services: "8"
+count/ingresses.networking.k8s.io: "1"   # exactly one, platform-owned (NS-5)
 count/secrets: "15"   count/configmaps: "15"
 count/cronjobs.batch: "5"   count/jobs.batch: "20"
 persistentvolumeclaims: "5"
@@ -212,16 +227,27 @@ services.loadbalancers: "0"       services.nodeports: "0"
 
 - **`requests.cpu` is the load-bearing number**, because CFS weight derives from requests, not
   limits. It does **not** preserve all CPU for OptionsEdge: the tenant may burst to 6 CPU.
-- **`limits.memory` 12 Gi and `limits.cpu` 6** are deliberately larger than the requests: limits do
-  not consume allocatable, and rev 2's 8 Gi/4 CPU ceiling was **operationally infeasible** — three
-  data services at 2 Gi each already consumed 6 Gi, leaving nothing for the web pod, backup pods,
-  rollout surge or a debug pod. NS-8 carries the replica-weighted budget that fits inside these.
+- **The Ingress quota is `1`, not `0`.** A ResourceQuota applies to every admission request in the
+  namespace regardless of which credential makes it, so rev 3's `0` would have rejected the
+  platform-owned Ingress it was meant to protect. The layering is: **RBAC** denies the tenant
+  credential any Ingress verb (NS-9), **the quota** prevents a second Ingress, and **NS-15(7)**
+  constrains the content of the one that exists.
+- **`limits.memory` 12 Gi and `limits.cpu` 6** are deliberately larger than the requests, because
+  limits do not consume allocatable. They are derived from NS-8's corrected budget —
+  **steady state plus exactly one transient** — not chosen round.
 - **Ephemeral storage is bounded at admission and enforced at runtime by eviction, not by an
   instantaneous quota.** A logging burst can overshoot before kubelet reacts (R-22), and container
   images and pulls sit outside the quota entirely. NS-1's table states this honestly.
 - `emptyDir` sizing and PID limits: NS-15(6) and NS-4.
-- `count/jobs.batch: 20` with `ttlSecondsAfterFinished` and `successfulJobsHistoryLimit` set on
-  every CronJob, so accumulated Job objects can never block the backup CronJob (rev-2 finding 9).
+- **Job accumulation is a detected, recoverable failure — not an impossibility.** rev 3 claimed
+  accumulated Jobs could "never" block the backup CronJob; that was wrong, because
+  `ttlSecondsAfterFinished` cleanup is asynchronous, *failed* history is bounded separately, active
+  or stuck Jobs are unaffected, other CronJobs share the quota, and a ResourceQuota cannot reserve a
+  Job slot for one CronJob. Required instead: `ttlSecondsAfterFinished`,
+  `successfulJobsHistoryLimit: 3`, **`failedJobsHistoryLimit: 3`**, `concurrencyPolicy: Forbid`,
+  `startingDeadlineSeconds`, `activeDeadlineSeconds` and `backoffLimit` on every CronJob — plus
+  **NS-18 alerting on a Job pending or missed for more than 15 minutes**, which is what actually
+  makes the failure recoverable.
 **Acceptance:** NS-V2, NS-V3, NS-V4, NS-V20a/b.
 
 ### NS-3 — Eviction preference (at the strength Kubernetes provides)
@@ -266,45 +292,70 @@ kubelet-arg:
 4. **Fitting by requests is not runtime safety** (§2.2: 149 Gi of declared limits).
 
 **Feasibility formula (this is the document's key result).** kubelet computes
-`allocatable = capacity − kube-reserved − system-reserved − eviction-hard(memory.available)`:
+`allocatable = capacity − kube-reserved − system-reserved − eviction-hard(memory.available)`. The
+tenant is **not** the only new consumer: the platform plane adds pods that sit outside the tenant
+quota but inside node allocatable, so an explicit `P_platform` term is required (rev 3 omitted it):
+
+| Platform-plane workload | cpu req | mem req | pods |
+|---|---|---|---|
+| second `local-path-provisioner` + its provisioning helper pods | 100m | 256Mi | 2 |
+| NS-11 scheduled guardrail checker (CronJob) | 50m | 128Mi | 1 |
+| NS-18 telemetry collectors (NS-18) | 100m | 256Mi | 1 |
+| NS-7 tenant-guard's in-cluster agent | 50m | 128Mi | 1 |
+| **`P_platform` (budgeted allowance)** | **0.3 CPU** | **0.75 Gi** | **5** |
 
 ```
-tenant_requests_memory  ≤  62.23 − R − 1 − 2 − 38.97 − M
-                        =  20.26 − R − M
+tenant_requests_memory  ≤  62.23 − R − 1 − 2 − 38.97 − P_platform(0.75) − M
+                        =  19.51 − R − M
 ```
-with `R` = measured `system-reserved` memory and `M` = **required margin, fixed at 4 Gi**.
+`R` = measured `system-reserved` memory; `M` = **4 Gi**.
+
+**`R` and `M` are not the same margin and are not double counting.** `R` covers *host processes
+outside Kubernetes* and carries its own measurement margin for their burst above the observed
+high-percentile. `M` is *scheduler headroom inside Kubernetes*, reserved for OptionsEdge growth —
+a new service, a replica increase, a raised request — that would otherwise be unschedulable.
 
 | R (measured) | Max feasible tenant `requests.memory` |
 |---|---|
-| 10 Gi | 6.26 Gi |
-| **12 Gi** | **4.26 Gi** — the 4 Gi budget just fits |
-| 14 Gi | 2.26 Gi — the 4 Gi budget **does not fit** |
-| 16 Gi | 0.26 Gi — infeasible |
+| 10 Gi | 5.51 Gi |
+| 11 Gi | 4.51 Gi |
+| **11.5 Gi** | **4.01 Gi — the 4 Gi budget just fits** |
+| 12 Gi | 3.51 Gi — the 4 Gi budget **does not fit** |
+| 14 Gi | 1.51 Gi |
 
 **Therefore the tenant's `requests.memory` is not fixed in this document.** It is set at §6 step 1
-from the measured `R`, capped at 4 Gi. **If `R > 12 Gi`, the user must choose** between a smaller
+from the measured `R`, capped at 4 Gi. **If `R > 11.5 Gi`, the user must choose** between a smaller
 tenant budget, a smaller reservation (accepting less host protection), or a second machine. Launch
-is blocked until that choice is recorded. rev 2's "≈4.3 Gi slack" was arithmetically wrong (it
-omitted the 2 Gi eviction reserve) and is withdrawn.
+is blocked until that choice is recorded. (rev 2's "≈4.3 Gi slack" omitted the eviction reserve;
+rev 3's "R ≤ 12 Gi" omitted `P_platform`. Both are withdrawn.)
 
-Companion headroom, all recomputed and recorded at NS-V6:
-- **CPU:** `24 − 4 − 1 = 19` allocatable; `− 14.07 − 2 = 2.93` slack.
-- **Ephemeral:** allocatable ≈ `69.97 − 4 − 2 − 6.99 = 56.98` Gi in *declaration* terms, but the
-  operative number is the **37 GiB actually free on `/`** (R-22).
-- **Pods:** `110 − 74 − 18 = 18` headroom.
+Companion headroom, all recomputed and recorded at NS-V6, each including `P_platform`:
+- **CPU:** allocatable `24 − 4 − 1 = 19`; `− 14.07 − 0.3 − 1.0 = 3.63` slack.
+- **Pods:** `110 − 74 − 5 − 18 = 13` headroom.
+- **Ephemeral:** allocatable ≈ `69.97 − 4 − 2 − 6.99 = 56.98` Gi, minus existing declared requests
+  (≈0), minus `P_platform` (≈0.5 Gi), minus the tenant's 2 Gi ⇒ ≈54 Gi of *declaration* headroom.
+  This is **not** free disk: the operative number is the **37 GiB actually free on `/`** (R-22), and
+  declaration headroom far exceeding real capacity is precisely why ephemeral storage is
+  eviction-enforced rather than reserved.
 
 **`R` is derived from high-percentile host usage across ≥5 representative sessions** (open, close,
-a volatility spike, the nightly backup window, a maintenance window) plus margin — not one snapshot.
-The off-hours ~13 Gi is a floor (D-3).
+a volatility spike, the nightly backup window, a maintenance window) plus its measurement margin —
+not one snapshot. The off-hours ~13 Gi is a floor, and note it already exceeds 11.5 Gi, so D-3 is
+**expected to force the user's choice** rather than being a formality.
 **Independent value:** this requirement improves the status quo even if the tenant is cancelled.
-**Acceptance:** NS-V6 — effective kubelet config dumped and asserted (all four eviction thresholds,
-`pod-max-pids`), allocatable and all four headroom figures recorded, full inventory scheduled.
+**Acceptance:** NS-V6 — effective kubelet config dumped and asserted (all four eviction thresholds;
+`pod-max-pids` asserted **to the value chosen in D-6, including a verified `-1`/absence if D-6
+chooses no limit**), allocatable and all four headroom figures recorded including `P_platform`,
+full inventory scheduled.
 
 ### NS-5 — Exposure: platform-owned Ingress only
 - Public path: **tenant ClusterIP Service → platform-owned traefik `Ingress` → cloudflared**.
 - cloudflared rule before the catch-all: `hostname: req.fullfunding.nl` → `http://127.0.0.1:80`.
-- **The tenant cannot create Ingress objects at all** (`count/ingresses: "0"`, NS-2; ownership in
-  NS-1). rev 2 relied on a host allowlist inside a tenant-created Ingress; that left open a second
+- **The tenant cannot create Ingress objects** — enforced by **RBAC** (NS-9 grants the tenant
+  credential no Ingress verb), with the quota capped at **1** so no second Ingress can exist and
+  NS-15(7) constraining the content of the one that does. rev 3's `0` quota is withdrawn: a quota
+  applies to every admission request in the namespace irrespective of identity, so it would have
+  rejected the platform-owned Ingress itself. rev 2 relied on a host allowlist inside a tenant-created Ingress; that left open a second
   Ingress for the same host without the required middleware, a backend pointed at the admin
   listener, an `ExternalName` Service, or dangerous traefik annotations. Platform ownership closes
   the whole class; NS-15(7) additionally constrains the Ingress content (class, host, path, backend
@@ -337,14 +388,19 @@ allow-all rule after preflight:
 | portal web / app pods | tenant Postgres | 5432 |
 | app pods | tenant Kafka | 9092 |
 | backup CronJob | MariaDB / Postgres | 3306 / 5432 |
-| all tenant pods | `kube-dns` | 53 |
+| all tenant pods | `kube-dns` | **UDP 53 and TCP 53** (a rule that omits `protocol` defaults to TCP only) |
 | portal web pod | `oe-keycloak` pod in `options-edge` | 8080 (back-channel, below) |
 
 Nothing may reach container port 81 over the pod network; it is reachable only via
 `kubectl port-forward` (which traverses the API server and kubelet, not the pod network).
 
-**The load-bearing negative assertion:** a tenant pod must be unable to open `192.168.100.252` on
-**9092, 5432, 8081, 8082, 8092, 5000**. NetworkPolicy is *expected* to be enforced (§2.1) but that is
+**The load-bearing negative assertion:** a tenant pod must be unable to open **any** listener on
+`192.168.100.252`. The test is built from the host's **captured listening-socket inventory** at the
+time of the run — not a hand-written six-port list — and every node destination must be denied with
+no allowlisted exception. It necessarily includes 9092, 5432, 8081, 8082, 8092 and 5000, and also
+**22, 3000, 6443, 8091, 9090, 10250** and every other control-plane and host listener, because if
+node-local traffic bypasses NetworkPolicy at all then the exposure is the whole inventory rather
+than a chosen subset. NetworkPolicy is *expected* to be enforced (§2.1) but that is
 an **inference until NS-V9 proves it**, and egress to the node's own IP is a known CNI weak spot.
 
 **If NS-V9 fails, launch is BLOCKED pending an architectural change — there is no clean fallback,
@@ -382,16 +438,25 @@ per NS-11, contains no allow-all rule).
   *new* provisioning; already-bound PVs would still be mounted after the mount disappeared, letting
   tenant pods write into the underlying `/home` and silently defeat the wall. Required, all three:
   1. the **underlying directory** `/home/fullfunding/data` is created empty and made
-     **immutable (`chattr +i`) and mode 0000** while unmounted, so any write with the image absent
-     **fails** instead of landing on `/home`;
-  2. the provisioner Deployment and every tenant workload carry a startup/readiness check that the
-     path is a **mountpoint**, and fail closed if it is not;
-  3. the mount unit is `RequiredBy` a small **tenant-guard unit** that scales the tenant to zero and
-     alerts if the mount is lost — **k3s itself must not depend on the mount** (a boot failure there
-     would take OptionsEdge down for a tenant-only concern), and for the same reason the fstab/mount
-     unit must **not** put this single production host into emergency boot: it is `nofail` at boot,
-     with the guard and NS-18 alert providing the loudness instead. Recovery is documented
-     (re-mount, verify mountpoint, un-taint) with an explicit rollback path.
+     **immutable (`chattr +i`) and mode 0000** while unmounted, so any attempt to create a new
+     backing path with the image absent **fails** instead of landing on `/home`;
+  2. **host-side identity verification, not an in-pod mountpoint check.** rev 3 required tenant pods
+     to test `mountpoint`; that is unsound, because a PVC bind-mounted into a container *always*
+     presents as a mountpoint regardless of where its host source came from. Verification is
+     therefore done on the host — `findmnt -no SOURCE,UUID /home/fullfunding/data` must match the
+     **recorded loop-device filesystem UUID** — and the provisioner additionally requires a
+     **sentinel file that exists only inside the loop filesystem** (`.fullfunding-volume-<uuid>`)
+     before it will provision;
+  3. an **independently running tenant-guard** (systemd timer, **not** `RequiredBy` the mount —
+     a `RequiredBy` guard is stopped when the mount stops, which is the opposite of a monitor) runs
+     the UUID check on a schedule and, on mismatch or absence, executes an **enumerated quiescence
+     procedure** with its own Kubernetes credential (NS-9, `tenant-guard`): (a) `kubectl -n
+     fullfunding patch cronjob --all -p '{"spec":{"suspend":true}}'`, (b) scale every Deployment and
+     StatefulSet to 0, (c) delete any remaining Jobs and standalone Pods in the namespace, (d) raise
+     the NS-18 alert. **k3s itself must not depend on the mount** (a boot failure there would take
+     OptionsEdge down for a tenant-only concern), and for the same reason the mount unit is `nofail`
+     so this single production host never drops to emergency boot. Recovery is documented: re-mount,
+     verify SOURCE+UUID, verify the sentinel, then un-suspend and scale back up — in that order.
 - Second `local-path-provisioner` instance, own `provisionerName`, own `nodePathMap`, StorageClass
   **`fullfunding-storage`**, `reclaimPolicy: Retain`, `volumeBindingMode: WaitForFirstConsumer`.
   It is a platform-plane object with its own requests/limits, outside the tenant quota.
@@ -411,21 +476,34 @@ Single replica each, never the host instances. **Data services use `Recreate` / 
 rollouts do not double their footprint; the web tier keeps a rolling update with `maxSurge: 1`,
 which is accounted below.
 
-| Workload | requests (cpu/mem) | limits (cpu/mem) | PVC |
-|---|---|---|---|
-| `bugzilla-req-db` (**MariaDB**, rev-11 pinned) | 100m / 512Mi | 1 / 2Gi | 20 Gi |
-| `postgres` (tenant platform DB) | 100m / 512Mi | 1 / 2Gi | 15 Gi |
-| `kafka` (KRaft, combined, 1 broker) | 200m / 1Gi | 1 / 2Gi | 20 Gi |
-| `bugzilla-req-web` | 200m / 768Mi | 1 / 2Gi | — |
-| app pods (≤2) | 2×100m / 2×256Mi | 2×500m / 2×1Gi | — |
-| backup CronJob (reserved) | 100m / 256Mi | 500m / 1Gi | 20 Gi (shared backups PVC) |
-| rollout surge (web, `maxSurge: 1`) | 200m / 768Mi | 1 / 2Gi | — |
-| debug/troubleshooting pod (reserved) | 100m / 256Mi | 500m / 1Gi | — |
-| **peak total** | **≈1.4 CPU / ≈4.3 Gi** | **≈6 CPU / ≈12 Gi** | **75 Gi of the 80 Gi quota** |
+| Workload | kind | requests (cpu/mem) | limits (cpu/mem) | PVC |
+|---|---|---|---|---|
+| `bugzilla-req-db` (**MariaDB**, rev-11 pinned) | StatefulSet ×1 | 100m / 512Mi | 1 / 2Gi | 20 Gi |
+| `postgres` (tenant platform DB) | StatefulSet ×1 | 100m / 512Mi | 1 / 2Gi | 15 Gi |
+| `kafka` (KRaft, combined, 1 broker) | StatefulSet ×1 | 200m / 1Gi | 1 / 2Gi | 20 Gi |
+| `bugzilla-req-web` | Deployment ×1 | 200m / 768Mi | 1 / 2Gi | — |
+| app pods (≤2) | Deployment | 200m / 512Mi | 1 / 2Gi | — |
+| backups PVC | — | — | — | 20 Gi |
+| **steady state** | | **0.8 CPU / 3.25 Gi** | **5 CPU / 10 Gi** | **75 Gi of the 80 Gi quota** |
+| **+ exactly ONE transient**, the largest being the web rollout surge (`maxSurge: 1`); the others are the backup Job and a debug Job | | **+0.2 CPU / +0.75 Gi** | **+1 CPU / +2 Gi** | — |
+| **peak** | | **1.0 CPU / 4.0 Gi** | **6 CPU / 12 Gi** | |
+
+rev 3's table summed to 1.2 CPU / 4.5 Gi requests and 7 CPU / 14 Gi limits — above its own quota,
+i.e. not admissible. The correction is structural, not cosmetic: **the quota admits steady state
+plus one transient, and the quota itself is the enforcement of that mutual exclusion.** The
+consequence is stated rather than hidden — during a web rollout a backup or debug Job will sit
+**Pending** until the surge pod is gone, which is why NS-18 alerts on a Job pending or missed for
+more than 15 minutes.
+
+**Kinds are specified because the update strategy depends on them:** the three data services are
+**StatefulSets at 1 replica**, whose rolling update terminates before it creates and therefore never
+surges (`Recreate` is a Deployment-only strategy and would be invalid here — rev 3 was ambiguous);
+only the web Deployment surges, and it is the transient budgeted above.
 
 The peak **requests** row is what must satisfy NS-4's feasibility formula; if the measured `R`
-forces `requests.memory` below 4.3 Gi, the app-pod count or the surge allowance is reduced first,
-and that reduction is recorded before launch rather than discovered at rollout.
+forces `requests.memory` below 4.0 Gi, the app-pod count is reduced first, then the surge allowance
+(accepting a `Recreate` web rollout with brief downtime) — recorded before launch, not discovered
+at rollout.
 
 - **Kafka's disk bound is the filesystem, not a setting.** `log.retention.bytes` is **per partition**;
   with segment granularity, topic count, internal/KRaft logs and compaction, a naive calculation is
@@ -437,23 +515,36 @@ and that reduction is recorded before launch rather than discovered at rollout.
   function recorded before Gate 2** — an unused database does not satisfy the requirement.
 **Acceptance:** NS-V11.
 
-### NS-9 — Five credentials, enumerated
+### NS-9 — Every operational identity, enumerated
 A single namespace-scoped ServiceAccount cannot create a Namespace, PriorityClass, StorageClass, PV
 or ClusterRole, and no Kubernetes credential can edit `config.yaml`, a mount unit, cloudflared or
 DNS. rev 2's two-plane model was therefore not implementable.
 
-| Credential | Kind | Scope |
-|---|---|---|
-| **platform-k8s** | kubeconfig, tightly held | create/update on the platform-Kubernetes plane (NS-1(2)); **nothing in `options-edge`** except the NS-15(9) policy |
-| **host-root** | SSH/root on `.252` | kubelet config, mount unit, loopback image, cloudflared, host backup agent |
-| **tenant-deploy** | Jenkins SA, `Role` in `fullfunding` **+ a read-only `ClusterRole`** | mutate the tenant plane only; **read-only** `get`/`list` on PriorityClass, StorageClass, ValidatingAdmissionPolicy and Namespaces so NS-11's preflight can inspect them (rev 2 forbade any ClusterRole and thereby made its own preflight impossible). No `escalate`, `bind`, `impersonate`; **no mutation of NetworkPolicy, Ingress or Middleware** |
-| **operator** | human break-glass kubeconfig | `get`/`list` pods + `create pods/portforward` in `fullfunding` only; separate from Jenkins |
-| **external** | Cloudflare dashboard / Keycloak admin | the DNS record; the realm `req` + client, via the existing Keycloak deploy path (NS-1(5)) |
+**Nine identities, not five** (rev 3 merged two administrative credentials into one row and omitted
+every runtime identity):
 
-**Stated honestly:** restricting `get secrets` is **not** a boundary against a principal that can
-create pods — it can mount any namespace Secret and read it. Moreover **tenant-deploy legitimately
-holds create/update on Secrets** (they are tenant-plane objects), so it can read them through the
-API as well. NS-15(8) therefore carries a **closed allowlist**: the exact Secret names, the exact
+| # | Identity | Kind | Scope |
+|---|---|---|---|
+| 1 | **platform-k8s** | kubeconfig, tightly held | create/update on the platform-Kubernetes plane (NS-1(2)); **nothing in `options-edge`** except the NS-15(9) policy |
+| 2 | **host-root** | SSH/root on `.252` | kubelet config, mount unit, loopback image, cloudflared, host backup agent, tenant-guard timer |
+| 3 | **tenant-deploy** | Jenkins SA, `Role` in `fullfunding` **+ a read-only `ClusterRole`** | mutate the tenant plane only; **read-only** `get`/`list` on PriorityClass, StorageClass, ValidatingAdmissionPolicy and Namespaces so NS-11's preflight can inspect them. **No** Ingress, NetworkPolicy or Middleware verb; no `escalate`, `bind`, `impersonate` |
+| 4 | **operator** | human break-glass kubeconfig | `get`/`list` pods + `create pods/portforward` in `fullfunding` only; separate from Jenkins |
+| 5 | **cloudflare-dns** | Cloudflare dashboard/API token | the `req.fullfunding.nl` DNS record only |
+| 6 | **keycloak-admin** | existing Keycloak admin credential | realm `req` + its client, via the existing Keycloak deploy path (NS-1(5)) |
+| 7 | **provisioner SA** | in-cluster ServiceAccount | the second local-path provisioner and its helper pods (PV/PVC verbs only) |
+| 8 | **guardrail-checker SA** | in-cluster ServiceAccount | read-only across the objects NS-11 asserts; no mutation |
+| 9 | **tenant-guard SA** | in-cluster ServiceAccount used by the host timer | suspend CronJobs, scale workloads to 0 and delete Pods/Jobs **in `fullfunding` only** (NS-7 quiescence) |
+
+**Derived objects** — ReplicaSets, Pods, Jobs, EndpointSlices, provisioner helper pods — are created
+by Kubernetes' own controller identities. NS-V1 therefore distinguishes **ownership by owner chain**
+(which named object they descend from) from **admission actor** (which identity submitted the
+request); a derived object is attributed through its owner chain, not to a human credential.
+
+**Stated honestly, with the exact verbs:** tenant-deploy holds `create`/`update`/`patch`/`delete`
+on Secrets (they are tenant-plane objects) — which does **not**, by itself, grant `get`. The more
+important residual path is indirect and unavoidable: a principal that can create or modify a
+workload can make an allowed consumer mount any namespace Secret and surface its value. Restricting
+the `get` verb is therefore not a boundary. NS-15(8) instead carries a **closed allowlist**: the exact Secret names, the exact
 ServiceAccounts that may be used, and which workloads may reference which Secret. R-14 records the
 residual truth: tenant-deploy, platform-k8s, host-root, any cluster-admin and the node itself can
 all reach tenant secrets; namespace RBAC does not and cannot exclude them.
@@ -465,7 +556,13 @@ resource/verb/subresource list, asserting permitted **and** denied cells, in `fu
 Manifests at `k8s/tenants/fullfunding/`, applied by a tenant-specific Jenkins job from `main` only,
 images digest-pinned from `.252:5000`.
 - **Last-known-good is the complete rendered state**: the rendered manifest set, ConfigMap contents,
-  Secret resource versions, the database schema version and the migration checkpoint.
+  the database schema version and the migration checkpoint. **Secret *values* are explicitly
+  excluded from rollback** — rev 3 recorded Secret `resourceVersion`s and called the state
+  "complete", but Kubernetes cannot restore a historical Secret from a resourceVersion. The
+  recoverable source of secret material is the **Jenkins credential store**, and the stated
+  consequence is that a rollback across a secret rotation requires re-applying the current secret
+  from that store (it is already valid at Keycloak, per rev-11 REQ-9's convergence argument), not
+  recovering the previous value.
 - **Rollback is migration-aware.** Bugzilla's `checksetup` migrates forward only, so an automatic
   LKG image rollback is permitted **only** when the captured schema version is unchanged; across a
   schema-migrating bump the job **stops and requires a database-restore decision** and never starts
@@ -497,6 +594,11 @@ trading session including the open and the close**, asserting thresholds agreed 
 - Tenant: filesystem **growth slope within an agreed band** (a database in use grows; "flat" was the
   wrong test), PVC usage, restarts.
 - All three tunnel hostnames serving.
+
+**The window must not be idle.** External users are provisioned only *after* this window (§6
+step 12), so without load the session would prove only that an idle tenant is harmless. A **bounded
+synthetic pilot load at the NS-16 SLO profile** (fixed before the run) therefore executes against
+the portal during the observation session, and the profile used is recorded with the result.
 **Acceptance:** NS-V16.
 
 ### NS-13 — What is and is not isolated
@@ -528,8 +630,11 @@ This cluster already runs a `ValidatingAdmissionPolicy` (`failurePolicy: Fail`, 
 so the mechanism is proven here.
 
 - **Pod Security Admission** on `fullfunding`: `enforce=restricted` (+`audit`/`warn`) — denies
-  privileged pods, host namespaces, `hostPath`, privilege escalation, unsafe capabilities. No
-  namespace uses PSA today, so this is additive.
+  privileged pods, host namespaces, `hostPath`, privilege escalation, unsafe capabilities. **All
+  three levels carry a pinned `*-version` label** (`enforce-version`, `audit-version`,
+  `warn-version`) rather than `latest`, so a k3s upgrade cannot silently change enforcement
+  semantics; bumping a pinned version is a reviewed change with its own re-verification of NS-V21.
+  No namespace uses PSA today, so this is additive.
 - **ValidatingAdmissionPolicies**, all `failurePolicy: Fail`, bindings `[Deny]`, scoped to
   `fullfunding` except (9):
   1. deny `hostPort`, `hostNetwork`, `hostPID`, `hostIPC`;
@@ -537,12 +642,18 @@ so the mechanism is proven here.
   3. require `spec.storageClassName == "fullfunding-storage"` on every PVC;
   4. require `priorityClassName == "fullfunding-low"` on every pod;
   5. **require explicit `requests` and `limits` (cpu, memory, ephemeral-storage) on every container
-     — enforced on controller *templates*, not on Pods.** This resolves rev 2's contradiction:
-     LimitRange mutates a Pod with defaults *before* validating policies see it, so a Pod-level rule
-     cannot distinguish a declared value from a default. The policy therefore matches
-     `Deployment`, `StatefulSet`, `DaemonSet`, `ReplicaSet`, `Job` and `CronJob` templates, where
-     LimitRange defaulting does not apply — and **directly created Pods are denied outright** in the
-     namespace, so there is no bypass and no "stored-but-unschedulable controller" outage;
+     — enforced on controller *templates*, not on Pods.** LimitRange mutates a Pod with defaults
+     *before* validating policies see it, so a Pod-level rule cannot distinguish a declared value
+     from a default. The policy matches `Deployment`, `StatefulSet`, `DaemonSet`, `ReplicaSet`,
+     `Job` and `CronJob` templates, where LimitRange defaulting does not apply;
+  5b. **deny Pods created directly by a *user* identity**, expressed on `request.userInfo.username`
+     — exactly the mechanism this cluster's existing `options-edge-jenkins-only-workloads` policy
+     already uses. rev 3 said "directly created Pods are denied outright", which as written would
+     also have blocked the ReplicaSet, StatefulSet and Job controllers and broken every workload.
+     Identity-based matching is both correct and unforgeable (userInfo comes from authentication,
+     unlike owner references). Consequences, made consistent: **NS-V3 runs in a fixture namespace**,
+     not here; and **debugging is an approved Job or Deployment submitted through Jenkins**, not a
+     hand-created Pod — which is why NS-8 budgets a debug *Job*;
   6. require every `emptyDir` to set `sizeLimit` (≤ 1 Gi);
   7. constrain the platform-owned `Ingress`: `ingressClassName`, an explicit non-empty host from the
      allowlist (`req.fullfunding.nl`; denying omitted/catch-all hosts, wildcards,
@@ -550,7 +661,10 @@ so the mechanism is proven here.
      port**, the required middleware annotation, and an annotation allowlist;
   8. a **closed allowlist** of Secret names, permitted consuming workloads and permitted
      ServiceAccounts (NS-9);
-  9. **scoped to `options-edge`:** deny any controller template declaring `limits.cpu` (NS-2);
+  9. **scoped to `options-edge`:** deny `limits.cpu` in any controller template **and in any
+     directly created Pod** (with the same controller-identity carve-out as 5b). rev 3 matched
+     templates only, leaving a direct-Pod bypass that made "OptionsEdge stays uncapped on CPU"
+     unenforced at the API;
   10. deny `Service.spec.type == ExternalName` in the namespace.
 **Acceptance:** NS-V21, NS-V23, NS-V24 — each policy exercised with a violating **and** a conforming
 object **for every workload/template kind it matches**, with `failurePolicy: Fail` confirmed (a
@@ -577,9 +691,11 @@ policy that fails open is worse than none).
 
 ### NS-17 — Backups: both databases, off-volume, with an honest failure domain
 - **Tenant MariaDB and tenant Postgres** are both backed up by a namespace CronJob:
-  `mysqldump --single-transaction` / `pg_dump`, one atomic generation, per-artifact checksums, a
-  manifest written **last** as the completion marker, 14-day retention, secrets excluded — rev-11
-  REQ-10a's structure. The job has reserved quota (NS-8) and `ttlSecondsAfterFinished` +
+  `mysqldump --single-transaction` / `pg_dump`, per-artifact checksums, a manifest written **last**
+  as the completion marker, 14-day retention, secrets excluded — rev-11 REQ-10a's structure.
+  **"One atomic generation" means atomic *publication*** (write to a temp directory on the same
+  filesystem, then rename), **not a transactionally consistent snapshot across the two databases** —
+  independent `mysqldump` and `pg_dump` runs cannot provide that, and no such consistency is claimed. The job has reserved quota (NS-8) and `ttlSecondsAfterFinished` +
   history limits (NS-2).
 - **Transport off the tenant volume — implementable, because the CronJob cannot do it.** Under
   NS-6/NS-15 the job has no `hostPath`, no non-tenant PVC and no egress beyond DNS and the
@@ -587,6 +703,11 @@ policy that fails open is worse than none).
   host-root, NS-1(3)) that reads completed generations from the tenant filesystem and writes them
   into the existing `.252` daily archive path. Its credentials, schedule, capacity check and
   failure alert are part of that unit, not of the tenant.
+- **Copy-race contract** (otherwise retention could delete a generation mid-copy): the agent copies
+  to a staging directory at the destination, verifies **source and destination checksums**, then
+  publishes atomically by rename; and the CronJob's retention **must not delete any generation newer
+  than the agent's last confirmed-copied marker**, which the agent writes back into the tenant
+  filesystem after a successful publish.
 - **Failure domain, stated honestly:** the archive path is on the **same host**. This protects
   against image corruption, accidental deletion and namespace teardown; it does **not** protect
   against loss of `.252` or of `/home`. **RPO 24 h, RTO hours (manual).** Backups are unencrypted,
@@ -602,8 +723,20 @@ policy that fails open is worse than none).
 mapping for MariaDB; a named table/row fixture for Postgres — rev 2 wrongly reused Bugzilla data for
 both).
 
-### NS-18 — Alerting
-Into the existing prod ops path: tenant filesystem ≥75%/≥90%, PVC growth beyond the NS-12 band, node
+### NS-18 — Alerting, and the telemetry path that makes it possible
+**Collection architecture, specified rather than assumed** (rev 3 asserted alerts that default-deny
+networking would have prevented from ever being collected):
+- **Host-side signals need no cluster path:** tenant filesystem usage, mount presence/UUID (NS-7),
+  backup generation age and host-agent success are emitted by the **host-platform agent** as
+  node-exporter *textfile* metrics, scraped by the existing host Prometheus on `.252:9090`.
+- **In-cluster signals** (Kafka lag, database saturation, Ingress 5xx, pod restarts/OOM/eviction)
+  are exposed by collectors inside the namespace and scraped by the host Prometheus. This requires
+  **one explicit NetworkPolicy ingress rule** allowing the node IP to reach **only** the collectors'
+  metrics port — a deliberate, narrow exception to default-deny, listed in the canonical policy set
+  (NS-V22) so it is visible rather than incidental.
+- Their CPU/memory/pod cost is budgeted in **`P_platform`** (NS-4), not left off the books.
+
+Alerts into the existing prod ops path: tenant filesystem ≥75%/≥90%, PVC growth beyond the NS-12 band, node
 memory pressure, any eviction or OOM kill (tenant **or** OptionsEdge), mount loss (NS-7), Kafka disk
 and consumer lag, database down or connection saturation, Ingress 5xx rate, backup generation older
 than 26 h, host backup-agent failure, and any NS-11 guardrail failure.
@@ -612,12 +745,14 @@ those faults that are safe to induce are induced for real. Deliberately causing 
 an eviction or an OptionsEdge OOM on this production node is **prohibited**.
 
 ### NS-19 — Clause-level traceability to rev 11
-Before **Gate 2 begins**, every rev-11 sub-requirement, acceptance clause and verification row
-(V-pre, V3, V4/V4d, V6, V6b, V6t, V7, V7-int, V8, V10, V11, V-lan, V-env, V-off, V-restore,
-V-rollback) is mapped: unchanged, superseded-by (with the NS id), or explicitly retired-with-reason.
-A REQ-level table cannot prove nothing was stranded.
-**Acceptance:** NS-V28 — mapping complete, zero unaccounted rows. **This is a Gate-1 exit criterion
-and a Gate-2 entry prerequisite**, not a step-10 item (rev 2 placed it at both, contradictorily).
+Every rev-11 verification row and risk row is mapped — unchanged, superseded-by (with the NS id), or
+explicitly retired-with-reason — because a REQ-level table cannot prove nothing was stranded.
+**The map is delivered in this document as Appendix A**, rather than promised: rev 3 deferred it and
+therefore could not demonstrate its own completeness.
+**Acceptance:** NS-V28 — Appendix A reviewed against the rev-11 document open side by side, zero
+unaccounted rows. **This is a Gate-1 exit criterion**, verified at **§6 step 0.5 — before any node
+change** (rev 3 declared it a Gate-2 prerequisite while scheduling it at step 10, after the node
+changes, deployment and publication; that contradiction is removed).
 
 ## 4. Disposition of the rev-11 req-portal requirements
 
@@ -636,7 +771,7 @@ Where this table says SUPERSEDED, the present document governs. Clause-level com
 | REQ-6 internal Bugzilla untouched | **UNCHANGED, strengthened** | NS-6 makes `:8092` unreachable from the tenant. **No modification to internal Bugzilla access is proposed** — rev 2's `pg_hba`/SASL fallback, which would have touched shared services, is withdrawn (NS-6) |
 | REQ-7 cross-system isolation | **UNCHANGED, plus evidence** | NS-V9 output added to the token-level proof |
 | REQ-8 Jenkins-only build & deploy | **SUPERSEDED (mechanism)** | kustomize apply + bounded `rollout status`; **the schema-forward rule becomes binding on the rollback path** (NS-10) |
-| REQ-9 secrets | **SUPERSEDED (mechanism), new risks** | host `0600` files → k8s `Secret` projected as files (never container env, never in probe text). **Enumerated k8s allowlist:** (a) the Secret in the k3s datastore, (b) its projected paths in the web pod, (c) the Jenkins credential store — and nowhere else (not the repo, job logs, archived artifacts, `describe` output, pod env, container logs or backups). **New truths, matching the actual permissions:** unencrypted at rest in the datastore; **readable via the API by tenant-deploy and platform-k8s, and mountable by anything that can create pods**; and **projected-Secret updates are asynchronous while `subPath` mounts never refresh**, so rotation is *not* atomic for the application and **requires an explicit pod restart**, which rev-11's runbook already performs |
+| REQ-9 secrets | **SUPERSEDED (mechanism), new risks** | host `0600` files → k8s `Secret` projected as files (never container env, never in probe text). **Enumerated k8s allowlist:** (a) the Secret object in the k3s datastore **and in any datastore backup**, (b) its projected paths in **every consuming pod** — the web pod, the database pods, application pods, backup Jobs, and any image-pull credential consumer — **and the node-managed projected-volume storage backing those mounts**, (c) the Jenkins credential store. V10's "absent everywhere else" is asserted against the *searchable* surfaces (repo, job logs, archived artifacts, `describe` output, pod env, container logs, backups); rev 3's unqualified "nowhere else" over-claimed, since node-side projected storage and datastore backups necessarily hold the material. **New truths, matching the actual permissions:** unencrypted at rest in the datastore; **readable via the API by tenant-deploy and platform-k8s, and mountable by anything that can create pods**; and **projected-Secret updates are asynchronous while `subPath` mounts never refresh**, so rotation is *not* atomic for the application and **requires an explicit pod restart**, which rev-11's runbook already performs |
 | REQ-10a windows & backups | **SUPERSEDED (mechanism), extended** | namespace CronJob + **host-platform agent** for the off-volume copy (NS-17); **tenant Postgres added**; failure domain stated as off-volume, **not off-host**. Keycloak's `pg_dump` stays with OptionsEdge |
 | REQ-10b health model | **SUPERSEDED (mechanism)** | healthchecks → probes; a probe is never the security gate |
 | REQ-10c verification & observation | **EXTENDED** | rev-11 matrix + NS-V1…**NS-V29**; window lengthens to a full session (NS-12) |
@@ -674,15 +809,17 @@ change nothing.
 0. **Pre-flight:** `req.fullfunding.nl` DNS record **absent**; `/home` free ≥ 400 GiB (so NS-7's
    reserve holds after the 100 GiB image); `/` free recorded; **NS-12 baseline capture begins**
    (it must span a full session, so it starts here).
+0.5. **Clause-map verification** (NS-19 / NS-V28) — Appendix A reviewed against rev 11 with zero
+   unaccounted rows. **Gate-1 exit criterion; nothing below starts until it passes.**
 1. **Measurement (read-only, spans RTH):** high-percentile host CPU/memory across ≥5 representative
-   sessions → `R`; **and** maximum pid count per OptionsEdge pod → `P` (NS-4). **Then apply NS-4's
-   feasibility formula and record the tenant `requests.memory`; if `R > 12 Gi`, stop and obtain the
-   user's decision.** Resolves D-3. *(Blocks step 2.)*
+   sessions → `R`; **and** maximum pid count per OptionsEdge pod → the D-6 value (NS-4). **Then
+   apply NS-4's feasibility formula and record the tenant `requests.memory`; if `R > 11.5 Gi`, stop
+   and obtain the user's decision.** Resolves D-3 and D-6. *(Blocks step 2.)*
 2. **Node reservation** (NS-4) — config + restart in the window; NS-V6. Valuable standalone.
 3. **Storage wall** (NS-7) — preallocated image, mount unit, immutable underlying directory,
    provisioner, StorageClass; NS-V10, NS-V23, NS-V29 rehearsed on a **scratch 1 GiB image**.
 4. **Admission + guardrails** (NS-1, NS-2, NS-3, NS-9, NS-15) — namespace, PSA labels, quota,
-   LimitRange, PriorityClass, policies, the five credentials; NS-V1…V5, V7, V12, V20a/b, V21, V23,
+   LimitRange, PriorityClass, policies, all nine identities; NS-V1…V5, V7, V12, V20a/b, V21, V23,
    V24.
 5. **Network policy** (NS-6, platform-owned) — **NS-V9 runs here. If it fails, launch is BLOCKED**
    (no fallback exists; see NS-6) and the project returns to an architecture decision. NS-V22.
@@ -696,8 +833,9 @@ change nothing.
    - 8b. **RTH-only, read-only:** NS-V13.
 9. **Publish** (NS-5) — Ingress, then the cloudflared rule, then DNS **last**. NS-V8 plus rev-11
    V3/V4/V6t/V11 immediately after, before any stakeholder user exists.
-10. **NS-19 clause map complete** (NS-V28) — a Gate-2 entry prerequisite, verified complete here.
-11. **Observation** (NS-12/NS-V16) — a full session including open and close, inside thresholds.
+10. *(moved to step 0.5 — the clause map is a Gate-1 exit criterion, not a post-publication item.)*
+11. **Observation** (NS-12/NS-V16) — a full session including open and close, **with the bounded
+    synthetic pilot load running** (NS-12), inside thresholds.
 12. **Onboarding gate** — every matrix row green, NS-19 complete, window closed. Only then are
     external users provisioned.
 
@@ -708,36 +846,36 @@ public exposure and teardown is private (NS-14).
 
 | id | Asserts | Exact expected result |
 |---|---|---|
-| NS-V1 | ownership | every object maps to exactly one of the five classes with a named credential |
+| NS-V1 | ownership | every object maps to exactly one of the five planes; every *authored* object names one of the nine identities; every *derived* object (ReplicaSet, Pod, Job, EndpointSlice, helper pod) is attributed through its owner chain, not to a human credential |
 | NS-V2 | quota binds | **five conforming 1-CPU containers** (each inside the LimitRange max) are rejected with `exceeded quota` — a single 5-CPU pod would fail the LimitRange first and would not test the quota |
-| NS-V3 | LimitRange defaults | a resource-less **Pod created by the platform for this test** shows exactly 50m/128Mi/256Mi requests and 500m/512Mi/512Mi limits. This does **not** prove production manifests are explicit — NS-V24(5) does |
-| NS-V4 | `limits.cpu` denied in `options-edge` | an `options-edge` controller template declaring `limits.cpu` is denied at the API; `failurePolicy: Fail` confirmed |
+| NS-V3 | LimitRange defaults | run **in a fixture namespace carrying the same LimitRange** (NS-15(5b) denies user-created Pods in `fullfunding`): a resource-less Pod shows exactly 50m/128Mi/256Mi requests and 500m/512Mi/512Mi limits. This does **not** prove production manifests are explicit — NS-V24(5) does |
+| NS-V4 | `limits.cpu` denied in `options-edge` | **both** a controller template **and** a directly created Pod declaring `limits.cpu` are denied at the API, while a controller-created Pod is unaffected; `failurePolicy: Fail` confirmed |
 | NS-V5 | priority | every tenant pod reports `priority: -100`; ranking inputs verified documentarily. **No production node-pressure rehearsal** |
-| NS-V6 | reservation | effective kubelet config lists all four eviction thresholds and `pod-max-pids`; allocatable plus **CPU, memory, ephemeral and pod-count** headroom recorded; full inventory schedules |
+| NS-V6 | reservation | effective kubelet config lists all four eviction thresholds, and `pod-max-pids` **matches the D-6 decision — including a verified `-1`/absence if D-6 chose no limit**; allocatable plus **CPU, memory, ephemeral and pod-count** headroom recorded, each net of `P_platform`; full inventory schedules |
 | NS-V7 | Service types | LoadBalancer and NodePort both rejected with `exceeded quota` |
 | NS-V8 | public routing | unauthenticated `req.fullfunding.nl` → **302 to the Keycloak authorization endpoint**; authenticated → 200 (rev 2's bare "200" was wrong for an OIDC-protected origin). `fullfunding.nl` and `auth.fullfunding.nl` unchanged after each cloudflared restart |
-| NS-V9 | host services unreachable | from a tenant pod, connections to `.252` on 9092/5432/8081/8082/8092/5000 **all fail to establish TCP** (timeout or refused). An authenticated rejection over an established connection is **not** a pass |
+| NS-V9 | host services unreachable | the host's **listening-socket inventory is captured at run time** (`ss -ltn`), and from a tenant pod **every** node destination in it — necessarily including 9092, 5432, 8081, 8082, 8092, 5000, 22, 3000, 6443, 8091, 9090, 10250 — **fails to establish TCP** (timeout or refused), with no allowlisted exception. An authenticated rejection over an **established** connection is **not** a pass |
 | NS-V10 | disk wall | scratch 1 GiB image: bounded writer fails with ENOSPC; image file size fixed; backing allocated blocks within stated tolerance, with no growth proportional to inner writes |
 | NS-V11 | tenant-only data services | every connect string resolves to `*.fullfunding.svc`; no host endpoint in any config |
 | NS-V12 | RBAC | every permitted and denied cell asserted, per credential, across 3 namespaces |
 | NS-V13 | the 8091 svclb cause | at RTH with feed-gateway scaled up: confirmed or refuted with `ss -ltnp` evidence (reporting only) |
 | NS-V14 | rollback | same-schema LKG succeeds; schema-changed case **blocks** and demands a restore decision |
 | NS-V15 | guardrail drift | on an **isolated fixture namespace** and by policy dry-run: removal is detected at the next preflight and raises an incident. Production guardrails are never removed to test this |
-| NS-V16 | observation | full-session window inside every NS-12 threshold vs a pre-change baseline |
+| NS-V16 | observation | full-session window inside every NS-12 threshold vs a pre-change baseline, **with the bounded synthetic pilot load at the fixed SLO profile running throughout** — an idle session is not coexistence evidence; the profile used is recorded with the result |
 | NS-V17 | teardown | enumerated checklist fully dispositioned (cluster, host, external); `kubectl get all -A` not used as the test |
 | NS-V18 | admin listener | port 81 unreachable from another tenant pod and from the LAN; the **operator credential is the only namespace-scoped credential intended to reach it via port-forward** — cluster-admin is explicitly outside the boundary (R-14) |
 | NS-V19 | OIDC back-channel | login completes under default-deny egress; decoded ID token `iss` equals the pinned public issuer |
 | NS-V20a | ephemeral **admission** | a container declaring ephemeral-storage above the LimitRange max, or a set exceeding the quota, is **rejected at admission** |
 | NS-V20b | ephemeral **runtime** | a conforming pod writing beyond its `limits.ephemeral-storage` is **evicted**, with a bounded write size and timeout; the delay before eviction is recorded as evidence for R-22 |
-| NS-V21 | node-escape denials | `hostPort`, `hostNetwork`, `hostPID`, `hostIPC`, `externalIPs`, `hostPath`, privileged, `ExternalName`, and a directly created Pod are each denied |
-| NS-V22 | effective policy set | the full NetworkPolicy set contains no allow-all ingress or egress rule; re-checked on the NS-11 schedule |
+| NS-V21 | node-escape denials | `hostPort`, `hostNetwork`, `hostPID`, `hostIPC`, `externalIPs`, `hostPath`, privileged, `ExternalName`, and a **user**-created Pod are each denied, **while a controller-created Pod is admitted** (proving 5b did not break the controllers); PSA pinned versions asserted |
+| NS-V22 | effective policy set | the live NetworkPolicy set is **byte-compared against the canonical set in the repo** and matches exactly. rev 3's "contains no allow-all" was too weak — it would have accepted a narrow unauthorised rule permitting, say, `.252:9092`. The NS-18 metrics-scrape exception is part of the canonical set. Re-checked on the NS-11 schedule |
 | NS-V23 | storage class | PVCs with omitted / `local-path` / an arbitrary third class are rejected; `fullfunding-storage` accepted |
 | NS-V24 | policy integrity | each policy exercised with a violating and a conforming object **for every workload/template kind it matches** (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, and the denied bare Pod); all bindings `[Deny]`, all `failurePolicy: Fail` |
 | NS-V25 | soak (off-hours) | rate/in-flight/body limits demonstrably engage; nothing breaks. **Not** evidence of RTH coexistence — that is NS-V16 |
 | NS-V26 | restore | both databases restored into a scratch namespace and verified with **service-specific fixtures** (MariaDB: known ticket, attachment checksum, identity mapping; Postgres: named table/row) |
 | NS-V27 | alerting | every alert **rule** exercised by synthetic metric injection; only safe faults induced for real; inducing node pressure, evictions or an OptionsEdge OOM is prohibited |
 | NS-V28 | traceability | every rev-11 clause and V-row mapped; zero unaccounted rows |
-| NS-V29 | mount-loss fail-closed | on the scratch image: with the mount absent, writes to the path **fail** (immutable mode-0000 directory), the guard scales the tenant to zero and alerts, and **no bytes land on `/home`** |
+| NS-V29 | mount-loss fail-closed | on the scratch image: with the mount absent, the host UUID check fails, the provisioner refuses (missing sentinel), new backing paths cannot be created (immutable mode-0000 directory), the independent guard executes the full quiescence procedure — CronJobs suspended, Deployments/StatefulSets scaled to 0, remaining Jobs and Pods deleted — the alert fires, and **no bytes land on `/home`**. Recovery re-mounts, re-verifies SOURCE+UUID and the sentinel, then restores in that order |
 
 ## 8. Accepted-risk register (additions to rev-11 R-1…R-11, R-13; R-12 superseded)
 
@@ -761,7 +899,7 @@ public exposure and teardown is private (NS-14).
 |---|---|---|
 | **D-1** | Bugzilla's database engine: **MariaDB** (rev-11 pinned, Codex-approved) or **Postgres** as the requirement's wording suggests? | **OPEN — needs the user.** Recommend keeping MariaDB for Bugzilla and running the requested Postgres as the platform DB, with a **named consumer recorded before Gate 2** |
 | **D-2** | Kafka at launch | **RESOLVED: one broker at 1 replica** — the requirement states the project needs its own Kafka; a zero-replica placeholder is rejected |
-| **D-3** | `system-reserved` `R`, and the tenant `requests.memory` that follows from it | **OPEN — resolved by measurement** at §6 step 1. **If `R > 12 Gi` the 4 Gi tenant budget is infeasible and the user must choose** (smaller tenant / smaller reservation / second machine) |
+| **D-3** | `system-reserved` `R`, and the tenant `requests.memory` that follows from it | **OPEN — resolved by measurement** at §6 step 1. **If `R > 11.5 Gi` the 4 Gi tenant budget is infeasible and the user must choose** (smaller tenant / smaller reservation / second machine). Note the off-hours floor is already ≈13 Gi, so this choice is **expected**, not hypothetical |
 | **D-4** | Tenant egress to the public internet | Default **no**; any runtime need becomes an explicit allowlist entry with its own risk row |
 | **D-5** | OIDC back-channel under default-deny egress | **Split front/back-channel (option ii)**, conditional on verifying the packaged module's endpoint overrides and Keycloak's issuer behaviour; fallback (i) is broad outbound HTTPS and must be recorded as such |
 | **D-6** | `pod-max-pids` value `P` | Set from the RTH measurement at §6 step 1, **or dropped entirely** — with the PID vector then removed from every isolation claim rather than claimed unenforced |
@@ -769,7 +907,81 @@ public exposure and teardown is private (NS-14).
 ## 10. Gate status
 
 - **Gate 1 (requirements):** this document. rev 1 → Codex REQUEST_CHANGES; rev 2 → Codex
-  REQUEST_CHANGES; **rev 3 implements every rev-2 finding and awaits Codex re-review, then the
-  user's explicit approval.** No implementation before that approval.
-- **Gate 2 (implementation):** not started. **Blocked on D-1, D-3, D-6, and on NS-19/NS-V28 (the
-  clause-level map) being complete.**
+  REQUEST_CHANGES; rev 3 → REQUEST_CHANGES; **rev 4 implements every rev-3 finding and awaits Codex
+  re-review, then the user's explicit approval.** No implementation before that approval.
+- **Gate 2 (implementation):** not started. **Blocked on D-1, D-3 and D-6.** NS-19/NS-V28 is no
+  longer a Gate-2 blocker because the map is delivered here as **Appendix A**; it is verified at
+  §6 step 0.5 as a Gate-1 exit criterion.
+
+---
+
+## Appendix A — Clause-level traceability to rev 11 (NS-19 / NS-V28)
+
+Delivered here rather than promised. Every verification row and every risk row of
+`req-portal-bugzilla-keycloak-sso.md` rev 11 is accounted for exactly once. "Unchanged" means the
+row executes as written once the Compose-specific mechanics are read as their Kubernetes
+equivalents (container → pod, `ssh -L` → `kubectl port-forward`, `docker inspect` → `kubectl
+describe`/pod spec).
+
+### A.1 — rev-11 verification rows (all 27)
+
+| rev-11 row | Status | Where it lives now |
+|---|---|---|
+| V1 realm discovery | **Unchanged** | Keycloak is unmoved; §6 step 7 |
+| V2 `optionsedge` semantic no-change | **Unchanged** | §6 step 7 |
+| V2b non-registered `redirect_uri` rejected | **Unchanged** | §6 step 7 |
+| V3 public-listener battery (Host tricks, methods, malformed/oversized) | **Unchanged** | §6 step 9; the listener set is now container ports 80/81 in one pod |
+| **V-lan** (`ss -ltn` loopback-only + LAN-refused) | **SUPERSEDED** | The loopback port bindings no longer exist. Replaced by **NS-V18** (admin port unreachable from the pod network and the LAN) + **NS-V7/NS-V21** (no LoadBalancer/NodePort/`hostPort` can create a host binding at all). `apachectl -S` survives as the vhost-separation proof |
+| V4 end-to-end login + ID-token decode | **Unchanged, extended** | §6 step 9; **NS-V19** adds the back-channel and issuer assertions that default-deny egress makes necessary |
+| V4b email/name change → same account | **Unchanged** | §6 step 9 |
+| V4c new `sub` + pre-existing email | **Unchanged** | §6 step 9 |
+| V4d email-claim vectors (absent/empty/malformed/null/array shapes) | **Unchanged** | The two-layer contract is hosting-independent; §6 step 9 |
+| V5 portal content audit | **Unchanged** | §6 step 9 |
+| V6 cross-realm login both directions | **Unchanged** | §6 step 9 |
+| V6b spoof battery (with V-env) | **Unchanged** | §6 step 8 (V-pre) |
+| V6t `req` token → trading API; cleanup verified | **Unchanged, extended** | §6 step 9; **NS-V9** adds network-level evidence |
+| V-env diagnostic CGI env dump, then removed | **Unchanged** | §6 step 8; removal re-verified at the onboarding gate |
+| V-authz every REQ-5d matrix cell | **Unchanged** | §6 step 8 |
+| V-off (a) KC disable alone (b) full offboarding | **Unchanged** | "restart the web container" reads as "restart the web pod" |
+| V7 internal-Bugzilla evidence set | **Unchanged, strengthened** | Evidence is still taken at each declared transition; **NS-V9** additionally proves `:8092` is unreachable from the tenant |
+| V7-int internal trading-UI live cards | **Unchanged** | Still deferrable only to the next market-hours window; folded into §6 step 11's RTH session |
+| V8 all hostnames after each cloudflared restart | **Unchanged, restated** | **NS-V8**, with the expected result corrected: unauthenticated `req.fullfunding.nl` → **302**, not 200 |
+| V9 KC pod post-rollout | **Unchanged** | Keycloak is unmoved |
+| V10 secret authorized-location assertion | **SUPERSEDED (surface list)** | The k8s allowlist and its new truths are in §4's REQ-9 row; `docker inspect` becomes the pod spec + `describe`; node-side projected storage and datastore backups are added as authorized locations |
+| V11 edge-rule trip + size-limit chain | **Unchanged, extended** | **NS-16** adds the traefik `Middleware` layer (rate/in-flight/body) beneath rev-11's Cloudflare layer; the size chain now reads Bugzilla < Apache < **traefik body cap** < Cloudflare |
+| V11b `optionsedge` login unaffected | **Unchanged** | §6 step 9 |
+| **V-smoke** bounded concurrency (~10 sessions) | **SUPERSEDED, widened** | **NS-V25** (off-hours soak, limits demonstrably engage) + **NS-V16**'s pilot load. rev-11's R-2 ("no formal load/soak") is correspondingly narrowed, not carried unchanged |
+| V-restart forced db-then-web restart | **Unchanged** | Pod restarts; probes replace healthchecks (§4 REQ-10b) |
+| V-restore content-verified restore | **Unchanged, extended** | **NS-V26** — both databases, with service-specific fixtures per database; `kubectl port-forward` replaces `ssh -L` |
+| V-rollback LKG + public fail-closed rehearsal | **Unchanged, extended** | **NS-V14** — split into the same-schema (automatic) and schema-changed (blocked) cases; the public fail-closed rehearsal is unchanged (NS-5) |
+
+### A.2 — rev-11 risk rows (all 13)
+
+| rev-11 risk | Status | Note |
+|---|---|---|
+| R-1 no staging env | **Carried** | V-pre honestly scoped; DNS-last; rehearsals now also use fixture/scratch namespaces |
+| R-2 no formal load/soak | **NARROWED** | NS-16 + NS-V25 + NS-V16's pilot load partially discharge it; what remains is that no *production-scale* load test exists |
+| R-3 KC single-replica blip | **Carried** | Keycloak unmoved |
+| R-4 no SBOM/signing | **Carried** | digest pinning = immutability, not provenance |
+| R-5 cloudflared restarts blip all hostnames | **Carried** | NS-V8 re-tests every hostname after each restart |
+| R-6 no automated uptime probe at launch | **DISCHARGED** | **NS-18** requires alerting wired *before* launch, including Ingress 5xx and pod restarts |
+| R-7 break-glass native admin vhost exists | **Carried, re-based** | Its protection is now NS-6's port-specific policy + NS-9's operator credential instead of loopback+ssh; **R-18** records the credential change |
+| R-8 no MFA for externals at launch | **Carried** | unchanged |
+| R-9 indefinite retention; RPO 24 h / RTO hours; unencrypted backups | **Carried, extended** | **R-24** adds that the off-volume copy is *not* off-host |
+| R-10 shared visibility among external orgs | **Carried** | REQ-13's per-onboarding gate is untouched |
+| R-11 no notification email | **Carried** | unchanged |
+| **R-12 single-host colocation / Docker-admin sees everything** | **SUPERSEDED** | Replaced by **R-14** (secrets reachable by tenant-deploy, platform-k8s, host-root, cluster-admin and the node) and **R-18**; the Docker-daemon dependency is gone, Kubernetes namespace access replaces it |
+| R-13 ubuntu 22.04 + Bugzilla 5.2 lifetime | **Carried** | REQ-12's monthly review is unchanged |
+
+### A.3 — rev-11 rollout steps
+
+Steps 0–8 of rev-11 §6 are preserved in content and order inside §6 steps 7–12 of this document,
+with three insertions ahead of them (node reservation, storage wall, admission/network guardrails)
+and one relocation: rev-11 step 2's secret transfer becomes a Kubernetes `Secret` creation by the
+platform credential. rev-11's step-7.5 "provisional technical gate" and step-8 "onboarding gate"
+survive verbatim as this document's step 12, with the observation window lengthened from 24 h to a
+full trading session (NS-12).
+
+**Zero rev-11 rows are unaccounted for:** 27 verification rows (24 unchanged/extended, 3
+superseded with a named replacement), 13 risk rows (10 carried, 1 narrowed, 1 discharged, 1
+superseded), and 16 REQ ids dispositioned in §4.
