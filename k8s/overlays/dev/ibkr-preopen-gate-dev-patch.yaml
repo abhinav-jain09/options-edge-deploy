@@ -1,0 +1,32 @@
+# DEV-ONLY gate β/γ for the pre-open IBKR GEX window (OVERNIGHT-IBKR-GEX-GATE1-REQUIREMENT.md
+# rev13+D15). BASE keeps every IBKR_GEX_* flag "false" (prod dormant); this patch is the ONLY
+# place the feature is live, exactly like the legacy databento-gex-preopen-dev-patch.yaml it
+# replaces on dev.
+#
+# R-PREOPEN one-publisher invariant: the legacy PREOPEN_GEX_ENABLED publisher is turned OFF here
+# because the two are mutually exclusive by construction — IbkrPreOpenConfig REFUSES BOOT when
+# both are true. The legacy path stays available as the next-session rollback (flip this patch).
+#
+# R-DOWN PREREQUISITE (satisfied): options-edge-processing feat/rdown-dispositions filters
+# pre-open records out of the gamma-flow topology AND the gex history series, so publishing the
+# window onto the shared live topic cannot contaminate either RTH construct. That change must be
+# merged and deployed BEFORE this patch goes live.
+#
+# Stage: "live" publishes the window's values onto the SAME live topic the UI already reads
+# (USER D14 same-topic), which is what makes the pre-open GEX visible on the option chain.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-gex-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: databento-gex
+          env:
+            - { name: PREOPEN_GEX_ENABLED, value: "false" }
+            - { name: IBKR_GEX_CONSUME_ENABLED, value: "true" }
+            - { name: IBKR_GEX_PUBLISH_ENABLED, value: "true" }
+            - { name: IBKR_GEX_TOPIC_STAGE, value: "live" }
+            - { name: IBKR_GEX_TOPIC, value: "options.databento.gex.strike" }
