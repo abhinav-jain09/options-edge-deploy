@@ -191,6 +191,42 @@ patches:
                   # both surviving the nightly wipe.
                   - name: OI_ANCHOR_MANIFEST_ENABLED
                     value: "true"
+  # oi-shadow: ENABLED on PRODUCTION with the SEEDED arm, 2026-08-04. It reads the anchor manifest
+  # and the raw chain and writes one record per strike to options.databento.oi.shadow.by-strike.
+  # That topic has NO consumers -- oi-shadow is its only writer and nothing reads it -- so no
+  # downstream READER can be affected by what it publishes. It is not free, though: it adds a
+  # continuous consumer of the 32-partition raw topic on the single production broker. Headroom
+  # measured 2026-08-04 before enabling: 24 cores at load 1.29, all java processes together 320%
+  # of 2400%, 14 GB memory available. The service requests 100m CPU and is capped at 1 GiB.
+  #
+  # Seed evidence (processing#553): fitted over 277 sessions on this service's own cell
+  # definitions, measured on 25 sessions that post-date that panel -- chain-wide error
+  # 0.242 -> 0.175, better on 24 of 25, DTE 0-1 improving 35%. It does NOT improve which strike
+  # carries the most open interest (92.0% -> 88.0%): it improves how much, not where.
+  #
+  # Watched on dev first, where enabling it surfaced two defects that were invisible while the
+  # flag was off: the raw topic defaulted to the empty IBKR one, and the manifest source skipped
+  # its own session's anchor on a fresh consumer group. Both are fixed in the base and in
+  # processing#554.
+  # MUST MIRROR the standalone slice k8s/services/oi-shadow/overlays/production (validate-services).
+  - target:
+      kind: Deployment
+      name: oi-shadow-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: oi-shadow-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: oi-shadow
+                env:
+                  - name: OI_SHADOW_ENABLED
+                    value: "true"
+                  - name: OI_SHADOW_SEED_COEFFICIENTS_ENABLED
+                    value: "true"
   # PROD-ONLY: §7a conflict bypass needs only 2-of-4 fresh agreement to clear a non-opposed
   # (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; opposed runner-ups still veto regardless (PR #462).
   # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/production (validate-services).
