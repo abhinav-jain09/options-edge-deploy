@@ -58,14 +58,24 @@ in a dedicated namespace **`fullfunding`**, hosting the requirement-intake porta
 (`req.fullfunding.nl` — Bugzilla + Keycloak realm `req`, designed in rev 11), with its own Postgres
 and Kafka, sized for a **data-entry** workload.
 
-**The objective is bounded, measured interference — not isolation.**
+**Threat model, stated before the guarantees, because everything below depends on it.** The
+`fullfunding` tenant is **not an untrusted party**. It is the same operator, deploying through the
+same `main`-only Jenkins path, onto the same host, as OptionsEdge. What this design defends against
+is therefore **accident, resource contention and blast radius** — a runaway process, a filled disk,
+a misconfigured workload, a login storm — **not a malicious insider with deploy rights**. Where a
+control would only stop a deliberate operator (for example: the tenant credential could point its
+own Service at the Bugzilla admin port, or add a sidecar that proxies it), that control is documented
+as a **guardrail against mistakes, not a boundary against intent**, and is not claimed as isolation.
+Anything requiring defence against a hostile deployer needs a separate cluster, not a namespace.
+
+**Subject to that model, the objective is bounded, measured interference — not isolation.**
 
 | Dimension | Delivered | Mechanism | Not delivered |
 |---|---|---|---|
 | CPU | Bounded scheduler weight and ceiling | NS-2 | Zero interference: up to 6 CPU of burst on a 24 CPU node, by design |
 | Memory | Hard ceiling on the tenant; tenant preferred as eviction victim | NS-2, NS-3, NS-4 | A guarantee that OptionsEdge is never the victim (NS-3) |
 | Persistent disk | Hard ceiling (a separate, preallocated filesystem) | NS-7 | Fair sharing *within* the tenant — one PVC can consume the whole image (R-23) |
-| Ephemeral disk on `/` | **Admission-bounded declarations + eviction-based runtime enforcement** | NS-2, NS-15 | A hard, instantaneous filesystem quota; a burst of logging can overshoot before kubelet reacts (R-22) |
+| Ephemeral disk on `/` | **Nothing of the tenant's is stored on `/`** except kernel-rotated container logs capped at ≈0.9 GiB — disk-medium `emptyDir` denied, root filesystems read-only | **NS-20**, NS-15(6)(11) | Literal zero, until D-7 relocates the pod-log directory |
 | Node-level escape | Blocked at admission | NS-15 | Protection against a cluster-admin, the host root, or the node itself |
 | Network | Default-deny, port-specific, platform-owned | NS-6, NS-9 | Protection of shared Keycloak/traefik/cloudflared/registry capacity (R-19) |
 | Availability | — | — | **Nothing.** One node, one kernel, one k3s (NS-13) |
@@ -101,6 +111,8 @@ loopback ports 8093/8095. This document moves the hosting model into Kubernetes.
 | StorageClass | **one**: `local-path` (default), path `/home/options-edge/data/k3s/storage` | `kubectl get sc`; `local-path-config` |
 | IngressClass / traefik | `traefik`; LoadBalancer on `192.168.100.252:80,443` | `kubectl get ingressclass`, `svc traefik` |
 | Existing Ingress objects | one: `options-edge/oe-keycloak` → `auth.fullfunding.nl`, path prefixes `/realms/optionsedge` and `/resources` **only** | `-o jsonpath` |
+| **The browser path to Keycloak does NOT use that Ingress** | cloudflared routes `auth.fullfunding.nl` **directly to the Keycloak ClusterIP** `http://10.43.127.26:8080` with `httpHostHeader: auth.fullfunding.nl`, with only `/admin` and `/realms/master` intercepted as `http_status:404`. **Every other path — including `/realms/req/*` — is forwarded**, so realm `req` needs **no change to any shared Keycloak route** | `/etc/cloudflared/options-edge-stable.yml` read 2026-08-04 |
+| ⚠️ Existing fragility this project now depends on | that route is **pinned to a ClusterIP**. Recreating the `oe-keycloak` Service changes the IP and breaks `auth.fullfunding.nl` for the trading UI **and** the portal. Pre-existing; recorded as **R-25**, not introduced here | same |
 | **traefik Ingress routing works** | Host-matched `curl` → **200** | direct test |
 | Design primitives accepted by this API server | `PriorityClass value: -100`; quota keys `services.loadbalancers: "0"`, `local-path.storageclass.storage.k8s.io/persistentvolumeclaims: "0"`, `<class>.storageclass.storage.k8s.io/requests.storage` | `--dry-run=server` — **syntax/admission acceptance only, never semantics** |
 
@@ -211,7 +223,7 @@ unattributed objects; no tenant-plane credential holds any platform-plane verb.
 ```yaml
 requests.cpu: "1"                 limits.cpu: "6"
 requests.memory: <see NS-4>       limits.memory: 12Gi
-requests.ephemeral-storage: 2Gi   limits.ephemeral-storage: 6Gi
+requests.ephemeral-storage: 256Mi limits.ephemeral-storage: 1Gi   # NS-20: nothing belongs on /
 pods: "18"
 count/services: "8"
 count/ingresses.networking.k8s.io: "1"   # exactly one, platform-owned (NS-5)
@@ -222,8 +234,8 @@ fullfunding-storage.storageclass.storage.k8s.io/requests.storage: 80Gi
 local-path.storageclass.storage.k8s.io/persistentvolumeclaims: "0"
 services.loadbalancers: "0"       services.nodeports: "0"
 ```
-`LimitRange` (Container): `defaultRequest` 50m/128Mi/256Mi-ephemeral, `default`
-500m/512Mi/512Mi-ephemeral, `max` 2 CPU / 3Gi / 2Gi-ephemeral.
+`LimitRange` (Container): `defaultRequest` 50m/128Mi/64Mi-ephemeral, `default`
+500m/512Mi/128Mi-ephemeral, `max` 2 CPU / 3Gi / **256Mi**-ephemeral (NS-20).
 
 - **`requests.cpu` is the load-bearing number**, because CFS weight derives from requests, not
   limits. It does **not** preserve all CPU for OptionsEdge: the tenant may burst to 6 CPU.
@@ -296,17 +308,26 @@ kubelet-arg:
 tenant is **not** the only new consumer: the platform plane adds pods that sit outside the tenant
 quota but inside node allocatable, so an explicit `P_platform` term is required (rev 3 omitted it):
 
-| Platform-plane workload | cpu req | mem req | pods |
-|---|---|---|---|
-| second `local-path-provisioner` + its provisioning helper pods | 100m | 256Mi | 2 |
-| NS-11 scheduled guardrail checker (CronJob) | 50m | 128Mi | 1 |
-| NS-18 telemetry collectors (NS-18) | 100m | 256Mi | 1 |
-| NS-7 tenant-guard's in-cluster agent | 50m | 128Mi | 1 |
-| **`P_platform` (budgeted allowance)** | **0.3 CPU** | **0.75 Gi** | **5** |
+**None of these run in `fullfunding`** — a ResourceQuota is identity-independent, so a
+platform-owned pod placed in the tenant namespace would consume the tenant's budget (the same
+reasoning that raised the Ingress quota to 1). They run in `kube-system` or a dedicated
+`fullfunding-platform` namespace, and are therefore counted **once**, here, against node allocatable
+and **not** against the tenant quota:
+
+| Platform-plane workload | Namespace | cpu req | mem req | max concurrent pods |
+|---|---|---|---|---|
+| second `local-path-provisioner` | `fullfunding-platform` | 100m | 256Mi | 1 |
+| its provisioning helper pods (one per PVC operation; bounded by `persistentvolumeclaims: 5`) | `fullfunding-platform` | 50m each | 128Mi each | **5 worst case** |
+| NS-11 guardrail checker (CronJob) | `fullfunding-platform` | 50m | 128Mi | 1 |
+| **`P_platform` (budgeted allowance, worst-case concurrent)** | | **0.4 CPU** | **1.0 Gi** | **7** |
+
+The NS-7 tenant-guard is a **host systemd timer with a Kubernetes credential** — not an in-cluster
+workload, so it appears in no pod budget (rev 4 contradictorily budgeted both). NS-18 needs no
+in-namespace collector at all (see NS-18).
 
 ```
-tenant_requests_memory  ≤  62.23 − R − 1 − 2 − 38.97 − P_platform(0.75) − M
-                        =  19.51 − R − M
+tenant_requests_memory  ≤  62.23 − R − 1 − 2 − 38.97 − P_platform(1.0) − M
+                        =  19.26 − R − M
 ```
 `R` = measured `system-reserved` memory; `M` = **4 Gi**.
 
@@ -317,21 +338,21 @@ a new service, a replica increase, a raised request — that would otherwise be 
 
 | R (measured) | Max feasible tenant `requests.memory` |
 |---|---|
-| 10 Gi | 5.51 Gi |
-| 11 Gi | 4.51 Gi |
-| **11.5 Gi** | **4.01 Gi — the 4 Gi budget just fits** |
-| 12 Gi | 3.51 Gi — the 4 Gi budget **does not fit** |
-| 14 Gi | 1.51 Gi |
+| 10 Gi | 5.26 Gi |
+| **11.25 Gi** | **4.01 Gi — the 4 Gi budget just fits** |
+| 12 Gi | 3.26 Gi — the 4 Gi budget **does not fit** |
+| 13 Gi | 2.26 Gi |
+| 14 Gi | 1.26 Gi |
 
 **Therefore the tenant's `requests.memory` is not fixed in this document.** It is set at §6 step 1
-from the measured `R`, capped at 4 Gi. **If `R > 11.5 Gi`, the user must choose** between a smaller
+from the measured `R`, capped at 4 Gi. **If `R > 11.25 Gi`, the user must choose** between a smaller
 tenant budget, a smaller reservation (accepting less host protection), or a second machine. Launch
 is blocked until that choice is recorded. (rev 2's "≈4.3 Gi slack" omitted the eviction reserve;
 rev 3's "R ≤ 12 Gi" omitted `P_platform`. Both are withdrawn.)
 
 Companion headroom, all recomputed and recorded at NS-V6, each including `P_platform`:
-- **CPU:** allocatable `24 − 4 − 1 = 19`; `− 14.07 − 0.3 − 1.0 = 3.63` slack.
-- **Pods:** `110 − 74 − 5 − 18 = 13` headroom.
+- **CPU:** allocatable `24 − 4 − 1 = 19`; `− 14.07 − 0.4 − 1.0 = 3.53` slack.
+- **Pods:** `110 − 74 − 7 − 18 = 11` headroom.
 - **Ephemeral:** allocatable ≈ `69.97 − 4 − 2 − 6.99 = 56.98` Gi, minus existing declared requests
   (≈0), minus `P_platform` (≈0.5 Gi), minus the tenant's 2 Gi ⇒ ≈54 Gi of *declaration* headroom.
   This is **not** free disk: the operative number is the **37 GiB actually free on `/`** (R-22), and
@@ -472,9 +493,11 @@ enforcement. NS-V29 — mount-loss rehearsal on the scratch image: writes fail, 
 bytes land on `/home`.
 
 ### NS-8 — Tenant platform services: a replica-weighted budget that fits
-Single replica each, never the host instances. **Data services use `Recreate` / `maxSurge: 0`** so
-rollouts do not double their footprint; the web tier keeps a rolling update with `maxSurge: 1`,
-which is accounted below.
+Single replica each, never the host instances. **The three data services are StatefulSets at one
+replica**, whose rolling update terminates before it creates and therefore never surges; only the
+web Deployment surges, and that surge is the budgeted transient below. (`Recreate` / `maxSurge` are
+Deployment-only fields and are deliberately not used for the StatefulSets.) Every per-pod figure in
+the table is stated per pod **and** as a row total, so the totals cannot be misread.
 
 | Workload | kind | requests (cpu/mem) | limits (cpu/mem) | PVC |
 |---|---|---|---|---|
@@ -482,7 +505,7 @@ which is accounted below.
 | `postgres` (tenant platform DB) | StatefulSet ×1 | 100m / 512Mi | 1 / 2Gi | 15 Gi |
 | `kafka` (KRaft, combined, 1 broker) | StatefulSet ×1 | 200m / 1Gi | 1 / 2Gi | 20 Gi |
 | `bugzilla-req-web` | Deployment ×1 | 200m / 768Mi | 1 / 2Gi | — |
-| app pods (≤2) | Deployment | 200m / 512Mi | 1 / 2Gi | — |
+| app pods — **2 pods, each 100m/256Mi requests and 500m/1Gi limits** | Deployment ×2 | **200m / 512Mi (both pods)** | **1 / 2Gi (both pods)** | — |
 | backups PVC | — | — | — | 20 Gi |
 | **steady state** | | **0.8 CPU / 3.25 Gi** | **5 CPU / 10 Gi** | **75 Gi of the 80 Gi quota** |
 | **+ exactly ONE transient**, the largest being the web rollout surge (`maxSurge: 1`); the others are the backup Job and a debug Job | | **+0.2 CPU / +0.75 Gi** | **+1 CPU / +2 Gi** | — |
@@ -654,7 +677,8 @@ so the mechanism is proven here.
      unlike owner references). Consequences, made consistent: **NS-V3 runs in a fixture namespace**,
      not here; and **debugging is an approved Job or Deployment submitted through Jenkins**, not a
      hand-created Pod — which is why NS-8 budgets a debug *Job*;
-  6. require every `emptyDir` to set `sizeLimit` (≤ 1 Gi);
+  6. **deny any `emptyDir` that is not `medium: Memory`** (NS-20), and require `sizeLimit` (≤ 512Mi)
+     on the tmpfs ones that remain — a disk-medium `emptyDir` writes to `/`;
   7. constrain the platform-owned `Ingress`: `ingressClassName`, an explicit non-empty host from the
      allowlist (`req.fullfunding.nl`; denying omitted/catch-all hosts, wildcards,
      `fullfunding.nl`, `auth.fullfunding.nl`, `es.fullfunding.nl`), path, **backend service and
@@ -665,7 +689,8 @@ so the mechanism is proven here.
      directly created Pod** (with the same controller-identity carve-out as 5b). rev 3 matched
      templates only, leaving a direct-Pod bypass that made "OptionsEdge stays uncapped on CPU"
      unenforced at the API;
-  10. deny `Service.spec.type == ExternalName` in the namespace.
+  10. deny `Service.spec.type == ExternalName` in the namespace;
+  11. **require `securityContext.readOnlyRootFilesystem: true`** on every tenant container (NS-20).
 **Acceptance:** NS-V21, NS-V23, NS-V24 — each policy exercised with a violating **and** a conforming
 object **for every workload/template kind it matches**, with `failurePolicy: Fail` confirmed (a
 policy that fails open is worse than none).
@@ -754,6 +779,45 @@ unaccounted rows. **This is a Gate-1 exit criterion**, verified at **§6 step 0.
 change** (rev 3 declared it a Gate-2 prerequisite while scheduling it at step 10, after the node
 changes, deployment and publication; that contradiction is removed).
 
+### NS-20 — Nothing of the tenant's is stored on the root filesystem (`/`)
+
+**User requirement, 2026-08-04: "nothing has to be stored on root directory."** This is stricter
+than rev 4's ephemeral-storage quota, and it is achievable because the exposure was measured rather
+than assumed. What actually lands on `/` (69 GiB, **37 GiB free**), verified on the host:
+
+| Writer | Path | On `/`? | Disposition |
+|---|---|---|---|
+| PVC data (`fullfunding-storage`) | `/home/fullfunding/data` (loop image) | **No** | already off `/` by NS-7 |
+| Container **writable layers** | imagefs = **`/home`** | **No** | already off `/`; measured, not assumed |
+| Container **images** | imagefs = **`/home`** | **No** | already off `/` |
+| **`emptyDir`** (disk medium) | `/var/lib/kubelet/pods/...` on **`/`** | **Yes** | **denied outright** (below) |
+| **Container stdout/stderr logs** | `/var/log/pods` on **`/`** | **Yes** | the only residue; bounded, and eliminable (D-7) |
+
+Requirements:
+1. **`emptyDir` with disk medium is denied** for the tenant by admission (NS-15(6) changes from
+   "must set `sizeLimit`" to **"deny unless `medium: Memory`"**). A `Memory`-medium `emptyDir` is
+   tmpfs: it consumes the pod's **memory limit**, not `/`, and must still set `sizeLimit`.
+2. **`readOnlyRootFilesystem: true`** is required on every tenant container (NS-15(11)). All
+   writable state goes to a `fullfunding-storage` PVC. This is stricter than PSA `restricted`, which
+   does not require it.
+3. **Container logs are the one unavoidable `/` residue**, because kubelet writes every pod's
+   stdout to `/var/log/pods` regardless of namespace. It is **bounded, not unbounded**: the live
+   kubelet config is `containerLogMaxSize: 10Mi` × `containerLogMaxFiles: 5` = **50 MiB per
+   container**, so 18 tenant pods cap at **≈0.9 GiB** of rotated logs on a filesystem with 37 GiB
+   free. Literal zero requires **D-7**.
+4. Consequently the tenant's ephemeral-storage quota drops to a token allowance —
+   `requests.ephemeral-storage: 256Mi`, `limits.ephemeral-storage: 1Gi` (NS-2) — since with (1) and
+   (2) there is nothing legitimate left to write to `/`. Anything approaching that limit is a defect
+   to investigate, not headroom to use.
+5. **NS-V30** proves it empirically rather than by argument: after the tenant is running, a
+   host-side scan attributes every byte under `/var/lib/kubelet` and `/var/log/pods` to a namespace,
+   and the tenant's share is **rotated container logs only**, with no `emptyDir` and no other
+   tenant-owned path anywhere on `/`.
+
+**R-22 is downgraded accordingly:** the `/`-exhaustion vector shrinks from "an unbounded write burst
+can overshoot eviction detection" to "≤0.9 GiB of kernel-rotated log files", which no longer depends
+on kubelet reacting in time.
+
 ## 4. Disposition of the rev-11 req-portal requirements
 
 Where this table says SUPERSEDED, the present document governs. Clause-level completeness is NS-19.
@@ -813,7 +877,7 @@ change nothing.
    unaccounted rows. **Gate-1 exit criterion; nothing below starts until it passes.**
 1. **Measurement (read-only, spans RTH):** high-percentile host CPU/memory across ≥5 representative
    sessions → `R`; **and** maximum pid count per OptionsEdge pod → the D-6 value (NS-4). **Then
-   apply NS-4's feasibility formula and record the tenant `requests.memory`; if `R > 11.5 Gi`, stop
+   apply NS-4's feasibility formula and record the tenant `requests.memory`; if `R > 11.25 Gi`, stop
    and obtain the user's decision.** Resolves D-3 and D-6. *(Blocks step 2.)*
 2. **Node reservation** (NS-4) — config + restart in the window; NS-V6. Valuable standalone.
 3. **Storage wall** (NS-7) — preallocated image, mount unit, immutable underlying directory,
@@ -875,6 +939,7 @@ public exposure and teardown is private (NS-14).
 | NS-V26 | restore | both databases restored into a scratch namespace and verified with **service-specific fixtures** (MariaDB: known ticket, attachment checksum, identity mapping; Postgres: named table/row) |
 | NS-V27 | alerting | every alert **rule** exercised by synthetic metric injection; only safe faults induced for real; inducing node pressure, evictions or an OptionsEdge OOM is prohibited |
 | NS-V28 | traceability | every rev-11 clause and V-row mapped; zero unaccounted rows |
+| NS-V30 | nothing on `/` (NS-20) | a host-side scan attributes every byte under `/var/lib/kubelet` and `/var/log/pods` to a namespace: the tenant's share is **rotated container logs only** (≤50 MiB per container), with **zero** `emptyDir` directories and no other tenant-owned path anywhere on `/`; `readOnlyRootFilesystem` asserted on every tenant container |
 | NS-V29 | mount-loss fail-closed | on the scratch image: with the mount absent, the host UUID check fails, the provisioner refuses (missing sentinel), new backing paths cannot be created (immutable mode-0000 directory), the independent guard executes the full quiescence procedure — CronJobs suspended, Deployments/StatefulSets scaled to 0, remaining Jobs and Pods deleted — the alert fires, and **no bytes land on `/home`**. Recovery re-mounts, re-verifies SOURCE+UUID and the sentinel, then restores in that order |
 
 ## 8. Accepted-risk register (additions to rev-11 R-1…R-11, R-13; R-12 superseded)
@@ -889,7 +954,8 @@ public exposure and teardown is private (NS-14).
 | R-19 | **Tenant load escapes the quota through shared services** — Keycloak, traefik, cloudflared, the registry and image pulls sit outside the quota; NS-16's limits bound the **portal route only**, not direct load on `auth.fullfunding.nl` | Bounded, not eliminated: portal-route rate/in-flight/body limits, database connection limits, off-hours soak, NS-18 alerting, NS-12 RTH observation. Rate-limiting the shared Keycloak route is out of scope |
 | R-20 | **LAN origin bypass** — traefik answers on `.252:80`, so Cloudflare is not an authentication boundary | The portal is fail-closed without Cloudflare (rev-11 REQ-5a). Restricting traefik to loopback would change shared infrastructure |
 | R-21 | **Thin memory slack.** At `R = 12 Gi` the margin is exactly the 4 Gi minimum; a large OptionsEdge growth event consumes it | NS-4's formula blocks launch rather than overcommitting; NS-18 alerts on memory pressure; the tenant is the preferred eviction victim (NS-3) |
-| R-22 | `/` (nodefs) has ~37 GiB free, is **not** covered by the tenant disk wall, and ephemeral limits are **eviction-based**, so a write burst can overshoot before kubelet reacts | NS-2 quota, NS-15(6) `emptyDir` limits, NS-4's `nodefs` thresholds, NS-18 alerting; NS-V20b records the observed reaction delay |
+| R-22 | **(downgraded by NS-20)** `/` (nodefs) has ~37 GiB free and is not covered by the tenant disk wall. With disk-medium `emptyDir` denied and `readOnlyRootFilesystem` required, the tenant's only `/` residue is **kernel-rotated container logs, capped at ≈0.9 GiB** | NS-20 (1)(2), NS-4's `nodefs` thresholds, NS-18 alerting, NS-V30's empirical attribution. Literal zero is D-7 |
+| R-25 | **Pre-existing, now also a portal dependency:** `auth.fullfunding.nl` is pinned in cloudflared to the Keycloak **ClusterIP**, so recreating that Service silently breaks authentication for the trading UI **and** the portal | Not introduced by this project and not fixed here (out of scope, shared infrastructure). Recorded so the dependency is visible; a stable-IP or Ingress-based route would remove it |
 | R-23 | **No fair sharing inside the tenant** — the inner filesystem does not enforce per-PVC sizes, so one tenant PVC can consume the whole 100 GiB and starve the others (including backups) | Accepted for a single-tenant, single-operator project; NS-18 alerts at 75%/90%; NS-17's host agent copies generations off the volume |
 | R-24 | Backups are **off-volume but not off-host** — they do not survive loss of `.252` or `/home` | Stated rather than claimed; genuine off-host copies depend on the archive destination, outside this scope |
 
@@ -899,9 +965,10 @@ public exposure and teardown is private (NS-14).
 |---|---|---|
 | **D-1** | Bugzilla's database engine: **MariaDB** (rev-11 pinned, Codex-approved) or **Postgres** as the requirement's wording suggests? | **OPEN — needs the user.** Recommend keeping MariaDB for Bugzilla and running the requested Postgres as the platform DB, with a **named consumer recorded before Gate 2** |
 | **D-2** | Kafka at launch | **RESOLVED: one broker at 1 replica** — the requirement states the project needs its own Kafka; a zero-replica placeholder is rejected |
-| **D-3** | `system-reserved` `R`, and the tenant `requests.memory` that follows from it | **OPEN — resolved by measurement** at §6 step 1. **If `R > 11.5 Gi` the 4 Gi tenant budget is infeasible and the user must choose** (smaller tenant / smaller reservation / second machine). Note the off-hours floor is already ≈13 Gi, so this choice is **expected**, not hypothetical |
+| **D-3** | `system-reserved` `R`, and the tenant `requests.memory` that follows from it | **OPEN — resolved by measurement** at §6 step 1. **If `R > 11.25 Gi` the 4 Gi tenant budget is infeasible and the user must choose** (smaller tenant / smaller reservation / second machine). Note the off-hours floor is already ≈13 Gi, so this choice is **expected**, not hypothetical |
 | **D-4** | Tenant egress to the public internet | Default **no**; any runtime need becomes an explicit allowlist entry with its own risk row |
 | **D-5** | OIDC back-channel under default-deny egress | **Split front/back-channel (option ii)**, conditional on verifying the packaged module's endpoint overrides and Keycloak's issuer behaviour; fallback (i) is broad outbound HTTPS and must be recorded as such |
+| **D-7** | NS-20 literal zero on `/`: accept the ≈0.9 GiB bound of kernel-rotated container logs, or eliminate it? | Two ways to reach literal zero: **(a)** relocate `/var/log/pods` and `/var/lib/kubelet` onto `/home` by bind mount — node-wide, needs a k3s restart, and **benefits OptionsEdge too** since `/` has only 37 GiB free; or **(b)** require tenant containers to log to a file on their PVC and emit nothing on stdout, which costs `kubectl logs`. **Recommend (a)** as a separate, independently valuable host change; accept the 0.9 GiB bound in the meantime |
 | **D-6** | `pod-max-pids` value `P` | Set from the RTH measurement at §6 step 1, **or dropped entirely** — with the PID vector then removed from every isolation claim rather than claimed unenforced |
 
 ## 10. Gate status
