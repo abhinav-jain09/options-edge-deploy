@@ -623,7 +623,8 @@ wording governs). KC realm-only corrections via inverse kcadm ops; KC DB restore
 
 ## 9. Requirement reconciliation (authoritative state; all gated on the §6 step-8 onboarding gate)
 
-**As-built note (2026-08-04):** the design merged as `1fb2dd6`. PR-A implements REQ-1 + REQ-2 only
+**As-built note (2026-08-04, updated post-deploy):** the design merged as `1fb2dd6`. PR-A (#703,
+`b8c7778`) implements REQ-1 + REQ-2 only
 (`k8s/keycloak/keycloak-realm-configmap.yaml` adds the `req-realm.json` key; the KC Deployment gains
 an `oe/config-nonce` so the plain ConfigMap change actually rolls the pod, since `--import-realm`
 runs only at container start). Deviation recorded per the Implemented-Code Documentation Accuracy
@@ -632,10 +633,44 @@ Rule: the client does NOT declare `defaultClientScopes` — it inherits the real
 scope would be a guess; REQ-2's live kcadm + decoded-ID-token check remains the authority for the
 `email`/`profile` claims.
 
+**Deploy record (§6 steps 0–1 PARTIAL — see the not-done list at the end of this note):** step-0
+pre-checks passed on `.252` — `/home` 1.2 T free,
+26 G memory available, host ports 8093 and 8095 both free, and NO `req.fullfunding.nl` DNS record
+exists (REQ-3 pre-check). Backups taken: Keycloak `pg_dump` →
+`/home/options-edge/backups/keycloak/keycloak-20260804-142401.sql` (0600, 87 `CREATE TABLE`
+statements, "dump complete" marker present) and the cloudflared config →
+`/home/options-edge/backups/cloudflared-options-edge-stable.yml.bak-20260804-142409`.
+**Runbook correction (not a REQ-10a change):** REQ-10a asks for a consistent single-transaction
+dump, which is a property, not a flag. The first attempt passed a literal `--single-transaction`,
+which `pg_dump` does not accept (it belongs to `psql`/`pg_restore`); the flag was dropped. The
+required property is unaffected — `pg_dump` already dumps from one consistent snapshot.
+Step-1 deploy: `common-infra-deploy` #30 (dry run, SUCCESS) showed exactly two changes — the
+ConfigMap gaining `req-realm.json` and the Deployment gaining the nonce; #31 applied it to
+production after the manual approval gate. The apply output also lists `oe-keycloak-postgres` as
+`configured`; the rendered diff contains **no desired-state hunk** for it, so no manifest change was
+requested — whether the server touched apply metadata was not inspected, and no stronger claim is
+made. Verification after rollout: pod `oe-keycloak-5584b4b69c-x6z4x` Ready 1/1, 0 restarts, LAN
+admin `:8089` → 302 (V9 complete); `https://fullfunding.nl/` returned 200 and the `optionsedge`
+discovery document was served unchanged. **That last check is NOT V2** — V2 requires a normalized
+kcadm export diff of security-relevant realm/client fields, which needs admin credentials and is
+still outstanding. Rollout ran at ~08:27 ET, inside the REQ-10 pre-market window, 63 min before the
+open.
+
+**Explicitly NOT done in this increment (so the record carries no silent gap):** step-0's Keycloak
+throwaway-restore validation and the project tracking bug (which carries the R-6 follow-up id);
+step-1's V7 internal-Bugzilla evidence set (image digests, mount list, compose config hash, params
+checksum, login + REST call) — only a homepage 200 and a discovery-document observation were taken;
+V2 proper; and the kcadm live-state reconciliation both REQ-1 and REQ-2 require. All of these are
+tracked obligations, not omissions.
+
+**Next increments:** REQ-9 secret transfer (step 2) is blocked on Keycloak admin credentials, which
+must be handled by Abhinav — the assistant does not handle them. Then PR-B (REQ-4/5/8: images,
+compose, Jenkins job).
+
 | Id | State | Evidence / gate |
 |---|---|---|
-| REQ-1 | IMPLEMENTING | PR-A (realm JSON + nonce) open; becomes IMPLEMENTED only after merge + KC rollout + V1/V2/V9 + live reconciliation + onboarding gate |
-| REQ-2 | IMPLEMENTING | PR-A (client JSON) open; becomes IMPLEMENTED only after merge + kcadm live inspection + V2b + V4 claim check + onboarding gate |
+| REQ-1 | IMPLEMENTING (code+deploy landed; acceptance pending) | PR #703 merged `b8c7778`; common-infra-deploy #31 (production, approved gate) rolled `oe-keycloak`. Green so far: **V1** (issuer correct), **V9** (pod Ready 1/1, 0 restarts, LAN admin `:8089` reachable → 302). Indicative only: the rendered login page shows 0 registration and 0 reset-credentials links — that evidences two settings, NOT the whole realm state. **Still pending:** kcadm live-state reconciliation of every security-relevant field (brute-force, sslRequired, loginWithEmail, password policy, session lifetimes), the REQ-7 semantic no-change proof, and the §6 step-8 onboarding gate |
+| REQ-2 | IMPLEMENTING (code+deploy landed; acceptance pending) | PR #703 merged `b8c7778`. Green so far: **V2b** both directions — foreign `redirect_uri` → Keycloak "Invalid parameter: redirect_uri"; the exact registered callback accepted. PKCE S256 proven ENFORCED (auth request without `code_challenge_method` → `invalid_request`). **Still pending:** kcadm live client inspection, the `email`/`profile` claim issuance check (V4 decoded ID token, a post-DNS gate) which REQ-2 makes part of the requirement, and the onboarding gate |
 | REQ-3 | TRACKED-PENDING | ordering + V3/V8 + V-rollback + onboarding gate |
 | REQ-4 | TRACKED-PENDING | PR-B + dual digests + onboarding gate |
 | REQ-5a | TRACKED-PENDING | V-lan/V3/V6b/V-env + onboarding gate |
