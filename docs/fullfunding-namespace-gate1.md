@@ -1,6 +1,6 @@
 # Gate-1 — `fullfunding` tenant namespace on the prod k3s node, and the req-portal's migration into it
 
-**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 6. AWAITING USER APPROVAL (gatekeeping Gate-1).
+**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 7. AWAITING USER APPROVAL (gatekeeping Gate-1).
 Not implemented.**
 
 **USER DECISIONS RECORDED 2026-08-04 — D-1, D-3 and D-7 are CLOSED:**
@@ -839,9 +839,15 @@ Requirements:
    `requests.ephemeral-storage: 256Mi`, `limits.ephemeral-storage: 1Gi` (NS-2) — since with (1) and
    (2) there is nothing legitimate left to write to `/`. Anything approaching that limit is a defect
    to investigate, not headroom to use.
-5. **NS-V30** proves it empirically rather than by argument: after the tenant is running and NS-21
-   is in place, a host-side scan finds **zero tenant-owned bytes anywhere on `/`** — no `emptyDir`,
-   no logs, no writable layer — with kubelet's own state and every pod log resident on `/home`.
+5. **Scope of the word "zero", stated precisely:** this requirement is **zero tenant-owned data**
+   on `/` — no `emptyDir`, no container logs, no writable layer, no PVC. It is **not** a claim that
+   running the tenant writes literally no bytes to `/`: journald entries for the container runtime,
+   containerd/CNI bookkeeping and similar OS metadata are produced by the *platform* on behalf of
+   any workload and remain on `/`. They are small, rotated by the OS, and are not tenant data.
+   R-27 records the distinction rather than hiding it behind the word "zero".
+6. **NS-V30** proves it empirically rather than by argument: after the tenant is running and NS-21
+   is in place, a host-side scan finds **zero tenant-owned bytes anywhere on `/`**, with kubelet's
+   own state and every pod log resident on `/home`.
 
 **R-22 is closed rather than downgraded once NS-21 lands:** with disk-medium `emptyDir` denied,
 root filesystems read-only, and kubelet's state and logs relocated to `/home`, the tenant has no
@@ -866,6 +872,13 @@ rotated logs for **both** projects. k3s's `--data-dir` already moved the rancher
   kubelet recreates the directories on `/` and the relocation is silently undone.
 - **Rollback:** remove the fstab entries, stop k3s, move the directories back, restart. The
   pre-change state (directory sizes, inode counts, `findmnt` output) is captured first.
+- **A consequence that must not be missed: after this change kubelet no longer watches `/` at all.**
+  Its `nodefs.available` and `nodefs.inodesFree` thresholds follow nodefs, which becomes `/home`
+  (1.2 TiB free). `/` still holds the OS, journald and container-runtime metadata, but nothing in
+  Kubernetes will evict or alert on it any more. **A host-level `/` capacity alert is therefore a
+  hard prerequisite of NS-21, not a follow-up** (NS-18), and NS-4's nodefs thresholds are re-read as
+  protecting `/home` — which is also where the tenant image, PVCs and imagefs live, so they become
+  the tenant's outer backstop rather than a `/` protection.
 - **Post-change gate:** all 55 OptionsEdge deployments Ready, `df /` shows the reclaimed space, and
   `stats/summary` reports **nodefs = `/home`**, not `/`.
 **Acceptance:** NS-V31 — nodefs is `/home` after the change; NS-V30 then finds zero tenant bytes on
@@ -891,7 +904,7 @@ Where this table says SUPERSEDED, the present document governs. Clause-level com
 | REQ-9 secrets | **SUPERSEDED (mechanism), new risks** | host `0600` files → k8s `Secret` projected as files (never container env, never in probe text). **Enumerated k8s allowlist:** (a) the Secret object in the k3s datastore **and in any datastore backup**, (b) its projected paths in **every consuming pod** — the web pod, the database pods, application pods, backup Jobs, and any image-pull credential consumer — **and the node-managed projected-volume storage backing those mounts**, (c) the Jenkins credential store. V10's "absent everywhere else" is asserted against the *searchable* surfaces (repo, job logs, archived artifacts, `describe` output, pod env, container logs, backups); rev 3's unqualified "nowhere else" over-claimed, since node-side projected storage and datastore backups necessarily hold the material. **New truths, matching the actual permissions:** unencrypted at rest in the datastore; **readable via the API by tenant-deploy and platform-k8s, and mountable by anything that can create pods**; and **projected-Secret updates are asynchronous while `subPath` mounts never refresh**, so rotation is *not* atomic for the application and **requires an explicit pod restart**, which rev-11's runbook already performs |
 | REQ-10a windows & backups | **SUPERSEDED (mechanism), extended** | namespace CronJob + **host-platform agent** for the off-volume copy (NS-17); **tenant Postgres added**; failure domain stated as off-volume, **not off-host**. Keycloak's `pg_dump` stays with OptionsEdge |
 | REQ-10b health model | **SUPERSEDED (mechanism)** | healthchecks → probes; a probe is never the security gate |
-| REQ-10c verification & observation | **EXTENDED** | rev-11 matrix + NS-V1…**NS-V29**; window lengthens to a full session (NS-12) |
+| REQ-10c verification & observation | **EXTENDED** | rev-11 matrix + NS-V1…**NS-V31** (including the root-filesystem rows NS-V30/NS-V31); window lengthens to a full session (NS-12) |
 | REQ-11 login-surface & edge hardening | **UNCHANGED, plus NS-16** | the required traefik `Middleware` is a named platform-plane object (rev 2 omitted it from both plane lists) |
 | REQ-12 patch & vulnerability posture | **UNCHANGED** | |
 | REQ-13 privacy & data handling | **UNCHANGED** | |
@@ -991,7 +1004,7 @@ public exposure and teardown is private (NS-14).
 | NS-V20a | ephemeral **admission** | a container declaring ephemeral-storage above the LimitRange max, or a set exceeding the quota, is **rejected at admission** |
 | NS-V20b | ephemeral **runtime** | a conforming pod writing beyond its `limits.ephemeral-storage` is **evicted**, with a bounded write size and timeout; the delay before eviction is recorded as evidence for R-22 |
 | NS-V21 | node-escape denials | `hostPort`, `hostNetwork`, `hostPID`, `hostIPC`, `externalIPs`, `hostPath`, privileged, `ExternalName`, and a **user**-created Pod are each denied, **while a controller-created Pod is admitted** (proving 5b did not break the controllers); PSA pinned versions asserted |
-| NS-V22 | effective policy set | the live NetworkPolicy set is **byte-compared against the canonical set in the repo** and matches exactly. rev 3's "contains no allow-all" was too weak — it would have accepted a narrow unauthorised rule permitting, say, `.252:9092`. The NS-18 metrics-scrape exception is part of the canonical set. Re-checked on the NS-11 schedule |
+| NS-V22 | effective policy set | the live NetworkPolicy set is compared against the canonical set in the repo as a **normalized semantic projection** — server-defaulted fields, `managedFields`, `resourceVersion`, UIDs, timestamps and ordering removed, rules canonically sorted — and matches exactly. A raw byte comparison is **not** used: API defaulting and server metadata would produce false differences. rev 3's "contains no allow-all" was too weak — it would have accepted a narrow unauthorised rule permitting, say, `.252:9092`. The NS-18 metrics-scrape exception is part of the canonical set. Re-checked on the NS-11 schedule |
 | NS-V23 | storage class | PVCs with omitted / `local-path` / an arbitrary third class are rejected; `fullfunding-storage` accepted |
 | NS-V24 | policy integrity | each policy exercised with a violating and a conforming object **for every workload/template kind it matches** (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, CronJob, and the denied bare Pod); all bindings `[Deny]`, all `failurePolicy: Fail` |
 | NS-V25 | soak (off-hours) | rate/in-flight/body limits demonstrably engage; nothing breaks. **Not** evidence of RTH coexistence — that is NS-V16 |
@@ -1015,6 +1028,10 @@ public exposure and teardown is private (NS-14).
 | R-20 | **LAN origin bypass** — traefik answers on `.252:80`, so Cloudflare is not an authentication boundary | The portal is fail-closed without Cloudflare (rev-11 REQ-5a). Restricting traefik to loopback would change shared infrastructure |
 | R-21 | **Thin memory slack.** At `R = 12 Gi` the margin is exactly the 4 Gi minimum; a large OptionsEdge growth event consumes it | NS-4's formula blocks launch rather than overcommitting; NS-18 alerts on memory pressure; the tenant is the preferred eviction victim (NS-3) |
 | R-22 | **(downgraded by NS-20)** `/` (nodefs) has ~37 GiB free and is not covered by the tenant disk wall. With disk-medium `emptyDir` denied and `readOnlyRootFilesystem` required, the tenant's only `/` residue is **kernel-rotated container logs, capped at ≈0.9 GiB** | NS-20 (1)(2), NS-4's `nodefs` thresholds, NS-18 alerting, NS-V30's empirical attribution. Literal zero is D-7 |
+| R-26 | **After NS-21, kubelet stops monitoring `/`.** nodefs becomes `/home`, so the eviction thresholds and any nodefs alerting follow it; `/` retains the OS, journald and runtime metadata with no Kubernetes-side watcher | A **host-level `/` capacity alert is a hard prerequisite of NS-21** (NS-18), not a follow-up. The trade is deliberate: `/` gains ~all of the reclaimed space and loses a watcher it only had incidentally |
+| R-27 | **"Zero on root" means zero *tenant-owned data*, not zero bytes.** journald entries for the container runtime, containerd/CNI bookkeeping and similar OS metadata are produced by the platform for any workload and remain on `/` | Small, OS-rotated, not tenant data. Stated so the requirement is not read as stronger than it is |
+| R-28 | **PID exhaustion remains unbounded if D-6 drops `pod-max-pids`** — today the effective value is `-1` for every pod on the node | If D-6 drops it, the PID vector is removed from every isolation claim (NS-4(3)) and this row is the honest record of what is left unprotected |
+| R-29 | **The platform plane escapes the tenant quota by construction** — the `fullfunding-platform` namespace, the host backup agent and the host tenant-guard are outside `fullfunding`'s ResourceQuota | Deliberate and accounted once in `P_platform` (NS-4); they are operator-owned, not tenant-writable, so the exposure is a sizing question rather than a containment one |
 | R-25 | **Pre-existing, now also a portal dependency:** `auth.fullfunding.nl` is pinned in cloudflared to the Keycloak **ClusterIP**, so recreating that Service silently breaks authentication for the trading UI **and** the portal | Not introduced by this project and not fixed here (out of scope, shared infrastructure). Recorded so the dependency is visible; a stable-IP or Ingress-based route would remove it |
 | R-23 | **No fair sharing inside the tenant** — the inner filesystem does not enforce per-PVC sizes, so one tenant PVC can consume the whole 100 GiB and starve the others (including backups) | Accepted for a single-tenant, single-operator project; NS-18 alerts at 75%/90%; NS-17's host agent copies generations off the volume |
 | R-24 | Backups are **off-volume but not off-host** — they do not survive loss of `.252` or `/home` | Stated rather than claimed; genuine off-host copies depend on the archive destination, outside this scope |
@@ -1091,13 +1108,13 @@ describe`/pod spec).
 | R-3 KC single-replica blip | **Carried** | Keycloak unmoved |
 | R-4 no SBOM/signing | **Carried** | digest pinning = immutability, not provenance |
 | R-5 cloudflared restarts blip all hostnames | **Carried** | NS-V8 re-tests every hostname after each restart |
-| R-6 no automated uptime probe at launch | **DISCHARGED** | **NS-18** requires alerting wired *before* launch, including Ingress 5xx and pod restarts |
+| R-6 no automated uptime probe at launch | **CARRIED, partially reduced** | NS-18's Ingress-5xx and restart alerts do **not** detect DNS failure, tunnel failure, a redirect loop or a broken Keycloak login. Discharging it requires a **synthetic external availability + login probe**, which is not in scope here; rev 4's "discharged" was wrong |
 | R-7 break-glass native admin vhost exists | **Carried, re-based** | Its protection is now NS-6's port-specific policy + NS-9's operator credential instead of loopback+ssh; **R-18** records the credential change |
 | R-8 no MFA for externals at launch | **Carried** | unchanged |
 | R-9 indefinite retention; RPO 24 h / RTO hours; unencrypted backups | **Carried, extended** | **R-24** adds that the off-volume copy is *not* off-host |
 | R-10 shared visibility among external orgs | **Carried** | REQ-13's per-onboarding gate is untouched |
 | R-11 no notification email | **Carried** | unchanged |
-| **R-12 single-host colocation / Docker-admin sees everything** | **SUPERSEDED** | Replaced by **R-14** (secrets reachable by tenant-deploy, platform-k8s, host-root, cluster-admin and the node) and **R-18**; the Docker-daemon dependency is gone, Kubernetes namespace access replaces it |
+| **R-12 single-host colocation / Docker-admin sees everything** | **SUPERSEDED, mapping to four successors** | Its *credential* half → **R-14** + **R-18** (the Docker-daemon dependency is gone; Kubernetes namespace access replaces it). Its *shared-fate* half → **R-15** (no I/O isolation) + **R-16** (no availability isolation). rev 4 mapped only the credential half and silently dropped the colocation half |
 | R-13 ubuntu 22.04 + Bugzilla 5.2 lifetime | **Carried** | REQ-12's monthly review is unchanged |
 
 ### A.3 — rev-11 rollout steps
@@ -1109,6 +1126,8 @@ platform credential. rev-11's step-7.5 "provisional technical gate" and step-8 "
 survive verbatim as this document's step 12, with the observation window lengthened from 24 h to a
 full trading session (NS-12).
 
-**Zero rev-11 rows are unaccounted for:** 27 verification rows (24 unchanged/extended, 3
-superseded with a named replacement), 13 risk rows (10 carried, 1 narrowed, 1 discharged, 1
-superseded), and 16 REQ ids dispositioned in §4.
+**Accounting rule, stated so "exactly once" is unambiguous:** every rev-11 row has **exactly one
+disposition row here**, though a disposition may name **more than one successor** (R-12 names four).
+**Zero rev-11 rows are unaccounted for:** 27 verification rows (24 unchanged/extended, 3 superseded
+with named replacements), 13 risk rows (11 carried — one of them narrowed — 1 superseded with four
+successors, 0 discharged), and 16 REQ ids dispositioned in §4.
