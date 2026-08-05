@@ -89,7 +89,28 @@ pipeline {
           kubectl apply -f k8s/base/configmap.yaml
           kubectl apply -f k8s/base/hpsf-stage-a-deployment.yaml
           kubectl apply -f k8s/base/hpsf-stage-b-deployment.yaml
-          kubectl apply -f k8s/base/hpsf-postgres-writer-deployment.yaml
+          # The WRITER comes from the DEV RENDER, never from k8s/base. The base manifest omits
+          # `strategy`, so applying it defaults the writer back to RollingUpdate — and on this
+          # 10-CPU node its 250m surge pod does not fit the ~200m headroom that
+          # databento-gex-service's 2-CPU reservation leaves, so the rollout below would wait on a
+          # pod that can never schedule. The dev overlay pins Recreate; rendering from it keeps this
+          # path in step with scripts/ci/validate-dev-capacity.sh instead of silently undoing it.
+          # (stage-a/stage-b are not in the dev overlay and carry no such constraint, so they keep
+          # applying from base.)
+          kubectl kustomize k8s/overlays/dev >/tmp/options-edge-hpsf-render.yaml
+          python3 - >/tmp/options-edge-hpsf-writer.yaml <<'PYEOF'
+import sys
+docs = open('/tmp/options-edge-hpsf-render.yaml').read().split('\n---\n')
+match = [d for d in docs
+         if any(l.strip() == 'kind: Deployment' for l in d.splitlines())
+         and any(l.strip() == 'name: hpsf-postgres-writer-service' for l in d.splitlines())]
+if len(match) != 1:
+    sys.exit(f'expected exactly 1 hpsf-postgres-writer Deployment in the dev render, found {len(match)}')
+if 'type: Recreate' not in match[0]:
+    sys.exit('the dev-rendered hpsf-postgres-writer is not Recreate — the capacity patch is missing')
+print(match[0])
+PYEOF
+          kubectl apply -f /tmp/options-edge-hpsf-writer.yaml
           kubectl apply -f k8s/base/hpsf-postgres-writer-service.yaml
           stage_b_smoke_app_id="options-edge-hpsf-stage-b-smoke-${BUILD_NUMBER:-manual}"
           echo "Using isolated Stage B Kafka Streams application id for remote smoke: ${stage_b_smoke_app_id}"

@@ -23,6 +23,9 @@ CAPACITY_TARGETS=(dealer-ledger-service unified-sr-service)
 CLEANUP=scripts/ops/dev-cleanup.sh
 RENDER=$(mktemp); trap 'rm -f "$RENDER"' EXIT
 
+RECREATE_PATCH=k8s/overlays/dev/dev-recreate-strategy-patch.yaml
+recreate_targets=$(yq eval-all 'select(.spec.strategy.type=="Recreate") | .metadata.name' "$RECREATE_PATCH" 2>/dev/null || true)
+
 echo "=== validate-dev-capacity: dev fleet must fit ${BUDGET_MCPU}m ==="
 kubectl kustomize k8s/overlays/dev > "$RENDER"
 
@@ -107,5 +110,22 @@ for svc in "${CAPACITY_TARGETS[@]}"; do
   fi
 done
 
-echo "${report#OK|}; capacity targets pinned at 0 in both places"
+# 5) no Jenkins path may apply a capacity-relevant Deployment straight from k8s/base — that
+#    defaults `strategy` back to RollingUpdate and silently reintroduces a surge that cannot fit.
+for jf in Jenkinsfile*; do
+  [ -f "$jf" ] || continue
+  while read -r base_dep; do
+    [ -n "$base_dep" ] || continue
+    svc=$(yq eval '.metadata.name' "k8s/base/$base_dep" 2>/dev/null || true)
+    [ -n "$svc" ] || continue
+    if printf '%s' "$recreate_targets" | grep -qx "$svc"; then
+      echo "FAIL: $jf applies k8s/base/$base_dep directly, but '$svc' is pinned to Recreate on dev."
+      echo "      k8s/base omits strategy, so applying it defaults back to RollingUpdate and its"
+      echo "      surge pod stops fitting the headroom. Apply the dev-rendered Deployment instead."
+      exit 1
+    fi
+  done <<< "$(grep -ohE 'kubectl apply -f k8s/base/[a-z0-9-]+-deployment\.yaml' "$jf" 2>/dev/null | sed 's|.*k8s/base/||')"
+done
+
+echo "${report#OK|}; capacity targets pinned at 0 in both places; no base-apply bypass of a Recreate-pinned service"
 echo "=== validate-dev-capacity: OK ==="
