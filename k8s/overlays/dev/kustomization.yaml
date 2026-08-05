@@ -130,12 +130,12 @@ patches:
   # gateway relays its status stream. Turns the legacy PREOPEN publisher OFF (mutually
   # exclusive by construction). Prod untouched — base flags stay false.
   - path: ibkr-preopen-gate-dev-patch.yaml
-  # The gateway relay (and with it the browser-visible window) is deliberately NOT enabled in
-  # this PR: R-ROLL orders beta (values live, UI dark) BEFORE gamma (user-visible), and the
-  # conforming UI (option-chain handler + IBKR palette + truthful provenance) must be deployed
-  # first — otherwise the existing UI would render IBKR values labelled Databento. The
-  # gateway patch file ships here so the gamma flip is a one-line kustomization change.
-  # - path: ibkr-preopen-gateway-dev-patch.yaml
+  # GAMMA (user-visible) — enabled now that its ONE stated precondition is met: the conforming
+  # UI is deployed on dev (web #439: the option-chain pre-open handler, the IBKR palette, the
+  # two-plane number-visibility rules and truthful provenance), so an IBKR value can no longer
+  # render labelled Databento. R-ROLL order is preserved — beta shipped first and ran on dev —
+  # and dev remains the ONLY environment flipped: prod stays dark on the base flag.
+  - path: ibkr-preopen-gateway-dev-patch.yaml
   # DEV mirror of the standalone overlay: OPB rolling windows disabled on dev (matches #482, which
   # touched only the standalone overlay and drifted the monolithic dev render). Prod already has it.
   - path: option-price-behavior-dev-env-patch.yaml

@@ -59,6 +59,8 @@ spec:
     spec:
       containers:
         - env:
+            - name: GATEWAY_IBKR_PREOPEN_ENABLED
+              value: "true"
             - name: WS_ALLOWED_ORIGINS
               value: http://localhost:8090
             - name: WS_AUTH_ISSUER_URI
