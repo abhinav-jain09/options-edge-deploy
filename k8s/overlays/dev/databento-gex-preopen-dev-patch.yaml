@@ -44,6 +44,17 @@ spec:
           # NOT changed in base: prod runs the same deployment on a node measured at 90% CPU / loadavg 36
           # on 24 threads, where a larger reservation would take cores from the SPX feed it is starving on.
           # This raises the floor only; it does not remove the single-partition ceiling (see PR body).
+          env:
+            # DEV-ONLY (2026-08-05): the OI-available gate defaults to 08:00 ET, but OPRA publishes
+            # today's SPXW open-interest statistics well before that — verified directly against
+            # hist.databento.com at 07:35 ET (stat_type 9 records present for 2026-08-05). The
+            # pre-open window opens at 06:15, so an 08:00 gate leaves ~1h45m of the window unable to
+            # price GEX at all, and prod's own retry history shows the first attempts often fail
+            # transiently (2026-08-04: 17 attempts, baseline landing only at 08:35). Moving the gate
+            # to 06:30 on dev lets the eager pre-fetch start as soon as the window does. The
+            # completeness check against the arm manifest still rejects a partial baseline, so an
+            # early fetch cannot latch bad OI.
+            - { name: DATABENTO_GEX_OI_AVAILABLE_LOCAL_TIME, value: "06:30" }
           resources:
             requests:
               cpu: "2"
