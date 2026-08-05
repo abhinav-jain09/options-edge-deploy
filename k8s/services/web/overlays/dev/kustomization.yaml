@@ -43,6 +43,17 @@ patches:
       - op: add
         path: /spec/progressDeadlineSeconds
         value: 1200
+  # Recreate on dev (mirror of k8s/overlays/dev/dev-recreate-strategy-patch.yaml): a RollingUpdate
+  # surge pod must SCHEDULE before the old one goes away, and this 10-CPU node keeps only ~200m
+  # free once databento-gex-service takes its 2-CPU reservation. Prod keeps RollingUpdate.
+  - target:
+      kind: Deployment
+      name: options-edge-web
+    patch: |-
+      - op: replace
+        path: /spec/strategy
+        value:
+          type: Recreate
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: host.docker.internal:5001/options-edge-web
