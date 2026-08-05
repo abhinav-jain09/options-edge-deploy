@@ -32,12 +32,13 @@ KEEP='keycloak'                                          # deployments to leave 
 # DEV-disabled deployments — held at 0 by do_start (exact full-name match via grep -x). MUST include
 # databento-timewarp-snapshot-replay: if it boots even briefly it replays snapshots into
 # options.databento.raw and poisons the chain. Keep in sync with premarket-check.sh DISABLED (dev).
-# TEMPORARY (2026-08-05, dev CPU headroom): dealer-ledger-service and unified-sr-service
+# TEMPORARY (2026-08-05, dev CPU headroom): dealer-ledger-service, unified-sr-service and
+# pressure-postgres-writer
 # are held at 0 so databento-gex-service's 2-CPU reservation fits on this 10-CPU node. Without them
 # here, `dev-cleanup start` scales every deployment outside this list back to 1 and silently undoes
 # the capacity fix. REMOVE BOTH when the overlay patches are reverted — see
 # k8s/overlays/dev/dealer-ledger-dev-scale-down-patch.yaml.
-DISABLED_DEV='dealer-ledger-service|unified-sr-service|hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service'
+DISABLED_DEV='dealer-ledger-service|unified-sr-service|pressure-postgres-writer|hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+30) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 06:15 ET full start. (2026-08-03: was 07:30)
 OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web'

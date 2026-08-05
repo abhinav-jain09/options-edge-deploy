@@ -126,8 +126,9 @@ patches:
   # race. TEMPORARY — each patch header carries the arithmetic and the four restore steps.
   - path: dealer-ledger-dev-scale-down-patch.yaml
   - path: unified-sr-dev-scale-down-patch.yaml
-  # Same budget, other half: a RollingUpdate pod bigger than the headroom cannot schedule its surge.
-  - path: dev-recreate-strategy-patch.yaml
+  # Same budget, rollout half: a RollingUpdate surge pod (largest on dev is 250m) must fit the
+  # headroom too, or that rollout deadlocks. This one is free — both its producers are already at 0.
+  - path: pressure-postgres-writer-dev-scale-down-patch.yaml
   # The gateway relay (and with it the browser-visible window) is deliberately NOT enabled in
   # this PR: R-ROLL orders beta (values live, UI dark) BEFORE gamma (user-visible), and the
   # conforming UI (option-chain handler + IBKR palette + truthful provenance) must be deployed

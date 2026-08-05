@@ -1,0 +1,29 @@
+# DEV-ONLY capacity patch (2026-08-05). TEMPORARY — see dealer-ledger-dev-scale-down-patch.yaml for
+# the full arithmetic.
+#
+# The first two patches bring the fleet to 8350m against the 8550m budget: 200m of headroom. That is
+# enough for steady state but NOT for a rollout — a RollingUpdate surge pod must SCHEDULE before the
+# old one goes away, and the largest such pod on dev asks 250m (hpsf-postgres-writer-service and
+# option-price-behavior-service). At 200m free those rollouts deadlock: service-deploy.sh applies the
+# new template and then waits on a pod that can never satisfy "Insufficient cpu".
+#
+# Freeing another 100m here takes the headroom to 300m, so every existing rollout fits with margin.
+# The alternative — pinning those services to Recreate on dev — was tried and rejected: it needed the
+# HPSF ops job to stop applying from k8s/base (which risks pushing dev-rendered manifests at whatever
+# kubectl context that job happens to hold), and web's base manifest records that Recreate previously
+# made its :8090 LoadBalancer binding vanish and not return.
+#
+# WHY THIS SERVICE COSTS NOTHING: pressure-postgres-writer persists the directional-pressure plane,
+# and BOTH its producers — directional-pressure-service and directional-pressure-databento-service —
+# already render at replicas 0 on dev. It has had nothing to consume for as long as they have been
+# down, so this frees 100m at no functional cost. It comes back with them.
+#
+# RESTORING: same four steps as the dealer-ledger patch (delete file, unwire from kustomization,
+# drop from DISABLED_DEV, re-run generate-service-slices.sh).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pressure-postgres-writer
+  namespace: options-edge
+spec:
+  replicas: 0

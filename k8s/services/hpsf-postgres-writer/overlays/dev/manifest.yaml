@@ -44,8 +44,6 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: hpsf-postgres-writer-service
-  strategy:
-    type: Recreate
   template:
     metadata:
       labels:

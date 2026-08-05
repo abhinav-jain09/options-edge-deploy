@@ -8,10 +8,9 @@
 #
 # WHY THIS SERVICE. unified-sr-service produces the support/resistance OVERLAY; the option chain's
 # GEX cell does not depend on it. It was chosen over hpsf-postgres-writer-service because
-# Jenkinsfile.hpsf-ops applies the HPSF deployments straight from k8s/base (replicas 1), bypassing
-# this overlay entirely — running that valid job would restore the writer and immediately recreate
-# the deficit, which DISABLED_DEV would only repair at the next cleanup start. No Jenkins path
-# applies unified-sr-service from base.
+# Jenkinsfile.hpsf-ops applies the HPSF deployments straight from k8s/base, so that job would put
+# the writer back at replicas 1 and DISABLED_DEV would only repair it at the next cleanup start.
+# No Jenkins path applies unified-sr-service from base.
 #
 # WHAT THIS COSTS: the S/R overlay is absent from the dev board, and strike-invasion loses the S/R
 # input it consumes, while this is in place.
