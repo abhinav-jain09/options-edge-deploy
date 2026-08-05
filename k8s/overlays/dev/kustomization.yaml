@@ -129,8 +129,6 @@ patches:
   # Same budget, rollout half: a RollingUpdate surge pod (largest on dev is 250m) must fit the
   # headroom too, or that rollout deadlocks. This one is free — both its producers are already at 0.
   - path: pressure-postgres-writer-dev-scale-down-patch.yaml
-  # ...and enough margin that an operational Job running alongside a rollout still fits.
-  - path: es-open-direction-dev-scale-down-patch.yaml
   # The gateway relay (and with it the browser-visible window) is deliberately NOT enabled in
   # this PR: R-ROLL orders beta (values live, UI dark) BEFORE gamma (user-visible), and the
   # conforming UI (option-chain handler + IBKR palette + truthful provenance) must be deployed

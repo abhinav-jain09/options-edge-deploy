@@ -7,11 +7,18 @@
 # option-price-behavior-service). At 200m free those rollouts deadlock: service-deploy.sh applies the
 # new template and then waits on a pod that can never satisfy "Insufficient cpu".
 #
-# Freeing another 100m here takes the headroom to 300m, so every existing rollout fits with margin.
-# The alternative — pinning those services to Recreate on dev — was tried and rejected: it needed the
-# HPSF ops job to stop applying from k8s/base (which risks pushing dev-rendered manifests at whatever
-# kubectl context that job happens to hold), and web's base manifest records that Recreate previously
-# made its :8090 LoadBalancer binding vanish and not return.
+# Freeing another 100m here takes the headroom to 300m, which covers that 250m surge on its own. It
+# does NOT cover a surge PLUS a concurrent on-demand Job (350m), and dev also has a 500m replay Job
+# that can be started by hand; covering the worst case would need ~750m, which this node cannot give
+# without disabling services that are genuinely in use. validate-dev-capacity.sh therefore asserts
+# steady state and REPORTS the rollout picture rather than pretending to guarantee it.
+#
+# Two alternatives were tried and rejected. Pinning the 250m services to Recreate on dev required the
+# HPSF ops job to stop applying from k8s/base, and the replacement risked pushing dev-rendered
+# manifests at whatever kubectl context that job holds; web's base manifest also records that
+# Recreate previously made its :8090 LoadBalancer binding vanish and not return. Disabling the ES
+# open-direction pair looked free but is not: dev-cleanup's OVERNIGHT_SET deliberately starts both
+# after the close for overnight ES tracking.
 #
 # WHY THIS SERVICE COSTS NOTHING: pressure-postgres-writer persists the directional-pressure plane,
 # and BOTH its producers — directional-pressure-service and directional-pressure-databento-service —
