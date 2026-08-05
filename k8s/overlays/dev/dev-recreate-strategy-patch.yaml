@@ -1,0 +1,40 @@
+# DEV-ONLY (2026-08-05). A RollingUpdate needs its surge pod to SCHEDULE before the old one goes
+# away. On this 10-CPU node the deliberate headroom is 200m, so any RollingUpdate deployment whose
+# pod asks for more than that cannot roll at all — service-deploy.sh applies the new template and
+# then waits for a rollout that can never satisfy "Insufficient cpu".
+#
+# The three services above that line move to Recreate, which is what ~80% of this dev fleet already
+# uses (databento-gex-service itself included). The cost is a brief gap during a dev rollout instead
+# of a deadlocked one. Prod keeps RollingUpdate — it has the headroom.
+#
+# Kept in step with scripts/ci/validate-dev-capacity.sh, which fails if the largest remaining
+# RollingUpdate pod no longer fits the headroom.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpsf-postgres-writer-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: option-price-behavior-service
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: options-edge-web
+  namespace: options-edge
+spec:
+  strategy:
+    type: Recreate
+    rollingUpdate: null

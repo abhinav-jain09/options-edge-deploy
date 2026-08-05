@@ -6,10 +6,14 @@
 # CPUs, and without deliberate headroom the rendered fleet exceeds that budget — which is exactly
 # how GEX ended up Pending on "Insufficient cpu" on 2026-08-05 with no bad code anywhere.
 #
-# Two capacity targets are held at 0 to buy that headroom. Both halves have to hold together: the
-# overlay alone is undone by `dev-cleanup start`, which scales every deployment outside DISABLED_DEV
-# back to 1. That omission already undid this fix once, so this script asserts BOTH, plus the budget
-# itself — a future patch that quietly raises a request now fails CI instead of production.
+# Three things have to hold together, so all three are asserted:
+#   1. every capacity target renders at replicas 0, AND
+#   2. is in dev-cleanup's DISABLED_DEV — the overlay alone is undone by `dev-cleanup start`, which
+#      scales every deployment outside that list back to 1 (this omission already undid the fix once)
+#   3. the rendered fleet fits, counting replicas, AND leaves room for the largest RollingUpdate
+#      surge pod — a rollout whose surge cannot schedule deadlocks in service-deploy.sh's wait.
+#
+# Uses yq (provisioned by the deploy-validation workflow); deliberately no Python YAML dependency.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -17,30 +21,84 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 BUDGET_MCPU=8550
 CAPACITY_TARGETS=(dealer-ledger-service unified-sr-service)
 CLEANUP=scripts/ops/dev-cleanup.sh
+RENDER=$(mktemp); trap 'rm -f "$RENDER"' EXIT
 
 echo "=== validate-dev-capacity: dev fleet must fit ${BUDGET_MCPU}m ==="
+kubectl kustomize k8s/overlays/dev > "$RENDER"
 
-render=$(kubectl kustomize k8s/overlays/dev)
+# yq turns the multi-doc render into ONE json array; python's STDLIB json does the arithmetic.
+# Deliberately no PyYAML — the deploy-validation workflow provisions kubectl and yq only.
+yq -o=json eval-all '[select(.kind=="Deployment")]' "$RENDER" > "$RENDER.json"
 
-# 1) every capacity target renders at replicas 0
-for svc in "${CAPACITY_TARGETS[@]}"; do
-  reps=$(printf '%s' "$render" | python3 -c "
-import sys, yaml
-name = sys.argv[1]
-found = 'MISSING'
-for doc in yaml.safe_load_all(sys.stdin.read()):
-    if doc and doc.get('kind') == 'Deployment' and doc['metadata']['name'] == name:
-        found = doc['spec'].get('replicas', 1)
-print(found)
-" "$svc")
-  if [ "$reps" != "0" ]; then
-    echo "FAIL: '$svc' renders replicas=$reps in the dev overlay, expected 0."
-    echo "      It is a capacity target: without it databento-gex-service cannot schedule."
-    exit 1
-  fi
-done
+report=$(python3 - "$RENDER.json" "$BUDGET_MCPU" "${CAPACITY_TARGETS[@]}" <<'PYEOF'
+import json, sys
 
-# 2) and is pinned by the daily lifecycle, or `dev-cleanup start` scales it back to 1
+path, budget = sys.argv[1], int(sys.argv[2])
+targets = sys.argv[3:]
+deployments = json.load(open(path))
+
+def mcpu(dep):
+    """CPU millicores for ONE pod of this deployment, summed over its containers."""
+    total = 0
+    for c in dep["spec"]["template"]["spec"]["containers"]:
+        v = ((c.get("resources") or {}).get("requests") or {}).get("cpu")
+        if not v:
+            continue
+        v = str(v)
+        total += int(v[:-1]) if v.endswith("m") else int(float(v) * 1000)
+    return total
+
+by_name = {d["metadata"]["name"]: d for d in deployments}
+
+for name in targets:
+    dep = by_name.get(name)
+    if dep is None:
+        print(f"FAIL|capacity target '{name}' is not in the rendered dev overlay at all.")
+        sys.exit(0)
+    reps = dep["spec"].get("replicas", 1)
+    if reps != 0:
+        print(f"FAIL|'{name}' renders replicas={reps} in the dev overlay, expected 0.|"
+              f"It is a capacity target: without it databento-gex-service cannot schedule.")
+        sys.exit(0)
+
+# Steady-state demand counts REPLICAS: a 2-replica deployment asks for twice as much.
+active = 0
+surge, surge_name = 0, "none"
+for dep in deployments:
+    reps = dep["spec"].get("replicas", 1)
+    if reps == 0:
+        continue
+    pod = mcpu(dep)
+    active += pod * reps
+    if dep["spec"].get("strategy", {}).get("type", "RollingUpdate") == "RollingUpdate" and pod > surge:
+        surge, surge_name = pod, dep["metadata"]["name"]
+
+if active > budget:
+    print(f"FAIL|the rendered dev fleet requests {active}m, over the {budget}m budget.|"
+          f"Something will sit Pending on 'Insufficient cpu' — most likely databento-gex-service, "
+          f"whose 2-CPU reservation is the largest single request.")
+    sys.exit(0)
+
+headroom = budget - active
+if surge > headroom:
+    print(f"FAIL|'{surge_name}' rolls with RollingUpdate and needs {surge}m for its surge pod, but "
+          f"only {headroom}m is free.|service-deploy.sh would apply the new template and then wait "
+          f"on a rollout that can never schedule. Give it strategy Recreate on dev, or free more CPU.")
+    sys.exit(0)
+
+print(f"OK|dev fleet: {active}m of {budget}m ({headroom}m headroom); "
+      f"largest RollingUpdate surge {surge}m ({surge_name})")
+PYEOF
+)
+rm -f "$RENDER.json"
+
+if [ "${report%%|*}" = "FAIL" ]; then
+  printf '%s\n' "$report" | tr '|' '\n' | sed '1s/^FAIL$/FAIL:/;1!s/^/      /'
+  exit 1
+fi
+
+# The overlay half is only half the invariant: `dev-cleanup start` scales every deployment outside
+# DISABLED_DEV back to 1, which already undid this fix once.
 for svc in "${CAPACITY_TARGETS[@]}"; do
   if ! grep -q "DISABLED_DEV='.*\b${svc}\b" "$CLEANUP"; then
     echo "FAIL: '$svc' renders at 0 but is NOT in DISABLED_DEV in $CLEANUP."
@@ -49,25 +107,5 @@ for svc in "${CAPACITY_TARGETS[@]}"; do
   fi
 done
 
-# 3) the active fleet fits the budget
-active=$(printf '%s' "$render" | python3 -c "
-import sys, yaml
-total = 0
-for doc in yaml.safe_load_all(sys.stdin.read()):
-    if not doc or doc.get('kind') != 'Deployment': continue
-    if doc['spec'].get('replicas', 1) == 0: continue
-    for c in doc['spec']['template']['spec']['containers']:
-        v = ((c.get('resources') or {}).get('requests') or {}).get('cpu')
-        if not v: continue
-        total += int(v[:-1]) if str(v).endswith('m') else int(float(v) * 1000)
-print(total)
-")
-if [ "$active" -gt "$BUDGET_MCPU" ]; then
-  echo "FAIL: the rendered dev fleet requests ${active}m, over the ${BUDGET_MCPU}m budget."
-  echo "      Something will sit Pending on 'Insufficient cpu' — most likely databento-gex-service,"
-  echo "      whose 2-CPU reservation is the largest single request."
-  exit 1
-fi
-
-echo "dev fleet: ${active}m of ${BUDGET_MCPU}m ($((BUDGET_MCPU - active))m headroom); capacity targets pinned at 0 in both places"
+echo "${report#OK|}; capacity targets pinned at 0 in both places"
 echo "=== validate-dev-capacity: OK ==="

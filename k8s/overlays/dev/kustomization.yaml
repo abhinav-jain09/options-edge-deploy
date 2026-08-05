@@ -126,6 +126,8 @@ patches:
   # race. TEMPORARY — each patch header carries the arithmetic and the four restore steps.
   - path: dealer-ledger-dev-scale-down-patch.yaml
   - path: unified-sr-dev-scale-down-patch.yaml
+  # Same budget, other half: a RollingUpdate pod bigger than the headroom cannot schedule its surge.
+  - path: dev-recreate-strategy-patch.yaml
   # The gateway relay (and with it the browser-visible window) is deliberately NOT enabled in
   # this PR: R-ROLL orders beta (values live, UI dark) BEFORE gamma (user-visible), and the
   # conforming UI (option-chain handler + IBKR palette + truthful provenance) must be deployed
