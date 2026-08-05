@@ -69,7 +69,7 @@ spec:
             - name: IBKR_GEX_TOPIC
               value: options.databento.gex.strike
             - name: DATABENTO_GEX_OI_AVAILABLE_LOCAL_TIME
-              value: "06:30"
+              value: "09:00"
             - name: PREOPEN_GEX_PUBLISH_ENABLED
               value: "true"
             - name: DATABENTO_GEX_DYNAMIC_CARRY_ENABLED
