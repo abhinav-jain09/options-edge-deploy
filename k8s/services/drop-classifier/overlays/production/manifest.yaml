@@ -84,6 +84,10 @@ spec:
               value: underlying.vix.price
             - name: DROP_LOOKBACK_MINUTES
               value: "30"
+            - name: DROP_SR_BOOTSTRAP
+              value: ""
+            - name: DROP_SIZE_STATS_PATH
+              value: /etc/drop-classifier/size_stats.json
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx1024m
           envFrom:
@@ -115,3 +119,12 @@ spec:
             requests:
               cpu: 100m
               memory: 1Gi
+          volumeMounts:
+            - mountPath: /etc/drop-classifier
+              name: size-stats
+              readOnly: true
+      volumes:
+        - configMap:
+            name: drop-classifier-size-stats
+            optional: true
+          name: size-stats

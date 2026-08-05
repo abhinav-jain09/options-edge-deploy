@@ -68,8 +68,21 @@ spec:
               value: underlying.vix.price
             - name: DROP_LOOKBACK_MINUTES
               value: "30"
+            # unified-sr is NOT deployed on prod yet (.2 only): SR stays
+            # disabled and F4-wall reports UNAVAILABLE (never fabricated).
+            # Flip DROP_SR_BOOTSTRAP when options.spx.strike-sr.current lands.
+            - name: DROP_SR_BOOTSTRAP
+              value: ""
+            # F3/F6 TOD baselines: prior-20-session aggregate produced by
+            # scripts/build_size_stats.py from the archived ES tape corpus.
+            - name: DROP_SIZE_STATS_PATH
+              value: /etc/drop-classifier/size_stats.json
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms256m -Xmx1024m"
+          volumeMounts:
+            - name: size-stats
+              mountPath: /etc/drop-classifier
+              readOnly: true
           ports:
             - name: health
               containerPort: 8125
@@ -92,3 +105,8 @@ spec:
               memory: 1Gi
             limits:
               memory: 2Gi
+      volumes:
+        - name: size-stats
+          configMap:
+            name: drop-classifier-size-stats
+            optional: true
