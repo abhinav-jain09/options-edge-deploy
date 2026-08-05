@@ -45,7 +45,7 @@ the decision table.
 
 **Revision history.** Every threshold quoted below is the value that revision computed for the
 **4 Gi** tenant budget, which D-3 later superseded. None of them governs: the operative numbers are
-`tenant ≤ 15.26 − R` and an abort at `R > 13.01 Gi` (NS-4, §6 step 1).
+`tenant ≤ 15.26 − R` and an abort at `R > 13.0 Gi` (NS-4, §6 step 1).
 
 rev 1 → Codex REQUEST_CHANGES (15 blockers); rev 2 → REQUEST_CHANGES (18);
 rev 3 → REQUEST_CHANGES (12 + corrections). **rev 4 implements every rev-3 finding**, the material
@@ -294,7 +294,7 @@ services.loadbalancers: "0"       services.nodeports: "0"
   constrains the content of the one that exists.
 - **`limits.memory` 10 Gi and `limits.cpu` 6** are deliberately larger than the requests, because
   limits do not consume allocatable. They are derived from NS-8's corrected budget —
-  **steady state plus exactly one transient**, whose peak is **5 CPU / 10 Gi** — not chosen round.
+  **steady state plus one budgeted transient**, whose peak is **5 CPU / 10 Gi** — not chosen round.
   The memory limit equals that peak exactly; the CPU limit carries 1 CPU over it.
 - **Ephemeral storage is bounded at admission and enforced at runtime by eviction, not by an
   instantaneous quota.** A logging burst can overshoot before kubelet reacts (R-22), and container
@@ -432,7 +432,7 @@ not one snapshot. The off-hours ~13 Gi is a floor. It already exceeded the thres
 earlier **4 Gi** tenant budget required, which is why D-3 was a real choice rather than a
 formality — and the user resolved it by keeping the reservation and shrinking the tenant to
 2.25 Gi. Against that envelope the same ~13 Gi floor now fits, with the abort threshold at
-`R > 13.01 Gi` (§6 step 1).
+`R > 13.0 Gi` (§6 step 1).
 **Independent value:** this requirement improves the status quo even if the tenant is cancelled.
 **Acceptance:** NS-V6 — effective kubelet config dumped and asserted (all four eviction thresholds;
 `pod-max-pids` asserted **to the value chosen in D-6, including a verified `-1`/absence if D-6
@@ -584,7 +584,7 @@ cannot be misread.
 | app pod | Deployment ×1 | 100m / 192Mi | 500m / 1Gi | — |
 | backups PVC | — | — | — | 20 Gi |
 | **steady state** | | **650m / 1984Mi (1.94 Gi)** | **4.5 CPU / 9 Gi** | **75 Gi of the 80 Gi quota** |
-| **+ ONE transient** — the backup Job **or** a debug Job | | **+100m / +256Mi** | **+0.5 CPU / +1 Gi** | — |
+| **+ the budgeted transient** — a backup Job or a debug Job | | **+100m / +256Mi** | **+0.5 CPU / +1 Gi** | — |
 | **peak** | | **750m / 2240Mi (2.19 Gi)** — inside the 2304Mi quota | **5 CPU / 10 Gi** | |
 
 Three consequences of the smaller envelope, stated rather than discovered later:
@@ -594,26 +594,29 @@ Three consequences of the smaller envelope, stated rather than discovered later:
 - **One application pod, not two.** A second app pod requires re-opening the NS-4 arithmetic.
 - **ResourceQuota does not *reserve* a slot for the backup Job.** It admits any combination that
   fits the remaining aggregate; the "one transient" shape is what the numbers permit, not something
-  the quota guarantees. If a debug Job is running when the backup fires, the backup Job sits
-  **Pending** — which is why NS-18 alerts on a Job pending or missed for more than 15 minutes.
+  the quota guarantees. If a debug Job is running when the backup fires **and the two together
+  would exceed the aggregate**, the backup Job sits **Pending** — which is why NS-18 alerts on a Job
+  pending or missed for more than 15 minutes. If they both fit inside the aggregate, both run; the
+  quota bounds the total, never the count.
 
 **Kinds are specified because the update strategy depends on them:** the three data services are
 **StatefulSets at 1 replica**, whose rolling update terminates before it creates and therefore never
 surges (`Recreate` is a Deployment-only strategy and would be invalid here — rev 3 was ambiguous);
 **nothing in this budget surges**: the StatefulSets cannot, and the web Deployment is pinned to
 `Recreate` precisely so it does not. The budgeted transient is therefore not a rollout surge at all
-— it is a backup Job or a debug Job. Stated precisely, because the quota constrains aggregate
-consumption and not the shape of it: **the budget accommodates at most one conforming transient
-declaring 100m / 256Mi requests**. What holds Jobs to that declaration is the LimitRange
-(`max` 2 CPU / 3Gi per container, `defaultRequest` 50m/128Mi where a Job declares nothing) plus the
-aggregate `requests.memory: 2304Mi` quota, which refuses admission once the sum is exceeded. Several
-smaller Jobs could therefore run concurrently within the same aggregate — that is permitted and
-budgeted; what cannot happen is the aggregate being exceeded.
+— it is a backup Job or a debug Job. Stated precisely, because a ResourceQuota constrains aggregate
+consumption and not the shape of it: **`100m / 256Mi` is the budgeted STANDARD shape for a transient
+Job, not an enforced one.** No control in this design pins a Job to that exact declaration —
+NS-15 requires Job and CronJob templates to declare resources explicitly, so the LimitRange's
+defaults never apply to them, and its `max` only caps a container at 2 CPU / 3Gi. **What is
+enforced is the aggregate**: `requests.memory: 2304Mi` refuses admission once the namespace sum
+would exceed it. So several smaller Jobs may run concurrently inside that aggregate — permitted and
+budgeted — and the guarantee is the ceiling, not the count.
 
 The peak **requests** row is what must satisfy NS-4's feasibility formula. That reduction has
 already been made: D-3 fixed the tenant at 2.25 Gi, and NS-8's table above is the re-sized result —
 the app-pod count and the surge allowance were spent to reach it, which is why the web Deployment is
-`Recreate` (accepting brief downtime on a rollout). If a measured `R` above 13.01 Gi forced the
+`Recreate` (accepting brief downtime on a rollout). If a measured `R` above 13.0 Gi forced the
 envelope down further, the next reductions are recorded before launch, not discovered
 at rollout.
 
@@ -970,8 +973,8 @@ Where this table says SUPERSEDED, the present document governs. Clause-level com
 | REQ-11 login-surface & edge hardening | **UNCHANGED, plus NS-16** | the required traefik `Middleware` is a named platform-plane object (rev 2 omitted it from both plane lists) |
 | REQ-12 patch & vulnerability posture | **UNCHANGED** | |
 | REQ-13 privacy & data handling | **UNCHANGED** | |
-| §8 risks R-1…R-11, R-13 | **CARRIED OVER unchanged** | |
-| §8 risk **R-12** | **SUPERSEDED, not carried** | replaced by R-14 and R-18 |
+| §8 risks R-1…R-11, R-13 | **CARRIED OVER** — 11 unchanged, **R-2 narrowed** | R-2 ("no formal load/soak") is partially discharged by NS-16 + NS-V25 + NS-V16's pilot load; what remains is that no *production-scale* load test exists. Per-row detail in Appendix A.2 |
+| §8 risk **R-12** | **SUPERSEDED, not carried** | **four successors:** its *credential* half → **R-14** + **R-18**; its *shared-fate* half → **R-15** (no I/O isolation) + **R-16** (no availability isolation). rev 4 mapped only the credential half |
 
 **Database engine:** the user's requirement names **Postgres**; rev 11 pins Bugzilla to **MariaDB**.
 Switching engines invalidates REQ-4's pinning and REQ-10a's backup design. This document keeps
