@@ -54,7 +54,19 @@ spec:
             # to 06:30 on dev lets the eager pre-fetch start as soon as the window does. The
             # completeness check against the arm manifest still rejects a partial baseline, so an
             # early fetch cannot latch bad OI.
-            - { name: DATABENTO_GEX_OI_AVAILABLE_LOCAL_TIME, value: "06:30" }
+            # 06:30 (2026-08-05) broke the anchor manifest outright. This value is not only a
+            # gate on WHEN the fetch runs -- it is also the universeAsOf the anchor attempt carries,
+            # so it becomes the `end` of the instrument-definition query. Asking for definitions
+            # "up to 06:30 ET" returns ZERO records, because OPRA has not published the session's
+            # definitions by then. No error, no 422, no available-edge retry: just an empty
+            # universe, and the manifest refuses to build because completeness cannot be
+            # established without one. Measured on 2026-08-05: two attempts, two missing_universe,
+            # no anchor for the session, and GEX pricing on the frozen print all morning.
+            #
+            # OPRA's definition availability for the session lands around 09:00 ET (13:00Z on
+            # 2026-08-05, where a query bounded at that edge returned 21,632 records). 09:00 is
+            # therefore the earliest value that can actually produce a universe.
+            - { name: DATABENTO_GEX_OI_AVAILABLE_LOCAL_TIME, value: "09:00" }
             # ONE env: key for this container. There were TWO, and YAML does not merge duplicate
             # mapping keys -- kustomize kept the first and dropped the second entirely, in silence.
             # Everything below lived in that second block, so DATABENTO_GEX_DYNAMIC_OI_ENABLED,
