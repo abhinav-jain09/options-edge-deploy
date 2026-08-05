@@ -231,7 +231,7 @@ patches:
                   - name: OI_ANCHOR_MANIFEST_ENABLED
                     value: "true"
   # oi-shadow: ENABLED on PRODUCTION with the SEEDED arm, 2026-08-04. It reads the anchor manifest
-  # and the raw chain and writes one record per strike to options.databento.oi.shadow.by-strike.
+  # and the raw chain and writes one record per strike to options.databento.oi.nowcast.by-strike.
   # That topic is now CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED above), so what this
   # service publishes reaches the live gamma surface. It was consumer-free when this was first
   # enabled; it is not any more, and the isolation argument that justified enabling it no longer

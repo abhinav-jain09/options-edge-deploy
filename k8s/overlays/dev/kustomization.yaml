@@ -26,7 +26,7 @@ resources:
   - ../../services/databento-vix-feed/base
 patches:
   # oi-shadow: ENABLED on DEV, with the SEEDED arm on. The service reads the anchor manifest and
-  # the raw chain and writes one record per strike to options.databento.oi.shadow.by-strike; that
+  # the raw chain and writes one record per strike to options.databento.oi.nowcast.by-strike; that
   # topic is now CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED), so what this service
   # publishes reaches the live gamma surface. It was consumer-free when this was first enabled;
   # that is no longer true and nothing here should be read as if it were.

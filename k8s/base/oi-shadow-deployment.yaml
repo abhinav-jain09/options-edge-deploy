@@ -69,8 +69,8 @@ spec:
               value: options.databento.raw
             - name: KAFKA_OI_ANCHOR_MANIFEST_TOPIC
               value: options.databento.oi.anchor-manifest
-            - name: KAFKA_OI_SHADOW_TOPIC
-              value: options.databento.oi.shadow.by-strike
+            - name: KAFKA_OI_NOWCAST_TOPIC
+              value: options.databento.oi.nowcast.by-strike
             # Session bounds and zone. The zone is the SAME key the anchor is keyed in -- a second
             # independently-read zone setting lets a session be identified in one and evaluated in
             # another, and the two only ever disagree in production.
