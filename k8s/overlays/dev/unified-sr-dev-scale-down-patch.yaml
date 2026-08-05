@@ -1,0 +1,26 @@
+# DEV-ONLY capacity patch (2026-08-05). TEMPORARY — companion to
+# dealer-ledger-dev-scale-down-patch.yaml, which carries the full arithmetic.
+#
+# Scaling dealer-ledger alone lands the rendered fleet at 8600m against 8550m of available CPU —
+# still 50m short, so the next simultaneous reconciliation could recreate the exact scheduling race
+# that took GEX down. This frees a further 250m, giving ~200m of deliberate headroom rather than a
+# fleet that only just fails to fit.
+#
+# WHY THIS SERVICE. unified-sr-service produces the support/resistance OVERLAY; the option chain's
+# GEX cell does not depend on it. It was chosen over hpsf-postgres-writer-service because
+# Jenkinsfile.hpsf-ops applies the HPSF deployments straight from k8s/base (replicas 1), bypassing
+# this overlay entirely — running that valid job would restore the writer and immediately recreate
+# the deficit, which DISABLED_DEV would only repair at the next cleanup start. No Jenkins path
+# applies unified-sr-service from base.
+#
+# WHAT THIS COSTS: the S/R overlay is absent from the dev board while this is in place.
+#
+# RESTORING: same four steps as the dealer-ledger patch (delete file, unwire from kustomization,
+# drop from DISABLED_DEV, re-run generate-service-slices.sh).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unified-sr-service
+  namespace: options-edge
+spec:
+  replicas: 0
