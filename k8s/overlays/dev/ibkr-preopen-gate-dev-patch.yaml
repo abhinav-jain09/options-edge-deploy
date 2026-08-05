@@ -29,4 +29,12 @@ spec:
             - { name: IBKR_GEX_CONSUME_ENABLED, value: "true" }
             - { name: IBKR_GEX_PUBLISH_ENABLED, value: "true" }
             - { name: IBKR_GEX_TOPIC_STAGE, value: "live" }
+            # PRE-OPEN SPOT (2026-08-05). The default spot topic carries dev's SYNTHETIC_OPTION_SPOT
+            # (a flat 7500.0), and pricing 7635-7840 strikes against it puts every put below
+            # intrinsic — the IV solver then fails and the whole window publishes
+            # GATED/PUT:IV_SOLVER_FAILED with a good OI baseline and real CBOE quotes. The IBKR feed
+            # now publishes IBKR's own option MODEL UNDERLYING here while the cash index has nothing
+            # live (it only prints CLOSE before 09:30), which is by definition the underlying IBKR
+            # priced these contracts against. Verified live at 12:30Z: 7776.20 and moving.
+            - { name: IBKR_GEX_SPOT_TOPIC, value: "underlying.spx.index.price" }
             - { name: IBKR_GEX_TOPIC, value: "options.databento.gex.strike" }

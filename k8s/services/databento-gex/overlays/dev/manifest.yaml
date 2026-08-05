@@ -64,6 +64,8 @@ spec:
               value: "true"
             - name: IBKR_GEX_TOPIC_STAGE
               value: live
+            - name: IBKR_GEX_SPOT_TOPIC
+              value: underlying.spx.index.price
             - name: IBKR_GEX_TOPIC
               value: options.databento.gex.strike
             - name: DATABENTO_GEX_OI_AVAILABLE_LOCAL_TIME
