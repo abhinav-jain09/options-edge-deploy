@@ -266,6 +266,17 @@ patches:
           # IBKR_SPX_KAFKA_TARGETS fallback so the chain contract is visible here.
           - name: IBKR_CHAIN_ENABLED
             value: "true"
+          # SPX options quote pre-market on CBOE's Global Trading Hours session, but the base
+          # config subscribes the chain through SMART, which has no pre-open route for them:
+          # verified 2026-08-05 07:50 ET, when every strike's raw snapshot carried
+          # {"ASK":"-1","BID":"-1"} with "bboExchange":"" while CLOSE and
+          # OPTION_MODEL_UNDERLYING were populated. With no bid/ask the IV solver cannot run,
+          # so the pre-open window published GATED/IV_SOLVER_FAILED for every strike and the
+          # board stayed numberless even after today's OI baseline landed. The underlying is
+          # already pinned to CBOE for SPX (IB_UNDERLYING_EXCHANGE); this makes the option legs
+          # agree with it. DEV ONLY while the window is proven — prod keeps SMART.
+          - name: IB_OPTION_EXCHANGE
+            value: "CBOE"
           - name: IBKR_CHAIN_KAFKA_TARGETS
             # label=bootstrap|schemaRegistry — registry IDs are REGISTRY-LOCAL, so each
             # cluster's producer registers against ITS OWN registry (feed

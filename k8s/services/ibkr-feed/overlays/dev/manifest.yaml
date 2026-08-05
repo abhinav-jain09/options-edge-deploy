@@ -70,6 +70,8 @@ spec:
               value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
             - name: IBKR_CHAIN_ENABLED
               value: "true"
+            - name: IB_OPTION_EXCHANGE
+              value: CBOE
             - name: IBKR_CHAIN_KAFKA_TARGETS
               value: dev=host.docker.internal:19092|http://host.docker.internal:8082
             - name: IB_CHAIN_WINDOW_START
