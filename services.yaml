@@ -67,6 +67,7 @@ services:
   - { name: spread-skew,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew,                  deployments: [spread-skew-service] }
   - { name: es-spx-align,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-spx-align,                 deployments: [es-spx-align-service] }
   - { name: reversal-confirmation,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-reversal-confirmation,        deployments: [reversal-confirmation-service] }
+  - { name: drop-classifier,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-drop-classifier,              deployments: [drop-classifier-service] }
   - { name: spread-skew-postgres-writer,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew-postgres-writer,  deployments: [spread-skew-postgres-writer] }
   - { name: es-open-direction,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction,            deployments: [es-open-direction-service] }
   - { name: close-direction,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-close-direction,              deployments: [close-direction-service] }

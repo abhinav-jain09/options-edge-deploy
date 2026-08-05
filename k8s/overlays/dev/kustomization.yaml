@@ -117,6 +117,7 @@ patches:
   # DEV-ONLY: delta-flow greek lookahead tolerance 3000ms (code default 0ms rejects 100% of trades
   # against dev's thin greek surface — see the patch header). Prod untouched.
   - path: delta-flow-dev-env-patch.yaml
+  - path: drop-classifier-dev-env-patch.yaml
   # Dev gex settings. Created for the pre-open GEX pipeline, but that is NO LONGER what it does:
   # the ibkr-preopen-gate patch below is applied AFTER it and sets PREOPEN_GEX_ENABLED back to
   # "false" for the one-publisher invariant, so the legacy pre-open publisher is live in neither
@@ -516,6 +517,9 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-reversal-confirmation
     newName: host.docker.internal:5001/options-edge-reversal-confirmation
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-drop-classifier
+    newName: host.docker.internal:5001/options-edge-drop-classifier
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer
     newName: host.docker.internal:5001/options-edge-spread-skew-postgres-writer

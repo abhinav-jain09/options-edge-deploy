@@ -380,6 +380,7 @@ pipeline {
             'VIX_OPTION_INTELIGENCE_IMAGE': 'vix-option-inteligence',
             'GREEK_MOVE_AUTHENTICITY_IMAGE': 'greek-move-authenticity',
             'INVASION_POSTGRES_WRITER_IMAGE': 'invasion-postgres-writer', 'SPREAD_SKEW_IMAGE': 'spread-skew', 'REVERSAL_CONFIRMATION_IMAGE': 'reversal-confirmation',
+            'DROP_CLASSIFIER_IMAGE': 'drop-classifier',
             'SPREAD_SKEW_POSTGRES_WRITER_IMAGE': 'spread-skew-postgres-writer', 'ES_OPEN_DIRECTION_IMAGE': 'es-open-direction',
             'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE': 'es-open-direction-postgres-writer',
             'CLOSE_DIRECTION_IMAGE': 'close-direction',

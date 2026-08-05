@@ -52,6 +52,7 @@ STRIKE_INVASION_IMAGE=$registry/options-edge-strike-invasion:$image_tag
 INVASION_POSTGRES_WRITER_IMAGE=$registry/options-edge-invasion-postgres-writer:$image_tag
 SPREAD_SKEW_IMAGE=$registry/options-edge-spread-skew:$image_tag
 REVERSAL_CONFIRMATION_IMAGE=$registry/options-edge-reversal-confirmation:$image_tag
+DROP_CLASSIFIER_IMAGE=$registry/options-edge-drop-classifier:$image_tag
 SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$registry/options-edge-spread-skew-postgres-writer:$image_tag
 ES_OPEN_DIRECTION_IMAGE=$registry/options-edge-es-open-direction:$image_tag
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$registry/options-edge-es-open-direction-postgres-writer:$image_tag
