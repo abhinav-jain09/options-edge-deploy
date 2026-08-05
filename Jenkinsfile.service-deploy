@@ -32,7 +32,7 @@ pipeline {
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
       'directional-pressure', 'es-open-direction', 'es-open-direction-postgres-writer', 'close-direction', 'spot-vol-regime', 'vix-option-inteligence', 'greek-move-authenticity', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
       'option-truth-engine', 'market-carry', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
-      'invasion-postgres-writer', 'reversal-confirmation', 'reversal-postgres-writer', 'short-premium-agent', 'es-spx-align', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
+      'invasion-postgres-writer', 'reversal-confirmation', 'drop-classifier', 'reversal-postgres-writer', 'short-premium-agent', 'es-spx-align', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
       'oi-shadow', 'unified-sr', 'volume-pace', 'signal-follower', 'web', 'ibkr-feed'
     ], description: 'Which service to deploy (dir under k8s/services; spread-skew and its writer are intentionally unavailable under the 2026-07-26 operator hold).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
