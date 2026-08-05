@@ -1,7 +1,23 @@
 # Gate-1 — `fullfunding` tenant namespace on the prod k3s node, and the req-portal's migration into it
 
-**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 7. AWAITING USER APPROVAL (gatekeeping Gate-1).
+**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 8. AWAITING USER APPROVAL (gatekeeping Gate-1).
 Not implemented.**
+
+**rev 8 — three internal inconsistencies corrected, no requirement changed.** Found while reading
+the document end-to-end for approval; each was a place where an earlier revision's number survived a
+later decision:
+1. **§6 step 1's abort threshold was unreachable.** It still read `R > 11.25 Gi`, the threshold for
+   the superseded **4 Gi** tenant budget. D-3 fixed the tenant at **2.25 Gi**, which NS-4's formula
+   makes feasible while `R ≤ 13.01 Gi`. Against the expected measurement (`R ≈ 13 Gi`, the
+   off-hours floor) the old figure would have aborted the rollout every time — a feasibility gate
+   that had silently become an unconditional stop. Now `R > 13.01 Gi`, with the derivation shown.
+2. **NS-2's prose contradicted its own YAML** — "`limits.memory` 12 Gi" against `limits.memory:
+   10Gi` in the block directly above it. NS-8's peak is **5 CPU / 10 Gi**, so the YAML was right and
+   the prose was left over from the 4 Gi envelope. Prose corrected, and it now states that the
+   memory limit equals NS-8's peak exactly.
+3. **§10's gate status was stale** — it described rev 4 awaiting Codex re-review, and listed D-1 and
+   D-3 as Gate-2 blockers after the user had closed them. It now records revs 5–8 and names the two
+   blockers that actually remain: **D-6**, and **a named consumer for Postgres**.
 
 **USER DECISIONS RECORDED 2026-08-04 — D-1, D-3 and D-7 are CLOSED:**
 1. **D-3 → the host reservation wins.** `system-reserved` keeps the full measured host requirement
@@ -255,9 +271,10 @@ services.loadbalancers: "0"       services.nodeports: "0"
   platform-owned Ingress it was meant to protect. The layering is: **RBAC** denies the tenant
   credential any Ingress verb (NS-9), **the quota** prevents a second Ingress, and **NS-15(7)**
   constrains the content of the one that exists.
-- **`limits.memory` 12 Gi and `limits.cpu` 6** are deliberately larger than the requests, because
+- **`limits.memory` 10 Gi and `limits.cpu` 6** are deliberately larger than the requests, because
   limits do not consume allocatable. They are derived from NS-8's corrected budget —
-  **steady state plus exactly one transient** — not chosen round.
+  **steady state plus exactly one transient**, whose peak is **5 CPU / 10 Gi** — not chosen round.
+  The memory limit equals that peak exactly; the CPU limit carries 1 CPU over it.
 - **Ephemeral storage is bounded at admission and enforced at runtime by eviction, not by an
   instantaneous quota.** A logging burst can overshoot before kubelet reacts (R-22), and container
   images and pulls sit outside the quota entirely. NS-1's table states this honestly.
@@ -347,13 +364,18 @@ outside Kubernetes* and carries its own measurement margin for their burst above
 high-percentile. `M` is *scheduler headroom inside Kubernetes*, reserved for OptionsEdge growth —
 a new service, a replica increase, a raised request — that would otherwise be unschedulable.
 
-| R (measured) | Max feasible tenant `requests.memory` |
-|---|---|
-| 10 Gi | 5.26 Gi |
-| **11.25 Gi** | **4.01 Gi — the 4 Gi budget just fits** |
-| 12 Gi | 3.26 Gi — the 4 Gi budget **does not fit** |
-| 13 Gi | 2.26 Gi |
-| 14 Gi | 1.26 Gi |
+| R (measured) | Max feasible tenant `requests.memory` | Against D-3's **2.25 Gi** envelope |
+|---|---|---|
+| 10 Gi | 5.26 Gi | fits |
+| 11.25 Gi | 4.01 Gi — the superseded 4 Gi budget just fits | fits |
+| 12 Gi | 3.26 Gi — the superseded 4 Gi budget does **not** fit | fits |
+| 13 Gi | 2.26 Gi | fits (the expected off-hours floor) |
+| **13.01 Gi** | **2.25 Gi** | **the limit — §6 step 1 aborts above this** |
+| 14 Gi | 1.26 Gi | does **not** fit |
+
+The middle column is the general result; the right-hand column is the one that governs now, since
+D-3 closed the tenant at 2.25 Gi. Reading only the middle column is what left §6 step 1 carrying the
+4 Gi budget's threshold through rev 7.
 
 **D-3 is closed: the reservation wins and the tenant shrinks.** The user chose to keep the full
 measured host reservation rather than trim it for the tenant's benefit. With `R = 13 Gi` (the
@@ -382,8 +404,11 @@ Companion headroom, all recomputed and recorded at NS-V6, each including `P_plat
 
 **`R` is derived from high-percentile host usage across ≥5 representative sessions** (open, close,
 a volatility spike, the nightly backup window, a maintenance window) plus its measurement margin —
-not one snapshot. The off-hours ~13 Gi is a floor, and note it already exceeds 11.5 Gi, so D-3 is
-**expected to force the user's choice** rather than being a formality.
+not one snapshot. The off-hours ~13 Gi is a floor. It already exceeded the thresholds that the
+earlier **4 Gi** tenant budget required, which is why D-3 was a real choice rather than a
+formality — and the user resolved it by keeping the reservation and shrinking the tenant to
+2.25 Gi. Against that envelope the same ~13 Gi floor now fits, with the abort threshold at
+`R > 13.01 Gi` (§6 step 1).
 **Independent value:** this requirement improves the status quo even if the tenant is cancelled.
 **Acceptance:** NS-V6 — effective kubelet config dumped and asserted (all four eviction thresholds;
 `pod-max-pids` asserted **to the value chosen in D-6, including a verified `-1`/absence if D-6
@@ -943,8 +968,15 @@ change nothing.
    unaccounted rows. **Gate-1 exit criterion; nothing below starts until it passes.**
 1. **Measurement (read-only, spans RTH):** high-percentile host CPU/memory across ≥5 representative
    sessions → `R`; **and** maximum pid count per OptionsEdge pod → the D-6 value (NS-4). **Then
-   apply NS-4's feasibility formula and record the tenant `requests.memory`; if `R > 11.25 Gi`, stop
-   and obtain the user's decision.** Resolves D-3 and D-6. *(Blocks step 2.)*
+   apply NS-4's feasibility formula and confirm the tenant `requests.memory`; if `R > 13.01 Gi`,
+   stop and obtain the user's decision.** Resolves D-6; confirms the D-3 envelope. *(Blocks step 2.)*
+
+   The threshold follows from D-3, not from the superseded 4 Gi budget. NS-4's formula is
+   `tenant_requests_memory ≤ 19.26 − R − M` with `M = 4 Gi`, i.e. `tenant ≤ 15.26 − R`. D-3 fixed
+   the tenant at **2.25 Gi**, which fits while `R ≤ 13.01 Gi`. The `11.25 Gi` figure that stood here
+   through rev 7 was the threshold for the **old 4 Gi** tenant budget; against the closed D-3
+   envelope it would have aborted on the expected measurement (`R ≈ 13 Gi`, the off-hours floor)
+   every single time — turning a feasibility gate into an unconditional stop.
 1.5. **Relocate kubelet state and pod logs off `/`** (NS-21, D-7) — full maintenance window: stop
    k3s, move `/var/lib/kubelet` and `/var/log/pods` to `/home`, add fstab bind mounts, verify the
    mounts are active **before** k3s starts. NS-V31 + the OptionsEdge health gate. **Shares the same
@@ -1050,12 +1082,16 @@ public exposure and teardown is private (NS-14).
 
 ## 10. Gate status
 
-- **Gate 1 (requirements):** this document. rev 1 → Codex REQUEST_CHANGES; rev 2 → Codex
-  REQUEST_CHANGES; rev 3 → REQUEST_CHANGES; **rev 4 implements every rev-3 finding and awaits Codex
-  re-review, then the user's explicit approval.** No implementation before that approval.
-- **Gate 2 (implementation):** not started. **Blocked on D-1, D-3 and D-6.** NS-19/NS-V28 is no
-  longer a Gate-2 blocker because the map is delivered here as **Appendix A**; it is verified at
-  §6 step 0.5 as a Gate-1 exit criterion.
+- **Gate 1 (requirements):** this document. rev 1 → Codex REQUEST_CHANGES; rev 2 → REQUEST_CHANGES;
+  rev 3 → REQUEST_CHANGES; rev 4 implemented every rev-3 finding; revs 5–7 recorded the user's D-1,
+  D-3 and D-7 decisions and the NS-21 side effects. **rev 8 corrects three internal inconsistencies
+  (below) and awaits the user's explicit approval.** No implementation before that approval.
+- **Gate 2 (implementation):** not started. **D-1, D-3 and D-7 are CLOSED.** Remaining Gate-2
+  blockers: **D-6** (the `pod-max-pids` value, which comes from the §6 step-1 measurement or is
+  dropped along with every PID isolation claim) and **a named consumer for Postgres** — D-1
+  provisions it, but an unused database does not honestly satisfy the requirement. NS-19/NS-V28 is
+  not a Gate-2 blocker: the map is delivered here as **Appendix A** and verified at §6 step 0.5 as a
+  Gate-1 exit criterion.
 
 ---
 
