@@ -33,7 +33,7 @@ kubectl kustomize k8s/overlays/dev > "$RENDER"
 yq -o=json eval-all '[select(.kind=="Deployment" or .kind=="CronJob")]' "$RENDER" > "$RENDER.json"
 
 report=$(python3 - "$RENDER.json" "$BUDGET_MCPU" "${CAPACITY_TARGETS[@]}" <<'PYEOF'
-import json, sys
+import json, math, sys
 
 path, budget = sys.argv[1], int(sys.argv[2])
 targets = sys.argv[3:]
@@ -87,8 +87,18 @@ for dep in deployments:
         continue
     pod = mcpu(dep)
     active += pod * reps
-    if dep["spec"].get("strategy", {}).get("type", "RollingUpdate") == "RollingUpdate" and pod > surge:
-        surge, surge_name = pod, dep["metadata"]["name"]
+    # Surge is a Kubernetes calculation, not "one pod each": maxSurge may be 0 (raw-postgres-writer
+    # relies on that), an integer, or a percentage that rounds UP against replicas.
+    strategy = dep["spec"].get("strategy") or {}
+    if strategy.get("type", "RollingUpdate") != "RollingUpdate":
+        continue
+    raw = (strategy.get("rollingUpdate") or {}).get("maxSurge", "25%")
+    if isinstance(raw, str) and raw.endswith("%"):
+        surge_pods = math.ceil(reps * int(raw[:-1]) / 100)
+    else:
+        surge_pods = int(raw)
+    if surge_pods > 0 and pod * surge_pods > surge:
+        surge, surge_name = pod * surge_pods, dep["metadata"]["name"]
 
 if active > budget:
     print(f"FAIL|the rendered dev fleet requests {active}m, over the {budget}m budget.|"

@@ -10,7 +10,9 @@
 #
 # `need` comes from the CANDIDATE manifest, never from the live Deployment: a change that RAISES a
 # request is exactly the case that must be caught, and reading the server would evaluate the old
-# value. Only free capacity is queried from the cluster.
+# value. `kubectl create --dry-run=client -o json` converts it locally without touching the API, so
+# the surge maths is structural (replicas x maxSurge, with Kubernetes' percentage rounding) rather
+# than a text scan assuming one pod each. Only free capacity is queried from the cluster.
 #
 # Fails OPEN on a query it cannot run (no kubectl, unreadable node) — this is a guard against a
 # known scheduling trap, not an authorisation gate, and must never wedge a deploy on a parse error.
@@ -22,36 +24,55 @@ LABEL="${2:-this deploy}"
 command -v kubectl >/dev/null 2>&1 || exit 0
 [ -f "$RENDER" ] || exit 0
 
-need=$(python3 - "$RENDER" <<'PYEOF'
-import sys
+need=$(kubectl create -f "$RENDER" --dry-run=client -o json 2>/dev/null | python3 -c "
+import json, math, sys
 
-# Deliberately not a YAML parse: the renders here are kubectl/kustomize output, and this only needs
-# each Deployment's strategy and container cpu requests. Tracks indentation to stay inside the
-# containers block of the doc it is reading.
-docs = open(sys.argv[1]).read().split('\n---\n')
+# STRUCTURAL, not a text scan: surge is a Kubernetes calculation, not 'one pod each'.
+#   replicas: 0        -> nothing rolls, no surge
+#   Recreate           -> old pods go first, no surge pod
+#   maxSurge: 0        -> explicitly no surge (raw-postgres-writer relies on this)
+#   maxSurge: N        -> N extra pods
+#   maxSurge: 'P%'     -> ceil(replicas * P / 100), the Kubernetes rounding
+#   default            -> 25%, i.e. 1 pod at replicas: 1
+decoder = json.JSONDecoder()
+text = sys.stdin.read().strip()
+docs, idx = [], 0
+while idx < len(text):
+    obj, end = decoder.raw_decode(text, idx)
+    docs.append(obj)
+    idx = end
+    while idx < len(text) and text[idx] in ' \\t\\r\\n':
+        idx += 1
+
 need = 0
-for doc in docs:
-    if 'kind: Deployment' not in doc:
-        continue
-    if 'type: Recreate' in doc:
-        continue
-    pod, in_requests, indent = 0, False, None
-    for line in doc.splitlines():
-        stripped = line.strip()
-        if stripped == 'requests:':
-            in_requests, indent = True, len(line) - len(line.lstrip())
+for d in docs:
+    for it in (d.get('items') or [d]):
+        if it.get('kind') != 'Deployment':
             continue
-        if in_requests:
-            cur = len(line) - len(line.lstrip())
-            if stripped and cur <= indent:
-                in_requests = False
-            elif stripped.startswith('cpu:'):
-                v = stripped.split(':', 1)[1].strip().strip('"\'')
-                pod += int(v[:-1]) if v.endswith('m') else int(float(v) * 1000)
-    need = max(need, pod)
+        spec = it['spec']
+        replicas = spec.get('replicas', 1)
+        if replicas == 0:
+            continue
+        strategy = spec.get('strategy') or {}
+        if strategy.get('type', 'RollingUpdate') != 'RollingUpdate':
+            continue
+        raw = (strategy.get('rollingUpdate') or {}).get('maxSurge', '25%')
+        if isinstance(raw, str) and raw.endswith('%'):
+            surge_pods = math.ceil(replicas * int(raw[:-1]) / 100)
+        else:
+            surge_pods = int(raw)
+        if surge_pods <= 0:
+            continue
+        pod = 0
+        for c in spec['template']['spec']['containers']:
+            v = ((c.get('resources') or {}).get('requests') or {}).get('cpu')
+            if not v:
+                continue
+            v = str(v)
+            pod += int(v[:-1]) if v.endswith('m') else int(float(v) * 1000)
+        need = max(need, pod * surge_pods)
 print(need)
-PYEOF
-) || exit 0
+") || exit 0
 
 [ "${need:-0}" -gt 0 ] || exit 0
 

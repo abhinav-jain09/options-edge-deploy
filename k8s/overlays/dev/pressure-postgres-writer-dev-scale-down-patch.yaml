@@ -10,7 +10,8 @@
 # Freeing another 100m here takes the headroom to 300m, which covers that 250m surge on its own. It
 # does NOT cover a surge PLUS a concurrent on-demand Job (350m), and dev also has a 500m replay Job
 # that can be started by hand; covering the worst case would need ~750m, which this node cannot give
-# without disabling services that are genuinely in use. validate-dev-capacity.sh therefore asserts
+# without disabling services that are genuinely in use. The standalone surge IS hard-asserted; only
+# the overlap is left to the runtime control. validate-dev-capacity.sh therefore asserts
 # steady state and REPORTS the rollout picture rather than pretending to guarantee it.
 #
 # Two alternatives were tried and rejected. Pinning the 250m services to Recreate on dev required the

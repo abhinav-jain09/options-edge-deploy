@@ -234,16 +234,19 @@
           # the atomic cutover (idempotent, deployer-SA-scoped). Its rotated app-id changelog/repartition
           # topics are cleaned separately per docs/es-spx-align-cutover-runbook.md (never auto-deleted here).
           kubectl -n options-edge delete deployment/es-gex-spx-align-service --ignore-not-found=true
+          kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
           # Same interlock the per-service path gets: on dev the headroom is thin enough that a
           # rollout started while an operational Job holds CPU waits on a surge pod that can never
-          # schedule. Refuse up front with the numbers rather than mass-restarting into a timeout.
+          # schedule. It runs AFTER the apply deliberately — the apply is what reconciles the
+          # capacity scale-downs, so checking before it would have this very deploy refuse itself
+          # during a capacity incident (GEX Pending, node oversubscribed). By here the declared
+          # state is live and the numbers are the ones the rollouts below will actually face.
           if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
             _capacity_render="${JENKINS_WORK_DIR:-/tmp}/options-edge-${ENVIRONMENT}-capacity.yaml"
             kubectl kustomize "k8s/overlays/${ENVIRONMENT}" > "$_capacity_render"
             scripts/deploy/dev-capacity-preflight.sh "$_capacity_render" "the dev monolith"
             rm -f "$_capacity_render"
           fi
-          kubectl apply -k "k8s/overlays/${ENVIRONMENT}"
           market_data_source="${MARKET_DATA_SOURCE:-DATABENTO}"
           effective_raw_topic="${RAW_TOPIC:-}"
           if [ -z "$effective_raw_topic" ]; then
