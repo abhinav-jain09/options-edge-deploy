@@ -1,18 +1,30 @@
-# DEV-ONLY capacity patch (2026-08-05). The dev node is docker-desktop with 10 allocatable CPUs;
-# kube-system (950m) and jenkins (500m) take 1450m of it, leaving 8550m for options-edge. The
-# namespace's own requests are 8400m WITHOUT databento-gex-service, whose dev overlay deliberately
-# reserves 2 full CPUs (see databento-gex-preopen-dev-patch.yaml: at the base 250m the 8-thread
-# Streams app fell ~1.1M records behind on the 0DTE repartition). Those two facts cannot both hold:
-# after the 2026-08-05 02:02 local-registry outage every deployment rescheduled at once and
-# databento-gex-service lost the race, sitting Pending with "Insufficient cpu" while GEX went dark.
+# DEV-ONLY capacity patch (2026-08-05). TEMPORARY — see RESTORING below.
 #
-# dealer-ledger-service is the single largest non-critical consumer at exactly 2000m and is not on
-# the pre-open GEX path (it consumes the ledger plane; the option chain's GEX cells do not depend on
-# it), so it yields precisely the reservation the gex service needs.
+# THE ARITHMETIC. The dev node is docker-desktop with 10 allocatable CPUs. kube-system takes 950m
+# and jenkins 500m, so options-edge has 8550m. The rendered dev fleet asks for 8600m — 50m MORE
+# than exists — because databento-gex-service's dev overlay deliberately reserves 2 full CPUs
+# (databento-gex-preopen-dev-patch.yaml: at the base 250m its 8-thread Streams app fell ~1.1M
+# records behind on the 0DTE repartition, growing +6849/min). The fleet only ever ran because
+# several deployments were failing to schedule anyway. When the local-registry container exited at
+# 02:02 on 2026-08-05 and every deployment rescheduled at once, databento-gex-service lost the race
+# and sat Pending on "Insufficient cpu" — GEX went dark on dev with no bad code anywhere.
 #
-# TEMPORARY — restore by deleting this patch + its kustomization entry. Deliberately NOT added to
-# dev-cleanup's DISABLED_DEV: that list is for services held down indefinitely, and this one should
-# come back as soon as the node has headroom (or the gex reservation is revisited).
+# THE LEVER. dealer-ledger-service is the largest non-critical consumer at exactly 2000m and sits
+# DOWNSTREAM of GEX (it consumes options.databento.gex.strike; the gateway reads GEX directly and
+# treats the dealer-ledger topics as optional), so it yields precisely the reservation gex needs
+# without touching the evidence-backed gex request. Paired with the hpsf-postgres-writer patch this
+# brings the fleet to ~8350m, leaving ~200m of deliberate headroom so a simultaneous reconciliation
+# cannot recreate the same race.
+#
+# WHAT THIS COSTS (stated explicitly): the dealer-ledger UI plane is gone from the dev board, and
+# close-direction-service stops receiving fresh dealer-ledger input while this is in place.
+#
+# RESTORING (all four steps, or the fix half-reverts):
+#   1. delete this file
+#   2. remove its entry from k8s/overlays/dev/kustomization.yaml
+#   3. remove dealer-ledger-service from DISABLED_DEV in scripts/ops/dev-cleanup.sh
+#   4. re-run scripts/deploy/generate-service-slices.sh — otherwise the standalone slice stays at
+#      replicas 0 and either fails mirror validation or silently keeps the service down
 apiVersion: apps/v1
 kind: Deployment
 metadata:

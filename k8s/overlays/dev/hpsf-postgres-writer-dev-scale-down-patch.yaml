@@ -1,0 +1,20 @@
+# DEV-ONLY capacity patch (2026-08-05). TEMPORARY — companion to
+# dealer-ledger-dev-scale-down-patch.yaml, which carries the full arithmetic.
+#
+# Scaling dealer-ledger alone lands the fleet at ~8600m against 8550m of available CPU — still 50m
+# short, so the next simultaneous reconciliation could recreate the exact scheduling race that took
+# GEX down. This frees a further 250m, giving ~200m of deliberate headroom rather than a fleet that
+# only just fails to fit.
+#
+# hpsf-postgres-writer-service persists HPSF pipeline signals to Postgres. It is not on the option
+# chain's GEX rendering path; the cost is that HPSF rows stop being written while this is in place.
+#
+# RESTORING: same four steps as the dealer-ledger patch (delete file, unwire from kustomization,
+# drop from DISABLED_DEV, re-run generate-service-slices.sh).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpsf-postgres-writer-service
+  namespace: options-edge
+spec:
+  replicas: 0
