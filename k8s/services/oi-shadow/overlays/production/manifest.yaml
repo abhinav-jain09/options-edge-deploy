@@ -74,8 +74,8 @@ spec:
               value: options.databento.raw
             - name: KAFKA_OI_ANCHOR_MANIFEST_TOPIC
               value: options.databento.oi.anchor-manifest
-            - name: KAFKA_OI_SHADOW_TOPIC
-              value: options.databento.oi.shadow.by-strike
+            - name: KAFKA_OI_NOWCAST_TOPIC
+              value: options.databento.oi.nowcast.by-strike
             - name: OI_SHADOW_SESSION_OPEN
               value: "09:30"
             - name: OI_SHADOW_SESSION_CLOSE
