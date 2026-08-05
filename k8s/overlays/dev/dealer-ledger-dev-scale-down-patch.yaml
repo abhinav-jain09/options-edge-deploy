@@ -10,13 +10,14 @@
 # 02:02 on 2026-08-05 and every deployment rescheduled at once, databento-gex-service lost the race
 # and sat Pending on "Insufficient cpu" — GEX went dark on dev with no bad code anywhere.
 #
-# THE LEVER. dealer-ledger-service is the largest non-critical consumer at exactly 2000m and sits
+# THE LEVER (one of three patches; see the kustomization for the set). dealer-ledger-service is the
+# largest non-critical consumer at exactly 2000m and sits
 # DOWNSTREAM of GEX (it consumes options.databento.gex.strike; the gateway reads GEX directly and
 # treats the dealer-ledger topics as optional), so it yields precisely the reservation gex needs
-# without touching the evidence-backed gex request. It is the first of several: with unified-sr the
-# render is 8350m, and the pressure-postgres-writer and es-open-direction patches take it to 8100m —
-# headroom the budget needs for a rollout surge that may overlap an operational Job, not merely for
-# steady state. scripts/ci/validate-dev-capacity.sh holds the current numbers.
+# without touching the evidence-backed gex request. It is the first of THREE: with unified-sr the
+# render is 8350m, and pressure-postgres-writer takes it to 8250m — 300m of headroom, which the
+# budget needs for a rollout surge (250m), not merely for steady state.
+# scripts/ci/validate-dev-capacity.sh holds the current numbers and asserts them.
 #
 # WHAT THIS COSTS (stated explicitly): the dealer-ledger UI plane is gone from the dev board;
 # close-direction-service stops receiving fresh dealer-ledger input; and the calibration chain goes

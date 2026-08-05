@@ -185,6 +185,66 @@ if [ "$DEPLOY_DRY_RUN" = "true" ]; then
   exit 0
 fi
 
+# --- capacity preflight (dev) -------------------------------------------------------------
+# A RollingUpdate needs its surge pod to SCHEDULE before the old one goes away. On dev the node is
+# 10 CPUs and headroom is deliberately thin (see scripts/ci/validate-dev-capacity.sh), so a rollout
+# that starts while an operational Job holds CPU waits on a pod that can never be scheduled — and
+# the Job may outlive ROLLOUT_TIMEOUT. Refuse up front with the actual numbers instead of applying
+# the new template and then timing out with the service half-rolled.
+if [ "$ENVIRONMENT" = "dev" ]; then
+  need=$(kubectl -n "$NAMESPACE" get -f "$RENDER" -o json 2>/dev/null | python3 -c "
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    print(0); raise SystemExit
+items = payload.get('items', [payload])
+need = 0
+for it in items:
+    if it.get('kind') != 'Deployment':
+        continue
+    if (it['spec'].get('strategy') or {}).get('type', 'RollingUpdate') != 'RollingUpdate':
+        continue
+    pod = 0
+    for c in it['spec']['template']['spec']['containers']:
+        v = ((c.get('resources') or {}).get('requests') or {}).get('cpu')
+        if not v:
+            continue
+        v = str(v)
+        pod += int(v[:-1]) if v.endswith('m') else int(float(v) * 1000)
+    need = max(need, pod)
+print(need)
+" 2>/dev/null || echo 0)
+  if [ "${need:-0}" -gt 0 ]; then
+    free=$(kubectl get node -o json | python3 -c "
+import json, sys, subprocess
+node = json.load(sys.stdin)['items'][0]
+cap = node['status']['allocatable']['cpu']
+cap = int(cap[:-1]) if cap.endswith('m') else int(float(cap) * 1000)
+pods = json.loads(subprocess.run(['kubectl','get','pods','-A','-o','json'],capture_output=True,text=True).stdout)
+used = 0
+for p in pods['items']:
+    if p['status'].get('phase') not in ('Running', 'Pending'):
+        continue
+    for c in p['spec']['containers']:
+        v = ((c.get('resources') or {}).get('requests') or {}).get('cpu')
+        if not v:
+            continue
+        v = str(v)
+        used += int(v[:-1]) if v.endswith('m') else int(float(v) * 1000)
+print(cap - used)
+" 2>/dev/null || echo "$need")
+    if [ "${free:-0}" -lt "$need" ]; then
+      echo "REFUSING TO DEPLOY: $SERVICE needs ${need}m for its RollingUpdate surge pod, but only ${free}m is free on the dev node." >&2
+      echo "  Something is holding CPU — most likely an operational Job (kafka-changelog-cleanup, the replay Job)." >&2
+      echo "  Applying now would leave the service half-rolled and time out after ${ROLLOUT_TIMEOUT}." >&2
+      echo "  Wait for it to finish (kubectl -n $NAMESPACE get pods --field-selector=status.phase=Running | grep -i job), then re-run." >&2
+      exit 1
+    fi
+    echo "capacity preflight: ${need}m surge needed, ${free}m free — proceeding"
+  fi
+fi
+
 echo "=== apply (service-scoped) ==="
 kubectl apply -f "$RENDER"
 echo "=== rollout (all deployments of this service) ==="

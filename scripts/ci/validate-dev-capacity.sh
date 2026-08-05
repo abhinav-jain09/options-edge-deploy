@@ -23,7 +23,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 BUDGET_MCPU=8550
 CAPACITY_TARGETS=(dealer-ledger-service unified-sr-service pressure-postgres-writer)
 CLEANUP=scripts/ops/dev-cleanup.sh
-RENDER=$(mktemp); trap 'rm -f "$RENDER"' EXIT
+RENDER=$(mktemp); trap 'rm -f "$RENDER" "$RENDER.json"' EXIT
 
 echo "=== validate-dev-capacity: dev fleet must fit ${BUDGET_MCPU}m ==="
 kubectl kustomize k8s/overlays/dev > "$RENDER"
@@ -107,19 +107,25 @@ for cj in cronjobs:
     if c > job:
         job, job_name = c, cj["metadata"]["name"]
 
-# NOT asserted, deliberately, and the reason is written down rather than left as a green tick.
-# A RollingUpdate surge pod and an on-demand Job both compete for the same headroom, and dev also
-# carries an unsuspendable-on-demand replay Job asking 500m (k8s/replay/dev). Covering the worst
-# case — surge + the largest Job — would need ~750m free, which this 10-CPU node cannot give
-# without disabling services that are genuinely in use (the ES pair, for one, is deliberately
-# started after the close by dev-cleanup's OVERNIGHT_SET). So the gate guarantees STEADY STATE and
-# REPORTS the rollout picture, which is the honest boundary of what it can promise.
-note = "fits" if surge + job <= headroom else f"TIGHT: a rollout overlapping that Job needs {surge + job}m"
+# A rollout on its own IS asserted: pressure-postgres-writer was disabled precisely to make the
+# largest surge fit, so letting a later change quietly take that back would defeat its own purpose.
+if surge > headroom:
+    print(f"FAIL|'{surge_name}' needs {surge}m for its RollingUpdate surge pod, but only {headroom}m "
+          f"is free.|service-deploy.sh would apply the new template and then wait on a pod that can "
+          f"never schedule. Free more CPU on dev, or give that service strategy Recreate.")
+    sys.exit(0)
+
+# A rollout CONCURRENT with an operational Job is reported, not asserted. Covering that worst case
+# — dev also carries a 500m on-demand replay Job under k8s/replay/dev — needs ~750m free, which a
+# 10-CPU node cannot give without disabling services genuinely in use (the ES open-direction pair,
+# for one, is deliberately started after the close by dev-cleanup's OVERNIGHT_SET). The runtime
+# control for that overlap lives in service-deploy.sh's preflight, which refuses to start a rollout
+# it cannot finish; this line makes the tightness visible.
+note = "fits" if surge + job <= headroom else f"TIGHT: concurrent with a Job it needs {surge + job}m — service-deploy preflights this"
 print(f"OK|dev fleet: {active}m of {budget}m ({headroom}m headroom); "
       f"largest RollingUpdate surge {surge}m ({surge_name}) + largest CronJob {job}m ({job_name}) -> {note}")
 PYEOF
 )
-rm -f "$RENDER.json"
 
 if [ "${report%%|*}" = "FAIL" ]; then
   printf '%s\n' "$report" | tr '|' '\n' | sed '1s/^FAIL$/FAIL:/;1!s/^/      /'

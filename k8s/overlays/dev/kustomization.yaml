@@ -121,9 +121,10 @@ patches:
   # gateway relays its status stream. Turns the legacy PREOPEN publisher OFF (mutually
   # exclusive by construction). Prod untouched — base flags stay false.
   - path: ibkr-preopen-gate-dev-patch.yaml
-  # DEV-ONLY capacity: frees the 2 CPUs databento-gex-service reserves on this 10-CPU node, plus
-  # 250m of deliberate headroom so a simultaneous reconciliation cannot recreate the scheduling
-  # race. TEMPORARY — each patch header carries the arithmetic and the four restore steps.
+  # DEV-ONLY capacity (THREE patches, temporary): free the 2 CPUs databento-gex-service reserves on
+  # this 10-CPU node, plus enough headroom for the largest rollout surge (300m against 250m).
+  # Each patch header carries the arithmetic and the four restore steps; the invariant is asserted
+  # by scripts/ci/validate-dev-capacity.sh.
   - path: dealer-ledger-dev-scale-down-patch.yaml
   - path: unified-sr-dev-scale-down-patch.yaml
   # Same budget, rollout half: a RollingUpdate surge pod (largest on dev is 250m) must fit the
