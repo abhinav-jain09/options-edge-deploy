@@ -27,11 +27,14 @@ resources:
 patches:
   # oi-shadow: ENABLED on DEV, with the SEEDED arm on. The service reads the anchor manifest and
   # the raw chain and writes one record per strike to options.databento.oi.shadow.by-strike; that
-  # topic has NO consumers, so nothing downstream can be affected by anything it publishes.
+  # topic is now CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED), so what this service
+  # publishes reaches the live gamma surface. It was consumer-free when this was first enabled;
+  # that is no longer true and nothing here should be read as if it were.
   #
-  # The seed is switched on with it rather than left at its default-off, because on dev the point
-  # is to see the estimator produce numbers against a live chain. Production stays on the control
-  # arm until that has been watched. Seed evidence: fitted over 277 sessions on this service's own
+  # The seed is switched on rather than left at its default-off, because the point is to see the
+  # estimator produce numbers against a live chain. Production runs the seeded arm too, enabled the
+  # same day -- the environments are NOT split between arms, so dev is not a control for prod.
+  # Seed evidence: fitted over 277 sessions on this service's own
   # cell definitions and measured on 25 sessions that post-date that panel — chain-wide error
   # 0.242 -> 0.175, better on 24 of 25. It does NOT improve which strike leads (92.0% -> 88.0%).
   # MUST MIRROR the standalone slice k8s/services/oi-shadow/overlays/dev (validate-services).
@@ -114,8 +117,14 @@ patches:
   # DEV-ONLY: delta-flow greek lookahead tolerance 3000ms (code default 0ms rejects 100% of trades
   # against dev's thin greek surface — see the patch header). Prod untouched.
   - path: delta-flow-dev-env-patch.yaml
-  # DEV-ONLY: enable the full pre-open GEX pipeline (capture + transactional publish) for the overnight
-  # verification cycle. Prod stays dormant (base flags false) until dev proves it. Prod untouched.
+  # Dev gex settings. Created for the pre-open GEX pipeline, but that is NO LONGER what it does:
+  # the ibkr-preopen-gate patch below is applied AFTER it and sets PREOPEN_GEX_ENABLED back to
+  # "false" for the one-publisher invariant, so the legacy pre-open publisher is live in neither
+  # environment (dev: ENABLED=false PUBLISH=true; production: both false).
+  #
+  # "Prod untouched" is also wrong now: TOP_N, GEX_SMILE_IV_FALLBACK and
+  # DATABENTO_GEX_DYNAMIC_OI_ENABLED all accumulated in that file and are set on production too.
+  # Read k8s/services/databento-gex/overlays/<env>/manifest.yaml, not the patch name.
   - path: databento-gex-preopen-dev-patch.yaml
   # DEV-ONLY gate β/γ: the pre-open IBKR GEX window publishes onto the live topic and the
   # gateway relays its status stream. Turns the legacy PREOPEN publisher OFF (mutually

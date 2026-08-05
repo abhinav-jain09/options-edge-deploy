@@ -178,11 +178,50 @@ patches:
                   # prod enable. Watch options_edge_databento_gex_smile_fallback_total.
                   - name: GEX_SMILE_IV_FALLBACK
                     value: "true"
+                  # DYNAMIC OPEN INTEREST. GEX stops pricing with the print the exchange published
+                  # this morning and prices with oi-shadow's estimate of where open interest lands at
+                  # the close, wherever that estimate is fresh. gex is LINEAR in open interest, so
+                  # this changes every number on the board.
+                  #
+                  # Measured on 25 sessions that post-date the panel the model was chosen on:
+                  # chain-wide error 0.242 -> 0.175, better on 24 of 25, DTE 0-1 improving 35%.
+                  #
+                  # It does NOT improve WHICH strike carries the most open interest -- 92.0% -> 88.0%
+                  # out of sample. The board becomes more accurate about how much gamma sits at a
+                  # strike and slightly LESS accurate about which strike leads. Anything downstream
+                  # reading it as a level-finder is reading it backwards.
+                  #
+                  # The intraday SHAPE is unverifiable. Ground truth arrives once a day, so the close
+                  # estimate is what was validated while the path to it assumes open interest accrues
+                  # with cumulative volume. A number read at 15:55 is near what was measured; one read
+                  # at 11:00 carries that assumption.
+                  #
+                  # Fail-soft by design (processing#555, Codex round-8 APPROVE, 17 overlay tests):
+                  # no estimate, stale, future-dated, a leg the model declined to price, a missing
+                  # symbol, an expiry that will not canonicalise, or a dead oi-shadow all leave the
+                  # settled print in place. That is the implementation's contract and its unit
+                  # evidence — it has not yet been OBSERVED on a running environment.
+                  #
+                  # ROLLBACK: set this to "false" HERE and re-run scripts/deploy/generate-service-slices.sh
+                  # — the generated slice carries its own copy, so editing one without the other
+                  # either drifts or fails validate-services.
+                  #
+                  # Watch ..._dynamic_oi_applied_total climbing during the session; the fallback
+                  # counters say WHY when it does not.
+                  - name: DATABENTO_GEX_DYNAMIC_OI_ENABLED
+                    value: "true"
                   # PROD capture of the daily settled open-interest print (2026-08-03). Writes ONE
                   # immutable manifest per session to options.databento.oi.anchor-manifest and to
-                  # calibration.oi_anchor_manifest, and is read by NOTHING — oi-shadow-service stays
-                  # at zero replicas. GEX is untouched: the work runs on its own daemon thread
-                  # behind a bounded queue, and a full queue drops rather than blocks the caller.
+                  # calibration.oi_anchor_manifest.
+                  #
+                  # It is no longer read by nothing. oi-shadow-service runs on production at one
+                  # replica and consumes this manifest, and with DATABENTO_GEX_DYNAMIC_OI_ENABLED
+                  # above, GEX consumes what oi-shadow publishes. The chain is
+                  # anchor -> oi-shadow -> GEX, so this capture is now on the path to the live board
+                  # rather than beside it.
+                  #
+                  # The PUBLISHING work is still isolated: its own daemon thread behind a bounded
+                  # queue, and a full queue drops rather than blocks the caller.
                   #
                   # Enabled on prod because the capture must not miss sessions. Dev is brought up by
                   # hand each morning, so any morning it is late past 09:25 ET leaves a permanent
@@ -193,8 +232,12 @@ patches:
                     value: "true"
   # oi-shadow: ENABLED on PRODUCTION with the SEEDED arm, 2026-08-04. It reads the anchor manifest
   # and the raw chain and writes one record per strike to options.databento.oi.shadow.by-strike.
-  # That topic has NO consumers -- oi-shadow is its only writer and nothing reads it -- so no
-  # downstream READER can be affected by what it publishes. It is not free, though: it adds a
+  # That topic is now CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED above), so what this
+  # service publishes reaches the live gamma surface. It was consumer-free when this was first
+  # enabled; it is not any more, and the isolation argument that justified enabling it no longer
+  # applies -- the justification now rests on the measured accuracy in processing#555.
+  #
+  # It also adds a
   # continuous consumer of the 32-partition raw topic on the single production broker. Headroom
   # measured 2026-08-04 before enabling: 24 cores at load 1.29, all java processes together 320%
   # of 2400%, 14 GB memory available. The service requests 100m CPU and is capped at 1 GiB.
