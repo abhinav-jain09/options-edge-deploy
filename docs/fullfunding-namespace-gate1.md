@@ -11,9 +11,11 @@ class, listed after them.
 Found on the first pass:
 1. **§6 step 1's abort threshold was unreachable.** It still read `R > 11.25 Gi`, the threshold for
    the superseded **4 Gi** tenant budget. D-3 fixed the tenant at **2.25 Gi**, which NS-4's formula
-   makes feasible while `R ≤ 13.01 Gi`. Against the expected measurement (`R ≈ 13 Gi`, the
+   makes feasible while `R ≤ 13.01 Gi`, gated conservatively at **13.0 Gi**. Against the expected measurement (`R ≈ 13 Gi`, the
    off-hours floor) the old figure would have aborted the rollout every time — a feasibility gate
-   that had silently become an unconditional stop. Now `R > 13.01 Gi`, with the derivation shown.
+   that had silently become an unconditional stop. Now `R > 13.0 Gi`, with the derivation shown and
+   the rounding rule stated — the formula's knife-edge is 13.01 Gi, but its inputs are rounded to
+   0.01 Gi, so the gate rounds down rather than claiming a precision the arithmetic lacks.
 2. **NS-2's prose contradicted its own YAML** — "`limits.memory` 12 Gi" against `limits.memory:
    10Gi` in the block directly above it. NS-8's peak is **5 CPU / 10 Gi**, so the YAML was right and
    the prose was left over from the 4 Gi envelope. Prose corrected, and it now states that the
@@ -389,7 +391,7 @@ a new service, a replica increase, a raised request — that would otherwise be 
 | 11.25 Gi | 4.01 Gi — the superseded 4 Gi budget just fits | fits |
 | 12 Gi | 3.26 Gi — the superseded 4 Gi budget does **not** fit | fits |
 | 13 Gi | 2.26 Gi | fits (the expected off-hours floor) |
-| **13.01 Gi** | **2.25 Gi** | **the limit — §6 step 1 aborts above this** |
+| **13.01 Gi** | **2.25 Gi** | the formula's knife-edge — but **§6 step 1 gates at 13.0 Gi**, rounding down because the inputs are rounded to 0.01 Gi |
 | 14 Gi | 1.26 Gi | does **not** fit |
 
 The middle column is the general result; the right-hand column is the one that governs now, since
@@ -406,8 +408,10 @@ tenant_requests_memory  ≤  19.26 − 13 − 4  =  2.26 Gi
 
 so the tenant's `requests.memory` is **fixed at 2.25 Gi (2304Mi)**, and NS-8's workload budget is
 sized to that envelope rather than to the 4 Gi rev 4 assumed. **If the measured `R` exceeds
-13.01 Gi, launch is blocked** and returns to the user with the same three options (smaller tenant /
-smaller reservation / second machine); if it comes in below 12.76 Gi the tenant may be raised toward
+13.0 Gi, launch is blocked** and returns to the user with the same three options (smaller tenant /
+smaller reservation / second machine). The formula's knife-edge is 13.01 Gi; the gate rounds down to
+13.0 because the formula's inputs are themselves rounded to 0.01 Gi and a 0.01 Gi margin sits inside
+that rounding error (§6 step 1). If `R` comes in below 12.76 Gi the tenant may be raised toward
 2.5 Gi,
 which is a recorded change, not an automatic one. (rev 2's "≈4.3 Gi slack" omitted the eviction
 reserve; rev 3 omitted `P_platform`; rev 4's 4 Gi tenant assumed a reservation the user has now
@@ -598,7 +602,13 @@ Three consequences of the smaller envelope, stated rather than discovered later:
 surges (`Recreate` is a Deployment-only strategy and would be invalid here — rev 3 was ambiguous);
 **nothing in this budget surges**: the StatefulSets cannot, and the web Deployment is pinned to
 `Recreate` precisely so it does not. The budgeted transient is therefore not a rollout surge at all
-— it is the backup Job or a debug Job, exactly one at a time.
+— it is a backup Job or a debug Job. Stated precisely, because the quota constrains aggregate
+consumption and not the shape of it: **the budget accommodates at most one conforming transient
+declaring 100m / 256Mi requests**. What holds Jobs to that declaration is the LimitRange
+(`max` 2 CPU / 3Gi per container, `defaultRequest` 50m/128Mi where a Job declares nothing) plus the
+aggregate `requests.memory: 2304Mi` quota, which refuses admission once the sum is exceeded. Several
+smaller Jobs could therefore run concurrently within the same aggregate — that is permitted and
+budgeted; what cannot happen is the aggregate being exceeded.
 
 The peak **requests** row is what must satisfy NS-4's feasibility formula. That reduction has
 already been made: D-3 fixed the tenant at 2.25 Gi, and NS-8's table above is the re-sized result —
@@ -996,15 +1006,25 @@ change nothing.
    unaccounted rows. **Gate-1 exit criterion; nothing below starts until it passes.**
 1. **Measurement (read-only, spans RTH):** high-percentile host CPU/memory across ≥5 representative
    sessions → `R`; **and** maximum pid count per OptionsEdge pod → the D-6 value (NS-4). **Then
-   apply NS-4's feasibility formula and confirm the tenant `requests.memory`; if `R > 13.01 Gi`,
+   apply NS-4's feasibility formula and confirm the tenant `requests.memory`; if `R > 13.0 Gi`,
    stop and obtain the user's decision.** Resolves D-6; confirms the D-3 envelope. *(Blocks step 2.)*
 
    The threshold follows from D-3, not from the superseded 4 Gi budget. NS-4's formula is
    `tenant_requests_memory ≤ 19.26 − R − M` with `M = 4 Gi`, i.e. `tenant ≤ 15.26 − R`. D-3 fixed
-   the tenant at **2.25 Gi**, which fits while `R ≤ 13.01 Gi`. The `11.25 Gi` figure that stood here
-   through rev 7 was the threshold for the **old 4 Gi** tenant budget; against the closed D-3
-   envelope it would have aborted on the expected measurement (`R ≈ 13 Gi`, the off-hours floor)
-   every single time — turning a feasibility gate into an unconditional stop.
+   the tenant at **2.25 Gi**, so the formula's knife-edge is `R = 13.01 Gi`.
+
+   **The gate is set at 13.0 Gi, not 13.01, deliberately.** The formula's inputs are rounded to
+   0.01 Gi — node capacity `62.23 Gi`, existing requests `38.97 Gi` — so a threshold quoted to the
+   second decimal claims a precision the arithmetic does not have, and at 13.01 the surviving margin
+   (0.01 Gi ≈ 10 MiB) is smaller than that rounding error. Rounding **down**, against the tenant, is
+   the only direction that cannot silently overcommit the node. A measurement in
+   `13.0 < R ≤ 13.01` is therefore not a pass with a thin margin: it returns to the user, which is
+   what a margin inside the noise floor deserves.
+
+   The `11.25 Gi` figure that stood here through rev 7 was the threshold for the **old 4 Gi** tenant
+   budget; against the closed D-3 envelope it would have aborted on the expected measurement
+   (`R ≈ 13 Gi`, the off-hours floor) every single time — turning a feasibility gate into an
+   unconditional stop.
 1.5. **Relocate kubelet state and pod logs off `/`** (NS-21, D-7) — full maintenance window: stop
    k3s, move `/var/lib/kubelet` and `/var/log/pods` to `/home`, add fstab bind mounts, verify the
    mounts are active **before** k3s starts. NS-V31 + the OptionsEdge health gate. **Shares the same
@@ -1102,7 +1122,7 @@ public exposure and teardown is private (NS-14).
 |---|---|---|
 | **D-1** | Bugzilla's database engine | **CLOSED (user, 2026-08-04): Bugzilla stays on MariaDB; Postgres is additionally provisioned as the namespace platform DB.** rev-11's REQ-4 pinning and REQ-10a backup design are untouched. **Still required before Gate 2: a named consumer for Postgres**, or it is an unused database |
 | **D-2** | Kafka at launch | **RESOLVED: one broker at 1 replica** — the requirement states the project needs its own Kafka; a zero-replica placeholder is rejected |
-| **D-3** | `system-reserved` `R`, and the tenant `requests.memory` | **CLOSED (user, 2026-08-04): keep the full host reservation (≈13 Gi) and shrink the tenant to 2.25 Gi.** `R` is still confirmed by the §6 step 1 measurement; **if it exceeds 13.01 Gi, launch is blocked** and returns to the user. 13.01 Gi is the exact point at which the formula's headroom equals the fixed 2.25 Gi tenant (NS-4) |
+| **D-3** | `system-reserved` `R`, and the tenant `requests.memory` | **CLOSED (user, 2026-08-04): keep the full host reservation (≈13 Gi) and shrink the tenant to 2.25 Gi.** `R` is still confirmed by the §6 step 1 measurement; **if it exceeds 13.0 Gi, launch is blocked** and returns to the user. The formula's knife-edge is 13.01 Gi — where headroom equals the fixed 2.25 Gi tenant — but the gate rounds down to 13.0, since the formula's inputs are rounded to 0.01 Gi and a 0.01 Gi margin is inside that error (NS-4, §6 step 1) |
 | **D-4** | Tenant egress to the public internet | Default **no**; any runtime need becomes an explicit allowlist entry with its own risk row |
 | **D-5** | OIDC back-channel under default-deny egress | **Split front/back-channel (option ii)**, conditional on verifying the packaged module's endpoint overrides and Keycloak's issuer behaviour; fallback (i) is broad outbound HTTPS and must be recorded as such |
 | **D-7** | NS-20 literal zero on `/` | **CLOSED (user, 2026-08-04): relocate `/var/lib/kubelet` and `/var/log/pods` onto `/home`** — option (a). Specified as **NS-21**, executed at §6 step 1.5. Node-wide and independently valuable, since `/` has only 38 GiB free |
@@ -1194,5 +1214,6 @@ full trading session (NS-12).
 **Accounting rule, stated so "exactly once" is unambiguous:** every rev-11 row has **exactly one
 disposition row here**, though a disposition may name **more than one successor** (R-12 names four).
 **Zero rev-11 rows are unaccounted for:** 27 verification rows (24 unchanged/extended, 3 superseded
-with named replacements), 13 risk rows (11 carried — one of them narrowed — 1 superseded with four
-successors, 0 discharged), and 16 REQ ids dispositioned in §4.
+with named replacements), 13 risk rows (**12 carried — one of those 12 narrowed rather than carried
+verbatim — and 1 superseded** with four successors; 0 discharged), and 16 REQ ids dispositioned
+in §4.
