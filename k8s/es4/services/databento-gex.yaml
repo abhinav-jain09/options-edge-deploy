@@ -90,6 +90,13 @@ spec:
           value: 'true'
         - name: DATABENTO_GEX_OI_PERSIST_LIVE_ENABLED
           value: 'true'
+        # The parent set the OI request must cover once the GLBX adapter (processing #557) is deployed.
+        # ES 0DTE is spread across these weekly roots, so a single-parent request silently misses exactly
+        # the strikes nearest spot: measured on es4 2026-08-04 the bootstrap seeded 405 of 730 legs and the
+        # chain rendered 0.00 GEX on every 5-point strike between 7750 and 7800 with spot at 7778 — every
+        # pod Ready, nothing logged. Inert while DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED stays false.
+        - name: DATABENTO_GEX_OI_PARENTS
+          value: ES,EW,E1A,E2A,E3A,E4A,E5A,E1B,E2B,E3B,E4B,E5B,E1C,E2C,E3C,E4C,E5C,E1D,E2D,E3D,E4D,E5D,EW1,EW2,EW3,EW4,EW5
         # ES-GEX-on-SPX JSON bridge (Gate-1 §3.1): tee each ES GexStrikeSnapshot to a self-describing JSON
         # record on es.options.databento.gex.spxbridge (es4 prefix). ARMED so it flows as soon as ES gex flows.
         # Consumed (mirrored) by the es-spx-align service. Additive; independent of the gex computation.

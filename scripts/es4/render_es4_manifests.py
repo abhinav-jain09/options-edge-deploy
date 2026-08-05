@@ -54,6 +54,25 @@ ES_ENV = {
         # restart-durable using the same DB path SPX uses, without the GLBX symbology adapter.
         {"name": "DATABENTO_GEX_OI_BASELINE_BACKFILL_ENABLED", "value": "true"},
         {"name": "DATABENTO_GEX_OI_PERSIST_LIVE_ENABLED", "value": "true"},
+        # The parent set the OI request must cover once the GLBX adapter above is enabled.
+        #
+        # ES 0DTE does NOT live under one parent: the near-dated chain is spread across the weekly
+        # roots below, so a single-parent request silently misses exactly the strikes nearest spot.
+        # Measured on es4 2026-08-04: the feed's own bootstrap seeded 405 of 730 legs, leaving 325
+        # unseeded, and the chain rendered 0.00 GEX on every 5-point strike between 7750 and 7800
+        # while spot sat at 7778 — with every pod Ready and nothing logged.
+        #
+        # Deliberately its OWN variable rather than a reuse of the feed's DATABENTO_OPTION_PARENTS
+        # (Gate-1 §4.2 decision D2): coupling them would let a feed-side change silently alter OI
+        # coverage. Kept in step with the feed's list by review, not by reference.
+        {"name": "DATABENTO_GEX_OI_PARENTS",
+         "value": "ES,EW,E1A,E2A,E3A,E4A,E5A,E1B,E2B,E3B,E4B,E5B,"
+                  "E1C,E2C,E3C,E4C,E5C,E1D,E2D,E3D,E4D,E5D,EW1,EW2,EW3,EW4,EW5"},
+        # ⚠️ DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED stays FALSE above until BOTH hold:
+        #   1. processing #557 (the GLBX instrument_id + definition-join adapter) is deployed here, and
+        #   2. this pod actually has a DATABENTO_API_KEY — without one the fetch self-disables, so
+        #      flipping the flag now would be a silent no-op that reads as "the fix did not work".
+        # The parent list is safe to ship ahead of the flip: it is inert while the fetch is off.
     ],
     "strike-flow-classifier": [
         {"name": "STRIKE_FLOW_CONTRACT_MULTIPLIER", "value": "50"},
