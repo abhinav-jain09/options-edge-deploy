@@ -13,9 +13,10 @@
 # THE LEVER. dealer-ledger-service is the largest non-critical consumer at exactly 2000m and sits
 # DOWNSTREAM of GEX (it consumes options.databento.gex.strike; the gateway reads GEX directly and
 # treats the dealer-ledger topics as optional), so it yields precisely the reservation gex needs
-# without touching the evidence-backed gex request. Paired with the unified-sr patch this brings the
-# FINAL render to 8350m, leaving 200m of deliberate headroom so a simultaneous reconciliation cannot
-# recreate the same race.
+# without touching the evidence-backed gex request. It is the first of several: with unified-sr the
+# render is 8350m, and the pressure-postgres-writer and es-open-direction patches take it to 8100m —
+# headroom the budget needs for a rollout surge that may overlap an operational Job, not merely for
+# steady state. scripts/ci/validate-dev-capacity.sh holds the current numbers.
 #
 # WHAT THIS COSTS (stated explicitly): the dealer-ledger UI plane is gone from the dev board;
 # close-direction-service stops receiving fresh dealer-ledger input; and the calibration chain goes

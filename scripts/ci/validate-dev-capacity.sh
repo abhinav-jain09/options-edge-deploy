@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 BUDGET_MCPU=8550
-CAPACITY_TARGETS=(dealer-ledger-service unified-sr-service pressure-postgres-writer)
+CAPACITY_TARGETS=(dealer-ledger-service unified-sr-service pressure-postgres-writer es-open-direction-service es-open-direction-postgres-writer)
 CLEANUP=scripts/ops/dev-cleanup.sh
 RENDER=$(mktemp); trap 'rm -f "$RENDER"' EXIT
 
@@ -29,7 +29,7 @@ kubectl kustomize k8s/overlays/dev > "$RENDER"
 
 # yq turns the multi-doc render into ONE json array; python's STDLIB json does the arithmetic.
 # Deliberately no PyYAML — the deploy-validation workflow provisions kubectl and yq only.
-yq -o=json eval-all '[select(.kind=="Deployment")]' "$RENDER" > "$RENDER.json"
+yq -o=json eval-all '[select(.kind=="Deployment" or .kind=="CronJob")]' "$RENDER" > "$RENDER.json"
 
 report=$(python3 - "$RENDER.json" "$BUDGET_MCPU" "${CAPACITY_TARGETS[@]}" <<'PYEOF'
 import json, sys
@@ -49,7 +49,22 @@ def mcpu(dep):
         total += int(v[:-1]) if v.endswith("m") else int(float(v) * 1000)
     return total
 
+cronjobs = [d for d in deployments if d["kind"] == "CronJob"]
+deployments = [d for d in deployments if d["kind"] == "Deployment"]
 by_name = {d["metadata"]["name"]: d for d in deployments}
+
+
+def job_mcpu(cj):
+    """CPU for one pod of a CronJob's job template."""
+    spec = cj["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+    total = 0
+    for c in spec.get("containers", []):
+        v = ((c.get("resources") or {}).get("requests") or {}).get("cpu")
+        if not v:
+            continue
+        v = str(v)
+        total += int(v[:-1]) if v.endswith("m") else int(float(v) * 1000)
+    return total
 
 for name in targets:
     dep = by_name.get(name)
@@ -81,14 +96,25 @@ if active > budget:
     sys.exit(0)
 
 headroom = budget - active
-if surge > headroom:
-    print(f"FAIL|'{surge_name}' rolls with RollingUpdate and needs {surge}m for its surge pod, but "
-          f"only {headroom}m is free.|service-deploy.sh would apply the new template and then wait "
-          f"on a rollout that can never schedule. Give it strategy Recreate on dev, or free more CPU.")
+
+# A rollout can overlap an operational Job. Every dev CronJob is suspend: true, but they are
+# triggered on demand (Jenkinsfile.kafka-cleanup) and the cleanup Job may run for 1800s — long
+# enough to sit under a whole rollout. The headroom has to cover BOTH.
+job, job_name = 0, "none"
+for cj in cronjobs:
+    c = job_mcpu(cj)
+    if c > job:
+        job, job_name = c, cj["metadata"]["name"]
+
+if surge + job > headroom:
+    print(f"FAIL|'{surge_name}' needs {surge}m for its RollingUpdate surge pod and the largest "
+          f"operational Job ('{job_name}') needs {job}m, but only {headroom}m is free.|"
+          f"A rollout overlapping that Job would wait on a pod that can never schedule — "
+          f"service-deploy.sh times out first. Free more CPU on dev.")
     sys.exit(0)
 
 print(f"OK|dev fleet: {active}m of {budget}m ({headroom}m headroom); "
-      f"largest RollingUpdate surge {surge}m ({surge_name})")
+      f"largest RollingUpdate surge {surge}m ({surge_name}) + largest Job {job}m ({job_name})")
 PYEOF
 )
 rm -f "$RENDER.json"

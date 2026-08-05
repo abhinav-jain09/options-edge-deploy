@@ -144,8 +144,8 @@ done
 echo "topic contracts: oi-anchor barrier, pure-compact verification, and the durable-preservation mutation suite passed"
 
 # ---------- 7) the dev CPU budget ----------
-# databento-gex-service's 2-CPU dev reservation only fits because two non-critical services are
-# held at 0 in BOTH the overlay and dev-cleanup's DISABLED_DEV. Missing either half puts GEX in
+# databento-gex-service's 2-CPU dev reservation only fits because several non-critical services
+# are held at 0 in BOTH the overlay and dev-cleanup's DISABLED_DEV. Missing either half puts GEX in
 # Pending with "Insufficient cpu" — which is how it went dark on 2026-08-05.
 if ! out=$(bash scripts/ci/validate-dev-capacity.sh 2>&1); then
   echo "FAIL: scripts/ci/validate-dev-capacity.sh"
