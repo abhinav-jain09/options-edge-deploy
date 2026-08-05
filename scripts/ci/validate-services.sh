@@ -153,5 +153,13 @@ if ! out=$(bash scripts/ci/validate-dev-capacity.sh 2>&1); then
   exit 1
 fi
 printf '%s\n' "$out" | tail -2 | sed 's/^/  /'
+# ...and the runtime interlock that covers what the static budget deliberately cannot: a rollout
+# starting while an operational Job holds CPU.
+if ! out=$(bash scripts/ci/dev-capacity-preflight-test.sh 2>&1); then
+  echo "FAIL: scripts/ci/dev-capacity-preflight-test.sh"
+  printf '%s\n' "$out" | sed 's/^/      /'
+  exit 1
+fi
+printf '%s\n' "$out" | tail -1 | sed 's/^/  /'
 
 echo "=== validate-services: OK ==="

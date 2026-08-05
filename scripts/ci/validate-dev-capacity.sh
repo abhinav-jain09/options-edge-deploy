@@ -100,7 +100,8 @@ headroom = budget - active
 
 # A rollout can overlap an operational Job. Every dev CronJob is suspend: true, but they are
 # triggered on demand (Jenkinsfile.kafka-cleanup) and the cleanup Job may run for 1800s — long
-# enough to sit under a whole rollout. The headroom has to cover BOTH.
+# enough to sit under a whole rollout. That overlap is REPORTED here and ENFORCED at deploy time by
+# scripts/deploy/dev-capacity-preflight.sh; only the standalone surge is asserted below.
 job, job_name = 0, "none"
 for cj in cronjobs:
     c = job_mcpu(cj)

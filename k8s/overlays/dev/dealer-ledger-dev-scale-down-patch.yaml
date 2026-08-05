@@ -1,7 +1,7 @@
 # DEV-ONLY capacity patch (2026-08-05). TEMPORARY — see RESTORING below.
 #
 # THE ARITHMETIC. The dev node is docker-desktop with 10 allocatable CPUs. kube-system takes 950m
-# and jenkins 500m, so options-edge has 8550m. Before these two patches the rendered dev fleet asked
+# and jenkins 500m, so options-edge has 8550m. Before these patches the rendered dev fleet asked
 # for 10600m, and with dealer-ledger alone it would still ask 8600m — 50m MORE than exists — because
 # databento-gex-service's dev overlay deliberately reserves 2 full CPUs
 # (databento-gex-preopen-dev-patch.yaml: at the base 250m its 8-thread Streams app fell ~1.1M
