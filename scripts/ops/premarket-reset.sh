@@ -203,7 +203,7 @@ log "identity guards PASSED"
 # is deliberately narrow — a broad `gamma-migration.*-changelog` also matched the SESSION
 # changelog, which would have carried yesterday's dwell and ladder into today through a reset
 # whose whole purpose is to start clean.
-PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring$|^options\.databento\.oi\.anchor-manifest$|gamma-migration-scorer-changelog$'
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring$|^options\.databento\.oi\.anchor-manifest$|gamma-migration-scorer-changelog$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
 log "calibration keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
 CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)
