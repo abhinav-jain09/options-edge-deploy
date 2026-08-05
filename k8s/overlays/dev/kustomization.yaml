@@ -121,6 +121,9 @@ patches:
   # gateway relays its status stream. Turns the legacy PREOPEN publisher OFF (mutually
   # exclusive by construction). Prod untouched — base flags stay false.
   - path: ibkr-preopen-gate-dev-patch.yaml
+  # DEV-ONLY capacity: frees the 2 CPUs databento-gex-service reserves on this 10-CPU node.
+  # Temporary — see the patch header for why and how to restore.
+  - path: dealer-ledger-dev-scale-down-patch.yaml
   # The gateway relay (and with it the browser-visible window) is deliberately NOT enabled in
   # this PR: R-ROLL orders beta (values live, UI dark) BEFORE gamma (user-visible), and the
   # conforming UI (option-chain handler + IBKR palette + truthful provenance) must be deployed

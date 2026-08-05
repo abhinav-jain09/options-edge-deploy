@@ -1,0 +1,22 @@
+# DEV-ONLY capacity patch (2026-08-05). The dev node is docker-desktop with 10 allocatable CPUs;
+# kube-system (950m) and jenkins (500m) take 1450m of it, leaving 8550m for options-edge. The
+# namespace's own requests are 8400m WITHOUT databento-gex-service, whose dev overlay deliberately
+# reserves 2 full CPUs (see databento-gex-preopen-dev-patch.yaml: at the base 250m the 8-thread
+# Streams app fell ~1.1M records behind on the 0DTE repartition). Those two facts cannot both hold:
+# after the 2026-08-05 02:02 local-registry outage every deployment rescheduled at once and
+# databento-gex-service lost the race, sitting Pending with "Insufficient cpu" while GEX went dark.
+#
+# dealer-ledger-service is the single largest non-critical consumer at exactly 2000m and is not on
+# the pre-open GEX path (it consumes the ledger plane; the option chain's GEX cells do not depend on
+# it), so it yields precisely the reservation the gex service needs.
+#
+# TEMPORARY — restore by deleting this patch + its kustomization entry. Deliberately NOT added to
+# dev-cleanup's DISABLED_DEV: that list is for services held down indefinitely, and this one should
+# come back as soon as the node has headroom (or the gex reservation is revisited).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dealer-ledger-service
+  namespace: options-edge
+spec:
+  replicas: 0
