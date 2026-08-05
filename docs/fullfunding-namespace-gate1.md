@@ -3,9 +3,12 @@
 **Status: GATE-1 REQUIREMENTS / PROPOSED — rev 8. AWAITING USER APPROVAL (gatekeeping Gate-1).
 Not implemented.**
 
-**rev 8 — three internal inconsistencies corrected, no requirement changed.** Found while reading
-the document end-to-end for approval; each was a place where an earlier revision's number survived a
-later decision:
+**rev 8 — eight internal inconsistencies corrected, no requirement changed.** Every one was a place
+where an earlier revision's number or claim survived a later decision. Three were found reading the
+document end-to-end for approval; Codex's review of those corrections found five more of the same
+class, listed after them.
+
+Found on the first pass:
 1. **§6 step 1's abort threshold was unreachable.** It still read `R > 11.25 Gi`, the threshold for
    the superseded **4 Gi** tenant budget. D-3 fixed the tenant at **2.25 Gi**, which NS-4's formula
    makes feasible while `R ≤ 13.01 Gi`. Against the expected measurement (`R ≈ 13 Gi`, the
@@ -19,8 +22,7 @@ later decision:
    D-3 as Gate-2 blockers after the user had closed them. It now records revs 5–8 and names the two
    blockers that actually remain: **D-6**, and **a named consumer for Postgres**.
 
-Codex's review of those three corrections found five more instances of the same class, all now
-fixed: NS-4's operative prose and the D-3 decision record still aborted at `R > 13 Gi` (so
+Found by Codex on review of those three, all now fixed: NS-4's operative prose and the D-3 decision record still aborted at `R > 13 Gi` (so
 `13.00 < R ≤ 13.01` both fitted and blocked); **R-21** still measured slack against the 4 Gi budget;
 **§4** still said D-1 awaited a decision; **NS-8** still described a rollout surge that `Recreate`
 makes impossible and a reduction trigger that D-3 had already applied; and the revision history
@@ -48,7 +50,9 @@ rev 3 → REQUEST_CHANGES (12 + corrections). **rev 4 implements every rev-3 fin
 ones being: the Ingress quota is raised to 1 (a `0` quota would have rejected the platform-owned
 Ingress it was meant to protect); NS-4 gains an explicit **`P_platform`** term and the feasibility
 threshold tightens to **R ≤ 11.5 Gi** (for the then-current 4 Gi budget); NS-8's arithmetic is corrected and restructured as
-**steady state + exactly one transient**, which the quota itself enforces; the direct-Pod denial is
+**steady state + exactly one transient** — rev 4 claimed the quota itself enforces that shape, which
+**NS-8 has since withdrawn**: a ResourceQuota constrains aggregate consumption, not the shape of it;
+the direct-Pod denial is
 re-expressed on the **requesting identity** (as this cluster's existing policy already does) so
 controller-created Pods are unaffected and the rule is unforgeable, and it is extended to
 `options-edge` so the CPU-limit prohibition has no Pod-level bypass; the disk-wall guard becomes an
@@ -556,10 +560,13 @@ bytes land on `/home`.
 
 ### NS-8 — Tenant platform services: a replica-weighted budget that fits
 Single replica each, never the host instances. **The three data services are StatefulSets at one
-replica**, whose rolling update terminates before it creates and therefore never surges; only the
-web Deployment surges, and that surge is the budgeted transient below. (`Recreate` / `maxSurge` are
-Deployment-only fields and are deliberately not used for the StatefulSets.) Every per-pod figure in
-the table is stated per pod **and** as a row total, so the totals cannot be misread.
+replica**, whose rolling update terminates before it creates and therefore never surges. **Nor does
+the web Deployment**: D-3's envelope left no room for a rollout surge, so it is pinned to
+`Recreate`, accepting brief downtime on a rollout. Nothing in this budget surges, and the budgeted
+transient below is therefore not a rollout at all — it is the backup Job or a debug Job, exactly one
+at a time. (`Recreate` / `maxSurge` are Deployment-only fields and are deliberately not used for the
+StatefulSets.) Every per-pod figure in the table is stated per pod **and** as a row total, so the
+totals cannot be misread.
 
 **Re-sized for D-3's 2.25 Gi envelope.** Every figure is per pod; row totals are stated so they
 cannot be misread.
@@ -1105,8 +1112,9 @@ public exposure and teardown is private (NS-14).
 
 - **Gate 1 (requirements):** this document. rev 1 → Codex REQUEST_CHANGES; rev 2 → REQUEST_CHANGES;
   rev 3 → REQUEST_CHANGES; rev 4 implemented every rev-3 finding; revs 5–7 recorded the user's D-1,
-  D-3 and D-7 decisions and the NS-21 side effects. **rev 8 corrects three internal inconsistencies
-  (below) and awaits the user's explicit approval.** No implementation before that approval.
+  D-3 and D-7 decisions and the NS-21 side effects. **rev 8 corrects eight internal inconsistencies
+  (three found on reading, five more found by Codex reviewing those) and awaits the user's explicit
+  approval.** No implementation before that approval.
 - **Gate 2 (implementation):** not started. **D-1, D-3 and D-7 are CLOSED.** Remaining Gate-2
   blockers: **D-6** (the `pod-max-pids` value, which comes from the §6 step-1 measurement or is
   dropped along with every PID isolation claim) and **a named consumer for Postgres** — D-1
