@@ -13,7 +13,8 @@
 # the deficit, which DISABLED_DEV would only repair at the next cleanup start. No Jenkins path
 # applies unified-sr-service from base.
 #
-# WHAT THIS COSTS: the S/R overlay is absent from the dev board while this is in place.
+# WHAT THIS COSTS: the S/R overlay is absent from the dev board, and strike-invasion loses the S/R
+# input it consumes, while this is in place.
 #
 # RESTORING: same four steps as the dealer-ledger patch (delete file, unwire from kustomization,
 # drop from DISABLED_DEV, re-run generate-service-slices.sh).
