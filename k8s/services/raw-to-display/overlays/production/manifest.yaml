@@ -150,6 +150,8 @@ spec:
               value: options.databento.display
             - name: KAFKA_DISPLAY_VOLUME_TOPIC
               value: options.databento.display.volume.current
+            - name: KAFKA_DATABENTO_GEX_STRIKE_TOPIC
+              value: options.databento.gex.strike
             - name: KAFKA_GAMMA_HISTORY_TOPIC
               value: options.databento.display.gamma.history
             - name: KAFKA_DISPLAY_STREAMS_APP_ID
