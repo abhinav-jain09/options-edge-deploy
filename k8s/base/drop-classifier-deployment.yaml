@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drop-classifier-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: drop-classifier-service
+    app.kubernetes.io/component: drop-classifier-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: drop-classifier-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: drop-classifier-service
+        app.kubernetes.io/component: drop-classifier-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: drop-classifier
+          image: 192.168.100.252:5000/options-edge-drop-classifier:dev
+          imagePullPolicy: Always
+          # SHADOW instant LIQUIDITY_SWEEP-vs-REAL_DROP nowcast
+          # (docs/drop-classifier/DESIGN.md v1, Codex r3; backtest v2 report:
+          # BACKTEST-REPORT-V2-ES-TAPE.md). Cross-broker by design in prod:
+          # ES tape + delta-flow + es.drop.* outputs on the es4 broker (.4);
+          # gamma-migration context + optional VIX diagnostic on the local
+          # prod broker; SCHEMA_REGISTRY_URL comes from the shared configmap.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: ENGINE_MODE
+              value: SHADOW
+            - name: HEALTH_PORT
+              value: "8125"
+            - name: DROP_UNDERLYING_MODE
+              value: ES_TRADES
+            - name: DROP_UNDERLYING_BOOTSTRAP
+              value: 192.168.100.4:9092
+            - name: DROP_UNDERLYING_TOPIC
+              value: es.underlying.es.trades
+            - name: DROP_FLOW_BOOTSTRAP
+              value: 192.168.100.4:9092
+            - name: DROP_FLOW_TOPIC
+              value: es.delta-flow-by-trade
+            - name: DROP_OUTPUT_BOOTSTRAP
+              value: 192.168.100.4:9092
+            # SHADOW corpus persistence (owner requirement): final-summary and
+            # outcome topics are compacted; nowcast retention is pinned by the
+            # service (default 7 d) and nightly-archived by oe-archive-kafka.
+            - name: DROP_NOWCAST_RETENTION_MS
+              value: "604800000"
+            - name: DROP_GAMMA_BOOTSTRAP
+              value: 192.168.100.252:9092
+            - name: DROP_GAMMA_TOPIC
+              value: options.spx.gamma-migration.current
+            - name: DROP_VIX_BOOTSTRAP
+              value: 192.168.100.252:9092
+            - name: DROP_VIX_TOPIC
+              value: underlying.vix.price
+            - name: DROP_LOOKBACK_MINUTES
+              value: "30"
+            # unified-sr is NOT deployed on prod yet (.2 only): SR stays
+            # disabled and F4-wall reports UNAVAILABLE (never fabricated).
+            # Flip DROP_SR_BOOTSTRAP when options.spx.strike-sr.current lands.
+            - name: DROP_SR_BOOTSTRAP
+              value: ""
+            # F3/F6 TOD baselines: prior-20-session aggregate produced by
+            # scripts/build_size_stats.py from the archived ES tape corpus.
+            - name: DROP_SIZE_STATS_PATH
+              value: /etc/drop-classifier/size_stats.json
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx1024m"
+          volumeMounts:
+            - name: size-stats
+              mountPath: /etc/drop-classifier
+              readOnly: true
+          ports:
+            - name: health
+              containerPort: 8125
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            # readiness = catch-up complete; warmup replays 30 min of tape
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: size-stats
+          configMap:
+            name: drop-classifier-size-stats
+            optional: true

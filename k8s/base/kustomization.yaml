@@ -38,6 +38,9 @@ resources:
   - spread-skew-service.yaml
   - reversal-confirmation-deployment.yaml
   - reversal-confirmation-service.yaml
+  - drop-classifier-deployment.yaml
+  - drop-classifier-service.yaml
+  - drop-classifier-size-stats-configmap.yaml
   - spread-skew-postgres-writer-deployment.yaml
   - spread-skew-postgres-writer-service.yaml
   - strike-liquidity-heatmap-deployment.yaml
