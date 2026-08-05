@@ -1,0 +1,13 @@
+# GENERATED from scripts/build_size_stats.py aggregate (prior-20-session TOD baselines,
+# 2026-08-05 corpus). Regenerate + redeploy monthly; the mount is optional so an absent
+# or stale file degrades F3/F6 to UNAVAILABLE, never crashes.
+apiVersion: v1
+data:
+  size_stats.json: '{"aggregate":{"36":{"p40":1,"p90":5,"optRate":null,"volRate":13.3078},"37":{"p40":1,"p90":6,"optRate":null,"volRate":12.5578},"38":{"p40":1,"p90":6,"optRate":350.4156,"volRate":93.4233},"39":{"p40":1,"p90":5,"optRate":253.3644,"volRate":64.7489},"40":{"p40":1,"p90":6,"optRate":201.4544,"volRate":63.5989},"41":{"p40":1,"p90":6,"optRate":190.1011,"volRate":57.57},"42":{"p40":1,"p90":6,"optRate":162.6011,"volRate":47.8678},"43":{"p40":1,"p90":6,"optRate":172.29,"volRate":40.4422},"44":{"p40":1,"p90":6,"optRate":176.6756,"volRate":45.5322},"45":{"p40":1,"p90":6,"optRate":146.5033,"volRate":38.5267},"46":{"p40":1,"p90":6,"optRate":155.2189,"volRate":45.3711},"47":{"p40":1,"p90":6,"optRate":147.8011,"volRate":31.68},"48":{"p40":1,"p90":6,"optRate":125.5044,"volRate":31.5411},"49":{"p40":1,"p90":6,"optRate":126.06,"volRate":26.4556},"50":{"p40":1,"p90":6,"optRate":120.5333,"volRate":28.0967},"51":{"p40":1,"p90":6,"optRate":110.1978,"volRate":27.0189},"52":{"p40":1,"p90":6,"optRate":104.9589,"volRate":23.4289},"53":{"p40":1,"p90":6,"optRate":117.8767,"volRate":22.2667},"54":{"p40":1,"p90":6,"optRate":124.7256,"volRate":22.1333},"55":{"p40":1,"p90":6,"optRate":124.7767,"volRate":23.0622},"56":{"p40":1,"p90":6,"optRate":149.0311,"volRate":22.3311},"57":{"p40":1,"p90":6,"optRate":120.7922,"volRate":23.2122},"58":{"p40":1,"p90":6,"optRate":117.4756,"volRate":21.9},"59":{"p40":1,"p90":6,"optRate":122.79,"volRate":20.7044},"60":{"p40":1,"p90":6,"optRate":179.7967,"volRate":23.4211},"61":{"p40":1,"p90":7,"optRate":162.9322,"volRate":24.0467},"62":{"p40":1,"p90":7,"optRate":207.2933,"volRate":34.58},"63":{"p40":1,"p90":9,"optRate":308.4578,"volRate":126.5556},"64":{"p40":1,"p90":9,"optRate":null,"volRate":34.9744},"65":{"p40":1,"p90":7,"optRate":null,"volRate":7.9556},"66":{"p40":1,"p90":7,"optRate":null,"volRate":4.4211},"67":{"p40":1,"p90":7,"optRate":null,"volRate":5.8344}}}'
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/name: drop-classifier-service
+    app.kubernetes.io/part-of: options-edge
+  name: drop-classifier-size-stats
+  namespace: options-edge
