@@ -33,7 +33,11 @@ pipeline {
     // §13.6 deploy locking: one web deploy at a time (covers all envs of this job —
     // conservative, plugin-free serialisation).
     disableConcurrentBuilds()
-    timeout(time: 45, unit: 'MINUTES')
+    // 120 min, not 45: during US market hours the agent Mac runs the dev k8s stack plus live
+    // trading apps (load avg 60+), and the validate-services.sh stage alone has been measured
+    // at 44+ min (builds #405/#406, 2026-08-06) vs its ~2-4 min idle baseline. 45 min made
+    // market-hours deploys abort mid-chain; the lock above still serialises runs.
+    timeout(time: 120, unit: 'MINUTES')
   }
   environment {
     KUBECONFIG  = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
