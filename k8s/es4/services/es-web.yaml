@@ -64,6 +64,10 @@ spec:
         # browser loads show an empty chain all evening (options-edge PR#258). SPX now aligns to 17:30.
         - name: IB_EXPIRY_ROLL_AFTER
           value: "17:30"
+        # GexStrikeTopicListener does not apply TOPIC_PREFIX to its app default. Bind the ES topic
+        # explicitly so /api/greeks consumes the live ES per-strike snapshots.
+        - name: KAFKA_GEX_STRIKE_TOPIC
+          value: es.options.databento.gex.strike
         - name: DEALER_LEDGER_UI_VISIBLE
           value: "true"
         # PRODUCTION Keycloak auth (same realm + client + audience as prod).
