@@ -117,7 +117,7 @@ spec:
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx1024m
             - name: REVERSAL_HUNT_ENABLED
-              value: "true"
+              value: "false"
             - name: REVERSAL_HUNT_SPX_BOOTSTRAP
               value: 192.168.100.252:9092
             - name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS

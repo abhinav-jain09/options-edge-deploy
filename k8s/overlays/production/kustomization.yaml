@@ -37,7 +37,7 @@ patches:
         path: /spec/template/spec/containers/0/env/-
         value:
           name: REVERSAL_HUNT_ENABLED
-          value: "true"
+          value: "false"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
