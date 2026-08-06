@@ -124,6 +124,11 @@ spec:
               value: "true"
             - name: REVERSAL_HUNT_SPX_BOOTSTRAP
               value: 192.168.100.252:9092
+            # prod's passive tune is 28t/30b: the hunt filter must be a
+            # STRICT subset, so its duration floor rises to the passive 30b
+            # (60 s) — depth (40t > 28t) carries the strictness
+            - name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS
+              value: "30"
           envFrom:
             - configMapRef:
                 name: options-edge-config
