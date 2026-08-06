@@ -179,52 +179,22 @@ PYEOF
         }
       }
     }
-    stage('Reconcile feed-gateway expiry') {
-      when { expression { params.SERVICE == 'feed-gateway' } }
-      steps {
-        // The standalone slice intentionally contains only this service's workload, not the shared
-        // ConfigMap. Reconcile the one gateway-owned selection key before rolling the pod so envFrom
-        // can never revive a blank literal expiry and drop the entire live option chain.
-        sh '''
-          set -euo pipefail
-          current="$(kubectl -n options-edge get configmap options-edge-config \
-            -o jsonpath='{.data.IB_EXPIRY}')"
-          if [ "$current" = "AUTO" ]; then
-            echo "options-edge-config IB_EXPIRY is already AUTO."
-          elif [ "${DEPLOY_DRY_RUN_PARAM:-false}" = "true" ]; then
-            echo "[dry-run] would change options-edge-config IB_EXPIRY from [$current] to AUTO."
-          else
-            kubectl -n options-edge patch configmap options-edge-config --type=merge \
-              --patch '{"data":{"IB_EXPIRY":"AUTO"}}'
-            observed="$(kubectl -n options-edge get configmap options-edge-config \
-              -o jsonpath='{.data.IB_EXPIRY}')"
-            [ "$observed" = "AUTO" ] || {
-              echo "FATAL: IB_EXPIRY reconcile did not persist AUTO (observed [$observed])." >&2
-              exit 1
-            }
-          fi
-        '''
-      }
-    }
-    stage('Ensure topic prerequisites') {
-      // ONE gate for EVERY service whose producer needs a Kafka topic to EXIST with a specific
-      // shape (partitions, cleanup.policy, retention) before it starts — otherwise the broker
-      // auto-creates it with cluster defaults that drop each session's record 24h later while
-      // still looking configured. BEFORE the rollout, while the prior pod (if any) still serves.
+    stage('Ensure service prerequisites') {
+      // ONE gate for EVERY per-service thing that must be TRUE before the pod rolls — a Kafka topic
+      // that EXISTS with a specific shape (else the broker auto-creates it with cluster defaults
+      // that drop each session's record 24h later while still looking configured), or a ConfigMap
+      // key reconciled (feed-gateway IB_EXPIRY -> AUTO so envFrom can't revive a blank expiry).
+      // BEFORE the rollout, while the prior pod (if any) still serves.
       //
-      // Dispatch is data-driven in scripts/kafka/ensure-service-topics.sh: a new service adds ONE
-      // case line there, NEVER a new `when { SERVICE == 'x' }` stage in this file. Currently covers
-      // databento-gex (OI anchor manifest), strike-intelligence (gamma-tilt evidence ledger), and
-      // vix-option-inteligence (current-topic reconcile, topic phase). A no-op for every other
-      // service, so the single unguarded stage is safe to always run.
-      // The dispatcher OWNS its Kafka setup (PATH + load-kafka-settings) and only runs it for a
-      // mapped service, so this always-run stage is a true no-op for everything else — an unrelated
-      // Kafka-settings failure can never block a service that has no topic to ensure (Codex P1).
-      when { expression { !params.DEPLOY_DRY_RUN } }
+      // Dispatch is data-driven in scripts/deploy/ensure-service-prereqs.sh: a new service adds ONE
+      // case line there, NEVER a new `when { SERVICE == 'x' }` stage in this file. The dispatcher
+      // owns its own setup (Kafka PATH/settings, kubectl) and per-concern dry-run policy (ConfigMap
+      // reconciles preview; topic ensures skip so they never mutate), and is a true no-op for every
+      // unmapped service — so this single stage always runs and can't be blocked by unrelated setup.
       steps {
         sh '''
           set -euo pipefail
-          scripts/kafka/ensure-service-topics.sh "$SERVICE_PARAM"
+          scripts/deploy/ensure-service-prereqs.sh "$SERVICE_PARAM" "${DEPLOY_DRY_RUN_PARAM:-false}"
         '''
       }
     }
@@ -233,7 +203,7 @@ PYEOF
         expression { params.SERVICE == 'vix-option-inteligence' && !params.DEPLOY_DRY_RUN }
       }
       steps {
-        // The current-topic reconcile (topic phase) already ran in 'Ensure topic prerequisites'
+        // The current-topic reconcile (topic phase) already ran in 'Ensure service prerequisites'
         // while the service was still serving. Only the identity prune needs the outage window,
         // which is all that remains here.
         // Pause and prune. The monolith Jenkinsfile does the same thing for the other ~40
