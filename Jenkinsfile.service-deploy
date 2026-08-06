@@ -206,54 +206,37 @@ PYEOF
         '''
       }
     }
-    stage('Verify OI anchor manifest topic') {
-      // BEFORE the rollout, not after: the point is to stop a producer reaching a topic that does
-      // not exist yet. apply-topics lives in a different job, and two manually sequenced jobs are
-      // not an ordering guarantee -- skip it, run it against the wrong environment, or have it
-      // fail quietly, and the broker auto-creates the topic with cluster defaults that drop each
-      // session's record 24h later while still looking configured.
-      when {
-        expression { params.SERVICE == 'databento-gex' && !params.DEPLOY_DRY_RUN }
-      }
+    stage('Ensure topic prerequisites') {
+      // ONE gate for EVERY service whose producer needs a Kafka topic to EXIST with a specific
+      // shape (partitions, cleanup.policy, retention) before it starts — otherwise the broker
+      // auto-creates it with cluster defaults that drop each session's record 24h later while
+      // still looking configured. BEFORE the rollout, while the prior pod (if any) still serves.
+      //
+      // Dispatch is data-driven in scripts/kafka/ensure-service-topics.sh: a new service adds ONE
+      // case line there, NEVER a new `when { SERVICE == 'x' }` stage in this file. Currently covers
+      // databento-gex (OI anchor manifest), strike-intelligence (gamma-tilt evidence ledger), and
+      // vix-option-inteligence (current-topic reconcile, topic phase). A no-op for every other
+      // service, so the single unguarded stage is safe to always run.
+      // The dispatcher OWNS its Kafka setup (PATH + load-kafka-settings) and only runs it for a
+      // mapped service, so this always-run stage is a true no-op for everything else — an unrelated
+      // Kafka-settings failure can never block a service that has no topic to ensure (Codex P1).
+      when { expression { !params.DEPLOY_DRY_RUN } }
       steps {
         sh '''
           set -euo pipefail
-          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          . scripts/kafka/load-kafka-settings.sh
-          scripts/kafka/ensure-oi-anchor-topic.sh
+          scripts/kafka/ensure-service-topics.sh "$SERVICE_PARAM"
         '''
       }
     }
-    stage('Verify gamma-tilt evidence ledger') {
-      // GMT Stage-1 (Codex code-review c1-6): the shadow evidence ledger must exist with the
-      // right shape (1 partition, delete, retention.ms=-1) BEFORE strike-intelligence rolls out.
-      // The service also refuses at boot; this stops the deploy before a crash-looping pod ships.
-      when {
-        expression { params.SERVICE == 'strike-intelligence' && !params.DEPLOY_DRY_RUN }
-      }
-      steps {
-        sh '''
-          set -euo pipefail
-          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          . scripts/kafka/load-kafka-settings.sh
-          scripts/kafka/ensure-gamma-tilt-ledger.sh
-        '''
-      }
-    }
-    stage('Reconcile VIX option intelligence current topic') {
+    stage('Retire VIX option intelligence identity') {
       when {
         expression { params.SERVICE == 'vix-option-inteligence' && !params.DEPLOY_DRY_RUN }
       }
       steps {
-        // Topic reconcile FIRST, while the service is still serving. Only the identity prune
-        // needs the service down, so nothing else belongs inside the outage window.
-        sh '''
-          set -euo pipefail
-          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          . scripts/kafka/load-kafka-settings.sh
-          RECONCILE_PHASE=topic scripts/kafka/ensure-vix-option-inteligence-topic.sh
-        '''
-        // Then pause and prune. The monolith Jenkinsfile does the same thing for the other ~40
+        // The current-topic reconcile (topic phase) already ran in 'Ensure topic prerequisites'
+        // while the service was still serving. Only the identity prune needs the outage window,
+        // which is all that remains here.
+        // Pause and prune. The monolith Jenkinsfile does the same thing for the other ~40
         // services ('Pause Runtime For Kafka Cleanup' before 'Kafka Cleanup'); this is that
         // pattern scoped to the single service this pipeline deploys. Retiring an identity a
         // live pod still holds can never converge -- the prune deletes the group and the
