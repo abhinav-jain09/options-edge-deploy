@@ -56,6 +56,8 @@ pipeline {
     string(name: 'ES_OPEN_DIRECTION_IMAGE', defaultValue: '', description: 'ES open-direction service image')
     string(name: 'CLOSE_DIRECTION_IMAGE', defaultValue: '', description: 'SPX close-direction service image')
     string(name: 'SPOT_VOL_REGIME_IMAGE', defaultValue: '', description: 'SPX spot-vol-regime service image')
+    string(name: 'INDICATOR_SERVICE_IMAGE', defaultValue: '', description: '0DTE indicator service image')
+    string(name: 'DROP_CLASSIFIER_IMAGE', defaultValue: '', description: 'Drop classifier service image')
     string(name: 'OI_SHADOW_IMAGE', defaultValue: '', description: 'SPXW open-interest shadow experiment image')
     string(name: 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'ES open-direction postgres writer image')
     string(name: 'REVERSAL_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Reversal calibration postgres writer image')
@@ -385,6 +387,7 @@ pipeline {
             'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE': 'es-open-direction-postgres-writer',
             'CLOSE_DIRECTION_IMAGE': 'close-direction',
             'SPOT_VOL_REGIME_IMAGE': 'spot-vol-regime',
+            'INDICATOR_SERVICE_IMAGE': 'indicator-service',
             'OI_SHADOW_IMAGE': 'oi-shadow',
             'REVERSAL_POSTGRES_WRITER_IMAGE': 'reversal-postgres-writer',
             'STRIKE_FLOW_AVRO_ADAPTER_IMAGE': 'strike-flow-avro-adapter', 'GEX_DELTA_REDIS_WRITER_IMAGE': 'gex-delta-redis-writer',

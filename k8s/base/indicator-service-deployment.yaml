@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: indicator-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: indicator-service
+    app.kubernetes.io/component: indicator-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Single-writer invariant (rev 14 §7.3): ONE canonical indicator stream per env —
+  # replicas=1 + Recreate; a single-symbol EOS Streams app cannot be scaled out.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: indicator-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: indicator-service
+        app.kubernetes.io/component: indicator-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: indicator-service
+          image: 192.168.100.252:5000/options-edge-indicator-service:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8133"
+            # dev/prod = SPX mode on the local synthetic spot; es4 overlay flips to
+            # ES_TRADES + LIVENESS_SESSION=globex + INDICATOR_INPUT_PARTITIONS=4.
+            - name: INDICATOR_SOURCE_MODE
+              value: "SPX_PRICE"
+            - name: LIVENESS_SESSION
+              value: "rth"
+            - name: INDICATOR_INPUT_PARTITIONS
+              value: "1"
+            # §6.10: reconstruct from the retained bars topic when the changelog is
+            # lost (guarded plain-consumer tail scan).
+            - name: INDICATOR_COLD_BOOTSTRAP
+              value: "true"
+            # §3.1 genesis fence: FALSE in steady state. Set true EXACTLY ONCE via a
+            # temporary overlay patch on first deployment per environment, then
+            # revert (runbook in the requirement doc).
+            - name: INDICATOR_EPOCH_GENESIS
+              value: "false"
+            - name: INDICATOR_STATE_DIR
+              value: /home/options-edge/indicator-service/state
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx1536m"
+          volumeMounts:
+            - name: state
+              mountPath: /home/options-edge/indicator-service/state
+          ports:
+            - name: health
+              containerPort: 8133
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          # §9 sizing: 2 GiB memory / state disk via emptyDir below; CPU limit
+          # intentionally absent, matching every sibling service.
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: state
+          emptyDir:
+            sizeLimit: 5Gi
