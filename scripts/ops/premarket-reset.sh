@@ -175,11 +175,17 @@ fi
 log "identity guards PASSED"
 
 # Candidate topics = everything except Kafka system topics and the explicit
-# CALIBRATION keep-list. es.reversal.final-summary + es.reversal.outcome are
-# compacted, bounded corpora whose entire purpose is cross-day accumulation
-# (the reversal engine's ground-truth dataset, design §14 promotion gate) —
-# same preservation principle as the clean-slate dealer-ledger exemption.
-# Rolling streams (es.reversal.verdicts/strength) stay purgeable by design.
+# DURABLE keep-list. es.reversal.final-summary + es.reversal.outcome are the
+# CALIBRATION topics: compacted, bounded corpora whose entire purpose is
+# cross-day accumulation (the reversal engine's ground-truth dataset, design
+# §14 promotion gate) — same preservation principle as the clean-slate
+# dealer-ledger exemption. The ARMED-HUNT program adds its contract-mandated
+# purge-exempt topics: es.reversal.hunt.state (compacted derived hunt state —
+# an armed hunt must survive the nightly reset), es.reversal.hunt.alerts
+# (7 d one-shot transitions, delete-cleaned but cross-day), and the wall
+# break-rate dataset (compacted, versioned). Rolling streams
+# (es.reversal.verdicts/strength, hunt status/commands) stay purgeable by
+# design.
 #
 # spx.basis.state (2026-07-28) is the ES->SPX basis engine's CROSS-DAY durable
 # state by design (retention.ms=-1: STATE_CURRENT restart authority, per-
@@ -203,9 +209,9 @@ log "identity guards PASSED"
 # is deliberately narrow — a broad `gamma-migration.*-changelog` also matched the SESSION
 # changelog, which would have carried yesterday's dwell and ladder into today through a reset
 # whose whole purpose is to start clean.
-PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring$|^options\.databento\.oi\.anchor-manifest$|gamma-migration-scorer-changelog$'
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^es\.reversal\.hunt\.(state|alerts)$|^options\.spx\.wall-break-rates\.dataset$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring$|^options\.databento\.oi\.anchor-manifest$|gamma-migration-scorer-changelog$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
-log "calibration keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
+log "durable keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
 CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)
 NTOPICS=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
 log "topics to purge: $NTOPICS (system topics excluded)"
