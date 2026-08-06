@@ -80,6 +80,12 @@ spec:
               value: es.reversal.outcome
             - name: REVERSAL_GROUP_ID
               value: reversal-confirmation
+            # Armed bottom/top hunt (requirement rev 5): PROD-enabled; hunt
+            # thresholds/topics keep their contract defaults (40t/15b etc.)
+            - name: REVERSAL_HUNT_ENABLED
+              value: "true"
+            - name: REVERSAL_HUNT_SPX_BOOTSTRAP
+              value: 192.168.100.252:9092
             - name: REVERSAL_MIN_DECLINE_TICKS
               value: "28"
             - name: REVERSAL_MIN_DECLINE_BUCKETS
