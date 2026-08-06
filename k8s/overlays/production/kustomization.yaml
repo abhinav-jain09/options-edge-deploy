@@ -26,6 +26,23 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PROD-ONLY: arm the reversal hunt (requirement rev 5). MIRRORS the
+  # standalone overlay k8s/services/reversal-confirmation/overlays/production
+  # exactly — validate-services enforces the render equality.
+  - target:
+      kind: Deployment
+      name: reversal-confirmation-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_ENABLED
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_SPX_BOOTSTRAP
+          value: 192.168.100.252:9092
   # greek-move-authenticity: ENABLED on PROD (go-live — advisory-only, CHARM_SIGN pinned by the
   # Gate-1 fixture, options-edge-processing #409). Strategic-merge on env name (namespace required).
   # MUST MIRROR the standalone slice k8s/services/greek-move-authenticity/overlays/production (validate-services).
