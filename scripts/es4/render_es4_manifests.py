@@ -41,9 +41,24 @@ SERVICES = [
     "pressure-postgres-writer", "raw-to-display", "strike-flow-avro-adapter", "strike-flow-classifier",
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
     "greek-move-authenticity", "gamma-migration",
+    "indicator-service",
 ]
 
 ES_ENV = {
+    "indicator-service": [
+        # 0DTE indicator service (rev 14 §7.3): es4 is the SOLE ES indicator producer. The
+        # production slice ships SPX mode; flip every mode-scoped knob here. Topics prefix via
+        # TOPIC_PREFIX at runtime (outputs land as es.options.indicators.* and the two output
+        # topics are mirrored VERBATIM to dev+prod by Jenkinsfile.es-indicator-mirror).
+        {"name": "INDICATOR_SOURCE_MODE", "value": "ES_TRADES", "_override": True},
+        # ES trades flow ~23h/day; the shared liveness gate must watch the Globex session,
+        # not NYSE RTH, or the pod restarts all night on a healthy feed.
+        {"name": "LIVENESS_SESSION", "value": "globex", "_override": True},
+        # es4's es.underlying.es.trades is 4 partitions (the es4 topic-partition contract);
+        # the admission watermark blocks on UNSEEN partitions, so an under-declared count
+        # would silently release records early — must match the live topic exactly.
+        {"name": "INDICATOR_INPUT_PARTITIONS", "value": "4", "_override": True},
+    ],
     "close-direction": [
         # es4 chains carry symbol "ES" (the es-prefixed dealer-ledger profile stream); the
         # engine's 0DTE chain selector must match it, not the SPX default. Topics prefix via

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: indicator-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: indicator-service
+    app.kubernetes.io/component: indicator-service
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8133"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: indicator-service
+  ports:
+    - name: health
+      port: 8133
+      targetPort: health
