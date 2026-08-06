@@ -22,7 +22,7 @@
 
 | | **DEV** | **PROD** |
 |---|---|---|
-| Cluster | docker-desktop (on the Mac) | k3s: **A `192.168.100.252`** + **B `192.168.100.4`** |
+| Cluster | docker-desktop (on the Mac) | k3s: single node **`192.168.100.252`** (`.4` decommissioned) |
 | OS / CPU | macOS / Apple Silicon | CentOS Stream 9 / **x86_64** |
 | **Image platform (`BUILD_PLATFORM`)** | **`linux/arm64`** | **`linux/amd64`** |
 | Image registry | local docker-desktop (`host.docker.internal:5001`) | **`192.168.100.252:5000`** |

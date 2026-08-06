@@ -17,7 +17,7 @@ set -uo pipefail
 
 # ---- config (override via env) ----
 KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/kafka_2.13-4.3.0/bin}"
-BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092,192.168.100.4:9092}"
+BOOTSTRAP="${KAFKA_BOOTSTRAP_SERVERS:-192.168.100.252:9092}"
 CONTROL_TOPIC="${CONTROL_TOPIC:-options.databento.control}"   # dev: dev.options.databento.control
 SYMBOL="${SYMBOL:-SPX}"
 SOURCE="${MARKET_DATA_SOURCE:-DATABENTO}"
