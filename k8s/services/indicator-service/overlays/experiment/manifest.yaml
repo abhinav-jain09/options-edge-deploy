@@ -70,6 +70,8 @@ spec:
               value: "true"
             - name: INDICATOR_EPOCH_GENESIS
               value: "false"
+            - name: INDICATOR_SESSION_BACKFILL
+              value: "true"
             - name: INDICATOR_STATE_DIR
               value: /home/options-edge/indicator-service/state
             - name: JAVA_TOOL_OPTIONS

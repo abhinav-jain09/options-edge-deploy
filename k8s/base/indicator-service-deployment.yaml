@@ -52,6 +52,11 @@ spec:
             # revert (runbook in the requirement doc).
             - name: INDICATOR_EPOCH_GENESIS
               value: "false"
+            # Backfill design §1: a checkpoint-less start replays the retained
+            # session from the calendar anchor (pre-start planner; manifest in the
+            # compacted bootstrap-control topic prevents replay-on-every-deploy).
+            - name: INDICATOR_SESSION_BACKFILL
+              value: "true"
             - name: INDICATOR_STATE_DIR
               value: /home/options-edge/indicator-service/state
             - name: JAVA_TOOL_OPTIONS
