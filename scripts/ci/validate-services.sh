@@ -143,4 +143,21 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
 done
 echo "topic contracts: oi-anchor barrier, pure-compact verification, and the durable-preservation mutation suite passed"
 
+# --- continuous auto-hunt production acceptance (auto-arm req §3.1) ---
+# Both flags must be true in BOTH prod mirrors: a deploy where either is
+# missing ships the feature inert, and the requirement makes that a
+# deploy-time failure, not a runtime surprise. (Values are quoted "true"
+# in the manifests; the JSON-patch overlay carries the same literal.)
+echo "=== 7) continuous auto-hunt: production flags present in both mirrors ==="
+for f in k8s/overlays/production/kustomization.yaml \
+         k8s/services/reversal-confirmation/overlays/production/manifest.yaml; do
+  for flag in REVERSAL_HUNT_ENABLED REVERSAL_HUNT_AUTO_ARM; do
+    if ! grep -A1 "name: $flag" "$f" | grep -q '"true"'; then
+      echo "FAIL: $flag is not \"true\" in $f — the always-armed hunt would deploy inert"
+      exit 1
+    fi
+  done
+done
+echo "auto-hunt flags: REVERSAL_HUNT_ENABLED + REVERSAL_HUNT_AUTO_ARM true in both prod mirrors"
+
 echo "=== validate-services: OK ==="
