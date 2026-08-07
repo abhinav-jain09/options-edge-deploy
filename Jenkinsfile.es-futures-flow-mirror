@@ -9,6 +9,12 @@
 // create es4.* / mm2-*.internal topics on the target -> pollution. MM1 --whitelist mirrors ONLY
 // the one topic, byte-copy, identity name, no heartbeat/checkpoint machinery. (Verified 2026-07-19.)
 //
+// The Verify stage enforces that as a DELTA, not an absolute: Preflight snapshots the target's
+// topic list before install and Verify fails only on pattern matches that appear AFTER it. Prod
+// permanently carries four dead-MM2 leftovers (heartbeats, mm2-{configs,offsets,status}.es4.internal)
+// that an absolute check read as this mirror's pollution, failing every prod install of the sibling
+// indicator mirror (builds #6/#7/#8, 2026-08-06); this job carried the identical check.
+//
 // The job runs on the 'local-mac' agent (the dev Mac, which IS the target for dev). It generates
 // the config + installs a KeepAlive launchd unit; NOTHING is hand-edited.
 pipeline {
@@ -32,6 +38,16 @@ pipeline {
     PLIST = "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-futures-flow-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}.plist"
     SRC   = "${params.SOURCE_ES_CLUSTER_IP}:${params.SOURCE_PORT}"
     TGT   = "${params.TARGET_SPX_CLUSTER_IP}:${params.TARGET_PORT}"
+    // Target-only slug, naming the approved-legacy-topics allow-list. That list is a property of
+    // the BROKER, not of any one mirror, so all three ES mirror jobs must resolve the SAME filename
+    // for the same target — this is deliberately its own definition rather than a reuse of SLUG, so
+    // that adding a topic to the launchd identity (as the indicator mirror did) can never silently
+    // re-point the allow-list at a file that does not exist and fail-close every prod install.
+    TSLUG = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
+    // Single definition of the MM2-pollution pattern, shared by the Preflight baseline capture and
+    // the Verify guard. It MUST be one string: if the two stages ever matched different patterns,
+    // a pre-existing topic could be missing from the baseline and fail the build as "new".
+    JUNK_RE = '^es4\\.|es\\.es\\.es|heartbeat|mm2-.*\\.internal'
   }
   stages {
 
@@ -63,8 +79,45 @@ pipeline {
           [ "$SOURCE_ES_CLUSTER_IP:$SOURCE_PORT" != "$TARGET_SPX_CLUSTER_IP:$TARGET_PORT" ] || { echo "FAIL: source==target"; exit 1; }
           # source broker reachable
           nc -z -w5 "$SOURCE_ES_CLUSTER_IP" "$SOURCE_PORT" || { echo "FAIL: source $SRC unreachable"; exit 1; }
-          # target broker reachable + usable
-          "$KBIN/kafka-topics" --bootstrap-server "$TGT" --list >/dev/null || { echo "FAIL: target $TGT unusable"; exit 1; }
+          # target broker reachable + usable — and CAPTURE ITS PRE-INSTALL TOPIC LIST.
+          # The Verify pollution guard diffs against this baseline so it fails only on junk THIS
+          # install introduced. Prod (192.168.100.252:9092) permanently carries four legacy topics
+          # from the old, stopped es4 MM2 setup (heartbeats, mm2-{configs,offsets,status}.es4.internal)
+          # that match JUNK_RE; the previous absolute match-count check therefore failed every prod
+          # install even though the mirror was clean (observed on the indicator mirror, 2026-08-06).
+          mkdir -p "$MDIR"
+          BASE="$MDIR/target-topics-preinstall.txt"
+          rm -f "$BASE" "$BASE.tmp"
+          "$KBIN/kafka-topics" --bootstrap-server "$TGT" --list > "$BASE.tmp" || { echo "FAIL: target $TGT unusable"; exit 1; }
+          # Header stamps build+target so Verify can never grandfather from a stale file, and keeps
+          # the file non-empty (an empty broker is a legitimate baseline). No Kafka topic name can
+          # ever collide with it: '#' and ' ' are not legal topic-name characters.
+          { echo "#BASELINE build=$BUILD_NUMBER target=$TGT"; cat "$BASE.tmp"; } > "$BASE"
+          rm -f "$BASE.tmp"
+          echo "baseline: $(grep -vc '^#' "$BASE" || true) topic(s) on $TGT before install"
+
+          # GROWTH GATE (fail-closed). A delta guard ALONE would launder pollution: junk created by
+          # an earlier failed/aborted build lands in the next build's baseline and gets grandfathered
+          # forever. So the pre-install junk set must be a SUBSET of this target's durable,
+          # code-reviewed allow-list. Approving prod's four dead-MM2 leftovers is a reviewed commit
+          # to that file — never something this job grants itself. No file = nothing approved = any
+          # junk-pattern topic blocks the install (which is why dev, being clean, needs no file).
+          APPROVED="$WORKSPACE/config/es-mirror-approved-legacy-topics/$TSLUG.txt"
+          # Every grep below handles status EXPLICITLY: 1 = "no lines matched" (a legitimate result),
+          # anything >1 is a real grep/read error. A blanket `|| true` would convert an unreadable
+          # file into "no junk found" and pass the gate vacuously.
+          PRE=$(grep -E "$JUNK_RE" "$BASE") || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: junk scan of $BASE errored (grep rc=$rc)"; exit 1; }; PRE=""; }
+          if [ -n "$PRE" ]; then
+            [ -f "$APPROVED" ] || { echo "FAIL: $TGT already carries junk-pattern topic(s), but config/es-mirror-approved-legacy-topics/$TSLUG.txt does not exist to approve them:"; printf '%s\\n' "$PRE" | sed 's/^/  /'; exit 1; }
+            CLEAN="$MDIR/approved-legacy.clean.txt"
+            grep -vE '^[[:space:]]*(#|$)' "$APPROVED" > "$CLEAN" || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: cannot read $APPROVED (grep rc=$rc)"; exit 1; }; : > "$CLEAN"; }
+            UNAPPROVED=$(printf '%s\\n' "$PRE" | grep -vxFf "$CLEAN") || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: allow-list subtraction errored (grep rc=$rc)"; exit 1; }; UNAPPROVED=""; }
+            [ -z "$UNAPPROVED" ] || { echo "FAIL: $TGT carries junk-pattern topic(s) NOT approved in config/es-mirror-approved-legacy-topics/$TSLUG.txt — clean the target, or get the allow-list extended by review:"; printf '%s\\n' "$UNAPPROVED" | sed 's/^/  /'; exit 1; }
+            echo "pre-existing junk topics on $TGT (all approved; Verify will grandfather them):"
+            printf '%s\\n' "$PRE" | sed 's/^/  /'
+          else
+            echo "pre-existing junk topics on $TGT: <none>"
+          fi
           # source topic exists (nothing to mirror otherwise)
           "$KBIN/kafka-topics" --bootstrap-server "$SRC" --describe --topic "$TOPIC" >/dev/null 2>&1 || { echo "FAIL: source topic $TOPIC missing"; exit 1; }
           # MM1 binary present
@@ -161,13 +214,35 @@ PL
           set -euo pipefail
           sleep 8
           launchctl list | grep "$LABEL" || { echo "FAIL: service not running"; exit 1; }
-          # pollution guard: MM1 must NOT have created es4.* / es.es.es / heartbeat / mm2 topics on target
+          # pollution guard: MM1 must NOT ADD es4.* / es.es.es / heartbeat / mm2 topics to the target.
+          # Judged as a DELTA against the pre-install baseline captured in Preflight: topics that were
+          # already there (prod's dead-MM2 leftovers) are grandfathered, anything new fails the build.
+          # Fail-closed: no baseline from THIS build, or an unreadable topic list, is a FAIL — never a
+          # silent pass, because either one would make the delta vacuously empty.
+          BASE="$MDIR/target-topics-preinstall.txt"
+          [ -f "$BASE" ] || { echo "FAIL: pre-install topic baseline $BASE missing — cannot distinguish new pollution from legacy topics"; exit 1; }
+          head -1 "$BASE" | grep -qxF "#BASELINE build=$BUILD_NUMBER target=$TGT" \
+            || { echo "FAIL: baseline $BASE is not from this build/target (got: $(head -1 "$BASE"))"; exit 1; }
+          # Everything the delta grandfathers was already proved approved by Preflight's growth gate,
+          # so this is a report, not a decision — but print it every build so the approved set stays
+          # visible in the log next to the result it licensed.
+          GRAND=$(grep -E "$JUNK_RE" "$BASE" | tr '\\n' ' ') || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: junk scan of $BASE errored (grep rc=$rc)"; exit 1; }; GRAND=""; }
+          echo "grandfathered pre-existing junk topics on $TGT: ${GRAND:-<none>}"
           # (read twice — kafka-topics --list gives flaky counts during MM startup)
           for i in 1 2; do
-            L=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --list 2>/dev/null)
-            J=$(printf '%s\\n' "$L" | grep -cE '^es4\\.|es\\.es\\.es|heartbeat|mm2-.*\\.internal' || true)
-            echo "read $i: junk-topics=$J  target-topic-present=$(printf '%s\\n' "$L" | grep -c "^$TOPIC$")"
-            [ "$J" = "0" ] || { echo "FAIL: mirror polluted the target with $J junk topics"; exit 1; }
+            L=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --list 2>/dev/null) \
+              || { echo "FAIL: cannot list topics on $TGT"; exit 1; }
+            # Both greps handle status EXPLICITLY (1 = no match, >1 = real error). This is the
+            # decisive guard: a blanket `|| true` here would turn an unreadable baseline file into
+            # an empty delta and PASS a genuinely polluted target.
+            JUNK=$(printf '%s\\n' "$L" | grep -E "$JUNK_RE") || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: junk scan of $TGT errored (grep rc=$rc)"; exit 1; }; JUNK=""; }
+            NEW=""
+            if [ -n "$JUNK" ]; then
+              NEW=$(printf '%s\\n' "$JUNK" | grep -vxFf "$BASE") || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: baseline subtraction errored (grep rc=$rc)"; exit 1; }; NEW=""; }
+            fi
+            if [ -n "$NEW" ]; then J=$(printf '%s\\n' "$NEW" | wc -l | tr -d ' '); else J=0; fi
+            echo "read $i: new-junk-topics=$J  target-topic-present=$(printf '%s\\n' "$L" | grep -c "^$TOPIC$")"
+            [ "$J" = "0" ] || { echo "FAIL: mirror polluted the target with $J NEW junk topic(s):"; printf '%s\\n' "$NEW" | sed 's/^/  /'; exit 1; }
             sleep 2
           done
           # fail-closed shape check: the aggregate is 1-partition (ordering/key contract) + compacted.
@@ -176,7 +251,7 @@ PL
           TP=$(printf '%s\\n' "$D" | awk -F'PartitionCount:' 'NR==1{split($2,a," "); print a[1]}')
           [ "$TP" = "1" ] || { echo "FAIL: target $TOPIC has $TP partitions, expected 1 (ordering contract)"; exit 1; }
           printf '%s\\n' "$D" | head -1 | grep -q "cleanup.policy=compact" || { echo "FAIL: target $TOPIC not compacted"; exit 1; }
-          echo "VERIFIED: $LABEL running, only $TOPIC mirrored (1 partition, compacted), zero pollution."
+          echo "VERIFIED: $LABEL running, only $TOPIC mirrored (1 partition, compacted), no NEW pollution on $TGT."
         '''
       }
     }
