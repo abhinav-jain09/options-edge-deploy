@@ -62,6 +62,11 @@ patches:
         value:
           name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS
           value: "30"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_AUTO_ARM
+          value: "true"
   # greek-move-authenticity: ENABLED on PROD (go-live — advisory-only, CHARM_SIGN pinned by the
   # Gate-1 fixture, options-edge-processing #409). Strategic-merge on env name (namespace required).
   # MUST MIRROR the standalone slice k8s/services/greek-move-authenticity/overlays/production (validate-services).
