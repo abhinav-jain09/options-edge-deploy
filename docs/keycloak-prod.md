@@ -10,7 +10,7 @@ stand up the issuer they point at.
 
 | File | Resource | Purpose |
 |------|----------|---------|
-| `keycloak-realm-configmap.yaml` | ConfigMap `oe-keycloak-realm` | Hardened realm import (client `options-edge-web`, no test user, origins pinned to `https://fullfunding.nl`) |
+| `keycloak-realm-configmap.yaml` | ConfigMap `oe-keycloak-realm` | Hardened realm import (client `options-edge-web`, no test user, origins pinned to the public web origins — both domains during the bleadingoptions.com migration; see docs/domain-migration-bleadingoptions.md) |
 | `keycloak-postgres.yaml` | headless Service + StatefulSet + **PVC** | Durable Keycloak database (state on disk, not H2/container layer) |
 | `keycloak-deployment.yaml` | Deployment + **ClusterIP** Service (`:8080` only) + headless Service | Keycloak in production mode (`start --import-realm`) on Postgres |
 | `keycloak-ingress.yaml` | traefik Ingress | Routes `Host: auth.fullfunding.nl` `/realms/optionsedge` + `/resources` → `oe-keycloak:8080` (admin paths get no route → 404) |
@@ -19,17 +19,24 @@ stand up the issuer they point at.
 
 ```
 browser ──HTTPS──▶ Cloudflare edge (TLS terminates) ──tunnel──▶ cloudflared on prod host
-         ──▶ http://192.168.100.252:80 (traefik, Host: auth.fullfunding.nl) ──▶ oe-keycloak ClusterIP :8080
+         ──▶ http://10.43.127.26:8080 (oe-keycloak ClusterIP, Host header forced per auth hostname)
 ```
 
-- Keycloak is **ClusterIP only** — never a LoadBalancer/host port — so a LAN client cannot bypass Cloudflare
-  and spoof the `X-Forwarded-*` headers Keycloak trusts (`KC_PROXY_HEADERS=xforwarded`).
+- The public path does **NOT** traverse traefik: the prod node's traefik `:80` proved broken, so the
+  cloudflared ingress targets the `oe-keycloak` ClusterIP directly (hardcoded IP — the canonical
+  tunnel file documents the re-read command if the Service is ever recreated). The traefik Ingress
+  in `keycloak-ingress.yaml` remains as an in-cluster routing definition only.
+- Keycloak is additionally published on the LAN as the `oe-keycloak-lan` **LoadBalancer**
+  (`192.168.100.252:8089`) for admin-console access (`KC_HOSTNAME_ADMIN`); this is a deliberate
+  LAN-only admin path, so the original "ClusterIP only, LAN cannot reach it" claim no longer holds.
+  The public edge still cannot reach `:8089`.
 - The **management port `:9000`** (health/metrics) is a containerPort used by the probes in-cluster; the
   Service never publishes it.
-- `/admin` and `/realms/master` are **blocked two ways**: (1) the Ingress only routes `/realms/optionsedge`
-  + `/resources`, so admin paths get no traefik route → 404 (self-protecting k8s config); (2) the cloudflared
-  rules 404 them at the public edge (belt-and-suspenders). Admin is performed in-cluster via `kcadm.sh` (below),
-  not over the public internet.
+- `/admin` and `/realms/master` are **edge-blocked by the cloudflared 404 rules** for every public
+  auth hostname (both domains during the migration). The traefik-route block only applies on the
+  in-cluster Ingress path, which public traffic no longer takes — the edge rules are the real
+  control. Realm/user admin is performed via `kcadm.sh` in-pod or the LAN admin console, never over
+  the public internet.
 
 ## Before deploy — operator prerequisites (NOT done by the pipeline)
 
