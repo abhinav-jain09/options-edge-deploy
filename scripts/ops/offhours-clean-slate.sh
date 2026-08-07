@@ -13,12 +13,20 @@
 #
 # WHAT IT DOES (each step a strict no-op under DRY_RUN):
 #   A. Kafka
-#      - DELETE every *-changelog and *-repartition topic (incl. compact ones —
-#        nothing is spared), so the apps rebuild empty state stores on restart.
+#      - DELETE every *-changelog and *-repartition topic (incl. compact ones), so
+#        the apps rebuild empty state stores on restart. TWO changelogs are exempt
+#        because they hold ACCUMULATED state that the surviving inputs cannot
+#        reconstruct — deleting them destroys information rather than a cache:
+#          * gamma-migration-scorer-changelog: the open +5/+15/+30 call horizons.
+#          * *-indicator-state-changelog: indicator warmup. READY needs ~21 clean
+#            closes, so 1h takes 21 h and 4h takes 84 h; they accrue only ACROSS
+#            sessions, and a one-day replay can never rebuild them.
 #      - PURGE every remaining data topic to 0 records via delete-records to the
 #        high-watermark (keeps topic shape: partitions + retention config).
-#      - PRESERVE exactly the 3 cluster-system topics: __consumer_offsets,
-#        __transaction_state, _schemas. (Deleting these breaks the cluster.)
+#      - PRESERVE the 3 cluster-system topics: __consumer_offsets,
+#        __transaction_state, _schemas (deleting these breaks the cluster), plus
+#        anything listed RESET-PRESERVED in topics.env and the two changelog
+#        exemptions above.
 #   B. Streams local state (on-disk RocksDB / the <svc>-streams-state PVCs)
 #      - For every Streams app: scale 0 -> delete+recreate its PVC -> scale 1, via
 #        the jenkins-deployer SA. A changelog-only wipe CRASHES apps against
@@ -68,13 +76,23 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" && pwd 2>/dev/null |
 DRY_RUN="${DRY_RUN:-true}"
 WIPE_ENABLED="${WIPE_ENABLED:-false}"
 
-# 2026-07-08: Kafka now self-expires data via a 12h broker retention
-# (log.retention.ms=43200000 broker-default; _schemas stays exempt at retention.ms=-1).
-# So by default we NO LONGER delete/purge Kafka topics or reset the Streams-state PVCs
-# nightly — that churn is what wiped _schemas (dead schema-ids -> gateway 40403 -> blank
-# UI) and raced app boot. WIPE_KAFKA=false keeps topics + Streams state intact; the
-# nightly run still scales apps to 0 (off-hours footprint), truncates the flow DB, and
-# trims logs. Set WIPE_KAFKA=true for a hard, from-empty Kafka reset.
+# 2026-07-08 (SUPERSEDED — kept for history): Kafka briefly self-expired data via a 12h
+# broker retention, so this job stopped deleting topics by default; that churn had wiped
+# _schemas (dead schema-ids -> gateway 40403 -> blank UI) and raced app boot.
+#
+# 2026-07-11 REVERSED IT and that is the standing model: retention is ETERNAL
+# (KAFKA_TOPIC_RETENTION_MS / KAFKA_MAX_RETENTION_MS / the broker default are all -1 in
+# k8s/infra/base/configmap.yaml) and deletion is owned MANUALLY by this job and
+# dev-cleanup.sh at close+CLOSE_BUFFER_MIN (30 min) ET. So WIPE_KAFKA=true is LOAD-BEARING, not an opt-in
+# extra: nothing else ever reclaims that disk.
+#
+# 2026-08-07: the paragraph above used to still describe the 12h-TTL world and promise
+# that the default kept topics intact, which contradicted the code by three days and
+# nearly cost a "fix" that flipped the default to false. That would have made the only
+# operator-reachable clean-slate (Jenkins exposes DRY_RUN and WIPE_ENABLED and never
+# passes WIPE_KAFKA) skip topic purge, offset reset and PVC recreation entirely, while
+# retention stayed eternal. The DEFAULT IS DELIBERATE. If it ever needs to change, add
+# an explicit Jenkins parameter and pass it through rather than moving this line.
 WIPE_KAFKA="${WIPE_KAFKA:-true}"
 # 2026-07-11: WIPE_DB defaults to FALSE so prod matches dev — the dev cleanup (dev-cleanup.sh) wipes Kafka
 # + brings up the overnight ES set but NEVER truncates Postgres. So by default the offhours DB truncate
@@ -391,6 +409,19 @@ while read -r t; do
       KEEP_DURABLE=$((KEEP_DURABLE+1))
       log "PRESERVE: $t (gamma-migration open calls — recomputable from nothing)"
       ;;
+    # The indicator service's state store holds INDICATOR WARMUP, which is an
+    # accumulation and not a cache: a timeframe becomes READY only after ~21 clean
+    # closes, so 15m needs 5.25 h, 1h needs 21 h and 4h needs 84 h of running. A
+    # single session cannot rebuild that — the session backfill replays one day and
+    # so restores 30s..15m at best, while 1h and 4h can only ever accrue ACROSS
+    # sessions. Wiping this changelog therefore does not cost a rebuild, it makes
+    # the two longest timeframes permanently unreachable: every clean would reset
+    # them long before 21 h of coverage exists. Same criterion the gamma-migration
+    # scorer is preserved under, and the pattern covers dev/prod/es4 alike.
+    *-indicator-state-changelog)
+      KEEP_DURABLE=$((KEEP_DURABLE+1))
+      log "PRESERVE: $t (indicator warmup — 1h/4h accrue across sessions, unrebuildable)"
+      ;;
     *-changelog|*-repartition) STATE_TOPICS="$STATE_TOPICS $t" ;;
     *)                         PURGE_TOPICS="$PURGE_TOPICS $t" ;;
   esac
@@ -575,7 +606,7 @@ if [ "$MUTATE" = "false" ]; then
     log "  B. Streams state: for each of $N_PVCS PVCs -> scale owner 0, delete+recreate PVC, scale 1 (--as=$KUBECTL_AS)"
     [ "$N_PVCS" -gt 0 ] && printf '%s\n' "$STATE_PVCS" | sed 's/^/       PVC /'
   else
-    log "  A+B. Kafka topic wipe + Streams-state PVC reset: SKIPPED (WIPE_KAFKA=false — 12h broker retention self-expires the ${N_PURGE} data + ${N_STATE} state topics; topics + $N_PVCS PVCs persist)"
+    log "  A+B. Kafka topic wipe + Streams-state PVC reset: SKIPPED (WIPE_KAFKA=false — the ${N_PURGE} data + ${N_STATE} state topics and $N_PVCS PVCs ALL persist and NOTHING is reclaimed: retention is eternal (-1))"
   fi
   if [ "$DB_WIPE" = "true" ]; then
     log "  C. Postgres: TRUNCATE only the ALLOW-LISTED session tables in '$EXPECTED_DB' + CHECKPOINT + VACUUM"
@@ -594,8 +625,8 @@ fi
 # ===========================================================================
 # LIVE WIPE PATH (DRY_RUN=false, WIPE_ENABLED=true, all guards passed).
 # ===========================================================================
-# Once-per-trading-day guard (2026-07-11): the cron fires at BOTH 13:15 and 16:15 ET so close+15 is hit
-# on normal (16:00->16:15) AND early-close (13:00->13:15) days. Whichever passes the market-hours guard
+# Once-per-trading-day guard (2026-07-11): the cron fires at BOTH 13:30 and 16:30 ET so
+# close+CLOSE_BUFFER_MIN (30) is hit on normal (16:00->16:30) AND early-close (13:00->13:30) days. Whichever passes the market-hours guard
 # first claims the day via a marker so the other cron tick is a no-op (no double wipe on early-close days).
 OFFHOURS_MARK_DIR="${OFFHOURS_MARK_DIR:-/tmp}"
 _TD=$(TZ='America/New_York' date '+%Y%m%d' 2>/dev/null || date '+%Y%m%d')
@@ -610,8 +641,9 @@ fi
 log ">>> LIVE WIPE BEGINS <<<"
 
 # System-topic retention guard: _schemas (the Schema Registry backing store) MUST be compact + INFINITE
-# retention. The broker default is log.retention.ms=1d; without an explicit override, a _schemas that is
-# ever recreated (auto-create inherits the delete-policy default) would age out its schemas after a day →
+# retention. Without an explicit override, a _schemas that is ever recreated (auto-create inherits the
+# broker's delete-policy default — see KAFKA_MAX_RETENTION_MS in k8s/infra/base/configmap.yaml) would age
+# out its schemas →
 # SR wipe → producers emit dead cached schema IDs → gateway "Schema N not found; 40403" → blank UI (the
 # dev-schema-registry-wipe-gateway-wedge incident, 2026-07-08). _schemas is delete-exempt below; this
 # additionally pins its retention so the schemas can never expire. Fail-soft.
@@ -664,9 +696,14 @@ while :; do
 done
 
 # ==== Kafka topic wipe + Streams-state PVC reset — ONLY when WIPE_KAFKA=true ====
-# Default (WIPE_KAFKA=false): skip A.1/A.2/consumer-reset/B entirely. Kafka's 12h
-# retention expires the session's data on its own overnight, and the Streams state
-# stores persist (so no BufferUnderflow/codec-mismatch on restart — nothing is emptied).
+# WIPE_KAFKA DEFAULTS TO TRUE and this branch is the point of the job. Setting it
+# false skips A.1/A.2/consumer-reset/B entirely, which leaves the Streams state
+# stores intact (no BufferUnderflow/codec-mismatch on restart) but reclaims NOTHING:
+# retention is eternal (-1), so nothing else ever deletes that data. Only skip when
+# something else is doing the reclaim.
+#
+# The earlier note here promised Kafka's 12h retention would expire the session
+# overnight. That model was reversed on 2026-07-11 (see the WIPE_KAFKA block above).
 del_ok=0; del_fail=0; purged=0; pvc_ok=0; pvc_fail=0
 if [ "$WIPE_KAFKA" = "true" ]; then
 
@@ -745,7 +782,7 @@ fi
 log "streams-state PVCs: recreated=$pvc_ok failed=$pvc_fail"
 
 else
-  log "WIPE_KAFKA=false — SKIPPING Kafka topic delete/purge + consumer-group reset + Streams-state PVC reset (12h broker retention self-expires the session's data; topics + Streams state persist)"
+  log "WIPE_KAFKA=false — SKIPPING Kafka topic delete/purge + consumer-group reset + Streams-state PVC reset. Topics + Streams state persist and NOTHING is reclaimed: retention is eternal (-1), so this job is the only thing that deletes data."
 fi
 
 # ---- C: Postgres flow-DB wipe (TRUNCATE all public + CHECKPOINT + VACUUM) ----
