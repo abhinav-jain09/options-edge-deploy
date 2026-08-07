@@ -53,32 +53,17 @@ In the Cloudflare dashboard for `fullfunding.nl`, add a **proxied** record for `
 tunnel as `fullfunding.nl` (a CNAME to `<tunnel-id>.cfargotunnel.com`, or via `cloudflared tunnel route dns
 options-edge-option-chain auth.fullfunding.nl`).
 
-### 3. cloudflared ingress — route `auth.fullfunding.nl` to traefik
+### 3. cloudflared ingress — route the auth hostnames to Keycloak
 
-Edit `/etc/cloudflared/options-edge-stable.yml` on the prod host (`192.168.100.252`) and add the auth rules
-**before** the catch-all `http_status:404`. The `/admin` + `/realms/master` 404 rules MUST precede the
-catch-all auth rule (first match wins):
-
-```yaml
-ingress:
-  - hostname: fullfunding.nl
-    path: /ws/events
-    service: http://192.168.100.252:8091
-  - hostname: fullfunding.nl
-    service: http://192.168.100.103:8090
-  # --- Keycloak (auth.fullfunding.nl) ---
-  - hostname: auth.fullfunding.nl       # block the admin console + master realm at the edge
-    path: /admin
-    service: http_status:404
-  - hostname: auth.fullfunding.nl
-    path: /realms/master
-    service: http_status:404
-  - hostname: auth.fullfunding.nl       # everything else -> traefik, preserving the Host header
-    service: http://192.168.100.252:80
-    originRequest:
-      httpHostHeader: auth.fullfunding.nl
-  - service: http_status:404
-```
+The reviewed tunnel config lives at
+[`infra/prod/cloudflared/options-edge-stable.yml`](../infra/prod/cloudflared/options-edge-stable.yml)
+— edit THAT file, copy it to `/etc/cloudflared/options-edge-stable.yml` on the prod host, and let
+`scripts/ops/verify-prod-tunnel.sh` prove live == repo. (An earlier revision of this doc inlined a
+sample config here; it drifted — `/ws/events` must target the gateway NodePort 30097, never the
+:8091 ServiceLB, and the web backend moved to `.252:8094`. The canonical file carries the incident
+notes.) The `/admin` + `/realms/master` 404 rules MUST precede each auth hostname's catch-all rule
+(first match wins), for every auth hostname (`auth.fullfunding.nl` and, since the domain migration,
+`auth.bleadingoptions.com` — see docs/domain-migration-bleadingoptions.md).
 
 Then `sudo systemctl restart cloudflared` (or restart the cloudflared service/container) and confirm it
 re-reads the config.

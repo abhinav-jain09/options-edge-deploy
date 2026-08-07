@@ -37,6 +37,13 @@ ingress:
     service: http://192.168.100.252:30097     # feed-gateway-service NodePort — NOT the 8091 ServiceLB
   - hostname: fullfunding.nl
     service: http://192.168.100.252:8094
+  # --- bleadingoptions.com (domain migration, dual-run since 2026-08-08) ---
+  # Same backends as fullfunding.nl; docs/domain-migration-bleadingoptions.md is the runbook.
+  - hostname: bleadingoptions.com
+    path: /ws/events
+    service: http://192.168.100.252:30097     # feed-gateway-service NodePort — NOT the 8091 ServiceLB
+  - hostname: bleadingoptions.com
+    service: http://192.168.100.252:8094
   - hostname: auth.fullfunding.nl
     path: /admin
     service: http_status:404
@@ -50,11 +57,28 @@ ingress:
     service: http://10.43.127.26:8080         # Keycloak ClusterIP (host-reachable; traefik :80 is broken)
     originRequest:
       httpHostHeader: auth.fullfunding.nl
+  # auth.bleadingoptions.com mirrors auth.fullfunding.nl, including the /admin + /realms/master
+  # 404 blocks — the block rules MUST precede the hostname catch-all (first match wins).
+  - hostname: auth.bleadingoptions.com
+    path: /admin
+    service: http_status:404
+  - hostname: auth.bleadingoptions.com
+    path: /realms/master
+    service: http_status:404
+  - hostname: auth.bleadingoptions.com
+    service: http://10.43.127.26:8080         # Keycloak ClusterIP (host-reachable; traefik :80 is broken)
+    originRequest:
+      httpHostHeader: auth.bleadingoptions.com
   # es4 already routed /ws/events to a NodePort — which is why the ES board kept working
   # through the prod outage and was the control that isolated the bug.
   - hostname: es.fullfunding.nl
     path: /ws/events
     service: http://192.168.100.4:30091
   - hostname: es.fullfunding.nl
+    service: http://192.168.100.4:30080
+  - hostname: es.bleadingoptions.com
+    path: /ws/events
+    service: http://192.168.100.4:30091
+  - hostname: es.bleadingoptions.com
     service: http://192.168.100.4:30080
   - service: http_status:404

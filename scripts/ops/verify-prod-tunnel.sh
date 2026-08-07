@@ -33,7 +33,11 @@ LIVE_PATH="${LIVE_PATH:-/etc/cloudflared/options-edge-stable.yml}"
 PROD_SSH="${PROD_SSH:-}"
 GW_SVC="${GW_SVC:-feed-gateway-service}"
 NS="${NS:-options-edge}"
-WS_URL="${WS_URL:-https://fullfunding.nl/ws/events}"
+# Dual-domain matrix (fullfunding.nl -> bleadingoptions.com migration): every public hostname is
+# probed. Override APEX_HOSTS/ES_HOSTS/AUTH_HOSTS (space-separated) if a domain is retired.
+APEX_HOSTS="${APEX_HOSTS:-fullfunding.nl bleadingoptions.com}"
+ES_HOSTS="${ES_HOSTS:-es.fullfunding.nl es.bleadingoptions.com}"
+AUTH_HOSTS="${AUTH_HOSTS:-auth.fullfunding.nl auth.bleadingoptions.com}"
 
 run() { if [ -n "$PROD_SSH" ]; then $PROD_SSH "$1"; else bash -c "$1"; fi; }
 strip() { grep -vE '^\s*#|^\s*$' | sed 's/[[:space:]]*#.*$//' | sed 's/[[:space:]]*$//'; }
@@ -56,35 +60,66 @@ else
   fi
 fi
 
-# 2 + 3. the /ws/events route ------------------------------------------------------------------
-ws_target="$(printf '%s\n' "$live_raw" | grep -A2 'path: /ws/events' | grep -m1 'service:' | sed -E 's#.*service:[[:space:]]*##; s/[[:space:]]*#.*//')"
-note "     /ws/events -> ${ws_target:-<unset>}"
-case "$ws_target" in
-  *:8091*) bad "/ws/events points at the :8091 ServiceLB — klipper-lb DROPS the WebSocket upgrade (2026-07-31 outage)" ;;
-  *:3[0-9][0-9][0-9][0-9]*) note "OK   /ws/events uses a NodePort" ;;
-  *) bad "/ws/events target '$ws_target' is neither a NodePort nor a recognised form" ;;
-esac
-
+# 2 + 3. the /ws/events routes (every apex hostname) -------------------------------------------
+# Each apex hostname must route /ws/events at the prod gateway NodePort — never the :8091
+# ServiceLB (2026-07-31 outage). The es.* hostnames route to the es4 box (.4:30091), whose
+# NodePort belongs to the other cluster, so they are covered by the live 401 probes below.
+ws_target_for() {  # $1 = hostname; prints that block's /ws/events service target
+  printf '%s\n' "$live_raw" | awk -v h="$1" '
+    $0 ~ "hostname: "h"$" { inhost=1; next }
+    inhost && /path: \/ws\/events/ { inpath=1; next }
+    inpath && /service:/ { sub(/.*service:[[:space:]]*/, ""); sub(/[[:space:]]*#.*/, ""); print; exit }
+    inhost && /hostname:/ { inhost=0 }'
+}
 want_np="$(run "kubectl -n $NS get svc $GW_SVC -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null")"
-if [ -n "$want_np" ]; then
+[ -n "$want_np" ] || note "WARN could not read $GW_SVC nodePort (kubectl unavailable from here) — skipping that check"
+for h in $APEX_HOSTS; do
+  ws_target="$(ws_target_for "$h")"
+  note "     $h/ws/events -> ${ws_target:-<unset>}"
   case "$ws_target" in
-    *":$want_np"*) note "OK   NodePort $want_np matches $GW_SVC" ;;
-    *) bad "$GW_SVC advertises NodePort $want_np but the tunnel routes to '$ws_target' — the Service was likely recreated" ;;
+    *:8091*) bad "$h/ws/events points at the :8091 ServiceLB — klipper-lb DROPS the WebSocket upgrade (2026-07-31 outage)" ;;
+    *:3[0-9][0-9][0-9][0-9]*) note "OK   $h/ws/events uses a NodePort" ;;
+    *) bad "$h/ws/events target '$ws_target' is neither a NodePort nor a recognised form" ;;
   esac
-else
-  note "WARN could not read $GW_SVC nodePort (kubectl unavailable from here) — skipping that check"
-fi
+  if [ -n "$want_np" ]; then
+    case "$ws_target" in
+      *":$want_np"*) note "OK   NodePort $want_np matches $GW_SVC" ;;
+      *) bad "$GW_SVC advertises NodePort $want_np but $h routes to '$ws_target' — the Service was likely recreated" ;;
+    esac
+  fi
+done
 
-# 4. does the route actually reach the gateway's auth layer? ------------------------------------
-code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
-        -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-        -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom | base64)" -H 'Sec-WebSocket-Version: 13' \
-        "$WS_URL" 2>/dev/null)"
-case "$code" in
-  401) note "OK   unauthenticated upgrade -> 401 (route reaches the gateway's auth layer)" ;;
-  000) bad "unauthenticated upgrade got NO response — the tunnel or the hop to the gateway is broken" ;;
-  *)   bad "unauthenticated upgrade -> $code (expected 401); the route may not reach the gateway" ;;
-esac
+# 4. do the routes actually reach each gateway's auth layer? -----------------------------------
+# 401 proves the upgrade crossed Cloudflare AND the tunnel AND reached the gateway's auth check;
+# 1006/000 means it died in a proxy on the way. Covers both domains and both clusters (apex=prod,
+# es.*=es4). A brand-new hostname failing here usually means its DNS CNAME is not live yet.
+for h in $APEX_HOSTS $ES_HOSTS; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
+          -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+          -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom | base64)" -H 'Sec-WebSocket-Version: 13' \
+          "https://$h/ws/events" 2>/dev/null)"
+  case "$code" in
+    401) note "OK   $h: unauthenticated upgrade -> 401 (route reaches the gateway auth layer)" ;;
+    000) bad "$h: unauthenticated upgrade got NO response — DNS, the tunnel, or the hop to the gateway is broken" ;;
+    *)   bad "$h: unauthenticated upgrade -> $code (expected 401); the route may not reach the gateway" ;;
+  esac
+done
+
+# 5. auth hostnames: OIDC discovery must serve, admin surfaces must be edge-blocked -------------
+for h in $AUTH_HOSTS; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$h/realms/optionsedge/.well-known/openid-configuration" 2>/dev/null)"
+  case "$code" in
+    200) note "OK   $h: OIDC discovery -> 200" ;;
+    *)   bad "$h: OIDC discovery -> $code (expected 200)" ;;
+  esac
+  for path in /admin /realms/master; do
+    code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$h$path" 2>/dev/null)"
+    case "$code" in
+      404) note "OK   $h$path -> 404 (edge-blocked)" ;;
+      *)   bad "$h$path -> $code (expected 404 — the admin surface must stay edge-blocked)" ;;
+    esac
+  done
+done
 
 [ "$fail" -eq 0 ] && echo "  prod tunnel VERIFIED" || echo "  prod tunnel has PROBLEMS (see above)" >&2
 exit "$fail"
