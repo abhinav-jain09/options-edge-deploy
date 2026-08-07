@@ -12,7 +12,7 @@ stand up the issuer they point at.
 |------|----------|---------|
 | `keycloak-realm-configmap.yaml` | ConfigMap `oe-keycloak-realm` | Hardened realm import (client `options-edge-web`, no test user, origins pinned to the public web origins — both domains during the bleadingoptions.com migration; see docs/domain-migration-bleadingoptions.md) |
 | `keycloak-postgres.yaml` | headless Service + StatefulSet + **PVC** | Durable Keycloak database (state on disk, not H2/container layer) |
-| `keycloak-deployment.yaml` | Deployment + **ClusterIP** Service (`:8080` only) + headless Service | Keycloak in production mode (`start --import-realm`) on Postgres |
+| `keycloak-deployment.yaml` | Deployment + **ClusterIP** Service (`:8080`) + headless Service + `oe-keycloak-lan` **LoadBalancer** (`192.168.100.252:8089`, LAN admin console) | Keycloak in production mode (`start --import-realm`) on Postgres |
 | `keycloak-ingress.yaml` | traefik Ingress | Routes `Host: auth.fullfunding.nl` `/realms/optionsedge` + `/resources` → `oe-keycloak:8080` (admin paths get no route → 404) |
 
 ## Edge / exposure model
@@ -63,9 +63,22 @@ options-edge-option-chain auth.fullfunding.nl`).
 ### 3. cloudflared ingress — route the auth hostnames to Keycloak
 
 The reviewed tunnel config lives at
-[`infra/prod/cloudflared/options-edge-stable.yml`](../infra/prod/cloudflared/options-edge-stable.yml)
-— edit THAT file, copy it to `/etc/cloudflared/options-edge-stable.yml` on the prod host, and let
-`scripts/ops/verify-prod-tunnel.sh` prove live == repo. (An earlier revision of this doc inlined a
+[`infra/prod/cloudflared/options-edge-stable.yml`](../infra/prod/cloudflared/options-edge-stable.yml).
+Deploying a change is a fail-safe sequence — stage, validate, back up, install atomically, restart
+the EXACT unit, verify (never edit the live file in place):
+
+```sh
+# on the prod host, with the merged repo copy staged at ~/options-edge-stable.yml.new
+cloudflared tunnel --config ~/options-edge-stable.yml.new ingress validate
+cloudflared tunnel --config ~/options-edge-stable.yml.new ingress rule https://fullfunding.nl/ws/events
+sudo cp /etc/cloudflared/options-edge-stable.yml /etc/cloudflared/options-edge-stable.yml.bak-$(date +%Y%m%d-%H%M%S)
+sudo cp ~/options-edge-stable.yml.new /etc/cloudflared/options-edge-stable.yml.tmp   && sudo mv /etc/cloudflared/options-edge-stable.yml.tmp /etc/cloudflared/options-edge-stable.yml
+sudo systemctl restart options-edge-cloudflared-stable.service   # the unit name — NOT bare "cloudflared"
+systemctl is-active options-edge-cloudflared-stable.service
+journalctl -u options-edge-cloudflared-stable.service -n 20 --no-pager   # no ERR lines
+scripts/ops/verify-prod-tunnel.sh                                        # phase-appropriate gate
+# rollback: sudo cp <the .bak file> /etc/cloudflared/options-edge-stable.yml && restart the unit
+``` (An earlier revision of this doc inlined a
 sample config here; it drifted — `/ws/events` must target the gateway NodePort 30097, never the
 :8091 ServiceLB, and the web backend moved to `.252:8094`. The canonical file carries the incident
 notes.) The `/admin` + `/realms/master` 404 rules MUST precede each auth hostname's catch-all rule

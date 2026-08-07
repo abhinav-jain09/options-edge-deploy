@@ -2,12 +2,18 @@
 # Exposure model (hardened per the prod-Keycloak design review):
 #   - Service is ClusterIP publishing ONLY http :8080. The management port :9000 (health/metrics, admin
 #     bootstrap surface) is a containerPort used by the probes IN-CLUSTER and is NEVER published.
-#   - Public reach is via the Cloudflare tunnel -> traefik Ingress (keycloak-ingress.yaml), Host
-#     auth.fullfunding.nl. TLS terminates at Cloudflare's edge; KC runs HTTP behind it and trusts
-#     X-Forwarded-* (KC_PROXY_HEADERS=xforwarded). KC is NOT exposed on a LAN host port (no LoadBalancer),
-#     so a LAN client cannot bypass the edge and spoof X-Forwarded-* headers.
-#   - The admin console (/admin) + master realm are blocked at the Cloudflare edge (see docs/keycloak-prod.md);
-#     admin is performed in-cluster (kubectl port-forward) or behind Cloudflare Access.
+#   - Public reach is via the Cloudflare tunnel DIRECTLY to the oe-keycloak ClusterIP below (traefik
+#     :80 proved broken on this cluster, so the tunnel bypasses the keycloak-ingress.yaml route), for
+#     every public auth hostname (auth.fullfunding.nl and auth.bleadingoptions.com during the domain
+#     migration — docs/domain-migration-bleadingoptions.md). TLS terminates at Cloudflare's edge; KC
+#     runs HTTP behind it and trusts X-Forwarded-* (KC_PROXY_HEADERS=xforwarded).
+#   - KC IS additionally published on the LAN via the oe-keycloak-lan LoadBalancer below (:8089) as
+#     the deliberate admin-console path (KC_HOSTNAME_ADMIN) — the original "no LoadBalancer, LAN
+#     cannot reach it" posture was superseded when the LAN admin Service was added. The public edge
+#     still cannot reach :8089.
+#   - The admin console (/admin) + master realm are blocked at the Cloudflare edge for every public
+#     auth hostname (see docs/keycloak-prod.md); realm/user admin is performed via kcadm.sh in-pod
+#     or the LAN admin console.
 # Realm imported from the oe-keycloak-realm ConfigMap (restricted client, no test user). Import is
 # idempotent: an existing realm is skipped on later boots.
 apiVersion: v1

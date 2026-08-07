@@ -5,7 +5,10 @@ the scheduled Phase-1 blips and the declared Phase-2 outage window (both section
 bounds), the old domain keeps serving until Phase 2 completes. The canonical tunnel desired state lives in
 [`infra/prod/cloudflared/options-edge-stable.yml`](../infra/prod/cloudflared/options-edge-stable.yml)
 (this doc references it, never repeats it); `scripts/ops/verify-prod-tunnel.sh` proves live == repo
-across BOTH domains and is the acceptance gate for each phase.
+and is the acceptance gate for each phase — run it in the matching mode: `--phase dual` after
+Phase 1, `--phase redirect` after Phase 2, `--phase retired` after Phase 3. It fails closed: a
+check it cannot run (unreachable kubectl, etc.) is a FAIL, not a skip (`--network-only` exists for
+credential-less diagnostics only, never for acceptance).
 
 | Old | New | Backend |
 |---|---|---|
@@ -43,7 +46,7 @@ Executed 2026-08-07/08 after the Friday close (CME closed until Sunday 18:00 ET)
    origins (es4). Deploy: per-service `feed-gateway` production job + `es4-deploy deploy-service
    SERVICE=es-feed-gateway`.
 
-**Phase-1 verification matrix** (`verify-prod-tunnel.sh` automates the tunnel/auth rows):
+**Phase-1 verification matrix** (`verify-prod-tunnel.sh --phase dual` automates every row except the login round-trip):
 
 | Check | Old domain | New domain |
 |---|---|---|
@@ -91,21 +94,22 @@ One coordinated change-set (single PR, single deploy window):
 6. Verify: full matrix above goes green on the NEW domain including REST; old-domain UI now serves
    pages pointing at new-domain APIs — immediately shadowed by the redirect (next step).
 7. **Cloudflare dashboard** — three separate Single Redirects on the `fullfunding.nl` zone (one
-   per hostname; a fixed target cannot host-map, and in wildcard patterns `${1}` is the FIRST
-   wildcard, so keep the hostname out of the pattern's wildcards). Preserve query string; start
-   every rule as **307** (temporary) for rollback safety — a cached permanent redirect cannot be
-   recalled from browsers — and promote to **308** (not 301: 301 may rewrite POST to GET; 308
-   preserves the method) after the soak:
+   per hostname; a fixed target cannot host-map). Patterns use `http*://` so plain-HTTP hits
+   redirect too (per Cloudflare's cross-domain example) — with that scheme wildcard, `${1}`
+   captures the scheme suffix and **`${2}` is the path**. Preserve query string; start every rule
+   as **307** (temporary) for rollback safety — a cached permanent redirect cannot be recalled
+   from browsers — and promote to **308** (not 301: 301 may rewrite POST to GET; 308 preserves
+   the method) after the soak:
 
    | # | Wildcard pattern | Target | Status |
    |---|---|---|---|
-   | 1 | `https://fullfunding.nl/*` | `https://bleadingoptions.com/${1}` | 307 → 308 |
-   | 2 | `https://es.fullfunding.nl/*` | `https://es.bleadingoptions.com/${1}` | 307 → 308 |
-   | 3 | `https://auth.fullfunding.nl/*` | `https://auth.bleadingoptions.com/${1}` | 307 → 308 |
+   | 1 | `http*://fullfunding.nl/*` | `https://bleadingoptions.com/${2}` | 307 → 308 |
+   | 2 | `http*://es.fullfunding.nl/*` | `https://es.bleadingoptions.com/${2}` | 307 → 308 |
+   | 3 | `http*://auth.fullfunding.nl/*` | `https://auth.bleadingoptions.com/${2}` | 307 → 308 |
 
-   Test each rule before promotion: `curl -sI https://fullfunding.nl/board?x=1` must return the
-   307 with `Location: https://bleadingoptions.com/board?x=1`, and likewise for the `es.`/`auth.`
-   hostnames.
+   Acceptance: `verify-prod-tunnel.sh --phase redirect` checks status + host-mapped `Location`
+   with path and query preserved for all three hostnames; spot-check plain HTTP too
+   (`curl -sI http://fullfunding.nl/board?x=1` → `Location: https://bleadingoptions.com/board?x=1`).
 
 Rollback (before the 308 promotion): revert the PR, redeploy the same set, drop the 307 rules.
 Old-issuer tokens die at the flip in both directions — that is expected, not a defect.
@@ -113,6 +117,9 @@ Old-issuer tokens die at the flip in both directions — that is expected, not a
 ## Phase 3 — retire
 
 After soak: remove old-domain ingress blocks from the canonical YAML + live (verifier keeps them
-honest), drop old-domain entries from the realm (live via kcadm + configmap parity), rename the
-`req` realm client, sweep docs/bookmarks, shrink `APEX_HOSTS`/`ES_HOSTS`/`AUTH_HOSTS` defaults in
-the verifier to the new domain only.
+honest), drop old-domain entries from the realm (live via kcadm + configmap parity), **remove the
+old origins from BOTH gateway allow-lists** — prod feed-gateway `WS_ALLOWED_ORIGINS` drops
+`https://fullfunding.nl`, es4 es-feed-gateway drops `https://es.fullfunding.nl` (the intentional
+es4 LAN origin `http://192.168.100.4:30080` stays) — rename the `req` realm client, sweep
+docs/bookmarks, and accept with `verify-prod-tunnel.sh --phase retired` (its `retired` expected
+origin sets are exactly the post-removal lists, so a leftover trusted old origin fails the gate).

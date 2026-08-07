@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # verify-prod-tunnel.sh — prove the LIVE prod Cloudflare tunnel still matches the reviewed repo copy,
-# and that the WebSocket route actually reaches the feed gateway.
+# and that every public hostname behaves per the current migration phase.
 #
 # WHY THIS EXISTS
 # ---------------
@@ -16,56 +16,122 @@
 # The lesson both times: a file that only exists on a box is a file nobody reviews. This script is
 # the cheap check that would have caught either in seconds.
 #
-# CHECKS
-#   1. live tunnel config == repo copy (ignoring comments/blank lines)
-#   2. /ws/events routes to a NodePort, never to the :8091 ServiceLB
-#   3. the NodePort in the config is the one feed-gateway-service actually advertises
-#   4. an unauthenticated WS upgrade returns 401 — proving the route reaches the gateway's auth
-#      layer rather than dying in a proxy (1006/000 would mean it never got there)
+# PHASES (fullfunding.nl -> bleadingoptions.com migration; docs/domain-migration-bleadingoptions.md)
+#   --phase dual      both domains serve everything (Phase 1 acceptance gate; default)
+#   --phase redirect  new domain serves; every OLD hostname 307/308-redirects, host-mapped, with
+#                     path+query preserved (Phase 2 acceptance gate)
+#   --phase retired   like redirect, but the old origins must be GONE from both gateway
+#                     allow-lists (Phase 3 acceptance gate)
+#
+# MODES
+#   default           GATE mode: every check that cannot run (e.g. kubectl unreachable) FAILS —
+#                     an unverifiable contract is a failed contract at phase acceptance.
+#   --network-only    diagnostic mode: kube-dependent checks downgrade to warnings so the network
+#                     surface can be probed from a box without cluster credentials.
+#   --selftest        run the embedded ingress-parser fixtures and exit.
 #
 # USAGE
-#   scripts/ops/verify-prod-tunnel.sh                     # from the prod box
-#   PROD_SSH="sshpass -p … ssh user@192.168.100.252" scripts/ops/verify-prod-tunnel.sh   # remote
+#   scripts/ops/verify-prod-tunnel.sh [--phase dual|redirect|retired] [--network-only]
+#   PROD_SSH="ssh user@192.168.100.252" scripts/ops/verify-prod-tunnel.sh   # remote prod reads
+#   ES4_SSH="ssh user@192.168.100.4"    …                                    # remote es4 reads
 set -uo pipefail
+
+PHASE="${TUNNEL_PHASE:-dual}"
+NETWORK_ONLY=0
+SELFTEST=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --phase) PHASE="${2:?--phase needs dual|redirect|retired}"; shift 2 ;;
+    --network-only) NETWORK_ONLY=1; shift ;;
+    --selftest) SELFTEST=1; shift ;;
+    *) echo "unknown arg: $1" >&2; exit 2 ;;
+  esac
+done
+case "$PHASE" in dual|redirect|retired) ;; *) echo "bad --phase '$PHASE'" >&2; exit 2 ;; esac
 
 REPO_COPY="${REPO_COPY:-$(cd "$(dirname "$0")/../.." && pwd)/infra/prod/cloudflared/options-edge-stable.yml}"
 LIVE_PATH="${LIVE_PATH:-/etc/cloudflared/options-edge-stable.yml}"
 PROD_SSH="${PROD_SSH:-}"
+ES4_SSH="${ES4_SSH:-ssh abhinav@192.168.100.4}"
 GW_SVC="${GW_SVC:-feed-gateway-service}"
-NS="${NS:-options-edge}"
-# Dual-domain matrix (fullfunding.nl -> bleadingoptions.com migration): every public hostname is
-# probed. Override APEX_HOSTS/ES_HOSTS/AUTH_HOSTS (space-separated) if a domain is retired.
-APEX_HOSTS="${APEX_HOSTS:-fullfunding.nl bleadingoptions.com}"
-ES_HOSTS="${ES_HOSTS:-es.fullfunding.nl es.bleadingoptions.com}"
-AUTH_HOSTS="${AUTH_HOSTS:-auth.fullfunding.nl auth.bleadingoptions.com}"
-# Contract expectations (flip EXPECTED_ISSUER at Phase 2; shrink hosts/origins at Phase 3).
-# KC_HOSTNAME pins the issuer, so BOTH auth hostnames must report this exact value.
-EXPECTED_ISSUER="${EXPECTED_ISSUER:-https://auth.fullfunding.nl/realms/optionsedge}"
-EXPECTED_WS_ORIGINS="${EXPECTED_WS_ORIGINS:-https://fullfunding.nl https://bleadingoptions.com}"
 GW_DEPLOY="${GW_DEPLOY:-feed-gateway-service}"
+ES4_GW_DEPLOY="${ES4_GW_DEPLOY:-es-feed-gateway}"
+NS="${NS:-options-edge}"
+ES4_LAN_ORIGIN="${ES4_LAN_ORIGIN:-http://192.168.100.4:30080}"
 
-run() { if [ -n "$PROD_SSH" ]; then $PROD_SSH "$1"; else bash -c "$1"; fi; }
+# Per-phase expectations. Every default is overridable, but the phase picks coherent defaults so
+# the gate cannot silently run with a stale matrix. KC_HOSTNAME pins ONE issuer for all auth hosts.
+case "$PHASE" in
+  dual)
+    SERVE_APEX_DEFAULT="fullfunding.nl bleadingoptions.com"
+    SERVE_ES_DEFAULT="es.fullfunding.nl es.bleadingoptions.com"
+    SERVE_AUTH_DEFAULT="auth.fullfunding.nl auth.bleadingoptions.com"
+    REDIR_HOSTS_DEFAULT=""
+    EXPECTED_ISSUER_DEFAULT="https://auth.fullfunding.nl/realms/optionsedge"
+    PROD_ORIGINS_DEFAULT="https://fullfunding.nl https://bleadingoptions.com"
+    ES4_ORIGINS_DEFAULT="https://es.fullfunding.nl https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
+    ;;
+  redirect)
+    SERVE_APEX_DEFAULT="bleadingoptions.com"
+    SERVE_ES_DEFAULT="es.bleadingoptions.com"
+    SERVE_AUTH_DEFAULT="auth.bleadingoptions.com"
+    REDIR_HOSTS_DEFAULT="fullfunding.nl es.fullfunding.nl auth.fullfunding.nl"
+    EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
+    # Old origins stay trusted during the redirect soak; Phase 3 removes them.
+    PROD_ORIGINS_DEFAULT="https://fullfunding.nl https://bleadingoptions.com"
+    ES4_ORIGINS_DEFAULT="https://es.fullfunding.nl https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
+    ;;
+  retired)
+    SERVE_APEX_DEFAULT="bleadingoptions.com"
+    SERVE_ES_DEFAULT="es.bleadingoptions.com"
+    SERVE_AUTH_DEFAULT="auth.bleadingoptions.com"
+    REDIR_HOSTS_DEFAULT="fullfunding.nl es.fullfunding.nl auth.fullfunding.nl"
+    EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
+    PROD_ORIGINS_DEFAULT="https://bleadingoptions.com"
+    ES4_ORIGINS_DEFAULT="https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
+    ;;
+esac
+SERVE_APEX="${SERVE_APEX:-$SERVE_APEX_DEFAULT}"
+SERVE_ES="${SERVE_ES:-$SERVE_ES_DEFAULT}"
+SERVE_AUTH="${SERVE_AUTH:-$SERVE_AUTH_DEFAULT}"
+REDIR_HOSTS="${REDIR_HOSTS:-$REDIR_HOSTS_DEFAULT}"
+EXPECTED_ISSUER="${EXPECTED_ISSUER:-$EXPECTED_ISSUER_DEFAULT}"
+EXPECTED_PROD_ORIGINS="${EXPECTED_PROD_ORIGINS:-$PROD_ORIGINS_DEFAULT}"
+EXPECTED_ES4_ORIGINS="${EXPECTED_ES4_ORIGINS:-$ES4_ORIGINS_DEFAULT}"
+
+redirect_target_for() {  # old host -> new host (host-mapped)
+  case "$1" in
+    fullfunding.nl) echo "bleadingoptions.com" ;;
+    es.fullfunding.nl) echo "es.bleadingoptions.com" ;;
+    auth.fullfunding.nl) echo "auth.bleadingoptions.com" ;;
+    *) echo "" ;;
+  esac
+}
+
+run()     { if [ -n "$PROD_SSH" ]; then $PROD_SSH "$1"; else bash -c "$1"; fi; }
+run_es4() { if [ -n "$ES4_SSH" ]; then $ES4_SSH "$1"; else bash -c "$1"; fi; }
 strip() { grep -vE '^\s*#|^\s*$' | sed 's/[[:space:]]*#.*$//' | sed 's/[[:space:]]*$//'; }
 fail=0
 note() { echo "  $*"; }
 bad()  { echo "  FAIL: $*" >&2; fail=1; }
+# A check that cannot run is a FAILED check at phase acceptance; --network-only downgrades it.
+unavailable() { if [ "$NETWORK_ONLY" = "1" ]; then note "WARN $* (network-only mode: skipped)"; else bad "$* — unverifiable contract fails the gate (use --network-only for a network-surface-only diagnostic)"; fi; }
 
-# Literal (non-regex) hostname match, and all state resets at every new ingress list item, so a
-# malformed block (path with no service) or a metacharacter host can never borrow a later block's
-# service line. Run with --selftest to exercise the fixtures.
+# --- ingress parser (literal hostname compare; ALL state resets on EVERY list item, because a
+# hostless rule is legal and matches every hostname — it must never lend its service line) -------
 ws_target_for() {  # $1 = hostname; $2 = config text; prints that host's /ws/events service target
   printf '%s\n' "$2" | awk -v h="$1" '
     function fieldval(line, key,    v) { v=line; sub(".*" key ":[[:space:]]*", "", v);
       sub(/[[:space:]]*#.*/, "", v); sub(/[[:space:]]+$/, "", v); return v }
-    /^[[:space:]]*-[[:space:]]*hostname:/ { cur=fieldval($0, "hostname"); haspath=0; next }
-    /^[[:space:]]*-[[:space:]]*service:/  { cur=""; haspath=0; next }   # hostless catch-all item
+    /^[[:space:]]*-([[:space:]]|$)/ { cur=""; haspath=0 }              # every list item resets
+    /^[[:space:]]*-[[:space:]]*hostname:/ { cur=fieldval($0, "hostname"); next }
     /path:[[:space:]]*\/ws\/events([[:space:]]|$)/ { if (cur == h) haspath=1; next }
     /service:/ { if (cur == h && haspath) { print fieldval($0, "service"); exit } haspath=0 }'
 }
 
 selftest() {
-  local fixture expect got rc=0
-  run_case() {  # host, expected, config
+  local fixture got rc=0
+  run_case() {  # host, expected, config, label
     got="$(ws_target_for "$1" "$3")"
     if [ "$got" = "$2" ]; then echo "  OK   selftest: $4"
     else echo "  FAIL selftest: $4 (host=$1 expected='$2' got='$got')" >&2; rc=1; fi
@@ -96,6 +162,13 @@ selftest() {
   run_case a.example "" "$fixture" "missing service yields empty, never a later block"
   run_case b.example "http://b:30001" "$fixture" "block after malformed one still resolves"
   fixture='ingress:
+  - hostname: a.example
+    path: /ws/events
+  - path: /health
+    service: http://borrowed:39999
+  - service: http_status:404'
+  run_case a.example "" "$fixture" "hostless rule (legal, matches all hosts) never lends its service"
+  fixture='ingress:
   - hostname: dup.example
     path: /ws/events
     service: http://first:30001
@@ -120,9 +193,10 @@ selftest() {
   run_case auth.example "" "$fixture" "non-ws path rule never reports its service"
   return $rc
 }
-case "${1:-}" in --selftest) selftest; exit $? ;; esac
+[ "$SELFTEST" = "1" ] && { selftest; exit $?; }
 
 [ -f "$REPO_COPY" ] || { echo "FATAL: repo copy not found at $REPO_COPY" >&2; exit 2; }
+note "phase=$PHASE $([ "$NETWORK_ONLY" = "1" ] && echo '(network-only diagnostic)')"
 
 # 1. live vs repo -----------------------------------------------------------------------------
 live_raw="$(run "cat '$LIVE_PATH' 2>/dev/null")"
@@ -137,14 +211,13 @@ else
   fi
 fi
 
-# 2 + 3. the /ws/events routes (every apex hostname) -------------------------------------------
-# Each apex hostname must route /ws/events at the prod gateway NodePort — never the :8091
+# 2 + 3. the /ws/events routes (every SERVING apex hostname) -----------------------------------
+# Each serving apex hostname must route /ws/events at the prod gateway NodePort — never the :8091
 # ServiceLB (2026-07-31 outage). The es.* hostnames route to the es4 box (.4:30091), whose
 # NodePort belongs to the other cluster, so they are covered by the live 401 probes below.
-
 want_np="$(run "kubectl -n $NS get svc $GW_SVC -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null")"
-[ -n "$want_np" ] || note "WARN could not read $GW_SVC nodePort (kubectl unavailable from here) — skipping that check"
-for h in $APEX_HOSTS; do
+[ -n "$want_np" ] || unavailable "could not read $GW_SVC nodePort"
+for h in $SERVE_APEX; do
   ws_target="$(ws_target_for "$h" "$live_raw")"
   note "     $h/ws/events -> ${ws_target:-<unset>}"
   case "$ws_target" in
@@ -162,9 +235,9 @@ done
 
 # 4. do the routes actually reach each gateway's auth layer? -----------------------------------
 # 401 proves the upgrade crossed Cloudflare AND the tunnel AND reached the gateway's auth check;
-# 1006/000 means it died in a proxy on the way. Covers both domains and both clusters (apex=prod,
-# es.*=es4). A brand-new hostname failing here usually means its DNS CNAME is not live yet.
-for h in $APEX_HOSTS $ES_HOSTS; do
+# 1006/000 means it died in a proxy on the way. Covers both clusters (apex=prod, es.*=es4). A
+# brand-new hostname failing here usually means its DNS CNAME is not live yet.
+for h in $SERVE_APEX $SERVE_ES; do
   code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
           -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
           -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom | base64)" -H 'Sec-WebSocket-Version: 13' \
@@ -176,13 +249,13 @@ for h in $APEX_HOSTS $ES_HOSTS; do
   esac
 done
 
-# 5. auth hostnames: OIDC discovery must serve, admin surfaces must be edge-blocked -------------
-for h in $AUTH_HOSTS; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$h/realms/optionsedge/.well-known/openid-configuration" 2>/dev/null)"
-  case "$code" in
-    200) note "OK   $h: OIDC discovery -> 200" ;;
-    *)   bad "$h: OIDC discovery -> $code (expected 200)" ;;
-  esac
+# 5. auth hostnames: OIDC discovery must serve the EXACT expected issuer; admin edge-blocked ----
+# (status 200 alone proves nothing about WHICH issuer is being served)
+for h in $SERVE_AUTH; do
+  disc="$(curl -s -m 20 "https://$h/realms/optionsedge/.well-known/openid-configuration" 2>/dev/null)"
+  iss="$(printf '%s' "$disc" | grep -o '"issuer" *: *"[^"]*"' | head -1 | sed -E 's/.*: *"//; s/"$//')"
+  if [ "$iss" = "$EXPECTED_ISSUER" ]; then note "OK   $h issuer = $iss"
+  else bad "$h issuer = '${iss:-<none>}' (expected $EXPECTED_ISSUER)"; fi
   for path in /admin /realms/master; do
     code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$h$path" 2>/dev/null)"
     case "$code" in
@@ -192,58 +265,52 @@ for h in $AUTH_HOSTS; do
   done
 done
 
-# 6. the changed security contracts, proven at their source --------------------------------------
-# 6a. WS_ALLOWED_ORIGINS as actually deployed (an unauthenticated handshake 401s before the origin
-#     check runs, so the HTTP probes above cannot see the allow-list; the Deployment env can).
-#     Covers the prod cluster only — the es4 allow-list lives on the other cluster's kubeconfig.
-deployed_origins="$(run "kubectl -n $NS get deploy $GW_DEPLOY -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"WS_ALLOWED_ORIGINS\")].value}' 2>/dev/null")"
-if [ -z "$deployed_origins" ]; then
-  note "WARN could not read $GW_DEPLOY WS_ALLOWED_ORIGINS (kubectl unavailable from here) — skipping"
-else
-  note "     deployed WS_ALLOWED_ORIGINS=$deployed_origins"
-  for o in $EXPECTED_WS_ORIGINS; do
-    case ",$deployed_origins," in
-      *",$o,"*) note "OK   allow-list carries $o" ;;
-      *) bad "deployed WS_ALLOWED_ORIGINS is missing '$o'" ;;
-    esac
-  done
-fi
+# 6. gateway origin allow-lists, proven at their source on BOTH clusters ------------------------
+# An unauthenticated handshake 401s before the origin check runs (verified empirically), so HTTP
+# probes cannot see the allow-list; the Deployment env can. EXACT set equality: an unexpected
+# extra origin (worst case '*') is as much a failure as a missing one.
+origin_set_check() {  # label, deployed-csv, expected space-list
+  local label="$1" csv="$2" expected="$3"
+  if [ -z "$csv" ]; then unavailable "could not read $label WS_ALLOWED_ORIGINS"; return; fi
+  note "     $label WS_ALLOWED_ORIGINS=$csv"
+  local deployed_sorted expected_sorted
+  deployed_sorted="$(printf '%s' "$csv" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' | sort -u)"
+  expected_sorted="$(printf '%s\n' $expected | sort -u)"
+  if [ "$deployed_sorted" = "$expected_sorted" ]; then
+    note "OK   $label allow-list matches the expected set exactly"
+  else
+    bad "$label allow-list differs from the expected set"
+    diff <(printf '%s\n' "$expected_sorted") <(printf '%s\n' "$deployed_sorted") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
+  fi
+}
+prod_csv="$(run "kubectl -n $NS get deploy $GW_DEPLOY -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"WS_ALLOWED_ORIGINS\")].value}' 2>/dev/null")"
+origin_set_check "prod $GW_DEPLOY" "$prod_csv" "$EXPECTED_PROD_ORIGINS"
+es4_csv="$(run_es4 "KC=\$(command -v kubectl); sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \$KC -n $NS get deploy $ES4_GW_DEPLOY -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"WS_ALLOWED_ORIGINS\")].value}' 2>/dev/null")"
+origin_set_check "es4 $ES4_GW_DEPLOY" "$es4_csv" "$EXPECTED_ES4_ORIGINS"
 
-# 6b. the OIDC issuer value (status 200 alone proves nothing about WHICH issuer is being served).
-for h in $AUTH_HOSTS; do
-  iss="$(curl -s -m 20 "https://$h/realms/optionsedge/.well-known/openid-configuration" 2>/dev/null \
-        | grep -o '"issuer" *: *"[^"]*"' | head -1 | sed -E 's/.*: *"//; s/"$//')"
-  if [ "$iss" = "$EXPECTED_ISSUER" ]; then note "OK   $h issuer = $iss"
-  else bad "$h issuer = '${iss:-<none>}' (expected $EXPECTED_ISSUER)"; fi
-done
-
-# 6c. the web surface itself: page serves, and the REST API refuses anonymous callers.
-for h in $APEX_HOSTS $ES_HOSTS; do
+# 7. the web surface itself: page serves, and the REST API refuses anonymous callers ------------
+for h in $SERVE_APEX $SERVE_ES; do
   code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$h/" 2>/dev/null)"
   [ "$code" = "200" ] && note "OK   $h/ -> 200" || bad "$h/ -> $code (expected 200)"
   code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$h/api/config" 2>/dev/null)"
   [ "$code" = "401" ] && note "OK   $h/api/config unauthenticated -> 401" || bad "$h/api/config unauthenticated -> $code (expected 401)"
 done
 
-# 6d. OPTIONAL end-to-end origin proof: with a real bearer (grab one from a browser session's WS
-#     token request), an allowed Origin completes the upgrade (101) and a hostile one must not.
-if [ -n "${WS_PROBE_TOKEN:-}" ]; then
-  for probe in "https://bleadingoptions.com 101" "https://evil.invalid not101"; do
-    o="${probe% *}"; want="${probe#* }"
-    code="$(curl -s -o /dev/null -w '%{http_code}' -m 8 \
-            -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H "Origin: $o" \
-            -H "Authorization: Bearer $WS_PROBE_TOKEN" \
-            -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom | base64)" -H 'Sec-WebSocket-Version: 13' \
-            "https://fullfunding.nl/ws/events" 2>/dev/null)"
-    if [ "$want" = "101" ]; then
-      [ "$code" = "101" ] && note "OK   authenticated upgrade with Origin $o -> 101" || bad "authenticated upgrade with Origin $o -> $code (expected 101)"
-    else
-      [ "$code" != "101" ] && note "OK   authenticated upgrade with hostile Origin $o rejected ($code)" || bad "authenticated upgrade with hostile Origin $o was ACCEPTED"
-    fi
-  done
-else
-  note "     (set WS_PROBE_TOKEN=<bearer> to also prove the origin allow-list end-to-end)"
-fi
+# 8. redirect phases: every OLD hostname must 307/308 host-mapped with path+query preserved -----
+for h in $REDIR_HOSTS; do
+  target_host="$(redirect_target_for "$h")"
+  if [ -z "$target_host" ]; then bad "no redirect mapping defined for $h"; continue; fi
+  hdrs="$(curl -s -o /dev/null -D - -m 20 "https://$h/board?x=1" 2>/dev/null)"
+  code="$(printf '%s' "$hdrs" | head -1 | awk '{print $2}')"
+  loc="$(printf '%s' "$hdrs" | grep -i '^location:' | head -1 | sed -E 's/^[Ll]ocation:[[:space:]]*//; s/\r$//')"
+  want="https://$target_host/board?x=1"
+  case "$code" in
+    307|308) note "OK   $h -> $code" ;;
+    *) bad "$h -> ${code:-<none>} (expected 307/308 redirect)" ;;
+  esac
+  if [ "$loc" = "$want" ]; then note "OK   $h Location preserves host-map + path + query ($loc)"
+  else bad "$h Location = '${loc:-<none>}' (expected $want)"; fi
+done
 
-[ "$fail" -eq 0 ] && echo "  prod tunnel VERIFIED" || echo "  prod tunnel has PROBLEMS (see above)" >&2
+[ "$fail" -eq 0 ] && echo "  prod tunnel VERIFIED (phase=$PHASE)" || echo "  prod tunnel has PROBLEMS (see above)" >&2
 exit "$fail"
