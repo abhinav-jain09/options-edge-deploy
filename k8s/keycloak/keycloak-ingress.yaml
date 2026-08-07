@@ -6,12 +6,12 @@
 # rules are (they cover every public auth hostname, both domains during the migration). No TLS here —
 # TLS terminates at Cloudflare's edge; Keycloak trusts X-Forwarded-* (KC_PROXY_HEADERS).
 #
-# SELF-PROTECTING ADMIN BLOCK: this Ingress only routes the public OIDC login surface — `/realms/optionsedge`
-# (discovery, token, login-actions, account) and `/resources` (login theme assets). It deliberately does NOT
-# route `/` , so the admin console (`/admin`), the admin REST API (`/admin/realms/...`), and the master realm
-# (`/realms/master`) have NO route and traefik returns 404 — the k8s config blocks admin on its own, without
-# depending on the cloudflared rules. The cloudflared `/admin` + `/realms/master` 404 rules (docs/keycloak-prod.md)
-# are kept as belt-and-suspenders at the public edge. Admin is performed in-cluster via kcadm.sh / port-forward.
+# ADMIN-PATH FILTERING (legacy, non-operative): this Ingress routes only `/realms/optionsedge` +
+# `/resources`, so traffic that DID flow through traefik would find no route to /admin or
+# /realms/master. But the live public path bypasses traefik entirely (see header), so this filter
+# protects nothing today — the cloudflared edge 404 rules are the operative admin block, and the
+# LAN admin console is intentionally reachable at the oe-keycloak-lan LoadBalancer (:8089). Kept
+# because it is harmless, and correct if traffic is ever moved back onto traefik.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

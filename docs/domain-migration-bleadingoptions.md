@@ -46,7 +46,11 @@ Executed 2026-08-07/08 after the Friday close (CME closed until Sunday 18:00 ET)
    origins (es4). Deploy: per-service `feed-gateway` production job + `es4-deploy deploy-service
    SERVICE=es-feed-gateway`.
 
-**Phase-1 verification matrix** (`verify-prod-tunnel.sh --phase dual` automates every row except the login round-trip):
+**Phase-1 verification matrix.** `verify-prod-tunnel.sh --phase dual` automates the edge, issuer,
+allow-list (running-pod env, both clusters), live-realm-client and unauthenticated web rows. The
+**login round-trip and the browser REST behavior are a MANDATORY MANUAL gate** — a curl cannot
+exercise the browser-injected API base, the OIDC redirect dance, or CORS; open the page, log in,
+and watch the network tab before calling the phase accepted:
 
 | Check | Old domain | New domain |
 |---|---|---|
@@ -91,8 +95,11 @@ One coordinated change-set (single PR, single deploy window):
    or the next scale-up boots broken) → web (`web-service-deploy ENVIRONMENT=production
    BUILD_IMAGE=false`; confirm the `:prod` tag still resolves to the running digest first) → es4
    `deploy-service` es-feed-gateway + es-web. Prod before es4 (es4 pulls the same image/pattern).
-6. Verify: full matrix above goes green on the NEW domain including REST; old-domain UI now serves
-   pages pointing at new-domain APIs — immediately shadowed by the redirect (next step).
+6. Verify: `verify-prod-tunnel.sh --phase redirect` (it proves the flipped issuer and runtime
+   URLs in the RUNNING pods on both clusters, not just the manifests) **plus the mandatory manual
+   browser gate**: log in on the new domain, confirm boards render and `/api/*` succeeds in the
+   network tab. Old-domain UI now serves pages pointing at new-domain APIs — immediately shadowed
+   by the redirect (next step).
 7. **Cloudflare dashboard** — three separate Single Redirects on the `fullfunding.nl` zone (one
    per hostname; a fixed target cannot host-map). Patterns use `http*://` so plain-HTTP hits
    redirect too (per Cloudflare's cross-domain example) — with that scheme wildcard, `${1}`

@@ -67,28 +67,47 @@ case "$PHASE" in
     SERVE_ES_DEFAULT="es.fullfunding.nl es.bleadingoptions.com"
     SERVE_AUTH_DEFAULT="auth.fullfunding.nl auth.bleadingoptions.com"
     REDIR_HOSTS_DEFAULT=""
+    EXPECTED_REDIRECT_STATUS_DEFAULT=""
     EXPECTED_ISSUER_DEFAULT="https://auth.fullfunding.nl/realms/optionsedge"
     PROD_ORIGINS_DEFAULT="https://fullfunding.nl https://bleadingoptions.com"
     ES4_ORIGINS_DEFAULT="https://es.fullfunding.nl https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
+    PRIMARY_APEX_DEFAULT="fullfunding.nl"; PRIMARY_ES_DEFAULT="es.fullfunding.nl"
+    ABSENT_TUNNEL_HOSTS_DEFAULT=""
+    KC_REDIRECTS_DEFAULT="https://fullfunding.nl/* https://es.fullfunding.nl/* https://bleadingoptions.com/* https://es.bleadingoptions.com/* http://192.168.100.4:30080/* http://192.168.100.252:8094/* http://192.168.100.103:8094/*"
+    KC_WEBORIGINS_DEFAULT="https://fullfunding.nl https://es.fullfunding.nl https://bleadingoptions.com https://es.bleadingoptions.com http://192.168.100.4:30080 http://192.168.100.252:8094 http://192.168.100.103:8094"
+    KC_POSTLOGOUT_DEFAULT="https://fullfunding.nl/* https://es.fullfunding.nl/* https://bleadingoptions.com/* https://es.bleadingoptions.com/*"
     ;;
   redirect)
     SERVE_APEX_DEFAULT="bleadingoptions.com"
     SERVE_ES_DEFAULT="es.bleadingoptions.com"
     SERVE_AUTH_DEFAULT="auth.bleadingoptions.com"
     REDIR_HOSTS_DEFAULT="fullfunding.nl es.fullfunding.nl auth.fullfunding.nl"
+    EXPECTED_REDIRECT_STATUS_DEFAULT="307"   # soak on temporary; 'retired' demands the promoted 308
     EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
     # Old origins stay trusted during the redirect soak; Phase 3 removes them.
     PROD_ORIGINS_DEFAULT="https://fullfunding.nl https://bleadingoptions.com"
     ES4_ORIGINS_DEFAULT="https://es.fullfunding.nl https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
+    PRIMARY_APEX_DEFAULT="bleadingoptions.com"; PRIMARY_ES_DEFAULT="es.bleadingoptions.com"
+    ABSENT_TUNNEL_HOSTS_DEFAULT=""
+    KC_REDIRECTS_DEFAULT="https://fullfunding.nl/* https://es.fullfunding.nl/* https://bleadingoptions.com/* https://es.bleadingoptions.com/* http://192.168.100.4:30080/* http://192.168.100.252:8094/* http://192.168.100.103:8094/*"
+    KC_WEBORIGINS_DEFAULT="https://fullfunding.nl https://es.fullfunding.nl https://bleadingoptions.com https://es.bleadingoptions.com http://192.168.100.4:30080 http://192.168.100.252:8094 http://192.168.100.103:8094"
+    KC_POSTLOGOUT_DEFAULT="https://fullfunding.nl/* https://es.fullfunding.nl/* https://bleadingoptions.com/* https://es.bleadingoptions.com/*"
     ;;
   retired)
     SERVE_APEX_DEFAULT="bleadingoptions.com"
     SERVE_ES_DEFAULT="es.bleadingoptions.com"
     SERVE_AUTH_DEFAULT="auth.bleadingoptions.com"
     REDIR_HOSTS_DEFAULT="fullfunding.nl es.fullfunding.nl auth.fullfunding.nl"
+    EXPECTED_REDIRECT_STATUS_DEFAULT="308"
     EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
     PROD_ORIGINS_DEFAULT="https://bleadingoptions.com"
     ES4_ORIGINS_DEFAULT="https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
+    PRIMARY_APEX_DEFAULT="bleadingoptions.com"; PRIMARY_ES_DEFAULT="es.bleadingoptions.com"
+    # Retirement must be provable in the config itself, not hidden behind the edge redirects.
+    ABSENT_TUNNEL_HOSTS_DEFAULT="fullfunding.nl es.fullfunding.nl auth.fullfunding.nl"
+    KC_REDIRECTS_DEFAULT="https://bleadingoptions.com/* https://es.bleadingoptions.com/* http://192.168.100.4:30080/* http://192.168.100.252:8094/* http://192.168.100.103:8094/*"
+    KC_WEBORIGINS_DEFAULT="https://bleadingoptions.com https://es.bleadingoptions.com http://192.168.100.4:30080 http://192.168.100.252:8094 http://192.168.100.103:8094"
+    KC_POSTLOGOUT_DEFAULT="https://bleadingoptions.com/* https://es.bleadingoptions.com/*"
     ;;
 esac
 SERVE_APEX="${SERVE_APEX:-$SERVE_APEX_DEFAULT}"
@@ -98,6 +117,13 @@ REDIR_HOSTS="${REDIR_HOSTS:-$REDIR_HOSTS_DEFAULT}"
 EXPECTED_ISSUER="${EXPECTED_ISSUER:-$EXPECTED_ISSUER_DEFAULT}"
 EXPECTED_PROD_ORIGINS="${EXPECTED_PROD_ORIGINS:-$PROD_ORIGINS_DEFAULT}"
 EXPECTED_ES4_ORIGINS="${EXPECTED_ES4_ORIGINS:-$ES4_ORIGINS_DEFAULT}"
+EXPECTED_REDIRECT_STATUS="${EXPECTED_REDIRECT_STATUS:-$EXPECTED_REDIRECT_STATUS_DEFAULT}"
+PRIMARY_APEX="${PRIMARY_APEX:-$PRIMARY_APEX_DEFAULT}"
+PRIMARY_ES="${PRIMARY_ES:-$PRIMARY_ES_DEFAULT}"
+ABSENT_TUNNEL_HOSTS="${ABSENT_TUNNEL_HOSTS:-$ABSENT_TUNNEL_HOSTS_DEFAULT}"
+EXPECTED_KC_REDIRECTS="${EXPECTED_KC_REDIRECTS:-$KC_REDIRECTS_DEFAULT}"
+EXPECTED_KC_WEBORIGINS="${EXPECTED_KC_WEBORIGINS:-$KC_WEBORIGINS_DEFAULT}"
+EXPECTED_KC_POSTLOGOUT="${EXPECTED_KC_POSTLOGOUT:-$KC_POSTLOGOUT_DEFAULT}"
 
 redirect_target_for() {  # old host -> new host (host-mapped)
   case "$1" in
@@ -211,6 +237,20 @@ else
   fi
 fi
 
+# 1b. retirement is proven in the config text, not hidden behind the edge redirects --------------
+for h in $ABSENT_TUNNEL_HOSTS; do
+  if printf '%s\n' "$live_raw" | grep -qE "hostname:[[:space:]]*$h([[:space:]]|\$)"; then
+    bad "retired hostname '$h' still has ingress rules in the LIVE tunnel config"
+  else
+    note "OK   retired hostname '$h' absent from the live tunnel config"
+  fi
+  if grep -qE "hostname:[[:space:]]*$h([[:space:]]|\$)" "$REPO_COPY"; then
+    bad "retired hostname '$h' still has ingress rules in the REPO canonical config"
+  else
+    note "OK   retired hostname '$h' absent from the repo canonical config"
+  fi
+done
+
 # 2 + 3. the /ws/events routes (every SERVING apex hostname) -----------------------------------
 # Each serving apex hostname must route /ws/events at the prod gateway NodePort — never the :8091
 # ServiceLB (2026-07-31 outage). The es.* hostnames route to the es4 box (.4:30091), whose
@@ -265,10 +305,37 @@ for h in $SERVE_AUTH; do
   done
 done
 
-# 6. gateway origin allow-lists, proven at their source on BOTH clusters ------------------------
+# 6. security contracts proven in the RUNNING workloads on BOTH clusters ------------------------
 # An unauthenticated handshake 401s before the origin check runs (verified empirically), so HTTP
-# probes cannot see the allow-list; the Deployment env can. EXACT set equality: an unexpected
-# extra origin (worst case '*') is as much a failure as a missing one.
+# probes cannot see these values; the running pod's effective environment can (kubectl exec
+# printenv — a template read alone could report a config an unfinished rollout is not serving).
+prod_kubectl() { run "kubectl -n $NS $1 2>/dev/null"; }
+es4_kubectl()  { run_es4 "KC=\$(command -v kubectl); sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \$KC -n $NS $1 2>/dev/null"; }
+k8s_on() { if [ "$1" = "prod" ]; then prod_kubectl "$2"; else es4_kubectl "$2"; fi; }
+
+rollout_settled() {  # cluster, deploy — desired == updated == ready (0-replica deploys settle trivially)
+  local counts
+  counts="$(k8s_on "$1" "get deploy $2 -o jsonpath='{.spec.replicas} {.status.updatedReplicas} {.status.readyReplicas}'")"
+  [ -z "$counts" ] && { unavailable "could not read $1/$2 rollout state"; return 1; }
+  set -- $counts
+  local want="${1:-0}" updated="${2:-0}" ready="${3:-0}"
+  if [ "$want" = "0" ] || { [ "$want" = "$updated" ] && [ "$want" = "$ready" ]; }; then return 0; fi
+  bad "$1 deploy has an unsettled rollout (spec=$want updated=$updated ready=$ready) — effective env below may be stale"
+  return 0
+}
+
+eff_env() {  # cluster, deploy, container, var — the RUNNING container's effective value
+  k8s_on "$1" "exec deploy/$2 -c $3 -- printenv $4"
+}
+
+env_must_equal() {  # cluster, deploy, container, var, expected
+  local got
+  got="$(eff_env "$1" "$2" "$3" "$4")"
+  if [ -z "$got" ]; then unavailable "could not read effective $4 from $1/$2"; return; fi
+  if [ "$got" = "$5" ]; then note "OK   $1/$2 $4 = $got"
+  else bad "$1/$2 $4 = '$got' (expected '$5')"; fi
+}
+
 origin_set_check() {  # label, deployed-csv, expected space-list
   local label="$1" csv="$2" expected="$3"
   if [ -z "$csv" ]; then unavailable "could not read $label WS_ALLOWED_ORIGINS"; return; fi
@@ -283,10 +350,74 @@ origin_set_check() {  # label, deployed-csv, expected space-list
     diff <(printf '%s\n' "$expected_sorted") <(printf '%s\n' "$deployed_sorted") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
   fi
 }
-prod_csv="$(run "kubectl -n $NS get deploy $GW_DEPLOY -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"WS_ALLOWED_ORIGINS\")].value}' 2>/dev/null")"
-origin_set_check "prod $GW_DEPLOY" "$prod_csv" "$EXPECTED_PROD_ORIGINS"
-es4_csv="$(run_es4 "KC=\$(command -v kubectl); sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \$KC -n $NS get deploy $ES4_GW_DEPLOY -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"WS_ALLOWED_ORIGINS\")].value}' 2>/dev/null")"
-origin_set_check "es4 $ES4_GW_DEPLOY" "$es4_csv" "$EXPECTED_ES4_ORIGINS"
+
+rollout_settled prod "$GW_DEPLOY"
+origin_set_check "prod $GW_DEPLOY" "$(eff_env prod "$GW_DEPLOY" feed-gateway WS_ALLOWED_ORIGINS)" "$EXPECTED_PROD_ORIGINS"
+env_must_equal prod "$GW_DEPLOY" feed-gateway WS_AUTH_ISSUER_URI "$EXPECTED_ISSUER"
+rollout_settled es4 "$ES4_GW_DEPLOY"
+origin_set_check "es4 $ES4_GW_DEPLOY" "$(eff_env es4 "$ES4_GW_DEPLOY" feed-gateway WS_ALLOWED_ORIGINS)" "$EXPECTED_ES4_ORIGINS"
+env_must_equal es4 "$ES4_GW_DEPLOY" feed-gateway WS_AUTH_ISSUER_URI "$EXPECTED_ISSUER"
+
+# 6b. web runtime URLs — RuntimeProfileConfig injects these envs into the page, so the browser's
+# API/WS/auth targets are exactly what the running web pods carry. Primary hosts follow the phase.
+WEB_DEPLOY="${WEB_DEPLOY:-options-edge-web}"
+ES4_WEB_DEPLOY="${ES4_WEB_DEPLOY:-es-web}"
+rollout_settled prod "$WEB_DEPLOY"
+env_must_equal prod "$WEB_DEPLOY" web VITE_AUTH_ISSUER "$EXPECTED_ISSUER"
+env_must_equal prod "$WEB_DEPLOY" web VITE_API_BASE_URL "https://$PRIMARY_APEX"
+env_must_equal prod "$WEB_DEPLOY" web VITE_WS_URL "wss://$PRIMARY_APEX/ws/events"
+rollout_settled es4 "$ES4_WEB_DEPLOY"
+env_must_equal es4 "$ES4_WEB_DEPLOY" web VITE_AUTH_ISSUER "$EXPECTED_ISSUER"
+env_must_equal es4 "$ES4_WEB_DEPLOY" web VITE_API_BASE_URL "https://$PRIMARY_ES"
+env_must_equal es4 "$ES4_WEB_DEPLOY" web VITE_WS_URL "wss://$PRIMARY_ES/ws/events"
+if [ "$PHASE" != "dual" ]; then
+  # WebNav's compiled default still says the old domain; from Phase 2 the env override is mandatory.
+  env_must_equal prod "$WEB_DEPLOY" web APP_ES_OPTIONS_URL "https://$PRIMARY_ES"
+fi
+# spx-mission-control declares 0 replicas — no pod to exec, so its desired template is the
+# strongest available check (a stale issuer there boots broken on the next scale-up).
+MC_DEPLOY="${MC_DEPLOY:-spx-mission-control-service}"
+mc_issuer="$(prod_kubectl "get deploy $MC_DEPLOY -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"MISSION_AUTH_ISSUER_URI\")].value}'")"
+if [ -z "$mc_issuer" ]; then unavailable "could not read $MC_DEPLOY MISSION_AUTH_ISSUER_URI template"
+elif [ "$mc_issuer" = "$EXPECTED_ISSUER" ]; then note "OK   $MC_DEPLOY (template, 0 replicas) issuer = $mc_issuer"
+else bad "$MC_DEPLOY (template) issuer = '$mc_issuer' (expected $EXPECTED_ISSUER)"; fi
+
+# 6c. the LIVE Keycloak client's redirect/origin/logout sets (kcadm in-pod; --import-realm skips
+# existing realms, so the configmap alone can silently diverge from what login actually enforces).
+kc_sets_check() {
+  command -v python3 >/dev/null || { unavailable "python3 needed to parse the Keycloak client"; return; }
+  local pw client
+  pw="$(prod_kubectl "get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}'" | base64 -d)"
+  [ -z "$pw" ] && { unavailable "could not read the Keycloak admin secret"; return; }
+  client="$(prod_kubectl "exec deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password \"$pw\" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web 2>/dev/null'")"
+  [ -z "$client" ] && { unavailable "could not read the live options-edge-web client via kcadm"; return; }
+  printf '%s' "$client" | python3 -c "
+import json, sys
+c = json.load(sys.stdin)[0]
+def out(name, vals): print(name + '\t' + '\n'.join(sorted(vals)).replace('\n', '\t'))
+out('REDIRECTS', c.get('redirectUris', []))
+out('WEBORIGINS', c.get('webOrigins', []))
+out('POSTLOGOUT', [u for u in c.get('attributes', {}).get('post.logout.redirect.uris', '').split('##') if u])
+" | while IFS=$'\t' read -r name rest; do
+    live_sorted="$(printf '%s' "$rest" | tr '\t' '\n' | sort -u)"
+    case "$name" in
+      REDIRECTS) expected="$EXPECTED_KC_REDIRECTS" ;;
+      WEBORIGINS) expected="$EXPECTED_KC_WEBORIGINS" ;;
+      POSTLOGOUT) expected="$EXPECTED_KC_POSTLOGOUT" ;;
+    esac
+    expected_sorted="$(printf '%s\n' $expected | sort -u)"
+    if [ "$live_sorted" = "$expected_sorted" ]; then
+      echo "  OK   live Keycloak client $name matches the expected set exactly"
+    else
+      echo "  FAIL: live Keycloak client $name differs from the expected set" >&2
+      diff <(printf '%s\n' "$expected_sorted") <(printf '%s\n' "$live_sorted") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
+    fi
+  done
+}
+# kc_sets_check pipes through a subshell, so $fail cannot mutate inside it; detect on its output.
+kc_out="$(kc_sets_check 2>&1)"
+[ -n "$kc_out" ] && printf '%s\n' "$kc_out"
+printf '%s\n' "$kc_out" | grep -q 'FAIL' && fail=1
 
 # 7. the web surface itself: page serves, and the REST API refuses anonymous callers ------------
 for h in $SERVE_APEX $SERVE_ES; do
@@ -296,20 +427,26 @@ for h in $SERVE_APEX $SERVE_ES; do
   [ "$code" = "401" ] && note "OK   $h/api/config unauthenticated -> 401" || bad "$h/api/config unauthenticated -> $code (expected 401)"
 done
 
-# 8. redirect phases: every OLD hostname must 307/308 host-mapped with path+query preserved -----
+# 8. redirect phases: every OLD hostname, BOTH schemes, exact lifecycle status ------------------
+# redirect soak expects 307 (recallable); retired expects the promoted 308. Accepting either would
+# let a premature permanent redirect — or a forgotten promotion — pass silently.
 for h in $REDIR_HOSTS; do
   target_host="$(redirect_target_for "$h")"
   if [ -z "$target_host" ]; then bad "no redirect mapping defined for $h"; continue; fi
-  hdrs="$(curl -s -o /dev/null -D - -m 20 "https://$h/board?x=1" 2>/dev/null)"
-  code="$(printf '%s' "$hdrs" | head -1 | awk '{print $2}')"
-  loc="$(printf '%s' "$hdrs" | grep -i '^location:' | head -1 | sed -E 's/^[Ll]ocation:[[:space:]]*//; s/\r$//')"
   want="https://$target_host/board?x=1"
-  case "$code" in
-    307|308) note "OK   $h -> $code" ;;
-    *) bad "$h -> ${code:-<none>} (expected 307/308 redirect)" ;;
-  esac
-  if [ "$loc" = "$want" ]; then note "OK   $h Location preserves host-map + path + query ($loc)"
-  else bad "$h Location = '${loc:-<none>}' (expected $want)"; fi
+  for scheme in https http; do
+    hdrs="$(curl -s -o /dev/null -D - -m 20 "$scheme://$h/board?x=1" 2>/dev/null)"
+    code="$(printf '%s' "$hdrs" | head -1 | awk '{print $2}')"
+    loc="$(printf '%s' "$hdrs" | grep -i '^location:' | head -1 | sed -E 's/^[Ll]ocation:[[:space:]]*//; s/\r$//')"
+    if [ "$code" = "$EXPECTED_REDIRECT_STATUS" ]; then note "OK   $scheme://$h -> $code"
+    else bad "$scheme://$h -> ${code:-<none>} (expected exactly $EXPECTED_REDIRECT_STATUS in phase $PHASE)"; fi
+    # Plain HTTP may hop via Cloudflare's own https upgrade first; the FINAL location must still
+    # land host-mapped with path+query intact.
+    if [ "$loc" = "$want" ]; then note "OK   $scheme://$h Location preserves host-map + path + query"
+    elif [ "$scheme" = "http" ] && [ "$loc" = "https://$h/board?x=1" ]; then
+      note "OK   $scheme://$h upgrades to https first (Location $loc); https leg verified above"
+    else bad "$scheme://$h Location = '${loc:-<none>}' (expected $want)"; fi
+  done
 done
 
 [ "$fail" -eq 0 ] && echo "  prod tunnel VERIFIED (phase=$PHASE)" || echo "  prod tunnel has PROBLEMS (see above)" >&2

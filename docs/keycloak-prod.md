@@ -70,14 +70,23 @@ the EXACT unit, verify (never edit the live file in place):
 ```sh
 # on the prod host, with the merged repo copy staged at ~/options-edge-stable.yml.new
 cloudflared tunnel --config ~/options-edge-stable.yml.new ingress validate
-cloudflared tunnel --config ~/options-edge-stable.yml.new ingress rule https://fullfunding.nl/ws/events
+# authoritative preflight: cloudflared itself resolves every public route against the STAGED file
+for u in https://fullfunding.nl/ws/events https://fullfunding.nl/ \
+         https://bleadingoptions.com/ws/events https://bleadingoptions.com/ \
+         https://auth.fullfunding.nl/admin https://auth.fullfunding.nl/realms/optionsedge \
+         https://auth.bleadingoptions.com/admin https://auth.bleadingoptions.com/realms/optionsedge \
+         https://es.fullfunding.nl/ws/events https://es.bleadingoptions.com/ws/events; do
+  cloudflared tunnel --config ~/options-edge-stable.yml.new ingress rule "$u"
+done
 sudo cp /etc/cloudflared/options-edge-stable.yml /etc/cloudflared/options-edge-stable.yml.bak-$(date +%Y%m%d-%H%M%S)
 sudo cp ~/options-edge-stable.yml.new /etc/cloudflared/options-edge-stable.yml.tmp   && sudo mv /etc/cloudflared/options-edge-stable.yml.tmp /etc/cloudflared/options-edge-stable.yml
 sudo systemctl restart options-edge-cloudflared-stable.service   # the unit name — NOT bare "cloudflared"
 systemctl is-active options-edge-cloudflared-stable.service
 journalctl -u options-edge-cloudflared-stable.service -n 20 --no-pager   # no ERR lines
 scripts/ops/verify-prod-tunnel.sh                                        # phase-appropriate gate
-# rollback: sudo cp <the .bak file> /etc/cloudflared/options-edge-stable.yml && restart the unit
+# rollback (exact, using the backup taken above):
+#   sudo cp /etc/cloudflared/options-edge-stable.yml.bak-<timestamp> /etc/cloudflared/options-edge-stable.yml
+#   sudo systemctl restart options-edge-cloudflared-stable.service
 ``` (An earlier revision of this doc inlined a
 sample config here; it drifted — `/ws/events` must target the gateway NodePort 30097, never the
 :8091 ServiceLB, and the web backend moved to `.252:8094`. The canonical file carries the incident
@@ -85,8 +94,6 @@ notes.) The `/admin` + `/realms/master` 404 rules MUST precede each auth hostnam
 (first match wins), for every auth hostname (`auth.fullfunding.nl` and, since the domain migration,
 `auth.bleadingoptions.com` — see docs/domain-migration-bleadingoptions.md).
 
-Then `sudo systemctl restart cloudflared` (or restart the cloudflared service/container) and confirm it
-re-reads the config.
 
 ## Deploy (via Jenkins)
 
