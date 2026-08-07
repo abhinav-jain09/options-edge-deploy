@@ -26,6 +26,20 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PROD-ONLY: the ES GEX strike topic for the databento display service. MIRRORS the standalone
+  # slice k8s/services/raw-to-display/overlays/production, which #714 added it to without the
+  # matching top-level patch — validate-services caught the drift and blocked every deploy.
+  # Inserted at INDEX 4, immediately after KAFKA_DISPLAY_VOLUME_TOPIC, because the mirror check
+  # compares the rendered manifests and an appended entry would still differ by position.
+  - target:
+      kind: Deployment
+      name: raw-to-display-databento-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/4
+        value:
+          name: KAFKA_DATABENTO_GEX_STRIKE_TOPIC
+          value: options.databento.gex.strike
   # PROD-ONLY: arm the reversal hunt (requirement rev 5). MIRRORS the
   # standalone overlay k8s/services/reversal-confirmation/overlays/production
   # exactly — validate-services enforces the render equality.
