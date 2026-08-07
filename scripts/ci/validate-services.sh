@@ -144,20 +144,36 @@ done
 echo "topic contracts: oi-anchor barrier, pure-compact verification, and the durable-preservation mutation suite passed"
 
 # --- continuous auto-hunt production acceptance (auto-arm req §3.1) ---
-# Both flags must be true in BOTH prod mirrors: a deploy where either is
-# missing ships the feature inert, and the requirement makes that a
-# deploy-time failure, not a runtime surprise. (Values are quoted "true"
-# in the manifests; the JSON-patch overlay carries the same literal.)
-echo "=== 7) continuous auto-hunt: production flags present in both mirrors ==="
-for f in k8s/overlays/production/kustomization.yaml \
-         k8s/services/reversal-confirmation/overlays/production/manifest.yaml; do
+# Both flags must be EFFECTIVELY true in BOTH prod mirrors: asserted on the
+# RENDERED manifests (not source text — a commented-out or duplicated env
+# entry must fail here, not deploy the hunt inert). Exactly one entry per
+# flag, value "true", on the reversal-confirmation container.
+echo "=== 7) continuous auto-hunt: production flags effective in both rendered mirrors ==="
+for r in "$TMP/mono-production.yaml" "$TMP/svc-reversal-confirmation-production.yaml"; do
+  if [ ! -s "$r" ]; then
+    echo "FAIL: rendered mirror $r missing — cannot assert auto-hunt flags"
+    exit 1
+  fi
   for flag in REVERSAL_HUNT_ENABLED REVERSAL_HUNT_AUTO_ARM; do
-    if ! grep -A1 "name: $flag" "$f" | grep -q '"true"'; then
-      echo "FAIL: $flag is not \"true\" in $f — the always-armed hunt would deploy inert"
+    # STRUCTURAL count on the named application container: project the env
+    # entry's NAME (always present on a real entry), so a duplicate with an
+    # empty value still counts as two (Codex r2 — Kubernetes deploys
+    # duplicate env entries; value-projection would collapse them).
+    q='select(.kind=="Deployment" and .metadata.name=="reversal-confirmation-service")
+        | .spec.template.spec.containers[] | select(.name=="reversal-confirmation")
+        | .env[] | select(.name=="'"$flag"'")'
+    n="$(yq -r "$q | .name" "$r" | grep -c "^${flag}\$" || true)"
+    if [ "$n" != "1" ]; then
+      echo "FAIL: $flag appears $n times on the reversal-confirmation container in rendered $r (need exactly 1)"
+      exit 1
+    fi
+    v="$(yq -r "$q | .value" "$r")"
+    if [ "$v" != "true" ]; then
+      echo "FAIL: $flag renders as '$v' in $r — the always-armed hunt would deploy inert"
       exit 1
     fi
   done
 done
-echo "auto-hunt flags: REVERSAL_HUNT_ENABLED + REVERSAL_HUNT_AUTO_ARM true in both prod mirrors"
+echo "auto-hunt flags: effective REVERSAL_HUNT_ENABLED + REVERSAL_HUNT_AUTO_ARM = true in both rendered mirrors"
 
 echo "=== validate-services: OK ==="
