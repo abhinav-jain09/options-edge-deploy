@@ -171,6 +171,19 @@ patches:
                 env:
                   - name: DEALER_LEDGER_ADVISORY_ENABLED
                     value: "true"
+                  # SHADOW-live gates (spec dl-shadow-live r3, Codex-approved 2026-08-08): absorption
+                  # verdict is evidence-only (matched-null OR 0.817 — no signal as a hard gate), greeks
+                  # DEGRADED may fire (live is 100% MISSING_IV), MIN_WAVES=1 (waves never close; 3 is
+                  # unsatisfiable), confidence floor LOW until the OI-seeded morning book lands.
+                  # Fires stay SHADOW-quality; rollback = remove these four (defaults restore HARD/FULL/3/MEDIUM).
+                  - name: DEALER_LEDGER_ABSORPTION_GATE_MODE
+                    value: CONFIDENCE
+                  - name: DEALER_LEDGER_FIRE_GREEKS_MIN_QUALITY
+                    value: DEGRADED
+                  - name: DEALER_LEDGER_ABSORB_MIN_WAVES
+                    value: "1"
+                  - name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE
+                    value: LOW
                   - name: JAVA_TOOL_OPTIONS
                     value: -Xms1024m -Xmx6144m
                 resources:
