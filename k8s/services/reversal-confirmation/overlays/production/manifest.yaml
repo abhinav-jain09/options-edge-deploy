@@ -122,6 +122,8 @@ spec:
               value: 192.168.100.252:9092
             - name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS
               value: "30"
+            - name: REVERSAL_HUNT_AUTO_ARM
+              value: "true"
           envFrom:
             - configMapRef:
                 name: options-edge-config
