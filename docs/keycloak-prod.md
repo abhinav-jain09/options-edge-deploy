@@ -69,15 +69,29 @@ the EXACT unit, verify (never edit the live file in place):
 
 ```sh
 # on the prod host, with the merged repo copy staged at ~/options-edge-stable.yml.new
+set -euo pipefail   # any failed validation below MUST stop the install
 cloudflared tunnel --config ~/options-edge-stable.yml.new ingress validate
-# authoritative preflight: cloudflared itself resolves every public route against the STAGED file
-for u in https://fullfunding.nl/ws/events https://fullfunding.nl/ \
-         https://bleadingoptions.com/ws/events https://bleadingoptions.com/ \
-         https://auth.fullfunding.nl/admin https://auth.fullfunding.nl/realms/optionsedge \
-         https://auth.bleadingoptions.com/admin https://auth.bleadingoptions.com/realms/optionsedge \
-         https://es.fullfunding.nl/ws/events https://es.bleadingoptions.com/ws/events; do
-  cloudflared tunnel --config ~/options-edge-stable.yml.new ingress rule "$u"
-done
+# authoritative preflight: cloudflared itself resolves EVERY public route against the STAGED file,
+# and each resolution is asserted against the expected backend (grep -q fails the pipeline).
+while read -r u expect; do
+  cloudflared tunnel --config ~/options-edge-stable.yml.new ingress rule "$u" | grep -q "$expect" \
+    || { echo "PREFLIGHT FAIL: $u did not resolve to $expect" >&2; exit 1; }
+done <<'ROUTES'
+https://fullfunding.nl/ws/events 192.168.100.252:30097
+https://fullfunding.nl/ 192.168.100.252:8094
+https://bleadingoptions.com/ws/events 192.168.100.252:30097
+https://bleadingoptions.com/ 192.168.100.252:8094
+https://auth.fullfunding.nl/admin http_status:404
+https://auth.fullfunding.nl/realms/master http_status:404
+https://auth.fullfunding.nl/realms/optionsedge 10.43.127.26:8080
+https://auth.bleadingoptions.com/admin http_status:404
+https://auth.bleadingoptions.com/realms/master http_status:404
+https://auth.bleadingoptions.com/realms/optionsedge 10.43.127.26:8080
+https://es.fullfunding.nl/ws/events 192.168.100.4:30091
+https://es.fullfunding.nl/ 192.168.100.4:30080
+https://es.bleadingoptions.com/ws/events 192.168.100.4:30091
+https://es.bleadingoptions.com/ 192.168.100.4:30080
+ROUTES
 sudo cp /etc/cloudflared/options-edge-stable.yml /etc/cloudflared/options-edge-stable.yml.bak-$(date +%Y%m%d-%H%M%S)
 sudo cp ~/options-edge-stable.yml.new /etc/cloudflared/options-edge-stable.yml.tmp   && sudo mv /etc/cloudflared/options-edge-stable.yml.tmp /etc/cloudflared/options-edge-stable.yml
 sudo systemctl restart options-edge-cloudflared-stable.service   # the unit name — NOT bare "cloudflared"

@@ -239,12 +239,13 @@ fi
 
 # 1b. retirement is proven in the config text, not hidden behind the edge redirects --------------
 for h in $ABSENT_TUNNEL_HOSTS; do
-  if printf '%s\n' "$live_raw" | grep -qE "hostname:[[:space:]]*$h([[:space:]]|\$)"; then
+  h_re="$(printf '%s' "$h" | sed 's/\./\\./g')"
+  if printf '%s\n' "$live_raw" | grep -qiE "hostname:[[:space:]]*[\"']?$h_re[\"']?([[:space:]]|\$)"; then
     bad "retired hostname '$h' still has ingress rules in the LIVE tunnel config"
   else
     note "OK   retired hostname '$h' absent from the live tunnel config"
   fi
-  if grep -qE "hostname:[[:space:]]*$h([[:space:]]|\$)" "$REPO_COPY"; then
+  if grep -qiE "hostname:[[:space:]]*[\"']?$h_re[\"']?([[:space:]]|\$)" "$REPO_COPY"; then
     bad "retired hostname '$h' still has ingress rules in the REPO canonical config"
   else
     note "OK   retired hostname '$h' absent from the repo canonical config"
@@ -366,10 +367,16 @@ rollout_settled prod "$WEB_DEPLOY"
 env_must_equal prod "$WEB_DEPLOY" web VITE_AUTH_ISSUER "$EXPECTED_ISSUER"
 env_must_equal prod "$WEB_DEPLOY" web VITE_API_BASE_URL "https://$PRIMARY_APEX"
 env_must_equal prod "$WEB_DEPLOY" web VITE_WS_URL "wss://$PRIMARY_APEX/ws/events"
+env_must_equal prod "$WEB_DEPLOY" web APP_FEED_GATEWAY_WS_URL "wss://$PRIMARY_APEX/ws/events"
+env_must_equal prod "$WEB_DEPLOY" web VITE_MISSION_CONTROL_URL "https://$PRIMARY_APEX"
+env_must_equal prod "$WEB_DEPLOY" web VITE_REPLAY_ORCHESTRATOR_URL "https://$PRIMARY_APEX"
 rollout_settled es4 "$ES4_WEB_DEPLOY"
 env_must_equal es4 "$ES4_WEB_DEPLOY" web VITE_AUTH_ISSUER "$EXPECTED_ISSUER"
 env_must_equal es4 "$ES4_WEB_DEPLOY" web VITE_API_BASE_URL "https://$PRIMARY_ES"
 env_must_equal es4 "$ES4_WEB_DEPLOY" web VITE_WS_URL "wss://$PRIMARY_ES/ws/events"
+env_must_equal es4 "$ES4_WEB_DEPLOY" web APP_FEED_GATEWAY_WS_URL "wss://$PRIMARY_ES/ws/events"
+env_must_equal es4 "$ES4_WEB_DEPLOY" web VITE_MISSION_CONTROL_URL "https://$PRIMARY_ES"
+env_must_equal es4 "$ES4_WEB_DEPLOY" web VITE_REPLAY_ORCHESTRATOR_URL "https://$PRIMARY_ES"
 if [ "$PHASE" != "dual" ]; then
   # WebNav's compiled default still says the old domain; from Phase 2 the env override is mandatory.
   env_must_equal prod "$WEB_DEPLOY" web APP_ES_OPTIONS_URL "https://$PRIMARY_ES"
@@ -377,10 +384,15 @@ fi
 # spx-mission-control declares 0 replicas — no pod to exec, so its desired template is the
 # strongest available check (a stale issuer there boots broken on the next scale-up).
 MC_DEPLOY="${MC_DEPLOY:-spx-mission-control-service}"
-mc_issuer="$(prod_kubectl "get deploy $MC_DEPLOY -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"MISSION_AUTH_ISSUER_URI\")].value}'")"
-if [ -z "$mc_issuer" ]; then unavailable "could not read $MC_DEPLOY MISSION_AUTH_ISSUER_URI template"
-elif [ "$mc_issuer" = "$EXPECTED_ISSUER" ]; then note "OK   $MC_DEPLOY (template, 0 replicas) issuer = $mc_issuer"
-else bad "$MC_DEPLOY (template) issuer = '$mc_issuer' (expected $EXPECTED_ISSUER)"; fi
+mc_template_env() { prod_kubectl "get deploy $MC_DEPLOY -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name==\"$1\")].value}'"; }
+mc_check() {  # var, expected
+  local got; got="$(mc_template_env "$1")"
+  if [ -z "$got" ]; then unavailable "could not read $MC_DEPLOY $1 template"
+  elif [ "$got" = "$2" ]; then note "OK   $MC_DEPLOY (template, 0 replicas) $1 = $got"
+  else bad "$MC_DEPLOY (template) $1 = '$got' (expected $2)"; fi
+}
+mc_check MISSION_AUTH_ISSUER_URI "$EXPECTED_ISSUER"
+mc_check MISSION_AUTH_JWK_SET_URI "$EXPECTED_ISSUER/protocol/openid-connect/certs"
 
 # 6c. the LIVE Keycloak client's redirect/origin/logout sets (kcadm in-pod; --import-realm skips
 # existing realms, so the configmap alone can silently diverge from what login actually enforces).
@@ -393,12 +405,21 @@ kc_sets_check() {
   [ -z "$client" ] && { unavailable "could not read the live options-edge-web client via kcadm"; return; }
   printf '%s' "$client" | python3 -c "
 import json, sys
-c = json.load(sys.stdin)[0]
+try:
+    arr = json.load(sys.stdin)
+    if not isinstance(arr, list) or len(arr) != 1:
+        raise ValueError('expected exactly 1 matching client, got %r' % (len(arr) if isinstance(arr, list) else type(arr).__name__))
+    c = arr[0]
+except Exception as e:
+    # printed to stdout so the caller's FAIL detector sees it even though we exit 0
+    print('  FAIL: live Keycloak client response unusable: %s' % e)
+    sys.exit(0)
 def out(name, vals): print(name + '\t' + '\n'.join(sorted(vals)).replace('\n', '\t'))
 out('REDIRECTS', c.get('redirectUris', []))
 out('WEBORIGINS', c.get('webOrigins', []))
 out('POSTLOGOUT', [u for u in c.get('attributes', {}).get('post.logout.redirect.uris', '').split('##') if u])
 " | while IFS=$'\t' read -r name rest; do
+    case "$name" in *FAIL:*) echo "$name" >&2; continue ;; esac
     live_sorted="$(printf '%s' "$rest" | tr '\t' '\n' | sort -u)"
     case "$name" in
       REDIRECTS) expected="$EXPECTED_KC_REDIRECTS" ;;
@@ -419,6 +440,31 @@ kc_out="$(kc_sets_check 2>&1)"
 [ -n "$kc_out" ] && printf '%s\n' "$kc_out"
 printf '%s\n' "$kc_out" | grep -q 'FAIL' && fail=1
 
+# 6d. the dark req realm's client must follow the domain too (Phase 3 renames it) ----------------
+case "$PHASE" in retired) req_expect="https://req.bleadingoptions.com" ;; *) req_expect="https://req.fullfunding.nl" ;; esac
+req_uris="$(prod_kubectl "exec deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web 2>/dev/null'" | { command -v python3 >/dev/null && python3 -c "
+import json, sys
+try:
+    arr = json.load(sys.stdin); c = arr[0]
+    print(' '.join(sorted(set(c.get('redirectUris', []) + c.get('webOrigins', [])))))
+except Exception:
+    pass" || true; })"
+if [ -z "$req_uris" ]; then
+  unavailable "could not read the req realm's bugzilla-web client"
+elif printf '%s' "$req_uris" | grep -q "$req_expect"; then
+  case "$PHASE" in
+    retired)
+      if printf '%s' "$req_uris" | grep -q "req.fullfunding.nl"; then
+        bad "req realm client still references req.fullfunding.nl after retirement ($req_uris)"
+      else
+        note "OK   req realm client is on $req_expect only"
+      fi ;;
+    *) note "OK   req realm client references $req_expect" ;;
+  esac
+else
+  bad "req realm client URIs '$req_uris' missing expected $req_expect"
+fi
+
 # 7. the web surface itself: page serves, and the REST API refuses anonymous callers ------------
 for h in $SERVE_APEX $SERVE_ES; do
   code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$h/" 2>/dev/null)"
@@ -438,13 +484,17 @@ for h in $REDIR_HOSTS; do
     hdrs="$(curl -s -o /dev/null -D - -m 20 "$scheme://$h/board?x=1" 2>/dev/null)"
     code="$(printf '%s' "$hdrs" | head -1 | awk '{print $2}')"
     loc="$(printf '%s' "$hdrs" | grep -i '^location:' | head -1 | sed -E 's/^[Ll]ocation:[[:space:]]*//; s/\r$//')"
+    # Classify FIRST: a plain-HTTP hit may hop through Cloudflare's own same-host https upgrade
+    # (any 3xx). That leg carries no mapping obligation — the https leg above already proved the
+    # lifecycle status and the host-mapped Location.
+    if [ "$scheme" = "http" ] && [ "$loc" = "https://$h/board?x=1" ]; then
+      case "$code" in
+        30[1278]) note "OK   $scheme://$h upgrades to https ($code); https leg carries the proof"; continue ;;
+      esac
+    fi
     if [ "$code" = "$EXPECTED_REDIRECT_STATUS" ]; then note "OK   $scheme://$h -> $code"
     else bad "$scheme://$h -> ${code:-<none>} (expected exactly $EXPECTED_REDIRECT_STATUS in phase $PHASE)"; fi
-    # Plain HTTP may hop via Cloudflare's own https upgrade first; the FINAL location must still
-    # land host-mapped with path+query intact.
     if [ "$loc" = "$want" ]; then note "OK   $scheme://$h Location preserves host-map + path + query"
-    elif [ "$scheme" = "http" ] && [ "$loc" = "https://$h/board?x=1" ]; then
-      note "OK   $scheme://$h upgrades to https first (Location $loc); https leg verified above"
     else bad "$scheme://$h Location = '${loc:-<none>}' (expected $want)"; fi
   done
 done

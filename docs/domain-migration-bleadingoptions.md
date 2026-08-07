@@ -95,11 +95,12 @@ One coordinated change-set (single PR, single deploy window):
    or the next scale-up boots broken) → web (`web-service-deploy ENVIRONMENT=production
    BUILD_IMAGE=false`; confirm the `:prod` tag still resolves to the running digest first) → es4
    `deploy-service` es-feed-gateway + es-web. Prod before es4 (es4 pulls the same image/pattern).
-6. Verify: `verify-prod-tunnel.sh --phase redirect` (it proves the flipped issuer and runtime
-   URLs in the RUNNING pods on both clusters, not just the manifests) **plus the mandatory manual
-   browser gate**: log in on the new domain, confirm boards render and `/api/*` succeeds in the
-   network tab. Old-domain UI now serves pages pointing at new-domain APIs — immediately shadowed
-   by the redirect (next step).
+6. Pre-redirect acceptance (the redirect rules do not exist yet, so the full redirect gate would
+   rightly fail here): `REDIR_HOSTS="" verify-prod-tunnel.sh --phase redirect` — proves the
+   flipped issuer and runtime URLs in the RUNNING pods on both clusters and the new-domain serving
+   surface — **plus the mandatory manual browser gate**: log in on the new domain, confirm boards
+   render and `/api/*` succeeds in the network tab. Old-domain UI now serves pages pointing at
+   new-domain APIs — shadowed by the redirect created next.
 7. **Cloudflare dashboard** — three separate Single Redirects on the `fullfunding.nl` zone (one
    per hostname; a fixed target cannot host-map). Patterns use `http*://` so plain-HTTP hits
    redirect too (per Cloudflare's cross-domain example) — with that scheme wildcard, `${1}`
@@ -114,9 +115,11 @@ One coordinated change-set (single PR, single deploy window):
    | 2 | `http*://es.fullfunding.nl/*` | `https://es.bleadingoptions.com/${2}` | 307 → 308 |
    | 3 | `http*://auth.fullfunding.nl/*` | `https://auth.bleadingoptions.com/${2}` | 307 → 308 |
 
-   Acceptance: `verify-prod-tunnel.sh --phase redirect` checks status + host-mapped `Location`
-   with path and query preserved for all three hostnames; spot-check plain HTTP too
-   (`curl -sI http://fullfunding.nl/board?x=1` → `Location: https://bleadingoptions.com/board?x=1`).
+8. Full Phase-2 acceptance, AFTER the rules exist: `verify-prod-tunnel.sh --phase redirect` — the
+   redirect section demands exactly 307 on both schemes for all three hostnames with host-mapped
+   `Location` preserving path + query (same-host https upgrades on the http leg are recognized).
+   At promotion time re-run with the retired lifecycle expectation:
+   `EXPECTED_REDIRECT_STATUS=308 verify-prod-tunnel.sh --phase redirect`.
 
 Rollback (before the 308 promotion): revert the PR, redeploy the same set, drop the 307 rules.
 Old-issuer tokens die at the flip in both directions — that is expected, not a defect.

@@ -44,8 +44,8 @@ data:
           "publicClient": true,
           "standardFlowEnabled": true,
           "directAccessGrantsEnabled": false,
-          "redirectUris": ["https://fullfunding.nl/*", "https://es.fullfunding.nl/*", "https://bleadingoptions.com/*", "https://es.bleadingoptions.com/*", "http://192.168.100.252:8094/*", "http://192.168.100.103:8094/*"],
-          "webOrigins": ["https://fullfunding.nl", "https://es.fullfunding.nl", "https://bleadingoptions.com", "https://es.bleadingoptions.com", "http://192.168.100.252:8094", "http://192.168.100.103:8094"],
+          "redirectUris": ["https://fullfunding.nl/*", "https://es.fullfunding.nl/*", "https://bleadingoptions.com/*", "https://es.bleadingoptions.com/*", "http://192.168.100.4:30080/*", "http://192.168.100.252:8094/*", "http://192.168.100.103:8094/*"],
+          "webOrigins": ["https://fullfunding.nl", "https://es.fullfunding.nl", "https://bleadingoptions.com", "https://es.bleadingoptions.com", "http://192.168.100.4:30080", "http://192.168.100.252:8094", "http://192.168.100.103:8094"],
           "attributes": {
             "pkce.code.challenge.method": "S256",
             "post.logout.redirect.uris": "https://fullfunding.nl/*##https://es.fullfunding.nl/*##https://bleadingoptions.com/*##https://es.bleadingoptions.com/*"
