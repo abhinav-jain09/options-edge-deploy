@@ -1,7 +1,8 @@
 # Production realm import for Keycloak (mounted at /opt/keycloak/data/import; consumed by `start --import-realm`).
 # Hardened vs the dev import: no test user (users are admin-provisioned), the web client has NO direct-access
 # grant, registration disabled, and redirect URIs / web origins are pinned to the real prod option-chain
-# origin (https://fullfunding.nl). Import is idempotent: an already-present realm is skipped on later boots,
+# origins (https://fullfunding.nl and https://bleadingoptions.com during the domain migration, plus their
+# es. subdomains). Import is idempotent: an already-present realm is skipped on later boots,
 # so realm drift must be reconciled out-of-band (kcadm) — see docs/keycloak-prod.md.
 apiVersion: v1
 kind: ConfigMap
@@ -47,7 +48,7 @@ data:
           "webOrigins": ["https://fullfunding.nl", "https://es.fullfunding.nl", "https://bleadingoptions.com", "https://es.bleadingoptions.com", "http://192.168.100.252:8094", "http://192.168.100.103:8094"],
           "attributes": {
             "pkce.code.challenge.method": "S256",
-            "post.logout.redirect.uris": "https://fullfunding.nl/*##https://bleadingoptions.com/*##https://es.bleadingoptions.com/*"
+            "post.logout.redirect.uris": "https://fullfunding.nl/*##https://es.fullfunding.nl/*##https://bleadingoptions.com/*##https://es.bleadingoptions.com/*"
           },
           "protocolMappers": [
             {
