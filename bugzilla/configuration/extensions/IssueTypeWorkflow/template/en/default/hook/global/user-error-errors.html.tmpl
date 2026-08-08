@@ -1,0 +1,22 @@
+[%# Errors raised by the IssueTypeWorkflow extension. %]
+
+[% IF error == "issue_type_required" %]
+  [% title = "Issue Type Required" %]
+  Every item must be filed as either a <em>BUG</em> or a <em>REQUIREMENT</em>.
+  Please set the <em>Issue Type</em> field.
+
+[% ELSIF error == "issue_type_unknown" %]
+  [% title = "Unknown Issue Type" %]
+  <em>[% issue_type FILTER html %]</em> is not a known issue type.
+
+[% ELSIF error == "issue_category_required" %]
+  [% title = "Category Required" %]
+  Every item must have a <em>Category</em>.
+
+[% ELSIF error == "issue_category_mismatch" %]
+  [% title = "Category Does Not Match Issue Type" %]
+  The category <em>[% category FILTER html %]</em> does not belong to issue type
+  <em>[% issue_type FILTER html %]</em>. Bug categories are prefixed
+  <em>BUG_</em> and requirement categories <em>REQ_</em>.
+
+[% END %]

@@ -1,0 +1,229 @@
+{
+  "spec_version": "1.0.0",
+  "_comment": [
+    "Declarative SSOT for the internal Bugzilla (5.2) project/lifecycle configuration.",
+    "setup-projects.pl converges the installation to this state; verify-projects.py asserts it.",
+    "The IssueTypeWorkflow extension carries the same type->status/resolution/category map as",
+    "Perl constants (it must not do runtime file IO); verify-projects.py proves the two agree",
+    "behaviourally by walking both lifecycles and asserting every illegal move is rejected."
+  ],
+
+  "bugzilla_version": "5.2",
+
+  "params": {
+    "duplicate_or_move_bug_status": "RESOLVED"
+  },
+
+  "issue_types": ["BUG", "REQUIREMENT"],
+
+  "fields": {
+    "cf_issue_type": {
+      "description": "Issue Type",
+      "type": "single_select",
+      "enter_bug": true,
+      "buglist": true,
+      "is_mandatory": true,
+      "sortkey": 1000,
+      "values": [
+        {"value": "BUG", "sortkey": 100},
+        {"value": "REQUIREMENT", "sortkey": 200}
+      ]
+    },
+
+    "cf_category": {
+      "description": "Category",
+      "type": "single_select",
+      "enter_bug": true,
+      "buglist": true,
+      "is_mandatory": true,
+      "sortkey": 1100,
+      "value_field": "cf_issue_type",
+      "_comment": [
+        "Bugzilla 5.2 stores ONE controller per field value (bug_status/resolution/cf_* value",
+        "tables all carry a single visibility_value_id INT2 column - see Bugzilla/DB/Schema.pm",
+        "and Bugzilla/Field/Choice.pm DB_COLUMNS). A category value therefore cannot be shared",
+        "between BUG and REQUIREMENT, which is why the vocabularies are prefixed instead."
+      ],
+      "values": [
+        {"value": "BUG_INFRA",          "sortkey": 100, "controlled_by": "BUG"},
+        {"value": "BUG_CODE",           "sortkey": 110, "controlled_by": "BUG"},
+        {"value": "BUG_CONFIG",         "sortkey": 120, "controlled_by": "BUG"},
+        {"value": "BUG_DATA",           "sortkey": 130, "controlled_by": "BUG"},
+        {"value": "BUG_INTEGRATION",    "sortkey": 140, "controlled_by": "BUG"},
+        {"value": "BUG_CI_CD",          "sortkey": 150, "controlled_by": "BUG"},
+        {"value": "BUG_SECURITY",       "sortkey": 160, "controlled_by": "BUG"},
+        {"value": "BUG_PERFORMANCE",    "sortkey": 170, "controlled_by": "BUG"},
+        {"value": "BUG_RELIABILITY",    "sortkey": 180, "controlled_by": "BUG"},
+        {"value": "BUG_TEST",           "sortkey": 190, "controlled_by": "BUG"},
+        {"value": "BUG_DOCUMENTATION",  "sortkey": 200, "controlled_by": "BUG"},
+
+        {"value": "REQ_COSMETIC",       "sortkey": 300, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_LOGIC",          "sortkey": 310, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_WORKFLOW",       "sortkey": 320, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_DATA",           "sortkey": 330, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_INTEGRATION",    "sortkey": 340, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_ACCESS_CONTROL", "sortkey": 350, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_SECURITY",       "sortkey": 360, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_COMPLIANCE",     "sortkey": 370, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_PERFORMANCE",    "sortkey": 380, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_OPERABILITY",    "sortkey": 390, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_REPORTING",      "sortkey": 400, "controlled_by": "REQUIREMENT"},
+        {"value": "REQ_DOCUMENTATION",  "sortkey": 410, "controlled_by": "REQUIREMENT"}
+      ]
+    },
+
+    "cf_environment": {
+      "description": "Environment",
+      "type": "single_select",
+      "enter_bug": true,
+      "buglist": true,
+      "is_mandatory": false,
+      "sortkey": 1200,
+      "visibility_field": "cf_issue_type",
+      "visibility_values": ["BUG"],
+      "values": [
+        {"value": "DEV",        "sortkey": 100},
+        {"value": "TEST_CI",    "sortkey": 200},
+        {"value": "PRODUCTION", "sortkey": 300},
+        {"value": "ES4",        "sortkey": 400}
+      ]
+    }
+  },
+
+  "statuses": [
+    {"value": "UNCONFIRMED",     "is_open": true,  "sortkey": 100, "rename_from": null},
+    {"value": "BUG_CONFIRMED",   "is_open": true,  "sortkey": 200, "rename_from": "CONFIRMED"},
+    {"value": "BUG_IN_PROGRESS", "is_open": true,  "sortkey": 300, "rename_from": "IN_PROGRESS"},
+    {"value": "REQ_DRAFT",       "is_open": true,  "sortkey": 400, "rename_from": null},
+    {"value": "REQ_REVIEW",      "is_open": true,  "sortkey": 500, "rename_from": null},
+    {"value": "REQ_APPROVED",    "is_open": true,  "sortkey": 600, "rename_from": null},
+    {"value": "REQ_IN_PROGRESS", "is_open": true,  "sortkey": 700, "rename_from": null},
+    {"value": "RESOLVED",        "is_open": false, "sortkey": 800, "rename_from": null},
+    {"value": "VERIFIED",        "is_open": false, "sortkey": 900, "rename_from": null}
+  ],
+
+  "_workflow_comment": [
+    "Installation-wide matrix (bug_status + status_workflow are global in Bugzilla - there is no",
+    "per-product or per-type workflow). Both lifecycles live in this one matrix; the",
+    "IssueTypeWorkflow extension is what stops an item crossing between the two branches.",
+    "'' (empty from) is the bug-creation row (status_workflow.old_status IS NULL).",
+    "Every status must be able to reach duplicate_or_move_bug_status (RESOLVED), otherwise",
+    "Bugzilla::Status::add_missing_bug_status_transitions() re-adds the row behind our back."
+  ],
+  "workflow": [
+    {"from": "",                 "to": "UNCONFIRMED",     "require_comment": false},
+    {"from": "",                 "to": "REQ_DRAFT",       "require_comment": false},
+
+    {"from": "UNCONFIRMED",      "to": "BUG_CONFIRMED",   "require_comment": false},
+    {"from": "UNCONFIRMED",      "to": "BUG_IN_PROGRESS", "require_comment": false},
+    {"from": "UNCONFIRMED",      "to": "RESOLVED",        "require_comment": true},
+
+    {"from": "BUG_CONFIRMED",    "to": "BUG_IN_PROGRESS", "require_comment": false},
+    {"from": "BUG_CONFIRMED",    "to": "RESOLVED",        "require_comment": true},
+
+    {"from": "BUG_IN_PROGRESS",  "to": "BUG_CONFIRMED",   "require_comment": true},
+    {"from": "BUG_IN_PROGRESS",  "to": "RESOLVED",        "require_comment": true},
+
+    {"from": "REQ_DRAFT",        "to": "REQ_REVIEW",      "require_comment": false},
+    {"from": "REQ_DRAFT",        "to": "RESOLVED",        "require_comment": true},
+
+    {"from": "REQ_REVIEW",       "to": "REQ_DRAFT",       "require_comment": true},
+    {"from": "REQ_REVIEW",       "to": "REQ_APPROVED",    "require_comment": false},
+    {"from": "REQ_REVIEW",       "to": "RESOLVED",        "require_comment": true},
+
+    {"from": "REQ_APPROVED",     "to": "REQ_REVIEW",      "require_comment": true},
+    {"from": "REQ_APPROVED",     "to": "REQ_IN_PROGRESS", "require_comment": false},
+    {"from": "REQ_APPROVED",     "to": "RESOLVED",        "require_comment": true},
+
+    {"from": "REQ_IN_PROGRESS",  "to": "REQ_APPROVED",    "require_comment": true},
+    {"from": "REQ_IN_PROGRESS",  "to": "RESOLVED",        "require_comment": true},
+
+    {"from": "RESOLVED",         "to": "BUG_CONFIRMED",   "require_comment": true},
+    {"from": "RESOLVED",         "to": "REQ_REVIEW",      "require_comment": true},
+    {"from": "RESOLVED",         "to": "VERIFIED",        "require_comment": false},
+
+    {"from": "VERIFIED",         "to": "BUG_CONFIRMED",   "require_comment": true},
+    {"from": "VERIFIED",         "to": "REQ_REVIEW",      "require_comment": true},
+    {"from": "VERIFIED",         "to": "RESOLVED",        "require_comment": true}
+  ],
+
+  "resolutions": [
+    {"value": "FIXED",       "sortkey": 100},
+    {"value": "INVALID",     "sortkey": 200},
+    {"value": "WONTFIX",     "sortkey": 300},
+    {"value": "DUPLICATE",   "sortkey": 400},
+    {"value": "WORKSFORME",  "sortkey": 500},
+    {"value": "IMPLEMENTED", "sortkey": 600},
+    {"value": "REJECTED",    "sortkey": 700},
+    {"value": "DEFERRED",    "sortkey": 800}
+  ],
+
+  "_enforcement_comment": [
+    "Mirrored as Perl constants in extensions/IssueTypeWorkflow/Extension.pm. Kept here so the",
+    "intended policy is reviewable in one place and so verify-projects.py can generate the",
+    "negative test cases from it rather than hard-coding them."
+  ],
+  "enforcement": {
+    "initial_status": {
+      "BUG": "UNCONFIRMED",
+      "REQUIREMENT": "REQ_DRAFT"
+    },
+    "allowed_statuses": {
+      "BUG": ["UNCONFIRMED", "BUG_CONFIRMED", "BUG_IN_PROGRESS", "RESOLVED", "VERIFIED"],
+      "REQUIREMENT": ["REQ_DRAFT", "REQ_REVIEW", "REQ_APPROVED", "REQ_IN_PROGRESS", "RESOLVED", "VERIFIED"]
+    },
+    "allowed_resolutions": {
+      "BUG": ["FIXED", "INVALID", "WONTFIX", "DUPLICATE", "WORKSFORME"],
+      "REQUIREMENT": ["IMPLEMENTED", "REJECTED", "DEFERRED", "DUPLICATE"]
+    },
+    "issue_type_immutable": true
+  },
+
+  "products": [
+    {
+      "name": "optionedge",
+      "description": "OptionEdge trading platform - market-data feeds, stream processing, gateway, UI and the ES4 futures environment.",
+      "is_active": true,
+      "allows_unconfirmed": true,
+      "default_milestone": "---",
+      "versions": ["unspecified"],
+      "milestones": ["---"],
+      "components": [
+        {"name": "Market Data Feeds",        "description": "Databento/IBKR feeds, symbol resolution, replay and feed lifecycle."},
+        {"name": "Trading Gateway",          "description": "Gateway service, REST/SSE endpoints and partition refresh."},
+        {"name": "Stream Processing",        "description": "Kafka Streams topologies, state stores, GEX/dealer-ledger/classifier pipelines."},
+        {"name": "Trading Services",         "description": "Standalone analytic services: reversal, indicator, close/open direction, carry."},
+        {"name": "Web UI",                   "description": "Option-chain, heatmap, boards and panels."},
+        {"name": "Contracts & Schemas",      "description": "Avro/JSON contracts, schema registry compatibility, topic contracts."},
+        {"name": "Platform & Deployment",    "description": "k3s/k8s manifests, Kafka broker, storage, Keycloak, host infrastructure."},
+        {"name": "CI/CD",                    "description": "Jenkins jobs, build/deploy pipelines, image promotion."},
+        {"name": "ES4 Futures Environment",  "description": "The .4 ES futures environment and its mirrors."},
+        {"name": "Cross-Cutting / Other",    "description": "Anything that does not belong to a single subsystem."}
+      ]
+    },
+    {
+      "name": "fullfunding",
+      "description": "FullFunding requirements portal and its supporting domain, identity and edge infrastructure.",
+      "is_active": true,
+      "allows_unconfirmed": true,
+      "default_milestone": "---",
+      "versions": ["unspecified"],
+      "milestones": ["---"],
+      "components": [
+        {"name": "Requirements Portal",   "description": "The externally facing Bugzilla portal itself."},
+        {"name": "Domain & Workflow",     "description": "Domain migration, hostname routing, intake and triage workflow."},
+        {"name": "Keycloak SSO",          "description": "Realms, clients, OIDC login flow and account provisioning."},
+        {"name": "Cloudflare Edge",       "description": "Tunnels, DNS records and edge routing."},
+        {"name": "K3s Platform",          "description": "The fullfunding namespace, manifests and cluster resources."},
+        {"name": "Web Frontend",          "description": "Portal-facing web assets and branding."},
+        {"name": "Integrations & API",    "description": "REST/API integrations with external stakeholders."},
+        {"name": "Cross-Cutting / Other", "description": "Anything that does not belong to a single subsystem."}
+      ]
+    }
+  ],
+
+  "decommission": {
+    "products": ["TestProduct"],
+    "_comment": "Removed only after verification passes and only when bug_count is 0; otherwise deactivated and reported."
+  }
+}
