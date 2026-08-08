@@ -369,9 +369,12 @@ def verify_custom_fields(fields, state):
                got.get("sort_key"), want["sortkey"])
             # Bugzilla 5.2 stores one controller per value, so this list is
             # either empty or exactly one issue type long.
-            eq(f"field {name} value '{want['value']}' controlled_by",
-               got.get("visibility_values") or [],
-               [want["controlled_by"]] if "controlled_by" in want else [])
+            # No choice carries its own controller in this model: cf_category
+            # is a flat vocabulary the extension checks against the
+            # product-derived type, and cf_environment is controlled at FIELD
+            # level by product.
+            eq(f"field {name} value '{want['value']}' has no value controller",
+               got.get("visibility_values") or [], [])
 
 
 def verify_statuses_and_workflow(fields, state):
@@ -445,13 +448,20 @@ class Walker:
         self.creation_codes = set(self.enf["error_codes"]["extension"].values())
         self.filed = []
 
+        # The type is the product. Pick a representative product per type.
+        self.product_of = {}
+        for name, issue_type in state["product_type"].items():
+            self.product_of.setdefault(issue_type, []).append(name)
+        for names in self.product_of.values():
+            names.sort()
+
         self.reachable = {}
         for edge in state["workflow"]:
             self.reachable.setdefault(edge["from"], set()).add(edge["to"])
 
         self.categories = {}
         for value in state["fields"]["cf_category"]["values"]:
-            self.categories.setdefault(value["controlled_by"], []).append(
+            self.categories.setdefault(value["issue_type"], []).append(
                 value["value"])
 
     # -- helpers ---------------------------------------------------------
@@ -463,13 +473,13 @@ class Walker:
         raise BzTransportError(f"product '{product}' is not declared")
 
     def file(self, product, component, issue_type, category, extra=None):
+        """issue_type is only used for the summary - the product decides it."""
         payload = {
             "product": product,
             "component": component,
             "summary": f"{SMOKE_PREFIX} - {issue_type}",
             "version": self.version_of(product),
             "description": "Filed by verify-projects.py. Closed automatically.",
-            "cf_issue_type": issue_type,
             "cf_category": category,
         }
         payload.update(extra or {})
@@ -490,13 +500,13 @@ class Walker:
             raise BzTransportError(
                 f"cannot read bug {bug_id} (HTTP {status}): {json.dumps(body)[:200]}")
         bug = bugs[0]
-        missing = [k for k in ("status", "resolution", "cf_issue_type",
+        missing = [k for k in ("status", "resolution", "product",
                                "cf_category") if k not in bug]
         if missing:
             raise BzTransportError(
                 f"bug {bug_id} is missing expected field(s) {missing}: the "
                 "custom fields are probably not provisioned")
-        return (bug["status"], bug["resolution"], bug["cf_issue_type"],
+        return (bug["status"], bug["resolution"], bug["product"],
                 bug["cf_category"])
 
     def expect_allowed(self, label, bug_id, **fields):
@@ -590,25 +600,41 @@ class Walker:
                 f"{other}'s", bug_id, status=other_status, resolution="",
                 cf_category=self.categories[other][0])
         self.expect_denied(
-            f"{issue_type}: retyped with matching {other} fields", bug_id,
-            cf_issue_type=other, cf_category=self.categories[other][0])
-        self.expect_denied(f"{issue_type}: category cleared", bug_id,
-                           cf_category="---")
-        self.expect_denied(f"{issue_type}: type cleared", bug_id,
-                           cf_issue_type="---")
+            f"{issue_type}: given {other}'s category", bug_id,
+            cf_category=self.categories[other][0])
 
-    def probe_type_immutable(self, bug_id, issue_type):
-        for other in self.enf["allowed_statuses"]:
-            if other != issue_type:
-                self.expect_denied(f"{issue_type} retyped to '{other}'",
-                                   bug_id, cf_issue_type=other)
+        # Clearing the category must be ALLOWED: an empty category is what
+        # leaves the pre-existing bugs untouched.
+        self.expect_allowed(f"{issue_type}: category cleared", bug_id,
+                            cf_category="---")
+
+    def probe_product_moves(self, bug_id, issue_type):
+        """The product IS the type, so a cross-type move would change the
+        item's lifecycle underneath it; a same-type move is ordinary."""
+        for other_type, products in self.product_of.items():
+            if other_type == issue_type:
+                continue
+            self.expect_denied(
+                f"{issue_type} moved to '{products[0]}' ({other_type})",
+                bug_id, product=products[0], component="General",
+                version="unspecified")
+
+        same = [p for p in self.product_of[issue_type]
+                if p != self.state_of(bug_id)[2]]
+        if same:
+            self.expect_allowed(f"{issue_type} moved to '{same[0]}' (same type)",
+                                bug_id, product=same[0], component="General",
+                                version="unspecified")
+            self.expect_allowed(f"{issue_type} moved back", bug_id,
+                                product=self.product_of[issue_type][0],
+                                component="General", version="unspecified")
 
 
 def walk_lifecycle(w, issue_type, product, path, closing_resolution):
     """File one item and walk it along `path`, probing at every state."""
     print(f"\n[7] {issue_type} lifecycle ({product})")
     category = w.categories[issue_type][0]
-    status, body = w.file(product, "Cross-Cutting / Other", issue_type, category)
+    status, body = w.file(product, "General", issue_type, category)
     if not check(f"file a {issue_type}", status < 400 and body.get("id"),
                  f"HTTP {status}: {json.dumps(body)[:300]}"):
         return None
@@ -628,7 +654,7 @@ def walk_lifecycle(w, issue_type, product, path, closing_resolution):
         current = target
         w.probe_illegal_statuses(bug_id, issue_type, current)
 
-    reopen_to = "BUG_CONFIRMED" if issue_type == "BUG" else "REQ_REVIEW"
+    reopen_to = "CONFIRMED" if issue_type == "BUG" else "REQ_REVIEW"
     w.probe_allowed_categories(bug_id, issue_type)
     w.probe_illegal_resolutions(bug_id, issue_type)
     w.probe_allowed_resolutions(bug_id, issue_type, reopen_to)
@@ -647,7 +673,7 @@ def walk_lifecycle(w, issue_type, product, path, closing_resolution):
     # that actually exercises the extension rather than the global matrix.
     w.probe_illegal_statuses(bug_id, issue_type, "VERIFIED")
     w.probe_illegal_categories(bug_id, issue_type)
-    w.probe_type_immutable(bug_id, issue_type)
+    w.probe_product_moves(bug_id, issue_type)
     w.probe_combined_illegal(bug_id, issue_type)
 
     if reopen_to in w.enf["allowed_statuses"][issue_type]:
@@ -661,8 +687,8 @@ def walk_lifecycle(w, issue_type, product, path, closing_resolution):
 
 def verify_creation_guards(w):
     print("\n[8] Creation-time guards")
-    product = "optionedge"
-    component = "Cross-Cutting / Other"
+    product = w.product_of["BUG"][0]
+    component = "General"
 
     w.expect_creation_refused(
         "BUG with a REQUIREMENT category", "issue_category_mismatch",
@@ -670,30 +696,20 @@ def verify_creation_guards(w):
         category=w.categories["REQUIREMENT"][0])
     w.expect_creation_refused(
         "REQUIREMENT with a BUG category", "issue_category_mismatch",
-        product="fullfunding", component=component, issue_type="REQUIREMENT",
-        category=w.categories["BUG"][0])
-    w.expect_creation_refused(
-        "no issue type", "issue_type_required", product=product,
-        component=component, issue_type="---", category=w.categories["BUG"][0])
-    w.expect_creation_refused(
-        "no category", "issue_category_required", product=product,
-        component=component, issue_type="BUG", category="---")
+        product=w.product_of["REQUIREMENT"][0], component=component,
+        issue_type="REQUIREMENT", category=w.categories["BUG"][0])
+    # An empty category must be ACCEPTED - that is the property that leaves the
+    # pre-existing bugs alone.
+    st, b = w.file(product, component, "BUG", "---")
+    if check("file a BUG with no category", st < 400 and b.get("id"),
+             f"HTTP {st}: {json.dumps(b)[:200]}"):
+        eq("BUG filed with no category has none", w.state_of(b["id"])[3], "")
 
-    # An unknown-but-syntactically-valid type: core's own select validation
-    # rejects a value that is not in the field, so this asserts the FIRST
-    # refusal wins rather than our own code - which is why it is checked
-    # loosely, as a refusal, not as issue_type_unknown.
-    status, body = w.file(product, component, "NOT_A_TYPE",
-                          w.categories["BUG"][0])
-    check("refused at creation: unknown issue type",
-          status == HTTP_BAD_REQUEST and body.get("error"),
-          f"expected HTTP {HTTP_BAD_REQUEST} (core's own select validation "
-          f"preempts our issue_type_unknown here), got HTTP {status}: "
-          f"{json.dumps(body)[:200]}")
-
-    print("  ....  issue_type_initial_status_unavailable and "
-          "issue_type_initial_status_needs_comment are NOT exercised: both "
-          "require deliberately breaking the workflow first")
+    print("  ....  issue_type_initial_status_unavailable, "
+          "issue_type_initial_status_needs_comment and "
+          "issue_type_workflow_misconfigured are NOT exercised here: each "
+          "needs the workflow deliberately damaged first. setup-projects.pl's "
+          "self-test covers the fail-closed path transactionally.")
 
     # Filing onto the other lifecycle's entry point is corrected, not rejected:
     # Bug.pm:1526-1536 forces UNCONFIRMED on any reporter without
@@ -753,12 +769,11 @@ def verify_low_privilege_reporter(bz, state, w, key_env):
                  "the probe would prove nothing"):
         return
     payload = {
-        "product": "fullfunding",
-        "component": "Cross-Cutting / Other",
+        "product": w.product_of["REQUIREMENT"][0],
+        "component": "General",
         "summary": f"{SMOKE_PREFIX} - REQUIREMENT filed unprivileged",
         "version": w.version_of("fullfunding"),
         "description": "Filed by verify-projects.py as an unprivileged user.",
-        "cf_issue_type": "REQUIREMENT",
         "cf_category": w.categories["REQUIREMENT"][0],
     }
     status, body = reporter.post("/bug", payload)
@@ -775,11 +790,11 @@ def verify_duplicate_path(w):
     """RESOLVED+DUPLICATE must keep working for both types - it is the reason
     the closed tail is shared in the first place."""
     print("\n[10] Native duplicate handling")
-    for issue_type, product in (("BUG", "optionedge"),
-                                ("REQUIREMENT", "fullfunding")):
+    for issue_type, product in (("BUG", w.product_of["BUG"][0]),
+                                ("REQUIREMENT", w.product_of["REQUIREMENT"][0])):
         category = w.categories[issue_type][0]
-        s1, b1 = w.file(product, "Cross-Cutting / Other", issue_type, category)
-        s2, b2 = w.file(product, "Cross-Cutting / Other", issue_type, category)
+        s1, b1 = w.file(product, "General", issue_type, category)
+        s2, b2 = w.file(product, "General", issue_type, category)
         if not check(f"file two {issue_type}s for the duplicate test",
                      s1 < 400 and s2 < 400 and b1.get("id") and b2.get("id")):
             continue
@@ -794,19 +809,19 @@ def verify_duplicate_path(w):
 def verify_bulk_atomicity(w):
     """One illegal item in a multi-bug update must abort the whole request."""
     print("\n[11] Bulk update atomicity")
-    s1, b1 = w.file("optionedge", "Cross-Cutting / Other", "BUG",
+    s1, b1 = w.file(w.product_of["BUG"][0], "General", "BUG",
                     w.categories["BUG"][0])
-    s2, b2 = w.file("fullfunding", "Cross-Cutting / Other", "REQUIREMENT",
+    s2, b2 = w.file(w.product_of["REQUIREMENT"][0], "General", "REQUIREMENT",
                     w.categories["REQUIREMENT"][0])
     if not check("file one item of each type for the bulk test",
                  s1 < 400 and s2 < 400 and b1.get("id") and b2.get("id")):
         return
     bug_id, req_id = b1["id"], b2["id"]
 
-    # Park both on VERIFIED, the one state from which BUG_CONFIRMED is reachable
+    # Park both on VERIFIED, the one state from which CONFIRMED is reachable
     # in the global matrix for both - so the refusal below can only come from
     # the extension.
-    for target in ("BUG_CONFIRMED", "RESOLVED", "VERIFIED"):
+    for target in ("CONFIRMED", "RESOLVED", "VERIFIED"):
         w.move(bug_id, status=target,
                **({"resolution": "FIXED"} if target == "RESOLVED" else {}))
     for target in ("REQ_REVIEW", "REQ_APPROVED", "RESOLVED", "VERIFIED"):
@@ -821,7 +836,7 @@ def verify_bulk_atomicity(w):
 
     status, body = w.bz.put(f"/bug/{bug_id}", {
         "ids": [bug_id, req_id],
-        "status": "BUG_CONFIRMED",
+        "status": "CONFIRMED",
         "resolution": "",
         "comment": {"body": "verify-projects.py bulk atomicity probe"},
     })
@@ -940,9 +955,10 @@ def main():
     else:
         walker = Walker(bz, state)
         try:
-            walk_lifecycle(walker, "BUG", "optionedge",
-                           ["BUG_CONFIRMED", "BUG_IN_PROGRESS"], "FIXED")
-            walk_lifecycle(walker, "REQUIREMENT", "fullfunding",
+            walk_lifecycle(walker, "BUG", walker.product_of["BUG"][0],
+                           ["CONFIRMED", "IN_PROGRESS"], "FIXED")
+            walk_lifecycle(walker, "REQUIREMENT",
+                           walker.product_of["REQUIREMENT"][0],
                            ["REQ_REVIEW", "REQ_APPROVED", "REQ_IN_PROGRESS"],
                            "IMPLEMENTED")
             verify_creation_guards(walker)

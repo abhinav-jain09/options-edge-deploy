@@ -221,23 +221,43 @@ sub validate_state {
     }
   }
 
-  my %type_values
-    = map { $_->{value} => 1 } @{$STATE->{fields}{cf_issue_type}{values}};
-  my %seen_type;
+  my %type_values;
   foreach my $type (@{$STATE->{issue_types}}) {
-    fatal("duplicate entry '$type' in issue_types") if $seen_type{$type}++;
-    fatal("issue_types lists '$type', which is not a cf_issue_type value")
-      if !$type_values{$type};
+    fatal("duplicate entry '$type' in issue_types") if $type_values{$type}++;
   }
-  fatal('issue_types does not cover every cf_issue_type value')
-    if keys %type_values != keys %seen_type;
+
+  # The type is derived from the product, so every product must map to a
+  # declared type and every declared type must own at least one product.
+  my %type_used;
+  foreach my $product (sort keys %{$STATE->{product_type}}) {
+    my $type = $STATE->{product_type}{$product};
+    fatal("product_type maps '$product' to unknown issue type '$type'")
+      if !$type_values{$type};
+    $type_used{$type}++;
+  }
+  foreach my $type (sort keys %type_values) {
+    fatal("no product is mapped to issue type '$type'") if !$type_used{$type};
+  }
+  foreach my $product (@{$STATE->{products}}) {
+    fatal("product '$product->{name}' is not in product_type")
+      if !$STATE->{product_type}{$product->{name}};
+    fatal("product '$product->{name}' declares issue_type "
+        . "'$product->{issue_type}' but product_type says "
+        . "'$STATE->{product_type}{$product->{name}}'")
+      if $product->{issue_type} ne $STATE->{product_type}{$product->{name}};
+  }
+  fatal('product_type names a product that is not declared under products')
+    if keys %{$STATE->{product_type}} != scalar(@{$STATE->{products}});
 
   my %status_is_open = map { $_->{value} => $_->{is_open} } @{$STATE->{statuses}};
   foreach my $value (@{$STATE->{fields}{cf_category}{values}}) {
-    fatal("category '$value->{value}' is controlled by unknown type "
-        . "'$value->{controlled_by}'")
-      if !$type_values{$value->{controlled_by} // ''};
+    fatal("category '$value->{value}' names unknown issue type "
+        . "'" . ($value->{issue_type} // '') . "'")
+      if !$type_values{$value->{issue_type} // ''};
   }
+  fatal('cf_category must stay optional: a mandatory select would force a '
+      . 'value onto every existing bug')
+    if $STATE->{fields}{cf_category}{is_mandatory};
 
   my $enf = $STATE->{enforcement};
   foreach my $type (sort keys %type_values) {
@@ -271,7 +291,7 @@ sub validate_state {
     # The category vocabulary is compiled into the extension as well as being
     # expressed as each value's controller, so all three must agree.
     my @declared_categories
-      = sort map { $_->{controlled_by} eq $type ? $_->{value} : () }
+      = sort map { $_->{issue_type} eq $type ? $_->{value} : () }
       @{$STATE->{fields}{cf_category}{values}};
     my @enforced_categories = sort @{$enf->{allowed_categories}{$type} || []};
     fatal("enforcement.allowed_categories['$type'] does not match the "
@@ -320,6 +340,16 @@ sub validate_extension_agreement {
     if $ext_version ne $STATE->{spec_version};
 
   my $enf = $STATE->{enforcement};
+
+  my $product_type = EXTENSION->PRODUCT_TYPE;
+  fatal('extension PRODUCT_TYPE covers a different set of products')
+    if keys %$product_type != keys %{$STATE->{product_type}};
+  foreach my $product (sort keys %{$STATE->{product_type}}) {
+    fatal("extension PRODUCT_TYPE['$product'] is '"
+        . ($product_type->{$product} // 'undef')
+        . "', expected '$STATE->{product_type}{$product}'")
+      if ($product_type->{$product} // '') ne $STATE->{product_type}{$product};
+  }
 
   my $initial = EXTENSION->INITIAL_STATUS;
   foreach my $type (sort keys %{$enf->{initial_status}}) {
@@ -485,18 +515,19 @@ sub preflight {
     if $version ne $STATE->{bugzilla_version};
 
   my %target_status = map { $_->{value} => 1 } @{$STATE->{statuses}};
-  my %renamed_from
-    = map { $_->{rename_from} => $_->{value} }
-    grep  { $_->{rename_from} } @{$STATE->{statuses}};
+  my %renamed_from;    # deliberately empty: this design never renames a status
 
-  # A rename can only be applied while the old name is the ONLY one present.
-  # If both exist, bugs on the old status would be silently left on a status the
-  # workflow rewrite is about to drop.
-  foreach my $old (sort keys %renamed_from) {
-    next if !Bugzilla::Status->new({name => $old});
-    fatal("both '$old' and its rename target '$renamed_from{$old}' exist; "
-        . 'migrate the bugs and remove one before re-running')
-      if Bugzilla::Status->new({name => $renamed_from{$old}});
+  # Statuses are never renamed. Bugzilla implements a value rename as
+  # UPDATE bugs SET <field> = ? (Field/Choice.pm:158), which would rewrite every
+  # live bug sitting on it - exactly what we are not allowed to do. Instead the
+  # SSOT records which statuses must ALREADY be present; if one is missing, this
+  # is not the installation we think it is.
+  foreach my $spec (@{$STATE->{statuses}}) {
+    next if !$spec->{exists};
+    fatal("status '$spec->{value}' is declared as pre-existing but is not "
+        . 'present; refusing to create it, because the declared model assumes '
+        . 'the stock statuses are the ones live bugs are already using')
+      if !Bugzilla::Status->new({name => $spec->{value}});
   }
 
   my $rows = $dbh->selectall_arrayref(
@@ -584,9 +615,7 @@ sub assert_nothing_undeclared {
   }
 
   my %declared_status = map { $_->{value} => 1 } @{$STATE->{statuses}};
-  my %renamed = map { $_->{rename_from} => 1 }
-    grep { $_->{rename_from} } @{$STATE->{statuses}};
-  my @extra_status = grep { !$declared_status{$_} && !$renamed{$_} }
+  my @extra_status = grep { !$declared_status{$_} }
     map { $_->name } Bugzilla::Status->get_all;
   push @problems, 'status(es): ' . join(', ', sort @extra_status)
     if @extra_status;
@@ -652,46 +681,32 @@ sub audit_existing_bugs {
   my ($renamed_from) = @_;
 
   my ($bug_count) = $dbh->selectrow_array('SELECT COUNT(*) FROM bugs');
+  return note('no existing bugs to audit') if !$bug_count;
 
-  my $type_field   = Bugzilla::Field->new({name => 'cf_issue_type'});
+  # cf_category is OPTIONAL, so creating it does not write to a single existing
+  # row and an empty value is valid forever. That is the whole reason the type
+  # is derived from the product instead of stored per bug.
   my $has_category = Bugzilla::Field->new({name => 'cf_category'}) ? 1 : 0;
 
-  # Creating a mandatory select field over a populated table gives every
-  # existing row the unset sentinel. Those items would then violate the model
-  # from the moment it is declared, and the extension cannot repair items whose
-  # fields nobody touches. Refuse, rather than "succeed" into that state.
-  if (!$type_field || !$has_category) {
-    fatal("$bug_count existing bug(s) but "
-        . (!$type_field ? 'cf_issue_type' : 'cf_category')
-        . ' does not exist yet. Provisioning would leave them untyped or '
-        . 'uncategorised; migrate or remove them first.')
-      if $bug_count;
-    return note('required fields absent and no existing bugs: nothing to audit');
-  }
   my $select
-    = 'SELECT bug_id, bug_status, resolution, cf_issue_type'
-    . ($has_category ? ', cf_category' : '')
-    . ' FROM bugs';
+    = 'SELECT b.bug_id, b.bug_status, b.resolution, p.name AS product'
+    . ($has_category ? ', b.cf_category' : '')
+    . ' FROM bugs b JOIN products p ON p.id = b.product_id';
   my $bugs = $dbh->selectall_arrayref($select, {Slice => {}});
-  return note('no existing bugs to audit') if !@$bugs;
 
   my $enf = $STATE->{enforcement};
-  my %category_owner = map { $_->{value} => $_->{controlled_by} }
+  my %category_type = map { $_->{value} => $_->{issue_type} }
     @{$STATE->{fields}{cf_category}{values}};
 
   my @bad;
   foreach my $bug (@$bugs) {
-    my $type = $bug->{cf_issue_type};
-    if (!defined $type || $type eq '' || $type eq '---') {
-      push @bad, "bug $bug->{bug_id}: no issue type";
-      next;
-    }
-    if (!$enf->{allowed_statuses}{$type}) {
-      push @bad, "bug $bug->{bug_id}: unknown issue type '$type'";
+    my $type = $STATE->{product_type}{$bug->{product}};
+    if (!defined $type) {
+      push @bad, "bug $bug->{bug_id}: product '$bug->{product}' has no declared type";
       next;
     }
 
-    my $status = $renamed_from->{$bug->{bug_status}} // $bug->{bug_status};
+    my $status = $bug->{bug_status};
     push @bad, "bug $bug->{bug_id}: $type on status '$status'"
       if !grep { $_ eq $status } @{$enf->{allowed_statuses}{$type}};
 
@@ -701,25 +716,25 @@ sub audit_existing_bugs {
       && $resolution ne ''
       && !grep { $_ eq $resolution } @{$enf->{allowed_resolutions}{$type}};
 
+    # An empty category is always valid - that is what leaves existing bugs
+    # untouched. Only a WRONG one is a problem.
     if ($has_category) {
       my $category = $bug->{cf_category};
-      if (!defined $category || $category eq '' || $category eq '---') {
-        push @bad, "bug $bug->{bug_id}: no category";
-      }
-      elsif (($category_owner{$category} // '') ne $type) {
-        push @bad, "bug $bug->{bug_id}: $type with category '$category'";
+      if (defined $category && $category ne '' && $category ne '---') {
+        push @bad, "bug $bug->{bug_id}: $type with category '$category'"
+          if ($category_type{$category} // '') ne $type;
       }
     }
   }
 
-  fatal("existing items violate the target model and cannot be repaired by "
-      . "this script:\n         " . join("\n         ", @bad[0 .. 19]) . "\n         ...")
-    if @bad > 20;
-  fatal("existing items violate the target model and cannot be repaired by "
-      . "this script:\n         " . join("\n         ", @bad))
-    if @bad;
+  if (@bad) {
+    my @show = @bad > 20 ? (@bad[0 .. 19], '...') : @bad;
+    fatal("existing items are inconsistent with the declared model:\n         "
+        . join("\n         ", @show));
+  }
 
-  note(scalar(@$bugs) . ' existing bug(s) audited: all consistent with the model');
+  note("$bug_count existing bug(s) audited against their product's type: all "
+      . 'consistent, and none will be written to');
   return;
 }
 
@@ -894,27 +909,16 @@ sub ensure_choice {
     return;
   }
 
+  # No choice in this model carries its own controller: cf_category is a flat
+  # vocabulary the extension checks against the product-derived type, and
+  # cf_environment is controlled at FIELD level by product.
   my $controller_id;
-  if (my $by = $spec->{controlled_by}) {
-    my $vf = $field->value_field ? $field->value_field->name : undef;
-    if (!$vf) {
-      fatal("$field_name has no value_field, cannot control '$spec->{value}'")
-        if !$DRY;
-      plan("create $field_name value '$spec->{value}' (controlled by $by, "
-          . 'after value_field is wired)');
-      return;
-    }
-    my $controller = Bugzilla::Field::Choice->type($vf)->new({name => $by})
-      or fatal("controlling value '$by' of '$vf' does not exist");
-    $controller_id = $controller->id;
-  }
 
   my $class  = Bugzilla::Field::Choice->type($field_name);
   my $choice = $class->new({name => $spec->{value}});
 
   if (!$choice) {
-    plan("create $field_name value '$spec->{value}'"
-        . ($spec->{controlled_by} ? " (controlled by $spec->{controlled_by})" : ''));
+    plan("create $field_name value '$spec->{value}'");
     return if $DRY;
     $class->create({
       value               => $spec->{value},
@@ -935,11 +939,11 @@ sub ensure_choice {
     plan("$field_name value '$spec->{value}': reactivate");
     if (!$DRY) { $choice->set('isactive', 1); $changed = 1; }
   }
+  # Clear any controller a previous model left on the value.
   my $have_controller = $choice->visibility_value ? $choice->visibility_value->id : 0;
-  if ($have_controller != ($controller_id // 0)) {
-    plan("$field_name value '$spec->{value}': controlled_by -> "
-        . ($spec->{controlled_by} // '(none)'));
-    if (!$DRY) { $choice->set('visibility_value_id', $controller_id); $changed = 1; }
+  if ($have_controller) {
+    plan("$field_name value '$spec->{value}': clear its value controller");
+    if (!$DRY) { $choice->set('visibility_value_id', undef); $changed = 1; }
   }
   $choice->update if $changed && !$DRY;
   return;
@@ -953,23 +957,9 @@ sub ensure_statuses {
   foreach my $spec (@{$STATE->{statuses}}) {
     my $status = Bugzilla::Status->new({name => $spec->{value}});
 
-    if (!$status && $spec->{rename_from}) {
-      my $old = Bugzilla::Status->new({name => $spec->{rename_from}});
-      if ($old) {
-        plan("rename status '$spec->{rename_from}' -> '$spec->{value}' (id "
-            . $old->id . ', preserves history and workflow rows)');
-        if (!$DRY) {
-          $old->set('value', $spec->{value});
-          $old->update;
-        }
-
-        # Carry the object forward in dry runs too, or the plan would report
-        # the same status as both renamed and created.
-        $status = $old;
-      }
-    }
-
     if (!$status) {
+      fatal("status '$spec->{value}' should already exist")
+        if $spec->{exists};
       plan("create status '$spec->{value}' (is_open="
           . ($spec->{is_open} ? 1 : 0) . ')');
       next if $DRY;
@@ -1021,10 +1011,7 @@ sub ensure_resolutions {
 sub rewrite_workflow {
   my %id_of;
   foreach my $spec (@{$STATE->{statuses}}) {
-    my $status = Bugzilla::Status->new({name => $spec->{value}})
-      || ($spec->{rename_from}
-      ? Bugzilla::Status->new({name => $spec->{rename_from}})
-      : undef);
+    my $status = Bugzilla::Status->new({name => $spec->{value}});
     if (!$status) {
       if ($DRY) {
         plan('rewrite status_workflow to the declared '
@@ -1386,13 +1373,8 @@ my $ok = eval {
     ? 'DRY RUN - no persistent change will be made. Re-run with --apply.'
     : 'APPLYING changes.');
 
-  # Order matters: cf_issue_type must exist before cf_category can be
-  # controlled by it, and its values must exist before they can control others.
-  ensure_field('cf_issue_type', $STATE->{fields}{cf_issue_type});
-  ensure_choice('cf_issue_type', $_)
-    foreach @{$STATE->{fields}{cf_issue_type}{values}};
-  flush_caches() if !$DRY;
-
+  # cf_environment is controlled by 'product', which already exists, so the
+  # fields can be created and wired in one pass.
   foreach my $name (qw(cf_category cf_environment)) {
     ensure_field($name, $STATE->{fields}{$name});
   }
