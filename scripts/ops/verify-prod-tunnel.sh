@@ -22,6 +22,10 @@
 #                     the tunnel, the Ingress, the realm and both gateway allow-lists. The operator
 #                     retired that domain WITHOUT redirects so it can host unrelated applications —
 #                     so nothing here may reference or claim it.
+#   --phase rollback  a Phase-3 revert BEFORE the DNS handoff: the old routes/trust lists are back
+#                     (both domains serve, both origin sets trusted, realm carries both) while the
+#                     ISSUER and the served URLs stay on the new domain — that is Phase-2 state, so
+#                     neither `dual` (old issuer) nor `retired` (absence) describes it.
 #   --phase dual      historical Phase-1 gate (both domains served); kept for auditability.
 #   --phase redirect  historical Phase-2 gate (old hostnames 307/308-redirect). NOT USED: the
 #                     migration ended with retirement, not redirection.
@@ -58,7 +62,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
-case "$PHASE" in dual|redirect|retired) ;; *) echo "bad --phase '$PHASE'" >&2; exit 2 ;; esac
+case "$PHASE" in dual|redirect|retired|rollback) ;; *) echo "bad --phase '$PHASE'" >&2; exit 2 ;; esac
 if [ "$NETWORK_ONLY" = "1" ] && [ "$PRECHECK" = "1" ]; then
   echo "FATAL: --network-only --precheck is meaningless — precheck exists to prove the kube/runtime contracts, which network-only skips" >&2
   exit 2
@@ -102,6 +106,22 @@ case "$PHASE" in
     EXPECTED_REDIRECT_STATUS_DEFAULT="307"   # soak on temporary; --promoted / retired demand 308
     EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
     # Old origins stay trusted during the redirect soak; Phase 3 removes them.
+    PROD_ORIGINS_DEFAULT="https://fullfunding.nl https://bleadingoptions.com"
+    ES4_ORIGINS_DEFAULT="https://es.fullfunding.nl https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
+    PRIMARY_APEX_DEFAULT="bleadingoptions.com"; PRIMARY_ES_DEFAULT="es.bleadingoptions.com"
+    ABSENT_TUNNEL_HOSTS_DEFAULT=""
+    KC_REDIRECTS_DEFAULT="https://fullfunding.nl/* https://es.fullfunding.nl/* https://bleadingoptions.com/* https://es.bleadingoptions.com/* http://192.168.100.4:30080/* http://192.168.100.252:8094/* http://192.168.100.103:8094/*"
+    KC_WEBORIGINS_DEFAULT="https://fullfunding.nl https://es.fullfunding.nl https://bleadingoptions.com https://es.bleadingoptions.com http://192.168.100.4:30080 http://192.168.100.252:8094 http://192.168.100.103:8094"
+    KC_POSTLOGOUT_DEFAULT="https://fullfunding.nl/* https://es.fullfunding.nl/* https://bleadingoptions.com/* https://es.bleadingoptions.com/*"
+    ;;
+  rollback)
+    # Phase-2 state: both domains SERVE and are trusted again, issuer/URLs remain new-domain.
+    SERVE_APEX_DEFAULT="fullfunding.nl bleadingoptions.com"
+    SERVE_ES_DEFAULT="es.fullfunding.nl es.bleadingoptions.com"
+    SERVE_AUTH_DEFAULT="auth.fullfunding.nl auth.bleadingoptions.com"
+    REDIR_HOSTS_DEFAULT=""
+    EXPECTED_REDIRECT_STATUS_DEFAULT=""
+    EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
     PROD_ORIGINS_DEFAULT="https://fullfunding.nl https://bleadingoptions.com"
     ES4_ORIGINS_DEFAULT="https://es.fullfunding.nl https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
     PRIMARY_APEX_DEFAULT="bleadingoptions.com"; PRIMARY_ES_DEFAULT="es.bleadingoptions.com"
@@ -304,6 +324,88 @@ selftest() {
   - hostname: auth.example
     service: http://kc:8080'
   run_case auth.example "" "$fixture" "non-ws path rule never reports its service"
+
+  # --- structural retirement parsers (the checks that keep the retired domain out) ---------------
+  struct_case() {  # label, config-text, python-snippet-selector, expected-prefix
+    local got
+    got="$(printf '%s\n' "$2" | python3 -c "$3" 2>/dev/null)"
+    case "$got" in
+      "$4"*) echo "  OK   selftest: $1" ;;
+      *) echo "  FAIL selftest: $1 (got '$got', wanted prefix '$4')" >&2; rc=1 ;;
+    esac
+  }
+  PY_TUNNEL_HOSTS="import sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    if not isinstance(rules, list): raise ValueError('ingress is not a list')
+    hosts = [str(r.get('hostname', '')).strip().lower().rstrip('.')
+             for r in rules if isinstance(r, dict) and str(r.get('hostname', '')).strip()]
+    print('HOSTS ' + ' '.join(sorted(set(hosts))))
+except Exception as e:
+    print('PARSE_FAIL %s' % e)"
+  struct_case "flow-mapping hostname is extracted (sed-invisible)" \
+    'ingress:
+  - {hostname: retired.example, path: /x, service: "http://evil:8080"}
+  - service: http_status:404' "$PY_TUNNEL_HOSTS" "HOSTS retired.example"
+  PY_HOSTLESS="import sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    if not isinstance(rules, list): raise ValueError('ingress is not a list')
+    offenders = [r for r in rules
+                 if isinstance(r, dict) and not str(r.get('hostname', '')).strip()
+                 and str(r.get('service', '')).strip() != 'http_status:404']
+    print('OFFENDERS' if offenders else 'CLEAN')
+except Exception as e:
+    print('PARSE_FAIL %s' % e)"
+  struct_case "multi-line hostless rule is flagged" \
+    'ingress:
+  - path: /unprobed
+    service: http://evil:8080
+  - service: http_status:404' "$PY_HOSTLESS" "OFFENDERS"
+  struct_case "terminal 404 alone is clean" \
+    'ingress:
+  - hostname: keep.example
+    service: http://x:1
+  - service: http_status:404' "$PY_HOSTLESS" "CLEAN"
+  PY_ING="import sys, yaml
+hosts, hostless = [], 0
+try:
+    for doc in yaml.safe_load_all(sys.stdin):
+        if not isinstance(doc, dict): continue
+        docs = (doc.get('items') or []) if doc.get('kind') == 'List' else [doc]
+        for d in docs:
+            if not isinstance(d, dict) or d.get('kind') != 'Ingress': continue
+            spec = d.get('spec') or {}
+            if spec.get('defaultBackend'):
+                print('DEFAULTBACKEND'); sys.exit(0)
+            for r in spec.get('rules') or []:
+                h = str((r or {}).get('host', '')).strip()
+                if h: hosts.append(h.lower())
+                else: hostless += 1
+    print('HOSTLESS' if hostless else 'HOSTS ' + ' '.join(sorted(set(hosts))))
+except Exception as e:
+    print('PARSE_FAIL %s' % e)"
+  struct_case "Ingress defaultBackend catch-all is flagged" \
+    'apiVersion: networking.k8s.io/v1
+kind: Ingress
+spec:
+  defaultBackend:
+    service:
+      name: oe-keycloak
+      port: {number: 8080}
+  rules:
+    - host: auth.keep.example
+      http: {paths: []}' "$PY_ING" "DEFAULTBACKEND"
+  struct_case "Ingress hostless rule is flagged" \
+    'apiVersion: networking.k8s.io/v1
+kind: Ingress
+spec:
+  rules:
+    - host: auth.keep.example
+      http: {paths: []}
+    - http: {paths: []}' "$PY_ING" "HOSTLESS"
   return $rc
 }
 [ "$SELFTEST" = "1" ] && { selftest; exit $?; }
@@ -450,8 +552,12 @@ if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   # EXACT host-set equality, not absence-of-a-literal: that also rejects wildcard hosts
   # ("*.fullfunding.nl"), a hostless rule (matches every host) and any unexpected extra rule.
   # Deliberately NOT env-overridable: an override could bless an Ingress that re-admits the
-  # retired host without tripping ALLOW_SET_OVERRIDES or the diagnostic stamp.
-  EXPECTED_ING_HOSTS="auth.bleadingoptions.com"
+  # retired host without tripping ALLOW_SET_OVERRIDES or the diagnostic stamp. (A pre-handoff
+  # rollback legitimately restores the old host, so that phase expects both — still not from env.)
+  case "$PHASE" in
+    rollback) EXPECTED_ING_HOSTS="auth.bleadingoptions.com auth.fullfunding.nl" ;;
+    *)        EXPECTED_ING_HOSTS="auth.bleadingoptions.com" ;;
+  esac
   ing_hostset_check() {  # label, whitespace-separated host list as deployed/declared
     local label="$1" got want
     got="$(printf '%s\n' $2 | sed '/^$/d' | tr 'A-Z' 'a-z' | sort -u)"
@@ -478,7 +584,10 @@ try:
             docs = [doc]
         for d in docs:
             if not isinstance(d, dict) or d.get('kind') != 'Ingress': continue
-            for r in (d.get('spec') or {}).get('rules') or []:
+            spec = d.get('spec') or {}
+            if spec.get('defaultBackend'):
+                print('DEFAULTBACKEND %r' % (spec.get('defaultBackend'),)); sys.exit(0)
+            for r in spec.get('rules') or []:
                 h = str((r or {}).get('host', '')).strip()
                 if h: hosts.append(h.lower())
                 else: hostless += 1
@@ -495,6 +604,7 @@ except Exception as e:
     case "$rep" in
       HOSTS*) ing_hostset_check "repo keycloak-ingress.yaml" "${rep#HOSTS }" ;;
       HOSTLESS*) bad "repo keycloak-ingress.yaml has ${rep#HOSTLESS } rule(s) with NO host — such a rule matches EVERY hostname, including the retired domain" ;;
+      DEFAULTBACKEND*) bad "repo keycloak-ingress.yaml declares spec.defaultBackend — it catches EVERY unmatched Host, including the retired domain: ${rep#DEFAULTBACKEND }" ;;
       *) bad "repo keycloak-ingress.yaml: could not structurally parse spec.rules ($rep)" ;;
     esac
   fi
@@ -506,6 +616,7 @@ except Exception as e:
     case "$rep" in
       HOSTS*) ing_hostset_check "live oe-keycloak" "${rep#HOSTS }" ;;
       HOSTLESS*) bad "live oe-keycloak Ingress has ${rep#HOSTLESS } rule(s) with NO host — such a rule matches EVERY hostname, including the retired domain" ;;
+      DEFAULTBACKEND*) bad "live oe-keycloak Ingress declares spec.defaultBackend — it catches EVERY unmatched Host, including the retired domain: ${rep#DEFAULTBACKEND }" ;;
       *) bad "live oe-keycloak Ingress: could not structurally parse spec.rules ($rep)" ;;
     esac
   fi

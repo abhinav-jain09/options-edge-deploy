@@ -172,17 +172,22 @@ What Phase 3 removes (this change-set):
      /opt/keycloak/bin/kcadm.sh update "clients/$RID" -r req \
        -s "redirectUris=[\"https://req.bleadingoptions.com/oidc-callback\"]" \
        -s "webOrigins=[\"https://req.bleadingoptions.com\"]"
-     /opt/keycloak/bin/kcadm.sh get "clients/$ID" -r optionsedge --fields redirectUris,webOrigins'
+     # read back EVERYTHING mutated: both clients, all three fields
+     /opt/keycloak/bin/kcadm.sh get "clients/$ID" -r optionsedge --fields redirectUris,webOrigins,attributes
+     /opt/keycloak/bin/kcadm.sh get "clients/$RID" -r req --fields redirectUris,webOrigins'
    ```
 
    The acceptance gate compares these sets exactly, so a slip is caught immediately — but re-read
    the output above before moving on, because a wrong replacement here breaks login on the NEW
    domain too.
 4. **Accept BEFORE the one-way step** — `timeout 600 scripts/ops/verify-prod-tunnel.sh` (defaults
-   to `--phase retired`) must be fully green FIRST, and smoke the new domain (login + boards).
-   Nothing in that gate depends on old-domain DNS, so everything it can catch — a stale live
-   Ingress rule, a leftover origin, a wrong realm set, a hostless/wildcard tunnel rule — must be
-   caught while ordinary rollback is still available.
+   to `--phase retired`) must be fully green FIRST, and the FULL authenticated smoke must pass on
+   BOTH sites (`https://bleadingoptions.com` and `https://es.bleadingoptions.com`): log in, boards
+   render with live data, and the WS request reaches `101 Switching Protocols` in the network tab.
+   Both sites matter because Phase 3 changes the ES allow-list and the shared realm. Nothing in
+   the scripted gate depends on old-domain DNS, so everything it can catch — a stale live Ingress
+   rule, a leftover origin, a wrong realm set, a hostless/wildcard/defaultBackend catch-all — must
+   be caught while ordinary rollback is still available.
 5. **Cloudflare — the DNS handoff that actually frees the domain** (operator, dashboard):
    in zone `fullfunding.nl`, DELETE the `@`, `es` and `auth` records that point at
    `976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com` (or repoint them at whatever new
@@ -220,11 +225,15 @@ printf '%s\n' "$ADMIN_PW" | kubectl -n options-edge exec -i "$POD" -- sh -c '
   RID=$(/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web --fields id --format csv --noquotes)
   /opt/keycloak/bin/kcadm.sh update "clients/$RID" -r req \
     -s "redirectUris=[\"https://req.fullfunding.nl/oidc-callback\"]" -s "webOrigins=[\"https://req.fullfunding.nl\"]"
-  /opt/keycloak/bin/kcadm.sh get "clients/$ID" -r optionsedge --fields redirectUris,webOrigins'
+  # read back EVERYTHING restored: both clients, all three fields
+  /opt/keycloak/bin/kcadm.sh get "clients/$ID" -r optionsedge --fields redirectUris,webOrigins,attributes
+  /opt/keycloak/bin/kcadm.sh get "clients/$RID" -r req --fields redirectUris,webOrigins'
 ```
 
-Verify the restore with `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase dual` (the Phase-1
-expectation set). ⚠️ This inverse is valid ONLY before the DNS handoff — after it, re-admitting
+Verify the restore with `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase rollback` — that
+mode describes exactly what a Phase-3 revert produces: both domains serving and trusted again while
+the issuer and served URLs stay on the new domain (Phase-2 state). `--phase dual` would wrongly
+demand the OLD issuer and `--phase retired` would wrongly demand absence, so neither can pass here. ⚠️ This inverse is valid ONLY before the DNS handoff — after it, re-admitting
 those entries is exactly the hijack risk described below, and the correct move is fix-forward.
 
 **After the handoff there is no rollback that re-admits `fullfunding.nl` — in ANY surface.** That
