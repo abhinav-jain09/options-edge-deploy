@@ -127,7 +127,8 @@ Old-issuer tokens die at the flip in both directions — that is expected, not a
 ## Phase 3 — retire
 
 After soak: remove old-domain ingress blocks from the canonical YAML + live (verifier keeps them
-honest), drop old-domain entries from the realm (live via kcadm + configmap parity), **remove the
+honest) and the `auth.fullfunding.nl` rule from `k8s/keycloak/keycloak-ingress.yaml`, drop
+old-domain entries from the realm (live via kcadm + configmap parity), **remove the
 old origins from BOTH gateway allow-lists** — prod feed-gateway `WS_ALLOWED_ORIGINS` drops
 `https://fullfunding.nl`, es4 es-feed-gateway drops `https://es.fullfunding.nl` (the intentional
 es4 LAN origin `http://192.168.100.4:30080` stays) — rename the `req` realm client, sweep

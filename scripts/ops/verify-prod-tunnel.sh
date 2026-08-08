@@ -257,7 +257,7 @@ done
 # Each serving apex hostname must route /ws/events at the prod gateway NodePort — never the :8091
 # ServiceLB (2026-07-31 outage). The es.* hostnames route to the es4 box (.4:30091), whose
 # NodePort belongs to the other cluster, so they are covered by the live 401 probes below.
-want_np="$(run "kubectl -n $NS get svc $GW_SVC -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null")"
+want_np="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get svc $GW_SVC -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null")"
 [ -n "$want_np" ] || unavailable "could not read $GW_SVC nodePort"
 for h in $SERVE_APEX; do
   ws_target="$(ws_target_for "$h" "$live_raw")"
@@ -291,8 +291,39 @@ for h in $SERVE_APEX $SERVE_ES; do
   esac
 done
 
+# --request-timeout bounds every k8s call: ConnectTimeout only bounds the ssh handshake, and an
+# acceptance gate that can hang on a wedged apiserver does not fail closed.
+K8S_TIMEOUT="${K8S_TIMEOUT:-20s}"
+prod_kubectl() { run "kubectl --request-timeout=$K8S_TIMEOUT -n $NS $1 2>/dev/null"; }
+es4_kubectl()  { run_es4 "KC=\$(command -v kubectl); sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \$KC --request-timeout=$K8S_TIMEOUT -n $NS $1 2>/dev/null"; }
+k8s_on() { if [ "$1" = "prod" ]; then prod_kubectl "$2"; else es4_kubectl "$2"; fi; }
+
+rollout_settled() {  # cluster, deploy — a COMPLETE rollout, not a mixed-version snapshot:
+  # generation observed, and desired == total == updated == ready == available ('total' catches a
+  # lingering old replica that would otherwise supply 'ready' while the new pod supplies
+  # 'updated'). 0-replica deploys settle trivially.
+  local fields
+  fields="$(k8s_on "$1" "get deploy $2 -o jsonpath='{.metadata.generation} {.status.observedGeneration} {.spec.replicas} {.status.replicas} {.status.updatedReplicas} {.status.readyReplicas} {.status.availableReplicas}'")"
+  [ -z "$fields" ] && { unavailable "could not read $1/$2 rollout state"; return 1; }
+  set -- $fields
+  local gen="${1:-0}" ogen="${2:-0}" want="${3:-0}" total="${4:-0}" updated="${5:-0}" ready="${6:-0}" avail="${7:-0}"
+  if [ "$gen" != "$ogen" ]; then
+    bad "$1/$2 rollout not observed yet (generation=$gen observed=$ogen) — effective env below may be stale"; return 0
+  fi
+  if [ "$want" = "0" ] && [ "$total" = "0" ]; then return 0; fi
+  if [ "$want" = "$total" ] && [ "$want" = "$updated" ] && [ "$want" = "$ready" ] && [ "$want" = "$avail" ]; then return 0; fi
+  bad "$1/$2 rollout unsettled (spec=$want total=$total updated=$updated ready=$ready available=$avail) — a mixed-version state; effective env below may be stale"
+  return 0
+}
+
+
 # 5. auth hostnames: OIDC discovery must serve the EXACT expected issuer; admin edge-blocked ----
 # (status 200 alone proves nothing about WHICH issuer is being served)
+# Keycloak must be SETTLED before discovery is trusted: a RollingUpdate briefly runs old- and
+# new-issuer pods side by side and one request can hit either — the mixed-issuer hazard Phase 2
+# declares. Settlement precedes the probes so a rollout finishing on a misconfigured pod cannot
+# slip in after a lucky early discovery hit.
+rollout_settled prod "${KC_DEPLOY:-oe-keycloak}"
 for h in $SERVE_AUTH; do
   disc="$(curl -s -m 20 -w '\n%{http_code}' "https://$h/realms/optionsedge/.well-known/openid-configuration" 2>/dev/null)"
   disc_code="$(printf '%s' "$disc" | tail -1)"
@@ -319,28 +350,6 @@ done
 # An unauthenticated handshake 401s before the origin check runs (verified empirically), so HTTP
 # probes cannot see these values; the running pod's effective environment can (kubectl exec
 # printenv — a template read alone could report a config an unfinished rollout is not serving).
-prod_kubectl() { run "kubectl -n $NS $1 2>/dev/null"; }
-es4_kubectl()  { run_es4 "KC=\$(command -v kubectl); sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \$KC -n $NS $1 2>/dev/null"; }
-k8s_on() { if [ "$1" = "prod" ]; then prod_kubectl "$2"; else es4_kubectl "$2"; fi; }
-
-rollout_settled() {  # cluster, deploy — a COMPLETE rollout, not a mixed-version snapshot:
-  # generation observed, and desired == total == updated == ready == available ('total' catches a
-  # lingering old replica that would otherwise supply 'ready' while the new pod supplies
-  # 'updated'). 0-replica deploys settle trivially.
-  local fields
-  fields="$(k8s_on "$1" "get deploy $2 -o jsonpath='{.metadata.generation} {.status.observedGeneration} {.spec.replicas} {.status.replicas} {.status.updatedReplicas} {.status.readyReplicas} {.status.availableReplicas}'")"
-  [ -z "$fields" ] && { unavailable "could not read $1/$2 rollout state"; return 1; }
-  set -- $fields
-  local gen="${1:-0}" ogen="${2:-0}" want="${3:-0}" total="${4:-0}" updated="${5:-0}" ready="${6:-0}" avail="${7:-0}"
-  if [ "$gen" != "$ogen" ]; then
-    bad "$1/$2 rollout not observed yet (generation=$gen observed=$ogen) — effective env below may be stale"; return 0
-  fi
-  if [ "$want" = "0" ] && [ "$total" = "0" ]; then return 0; fi
-  if [ "$want" = "$total" ] && [ "$want" = "$updated" ] && [ "$want" = "$ready" ] && [ "$want" = "$avail" ]; then return 0; fi
-  bad "$1/$2 rollout unsettled (spec=$want total=$total updated=$updated ready=$ready available=$avail) — a mixed-version state; effective env below may be stale"
-  return 0
-}
-
 eff_env() {  # cluster, deploy, container, var — the RUNNING container's effective value
   k8s_on "$1" "exec deploy/$2 -c $3 -- printenv $4"
 }
@@ -368,9 +377,6 @@ origin_set_check() {  # label, deployed-csv, expected space-list
   fi
 }
 
-# Keycloak itself must be settled: a RollingUpdate briefly runs old- and new-issuer pods side by
-# side, and one discovery request can hit either — the exact mixed-issuer hazard Phase 2 declares.
-rollout_settled prod "${KC_DEPLOY:-oe-keycloak}"
 rollout_settled prod "$GW_DEPLOY"
 origin_set_check "prod $GW_DEPLOY" "$(eff_env prod "$GW_DEPLOY" feed-gateway WS_ALLOWED_ORIGINS)" "$EXPECTED_PROD_ORIGINS"
 env_must_equal prod "$GW_DEPLOY" feed-gateway WS_AUTH_ISSUER_URI "$EXPECTED_ISSUER"
@@ -432,7 +438,7 @@ kc_sets_check() {
   [ -z "$pw" ] && { unavailable "could not read the Keycloak admin secret"; return; }
   # Password travels via stdin end-to-end — never interpolated into shell text, so any character
   # (apostrophes included) is safe; kcadm receives it through the pod-side shell variable.
-  client="$(printf '%s' "$pw" | run_stdin "kubectl -n $NS exec -i deploy/oe-keycloak -- sh -c 'IFS= read -r KC_PW; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$KC_PW\" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web 2>/dev/null'")"
+  client="$(printf '%s' "$pw" | run_stdin "kubectl --request-timeout=$K8S_TIMEOUT -n $NS exec -i deploy/oe-keycloak -- sh -c 'IFS= read -r KC_PW; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$KC_PW\" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web 2>/dev/null'")"
   [ -z "$client" ] && { unavailable "could not read the live options-edge-web client via kcadm"; return; }
   printf '%s' "$client" | python3 -c "
 import json, sys

@@ -132,10 +132,21 @@ console. **Current credential contract (since 2026-07-18):** the bootstrap `admi
 DISABLED; the permanent master-realm admin is **`abhinav`**, and by contract `abhinav`'s password
 EQUALS the `KC_BOOTSTRAP_ADMIN_PASSWORD` key in `oe-keycloak-secrets` — the Deployment still reads
 that key at boot and `scripts/ops/verify-prod-tunnel.sh` authenticates with it, so the key must
-never be removed. Rotation, in one maintenance window:
-`kcadm.sh set-password -r master --username abhinav --new-password '<new-strong-pw>'` then
-`kubectl -n options-edge patch secret oe-keycloak-secrets -p '{"stringData":{"KC_BOOTSTRAP_ADMIN_PASSWORD":"<new-strong-pw>"}}'`
-(then re-run the verifier — it authenticates with the Secret value, so a half-done rotation fails loudly).
+never be removed. Rotation is ONE fail-fast sequence (single captured value, fresh kcadm login, Secret patched only
+after the password change succeeded; the verifier re-run catches any residue):
+
+```sh
+set -euo pipefail
+NEW_PW="$(openssl rand -base64 24)"                       # captured ONCE — no manual retyping drift
+OLD_PW="$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)"
+printf '%s\n%s\n' "$OLD_PW" "$NEW_PW" | kubectl -n options-edge exec -i deploy/oe-keycloak -- sh -c '
+  set -eu; IFS= read -r OLDP; IFS= read -r NEWP
+  /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$OLDP"
+  /opt/keycloak/bin/kcadm.sh set-password -r master --username abhinav --new-password "$NEWP"'
+kubectl -n options-edge patch secret oe-keycloak-secrets \
+  -p "{\"stringData\":{\"KC_BOOTSTRAP_ADMIN_PASSWORD\":\"$NEW_PW\"}}"
+scripts/ops/verify-prod-tunnel.sh   # authenticates with the Secret value — half-done rotation fails loudly
+```
 
 ```sh
 ADMIN_PW=$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
