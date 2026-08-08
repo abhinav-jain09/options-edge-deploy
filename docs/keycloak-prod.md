@@ -154,8 +154,18 @@ kubectl $KT -n options-edge create configmap kc-rotation-lock \
   --from-literal=holder="$LOCK_HOLDER" \
   || { echo "ABORT: another rotation holds kc-rotation-lock (kubectl -n options-edge get configmap kc-rotation-lock -o yaml to see who) — nothing was changed" >&2; exit 7; }
 release_lock() {  # bounded AND verified — a silently surviving lock would block the next rotation.
-  # The verification must itself be trustworthy: `get` failing does NOT mean the lock is gone —
-  # only an explicit NotFound does; an API error means deletion is UNVERIFIED, which is a failure.
+  # OWNERSHIP-GUARDED delete: only remove the lock if it is still OURS. kubectl exposes no UID
+  # precondition on delete, so this is a holder-checked get-then-delete; the residual get->delete
+  # window is accepted deliberately: a successor lock can only exist after ours was removed, and
+  # ours can only be removed out-of-band via the documented crash-takeover procedure, which
+  # REQUIRES first proving this process dead — a live us racing a legitimate successor is
+  # therefore an operator-error state, not a reachable one under the procedure.
+  local holder
+  holder="$(kubectl $KT -n options-edge get configmap kc-rotation-lock -o jsonpath='{.data.holder}' 2>/dev/null)"
+  if [ -n "$holder" ] && [ "$holder" != "$LOCK_HOLDER" ]; then
+    # Not ours (a successor's fence) — our lock is already gone; never delete theirs.
+    return 0
+  fi
   kubectl $KT -n options-edge delete configmap kc-rotation-lock --ignore-not-found >/dev/null 2>&1
   local out
   if out="$(kubectl $KT -n options-edge get configmap kc-rotation-lock -o jsonpath='{.data.holder}' 2>&1)"; then
