@@ -347,6 +347,19 @@ resolve_ws_target() {  # $1 = hostname. cloudflared's own first-match answer is 
   printf ''
 }
 
+realm_verdict() {  # $1 = marker from realm_scan. THE production verdict — the selftest calls this
+  # very function, so a regression in its failure handling cannot hide behind a copied handler.
+  case "$1" in
+    CLEAN*) note "OK   no client in any live realm can reach the retired domain ($1)" ;;
+    PROBLEMS*) bad "LIVE Keycloak still admits the retired domain: ${1#PROBLEMS }" ;;
+    SCAN_FAIL*) if [ "$NETWORK_ONLY" = "1" ]; then note "WARN realm-wide scan skipped (${1#SCAN_FAIL })"
+                else bad "realm-wide retirement scan could not complete — ${1#SCAN_FAIL } (an incomplete enumeration is not evidence)"; fi ;;
+    "") if [ "$NETWORK_ONLY" = "1" ]; then note "WARN realm-wide scan produced no output (network-only)"
+        else bad "realm-wide retirement scan produced NO output — the decisive realm gate did not run"; fi ;;
+    *) bad "realm-wide retirement scan produced unusable output: $1" ;;
+  esac
+}
+
 selftest() {
   local fixture got rc=0
   run_case() {  # host, expected, config, label
@@ -559,7 +572,8 @@ def host_hits(u):
     return bool(h) and any(h==s or h.endswith('.'+s) for s in sfxs)
 def catch_all(v):
     v=str(v).strip()
-    return v in ('*','/*') or v.startswith('http://*') or v.startswith('https://*')
+    lv=v.lower()
+    return v in ('*','/*') or lv.startswith('http://*') or lv.startswith('https://*')
 c=json.load(sys.stdin); root=str(c.get('rootUrl') or ''); bad=[]
 for v in list(c.get('redirectUris') or [])+list(c.get('webOrigins') or []):
     v=str(v)
@@ -578,18 +592,19 @@ print('PROBLEMS '+','.join(bad) if bad else 'CLEAN')"
   struct_case "new-domain client is clean" \
     '{"clientId":"x","redirectUris":["https://bleadingoptions.com/*"],"webOrigins":["https://bleadingoptions.com"]}' "$PY_CLIENT" "CLEAN"
   # The realm gate must FAIL (never pass quietly) when enumeration cannot complete.
-  realm_marker_case() {
-    local out rc2
-    out="$( { rw="SCAN_FAIL forced"; case "$rw" in
-        CLEAN*) note "OK   clean" ;;
-        PROBLEMS*) bad "problems" ;;
-        SCAN_FAIL*) bad "realm-wide retirement scan could not complete — ${rw#SCAN_FAIL }" ;;
-        "") bad "no output" ;;
-      esac; } 2>&1 )"
-    case "$out" in
-      *"could not complete"*) echo "  OK   selftest: SCAN_FAIL marker makes the realm gate fail" ;;
-      *) echo "  FAIL selftest: SCAN_FAIL marker handling (got '$out')" >&2; rc=1 ;;
-    esac
+  realm_marker_case() {  # invoke the PRODUCTION verdict function in THIS shell and assert `fail`
+    local saved="$fail" saved_net="$NETWORK_ONLY"
+    NETWORK_ONLY=0
+    for marker in "SCAN_FAIL forced" "" "garbage-output"; do
+      fail=0
+      realm_verdict "$marker" >/dev/null 2>&1
+      if [ "$fail" = "1" ]; then echo "  OK   selftest: realm_verdict fails the gate for marker '${marker:-<empty>}'"
+      else echo "  FAIL selftest: realm_verdict did NOT fail for marker '${marker:-<empty>}'" >&2; rc=1; fi
+    done
+    fail=0; realm_verdict "CLEAN 3 realm(s) scanned" >/dev/null 2>&1
+    if [ "$fail" = "0" ]; then echo "  OK   selftest: realm_verdict passes a CLEAN marker"
+    else echo "  FAIL selftest: realm_verdict failed a CLEAN marker" >&2; rc=1; fi
+    fail="$saved"; NETWORK_ONLY="$saved_net"
   }
   realm_marker_case
   struct_case "backchannel logout URL on the retired host is caught" \
@@ -1149,6 +1164,7 @@ fi
 #   * relative redirects are resolved against rootUrl/baseUrl/adminUrl,
 #   * effective catch-alls ("*", "http://*", a wildcard web origin) FAIL regardless of spelling,
 #   * hostnames are normalised (trailing dot, port, case) before the suffix test.
+
 realm_scan() {
   local pw payload
   # NOTE: this function runs inside $(...), so it must NEVER call bad/unavailable — their effect
@@ -1184,7 +1200,8 @@ def host_hits(u):
 def catch_all(v):
     'Effective catch-alls admit ANY host, including the retired one.'
     v = str(v).strip()
-    return v in ('*', '/*') or v.startswith('http://*') or v.startswith('https://*') or v == 'http*'
+    lv = v.lower()
+    return v in ('*', '/*') or lv.startswith('http://*') or lv.startswith('https://*') or lv in ('http*', 'http*://*')
 
 try:
     doc = json.loads(sys.stdin.read())
@@ -1237,16 +1254,7 @@ else: print('CLEAN %d realm(s) scanned' % len(realms))
 " 2>/dev/null
 }
 if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
-  rw="$(realm_scan)"
-  case "$rw" in
-    CLEAN*) note "OK   no client in any live realm can reach the retired domain ($rw)" ;;
-    PROBLEMS*) bad "LIVE Keycloak still admits the retired domain: ${rw#PROBLEMS }" ;;
-    SCAN_FAIL*) if [ "$NETWORK_ONLY" = "1" ]; then note "WARN realm-wide scan skipped (${rw#SCAN_FAIL })"
-                else bad "realm-wide retirement scan could not complete — ${rw#SCAN_FAIL } (an incomplete enumeration is not evidence)"; fi ;;
-    "") if [ "$NETWORK_ONLY" = "1" ]; then note "WARN realm-wide scan produced no output (network-only)"
-        else bad "realm-wide retirement scan produced NO output — the decisive realm gate did not run"; fi ;;
-    *) bad "realm-wide retirement scan produced unusable output: $rw" ;;
-  esac
+  realm_verdict "$(realm_scan)"
 
   # 6g. the DEPLOYED realm import ConfigMap — if common-infra-deploy did not land while the manual
   # kcadm patch did, a later DB recreate would re-import stale URIs and restore the retired domain.

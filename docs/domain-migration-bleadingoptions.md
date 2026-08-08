@@ -288,6 +288,13 @@ sys.exit(0 if tp <= pg else 7)"
    `@`, `es` and `auth` records in the `fullfunding.nl` zone**, and record the zone's DNS tab
    showing they are gone. `bleadingoptions.com` keeps its three proxied CNAMEs.
 
+6. **Re-accept AFTER the handoff, then destroy the rollback path** — rerun
+   `timeout 600 scripts/ops/verify-prod-tunnel.sh` (defaults to `--phase retired`) and keep its
+   output with the DNS evidence from step 5; repeat the authenticated smoke on BOTH sites (login,
+   boards live, WS `101`) because the handoff changed DNS for a domain browsers may have cached.
+   ONLY once that is green: delete the pre-Phase-3 tunnel backup taken in step 1, so the old
+   ingress rules cannot be restored by reflex (see the boundary below).
+
 ### Rollback boundary (one-way after the DNS handoff)
 
 Before the handoff (steps 1-4) rollback is revert-and-redeploy for the tunnel (restore the step-1
