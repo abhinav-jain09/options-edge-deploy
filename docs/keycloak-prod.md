@@ -13,7 +13,7 @@ stand up the issuer they point at.
 | `keycloak-realm-configmap.yaml` | ConfigMap `oe-keycloak-realm` | Hardened realm import (client `options-edge-web`, no test user, origins pinned to the public web origins — both domains during the bleadingoptions.com migration; see docs/domain-migration-bleadingoptions.md) |
 | `keycloak-postgres.yaml` | headless Service + StatefulSet + **PVC** | Durable Keycloak database (state on disk, not H2/container layer) |
 | `keycloak-deployment.yaml` | Deployment + **ClusterIP** Service (`:8080`) + headless Service + `oe-keycloak-lan` **LoadBalancer** (`192.168.100.252:8089`, LAN admin console) | Keycloak in production mode (`start --import-realm`) on Postgres |
-| `keycloak-ingress.yaml` | traefik Ingress | Routes `Host: auth.fullfunding.nl` `/realms/optionsedge` + `/resources` → `oe-keycloak:8080` (admin paths get no route → 404) |
+| `keycloak-ingress.yaml` | traefik Ingress (LEGACY fallback — live public path bypasses traefik) | Routes both auth hostnames' `/realms/optionsedge` + `/resources` → `oe-keycloak:8080` (admin paths get no route); old host rule removed at migration Phase 3 |
 
 ## Edge / exposure model
 
@@ -137,15 +137,34 @@ after the password change succeeded; the verifier re-run catches any residue):
 
 ```sh
 set -euo pipefail
+KT="--request-timeout=20s"                                # never hang mid-rotation
 NEW_PW="$(openssl rand -base64 24)"                       # captured ONCE — no manual retyping drift
-OLD_PW="$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)"
-printf '%s\n%s\n' "$OLD_PW" "$NEW_PW" | kubectl -n options-edge exec -i deploy/oe-keycloak -- sh -c '
-  set -eu; IFS= read -r OLDP; IFS= read -r NEWP
-  /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$OLDP"
-  /opt/keycloak/bin/kcadm.sh set-password -r master --username abhinav --new-password "$NEWP"'
-kubectl -n options-edge patch secret oe-keycloak-secrets \
-  -p "{\"stringData\":{\"KC_BOOTSTRAP_ADMIN_PASSWORD\":\"$NEW_PW\"}}"
-scripts/ops/verify-prod-tunnel.sh   # authenticates with the Secret value — half-done rotation fails loudly
+OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)"
+kc_setpw() {  # $1=auth-pw $2=new-pw — fresh login + set-password inside the pod, both via stdin
+  printf '%s\n%s\n' "$1" "$2" | kubectl $KT -n options-edge exec -i deploy/oe-keycloak -- sh -c '
+    set -eu; IFS= read -r AUTHP; IFS= read -r NEWP
+    /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$AUTHP"
+    /opt/keycloak/bin/kcadm.sh set-password -r master --username abhinav --new-password "$NEWP"'
+}
+kc_setpw "$OLD_PW" "$NEW_PW"
+# set-password is irreversible from here — the Secret patch below MUST land or be compensated.
+# Patch travels via stdin (no NEW_PW in argv); retried because a lost success response leaves the
+# credential split; on persistent failure, COMPENSATE by restoring the old Keycloak password.
+patched=false
+for attempt in 1 2 3; do
+  if printf '{"stringData":{"KC_BOOTSTRAP_ADMIN_PASSWORD":"%s"}}' "$NEW_PW" \
+     | kubectl $KT -n options-edge patch secret oe-keycloak-secrets --patch-file /dev/stdin; then
+    patched=true; break
+  fi
+  sleep 2
+done
+if [ "$patched" != true ]; then
+  echo "Secret patch failed 3x — restoring the OLD Keycloak password so admin+Secret stay in sync" >&2
+  kc_setpw "$NEW_PW" "$OLD_PW"
+  exit 1
+fi
+# final proof — pass the CURRENT migration phase explicitly (dual | redirect | retired):
+scripts/ops/verify-prod-tunnel.sh --phase <current-phase>
 ```
 
 ```sh

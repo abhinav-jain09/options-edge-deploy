@@ -253,6 +253,24 @@ for h in $ABSENT_TUNNEL_HOSTS; do
   fi
 done
 
+# 1c. retired: the legacy traefik Ingress must not route the old auth hostname either ------------
+if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
+  ING_FILE="${ING_FILE:-$(cd "$(dirname "$0")/../.." && pwd)/k8s/keycloak/keycloak-ingress.yaml}"
+  if grep -qiE "host:[[:space:]]*[\"']?auth\.fullfunding\.nl[\"']?([[:space:]]|\$)" "$ING_FILE" 2>/dev/null; then
+    bad "repo keycloak-ingress.yaml still routes auth.fullfunding.nl after retirement"
+  else
+    note "OK   repo keycloak-ingress.yaml carries no old auth host"
+  fi
+  live_ing_hosts="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get ingress oe-keycloak -o jsonpath='{.spec.rules[*].host}' 2>/dev/null")"
+  if [ -z "$live_ing_hosts" ]; then
+    unavailable "could not read the live oe-keycloak Ingress host set"
+  elif printf '%s' "$live_ing_hosts" | grep -qi "auth\.fullfunding\.nl"; then
+    bad "live oe-keycloak Ingress still routes auth.fullfunding.nl after retirement ($live_ing_hosts)"
+  else
+    note "OK   live oe-keycloak Ingress carries no old auth host ($live_ing_hosts)"
+  fi
+fi
+
 # 2 + 3. the /ws/events routes (every SERVING apex hostname) -----------------------------------
 # Each serving apex hostname must route /ws/events at the prod gateway NodePort — never the :8091
 # ServiceLB (2026-07-31 outage). The es.* hostnames route to the es4 box (.4:30091), whose
@@ -490,7 +508,12 @@ printf '%s\n' "$kc_out" | grep -q 'FAIL' && fail=1
 case "$PHASE" in retired) req_host="req.bleadingoptions.com" ;; *) req_host="req.fullfunding.nl" ;; esac
 EXPECTED_REQ_REDIRECTS="${EXPECTED_REQ_REDIRECTS:-https://$req_host/oidc-callback}"
 EXPECTED_REQ_WEBORIGINS="${EXPECTED_REQ_WEBORIGINS:-https://$req_host}"
-req_out="$(prod_kubectl "exec deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web 2>/dev/null'" | { command -v python3 >/dev/null && python3 -c "
+req_raw="$(prod_kubectl "exec deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web 2>/dev/null'")"
+if [ -z "$req_raw" ]; then
+  unavailable "could not read the req realm's bugzilla-web client"
+  req_out=""
+else
+req_out="$(printf '%s' "$req_raw" | { command -v python3 >/dev/null && python3 -c "
 import json, sys
 try:
     arr = json.load(sys.stdin)
@@ -503,8 +526,9 @@ try:
     print('REQ_WEBORIGINS\t' + '\t'.join(sorted(str(v) for v in c.get('webOrigins', []))))
 except Exception as e:
     print('  FAIL: req realm client response unusable: %s' % e)" || true; })"
+fi
 if [ -z "$req_out" ]; then
-  unavailable "could not read the req realm's bugzilla-web client"
+  :  # unavailable already reported above (or python3 missing — the kc_sets_check gate covers that)
 elif printf '%s\n' "$req_out" | grep -q 'FAIL'; then
   printf '%s\n' "$req_out"; fail=1
 else
