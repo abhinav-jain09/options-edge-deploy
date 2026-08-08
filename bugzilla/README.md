@@ -45,7 +45,7 @@ extensions Bugzilla ships with.
 Everything runs on `.252`. Set these once per session:
 
 ```bash
-BZ=options-edge-bugzilla-web; ADMIN=<admin-login>; TRIAGE=<triage-login>
+BZ=options-edge-bugzilla-web; ADMIN=<admin-login>
 ```
 
 Step **5** is the only one that changes anything: it applies the configuration and then files and
@@ -63,7 +63,7 @@ docker exec $BZ perl -e 'use lib qw(/var/www/html /var/www/html/lib /var/www/htm
 writes nothing, and also cross-checks that the extension's policy constants match the JSON.
 
 ```bash
-docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE"
+docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN"
 ```
 
 **3. Stop Apache and back up.** The container's PID 1 is a sleep loop, so stopping Apache takes the
@@ -81,6 +81,14 @@ container.
 
 **If it does not print `BACKUP OK`, stop — restart Apache with `docker exec $BZ apachectl start` and
 do not apply.**
+
+**0. Prerequisite for the FIRST apply: an unprivileged reporter account.** This installation has a
+single profile today, and verification cannot prove the path external stakeholders actually use
+without a second one — a user in neither `editbugs` nor `canconfirm`, who also cannot edit other
+people's bugs through any product group grant. **Create that account yourself** (account creation is
+not something this runbook automates), give it an API key, and only then run step 5. Until it
+exists, the first apply is deliberately incomplete: `--strict` will fail rather than report success
+over an unproven path.
 
 **4. Get two API keys into the environment** — step 5 needs both. `BZ_API_KEY` must belong to an
 admin (`requirelogin` is on, and the parameter assertions need `tweakparams`). `BZ_REPORTER_KEY`
@@ -106,7 +114,7 @@ checks that the extension goes fail-closed, and rolls back. Verification then **
 bugs** prefixed `[SMOKE]` and closes them again — so run this in a change window.
 
 ```bash
-docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply \
+docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --apply \
   && docker restart $BZ \
   && { python3 configuration/verify-projects.py --state configuration/expected-state.json --reporter-api-key-env BZ_REPORTER_KEY --strict \
        || { echo "VERIFICATION FAILED - taking the site down again"; docker exec $BZ apachectl stop; false; }; }
@@ -131,7 +139,7 @@ Nothing is scheduled for decommissioning, so no product warning is expected.
 configuration; a dry run reads only, so it is safe against the live site:
 
 ```bash
-docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE"
+docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN"
 ```
 
 Pass the same `--default-assignee` as step 4: it defaults to `--admin-login`, so omitting it would
@@ -142,7 +150,7 @@ make the script plan a reassignment of every component and the run would not be 
 something genuinely needs retiring; it aborts rather than removing a product that still holds bugs.
 
 ```bash
-docker exec $BZ apachectl stop && docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply --remove-decommissioned && docker restart $BZ
+docker exec $BZ apachectl stop && docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --apply --remove-decommissioned && docker restart $BZ
 ```
 
 If that fails, Apache stays stopped on purpose. Fix the cause, then re-run the same command. Then
@@ -178,8 +186,9 @@ Do not try to unpick a partial run with ad-hoc `DROP COLUMN`.
   (the field's shape, all four products by **name and id**, the category vocabulary, the
   resolutions, the statuses with their open flags, and the full workflow matrix) must match, or
   every guarded change is refused until the provisioner is re-run. Deleting the field is not a way
-  out: from a web or API request that is *broken*, not *bootstrap*. Bootstrap has to be claimed
-  explicitly through `BUGZILLA_ITW_BOOTSTRAP`, which only the provisioner sets.
+  out: from a web or API request that is *broken*, not *bootstrap*. "Never provisioned" is judged from the
+  database — no category field *and* no `REQ_*` status — so mounting the extension on a fresh
+  installation is safe, while removing the field afterwards is not a way out.
 - It also aborts if an existing item already violates the model — a status or resolution that does
   not belong to its product's type, or a category belonging to the other type. An **empty** category
   is always fine; that is exactly what leaves the 177 existing bugs editable. The extension validates

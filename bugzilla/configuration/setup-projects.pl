@@ -526,8 +526,9 @@ sub check_web_tier_is_down {
     # Only an actively refused connection proves nothing is listening. A
     # timeout, an unknown host or an unreachable network means we do not know -
     # and "we do not know" must not pass for "it is safe".
-    fatal("cannot tell whether the web tier at $target is down ($why). "
-        . 'Check --web-host/--web-port, or pass --allow-live if you are sure.')
+    fatal("cannot tell whether the web tier at $target is down ($why) - this "
+        . 'is not proof that it is. Fix --web-host/--web-port, or pass '
+        . '--allow-live to apply anyway.')
       if $why !~ /refused/i;
 
     note("web tier $target actively refused the connection - good, applying "
@@ -717,6 +718,13 @@ sub preflight {
       fatal("declared default_assignee '$owner' is disabled")
         if !$user->is_enabled;
     }
+  }
+
+  foreach my $spec (@{$STATE->{products}}) {
+    fatal("declared product '$spec->{name}' does not exist. This SSOT describes "
+        . 'an installation that already has it; creating it here would take an '
+        . 'unpredictable id, and the issue type is bound to the id.')
+      if !Bugzilla::Product->new({name => $spec->{name}});
   }
 
   audit_existing_bugs();
@@ -1592,8 +1600,15 @@ sub self_test_rename_guards {
   my @unguarded;
   foreach my $case (@cases) {
     my ($label, $object, $field, $value) = @$case;
-    my $refused = !eval { $object->set($field, $value); 1 };
-    push @unguarded, $label if !$refused;
+    my $ok  = eval { $object->set($field, $value); 1 };
+    my $err = $@;
+    if ($ok) { push @unguarded, "$label (allowed)"; next; }
+
+    # Any exception is not proof: it must be OUR refusal, not a validation
+    # error that would disappear with a different test value.
+    my $message = ref($err) ? (eval { $err->{error} } // "$err") : "$err";
+    push @unguarded, "$label (refused, but by '$message', not the rename guard)"
+      if $message !~ /issue_type_(?:value|product)_rename_forbidden/;
   }
   eval { $dbh->bz_rollback_transaction(); 1 }
     or fatal("rename-guard self-test rollback FAILED: $@");
@@ -1606,6 +1621,35 @@ sub self_test_rename_guards {
 
   note('rename-guard self-test passed (' . scalar(@cases)
       . ' guarded object(s) refused renaming)');
+  self_test_delete_guards();
+  return;
+}
+
+# Deleting a guarded value would strip the lifecycle out from under live items,
+# so object_before_delete gets the same treatment.
+sub self_test_delete_guards {
+  return if $DRY;
+
+  my $category
+    = Bugzilla::Field::Choice->type('cf_category')->new({name => 'BUG_CODE'})
+    or return note('delete-guard self-test skipped: BUG_CODE not present');
+
+  assert_lock_held('the delete-guard self-test');
+  $dbh->bz_start_transaction();
+  my $ok  = eval { $category->remove_from_db; 1 };
+  my $err = $@;
+  eval { $dbh->bz_rollback_transaction(); 1 }
+    or fatal("delete-guard self-test rollback FAILED: $@");
+  flush_caches();
+
+  fatal('delete-guard self-test: deleting the category BUG_CODE was NOT refused')
+    if $ok;
+  my $message = ref($err) ? (eval { $err->{error} } // "$err") : "$err";
+  fatal("delete-guard self-test: deletion was refused by '$message', not by the "
+      . 'delete guard')
+    if $message !~ /issue_type_value_delete_forbidden/;
+
+  note('delete-guard self-test passed');
   return;
 }
 
@@ -1642,12 +1686,16 @@ validate_extension_agreement();
 check_web_tier_is_down();
 take_lock();
 
-my @BUG_COLUMNS_BEFORE = bugs_columns();
-my ($BUG_DIGEST_BEFORE, $BUG_ROWS_BEFORE) = bugs_digest(@BUG_COLUMNS_BEFORE);
-note("$BUG_ROWS_BEFORE existing bug row(s), digest $BUG_DIGEST_BEFORE over "
-    . scalar(@BUG_COLUMNS_BEFORE) . ' pre-existing column(s)');
+my (@BUG_COLUMNS_BEFORE, $BUG_DIGEST_BEFORE, $BUG_ROWS_BEFORE);
 
 my $ok = eval {
+  # Inside the eval, so a failure here still runs release_lock() below rather
+  # than leaving the advisory lock to process teardown.
+  @BUG_COLUMNS_BEFORE = bugs_columns();
+  ($BUG_DIGEST_BEFORE, $BUG_ROWS_BEFORE) = bugs_digest(@BUG_COLUMNS_BEFORE);
+  note("$BUG_ROWS_BEFORE existing bug row(s), digest $BUG_DIGEST_BEFORE over "
+      . scalar(@BUG_COLUMNS_BEFORE) . ' pre-existing column(s)');
+
   preflight();
 
   note($DRY

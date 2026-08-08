@@ -240,12 +240,12 @@ for the reachable ones and says plainly which it cannot induce.
 - The extension duplicates the status/resolution policy as Perl constants (it must not depend on a
   config file at runtime). The provisioner asserts they match the JSON on every run, and
   `verify-projects.py` proves them behaviourally.
-- **An administrator with `editvalues` can rewrite bug rows, and no hook can stop them.**
-  `Bugzilla::Field::Choice::update` implements a value *rename* as a direct
-  `UPDATE bugs SET <field> = ?` — it never goes through `Bugzilla::Bug`, so nothing this extension
-  hooks is involved. That is true of stock Bugzilla too; it is an admin-privilege boundary, not a
-  hole this design opened. What this design adds is **detection**: the provisioner digests every
-  pre-existing row and re-audits every item against its product's type, so the next run says so.
+- A value *rename* would rewrite bug rows directly — `Bugzilla::Field::Choice::update` issues
+  `UPDATE bugs SET <field> = ?` without going through `Bugzilla::Bug` — so it is refused up front in
+  `object_before_set` (`Object.pm:445`), which fires before `set` does any work. Renaming or
+  deleting a guarded status, resolution, category value or mapped product is blocked, which closes
+  the swap-through-temporary-names route. The apply proves both guards by attempting the forbidden
+  operations inside a transaction it rolls back.
 - An administrator editing `editvalues.cgi`/`editworkflow.cgi` can no longer widen policy — the
   compiled-in vocabulary and the fail-closed marker see to that — but they can still make the
   installation *stop working* (which is the intended direction), and items stored before such an edit

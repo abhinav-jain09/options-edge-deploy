@@ -340,7 +340,7 @@ def verify_products(bz, state, require_decommissioned):
             check(f"decommissioned product '{name}' is gone", gone)
         elif not gone:
             warn(f"'{name}' is still present",
-                 "expected until the runbook retires it; re-run with "
+                 "expected until it is retired; re-run with "
                  "--require-decommissioned afterwards to assert it is gone",
                  expected=True)
 
@@ -546,7 +546,8 @@ class Walker:
     def state_of(self, bug_id):
         status, body = self.bz.get(f"/bug/{bug_id}")
         bugs = body.get("bugs")
-        if status >= 400 or not bugs:
+        if (status >= 400 or not isinstance(bugs, list) or not bugs
+                or not isinstance(bugs[0], dict)):
             raise BzTransportError(
                 f"cannot read bug {bug_id} (HTTP {status}): {json.dumps(body)[:200]}")
         bug = bugs[0]
@@ -852,10 +853,27 @@ def verify_low_privilege_reporter(bz, state, w, key_env):
                  json.dumps(body)[:200]):
         return
     groups = {g["name"] for g in users[0].get("groups", [])}
-    if not check(f"'{login}' has neither editbugs nor canconfirm",
+    if not check(f"'{login}' is in neither editbugs nor canconfirm",
                  not (groups & {"editbugs", "canconfirm"}),
                  f"groups: {sorted(groups)} - this key is NOT low privilege, so "
                  "the probe would prove nothing"):
+        return
+
+    # Group names are not the whole story: a product's group controls can grant
+    # the same effective permission through another group entirely. So probe the
+    # EFFECT - editing a field on someone else's bug is exactly what editbugs
+    # buys - rather than trusting membership.
+    probe_product = w.product_of["REQUIREMENT"][0]
+    st, probe = w.file(probe_product, "General", "REQUIREMENT",
+                       w.categories["REQUIREMENT"][0])
+    if not check("filed an admin-owned item for the privilege probe",
+                 st < 400 and probe.get("id")):
+        return
+    st, body = reporter.put(f"/bug/{probe['id']}", {"priority": "Low"})
+    if not check(f"'{login}' cannot edit someone else's bug (so it really is "
+                 "low privilege)", st >= 400 and body.get("error"),
+                 f"HTTP {st}: this account CAN edit other people's bugs, so it "
+                 "does not take core's low-privilege path and proves nothing"):
         return
     payload = {
         "product": w.product_of["REQUIREMENT"][0],

@@ -24,6 +24,7 @@ PARAMS="$BASE.params.json"
 CHARSET="$BASE.charset"
 MANIFEST="$BASE.tables"
 ROWS="$BASE.rows"
+MANIFEST_CHECK=$(mktemp "${TMPDIR:-/tmp}/bz-restore-tables.XXXXXX")
 SUMS="$BASE.sha256"
 
 apache_stopped=0
@@ -138,17 +139,18 @@ gunzip -c "$DUMP" | docker exec -i "$DB" sh -c \
 
 echo "==> comparing the restored tables against the manifest"
 db_sql "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='$DBNAME' ORDER BY TABLE_NAME" \
-  | sort > "$MANIFEST.restored"
-if ! diff -u "$MANIFEST" "$MANIFEST.restored"; then
+  | sort > "$MANIFEST_CHECK"
+if ! diff -u "$MANIFEST" "$MANIFEST_CHECK"; then
   echo "FATAL: the restored schema does not match the manifest taken at backup time" >&2
   exit 1
 fi
 echo "    $(wc -l < "$MANIFEST") tables, exactly as recorded"
-rm -f "$MANIFEST.restored"
+rm -f "$MANIFEST_CHECK"
 
 if [ -f "$ROWS" ]; then
   echo "==> comparing row counts against the backup"
-  db_sql "SELECT CONCAT(TABLE_NAME, ' ', COALESCE(TABLE_ROWS,0)) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$DBNAME' ORDER BY TABLE_NAME" > "$ROWS.restored"
+  SCRATCH=$(mktemp "${TMPDIR:-/tmp}/bz-restore-rows.XXXXXX")
+  db_sql "SELECT CONCAT(TABLE_NAME, ' ', COALESCE(TABLE_ROWS,0)) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$DBNAME' ORDER BY TABLE_NAME" > "$SCRATCH"
   BUGS_BEFORE=$(awk '$1 == "bugs" {print $2}' "$ROWS")
   BUGS_AFTER=$(db_sql "SELECT COUNT(*) FROM $DBNAME.bugs")
   [ "${BUGS_BEFORE:-0}" = "$BUGS_AFTER" ] || {
@@ -156,7 +158,7 @@ if [ -f "$ROWS" ]; then
     exit 1
   }
   echo "    bugs: $BUGS_AFTER rows, as recorded"
-  rm -f "$ROWS.restored"
+  rm -f "$SCRATCH"
 fi
 
 echo "==> flushing Bugzilla's memcached, if it has one"
@@ -190,9 +192,10 @@ for _ in $(seq 1 60); do
 done
 if [ "${healthy:-0}" != "1" ]; then
   echo "FATAL: the web tier did not respond within 120s after restart." >&2
-  echo "       The DATA IS RESTORED, but the instance is not serving. Apache is" >&2
-  echo "       RUNNING - stop it yourself if you need the instance dark:" >&2
-  echo "         docker exec $WEB apachectl stop" >&2
+  echo "       The DATA IS RESTORED, but the instance is not serving." >&2
+  echo "       Stopping Apache so nothing reaches a half-working instance." >&2
+  docker exec "$WEB" apachectl stop >/dev/null 2>&1 || true
+  apache_stopped=1
   exit 1
 fi
 echo "    the web tier responded"
