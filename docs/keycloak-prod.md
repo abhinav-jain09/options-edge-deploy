@@ -74,23 +74,25 @@ cloudflared tunnel --config ~/options-edge-stable.yml.new ingress validate
 # authoritative preflight: cloudflared itself resolves EVERY public route against the STAGED file,
 # and each resolution is asserted against the expected backend (grep -q fails the pipeline).
 while read -r u expect; do
-  cloudflared tunnel --config ~/options-edge-stable.yml.new ingress rule "$u" | grep -q "$expect" \
-    || { echo "PREFLIGHT FAIL: $u did not resolve to $expect" >&2; exit 1; }
+  got="$(cloudflared tunnel --config ~/options-edge-stable.yml.new ingress rule "$u" \
+         | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
+  [ "$got" = "$expect" ] \
+    || { echo "PREFLIGHT FAIL: $u resolved to '$got', expected '$expect'" >&2; exit 1; }
 done <<'ROUTES'
-https://fullfunding.nl/ws/events 192.168.100.252:30097
-https://fullfunding.nl/ 192.168.100.252:8094
-https://bleadingoptions.com/ws/events 192.168.100.252:30097
-https://bleadingoptions.com/ 192.168.100.252:8094
+https://fullfunding.nl/ws/events http://192.168.100.252:30097
+https://fullfunding.nl/ http://192.168.100.252:8094
+https://bleadingoptions.com/ws/events http://192.168.100.252:30097
+https://bleadingoptions.com/ http://192.168.100.252:8094
 https://auth.fullfunding.nl/admin http_status:404
 https://auth.fullfunding.nl/realms/master http_status:404
-https://auth.fullfunding.nl/realms/optionsedge 10.43.127.26:8080
+https://auth.fullfunding.nl/realms/optionsedge http://10.43.127.26:8080
 https://auth.bleadingoptions.com/admin http_status:404
 https://auth.bleadingoptions.com/realms/master http_status:404
-https://auth.bleadingoptions.com/realms/optionsedge 10.43.127.26:8080
-https://es.fullfunding.nl/ws/events 192.168.100.4:30091
-https://es.fullfunding.nl/ 192.168.100.4:30080
-https://es.bleadingoptions.com/ws/events 192.168.100.4:30091
-https://es.bleadingoptions.com/ 192.168.100.4:30080
+https://auth.bleadingoptions.com/realms/optionsedge http://10.43.127.26:8080
+https://es.fullfunding.nl/ws/events http://192.168.100.4:30091
+https://es.fullfunding.nl/ http://192.168.100.4:30080
+https://es.bleadingoptions.com/ws/events http://192.168.100.4:30091
+https://es.bleadingoptions.com/ http://192.168.100.4:30080
 ROUTES
 sudo cp /etc/cloudflared/options-edge-stable.yml /etc/cloudflared/options-edge-stable.yml.bak-$(date +%Y%m%d-%H%M%S)
 sudo cp ~/options-edge-stable.yml.new /etc/cloudflared/options-edge-stable.yml.tmp   && sudo mv /etc/cloudflared/options-edge-stable.yml.tmp /etc/cloudflared/options-edge-stable.yml
@@ -125,7 +127,10 @@ kubectl -n options-edge rollout status deployment/oe-keycloak
 
 ## First admin login + create a user (in-cluster, no public /admin)
 
-Use `kcadm.sh` inside the pod — this targets the local server and does not need the public admin console:
+Use `kcadm.sh` inside the pod — this targets the local server and does not need the public admin
+console. NOTE (2026-07-18): the bootstrap `admin` account is now DISABLED; the permanent master-realm
+admin is `abhinav`, whose password was re-synced to equal `KC_BOOTSTRAP_ADMIN_PASSWORD` in the
+`oe-keycloak-secrets` Secret. Substitute `--user abhinav` in the examples below:
 
 ```sh
 ADMIN_PW=$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
@@ -169,7 +174,7 @@ AUTH_AUDIENCE=options-edge-web
 WS_AUTH_ENABLED=true
 WS_AUTH_ISSUER_URI=https://auth.fullfunding.nl/realms/optionsedge
 WS_AUTH_AUDIENCE=options-edge-web
-WS_ALLOWED_ORIGINS=https://fullfunding.nl   # explicit allow-list required once auth is on
+WS_ALLOWED_ORIGINS=https://fullfunding.nl,https://bleadingoptions.com   # explicit allow-list required once auth is on (both domains during the migration)
 ```
 
 The app prod profiles **fail closed**: they refuse to start unless auth is enabled with a non-loopback HTTPS
@@ -184,5 +189,7 @@ issuer and explicit audience/client id.
 - **traefik header trust:** traefik on `:80` is LAN-reachable. The prod LAN is trusted and Cloudflare is the
   only public path, but for full closure firewall `:80/:443` to the cloudflared host or set the traefik
   entrypoint `forwardedHeaders.trustedIPs`.
-- **Admin console:** reachable only in-cluster (kcadm / port-forward) by design. To use the web console,
-  front a `/admin` route with Cloudflare Access (operator's CF dashboard) rather than unblocking it openly.
+- **Admin console:** never public. It IS reachable on the trusted LAN via the `oe-keycloak-lan`
+  LoadBalancer (`http://192.168.100.252:8089/admin/`, `KC_HOSTNAME_ADMIN`); kcadm-in-pod remains the
+  scripted path. The public `/admin` stays edge-404ed — front it with Cloudflare Access if a public
+  console is ever genuinely needed, never by unblocking it openly.

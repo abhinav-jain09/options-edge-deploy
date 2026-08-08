@@ -110,17 +110,17 @@ case "$PHASE" in
     KC_POSTLOGOUT_DEFAULT="https://bleadingoptions.com/* https://es.bleadingoptions.com/*"
     ;;
 esac
-SERVE_APEX="${SERVE_APEX:-$SERVE_APEX_DEFAULT}"
-SERVE_ES="${SERVE_ES:-$SERVE_ES_DEFAULT}"
-SERVE_AUTH="${SERVE_AUTH:-$SERVE_AUTH_DEFAULT}"
-REDIR_HOSTS="${REDIR_HOSTS:-$REDIR_HOSTS_DEFAULT}"
+SERVE_APEX="${SERVE_APEX-$SERVE_APEX_DEFAULT}"
+SERVE_ES="${SERVE_ES-$SERVE_ES_DEFAULT}"
+SERVE_AUTH="${SERVE_AUTH-$SERVE_AUTH_DEFAULT}"
+REDIR_HOSTS="${REDIR_HOSTS-$REDIR_HOSTS_DEFAULT}"   # dash (not :-) so REDIR_HOSTS="" is a real override
 EXPECTED_ISSUER="${EXPECTED_ISSUER:-$EXPECTED_ISSUER_DEFAULT}"
 EXPECTED_PROD_ORIGINS="${EXPECTED_PROD_ORIGINS:-$PROD_ORIGINS_DEFAULT}"
 EXPECTED_ES4_ORIGINS="${EXPECTED_ES4_ORIGINS:-$ES4_ORIGINS_DEFAULT}"
 EXPECTED_REDIRECT_STATUS="${EXPECTED_REDIRECT_STATUS:-$EXPECTED_REDIRECT_STATUS_DEFAULT}"
 PRIMARY_APEX="${PRIMARY_APEX:-$PRIMARY_APEX_DEFAULT}"
 PRIMARY_ES="${PRIMARY_ES:-$PRIMARY_ES_DEFAULT}"
-ABSENT_TUNNEL_HOSTS="${ABSENT_TUNNEL_HOSTS:-$ABSENT_TUNNEL_HOSTS_DEFAULT}"
+ABSENT_TUNNEL_HOSTS="${ABSENT_TUNNEL_HOSTS-$ABSENT_TUNNEL_HOSTS_DEFAULT}"
 EXPECTED_KC_REDIRECTS="${EXPECTED_KC_REDIRECTS:-$KC_REDIRECTS_DEFAULT}"
 EXPECTED_KC_WEBORIGINS="${EXPECTED_KC_WEBORIGINS:-$KC_WEBORIGINS_DEFAULT}"
 EXPECTED_KC_POSTLOGOUT="${EXPECTED_KC_POSTLOGOUT:-$KC_POSTLOGOUT_DEFAULT}"
@@ -293,10 +293,18 @@ done
 # 5. auth hostnames: OIDC discovery must serve the EXACT expected issuer; admin edge-blocked ----
 # (status 200 alone proves nothing about WHICH issuer is being served)
 for h in $SERVE_AUTH; do
-  disc="$(curl -s -m 20 "https://$h/realms/optionsedge/.well-known/openid-configuration" 2>/dev/null)"
-  iss="$(printf '%s' "$disc" | grep -o '"issuer" *: *"[^"]*"' | head -1 | sed -E 's/.*: *"//; s/"$//')"
-  if [ "$iss" = "$EXPECTED_ISSUER" ]; then note "OK   $h issuer = $iss"
-  else bad "$h issuer = '${iss:-<none>}' (expected $EXPECTED_ISSUER)"; fi
+  disc="$(curl -s -m 20 -w '\n%{http_code}' "https://$h/realms/optionsedge/.well-known/openid-configuration" 2>/dev/null)"
+  disc_code="$(printf '%s' "$disc" | tail -1)"
+  disc_body="$(printf '%s' "$disc" | sed '$d')"
+  if [ "$disc_code" != "200" ]; then
+    bad "$h OIDC discovery -> ${disc_code:-<none>} (expected 200)"
+  fi
+  iss="$(printf '%s' "$disc_body" | python3 -c "
+import json, sys
+try: print(json.load(sys.stdin).get('issuer', ''))
+except Exception: pass" 2>/dev/null)"
+  if [ "$iss" = "$EXPECTED_ISSUER" ]; then note "OK   $h discovery 200, issuer = $iss"
+  else bad "$h issuer = '${iss:-<unparsable>}' (expected $EXPECTED_ISSUER; discovery must be valid JSON)"; fi
   for path in /admin /realms/master; do
     code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$h$path" 2>/dev/null)"
     case "$code" in
@@ -396,28 +404,44 @@ mc_check MISSION_AUTH_JWK_SET_URI "$EXPECTED_ISSUER/protocol/openid-connect/cert
 
 # 6c. the LIVE Keycloak client's redirect/origin/logout sets (kcadm in-pod; --import-realm skips
 # existing realms, so the configmap alone can silently diverge from what login actually enforces).
+# The permanent master-realm admin is 'abhinav' (the bootstrap 'admin' account is DISABLED; its
+# password was re-synced to the KC_BOOTSTRAP_ADMIN_PASSWORD secret on 2026-07-18 — see
+# docs/keycloak-prod.md). Override KC_VERIFY_USER to use a dedicated read-only verifier account.
+KC_VERIFY_USER="${KC_VERIFY_USER:-abhinav}"
+run_stdin() {  # like run(), but forwards OUR stdin to the remote command (ssh passes stdin through)
+  if [ -n "$PROD_SSH" ]; then $PROD_SSH "$1"; else bash -c "$1"; fi
+}
 kc_sets_check() {
   command -v python3 >/dev/null || { unavailable "python3 needed to parse the Keycloak client"; return; }
   local pw client
   pw="$(prod_kubectl "get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}'" | base64 -d)"
   [ -z "$pw" ] && { unavailable "could not read the Keycloak admin secret"; return; }
-  client="$(prod_kubectl "exec deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password \"$pw\" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web 2>/dev/null'")"
+  # Password travels via stdin end-to-end — never interpolated into shell text, so any character
+  # (apostrophes included) is safe; kcadm receives it through the pod-side shell variable.
+  client="$(printf '%s' "$pw" | run_stdin "kubectl -n $NS exec -i deploy/oe-keycloak -- sh -c 'IFS= read -r KC_PW; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$KC_PW\" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web 2>/dev/null'")"
   [ -z "$client" ] && { unavailable "could not read the live options-edge-web client via kcadm"; return; }
   printf '%s' "$client" | python3 -c "
 import json, sys
+# EVERYTHING inside the guard: a [null] element, a non-dict client, or non-list fields must all
+# surface as a FAIL line (stdout, exit 0 — the caller's detector reads the message, not the status).
 try:
     arr = json.load(sys.stdin)
     if not isinstance(arr, list) or len(arr) != 1:
         raise ValueError('expected exactly 1 matching client, got %r' % (len(arr) if isinstance(arr, list) else type(arr).__name__))
     c = arr[0]
+    if not isinstance(c, dict):
+        raise ValueError('client entry is %s, not an object' % type(c).__name__)
+    red = c.get('redirectUris', []); wo = c.get('webOrigins', [])
+    attrs = c.get('attributes', {}) or {}
+    if not isinstance(red, list) or not isinstance(wo, list) or not isinstance(attrs, dict):
+        raise ValueError('client fields have unexpected types')
+    pl = [u for u in str(attrs.get('post.logout.redirect.uris', '')).split('##') if u]
+    def out(name, vals): print(name + '\t' + '\t'.join(sorted(str(v) for v in vals)))
+    out('REDIRECTS', red)
+    out('WEBORIGINS', wo)
+    out('POSTLOGOUT', pl)
 except Exception as e:
-    # printed to stdout so the caller's FAIL detector sees it even though we exit 0
     print('  FAIL: live Keycloak client response unusable: %s' % e)
-    sys.exit(0)
-def out(name, vals): print(name + '\t' + '\n'.join(sorted(vals)).replace('\n', '\t'))
-out('REDIRECTS', c.get('redirectUris', []))
-out('WEBORIGINS', c.get('webOrigins', []))
-out('POSTLOGOUT', [u for u in c.get('attributes', {}).get('post.logout.redirect.uris', '').split('##') if u])
 " | while IFS=$'\t' read -r name rest; do
     case "$name" in *FAIL:*) echo "$name" >&2; continue ;; esac
     live_sorted="$(printf '%s' "$rest" | tr '\t' '\n' | sort -u)"
@@ -463,6 +487,63 @@ elif printf '%s' "$req_uris" | grep -q "$req_expect"; then
   esac
 else
   bad "req realm client URIs '$req_uris' missing expected $req_expect"
+fi
+
+# 6e. the repo realm IMPORT FILE must carry the same sets (parity is a gate, not a hope) ---------
+REALM_CM="${REALM_CM:-$(cd "$(dirname "$0")/../.." && pwd)/k8s/keycloak/keycloak-realm-configmap.yaml}"
+cm_out="$(python3 - "$REALM_CM" <<'PYCM'
+import sys
+try:
+    import yaml, json
+    docs = list(yaml.safe_load_all(open(sys.argv[1])))
+    cm = next(d for d in docs if d and d.get('kind') == 'ConfigMap')
+    realm = json.loads(cm['data']['optionsedge-realm.json'])
+    req = json.loads(cm['data']['req-realm.json'])
+    web = next(c for c in realm['clients'] if c['clientId'] == 'options-edge-web')
+    bz = next(c for c in req['clients'] if c['clientId'] == 'bugzilla-web')
+    pl = [u for u in web.get('attributes', {}).get('post.logout.redirect.uris', '').split('##') if u]
+    print('CM_REDIRECTS	' + '	'.join(sorted(web.get('redirectUris', []))))
+    print('CM_WEBORIGINS	' + '	'.join(sorted(web.get('webOrigins', []))))
+    print('CM_POSTLOGOUT	' + '	'.join(sorted(pl)))
+    print('CM_REQ	' + '	'.join(sorted(set(bz.get('redirectUris', []) + bz.get('webOrigins', [])))))
+except Exception as e:
+    print('  FAIL: realm configmap unusable: %s' % e)
+PYCM
+)"
+if printf '%s\n' "$cm_out" | grep -q 'FAIL'; then
+  printf '%s\n' "$cm_out"; fail=1
+else
+  while IFS=$'\t' read -r name rest; do
+    cm_sorted="$(printf '%s' "$rest" | tr '\t' '\n' | sort -u)"
+    case "$name" in
+      CM_REDIRECTS) expected="$EXPECTED_KC_REDIRECTS"; label="redirectUris" ;;
+      CM_WEBORIGINS) expected="$EXPECTED_KC_WEBORIGINS"; label="webOrigins" ;;
+      CM_POSTLOGOUT) expected="$EXPECTED_KC_POSTLOGOUT"; label="post-logout" ;;
+      CM_REQ) expected=""; label="req" ;;
+      *) continue ;;
+    esac
+    if [ "$label" = "req" ]; then
+      if printf '%s' "$cm_sorted" | grep -q "$req_expect"; then
+        if [ "$PHASE" = "retired" ] && printf '%s' "$cm_sorted" | grep -q "req.fullfunding.nl"; then
+          echo "  FAIL: realm configmap req client still references req.fullfunding.nl after retirement" >&2; fail=1
+        else
+          note "OK   realm configmap req client references $req_expect"
+        fi
+      else
+        echo "  FAIL: realm configmap req client missing expected $req_expect" >&2; fail=1
+      fi
+      continue
+    fi
+    expected_sorted="$(printf '%s\n' $expected | sort -u)"
+    if [ "$cm_sorted" = "$expected_sorted" ]; then
+      note "OK   realm configmap $label matches the expected set exactly"
+    else
+      echo "  FAIL: realm configmap $label differs from the expected set" >&2; fail=1
+      diff <(printf '%s\n' "$expected_sorted") <(printf '%s\n' "$cm_sorted") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
+    fi
+  done <<EOF_CM
+$cm_out
+EOF_CM
 fi
 
 # 7. the web surface itself: page serves, and the REST API refuses anonymous callers ------------
