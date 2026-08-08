@@ -358,8 +358,8 @@ fi
 
 # 2 + 3. the /ws/events routes (every SERVING apex hostname) -----------------------------------
 # Each serving apex hostname must route /ws/events at the prod gateway NodePort — never the :8091
-# ServiceLB (2026-07-31 outage). The es.* hostnames route to the es4 box (.4:30091), whose
-# NodePort belongs to the other cluster, so they are covered by the live 401 probes below.
+# ServiceLB (2026-07-31 outage). The es.* hostnames get the same structural proof against the es4
+# cluster's advertised NodePort in section 3b.
 want_np="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get svc $GW_SVC -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null")"
 [ -n "$want_np" ] || unavailable "could not read $GW_SVC nodePort"
 for h in $SERVE_APEX; do
@@ -375,6 +375,24 @@ for h in $SERVE_APEX; do
       *":$want_np"*) note "OK   NodePort $want_np matches $GW_SVC" ;;
       *) bad "$GW_SVC advertises NodePort $want_np but $h routes to '$ws_target' — the Service was likely recreated" ;;
     esac
+  fi
+done
+
+# 3b. es routes get the SAME structural NodePort proof as prod — an unauthenticated 401 is the
+# exact evidence class the 2026-07-31 incident proved insufficient, and live==repo does not help
+# if a wrong target is committed on both sides. es4's gateway Service advertises its own NodePort.
+ES4_GW_SVC="${ES4_GW_SVC:-es-feed-gateway}"
+es4_np="$(es4_kubectl "get svc $ES4_GW_SVC -o jsonpath='{.spec.ports[0].nodePort}'")"
+[ -n "$es4_np" ] || unavailable "could not read es4 $ES4_GW_SVC nodePort"
+for h in $SERVE_ES; do
+  ws_target="$(ws_target_for "$h" "$live_raw")"
+  note "     $h/ws/events -> ${ws_target:-<unset>}"
+  if [ -n "$es4_np" ]; then
+    if [ "$ws_target" = "http://192.168.100.4:$es4_np" ]; then
+      note "OK   $h/ws/events targets the es4 NodePort $es4_np"
+    else
+      bad "$h/ws/events targets '$ws_target' but es4 $ES4_GW_SVC advertises NodePort $es4_np"
+    fi
   fi
 done
 

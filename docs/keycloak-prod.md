@@ -103,7 +103,9 @@ timeout 600 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>    # bound
 # rollback (exact, using the backup taken above):
 #   sudo cp /etc/cloudflared/options-edge-stable.yml.bak-<timestamp> /etc/cloudflared/options-edge-stable.yml
 #   sudo systemctl restart options-edge-cloudflared-stable.service
-``` (An earlier revision of this doc inlined a
+```
+
+(An earlier revision of this doc inlined a
 sample config here; it drifted — `/ws/events` must target the gateway NodePort 30097, never the
 :8091 ServiceLB, and the web backend moved to `.252:8094`. The canonical file carries the incident
 notes.) The `/admin` + `/realms/master` 404 rules MUST precede each auth hostname's catch-all rule
@@ -165,8 +167,8 @@ RESCUE="$(mktemp /var/tmp/kc-rotation-rescue.XXXXXX)" \
 # The traps EXIT — with no -e, a print-only trap would let an interrupted `sleep` fall straight
 # through into reconciliation INSIDE the quiesce window, exactly the delayed-commit race the
 # fence exists to prevent. Distinct codes: 130 = SIGINT, 143 = SIGTERM.
-trap 'echo "INTERRUPTED (SIGINT) mid-rotation — candidates preserved at $RESCUE (mode 0600); reconcile by hand" >&2; exit 130' INT
-trap 'echo "TERMINATED (SIGTERM) mid-rotation — candidates preserved at $RESCUE (mode 0600); reconcile by hand" >&2; exit 143' TERM
+trap 'echo "INTERRUPTED (SIGINT) mid-rotation — candidates preserved at $RESCUE (mode 0600). WAIT >=40s (the pod-side write fence) before inspecting or changing EITHER state, then reconcile by hand" >&2; exit 130' INT
+trap 'echo "TERMINATED (SIGTERM) mid-rotation — candidates preserved at $RESCUE (mode 0600). WAIT >=40s (the pod-side write fence) before inspecting or changing EITHER state, then reconcile by hand" >&2; exit 143' TERM
 # Client-side `timeout 60` is the real bound: --request-timeout limits one API request and
 # --pod-running-timeout only the wait-for-running — neither bounds the remote command itself. An
 # expiry here is exactly the "ambiguous transport" case the reconciler already handles.
@@ -238,19 +240,20 @@ echo "rotation converged on the NEW password"
 timeout 600 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>
 ```
 
+Credentials travel via `kubectl exec -i` stdin, never argv (argv is world-readable in the pod):
+
 ```sh
 ADMIN_PW=$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
 POD=$(kubectl -n options-edge get pod -l app.kubernetes.io/name=oe-keycloak -o name | head -1)
-kubectl -n options-edge exec "$POD" -- /opt/keycloak/bin/kcadm.sh config credentials \
-  --server http://localhost:8080 --realm master --user abhinav --password "$ADMIN_PW"
-# create a login user for the option-chain UI
-kubectl -n options-edge exec "$POD" -- /opt/keycloak/bin/kcadm.sh create users -r optionsedge \
-  -s username=<user> -s enabled=true
-kubectl -n options-edge exec "$POD" -- /opt/keycloak/bin/kcadm.sh set-password -r optionsedge \
-  --username <user> --new-password '<strong-pw>'
-# (optional) grant replay roles for the replay UI
-kubectl -n options-edge exec "$POD" -- /opt/keycloak/bin/kcadm.sh add-roles -r optionsedge \
-  --username <user> --rolename replay-admin
+read -rs -p "new user's password: " USER_PW; echo
+printf '%s\n%s\n' "$ADMIN_PW" "$USER_PW" | kubectl -n options-edge exec -i "$POD" -- sh -c '
+  set -eu; IFS= read -r ADMINP; IFS= read -r USERP
+  /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$ADMINP"
+  /opt/keycloak/bin/kcadm.sh create users -r optionsedge -s username=<user> -s enabled=true
+  /opt/keycloak/bin/kcadm.sh set-password -r optionsedge --username <user> --new-password "$USERP"
+  # (optional) grant replay roles for the replay UI
+  /opt/keycloak/bin/kcadm.sh add-roles -r optionsedge --username <user> --rolename replay-admin'
+unset USER_PW
 ```
 
 ## Verify the issuer
