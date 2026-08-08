@@ -57,14 +57,16 @@ opening the new pages exercises the new Origins but NOT the new WS routes:
 
 1. In the browser (both apex and es pages): log in, confirm the network tab's WS request reaches
    `101 Switching Protocols` and live board data updates — and note WHICH Request URL that was.
-2. Authenticated direct probe of each NEW WS hostname the pages did not traverse: copy the
-   bearer from the page's WS request (network tab → Authorization header), then for each of
+2. Authenticated direct probe of each NEW WS hostname the pages did not traverse. The browser
+   carries the token as a WebSocket SUBPROTOCOL (`["oc.bearer", <accessToken>]`), NOT an
+   Authorization header — copy the token from the page's WS request (network tab →
+   `Sec-WebSocket-Protocol` request header, second value), then for each of
    `bleadingoptions.com` and `es.bleadingoptions.com`:
 
    ```sh
    curl -s -o /dev/null -w '%{http_code}\n' -m 8 \
      -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-     -H "Origin: https://<host>" -H "Authorization: Bearer <token-from-network-tab>" \
+     -H "Origin: https://<host>" -H "Sec-WebSocket-Protocol: oc.bearer, <token-from-network-tab>" \
      -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom | base64)" -H 'Sec-WebSocket-Version: 13' \
      "https://<host>/ws/events"
    ```
@@ -140,7 +142,8 @@ One coordinated change-set (single PR, single deploy window):
 
 8. Full Phase-2 acceptance, AFTER the rules exist: `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect` — the
    redirect section demands exactly 307 on both schemes for all three hostnames with host-mapped
-   `Location` preserving path + query (same-host https upgrades on the http leg are recognized).
+   `Location` preserving path + query — a same-host 301/302 https upgrade on the http leg FAILS
+   (it would rewrite POST to GET before the cross-domain hop).
    At promotion time re-run with the retired lifecycle expectation:
    `EXPECTED_REDIRECT_STATUS=308 timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect`.
 

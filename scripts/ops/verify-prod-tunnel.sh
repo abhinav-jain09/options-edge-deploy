@@ -134,13 +134,15 @@ ABSENT_TUNNEL_HOSTS="${ABSENT_TUNNEL_HOSTS-$ABSENT_TUNNEL_HOSTS_DEFAULT}"
 EXPECTED_KC_REDIRECTS="${EXPECTED_KC_REDIRECTS:-$KC_REDIRECTS_DEFAULT}"
 EXPECTED_KC_WEBORIGINS="${EXPECTED_KC_WEBORIGINS:-$KC_WEBORIGINS_DEFAULT}"
 EXPECTED_KC_POSTLOGOUT="${EXPECTED_KC_POSTLOGOUT:-$KC_POSTLOGOUT_DEFAULT}"
+# The serving surface is mandatory in EVERY mode — an inherited SERVE_*='' must never suppress
+# the page/WS/discovery/admin probes and still print a passing stamp.
+[ -n "$SERVE_APEX" ] && [ -n "$SERVE_ES" ] && [ -n "$SERVE_AUTH" ] \
+  || { echo "FATAL: empty SERVE_* set — the serving surface cannot be skipped in any mode" >&2; exit 2; }
 if [ "$PRECHECK" = "1" ]; then
-  REDIR_HOSTS=""   # the rules deliberately do not exist yet; everything else still runs full
+  # Precheck exists for exactly one moment: the redirect phase before its rules are created.
+  [ "$PHASE" = "redirect" ] || { echo "FATAL: --precheck is only meaningful with --phase redirect" >&2; exit 2; }
+  REDIR_HOSTS=""   # the ONLY exemption precheck grants
 else
-  # ACCEPTANCE mode: an emptied mandatory set (e.g. an inherited REDIR_HOSTS="" from a precheck
-  # shell) must not silently skip its section and still print VERIFIED.
-  [ -n "$SERVE_APEX" ] && [ -n "$SERVE_ES" ] && [ -n "$SERVE_AUTH" ] \
-    || { echo "FATAL: empty SERVE_* set in acceptance mode — use --precheck for partial runs" >&2; exit 2; }
   if [ "$PHASE" != "dual" ] && [ -z "$REDIR_HOSTS" ]; then
     echo "FATAL: empty REDIR_HOSTS in $PHASE acceptance mode — use --precheck for the pre-redirect run" >&2; exit 2
   fi
