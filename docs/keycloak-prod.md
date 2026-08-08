@@ -132,8 +132,10 @@ console. **Current credential contract (since 2026-07-18):** the bootstrap `admi
 DISABLED; the permanent master-realm admin is **`abhinav`**, and by contract `abhinav`'s password
 EQUALS the `KC_BOOTSTRAP_ADMIN_PASSWORD` key in `oe-keycloak-secrets` — the Deployment still reads
 that key at boot and `scripts/ops/verify-prod-tunnel.sh` authenticates with it, so the key must
-never be removed. Rotation = `kcadm.sh set-password -r master --username abhinav` AND updating the
-Secret key to the same value in the same maintenance window.
+never be removed. Rotation, in one maintenance window:
+`kcadm.sh set-password -r master --username abhinav --new-password '<new-strong-pw>'` then
+`kubectl -n options-edge patch secret oe-keycloak-secrets -p '{"stringData":{"KC_BOOTSTRAP_ADMIN_PASSWORD":"<new-strong-pw>"}}'`
+(then re-run the verifier — it authenticates with the Secret value, so a half-done rotation fails loudly).
 
 ```sh
 ADMIN_PW=$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)

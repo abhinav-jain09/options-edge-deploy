@@ -323,14 +323,21 @@ prod_kubectl() { run "kubectl -n $NS $1 2>/dev/null"; }
 es4_kubectl()  { run_es4 "KC=\$(command -v kubectl); sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \$KC -n $NS $1 2>/dev/null"; }
 k8s_on() { if [ "$1" = "prod" ]; then prod_kubectl "$2"; else es4_kubectl "$2"; fi; }
 
-rollout_settled() {  # cluster, deploy — desired == updated == ready (0-replica deploys settle trivially)
-  local counts
-  counts="$(k8s_on "$1" "get deploy $2 -o jsonpath='{.spec.replicas} {.status.updatedReplicas} {.status.readyReplicas}'")"
-  [ -z "$counts" ] && { unavailable "could not read $1/$2 rollout state"; return 1; }
-  set -- $counts
-  local want="${1:-0}" updated="${2:-0}" ready="${3:-0}"
-  if [ "$want" = "0" ] || { [ "$want" = "$updated" ] && [ "$want" = "$ready" ]; }; then return 0; fi
-  bad "$1 deploy has an unsettled rollout (spec=$want updated=$updated ready=$ready) — effective env below may be stale"
+rollout_settled() {  # cluster, deploy — a COMPLETE rollout, not a mixed-version snapshot:
+  # generation observed, and desired == total == updated == ready == available ('total' catches a
+  # lingering old replica that would otherwise supply 'ready' while the new pod supplies
+  # 'updated'). 0-replica deploys settle trivially.
+  local fields
+  fields="$(k8s_on "$1" "get deploy $2 -o jsonpath='{.metadata.generation} {.status.observedGeneration} {.spec.replicas} {.status.replicas} {.status.updatedReplicas} {.status.readyReplicas} {.status.availableReplicas}'")"
+  [ -z "$fields" ] && { unavailable "could not read $1/$2 rollout state"; return 1; }
+  set -- $fields
+  local gen="${1:-0}" ogen="${2:-0}" want="${3:-0}" total="${4:-0}" updated="${5:-0}" ready="${6:-0}" avail="${7:-0}"
+  if [ "$gen" != "$ogen" ]; then
+    bad "$1/$2 rollout not observed yet (generation=$gen observed=$ogen) — effective env below may be stale"; return 0
+  fi
+  if [ "$want" = "0" ] && [ "$total" = "0" ]; then return 0; fi
+  if [ "$want" = "$total" ] && [ "$want" = "$updated" ] && [ "$want" = "$ready" ] && [ "$want" = "$avail" ]; then return 0; fi
+  bad "$1/$2 rollout unsettled (spec=$want total=$total updated=$updated ready=$ready available=$avail) — a mixed-version state; effective env below may be stale"
   return 0
 }
 
@@ -361,6 +368,9 @@ origin_set_check() {  # label, deployed-csv, expected space-list
   fi
 }
 
+# Keycloak itself must be settled: a RollingUpdate briefly runs old- and new-issuer pods side by
+# side, and one discovery request can hit either — the exact mixed-issuer hazard Phase 2 declares.
+rollout_settled prod "${KC_DEPLOY:-oe-keycloak}"
 rollout_settled prod "$GW_DEPLOY"
 origin_set_check "prod $GW_DEPLOY" "$(eff_env prod "$GW_DEPLOY" feed-gateway WS_ALLOWED_ORIGINS)" "$EXPECTED_PROD_ORIGINS"
 env_must_equal prod "$GW_DEPLOY" feed-gateway WS_AUTH_ISSUER_URI "$EXPECTED_ISSUER"
@@ -522,12 +532,18 @@ try:
     realm = json.loads(cm['data']['optionsedge-realm.json'])
     req = json.loads(cm['data']['req-realm.json'])
     web = next(c for c in realm['clients'] if c['clientId'] == 'options-edge-web')
-    bz = next(c for c in req['clients'] if c['clientId'] == 'bugzilla-web')
+    bz_all = [c for c in req['clients'] if isinstance(c, dict) and c.get('clientId') == 'bugzilla-web']
+    if len(bz_all) != 1:
+        raise ValueError('expected exactly 1 bugzilla-web client in the import file, got %d' % len(bz_all))
+    bz = bz_all[0]
+    if not isinstance(bz.get('redirectUris', []), list) or not isinstance(bz.get('webOrigins', []), list):
+        raise ValueError('bugzilla-web fields have unexpected types')
     pl = [u for u in web.get('attributes', {}).get('post.logout.redirect.uris', '').split('##') if u]
     print('CM_REDIRECTS	' + '	'.join(sorted(web.get('redirectUris', []))))
     print('CM_WEBORIGINS	' + '	'.join(sorted(web.get('webOrigins', []))))
     print('CM_POSTLOGOUT	' + '	'.join(sorted(pl)))
-    print('CM_REQ	' + '	'.join(sorted(set(bz.get('redirectUris', []) + bz.get('webOrigins', [])))))
+    print('CM_REQ_REDIRECTS	' + '	'.join(sorted(str(v) for v in bz.get('redirectUris', []))))
+    print('CM_REQ_WEBORIGINS	' + '	'.join(sorted(str(v) for v in bz.get('webOrigins', []))))
 except Exception as e:
     print('  FAIL: realm configmap unusable: %s' % e)
 PYCM
@@ -541,19 +557,10 @@ else
       CM_REDIRECTS) expected="$EXPECTED_KC_REDIRECTS"; label="redirectUris" ;;
       CM_WEBORIGINS) expected="$EXPECTED_KC_WEBORIGINS"; label="webOrigins" ;;
       CM_POSTLOGOUT) expected="$EXPECTED_KC_POSTLOGOUT"; label="post-logout" ;;
-      CM_REQ) expected=""; label="req" ;;
+      CM_REQ_REDIRECTS) expected="$EXPECTED_REQ_REDIRECTS"; label="req redirectUris" ;;
+      CM_REQ_WEBORIGINS) expected="$EXPECTED_REQ_WEBORIGINS"; label="req webOrigins" ;;
       *) continue ;;
     esac
-    if [ "$label" = "req" ]; then
-      expected_sorted="$(printf '%s\n' $EXPECTED_REQ_REDIRECTS $EXPECTED_REQ_WEBORIGINS | sort -u)"
-      if [ "$cm_sorted" = "$expected_sorted" ]; then
-        note "OK   realm configmap req client matches the expected sets exactly"
-      else
-        echo "  FAIL: realm configmap req client differs from the expected sets" >&2; fail=1
-        diff <(printf '%s\n' "$expected_sorted") <(printf '%s\n' "$cm_sorted") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
-      fi
-      continue
-    fi
     expected_sorted="$(printf '%s\n' $expected | sort -u)"
     if [ "$cm_sorted" = "$expected_sorted" ]; then
       note "OK   realm configmap $label matches the expected set exactly"

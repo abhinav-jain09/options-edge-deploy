@@ -166,7 +166,11 @@ spec:
               value: "true"
             - name: KC_METRICS_ENABLED
               value: "true"
-            # --- Initial admin (bootstrap once, then create a real admin and rotate this out) ---
+            # --- Admin credential contract: the bootstrap 'admin' account is DISABLED; the
+            # permanent master-realm admin is 'abhinav', whose password EQUALS this Secret key by
+            # contract (verify-prod-tunnel.sh authenticates with it). NEVER remove the key —
+            # rotation = kcadm set-password for abhinav + patch this Secret, same window
+            # (docs/keycloak-prod.md "Admin login"). ---
             - name: KC_BOOTSTRAP_ADMIN_USERNAME
               value: admin
             - name: KC_BOOTSTRAP_ADMIN_PASSWORD
