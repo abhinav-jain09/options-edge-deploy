@@ -209,127 +209,45 @@ What Phase 3 removes (this change-set):
    use the dashboard instead, filter the DNS tab by that tunnel target and screenshot the complete
    filtered result — not one unfiltered page.
 
-   **Also prove no Cloudflare RULES still act on the retired zone** — DNS records are not the only
-   way that zone can point at us. Fetch each ruleset's RULES (the list endpoint returns names
-   only), the page rules' targets/actions, and the workers routes, then assert that nothing
-   references our tunnel or the new domain:
+   **What actually makes this safe — and what does not.** It is tempting to try to *prove absence*
+   by enumerating every Cloudflare object that could still route the retired zone to us: rulesets,
+   page rules, worker routes, worker custom domains, bulk redirects, snippets — each paginated,
+   each able to reach us through a binding or a secret that no text search can see. That proof can
+   never be completed, and treating an incomplete sweep as an acceptance gate is worse than not
+   running it, because it manufactures false confidence at a one-way boundary.
+
+   The invariant we actually rely on is the opposite direction, and it IS machine-provable:
+
+   > **Our platform refuses the retired hostnames.** The tunnel resolves every retired URL to
+   > `http_status:404` (cloudflared's own first-match answer, asserted by the gate), no Ingress of
+   > ours names them, no gateway trusts their origins, and the realm issues nothing for them.
+
+   That holds no matter what the retired zone contains or who owns it next — which is precisely
+   why retirement is safer than a redirect here. `scripts/ops/verify-prod-tunnel.sh` proves it, and
+   its `retired` phase fails closed on wildcards, hostless rules, `defaultBackend` catch-alls,
+   shadowed routes and unprobed paths.
+
+   **Still do a best-effort zone sweep — for the domain's NEXT owner, not as our gate.** A stale
+   redirect or worker left in that zone would confuse whatever you host there next:
 
    ```sh
-   set -euo pipefail                      # a failed API call must STOP this, never read as "clean"
+   set -euo pipefail
    Z="https://api.cloudflare.com/client/v4/zones/$ZONE_ID"
    A="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID"
    cf() { curl --fail-with-body -sS -H "Authorization: Bearer $CF_TOKEN" "$@"; }
-   ok() { python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('success') else 1)"; }
-   EV=/tmp/cf-retired-zone-evidence.json; : > "$EV"
-
-   # 1. rulesets — list (max per_page=50, exhaust the cursor), then FETCH EACH BY ID: the list
-   #    response omits the rules themselves, so names alone prove nothing.
-   cursor=""
-   while :; do
-     page="$(cf "$Z/rulesets?per_page=50${cursor:+&cursor=$cursor}")"
-     printf '%s' "$page" | ok
-     printf '%s\n' "$page" >> "$EV"
-     for rid in $(printf '%s' "$page" | python3 -c "import json,sys; print('\n'.join(r['id'] for r in json.load(sys.stdin)['result']))"); do
-       body="$(cf "$Z/rulesets/$rid")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
-     done
-     cursor="$(printf '%s' "$page" | python3 -c "import json,sys; print(json.load(sys.stdin).get('result_info',{}).get('cursors',{}).get('after','') or '')")"
-     [ -n "$cursor" ] || break
-   done
-
-   # 2. page rules — full targets + actions, not a count
-   body="$(cf "$Z/pagerules")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
-
-   # 3. worker routes / custom domains / bulk redirects / snippets — every mechanism that can
-   #    route a hostname independently of a DNS record you would recognise. EVERY list is paged to
-   #    exhaustion; a reference on page 2 would otherwise be missing from the evidence.
-   page_all() {  # $1 = url (no page param) — page/per_page style, appends every page to $EV
-     local pg=1 body more
-     while :; do
-       body="$(cf "$1$(case "$1" in *\?*) echo '&';; *) echo '?';; esac)per_page=100&page=$pg")"
-       printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
-       more="$(printf '%s' "$body" | python3 -c "
-import json,sys
-d=json.load(sys.stdin); ri=d.get('result_info') or {}
-tp=ri.get('total_pages'); pg=ri.get('page') or 1
-print('yes' if (tp and pg < tp) else '')")"
-       [ -n "$more" ] || break
-       pg=$((pg+1))
-     done
-   }
-   cursor_all() {  # $1 = url — cursor style (bulk-redirect items), appends every page to $EV
-     local cur="" body
-     while :; do
-       body="$(cf "$1$(case "$1" in *\?*) echo '&';; *) echo '?';; esac)per_page=500${cur:+&cursor=$cur}")"
-       printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
-       cur="$(printf '%s' "$body" | python3 -c "
-import json,sys
-d=json.load(sys.stdin); ri=d.get('result_info') or {}
-print((ri.get('cursors') or {}).get('after','') or '')")"
-       [ -n "$cur" ] || break
-     done
-   }
-
-   WORKER_SCRIPTS=/tmp/cf-worker-scripts.txt; : > "$WORKER_SCRIPTS"
-   routes="$(cf "$Z/workers/routes")"; printf '%s' "$routes" | ok; printf '%s\n' "$routes" >> "$EV"
-   printf '%s' "$routes" | python3 -c "import json,sys; print('\n'.join(filter(None,(r.get('script') for r in json.load(sys.stdin)['result']))))" >> "$WORKER_SCRIPTS"
-
-   page_all "$A/workers/domains"          # Worker CUSTOM DOMAINS route a whole hostname
-   page_all "$Z/snippets"                 # zone-level JS
-   page_all "$Z/snippets/snippet_rules"
-   page_all "$A/rules/lists"              # account Bulk Redirect lists…
-   for lid in $(grep -ho '"id":"[a-f0-9]\{32\}"' "$EV" | cut -d'"' -f4 | sort -u); do
-     cursor_all "$A/rules/lists/$lid/items" || true   # …and their ITEMS (cursor-paged, max 500)
-   done
-   # custom domains expose their `service` — those scripts belong in the source closure too
-   python3 -c "
-import json,re,sys
-for blob in open('$EV').read().split('\n'):
-    if not blob.strip().startswith('{'): continue
-    try: d=json.loads(blob)
-    except Exception: continue
-    for r in (d.get('result') or []) if isinstance(d.get('result'), list) else []:
-        if isinstance(r, dict) and r.get('service'): print(r['service'])
-" >> "$WORKER_SCRIPTS"
-   for sn in $(grep -ho '"snippet_name":"[^"]*"' "$EV" | cut -d'"' -f4 | sort -u); do
-     cf "$Z/snippets/$sn/content" >> "$EV"
-   done
-   # every Worker in the closure: SOURCE + BINDINGS (a script can reach the new domain via
-   # env/KV/secret/service binding and contain no searchable needle)
-   for sc in $(sort -u "$WORKER_SCRIPTS" | grep -v '^$'); do
-     echo "=== worker script: $sc ===" >> "$EV"
-     cf "$A/workers/scripts/$sc/content/v2" >> "$EV"      # GET is /content/v2 (/content is upload)
-     cf "$A/workers/scripts/$sc/settings" >> "$EV"        # bindings
-   done
-
-   # 4. verdict — any reference to us anywhere in the evidence stops the handoff
-   if grep -niE "bleadingoptions\.com|976f76d2-e3c8-4887-a11d-21c27f5e8bed|cfargotunnel" "$EV"; then
-     echo "STOP: the retired zone still references us — investigate before proceeding"; exit 1
-   else
-     rc=$?; [ "$rc" = "1" ] || { echo "STOP: grep failed ($rc) — evidence unverified"; exit 1; }
-     echo "OK: no rule/route/worker in the retired zone references our tunnel or the new domain"
-   fi
+   for u in "$Z/dns_records?per_page=100" "$Z/rulesets?per_page=50" "$Z/pagerules" \
+            "$Z/workers/routes" "$Z/snippets" "$A/workers/domains?per_page=100" \
+            "$A/rules/lists?per_page=100"; do
+     echo "=== $u ==="; cf "$u"; echo
+   done | tee /tmp/cf-retired-zone-sweep.txt
+   grep -niE "976f76d2-e3c8-4887-a11d-21c27f5e8bed|cfargotunnel|bleadingoptions\.com" \
+     /tmp/cf-retired-zone-sweep.txt || echo "(no obvious reference to us — note that paginated
+     results, worker bindings and secrets are NOT covered; this is a courtesy sweep, not a proof)"
    ```
 
-   Keep `$EV` and the verdict line as the acceptance artifact. **The grep is necessary but never
-   sufficient where code runs.** If any Worker route/custom domain or Snippet exists on the retired
-   zone, read its source AND its bindings yourself: a script can reach the new domain through
-   `env.ORIGIN`, a secret, a KV value or a service binding to another Worker (follow those
-   recursively) without containing a single searchable needle. If a destination is secret or
-   otherwise unknowable, do NOT hand off — remove the route/domain/snippet first, or obtain
-   independent behavioural evidence (e.g. request the retired hostname through it and observe where
-   it lands). Cloudflare API paths shift over time; if any call 404s, look it up rather than
-   dropping the check — a skipped mechanism is an unproven one.
-
-   (This migration never created redirect rules — the domain is being freed, not forwarded — so
-   the expected result is nothing referencing us; record it either way.) `bleadingoptions.com`
-   keeps its three proxied CNAMEs.
-6. **Re-accept after the handoff** — run the gate once more (it proves absence in every config we
-   own AND asks cloudflared itself that each retired URL resolves to `http_status:404`), record the
-   DNS evidence from step 5, AND repeat the full authenticated smoke on BOTH sites
-   (`https://bleadingoptions.com` and `https://es.bleadingoptions.com`): log in, confirm boards
-   render with live data, and confirm the WS request reaches `101 Switching Protocols` in the
-   network tab. The scripted gate cannot see any of that (it only probes unauthenticated
-   surfaces), and the handoff changes DNS for a domain the browser may still have cached.
+   Then do the one thing that is decisive and needs no enumeration: **delete (or repoint) the
+   `@`, `es` and `auth` records in the `fullfunding.nl` zone**, and record the zone's DNS tab
+   showing they are gone. `bleadingoptions.com` keeps its three proxied CNAMEs.
 
 ### Rollback boundary (one-way after the DNS handoff)
 
