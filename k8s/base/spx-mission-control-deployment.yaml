@@ -75,11 +75,11 @@ spec:
             # Mac Keycloak (spx-mission-control-dev-env-patch.yaml). Audience matches
             # the gateway/web client (options-edge-web) so a single UI token works.
             - name: MISSION_AUTH_ISSUER_URI
-              value: "https://auth.fullfunding.nl/realms/optionsedge"
+              value: "https://auth.bleadingoptions.com/realms/optionsedge"
             - name: MISSION_AUTH_AUDIENCE
               value: "options-edge-web"
             - name: MISSION_AUTH_JWK_SET_URI
-              value: "https://auth.fullfunding.nl/realms/optionsedge/protocol/openid-connect/certs"
+              value: "https://auth.bleadingoptions.com/realms/optionsedge/protocol/openid-connect/certs"
           ports:
             - name: http
               containerPort: 8096

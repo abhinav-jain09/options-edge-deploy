@@ -67,15 +67,16 @@ pipeline {
     // in this umbrella). Children that don't yet require ENVIRONMENT still accept these as
     // explicit overrides, so the contract is unchanged.
     //
-    // Per-env web URLs baked into the web image at build time. THIS IS CRITICAL: the web
-    // serves /api/config.feedGatewayWsUrl from the build-time VITE_WS_URL/APP_FEED_GATEWAY_WS_URL,
-    // so building with the wrong gateway URL (the old job default ws://…:8093, the dead host
-    // gateway) makes the browser connect to a gateway that serves no chain. Bake the correct
-    // per-env values: dev -> the k8s gateway LB on :8091; prod -> the public wss edge.
-    WEB_WS_URL      = "${params.PROFILE == 'prod' ? 'wss://fullfunding.nl/ws/events' : 'ws://localhost:8091/ws/events'}"
-    WEB_API_BASE    = "${params.PROFILE == 'prod' ? 'https://fullfunding.nl' : 'http://localhost:8090'}"
-    WEB_AUTH_ISSUER = "${params.PROFILE == 'prod' ? 'https://auth.fullfunding.nl/realms/optionsedge' : 'http://192.168.100.102:8089/realms/optionsedge'}"
-    WEB_REPLAY_URL  = "${params.PROFILE == 'prod' ? 'https://fullfunding.nl' : 'http://localhost:8095'}"
+    // Per-env web URL matrix. NOTE on precedence: the DEPLOYED truth is the k8s runtime env
+    // (RuntimeProfileConfig injects pod env into the served page), so in-cluster deployments get
+    // their URLs from the manifests, not from here. These build-time values are the image's own
+    // defaults — they are what a container run OUTSIDE k8s (RUN_LOCAL, ad-hoc docker) serves, so
+    // a wrong value here still breaks those paths (the old job default ws://…:8093 pointed at a
+    // dead host gateway). Keep in sync with Jenkinsfile.web-service and the k8s manifests.
+    WEB_WS_URL      = "${params.PROFILE == 'prod' ? 'wss://bleadingoptions.com/ws/events' : 'ws://localhost:8091/ws/events'}"
+    WEB_API_BASE    = "${params.PROFILE == 'prod' ? 'https://bleadingoptions.com' : 'http://localhost:8090'}"
+    WEB_AUTH_ISSUER = "${params.PROFILE == 'prod' ? 'https://auth.bleadingoptions.com/realms/optionsedge' : 'http://192.168.100.102:8089/realms/optionsedge'}"
+    WEB_REPLAY_URL  = "${params.PROFILE == 'prod' ? 'https://bleadingoptions.com' : 'http://localhost:8095'}"
     // Where the native image build runs (children build there via ssh, no binary copy):
     // prod/dev -> the Linux amd64 host; experiment -> the .2 box (build runs inside its Lima VM).
     // The child jobs derive REMOTE_BUILD_USER from ENVIRONMENT (experiment->AMSKEL) when unset,

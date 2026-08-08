@@ -1,7 +1,7 @@
 # ES feed-gateway on es4. Same options-edge-feed-gateway binary as prod; env-only divergence.
 # Reads es.* topics from the .4 Kafka/SchemaRegistry via TOPIC_PREFIX (es4-common-env) — the
 # gateway applies TOPIC_PREFIX to every _TOPIC value (GatewaySettings, PR #73). WS handshake is
-# Keycloak-protected against the PRODUCTION realm (auth.fullfunding.nl). Exposed on NodePort 30091
+# Keycloak-protected against the PRODUCTION realm (auth.bleadingoptions.com). Exposed on NodePort 30091
 # so the ES web (NodePort 30080) can open ws://192.168.100.4:30091/ws/events.
 # Deploy ONLY via Jenkinsfile.es4-deploy (digest-pins :prod before apply).
 apiVersion: v1
@@ -124,7 +124,7 @@ spec:
         - name: WS_AUTH_ENABLED
           value: "true"
         - name: WS_AUTH_ISSUER_URI
-          value: "https://auth.fullfunding.nl/realms/optionsedge"
+          value: "https://auth.bleadingoptions.com/realms/optionsedge"
         - name: WS_AUTH_AUDIENCE
           value: "options-edge-web"
         # Browser origins of the ES web UI. Public edge origins first (old + new domain during the
