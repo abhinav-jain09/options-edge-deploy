@@ -176,7 +176,25 @@
       "BUG": ["FIXED", "INVALID", "WONTFIX", "DUPLICATE", "WORKSFORME"],
       "REQUIREMENT": ["IMPLEMENTED", "REJECTED", "DEFERRED", "DUPLICATE"]
     },
-    "issue_type_immutable": true
+    "issue_type_immutable": true,
+
+    "_error_codes_comment": [
+      "illegal_change (115) is core Bugzilla's, raised whenever the extension denies an",
+      "UPDATE via priv_results; REST maps it to HTTP 401. The 1000xx codes are the",
+      "extension's own creation-time errors, registered through the webservice_error_codes",
+      "hook and mapped to HTTP 400. verify-projects.py asserts these exact codes so that an",
+      "auth failure, a 404 or a 500 can never be mistaken for successful enforcement."
+    ],
+    "error_codes": {
+      "core_illegal_change": 115,
+      "extension": {
+        "issue_type_required": 100001,
+        "issue_type_unknown": 100002,
+        "issue_category_required": 100003,
+        "issue_category_mismatch": 100004,
+        "issue_type_initial_status_unavailable": 100005
+      }
+    }
   },
 
   "products": [

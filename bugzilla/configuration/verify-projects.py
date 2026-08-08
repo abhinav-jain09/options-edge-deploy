@@ -3,20 +3,32 @@
 
 Two layers, because metadata alone proves nothing:
 
-  * structural - every product, component, custom field, field value, status,
-    workflow edge and resolution is read back over REST (i.e. through a
-    *restarted* web process, so a stale cache shows up as a failure) and
-    compared with the declared state;
+  * structural - every product, component, version, milestone, custom field,
+    field value, status, workflow edge, resolution and parameter is read back
+    over REST (i.e. through a *restarted* web process, so a stale cache shows up
+    as a failure) and compared with the declared state;
 
   * behavioural - a BUG and a REQUIREMENT are filed and walked through their
-    complete lifecycles, and every illegal cross-lifecycle move is attempted and
-    must be refused. This is the only thing that actually proves the
-    IssueTypeWorkflow extension is loaded and enforcing.
+    complete lifecycles, and every cross-lifecycle move that core Bugzilla would
+    otherwise permit is attempted and must be refused with the exact error code
+    the policy raises. This is the only thing that proves the IssueTypeWorkflow
+    extension is loaded and enforcing.
 
-Exits non-zero if anything fails. Nothing here mutates configuration.
+The negative cases are GENERATED from expected-state.json, not hard-coded: for
+each state of each walk, the illegal targets are exactly
+(reachable in the global workflow) minus (allowed for this issue type). Targets
+the global matrix already blocks are excluded on purpose - core would refuse
+those with the extension switched off, so they prove nothing.
 
-  ./verify-projects.py --base-url http://192.168.100.252:8092 \
-                       --state expected-state.json --api-key "$BZ_API_KEY"
+Refusals are checked against specific codes (115 for a denied update, the
+extension's own 1000xx codes on creation). A 401 from a bad API key, a 404 or a
+500 must never be able to masquerade as successful enforcement.
+
+Exits non-zero if anything fails. It changes no configuration, but it does file
+smoke-test bugs (summary prefix [SMOKE]) and closes them again on the way out.
+
+  BZ_API_KEY=... ./verify-projects.py --base-url http://192.168.100.252:8092 \
+                                      --state expected-state.json
 """
 
 import argparse
@@ -28,9 +40,15 @@ import urllib.parse
 import urllib.request
 
 FIELD_TYPE_SINGLE_SELECT = 2
+HTTP_DENIED = 401   # REST_STATUS_CODE_MAP maps code 115 to STATUS_NOT_AUTHORIZED
+HTTP_BAD_REQUEST = 400
 
 failures = []
 checks = 0
+
+
+class BzTransportError(RuntimeError):
+    """A request failed in a way that says nothing about Bugzilla's policy."""
 
 
 def check(name, ok, detail=""):
@@ -41,11 +59,15 @@ def check(name, ok, detail=""):
     else:
         print(f"  FAIL  {name}" + (f"\n          {detail}" if detail else ""))
         failures.append(name)
-    return ok
+    return bool(ok)
 
 
 def eq(name, got, want):
     return check(name, got == want, f"got {got!r}, want {want!r}")
+
+
+def skip(name, why):
+    print(f"  ....  {name} - {why}")
 
 
 class Bz:
@@ -61,15 +83,24 @@ class Bz:
         req.add_header("Accept", "application/json")
         if self.api_key:
             req.add_header("X-BUGZILLA-API-KEY", self.api_key)
+
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
-                return resp.status, json.loads(resp.read().decode() or "{}")
+                status, raw = resp.status, resp.read().decode()
         except urllib.error.HTTPError as exc:
-            body = exc.read().decode()
-            try:
-                return exc.code, json.loads(body or "{}")
-            except json.JSONDecodeError:
-                return exc.code, {"error": True, "message": body[:500]}
+            status, raw = exc.code, exc.read().decode()
+        except (urllib.error.URLError, OSError) as exc:
+            raise BzTransportError(f"{method} {url}: {exc}") from exc
+
+        try:
+            body = json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError as exc:
+            raise BzTransportError(
+                f"{method} {url}: HTTP {status} with non-JSON body: {raw[:200]!r}"
+            ) from exc
+        if not isinstance(body, dict):
+            raise BzTransportError(f"{method} {url}: expected a JSON object, got {type(body).__name__}")
+        return status, body
 
     def get(self, path):
         return self._request("GET", path)
@@ -91,49 +122,86 @@ def verify_version(bz, state):
     eq("version", body.get("version"), state["bugzilla_version"])
 
 
+def verify_parameters(bz, state):
+    print("\n[2] Parameters")
+    status, body = bz.get("/parameters")
+    params = body.get("parameters")
+    if not check("parameters readable (API key needs tweakparams/admin)",
+                 isinstance(params, dict) and params,
+                 f"HTTP {status}: {json.dumps(body)[:200]}"):
+        return
+    for name, want in state["params"].items():
+        if name not in params:
+            check(f"param {name} visible", False,
+                  "not returned; the API key's user is probably not an admin")
+            continue
+        eq(f"param {name}", params[name], want)
+
+
 def verify_products(bz, state):
-    print("\n[2] Products and components")
+    print("\n[3] Products, components, versions, milestones")
     for spec in state["products"]:
         name = spec["name"]
-        status, body = bz.get("/product?names=" + urllib.parse.quote(name))
+        _, body = bz.get("/product?names=" + urllib.parse.quote(name))
         products = body.get("products") or []
-        if not check(f"product '{name}' exists", len(products) == 1, json.dumps(body)[:300]):
+        if not check(f"product '{name}' exists", len(products) == 1,
+                     json.dumps(body)[:300]):
             continue
         product = products[0]
 
-        eq(f"product '{name}' is_active", bool(product.get("is_active")), spec["is_active"])
+        eq(f"product '{name}' description", product.get("description"),
+           spec["description"])
+        eq(f"product '{name}' is_active", bool(product.get("is_active")),
+           spec["is_active"])
         eq(f"product '{name}' has_unconfirmed",
            bool(product.get("has_unconfirmed")), spec["allows_unconfirmed"])
         eq(f"product '{name}' default_milestone",
            product.get("default_milestone"), spec["default_milestone"])
 
-        got_components = sorted(c["name"] for c in product.get("components", []))
-        eq(f"product '{name}' components", got_components,
+        components = product.get("components", [])
+        eq(f"product '{name}' components", sorted(c["name"] for c in components),
            sorted(c["name"] for c in spec["components"]))
 
+        by_name = {c["name"]: c for c in components}
+        for want in spec["components"]:
+            got = by_name.get(want["name"])
+            if got is None:
+                continue
+            eq(f"component '{name}/{want['name']}' description",
+               got.get("description"), want["description"])
+            check(f"component '{name}/{want['name']}' is active",
+                  bool(got.get("is_active")))
+            check(f"component '{name}/{want['name']}' has a default assignee",
+                  bool(got.get("default_assigned_to")),
+                  f"default_assigned_to={got.get('default_assigned_to')!r}")
+
         eq(f"product '{name}' versions",
-           sorted(v["name"] for v in product.get("versions", [])), sorted(spec["versions"]))
+           sorted(v["name"] for v in product.get("versions", [])
+                  if v.get("is_active", True)),
+           sorted(spec["versions"]))
         eq(f"product '{name}' milestones",
-           sorted(m["name"] for m in product.get("milestones", [])),
+           sorted(m["name"] for m in product.get("milestones", [])
+                  if m.get("is_active", True)),
            sorted(spec["milestones"]))
 
-        unassigned = [c["name"] for c in product.get("components", [])
-                      if not c.get("default_assigned_to")]
-        check(f"product '{name}' every component has a default assignee",
-              not unassigned, f"missing on: {unassigned}")
+    for name in state["decommission"]["products"]:
+        _, body = bz.get("/product?names=" + urllib.parse.quote(name))
+        gone = not (body.get("products") or [])
+        inactive = not gone and not body["products"][0].get("is_active")
+        check(f"decommissioned product '{name}' is gone or inactive",
+              gone or inactive)
 
 
 def fields_by_name(bz):
     status, body = bz.get("/field/bug")
     if "fields" not in body:
-        print(f"  FATAL cannot read /rest/field/bug (HTTP {status}): "
-              f"{json.dumps(body)[:300]}")
-        sys.exit(2)
+        raise BzTransportError(
+            f"cannot read /rest/field/bug (HTTP {status}): {json.dumps(body)[:300]}")
     return {f["name"]: f for f in body["fields"]}
 
 
-def verify_custom_fields(bz, fields, state):
-    print("\n[3] Custom fields")
+def verify_custom_fields(fields, state):
+    print("\n[4] Custom fields")
     for name, spec in state["fields"].items():
         field = fields.get(name)
         if not check(f"field {name} exists", field is not None):
@@ -141,79 +209,88 @@ def verify_custom_fields(bz, fields, state):
 
         eq(f"field {name} is_custom", bool(field.get("is_custom")), True)
         eq(f"field {name} type", field.get("type"), FIELD_TYPE_SINGLE_SELECT)
-        eq(f"field {name} display_name", field.get("display_name"), spec["description"])
+        eq(f"field {name} display_name", field.get("display_name"),
+           spec["description"])
         eq(f"field {name} is_mandatory", bool(field.get("is_mandatory")),
            spec["is_mandatory"])
         eq(f"field {name} is_on_bug_entry", bool(field.get("is_on_bug_entry")),
            spec["enter_bug"])
 
-        if spec.get("value_field"):
-            eq(f"field {name} value_field", field.get("value_field"), spec["value_field"])
-        if spec.get("visibility_field"):
-            eq(f"field {name} visibility_field",
-               field.get("visibility_field"), spec["visibility_field"])
-            eq(f"field {name} visibility_values",
-               sorted(field.get("visibility_values") or []),
-               sorted(spec["visibility_values"]))
+        eq(f"field {name} value_field", field.get("value_field"),
+           spec.get("value_field"))
+        eq(f"field {name} visibility_field", field.get("visibility_field"),
+           spec.get("visibility_field"))
+        eq(f"field {name} visibility_values",
+           sorted(field.get("visibility_values") or []),
+           sorted(spec.get("visibility_values") or []))
 
-        want_values = sorted(v["value"] for v in spec["values"])
-        got_values = sorted(v["name"] for v in field.get("values", [])
-                            if v["name"] not in ("", "---"))
-        eq(f"field {name} values", got_values, want_values)
+        values = {v["name"]: v for v in field.get("values", [])}
+        eq(f"field {name} values",
+           sorted(n for n in values if n not in ("", "---")),
+           sorted(v["value"] for v in spec["values"]))
 
-        # Every value must be owned by exactly the declared issue type. Bugzilla
-        # 5.2 stores one controller per value, so this list is 0 or 1 long.
-        for v in spec["values"]:
-            if "controlled_by" not in v:
+        for want in spec["values"]:
+            got = values.get(want["value"])
+            if got is None:
                 continue
-            got = next((x.get("visibility_values") or []
-                        for x in field.get("values", []) if x["name"] == v["value"]), None)
-            eq(f"field {name} value '{v['value']}' controlled_by",
-               got, [v["controlled_by"]])
+            eq(f"field {name} value '{want['value']}' sort_key",
+               got.get("sort_key"), want["sortkey"])
+            # Bugzilla 5.2 stores one controller per value, so this list is
+            # either empty or exactly one issue type long.
+            eq(f"field {name} value '{want['value']}' controlled_by",
+               got.get("visibility_values") or [],
+               [want["controlled_by"]] if "controlled_by" in want else [])
 
 
-def verify_statuses_and_workflow(bz, fields, state):
-    print("\n[4] Statuses and workflow matrix")
+def verify_statuses_and_workflow(fields, state):
+    print("\n[5] Statuses and workflow matrix")
     field = fields.get("bug_status")
     if not check("bug_status field present", field is not None):
         return
 
     values = {v["name"]: v for v in field.get("values", [])}
-
-    want_names = sorted(s["value"] for s in state["statuses"])
-    got_names = sorted(n for n in values if n != "")
-    eq("status set", got_names, want_names)
+    eq("status set", sorted(n for n in values if n != ""),
+       sorted(s["value"] for s in state["statuses"]))
 
     for spec in state["statuses"]:
-        v = values.get(spec["value"])
-        if not v:
+        got = values.get(spec["value"])
+        if got is None:
             continue
-        eq(f"status '{spec['value']}' is_open", bool(v.get("is_open")), spec["is_open"])
+        eq(f"status '{spec['value']}' is_open", bool(got.get("is_open")),
+           spec["is_open"])
+        eq(f"status '{spec['value']}' sort_key", got.get("sort_key"),
+           spec["sortkey"])
 
-    # The synthetic '' entry is Bugzilla's bug-creation row.
     want_edges = {}
     for edge in state["workflow"]:
-        want_edges.setdefault(edge["from"], {})[edge["to"]] = bool(edge["require_comment"])
+        want_edges.setdefault(edge["from"], {})[edge["to"]] = \
+            bool(edge["require_comment"])
 
-    for from_status in sorted(set(list(want_edges) + [n for n in values])):
-        v = values.get(from_status)
-        if v is None:
+    for from_status in sorted(set(list(want_edges) + list(values))):
+        got_value = values.get(from_status)
+        if got_value is None:
             check(f"workflow row for '{from_status}'", False, "status missing")
             continue
         got = {t["name"]: bool(t.get("comment_required"))
-               for t in v.get("can_change_to", [])}
-        want = want_edges.get(from_status, {})
+               for t in got_value.get("can_change_to", [])}
         eq(f"workflow from '{from_status or '(new bug)'}'",
-           dict(sorted(got.items())), dict(sorted(want.items())))
+           dict(sorted(got.items())),
+           dict(sorted(want_edges.get(from_status, {}).items())))
 
 
-def verify_resolutions(bz, fields, state):
-    print("\n[5] Resolutions")
+def verify_resolutions(fields, state):
+    print("\n[6] Resolutions")
     field = fields.get("resolution")
     if not check("resolution field present", field is not None):
         return
-    got = sorted(v["name"] for v in field.get("values", []) if v["name"] != "")
-    eq("resolution set", got, sorted(r["value"] for r in state["resolutions"]))
+    values = {v["name"]: v for v in field.get("values", [])}
+    eq("resolution set", sorted(n for n in values if n != ""),
+       sorted(r["value"] for r in state["resolutions"]))
+    for spec in state["resolutions"]:
+        got = values.get(spec["value"])
+        if got is not None:
+            eq(f"resolution '{spec['value']}' sort_key", got.get("sort_key"),
+               spec["sortkey"])
 
 
 # --------------------------------------------------------------------------
@@ -223,181 +300,359 @@ def verify_resolutions(bz, fields, state):
 SMOKE_PREFIX = "[SMOKE] issue-type lifecycle verification"
 
 
-def file_bug(bz, product, component, issue_type, category, extra=None):
-    payload = {
-        "product": product,
-        "component": component,
-        "summary": f"{SMOKE_PREFIX} - {issue_type}",
-        "version": "unspecified",
-        "description": "Filed by verify-projects.py. Safe to close or delete.",
-        "cf_issue_type": issue_type,
-        "cf_category": category,
-    }
-    payload.update(extra or {})
-    return bz.post("/bug", payload)
+class Walker:
+    """Files smoke items and drives them, asserting policy at every step."""
+
+    def __init__(self, bz, state):
+        self.bz = bz
+        self.state = state
+        self.enf = state["enforcement"]
+        self.denied_code = self.enf["error_codes"]["core_illegal_change"]
+        self.creation_codes = set(self.enf["error_codes"]["extension"].values())
+        self.filed = []
+
+        self.reachable = {}
+        for edge in state["workflow"]:
+            self.reachable.setdefault(edge["from"], set()).add(edge["to"])
+
+        self.categories = {}
+        for value in state["fields"]["cf_category"]["values"]:
+            self.categories.setdefault(value["controlled_by"], []).append(
+                value["value"])
+
+    # -- helpers ---------------------------------------------------------
+
+    def file(self, product, component, issue_type, category, extra=None):
+        payload = {
+            "product": product,
+            "component": component,
+            "summary": f"{SMOKE_PREFIX} - {issue_type}",
+            "version": self.state["products"][0]["versions"][0],
+            "description": "Filed by verify-projects.py. Closed automatically.",
+            "cf_issue_type": issue_type,
+            "cf_category": category,
+        }
+        payload.update(extra or {})
+        status, body = self.bz.post("/bug", payload)
+        if status < 400 and body.get("id"):
+            self.filed.append(body["id"])
+        return status, body
+
+    def move(self, bug_id, **fields):
+        payload = {"comment": {"body": "verify-projects.py lifecycle step"}}
+        payload.update(fields)
+        return self.bz.put(f"/bug/{bug_id}", payload)
+
+    def state_of(self, bug_id):
+        status, body = self.bz.get(f"/bug/{bug_id}")
+        bugs = body.get("bugs")
+        if status >= 400 or not bugs:
+            raise BzTransportError(
+                f"cannot read bug {bug_id} (HTTP {status}): {json.dumps(body)[:200]}")
+        bug = bugs[0]
+        return (bug["status"], bug["resolution"], bug["cf_issue_type"],
+                bug["cf_category"])
+
+    def expect_allowed(self, label, bug_id, **fields):
+        status, body = self.move(bug_id, **fields)
+        check(f"allowed: {label}", status < 400 and not body.get("error"),
+              f"HTTP {status}: {json.dumps(body)[:200]}")
+
+    def expect_denied(self, label, bug_id, **fields):
+        """The policy - not core, not the transport - must refuse this."""
+        before = self.state_of(bug_id)
+        status, body = self.move(bug_id, **fields)
+        code = body.get("code")
+        check(f"denied: {label}",
+              status == HTTP_DENIED and code == self.denied_code,
+              f"expected HTTP {HTTP_DENIED} code {self.denied_code}, "
+              f"got HTTP {status} code {code}: {body.get('message', '')[:160]}")
+        eq(f"unchanged after denying: {label}", self.state_of(bug_id), before)
+
+    def expect_creation_refused(self, label, **kwargs):
+        status, body = self.file(**kwargs)
+        code = body.get("code")
+        check(f"refused at creation: {label}",
+              status == HTTP_BAD_REQUEST and code in self.creation_codes,
+              f"expected HTTP {HTTP_BAD_REQUEST} and one of "
+              f"{sorted(self.creation_codes)}, got HTTP {status} code {code}: "
+              f"{body.get('message', '')[:160]}")
+
+    # -- generated probes -------------------------------------------------
+
+    def probe_illegal_statuses(self, bug_id, issue_type, current):
+        """Every target core would allow from here but this type must not use."""
+        allowed = set(self.enf["allowed_statuses"][issue_type])
+        illegal = sorted(self.reachable.get(current, set()) - allowed)
+        if not illegal:
+            skip(f"illegal status targets from '{current}' ({issue_type})",
+                 "the global matrix already blocks them all; nothing here is "
+                 "extension-only")
+            return
+        for target in illegal:
+            self.expect_denied(f"{issue_type} on '{current}' -> '{target}'",
+                               bug_id, status=target)
+
+    def probe_illegal_resolutions(self, bug_id, issue_type):
+        allowed = set(self.enf["allowed_resolutions"][issue_type])
+        for resolution in sorted(
+                {r["value"] for r in self.state["resolutions"]} - allowed):
+            self.expect_denied(
+                f"{issue_type} resolved '{resolution}'", bug_id,
+                status="RESOLVED", resolution=resolution)
+
+    def probe_illegal_categories(self, bug_id, issue_type):
+        for other, values in self.categories.items():
+            if other == issue_type:
+                continue
+            for value in values:
+                self.expect_denied(f"{issue_type} given category '{value}'",
+                                   bug_id, cf_category=value)
+
+    def probe_type_immutable(self, bug_id, issue_type):
+        for other in self.enf["allowed_statuses"]:
+            if other != issue_type:
+                self.expect_denied(f"{issue_type} retyped to '{other}'",
+                                   bug_id, cf_issue_type=other)
 
 
-def move(bz, bug_id, **fields):
-    payload = {"comment": {"body": "verify-projects.py lifecycle step"}}
-    payload.update(fields)
-    return bz.put(f"/bug/{bug_id}", payload)
-
-
-def state_of(bz, bug_id):
-    _, body = bz.get(f"/bug/{bug_id}")
-    bug = (body.get("bugs") or [{}])[0]
-    return (bug.get("status"), bug.get("resolution"),
-            bug.get("cf_issue_type"), bug.get("cf_category"))
-
-
-def expect_refused(bz, label, bug_id, before, **fields):
-    status, body = move(bz, bug_id, **fields)
-    refused = status >= 400 or body.get("error")
-    check(f"refused: {label}", refused,
-          f"HTTP {status}, body {json.dumps(body)[:200]}")
-    after = state_of(bz, bug_id)
-    eq(f"unchanged after refusing: {label}", after, before)
-
-
-def verify_bug_lifecycle(bz, state):
-    print("\n[6] BUG lifecycle (optionedge)")
-    status, body = file_bug(bz, "optionedge", "Cross-Cutting / Other",
-                            "BUG", "BUG_CODE")
-    if not check("file a BUG", status < 400 and body.get("id"),
-                 json.dumps(body)[:300]):
+def walk_lifecycle(w, issue_type, product, path, closing_resolution):
+    """File one item and walk it along `path`, probing at every state."""
+    print(f"\n[7] {issue_type} lifecycle ({product})")
+    category = w.categories[issue_type][0]
+    status, body = w.file(product, "Cross-Cutting / Other", issue_type, category)
+    if not check(f"file a {issue_type}", status < 400 and body.get("id"),
+                 f"HTTP {status}: {json.dumps(body)[:300]}"):
         return None
     bug_id = body["id"]
     print(f"  ....  bug {bug_id}")
 
-    eq("BUG starts UNCONFIRMED", state_of(bz, bug_id)[0], "UNCONFIRMED")
+    initial = w.enf["initial_status"][issue_type]
+    eq(f"{issue_type} starts at '{initial}'", w.state_of(bug_id)[0], initial)
 
-    for target in ("BUG_CONFIRMED", "BUG_IN_PROGRESS"):
-        st, b = move(bz, bug_id, status=target)
-        check(f"BUG -> {target}", st < 400 and not b.get("error"),
-              json.dumps(b)[:200])
-        eq(f"BUG is {target}", state_of(bz, bug_id)[0], target)
+    current = initial
+    w.probe_illegal_statuses(bug_id, issue_type, current)
 
-    st, b = move(bz, bug_id, status="RESOLVED", resolution="FIXED")
-    check("BUG -> RESOLVED/FIXED", st < 400 and not b.get("error"), json.dumps(b)[:200])
-    eq("BUG is RESOLVED/FIXED", state_of(bz, bug_id)[:2], ("RESOLVED", "FIXED"))
+    for target in path:
+        w.expect_allowed(f"{issue_type} '{current}' -> '{target}'", bug_id,
+                         status=target)
+        eq(f"{issue_type} is '{target}'", w.state_of(bug_id)[0], target)
+        current = target
+        w.probe_illegal_statuses(bug_id, issue_type, current)
 
-    st, b = move(bz, bug_id, status="VERIFIED")
-    check("BUG -> VERIFIED", st < 400 and not b.get("error"), json.dumps(b)[:200])
-    eq("BUG is VERIFIED/FIXED", state_of(bz, bug_id)[:2], ("VERIFIED", "FIXED"))
+    w.probe_illegal_resolutions(bug_id, issue_type)
+    w.expect_allowed(f"{issue_type} -> RESOLVED/{closing_resolution}", bug_id,
+                     status="RESOLVED", resolution=closing_resolution)
+    eq(f"{issue_type} is RESOLVED/{closing_resolution}",
+       w.state_of(bug_id)[:2], ("RESOLVED", closing_resolution))
 
-    before = state_of(bz, bug_id)
-    expect_refused(bz, "BUG -> REQ_REVIEW", bug_id, before, status="REQ_REVIEW")
-    expect_refused(bz, "BUG issue type change", bug_id, before,
-                   cf_issue_type="REQUIREMENT")
-    expect_refused(bz, "BUG given a REQ_ category", bug_id, before,
-                   cf_category="REQ_LOGIC")
-    expect_refused(bz, "BUG resolved IMPLEMENTED", bug_id, before,
-                   status="RESOLVED", resolution="IMPLEMENTED")
+    w.probe_illegal_statuses(bug_id, issue_type, "RESOLVED")
+
+    w.expect_allowed(f"{issue_type} -> VERIFIED", bug_id, status="VERIFIED")
+    eq(f"{issue_type} is VERIFIED/{closing_resolution}",
+       w.state_of(bug_id)[:2], ("VERIFIED", closing_resolution))
+
+    # VERIFIED is where both reopen branches are reachable, so this is the state
+    # that actually exercises the extension rather than the global matrix.
+    w.probe_illegal_statuses(bug_id, issue_type, "VERIFIED")
+    w.probe_illegal_categories(bug_id, issue_type)
+    w.probe_type_immutable(bug_id, issue_type)
+
+    reopen = w.enf["allowed_statuses"][issue_type]
+    reopen_to = "BUG_CONFIRMED" if issue_type == "BUG" else "REQ_REVIEW"
+    if reopen_to in reopen:
+        w.expect_allowed(f"{issue_type} reopens to '{reopen_to}'", bug_id,
+                         status=reopen_to, resolution="")
+        eq(f"reopened {issue_type} has no resolution",
+           w.state_of(bug_id)[:2], (reopen_to, ""))
+
     return bug_id
 
 
-def verify_requirement_lifecycle(bz, state):
-    print("\n[7] REQUIREMENT lifecycle (fullfunding)")
-    status, body = file_bug(bz, "fullfunding", "Cross-Cutting / Other",
-                            "REQUIREMENT", "REQ_LOGIC")
-    if not check("file a REQUIREMENT", status < 400 and body.get("id"),
-                 json.dumps(body)[:300]):
-        return None
-    bug_id = body["id"]
-    print(f"  ....  bug {bug_id}")
-
-    eq("REQUIREMENT starts REQ_DRAFT", state_of(bz, bug_id)[0], "REQ_DRAFT")
-
-    for target in ("REQ_REVIEW", "REQ_APPROVED", "REQ_IN_PROGRESS"):
-        st, b = move(bz, bug_id, status=target)
-        check(f"REQUIREMENT -> {target}", st < 400 and not b.get("error"),
-              json.dumps(b)[:200])
-        eq(f"REQUIREMENT is {target}", state_of(bz, bug_id)[0], target)
-
-    before = state_of(bz, bug_id)
-    expect_refused(bz, "REQUIREMENT resolved FIXED", bug_id, before,
-                   status="RESOLVED", resolution="FIXED")
-    expect_refused(bz, "REQUIREMENT -> BUG_CONFIRMED", bug_id, before,
-                   status="BUG_CONFIRMED")
-    expect_refused(bz, "REQUIREMENT given a BUG_ category", bug_id, before,
-                   cf_category="BUG_CODE")
-
-    st, b = move(bz, bug_id, status="RESOLVED", resolution="IMPLEMENTED")
-    check("REQUIREMENT -> RESOLVED/IMPLEMENTED", st < 400 and not b.get("error"),
-          json.dumps(b)[:200])
-    st, b = move(bz, bug_id, status="VERIFIED")
-    check("REQUIREMENT -> VERIFIED", st < 400 and not b.get("error"),
-          json.dumps(b)[:200])
-    eq("REQUIREMENT is VERIFIED/IMPLEMENTED",
-       state_of(bz, bug_id)[:2], ("VERIFIED", "IMPLEMENTED"))
-
-    st, b = move(bz, bug_id, status="REQ_REVIEW", resolution="")
-    check("REQUIREMENT reopens to REQ_REVIEW", st < 400 and not b.get("error"),
-          json.dumps(b)[:200])
-    eq("reopened REQUIREMENT has no resolution", state_of(bz, bug_id)[:2],
-       ("REQ_REVIEW", ""))
-    return bug_id
-
-
-def verify_creation_guards(bz):
+def verify_creation_guards(w):
     print("\n[8] Creation-time guards")
-    st, b = file_bug(bz, "optionedge", "Cross-Cutting / Other", "BUG", "REQ_LOGIC")
-    check("refused: file a BUG with a REQ_ category", st >= 400 or b.get("error"),
-          json.dumps(b)[:200])
+    product = "optionedge"
+    component = "Cross-Cutting / Other"
 
-    st, b = file_bug(bz, "fullfunding", "Cross-Cutting / Other",
-                     "REQUIREMENT", "BUG_CODE")
-    check("refused: file a REQUIREMENT with a BUG_ category",
-          st >= 400 or b.get("error"), json.dumps(b)[:200])
+    w.expect_creation_refused(
+        "BUG with a REQUIREMENT category", product=product, component=component,
+        issue_type="BUG", category=w.categories["REQUIREMENT"][0])
+    w.expect_creation_refused(
+        "REQUIREMENT with a BUG category", product="fullfunding",
+        component=component, issue_type="REQUIREMENT",
+        category=w.categories["BUG"][0])
+    w.expect_creation_refused(
+        "no issue type", product=product, component=component,
+        issue_type="---", category=w.categories["BUG"][0])
+    w.expect_creation_refused(
+        "no category", product=product, component=component,
+        issue_type="BUG", category="---")
 
-    # An item filed onto the other lifecycle's entry point is canonicalised, not
-    # rejected: Bugzilla itself forces UNCONFIRMED for reporters without
-    # editbugs/canconfirm (Bug.pm:1526-1536), which would otherwise dump every
-    # externally filed REQUIREMENT onto the BUG lifecycle.
-    st, b = file_bug(bz, "fullfunding", "Cross-Cutting / Other",
-                     "REQUIREMENT", "REQ_COSMETIC", extra={"status": "UNCONFIRMED"})
-    if check("file a REQUIREMENT asking for UNCONFIRMED", st < 400 and b.get("id"),
-             json.dumps(b)[:200]):
+    # Filing onto the other lifecycle's entry point is corrected, not rejected:
+    # Bug.pm:1526-1536 forces UNCONFIRMED on any reporter without
+    # editbugs/canconfirm, so rejecting it would break external filing. This
+    # also stands in for the low-privilege-reporter case, which needs a second
+    # account the verifier does not create.
+    status, body = w.file("fullfunding", component, "REQUIREMENT",
+                          w.categories["REQUIREMENT"][0],
+                          extra={"status": "UNCONFIRMED"})
+    if check("file a REQUIREMENT asking for UNCONFIRMED",
+             status < 400 and body.get("id"), f"HTTP {status}: {json.dumps(body)[:200]}"):
         eq("REQUIREMENT was canonicalised to REQ_DRAFT",
-           state_of(bz, b["id"])[0], "REQ_DRAFT")
-        return b["id"]
-    return None
+           w.state_of(body["id"])[0], "REQ_DRAFT")
+
+
+def verify_duplicate_path(w):
+    """RESOLVED+DUPLICATE must keep working for both types - it is the reason
+    the closed tail is shared in the first place."""
+    print("\n[9] Native duplicate handling")
+    for issue_type, product in (("BUG", "optionedge"),
+                                ("REQUIREMENT", "fullfunding")):
+        category = w.categories[issue_type][0]
+        s1, b1 = w.file(product, "Cross-Cutting / Other", issue_type, category)
+        s2, b2 = w.file(product, "Cross-Cutting / Other", issue_type, category)
+        if not check(f"file two {issue_type}s for the duplicate test",
+                     s1 < 400 and s2 < 400 and b1.get("id") and b2.get("id")):
+            continue
+        status, body = w.move(b2["id"], dupe_of=b1["id"])
+        check(f"{issue_type} can be marked a duplicate",
+              status < 400 and not body.get("error"),
+              f"HTTP {status}: {json.dumps(body)[:200]}")
+        eq(f"duplicate {issue_type} is RESOLVED/DUPLICATE",
+           w.state_of(b2["id"])[:2], ("RESOLVED", "DUPLICATE"))
+
+
+def verify_bulk_atomicity(w):
+    """One illegal item in a multi-bug update must abort the whole request."""
+    print("\n[10] Bulk update atomicity")
+    s1, b1 = w.file("optionedge", "Cross-Cutting / Other", "BUG",
+                    w.categories["BUG"][0])
+    s2, b2 = w.file("fullfunding", "Cross-Cutting / Other", "REQUIREMENT",
+                    w.categories["REQUIREMENT"][0])
+    if not check("file one item of each type for the bulk test",
+                 s1 < 400 and s2 < 400 and b1.get("id") and b2.get("id")):
+        return
+    bug_id, req_id = b1["id"], b2["id"]
+
+    # Park both on VERIFIED, the one state from which BUG_CONFIRMED is reachable
+    # in the global matrix for both - so the refusal below can only come from
+    # the extension.
+    for target in ("BUG_CONFIRMED", "RESOLVED", "VERIFIED"):
+        w.move(bug_id, status=target,
+               **({"resolution": "FIXED"} if target == "RESOLVED" else {}))
+    for target in ("REQ_REVIEW", "REQ_APPROVED", "RESOLVED", "VERIFIED"):
+        w.move(req_id, status=target,
+               **({"resolution": "IMPLEMENTED"} if target == "RESOLVED" else {}))
+
+    before_bug, before_req = w.state_of(bug_id), w.state_of(req_id)
+    if not check("both bulk-test items reached VERIFIED",
+                 before_bug[0] == "VERIFIED" and before_req[0] == "VERIFIED",
+                 f"bug={before_bug}, requirement={before_req}"):
+        return
+
+    status, body = w.bz.put(f"/bug/{bug_id}", {
+        "ids": [bug_id, req_id],
+        "status": "BUG_CONFIRMED",
+        "resolution": "",
+        "comment": {"body": "verify-projects.py bulk atomicity probe"},
+    })
+    check("bulk update containing one illegal item is refused",
+          status == HTTP_DENIED and body.get("code") == w.denied_code,
+          f"HTTP {status} code {body.get('code')}: {body.get('message','')[:160]}")
+    eq("legal item in the bulk update was NOT changed", w.state_of(bug_id),
+       before_bug)
+    eq("illegal item in the bulk update was NOT changed", w.state_of(req_id),
+       before_req)
+
+
+def close_smoke_bugs(w):
+    """Leave the tracker tidy - REST cannot delete bugs, so close them."""
+    if not w.filed:
+        return
+    print("\n[11] Cleanup")
+    closed, stuck = 0, []
+    for bug_id in w.filed:
+        try:
+            status, resolution, issue_type, _ = w.state_of(bug_id)
+            if status in ("RESOLVED", "VERIFIED") and resolution:
+                closed += 1
+                continue
+            wanted = "INVALID" if issue_type == "BUG" else "REJECTED"
+            code, body = w.move(bug_id, status="RESOLVED", resolution=wanted)
+            if code < 400 and not body.get("error"):
+                closed += 1
+            else:
+                stuck.append(bug_id)
+        except BzTransportError as exc:
+            stuck.append(f"{bug_id} ({exc})")
+    print(f"  ....  {closed}/{len(w.filed)} smoke bug(s) closed")
+    if stuck:
+        print(f"  ....  still open, close by hand: {stuck}")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://192.168.100.252:8092")
     parser.add_argument("--state", default="expected-state.json")
-    parser.add_argument("--api-key", default=os.environ.get("BZ_API_KEY", ""))
     parser.add_argument("--no-smoke", action="store_true",
                         help="structural assertions only; files no bugs")
     args = parser.parse_args()
 
+    # Deliberately env-only: an --api-key argument would show up in the process
+    # list and shell history on a shared host.
+    api_key = os.environ.get("BZ_API_KEY", "")
+    if not api_key:
+        sys.exit("BZ_API_KEY is required: this installation has requirelogin "
+                 "enabled, so even read-only endpoints need authentication.")
+
     with open(args.state, encoding="utf-8") as fh:
         state = json.load(fh)
 
-    if not args.api_key and not args.no_smoke:
-        sys.exit("An API key is required (--api-key or BZ_API_KEY): this "
-                 "installation has requirelogin enabled.")
+    bz = Bz(args.base_url, api_key)
 
-    bz = Bz(args.base_url, args.api_key)
+    try:
+        verify_version(bz, state)
+        verify_parameters(bz, state)
+        verify_products(bz, state)
+        fields = fields_by_name(bz)
+        verify_custom_fields(fields, state)
+        verify_statuses_and_workflow(fields, state)
+        verify_resolutions(fields, state)
+    except BzTransportError as exc:
+        sys.exit(f"\nABORTED: {exc}")
 
-    verify_version(bz, state)
-    fields = fields_by_name(bz)
-    verify_products(bz, state)
-    verify_custom_fields(bz, fields, state)
-    verify_statuses_and_workflow(bz, fields, state)
-    verify_resolutions(bz, fields, state)
-
-    smoke_ids = []
-    if not args.no_smoke:
-        smoke_ids = [i for i in (verify_bug_lifecycle(bz, state),
-                                 verify_requirement_lifecycle(bz, state),
-                                 verify_creation_guards(bz)) if i]
+    structural_failures = len(failures)
+    walker = None
+    if args.no_smoke:
+        print("\n--no-smoke: behavioural verification skipped. The extension is "
+              "NOT proven to be enforcing.")
+    elif structural_failures:
+        print(f"\n{structural_failures} structural failure(s): skipping the "
+              "behavioural pass rather than filing bugs into a known-broken "
+              "installation.")
+    else:
+        walker = Walker(bz, state)
+        try:
+            walk_lifecycle(walker, "BUG", "optionedge",
+                           ["BUG_CONFIRMED", "BUG_IN_PROGRESS"], "FIXED")
+            walk_lifecycle(walker, "REQUIREMENT", "fullfunding",
+                           ["REQ_REVIEW", "REQ_APPROVED", "REQ_IN_PROGRESS"],
+                           "IMPLEMENTED")
+            verify_creation_guards(walker)
+            verify_duplicate_path(walker)
+            verify_bulk_atomicity(walker)
+        except BzTransportError as exc:
+            check("behavioural pass completed", False, str(exc))
+        finally:
+            try:
+                close_smoke_bugs(walker)
+            except BzTransportError as exc:
+                print(f"  ....  cleanup aborted: {exc}")
 
     print(f"\n{'=' * 60}")
-    if smoke_ids:
-        print(f"smoke test bugs: {', '.join(str(i) for i in smoke_ids)}")
+    if walker and walker.filed:
+        print("smoke test bugs: "
+              + ", ".join(str(i) for i in walker.filed))
     if failures:
         print(f"FAILED  {len(failures)}/{checks} checks failed:")
         for name in failures:

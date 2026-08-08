@@ -19,4 +19,11 @@
   <em>[% issue_type FILTER html %]</em>. Bug categories are prefixed
   <em>BUG_</em> and requirement categories <em>REQ_</em>.
 
+[% ELSIF error == "issue_type_initial_status_unavailable" %]
+  [% title = "Lifecycle Entry Point Missing" %]
+  Items of type <em>[% issue_type FILTER html %]</em> must be created in status
+  <em>[% status FILTER html %]</em>, but that status is not a legal status for a
+  new item. The status workflow no longer matches the configured lifecycles —
+  re-run <em>setup-projects.pl</em>.
+
 [% END %]
