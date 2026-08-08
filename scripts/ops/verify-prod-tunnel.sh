@@ -373,14 +373,31 @@ scan_config_for_retired() {  # label, config text
       note "OK   $label declares no hostname under '$sfx' (wildcards included)"
     fi
   done
-  # hostless rules: legal, match every hostname — only the terminal 404 catch-all may be hostless.
-  local hostless
-  hostless="$(printf '%s\n' "$cfg" | awk '/^[[:space:]]*-[[:space:]]*service:/ {sub(/.*service:[[:space:]]*/,""); sub(/[[:space:]]*#.*/,""); sub(/[[:space:]]*$/,""); print}')"
-  if [ -n "$(printf '%s\n' "$hostless" | grep -v '^http_status:404$' | grep -v '^$' || true)" ]; then
-    bad "$label has a HOSTLESS ingress rule that is not http_status:404 — it would answer for the retired domain: $(printf '%s' "$hostless" | tr '\n' ' ')"
-  else
-    note "OK   $label has no hostless rule other than the terminal 404"
-  fi
+  # Hostless rules are legal and match EVERY hostname, so only the terminal http_status:404 may be
+  # hostless. Parse the ingress list STRUCTURALLY (a rule's fields can appear in any order across
+  # multiple lines — a line-oriented scan misses `- path: …` + `service: …` on the next line).
+  local hostless_report
+  hostless_report="$(printf '%s\n' "$cfg" | python3 -c "
+import sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    if not isinstance(rules, list): raise ValueError('ingress is not a list')
+    offenders = [r for r in rules
+                 if isinstance(r, dict) and not str(r.get('hostname', '')).strip()
+                 and str(r.get('service', '')).strip() != 'http_status:404']
+    if offenders:
+        print('OFFENDERS ' + '; '.join(repr(o) for o in offenders))
+    else:
+        print('CLEAN')
+except Exception as e:
+    print('PARSE_FAIL %s' % e)
+" 2>/dev/null)"
+  case "$hostless_report" in
+    CLEAN) note "OK   $label has no hostless rule other than the terminal 404" ;;
+    OFFENDERS*) bad "$label has HOSTLESS ingress rule(s) that are not http_status:404 — they answer for EVERY hostname incl. the retired domain: ${hostless_report#OFFENDERS }" ;;
+    *) bad "$label: could not structurally parse the ingress list to prove no hostless rule ($hostless_report)" ;;
+  esac
 }
 if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   scan_config_for_retired "live tunnel config" "$live_raw"
@@ -423,16 +440,51 @@ if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
       diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
     fi
   }
+  # Structural parse of the FULL rules array: a rule with NO host matches every hostname, and a
+  # host-only extraction (sed/jsonpath) silently omits it — so count rules and demand each has one.
+  ing_structural() {  # label, yaml-or-json text
+    printf '%s\n' "$2" | python3 -c "
+import sys, yaml
+try:
+    hosts, hostless = [], 0
+    for doc in yaml.safe_load_all(sys.stdin):   # JSON is valid YAML, so one parser covers both
+        if not isinstance(doc, dict): continue
+        if doc.get('kind') == 'List':
+            docs = doc.get('items') or []
+        else:
+            docs = [doc]
+        for d in docs:
+            if not isinstance(d, dict) or d.get('kind') != 'Ingress': continue
+            for r in (d.get('spec') or {}).get('rules') or []:
+                h = str((r or {}).get('host', '')).strip()
+                if h: hosts.append(h.lower())
+                else: hostless += 1
+    if hostless: print('HOSTLESS %d' % hostless)
+    else: print('HOSTS ' + ' '.join(sorted(set(hosts))))
+except Exception as e:
+    print('PARSE_FAIL %s' % e)
+" 2>/dev/null
+  }
   if [ ! -r "$ING_FILE" ]; then
     bad "repo keycloak-ingress.yaml not readable at $ING_FILE — cannot prove ingress retirement"
   else
-    ing_hostset_check "repo keycloak-ingress.yaml" "$(sed -n 's/^[[:space:]]*-[[:space:]]*host:[[:space:]]*//p' "$ING_FILE" | tr -d "\"'" | tr '\n' ' ')"
+    rep="$(ing_structural "repo keycloak-ingress.yaml" "$(cat "$ING_FILE")")"
+    case "$rep" in
+      HOSTS*) ing_hostset_check "repo keycloak-ingress.yaml" "${rep#HOSTS }" ;;
+      HOSTLESS*) bad "repo keycloak-ingress.yaml has ${rep#HOSTLESS } rule(s) with NO host — such a rule matches EVERY hostname, including the retired domain" ;;
+      *) bad "repo keycloak-ingress.yaml: could not structurally parse spec.rules ($rep)" ;;
+    esac
   fi
-  live_ing_hosts="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get ingress oe-keycloak -o jsonpath='{.spec.rules[*].host}' 2>/dev/null")"
-  if [ -z "$live_ing_hosts" ]; then
-    unavailable "could not read the live oe-keycloak Ingress host set"
+  live_ing_json="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get ingress oe-keycloak -o json 2>/dev/null")"
+  if [ -z "$live_ing_json" ]; then
+    unavailable "could not read the live oe-keycloak Ingress"
   else
-    ing_hostset_check "live oe-keycloak" "$live_ing_hosts"
+    rep="$(ing_structural "live oe-keycloak" "$live_ing_json")"
+    case "$rep" in
+      HOSTS*) ing_hostset_check "live oe-keycloak" "${rep#HOSTS }" ;;
+      HOSTLESS*) bad "live oe-keycloak Ingress has ${rep#HOSTLESS } rule(s) with NO host — such a rule matches EVERY hostname, including the retired domain" ;;
+      *) bad "live oe-keycloak Ingress: could not structurally parse spec.rules ($rep)" ;;
+    esac
   fi
 fi
 

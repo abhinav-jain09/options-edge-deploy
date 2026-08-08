@@ -178,7 +178,12 @@ What Phase 3 removes (this change-set):
    The acceptance gate compares these sets exactly, so a slip is caught immediately — but re-read
    the output above before moving on, because a wrong replacement here breaks login on the NEW
    domain too.
-4. **Cloudflare — the DNS handoff that actually frees the domain** (operator, dashboard):
+4. **Accept BEFORE the one-way step** — `timeout 600 scripts/ops/verify-prod-tunnel.sh` (defaults
+   to `--phase retired`) must be fully green FIRST, and smoke the new domain (login + boards).
+   Nothing in that gate depends on old-domain DNS, so everything it can catch — a stale live
+   Ingress rule, a leftover origin, a wrong realm set, a hostless/wildcard tunnel rule — must be
+   caught while ordinary rollback is still available.
+5. **Cloudflare — the DNS handoff that actually frees the domain** (operator, dashboard):
    in zone `fullfunding.nl`, DELETE the `@`, `es` and `auth` records that point at
    `976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com` (or repoint them at whatever new
    application takes the domain). Removing our ingress rules only makes the tunnel answer 404 —
@@ -186,15 +191,25 @@ What Phase 3 removes (this change-set):
    Evidence for the record: a dashboard screenshot or `dig +short <host>` showing no
    Cloudflare-proxied answer for our tunnel, kept with this migration's notes. `bleadingoptions.com`
    keeps its three proxied CNAMEs.
-5. **Accept** — `timeout 600 scripts/ops/verify-prod-tunnel.sh` (defaults to `--phase retired`)
-   fully green: it proves absence in every config we own AND asks cloudflared itself that each
-   retired URL resolves to `http_status:404`.
+6. **Re-accept after the handoff** — run the same gate once more (it proves absence in every
+   config we own AND asks cloudflared itself that each retired URL resolves to `http_status:404`)
+   and record the DNS evidence from step 5 alongside it.
 
-### Rollback boundary (one-way after step 4)
+### Rollback boundary (one-way after the DNS handoff)
 
-Before step 4, rollback is the ordinary revert-and-redeploy, and the tunnel backup taken in step 1
-may be restored. **After the DNS handoff, the old ingress rules must NEVER be restored** — that
-domain may already serve someone else's application, and re-adding those hostnames would hijack
-their traffic. Any post-handoff rollback stays retired-edge-safe: revert workload/realm changes
-only, never the tunnel hostnames. Delete the pre-Phase-3 tunnel backup once step 5 is green so it
-cannot be restored by reflex.
+Before the handoff (steps 1-4) rollback is the ordinary revert-and-redeploy, and the tunnel backup
+taken in step 1 may be restored.
+
+**After the handoff there is no rollback that re-admits `fullfunding.nl` — in ANY surface.** That
+domain may already serve someone else's application, so re-adding it would not merely be untidy:
+- restoring the tunnel hostnames would hijack their HTTP traffic;
+- restoring the old Keycloak redirect URIs / web origins would let a page on THEIR domain start an
+  OIDC flow against our realm and receive tokens;
+- restoring the old gateway `WS_ALLOWED_ORIGINS` would let their page open our authenticated
+  WebSocket;
+- restoring the old Ingress host would route their Host header into Keycloak.
+
+So post-handoff recovery is **fix-forward with new-domain-only configuration**: revert a workload
+to a previous IMAGE if needed, but never to a config revision that names the retired domain. Delete
+the pre-Phase-3 tunnel backup once the gate is green (step 6) so it cannot be restored by reflex,
+and note that the `retired` gate fails loudly if any surface re-acquires that domain.
