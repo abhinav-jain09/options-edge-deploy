@@ -152,7 +152,13 @@ OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath
 kubectl $KT -n options-edge create configmap kc-rotation-lock \
   --from-literal=holder="$(whoami)@$(hostname) $$ $(date -u +%Y%m%dT%H%M%SZ)" \
   || { echo "ABORT: another rotation holds kc-rotation-lock (kubectl -n options-edge get configmap kc-rotation-lock -o yaml to see who) — nothing was changed" >&2; exit 7; }
-release_lock() { kubectl $KT -n options-edge delete configmap kc-rotation-lock --ignore-not-found >/dev/null 2>&1 || true; }
+release_lock() {  # bounded AND verified — a silently surviving lock would block the next rotation
+  kubectl $KT -n options-edge delete configmap kc-rotation-lock --ignore-not-found >/dev/null 2>&1
+  if kubectl $KT -n options-edge get configmap kc-rotation-lock >/dev/null 2>&1; then
+    echo "WARNING: kc-rotation-lock could NOT be deleted — remove it by hand before the next rotation" >&2
+    return 1
+  fi
+}
 # Persist BOTH candidates (0600, verified) BEFORE the first mutation: an interrupt or crash after
 # Keycloak commits but before the Secret reconciles must never orphan the only usable credential.
 # The file outlives every failure path and is shredded ONLY after the end-state proof.
@@ -212,14 +218,18 @@ indeterminate() {  # the rescue file was verified-written BEFORE the first mutat
   echo "  kc-rotation-lock is RETAINED so nobody races your manual reconciliation — delete it when done" >&2
   exit 3
 }
-shred_rescue() {  # only after an end-state proof; VERIFIED destruction, and the trap is retired
+shred_rescue() {  # only after an end-state proof; VERIFIED destruction
   if command -v shred >/dev/null; then shred -u "$RESCUE"
   else dd if=/dev/urandom of="$RESCUE" bs=1k count=1 conv=notrunc 2>/dev/null; rm -f "$RESCUE"; fi
   if [ -e "$RESCUE" ]; then
     echo "WARNING: rescue file could NOT be destroyed — remove $RESCUE by hand before leaving" >&2
     return 1
   fi
-  trap - INT TERM   # candidates no longer exist on disk; the announcement would now be false
+}
+post_consistency_traps() {  # the mid-rotation messages would now LIE (state is consistent; the
+  # remaining risk is only incomplete cleanup) — swap them the moment consistency is proven.
+  trap 'echo "signal during CLEANUP: rotation state is already CONSISTENT — verify by hand that $RESCUE is destroyed and kc-rotation-lock is deleted" >&2; exit 130' INT
+  trap 'echo "signal during CLEANUP: rotation state is already CONSISTENT — verify by hand that $RESCUE is destroyed and kc-rotation-lock is deleted" >&2; exit 143' TERM
 }
 
 if ! kc_setpw "$OLD_PW" "$NEW_PW"; then
@@ -244,14 +254,20 @@ if [ "$TARGET" = "$OLD_PW" ]; then
   # Consistent, but NOT rotated — the write never took. End state is proven, so the rescue file
   # (which holds the unused NEW value) is shredded; exit nonzero so nothing upstream treats this
   # safe-rollback state as a completed rotation; retry the sequence.
-  release_lock             # state proven consistent — the fence has done its job
-  shred_rescue || exit 5   # exit 5: state consistent but credential material left on disk
+  post_consistency_traps
+  cleanup_rc=0
+  release_lock || cleanup_rc=8   # exit 8: consistent, but the lock survived — clear it by hand
+  shred_rescue || cleanup_rc=5   # exit 5: consistent, but credential material left on disk
   echo "rotation DID NOT complete: converged back on the OLD password (consistent; retry needed)" >&2
+  [ "$cleanup_rc" != "0" ] && exit "$cleanup_rc"
   exit 4
 fi
-release_lock
-shred_rescue || exit 5   # exit 5: rotation done but credential material left on disk — clean up first
+post_consistency_traps
+cleanup_rc=0
+release_lock || cleanup_rc=8   # exit 8: rotated, but the lock survived — clear it by hand
+shred_rescue || cleanup_rc=5   # exit 5: rotated, but credential material left on disk
 echo "rotation converged on the NEW password"
+[ "$cleanup_rc" != "0" ] && exit "$cleanup_rc"
 # final gate — pass the CURRENT migration phase explicitly (dual | redirect | retired):
 timeout 600 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>
 ```
