@@ -858,10 +858,12 @@ def close_smoke_bugs(w):
     closed, stuck = 0, []
     for bug_id in w.filed:
         try:
-            status, resolution, issue_type, _ = w.state_of(bug_id)
+            status, resolution, product, _ = w.state_of(bug_id)
             if status in ("RESOLVED", "VERIFIED") and resolution:
                 closed += 1
                 continue
+            # state_of() reports the PRODUCT; the type is derived from it.
+            issue_type = w.state["product_type"].get(product)
             wanted = "INVALID" if issue_type == "BUG" else "REJECTED"
             code, body = w.move(bug_id, status="RESOLVED", resolution=wanted)
             if code < 400 and not body.get("error"):

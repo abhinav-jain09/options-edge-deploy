@@ -151,6 +151,11 @@ my $json_text = do {
 };
 my $STATE = JSON::PP->new->relaxed->decode($json_text);
 
+# Tells the extension this really is a provisioning run, so that a missing
+# cf_category means "not provisioned yet" rather than "someone deleted the
+# anchor". Nothing else may claim it.
+BEGIN { $ENV{BUGZILLA_ITW_BOOTSTRAP} = 1 }
+
 Bugzilla->usage_mode(USAGE_MODE_CMDLINE);
 my $dbh = Bugzilla->dbh;
 
@@ -349,6 +354,16 @@ sub validate_extension_agreement {
         . ($product_type->{$product} // 'undef')
         . "', expected '$STATE->{product_type}{$product}'")
       if ($product_type->{$product} // '') ne $STATE->{product_type}{$product};
+  }
+
+  my $type_by_id = EXTENSION->PRODUCT_TYPE_ID;
+  my $want_by_id = $STATE->{product_type_id};
+  fatal('extension PRODUCT_TYPE_ID covers a different set of product ids')
+    if keys %$type_by_id != keys %$want_by_id;
+  foreach my $id (sort keys %$want_by_id) {
+    fatal("extension PRODUCT_TYPE_ID[$id] is '"
+        . ($type_by_id->{$id} // 'undef') . "', expected '$want_by_id->{$id}'")
+      if ($type_by_id->{$id} // '') ne $want_by_id->{$id};
   }
 
   my $initial = EXTENSION->INITIAL_STATUS;
@@ -582,6 +597,17 @@ sub preflight {
           . 'Move them to another product (or delete them) first.')
         if $count;
     }
+  }
+
+  foreach my $spec (@{$STATE->{products}}) {
+    my $product = Bugzilla::Product->new({name => $spec->{name}}) or next;
+    my $want = $STATE->{product_type_id}{$product->id};
+    fatal("product '$spec->{name}' has id " . $product->id
+        . ", which expected-state.json maps to '"
+        . (defined $want ? $want : 'nothing')
+        . "' rather than '$spec->{issue_type}'. The type is bound to the id as "
+        . 'well as the name, so this mismatch must be resolved by hand.')
+      if !defined $want || $want ne $spec->{issue_type};
   }
 
   audit_existing_bugs(\%renamed_from);

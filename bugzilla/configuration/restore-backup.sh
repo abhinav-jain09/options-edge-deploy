@@ -137,20 +137,26 @@ docker exec "$WEB" chown www-data:www-data /var/www/html/data/params.json
 
 echo "==> restarting the web tier and waiting for it to answer"
 docker restart "$WEB" >/dev/null
+apache_stopped=0   # it is running again; the trap must not claim otherwise
 for _ in $(seq 1 60); do
-  if docker exec "$WEB" sh -c 'command -v curl >/dev/null 2>&1' \
-     && docker exec "$WEB" curl -fsS -o /dev/null http://localhost/rest/version 2>/dev/null; then
+  # Any HTTP response proves Apache and Bugzilla are up. requirelogin=1 makes
+  # an unauthenticated /rest/version return 401, which is a perfectly good
+  # liveness signal - demanding 200 here would fail a healthy instance.
+  if docker exec "$WEB" sh -c \
+       'curl -s -o /dev/null -w "%{http_code}" http://localhost/rest/version 2>/dev/null' \
+       | grep -Eq '^(200|401|403)$'; then
     healthy=1; break
   fi
   sleep 2
 done
-[ "${healthy:-0}" = "1" ] || {
-  echo "FATAL: the web tier did not answer /rest/version within 120s." >&2
-  echo "       The data is restored but the instance is not serving; investigate before" >&2
-  echo "       telling anyone the restore succeeded." >&2
+if [ "${healthy:-0}" != "1" ]; then
+  echo "FATAL: the web tier did not respond within 120s after restart." >&2
+  echo "       The DATA IS RESTORED, but the instance is not serving. Apache is" >&2
+  echo "       RUNNING - stop it yourself if you need the instance dark:" >&2
+  echo "         docker exec $WEB apachectl stop" >&2
   exit 1
-}
-echo "    /rest/version answered"
+fi
+echo "    the web tier responded"
 
 restored=1
 echo

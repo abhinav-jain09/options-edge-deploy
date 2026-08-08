@@ -8,7 +8,14 @@
     "already exist and OptionsEdge holds 177 live bugs created 2026-06-11..2026-08-03. Two hard",
     "constraints follow from that, and they shape everything below:",
     "  1. the four existing products are adopted, not replaced;",
-    "  2. NOTHING may write to an existing bug row.",
+    "  2. no existing bug's DATA may be modified.",
+    "",
+    "Constraint 2 stated precisely, because the difference matters: applying this configuration",
+    "changes no value of any existing bug. It does add two nullable columns to the bugs table",
+    "(Bugzilla::Field->create issues ALTER TABLE), which existing rows acquire as empty - and,",
+    "depending on the MariaDB version and the DDL algorithm chosen, that ALTER may rebuild the",
+    "table physically. What it never does is change a status, resolution, product or any other",
+    "field of a bug that already exists.",
     "",
     "Constraint 2 is why there is no cf_issue_type (a mandatory select over a populated table",
     "gives every existing row the '---' sentinel) and why CONFIRMED/IN_PROGRESS are NOT renamed",
@@ -46,6 +53,19 @@
     "Fullfunding": "BUG",
     "OptionsEdge Requirements": "REQUIREMENT",
     "Fullfunding Requirements": "REQUIREMENT"
+  },
+  "_product_type_id_comment": [
+    "Product NAMES are mutable, so a name-only map can be subverted: rename OptionsEdge aside,",
+    "rename a requirement product into its place, rename back, and 177 bugs are derived as",
+    "REQUIREMENTs without a single bug row changing. The id cannot be edited from the admin UI,",
+    "so name and id must BOTH agree or the installation goes fail-closed.",
+    "These ids are installation-specific by nature; this repository configures one installation."
+  ],
+  "product_type_id": {
+    "1": "BUG",
+    "2": "REQUIREMENT",
+    "3": "BUG",
+    "4": "REQUIREMENT"
   },
 
   "fields": {
@@ -119,8 +139,8 @@
   "_statuses_comment": [
     "The BUG branch keeps Bugzilla's stock names. Renaming CONFIRMED/IN_PROGRESS would be an",
     "UPDATE against the 80 live bugs sitting on them (Field/Choice.pm:158), which the no-touch",
-    "constraint forbids. Only the four REQ_* statuses are new, so applying this writes nothing",
-    "to the bugs table at all.",
+    "constraint forbids. Only the four REQ_* statuses are new, so no bug's status value is",
+    "touched.",
     "The REQ_ prefix still makes a cross-branch status obvious to a human; the extension is what",
     "makes it impossible. Existing sortkeys are kept exactly as they are (100/200/300/400/500) so",
     "no existing row is rewritten; the new REQ_* statuses take 600-900.",
@@ -146,7 +166,7 @@
     "'' (empty from) is the bug-creation row (status_workflow.old_status IS NULL).",
     "Every status must be able to reach duplicate_or_move_bug_status (RESOLVED), otherwise",
     "Bugzilla::Status::add_missing_bug_status_transitions() re-adds the row behind our back.",
-    "Rewriting this table does NOT touch bug rows."
+    "Rewriting status_workflow does NOT touch bug rows."
   ],
   "workflow": [
     {"from": "",                "to": "UNCONFIRMED",     "require_comment": false},

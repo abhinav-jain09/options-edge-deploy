@@ -58,6 +58,21 @@ use constant PRODUCT_TYPE => {
   'Fullfunding Requirements' => 'REQUIREMENT',
 };
 
+# Product NAMES are mutable, so a name-only map can be subverted: rename
+# OptionsEdge aside, rename a requirement product into its place, rename back,
+# and 177 bugs are silently derived as REQUIREMENTs without a single bug row
+# changing. Binding the id as well makes that trip the fail-closed state,
+# because the id cannot be edited from the admin UI.
+#
+# These ids are installation-specific by nature - this repository configures one
+# installation, and expected-state.json already declares its exact topology.
+use constant PRODUCT_TYPE_ID => {
+  1 => 'BUG',
+  2 => 'REQUIREMENT',
+  3 => 'BUG',
+  4 => 'REQUIREMENT',
+};
+
 use constant INITIAL_STATUS => {BUG => 'UNCONFIRMED', REQUIREMENT => 'REQ_DRAFT',};
 
 # The BUG branch keeps Bugzilla's stock status names. Renaming them would be an
@@ -166,7 +181,12 @@ sub _enforcement_state {
 
   my $state;
   if (!Bugzilla::Field->new({name => CATEGORY_FIELD})) {
-    $state = i_am_cgi() ? 'broken' : 'off';
+
+    # Bootstrap has to be claimed explicitly. Treating "not a CGI request" as
+    # bootstrap would leave email-in, cron and every other command-line path
+    # unenforced the moment somebody deleted the field.
+    $state
+      = (!i_am_cgi() && $ENV{BUGZILLA_ITW_BOOTSTRAP}) ? 'off' : 'broken';
   }
   else {
     $state = model_is_complete() ? 'on' : 'broken';
@@ -192,9 +212,15 @@ sub model_is_complete {
   # Optional by design: this is what leaves the pre-existing bugs alone.
   return 0 if $field->is_mandatory;
 
+  # Name AND id must agree, or a rename could re-type existing items.
+  my $mapped = 0;
   foreach my $name (keys %{(PRODUCT_TYPE)}) {
-    return 0 if !Bugzilla::Product->new({name => $name});
+    my $product = Bugzilla::Product->new({name => $name}) or return 0;
+    my $by_id = PRODUCT_TYPE_ID->{$product->id};
+    return 0 if !defined $by_id || $by_id ne PRODUCT_TYPE->{$name};
+    $mapped++;
   }
+  return 0 if $mapped != keys %{(PRODUCT_TYPE_ID)};
 
   my %live;
   foreach my $choice (@{Bugzilla::Field::Choice->type(CATEGORY_FIELD)->match({})}) {
@@ -262,10 +288,15 @@ sub _type_of_product_name {
   return PRODUCT_TYPE->{$name};
 }
 
+# Resolved from the id, with the name required to agree. model_is_complete()
+# has already established that they do; this is belt and braces on the hot path.
 sub _type_of_bug {
   my ($bug) = @_;
-  my $product = eval { $bug->product_obj };
-  return _type_of_product_name($product ? $product->name : undef);
+  my $product = eval { $bug->product_obj } or return undef;
+  my $by_id   = PRODUCT_TYPE_ID->{$product->id};
+  my $by_name = PRODUCT_TYPE->{$product->name};
+  return undef if !defined $by_id || !defined $by_name || $by_id ne $by_name;
+  return $by_id;
 }
 
 # A category is valid for a type only if the compiled-in vocabulary and the live
