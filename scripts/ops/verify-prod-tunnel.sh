@@ -1078,6 +1078,47 @@ EOF_CM
   [ "$cm_rows" = "5" ] || bad "realm configmap verification produced $cm_rows/5 records — parser output truncated"
 fi
 
+# 6f. the realm-wide invariant: NO client in ANY live realm may name a retired hostname ----------
+# The per-client set checks above cover the two clients we manage; the runbook's claim ("the realm
+# issues nothing for the retired domain") is realm-WIDE. A stale/hand-made public client with
+# redirectUris on the retired host would let its next owner complete an auth-code flow and receive
+# the code at a hostname they control. This is finite enumeration of OUR OWN state.
+if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
+  realm_wide="$(printf '%s' "$(prod_kubectl "get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}'" | base64 -d)" | run_stdin "kubectl $KEXEC_OPTS -n $NS exec -i deploy/oe-keycloak -- sh -c 'IFS= read -r KC_PW; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$KC_PW\" >/dev/null 2>&1 && for R in \$(/opt/keycloak/bin/kcadm.sh get realms --fields realm --format csv --noquotes 2>/dev/null); do echo \"REALM \$R\"; /opt/keycloak/bin/kcadm.sh get clients -r \"\$R\" --fields clientId,redirectUris,webOrigins,attributes 2>/dev/null; done'")"
+  if [ -z "$realm_wide" ]; then
+    unavailable "could not enumerate realms/clients for the realm-wide retirement check"
+  else
+    hits="$(printf '%s\n' "$realm_wide" | grep -oiE "https?://[^\"',[:space:]]*" | sort -u | while read -r u; do
+      for sfx in $(retired_suffixes); do
+        printf '%s' "$u" | grep -qiE "://([^/]*\.)?$(printf '%s' "$sfx" | sed 's/\./\\./g')(/|:|$)" && printf '%s\n' "$u"
+      done
+    done | sort -u)"
+    if [ -n "$hits" ]; then
+      bad "LIVE Keycloak still references the retired domain in some client (realm-wide scan): $(printf '%s' "$hits" | tr '\n' ' ')"
+    else
+      note "OK   no client in any live realm references the retired domain (realm-wide scan)"
+    fi
+  fi
+
+  # 6g. the DEPLOYED realm import ConfigMap — if common-infra-deploy did not land, a later DB
+  # recreation would re-import stale redirect URIs and silently restore the retired domain.
+  live_cm="$(prod_kubectl "get configmap oe-keycloak-realm -o jsonpath='{.data}'")"
+  if [ -z "$live_cm" ]; then
+    unavailable "could not read the LIVE oe-keycloak-realm ConfigMap"
+  else
+    cm_hits="$(printf '%s\n' "$live_cm" | grep -oiE "https?://[^\"',[:space:]]*" | sort -u | while read -r u; do
+      for sfx in $(retired_suffixes); do
+        printf '%s' "$u" | grep -qiE "://([^/]*\.)?$(printf '%s' "$sfx" | sed 's/\./\\./g')(/|:|$)" && printf '%s\n' "$u"
+      done
+    done | sort -u)"
+    if [ -n "$cm_hits" ]; then
+      bad "the DEPLOYED oe-keycloak-realm ConfigMap still names the retired domain (a DB recreate would re-import it): $(printf '%s' "$cm_hits" | tr '\n' ' ')"
+    else
+      note "OK   the deployed realm import ConfigMap names no retired hostname"
+    fi
+  fi
+fi
+
 # 7. the web surface itself: page serves, and the REST API refuses anonymous callers ------------
 for h in $SERVE_APEX $SERVE_ES; do
   code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$h/" 2>/dev/null)"

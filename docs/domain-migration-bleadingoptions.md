@@ -199,15 +199,28 @@ What Phase 3 removes (this change-set):
    one page proves nothing. Use an exact content filter and assert zero matches:
 
    ```sh
-   curl -s -H "Authorization: Bearer $CF_TOKEN" \
-     "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?content=976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com&per_page=100" \
+   # content.exact is the documented exact-match filter; a bare ?content= is a contains-style
+   # search whose semantics have changed across API versions. Ask for BOTH forms and take the
+   # larger count — a filter that silently matches nothing must not read as "clean".
+   for q in "content.exact=976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com" \
+            "content=976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com"; do
+     curl --fail-with-body -sS -H "Authorization: Bearer $CF_TOKEN" \
+       "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?$q&per_page=100" \
+       | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; \
+          print('$q ->', d['result_info']['total_count'], 'match(es)')"
+   done
+   # ALSO list the zone's records unfiltered and eyeball the three names — the filter is a
+   # convenience, the record list is the evidence.
+   curl --fail-with-body -sS -H "Authorization: Bearer $CF_TOKEN" \
+     "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?per_page=100" \
      | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; \
-        print('MATCHES', d['result_info']['total_count']); sys.exit(0 if d['result_info']['total_count']==0 else 1)"
+        [print(r['type'], r['name'], '->', r['content']) for r in d['result']]"
    ```
 
-   `success: true` **and** `total_count == 0` is the acceptance evidence (keep the output). If you
-   use the dashboard instead, filter the DNS tab by that tunnel target and screenshot the complete
-   filtered result — not one unfiltered page.
+   Acceptance evidence: `success: true`, **zero matches on both filter forms**, and a printed
+   record list in which `@`, `es` and `auth` no longer point at
+   `976f76d2-…cfargotunnel.com` (keep the output). If you use the dashboard instead, screenshot
+   the zone's full DNS tab, not a filtered page.
 
    **What actually makes this safe — and what does not.** It is tempting to try to *prove absence*
    by enumerating every Cloudflare object that could still route the retired zone to us: rulesets,
