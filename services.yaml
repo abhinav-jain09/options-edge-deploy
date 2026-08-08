@@ -14,6 +14,13 @@
 # image:      the image basename in the env registry (oeProfile prepends the registry).
 # managedBy:  standalone = has its own <svc>-deploy fast path;
 #             monolith   = still deployed by the monolithic options-edge-deploy.
+# namespace:  WHICH APPLICATION the service belongs to. Optional; unset means `options-edge`,
+#             so every pre-existing entry keeps its behaviour and nothing needs back-filling.
+#             Set it to `fullfunding` (or a future tenant) and service-deploy applies there
+#             instead — the build reads this rather than assuming, and refuses if the rendered
+#             manifests disagree with what is registered here.
+#             The namespace itself is created by its own tenant/infra job, never by a service
+#             deploy: see k8s/tenants/<tenant>/bootstrap.
 # Migration COMPLETE for the processing repo (2026-07-02): every processing service is
 # standalone. sliceGenerated entries get their overlays from
 # scripts/deploy/generate-service-slices.sh (the monolith render of just that service —
