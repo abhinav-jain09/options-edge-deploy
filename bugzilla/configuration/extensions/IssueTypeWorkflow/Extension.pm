@@ -208,10 +208,18 @@ sub _enforcement_state {
   return $cache->{itw_state} = $state;
 }
 
-# Every part of the model the policy depends on. Checking only that a couple of
-# objects exist would leave most broken installations classified 'on': a
-# re-pointed category, a flipped is_open, a deleted creation edge or an
-# editworkflow.cgi shortcut would all still look "complete".
+# Everything that can change what the policy PERMITS - and deliberately not
+# more. A re-pointed category, a flipped is_open, a deleted creation edge or an
+# editworkflow.cgi shortcut all change what is allowed, so all of them are
+# checked. Cosmetics (descriptions, sort keys, buglist flags) cannot, so they
+# are left to the provisioner's zero-change dry run rather than paid for on
+# every request.
+#
+# Undeclared statuses, resolutions and products are not checked either, because
+# they cannot widen anything: the workflow matrix is pinned exactly, so an extra
+# status is unreachable; an extra resolution is refused by ALLOWED_RESOLUTIONS;
+# and an item in an unmapped product has no type, so its guarded fields are
+# frozen. The provisioner still refuses to run while any of them exist.
 #
 # Public because setup-projects.pl calls it to prove, inside a transaction it
 # then rolls back, that damage really does trip 'broken'.

@@ -54,6 +54,12 @@ done
   exit 1
 }
 echo "    no Apache processes remain"
+echo
+echo "NOTE: this excludes Apache only. --single-transaction gives a consistent"
+echo "      snapshot of InnoDB tables, but any OTHER writer - email-in, cron,"
+echo "      a job queue, someone on the Bugzilla CLI - is neither stopped nor"
+echo "      detected here. Stop them yourself if this installation has them."
+echo
 
 echo "==> checking the database exists"
 DBNAME=$(docker exec "$DB" sh -c 'printf %s "$BZ_DB_NAME"')

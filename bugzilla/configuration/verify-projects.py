@@ -221,19 +221,30 @@ class Bz:
 # structural
 # --------------------------------------------------------------------------
 
+def ok_response(name, status, body, key):
+    """Structural absence and equality only mean something when the response
+    actually succeeded and carries the shape we expect."""
+    return check(f"{name}: response is usable",
+                 status < 400 and isinstance(body, dict) and key in body,
+                 f"HTTP {status}: {json.dumps(body)[:200]}")
+
+
 def verify_version(bz, state):
     print("\n[1] Bugzilla version")
-    _, body = bz.get("/version")
-    eq("version", body.get("version"), state["bugzilla_version"])
+    status, body = bz.get("/version")
+    if ok_response("version", status, body, "version"):
+        eq("version", body.get("version"), state["bugzilla_version"])
 
 
 def verify_parameters(bz, state):
     print("\n[2] Parameters")
     status, body = bz.get("/parameters")
-    params = body.get("parameters")
+    if not ok_response("parameters", status, body, "parameters"):
+        return
+    params = body["parameters"]
     if not check("parameters readable (API key needs tweakparams/admin)",
                  isinstance(params, dict) and params,
-                 f"HTTP {status}: {json.dumps(body)[:200]}"):
+                 f"got {json.dumps(body)[:200]}"):
         return
     for name, want in state["params"].items():
         if name not in params:
@@ -257,12 +268,23 @@ def verify_products(bz, state, require_decommissioned):
     print("\n[3] Products, components, versions, milestones")
     for spec in state["products"]:
         name = spec["name"]
-        _, body = bz.get("/product?names=" + urllib.parse.quote(name))
-        products = body.get("products") or []
+        status, body = bz.get("/product?names=" + urllib.parse.quote(name))
+        if not ok_response(f"product '{name}'", status, body, "products"):
+            continue
+        products = body["products"]
         if not check(f"product '{name}' exists", len(products) == 1,
                      json.dumps(body)[:300]):
             continue
         product = products[0]
+
+        # R7-13: the type is bound to the product id, so the id is part of the
+        # declared state and has to be asserted, not assumed.
+        eq(f"product '{name}' id", str(product.get("id")),
+           next((pid for pid, t in state["product_type_id"].items()
+                 if str(product.get("id")) == pid), None))
+        eq(f"product '{name}' id maps to its type",
+           state["product_type_id"].get(str(product.get("id"))),
+           spec["issue_type"])
 
         eq(f"product '{name}' description", product.get("description"),
            spec["description"])
@@ -344,7 +366,7 @@ def verify_nothing_undeclared(bz, state, fields):
 
 def fields_by_name(bz):
     status, body = bz.get("/field/bug")
-    if "fields" not in body:
+    if status >= 400 or not isinstance(body.get("fields"), list):
         raise BzTransportError(
             f"cannot read /rest/field/bug (HTTP {status}): {json.dumps(body)[:300]}")
     return {f["name"]: f for f in body["fields"]}
@@ -899,12 +921,28 @@ def close_smoke_bugs(w):
     closed, stuck = 0, []
     for bug_id in w.filed:
         try:
-            status, resolution, product, _ = w.state_of(bug_id)
+            status, resolution, product, category = w.state_of(bug_id)
+            issue_type = w.state["product_type"].get(product)
+
+            # Closed is not enough: if a negative probe unexpectedly SUCCEEDED,
+            # the malformed bug it produced would look tidy and be left behind.
+            valid = (
+                issue_type is not None
+                and status in w.enf["allowed_statuses"][issue_type]
+                and (not resolution
+                     or resolution in w.enf["allowed_resolutions"][issue_type])
+                and (not category
+                     or category in w.enf["allowed_categories"][issue_type]))
+            if not valid:
+                stuck.append(f"{bug_id} (policy-invalid: {product}/{status}/"
+                             f"{resolution}/{category})")
+                check(f"smoke bug {bug_id} is policy-valid", False,
+                      "a negative probe appears to have succeeded")
+                continue
+
             if status in ("RESOLVED", "VERIFIED") and resolution:
                 closed += 1
                 continue
-            # state_of() reports the PRODUCT; the type is derived from it.
-            issue_type = w.state["product_type"].get(product)
             wanted = "INVALID" if issue_type == "BUG" else "REJECTED"
             code, body = w.move(bug_id, status="RESOLVED", resolution=wanted)
             if code < 400 and not body.get("error"):

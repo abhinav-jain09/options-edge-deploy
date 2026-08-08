@@ -173,7 +173,70 @@ fatal("default assignee '$OPT{'default-assignee'}' is disabled")
 
 # Everything below runs against $STATE alone. A typo in the SSOT must be caught
 # here, not half way through a mutation.
+sub _require {
+  my ($value, $kind, $where) = @_;
+  fatal("$where is missing") if !defined $value;
+  my $got = ref($value) || 'SCALAR';
+  fatal("$where must be $kind, got $got")
+    if ($kind eq 'ARRAY' && $got ne 'ARRAY')
+    || ($kind eq 'HASH'  && $got ne 'HASH')
+    || ($kind eq 'SCALAR' && $got ne 'SCALAR');
+  return $value;
+}
+
+# JSON booleans arrive as JSON::PP::Boolean objects, plain scalars as strings.
+# Perl truthiness would quietly accept "false" as true, so be explicit.
+sub _bool {
+  my ($value, $where) = @_;
+  fatal("$where is missing") if !defined $value;
+  return $value ? 1 : 0 if ref($value) eq 'JSON::PP::Boolean';
+  return 1 if $value eq '1' || lc("$value") eq 'true';
+  return 0 if $value eq '0' || $value eq '' || lc("$value") eq 'false';
+  fatal("$where must be a boolean, got '$value'");
+}
+
 sub validate_state {
+  # Shape first: a malformed SSOT must fail here, not half way through.
+  _require($STATE->{$_->[0]}, $_->[1], "expected-state.json: $_->[0]")
+    foreach (['bugzilla_version', 'SCALAR'], ['spec_version', 'SCALAR'],
+    ['params', 'HASH'], ['issue_types', 'ARRAY'], ['product_type', 'HASH'],
+    ['product_type_id', 'HASH'], ['fields', 'HASH'], ['statuses', 'ARRAY'],
+    ['workflow', 'ARRAY'], ['resolutions', 'ARRAY'], ['products', 'ARRAY'],
+    ['enforcement', 'HASH'], ['decommission', 'HASH']);
+
+  foreach my $id (keys %{$STATE->{product_type_id}}) {
+    fatal("product_type_id key '$id' is not a positive integer")
+      if $id !~ /\A[1-9][0-9]*\z/;
+  }
+  foreach my $spec (@{$STATE->{products}}) {
+    _require($spec->{$_}, 'SCALAR', "products[].$_")
+      foreach qw(name issue_type description classification default_milestone);
+    _require($spec->{$_}, 'ARRAY', "products[$spec->{name}].$_")
+      foreach qw(versions milestones components);
+    $spec->{is_active}          = _bool($spec->{is_active}, "products[$spec->{name}].is_active");
+    $spec->{allows_unconfirmed} = _bool($spec->{allows_unconfirmed}, "products[$spec->{name}].allows_unconfirmed");
+    foreach my $component (@{$spec->{components}}) {
+      _require($component->{$_}, 'SCALAR', "products[$spec->{name}].components[].$_")
+        foreach qw(name description);
+    }
+  }
+  foreach my $name (sort keys %{$STATE->{fields}}) {
+    my $field = $STATE->{fields}{$name};
+    _require($field->{$_}, 'SCALAR', "fields.$name.$_") foreach qw(description type sortkey);
+    _require($field->{values}, 'ARRAY', "fields.$name.values");
+    $field->{$_} = _bool($field->{$_}, "fields.$name.$_")
+      foreach qw(enter_bug buglist is_mandatory);
+  }
+  foreach my $spec (@{$STATE->{statuses}}) {
+    _require($spec->{$_}, 'SCALAR', "statuses[].$_") foreach qw(value sortkey);
+    $spec->{is_open} = _bool($spec->{is_open}, "statuses[$spec->{value}].is_open");
+    $spec->{exists}  = _bool($spec->{exists},  "statuses[$spec->{value}].exists");
+  }
+  foreach my $edge (@{$STATE->{workflow}}) {
+    _require($edge->{to}, 'SCALAR', 'workflow[].to');
+    $edge->{require_comment} = _bool($edge->{require_comment}, 'workflow[].require_comment');
+  }
+
   my %status_names;
   foreach my $spec (@{$STATE->{statuses}}) {
     fatal("duplicate status '$spec->{value}' in expected-state.json")
