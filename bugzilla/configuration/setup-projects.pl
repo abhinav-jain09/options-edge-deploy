@@ -46,6 +46,7 @@ use JSON::PP         ();
 use Bugzilla;
 use Bugzilla::Constants;
 use Bugzilla::Config qw(:admin);
+use Bugzilla::Bug;
 use Bugzilla::Component;
 use Bugzilla::Field;
 use Bugzilla::Field::Choice;
@@ -1557,6 +1558,82 @@ sub self_test_rename_guards {
   note('rename-guard self-test passed (' . scalar(@cases)
       . ' guarded object(s) refused renaming)');
   self_test_delete_guards();
+  self_test_unprivileged_filing();
+  return;
+}
+
+# The one behaviour an admin can never demonstrate by filing normally.
+#
+# Bugzilla overrides the requested initial status to UNCONFIRMED for any
+# reporter without editbugs/canconfirm (Bug.pm:1526-1536) - which is how every
+# external stakeholder files. UNCONFIRMED is a BUG-branch status, so without the
+# extension's canonicalisation their REQUIREMENTs would land on the wrong
+# lifecycle. For a privileged user core never takes that branch at all, so a
+# normal admin-filed test would pass whether or not the fix works.
+#
+# Rather than demand a second account - users come from Keycloak here, so there
+# is no Bugzilla-side account to create - drop the acting user's privileges
+# inside a transaction, file as them, check where it landed, and roll the whole
+# thing back. Nothing survives: not the bug, not the group change.
+sub self_test_unprivileged_filing {
+  return if $DRY;
+
+  my $spec = $STATE->{products}[0];
+  my $product = Bugzilla::Product->new({name => $spec->{name}})
+    or return note('unprivileged-filing self-test skipped: no product');
+
+  assert_lock_held('the unprivileged-filing self-test');
+  $dbh->bz_start_transaction();
+
+  my $landed = eval {
+
+    # editbugs arrives here through the group's userregexp, and the admin group
+    # grants both; remove all three so in_group() really is false. Only inside
+    # this transaction.
+    $dbh->do(
+      'DELETE ug FROM user_group_map ug JOIN groups g ON g.id = ug.group_id '
+        . 'WHERE ug.user_id = ? AND g.name IN (?, ?, ?)',
+      undef, $admin->id, 'editbugs', 'canconfirm', 'admin');
+
+    my $stripped = Bugzilla::User->new({id => $admin->id, cache => 0});
+    die "still privileged after stripping groups\n"
+      if $stripped->in_group('editbugs') || $stripped->in_group('canconfirm');
+    Bugzilla->set_user($stripped);
+
+    my $bug = Bugzilla::Bug->create({
+      product     => $spec->{name},
+      component   => $spec->{components}[0]{name},
+      version     => $spec->{versions}[0],
+      short_desc  => '[SELF-TEST] unprivileged REQUIREMENT filing',
+      comment     => 'Created and rolled back by setup-projects.pl.',
+      bug_severity   => 'normal',
+      op_sys         => 'Other',
+      rep_platform   => 'Other',
+      cf_issue_type  => 'REQUIREMENT',
+
+      # Ask for the BUG entry point on purpose: core would force UNCONFIRMED
+      # here anyway, and the point is that the extension corrects it.
+      bug_status => 'UNCONFIRMED',
+    });
+    $bug->status->name;
+  };
+  my $err = $@;
+
+  eval { $dbh->bz_rollback_transaction(); 1 }
+    or fatal("unprivileged-filing self-test rollback FAILED: $@");
+  Bugzilla->set_user($admin);
+  flush_caches();
+
+  fatal("unprivileged-filing self-test errored: $err") if $err;
+
+  my $want = $STATE->{enforcement}{initial_status}{REQUIREMENT};
+  fatal("unprivileged-filing self-test: a REQUIREMENT filed by an unprivileged "
+      . "reporter landed on '$landed', not '$want'. Every externally filed "
+      . 'requirement would start on the BUG lifecycle.')
+    if $landed ne $want;
+
+  note("unprivileged-filing self-test passed (REQUIREMENT landed on $landed "
+      . 'even with core forcing UNCONFIRMED; all rolled back)');
   return;
 }
 

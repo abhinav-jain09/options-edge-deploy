@@ -52,14 +52,6 @@ Everything runs on `.252`. Set these once per session:
 BZ=options-edge-bugzilla-web; ADMIN=<admin-login>
 ```
 
-**0. Prerequisite for the FIRST apply: an unprivileged reporter account.** This installation has a
-single profile today, and verification cannot prove the path external stakeholders actually use
-without a second one — a user in neither `editbugs` nor `canconfirm`, who also cannot edit other
-people's bugs through any product group grant. **Create that account yourself** (account creation is
-not something this runbook automates), give it an API key, and only then run step 5. Until it
-exists, the first apply is deliberately incomplete: `--strict` will fail rather than report success
-over an unproven path.
-
 Step **5** is the only one that changes anything: it applies the configuration and then files and
 closes smoke bugs. Steps 1, 2, 4 and 6 are read-only; step 3 backs up. Step 5 is deliberately a
 single `&&` chain, so a failure at any point stops the rest and leaves the site down.
@@ -94,13 +86,11 @@ container.
 **If it does not print `BACKUP OK`, stop — restart Apache with `docker exec $BZ apachectl start` and
 do not apply.**
 
-**4. Get two API keys into the environment** — step 5 needs both. `BZ_API_KEY` must belong to an
-admin (`requirelogin` is on, and the parameter assertions need `tweakparams`). `BZ_REPORTER_KEY`
-must belong to a user WITHOUT `editbugs`/`canconfirm` — the verifier checks that before believing
-it — because that is the only way to prove how an external stakeholder's filing actually behaves.
+**4. Get an admin API key into the environment** — step 5 needs it (`requirelogin` is on, and the
+parameter assertions need `tweakparams`).
 
 ```bash
-read -rs BZ_API_KEY && export BZ_API_KEY && read -rs BZ_REPORTER_KEY && export BZ_REPORTER_KEY
+read -rs BZ_API_KEY && export BZ_API_KEY
 ```
 
 `read -rs` keeps the key out of shell history and out of any command's argv. It is still an
@@ -114,19 +104,19 @@ takes Apache down again by itself, rather than leaving traffic flowing through u
 The provisioner refuses to run while Apache is answering on `localhost:80`, which is what guarantees
 enforcement is never observably half-installed. The restart clears any pre-change field/status
 cache. The apply ends with a self-test that deletes the bug-creation rows inside a transaction,
-checks that the extension goes fail-closed, and rolls back. Verification then **files smoke-test
+checks that the extension goes fail-closed, proves the rename and delete guards refuse, and proves
+that a REQUIREMENT filed by an *unprivileged* reporter still lands on `REQ_DRAFT` — all inside
+transactions it rolls back. That last one is the path external stakeholders use, and it cannot be
+demonstrated by filing as an admin, because core never takes the override branch for a privileged
+user. No second account is needed: the run drops its own privileges for the duration. Verification then **files smoke-test
 bugs** prefixed `[SMOKE]` and closes them again — so run this in a change window.
 
 ```bash
 docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --apply \
   && docker restart $BZ \
-  && { python3 ./verify-projects.py --state expected-state.json --reporter-api-key-env BZ_REPORTER_KEY --strict \
+  && { python3 ./verify-projects.py --state expected-state.json \
        || { echo "VERIFICATION FAILED - taking the site down again"; docker exec $BZ apachectl stop; false; }; }
 ```
-
-`--strict` and the reporter key are **mandatory for the first apply**: without them the run reports
-success while the path external stakeholders actually use — an unprivileged reporter filing a
-REQUIREMENT — is only a warning.
 
 The verifier defaults to `http://localhost:8092` and **refuses** a non-loopback plain-HTTP URL unless
 you pass `--allow-remote-http`: the endpoint speaks plain HTTP and the key travels in a header. Run

@@ -827,11 +827,11 @@ def verify_low_privilege_reporter(bz, state, w, key_env):
     """
     print("\n[10] Low-privilege reporter")
     if not key_env:
-        warn("low-privilege reporter path is NOT proven",
-             "pass --reporter-api-key-env NAME with the API key of a user "
-             "lacking editbugs/canconfirm. The admin-side probe in [8] "
-             "exercises the canonicalisation but not the privilege-dependent "
-             "override at Bug.pm:1526-1536.")
+        skip("low-privilege reporter probe",
+             "not needed: setup-projects.pl proves this transactionally by "
+             "dropping its own privileges, filing a REQUIREMENT and rolling "
+             "back. Pass --reporter-api-key-env NAME to also prove it "
+             "end-to-end with a real Keycloak-provisioned account.")
         return
 
     key = os.environ.get(key_env, "")
