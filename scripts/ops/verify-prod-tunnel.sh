@@ -38,7 +38,7 @@
 #   --selftest        run the embedded ingress-parser fixtures and exit.
 #
 # USAGE
-#   scripts/ops/verify-prod-tunnel.sh [--phase dual|redirect|retired] [--network-only]
+#   scripts/ops/verify-prod-tunnel.sh [--phase retired|rollback|dual|redirect] [--network-only]
 #   SSHOPTS="-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
 #   timeout 600 env PROD_SSH="ssh $SSHOPTS user@192.168.100.252" ES4_SSH="ssh $SSHOPTS user@192.168.100.4" \
 #     scripts/ops/verify-prod-tunnel.sh --phase …
@@ -54,7 +54,7 @@ PRECHECK=0
 PROMOTED=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --phase) PHASE="${2:?--phase needs dual|redirect|retired}"; shift 2 ;;
+    --phase) PHASE="${2:?--phase needs retired|rollback|dual|redirect}"; shift 2 ;;
     --network-only) NETWORK_ONLY=1; shift ;;
     --precheck) PRECHECK=1; shift ;;   # skip ONLY the redirect section; output stamped PRECHECK
     --promoted) PROMOTED=1; shift ;;   # redirect phase after the 307->308 promotion
@@ -62,7 +62,7 @@ while [ $# -gt 0 ]; do
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
-case "$PHASE" in dual|redirect|retired|rollback) ;; *) echo "bad --phase '$PHASE'" >&2; exit 2 ;; esac
+case "$PHASE" in dual|redirect|retired|rollback) ;; *) echo "bad --phase '$PHASE' (want retired|rollback|dual|redirect)" >&2; exit 2 ;; esac
 if [ "$NETWORK_ONLY" = "1" ] && [ "$PRECHECK" = "1" ]; then
   echo "FATAL: --network-only --precheck is meaningless — precheck exists to prove the kube/runtime contracts, which network-only skips" >&2
   exit 2
@@ -546,8 +546,11 @@ fi
 # (A live HTTP probe is deliberately NOT a failure signal here — whatever answers that domain now
 # is not ours to judge.)
 
-# 1c. retired: the legacy traefik Ingress must not route the old auth hostname either ------------
-if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
+# 1c. the legacy traefik Ingress host set — validated in the phases that make a claim about it:
+# 'retired' (only the new host may remain) and 'rollback' (the old host is legitimately back).
+# Deliberately NOT gated on ABSENT_TUNNEL_HOSTS: rollback has none, yet still needs this proof.
+case "$PHASE" in retired|rollback) ING_CHECK=1 ;; *) ING_CHECK=0 ;; esac
+if [ "$ING_CHECK" = "1" ]; then
   ING_FILE="${ING_FILE:-$(cd "$(dirname "$0")/../.." && pwd)/k8s/keycloak/keycloak-ingress.yaml}"
   # EXACT host-set equality, not absence-of-a-literal: that also rejects wildcard hosts
   # ("*.fullfunding.nl"), a hostless rule (matches every host) and any unexpected extra rule.

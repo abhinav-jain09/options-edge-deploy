@@ -1,5 +1,14 @@
 # Gate-1 — `fullfunding` tenant namespace on the prod k3s node, and the req-portal's migration into it
 
+> **⚠️ 2026-08-08 MIGRATION NOTE (added after this document was written):** every
+> `*.fullfunding.nl` hostname below is HISTORICAL — it records what was observed/planned at
+> the stated dates. The platform migrated to `bleadingoptions.com` on 2026-08-08 and
+> `fullfunding.nl` was RETIRED with no redirect (it is being reused for unrelated
+> applications), so nothing here may be used as a current routing/DNS reference and no
+> `*.fullfunding.nl` hostname may be re-added to our tunnel, Ingress, realm or WS origins.
+> If this design ever ships, substitute the `*.bleadingoptions.com` equivalents.
+> See [`domain-migration-bleadingoptions.md`](./domain-migration-bleadingoptions.md).
+
 **Status: GATE-1 REQUIREMENTS / PROPOSED — rev 8. AWAITING USER APPROVAL (gatekeeping Gate-1).
 Not implemented.**
 
@@ -103,7 +112,7 @@ disposition table; NS-19 is the clause-level completion requirement.
 
 Run a **second, unrelated project on the existing production machine** inside the same k3s cluster,
 in a dedicated namespace **`fullfunding`**, hosting the requirement-intake portal
-(`req.bleadingoptions.com` — Bugzilla + Keycloak realm `req`, designed in rev 11), with its own Postgres
+(`req.fullfunding.nl` — Bugzilla + Keycloak realm `req`, designed in rev 11), with its own Postgres
 and Kafka, sized for a **data-entry** workload.
 
 **Threat model, stated before the guarantees, because everything below depends on it.** The
@@ -158,9 +167,9 @@ loopback ports 8093/8095. This document moves the hosting model into Kubernetes.
 | NetworkPolicy objects | **none, anywhere**. `--disable-network-policy` is not set, so k3s's controller is expected to be active — **inference; enforcement is proven only by NS-V9** | `kubectl get netpol -A`; unit + config |
 | StorageClass | **one**: `local-path` (default), path `/home/options-edge/data/k3s/storage` | `kubectl get sc`; `local-path-config` |
 | IngressClass / traefik | `traefik`; LoadBalancer on `192.168.100.252:80,443` | `kubectl get ingressclass`, `svc traefik` |
-| Existing Ingress objects | one: `options-edge/oe-keycloak` → `auth.bleadingoptions.com`, path prefixes `/realms/optionsedge` and `/resources` **only** | `-o jsonpath` |
-| **The browser path to Keycloak does NOT use that Ingress** | cloudflared routes `auth.bleadingoptions.com` **directly to the Keycloak ClusterIP** `http://10.43.127.26:8080` with `httpHostHeader: auth.bleadingoptions.com`, with only `/admin` and `/realms/master` intercepted as `http_status:404`. **Every other path — including `/realms/req/*` — is forwarded**, so realm `req` needs **no change to any shared Keycloak route** | `/etc/cloudflared/options-edge-stable.yml` read 2026-08-04 |
-| ⚠️ Existing fragility this project now depends on | that route is **pinned to a ClusterIP**. Recreating the `oe-keycloak` Service changes the IP and breaks `auth.bleadingoptions.com` for the trading UI **and** the portal. Pre-existing; recorded as **R-25**, not introduced here | same |
+| Existing Ingress objects | one: `options-edge/oe-keycloak` → `auth.fullfunding.nl`, path prefixes `/realms/optionsedge` and `/resources` **only** | `-o jsonpath` |
+| **The browser path to Keycloak does NOT use that Ingress** | cloudflared routes `auth.fullfunding.nl` **directly to the Keycloak ClusterIP** `http://10.43.127.26:8080` with `httpHostHeader: auth.fullfunding.nl`, with only `/admin` and `/realms/master` intercepted as `http_status:404`. **Every other path — including `/realms/req/*` — is forwarded**, so realm `req` needs **no change to any shared Keycloak route** | `/etc/cloudflared/options-edge-stable.yml` read 2026-08-04 |
+| ⚠️ Existing fragility this project now depends on | that route is **pinned to a ClusterIP**. Recreating the `oe-keycloak` Service changes the IP and breaks `auth.fullfunding.nl` for the trading UI **and** the portal. Pre-existing; recorded as **R-25**, not introduced here | same |
 | **traefik Ingress routing works** | Host-matched `curl` → **200** | direct test |
 | Design primitives accepted by this API server | `PriorityClass value: -100`; quota keys `services.loadbalancers: "0"`, `local-path.storageclass.storage.k8s.io/persistentvolumeclaims: "0"`, `<class>.storageclass.storage.k8s.io/requests.storage` | `--dry-run=server` — **syntax/admission acceptance only, never semantics** |
 
@@ -441,7 +450,7 @@ full inventory scheduled.
 
 ### NS-5 — Exposure: platform-owned Ingress only
 - Public path: **tenant ClusterIP Service → platform-owned traefik `Ingress` → cloudflared**.
-- cloudflared rule before the catch-all: `hostname: req.bleadingoptions.com` → `http://127.0.0.1:80`.
+- cloudflared rule before the catch-all: `hostname: req.fullfunding.nl` → `http://127.0.0.1:80`.
 - **The tenant cannot create Ingress objects** — enforced by **RBAC** (NS-9 grants the tenant
   credential no Ingress verb), with the quota capped at **1** so no second Ingress can exist and
   NS-15(7) constraining the content of the one that does. rev 3's `0` quota is withdrawn: a quota
@@ -461,7 +470,7 @@ full inventory scheduled.
 - Publication order and rollback carry from rev-11 REQ-3 verbatim: DNS published last, closed first;
   rollback = (1) point the rule at `http_status:404`, (2) restart cloudflared, (3) **prove** the
   closed response, (4) remove DNS, (5) only then touch the application.
-- **The existing `auth.bleadingoptions.com` ClusterIP route is left untouched.** Its inline comment
+- **The existing `auth.fullfunding.nl` ClusterIP route is left untouched.** Its inline comment
   *"traefik :80 is broken"* is **refuted** (§2.1: Host-matched request → 200; the 404s that motivated
   it are explained by that Ingress declaring only two path prefixes). Correcting it is out of scope.
 **Acceptance:** NS-V7, NS-V21, NS-V8.
@@ -504,7 +513,7 @@ selective enforcement in the CNI, or (b) move the tenant to its own VM/node. Nei
 same-window fix, which is precisely why NS-V9 runs at §6 step 5, before anything is built on top.
 
 **OIDC back-channel under default-deny (D-5).** Under Compose the container had unrestricted egress,
-so `OIDCProviderMetadataURL https://auth.bleadingoptions.com/...` simply worked; that hostname resolves
+so `OIDCProviderMetadataURL https://auth.fullfunding.nl/...` simply worked; that hostname resolves
 to the **public Cloudflare edge**, which default-deny egress forbids.
 - **(ii), recommended — split front/back-channel.** The browser keeps the public authorization
   endpoint (rev-11 REQ-2's exact redirect URI unchanged); mod_auth_openidc's back-channel endpoints
@@ -644,7 +653,7 @@ every runtime identity):
 | 2 | **host-root** | SSH/root on `.252` | kubelet config, mount unit, loopback image, cloudflared, host backup agent, tenant-guard timer |
 | 3 | **tenant-deploy** | Jenkins SA, `Role` in `fullfunding` **+ a read-only `ClusterRole`** | mutate the tenant plane only; **read-only** `get`/`list` on PriorityClass, StorageClass, ValidatingAdmissionPolicy and Namespaces so NS-11's preflight can inspect them. **No** Ingress, NetworkPolicy or Middleware verb; no `escalate`, `bind`, `impersonate` |
 | 4 | **operator** | human break-glass kubeconfig | `get`/`list` pods + `create pods/portforward` in `fullfunding` only; separate from Jenkins |
-| 5 | **cloudflare-dns** | Cloudflare dashboard/API token | the `req.bleadingoptions.com` DNS record only |
+| 5 | **cloudflare-dns** | Cloudflare dashboard/API token | the `req.fullfunding.nl` DNS record only |
 | 6 | **keycloak-admin** | existing Keycloak admin credential | realm `req` + its client, via the existing Keycloak deploy path (NS-1(5)) |
 | 7 | **provisioner SA** | in-cluster ServiceAccount | the second local-path provisioner and its helper pods (PV/PVC verbs only) |
 | 8 | **guardrail-checker SA** | in-cluster ServiceAccount | read-only across the objects NS-11 asserts; no mutation |
@@ -772,8 +781,8 @@ so the mechanism is proven here.
   6. **deny any `emptyDir` that is not `medium: Memory`** (NS-20), and require `sizeLimit` (≤ 512Mi)
      on the tmpfs ones that remain — a disk-medium `emptyDir` writes to `/`;
   7. constrain the platform-owned `Ingress`: `ingressClassName`, an explicit non-empty host from the
-     allowlist (`req.bleadingoptions.com`; denying omitted/catch-all hosts, wildcards,
-     `bleadingoptions.com`, `auth.bleadingoptions.com`, `es.bleadingoptions.com`), path, **backend service and
+     allowlist (`req.fullfunding.nl`; denying omitted/catch-all hosts, wildcards,
+     `fullfunding.nl`, `auth.fullfunding.nl`, `es.fullfunding.nl`), path, **backend service and
      port**, the required middleware annotation, and an annotation allowlist;
   8. a **closed allowlist** of Secret names, permitted consuming workloads and permitted
      ServiceAccounts (NS-9);
@@ -793,7 +802,7 @@ policy that fails open is worse than none).
 - **Traefik `Middleware` (platform-owned, NS-1):** request-rate limit, in-flight cap, and request
   body size cap on the portal route; connection limits on both tenant databases.
 - **What this does and does not bound, stated exactly.** These limits bound load arriving **through
-  the portal route**. They do **not** bound a client hitting `auth.bleadingoptions.com` (shared Keycloak)
+  the portal route**. They do **not** bound a client hitting `auth.fullfunding.nl` (shared Keycloak)
   directly — a login storm can address Keycloak without touching the portal. Bounding that would
   require rate limiting on the Keycloak route, which is shared OptionsEdge infrastructure and out of
   scope; it is recorded as R-19 rather than claimed as solved.
@@ -993,7 +1002,7 @@ database does not honestly satisfy the requirement.
 - No change to the `optionsedge` realm, the internal Bugzilla, or any OptionsEdge workload — the
   only OptionsEdge-scoped change is the NS-15(9) admission policy, which adds a constraint and
   modifies nothing.
-- No XFS project quota on `/home`; no change to the existing `auth.bleadingoptions.com` tunnel route.
+- No XFS project quota on `/home`; no change to the existing `auth.fullfunding.nl` tunnel route.
 - No encryption-at-rest for k3s secrets (R-14); no genuine off-host backup (R-24).
 
 ## 6. Rollout sequence (fail-closed, ordered)
@@ -1002,7 +1011,7 @@ All steps run **outside** Mon–Fri 09:30–16:15 America/New_York **except the 
 and observation steps that by definition require live trading hours** (steps 1, 8b and 11), which
 change nothing.
 
-0. **Pre-flight:** `req.bleadingoptions.com` DNS record **absent**; `/home` free ≥ 400 GiB (so NS-7's
+0. **Pre-flight:** `req.fullfunding.nl` DNS record **absent**; `/home` free ≥ 400 GiB (so NS-7's
    reserve holds after the 100 GiB image); `/` free recorded; **NS-12 baseline capture begins**
    (it must span a full session, so it starts here).
 0.5. **Clause-map verification** (NS-19 / NS-V28) — Appendix A reviewed against rev 11 with zero
@@ -1072,7 +1081,7 @@ public exposure and teardown is private (NS-14).
 | NS-V5 | priority | every tenant pod reports `priority: -100`; ranking inputs verified documentarily. **No production node-pressure rehearsal** |
 | NS-V6 | reservation | effective kubelet config lists all four eviction thresholds, and `pod-max-pids` **matches the D-6 decision — including a verified `-1`/absence if D-6 chose no limit**; allocatable plus **CPU, memory, ephemeral and pod-count** headroom recorded, each net of `P_platform`; full inventory schedules |
 | NS-V7 | Service types | LoadBalancer and NodePort both rejected with `exceeded quota` |
-| NS-V8 | public routing | unauthenticated `req.bleadingoptions.com` → **302 to the Keycloak authorization endpoint**; authenticated → 200 (rev 2's bare "200" was wrong for an OIDC-protected origin). `bleadingoptions.com` and `auth.bleadingoptions.com` unchanged after each cloudflared restart |
+| NS-V8 | public routing | unauthenticated `req.fullfunding.nl` → **302 to the Keycloak authorization endpoint**; authenticated → 200 (rev 2's bare "200" was wrong for an OIDC-protected origin). `fullfunding.nl` and `auth.fullfunding.nl` unchanged after each cloudflared restart |
 | NS-V9 | host services unreachable | the host's **listening-socket inventory is captured at run time** (`ss -ltn`), and from a tenant pod **every** node destination in it — necessarily including 9092, 5432, 8081, 8082, 8092, 5000, 22, 3000, 6443, 8091, 9090, 10250 — **fails to establish TCP** (timeout or refused), with no allowlisted exception. An authenticated rejection over an **established** connection is **not** a pass |
 | NS-V10 | disk wall | scratch 1 GiB image: bounded writer fails with ENOSPC; image file size fixed; backing allocated blocks within stated tolerance, with no growth proportional to inner writes |
 | NS-V11 | tenant-only data services | every connect string resolves to `*.fullfunding.svc`; no host endpoint in any config |
@@ -1107,7 +1116,7 @@ public exposure and teardown is private (NS-14).
 | R-16 | **Shared availability** | Explicitly accepted (NS-13) |
 | R-17 | The loopback filesystem adds I/O overhead and takes **100 GiB of `/home` up front**, retained until teardown | The only hard disk wall available without unmounting `/home`; the cost is stated, not hidden |
 | R-18 | The admin surface depends on a **kubeconfig** rather than SSH | Narrower in scope but a new credential to protect (NS-9); rev-11 R-7 still applies |
-| R-19 | **Tenant load escapes the quota through shared services** — Keycloak, traefik, cloudflared, the registry and image pulls sit outside the quota; NS-16's limits bound the **portal route only**, not direct load on `auth.bleadingoptions.com` | Bounded, not eliminated: portal-route rate/in-flight/body limits, database connection limits, off-hours soak, NS-18 alerting, NS-12 RTH observation. Rate-limiting the shared Keycloak route is out of scope |
+| R-19 | **Tenant load escapes the quota through shared services** — Keycloak, traefik, cloudflared, the registry and image pulls sit outside the quota; NS-16's limits bound the **portal route only**, not direct load on `auth.fullfunding.nl` | Bounded, not eliminated: portal-route rate/in-flight/body limits, database connection limits, off-hours soak, NS-18 alerting, NS-12 RTH observation. Rate-limiting the shared Keycloak route is out of scope |
 | R-20 | **LAN origin bypass** — traefik answers on `.252:80`, so Cloudflare is not an authentication boundary | The portal is fail-closed without Cloudflare (rev-11 REQ-5a). Restricting traefik to loopback would change shared infrastructure |
 | R-21 | **Thin memory slack.** D-3's envelope leaves almost nothing in reserve: at the expected `R ≈ 13 Gi` the formula yields 2.26 Gi against a fixed 2.25 Gi tenant, so the launch margin is ~0.01 Gi, and a large OptionsEdge growth event consumes the `M = 4 Gi` scheduler headroom the formula already sets aside | NS-4's formula blocks launch rather than overcommitting; NS-18 alerts on memory pressure; the tenant is the preferred eviction victim (NS-3) |
 | R-22 | **(downgraded by NS-20)** `/` (nodefs) has ~37 GiB free and is not covered by the tenant disk wall. With disk-medium `emptyDir` denied and `readOnlyRootFilesystem` required, the tenant's only `/` residue is **kernel-rotated container logs, capped at ≈0.9 GiB** | NS-20 (1)(2), NS-4's `nodefs` thresholds, NS-18 alerting, NS-V30's empirical attribution. Literal zero is D-7 |
@@ -1115,7 +1124,7 @@ public exposure and teardown is private (NS-14).
 | R-27 | **"Zero on root" means zero *tenant-owned data*, not zero bytes.** journald entries for the container runtime, containerd/CNI bookkeeping and similar OS metadata are produced by the platform for any workload and remain on `/` | Small, OS-rotated, not tenant data. Stated so the requirement is not read as stronger than it is |
 | R-28 | **PID exhaustion remains unbounded if D-6 drops `pod-max-pids`** — today the effective value is `-1` for every pod on the node | If D-6 drops it, the PID vector is removed from every isolation claim (NS-4(3)) and this row is the honest record of what is left unprotected |
 | R-29 | **The platform plane escapes the tenant quota by construction** — the `fullfunding-platform` namespace, the host backup agent and the host tenant-guard are outside `fullfunding`'s ResourceQuota | Deliberate and accounted once in `P_platform` (NS-4); they are operator-owned, not tenant-writable, so the exposure is a sizing question rather than a containment one |
-| R-25 | **Pre-existing, now also a portal dependency:** `auth.bleadingoptions.com` is pinned in cloudflared to the Keycloak **ClusterIP**, so recreating that Service silently breaks authentication for the trading UI **and** the portal | Not introduced by this project and not fixed here (out of scope, shared infrastructure). Recorded so the dependency is visible; a stable-IP or Ingress-based route would remove it |
+| R-25 | **Pre-existing, now also a portal dependency:** `auth.fullfunding.nl` is pinned in cloudflared to the Keycloak **ClusterIP**, so recreating that Service silently breaks authentication for the trading UI **and** the portal | Not introduced by this project and not fixed here (out of scope, shared infrastructure). Recorded so the dependency is visible; a stable-IP or Ingress-based route would remove it |
 | R-23 | **No fair sharing inside the tenant** — the inner filesystem does not enforce per-PVC sizes, so one tenant PVC can consume the whole 100 GiB and starve the others (including backups) | Accepted for a single-tenant, single-operator project; NS-18 alerts at 75%/90%; NS-17's host agent copies generations off the volume |
 | R-24 | Backups are **off-volume but not off-host** — they do not survive loss of `.252` or `/home` | Stated rather than claimed; genuine off-host copies depend on the archive destination, outside this scope |
 
@@ -1177,7 +1186,7 @@ describe`/pod spec).
 | V-off (a) KC disable alone (b) full offboarding | **Unchanged** | "restart the web container" reads as "restart the web pod" |
 | V7 internal-Bugzilla evidence set | **Unchanged, strengthened** | Evidence is still taken at each declared transition; **NS-V9** additionally proves `:8092` is unreachable from the tenant |
 | V7-int internal trading-UI live cards | **Unchanged** | Still deferrable only to the next market-hours window; folded into §6 step 11's RTH session |
-| V8 all hostnames after each cloudflared restart | **Unchanged, restated** | **NS-V8**, with the expected result corrected: unauthenticated `req.bleadingoptions.com` → **302**, not 200 |
+| V8 all hostnames after each cloudflared restart | **Unchanged, restated** | **NS-V8**, with the expected result corrected: unauthenticated `req.fullfunding.nl` → **302**, not 200 |
 | V9 KC pod post-rollout | **Unchanged** | Keycloak is unmoved |
 | V10 secret authorized-location assertion | **SUPERSEDED (surface list)** | The k8s allowlist and its new truths are in §4's REQ-9 row; `docker inspect` becomes the pod spec + `describe`; node-side projected storage and datastore backups are added as authorized locations |
 | V11 edge-rule trip + size-limit chain | **Unchanged, extended** | **NS-16** adds the traefik `Middleware` layer (rate/in-flight/body) beneath rev-11's Cloudflare layer; the size chain now reads Bugzilla < Apache < **traefik body cap** < Cloudflare |
