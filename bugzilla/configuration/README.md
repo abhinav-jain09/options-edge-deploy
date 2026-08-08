@@ -1,7 +1,7 @@
 # Internal Bugzilla — project / lifecycle configuration
 
-Design: [`docs/bugzilla-project-lifecycle.md`](../docs/bugzilla-project-lifecycle.md).
-Declared state: [`configuration/expected-state.json`](configuration/expected-state.json).
+Design: [`docs/bugzilla-project-lifecycle.md`](../../docs/bugzilla-project-lifecycle.md).
+Declared state: [`expected-state.json`](expected-state.json).
 
 ```
 configuration/
@@ -38,7 +38,7 @@ Add to `/home/options-edge/deploy/bugzilla/docker-compose.yml`, service `bugzill
     volumes:
       - /home/options-edge/deploy/bugzilla/configuration/extensions/IssueTypeWorkflow:/var/www/html/extensions/IssueTypeWorkflow:ro
       - /home/options-edge/deploy/bugzilla/configuration/setup-projects.pl:/var/www/html/local/setup-projects.pl:ro
-      - /home/options-edge/deploy/bugzilla/configuration/expected-state.json:/var/www/html/local/expected-state.json:ro
+      - /home/options-edge/deploy/bugzilla/expected-state.json:/var/www/html/local/expected-state.json:ro
 ```
 
 Mount the extension **directory**, never the whole `extensions/` tree — that would shadow the
@@ -82,7 +82,7 @@ docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html
 site offline without stopping the container — which matters, because `localconfig` lives inside it.
 
 ```bash
-docker exec $BZ apachectl stop && configuration/backup.sh
+docker exec $BZ apachectl stop && ./backup.sh
 ```
 
 `backup.sh` dumps the database, checks the dump's own `-- Dump completed` footer, records the schema
@@ -120,7 +120,7 @@ bugs** prefixed `[SMOKE]` and closes them again — so run this in a change wind
 ```bash
 docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --apply \
   && docker restart $BZ \
-  && { python3 configuration/verify-projects.py --state configuration/expected-state.json --reporter-api-key-env BZ_REPORTER_KEY --strict \
+  && { python3 ./verify-projects.py --state expected-state.json --reporter-api-key-env BZ_REPORTER_KEY --strict \
        || { echo "VERIFICATION FAILED - taking the site down again"; docker exec $BZ apachectl stop; false; }; }
 ```
 
@@ -162,7 +162,7 @@ re-run step 5 with `--require-decommissioned` to assert it is really gone.
 partial run cannot be undone with a transaction. Rollback is a restore:
 
 ```bash
-configuration/restore-backup.sh ~/bugzilla-pre-projects-<TS>.sql.gz
+./restore-backup.sh ~/bugzilla-pre-projects-<TS>.sql.gz
 ```
 
 The script verifies the checksums, the gzip, the dump footer, the charset sidecar and that the dump
