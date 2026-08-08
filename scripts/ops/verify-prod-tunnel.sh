@@ -347,6 +347,73 @@ resolve_ws_target() {  # $1 = hostname. cloudflared's own first-match answer is 
   printf ''
 }
 
+# --- THE retirement classifier — ONE implementation, used by the live-realm scan, the deployed
+# ConfigMap scan and the selftests. Duplicating it is how a case-sensitivity regression survived
+# a green suite in round 18: the tests exercised a copy while production kept the bug.
+# stdin: JSON {"sources":[{"label":..,"clients":[client,…]},…]}; stdout: CLEAN/PROBLEMS.
+RETIREMENT_CLASSIFIER_PY='
+import json, os, sys
+from urllib.parse import urlparse, urljoin
+
+SFXS = [x.strip().lower() for x in os.environ.get("RETIRED_SUFFIXES", "").split() if x.strip()]
+
+def host_hits(u):
+    """Normalised host test: case, trailing dot, port, query strings, and any subdomain."""
+    try: h = (urlparse(str(u)).hostname or "").strip().lower().rstrip(".")
+    except Exception: return False
+    return bool(h) and any(h == s or h.endswith("." + s) for s in SFXS)
+
+def catch_all(v):
+    """Effective catch-alls admit ANY host, retired one included (scheme case-insensitive)."""
+    v = str(v).strip(); lv = v.lower()
+    return v in ("*", "/*") or lv.startswith("http://*") or lv.startswith("https://*") \
+        or lv in ("http*", "http*://*")
+
+def client_problems(label, c):
+    out = []
+    if not isinstance(c, dict):
+        return ["%s: non-object client entry" % label]
+    cid = c.get("clientId", "?"); root = str(c.get("rootUrl") or "")
+    def judge(kind, v):
+        v = str(v)
+        if not v: return
+        if catch_all(v): out.append("%s/%s %s=%s is an effective CATCH-ALL" % (label, cid, kind, v))
+        elif host_hits(v): out.append("%s/%s %s=%s" % (label, cid, kind, v))
+        elif v.startswith("/") and root and host_hits(urljoin(root + "/", v.lstrip("/"))):
+            out.append("%s/%s %s=%s (resolved against rootUrl %s)" % (label, cid, kind, v, root))
+    for field in ("redirectUris", "webOrigins"):
+        for v in (c.get(field) or []): judge(field, v)
+    for field in ("rootUrl", "baseUrl", "adminUrl"):
+        if c.get(field): judge(field, c.get(field))
+    attrs = c.get("attributes") or {}
+    if isinstance(attrs, dict):
+        for ak, av in attrs.items():
+            if av is None: continue
+            parts = str(av).split("##") if ak == "post.logout.redirect.uris" else [str(av)]
+            for v in parts:
+                if not v: continue
+                looks_url = "://" in v or v.startswith("/")
+                if looks_url or ak.lower().endswith(("url", "uri", "uris")): judge("attr " + ak, v)
+    return out
+
+try:
+    doc = json.loads(sys.stdin.read())
+    sources = doc.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("no sources to scan")
+    problems, n = [], 0
+    for src in sources:
+        label = src.get("label", "?")
+        clients = src.get("clients")
+        if not isinstance(clients, list):
+            problems.append("%s: client list unreadable (enumeration incomplete)" % label); continue
+        n += 1
+        for c in clients: problems += client_problems(label, c)
+    print("PROBLEMS " + " | ".join(problems) if problems else "CLEAN %d source(s) scanned" % n)
+except Exception as e:
+    print("SCAN_FAIL %s" % e)
+'
+
 realm_verdict() {  # $1 = marker from realm_scan. THE production verdict — the selftest calls this
   # very function, so a regression in its failure handling cannot hide behind a copied handler.
   case "$1" in
@@ -563,70 +630,36 @@ except Exception as e:
     fi
   }
   resolver_contract_case
-  PY_CLIENT="import json, os, sys
-from urllib.parse import urlparse, urljoin
-sfxs=['fullfunding.nl']
-def host_hits(u):
-    try: h=(urlparse(str(u)).hostname or '').strip().lower().rstrip('.')
-    except Exception: return False
-    return bool(h) and any(h==s or h.endswith('.'+s) for s in sfxs)
-def catch_all(v):
-    v=str(v).strip()
-    lv=v.lower()
-    return v in ('*','/*') or lv.startswith('http://*') or lv.startswith('https://*')
-c=json.load(sys.stdin); root=str(c.get('rootUrl') or ''); bad=[]
-for v in list(c.get('redirectUris') or [])+list(c.get('webOrigins') or []):
-    v=str(v)
-    if catch_all(v): bad.append('catchall:'+v)
-    elif host_hits(v): bad.append('host:'+v)
-    elif v.startswith('/') and root and host_hits(urljoin(root+'/', v.lstrip('/'))): bad.append('rooturl:'+v)
-print('PROBLEMS '+','.join(bad) if bad else 'CLEAN')"
-  struct_case "client redirectUris=['*'] is an effective catch-all" \
-    '{"clientId":"x","redirectUris":["*"],"webOrigins":[]}' "$PY_CLIENT" "PROBLEMS"
-  struct_case "rootUrl + relative redirect resolves onto the retired host" \
-    '{"clientId":"x","rootUrl":"https://fullfunding.nl","redirectUris":["/*"],"webOrigins":[]}' "$PY_CLIENT" "PROBLEMS"
-  struct_case "query-string literal on the retired host is caught" \
-    '{"clientId":"x","redirectUris":["https://fullfunding.nl?x=1"],"webOrigins":[]}' "$PY_CLIENT" "PROBLEMS"
-  struct_case "trailing-dot (DNS-equivalent) retired host is caught" \
-    '{"clientId":"x","redirectUris":["https://fullfunding.nl./callback"],"webOrigins":[]}' "$PY_CLIENT" "PROBLEMS"
-  struct_case "new-domain client is clean" \
-    '{"clientId":"x","redirectUris":["https://bleadingoptions.com/*"],"webOrigins":["https://bleadingoptions.com"]}' "$PY_CLIENT" "CLEAN"
-  # The realm gate must FAIL (never pass quietly) when enumeration cannot complete.
-  realm_marker_case() {  # invoke the PRODUCTION verdict function in THIS shell and assert `fail`
-    local saved="$fail" saved_net="$NETWORK_ONLY"
-    NETWORK_ONLY=0
-    for marker in "SCAN_FAIL forced" "" "garbage-output"; do
-      fail=0
-      realm_verdict "$marker" >/dev/null 2>&1
-      if [ "$fail" = "1" ]; then echo "  OK   selftest: realm_verdict fails the gate for marker '${marker:-<empty>}'"
-      else echo "  FAIL selftest: realm_verdict did NOT fail for marker '${marker:-<empty>}'" >&2; rc=1; fi
-    done
-    fail=0; realm_verdict "CLEAN 3 realm(s) scanned" >/dev/null 2>&1
-    if [ "$fail" = "0" ]; then echo "  OK   selftest: realm_verdict passes a CLEAN marker"
-    else echo "  FAIL selftest: realm_verdict failed a CLEAN marker" >&2; rc=1; fi
-    fail="$saved"; NETWORK_ONLY="$saved_net"
+  # These drive the PRODUCTION classifier ($RETIREMENT_CLASSIFIER_PY) — the same code the live
+  # realm scan and the ConfigMap scan run. A copy would let a production-only regression pass.
+  cls_case() {  # label, client-json, expected-prefix
+    local got
+    got="$(printf '{"sources":[{"label":"t","clients":[%s]}]}' "$2" \
+      | RETIRED_SUFFIXES="fullfunding.nl" python3 -c "$RETIREMENT_CLASSIFIER_PY" 2>/dev/null)"
+    case "$got" in
+      "$3"*) echo "  OK   selftest: $1" ;;
+      *) echo "  FAIL selftest: $1 (got '$got', wanted '$3')" >&2; rc=1 ;;
+    esac
   }
-  realm_marker_case
-  struct_case "backchannel logout URL on the retired host is caught" \
-    '{"clientId":"x","redirectUris":[],"webOrigins":[],"attributes":{"backchannel.logout.url":"https://fullfunding.nl/logout"}}' \
-    "import json,sys
-from urllib.parse import urlparse, urljoin
-sfxs=['fullfunding.nl']
-def host_hits(u):
-    try: h=(urlparse(str(u)).hostname or '').strip().lower().rstrip('.')
-    except Exception: return False
-    return bool(h) and any(h==s or h.endswith('.'+s) for s in sfxs)
-c=json.load(sys.stdin); bad=[]
-attrs=c.get('attributes') or {}
-for ak,av in attrs.items():
-    for v in (str(av).split('##') if ak=='post.logout.redirect.uris' else [str(av)]):
-        if v and ('://' in v) and host_hits(v): bad.append(ak+'='+v)
-print('PROBLEMS '+','.join(bad) if bad else 'CLEAN')" "PROBLEMS"
-  struct_case "uppercase scheme catch-all HTTPS://* is caught" \
-    '{"v":"HTTPS://*"}' \
-    "import json,sys
-v=str(json.load(sys.stdin)['v']).strip(); lv=v.lower()
-print('PROBLEMS' if (v in ('*','/*') or lv.startswith('http://*') or lv.startswith('https://*')) else 'CLEAN')" "PROBLEMS"
+  cls_case "redirectUris=['*'] is an effective catch-all" '{"clientId":"x","redirectUris":["*"]}' "PROBLEMS"
+  cls_case "UPPERCASE scheme catch-all HTTPS://* is caught" '{"clientId":"x","redirectUris":["HTTPS://*"]}' "PROBLEMS"
+  cls_case "http*://* form is caught" '{"clientId":"x","webOrigins":["HTTP*://*"]}' "PROBLEMS"
+  cls_case "rootUrl + relative redirect resolves onto the retired host" '{"clientId":"x","rootUrl":"https://fullfunding.nl","redirectUris":["/*"]}' "PROBLEMS"
+  cls_case "query-string literal on the retired host is caught" '{"clientId":"x","redirectUris":["https://fullfunding.nl?x=1"]}' "PROBLEMS"
+  cls_case "trailing-dot (DNS-equivalent) retired host is caught" '{"clientId":"x","redirectUris":["https://fullfunding.nl./cb"]}' "PROBLEMS"
+  cls_case "backchannel logout URL on the retired host is caught" '{"clientId":"x","attributes":{"backchannel.logout.url":"https://fullfunding.nl/logout"}}' "PROBLEMS"
+  cls_case "post-logout ## list entry on the retired host is caught" '{"clientId":"x","attributes":{"post.logout.redirect.uris":"https://ok.example/*##https://fullfunding.nl/*"}}' "PROBLEMS"
+  cls_case "adminUrl on the retired host is caught" '{"clientId":"x","adminUrl":"https://es.fullfunding.nl/admin"}' "PROBLEMS"
+  cls_case "new-domain client is clean" '{"clientId":"x","redirectUris":["https://bleadingoptions.com/*"],"webOrigins":["https://bleadingoptions.com"]}' "CLEAN"
+  # unreadable client list must be a problem, never silence
+  cls_case_raw() {
+    local got
+    got="$(printf '%s' "$2" | RETIRED_SUFFIXES="fullfunding.nl" python3 -c "$RETIREMENT_CLASSIFIER_PY" 2>/dev/null)"
+    case "$got" in "$3"*) echo "  OK   selftest: $1" ;; *) echo "  FAIL selftest: $1 (got '$got')" >&2; rc=1 ;; esac
+  }
+  cls_case_raw "unreadable client list is reported, not skipped" '{"sources":[{"label":"t","clients":null}]}' "PROBLEMS"
+  cls_case_raw "empty source set is SCAN_FAIL, never CLEAN" '{"sources":[]}' "SCAN_FAIL"
+  cls_case_raw "malformed payload is SCAN_FAIL" 'not-json' "SCAN_FAIL"
   struct_case "Ingress hostless rule is flagged" \
     'apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -1166,92 +1199,25 @@ fi
 #   * hostnames are normalised (trailing dot, port, case) before the suffix test.
 
 realm_scan() {
+  # NOTE: runs inside $(...), so it must NEVER call bad/unavailable — their effect would die with
+  # the subshell. It returns a MARKER; realm_verdict (the caller) decides.
   local pw payload
-  # NOTE: this function runs inside $(...), so it must NEVER call bad/unavailable — their effect
-  # would die with the subshell. It returns a MARKER; the caller decides the verdict.
   command -v python3 >/dev/null || { echo "SCAN_FAIL python3 unavailable"; return; }
   pw="$(prod_kubectl "get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}'" | base64 -d)"
   [ -n "$pw" ] || { echo "SCAN_FAIL could not read the Keycloak admin secret"; return; }
   payload="$(printf '%s' "$pw" | run_stdin "kubectl $KEXEC_OPTS -n $NS exec -i deploy/oe-keycloak -- sh -c 'set -eu; IFS= read -r KC_PW
     /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$KC_PW\" >/dev/null 2>&1
-    echo \"{\\\"realms\\\":[\"
+    echo \"{\\\"sources\\\":[\"
     first=1
     for R in \$(/opt/keycloak/bin/kcadm.sh get realms --fields realm --format csv --noquotes); do
       [ \$first -eq 1 ] || echo \",\"; first=0
-      echo \"{\\\"realm\\\":\\\"\$R\\\",\\\"clients\\\":\"
+      echo \"{\\\"label\\\":\\\"realm \$R\\\",\\\"clients\\\":\"
       /opt/keycloak/bin/kcadm.sh get clients -r \"\$R\" --fields clientId,rootUrl,baseUrl,adminUrl,redirectUris,webOrigins,attributes
       echo \"}\"
     done
     echo \"]}\"'")"
   [ -n "$payload" ] || { echo "SCAN_FAIL kcadm returned nothing (auth failure? pod unreachable?)"; return; }
-  printf '%s' "$payload" | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "
-import json, os, sys
-from urllib.parse import urlparse, urljoin
-
-sfxs = [x.strip().lower() for x in os.environ.get('RETIRED_SUFFIXES','').split() if x.strip()]
-
-def host_hits(u):
-    'Normalised host test: trailing dot, port, case, and any subdomain of a retired suffix.'
-    try: h = (urlparse(u).hostname or '').strip().lower().rstrip('.')
-    except Exception: return False
-    if not h: return False
-    return any(h == s or h.endswith('.' + s) for s in sfxs)
-
-def catch_all(v):
-    'Effective catch-alls admit ANY host, including the retired one.'
-    v = str(v).strip()
-    lv = v.lower()
-    return v in ('*', '/*') or lv.startswith('http://*') or lv.startswith('https://*') or lv in ('http*', 'http*://*')
-
-try:
-    doc = json.loads(sys.stdin.read())
-except Exception as e:
-    print('SCAN_FAIL could not parse the realm payload: %s' % e); sys.exit(0)
-
-realms = doc.get('realms') or []
-if not realms:
-    print('SCAN_FAIL no realms returned'); sys.exit(0)
-
-problems = []
-for r in realms:
-    name = r.get('realm', '?')
-    clients = r.get('clients')
-    if not isinstance(clients, list):
-        problems.append('realm %s: client list unreadable (enumeration incomplete)' % name); continue
-    for c in clients:
-        if not isinstance(c, dict):
-            problems.append('realm %s: non-object client entry' % name); continue
-        cid = c.get('clientId', '?')
-        root = str(c.get('rootUrl') or '')
-        for field in ('redirectUris', 'webOrigins'):
-            for v in (c.get(field) or []):
-                v = str(v)
-                if catch_all(v):
-                    problems.append('%s/%s %s=%s is an effective CATCH-ALL (admits the retired host)' % (name, cid, field, v))
-                elif host_hits(v):
-                    problems.append('%s/%s %s=%s' % (name, cid, field, v))
-                elif v.startswith('/') and root:
-                    if host_hits(urljoin(root + '/', v.lstrip('/'))):
-                        problems.append('%s/%s %s=%s resolved against rootUrl %s' % (name, cid, field, v, root))
-        for field in ('rootUrl', 'baseUrl', 'adminUrl'):
-            v = str(c.get(field) or '')
-            if v and host_hits(v):
-                problems.append('%s/%s %s=%s' % (name, cid, field, v))
-        # EVERY url-bearing attribute, not just post-logout: back/front-channel logout URLs are
-        # contacted by Keycloak/the browser directly, and jwks/request-object URLs are fetched.
-        attrs = c.get('attributes') or {}
-        for ak, av in (attrs.items() if isinstance(attrs, dict) else []):
-            if av is None: continue
-            parts = str(av).split('##') if ak == 'post.logout.redirect.uris' else [str(av)]
-            for v in [x for x in parts if x]:
-                looks_url = v.startswith(('http://', 'https://', 'HTTP://', 'HTTPS://', '/')) or '://' in v
-                if not (looks_url or ak.endswith(('url', 'uri', 'uris'))): continue
-                if catch_all(v) or host_hits(v) or (v.startswith('/') and root and host_hits(urljoin(root + '/', v.lstrip('/')))):
-                    problems.append('%s/%s attr %s=%s' % (name, cid, ak, v))
-
-if problems: print('PROBLEMS ' + ' | '.join(problems))
-else: print('CLEAN %d realm(s) scanned' % len(realms))
-" 2>/dev/null
+  printf '%s' "$payload" | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "$RETIREMENT_CLASSIFIER_PY" 2>/dev/null
 }
 if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   realm_verdict "$(realm_scan)"
@@ -1262,42 +1228,18 @@ if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   if [ -z "$live_cm" ]; then
     unavailable "could not read the LIVE oe-keycloak-realm ConfigMap"
   else
-    cm_out="$(printf '%s' "$live_cm" | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "
-import json, os, sys
-from urllib.parse import urlparse, urljoin
-sfxs = [x.strip().lower() for x in os.environ.get('RETIRED_SUFFIXES','').split() if x.strip()]
-def host_hits(u):
-    try: h = (urlparse(str(u)).hostname or '').strip().lower().rstrip('.')
-    except Exception: return False
-    return bool(h) and any(h == s or h.endswith('.' + s) for s in sfxs)
-def catch_all(v):
-    v = str(v).strip(); lv = v.lower()
-    return v in ('*', '/*') or lv.startswith('http://*') or lv.startswith('https://*')
+    cm_out="$(printf '%s' "$live_cm" | python3 -c "
+import json, sys
 try:
     data = (json.loads(sys.stdin.read()).get('data') or {})
     if not data: raise ValueError('ConfigMap has no data')
-    problems = []
+    srcs = []
     for key, blob in data.items():
-        realm = json.loads(blob)
-        for c in realm.get('clients') or []:
-            cid = c.get('clientId','?'); root = str(c.get('rootUrl') or '')
-            vals = list(c.get('redirectUris') or []) + list(c.get('webOrigins') or [])
-            attrs = c.get('attributes') or {}
-            for ak, av in (attrs.items() if isinstance(attrs, dict) else []):
-                if av is None: continue
-                vals += str(av).split('##') if ak == 'post.logout.redirect.uris' else [str(av)]
-            vals += [c.get('rootUrl'), c.get('baseUrl'), c.get('adminUrl')]
-            for v in vals:
-                if v is None: continue
-                v = str(v)
-                if catch_all(v): problems.append('%s/%s catch-all %s' % (key, cid, v))
-                elif host_hits(v): problems.append('%s/%s %s' % (key, cid, v))
-                elif v.startswith('/') and root and host_hits(urljoin(root + '/', v.lstrip('/'))):
-                    problems.append('%s/%s %s (via rootUrl)' % (key, cid, v))
-    print('PROBLEMS ' + ' | '.join(problems) if problems else 'CLEAN %d realm doc(s)' % len(data))
+        srcs.append({'label': 'configmap ' + key, 'clients': (json.loads(blob).get('clients') or [])})
+    print(json.dumps({'sources': srcs}))
 except Exception as e:
-    print('SCAN_FAIL %s' % e)
-" 2>/dev/null)"
+    print(json.dumps({'sources': []}))
+" 2>/dev/null | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "$RETIREMENT_CLASSIFIER_PY" 2>/dev/null)"
     case "$cm_out" in
       CLEAN*) note "OK   the deployed realm import ConfigMap admits no retired hostname ($cm_out)" ;;
       PROBLEMS*) bad "the DEPLOYED oe-keycloak-realm ConfigMap still admits the retired domain (a DB recreate would re-import it): ${cm_out#PROBLEMS }" ;;

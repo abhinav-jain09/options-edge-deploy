@@ -206,18 +206,22 @@ What Phase 3 removes (this change-set):
    # produce a clean-looking report about somebody else's zone.
    "${CF[@]}" "$API/zones/$ZONE_ID" | python3 -c "
 import json,sys
-d=json.load(sys.stdin); assert d['success'], d
+d=json.load(sys.stdin)
+if not d.get('success'): sys.exit('API call failed: %s' % d)
 name=d['result']['name']
 print('zone under audit:', name)
 sys.exit(0 if name == 'fullfunding.nl' else 'STOP: ZONE_ID is not the retired zone')"
    Z="$API/zones/$ZONE_ID/dns_records"
    # content.exact is the documented exact filter; the legacy contains-style ?content= is asked as
    # a cross-check. BOTH must return zero — and a nonzero count EXITS nonzero, it does not just print.
+   # content.exact = documented exact filter; content.contains = documented substring filter.
+   # (A bare ?content= is not in the current API contract — requiring it could block the handoff.)
    for q in "content.exact=976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com" \
-            "content=976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com"; do
+            "content.contains=cfargotunnel.com"; do
      "${CF[@]}" "$Z?$q&per_page=100" | python3 -c "
 import json,sys
-d=json.load(sys.stdin); assert d['success'], d
+d=json.load(sys.stdin)
+if not d.get('success'): sys.exit('API call failed: %s' % d)
 n=(d.get('result_info') or {}).get('total_count')
 if n is None: sys.exit('no total_count in response — cannot assert zero')
 print('$q ->', n, 'match(es)')
@@ -232,7 +236,8 @@ sys.exit(0 if n == 0 else 'STOP: the retired zone still targets our tunnel')"
      set +e
      printf '%s' "$body" | python3 -c "
 import json,sys
-d=json.load(sys.stdin); assert d['success'], d
+d=json.load(sys.stdin)
+if not d.get('success'): sys.exit('API call failed: %s' % d)
 for r in d['result']: print(r['type'], r['name'], '->', r['content'])
 ri=d.get('result_info') or {}
 tp, pg = ri.get('total_pages'), ri.get('page') or 1
