@@ -201,7 +201,16 @@ What Phase 3 removes (this change-set):
    ```sh
    set -euo pipefail                      # a failed query must STOP this, never read as clean
    CF=(curl --fail-with-body -sS -H "Authorization: Bearer $CF_TOKEN")
-   Z="https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records"
+   API="https://api.cloudflare.com/client/v4"
+   # Bind the evidence to the RETIRED zone by name — a mistyped/stale ZONE_ID would otherwise
+   # produce a clean-looking report about somebody else's zone.
+   "${CF[@]}" "$API/zones/$ZONE_ID" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); assert d['success'], d
+name=d['result']['name']
+print('zone under audit:', name)
+sys.exit(0 if name == 'fullfunding.nl' else 'STOP: ZONE_ID is not the retired zone')"
+   Z="$API/zones/$ZONE_ID/dns_records"
    # content.exact is the documented exact filter; the legacy contains-style ?content= is asked as
    # a cross-check. BOTH must return zero — and a nonzero count EXITS nonzero, it does not just print.
    for q in "content.exact=976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com" \
@@ -219,13 +228,18 @@ sys.exit(0 if n == 0 else 'STOP: the retired zone still targets our tunnel')"
    pg=1
    while :; do
      body="$("${CF[@]}" "$Z?per_page=100&page=$pg")"
+     # exit 0 = last page, 7 = more pages, anything else = a real error that must stop us
+     set +e
      printf '%s' "$body" | python3 -c "
 import json,sys
 d=json.load(sys.stdin); assert d['success'], d
 for r in d['result']: print(r['type'], r['name'], '->', r['content'])
 ri=d.get('result_info') or {}
-sys.exit(0 if (ri.get('total_pages') or 1) <= (ri.get('page') or 1) else 7)" && break || [ $? -eq 7 ] || exit 1
-     pg=$((pg+1))
+tp, pg = ri.get('total_pages'), ri.get('page') or 1
+if tp is None: sys.exit('no total_pages in response — cannot prove the listing is complete')
+sys.exit(0 if tp <= pg else 7)"
+     rc=$?; set -e
+     case "$rc" in 0) break ;; 7) pg=$((pg+1)) ;; *) echo "STOP: record listing incomplete (rc=$rc)"; exit 1 ;; esac
    done
    ```
 
@@ -326,5 +340,5 @@ domain may already serve someone else's application, so re-adding it would not m
 
 So post-handoff recovery is **fix-forward with new-domain-only configuration**: revert a workload
 to a previous IMAGE if needed, but never to a config revision that names the retired domain. Delete
-the pre-Phase-3 tunnel backup once the gate is green (step 6) so it cannot be restored by reflex,
+the pre-Phase-3 tunnel backup once the post-handoff gate (step 6) is green so it cannot be restored by reflex,
 and note that the `retired` gate fails loudly if any surface re-acquires that domain.

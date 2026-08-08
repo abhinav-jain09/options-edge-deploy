@@ -577,6 +577,41 @@ print('PROBLEMS '+','.join(bad) if bad else 'CLEAN')"
     '{"clientId":"x","redirectUris":["https://fullfunding.nl./callback"],"webOrigins":[]}' "$PY_CLIENT" "PROBLEMS"
   struct_case "new-domain client is clean" \
     '{"clientId":"x","redirectUris":["https://bleadingoptions.com/*"],"webOrigins":["https://bleadingoptions.com"]}' "$PY_CLIENT" "CLEAN"
+  # The realm gate must FAIL (never pass quietly) when enumeration cannot complete.
+  realm_marker_case() {
+    local out rc2
+    out="$( { rw="SCAN_FAIL forced"; case "$rw" in
+        CLEAN*) note "OK   clean" ;;
+        PROBLEMS*) bad "problems" ;;
+        SCAN_FAIL*) bad "realm-wide retirement scan could not complete — ${rw#SCAN_FAIL }" ;;
+        "") bad "no output" ;;
+      esac; } 2>&1 )"
+    case "$out" in
+      *"could not complete"*) echo "  OK   selftest: SCAN_FAIL marker makes the realm gate fail" ;;
+      *) echo "  FAIL selftest: SCAN_FAIL marker handling (got '$out')" >&2; rc=1 ;;
+    esac
+  }
+  realm_marker_case
+  struct_case "backchannel logout URL on the retired host is caught" \
+    '{"clientId":"x","redirectUris":[],"webOrigins":[],"attributes":{"backchannel.logout.url":"https://fullfunding.nl/logout"}}' \
+    "import json,sys
+from urllib.parse import urlparse, urljoin
+sfxs=['fullfunding.nl']
+def host_hits(u):
+    try: h=(urlparse(str(u)).hostname or '').strip().lower().rstrip('.')
+    except Exception: return False
+    return bool(h) and any(h==s or h.endswith('.'+s) for s in sfxs)
+c=json.load(sys.stdin); bad=[]
+attrs=c.get('attributes') or {}
+for ak,av in attrs.items():
+    for v in (str(av).split('##') if ak=='post.logout.redirect.uris' else [str(av)]):
+        if v and ('://' in v) and host_hits(v): bad.append(ak+'='+v)
+print('PROBLEMS '+','.join(bad) if bad else 'CLEAN')" "PROBLEMS"
+  struct_case "uppercase scheme catch-all HTTPS://* is caught" \
+    '{"v":"HTTPS://*"}' \
+    "import json,sys
+v=str(json.load(sys.stdin)['v']).strip(); lv=v.lower()
+print('PROBLEMS' if (v in ('*','/*') or lv.startswith('http://*') or lv.startswith('https://*')) else 'CLEAN')" "PROBLEMS"
   struct_case "Ingress hostless rule is flagged" \
     'apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -1116,8 +1151,11 @@ fi
 #   * hostnames are normalised (trailing dot, port, case) before the suffix test.
 realm_scan() {
   local pw payload
+  # NOTE: this function runs inside $(...), so it must NEVER call bad/unavailable — their effect
+  # would die with the subshell. It returns a MARKER; the caller decides the verdict.
+  command -v python3 >/dev/null || { echo "SCAN_FAIL python3 unavailable"; return; }
   pw="$(prod_kubectl "get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}'" | base64 -d)"
-  [ -n "$pw" ] || { unavailable "could not read the Keycloak admin secret for the realm-wide scan"; return; }
+  [ -n "$pw" ] || { echo "SCAN_FAIL could not read the Keycloak admin secret"; return; }
   payload="$(printf '%s' "$pw" | run_stdin "kubectl $KEXEC_OPTS -n $NS exec -i deploy/oe-keycloak -- sh -c 'set -eu; IFS= read -r KC_PW
     /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$KC_PW\" >/dev/null 2>&1
     echo \"{\\\"realms\\\":[\"
@@ -1129,7 +1167,7 @@ realm_scan() {
       echo \"}\"
     done
     echo \"]}\"'")"
-  [ -n "$payload" ] || { unavailable "could not enumerate realms/clients for the realm-wide retirement check"; return; }
+  [ -n "$payload" ] || { echo "SCAN_FAIL kcadm returned nothing (auth failure? pod unreachable?)"; return; }
   printf '%s' "$payload" | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "
 import json, os, sys
 from urllib.parse import urlparse, urljoin
@@ -1164,7 +1202,7 @@ for r in realms:
     if not isinstance(clients, list):
         problems.append('realm %s: client list unreadable (enumeration incomplete)' % name); continue
     for c in clients:
-        if not isinstance(c, dict): 
+        if not isinstance(c, dict):
             problems.append('realm %s: non-object client entry' % name); continue
         cid = c.get('clientId', '?')
         root = str(c.get('rootUrl') or '')
@@ -1182,10 +1220,17 @@ for r in realms:
             v = str(c.get(field) or '')
             if v and host_hits(v):
                 problems.append('%s/%s %s=%s' % (name, cid, field, v))
-        pl = str((c.get('attributes') or {}).get('post.logout.redirect.uris', ''))
-        for v in [x for x in pl.split('##') if x]:
-            if catch_all(v) or host_hits(v) or (v.startswith('/') and root and host_hits(urljoin(root + '/', v.lstrip('/')))):
-                problems.append('%s/%s post-logout=%s' % (name, cid, v))
+        # EVERY url-bearing attribute, not just post-logout: back/front-channel logout URLs are
+        # contacted by Keycloak/the browser directly, and jwks/request-object URLs are fetched.
+        attrs = c.get('attributes') or {}
+        for ak, av in (attrs.items() if isinstance(attrs, dict) else []):
+            if av is None: continue
+            parts = str(av).split('##') if ak == 'post.logout.redirect.uris' else [str(av)]
+            for v in [x for x in parts if x]:
+                looks_url = v.startswith(('http://', 'https://', 'HTTP://', 'HTTPS://', '/')) or '://' in v
+                if not (looks_url or ak.endswith(('url', 'uri', 'uris'))): continue
+                if catch_all(v) or host_hits(v) or (v.startswith('/') and root and host_hits(urljoin(root + '/', v.lstrip('/')))):
+                    problems.append('%s/%s attr %s=%s' % (name, cid, ak, v))
 
 if problems: print('PROBLEMS ' + ' | '.join(problems))
 else: print('CLEAN %d realm(s) scanned' % len(realms))
@@ -1196,8 +1241,10 @@ if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   case "$rw" in
     CLEAN*) note "OK   no client in any live realm can reach the retired domain ($rw)" ;;
     PROBLEMS*) bad "LIVE Keycloak still admits the retired domain: ${rw#PROBLEMS }" ;;
-    SCAN_FAIL*) bad "realm-wide retirement scan could not complete — ${rw#SCAN_FAIL } (an incomplete enumeration is not evidence)" ;;
-    "") : ;;   # unavailable() already reported
+    SCAN_FAIL*) if [ "$NETWORK_ONLY" = "1" ]; then note "WARN realm-wide scan skipped (${rw#SCAN_FAIL })"
+                else bad "realm-wide retirement scan could not complete — ${rw#SCAN_FAIL } (an incomplete enumeration is not evidence)"; fi ;;
+    "") if [ "$NETWORK_ONLY" = "1" ]; then note "WARN realm-wide scan produced no output (network-only)"
+        else bad "realm-wide retirement scan produced NO output — the decisive realm gate did not run"; fi ;;
     *) bad "realm-wide retirement scan produced unusable output: $rw" ;;
   esac
 
@@ -1216,8 +1263,8 @@ def host_hits(u):
     except Exception: return False
     return bool(h) and any(h == s or h.endswith('.' + s) for s in sfxs)
 def catch_all(v):
-    v = str(v).strip()
-    return v in ('*', '/*') or v.startswith('http://*') or v.startswith('https://*')
+    v = str(v).strip(); lv = v.lower()
+    return v in ('*', '/*') or lv.startswith('http://*') or lv.startswith('https://*')
 try:
     data = (json.loads(sys.stdin.read()).get('data') or {})
     if not data: raise ValueError('ConfigMap has no data')
@@ -1227,7 +1274,10 @@ try:
         for c in realm.get('clients') or []:
             cid = c.get('clientId','?'); root = str(c.get('rootUrl') or '')
             vals = list(c.get('redirectUris') or []) + list(c.get('webOrigins') or [])
-            vals += [x for x in str((c.get('attributes') or {}).get('post.logout.redirect.uris','')).split('##') if x]
+            attrs = c.get('attributes') or {}
+            for ak, av in (attrs.items() if isinstance(attrs, dict) else []):
+                if av is None: continue
+                vals += str(av).split('##') if ak == 'post.logout.redirect.uris' else [str(av)]
             vals += [c.get('rootUrl'), c.get('baseUrl'), c.get('adminUrl')]
             for v in vals:
                 if v is None: continue
