@@ -63,4 +63,17 @@ ingress:
     service: http://192.168.100.4:30091
   - hostname: es.bleadingoptions.com
     service: http://192.168.100.4:30080
+  # Bugzilla, served by its own Apache as a host container on :8092 — deliberately NOT moved into
+  # Kubernetes: it is memory-hungry and lives where the memory is, while the hostname it answers on
+  # is just routing. Reaching it needs no NodePort and no ClusterIP, so nothing here breaks when a
+  # Service is recreated.
+  #
+  # This works only because OIDCRedirectURI in /home/options-edge/config/bugzilla-oidc.conf is
+  # PATH-ONLY (/oauth2callback) with OIDCXForwardedHeaders trusting X-Forwarded-Proto/Host. Pinned
+  # to a single hostname, as it was until 2026-08-08, mod_auth_openidc answers every request for
+  # any OTHER host with a 500 — so a hostname added here without that change would look broken
+  # rather than merely misrouted. Keycloak client `bugzilla` carries the matching
+  # https://req.bleadingoptions.com/oauth2callback redirect URI.
+  - hostname: req.bleadingoptions.com
+    service: http://127.0.0.1:8092
   - service: http_status:404
