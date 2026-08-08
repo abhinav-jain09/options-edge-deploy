@@ -94,8 +94,15 @@ is what clears any pre-change field/status cache. The apply ends with a self-tes
 bug-creation rows inside a transaction, checks that the extension goes fail-closed, and rolls back.
 
 ```bash
-docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply && docker restart $BZ
+docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply \
+  && docker restart $BZ \
+  && { python3 configuration/verify-projects.py --state configuration/expected-state.json \
+       || { echo "VERIFICATION FAILED - taking the site down again"; docker exec $BZ apachectl stop; false; }; }
 ```
+
+Read as one operation: a failed apply never restarts, and a failed verification takes Apache down
+again by itself rather than leaving traffic flowing through unproven enforcement. Export `BZ_API_KEY`
+first (see step 5) — the verifier needs it.
 
 **5. Verify.** Needs an admin API key (`requirelogin` is on, and the parameter assertions need
 `tweakparams`). This step **files smoke-test bugs** prefixed `[SMOKE]` and closes them again;

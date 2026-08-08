@@ -558,6 +558,20 @@ class Walker:
         check(f"allowed: {label}", status < 400 and not body.get("error"),
               f"HTTP {status}: {json.dumps(body)[:200]}")
 
+    def expect_denied_with(self, label, error, bug_id, **fields):
+        """Refused by an error the extension raises itself, rather than by
+        core's illegal_change - the product guard throws from
+        bug_start_of_update, so it reports its own code."""
+        want = self.enf["error_codes"]["extension"][error]
+        before = self.state_of(bug_id)
+        status, body = self.move(bug_id, **fields)
+        code = body.get("code")
+        check(f"denied: {label}",
+              status == HTTP_BAD_REQUEST and code == want,
+              f"expected HTTP {HTTP_BAD_REQUEST} code {want} ({error}), got "
+              f"HTTP {status} code {code}: {body.get('message','')[:160]}")
+        eq(f"unchanged after denying: {label}", self.state_of(bug_id), before)
+
     def expect_denied(self, label, bug_id, **fields):
         """The policy - not core, not the transport - must refuse this."""
         before = self.state_of(bug_id)
@@ -658,10 +672,11 @@ class Walker:
         for other_type, products in self.product_of.items():
             if other_type == issue_type:
                 continue
-            self.expect_denied(
+            self.expect_denied_with(
                 f"{issue_type} moved to '{products[0]}' ({other_type})",
-                bug_id, product=products[0], component="General",
-                version="unspecified")
+                "issue_product_move_cross_type", bug_id,
+                product=products[0], component="General",
+                version=self.version_of(products[0]))
 
         same = [p for p in self.product_of[issue_type]
                 if p != self.state_of(bug_id)[2]]

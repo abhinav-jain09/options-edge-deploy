@@ -878,9 +878,12 @@ sub flush_caches {
       if $key
       =~ /^Bugzilla::(Field|Field::Choice|Status|Product|Component|Version|Milestone)/;
   }
-  my $result = eval { Bugzilla->memcached->clear_all };
-  fatal('could not flush memcached: ' . $@) if $@;
-  fatal('memcached clear_all reported failure') if !$result;
+  # clear_all is a void operation (Memcached.pm:159-163 returns early when
+  # memcached is disabled, and otherwise returns whatever _inc_prefix does), so
+  # only an exception means anything. Demanding a truthy result would fail every
+  # run - including on installations with no memcached at all.
+  eval { Bugzilla->memcached->clear_all; 1 }
+    or fatal('could not flush memcached: ' . $@);
   return;
 }
 

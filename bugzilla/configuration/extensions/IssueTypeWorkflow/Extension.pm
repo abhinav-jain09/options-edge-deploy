@@ -155,6 +155,10 @@ use constant ERROR_CODES => {
   issue_type_initial_status_needs_comment => 100006,
   issue_type_workflow_misconfigured       => 100007,
   issue_product_move_cross_type           => 100008,
+  issue_type_value_rename_forbidden       => 100009,
+  issue_type_value_delete_forbidden       => 100010,
+  issue_type_product_rename_forbidden     => 100011,
+  issue_type_product_delete_forbidden     => 100012,
 };
 
 ###############################
@@ -174,12 +178,9 @@ use constant ERROR_CODES => {
 # reachable by anyone with tweakparams. Deleting cf_category is not a way out
 # either: the REQ_* statuses remain, so the state is 'broken', not 'off'.
 #
-# NOTE the limit this cannot close: Bugzilla::Field::Choice::update implements a
-# value RENAME as a direct UPDATE bugs SET <field> = ?, without going through
-# Bugzilla::Bug at all. An administrator with editvalues can therefore rewrite
-# bug rows - in stock Bugzilla just as much as here - and no hook can see it.
-# What this design does is make it detectable: setup-projects.pl digests every
-# pre-existing row and re-audits every item against its product's type.
+# Renaming a choice value would rewrite bug rows directly - Field::Choice::update
+# runs UPDATE bugs SET <field> = ? without going through Bugzilla::Bug - so that
+# is guarded separately, in object_before_set, which fires before any of it.
 #
 # Cached for the current request only, so no answer outlives the state it
 # described and a mod_perl worker cannot get stuck fail-open.
@@ -527,6 +528,84 @@ sub bug_end_of_create_validators {
 
   # Both entry points are open statuses; an item may never be born resolved.
   $params->{resolution} = '';
+
+  return;
+}
+
+# Bugzilla::Field::Choice::update implements a value RENAME as a direct
+# UPDATE bugs SET <field> = ? (Field/Choice.pm:158) and a status/resolution
+# rename therefore rewrites live bug rows without Bugzilla::Bug - and so without
+# any of the hooks above - ever being involved. An administrator with editvalues
+# could rename BUG_CODE to REQ_LOGIC, or swap two statuses through temporary
+# names, and land in a state that looks complete again afterwards.
+#
+# object_before_set (Object.pm:445) fires before Bugzilla::Object::set does any
+# work at all, which is early enough to refuse it.
+sub object_before_set {
+  my ($self, $args) = @_;
+  my ($object, $field) = @$args{qw(object field)};
+
+  return if _enforcement_state() eq 'off';
+  return if !blessed($object);
+
+  # Renaming a value the policy names.
+  if ($object->isa('Bugzilla::Field::Choice') && $field eq 'value') {
+    my $of = eval { $object->field->name } // '';
+    my $current = eval { $object->name } // '';
+    return if !GUARDED_FIELDS->{$of};
+
+    my $guarded
+      = $of eq 'bug_status' ? STATUS_IS_OPEN->{$current}
+      : $of eq 'resolution'
+      ? (ALLOWED_RESOLUTIONS->{BUG}{$current}
+        || ALLOWED_RESOLUTIONS->{REQUIREMENT}{$current})
+      : (ALLOWED_CATEGORIES->{BUG}{$current}
+        || ALLOWED_CATEGORIES->{REQUIREMENT}{$current});
+    ThrowUserError('issue_type_value_rename_forbidden',
+      {field => $of, value => $current})
+      if defined $guarded;
+  }
+
+  # Renaming a mapped product would re-type every item in it.
+  if ($object->isa('Bugzilla::Product') && $field eq 'name') {
+    my $current = eval { $object->name } // '';
+    ThrowUserError('issue_type_product_rename_forbidden', {product => $current})
+      if PRODUCT_TYPE->{$current};
+  }
+
+  return;
+}
+
+# Same reasoning: deleting one of these would strip the lifecycle out from under
+# live items.
+sub object_before_delete {
+  my ($self, $args) = @_;
+  my $object = $args->{object};
+
+  return if _enforcement_state() eq 'off';
+  return if !blessed($object);
+
+  if ($object->isa('Bugzilla::Field::Choice')) {
+    my $of      = eval { $object->field->name } // '';
+    my $current = eval { $object->name } // '';
+    return if !GUARDED_FIELDS->{$of};
+    my $guarded
+      = $of eq 'bug_status' ? STATUS_IS_OPEN->{$current}
+      : $of eq 'resolution'
+      ? (ALLOWED_RESOLUTIONS->{BUG}{$current}
+        || ALLOWED_RESOLUTIONS->{REQUIREMENT}{$current})
+      : (ALLOWED_CATEGORIES->{BUG}{$current}
+        || ALLOWED_CATEGORIES->{REQUIREMENT}{$current});
+    ThrowUserError('issue_type_value_delete_forbidden',
+      {field => $of, value => $current})
+      if defined $guarded;
+  }
+
+  if ($object->isa('Bugzilla::Product')) {
+    my $current = eval { $object->name } // '';
+    ThrowUserError('issue_type_product_delete_forbidden', {product => $current})
+      if PRODUCT_TYPE->{$current};
+  }
 
   return;
 }

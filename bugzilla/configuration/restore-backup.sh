@@ -83,10 +83,11 @@ printf '%s' "$DBNAME" | grep -Eq '^[A-Za-z0-9_]+$' \
 
 # Confirm we are about to drop the schema this dump actually came from.
 #
-# Read the header with awk's own early exit rather than `gunzip | head | grep`:
-# under `set -o pipefail`, head closing the pipe makes gunzip die of SIGPIPE and
-# the whole pipeline "fails" on a perfectly good multi-hundred-megabyte dump.
-HEADER=$(gunzip -c "$DUMP" | awk 'NR <= 30; NR == 30 {exit}')
+# Do not close the pipe early. `head`, and equally `awk ... {exit}`, make gunzip
+# die of SIGPIPE, and under `set -o pipefail` the whole substitution then fails -
+# on a perfectly good multi-hundred-megabyte dump. Let awk read the entire
+# stream and simply print nothing after the header.
+HEADER=$(gunzip -c "$DUMP" | awk 'NR <= 30 {print}')
 case "$HEADER" in
   *"MySQL dump"*|*"MariaDB dump"*) ;;
   *) echo "FATAL: $DUMP does not look like a mariadb-dump" >&2; exit 1 ;;

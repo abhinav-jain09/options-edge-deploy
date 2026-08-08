@@ -261,7 +261,11 @@
         "issue_type_initial_status_unavailable": 100005,
         "issue_type_initial_status_needs_comment": 100006,
         "issue_type_workflow_misconfigured": 100007,
-        "issue_product_move_cross_type": 100008
+        "issue_product_move_cross_type": 100008,
+        "issue_type_value_rename_forbidden": 100009,
+        "issue_type_value_delete_forbidden": 100010,
+        "issue_type_product_rename_forbidden": 100011,
+        "issue_type_product_delete_forbidden": 100012
       }
     }
   },

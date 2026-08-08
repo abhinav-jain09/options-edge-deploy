@@ -37,4 +37,30 @@
   <em>setup-projects.pl</em> has been re-run. This is deliberate: the
   alternative would be to silently stop enforcing the lifecycles.
 
+[% ELSIF error == "issue_type_value_rename_forbidden" %]
+  [% title = "That Value Cannot Be Renamed" %]
+  <em>[% value FILTER html %]</em> is part of the configured issue-type
+  lifecycles. Renaming a <em>[% field FILTER html %]</em> value rewrites it on
+  every item already using it, directly in the database — so it is refused here.
+  Change <em>expected-state.json</em> and re-run <em>setup-projects.pl</em>
+  instead.
+
+[% ELSIF error == "issue_type_value_delete_forbidden" %]
+  [% title = "That Value Cannot Be Deleted" %]
+  <em>[% value FILTER html %]</em> is part of the configured issue-type
+  lifecycles; removing it would leave items with no lifecycle. Change
+  <em>expected-state.json</em> and re-run <em>setup-projects.pl</em>.
+
+[% ELSIF error == "issue_type_product_rename_forbidden" %]
+  [% title = "That Product Cannot Be Renamed" %]
+  The issue type is derived from the product, so renaming
+  <em>[% product FILTER html %]</em> would change the type of everything in it.
+  Change <em>expected-state.json</em> (and the extension's map) and re-run
+  <em>setup-projects.pl</em>.
+
+[% ELSIF error == "issue_type_product_delete_forbidden" %]
+  [% title = "That Product Cannot Be Deleted" %]
+  <em>[% product FILTER html %]</em> carries an issue type, so deleting it would
+  leave its items with no lifecycle.
+
 [% END %]
