@@ -33,7 +33,6 @@ use Bugzilla::Field;
 use Bugzilla::Field::Choice;
 use Bugzilla::Product;
 use Bugzilla::Status;
-use Bugzilla::Util qw(i_am_cgi);
 
 our $VERSION = '2.0.0';
 
@@ -164,15 +163,23 @@ use constant ERROR_CODES => {
 
 # Three states, none switchable from the admin UI.
 #
-#   off    - cf_category does not exist AND we are not serving a request: never
-#            provisioned, so checksetup.pl and the provisioner can run.
+#   off    - cf_category does not exist AND no REQ_* status does either: this
+#            installation has never been provisioned, so checksetup.pl, the
+#            first extension mount and the first apply all work normally.
 #   on     - the whole declared model is present and matches.
 #   broken - anything else. EVERY guarded change is refused until
 #            setup-projects.pl has been re-run.
 #
 # There is deliberately no "enforcement enabled" parameter: any such switch is
 # reachable by anyone with tweakparams. Deleting cf_category is not a way out
-# either - from a request that is 'broken', not 'off'.
+# either: the REQ_* statuses remain, so the state is 'broken', not 'off'.
+#
+# NOTE the limit this cannot close: Bugzilla::Field::Choice::update implements a
+# value RENAME as a direct UPDATE bugs SET <field> = ?, without going through
+# Bugzilla::Bug at all. An administrator with editvalues can therefore rewrite
+# bug rows - in stock Bugzilla just as much as here - and no hook can see it.
+# What this design does is make it detectable: setup-projects.pl digests every
+# pre-existing row and re-audits every item against its product's type.
 #
 # Cached for the current request only, so no answer outlives the state it
 # described and a mod_perl worker cannot get stuck fail-open.
@@ -183,11 +190,16 @@ sub _enforcement_state {
   my $state;
   if (!Bugzilla::Field->new({name => CATEGORY_FIELD})) {
 
-    # Bootstrap has to be claimed explicitly. Treating "not a CGI request" as
-    # bootstrap would leave email-in, cron and every other command-line path
-    # unenforced the moment somebody deleted the field.
-    $state
-      = (!i_am_cgi() && $ENV{BUGZILLA_ITW_BOOTSTRAP}) ? 'off' : 'broken';
+    # Bootstrap, or sabotage? The difference is whether this installation has
+    # EVER been provisioned, and the database can answer that: provisioning
+    # creates the REQ_* statuses, which cannot be removed while any item sits
+    # on them.
+    #
+    # An env var is not usable here (it would brick every web request between
+    # mounting the extension and the first apply), and "not a CGI request" is
+    # not usable either (it would leave email-in and cron unenforced the moment
+    # someone deleted the field).
+    $state = _ever_provisioned() ? 'broken' : 'off';
   }
   else {
     $state = model_is_complete() ? 'on' : 'broken';
@@ -203,6 +215,17 @@ sub _enforcement_state {
 #
 # Public because setup-projects.pl calls it to prove, inside a transaction it
 # then rolls back, that damage really does trip 'broken'.
+# True once provisioning has happened, judged by something an administrator
+# cannot quietly remove: the requirement statuses. Deleting cf_category alone
+# therefore lands in 'broken' rather than back in 'bootstrap'.
+sub _ever_provisioned {
+  foreach my $name (keys %{ALLOWED_STATUSES->{REQUIREMENT}}) {
+    next if ALLOWED_STATUSES->{BUG}{$name};    # skip the shared closed tail
+    return 1 if Bugzilla::Status->new({name => $name});
+  }
+  return 0;
+}
+
 sub model_is_complete {
   my $field = Bugzilla::Field->new({name => CATEGORY_FIELD}) or return 0;
   return 0 if !$field->custom;

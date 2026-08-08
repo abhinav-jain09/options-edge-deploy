@@ -38,7 +38,7 @@ use 5.14.0;
 use strict;
 use warnings;
 
-use Digest::MD5 ();
+use Digest::SHA ();
 use Getopt::Long qw(GetOptions);
 use IO::Socket::INET ();
 use JSON::PP         ();
@@ -151,11 +151,6 @@ my $json_text = do {
   <$fh>;
 };
 my $STATE = JSON::PP->new->relaxed->decode($json_text);
-
-# Tells the extension this really is a provisioning run, so that a missing
-# cf_category means "not provisioned yet" rather than "someone deleted the
-# anchor". Nothing else may claim it.
-BEGIN { $ENV{BUGZILLA_ITW_BOOTSTRAP} = 1 }
 
 Bugzilla->usage_mode(USAGE_MODE_CMDLINE);
 my $dbh = Bugzilla->dbh;
@@ -729,10 +724,12 @@ sub audit_existing_bugs {
   # row and an empty value is valid forever. That is the whole reason the type
   # is derived from the product instead of stored per bug.
   my $has_category = Bugzilla::Field->new({name => 'cf_category'}) ? 1 : 0;
+  my $has_env      = Bugzilla::Field->new({name => 'cf_environment'}) ? 1 : 0;
 
   my $select
     = 'SELECT b.bug_id, b.bug_status, b.resolution, p.name AS product'
-    . ($has_category ? ', b.cf_category' : '')
+    . ($has_category ? ', b.cf_category'    : '')
+    . ($has_env      ? ', b.cf_environment' : '')
     . ' FROM bugs b JOIN products p ON p.id = b.product_id';
   my $bugs = $dbh->selectall_arrayref($select, {Slice => {}});
 
@@ -768,6 +765,17 @@ sub audit_existing_bugs {
         if $is_open && $resolution ne '';
       push @bad, "bug $bug->{bug_id}: closed status '$status' with no resolution"
         if !$is_open && $resolution eq '';
+    }
+
+    # cf_environment is declared visible for the BUG products only, so a
+    # REQUIREMENT carrying one is drift from an earlier, unguarded period.
+    if ($has_env) {
+      my $env = $bug->{cf_environment};
+      push @bad, "bug $bug->{bug_id}: $type carries environment '$env'"
+        if defined $env
+        && $env ne ''
+        && $env ne '---'
+        && $type ne 'BUG';
     }
 
     # An empty category is always valid - that is what leaves existing bugs
@@ -1176,6 +1184,15 @@ sub ensure_product {
       allows_unconfirmed => $spec->{allows_unconfirmed} ? 1 : 0,
       create_series      => 1,
     });
+
+    # The type is bound to the id, so a product that lands on an unexpected one
+    # would be typed wrongly (or not at all) the moment it holds an item.
+    my $want = $STATE->{product_type_id}{$product->id};
+    fatal("created product '$spec->{name}' with id " . $product->id
+        . ", but expected-state.json maps that id to '"
+        . (defined $want ? $want : 'nothing')
+        . "'. Update product_type_id (and Extension.pm) or remove the product.")
+      if !defined $want || $want ne $spec->{issue_type};
   }
   else {
     my %want = (
@@ -1366,14 +1383,21 @@ sub bugs_digest {
   my $sth  = $dbh->prepare("SELECT $list FROM bugs ORDER BY bug_id");
   $sth->execute;
 
-  my $md5  = Digest::MD5->new;
+  # Length-prefixed and type-tagged, so no value can imitate a separator, and
+  # SHA-256 rather than MD5. Ambiguity here would defeat the whole point.
+  my $sha  = Digest::SHA->new(256);
   my $rows = 0;
   while (my @row = $sth->fetchrow_array) {
-    $md5->add(join("\x1f", map { defined $_ ? $_ : "\x00NULL" } @row));
-    $md5->add("\x1e");
+    foreach my $value (@row) {
+      if (!defined $value) { $sha->add('N:'); next; }
+      my $octets = "$value";
+      utf8::encode($octets) if utf8::is_utf8($octets);
+      $sha->add('V:' . length($octets) . ':' . $octets);
+    }
+    $sha->add('|R|');
     $rows++;
   }
-  return ($md5->hexdigest, $rows);
+  return ($sha->hexdigest, $rows);
 }
 
 ########################################################################
@@ -1488,6 +1512,10 @@ my $ok = eval {
   }
   flush_caches() if !$DRY;
 
+  # Before any status is created: Bugzilla::Status::create() calls
+  # add_missing_bug_status_transitions(), which reads this parameter live.
+  ensure_params();
+
   ensure_statuses();
   ensure_resolutions();
   ensure_product($_) foreach @{$STATE->{products}};
@@ -1499,12 +1527,8 @@ my $ok = eval {
   decommission_products();
   flush_caches() if !$DRY;
 
-  # Re-audit AFTER the DDL: creating a mandatory select field over existing rows
-  # would have given them the unset sentinel, and declaring the model complete
-  # over that would lock those items out of every guarded edit.
+  # Re-audit AFTER the DDL, against the columns that now exist.
   audit_existing_bugs() if !$DRY;
-
-  ensure_params();
 
   # The constraint this whole design is shaped around, proven rather than
   # asserted. Runs before the self-test, so a self-test failure cannot be

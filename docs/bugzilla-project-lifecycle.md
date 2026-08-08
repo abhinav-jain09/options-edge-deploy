@@ -18,9 +18,16 @@ created by separate work:
 | `Fullfunding Requirements` | REQUIREMENT | 0 |
 
 Two constraints follow, and they decide almost everything below: **the four products are adopted,
-not replaced**, and **nothing may write to an existing bug row**.
+not replaced**, and **no existing bug's data may be modified**.
 
-That second one is not a preference, it is arithmetic. A mandatory custom select over a populated
+Stated precisely, because the difference matters: applying this configuration changes no *value* of
+any existing bug. It does add two nullable columns to `bugs` (`Bugzilla::Field->create` issues
+`ALTER TABLE`), which existing rows acquire as empty — and depending on the MariaDB version and DDL
+algorithm, that `ALTER` may rebuild the table physically. What it never does is change a status,
+resolution, product or any other field of a bug that already exists. The provisioner **proves** that
+by digesting every pre-existing row before and after and refusing to finish if anything differs.
+
+The constraint is not a preference, it is arithmetic. A mandatory custom select over a populated
 table gives all 177 rows the `---` sentinel. And a status rename is not metadata: Bugzilla
 implements it as `UPDATE bugs SET <field> = ?` (`Field/Choice.pm:158`), which would have rewritten
 the 80 rows sitting on `CONFIRMED`/`IN_PROGRESS`.
@@ -69,8 +76,7 @@ REQUIREMENT:  REQ_DRAFT → REQ_REVIEW → REQ_APPROVED → REQ_IN_PROGRESS → 
 ```
 
 The BUG branch keeps Bugzilla's **stock names**: renaming them would rewrite the live rows using
-them. Only the four `REQ_*` statuses are new, so applying this configuration writes nothing at all
-to the `bugs` table.
+them. Only the four `REQ_*` statuses are new, so no bug's status value is touched.
 
 The exact matrix, `is_open` flags and `require_comment` values live in
 [`bugzilla/configuration/expected-state.json`](../bugzilla/configuration/expected-state.json), which
@@ -93,8 +99,8 @@ The 177 existing bugs land correctly without being touched: they are in `Options
 
 ## 4. Enforcement — `extensions/IssueTypeWorkflow`
 
-Two hooks, both inside `Bugzilla::Bug`, so the UI, bulk edit, email-in, XML-RPC/JSON-RPC and REST all
-get the same policy:
+Three hooks, all inside `Bugzilla::Bug`, so the UI, bulk edit, email-in, XML-RPC/JSON-RPC and REST
+all get the same policy:
 
 - **`bug_check_can_change_field`** — every update. Denies a status outside the item's own branch, a
   resolution not allowed for its type, and a category not belonging to its type. Denial is by
@@ -113,8 +119,9 @@ Enforcement has **three** states:
 
 There is deliberately **no** "enforcement enabled" parameter. Any such switch is reachable by anyone
 with `tweakparams`, which would hand administrators the one thing this design exists to deny them.
-The presence of `cf_category` is the marker instead, and deleting it is not a way out: from a web or
-API request a missing field is `broken`, not `off`.
+`cf_category` is the marker instead, and deleting it is not a way out: provisioning also creates the
+`REQ_*` statuses, which cannot be removed while items sit on them, so a missing category field with
+those statuses present reads as `broken`, not `bootstrap`.
 
 "Matches" means the whole model, not a couple of spot checks: both fields' type, custom, mandatory,
 `enter_bug` and control wiring; exactly the declared issue types; exactly the declared categories,
@@ -218,12 +225,10 @@ duplicate handling and bulk-update atomicity, and closes its smoke bugs on the w
 
 Refusals are asserted by **code**, not by "something went wrong": a denied update is
 `illegal_change` (115, HTTP 401), and the extension registers its own creation errors
-(100001-100007, HTTP 400) through the `webservice_error_codes` hook. Otherwise a bad API key or a
-500 would look exactly like successful enforcement. Three of those codes are defence-in-depth rather
-than routinely reachable — core's select validation preempts `issue_type_unknown`, and the
-`initial_status_*` and `workflow_misconfigured` errors only arise once the workflow has been damaged,
-which now also trips the fail-closed state — so the verifier asserts exact codes for the reachable
-ones and says plainly which it cannot induce.
+(100004-100008, HTTP 400) through the `webservice_error_codes` hook. Otherwise a bad API key or a
+500 would look exactly like successful enforcement. The two `initial_status_*` codes are race defence: a damaged
+workflow normally trips `issue_type_workflow_misconfigured` first. The verifier asserts exact codes
+for the reachable ones and says plainly which it cannot induce.
 
 ## 7. Known limits
 
@@ -231,10 +236,16 @@ ones and says plainly which it cannot induce.
   than a bespoke message. That is the price of denying via `priv_results` instead of throwing (§5.1);
   creation-time errors do have their own messages and codes.
 - Because the closed tail is shared, any report that distinguishes "fixed bug" from "implemented
-  requirement" must filter on `cf_issue_type` and `resolution`, not on status alone.
+  requirement" must filter on the product and `resolution`, not on status alone.
 - The extension duplicates the status/resolution policy as Perl constants (it must not depend on a
   config file at runtime). The provisioner asserts they match the JSON on every run, and
   `verify-projects.py` proves them behaviourally.
+- **An administrator with `editvalues` can rewrite bug rows, and no hook can stop them.**
+  `Bugzilla::Field::Choice::update` implements a value *rename* as a direct
+  `UPDATE bugs SET <field> = ?` — it never goes through `Bugzilla::Bug`, so nothing this extension
+  hooks is involved. That is true of stock Bugzilla too; it is an admin-privilege boundary, not a
+  hole this design opened. What this design adds is **detection**: the provisioner digests every
+  pre-existing row and re-audits every item against its product's type, so the next run says so.
 - An administrator editing `editvalues.cgi`/`editworkflow.cgi` can no longer widen policy — the
   compiled-in vocabulary and the fail-closed marker see to that — but they can still make the
   installation *stop working* (which is the intended direction), and items stored before such an edit

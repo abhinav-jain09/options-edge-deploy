@@ -85,8 +85,10 @@ container.
 **If it does not print `BACKUP OK`, stop — restart Apache with `docker exec $BZ apachectl start` and
 do not apply.**
 
-**4. Apply, then restart** — one command, so a failed apply leaves the site down rather than serving
-a half-provisioned installation. The script refuses to run while Apache is answering on
+**4. Apply, then restart, then verify** — chained, so a failed apply leaves the site down rather
+than serving a half-provisioned installation, and a failed verification is seen immediately. **If
+verification fails, stop Apache again** (`docker exec $BZ apachectl stop`) before investigating:
+until it passes, enforcement is unproven. The script refuses to run while Apache is answering on
 `localhost:80`, which is what guarantees enforcement is never observably half-installed; the restart
 is what clears any pre-change field/status cache. The apply ends with a self-test that deletes the
 bug-creation rows inside a transaction, checks that the extension goes fail-closed, and rolls back.
@@ -114,9 +116,7 @@ lack those groups before believing it:
 read -rs BZ_REPORTER_KEY && export BZ_REPORTER_KEY && python3 configuration/verify-projects.py --state configuration/expected-state.json --reporter-api-key-env BZ_REPORTER_KEY --strict
 ```
 
-`TestProduct` is also reported as `WARN` until step 7 retires it. That one is flagged as *expected*,
-so `--strict` does not fail on it — otherwise the documented order (verify, then decommission) could
-never be followed. After step 7, re-run with `--require-decommissioned` to assert it is really gone.
+Nothing is scheduled for decommissioning, so no product warning is expected here.
 
 It defaults to `http://localhost:8092` and **refuses** a non-loopback plain-HTTP URL unless you pass
 `--allow-remote-http`, because the endpoint speaks plain HTTP and the key travels in a header. Run it
