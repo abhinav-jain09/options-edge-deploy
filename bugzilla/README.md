@@ -52,6 +52,14 @@ Everything runs on `.252`. Set these once per session:
 BZ=options-edge-bugzilla-web; ADMIN=<admin-login>
 ```
 
+**0. Prerequisite for the FIRST apply: an unprivileged reporter account.** This installation has a
+single profile today, and verification cannot prove the path external stakeholders actually use
+without a second one — a user in neither `editbugs` nor `canconfirm`, who also cannot edit other
+people's bugs through any product group grant. **Create that account yourself** (account creation is
+not something this runbook automates), give it an API key, and only then run step 5. Until it
+exists, the first apply is deliberately incomplete: `--strict` will fail rather than report success
+over an unproven path.
+
 Step **5** is the only one that changes anything: it applies the configuration and then files and
 closes smoke bugs. Steps 1, 2, 4 and 6 are read-only; step 3 backs up. Step 5 is deliberately a
 single `&&` chain, so a failure at any point stops the rest and leaves the site down.
@@ -86,14 +94,6 @@ container.
 **If it does not print `BACKUP OK`, stop — restart Apache with `docker exec $BZ apachectl start` and
 do not apply.**
 
-**0. Prerequisite for the FIRST apply: an unprivileged reporter account.** This installation has a
-single profile today, and verification cannot prove the path external stakeholders actually use
-without a second one — a user in neither `editbugs` nor `canconfirm`, who also cannot edit other
-people's bugs through any product group grant. **Create that account yourself** (account creation is
-not something this runbook automates), give it an API key, and only then run step 5. Until it
-exists, the first apply is deliberately incomplete: `--strict` will fail rather than report success
-over an unproven path.
-
 **4. Get two API keys into the environment** — step 5 needs both. `BZ_API_KEY` must belong to an
 admin (`requirelogin` is on, and the parameter assertions need `tweakparams`). `BZ_REPORTER_KEY`
 must belong to a user WITHOUT `editbugs`/`canconfirm` — the verifier checks that before believing
@@ -126,11 +126,7 @@ docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html
 
 `--strict` and the reporter key are **mandatory for the first apply**: without them the run reports
 success while the path external stakeholders actually use — an unprivileged reporter filing a
-REQUIREMENT — is only a warning. Export both keys in step 4:
-
-```bash
-read -rs BZ_API_KEY && export BZ_API_KEY && read -rs BZ_REPORTER_KEY && export BZ_REPORTER_KEY
-```
+REQUIREMENT — is only a warning.
 
 The verifier defaults to `http://localhost:8092` and **refuses** a non-loopback plain-HTTP URL unless
 you pass `--allow-remote-http`: the endpoint speaks plain HTTP and the key travels in a header. Run
