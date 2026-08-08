@@ -4,6 +4,11 @@
 # origins (https://bleadingoptions.com plus its es. subdomain; fullfunding.nl retired 2026-08-08).
 # Import is idempotent: an already-present realm is skipped on later boots,
 # so realm drift must be reconciled out-of-band (kcadm) — see docs/keycloak-prod.md.
+#
+# ⚠️ Because import is creation-only, editing this file changes NOTHING on a running Keycloak.
+# It is the desired state: what a rebuild-from-empty must reproduce. Anything added here must
+# already have been applied live with kcadm in the same change (REQ-1 of the req-portal design),
+# which is the case for the `bugzilla` client, its `groups` mapper, and the group tree below.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -73,6 +78,63 @@ data:
                 "access.token.claim": "true"
               }
             }
+          ]
+        },
+        {
+          "//": "Bugzilla (http://192.168.100.252:8092) authenticates through this realm using",
+          "//2": "mod_auth_openidc in its own Apache. Confidential: Keycloak generates the secret at",
+          "//3": "import and it is transferred server-side into /home/options-edge/config/bugzilla-oidc.env",
+          "//4": "(0600) — it is never committed here, exactly as for the req portal client below.",
+          "//5": "The `groups` mapper is load-bearing, not cosmetic: Bugzilla's Env login can only read",
+          "//6": "auth_env_id/email/realname, so group membership can ONLY reach it through this claim,",
+          "//7": "which the KeycloakGroups Bugzilla extension turns into Bugzilla group membership.",
+          "//8": "full.path=true is required — the paths (/optionsedge/internal) are what map onto the",
+          "//9": "Bugzilla group names (optionsedge-internal); bare names would collide across apps.",
+          "clientId": "bugzilla",
+          "protocol": "openid-connect",
+          "publicClient": false,
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "redirectUris": ["http://192.168.100.252:8092/oauth2callback"],
+          "webOrigins": ["http://192.168.100.252:8092"],
+          "protocolMappers": [
+            {
+              "name": "groups",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "consentRequired": false,
+              "config": {
+                "full.path": "true",
+                "claim.name": "groups",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true"
+              }
+            }
+          ]
+        }
+      ],
+      "//groups": "Access model: one parent group per application, with an `internal` and an",
+      "//groups2": "`external` child. Membership here is the single place access is granted — the",
+      "//groups3": "KeycloakGroups Bugzilla extension mirrors these paths onto Bugzilla groups named",
+      "//groups4": "<app>-<tier> at each login. Adding an application means adding one parent and two",
+      "//groups5": "children here, plus the matching Bugzilla groups and products.",
+      "groups": [
+        {
+          "name": "optionsedge",
+          "path": "/optionsedge",
+          "subGroups": [
+            { "name": "internal", "path": "/optionsedge/internal" },
+            { "name": "external", "path": "/optionsedge/external" }
+          ]
+        },
+        {
+          "name": "fullfunding",
+          "path": "/fullfunding",
+          "subGroups": [
+            { "name": "internal", "path": "/fullfunding/internal" },
+            { "name": "external", "path": "/fullfunding/external" }
           ]
         }
       ]
