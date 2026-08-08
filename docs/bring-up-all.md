@@ -108,7 +108,7 @@ per the production environment** (the app intentionally has *no* prod defaults �
 | `VITE_MISSION_CONTROL_URL` | `http://localhost:8090` | `https://bleadingoptions.com` |
 | `KAFKA_BOOTSTRAP_SERVERS` | _dev default_ | `192.168.100.252:9092,192.168.100.4:9092` — **confirm** |
 | `VITE_AUTH_ENABLED` | `true` | `true` (auth mandatory in every env) |
-| `VITE_AUTH_ISSUER` | `http://192.168.100.102:8089/realms/optionsedge` | _prod Keycloak issuer_ — **TBD** |
+| `VITE_AUTH_ISSUER` | `http://192.168.100.102:8089/realms/optionsedge` | `https://auth.bleadingoptions.com/realms/optionsedge` (deployed 2026-08-08) |
 | `VITE_AUTH_CLIENT_ID` | `options-edge-web` | `options-edge-web` |
 | `AUTH_AUDIENCE` / `VITE_AUTH_AUDIENCE` | `options-edge-web` | `options-edge-web` |
 

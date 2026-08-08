@@ -244,9 +244,26 @@ What Phase 3 removes (this change-set):
    body="$(cf "$Z/workers/routes")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
    for sc in $(printf '%s' "$body" | python3 -c "import json,sys; print('\n'.join(filter(None,(r.get('script') for r in json.load(sys.stdin)['result']))))" | sort -u); do
      echo "=== worker script: $sc ===" >> "$EV"
-     cf "$A/workers/scripts/$sc/content" >> "$EV"     # inspect it; a route with no readable
-                                                      # script content = STOP and inspect by hand
+     cf "$A/workers/scripts/$sc/content/v2" >> "$EV"      # GET is /content/v2 (/content is upload)
+     cf "$A/workers/scripts/$sc/settings" >> "$EV"        # bindings: a script can reach the new
+                                                          # domain via env/KV/secret/service binding
+                                                          # and contain NO searchable needle
    done
+
+   # 3b. the mechanisms that are NOT zone rulesets/pagerules/routes and would otherwise be missed:
+   #     account Bulk Redirects (apply across every domain in the account, so their LIST ITEMS
+   #     must be fetched too), Worker Custom Domains (route a whole hostname without a DNS record
+   #     you would recognise), and Snippets (zone-level JS with its own API).
+   body="$(cf "$A/rules/lists")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
+   for lid in $(printf '%s' "$body" | python3 -c "import json,sys; print('\n'.join(l['id'] for l in json.load(sys.stdin)['result'] if l.get('kind')=='redirect'))"); do
+     item="$(cf "$A/rules/lists/$lid/items?per_page=500")"; printf '%s' "$item" | ok; printf '%s\n' "$item" >> "$EV"
+   done
+   body="$(cf "$A/workers/domains?per_page=100")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
+   body="$(cf "$Z/snippets")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
+   for sn in $(printf '%s' "$body" | python3 -c "import json,sys; print('\n'.join(x['snippet_name'] for x in (json.load(sys.stdin).get('result') or [])))"); do
+     cf "$Z/snippets/$sn/content" >> "$EV"
+   done
+   body="$(cf "$Z/snippets/snippet_rules")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
 
    # 4. verdict — any reference to us anywhere in the evidence stops the handoff
    if grep -niE "bleadingoptions\.com|976f76d2-e3c8-4887-a11d-21c27f5e8bed|cfargotunnel" "$EV"; then
@@ -257,9 +274,15 @@ What Phase 3 removes (this change-set):
    fi
    ```
 
-   Keep `$EV` and the verdict line as the acceptance artifact. If ANY worker route exists, treat
-   the automated grep as necessary-but-not-sufficient and read that script yourself before
-   proceeding — behaviour cannot be proven by a needle search.
+   Keep `$EV` and the verdict line as the acceptance artifact. **The grep is necessary but never
+   sufficient where code runs.** If any Worker route/custom domain or Snippet exists on the retired
+   zone, read its source AND its bindings yourself: a script can reach the new domain through
+   `env.ORIGIN`, a secret, a KV value or a service binding to another Worker (follow those
+   recursively) without containing a single searchable needle. If a destination is secret or
+   otherwise unknowable, do NOT hand off — remove the route/domain/snippet first, or obtain
+   independent behavioural evidence (e.g. request the retired hostname through it and observe where
+   it lands). Cloudflare API paths shift over time; if any call 404s, look it up rather than
+   dropping the check — a skipped mechanism is an unproven one.
 
    (This migration never created redirect rules — the domain is being freed, not forwarded — so
    the expected result is nothing referencing us; record it either way.) `bleadingoptions.com`
