@@ -1,9 +1,29 @@
 # Bugzilla: two projects, two issue types, two lifecycles
 
 Internal Bugzilla (`http://192.168.100.252:8092`, Bugzilla **5.2**, source checkout on `.252` at
-`/home/options-edge/data/bugzilla/runtime` @ `276673ab6`) gets two projects — **optionedge** and
-**fullfunding** — where every item is either a **BUG** or a **REQUIREMENT**, each type has its own
-lifecycle, and each type has its own category vocabulary.
+`/home/options-edge/data/bugzilla/runtime` @ `276673ab6`) gets two lifecycles: every item is either
+a **BUG** or a **REQUIREMENT**, each type has its own lifecycle, and each has its own category
+vocabulary.
+
+## 0. What the installation actually is
+
+Not a fresh install. It holds **177 live bugs** (2026-06-11 .. 2026-08-03) and **four products**
+created by separate work:
+
+| Product | Type | Bugs |
+|---|---|---|
+| `OptionsEdge` | BUG | 177 |
+| `Fullfunding` | BUG | 0 |
+| `OptionsEdge Requirements` | REQUIREMENT | 0 |
+| `Fullfunding Requirements` | REQUIREMENT | 0 |
+
+Two constraints follow, and they decide almost everything below: **the four products are adopted,
+not replaced**, and **nothing may write to an existing bug row**.
+
+That second one is not a preference, it is arithmetic. A mandatory custom select over a populated
+table gives all 177 rows the `---` sentinel. And a status rename is not metadata: Bugzilla
+implements it as `UPDATE bugs SET <field> = ?` (`Field/Choice.pm:158`), which would have rewritten
+the 80 rows sitting on `CONFIRMED`/`IN_PROGRESS`.
 
 ## 1. The constraint that shapes everything
 
@@ -20,36 +40,41 @@ Naming convention alone is not enough: without server-side enforcement, a `PUT /
 
 | Concern | Decision |
 |---|---|
-| Project | Bugzilla **Product**: `optionedge`, `fullfunding`. Classifications stay off. |
-| Item type | `cf_issue_type` single-select, mandatory, **immutable after creation** |
-| Category | `cf_category` single-select, mandatory, values controlled by `cf_issue_type` |
-| Subsystem | Bugzilla **Component** (not the category) |
-| Environment | `cf_environment`, visible for BUG only |
+| Item type | **derived from the product** (`product_type` in the SSOT). No per-bug type field. |
+| Category | `cf_category` single-select, **optional**, one flat `BUG_*`/`REQ_*` vocabulary |
+| Environment | `cf_environment`, controlled at field level by product (the two BUG products) |
+| Classifications | stay off |
 
-Four products (`optionedge-bugs`, `optionedge-reqs`, …) were rejected: the workflow is global, so
-splitting products buys no separate lifecycle at all, and it breaks dependencies, duplicate links
-and cross-type search for nothing.
+**The type is the product.** `bugs.product_id` is already the normalised ownership column; a second
+per-bug copy could only drift from it, and — decisively — could not be populated for the 177 existing
+rows without writing to them. Search ergonomics: "all bugs" is `product IN (OptionsEdge,
+Fullfunding)`.
 
-**Type is immutable** because a type change would strand the item on a status and a category
-belonging to the other lifecycle. The one exception: an item whose type is missing or `---` may have
-its type set once, so a mis-provisioned item stays repairable instead of frozen forever — and only
-to a type whose lifecycle its *current* status, resolution and category are all already valid for.
-Without that last condition the repair would itself be a way to build the cross-lifecycle item this
-whole design exists to prevent, since the untouched fields never trigger their own checks.
+The cost is that moving an item between products can change its type, so **the product is guarded**:
+same-type moves are ordinary, cross-type moves are refused. That check cannot live in
+`bug_check_can_change_field`, because `Bugzilla::Bug::_set_product` (`Bug.pm:2716`) mutates the
+object directly instead of routing `product` through the setter. It runs in `bug_start_of_update`
+(`Bug.pm:905`) instead — after the base update but *inside* the enclosing transaction, so throwing
+rolls the whole submission back. Note the change is still keyed `product_id` with numeric ids at
+that point; `Bug.pm:915-922` rewrites it to `product` with names only afterwards.
+
+**The category is optional on purpose.** An empty category is always valid, which is exactly what
+leaves the 177 existing bugs freely editable.
 
 ## 3. Lifecycles
 
 ```
-BUG:          UNCONFIRMED → BUG_CONFIRMED → BUG_IN_PROGRESS → RESOLVED → VERIFIED
+BUG:          UNCONFIRMED → CONFIRMED → IN_PROGRESS → RESOLVED → VERIFIED
 REQUIREMENT:  REQ_DRAFT → REQ_REVIEW → REQ_APPROVED → REQ_IN_PROGRESS → RESOLVED → VERIFIED
 ```
+
+The BUG branch keeps Bugzilla's **stock names**: renaming them would rewrite the live rows using
+them. Only the four `REQ_*` statuses are new, so applying this configuration writes nothing at all
+to the `bugs` table.
 
 The exact matrix, `is_open` flags and `require_comment` values live in
 [`bugzilla/configuration/expected-state.json`](../bugzilla/configuration/expected-state.json), which
 is the single source of truth for both the provisioner and the verifier.
-
-`CONFIRMED` and `IN_PROGRESS` are **renamed** to `BUG_CONFIRMED` / `BUG_IN_PROGRESS` rather than
-deleted and recreated, so status IDs and any history survive.
 
 **The closed tail (`RESOLVED`/`VERIFIED`) is deliberately shared.** Bugzilla has exactly one
 `duplicate_or_move_bug_status` parameter, and `Bugzilla::Status::add_missing_bug_status_transitions()`
@@ -63,21 +88,24 @@ added; the extension restricts each type to its own subset (`DUPLICATE` is legal
 `UNCONFIRMED` stays on the BUG branch — Bugzilla treats it specially (it cannot be deleted, and
 `allows_unconfirmed` / `everconfirmed` depend on it).
 
+The 177 existing bugs land correctly without being touched: they are in `OptionsEdge` (BUG), on
+`CONFIRMED`/`IN_PROGRESS`/`RESOLVED`, resolved `FIXED` — every one of which is BUG-valid.
+
 ## 4. Enforcement — `extensions/IssueTypeWorkflow`
 
 Two hooks, both inside `Bugzilla::Bug`, so the UI, bulk edit, email-in, XML-RPC/JSON-RPC and REST all
 get the same policy:
 
-- **`bug_check_can_change_field`** — every update. Denies: any change of `cf_issue_type`; a status
-  outside the item's own branch; a resolution not allowed for its type; a category not owned by its
-  type. Denial is by pushing `PRIVILEGES_REQUIRED_EMPOWERED` into `priv_results`, **not** by throwing
-  — see §6.
-- **`bug_end_of_create_validators`** — creation. Requires a type and a matching category, and
+- **`bug_check_can_change_field`** — every update. Denies a status outside the item's own branch, a
+  resolution not allowed for its type, and a category not belonging to its type. Denial is by
+  pushing `PRIVILEGES_REQUIRED_EMPOWERED` into `priv_results`, **not** by throwing — see §6.
+- **`bug_start_of_update`** — cross-type product moves, which the setter hook cannot see.
+- **`bug_end_of_create_validators`** — creation. Checks the category against the product's type and
   canonicalises the entry status (BUG → `UNCONFIRMED`, REQUIREMENT → `REQ_DRAFT`).
 
 Enforcement has **three** states:
 
-| `cf_issue_type` | model matches | behaviour |
+| `cf_category` | model matches | behaviour |
 |---|---|---|
 | absent | — | nothing enforced — the bootstrap window that lets the first `checksetup.pl` load the extension before the fields exist |
 | present | yes | normal policy |
@@ -85,8 +113,8 @@ Enforcement has **three** states:
 
 There is deliberately **no** "enforcement enabled" parameter. Any such switch is reachable by anyone
 with `tweakparams`, which would hand administrators the one thing this design exists to deny them.
-The presence of `cf_issue_type` is the marker instead: getting back to "not provisioned" means
-deleting that field, which destroys every item's type — destructive and obvious, not a quiet toggle.
+The presence of `cf_category` is the marker instead, and deleting it is not a way out: from a web or
+API request a missing field is `broken`, not `off`.
 
 "Matches" means the whole model, not a couple of spot checks: both fields' type, custom, mandatory,
 `enter_bug` and control wiring; exactly the declared issue types; exactly the declared categories,
