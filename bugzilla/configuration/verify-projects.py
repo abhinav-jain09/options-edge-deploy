@@ -716,7 +716,8 @@ def verify_creation_guards(w):
     # editbugs/canconfirm, so rejecting it would break external filing. This
     # also stands in for the low-privilege-reporter case, which needs a second
     # account the verifier does not create.
-    status, body = w.file("fullfunding", component, "REQUIREMENT",
+    status, body = w.file(w.product_of["REQUIREMENT"][0], component,
+                          "REQUIREMENT",
                           w.categories["REQUIREMENT"][0],
                           extra={"status": "UNCONFIRMED"})
     if check("file a REQUIREMENT asking for UNCONFIRMED",
@@ -772,7 +773,7 @@ def verify_low_privilege_reporter(bz, state, w, key_env):
         "product": w.product_of["REQUIREMENT"][0],
         "component": "General",
         "summary": f"{SMOKE_PREFIX} - REQUIREMENT filed unprivileged",
-        "version": w.version_of("fullfunding"),
+        "version": w.version_of(w.product_of["REQUIREMENT"][0]),
         "description": "Filed by verify-projects.py as an unprivileged user.",
         "cf_category": w.categories["REQUIREMENT"][0],
     }
