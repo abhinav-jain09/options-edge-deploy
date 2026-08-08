@@ -79,3 +79,26 @@ spec:
               kubernetes.io/metadata.name: kube-system
       ports:
         - { protocol: TCP, port: 8080 }
+---
+# The application service -> Postgres, on 5432 only.
+#
+# Written as a pair of policies keyed on labels so the service can be added later without
+# touching this file: the service carries `fullfunding.io/role: app`, the database carries
+# `app.kubernetes.io/component: database`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-to-postgres
+  namespace: fullfunding
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: database
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              fullfunding.io/role: app
+      ports:
+        - { protocol: TCP, port: 5432 }

@@ -1,9 +1,15 @@
 # The `fullfunding` tenant SPACE — namespace, budget, priority, network boundary, admission
 # rules and deploy identity. Applied by the tenant's own Jenkins job from main.
 #
-# This creates the space, NOT the application. The requirement-intake portal workloads
-# (Bugzilla web + MariaDB) come in a separate change once their image exists; they land in this
-# namespace and inherit everything here.
+# Contents: the space (namespace, budget, priority, network boundary, admission rules, deploy
+# identity) plus the application's Postgres database.
+#
+# The application SERVICE itself is still to be developed and is not here yet; when it arrives it
+# lands in this namespace and inherits everything above. Bugzilla is NOT part of this namespace —
+# it stays in options-edge.
+#
+# Kafka is deliberately absent: nothing in this namespace uses it today, and it would not fit
+# inside the 2 GiB budget alongside Postgres and the service. Adding it later is a small change.
 #
 # Storage note: PVCs in this namespace must name `local-path`, whose provisioner root is
 # /home/options-edge/data/k3s/storage — i.e. on /home, NOT on the root filesystem. `local-path`
@@ -20,3 +26,4 @@ resources:
   - networkpolicy.yaml
   - validating-policy.yaml
   - rbac.yaml
+  - postgres.yaml
