@@ -43,7 +43,8 @@ our $VERSION = '2.0.0';
 # half-written config file must never be able to silently turn enforcement off.
 use constant SPEC_VERSION => '2.0.0';
 
-use constant CATEGORY_FIELD => 'cf_category';
+use constant CATEGORY_FIELD    => 'cf_category';
+use constant ENVIRONMENT_FIELD => 'cf_environment';
 
 # The unset sentinel Bugzilla creates for every custom select field.
 use constant UNSET => '---';
@@ -212,10 +213,31 @@ sub model_is_complete {
   # Optional by design: this is what leaves the pre-existing bugs alone.
   return 0 if $field->is_mandatory;
 
+  # Flat and uncontrolled: a controller on the category would make an
+  # editvalues.cgi edit the policy.
+  return 0 if $field->value_field;
+  return 0 if $field->visibility_field;
+
+  # cf_environment belongs to the BUG products only. It carries no policy, but
+  # it is part of the declared model, and the documentation says so.
+  my $env = Bugzilla::Field->new({name => ENVIRONMENT_FIELD}) or return 0;
+  return 0 if !$env->custom || $env->obsolete;
+  return 0 if $env->type != FIELD_TYPE_SINGLE_SELECT;
+  return 0 if $env->is_mandatory;
+  return 0
+    if !$env->visibility_field || $env->visibility_field->name ne 'product';
+  my %env_visible = map { $_->name => 1 } @{$env->visibility_values || []};
+  my @bug_products = grep { PRODUCT_TYPE->{$_} eq 'BUG' } keys %{(PRODUCT_TYPE)};
+  return 0 if keys %env_visible != scalar(@bug_products);
+  foreach my $name (@bug_products) {
+    return 0 if !$env_visible{$name};
+  }
+
   # Name AND id must agree, or a rename could re-type existing items.
   my $mapped = 0;
   foreach my $name (keys %{(PRODUCT_TYPE)}) {
     my $product = Bugzilla::Product->new({name => $name}) or return 0;
+    return 0 if !$product->is_active;
     my $by_id = PRODUCT_TYPE_ID->{$product->id};
     return 0 if !defined $by_id || $by_id ne PRODUCT_TYPE->{$name};
     $mapped++;

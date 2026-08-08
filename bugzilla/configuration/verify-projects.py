@@ -115,7 +115,8 @@ def require_shape(state):
         return container[key]
 
     for key, kind in (("spec_version", str), ("bugzilla_version", str),
-                      ("issue_types", list), ("params", dict),
+                      ("issue_types", list), ("product_type", dict),
+                      ("product_type_id", dict), ("params", dict),
                       ("fields", dict), ("statuses", list), ("workflow", list),
                       ("resolutions", list), ("products", list),
                       ("enforcement", dict), ("decommission", dict)):
@@ -142,15 +143,22 @@ def require_shape(state):
         need(resolution, "value", str, "resolutions[].")
     for name, field in state["fields"].items():
         for key, kind in (("description", str), ("type", str),
-                          ("is_mandatory", bool), ("values", list)):
+                          ("is_mandatory", bool), ("enter_bug", bool),
+                          ("buglist", bool), ("values", list)):
             need(field, key, kind, f"fields.{name}.")
         for value in field["values"]:
             need(value, "value", str, f"fields.{name}.values[].")
             need(value, "sortkey", int, f"fields.{name}.values[].")
+        if name == "cf_category":
+            for value in field["values"]:
+                need(value, "issue_type", str, "fields.cf_category.values[].")
 
     for product in state["products"]:
-        for key in ("name", "description", "classification", "default_milestone"):
+        for key in ("name", "description", "classification", "default_milestone",
+                    "issue_type"):
             need(product, key, str, "products[].")
+        for key in ("is_active", "allows_unconfirmed"):
+            need(product, key, bool, "products[].")
         for key in ("components", "versions", "milestones"):
             need(product, key, list, f"products[{product.get('name')}].")
 
@@ -294,8 +302,12 @@ def verify_products(bz, state, require_decommissioned):
            sorted(spec["milestones"]))
 
     for name in state["decommission"]["products"]:
-        _, body = bz.get("/product?names=" + urllib.parse.quote(name))
-        gone = not (body.get("products") or [])
+        status, body = bz.get("/product?names=" + urllib.parse.quote(name))
+        if not check(f"decommission check for '{name}' got a real answer",
+                     status < 400 and "products" in body,
+                     f"HTTP {status}: {json.dumps(body)[:200]}"):
+            continue
+        gone = not body["products"]
         if require_decommissioned:
             # Deletion, not deactivation: preflight rejects an undeclared
             # product whether or not it is active.
@@ -315,8 +327,14 @@ def verify_nothing_undeclared(bz, state, fields):
 
     declared = {p["name"] for p in state["products"]}
     declared |= set(state["decommission"]["products"])
-    _, body = bz.get("/product?type=accessible&include_fields=name")
-    live = {p["name"] for p in body.get("products") or []}
+    status, body = bz.get("/product?type=accessible&include_fields=name")
+    # "No undeclared products" may only be concluded from a response that
+    # actually listed them; a 401/404/500 would otherwise read as an empty set.
+    if not check("product list is readable",
+                 status < 400 and isinstance(body.get("products"), list),
+                 f"HTTP {status}: {json.dumps(body)[:200]}"):
+        return
+    live = {p["name"] for p in body["products"]}
     eq("no undeclared products", sorted(live - declared), [])
 
     declared_fields = set(state["fields"])
@@ -622,12 +640,16 @@ class Walker:
         same = [p for p in self.product_of[issue_type]
                 if p != self.state_of(bug_id)[2]]
         if same:
+            home = self.state_of(bug_id)[2]
             self.expect_allowed(f"{issue_type} moved to '{same[0]}' (same type)",
                                 bug_id, product=same[0], component="General",
-                                version="unspecified")
-            self.expect_allowed(f"{issue_type} moved back", bug_id,
-                                product=self.product_of[issue_type][0],
-                                component="General", version="unspecified")
+                                version=self.version_of(same[0]))
+            eq(f"{issue_type} really is in '{same[0]}' now",
+               self.state_of(bug_id)[2], same[0])
+            self.expect_allowed(f"{issue_type} moved back to '{home}'", bug_id,
+                                product=home, component="General",
+                                version=self.version_of(home))
+            eq(f"{issue_type} is back in '{home}'", self.state_of(bug_id)[2], home)
 
 
 def walk_lifecycle(w, issue_type, product, path, closing_resolution):
@@ -685,8 +707,27 @@ def walk_lifecycle(w, issue_type, product, path, closing_resolution):
     return bug_id
 
 
+def verify_every_product(w):
+    """Each type is walked in one representative product, so file into the
+    OTHERS too: a bad mapping for a product the walk never touches would
+    otherwise pass."""
+    print("\n[8] Every product accepts its own type")
+    for product, issue_type in w.state["product_type"].items():
+        category = w.categories[issue_type][0]
+        status, body = w.file(product, "General", issue_type, category)
+        if not check(f"file into '{product}' ({issue_type})",
+                     status < 400 and body.get("id"),
+                     f"HTTP {status}: {json.dumps(body)[:200]}"):
+            continue
+        eq(f"'{product}' item starts at {w.enf['initial_status'][issue_type]}",
+           w.state_of(body["id"])[0], w.enf["initial_status"][issue_type])
+        other = next(t for t in w.enf["allowed_statuses"] if t != issue_type)
+        w.expect_denied(f"'{product}' item given {other}'s category",
+                        body["id"], cf_category=w.categories[other][0])
+
+
 def verify_creation_guards(w):
-    print("\n[8] Creation-time guards")
+    print("\n[9] Creation-time guards")
     product = w.product_of["BUG"][0]
     component = "General"
 
@@ -735,7 +776,7 @@ def verify_low_privilege_reporter(bz, state, w, key_env):
     what puts such a REQUIREMENT back on its own lifecycle, so this deserves a
     real unprivileged account rather than an admin pretending.
     """
-    print("\n[9] Low-privilege reporter")
+    print("\n[10] Low-privilege reporter")
     if not key_env:
         warn("low-privilege reporter path is NOT proven",
              "pass --reporter-api-key-env NAME with the API key of a user "
@@ -790,7 +831,7 @@ def verify_low_privilege_reporter(bz, state, w, key_env):
 def verify_duplicate_path(w):
     """RESOLVED+DUPLICATE must keep working for both types - it is the reason
     the closed tail is shared in the first place."""
-    print("\n[10] Native duplicate handling")
+    print("\n[11] Native duplicate handling")
     for issue_type, product in (("BUG", w.product_of["BUG"][0]),
                                 ("REQUIREMENT", w.product_of["REQUIREMENT"][0])):
         category = w.categories[issue_type][0]
@@ -809,7 +850,7 @@ def verify_duplicate_path(w):
 
 def verify_bulk_atomicity(w):
     """One illegal item in a multi-bug update must abort the whole request."""
-    print("\n[11] Bulk update atomicity")
+    print("\n[12] Bulk update atomicity")
     s1, b1 = w.file(w.product_of["BUG"][0], "General", "BUG",
                     w.categories["BUG"][0])
     s2, b2 = w.file(w.product_of["REQUIREMENT"][0], "General", "REQUIREMENT",
@@ -854,7 +895,7 @@ def close_smoke_bugs(w):
     """Leave the tracker tidy - REST cannot delete bugs, so close them."""
     if not w.filed:
         return
-    print("\n[12] Cleanup")
+    print("\n[13] Cleanup")
     closed, stuck = 0, []
     for bug_id in w.filed:
         try:
@@ -964,6 +1005,7 @@ def main():
                            walker.product_of["REQUIREMENT"][0],
                            ["REQ_REVIEW", "REQ_APPROVED", "REQ_IN_PROGRESS"],
                            "IMPLEMENTED")
+            verify_every_product(walker)
             verify_creation_guards(walker)
             verify_low_privilege_reporter(bz, state, walker,
                                           args.reporter_api_key_env)

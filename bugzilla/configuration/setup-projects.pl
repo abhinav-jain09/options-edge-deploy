@@ -38,6 +38,7 @@ use 5.14.0;
 use strict;
 use warnings;
 
+use Digest::MD5 ();
 use Getopt::Long qw(GetOptions);
 use IO::Socket::INET ();
 use JSON::PP         ();
@@ -530,7 +531,6 @@ sub preflight {
     if $version ne $STATE->{bugzilla_version};
 
   my %target_status = map { $_->{value} => 1 } @{$STATE->{statuses}};
-  my %renamed_from;    # deliberately empty: this design never renames a status
 
   # Statuses are never renamed. Bugzilla implements a value rename as
   # UPDATE bugs SET <field> = ? (Field/Choice.pm:158), which would rewrite every
@@ -550,7 +550,7 @@ sub preflight {
     {Slice => {}});
   foreach my $row (@$rows) {
     my $status = $row->{bug_status};
-    next if $target_status{$status} || $renamed_from{$status};
+    next if $target_status{$status};
     fatal("$row->{n} bug(s) use status '$status', which is not in the target "
         . 'model; migrate them first');
   }
@@ -610,7 +610,24 @@ sub preflight {
       if !defined $want || $want ne $spec->{issue_type};
   }
 
-  audit_existing_bugs(\%renamed_from);
+  # Field creation spans a DDL implicit commit, so a crash can leave the
+  # definition and the physical column out of step. Re-running would then either
+  # assume a missing column exists or try to add a duplicate one.
+  foreach my $name (sort keys %{$STATE->{fields}}) {
+    my $defined = Bugzilla::Field->new({name => $name}) ? 1 : 0;
+    my ($column) = $dbh->selectrow_array(
+      'SELECT COUNT(*) FROM information_schema.COLUMNS '
+        . 'WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+      undef, 'bugs', $name);
+    fatal("$name is defined in fielddefs but bugs.$name does not exist - a "
+        . 'previous run died mid-DDL. Repair by hand before re-running.')
+      if $defined && !$column;
+    fatal("bugs.$name exists but $name is not defined in fielddefs - a "
+        . 'previous run died mid-DDL. Repair by hand before re-running.')
+      if !$defined && $column;
+  }
+
+  audit_existing_bugs();
   assert_nothing_undeclared();
 
   note("preflight OK (Bugzilla $version, acting as " . $admin->login . ')');
@@ -704,7 +721,6 @@ sub assert_nothing_undeclared {
 # item that is already inconsistent. Refuse to declare the model in force while
 # any existing item violates it.
 sub audit_existing_bugs {
-  my ($renamed_from) = @_;
 
   my ($bug_count) = $dbh->selectrow_array('SELECT COUNT(*) FROM bugs');
   return note('no existing bugs to audit') if !$bug_count;
@@ -723,6 +739,8 @@ sub audit_existing_bugs {
   my $enf = $STATE->{enforcement};
   my %category_type = map { $_->{value} => $_->{issue_type} }
     @{$STATE->{fields}{cf_category}{values}};
+  my %status_open = map { $_->{value} => ($_->{is_open} ? 1 : 0) }
+    @{$STATE->{statuses}};
 
   my @bad;
   foreach my $bug (@$bugs) {
@@ -736,11 +754,21 @@ sub audit_existing_bugs {
     push @bad, "bug $bug->{bug_id}: $type on status '$status'"
       if !grep { $_ eq $status } @{$enf->{allowed_statuses}{$type}};
 
-    my $resolution = $bug->{resolution};
+    my $resolution = defined $bug->{resolution} ? $bug->{resolution} : '';
     push @bad, "bug $bug->{bug_id}: $type with resolution '$resolution'"
-      if defined $resolution
-      && $resolution ne ''
+      if $resolution ne ''
       && !grep { $_ eq $resolution } @{$enf->{allowed_resolutions}{$type}};
+
+    # Bugzilla's own invariant, which membership checks alone would miss:
+    # an open status carries no resolution, a closed one must.
+    my $is_open = $status_open{$status};
+    if (defined $is_open) {
+      push @bad, "bug $bug->{bug_id}: open status '$status' with resolution "
+        . "'$resolution'"
+        if $is_open && $resolution ne '';
+      push @bad, "bug $bug->{bug_id}: closed status '$status' with no resolution"
+        if !$is_open && $resolution eq '';
+    }
 
     # An empty category is always valid - that is what leaves existing bugs
     # untouched. Only a WRONG one is a problem.
@@ -1310,6 +1338,45 @@ sub decommission_products {
 }
 
 ########################################################################
+# Proof that no existing bug's data changed
+########################################################################
+
+# The headline constraint of this design is that applying it changes no
+# existing bug. Auditing validity before and after does not prove that: a
+# regression could turn one valid value into another valid value and pass.
+#
+# So take a digest of every pre-existing row over the columns that existed
+# BEFORE the run - deliberately not the cf_* columns we are about to add - and
+# compare it afterwards. delta_ts and lastdiffed are included, so even a
+# touch-without-change would show up.
+sub bugs_columns {
+  return @{
+    $dbh->selectcol_arrayref(
+      'SELECT COLUMN_NAME FROM information_schema.COLUMNS '
+        . 'WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? '
+        . 'ORDER BY COLUMN_NAME', undef, 'bugs')
+  };
+}
+
+sub bugs_digest {
+  my (@columns) = @_;
+  return ('no-bugs', 0) if !@columns;
+
+  my $list = join(', ', map { $dbh->quote_identifier($_) } @columns);
+  my $sth  = $dbh->prepare("SELECT $list FROM bugs ORDER BY bug_id");
+  $sth->execute;
+
+  my $md5  = Digest::MD5->new;
+  my $rows = 0;
+  while (my @row = $sth->fetchrow_array) {
+    $md5->add(join("\x1f", map { defined $_ ? $_ : "\x00NULL" } @row));
+    $md5->add("\x1e");
+    $rows++;
+  }
+  return ($md5->hexdigest, $rows);
+}
+
+########################################################################
 # Post-apply self-test
 ########################################################################
 
@@ -1392,6 +1459,11 @@ validate_extension_agreement();
 check_web_tier_is_down();
 take_lock();
 
+my @BUG_COLUMNS_BEFORE = bugs_columns();
+my ($BUG_DIGEST_BEFORE, $BUG_ROWS_BEFORE) = bugs_digest(@BUG_COLUMNS_BEFORE);
+note("$BUG_ROWS_BEFORE existing bug row(s), digest $BUG_DIGEST_BEFORE over "
+    . scalar(@BUG_COLUMNS_BEFORE) . ' pre-existing column(s)');
+
 my $ok = eval {
   preflight();
 
@@ -1430,9 +1502,22 @@ my $ok = eval {
   # Re-audit AFTER the DDL: creating a mandatory select field over existing rows
   # would have given them the unset sentinel, and declaring the model complete
   # over that would lock those items out of every guarded edit.
-  audit_existing_bugs({}) if !$DRY;
+  audit_existing_bugs() if !$DRY;
 
   ensure_params();
+
+  # The constraint this whole design is shaped around, proven rather than
+  # asserted. Runs before the self-test, so a self-test failure cannot be
+  # confused with a data change.
+  if (!$DRY) {
+    my ($after, $rows) = bugs_digest(@BUG_COLUMNS_BEFORE);
+    fatal("EXISTING BUG DATA CHANGED. Rows before $BUG_ROWS_BEFORE, after "
+        . "$rows; digest $BUG_DIGEST_BEFORE -> $after. This run was supposed "
+        . 'to be configuration-only. Restore from the backup taken in runbook '
+        . 'step 3 and do not restart the web tier until you know why.')
+      if $rows != $BUG_ROWS_BEFORE || $after ne $BUG_DIGEST_BEFORE;
+    note("verified: all $rows existing bug row(s) are byte-for-byte unchanged");
+  }
 
   # Only meaningful once everything above is in place.
   self_test_fail_closed() if !$OPT{'skip-self-test'};
