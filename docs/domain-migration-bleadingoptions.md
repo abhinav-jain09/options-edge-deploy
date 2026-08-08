@@ -143,9 +143,58 @@ What Phase 3 removes (this change-set):
 | Realm `req` client `bugzilla-web` | `req.fullfunding.nl` → `req.bleadingoptions.com` |
 | Comments/docs across `k8s/`, `docs/` | old hostnames swept |
 
-Deploy + accept: tunnel file installed per the fail-safe procedure in `docs/keycloak-prod.md`, then
-`common-infra-deploy` (Ingress + realm import file), `service-deploy feed-gateway`,
-`es4-deploy deploy-service es-feed-gateway`, plus the LIVE realm edits via `kcadm` (the import file
-never mutates an existing realm). Then `timeout 600 scripts/ops/verify-prod-tunnel.sh` (defaults to
-`--phase retired`) must be fully green, and Cloudflare's `bleadingoptions.com` zone keeps the three
-proxied CNAMEs while the `fullfunding.nl` zone is left with no records pointing at this tunnel.
+### Apply order (each step verifiable; the new domain never breaks)
+
+1. **Tunnel** — install the new canonical file per the fail-safe procedure in
+   `docs/keycloak-prod.md` (stage → validate → route-table preflight → backup → atomic install →
+   restart `options-edge-cloudflared-stable.service` → journal check). The retired hostnames now
+   fall through to the terminal `http_status:404`.
+2. **Workloads** — `common-infra-deploy ENVIRONMENT=production` (Ingress host removal + realm
+   import file; it PAUSES on an "Apply to production?" input — approve it, or the build ABORTS on
+   timeout), then `service-deploy SERVICE=feed-gateway ENVIRONMENT=production BUILD_IMAGES=false`,
+   then `es4-deploy deploy-service SERVICE=es-feed-gateway`.
+3. **LIVE realm** (the import file never mutates an existing realm — this is the only path that
+   changes what login actually enforces). Read first, patch by client UUID, read back:
+
+   ```sh
+   POD=$(kubectl -n options-edge get pod -l app.kubernetes.io/name=oe-keycloak -o name | head -1)
+   ADMIN_PW=$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
+   printf '%s\n' "$ADMIN_PW" | kubectl -n options-edge exec -i "$POD" -- sh -c '
+     set -eu; IFS= read -r P
+     /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$P"
+     ID=$(/opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web --fields id --format csv --noquotes)
+     # BOTH lists are REPLACED wholesale — keep every new-domain + LAN entry, drop only the retired ones
+     /opt/keycloak/bin/kcadm.sh update "clients/$ID" -r optionsedge \
+       -s "redirectUris=[\"https://bleadingoptions.com/*\",\"https://es.bleadingoptions.com/*\",\"http://192.168.100.4:30080/*\",\"http://192.168.100.252:8094/*\",\"http://192.168.100.103:8094/*\"]" \
+       -s "webOrigins=[\"https://bleadingoptions.com\",\"https://es.bleadingoptions.com\",\"http://192.168.100.4:30080\",\"http://192.168.100.252:8094\",\"http://192.168.100.103:8094\"]" \
+       -s "attributes.\"post.logout.redirect.uris\"=https://bleadingoptions.com/*##https://es.bleadingoptions.com/*"
+     RID=$(/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web --fields id --format csv --noquotes)
+     /opt/keycloak/bin/kcadm.sh update "clients/$RID" -r req \
+       -s "redirectUris=[\"https://req.bleadingoptions.com/oidc-callback\"]" \
+       -s "webOrigins=[\"https://req.bleadingoptions.com\"]"
+     /opt/keycloak/bin/kcadm.sh get "clients/$ID" -r optionsedge --fields redirectUris,webOrigins'
+   ```
+
+   The acceptance gate compares these sets exactly, so a slip is caught immediately — but re-read
+   the output above before moving on, because a wrong replacement here breaks login on the NEW
+   domain too.
+4. **Cloudflare — the DNS handoff that actually frees the domain** (operator, dashboard):
+   in zone `fullfunding.nl`, DELETE the `@`, `es` and `auth` records that point at
+   `976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com` (or repoint them at whatever new
+   application takes the domain). Removing our ingress rules only makes the tunnel answer 404 —
+   until these records are gone, the OptionsEdge tunnel is still the DNS target for that domain.
+   Evidence for the record: a dashboard screenshot or `dig +short <host>` showing no
+   Cloudflare-proxied answer for our tunnel, kept with this migration's notes. `bleadingoptions.com`
+   keeps its three proxied CNAMEs.
+5. **Accept** — `timeout 600 scripts/ops/verify-prod-tunnel.sh` (defaults to `--phase retired`)
+   fully green: it proves absence in every config we own AND asks cloudflared itself that each
+   retired URL resolves to `http_status:404`.
+
+### Rollback boundary (one-way after step 4)
+
+Before step 4, rollback is the ordinary revert-and-redeploy, and the tunnel backup taken in step 1
+may be restored. **After the DNS handoff, the old ingress rules must NEVER be restored** — that
+domain may already serve someone else's application, and re-adding those hostnames would hijack
+their traffic. Any post-handoff rollback stays retired-edge-safe: revert workload/realm changes
+only, never the tunnel hostnames. Delete the pre-Phase-3 tunnel backup once step 5 is green so it
+cannot be restored by reflex.

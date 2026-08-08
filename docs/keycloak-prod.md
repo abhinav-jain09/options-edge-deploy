@@ -10,10 +10,10 @@ stand up the issuer they point at.
 
 | File | Resource | Purpose |
 |------|----------|---------|
-| `keycloak-realm-configmap.yaml` | ConfigMap `oe-keycloak-realm` | Hardened realm import (client `options-edge-web`, no test user, origins pinned to the public web origins — both domains during the bleadingoptions.com migration; see docs/domain-migration-bleadingoptions.md) |
+| `keycloak-realm-configmap.yaml` | ConfigMap `oe-keycloak-realm` | Hardened realm import (client `options-edge-web`, no test user, origins pinned to the live public web origins (bleadingoptions.com + es. subdomain); see docs/domain-migration-bleadingoptions.md) |
 | `keycloak-postgres.yaml` | headless Service + StatefulSet + **PVC** | Durable Keycloak database (state on disk, not H2/container layer) |
 | `keycloak-deployment.yaml` | Deployment + **ClusterIP** Service (`:8080`) + headless Service + `oe-keycloak-lan` **LoadBalancer** (`192.168.100.252:8089`, LAN admin console) | Keycloak in production mode (`start --import-realm`) on Postgres |
-| `keycloak-ingress.yaml` | traefik Ingress (LEGACY fallback — live public path bypasses traefik) | Routes both auth hostnames' `/realms/optionsedge` + `/resources` → `oe-keycloak:8080` (admin paths get no route); old host rule removed at migration Phase 3 |
+| `keycloak-ingress.yaml` | traefik Ingress (LEGACY fallback — live public path bypasses traefik) | Routes `Host: auth.bleadingoptions.com` `/realms/optionsedge` + `/resources` → `oe-keycloak:8080` (admin paths get no route); the retired auth host was removed at migration Phase 3 |
 
 ## Edge / exposure model
 
@@ -33,7 +33,7 @@ browser ──HTTPS──▶ Cloudflare edge (TLS terminates) ──tunnel──
 - The **management port `:9000`** (health/metrics) is a containerPort used by the probes in-cluster; the
   Service never publishes it.
 - `/admin` and `/realms/master` are **edge-blocked by the cloudflared 404 rules** for every public
-  auth hostname (both domains during the migration). The traefik-route block only applies on the
+  auth hostname (the live domain). The traefik-route block only applies on the
   in-cluster Ingress path, which public traffic no longer takes — the edge rules are the real
   control. Realm/user admin is performed via `kcadm.sh` in-pod or the LAN admin console, never over
   the public internet.
@@ -101,9 +101,9 @@ timeout 600 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>    # bound
 (An earlier revision of this doc inlined a
 sample config here; it drifted — `/ws/events` must target the gateway NodePort 30097, never the
 :8091 ServiceLB, and the web backend moved to `.252:8094`. The canonical file carries the incident
-notes.) The `/admin` + `/realms/master` 404 rules MUST precede each auth hostname's catch-all rule
-(first match wins), for every auth hostname (`auth.bleadingoptions.com` and, since the domain migration,
-`auth.bleadingoptions.com` — see docs/domain-migration-bleadingoptions.md).
+notes.) The `/admin` + `/realms/master` 404 rules MUST precede the auth hostname's catch-all rule
+(first match wins). There is exactly ONE public auth hostname today —
+`auth.bleadingoptions.com`; see docs/domain-migration-bleadingoptions.md for the retired one.
 
 
 ## Deploy (via Jenkins)
@@ -330,9 +330,10 @@ curl -s https://auth.bleadingoptions.com/realms/optionsedge/.well-known/openid-c
 curl -s -o /dev/null -w '%{http_code}\n' https://auth.bleadingoptions.com/admin/    # expect 404
 ```
 
-## Point the apps at it (next phase — NOT in this change)
+## How the apps point at it (DEPLOYED — recorded here for reference)
 
-Built into the web image and feed-gateway env once this issuer is verified:
+These are the values the running deployments carry (set as k8s env; RuntimeProfileConfig injects
+the web ones into the served page at runtime):
 
 ```sh
 # option-chain web (APP_PROFILE=prod)
@@ -345,7 +346,7 @@ AUTH_AUDIENCE=options-edge-web
 WS_AUTH_ENABLED=true
 WS_AUTH_ISSUER_URI=https://auth.bleadingoptions.com/realms/optionsedge
 WS_AUTH_AUDIENCE=options-edge-web
-WS_ALLOWED_ORIGINS=https://bleadingoptions.com,https://bleadingoptions.com   # explicit allow-list required once auth is on (both domains during the migration)
+WS_ALLOWED_ORIGINS=https://bleadingoptions.com   # explicit allow-list required once auth is on
 ```
 
 The app prod profiles **fail closed**: they refuse to start unless auth is enabled with a non-loopback HTTPS

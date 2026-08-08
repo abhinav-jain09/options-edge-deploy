@@ -356,19 +356,49 @@ else
 fi
 
 # 1b. retirement is proven in the config text, not hidden behind the edge redirects --------------
-for h in $ABSENT_TUNNEL_HOSTS; do
-  h_re="$(printf '%s' "$h" | sed 's/\./\\./g')"
-  if printf '%s\n' "$live_raw" | grep -qiE "hostname:[[:space:]]*[\"']?$h_re[\"']?([[:space:]]|\$)"; then
-    bad "retired hostname '$h' still has ingress rules in the LIVE tunnel config"
+# Literal-name checks are NOT sufficient: cloudflared supports wildcard hostnames ("*.domain") and
+# hostname-less rules that match EVERY hostname. So we (a) reject any declared hostname that
+# equals or ends in the retired suffix, in ANY quoting/wildcard form, (b) reject a hostless rule
+# whose service is not the terminal http_status:404, and (c) ask cloudflared ITSELF how each
+# retired URL resolves — the only authoritative answer — demanding http_status:404.
+retired_suffixes() { for h in $ABSENT_TUNNEL_HOSTS; do printf '%s\n' "$h"; done | awk -F. 'NF>2{print $(NF-1)"."$NF} NF==2{print}' | sort -u; }
+scan_config_for_retired() {  # label, config text
+  local label="$1" cfg="$2" sfx hosts bad_hosts
+  hosts="$(printf '%s\n' "$cfg" | sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*hostname:[[:space:]]*//p' | tr -d "\"'" | sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"
+  for sfx in $(retired_suffixes); do
+    bad_hosts="$(printf '%s\n' "$hosts" | grep -E "(^|\.|\*\.)$(printf '%s' "$sfx" | sed 's/\./\\./g')$" || true)"
+    if [ -n "$bad_hosts" ]; then
+      bad "$label still declares retired-domain hostname(s): $(printf '%s' "$bad_hosts" | tr '\n' ' ')"
+    else
+      note "OK   $label declares no hostname under '$sfx' (wildcards included)"
+    fi
+  done
+  # hostless rules: legal, match every hostname — only the terminal 404 catch-all may be hostless.
+  local hostless
+  hostless="$(printf '%s\n' "$cfg" | awk '/^[[:space:]]*-[[:space:]]*service:/ {sub(/.*service:[[:space:]]*/,""); sub(/[[:space:]]*#.*/,""); sub(/[[:space:]]*$/,""); print}')"
+  if [ -n "$(printf '%s\n' "$hostless" | grep -v '^http_status:404$' | grep -v '^$' || true)" ]; then
+    bad "$label has a HOSTLESS ingress rule that is not http_status:404 — it would answer for the retired domain: $(printf '%s' "$hostless" | tr '\n' ' ')"
   else
-    note "OK   retired hostname '$h' absent from the live tunnel config"
+    note "OK   $label has no hostless rule other than the terminal 404"
   fi
-  if grep -qiE "hostname:[[:space:]]*[\"']?$h_re[\"']?([[:space:]]|\$)" "$REPO_COPY"; then
-    bad "retired hostname '$h' still has ingress rules in the REPO canonical config"
-  else
-    note "OK   retired hostname '$h' absent from the repo canonical config"
-  fi
-done
+}
+if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
+  scan_config_for_retired "live tunnel config" "$live_raw"
+  scan_config_for_retired "repo canonical config" "$(cat "$REPO_COPY")"
+  # (c) authoritative resolution, on the box that owns cloudflared
+  for h in $ABSENT_TUNNEL_HOSTS; do
+    for u in "https://$h/" "https://$h/ws/events" "https://$h/admin"; do
+      got="$(run "cloudflared tunnel --config '$LIVE_PATH' ingress rule '$u' 2>/dev/null" | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
+      if [ -z "$got" ]; then
+        unavailable "could not resolve $u through cloudflared on the prod host"
+      elif [ "$got" = "http_status:404" ]; then
+        note "OK   $u resolves to http_status:404 (we no longer serve it)"
+      else
+        bad "$u still resolves to '$got' — this tunnel would hijack the retired domain"
+      fi
+    done
+  done
+fi
 
 # 1b2. retired: our tunnel must not answer for the retired domain at all. It may now legitimately
 # belong to someone else's application, so we assert only what is OURS to assert: that no ingress
@@ -379,23 +409,30 @@ done
 # 1c. retired: the legacy traefik Ingress must not route the old auth hostname either ------------
 if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   ING_FILE="${ING_FILE:-$(cd "$(dirname "$0")/../.." && pwd)/k8s/keycloak/keycloak-ingress.yaml}"
+  # EXACT host-set equality, not absence-of-a-literal: that also rejects wildcard hosts
+  # ("*.fullfunding.nl"), a hostless rule (matches every host) and any unexpected extra rule.
+  EXPECTED_ING_HOSTS="${EXPECTED_ING_HOSTS:-auth.bleadingoptions.com}"
+  ing_hostset_check() {  # label, whitespace-separated host list as deployed/declared
+    local label="$1" got want
+    got="$(printf '%s\n' $2 | sed '/^$/d' | tr 'A-Z' 'a-z' | sort -u)"
+    want="$(printf '%s\n' $EXPECTED_ING_HOSTS | sort -u)"
+    if [ -z "$got" ]; then bad "$label declares NO Ingress host — a hostless rule matches every hostname, including the retired domain"; return; fi
+    if [ "$got" = "$want" ]; then note "OK   $label Ingress host set is exactly: $(printf '%s' "$got" | tr '\n' ' ')"
+    else
+      bad "$label Ingress host set differs from the expected set"
+      diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
+    fi
+  }
   if [ ! -r "$ING_FILE" ]; then
     bad "repo keycloak-ingress.yaml not readable at $ING_FILE — cannot prove ingress retirement"
   else
-    grep -qiE "host:[[:space:]]*[\"']?auth\.fullfunding\.nl[\"']?([[:space:]]|\$)" "$ING_FILE"
-    case $? in
-      0) bad "repo keycloak-ingress.yaml still routes auth.fullfunding.nl after retirement" ;;
-      1) note "OK   repo keycloak-ingress.yaml carries no old auth host" ;;
-      *) bad "grep error reading $ING_FILE — cannot prove ingress retirement" ;;
-    esac
+    ing_hostset_check "repo keycloak-ingress.yaml" "$(sed -n 's/^[[:space:]]*-[[:space:]]*host:[[:space:]]*//p' "$ING_FILE" | tr -d "\"'" | tr '\n' ' ')"
   fi
   live_ing_hosts="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get ingress oe-keycloak -o jsonpath='{.spec.rules[*].host}' 2>/dev/null")"
   if [ -z "$live_ing_hosts" ]; then
     unavailable "could not read the live oe-keycloak Ingress host set"
-  elif printf '%s' "$live_ing_hosts" | grep -qi "auth\.fullfunding\.nl"; then
-    bad "live oe-keycloak Ingress still routes auth.fullfunding.nl after retirement ($live_ing_hosts)"
   else
-    note "OK   live oe-keycloak Ingress carries no old auth host ($live_ing_hosts)"
+    ing_hostset_check "live oe-keycloak" "$live_ing_hosts"
   fi
 fi
 
