@@ -330,15 +330,17 @@ resolve_ws_target() {  # $1 = hostname. cloudflared's own first-match answer is 
   # earlier :8091 ServiceLB entry) would be invisible — exactly the 2026-07-31 outage shape, which
   # the 401 probe provably cannot catch. FAIL CLOSED if cloudflared cannot answer; the parser is a
   # labelled fallback in --network-only diagnostics only.
+  # stdout carries ONLY the target — every diagnostic goes to stderr, or a caller capturing
+  # stdout would compare a multi-line blob against the expected NodePort and reject a good route.
   local t
   t="$(run "cloudflared tunnel --config '$LIVE_PATH' ingress rule 'https://$1/ws/events' 2>/dev/null" | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
   if [ -n "$t" ]; then
-    note "     $1/ws/events -> $t (resolved by cloudflared — authoritative)"
+    echo "       $1/ws/events -> $t (resolved by cloudflared — authoritative)" >&2
     printf '%s' "$t"; return
   fi
   if [ "$NETWORK_ONLY" = "1" ]; then
     t="$(ws_target_for "$1" "$live_raw")"
-    note "WARN $1/ws/events -> ${t:-<unset>} (TEXT PARSER fallback — cloudflared unavailable; shadowed rules may be missed)"
+    echo "  WARN $1/ws/events -> ${t:-<unset>} (TEXT PARSER fallback — cloudflared unavailable; shadowed rules may be missed)" >&2
     printf '%s' "$t"; return
   fi
   bad "$1/ws/events: cloudflared could not resolve the route — the authoritative check cannot run (use --network-only for a parser-only diagnostic)"
@@ -531,6 +533,23 @@ except Exception as e:
   - hostname: bleadingoptions.com
     service: http://x:1
   - service: http_status:404' "no wildcard and no retired-domain"
+  # The resolver's CONTRACT: stdout is exactly the target, nothing else (a diagnostic leaking into
+  # stdout made every ES route comparison fail).
+  resolver_contract_case() {
+    local out lines
+    out="$(LIVE_PATH=/nonexistent NETWORK_ONLY=1 live_raw='ingress:
+  - hostname: probe.example
+    path: /ws/events
+    service: http://10.0.0.1:30091
+  - service: http_status:404' resolve_ws_target probe.example 2>/dev/null)"
+    lines="$(printf '%s' "$out" | wc -l | tr -d ' ')"
+    if [ "$out" = "http://10.0.0.1:30091" ] && [ "$lines" = "0" ]; then
+      echo "  OK   selftest: resolver stdout is exactly the target (no diagnostics leak)"
+    else
+      echo "  FAIL selftest: resolver stdout contract (got '$out')" >&2; rc=1
+    fi
+  }
+  resolver_contract_case
   struct_case "Ingress hostless rule is flagged" \
     'apiVersion: networking.k8s.io/v1
 kind: Ingress

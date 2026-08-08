@@ -210,18 +210,28 @@ What Phase 3 removes (this change-set):
    filtered result — not one unfiltered page.
 
    **Also prove no Cloudflare RULES still act on the retired zone** — DNS records are not the only
-   way that zone can point at us. Read and record its rulesets (redirect rules, page rules,
-   workers routes) and confirm none targets `bleadingoptions.com` or our tunnel:
+   way that zone can point at us. Fetch each ruleset's RULES (the list endpoint returns names
+   only), the page rules' targets/actions, and the workers routes, then assert that nothing
+   references our tunnel or the new domain:
 
    ```sh
-   curl -s -H "Authorization: Bearer $CF_TOKEN" \
-     "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/rulesets?per_page=100" \
-     | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; \
-        print(json.dumps([r['name'] for r in d['result']], indent=1))"
-   curl -s -H "Authorization: Bearer $CF_TOKEN" \
-     "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/pagerules" \
-     | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; print('PAGERULES', len(d['result']))"
+   Z="https://api.cloudflare.com/client/v4/zones/$ZONE_ID"
+   H=(-H "Authorization: Bearer $CF_TOKEN")
+   {
+     # rulesets: list (max per_page is 50), then FETCH EACH BY ID — the list omits the rules
+     curl -s "${H[@]}" "$Z/rulesets?per_page=50" \
+       | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; print('\n'.join(r['id'] for r in d['result']))" \
+       | while read -r rid; do curl -s "${H[@]}" "$Z/rulesets/$rid"; done
+     curl -s "${H[@]}" "$Z/pagerules"            # targets + actions, not just a count
+     curl -s "${H[@]}" "$Z/workers/routes"       # workers routes are a separate mechanism
+   } > /tmp/cf-retired-zone-evidence.json
+   grep -niE "bleadingoptions\.com|976f76d2-e3c8-4887-a11d-21c27f5e8bed|cfargotunnel" /tmp/cf-retired-zone-evidence.json \
+     && echo "STOP: the retired zone still references us — investigate before proceeding" \
+     || echo "OK: no rule/route in the retired zone references our tunnel or the new domain"
    ```
+
+   Keep `/tmp/cf-retired-zone-evidence.json` (and the grep result) as the acceptance artifact; if
+   the ruleset list is paginated beyond one page, follow its cursor and append.
 
    (This migration never created redirect rules — the domain is being freed, not forwarded — so
    the expected result is nothing referencing us; record it either way.) `bleadingoptions.com`
