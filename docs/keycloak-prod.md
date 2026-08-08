@@ -144,7 +144,10 @@ OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath
 # Refuse to mutate anything until both values provably exist — an empty OLD_PW (failed Secret
 # read) or NEW_PW (missing openssl) would corrupt the rotation from the first write.
 [ -n "$NEW_PW" ] && [ -n "$OLD_PW" ] || { echo "ABORT: could not initialize both password values — nothing was changed" >&2; exit 2; }
-kc_exec() { kubectl $KT --pod-running-timeout=20s -n options-edge exec -i deploy/oe-keycloak -- sh -c "$1"; }
+# Client-side `timeout 60` is the real bound: --request-timeout limits one API request and
+# --pod-running-timeout only the wait-for-running — neither bounds the remote command itself. An
+# expiry here is exactly the "ambiguous transport" case the reconciler already handles.
+kc_exec() { timeout 60 kubectl $KT --pod-running-timeout=20s -n options-edge exec -i deploy/oe-keycloak -- sh -c "$1"; }
 kc_login_ok() {  # does Keycloak accept this password RIGHT NOW? (the only trustworthy state)
   printf '%s\n' "$1" | kc_exec 'IFS= read -r P; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$P"' >/dev/null 2>&1
 }

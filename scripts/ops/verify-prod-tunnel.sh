@@ -134,10 +134,31 @@ ABSENT_TUNNEL_HOSTS="${ABSENT_TUNNEL_HOSTS-$ABSENT_TUNNEL_HOSTS_DEFAULT}"
 EXPECTED_KC_REDIRECTS="${EXPECTED_KC_REDIRECTS:-$KC_REDIRECTS_DEFAULT}"
 EXPECTED_KC_WEBORIGINS="${EXPECTED_KC_WEBORIGINS:-$KC_WEBORIGINS_DEFAULT}"
 EXPECTED_KC_POSTLOGOUT="${EXPECTED_KC_POSTLOGOUT:-$KC_POSTLOGOUT_DEFAULT}"
+# Normalize every host set first: whitespace-only values would satisfy -n yet expand to zero loop
+# iterations — the exact fail-open the guards exist to stop.
+trimset() { printf '%s' "$1" | xargs 2>/dev/null || true; }
+SERVE_APEX="$(trimset "$SERVE_APEX")"; SERVE_ES="$(trimset "$SERVE_ES")"; SERVE_AUTH="$(trimset "$SERVE_AUTH")"
+REDIR_HOSTS="$(trimset "$REDIR_HOSTS")"; ABSENT_TUNNEL_HOSTS="$(trimset "$ABSENT_TUNNEL_HOSTS")"
+
 # The serving surface is mandatory in EVERY mode — an inherited SERVE_*='' must never suppress
 # the page/WS/discovery/admin probes and still print a passing stamp.
 [ -n "$SERVE_APEX" ] && [ -n "$SERVE_ES" ] && [ -n "$SERVE_AUTH" ] \
   || { echo "FATAL: empty SERVE_* set — the serving surface cannot be skipped in any mode" >&2; exit 2; }
+
+# In acceptance mode the sets must be EXACTLY the phase defaults: a subset override (e.g. only the
+# new apex) would silently shrink the matrix and still stamp VERIFIED. ALLOW_SET_OVERRIDES=1 is
+# the named escape for deliberate diagnostics — its runs are stamped as such below.
+if [ "$PRECHECK" != "1" ] && [ "$NETWORK_ONLY" != "1" ] && [ "${ALLOW_SET_OVERRIDES:-0}" != "1" ]; then
+  for pair in "SERVE_APEX|$SERVE_APEX|$SERVE_APEX_DEFAULT" "SERVE_ES|$SERVE_ES|$SERVE_ES_DEFAULT" \
+              "SERVE_AUTH|$SERVE_AUTH|$SERVE_AUTH_DEFAULT" "REDIR_HOSTS|$REDIR_HOSTS|$REDIR_HOSTS_DEFAULT" \
+              "ABSENT_TUNNEL_HOSTS|$ABSENT_TUNNEL_HOSTS|$ABSENT_TUNNEL_HOSTS_DEFAULT"; do
+    name="${pair%%|*}"; rest="${pair#*|}"; got="$(trimset "${rest%%|*}")"; want="$(trimset "${rest#*|}")"
+    if [ "$got" != "$want" ]; then
+      echo "FATAL: $name overridden ('$got' != phase default '$want') in acceptance mode — set ALLOW_SET_OVERRIDES=1 for a deliberately reduced diagnostic run (its stamp will say so)" >&2
+      exit 2
+    fi
+  done
+fi
 if [ "$PRECHECK" = "1" ]; then
   # Precheck exists for exactly one moment: the redirect phase before its rules are created.
   [ "$PHASE" = "redirect" ] || { echo "FATAL: --precheck is only meaningful with --phase redirect" >&2; exit 2; }
@@ -682,6 +703,17 @@ for h in $REDIR_HOSTS; do
   target_host="$(redirect_target_for "$h")"
   if [ -z "$target_host" ]; then bad "no redirect mapping defined for $h"; continue; fi
   want="https://$target_host/board?x=1"
+  # Method preservation is the entire point of 307/308 — and only a POST can prove it. A
+  # higher-priority or method-scoped rule could redirect GET while mangling POST (Keycloak's
+  # token endpoint is the load-bearing case), so probe POST explicitly.
+  hdrs="$(curl -s -o /dev/null -D - -m 20 -X POST "https://$h/board?x=1" 2>/dev/null)"
+  code="$(printf '%s' "$hdrs" | head -1 | awk '{print $2}')"
+  loc="$(printf '%s' "$hdrs" | grep -i '^location:' | head -1 | sed -E 's/^[Ll]ocation:[[:space:]]*//; s/\r$//')"
+  if [ "$code" = "$EXPECTED_REDIRECT_STATUS" ] && [ "$loc" = "$want" ]; then
+    note "OK   POST https://$h -> $code, Location host-mapped (method-preserving)"
+  else
+    bad "POST https://$h -> ${code:-<none>} Location='${loc:-<none>}' (expected $EXPECTED_REDIRECT_STATUS -> $want; a method-scoped rule may be mangling POST)"
+  fi
   for scheme in https http; do
     hdrs="$(curl -s -o /dev/null -D - -m 20 "$scheme://$h/board?x=1" 2>/dev/null)"
     code="$(printf '%s' "$hdrs" | head -1 | awk '{print $2}')"
@@ -698,6 +730,7 @@ for h in $REDIR_HOSTS; do
 done
 
 stamp="VERIFIED"
+[ "${ALLOW_SET_OVERRIDES:-0}" = "1" ] && stamp="REDUCED-MATRIX DIAGNOSTIC PASSED (host sets overridden — NOT acceptance)"
 [ "$PRECHECK" = "1" ] && stamp="PRECHECK PASSED (redirect section deliberately skipped — NOT the full gate)"
 [ "$NETWORK_ONLY" = "1" ] && stamp="NETWORK-ONLY DIAGNOSTIC PASSED (kube/runtime contracts skipped — NOT acceptance)"
 [ "$fail" -eq 0 ] && echo "  prod tunnel $stamp (phase=$PHASE)" || echo "  prod tunnel has PROBLEMS (see above)" >&2

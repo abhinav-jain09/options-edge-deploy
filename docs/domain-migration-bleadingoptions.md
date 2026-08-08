@@ -60,15 +60,21 @@ opening the new pages exercises the new Origins but NOT the new WS routes:
 2. Authenticated direct probe of each NEW WS hostname the pages did not traverse. The browser
    carries the token as a WebSocket SUBPROTOCOL (`["oc.bearer", <accessToken>]`), NOT an
    Authorization header — copy the token from the page's WS request (network tab →
-   `Sec-WebSocket-Protocol` request header, second value), then for each of
-   `bleadingoptions.com` and `es.bleadingoptions.com`:
+   `Sec-WebSocket-Protocol` request header, second value). The token is a LIVE credential — it
+   must never enter shell history or any process argv, so it is read silently and passed to curl
+   through a config stream:
 
    ```sh
-   curl -s -o /dev/null -w '%{http_code}\n' -m 8 \
-     -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-     -H "Origin: https://<host>" -H "Sec-WebSocket-Protocol: oc.bearer, <token-from-network-tab>" \
-     -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom | base64)" -H 'Sec-WebSocket-Version: 13' \
-     "https://<host>/ws/events"
+   read -rs -p "paste token: " TOK; echo
+   for host in bleadingoptions.com es.bleadingoptions.com; do
+     printf 'header = "Sec-WebSocket-Protocol: oc.bearer, %s"\n' "$TOK" \
+       | curl -s -o /dev/null -w "$host: %{http_code}\n" -m 8 --config /dev/stdin \
+           -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+           -H "Origin: https://$host" \
+           -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom | base64)" -H 'Sec-WebSocket-Version: 13' \
+           "https://$host/ws/events"
+   done
+   unset TOK
    ```
 
    `101` = the authenticated upgrade crossed the new route end-to-end (curl then idles until the
