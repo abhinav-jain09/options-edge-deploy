@@ -5,8 +5,8 @@ the scheduled Phase-1 blips and the declared Phase-2 outage window (both section
 bounds), the old domain keeps serving until Phase 2 completes. The canonical tunnel desired state lives in
 [`infra/prod/cloudflared/options-edge-stable.yml`](../infra/prod/cloudflared/options-edge-stable.yml)
 (this doc references it, never repeats it); `scripts/ops/verify-prod-tunnel.sh` proves live == repo
-and is the acceptance gate for each phase — run it in the matching mode: `--phase dual` after
-Phase 1, `--phase redirect` after Phase 2, `--phase retired` after Phase 3. It fails closed: a
+and is the acceptance gate — the steady state is `--phase retired` (its default). `--phase dual`
+and `--phase redirect` are the historical Phase-1/2 gates, kept for auditability. It fails closed: a
 check it cannot run (unreachable kubectl, etc.) is a FAIL, not a skip (`--network-only` exists for
 credential-less diagnostics only, never for acceptance).
 
@@ -15,7 +15,7 @@ credential-less diagnostics only, never for acceptance).
 | `fullfunding.nl` | `bleadingoptions.com` | prod web `.252:8094`, WS `.252:30097` |
 | `es.fullfunding.nl` | `es.bleadingoptions.com` | es4 es-web `.4:30080`, WS `.4:30091` |
 | `auth.fullfunding.nl` | `auth.bleadingoptions.com` | Keycloak ClusterIP `:8080` (`/admin` + `/realms/master` edge-404) |
-| `req.fullfunding.nl` | `req.bleadingoptions.com` | dark today (realm client exists; no DNS, no tunnel route) — renamed in the realm at Phase 3, wired up only if the portal ever ships |
+| `req.fullfunding.nl` | `req.bleadingoptions.com` | dark (realm client only; no DNS, no tunnel route) — renamed at Phase 3, wired up only if the portal ever ships |
 
 Both zones sit in the SAME Cloudflare account (same nameserver pair), so no registrar/account moves
 are involved; the tunnel (`options-edge-option-chain`, `976f76d2-e3c8-4887-a11d-21c27f5e8bed`) is
@@ -92,80 +92,60 @@ Only after both parts pass on both domains is the phase accepted:
 | Authenticated login round-trip | ✅ | ✅ (issuer still `auth.fullfunding.nl` — by design) |
 | REST `/api/*` from the browser | ✅ | ❌ **known-blocked**: the served page points at absolute `https://fullfunding.nl` API bases and the web backend serves no CORS headers, so cross-origin fetches are browser-blocked until the Phase-2 env flip. Do not "fix" this with CORS — Phase 2 removes the cross-origin condition itself. |
 
-## Phase 2 — cutover (a declared AUTH/UI OUTAGE WINDOW, not a seamless flip)
+## Phase 2 — cutover (EXECUTED 2026-08-08, a declared auth/UI outage window)
 
-Be explicit about what this window is: from the Keycloak deploy until the last consumer deploy +
-redirect, authentication is NOT continuously available on either domain, and there are transient
-mixed states (Keycloak's RollingUpdate briefly runs old-issuer and new-issuer pods side by side, so
-a token minted in that overlap may be rejected by a consumer; after the web env flip and before the
-redirect, an old-domain page calls new-domain APIs cross-origin and those fetches are
-browser-blocked). None of these states are avoidable with single-replica services and a
-single-valued `KC_HOSTNAME` — the mitigation is scheduling, not engineering: run the whole window
-while the market is closed (weekend), expect every session to be invalidated, and verify the new
-domain end-to-end before leaving the window. Bound: minutes per deploy step, dominated by the
-Keycloak and feed-gateway rollouts.
+No web image rebuild was needed: the served URLs come from RUNTIME env (`RuntimeProfileConfig`
+injects `window.__OPTIONS_EDGE_ENV__` from pod env each request), so the cutover was an env flip
+plus rollouts. Jenkins URL matrices are build-time image defaults (they matter for runs outside
+k8s) and were flipped in the same change-set.
 
-No web image rebuild: the served URLs come from RUNTIME env (`RuntimeProfileConfig` injects
-`window.__OPTIONS_EDGE_ENV__` from pod env each request). The Jenkins URL matrices are build-time
-defaults/documentation only — keep them in sync, but the deployed truth is the k8s env.
+What shipped (deploy PR #746), in this order:
 
-One coordinated change-set (single PR, single deploy window):
+1. Keycloak `KC_HOSTNAME` → `https://auth.bleadingoptions.com` (+ config-nonce). This is the TOKEN
+   ISSUER and is single-valued, so every consumer had to move in the same window; all sessions
+   were invalidated by design.
+2. Issuer/JWKS consumers: prod feed-gateway, spx-mission-control (base **and** the production
+   per-service slice — the per-service job applies the slice, not `k8s/base`), es4 es-feed-gateway.
+3. Web runtime URLs on BOTH web deployments: `VITE_AUTH_ISSUER`, `VITE_WS_URL`,
+   `APP_FEED_GATEWAY_WS_URL`, `VITE_API_BASE_URL`, `VITE_MISSION_CONTROL_URL`,
+   `VITE_REPLAY_ORCHESTRATOR_URL`, plus `APP_ES_OPTIONS_URL` (WebNav's compiled default still
+   names the old es host, so the env override is mandatory).
+4. Deploy order actually run: `common-infra-deploy ENVIRONMENT=production` (Keycloak; it PAUSES on
+   an "Apply to production?" input — approve it or the build ABORTS on timeout, as build #32 did)
+   → `service-deploy` feed-gateway → spx-mission-control → web (all `BUILD_IMAGES=false`) →
+   `es4-deploy deploy-service` es-feed-gateway → es-web.
+5. Acceptance: `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect --precheck` passed
+   (running-pod issuer/URL contracts on both clusters, live realm + configmap set equality).
 
-1. Keycloak `KC_HOSTNAME` → `https://auth.bleadingoptions.com` (+ config-nonce bump). This changes
-   the TOKEN ISSUER — partial deploys leave services rejecting every token, so the whole set below
-   ships together.
-2. Every issuer/JWKS consumer: prod feed-gateway `WS_AUTH_ISSUER_URI`, spx-mission-control
-   `MISSION_AUTH_ISSUER_URI` + JWK URI, es4 es-feed-gateway issuer, web `VITE_AUTH_ISSUER`.
-3. Web runtime URLs (prod web deployment + es4 es-web): `VITE_API_BASE_URL`, `VITE_WS_URL`,
-   `APP_FEED_GATEWAY_WS_URL`, `VITE_MISSION_CONTROL_URL`, `VITE_REPLAY_ORCHESTRATOR_URL` → new
-   domain; add `APP_ES_OPTIONS_URL=https://es.bleadingoptions.com` (the WebNav default still
-   points at the old domain).
-4. Jenkinsfile URL matrices (`Jenkinsfile.web-service`, `Jenkinsfile.bring-up-all`) → new domain.
-5. Deploy order: keycloak (base pipeline — the common-infra path owns Keycloak only, it does NOT
-   apply service workloads) → feed-gateway (per-service job) → spx-mission-control (per-service
-   job; it declares 0 replicas today, but its desired state must not stay pinned to a dead issuer
-   or the next scale-up boots broken) → web (`web-service-deploy ENVIRONMENT=production
-   BUILD_IMAGE=false`; confirm the `:prod` tag still resolves to the running digest first) → es4
-   `deploy-service` es-feed-gateway + es-web. Prod before es4 (es4 pulls the same image/pattern).
-6. Pre-redirect acceptance (the redirect rules do not exist yet; `--precheck` skips ONLY the
-   redirect section and stamps its output PRECHECK so it can never be mistaken for the full
-   gate): `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect --precheck` — proves the
-   flipped issuer and runtime URLs in the RUNNING pods on both clusters and the new-domain serving
-   surface — **plus the mandatory manual browser gate**: log in on the new domain, confirm boards
-   render and `/api/*` succeeds in the network tab. Old-domain UI now serves pages pointing at
-   new-domain APIs — shadowed by the redirect created next.
-7. **Cloudflare dashboard** — three separate Single Redirects on the `fullfunding.nl` zone (one
-   per hostname; a fixed target cannot host-map). Patterns use `http*://` so plain-HTTP hits
-   redirect too (per Cloudflare's cross-domain example) — with that scheme wildcard, `${1}`
-   captures the scheme suffix and **`${2}` is the path**. Preserve query string; start every rule
-   as **307** (temporary) for rollback safety — a cached permanent redirect cannot be recalled
-   from browsers — and promote to **308** (not 301: 301 may rewrite POST to GET; 308 preserves
-   the method) after the soak:
+## Phase 3 — RETIREMENT (no redirect: the old domain is freed for other applications)
 
-   | # | Wildcard pattern | Target | Status |
-   |---|---|---|---|
-   | 1 | `http*://fullfunding.nl/*` | `https://bleadingoptions.com/${2}` | 307 → 308 |
-   | 2 | `http*://es.fullfunding.nl/*` | `https://es.bleadingoptions.com/${2}` | 307 → 308 |
-   | 3 | `http*://auth.fullfunding.nl/*` | `https://auth.bleadingoptions.com/${2}` | 307 → 308 |
+⚠️ **Operator decision (2026-08-08): `fullfunding.nl` is NOT redirected.** It is being reused for
+unrelated applications, so our platform must stop claiming it entirely. Consequences that make
+this stricter than a redirect-based retirement:
 
-8. Full Phase-2 acceptance, AFTER the rules exist: `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect` — the
-   redirect section demands exactly 307 on both schemes for all three hostnames with host-mapped
-   `Location` preserving path + query — a same-host 301/302 https upgrade on the http leg FAILS
-   (it would rewrite POST to GET before the cross-domain hop).
-   At promotion time re-run with the sanctioned promotion flag (a raw EXPECTED_REDIRECT_STATUS
-   override is refused by the gate): `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase
-   redirect --promoted`.
+- Re-adding any `*.fullfunding.nl` ingress rule to this tunnel would HIJACK traffic belonging to
+  whatever now owns that domain. The canonical tunnel file says so at the top of its ingress list.
+- The acceptance gate's `retired` phase (now the DEFAULT) asserts absence in the configs we own —
+  the live tunnel, the repo canonical copy, the Keycloak Ingress, both gateway allow-lists, the
+  live realm client, the realm import file and the `req` client. It deliberately does NOT probe
+  the retired hostnames over HTTP: whatever answers them is no longer ours to judge.
+- Old links simply break (there is no forwarding). That is the accepted trade-off for freeing the
+  domain; communicate the new URLs to anyone who has the old ones bookmarked.
 
-Rollback (before the 308 promotion): revert the PR, redeploy the same set, drop the 307 rules.
-Old-issuer tokens die at the flip in both directions — that is expected, not a defect.
+What Phase 3 removes (this change-set):
 
-## Phase 3 — retire
+| Surface | Change |
+|---|---|
+| Canonical tunnel + live `/etc/cloudflared/options-edge-stable.yml` | all three `*.fullfunding.nl` ingress blocks deleted |
+| `k8s/keycloak/keycloak-ingress.yaml` | `auth.fullfunding.nl` host rule deleted |
+| prod feed-gateway + es4 es-feed-gateway | `WS_ALLOWED_ORIGINS` drops the old origins (es4 keeps its intentional LAN origin `http://192.168.100.4:30080`) |
+| Realm import + LIVE realm client `options-edge-web` | old redirectUris / webOrigins / post-logout entries removed |
+| Realm `req` client `bugzilla-web` | `req.fullfunding.nl` → `req.bleadingoptions.com` |
+| Comments/docs across `k8s/`, `docs/` | old hostnames swept |
 
-After soak: remove old-domain ingress blocks from the canonical YAML + live (verifier keeps them
-honest) and the `auth.fullfunding.nl` rule from `k8s/keycloak/keycloak-ingress.yaml`, drop
-old-domain entries from the realm (live via kcadm + configmap parity), **remove the
-old origins from BOTH gateway allow-lists** — prod feed-gateway `WS_ALLOWED_ORIGINS` drops
-`https://fullfunding.nl`, es4 es-feed-gateway drops `https://es.fullfunding.nl` (the intentional
-es4 LAN origin `http://192.168.100.4:30080` stays) — rename the `req` realm client, sweep
-docs/bookmarks, and accept with `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase retired` (its `retired` expected
-origin sets are exactly the post-removal lists, so a leftover trusted old origin fails the gate).
+Deploy + accept: tunnel file installed per the fail-safe procedure in `docs/keycloak-prod.md`, then
+`common-infra-deploy` (Ingress + realm import file), `service-deploy feed-gateway`,
+`es4-deploy deploy-service es-feed-gateway`, plus the LIVE realm edits via `kcadm` (the import file
+never mutates an existing realm). Then `timeout 600 scripts/ops/verify-prod-tunnel.sh` (defaults to
+`--phase retired`) must be fully green, and Cloudflare's `bleadingoptions.com` zone keeps the three
+proxied CNAMEs while the `fullfunding.nl` zone is left with no records pointing at this tunnel.

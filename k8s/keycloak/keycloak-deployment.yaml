@@ -4,8 +4,8 @@
 #     bootstrap surface) is a containerPort used by the probes IN-CLUSTER and is NEVER published.
 #   - Public reach is via the Cloudflare tunnel DIRECTLY to the oe-keycloak ClusterIP below (traefik
 #     :80 proved broken on this cluster, so the tunnel bypasses the keycloak-ingress.yaml route), for
-#     every public auth hostname (auth.fullfunding.nl and auth.bleadingoptions.com during the domain
-#     migration — docs/domain-migration-bleadingoptions.md). TLS terminates at Cloudflare's edge; KC
+#     the public auth hostname auth.bleadingoptions.com (fullfunding.nl retired 2026-08-08 —
+#     docs/domain-migration-bleadingoptions.md). TLS terminates at Cloudflare's edge; KC
 #     runs HTTP behind it and trusts X-Forwarded-* (KC_PROXY_HEADERS=xforwarded).
 #   - KC IS additionally published on the LAN via the oe-keycloak-lan LoadBalancer below (:8089) as
 #     the deliberate admin-console path (KC_HOSTNAME_ADMIN) — the original "no LoadBalancer, LAN
@@ -27,7 +27,7 @@ metadata:
     app.kubernetes.io/component: auth
 spec:
   type: ClusterIP
-  # Pinned clusterIP: the cloudflared tunnel routes auth.fullfunding.nl -> this IP:8080 (traefik on :80 is
+  # Pinned clusterIP: the cloudflared tunnel routes auth.bleadingoptions.com -> this IP:8080 (traefik on :80 is
   # broken on this cluster), so the IP must be stable across redeploys. This is the IP already assigned.
   clusterIP: 10.43.127.26
   selector:

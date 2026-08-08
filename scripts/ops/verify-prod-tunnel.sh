@@ -17,11 +17,14 @@
 # the cheap check that would have caught either in seconds.
 #
 # PHASES (fullfunding.nl -> bleadingoptions.com migration; docs/domain-migration-bleadingoptions.md)
-#   --phase dual      both domains serve everything (Phase 1 acceptance gate; default)
-#   --phase redirect  new domain serves; every OLD hostname 307/308-redirects, host-mapped, with
-#                     path+query preserved (Phase 2 acceptance gate)
-#   --phase retired   like redirect, but the old origins must be GONE from both gateway
-#                     allow-lists (Phase 3 acceptance gate)
+#   --phase retired   the CURRENT steady state (default since 2026-08-08): only
+#                     bleadingoptions.com serves, and every fullfunding.nl trace must be GONE from
+#                     the tunnel, the Ingress, the realm and both gateway allow-lists. The operator
+#                     retired that domain WITHOUT redirects so it can host unrelated applications —
+#                     so nothing here may reference or claim it.
+#   --phase dual      historical Phase-1 gate (both domains served); kept for auditability.
+#   --phase redirect  historical Phase-2 gate (old hostnames 307/308-redirect). NOT USED: the
+#                     migration ended with retirement, not redirection.
 #
 # MODES
 #   default           GATE mode: every check that cannot run (e.g. kubectl unreachable) FAILS —
@@ -40,7 +43,7 @@
 #   gate that failed open)
 set -uo pipefail
 
-PHASE="${TUNNEL_PHASE:-dual}"
+PHASE="${TUNNEL_PHASE:-retired}"   # steady state; dual/redirect are historical phases
 NETWORK_ONLY=0
 SELFTEST=0
 PRECHECK=0
@@ -111,8 +114,9 @@ case "$PHASE" in
     SERVE_APEX_DEFAULT="bleadingoptions.com"
     SERVE_ES_DEFAULT="es.bleadingoptions.com"
     SERVE_AUTH_DEFAULT="auth.bleadingoptions.com"
-    REDIR_HOSTS_DEFAULT="fullfunding.nl es.fullfunding.nl auth.fullfunding.nl"
-    EXPECTED_REDIRECT_STATUS_DEFAULT="308"
+    # No redirects: the old domain is being reused elsewhere, so it must NOT resolve here at all.
+    REDIR_HOSTS_DEFAULT=""
+    EXPECTED_REDIRECT_STATUS_DEFAULT=""
     EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
     PROD_ORIGINS_DEFAULT="https://bleadingoptions.com"
     ES4_ORIGINS_DEFAULT="https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
@@ -181,7 +185,7 @@ if [ "$NETWORK_ONLY" != "1" ] && [ "${ALLOW_SET_OVERRIDES:-0}" != "1" ]; then
   # Every acceptance EXPECTATION is phase-locked as well: EXPECTED_REDIRECT_STATUS=301 or a
   # substituted issuer would otherwise bless a coherently wrong deployment with VERIFIED.
   require_default EXPECTED_ISSUER "$EXPECTED_ISSUER" "$EXPECTED_ISSUER_DEFAULT"
-  require_default EXPECTED_REDIRECT_STATUS "$EXPECTED_REDIRECT_STATUS" "$EXPECTED_REDIRECT_STATUS_DEFAULT"
+  [ "$PHASE" = "redirect" ] && require_default EXPECTED_REDIRECT_STATUS "$EXPECTED_REDIRECT_STATUS" "$EXPECTED_REDIRECT_STATUS_DEFAULT"
   require_default EXPECTED_PROD_ORIGINS "$EXPECTED_PROD_ORIGINS" "$PROD_ORIGINS_DEFAULT"
   require_default EXPECTED_ES4_ORIGINS "$EXPECTED_ES4_ORIGINS" "$ES4_ORIGINS_DEFAULT"
   require_default EXPECTED_KC_REDIRECTS "$EXPECTED_KC_REDIRECTS" "$KC_REDIRECTS_DEFAULT"
@@ -198,8 +202,10 @@ if [ "$PRECHECK" = "1" ]; then
   [ "$PHASE" = "redirect" ] || { echo "FATAL: --precheck is only meaningful with --phase redirect" >&2; exit 2; }
   REDIR_HOSTS=""   # the ONLY exemption precheck grants
 else
-  if [ "$PHASE" != "dual" ] && [ -z "$REDIR_HOSTS" ]; then
-    echo "FATAL: empty REDIR_HOSTS in $PHASE acceptance mode — use --precheck for the pre-redirect run" >&2; exit 2
+  # 'redirect' is the only phase that asserts redirects; 'retired' deliberately has none (the old
+  # domain was freed for unrelated use, not redirected) and 'dual' predates them.
+  if [ "$PHASE" = "redirect" ] && [ -z "$REDIR_HOSTS" ]; then
+    echo "FATAL: empty REDIR_HOSTS in redirect acceptance mode — use --precheck for the pre-redirect run" >&2; exit 2
   fi
   if [ "$PHASE" = "retired" ] && [ -z "$ABSENT_TUNNEL_HOSTS" ]; then
     echo "FATAL: empty ABSENT_TUNNEL_HOSTS in retired acceptance mode" >&2; exit 2
@@ -363,6 +369,12 @@ for h in $ABSENT_TUNNEL_HOSTS; do
     note "OK   retired hostname '$h' absent from the repo canonical config"
   fi
 done
+
+# 1b2. retired: our tunnel must not answer for the retired domain at all. It may now legitimately
+# belong to someone else's application, so we assert only what is OURS to assert: that no ingress
+# rule of ours names it (checked in 1b) and that OUR canonical config carries no such target.
+# (A live HTTP probe is deliberately NOT a failure signal here — whatever answers that domain now
+# is not ours to judge.)
 
 # 1c. retired: the legacy traefik Ingress must not route the old auth hostname either ------------
 if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then

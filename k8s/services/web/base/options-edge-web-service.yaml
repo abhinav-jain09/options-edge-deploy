@@ -1,6 +1,6 @@
 # LoadBalancer on host port 8094 (k3s ServiceLB binds it on the node, EXTERNAL-IP 192.168.100.252), mirroring
 # the feed-gateway/mission-control exposure pattern. Deliberately NOT 8090 so this can be deployed and verified
-# while the legacy Tomcat web still serves :8090 — the cutover (re-point the cloudflared tunnel fullfunding.nl
+# while the legacy Tomcat web still serves :8090 — the cutover (re-point the cloudflared tunnel bleadingoptions.com
 # from 192.168.100.103:8090 to 192.168.100.252:8094, then stop Tomcat) is a separate, signed-off step.
 apiVersion: v1
 kind: Service

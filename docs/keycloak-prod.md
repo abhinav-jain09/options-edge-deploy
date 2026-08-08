@@ -54,11 +54,11 @@ kubectl -n options-edge create secret generic oe-keycloak-secrets \
 The Postgres StatefulSet and the Keycloak Deployment both fail to start without this Secret — create it
 **before** the Jenkins deploy.
 
-### 2. DNS — add `auth.fullfunding.nl` (Cloudflare account)
+### 2. DNS — add `auth.bleadingoptions.com` (Cloudflare account)
 
-In the Cloudflare dashboard for `fullfunding.nl`, add a **proxied** record for `auth` pointing at the same
-tunnel as `fullfunding.nl` (a CNAME to `<tunnel-id>.cfargotunnel.com`, or via `cloudflared tunnel route dns
-options-edge-option-chain auth.fullfunding.nl`).
+In the Cloudflare dashboard for `bleadingoptions.com`, add a **proxied** CNAME for `auth` pointing at the
+same tunnel as the apex (`<tunnel-id>.cfargotunnel.com`; the prod host has no `cert.pem`, so use the
+dashboard rather than `cloudflared tunnel route dns`).
 
 ### 3. cloudflared ingress — route the auth hostnames to Keycloak
 
@@ -79,18 +79,11 @@ while read -r u expect; do
   [ "$got" = "$expect" ] \
     || { echo "PREFLIGHT FAIL: $u resolved to '$got', expected '$expect'" >&2; exit 1; }
 done <<'ROUTES'
-https://fullfunding.nl/ws/events http://192.168.100.252:30097
-https://fullfunding.nl/ http://192.168.100.252:8094
 https://bleadingoptions.com/ws/events http://192.168.100.252:30097
 https://bleadingoptions.com/ http://192.168.100.252:8094
-https://auth.fullfunding.nl/admin http_status:404
-https://auth.fullfunding.nl/realms/master http_status:404
-https://auth.fullfunding.nl/realms/optionsedge http://10.43.127.26:8080
 https://auth.bleadingoptions.com/admin http_status:404
 https://auth.bleadingoptions.com/realms/master http_status:404
 https://auth.bleadingoptions.com/realms/optionsedge http://10.43.127.26:8080
-https://es.fullfunding.nl/ws/events http://192.168.100.4:30091
-https://es.fullfunding.nl/ http://192.168.100.4:30080
 https://es.bleadingoptions.com/ws/events http://192.168.100.4:30091
 https://es.bleadingoptions.com/ http://192.168.100.4:30080
 ROUTES
@@ -109,7 +102,7 @@ timeout 600 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>    # bound
 sample config here; it drifted — `/ws/events` must target the gateway NodePort 30097, never the
 :8091 ServiceLB, and the web backend moved to `.252:8094`. The canonical file carries the incident
 notes.) The `/admin` + `/realms/master` 404 rules MUST precede each auth hostname's catch-all rule
-(first match wins), for every auth hostname (`auth.fullfunding.nl` and, since the domain migration,
+(first match wins), for every auth hostname (`auth.bleadingoptions.com` and, since the domain migration,
 `auth.bleadingoptions.com` — see docs/domain-migration-bleadingoptions.md).
 
 
@@ -331,10 +324,10 @@ printf '%s\n' "$ADMIN_PW" | kubectl -n options-edge exec -i "$POD" -- sh -c '
 
 ```sh
 # Public OIDC discovery (through the tunnel) — issuer must be the HTTPS hostname:
-curl -s https://auth.fullfunding.nl/realms/optionsedge/.well-known/openid-configuration | jq .issuer
-# expect: "https://auth.fullfunding.nl/realms/optionsedge"
+curl -s https://auth.bleadingoptions.com/realms/optionsedge/.well-known/openid-configuration | jq .issuer
+# expect: "https://auth.bleadingoptions.com/realms/optionsedge"
 # Admin console must NOT be public:
-curl -s -o /dev/null -w '%{http_code}\n' https://auth.fullfunding.nl/admin/    # expect 404
+curl -s -o /dev/null -w '%{http_code}\n' https://auth.bleadingoptions.com/admin/    # expect 404
 ```
 
 ## Point the apps at it (next phase — NOT in this change)
@@ -344,15 +337,15 @@ Built into the web image and feed-gateway env once this issuer is verified:
 ```sh
 # option-chain web (APP_PROFILE=prod)
 VITE_AUTH_ENABLED=true
-VITE_AUTH_ISSUER=https://auth.fullfunding.nl/realms/optionsedge
+VITE_AUTH_ISSUER=https://auth.bleadingoptions.com/realms/optionsedge
 VITE_AUTH_CLIENT_ID=options-edge-web
 AUTH_AUDIENCE=options-edge-web
 # feed-gateway (oc.bearer WS auth — the web app's path; NOT the ticket/GATEWAY_AUTH_ENABLED mode,
 # which needs a replay orchestrator + approval gate prod doesn't run). Set on the feed-gateway Deployment.
 WS_AUTH_ENABLED=true
-WS_AUTH_ISSUER_URI=https://auth.fullfunding.nl/realms/optionsedge
+WS_AUTH_ISSUER_URI=https://auth.bleadingoptions.com/realms/optionsedge
 WS_AUTH_AUDIENCE=options-edge-web
-WS_ALLOWED_ORIGINS=https://fullfunding.nl,https://bleadingoptions.com   # explicit allow-list required once auth is on (both domains during the migration)
+WS_ALLOWED_ORIGINS=https://bleadingoptions.com,https://bleadingoptions.com   # explicit allow-list required once auth is on (both domains during the migration)
 ```
 
 The app prod profiles **fail closed**: they refuse to start unless auth is enabled with a non-loopback HTTPS
