@@ -1650,6 +1650,107 @@ sub self_test_delete_guards {
     if $message !~ /issue_type_value_delete_forbidden/;
 
   note('delete-guard self-test passed');
+  self_test_unprivileged_initial_status();
+  return;
+}
+
+# The one property an administrator can never test as themselves.
+#
+# Bug.pm:1526-1536 forces UNCONFIRMED for any reporter WITHOUT editbugs or
+# canconfirm - and UNCONFIRMED belongs to the BUG branch. So an externally filed
+# requirement lands on the wrong lifecycle unless bug_end_of_create_validators
+# substitutes REQ_DRAFT back. That substitution runs at the end of
+# run_create_validators, i.e. after core has already forced its choice, which is
+# exactly why it works - and exactly why nothing proves it until the
+# unprivileged path is actually walked.
+#
+# Running this as the admin proves nothing: core skips the override entirely for
+# a privileged reporter and honours the requested status, so the assertion would
+# pass whether or not the substitution exists.
+#
+# No account is needed. Inside a transaction we strip the admin's own
+# editbugs/canconfirm rows, reload the user so in_group() really reports false,
+# file a requirement in that state, and roll the whole thing back - no bug row,
+# no group change, and the same code path a real external reporter would take.
+sub self_test_unprivileged_initial_status {
+  return if $DRY;
+
+  # The declared model, not the extension's copy of it: this script owns
+  # expected-state.json, and a divergence between the two is itself a failure the
+  # other checks catch.
+  my ($product_name)
+    = grep { ($STATE->{product_type}{$_} // '') eq 'REQUIREMENT' }
+      sort keys %{$STATE->{product_type}};
+  return note('unprivileged-status self-test skipped: no REQUIREMENT product')
+    if !$product_name;
+  my $product = Bugzilla::Product->new({name => $product_name})
+    or return note("unprivileged-status self-test skipped: '$product_name' absent");
+  my ($component) = @{$product->components}
+    or return note("unprivileged-status self-test skipped: '$product_name' has no component");
+
+  assert_lock_held('the unprivileged-status self-test');
+  $dbh->bz_start_transaction();
+
+  my ($status, $was_privileged, $err);
+  my $ok = eval {
+    my $user = Bugzilla->user;
+    $was_privileged = ($user->in_group('editbugs') || $user->in_group('canconfirm')) ? 1 : 0;
+
+    # Strip the privileges core keys on. Direct rows only - inherited grants
+    # (admin -> editbugs) have to go too, or in_group() still reports true.
+    $dbh->do(
+      'DELETE FROM user_group_map WHERE user_id = ? AND group_id IN
+         (SELECT id FROM groups WHERE name IN (?, ?))',
+      undef, $user->id, 'editbugs', 'canconfirm');
+    $dbh->do(
+      'DELETE FROM group_group_map WHERE grantor_id IN
+         (SELECT id FROM groups WHERE name IN (?, ?))',
+      undef, 'editbugs', 'canconfirm');
+    flush_caches();
+    Bugzilla->set_user(Bugzilla::User->new({name => Bugzilla->user->login, cache => 0}));
+
+    fatal('unprivileged-status self-test could not drop its own privileges - '
+        . 'the test would pass vacuously')
+      if Bugzilla->user->in_group('editbugs') || Bugzilla->user->in_group('canconfirm');
+
+    my $bug = Bugzilla::Bug->create({
+      product     => $product->name,
+      component   => $component->name,
+      version     => $product->versions->[0]->name,
+      short_desc  => 'self-test: unprivileged requirement initial status',
+      comment     => 'Created by setup-projects.pl self-test; rolled back.',
+      op_sys      => 'Other',
+      rep_platform=> 'Other',
+      bug_severity=> 'normal',
+      priority    => '---',
+    });
+    $status = $bug->bug_status;
+    1;
+  };
+  $err = $@;
+
+  eval { $dbh->bz_rollback_transaction(); 1 }
+    or fatal("unprivileged-status self-test rollback FAILED - a test bug or a "
+        . "group change may have survived: $@");
+  flush_caches();
+  Bugzilla->set_user(Bugzilla::User->new({name => Bugzilla->user->login, cache => 0}));
+
+  fatal("unprivileged-status self-test errored: $err") if !$ok;
+
+  # Restoration is part of the proof: if the rollback did not put the privileges
+  # back, every later run would test something else entirely.
+  fatal('unprivileged-status self-test: privileges were NOT restored by the '
+      . 'rollback - refusing to declare this installation provisioned.')
+    if $was_privileged
+    && !(Bugzilla->user->in_group('editbugs') || Bugzilla->user->in_group('canconfirm'));
+
+  fatal("unprivileged-status self-test: a requirement filed by an unprivileged "
+      . "reporter landed on '$status', not 'REQ_DRAFT'. Core forces UNCONFIRMED "
+      . '(Bug.pm:1526-1536) and the bug_end_of_create_validators substitution did '
+      . 'not correct it, so externally filed requirements are on the BUG lifecycle.')
+    if $status ne 'REQ_DRAFT';
+
+  note("unprivileged-status self-test passed (unprivileged requirement -> $status)");
   return;
 }
 
