@@ -69,7 +69,9 @@ GW_SVC="${GW_SVC:-feed-gateway-service}"
 GW_DEPLOY="${GW_DEPLOY:-feed-gateway-service}"
 ES4_GW_DEPLOY="${ES4_GW_DEPLOY:-es-feed-gateway}"
 NS="${NS:-options-edge}"
-ES4_LAN_ORIGIN="${ES4_LAN_ORIGIN:-http://192.168.100.4:30080}"
+# Deliberately NOT overridable: this constant feeds the phase-default origin sets, and an
+# overridden value would contaminate the very defaults require_default compares against.
+ES4_LAN_ORIGIN="http://192.168.100.4:30080"
 
 # Per-phase expectations. Every default is overridable, but the phase picks coherent defaults so
 # the gate cannot silently run with a stale matrix. KC_HOSTNAME pins ONE issuer for all auth hosts.
@@ -129,6 +131,12 @@ REDIR_HOSTS="${REDIR_HOSTS-$REDIR_HOSTS_DEFAULT}"   # dash (not :-) so REDIR_HOS
 EXPECTED_ISSUER="${EXPECTED_ISSUER:-$EXPECTED_ISSUER_DEFAULT}"
 EXPECTED_PROD_ORIGINS="${EXPECTED_PROD_ORIGINS:-$PROD_ORIGINS_DEFAULT}"
 EXPECTED_ES4_ORIGINS="${EXPECTED_ES4_ORIGINS:-$ES4_ORIGINS_DEFAULT}"
+# --promoted shifts the phase default itself (the one sanctioned lifecycle change), so it must be
+# applied BEFORE the value is bound and phase-locked.
+if [ "${PROMOTED:-0}" = "1" ]; then
+  [ "$PHASE" = "redirect" ] || { echo "FATAL: --promoted is only meaningful with --phase redirect" >&2; exit 2; }
+  EXPECTED_REDIRECT_STATUS_DEFAULT="308"
+fi
 EXPECTED_REDIRECT_STATUS="${EXPECTED_REDIRECT_STATUS:-$EXPECTED_REDIRECT_STATUS_DEFAULT}"
 PRIMARY_APEX="${PRIMARY_APEX:-$PRIMARY_APEX_DEFAULT}"
 PRIMARY_ES="${PRIMARY_ES:-$PRIMARY_ES_DEFAULT}"
@@ -136,6 +144,9 @@ ABSENT_TUNNEL_HOSTS="${ABSENT_TUNNEL_HOSTS-$ABSENT_TUNNEL_HOSTS_DEFAULT}"
 EXPECTED_KC_REDIRECTS="${EXPECTED_KC_REDIRECTS:-$KC_REDIRECTS_DEFAULT}"
 EXPECTED_KC_WEBORIGINS="${EXPECTED_KC_WEBORIGINS:-$KC_WEBORIGINS_DEFAULT}"
 EXPECTED_KC_POSTLOGOUT="${EXPECTED_KC_POSTLOGOUT:-$KC_POSTLOGOUT_DEFAULT}"
+case "$PHASE" in retired) REQ_HOST_DEFAULT="req.bleadingoptions.com" ;; *) REQ_HOST_DEFAULT="req.fullfunding.nl" ;; esac
+EXPECTED_REQ_REDIRECTS="${EXPECTED_REQ_REDIRECTS:-https://$REQ_HOST_DEFAULT/oidc-callback}"
+EXPECTED_REQ_WEBORIGINS="${EXPECTED_REQ_WEBORIGINS:-https://$REQ_HOST_DEFAULT}"
 # Normalize every host set first: whitespace-only values would satisfy -n yet expand to zero loop
 # iterations — the exact fail-open the guards exist to stop.
 trimset() { printf '%s' "$1" | xargs 2>/dev/null || true; }
@@ -170,8 +181,7 @@ if [ "$NETWORK_ONLY" != "1" ] && [ "${ALLOW_SET_OVERRIDES:-0}" != "1" ]; then
   # Every acceptance EXPECTATION is phase-locked as well: EXPECTED_REDIRECT_STATUS=301 or a
   # substituted issuer would otherwise bless a coherently wrong deployment with VERIFIED.
   require_default EXPECTED_ISSUER "$EXPECTED_ISSUER" "$EXPECTED_ISSUER_DEFAULT"
-  require_default EXPECTED_REDIRECT_STATUS "$EXPECTED_REDIRECT_STATUS" \
-    "$([ "$PROMOTED" = "1" ] && echo 308 || echo "$EXPECTED_REDIRECT_STATUS_DEFAULT")"
+  require_default EXPECTED_REDIRECT_STATUS "$EXPECTED_REDIRECT_STATUS" "$EXPECTED_REDIRECT_STATUS_DEFAULT"
   require_default EXPECTED_PROD_ORIGINS "$EXPECTED_PROD_ORIGINS" "$PROD_ORIGINS_DEFAULT"
   require_default EXPECTED_ES4_ORIGINS "$EXPECTED_ES4_ORIGINS" "$ES4_ORIGINS_DEFAULT"
   require_default EXPECTED_KC_REDIRECTS "$EXPECTED_KC_REDIRECTS" "$KC_REDIRECTS_DEFAULT"
@@ -179,12 +189,10 @@ if [ "$NETWORK_ONLY" != "1" ] && [ "${ALLOW_SET_OVERRIDES:-0}" != "1" ]; then
   require_default EXPECTED_KC_POSTLOGOUT "$EXPECTED_KC_POSTLOGOUT" "$KC_POSTLOGOUT_DEFAULT"
   require_default PRIMARY_APEX "$PRIMARY_APEX" "$PRIMARY_APEX_DEFAULT"
   require_default PRIMARY_ES "$PRIMARY_ES" "$PRIMARY_ES_DEFAULT"
+  require_default EXPECTED_REQ_REDIRECTS "$EXPECTED_REQ_REDIRECTS" "https://$REQ_HOST_DEFAULT/oidc-callback"
+  require_default EXPECTED_REQ_WEBORIGINS "$EXPECTED_REQ_WEBORIGINS" "https://$REQ_HOST_DEFAULT"
 fi
-# --promoted: the ONE sanctioned expectation shift — the post-soak 307->308 promotion check.
-if [ "$PROMOTED" = "1" ]; then
-  [ "$PHASE" = "redirect" ] || { echo "FATAL: --promoted is only meaningful with --phase redirect" >&2; exit 2; }
-  EXPECTED_REDIRECT_STATUS="308"
-fi
+
 if [ "$PRECHECK" = "1" ]; then
   # Precheck exists for exactly one moment: the redirect phase before its rules are created.
   [ "$PHASE" = "redirect" ] || { echo "FATAL: --precheck is only meaningful with --phase redirect" >&2; exit 2; }
@@ -601,9 +609,6 @@ fi
 # 6d. the dark req realm's client must follow the domain too (Phase 3 renames it) ----------------
 # Exact per-field sets: the callback URI and the origin are DIFFERENT values and each list must
 # match its expected set exactly (extra entries are a failure, substrings prove nothing).
-case "$PHASE" in retired) req_host="req.bleadingoptions.com" ;; *) req_host="req.fullfunding.nl" ;; esac
-EXPECTED_REQ_REDIRECTS="${EXPECTED_REQ_REDIRECTS:-https://$req_host/oidc-callback}"
-EXPECTED_REQ_WEBORIGINS="${EXPECTED_REQ_WEBORIGINS:-https://$req_host}"
 req_raw="$(prod_kubectl "exec --pod-running-timeout=$K8S_TIMEOUT deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web 2>/dev/null'")"
 if [ -z "$req_raw" ]; then
   unavailable "could not read the req realm's bugzilla-web client"
