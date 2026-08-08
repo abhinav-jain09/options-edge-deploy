@@ -363,14 +363,35 @@ fi
 # retired URL resolves — the only authoritative answer — demanding http_status:404.
 retired_suffixes() { for h in $ABSENT_TUNNEL_HOSTS; do printf '%s\n' "$h"; done | awk -F. 'NF>2{print $(NF-1)"."$NF} NF==2{print}' | sort -u; }
 scan_config_for_retired() {  # label, config text
-  local label="$1" cfg="$2" sfx hosts bad_hosts
-  hosts="$(printf '%s\n' "$cfg" | sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*hostname:[[:space:]]*//p' | tr -d "\"'" | sed 's/[[:space:]]*#.*//; s/[[:space:]]*$//' | tr 'A-Z' 'a-z')"
+  local label="$1" cfg="$2" sfx report
+  # STRUCTURAL hostname extraction (PyYAML): flow mappings ({hostname: x, path: y}), anchors/aliases
+  # and any indentation style are all covered — a sed/grep scan sees none of those reliably.
+  report="$(printf '%s\n' "$cfg" | python3 -c "
+import sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    if not isinstance(rules, list): raise ValueError('ingress is not a list')
+    hosts = [str(r.get('hostname', '')).strip().lower().rstrip('.')
+             for r in rules if isinstance(r, dict) and str(r.get('hostname', '')).strip()]
+    print('HOSTS ' + ' '.join(sorted(set(hosts))))
+except Exception as e:
+    print('PARSE_FAIL %s' % e)
+" 2>/dev/null)"
+  case "$report" in
+    HOSTS*) : ;;
+    *) bad "$label: could not structurally parse the ingress hostnames ($report)"; return ;;
+  esac
+  local hosts="${report#HOSTS }"
   for sfx in $(retired_suffixes); do
-    bad_hosts="$(printf '%s\n' "$hosts" | grep -E "(^|\.|\*\.)$(printf '%s' "$sfx" | sed 's/\./\\./g')$" || true)"
+    local sfx_re bad_hosts
+    sfx_re="$(printf '%s' "$sfx" | sed 's/\./\\./g')"
+    # matches the apex itself, ANY subdomain of it, and wildcard forms ("*.sfx", "*.sub.sfx")
+    bad_hosts="$(printf '%s\n' $hosts | grep -E "(^|\.)${sfx_re}$" || true)"
     if [ -n "$bad_hosts" ]; then
       bad "$label still declares retired-domain hostname(s): $(printf '%s' "$bad_hosts" | tr '\n' ' ')"
     else
-      note "OK   $label declares no hostname under '$sfx' (wildcards included)"
+      note "OK   $label declares no hostname at or under '$sfx' (wildcards/flow-style included)"
     fi
   done
   # Hostless rules are legal and match EVERY hostname, so only the terminal http_status:404 may be
@@ -428,7 +449,9 @@ if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   ING_FILE="${ING_FILE:-$(cd "$(dirname "$0")/../.." && pwd)/k8s/keycloak/keycloak-ingress.yaml}"
   # EXACT host-set equality, not absence-of-a-literal: that also rejects wildcard hosts
   # ("*.fullfunding.nl"), a hostless rule (matches every host) and any unexpected extra rule.
-  EXPECTED_ING_HOSTS="${EXPECTED_ING_HOSTS:-auth.bleadingoptions.com}"
+  # Deliberately NOT env-overridable: an override could bless an Ingress that re-admits the
+  # retired host without tripping ALLOW_SET_OVERRIDES or the diagnostic stamp.
+  EXPECTED_ING_HOSTS="auth.bleadingoptions.com"
   ing_hostset_check() {  # label, whitespace-separated host list as deployed/declared
     local label="$1" got want
     got="$(printf '%s\n' $2 | sed '/^$/d' | tr 'A-Z' 'a-z' | sort -u)"

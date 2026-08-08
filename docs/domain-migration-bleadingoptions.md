@@ -191,14 +191,41 @@ What Phase 3 removes (this change-set):
    Evidence for the record: a dashboard screenshot or `dig +short <host>` showing no
    Cloudflare-proxied answer for our tunnel, kept with this migration's notes. `bleadingoptions.com`
    keeps its three proxied CNAMEs.
-6. **Re-accept after the handoff** — run the same gate once more (it proves absence in every
-   config we own AND asks cloudflared itself that each retired URL resolves to `http_status:404`)
-   and record the DNS evidence from step 5 alongside it.
+6. **Re-accept after the handoff** — run the gate once more (it proves absence in every config we
+   own AND asks cloudflared itself that each retired URL resolves to `http_status:404`), record the
+   DNS evidence from step 5, AND repeat the full authenticated smoke on BOTH sites
+   (`https://bleadingoptions.com` and `https://es.bleadingoptions.com`): log in, confirm boards
+   render with live data, and confirm the WS request reaches `101 Switching Protocols` in the
+   network tab. The scripted gate cannot see any of that (it only probes unauthenticated
+   surfaces), and the handoff changes DNS for a domain the browser may still have cached.
 
 ### Rollback boundary (one-way after the DNS handoff)
 
-Before the handoff (steps 1-4) rollback is the ordinary revert-and-redeploy, and the tunnel backup
-taken in step 1 may be restored.
+Before the handoff (steps 1-4) rollback is revert-and-redeploy for the tunnel (restore the step-1
+backup) and the workloads — **but NOT for the realm**: `--import-realm` never updates an existing
+realm, so a git revert cannot put the old client entries back. The realm inverse is an explicit
+kcadm run (same shape as step 3, old values restored, with a readback):
+
+```sh
+POD=$(kubectl -n options-edge get pod -l app.kubernetes.io/name=oe-keycloak -o name | head -1)
+ADMIN_PW=$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
+printf '%s\n' "$ADMIN_PW" | kubectl -n options-edge exec -i "$POD" -- sh -c '
+  set -eu; IFS= read -r P
+  /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$P"
+  ID=$(/opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web --fields id --format csv --noquotes)
+  /opt/keycloak/bin/kcadm.sh update "clients/$ID" -r optionsedge \
+    -s "redirectUris=[\"https://fullfunding.nl/*\",\"https://es.fullfunding.nl/*\",\"https://bleadingoptions.com/*\",\"https://es.bleadingoptions.com/*\",\"http://192.168.100.4:30080/*\",\"http://192.168.100.252:8094/*\",\"http://192.168.100.103:8094/*\"]" \
+    -s "webOrigins=[\"https://fullfunding.nl\",\"https://es.fullfunding.nl\",\"https://bleadingoptions.com\",\"https://es.bleadingoptions.com\",\"http://192.168.100.4:30080\",\"http://192.168.100.252:8094\",\"http://192.168.100.103:8094\"]" \
+    -s "attributes.\"post.logout.redirect.uris\"=https://fullfunding.nl/*##https://es.fullfunding.nl/*##https://bleadingoptions.com/*##https://es.bleadingoptions.com/*"
+  RID=$(/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web --fields id --format csv --noquotes)
+  /opt/keycloak/bin/kcadm.sh update "clients/$RID" -r req \
+    -s "redirectUris=[\"https://req.fullfunding.nl/oidc-callback\"]" -s "webOrigins=[\"https://req.fullfunding.nl\"]"
+  /opt/keycloak/bin/kcadm.sh get "clients/$ID" -r optionsedge --fields redirectUris,webOrigins'
+```
+
+Verify the restore with `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase dual` (the Phase-1
+expectation set). ⚠️ This inverse is valid ONLY before the DNS handoff — after it, re-admitting
+those entries is exactly the hijack risk described below, and the correct move is fix-forward.
 
 **After the handoff there is no rollback that re-admits `fullfunding.nl` — in ANY surface.** That
 domain may already serve someone else's application, so re-adding it would not merely be untidy:
