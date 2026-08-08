@@ -148,7 +148,9 @@ OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath
 [ -n "$NEW_PW" ] && [ -n "$OLD_PW" ] || { echo "ABORT: could not initialize both password values — nothing was changed" >&2; exit 2; }
 # CONCURRENCY FENCE: exactly one rotation at a time. `kubectl create` is atomic — a second
 # operator's create fails and aborts before touching anything. A crashed run leaves the lock;
-# takeover = verify the other session is truly dead, then delete the configmap by hand.
+# takeover = (1) verify the other CLIENT session is truly dead, (2) then WAIT >=40s — a dead
+# client does not mean the POD-side write it launched is done; the 30s+5s TERM->KILL fence must
+# fully elapse first — and only then (3) delete the configmap by hand and reconcile.
 LOCK_HOLDER="$(whoami)@$(hostname) $$ $(date -u +%Y%m%dT%H%M%SZ)"
 kubectl $KT -n options-edge create configmap kc-rotation-lock \
   --from-literal=holder="$LOCK_HOLDER" \
