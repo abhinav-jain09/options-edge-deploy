@@ -149,17 +149,23 @@ OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath
 # CONCURRENCY FENCE: exactly one rotation at a time. `kubectl create` is atomic — a second
 # operator's create fails and aborts before touching anything. A crashed run leaves the lock;
 # takeover = verify the other session is truly dead, then delete the configmap by hand.
+LOCK_HOLDER="$(whoami)@$(hostname) $$ $(date -u +%Y%m%dT%H%M%SZ)"
 kubectl $KT -n options-edge create configmap kc-rotation-lock \
-  --from-literal=holder="$(whoami)@$(hostname) $$ $(date -u +%Y%m%dT%H%M%SZ)" \
+  --from-literal=holder="$LOCK_HOLDER" \
   || { echo "ABORT: another rotation holds kc-rotation-lock (kubectl -n options-edge get configmap kc-rotation-lock -o yaml to see who) — nothing was changed" >&2; exit 7; }
 release_lock() {  # bounded AND verified — a silently surviving lock would block the next rotation.
   # The verification must itself be trustworthy: `get` failing does NOT mean the lock is gone —
   # only an explicit NotFound does; an API error means deletion is UNVERIFIED, which is a failure.
   kubectl $KT -n options-edge delete configmap kc-rotation-lock --ignore-not-found >/dev/null 2>&1
   local out
-  if out="$(kubectl $KT -n options-edge get configmap kc-rotation-lock 2>&1)"; then
-    echo "WARNING: kc-rotation-lock could NOT be deleted — remove it by hand before the next rotation" >&2
-    return 1
+  if out="$(kubectl $KT -n options-edge get configmap kc-rotation-lock -o jsonpath='{.data.holder}' 2>&1)"; then
+    if [ "$out" = "$LOCK_HOLDER" ]; then
+      echo "WARNING: OUR kc-rotation-lock could NOT be deleted — remove it by hand before the next rotation" >&2
+      return 1
+    fi
+    # A different holder means OUR deletion succeeded and a successor rotation has already begun —
+    # that lock is theirs, not a survivor; do not tell anyone to remove it.
+    return 0
   elif printf '%s' "$out" | grep -q 'NotFound'; then
     return 0
   else
