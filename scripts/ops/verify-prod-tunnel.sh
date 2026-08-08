@@ -569,8 +569,10 @@ kc_sets_check() {
   local pw client
   pw="$(prod_kubectl "get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}'" | base64 -d)"
   [ -z "$pw" ] && { unavailable "could not read the Keycloak admin secret"; return; }
-  # Password travels via stdin end-to-end — never interpolated into shell text, so any character
-  # (apostrophes included) is safe; kcadm receives it through the pod-side shell variable.
+  # Password travels via stdin end-to-end — never interpolated into shell text (any character is
+  # safe) and never in LOCAL argv/history. kcadm itself only takes --password as an argument, so
+  # the value is briefly visible in the pod-local process list; accepted deliberately (reading the
+  # pod's /proc needs the same exec privilege this check already uses).
   client="$(printf '%s' "$pw" | run_stdin "kubectl $KEXEC_OPTS -n $NS exec -i deploy/oe-keycloak -- sh -c 'IFS= read -r KC_PW; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$KC_PW\" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web 2>/dev/null'")"
   [ -z "$client" ] && { unavailable "could not read the live options-edge-web client via kcadm"; return; }
   printf '%s' "$client" | python3 -c "

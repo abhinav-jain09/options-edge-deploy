@@ -32,7 +32,9 @@ old-domain connections, so run it while the market is closed:
   disconnect and the endpoint is absent until the new pod passes readiness (~30-60 s each,
   observed; the Jenkins job waits for rollout + health before finishing).
 
-Executed 2026-08-07/08 after the Friday close (CME closed until Sunday 18:00 ET).
+Execution status (as of 2026-08-08, Friday after the close; CME closed until Sunday 18:00 ET):
+steps 2 and 3 APPLIED; step 1 (DNS CNAMEs) PENDING with the operator; step 4 (gateway deploys)
+PENDING on this PR's merge. Phase 1 is accepted only when `--phase dual` goes fully green.
 
 1. **Cloudflare dashboard** (zone `bleadingoptions.com`): proxied CNAMEs `@`, `es`, `auth` →
    `976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com`.

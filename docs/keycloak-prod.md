@@ -146,6 +146,13 @@ OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath
 # Refuse to mutate anything until both values provably exist — an empty OLD_PW (failed Secret
 # read) or NEW_PW (missing openssl) would corrupt the rotation from the first write.
 [ -n "$NEW_PW" ] && [ -n "$OLD_PW" ] || { echo "ABORT: could not initialize both password values — nothing was changed" >&2; exit 2; }
+# CONCURRENCY FENCE: exactly one rotation at a time. `kubectl create` is atomic — a second
+# operator's create fails and aborts before touching anything. A crashed run leaves the lock;
+# takeover = verify the other session is truly dead, then delete the configmap by hand.
+kubectl $KT -n options-edge create configmap kc-rotation-lock \
+  --from-literal=holder="$(whoami)@$(hostname) $$ $(date -u +%Y%m%dT%H%M%SZ)" \
+  || { echo "ABORT: another rotation holds kc-rotation-lock (kubectl -n options-edge get configmap kc-rotation-lock -o yaml to see who) — nothing was changed" >&2; exit 7; }
+release_lock() { kubectl $KT -n options-edge delete configmap kc-rotation-lock --ignore-not-found >/dev/null 2>&1 || true; }
 # Persist BOTH candidates (0600, verified) BEFORE the first mutation: an interrupt or crash after
 # Keycloak commits but before the Secret reconciles must never orphan the only usable credential.
 # The file outlives every failure path and is shredded ONLY after the end-state proof.
@@ -167,6 +174,7 @@ RESCUE="$(mktemp /var/tmp/kc-rotation-rescue.XXXXXX)" \
 # The traps EXIT — with no -e, a print-only trap would let an interrupted `sleep` fall straight
 # through into reconciliation INSIDE the quiesce window, exactly the delayed-commit race the
 # fence exists to prevent. Distinct codes: 130 = SIGINT, 143 = SIGTERM.
+trap 'release_lock' EXIT
 trap 'echo "INTERRUPTED (SIGINT) mid-rotation — candidates preserved at $RESCUE (mode 0600). WAIT >=40s (the pod-side write fence) before inspecting or changing EITHER state, then reconcile by hand" >&2; exit 130' INT
 trap 'echo "TERMINATED (SIGTERM) mid-rotation — candidates preserved at $RESCUE (mode 0600). WAIT >=40s (the pod-side write fence) before inspecting or changing EITHER state, then reconcile by hand" >&2; exit 143' TERM
 # Client-side `timeout 60` is the real bound: --request-timeout limits one API request and
@@ -240,7 +248,12 @@ echo "rotation converged on the NEW password"
 timeout 600 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>
 ```
 
-Credentials travel via `kubectl exec -i` stdin, never argv (argv is world-readable in the pod):
+Credentials travel via `kubectl exec -i` stdin — they never appear in LOCAL argv or shell
+history. Honest scope of that guarantee: `kcadm.sh` only accepts `--password`/`--new-password` as
+arguments, so inside the pod the value is briefly visible in the pod-local process list; that
+exposure is accepted deliberately (the pod is single-purpose, and reading its /proc requires the
+same `exec` privilege this procedure already needs — the same trade-off the rotation sequence and
+the verifier make).
 
 ```sh
 ADMIN_PW=$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
@@ -250,10 +263,18 @@ printf '%s\n%s\n' "$ADMIN_PW" "$USER_PW" | kubectl -n options-edge exec -i "$POD
   set -eu; IFS= read -r ADMINP; IFS= read -r USERP
   /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$ADMINP"
   /opt/keycloak/bin/kcadm.sh create users -r optionsedge -s username=<user> -s enabled=true
-  /opt/keycloak/bin/kcadm.sh set-password -r optionsedge --username <user> --new-password "$USERP"
-  # (optional) grant replay roles for the replay UI
-  /opt/keycloak/bin/kcadm.sh add-roles -r optionsedge --username <user> --rolename replay-admin'
+  /opt/keycloak/bin/kcadm.sh set-password -r optionsedge --username <user> --new-password "$USERP"'
 unset USER_PW
+```
+
+Replay roles are a SEPARATE, explicit grant — `replay-admin` means "full replay administration
+(any operation)" and must never ride along silently with routine user creation:
+
+```sh
+printf '%s\n' "$ADMIN_PW" | kubectl -n options-edge exec -i "$POD" -- sh -c '
+  set -eu; IFS= read -r ADMINP
+  /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$ADMINP"
+  /opt/keycloak/bin/kcadm.sh add-roles -r optionsedge --username <user> --rolename replay-admin'
 ```
 
 ## Verify the issuer
