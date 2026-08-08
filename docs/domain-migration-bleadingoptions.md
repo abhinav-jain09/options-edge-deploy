@@ -193,9 +193,12 @@ What Phase 3 removes (this change-set):
    `976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com` (or repoint them at whatever new
    application takes the domain). Removing our ingress rules only makes the tunnel answer 404 —
    until these records are gone, the OptionsEdge tunnel is still the DNS target for that domain.
-   Evidence for the record: a dashboard screenshot or `dig +short <host>` showing no
-   Cloudflare-proxied answer for our tunnel, kept with this migration's notes. `bleadingoptions.com`
-   keeps its three proxied CNAMEs.
+   Evidence for the record must be CONFIGURATION-level, not a resolver answer: `dig` cannot show
+   which tunnel a proxied record targets (and a repointed record still answers from Cloudflare
+   IPs). Capture the zone's record list showing no record pointing at
+   `976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com` — a dashboard screenshot of the DNS tab,
+   or `GET /zones/<fullfunding-zone-id>/dns_records` from the Cloudflare API — and keep it with
+   this migration's notes. `bleadingoptions.com` keeps its three proxied CNAMEs.
 6. **Re-accept after the handoff** — run the gate once more (it proves absence in every config we
    own AND asks cloudflared itself that each retired URL resolves to `http_status:404`), record the
    DNS evidence from step 5, AND repeat the full authenticated smoke on BOTH sites
@@ -233,7 +236,14 @@ printf '%s\n' "$ADMIN_PW" | kubectl -n options-edge exec -i "$POD" -- sh -c '
 Verify the restore with `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase rollback` — that
 mode describes exactly what a Phase-3 revert produces: both domains serving and trusted again while
 the issuer and served URLs stay on the new domain (Phase-2 state). `--phase dual` would wrongly
-demand the OLD issuer and `--phase retired` would wrongly demand absence, so neither can pass here. ⚠️ This inverse is valid ONLY before the DNS handoff — after it, re-admitting
+demand the OLD issuer and `--phase retired` would wrongly demand absence, so neither can pass here.
+
+⚠️ **Revert the DESIRED STATE, never this whole commit.** `--phase rollback` is introduced BY the
+Phase-3 change, so a blanket `git revert` of it takes the verifier away with it and leaves a script
+that rejects `--phase rollback`. Roll back selectively — the tunnel file, the manifests' env/host
+values, the realm via the kcadm inverse above — and keep `scripts/ops/verify-prod-tunnel.sh` at its
+Phase-3 version (if you must work from a reverted tree, run the gate from this commit explicitly:
+`git show <phase3-sha>:scripts/ops/verify-prod-tunnel.sh > /tmp/gate.sh && bash /tmp/gate.sh --phase rollback`). ⚠️ This inverse is valid ONLY before the DNS handoff — after it, re-admitting
 those entries is exactly the hijack risk described below, and the correct move is fix-forward.
 
 **After the handoff there is no rollback that re-admits `fullfunding.nl` — in ANY surface.** That
