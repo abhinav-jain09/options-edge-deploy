@@ -1201,23 +1201,29 @@ fi
 realm_scan() {
   # NOTE: runs inside $(...), so it must NEVER call bad/unavailable — their effect would die with
   # the subshell. It returns a MARKER; realm_verdict (the caller) decides.
-  local pw payload
+  # Kept deliberately simple: one exec per step. An earlier version built the whole JSON document
+  # inside a nested pod-side shell and the quoting collapsed — kcadm returned nothing and the gate
+  # (correctly) failed closed, but for a tooling reason rather than a real finding.
+  local pw realms json
   command -v python3 >/dev/null || { echo "SCAN_FAIL python3 unavailable"; return; }
   pw="$(prod_kubectl "get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}'" | base64 -d)"
   [ -n "$pw" ] || { echo "SCAN_FAIL could not read the Keycloak admin secret"; return; }
-  payload="$(printf '%s' "$pw" | run_stdin "kubectl $KEXEC_OPTS -n $NS exec -i deploy/oe-keycloak -- sh -c 'set -eu; IFS= read -r KC_PW
-    /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$KC_PW\" >/dev/null 2>&1
-    echo \"{\\\"sources\\\":[\"
-    first=1
-    for R in \$(/opt/keycloak/bin/kcadm.sh get realms --fields realm --format csv --noquotes); do
-      [ \$first -eq 1 ] || echo \",\"; first=0
-      echo \"{\\\"label\\\":\\\"realm \$R\\\",\\\"clients\\\":\"
-      /opt/keycloak/bin/kcadm.sh get clients -r \"\$R\" --fields clientId,rootUrl,baseUrl,adminUrl,redirectUris,webOrigins,attributes
-      echo \"}\"
-    done
-    echo \"]}\"'")"
-  [ -n "$payload" ] || { echo "SCAN_FAIL kcadm returned nothing (auth failure? pod unreachable?)"; return; }
-  printf '%s' "$payload" | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "$RETIREMENT_CLASSIFIER_PY" 2>/dev/null
+  kc() {  # $1 = kcadm arguments (authenticates first; password via stdin, never argv)
+    printf '%s\n' "$pw" | run_stdin "kubectl $KEXEC_OPTS -n $NS exec -i deploy/oe-keycloak -- sh -c 'set -eu; IFS= read -r P; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$P\" >/dev/null 2>&1; /opt/keycloak/bin/kcadm.sh $1 2>/dev/null'"
+  }
+  realms="$(kc "get realms --fields realm --format csv --noquotes")"
+  [ -n "$realms" ] || { echo "SCAN_FAIL could not list realms (auth failure? pod unreachable?)"; return; }
+  json='{"sources":['
+  local first=1 r clients
+  for r in $realms; do
+    clients="$(kc "get clients -r $r --fields clientId,rootUrl,baseUrl,adminUrl,redirectUris,webOrigins,attributes")"
+    [ -n "$clients" ] || { echo "SCAN_FAIL client list unreadable for realm $r"; return; }
+    [ "$first" = "1" ] || json="$json,"
+    first=0
+    json="$json{\"label\":\"realm $r\",\"clients\":$clients}"
+  done
+  json="$json]}"
+  printf '%s' "$json" | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "$RETIREMENT_CLASSIFIER_PY" 2>/dev/null
 }
 if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   realm_verdict "$(realm_scan)"
