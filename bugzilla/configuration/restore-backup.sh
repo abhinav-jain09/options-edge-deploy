@@ -82,15 +82,37 @@ printf '%s' "$DBNAME" | grep -Eq '^[A-Za-z0-9_]+$' \
   || { echo "FATAL: refusing database name '$DBNAME' - not a bare identifier" >&2; exit 1; }
 
 # Confirm we are about to drop the schema this dump actually came from.
-grep -Eq "^-- (Host|Server version|MySQL dump)" <(gunzip -c "$DUMP" | head -5) \
-  || { echo "FATAL: $DUMP does not look like a mariadb-dump" >&2; exit 1; }
-gunzip -c "$DUMP" | head -30 | grep -q "Database: $DBNAME" \
-  || { echo "FATAL: $DUMP was not taken from database '$DBNAME'" >&2; exit 1; }
-echo "==> target database: $DBNAME (matches the dump header)"
+#
+# Read the header with awk's own early exit rather than `gunzip | head | grep`:
+# under `set -o pipefail`, head closing the pipe makes gunzip die of SIGPIPE and
+# the whole pipeline "fails" on a perfectly good multi-hundred-megabyte dump.
+HEADER=$(gunzip -c "$DUMP" | awk 'NR <= 30; NR == 30 {exit}')
+case "$HEADER" in
+  *"MySQL dump"*|*"MariaDB dump"*) ;;
+  *) echo "FATAL: $DUMP does not look like a mariadb-dump" >&2; exit 1 ;;
+esac
+# Anchored on both sides: a prefix match would let a dump of `bugs_old` pass as
+# a dump of `bugs`, and we are about to DROP the target.
+printf '%s\n' "$HEADER" | grep -Eq "^-- Host:.*Database: ${DBNAME}\$" \
+  || { echo "FATAL: $DUMP was not taken from database '$DBNAME'" >&2
+       printf '%s\n' "$HEADER" | grep -E "^-- Host:" >&2
+       exit 1; }
+echo "==> target database: $DBNAME (matches the dump header exactly)"
 
-echo "==> stopping Apache (the container stays up)"
+echo "==> stopping Apache and waiting for it to drain"
 docker exec "$WEB" apachectl stop
 apache_stopped=1
+for _ in $(seq 1 30); do
+  if ! docker exec "$WEB" sh -c 'pgrep -x apache2 >/dev/null 2>&1 || pgrep -x httpd >/dev/null 2>&1'; then
+    drained=1; break
+  fi
+  sleep 1
+done
+# apachectl stop is asynchronous. Dropping the schema while a worker is still
+# alive would let an in-flight request touch a database that is being replaced.
+[ "${drained:-0}" = "1" ] \
+  || { echo "FATAL: Apache workers are still running after 30s; refusing to drop the schema" >&2; exit 1; }
+echo "    no Apache processes remain"
 
 echo "==> recreating the schema"
 db_sql "DROP DATABASE IF EXISTS \\\`$DBNAME\\\`; CREATE DATABASE \\\`$DBNAME\\\` CHARACTER SET $CS COLLATE $COLL;"
@@ -113,8 +135,22 @@ echo "==> restoring params.json"
 docker cp "$PARAMS" "$WEB:/var/www/html/data/params.json"
 docker exec "$WEB" chown www-data:www-data /var/www/html/data/params.json
 
-echo "==> restarting the web tier"
+echo "==> restarting the web tier and waiting for it to answer"
 docker restart "$WEB" >/dev/null
+for _ in $(seq 1 60); do
+  if docker exec "$WEB" sh -c 'command -v curl >/dev/null 2>&1' \
+     && docker exec "$WEB" curl -fsS -o /dev/null http://localhost/rest/version 2>/dev/null; then
+    healthy=1; break
+  fi
+  sleep 2
+done
+[ "${healthy:-0}" = "1" ] || {
+  echo "FATAL: the web tier did not answer /rest/version within 120s." >&2
+  echo "       The data is restored but the instance is not serving; investigate before" >&2
+  echo "       telling anyone the restore succeeded." >&2
+  exit 1
+}
+echo "    /rest/version answered"
 
 restored=1
 echo

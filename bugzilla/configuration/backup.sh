@@ -58,6 +58,10 @@ echo "    no Apache processes remain"
 echo "==> checking the database exists"
 DBNAME=$(docker exec "$DB" sh -c 'printf %s "$BZ_DB_NAME"')
 [ -n "$DBNAME" ] || { echo "FATAL: \$BZ_DB_NAME is not set in $DB" >&2; exit 1; }
+# It is interpolated into SQL that runs through `sh -c`, exactly as in the
+# restore script - so hold it to the same bare-identifier allowlist.
+printf '%s' "$DBNAME" | grep -Eq '^[A-Za-z0-9_]+$' \
+  || { echo "FATAL: refusing database name '$DBNAME' - not a bare identifier" >&2; exit 1; }
 FOUND=$(db_sql "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='$DBNAME'")
 [ "$FOUND" = "1" ] || { echo "FATAL: database '$DBNAME' does not exist" >&2; exit 1; }
 echo "    $DBNAME"

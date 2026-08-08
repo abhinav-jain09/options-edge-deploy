@@ -1,30 +1,27 @@
 [%# Errors raised by the IssueTypeWorkflow extension. %]
 
-[% IF error == "issue_type_required" %]
-  [% title = "Issue Type Required" %]
-  Every item must be filed as either a <em>BUG</em> or a <em>REQUIREMENT</em>.
-  Please set the <em>Issue Type</em> field.
-
-[% ELSIF error == "issue_type_unknown" %]
-  [% title = "Unknown Issue Type" %]
-  <em>[% issue_type FILTER html %]</em> is not a known issue type.
-
-[% ELSIF error == "issue_category_required" %]
-  [% title = "Category Required" %]
-  Every item must have a <em>Category</em>.
-
-[% ELSIF error == "issue_category_mismatch" %]
+[% IF error == "issue_category_mismatch" %]
   [% title = "Category Does Not Match Issue Type" %]
   The category <em>[% category FILTER html %]</em> does not belong to issue type
-  <em>[% issue_type FILTER html %]</em>. Bug categories are prefixed
-  <em>BUG_</em> and requirement categories <em>REQ_</em>.
+  <em>[% issue_type FILTER html %]</em>, which is determined by this item's
+  product. Bug categories are prefixed <em>BUG_</em> and requirement categories
+  <em>REQ_</em>. Leaving the category empty is always allowed.
+
+[% ELSIF error == "issue_product_move_cross_type" %]
+  [% title = "Cannot Move Between Bugs and Requirements" %]
+  <em>[% old_product FILTER html %]</em> holds
+  <em>[% old_type FILTER html %]</em> items and
+  <em>[% new_product FILTER html %]</em> holds
+  <em>[% new_type FILTER html %]</em> items, so this move would change the
+  item's lifecycle underneath it. File a linked item in the other product
+  instead. Moves between products of the same kind are fine.
 
 [% ELSIF error == "issue_type_initial_status_unavailable" %]
   [% title = "Lifecycle Entry Point Missing" %]
   Items of type <em>[% issue_type FILTER html %]</em> must be created in status
-  <em>[% status FILTER html %]</em>, but that status is not a legal status for a
-  new item. The status workflow no longer matches the configured lifecycles —
-  re-run <em>setup-projects.pl</em>.
+  <em>[% status FILTER html %]</em>, but that is not currently a legal status
+  for a new item. The status workflow no longer matches the configured
+  lifecycles — re-run <em>setup-projects.pl</em>.
 
 [% ELSIF error == "issue_type_initial_status_needs_comment" %]
   [% title = "Comment Required" %]
@@ -35,8 +32,8 @@
 [% ELSIF error == "issue_type_workflow_misconfigured" %]
   [% title = "Issue Type Workflow Is Misconfigured" %]
   Part of the configuration the issue-type lifecycles depend on is missing or
-  has been altered — a custom field, an issue type, a category, a status or the
-  status workflow itself. Changes are blocked until
+  has been altered — the category field, a category value, a product, a status
+  or the status workflow itself. Changes are blocked until
   <em>setup-projects.pl</em> has been re-run. This is deliberate: the
   alternative would be to silently stop enforcing the lifecycles.
 

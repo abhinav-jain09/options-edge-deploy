@@ -441,7 +441,9 @@ sub take_lock {
 # ownership before each destructive phase rather than assuming we still hold it.
 sub assert_lock_held {
   my ($phase) = @_;
-  return if $DRY;
+
+  # Checked in dry runs as well: a reconnect there would let a concurrent apply
+  # change things underneath us and turn "zero actions" into a false result.
   my ($used) = $dbh->selectrow_array('SELECT IS_USED_LOCK(?)', undef, LOCK_NAME);
   my ($mine) = $dbh->selectrow_array('SELECT CONNECTION_ID()');
   fatal("the database connection was replaced (was $LOCK_CONNECTION_ID, now "
@@ -455,13 +457,25 @@ sub assert_lock_held {
   return;
 }
 
+my $LOCK_WAS_LOST = 0;
+
 sub release_lock {
   my ($released) = eval { $dbh->selectrow_array('SELECT RELEASE_LOCK(?)', undef, LOCK_NAME) };
-  return warn "WARNING: could not release the setup lock: $@\n" if $@;
-  warn "WARNING: RELEASE_LOCK returned "
-    . (defined $released ? $released : 'NULL')
-    . " - the lock was not held by this connection\n"
-    if !$released;
+  if ($@) {
+    $LOCK_WAS_LOST = 1;
+    warn "WARNING: could not release the setup lock: $@\n";
+    return;
+  }
+
+  # 0 or NULL means this connection did not hold the lock when we let go - so
+  # the concurrency invariant the whole run relies on was not actually held.
+  # That is a failed run, not a warning.
+  if (!$released) {
+    $LOCK_WAS_LOST = 1;
+    warn 'WARNING: RELEASE_LOCK returned '
+      . (defined $released ? $released : 'NULL')
+      . " - this connection did not hold the setup lock\n";
+  }
   return;
 }
 
@@ -718,7 +732,7 @@ sub flush_caches {
   delete $cache->{fields};
   delete $cache->{active_custom_fields};
   delete $cache->{status_bug_state_open};
-  delete $cache->{itw_enforcing};
+  delete $cache->{itw_state};
   foreach my $key (keys %$cache) {
     delete $cache->{$key}
       if $key
@@ -1422,6 +1436,10 @@ my $err = $@;
 
 release_lock();
 die $err if !$ok;
+fatal('the setup lock was not held when the run finished; another process may '
+    . 'have changed the configuration concurrently. Re-run the dry run and '
+    . 'compare before trusting this result.')
+  if $LOCK_WAS_LOST;
 
 if (!@PLAN) {
   print "\nNo changes - the installation already matches expected-state.json.\n";

@@ -1,11 +1,20 @@
 {
-  "spec_version": "1.0.0",
+  "spec_version": "2.0.0",
   "_comment": [
     "Declarative SSOT for the internal Bugzilla (5.2) project/lifecycle configuration.",
     "setup-projects.pl converges the installation to this state; verify-projects.py asserts it.",
-    "The IssueTypeWorkflow extension carries the same type->status/resolution/category map as",
-    "Perl constants (it must not do runtime file IO); verify-projects.py proves the two agree",
-    "behaviourally by walking both lifecycles and asserting every illegal move is rejected."
+    "",
+    "REBASED ON REALITY (spec_version 2.0.0). The installation is NOT empty: four products",
+    "already exist and OptionsEdge holds 177 live bugs created 2026-06-11..2026-08-03. Two hard",
+    "constraints follow from that, and they shape everything below:",
+    "  1. the four existing products are adopted, not replaced;",
+    "  2. NOTHING may write to an existing bug row.",
+    "",
+    "Constraint 2 is why there is no cf_issue_type (a mandatory select over a populated table",
+    "gives every existing row the '---' sentinel) and why CONFIRMED/IN_PROGRESS are NOT renamed",
+    "(Bugzilla/Field/Choice.pm:158 implements a value rename as UPDATE bugs SET <field> = ?,",
+    "which would rewrite 80 live rows). The issue type is derived from the product instead, and",
+    "cf_category is optional."
   ],
 
   "bugzilla_version": "5.2",
@@ -15,75 +24,71 @@
     "useclassification": "0"
   },
   "_enforcement_switch_comment": [
-    "There is deliberately NO 'enforcement enabled' parameter. Any such switch would be",
-    "reachable by anyone with tweakparams, which would defeat denying administrators too.",
-    "The extension instead derives its state: cf_issue_type absent = never provisioned",
-    "(bootstrap, nothing enforced); cf_issue_type present = every ENFORCEMENT-CRITICAL part of",
-    "the model below must match, or every guarded change is refused. That means the two policy",
-    "fields' wiring, the issue types, the categories and their controllers, the resolutions,",
-    "the statuses with their is_open flags, and the whole workflow matrix. It deliberately does",
-    "NOT include cf_environment, products, components, descriptions or sort keys: those cannot",
-    "widen lifecycle policy, and the provisioner's zero-change dry run is what covers them.",
-    "Getting back to 'off' means deleting cf_issue_type, which destroys every item's type -",
-    "destructive and obvious, not a quiet toggle. From a web or API request a missing",
-    "cf_issue_type is treated as BROKEN, not as bootstrap, so deleting it is not a way out."
+    "There is deliberately NO 'enforcement enabled' parameter: anyone with tweakparams could",
+    "turn one off. The extension derives its state instead, anchored on cf_category - the one",
+    "object this design creates. Absent outside a web/API request = never provisioned",
+    "(bootstrap, nothing enforced, so checksetup.pl and the provisioner can run). Absent or",
+    "structurally damaged during a request = BROKEN: every guarded change is refused until",
+    "setup-projects.pl has been re-run."
   ],
 
   "issue_types": ["BUG", "REQUIREMENT"],
 
-  "fields": {
-    "cf_issue_type": {
-      "description": "Issue Type",
-      "type": "single_select",
-      "enter_bug": true,
-      "buglist": true,
-      "is_mandatory": true,
-      "sortkey": 1000,
-      "values": [
-        {"value": "BUG", "sortkey": 100},
-        {"value": "REQUIREMENT", "sortkey": 200}
-      ]
-    },
+  "_product_type_comment": [
+    "The issue type IS the product. bugs.product_id is already the normalised ownership column;",
+    "storing the type a second time per bug would create two authorities that can drift, and",
+    "could not be populated for the 177 existing rows anyway. Product changes are recorded in",
+    "bug activity, so history stays reconstructible.",
+    "Search ergonomics: 'all bugs' is product IN (OptionsEdge, Fullfunding)."
+  ],
+  "product_type": {
+    "OptionsEdge": "BUG",
+    "Fullfunding": "BUG",
+    "OptionsEdge Requirements": "REQUIREMENT",
+    "Fullfunding Requirements": "REQUIREMENT"
+  },
 
+  "fields": {
     "cf_category": {
       "description": "Category",
       "type": "single_select",
       "enter_bug": true,
       "buglist": true,
-      "is_mandatory": true,
+      "is_mandatory": false,
       "sortkey": 1100,
-      "value_field": "cf_issue_type",
       "_comment": [
-        "Bugzilla 5.2 stores ONE controller per field value (bug_status/resolution/cf_* value",
-        "tables all carry a single visibility_value_id INT2 column - see Bugzilla/DB/Schema.pm",
-        "and Bugzilla/Field/Choice.pm DB_COLUMNS). A category value therefore cannot be shared",
-        "between BUG and REQUIREMENT, which is why the vocabularies are prefixed instead."
+        "OPTIONAL, and deliberately uncontrolled. Bugzilla stores one visibility_value_id per",
+        "choice row, so a product-controlled vocabulary would need per-product duplicates of",
+        "every value (there are two products per type) - which would fragment reporting and",
+        "strand values on a same-type product move. One flat BUG_*/REQ_* list, with the",
+        "extension rejecting a value that does not belong to the item's product-derived type.",
+        "Optional is what leaves the 177 existing bugs alone: an empty category is always valid."
       ],
       "values": [
-        {"value": "BUG_INFRA",          "sortkey": 100, "controlled_by": "BUG"},
-        {"value": "BUG_CODE",           "sortkey": 110, "controlled_by": "BUG"},
-        {"value": "BUG_CONFIG",         "sortkey": 120, "controlled_by": "BUG"},
-        {"value": "BUG_DATA",           "sortkey": 130, "controlled_by": "BUG"},
-        {"value": "BUG_INTEGRATION",    "sortkey": 140, "controlled_by": "BUG"},
-        {"value": "BUG_CI_CD",          "sortkey": 150, "controlled_by": "BUG"},
-        {"value": "BUG_SECURITY",       "sortkey": 160, "controlled_by": "BUG"},
-        {"value": "BUG_PERFORMANCE",    "sortkey": 170, "controlled_by": "BUG"},
-        {"value": "BUG_RELIABILITY",    "sortkey": 180, "controlled_by": "BUG"},
-        {"value": "BUG_TEST",           "sortkey": 190, "controlled_by": "BUG"},
-        {"value": "BUG_DOCUMENTATION",  "sortkey": 200, "controlled_by": "BUG"},
+        {"value": "BUG_INFRA",          "sortkey": 100, "issue_type": "BUG"},
+        {"value": "BUG_CODE",           "sortkey": 110, "issue_type": "BUG"},
+        {"value": "BUG_CONFIG",         "sortkey": 120, "issue_type": "BUG"},
+        {"value": "BUG_DATA",           "sortkey": 130, "issue_type": "BUG"},
+        {"value": "BUG_INTEGRATION",    "sortkey": 140, "issue_type": "BUG"},
+        {"value": "BUG_CI_CD",          "sortkey": 150, "issue_type": "BUG"},
+        {"value": "BUG_SECURITY",       "sortkey": 160, "issue_type": "BUG"},
+        {"value": "BUG_PERFORMANCE",    "sortkey": 170, "issue_type": "BUG"},
+        {"value": "BUG_RELIABILITY",    "sortkey": 180, "issue_type": "BUG"},
+        {"value": "BUG_TEST",           "sortkey": 190, "issue_type": "BUG"},
+        {"value": "BUG_DOCUMENTATION",  "sortkey": 200, "issue_type": "BUG"},
 
-        {"value": "REQ_COSMETIC",       "sortkey": 300, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_LOGIC",          "sortkey": 310, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_WORKFLOW",       "sortkey": 320, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_DATA",           "sortkey": 330, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_INTEGRATION",    "sortkey": 340, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_ACCESS_CONTROL", "sortkey": 350, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_SECURITY",       "sortkey": 360, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_COMPLIANCE",     "sortkey": 370, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_PERFORMANCE",    "sortkey": 380, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_OPERABILITY",    "sortkey": 390, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_REPORTING",      "sortkey": 400, "controlled_by": "REQUIREMENT"},
-        {"value": "REQ_DOCUMENTATION",  "sortkey": 410, "controlled_by": "REQUIREMENT"}
+        {"value": "REQ_COSMETIC",       "sortkey": 300, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_LOGIC",          "sortkey": 310, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_WORKFLOW",       "sortkey": 320, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_DATA",           "sortkey": 330, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_INTEGRATION",    "sortkey": 340, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_ACCESS_CONTROL", "sortkey": 350, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_SECURITY",       "sortkey": 360, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_COMPLIANCE",     "sortkey": 370, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_PERFORMANCE",    "sortkey": 380, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_OPERABILITY",    "sortkey": 390, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_REPORTING",      "sortkey": 400, "issue_type": "REQUIREMENT"},
+        {"value": "REQ_DOCUMENTATION",  "sortkey": 410, "issue_type": "REQUIREMENT"}
       ]
     },
 
@@ -94,8 +99,14 @@
       "buglist": true,
       "is_mandatory": false,
       "sortkey": 1200,
-      "visibility_field": "cf_issue_type",
-      "visibility_values": ["BUG"],
+      "_comment": [
+        "Controlled by product rather than by a type field: the two BUG products are exactly the",
+        "places an environment makes sense, and product IS a select field Bugzilla accepts as a",
+        "controller (FIELD_TYPE_SINGLE_SELECT, Field/Choice.pm CLASS_MAP maps it to",
+        "Bugzilla::Product)."
+      ],
+      "visibility_field": "product",
+      "visibility_values": ["OptionsEdge", "Fullfunding"],
       "values": [
         {"value": "DEV",        "sortkey": 100},
         {"value": "TEST_CI",    "sortkey": 200},
@@ -105,16 +116,27 @@
     }
   },
 
+  "_statuses_comment": [
+    "The BUG branch keeps Bugzilla's stock names. Renaming CONFIRMED/IN_PROGRESS would be an",
+    "UPDATE against the 80 live bugs sitting on them (Field/Choice.pm:158), which the no-touch",
+    "constraint forbids. Only the four REQ_* statuses are new, so applying this writes nothing",
+    "to the bugs table at all.",
+    "The REQ_ prefix still makes a cross-branch status obvious to a human; the extension is what",
+    "makes it impossible. Existing sortkeys are kept exactly as they are (100/200/300/400/500) so",
+    "no existing row is rewritten; the new REQ_* statuses take 600-900.",
+    "'exists' records which statuses are expected to be there already - the provisioner refuses",
+    "to CREATE one marked true, because that would mean the installation is not what we think."
+  ],
   "statuses": [
-    {"value": "UNCONFIRMED",     "is_open": true,  "sortkey": 100, "rename_from": null},
-    {"value": "BUG_CONFIRMED",   "is_open": true,  "sortkey": 200, "rename_from": "CONFIRMED"},
-    {"value": "BUG_IN_PROGRESS", "is_open": true,  "sortkey": 300, "rename_from": "IN_PROGRESS"},
-    {"value": "REQ_DRAFT",       "is_open": true,  "sortkey": 400, "rename_from": null},
-    {"value": "REQ_REVIEW",      "is_open": true,  "sortkey": 500, "rename_from": null},
-    {"value": "REQ_APPROVED",    "is_open": true,  "sortkey": 600, "rename_from": null},
-    {"value": "REQ_IN_PROGRESS", "is_open": true,  "sortkey": 700, "rename_from": null},
-    {"value": "RESOLVED",        "is_open": false, "sortkey": 800, "rename_from": null},
-    {"value": "VERIFIED",        "is_open": false, "sortkey": 900, "rename_from": null}
+    {"value": "UNCONFIRMED",     "is_open": true,  "sortkey": 100, "exists": true},
+    {"value": "CONFIRMED",       "is_open": true,  "sortkey": 200, "exists": true},
+    {"value": "IN_PROGRESS",     "is_open": true,  "sortkey": 300, "exists": true},
+    {"value": "REQ_DRAFT",       "is_open": true,  "sortkey": 600, "exists": false},
+    {"value": "REQ_REVIEW",      "is_open": true,  "sortkey": 700, "exists": false},
+    {"value": "REQ_APPROVED",    "is_open": true,  "sortkey": 800, "exists": false},
+    {"value": "REQ_IN_PROGRESS", "is_open": true,  "sortkey": 900, "exists": false},
+    {"value": "RESOLVED",        "is_open": false, "sortkey": 400, "exists": true},
+    {"value": "VERIFIED",        "is_open": false, "sortkey": 500, "exists": true}
   ],
 
   "_workflow_comment": [
@@ -123,43 +145,44 @@
     "IssueTypeWorkflow extension is what stops an item crossing between the two branches.",
     "'' (empty from) is the bug-creation row (status_workflow.old_status IS NULL).",
     "Every status must be able to reach duplicate_or_move_bug_status (RESOLVED), otherwise",
-    "Bugzilla::Status::add_missing_bug_status_transitions() re-adds the row behind our back."
+    "Bugzilla::Status::add_missing_bug_status_transitions() re-adds the row behind our back.",
+    "Rewriting this table does NOT touch bug rows."
   ],
   "workflow": [
-    {"from": "",                 "to": "UNCONFIRMED",     "require_comment": false},
-    {"from": "",                 "to": "REQ_DRAFT",       "require_comment": false},
+    {"from": "",                "to": "UNCONFIRMED",     "require_comment": false},
+    {"from": "",                "to": "REQ_DRAFT",       "require_comment": false},
 
-    {"from": "UNCONFIRMED",      "to": "BUG_CONFIRMED",   "require_comment": false},
-    {"from": "UNCONFIRMED",      "to": "BUG_IN_PROGRESS", "require_comment": false},
-    {"from": "UNCONFIRMED",      "to": "RESOLVED",        "require_comment": true},
+    {"from": "UNCONFIRMED",     "to": "CONFIRMED",       "require_comment": false},
+    {"from": "UNCONFIRMED",     "to": "IN_PROGRESS",     "require_comment": false},
+    {"from": "UNCONFIRMED",     "to": "RESOLVED",        "require_comment": true},
 
-    {"from": "BUG_CONFIRMED",    "to": "BUG_IN_PROGRESS", "require_comment": false},
-    {"from": "BUG_CONFIRMED",    "to": "RESOLVED",        "require_comment": true},
+    {"from": "CONFIRMED",       "to": "IN_PROGRESS",     "require_comment": false},
+    {"from": "CONFIRMED",       "to": "RESOLVED",        "require_comment": true},
 
-    {"from": "BUG_IN_PROGRESS",  "to": "BUG_CONFIRMED",   "require_comment": true},
-    {"from": "BUG_IN_PROGRESS",  "to": "RESOLVED",        "require_comment": true},
+    {"from": "IN_PROGRESS",     "to": "CONFIRMED",       "require_comment": true},
+    {"from": "IN_PROGRESS",     "to": "RESOLVED",        "require_comment": true},
 
-    {"from": "REQ_DRAFT",        "to": "REQ_REVIEW",      "require_comment": false},
-    {"from": "REQ_DRAFT",        "to": "RESOLVED",        "require_comment": true},
+    {"from": "REQ_DRAFT",       "to": "REQ_REVIEW",      "require_comment": false},
+    {"from": "REQ_DRAFT",       "to": "RESOLVED",        "require_comment": true},
 
-    {"from": "REQ_REVIEW",       "to": "REQ_DRAFT",       "require_comment": true},
-    {"from": "REQ_REVIEW",       "to": "REQ_APPROVED",    "require_comment": false},
-    {"from": "REQ_REVIEW",       "to": "RESOLVED",        "require_comment": true},
+    {"from": "REQ_REVIEW",      "to": "REQ_DRAFT",       "require_comment": true},
+    {"from": "REQ_REVIEW",      "to": "REQ_APPROVED",    "require_comment": false},
+    {"from": "REQ_REVIEW",      "to": "RESOLVED",        "require_comment": true},
 
-    {"from": "REQ_APPROVED",     "to": "REQ_REVIEW",      "require_comment": true},
-    {"from": "REQ_APPROVED",     "to": "REQ_IN_PROGRESS", "require_comment": false},
-    {"from": "REQ_APPROVED",     "to": "RESOLVED",        "require_comment": true},
+    {"from": "REQ_APPROVED",    "to": "REQ_REVIEW",      "require_comment": true},
+    {"from": "REQ_APPROVED",    "to": "REQ_IN_PROGRESS", "require_comment": false},
+    {"from": "REQ_APPROVED",    "to": "RESOLVED",        "require_comment": true},
 
-    {"from": "REQ_IN_PROGRESS",  "to": "REQ_APPROVED",    "require_comment": true},
-    {"from": "REQ_IN_PROGRESS",  "to": "RESOLVED",        "require_comment": true},
+    {"from": "REQ_IN_PROGRESS", "to": "REQ_APPROVED",    "require_comment": true},
+    {"from": "REQ_IN_PROGRESS", "to": "RESOLVED",        "require_comment": true},
 
-    {"from": "RESOLVED",         "to": "BUG_CONFIRMED",   "require_comment": true},
-    {"from": "RESOLVED",         "to": "REQ_REVIEW",      "require_comment": true},
-    {"from": "RESOLVED",         "to": "VERIFIED",        "require_comment": false},
+    {"from": "RESOLVED",        "to": "CONFIRMED",       "require_comment": true},
+    {"from": "RESOLVED",        "to": "REQ_REVIEW",      "require_comment": true},
+    {"from": "RESOLVED",        "to": "VERIFIED",        "require_comment": false},
 
-    {"from": "VERIFIED",         "to": "BUG_CONFIRMED",   "require_comment": true},
-    {"from": "VERIFIED",         "to": "REQ_REVIEW",      "require_comment": true},
-    {"from": "VERIFIED",         "to": "RESOLVED",        "require_comment": true}
+    {"from": "VERIFIED",        "to": "CONFIRMED",       "require_comment": true},
+    {"from": "VERIFIED",        "to": "REQ_REVIEW",      "require_comment": true},
+    {"from": "VERIFIED",        "to": "RESOLVED",        "require_comment": true}
   ],
 
   "resolutions": [
@@ -174,31 +197,23 @@
   ],
 
   "_enforcement_comment": [
-    "Mirrored as Perl constants in extensions/IssueTypeWorkflow/Extension.pm. Kept here so the",
-    "intended policy is reviewable in one place and so verify-projects.py can generate the",
-    "negative test cases from it rather than hard-coding them."
+    "Mirrored as Perl constants in extensions/IssueTypeWorkflow/Extension.pm, which the",
+    "provisioner refuses to run against if the two disagree. The constants exist so that an",
+    "unreadable or half-written config file can never silently turn enforcement off."
   ],
   "enforcement": {
+    "allowed_statuses": {
+      "BUG": ["UNCONFIRMED", "CONFIRMED", "IN_PROGRESS", "RESOLVED", "VERIFIED"],
+      "REQUIREMENT": ["REQ_DRAFT", "REQ_REVIEW", "REQ_APPROVED", "REQ_IN_PROGRESS", "RESOLVED", "VERIFIED"]
+    },
     "initial_status": {
       "BUG": "UNCONFIRMED",
       "REQUIREMENT": "REQ_DRAFT"
-    },
-    "allowed_statuses": {
-      "BUG": ["UNCONFIRMED", "BUG_CONFIRMED", "BUG_IN_PROGRESS", "RESOLVED", "VERIFIED"],
-      "REQUIREMENT": ["REQ_DRAFT", "REQ_REVIEW", "REQ_APPROVED", "REQ_IN_PROGRESS", "RESOLVED", "VERIFIED"]
     },
     "allowed_resolutions": {
       "BUG": ["FIXED", "INVALID", "WONTFIX", "DUPLICATE", "WORKSFORME"],
       "REQUIREMENT": ["IMPLEMENTED", "REJECTED", "DEFERRED", "DUPLICATE"]
     },
-    "issue_type_immutable": true,
-
-    "_allowed_categories_comment": [
-      "Mirrors Extension.pm's ALLOWED_CATEGORIES. The extension compiles the vocabulary in as",
-      "well as reading each value's live controller, and requires both to agree - otherwise an",
-      "editvalues.cgi edit would silently be a policy change. setup-projects.pl asserts this",
-      "list matches the cf_category values above AND the extension's constants."
-    ],
     "allowed_categories": {
       "BUG": ["BUG_INFRA", "BUG_CODE", "BUG_CONFIG", "BUG_DATA", "BUG_INTEGRATION", "BUG_CI_CD",
               "BUG_SECURITY", "BUG_PERFORMANCE", "BUG_RELIABILITY", "BUG_TEST",
@@ -207,82 +222,99 @@
                       "REQ_ACCESS_CONTROL", "REQ_SECURITY", "REQ_COMPLIANCE", "REQ_PERFORMANCE",
                       "REQ_OPERABILITY", "REQ_REPORTING", "REQ_DOCUMENTATION"]
     },
+    "empty_category_allowed": true,
+    "cross_type_product_move_allowed": false,
 
     "_error_codes_comment": [
-      "illegal_change (115) is core Bugzilla's, raised whenever the extension denies an",
-      "UPDATE via priv_results; REST maps it to HTTP 401. The 1000xx codes are the",
-      "extension's own creation-time errors, registered through the webservice_error_codes",
-      "hook and mapped to HTTP 400. verify-projects.py asserts these exact codes so that an",
-      "auth failure, a 404 or a 500 can never be mistaken for successful enforcement.",
-      "Four of the seven are defence-in-depth rather than routinely reachable. Core's own select",
-      "validation rejects an unknown cf_issue_type before issue_type_unknown can fire (so the",
-      "verifier asserts only that creation is refused with HTTP 400 there). The two",
-      "initial_status errors are normally preempted by issue_type_workflow_misconfigured, since",
-      "a damaged workflow now trips the fail-closed state first; they remain as race defence.",
-      "verify-projects.py asserts exact codes for the reachable ones and says which it cannot",
-      "induce without deliberately damaging the installation."
+      "illegal_change (115) is core Bugzilla's, raised whenever the extension denies an UPDATE",
+      "via priv_results; REST maps it to HTTP 401. The 1000xx codes are the extension's own,",
+      "registered through the webservice_error_codes hook and mapped to HTTP 400.",
+      "verify-projects.py asserts these exact codes so an auth failure, a 404 or a 500 can never",
+      "be mistaken for successful enforcement.",
+      "The two initial_status codes are race defence: a damaged workflow normally trips",
+      "issue_type_workflow_misconfigured first. The verifier says which it cannot induce."
     ],
     "error_codes": {
       "core_illegal_change": 115,
       "extension": {
-        "issue_type_required": 100001,
-        "issue_type_unknown": 100002,
-        "issue_category_required": 100003,
         "issue_category_mismatch": 100004,
         "issue_type_initial_status_unavailable": 100005,
         "issue_type_initial_status_needs_comment": 100006,
-        "issue_type_workflow_misconfigured": 100007
+        "issue_type_workflow_misconfigured": 100007,
+        "issue_product_move_cross_type": 100008
       }
     }
   },
 
+  "_products_comment": [
+    "These four already exist - created by separate work, with OptionsEdge holding the 177 live",
+    "bugs. They are adopted as they are; only descriptions are converged (the OptionsEdge",
+    "General component still carries Bugzilla's TestProduct boilerplate, because that product",
+    "began life as TestProduct and was renamed).",
+    "Component/version/milestone sets are declared exactly as they exist so the provisioner",
+    "neither adds nor removes anything the other work owns."
+  ],
   "products": [
     {
-      "name": "optionedge",
-      "description": "OptionEdge trading platform - market-data feeds, stream processing, gateway, UI and the ES4 futures environment.",
-      "is_active": true,
+      "name": "OptionsEdge",
+      "issue_type": "BUG",
+      "description": "OptionsEdge - internal engineering bugs.",
       "classification": "Unclassified",
+      "is_active": true,
       "allows_unconfirmed": true,
       "default_milestone": "---",
       "versions": ["unspecified"],
       "milestones": ["---"],
       "components": [
-        {"name": "Market Data Feeds",        "description": "Databento/IBKR feeds, symbol resolution, replay and feed lifecycle."},
-        {"name": "Trading Gateway",          "description": "Gateway service, REST/SSE endpoints and partition refresh."},
-        {"name": "Stream Processing",        "description": "Kafka Streams topologies, state stores, GEX/dealer-ledger/classifier pipelines."},
-        {"name": "Trading Services",         "description": "Standalone analytic services: reversal, indicator, close/open direction, carry."},
-        {"name": "Web UI",                   "description": "Option-chain, heatmap, boards and panels."},
-        {"name": "Contracts & Schemas",      "description": "Avro/JSON contracts, schema registry compatibility, topic contracts."},
-        {"name": "Platform & Deployment",    "description": "k3s/k8s manifests, Kafka broker, storage, Keycloak, host infrastructure."},
-        {"name": "CI/CD",                    "description": "Jenkins jobs, build/deploy pipelines, image promotion."},
-        {"name": "ES4 Futures Environment",  "description": "The .4 ES futures environment and its mirrors."},
-        {"name": "Cross-Cutting / Other",    "description": "Anything that does not belong to a single subsystem."}
+        {"name": "General", "description": "Anything in the OptionsEdge trading platform."}
       ]
     },
     {
-      "name": "fullfunding",
-      "description": "FullFunding requirements portal and its supporting domain, identity and edge infrastructure.",
-      "is_active": true,
+      "name": "OptionsEdge Requirements",
+      "issue_type": "REQUIREMENT",
+      "description": "Requests raised by people outside the team.",
       "classification": "Unclassified",
+      "is_active": true,
       "allows_unconfirmed": true,
       "default_milestone": "---",
       "versions": ["unspecified"],
       "milestones": ["---"],
       "components": [
-        {"name": "Requirements Portal",   "description": "The externally facing Bugzilla portal itself."},
-        {"name": "Domain & Workflow",     "description": "Domain migration, hostname routing, intake and triage workflow."},
-        {"name": "Keycloak SSO",          "description": "Realms, clients, OIDC login flow and account provisioning."},
-        {"name": "Cloudflare Edge",       "description": "Tunnels, DNS records and edge routing."},
-        {"name": "K3s Platform",          "description": "The fullfunding namespace, manifests and cluster resources."},
-        {"name": "Web Frontend",          "description": "Portal-facing web assets and branding."},
-        {"name": "Integrations & API",    "description": "REST/API integrations with external stakeholders."},
-        {"name": "Cross-Cutting / Other", "description": "Anything that does not belong to a single subsystem."}
+        {"name": "General", "description": "Anything requested for the OptionsEdge platform."}
+      ]
+    },
+    {
+      "name": "Fullfunding",
+      "issue_type": "BUG",
+      "description": "Fullfunding - internal engineering bugs.",
+      "classification": "Unclassified",
+      "is_active": true,
+      "allows_unconfirmed": true,
+      "default_milestone": "---",
+      "versions": ["unspecified"],
+      "milestones": ["---"],
+      "components": [
+        {"name": "General", "description": "Anything in the Fullfunding portal and its infrastructure."}
+      ]
+    },
+    {
+      "name": "Fullfunding Requirements",
+      "issue_type": "REQUIREMENT",
+      "description": "Requests raised by people outside the team.",
+      "classification": "Unclassified",
+      "is_active": true,
+      "allows_unconfirmed": true,
+      "default_milestone": "---",
+      "versions": ["unspecified"],
+      "milestones": ["---"],
+      "components": [
+        {"name": "General", "description": "Anything requested for the Fullfunding portal."}
       ]
     }
   ],
 
   "decommission": {
-    "products": ["TestProduct"],
-    "_comment": "Opt-in only (--remove-decommissioned), and only after verification has passed. The script ABORTS if the product still holds bugs - it does not deactivate it, because a half-retired product is worse than an obvious failure. Closing bugs does not help; they must be moved to another product or deleted."
+    "products": [],
+    "_comment": "Nothing to retire: TestProduct was renamed to OptionsEdge by earlier work and holds the 177 live bugs."
   }
 }

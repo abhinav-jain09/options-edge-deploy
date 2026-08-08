@@ -179,10 +179,11 @@ class Bz:
         except urllib.error.HTTPError as exc:
             try:
                 status, raw = exc.code, exc.read().decode("utf-8")
-            except UnicodeDecodeError as decode_exc:
+            except (UnicodeDecodeError, OSError) as read_exc:
                 raise BzTransportError(
-                    f"{method} {url}: HTTP {exc.code} with undecodable body"
-                ) from decode_exc
+                    f"{method} {url}: HTTP {exc.code}, but its body could not "
+                    f"be read ({read_exc})"
+                ) from read_exc
         except (urllib.error.URLError, OSError) as exc:
             raise BzTransportError(f"{method} {url}: {exc}") from exc
         except UnicodeDecodeError as exc:
@@ -231,7 +232,17 @@ def verify_parameters(bz, state):
             check(f"param {name} visible", False,
                   "not returned; the API key's user is probably not an admin")
             continue
-        eq(f"param {name}", params[name], want)
+        # Bugzilla serialises every parameter as a string, but a boolean can
+        # come back as 0/1 or ''/1 depending on how it was written. Compare the
+        # normalised scalars so a converged installation cannot fail on typing.
+        eq(f"param {name}", _param_scalar(params[name]), _param_scalar(want))
+
+
+def _param_scalar(value):
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    text = str(value).strip()
+    return {"": "0", "false": "0", "true": "1"}.get(text.lower(), text)
 
 
 def verify_products(bz, state, require_decommissioned):
@@ -291,7 +302,7 @@ def verify_products(bz, state, require_decommissioned):
             check(f"decommissioned product '{name}' is gone", gone)
         elif not gone:
             warn(f"'{name}' is still present",
-                 "expected until runbook step 7 retires it; re-run with "
+                 "expected until the runbook retires it; re-run with "
                  "--require-decommissioned afterwards to assert it is gone",
                  expected=True)
 
