@@ -1,7 +1,36 @@
 # Gate-1 — `fullfunding` tenant namespace on the prod k3s node, and the req-portal's migration into it
 
-**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 7. AWAITING USER APPROVAL (gatekeeping Gate-1).
+**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 8. AWAITING USER APPROVAL (gatekeeping Gate-1).
 Not implemented.**
+
+**rev 8 — eight internal inconsistencies corrected, no requirement changed.** Every one was a place
+where an earlier revision's number or claim survived a later decision. Three were found reading the
+document end-to-end for approval; Codex's review of those corrections found five more of the same
+class, listed after them.
+
+Found on the first pass:
+1. **§6 step 1's abort threshold was unreachable.** It still read `R > 11.25 Gi`, the threshold for
+   the superseded **4 Gi** tenant budget. D-3 fixed the tenant at **2.25 Gi**, which NS-4's formula
+   makes feasible while `R ≤ 13.01 Gi`, gated conservatively at **13.0 Gi**. Against the expected measurement (`R ≈ 13 Gi`, the
+   off-hours floor) the old figure would have aborted the rollout every time — a feasibility gate
+   that had silently become an unconditional stop. Now `R > 13.0 Gi`, with the derivation shown and
+   the rounding rule stated — the formula's knife-edge is 13.01 Gi, but its inputs are rounded to
+   0.01 Gi, so the gate rounds down rather than claiming a precision the arithmetic lacks.
+2. **NS-2's prose contradicted its own YAML** — "`limits.memory` 12 Gi" against `limits.memory:
+   10Gi` in the block directly above it. NS-8's peak is **5 CPU / 10 Gi**, so the YAML was right and
+   the prose was left over from the 4 Gi envelope. Prose corrected, and it now states that the
+   memory limit equals NS-8's peak exactly.
+3. **§10's gate status was stale** — it described rev 4 awaiting Codex re-review, and listed D-1 and
+   D-3 as Gate-2 blockers after the user had closed them. It now records revs 5–8 and names the two
+   blockers that actually remain: **D-6**, and **a named consumer for Postgres**.
+
+Found by Codex on review of those three, all now fixed: NS-4's operative prose and the D-3 decision record still aborted at `R > 13 Gi` (so
+`13.00 < R ≤ 13.01` both fitted and blocked); **R-21** still measured slack against the 4 Gi budget;
+**§4** still said D-1 awaited a decision; **NS-8** still described a rollout surge that `Recreate`
+makes impossible and a reduction trigger that D-3 had already applied; and the revision history
+quoted superseded thresholds without marking them as such. The lesson is recorded rather than just
+the fix: a closed decision has to be propagated to every operative number it touches, not only to
+the decision table.
 
 **USER DECISIONS RECORDED 2026-08-04 — D-1, D-3 and D-7 are CLOSED:**
 1. **D-3 → the host reservation wins.** `system-reserved` keeps the full measured host requirement
@@ -14,12 +43,18 @@ Not implemented.**
    (**NS-21**), so nothing of the tenant's — not even rotated container logs — is stored on the root
    filesystem. This also benefits OptionsEdge, since `/` has only 38 GiB free.
 
-**Revision history.** rev 1 → Codex REQUEST_CHANGES (15 blockers); rev 2 → REQUEST_CHANGES (18);
+**Revision history.** Every threshold quoted below is the value that revision computed for the
+**4 Gi** tenant budget, which D-3 later superseded. None of them governs: the operative numbers are
+`tenant ≤ 15.26 − R` and an abort at `R > 13.0 Gi` (NS-4, §6 step 1).
+
+rev 1 → Codex REQUEST_CHANGES (15 blockers); rev 2 → REQUEST_CHANGES (18);
 rev 3 → REQUEST_CHANGES (12 + corrections). **rev 4 implements every rev-3 finding**, the material
 ones being: the Ingress quota is raised to 1 (a `0` quota would have rejected the platform-owned
 Ingress it was meant to protect); NS-4 gains an explicit **`P_platform`** term and the feasibility
-threshold tightens to **R ≤ 11.5 Gi**; NS-8's arithmetic is corrected and restructured as
-**steady state + exactly one transient**, which the quota itself enforces; the direct-Pod denial is
+threshold tightens to **R ≤ 11.5 Gi** (for the then-current 4 Gi budget); NS-8's arithmetic is corrected and restructured as
+**steady state + exactly one transient** — rev 4 claimed the quota itself enforces that shape, which
+**NS-8 has since withdrawn**: a ResourceQuota constrains aggregate consumption, not the shape of it;
+the direct-Pod denial is
 re-expressed on the **requesting identity** (as this cluster's existing policy already does) so
 controller-created Pods are unaffected and the rule is unforgeable, and it is extended to
 `options-edge` so the CPU-limit prohibition has no Pod-level bypass; the disk-wall guard becomes an
@@ -32,8 +67,10 @@ and NS-18 gains a budgeted, policy-compatible telemetry path.
 **rev 3 implemented every rev-2 finding**, the material
 ones being: the NS-4 arithmetic is corrected (it omitted the eviction reserve — the real slack at a
 14 Gi reservation is **2.26 Gi, not 4.3 Gi**) and is now expressed as a **feasibility formula with a
-quantified margin**, which surfaces the document's most important result — **the tenant's 4 Gi
-memory budget is only feasible if the measured reservation is ≤ 12 Gi** (§3 NS-4); the
+quantified margin**, which surfaces the document's most important result — **the tenant's then-4 Gi
+memory budget is only feasible if the measured reservation is small enough** (§3 NS-4 — rev 3's own
+figure was ≤ 12 Gi; the corrected formula puts a 4 Gi tenant at `R ≤ 11.26 Gi`, and D-3 has since
+replaced the 4 Gi budget entirely); the
 request-accounting methodology is restated in the actual scheduler formula and **certified against
 this cluster** (zero restartable-init sidecars, zero pod overhead); ephemeral storage is no longer
 called a hard ceiling; the LimitRange-versus-explicit-resources contradiction is resolved by
@@ -255,9 +292,10 @@ services.loadbalancers: "0"       services.nodeports: "0"
   platform-owned Ingress it was meant to protect. The layering is: **RBAC** denies the tenant
   credential any Ingress verb (NS-9), **the quota** prevents a second Ingress, and **NS-15(7)**
   constrains the content of the one that exists.
-- **`limits.memory` 12 Gi and `limits.cpu` 6** are deliberately larger than the requests, because
+- **`limits.memory` 10 Gi and `limits.cpu` 6** are deliberately larger than the requests, because
   limits do not consume allocatable. They are derived from NS-8's corrected budget —
-  **steady state plus exactly one transient** — not chosen round.
+  **steady state plus one budgeted transient**, whose peak is **5 CPU / 10 Gi** — not chosen round.
+  The memory limit equals that peak exactly; the CPU limit carries 1 CPU over it.
 - **Ephemeral storage is bounded at admission and enforced at runtime by eviction, not by an
   instantaneous quota.** A logging burst can overshoot before kubelet reacts (R-22), and container
   images and pulls sit outside the quota entirely. NS-1's table states this honestly.
@@ -347,13 +385,18 @@ outside Kubernetes* and carries its own measurement margin for their burst above
 high-percentile. `M` is *scheduler headroom inside Kubernetes*, reserved for OptionsEdge growth —
 a new service, a replica increase, a raised request — that would otherwise be unschedulable.
 
-| R (measured) | Max feasible tenant `requests.memory` |
-|---|---|
-| 10 Gi | 5.26 Gi |
-| **11.25 Gi** | **4.01 Gi — the 4 Gi budget just fits** |
-| 12 Gi | 3.26 Gi — the 4 Gi budget **does not fit** |
-| 13 Gi | 2.26 Gi |
-| 14 Gi | 1.26 Gi |
+| R (measured) | Max feasible tenant `requests.memory` | Against D-3's **2.25 Gi** envelope |
+|---|---|---|
+| 10 Gi | 5.26 Gi | fits |
+| 11.25 Gi | 4.01 Gi — the superseded 4 Gi budget just fits | fits |
+| 12 Gi | 3.26 Gi — the superseded 4 Gi budget does **not** fit | fits |
+| 13 Gi | 2.26 Gi | fits (the expected off-hours floor) |
+| **13.01 Gi** | **2.25 Gi** | the formula's knife-edge — but **§6 step 1 gates at 13.0 Gi**, rounding down because the inputs are rounded to 0.01 Gi |
+| 14 Gi | 1.26 Gi | does **not** fit |
+
+The middle column is the general result; the right-hand column is the one that governs now, since
+D-3 closed the tenant at 2.25 Gi. Reading only the middle column is what left §6 step 1 carrying the
+4 Gi budget's threshold through rev 7.
 
 **D-3 is closed: the reservation wins and the tenant shrinks.** The user chose to keep the full
 measured host reservation rather than trim it for the tenant's benefit. With `R = 13 Gi` (the
@@ -364,9 +407,12 @@ tenant_requests_memory  ≤  19.26 − 13 − 4  =  2.26 Gi
 ```
 
 so the tenant's `requests.memory` is **fixed at 2.25 Gi (2304Mi)**, and NS-8's workload budget is
-sized to that envelope rather than to the 4 Gi rev 4 assumed. **If the measured `R` exceeds 13 Gi,
-launch is blocked** and returns to the user with the same three options (smaller tenant / smaller
-reservation / second machine); if it comes in below 12.75 Gi the tenant may be raised toward 2.5 Gi,
+sized to that envelope rather than to the 4 Gi rev 4 assumed. **If the measured `R` exceeds
+13.0 Gi, launch is blocked** and returns to the user with the same three options (smaller tenant /
+smaller reservation / second machine). The formula's knife-edge is 13.01 Gi; the gate rounds down to
+13.0 because the formula's inputs are themselves rounded to 0.01 Gi and a 0.01 Gi margin sits inside
+that rounding error (§6 step 1). If `R` comes in below 12.76 Gi the tenant may be raised toward
+2.5 Gi,
 which is a recorded change, not an automatic one. (rev 2's "≈4.3 Gi slack" omitted the eviction
 reserve; rev 3 omitted `P_platform`; rev 4's 4 Gi tenant assumed a reservation the user has now
 declined. All withdrawn.)
@@ -382,8 +428,11 @@ Companion headroom, all recomputed and recorded at NS-V6, each including `P_plat
 
 **`R` is derived from high-percentile host usage across ≥5 representative sessions** (open, close,
 a volatility spike, the nightly backup window, a maintenance window) plus its measurement margin —
-not one snapshot. The off-hours ~13 Gi is a floor, and note it already exceeds 11.5 Gi, so D-3 is
-**expected to force the user's choice** rather than being a formality.
+not one snapshot. The off-hours ~13 Gi is a floor. It already exceeded the thresholds that the
+earlier **4 Gi** tenant budget required, which is why D-3 was a real choice rather than a
+formality — and the user resolved it by keeping the reservation and shrinking the tenant to
+2.25 Gi. Against that envelope the same ~13 Gi floor now fits, with the abort threshold at
+`R > 13.0 Gi` (§6 step 1).
 **Independent value:** this requirement improves the status quo even if the tenant is cancelled.
 **Acceptance:** NS-V6 — effective kubelet config dumped and asserted (all four eviction thresholds;
 `pod-max-pids` asserted **to the value chosen in D-6, including a verified `-1`/absence if D-6
@@ -515,10 +564,13 @@ bytes land on `/home`.
 
 ### NS-8 — Tenant platform services: a replica-weighted budget that fits
 Single replica each, never the host instances. **The three data services are StatefulSets at one
-replica**, whose rolling update terminates before it creates and therefore never surges; only the
-web Deployment surges, and that surge is the budgeted transient below. (`Recreate` / `maxSurge` are
-Deployment-only fields and are deliberately not used for the StatefulSets.) Every per-pod figure in
-the table is stated per pod **and** as a row total, so the totals cannot be misread.
+replica**, whose rolling update terminates before it creates and therefore never surges. **Nor does
+the web Deployment**: D-3's envelope left no room for a rollout surge, so it is pinned to
+`Recreate`, accepting brief downtime on a rollout. Nothing in this budget surges, and the budgeted
+transient below is therefore not a rollout at all — it is the backup Job or a debug Job, exactly one
+at a time. (`Recreate` / `maxSurge` are Deployment-only fields and are deliberately not used for the
+StatefulSets.) Every per-pod figure in the table is stated per pod **and** as a row total, so the
+totals cannot be misread.
 
 **Re-sized for D-3's 2.25 Gi envelope.** Every figure is per pod; row totals are stated so they
 cannot be misread.
@@ -532,7 +584,7 @@ cannot be misread.
 | app pod | Deployment ×1 | 100m / 192Mi | 500m / 1Gi | — |
 | backups PVC | — | — | — | 20 Gi |
 | **steady state** | | **650m / 1984Mi (1.94 Gi)** | **4.5 CPU / 9 Gi** | **75 Gi of the 80 Gi quota** |
-| **+ ONE transient** — the backup Job **or** a debug Job | | **+100m / +256Mi** | **+0.5 CPU / +1 Gi** | — |
+| **+ the budgeted transient** — a backup Job or a debug Job | | **+100m / +256Mi** | **+0.5 CPU / +1 Gi** | — |
 | **peak** | | **750m / 2240Mi (2.19 Gi)** — inside the 2304Mi quota | **5 CPU / 10 Gi** | |
 
 Three consequences of the smaller envelope, stated rather than discovered later:
@@ -542,17 +594,30 @@ Three consequences of the smaller envelope, stated rather than discovered later:
 - **One application pod, not two.** A second app pod requires re-opening the NS-4 arithmetic.
 - **ResourceQuota does not *reserve* a slot for the backup Job.** It admits any combination that
   fits the remaining aggregate; the "one transient" shape is what the numbers permit, not something
-  the quota guarantees. If a debug Job is running when the backup fires, the backup Job sits
-  **Pending** — which is why NS-18 alerts on a Job pending or missed for more than 15 minutes.
+  the quota guarantees. If a debug Job is running when the backup fires **and the two together
+  would exceed the aggregate**, the backup Job sits **Pending** — which is why NS-18 alerts on a Job
+  pending or missed for more than 15 minutes. If they both fit inside the aggregate, both run; the
+  quota bounds the total, never the count.
 
 **Kinds are specified because the update strategy depends on them:** the three data services are
 **StatefulSets at 1 replica**, whose rolling update terminates before it creates and therefore never
 surges (`Recreate` is a Deployment-only strategy and would be invalid here — rev 3 was ambiguous);
-only the web Deployment surges, and it is the transient budgeted above.
+**nothing in this budget surges**: the StatefulSets cannot, and the web Deployment is pinned to
+`Recreate` precisely so it does not. The budgeted transient is therefore not a rollout surge at all
+— it is a backup Job or a debug Job. Stated precisely, because a ResourceQuota constrains aggregate
+consumption and not the shape of it: **`100m / 256Mi` is the budgeted STANDARD shape for a transient
+Job, not an enforced one.** No control in this design pins a Job to that exact declaration —
+NS-15 requires Job and CronJob templates to declare resources explicitly, so the LimitRange's
+defaults never apply to them, and its `max` only caps a container at 2 CPU / 3Gi. **What is
+enforced is the aggregate**: `requests.memory: 2304Mi` refuses admission once the namespace sum
+would exceed it. So several smaller Jobs may run concurrently inside that aggregate — permitted and
+budgeted — and the guarantee is the ceiling, not the count.
 
-The peak **requests** row is what must satisfy NS-4's feasibility formula; if the measured `R`
-forces `requests.memory` below 4.0 Gi, the app-pod count is reduced first, then the surge allowance
-(accepting a `Recreate` web rollout with brief downtime) — recorded before launch, not discovered
+The peak **requests** row is what must satisfy NS-4's feasibility formula. That reduction has
+already been made: D-3 fixed the tenant at 2.25 Gi, and NS-8's table above is the re-sized result —
+the app-pod count and the surge allowance were spent to reach it, which is why the web Deployment is
+`Recreate` (accepting brief downtime on a rollout). If a measured `R` above 13.0 Gi forced the
+envelope down further, the next reductions are recorded before launch, not discovered
 at rollout.
 
 - **Kafka's disk bound is the filesystem, not a setting.** `log.retention.bytes` is **per partition**;
@@ -908,14 +973,15 @@ Where this table says SUPERSEDED, the present document governs. Clause-level com
 | REQ-11 login-surface & edge hardening | **UNCHANGED, plus NS-16** | the required traefik `Middleware` is a named platform-plane object (rev 2 omitted it from both plane lists) |
 | REQ-12 patch & vulnerability posture | **UNCHANGED** | |
 | REQ-13 privacy & data handling | **UNCHANGED** | |
-| §8 risks R-1…R-11, R-13 | **CARRIED OVER unchanged** | |
-| §8 risk **R-12** | **SUPERSEDED, not carried** | replaced by R-14 and R-18 |
+| §8 risks R-1…R-11, R-13 | **CARRIED OVER** — 11 unchanged, **R-2 narrowed** | R-2 ("no formal load/soak") is partially discharged by NS-16 + NS-V25 + NS-V16's pilot load; what remains is that no *production-scale* load test exists. Per-row detail in Appendix A.2 |
+| §8 risk **R-12** | **SUPERSEDED, not carried** | **four successors:** its *credential* half → **R-14** + **R-18**; its *shared-fate* half → **R-15** (no I/O isolation) + **R-16** (no availability isolation). rev 4 mapped only the credential half |
 
 **Database engine:** the user's requirement names **Postgres**; rev 11 pins Bugzilla to **MariaDB**.
 Switching engines invalidates REQ-4's pinning and REQ-10a's backup design. This document keeps
 **MariaDB for Bugzilla** and provisions **Postgres as the namespace platform database**; both are
-sized and backed up. **D-1 — requires the user's decision**, and Postgres needs a named consumer
-recorded before Gate 2, since an unused database does not honestly satisfy the requirement.
+sized and backed up. **D-1 is CLOSED (user, 2026-08-04)** exactly as described here. What remains
+open is narrower: **Postgres needs a named consumer recorded before Gate 2**, since an unused
+database does not honestly satisfy the requirement.
 
 ## 5. Non-goals
 
@@ -943,8 +1009,25 @@ change nothing.
    unaccounted rows. **Gate-1 exit criterion; nothing below starts until it passes.**
 1. **Measurement (read-only, spans RTH):** high-percentile host CPU/memory across ≥5 representative
    sessions → `R`; **and** maximum pid count per OptionsEdge pod → the D-6 value (NS-4). **Then
-   apply NS-4's feasibility formula and record the tenant `requests.memory`; if `R > 11.25 Gi`, stop
-   and obtain the user's decision.** Resolves D-3 and D-6. *(Blocks step 2.)*
+   apply NS-4's feasibility formula and confirm the tenant `requests.memory`; if `R > 13.0 Gi`,
+   stop and obtain the user's decision.** Resolves D-6; confirms the D-3 envelope. *(Blocks step 2.)*
+
+   The threshold follows from D-3, not from the superseded 4 Gi budget. NS-4's formula is
+   `tenant_requests_memory ≤ 19.26 − R − M` with `M = 4 Gi`, i.e. `tenant ≤ 15.26 − R`. D-3 fixed
+   the tenant at **2.25 Gi**, so the formula's knife-edge is `R = 13.01 Gi`.
+
+   **The gate is set at 13.0 Gi, not 13.01, deliberately.** The formula's inputs are rounded to
+   0.01 Gi — node capacity `62.23 Gi`, existing requests `38.97 Gi` — so a threshold quoted to the
+   second decimal claims a precision the arithmetic does not have, and at 13.01 the surviving margin
+   (0.01 Gi ≈ 10 MiB) is smaller than that rounding error. Rounding **down**, against the tenant, is
+   the only direction that cannot silently overcommit the node. A measurement in
+   `13.0 < R ≤ 13.01` is therefore not a pass with a thin margin: it returns to the user, which is
+   what a margin inside the noise floor deserves.
+
+   The `11.25 Gi` figure that stood here through rev 7 was the threshold for the **old 4 Gi** tenant
+   budget; against the closed D-3 envelope it would have aborted on the expected measurement
+   (`R ≈ 13 Gi`, the off-hours floor) every single time — turning a feasibility gate into an
+   unconditional stop.
 1.5. **Relocate kubelet state and pod logs off `/`** (NS-21, D-7) — full maintenance window: stop
    k3s, move `/var/lib/kubelet` and `/var/log/pods` to `/home`, add fstab bind mounts, verify the
    mounts are active **before** k3s starts. NS-V31 + the OptionsEdge health gate. **Shares the same
@@ -1026,7 +1109,7 @@ public exposure and teardown is private (NS-14).
 | R-18 | The admin surface depends on a **kubeconfig** rather than SSH | Narrower in scope but a new credential to protect (NS-9); rev-11 R-7 still applies |
 | R-19 | **Tenant load escapes the quota through shared services** — Keycloak, traefik, cloudflared, the registry and image pulls sit outside the quota; NS-16's limits bound the **portal route only**, not direct load on `auth.fullfunding.nl` | Bounded, not eliminated: portal-route rate/in-flight/body limits, database connection limits, off-hours soak, NS-18 alerting, NS-12 RTH observation. Rate-limiting the shared Keycloak route is out of scope |
 | R-20 | **LAN origin bypass** — traefik answers on `.252:80`, so Cloudflare is not an authentication boundary | The portal is fail-closed without Cloudflare (rev-11 REQ-5a). Restricting traefik to loopback would change shared infrastructure |
-| R-21 | **Thin memory slack.** At `R = 12 Gi` the margin is exactly the 4 Gi minimum; a large OptionsEdge growth event consumes it | NS-4's formula blocks launch rather than overcommitting; NS-18 alerts on memory pressure; the tenant is the preferred eviction victim (NS-3) |
+| R-21 | **Thin memory slack.** D-3's envelope leaves almost nothing in reserve: at the expected `R ≈ 13 Gi` the formula yields 2.26 Gi against a fixed 2.25 Gi tenant, so the launch margin is ~0.01 Gi, and a large OptionsEdge growth event consumes the `M = 4 Gi` scheduler headroom the formula already sets aside | NS-4's formula blocks launch rather than overcommitting; NS-18 alerts on memory pressure; the tenant is the preferred eviction victim (NS-3) |
 | R-22 | **(downgraded by NS-20)** `/` (nodefs) has ~37 GiB free and is not covered by the tenant disk wall. With disk-medium `emptyDir` denied and `readOnlyRootFilesystem` required, the tenant's only `/` residue is **kernel-rotated container logs, capped at ≈0.9 GiB** | NS-20 (1)(2), NS-4's `nodefs` thresholds, NS-18 alerting, NS-V30's empirical attribution. Literal zero is D-7 |
 | R-26 | **After NS-21, kubelet stops monitoring `/`.** nodefs becomes `/home`, so the eviction thresholds and any nodefs alerting follow it; `/` retains the OS, journald and runtime metadata with no Kubernetes-side watcher | A **host-level `/` capacity alert is a hard prerequisite of NS-21** (NS-18), not a follow-up. The trade is deliberate: `/` gains ~all of the reclaimed space and loses a watcher it only had incidentally |
 | R-27 | **"Zero on root" means zero *tenant-owned data*, not zero bytes.** journald entries for the container runtime, containerd/CNI bookkeeping and similar OS metadata are produced by the platform for any workload and remain on `/` | Small, OS-rotated, not tenant data. Stated so the requirement is not read as stronger than it is |
@@ -1042,7 +1125,7 @@ public exposure and teardown is private (NS-14).
 |---|---|---|
 | **D-1** | Bugzilla's database engine | **CLOSED (user, 2026-08-04): Bugzilla stays on MariaDB; Postgres is additionally provisioned as the namespace platform DB.** rev-11's REQ-4 pinning and REQ-10a backup design are untouched. **Still required before Gate 2: a named consumer for Postgres**, or it is an unused database |
 | **D-2** | Kafka at launch | **RESOLVED: one broker at 1 replica** — the requirement states the project needs its own Kafka; a zero-replica placeholder is rejected |
-| **D-3** | `system-reserved` `R`, and the tenant `requests.memory` | **CLOSED (user, 2026-08-04): keep the full host reservation (≈13 Gi) and shrink the tenant to 2.25 Gi.** `R` is still confirmed by the §6 step 1 measurement; **if it exceeds 13 Gi, launch is blocked** and returns to the user |
+| **D-3** | `system-reserved` `R`, and the tenant `requests.memory` | **CLOSED (user, 2026-08-04): keep the full host reservation (≈13 Gi) and shrink the tenant to 2.25 Gi.** `R` is still confirmed by the §6 step 1 measurement; **if it exceeds 13.0 Gi, launch is blocked** and returns to the user. The formula's knife-edge is 13.01 Gi — where headroom equals the fixed 2.25 Gi tenant — but the gate rounds down to 13.0, since the formula's inputs are rounded to 0.01 Gi and a 0.01 Gi margin is inside that error (NS-4, §6 step 1) |
 | **D-4** | Tenant egress to the public internet | Default **no**; any runtime need becomes an explicit allowlist entry with its own risk row |
 | **D-5** | OIDC back-channel under default-deny egress | **Split front/back-channel (option ii)**, conditional on verifying the packaged module's endpoint overrides and Keycloak's issuer behaviour; fallback (i) is broad outbound HTTPS and must be recorded as such |
 | **D-7** | NS-20 literal zero on `/` | **CLOSED (user, 2026-08-04): relocate `/var/lib/kubelet` and `/var/log/pods` onto `/home`** — option (a). Specified as **NS-21**, executed at §6 step 1.5. Node-wide and independently valuable, since `/` has only 38 GiB free |
@@ -1050,12 +1133,17 @@ public exposure and teardown is private (NS-14).
 
 ## 10. Gate status
 
-- **Gate 1 (requirements):** this document. rev 1 → Codex REQUEST_CHANGES; rev 2 → Codex
-  REQUEST_CHANGES; rev 3 → REQUEST_CHANGES; **rev 4 implements every rev-3 finding and awaits Codex
-  re-review, then the user's explicit approval.** No implementation before that approval.
-- **Gate 2 (implementation):** not started. **Blocked on D-1, D-3 and D-6.** NS-19/NS-V28 is no
-  longer a Gate-2 blocker because the map is delivered here as **Appendix A**; it is verified at
-  §6 step 0.5 as a Gate-1 exit criterion.
+- **Gate 1 (requirements):** this document. rev 1 → Codex REQUEST_CHANGES; rev 2 → REQUEST_CHANGES;
+  rev 3 → REQUEST_CHANGES; rev 4 implemented every rev-3 finding; revs 5–7 recorded the user's D-1,
+  D-3 and D-7 decisions and the NS-21 side effects. **rev 8 corrects eight internal inconsistencies
+  (three found on reading, five more found by Codex reviewing those) and awaits the user's explicit
+  approval.** No implementation before that approval.
+- **Gate 2 (implementation):** not started. **D-1, D-3 and D-7 are CLOSED.** Remaining Gate-2
+  blockers: **D-6** (the `pod-max-pids` value, which comes from the §6 step-1 measurement or is
+  dropped along with every PID isolation claim) and **a named consumer for Postgres** — D-1
+  provisions it, but an unused database does not honestly satisfy the requirement. NS-19/NS-V28 is
+  not a Gate-2 blocker: the map is delivered here as **Appendix A** and verified at §6 step 0.5 as a
+  Gate-1 exit criterion.
 
 ---
 
@@ -1129,5 +1217,6 @@ full trading session (NS-12).
 **Accounting rule, stated so "exactly once" is unambiguous:** every rev-11 row has **exactly one
 disposition row here**, though a disposition may name **more than one successor** (R-12 names four).
 **Zero rev-11 rows are unaccounted for:** 27 verification rows (24 unchanged/extended, 3 superseded
-with named replacements), 13 risk rows (11 carried — one of them narrowed — 1 superseded with four
-successors, 0 discharged), and 16 REQ ids dispositioned in §4.
+with named replacements), 13 risk rows (**12 carried — one of those 12 narrowed rather than carried
+verbatim — and 1 superseded** with four successors; 0 discharged), and 16 REQ ids dispositioned
+in §4.
