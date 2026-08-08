@@ -46,7 +46,7 @@ defaults. Changes for `192.168.100.252` must be treated as production changes:
 - Production registry: `192.168.100.252:5000`
 - Production Kafka: `192.168.100.252:9092`
 - Production Kafka topic prefix: empty/unprefixed
-- Production web app: `http://192.168.100.252:8094` (k8s Service `options-edge-web`, LoadBalancer on prod cluster). Public via cloudflared tunnel: `https://fullfunding.nl`.
+- Production web app: `http://192.168.100.252:8094` (k8s Service `options-edge-web`, LoadBalancer on prod cluster). Public via cloudflared tunnel: `https://bleadingoptions.com`.
 - Production/remote kubeconfig path: `/home/options-edge/config/...`
 
 Build `#264` failed because the Jenkinsfile drifted back to `/home/options-edge/config/kubeconfig`, which does not exist in local Jenkins. The `scripts/jenkins/enforce-local-dev-defaults.sh` rule now runs in the Jenkins `Validate` stage and blocks this kind of drift before any deploy, Kafka topic, or smoke-test step runs.

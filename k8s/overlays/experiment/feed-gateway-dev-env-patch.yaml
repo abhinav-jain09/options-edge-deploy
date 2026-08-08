@@ -1,6 +1,6 @@
 # EXPERIMENT (.2) feed-gateway config. The k8s gateway (feed-gateway-service, hostNetwork pod on
 # :18091, exposed via its LoadBalancer Service :8091) is the single gateway on .2 and Jenkins owns it.
-# The base manifest hardcodes PROD WS auth/origins (https://fullfunding.nl, auth.fullfunding.nl) as
+# The base manifest hardcodes PROD WS auth/origins (https://bleadingoptions.com, auth.bleadingoptions.com) as
 # direct container env, which override the configmap; this patch overrides them to the experiment values
 # so a http://localhost:18090 browser (the SPA origin via the SSH tunnel) with a .2-Keycloak token is
 # accepted (WS_ALLOWED_ORIGINS must equal that web origin). Prod overlay is untouched (keeps base values).

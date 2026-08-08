@@ -1,7 +1,7 @@
 # Dev overlay env patch for the OptionsEdge web Deployment.
 #
 # The base manifest (k8s/base/options-edge-web-deployment.yaml) hard-codes the PROD
-# public edge URLs (auth.fullfunding.nl, wss://fullfunding.nl, …). Those are direct
+# public edge URLs (auth.bleadingoptions.com, wss://bleadingoptions.com, …). Those are direct
 # container env values, so they win over the dev `options-edge-config` ConfigMap
 # (envFrom). This strategic-merge patch overrides only the URL/profile env vars with
 # the dev-local values — the exact set proven by the historical local-run dev deploy

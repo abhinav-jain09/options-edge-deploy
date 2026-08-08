@@ -1,5 +1,14 @@
 # Requirement Intake Portal — dedicated Bugzilla at req.fullfunding.nl with Keycloak SSO (realm-isolated)
 
+> **⚠️ 2026-08-08 MIGRATION NOTE (added after this document was written):** every
+> `*.fullfunding.nl` hostname below is HISTORICAL — it records what was observed/planned at
+> the stated dates. The platform migrated to `bleadingoptions.com` on 2026-08-08 and
+> `fullfunding.nl` was RETIRED with no redirect (it is being reused for unrelated
+> applications), so nothing here may be used as a current routing/DNS reference and no
+> `*.fullfunding.nl` hostname may be re-added to our tunnel, Ingress, realm or WS origins.
+> If this design ever ships, substitute the `*.bleadingoptions.com` equivalents.
+> See [`domain-migration-bleadingoptions.md`](./domain-migration-bleadingoptions.md).
+
 **Status: DESIGN / PROPOSED — rev 11 (Codex 3-bar rounds 1–10, all REQUEST_CHANGES; round 2 accepted
 the architecture; rounds 7–9 narrowed to the email-claim contract, corrected below). Not yet
 implemented.** "Current state (as-is)", the REQ-5c source-behavior block, the REQ-5d authorization

@@ -42,6 +42,9 @@ SERVICES = [
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
     "greek-move-authenticity", "gamma-migration",
     "indicator-service",
+    # es4-ONLY (no dev/prod deployment): its slice is hand-authored as the render source —
+    # see the header of k8s/services/tape-zones/overlays/production/manifest.yaml.
+    "tape-zones",
 ]
 
 ES_ENV = {
@@ -58,6 +61,8 @@ ES_ENV = {
         # the admission watermark blocks on UNSEEN partitions, so an under-declared count
         # would silently release records early — must match the live topic exactly.
         {"name": "INDICATOR_INPUT_PARTITIONS", "value": "4", "_override": True},
+        # NO control-topic entry here on purpose (PR #734): TOPIC_PREFIX=es. (es4-common-env)
+        # prefixes the control-topic default at runtime — an explicit value would double-prefix.
     ],
     "close-direction": [
         # es4 chains carry symbol "ES" (the es-prefixed dealer-ledger profile stream); the

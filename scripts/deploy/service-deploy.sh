@@ -43,11 +43,27 @@ if [ -z "${ROLLOUT_TIMEOUT:-}" ]; then
 fi
 WORK_DIR="${WORK_DIR:-$(mktemp -d)}"
 mkdir -p "$WORK_DIR"
-NAMESPACE="options-edge"
 OVERLAY="k8s/services/${SERVICE}/overlays/${ENVIRONMENT}"
 
 [ -d "$OVERLAY" ] || { echo "FATAL: no overlay $OVERLAY for SERVICE=$SERVICE ENVIRONMENT=$ENVIRONMENT" >&2; exit 1; }
 command -v yq >/dev/null 2>&1 || { echo "FATAL: yq is required" >&2; exit 1; }
+
+# --- WHERE does this service deploy? -------------------------------------------------
+# The namespace comes from the registry, not from a constant here. Until 2026-08-08 this
+# was hard-coded to options-edge, which was fine while that was the only namespace — now
+# `fullfunding` exists and a build has to know which application it belongs to.
+#
+# Unset means options-edge, so all 51 pre-existing services keep behaving exactly as before
+# and nothing has to be back-filled.
+NAMESPACE="$(yq -r ".services[] | select(.name == \"$SERVICE\") | .namespace // \"options-edge\"" services.yaml | head -1)"
+[ -n "$NAMESPACE" ] || { echo "FATAL: $SERVICE is not registered in services.yaml — register it before deploying" >&2; exit 1; }
+echo "=== service-deploy: $SERVICE -> namespace $NAMESPACE (env=$ENVIRONMENT) ==="
+
+# The namespace must already exist. Creating one is a platform action with its own job and
+# its own credential (see k8s/tenants/<tenant>/bootstrap), never a side effect of a service
+# deploy — otherwise a typo in the registry silently creates a namespace and deploys into it.
+kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 \
+  || { echo "FATAL: namespace '$NAMESPACE' does not exist. A service deploy never creates one — run the owning tenant/infra job first." >&2; exit 1; }
 
 if [ -z "${DEPLOY_PLATFORM:-}" ]; then
   if [ "$ENVIRONMENT" = "dev" ]; then DEPLOY_PLATFORM="linux/arm64"; else DEPLOY_PLATFORM="linux/amd64"; fi
@@ -63,6 +79,18 @@ kubectl kustomize "$OVERLAY" >"$RENDER"
 # --- §13.5 blast-radius guard: only service-owned kinds may be applied ----------------
 bad_kinds="$(yq -r '.kind' "$RENDER" | grep -v '^---$' | sort -u \
   | { grep -vE '^(Deployment|Service|HorizontalPodAutoscaler|ServiceMonitor|Ingress)$' || true; })"
+# --- the render must target the registered namespace, and nothing else ---------------
+# A service whose manifests say options-edge but whose registry entry says fullfunding (or the
+# reverse) would deploy into the wrong application. Catch it here, before any apply: the whole
+# point of separate namespaces is that a mistake in one cannot reach the other.
+wrong_ns="$(yq -r "select(.metadata.namespace != null and .metadata.namespace != \"$NAMESPACE\") | .kind + \"/\" + .metadata.name + \" -> \" + .metadata.namespace" "$RENDER" | { grep -vE '^(---)?$' || true; })"
+if [ -n "$wrong_ns" ]; then
+  echo "FATAL: $SERVICE is registered for namespace '$NAMESPACE' but its render targets another:" >&2
+  printf '%s\n' "$wrong_ns" >&2
+  echo "       Fix the overlay or the services.yaml entry — they must agree." >&2
+  exit 1
+fi
+
 if [ -n "$bad_kinds" ]; then
   echo "FATAL: $OVERLAY renders kinds a per-service deploy must NOT own (they belong to common-infra):" >&2
   printf '  %s\n' $bad_kinds >&2

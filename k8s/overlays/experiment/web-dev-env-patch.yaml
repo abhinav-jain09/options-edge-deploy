@@ -23,7 +23,7 @@
 # origin (localhost), not the issuer, so PKCE is unaffected.
 #
 # The base manifest (k8s/base/options-edge-web-deployment.yaml) hard-codes the PROD public edge URLs
-# (auth.fullfunding.nl, wss://fullfunding.nl, …) as direct container env, which win over the
+# (auth.bleadingoptions.com, wss://bleadingoptions.com, …) as direct container env, which win over the
 # `options-edge-config` ConfigMap (envFrom). This strategic-merge patch overrides only the URL/profile
 # env vars with the experiment values:
 #   - Keycloak issuer:     http://192.168.100.2:8089/realms/optionsedge  (.2 LAN IP; pod-reachable)

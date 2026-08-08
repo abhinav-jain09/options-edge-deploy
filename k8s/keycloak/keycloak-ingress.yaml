@@ -24,27 +24,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    # Both public auth hostnames during the bleadingoptions.com dual-run, so this fallback stays
-    # valid if traffic ever returns to traefik; the fullfunding.nl rule is removed at Phase 3.
-    - host: auth.fullfunding.nl
-      http:
-        paths:
-          # Public OIDC endpoints for the optionsedge realm only (NOT /realms/master).
-          - path: /realms/optionsedge
-            pathType: Prefix
-            backend:
-              service:
-                name: oe-keycloak
-                port:
-                  number: 8080
-          # Login theme CSS/JS and other static assets the login page references.
-          - path: /resources
-            pathType: Prefix
-            backend:
-              service:
-                name: oe-keycloak
-                port:
-                  number: 8080
+    # Only the live public auth hostname. auth.fullfunding.nl was retired 2026-08-08 (Phase 3).
     - host: auth.bleadingoptions.com
       http:
         paths:
