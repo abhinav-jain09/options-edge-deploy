@@ -215,23 +215,51 @@ What Phase 3 removes (this change-set):
    references our tunnel or the new domain:
 
    ```sh
+   set -euo pipefail                      # a failed API call must STOP this, never read as "clean"
    Z="https://api.cloudflare.com/client/v4/zones/$ZONE_ID"
-   H=(-H "Authorization: Bearer $CF_TOKEN")
-   {
-     # rulesets: list (max per_page is 50), then FETCH EACH BY ID — the list omits the rules
-     curl -s "${H[@]}" "$Z/rulesets?per_page=50" \
-       | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; print('\n'.join(r['id'] for r in d['result']))" \
-       | while read -r rid; do curl -s "${H[@]}" "$Z/rulesets/$rid"; done
-     curl -s "${H[@]}" "$Z/pagerules"            # targets + actions, not just a count
-     curl -s "${H[@]}" "$Z/workers/routes"       # workers routes are a separate mechanism
-   } > /tmp/cf-retired-zone-evidence.json
-   grep -niE "bleadingoptions\.com|976f76d2-e3c8-4887-a11d-21c27f5e8bed|cfargotunnel" /tmp/cf-retired-zone-evidence.json \
-     && echo "STOP: the retired zone still references us — investigate before proceeding" \
-     || echo "OK: no rule/route in the retired zone references our tunnel or the new domain"
+   A="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID"
+   cf() { curl --fail-with-body -sS -H "Authorization: Bearer $CF_TOKEN" "$@"; }
+   ok() { python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('success') else 1)"; }
+   EV=/tmp/cf-retired-zone-evidence.json; : > "$EV"
+
+   # 1. rulesets — list (max per_page=50, exhaust the cursor), then FETCH EACH BY ID: the list
+   #    response omits the rules themselves, so names alone prove nothing.
+   cursor=""
+   while :; do
+     page="$(cf "$Z/rulesets?per_page=50${cursor:+&cursor=$cursor}")"
+     printf '%s' "$page" | ok
+     printf '%s\n' "$page" >> "$EV"
+     for rid in $(printf '%s' "$page" | python3 -c "import json,sys; print('\n'.join(r['id'] for r in json.load(sys.stdin)['result']))"); do
+       body="$(cf "$Z/rulesets/$rid")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
+     done
+     cursor="$(printf '%s' "$page" | python3 -c "import json,sys; print(json.load(sys.stdin).get('result_info',{}).get('cursors',{}).get('after','') or '')")"
+     [ -n "$cursor" ] || break
+   done
+
+   # 2. page rules — full targets + actions, not a count
+   body="$(cf "$Z/pagerules")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
+
+   # 3. workers routes — metadata only tells you a Worker runs, NOT what it does, so fetch each
+   #    referenced script's CONTENT too (a generically named script can proxy anywhere).
+   body="$(cf "$Z/workers/routes")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
+   for sc in $(printf '%s' "$body" | python3 -c "import json,sys; print('\n'.join(filter(None,(r.get('script') for r in json.load(sys.stdin)['result']))))" | sort -u); do
+     echo "=== worker script: $sc ===" >> "$EV"
+     cf "$A/workers/scripts/$sc/content" >> "$EV"     # inspect it; a route with no readable
+                                                      # script content = STOP and inspect by hand
+   done
+
+   # 4. verdict — any reference to us anywhere in the evidence stops the handoff
+   if grep -niE "bleadingoptions\.com|976f76d2-e3c8-4887-a11d-21c27f5e8bed|cfargotunnel" "$EV"; then
+     echo "STOP: the retired zone still references us — investigate before proceeding"; exit 1
+   else
+     rc=$?; [ "$rc" = "1" ] || { echo "STOP: grep failed ($rc) — evidence unverified"; exit 1; }
+     echo "OK: no rule/route/worker in the retired zone references our tunnel or the new domain"
+   fi
    ```
 
-   Keep `/tmp/cf-retired-zone-evidence.json` (and the grep result) as the acceptance artifact; if
-   the ruleset list is paginated beyond one page, follow its cursor and append.
+   Keep `$EV` and the verdict line as the acceptance artifact. If ANY worker route exists, treat
+   the automated grep as necessary-but-not-sufficient and read that script yourself before
+   proceeding — behaviour cannot be proven by a needle search.
 
    (This migration never created redirect rules — the domain is being freed, not forwarded — so
    the expected result is nothing referencing us; record it either way.) `bleadingoptions.com`
