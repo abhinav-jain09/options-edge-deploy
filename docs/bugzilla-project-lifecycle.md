@@ -167,17 +167,17 @@ During the run it takes a `GET_LOCK` and re-asserts ownership before **every** m
 announced through a single `plan()` chokepoint, which is where the check lives, because the lock is
 connection-scoped and a silent reconnect would drop it. It rewrites `status_workflow` in one
 transaction with a multiset read-back comparison and an explicit rollback, and treats a failed cache
-flush as fatal. The very last thing it does is arm `issue_type_workflow_enforced`, after a second
-audit of every item — arming it earlier, or over items the new mandatory fields had just left
-unset, would take the installation down.
+flush as fatal. After the mutations it re-audits every item — the DDL for a mandatory select field
+gives pre-existing rows the unset sentinel, and declaring the model complete over that would lock
+those items out of every guarded edit — and then proves the fail-closed state (below).
 
 Backup and restore are scripts rather than pasted commands (`backup.sh`, `restore-backup.sh`): the
 backup verifies the dump's own completion footer, because a failed `mariadb-dump` still yields a
 valid *empty* gzip, and the restore verifies everything before it drops anything and leaves Apache
 stopped if any step fails.
 
-The script, the extension and the verifier live in this repository and are bind-mounted read-only
-into the container — the Bugzilla runtime checkout itself is not version controlled, and this design
+The script and the extension live in this repository and are bind-mounted read-only into the
+container (the verifier runs from the host, against REST) — the Bugzilla runtime checkout itself is not version controlled, and this design
 deliberately does not add anything new to it.
 
 Verification is `bugzilla/configuration/verify-projects.py`: structural assertions read back over

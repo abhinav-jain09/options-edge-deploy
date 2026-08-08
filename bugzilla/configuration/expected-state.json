@@ -18,9 +18,15 @@
     "There is deliberately NO 'enforcement enabled' parameter. Any such switch would be",
     "reachable by anyone with tweakparams, which would defeat denying administrators too.",
     "The extension instead derives its state: cf_issue_type absent = never provisioned",
-    "(bootstrap, nothing enforced); cf_issue_type present = the ENTIRE model below must match,",
-    "or every guarded change is refused. Getting back to 'off' means deleting cf_issue_type,",
-    "which destroys every item's type - destructive and obvious, not a quiet toggle."
+    "(bootstrap, nothing enforced); cf_issue_type present = every ENFORCEMENT-CRITICAL part of",
+    "the model below must match, or every guarded change is refused. That means the two policy",
+    "fields' wiring, the issue types, the categories and their controllers, the resolutions,",
+    "the statuses with their is_open flags, and the whole workflow matrix. It deliberately does",
+    "NOT include cf_environment, products, components, descriptions or sort keys: those cannot",
+    "widen lifecycle policy, and the provisioner's zero-change dry run is what covers them.",
+    "Getting back to 'off' means deleting cf_issue_type, which destroys every item's type -",
+    "destructive and obvious, not a quiet toggle. From a web or API request a missing",
+    "cf_issue_type is treated as BROKEN, not as bootstrap, so deleting it is not a way out."
   ],
 
   "issue_types": ["BUG", "REQUIREMENT"],
@@ -208,11 +214,13 @@
       "extension's own creation-time errors, registered through the webservice_error_codes",
       "hook and mapped to HTTP 400. verify-projects.py asserts these exact codes so that an",
       "auth failure, a 404 or a 500 can never be mistaken for successful enforcement.",
-      "Two of these are defence-in-depth rather than routinely reachable: core's own select",
-      "validation rejects an unknown cf_issue_type before issue_type_unknown can fire, and",
-      "issue_type_initial_status_unavailable / _needs_comment / workflow_misconfigured only",
-      "occur after the workflow has been damaged - which now also trips the fail-closed state.",
-      "verify-projects.py asserts exact codes for the reachable ones and says so for the rest."
+      "Four of the seven are defence-in-depth rather than routinely reachable. Core's own select",
+      "validation rejects an unknown cf_issue_type before issue_type_unknown can fire (so the",
+      "verifier asserts only that creation is refused with HTTP 400 there). The two",
+      "initial_status errors are normally preempted by issue_type_workflow_misconfigured, since",
+      "a damaged workflow now trips the fail-closed state first; they remain as race defence.",
+      "verify-projects.py asserts exact codes for the reachable ones and says which it cannot",
+      "induce without deliberately damaging the installation."
     ],
     "error_codes": {
       "core_illegal_change": 115,

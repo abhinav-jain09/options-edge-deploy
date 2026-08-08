@@ -105,7 +105,9 @@ lack those groups before believing it:
 read -rs BZ_REPORTER_KEY && export BZ_REPORTER_KEY && python3 configuration/verify-projects.py --state configuration/expected-state.json --reporter-api-key-env BZ_REPORTER_KEY --strict
 ```
 
-`TestProduct` is also reported as `WARN` until step 7 retires it; that is expected on a first run.
+`TestProduct` is also reported as `WARN` until step 7 retires it. That one is flagged as *expected*,
+so `--strict` does not fail on it — otherwise the documented order (verify, then decommission) could
+never be followed. After step 7, re-run with `--require-decommissioned` to assert it is really gone.
 
 It defaults to `http://localhost:8092` and **refuses** a non-loopback plain-HTTP URL unless you pass
 `--allow-remote-http`, because the endpoint speaks plain HTTP and the key travels in a header. Run it
@@ -143,10 +145,12 @@ partial run cannot be undone with a transaction. Rollback is a restore:
 configuration/restore-backup.sh ~/bugzilla-pre-projects-<TS>.sql.gz
 ```
 
-The script verifies the checksum, the gzip and the dump footer **before** dropping anything,
-recreates the schema with the charset and collation recorded at backup time, checks the table count
-after importing, restores `params.json`, and only then restarts Apache. If any step fails it leaves
-Apache stopped and says so — a half-restored database never serves traffic.
+The script verifies the checksums, the gzip, the dump footer, the charset sidecar and that the dump
+really came from this database **before** touching anything; then recreates the schema with the
+recorded charset and collation, diffs the restored tables against the manifest taken at backup time,
+restores `params.json`, and only then restarts Apache. A failure *before* it stops Apache leaves the
+instance exactly as it was; a failure *after* leaves Apache stopped and says so — either way a
+half-restored database never serves traffic.
 
 Do not try to unpick a partial run with ad-hoc `DROP COLUMN`.
 

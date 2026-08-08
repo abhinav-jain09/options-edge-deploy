@@ -38,6 +38,23 @@ echo "==> writing a protected client option file inside $DB"
 # in that container could read it from /proc.
 docker exec "$DB" sh -c "umask 077; printf '[client]\nuser=root\npassword=%s\n' \"\$MARIADB_ROOT_PASSWORD\" > $CNF"
 
+echo "==> waiting for Apache to drain"
+# `apachectl stop` is asynchronous: an in-flight request can still commit after
+# it returns, and that write would be missing from the dump we are about to
+# call a backup.
+for _ in $(seq 1 30); do
+  if ! docker exec "$WEB" sh -c 'pgrep -x apache2 >/dev/null 2>&1 || pgrep -x httpd >/dev/null 2>&1'; then
+    drained=1; break
+  fi
+  sleep 1
+done
+[ "${drained:-0}" = "1" ] || {
+  echo "FATAL: Apache is still running in $WEB after 30s. Stop it first:" >&2
+  echo "       docker exec $WEB apachectl stop" >&2
+  exit 1
+}
+echo "    no Apache processes remain"
+
 echo "==> checking the database exists"
 DBNAME=$(docker exec "$DB" sh -c 'printf %s "$BZ_DB_NAME"')
 [ -n "$DBNAME" ] || { echo "FATAL: \$BZ_DB_NAME is not set in $DB" >&2; exit 1; }
@@ -61,9 +78,13 @@ docker exec "$DB" sh -c \
 
 echo "==> verifying the dump is complete"
 gzip -t "$DUMP"
-# The footer is mariadb-dump's last line; anything else means it was truncated.
-gunzip -c "$DUMP" | tail -5 | grep -q -- '-- Dump completed' \
-  || { echo "FATAL: $DUMP does not END with a completion footer - truncated dump" >&2; exit 1; }
+# The footer is mariadb-dump's last non-empty line. Checking the actual last
+# line - not "somewhere near the end" - is what makes truncation detectable.
+LAST=$(gunzip -c "$DUMP" | awk 'NF {last = $0} END {print last}')
+case "$LAST" in
+  '-- Dump completed'*) ;;
+  *) echo "FATAL: $DUMP does not end with a completion footer (last line: ${LAST:0:80}) - truncated dump" >&2; exit 1 ;;
+esac
 
 echo "==> copying params.json"
 docker cp "$WEB:/var/www/html/data/params.json" "$PARAMS"

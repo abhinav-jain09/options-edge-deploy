@@ -48,15 +48,27 @@ for f in "$PARAMS" "$CHARSET" "$MANIFEST" "$SUMS"; do
 done
 ( cd "$(dirname "$DUMP")" && sha256sum -c "$(basename "$SUMS")" )
 gzip -t "$DUMP"
-gunzip -c "$DUMP" | tail -5 | grep -q -- '-- Dump completed' \
-  || { echo "FATAL: $DUMP does not end with a completion footer" >&2; exit 1; }
+LAST=$(gunzip -c "$DUMP" | awk 'NF {last = $0} END {print last}')
+case "$LAST" in
+  '-- Dump completed'*) ;;
+  *) echo "FATAL: $DUMP does not end with a completion footer (last line: ${LAST:0:80})" >&2; exit 1 ;;
+esac
 python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$PARAMS"
 
-# These two values are interpolated into a root SQL statement, so they are
-# allowlisted to bare identifiers rather than trusted because they came off disk.
-grep -Eq '^[A-Za-z0-9_]+ [A-Za-z0-9_]+$' "$CHARSET" \
-  || { echo "FATAL: $CHARSET is not '<charset> <collation>': $(cat "$CHARSET")" >&2; exit 1; }
-read -r CS COLL < "$CHARSET"
+# These values are interpolated into a root SQL statement, so they are
+# allowlisted to bare identifiers rather than trusted because they came off
+# disk. The file must be exactly ONE line: `grep -q` would otherwise pass on a
+# file whose first line is hostile and whose second is harmless, and `read`
+# takes the first.
+[ "$(wc -l < "$CHARSET")" -eq 1 ] \
+  || { echo "FATAL: $CHARSET must contain exactly one line" >&2; exit 1; }
+read -r CS COLL REST_OF_LINE < "$CHARSET"
+[ -z "${REST_OF_LINE:-}" ] \
+  || { echo "FATAL: $CHARSET has unexpected trailing content" >&2; exit 1; }
+printf '%s' "$CS"   | grep -Eq '^[A-Za-z0-9_]+$' \
+  || { echo "FATAL: refusing charset '$CS' - not a bare identifier" >&2; exit 1; }
+printf '%s' "$COLL" | grep -Eq '^[A-Za-z0-9_]+$' \
+  || { echo "FATAL: refusing collation '$COLL' - not a bare identifier" >&2; exit 1; }
 echo "==> will recreate the schema with CHARACTER SET $CS COLLATE $COLL"
 
 docker exec "$DB" sh -c "umask 077; printf '[client]\nuser=root\npassword=%s\n' \"\$MARIADB_ROOT_PASSWORD\" > $CNF"
@@ -64,7 +76,17 @@ db_sql() { docker exec "$DB" sh -c "mysql --defaults-file=$CNF -BN -e \"$1\""; }
 
 DBNAME=$(docker exec "$DB" sh -c 'printf %s "$BZ_DB_NAME"')
 [ -n "$DBNAME" ] || { echo "FATAL: \$BZ_DB_NAME is not set in $DB" >&2; exit 1; }
-echo "==> target database: $DBNAME"
+# This name reaches a root DROP DATABASE. Anything but a bare identifier could
+# change the statement or target another schema entirely.
+printf '%s' "$DBNAME" | grep -Eq '^[A-Za-z0-9_]+$' \
+  || { echo "FATAL: refusing database name '$DBNAME' - not a bare identifier" >&2; exit 1; }
+
+# Confirm we are about to drop the schema this dump actually came from.
+grep -Eq "^-- (Host|Server version|MySQL dump)" <(gunzip -c "$DUMP" | head -5) \
+  || { echo "FATAL: $DUMP does not look like a mariadb-dump" >&2; exit 1; }
+gunzip -c "$DUMP" | head -30 | grep -q "Database: $DBNAME" \
+  || { echo "FATAL: $DUMP was not taken from database '$DBNAME'" >&2; exit 1; }
+echo "==> target database: $DBNAME (matches the dump header)"
 
 echo "==> stopping Apache (the container stays up)"
 docker exec "$WEB" apachectl stop

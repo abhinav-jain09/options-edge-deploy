@@ -78,11 +78,15 @@ def skip(name, why):
     print(f"  ....  {name} - {why}")
 
 
-def warn(name, why):
-    """Something this run could not prove. Loud, listed in the summary, and
-    fatal under --strict, but not a failure of the installation itself."""
+def warn(name, why, expected=False):
+    """Something this run could not prove.
+
+    `expected=True` marks a warning the runbook says to expect at this point
+    (TestProduct before it is retired), so --strict does not turn the
+    documented sequence into an impossible one.
+    """
     print(f"  WARN  {name}\n          {why}")
-    warnings.append(name)
+    warnings.append((name, expected))
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -98,6 +102,9 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def require_shape(state):
     """Fail with one clear sentence rather than a KeyError six calls deep."""
+    if not isinstance(state, dict):
+        raise ValueError("the state file must contain a JSON object")
+
     def need(container, key, kind, where):
         if key not in container:
             raise ValueError(f"missing {where}{key}")
@@ -107,7 +114,8 @@ def require_shape(state):
                 f"{type(container[key]).__name__}")
         return container[key]
 
-    for key, kind in (("bugzilla_version", str), ("params", dict),
+    for key, kind in (("spec_version", str), ("bugzilla_version", str),
+                      ("issue_types", list), ("params", dict),
                       ("fields", dict), ("statuses", list), ("workflow", list),
                       ("resolutions", list), ("products", list),
                       ("enforcement", dict), ("decommission", dict)):
@@ -122,6 +130,24 @@ def require_shape(state):
     need(state["fields"], "cf_category", dict, "fields.")
     need(state["decommission"], "products", list, "decommission.")
 
+    for status in state["statuses"]:
+        need(status, "value", str, "statuses[].")
+        need(status, "is_open", bool, "statuses[].")
+        need(status, "sortkey", int, "statuses[].")
+    for edge in state["workflow"]:
+        need(edge, "from", str, "workflow[].")
+        need(edge, "to", str, "workflow[].")
+        need(edge, "require_comment", bool, "workflow[].")
+    for resolution in state["resolutions"]:
+        need(resolution, "value", str, "resolutions[].")
+    for name, field in state["fields"].items():
+        for key, kind in (("description", str), ("type", str),
+                          ("is_mandatory", bool), ("values", list)):
+            need(field, key, kind, f"fields.{name}.")
+        for value in field["values"]:
+            need(value, "value", str, f"fields.{name}.values[].")
+            need(value, "sortkey", int, f"fields.{name}.values[].")
+
     for product in state["products"]:
         for key in ("name", "description", "classification", "default_milestone"):
             need(product, key, str, "products[].")
@@ -133,7 +159,10 @@ class Bz:
     def __init__(self, base_url, api_key):
         self.base = base_url.rstrip("/")
         self.api_key = api_key
-        self.opener = urllib.request.build_opener(_NoRedirect)
+        # ProxyHandler({}) disables the environment proxy urllib would
+        # otherwise install: a proxy would see the API key even for loopback.
+        self.opener = urllib.request.build_opener(
+            _NoRedirect, urllib.request.ProxyHandler({}))
 
     def _request(self, method, path, payload=None):
         url = f"{self.base}/rest{path}"
@@ -262,8 +291,26 @@ def verify_products(bz, state, require_decommissioned):
             check(f"decommissioned product '{name}' is gone", gone)
         elif not gone:
             warn(f"'{name}' is still present",
-                 "expected until runbook step 8 retires it; re-run with "
-                 "--require-decommissioned afterwards to assert it is gone")
+                 "expected until runbook step 7 retires it; re-run with "
+                 "--require-decommissioned afterwards to assert it is gone",
+                 expected=True)
+
+
+def verify_nothing_undeclared(bz, state, fields):
+    """The provisioner refuses to run against undeclared objects; the verifier
+    has to agree, or an administrator could add a product or a custom field and
+    still be told the installation is converged."""
+    print("\n[3b] Nothing undeclared")
+
+    declared = {p["name"] for p in state["products"]}
+    declared |= set(state["decommission"]["products"])
+    _, body = bz.get("/product?type=accessible&include_fields=name")
+    live = {p["name"] for p in body.get("products") or []}
+    eq("no undeclared products", sorted(live - declared), [])
+
+    declared_fields = set(state["fields"])
+    live_custom = {name for name, f in fields.items() if f.get("is_custom")}
+    eq("no undeclared custom fields", sorted(live_custom - declared_fields), [])
 
 
 def fields_by_name(bz):
@@ -398,12 +445,18 @@ class Walker:
 
     # -- helpers ---------------------------------------------------------
 
+    def version_of(self, product):
+        for spec in self.state["products"]:
+            if spec["name"] == product:
+                return spec["versions"][0]
+        raise BzTransportError(f"product '{product}' is not declared")
+
     def file(self, product, component, issue_type, category, extra=None):
         payload = {
             "product": product,
             "component": component,
             "summary": f"{SMOKE_PREFIX} - {issue_type}",
-            "version": self.state["products"][0]["versions"][0],
+            "version": self.version_of(product),
             "description": "Filed by verify-projects.py. Closed automatically.",
             "cf_issue_type": issue_type,
             "cf_category": category,
@@ -512,6 +565,27 @@ class Walker:
                 self.expect_denied(f"{issue_type} given category '{value}'",
                                    bug_id, cf_category=value)
 
+    def probe_combined_illegal(self, bug_id, issue_type):
+        """Several guarded fields changing at once, which is where a
+        field-ordering bug inside set_all would show up."""
+        other = next(t for t in self.enf["allowed_statuses"] if t != issue_type)
+        other_status = next(
+            (s for s in sorted(self.reachable.get("VERIFIED", set()))
+             if s in self.enf["allowed_statuses"][other]
+             and s not in self.enf["allowed_statuses"][issue_type]), None)
+        if other_status:
+            self.expect_denied(
+                f"{issue_type}: status+resolution+category all flipped to "
+                f"{other}'s", bug_id, status=other_status, resolution="",
+                cf_category=self.categories[other][0])
+        self.expect_denied(
+            f"{issue_type}: retyped with matching {other} fields", bug_id,
+            cf_issue_type=other, cf_category=self.categories[other][0])
+        self.expect_denied(f"{issue_type}: category cleared", bug_id,
+                           cf_category="---")
+        self.expect_denied(f"{issue_type}: type cleared", bug_id,
+                           cf_issue_type="---")
+
     def probe_type_immutable(self, bug_id, issue_type):
         for other in self.enf["allowed_statuses"]:
             if other != issue_type:
@@ -563,6 +637,7 @@ def walk_lifecycle(w, issue_type, product, path, closing_resolution):
     w.probe_illegal_statuses(bug_id, issue_type, "VERIFIED")
     w.probe_illegal_categories(bug_id, issue_type)
     w.probe_type_immutable(bug_id, issue_type)
+    w.probe_combined_illegal(bug_id, issue_type)
 
     if reopen_to in w.enf["allowed_statuses"][issue_type]:
         w.expect_allowed(f"{issue_type} reopens to '{reopen_to}'", bug_id,
@@ -600,8 +675,10 @@ def verify_creation_guards(w):
     status, body = w.file(product, component, "NOT_A_TYPE",
                           w.categories["BUG"][0])
     check("refused at creation: unknown issue type",
-          status >= 400 and body.get("error"),
-          f"HTTP {status}: {json.dumps(body)[:200]}")
+          status == HTTP_BAD_REQUEST and body.get("error"),
+          f"expected HTTP {HTTP_BAD_REQUEST} (core's own select validation "
+          f"preempts our issue_type_unknown here), got HTTP {status}: "
+          f"{json.dumps(body)[:200]}")
 
     print("  ....  issue_type_initial_status_unavailable and "
           "issue_type_initial_status_needs_comment are NOT exercised: both "
@@ -668,7 +745,7 @@ def verify_low_privilege_reporter(bz, state, w, key_env):
         "product": "fullfunding",
         "component": "Cross-Cutting / Other",
         "summary": f"{SMOKE_PREFIX} - REQUIREMENT filed unprivileged",
-        "version": state["products"][0]["versions"][0],
+        "version": w.version_of("fullfunding"),
         "description": "Filed by verify-projects.py as an unprivileged user.",
         "cf_issue_type": "REQUIREMENT",
         "cf_category": w.categories["REQUIREMENT"][0],
@@ -766,6 +843,7 @@ def close_smoke_bugs(w):
                 stuck.append(bug_id)
         except BzTransportError as exc:
             stuck.append(f"{bug_id} ({exc})")
+            check(f"smoke bug {bug_id} final state is known", False, str(exc))
     check(f"all {len(w.filed)} smoke bug(s) closed", not stuck,
           f"still open, close by hand: {stuck}")
     print(f"  ....  {closed}/{len(w.filed)} smoke bug(s) closed")
@@ -831,6 +909,7 @@ def main():
         verify_parameters(bz, state)
         verify_products(bz, state, args.require_decommissioned)
         fields = fields_by_name(bz)
+        verify_nothing_undeclared(bz, state, fields)
         verify_custom_fields(fields, state)
         verify_statuses_and_workflow(fields, state)
         verify_resolutions(fields, state)
@@ -840,8 +919,9 @@ def main():
     structural_failures = len(failures)
     walker = None
     if args.no_smoke:
-        print("\n--no-smoke: behavioural verification skipped. The extension is "
-              "NOT proven to be enforcing.")
+        warn("behavioural enforcement is NOT proven",
+             "--no-smoke was given, so no item was filed and no illegal "
+             "transition was attempted. Only the configuration was checked.")
     elif structural_failures:
         print(f"\n{structural_failures} structural failure(s): skipping the "
               "behavioural pass rather than filing bugs into a known-broken "
@@ -865,23 +945,25 @@ def main():
             try:
                 close_smoke_bugs(walker)
             except BzTransportError as exc:
-                print(f"  ....  cleanup aborted: {exc}")
+                check("smoke-bug cleanup completed", False, str(exc))
 
     print(f"\n{'=' * 60}")
     if walker and walker.filed:
         print("smoke test bugs: "
               + ", ".join(str(i) for i in walker.filed))
+    unexpected = [name for name, expected in warnings if not expected]
     if warnings:
         print(f"{len(warnings)} thing(s) this run could NOT prove:")
-        for name in warnings:
-            print(f"  ? {name}")
+        for name, expected in warnings:
+            print(f"  ? {name}" + ("  (expected at this stage)" if expected else ""))
     if failures:
         print(f"FAILED  {len(failures)}/{checks} checks failed:")
         for name in failures:
             print(f"  - {name}")
         sys.exit(1)
-    if warnings and args.strict:
-        sys.exit("FAILED  --strict: unproven checks above are treated as failures")
+    if unexpected and args.strict:
+        sys.exit(f"FAILED  --strict: {len(unexpected)} unproven check(s) above "
+                 "are treated as failures")
     print(f"OK  all {checks} checks passed"
           + (f" ({len(warnings)} unproven)" if warnings else ""))
 

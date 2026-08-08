@@ -27,6 +27,7 @@ use Bugzilla::Error;
 use Bugzilla::Field;
 use Bugzilla::Field::Choice;
 use Bugzilla::Status;
+use Bugzilla::Util qw(i_am_cgi);
 
 our $VERSION = '1.0.0';
 
@@ -171,18 +172,31 @@ use constant ERROR_CODES => {
 # itself - a destructive, obvious act that takes every item's type with it, not
 # a quiet toggle.
 #
-# Only 'on' is cached, and only for the current request. A negative answer must
-# never be remembered, or a long-lived mod_perl worker that once saw an
-# unprovisioned database would stay permanently fail-open.
+# The answer is cached for the current request only. request_cache is torn down
+# with the request, so no answer - positive or negative - can outlive the state
+# it described, and a long-lived mod_perl worker cannot get stuck fail-open.
 sub _enforcement_state {
   my $cache = Bugzilla->request_cache;
-  return 'on' if $cache->{itw_enforcing};
+  return $cache->{itw_state} if $cache->{itw_state};
 
-  return 'off' if !Bugzilla::Field->new({name => TYPE_FIELD});
-  return 'broken' if !model_is_complete();
+  my $state;
+  if (!Bugzilla::Field->new({name => TYPE_FIELD})) {
 
-  $cache->{itw_enforcing} = 1;
-  return 'on';
+    # The bootstrap window exists so that checksetup.pl and the provisioner can
+    # run against a database that has never been provisioned. It is NOT a way
+    # for an administrator to switch the policy off by deleting the field: from
+    # a web or API request, a missing type field is a broken installation.
+    $state = i_am_cgi() ? 'broken' : 'off';
+  }
+  else {
+    $state = model_is_complete() ? 'on' : 'broken';
+  }
+
+  # Cached for this request only. request_cache dies with the request, so a
+  # cached 'broken' cannot outlive the damage, and re-deriving it for every
+  # candidate status while building a dropdown would re-run the whole model
+  # scan each time.
+  return $cache->{itw_state} = $state;
 }
 
 # Every part of the model the policy depends on. Checking only that a couple of

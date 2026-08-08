@@ -57,6 +57,11 @@ use Bugzilla::Version;
 BEGIN { Bugzilla->extensions }
 
 use constant LOCK_NAME  => 'bugzilla-project-setup';
+
+# Declared here rather than beside ensure_field() because preflight uses it too,
+# and a file-scoped `my` is only visible to code compiled after it.
+my %FIELD_TYPE = (single_select => FIELD_TYPE_SINGLE_SELECT,);
+
 use constant EXTENSION  => 'Bugzilla::Extension::IssueTypeWorkflow';
 
 my %OPT = (
@@ -385,6 +390,7 @@ sub validate_extension_agreement {
 sub check_web_tier_is_down {
   return if $DRY;
 
+  my $target = "$OPT{'web-host'}:$OPT{'web-port'}";
   my $socket = IO::Socket::INET->new(
     PeerHost => $OPT{'web-host'},
     PeerPort => $OPT{'web-port'},
@@ -392,8 +398,17 @@ sub check_web_tier_is_down {
     Timeout  => 3,
   );
   if (!$socket) {
-    note("web tier $OPT{'web-host'}:$OPT{'web-port'} is not accepting "
-        . 'connections - good, applying in isolation');
+    my $why = $!;
+
+    # Only an actively refused connection proves nothing is listening. A
+    # timeout, an unknown host or an unreachable network means we do not know -
+    # and "we do not know" must not pass for "it is safe".
+    fatal("cannot tell whether the web tier at $target is down ($why). "
+        . 'Check --web-host/--web-port, or pass --allow-live if you are sure.')
+      if $why !~ /refused/i;
+
+    note("web tier $target actively refused the connection - good, applying "
+        . 'in isolation');
     return;
   }
   close($socket);
@@ -408,10 +423,17 @@ sub check_web_tier_is_down {
   return;
 }
 
+my $LOCK_CONNECTION_ID;
+
 sub take_lock {
+  # An automatic reconnect would silently drop the advisory lock underneath us,
+  # so turn it off where the driver supports it and pin the connection id.
+  eval { $dbh->{mysql_auto_reconnect} = 0; 1 };
+
   my ($got_lock)
     = $dbh->selectrow_array('SELECT GET_LOCK(?, 0)', undef, LOCK_NAME);
   fatal("another setup run holds the '" . LOCK_NAME . "' lock") if !$got_lock;
+  ($LOCK_CONNECTION_ID) = $dbh->selectrow_array('SELECT CONNECTION_ID()');
   return;
 }
 
@@ -422,15 +444,24 @@ sub assert_lock_held {
   return if $DRY;
   my ($used) = $dbh->selectrow_array('SELECT IS_USED_LOCK(?)', undef, LOCK_NAME);
   my ($mine) = $dbh->selectrow_array('SELECT CONNECTION_ID()');
-  fatal("lost the '" . LOCK_NAME . "' lock before $phase "
-      . '(database reconnect?); re-run the script')
+  fatal("the database connection was replaced (was $LOCK_CONNECTION_ID, now "
+      . (defined $mine ? $mine : 'unknown')
+      . "); the advisory lock is gone. Re-run the script.")
+    if !defined $mine
+    || !defined $LOCK_CONNECTION_ID
+    || $mine != $LOCK_CONNECTION_ID;
+  fatal("lost the '" . LOCK_NAME . "' lock before $phase; re-run the script")
     if !defined $used || $used != $mine;
   return;
 }
 
 sub release_lock {
-  eval { $dbh->selectrow_array('SELECT RELEASE_LOCK(?)', undef, LOCK_NAME); 1 }
-    or warn "WARNING: could not release the setup lock: $@";
+  my ($released) = eval { $dbh->selectrow_array('SELECT RELEASE_LOCK(?)', undef, LOCK_NAME) };
+  return warn "WARNING: could not release the setup lock: $@\n" if $@;
+  warn "WARNING: RELEASE_LOCK returned "
+    . (defined $released ? $released : 'NULL')
+    . " - the lock was not held by this connection\n"
+    if !$released;
   return;
 }
 
@@ -474,6 +505,38 @@ sub preflight {
         . 'Bugzilla cannot move a product between classifications from the '
         . 'object API; fix it in the admin UI.')
       if $product->classification->name ne $spec->{classification};
+  }
+
+  my ($engine) = $dbh->selectrow_array(
+    'SELECT ENGINE FROM information_schema.TABLES '
+      . 'WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?',
+    undef, 'status_workflow');
+  fatal("status_workflow uses the '" . ($engine // 'unknown')
+      . "' engine, which is not transactional. The workflow rewrite's "
+      . 'rollback guarantee would not hold; refusing to continue.')
+    if !defined $engine || uc($engine) ne 'INNODB';
+
+  # Non-convergeable conditions belong here, before the first mutation, not
+  # half way through: an existing custom field of the wrong shape can never be
+  # fixed by this script, and neither can a populated product we were asked to
+  # remove.
+  foreach my $name (sort keys %{$STATE->{fields}}) {
+    my $field = Bugzilla::Field->new({name => $name}) or next;
+    fatal("field $name exists but is not a custom field") if !$field->custom;
+    fatal("field $name exists with type " . $field->type . ', expected '
+        . $FIELD_TYPE{$STATE->{fields}{$name}{type}}
+        . ' - Bugzilla cannot change a field\'s type')
+      if $field->type != $FIELD_TYPE{$STATE->{fields}{$name}{type}};
+  }
+
+  if ($OPT{'remove-decommissioned'}) {
+    foreach my $name (@{$STATE->{decommission}{products} || []}) {
+      my $product = Bugzilla::Product->new({name => $name}) or next;
+      my $count = $product->bug_count;
+      fatal("refusing to remove product '$name': it holds $count bug(s). "
+          . 'Move them to another product (or delete them) first.')
+        if $count;
+    }
   }
 
   audit_existing_bugs(\%renamed_from);
@@ -661,17 +724,15 @@ sub flush_caches {
       if $key
       =~ /^Bugzilla::(Field|Field::Choice|Status|Product|Component|Version|Milestone)/;
   }
-  my $flushed = eval { Bugzilla->memcached->clear_all; 1 };
-  fatal('could not flush memcached: ' . ($@ || 'clear_all returned false'))
-    if !$flushed;
+  my $result = eval { Bugzilla->memcached->clear_all };
+  fatal('could not flush memcached: ' . $@) if $@;
+  fatal('memcached clear_all reported failure') if !$result;
   return;
 }
 
 ########################################################################
 # Fields and field values
 ########################################################################
-
-my %FIELD_TYPE = (single_select => FIELD_TYPE_SINGLE_SELECT,);
 
 sub ensure_field {
   my ($name, $spec) = @_;
@@ -1025,9 +1086,12 @@ sub rewrite_workflow {
     1;
   };
   if (!$ok) {
-    my $err = $@ || "unknown error\n";
-    eval { $dbh->bz_rollback_transaction(); 1 }
-      or warn "WARNING: rollback also failed: $@";
+    my $err        = $@ || "unknown error\n";
+    my $rolled_back = eval { $dbh->bz_rollback_transaction(); 1 };
+    fatal("status_workflow rewrite failed AND the rollback failed ($@). "
+        . "The matrix may be empty or partial - restore from backup before "
+        . "restarting the web tier. Original error: $err")
+      if !$rolled_back;
     fatal("status_workflow rewrite failed and was rolled back: $err");
   }
   $dbh->bz_commit_transaction();
@@ -1244,7 +1308,11 @@ sub self_test_fail_closed {
   my $tripped = eval {
     $dbh->do('DELETE FROM status_workflow WHERE old_status IS NULL');
     flush_caches();
-    EXTENSION->model_is_complete ? 0 : 1;
+
+    # Assert the STATE the hooks branch on, not just the predicate behind it:
+    # a regression that disconnected the two would otherwise pass this test.
+    my $state = Bugzilla::Extension::IssueTypeWorkflow::_enforcement_state();
+    (!EXTENSION->model_is_complete && $state eq 'broken') ? 1 : 0;
   };
   my $err = $@;
   eval { $dbh->bz_rollback_transaction(); 1 }
@@ -1252,8 +1320,8 @@ sub self_test_fail_closed {
   flush_caches();
 
   fatal("self-test errored: $err") if $err;
-  fatal('self-test: deleting the bug-creation rows did NOT trip the '
-      . 'fail-closed state. Enforcement would silently stop instead of '
+  fatal('self-test: deleting the bug-creation rows did NOT put the extension '
+      . "into its 'broken' state. Enforcement would silently stop instead of "
       . 'blocking. Refusing to declare this installation provisioned.')
     if !$tripped;
 
@@ -1338,8 +1406,8 @@ my $ok = eval {
   flush_caches() if !$DRY;
 
   # Re-audit AFTER the DDL: creating a mandatory select field over existing rows
-  # would have given them the unset sentinel, and arming enforcement over that
-  # would lock those items out of every guarded edit.
+  # would have given them the unset sentinel, and declaring the model complete
+  # over that would lock those items out of every guarded edit.
   audit_existing_bugs({}) if !$DRY;
 
   ensure_params();
@@ -1356,7 +1424,11 @@ release_lock();
 die $err if !$ok;
 
 if (!@PLAN) {
-  print "\nNothing to do - the installation already matches expected-state.json.\n";
+  print "\nNo changes - the installation already matches expected-state.json.\n";
+  print "(The run still cleared caches"
+    . ($DRY ? '' : ' and ran the fail-closed self-test, which briefly damages '
+      . 'and rolls back the workflow inside a transaction')
+    . ".)\n";
   exit 0;
 }
 
