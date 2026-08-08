@@ -239,31 +239,67 @@ What Phase 3 removes (this change-set):
    # 2. page rules — full targets + actions, not a count
    body="$(cf "$Z/pagerules")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
 
-   # 3. workers routes — metadata only tells you a Worker runs, NOT what it does, so fetch each
-   #    referenced script's CONTENT too (a generically named script can proxy anywhere).
-   body="$(cf "$Z/workers/routes")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
-   for sc in $(printf '%s' "$body" | python3 -c "import json,sys; print('\n'.join(filter(None,(r.get('script') for r in json.load(sys.stdin)['result']))))" | sort -u); do
-     echo "=== worker script: $sc ===" >> "$EV"
-     cf "$A/workers/scripts/$sc/content/v2" >> "$EV"      # GET is /content/v2 (/content is upload)
-     cf "$A/workers/scripts/$sc/settings" >> "$EV"        # bindings: a script can reach the new
-                                                          # domain via env/KV/secret/service binding
-                                                          # and contain NO searchable needle
-   done
+   # 3. worker routes / custom domains / bulk redirects / snippets — every mechanism that can
+   #    route a hostname independently of a DNS record you would recognise. EVERY list is paged to
+   #    exhaustion; a reference on page 2 would otherwise be missing from the evidence.
+   page_all() {  # $1 = url (no page param) — page/per_page style, appends every page to $EV
+     local pg=1 body more
+     while :; do
+       body="$(cf "$1$(case "$1" in *\?*) echo '&';; *) echo '?';; esac)per_page=100&page=$pg")"
+       printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
+       more="$(printf '%s' "$body" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); ri=d.get('result_info') or {}
+tp=ri.get('total_pages'); pg=ri.get('page') or 1
+print('yes' if (tp and pg < tp) else '')")"
+       [ -n "$more" ] || break
+       pg=$((pg+1))
+     done
+   }
+   cursor_all() {  # $1 = url — cursor style (bulk-redirect items), appends every page to $EV
+     local cur="" body
+     while :; do
+       body="$(cf "$1$(case "$1" in *\?*) echo '&';; *) echo '?';; esac)per_page=500${cur:+&cursor=$cur}")"
+       printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
+       cur="$(printf '%s' "$body" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); ri=d.get('result_info') or {}
+print((ri.get('cursors') or {}).get('after','') or '')")"
+       [ -n "$cur" ] || break
+     done
+   }
 
-   # 3b. the mechanisms that are NOT zone rulesets/pagerules/routes and would otherwise be missed:
-   #     account Bulk Redirects (apply across every domain in the account, so their LIST ITEMS
-   #     must be fetched too), Worker Custom Domains (route a whole hostname without a DNS record
-   #     you would recognise), and Snippets (zone-level JS with its own API).
-   body="$(cf "$A/rules/lists")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
-   for lid in $(printf '%s' "$body" | python3 -c "import json,sys; print('\n'.join(l['id'] for l in json.load(sys.stdin)['result'] if l.get('kind')=='redirect'))"); do
-     item="$(cf "$A/rules/lists/$lid/items?per_page=500")"; printf '%s' "$item" | ok; printf '%s\n' "$item" >> "$EV"
+   WORKER_SCRIPTS=/tmp/cf-worker-scripts.txt; : > "$WORKER_SCRIPTS"
+   routes="$(cf "$Z/workers/routes")"; printf '%s' "$routes" | ok; printf '%s\n' "$routes" >> "$EV"
+   printf '%s' "$routes" | python3 -c "import json,sys; print('\n'.join(filter(None,(r.get('script') for r in json.load(sys.stdin)['result']))))" >> "$WORKER_SCRIPTS"
+
+   page_all "$A/workers/domains"          # Worker CUSTOM DOMAINS route a whole hostname
+   page_all "$Z/snippets"                 # zone-level JS
+   page_all "$Z/snippets/snippet_rules"
+   page_all "$A/rules/lists"              # account Bulk Redirect lists…
+   for lid in $(grep -ho '"id":"[a-f0-9]\{32\}"' "$EV" | cut -d'"' -f4 | sort -u); do
+     cursor_all "$A/rules/lists/$lid/items" || true   # …and their ITEMS (cursor-paged, max 500)
    done
-   body="$(cf "$A/workers/domains?per_page=100")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
-   body="$(cf "$Z/snippets")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
-   for sn in $(printf '%s' "$body" | python3 -c "import json,sys; print('\n'.join(x['snippet_name'] for x in (json.load(sys.stdin).get('result') or [])))"); do
+   # custom domains expose their `service` — those scripts belong in the source closure too
+   python3 -c "
+import json,re,sys
+for blob in open('$EV').read().split('\n'):
+    if not blob.strip().startswith('{'): continue
+    try: d=json.loads(blob)
+    except Exception: continue
+    for r in (d.get('result') or []) if isinstance(d.get('result'), list) else []:
+        if isinstance(r, dict) and r.get('service'): print(r['service'])
+" >> "$WORKER_SCRIPTS"
+   for sn in $(grep -ho '"snippet_name":"[^"]*"' "$EV" | cut -d'"' -f4 | sort -u); do
      cf "$Z/snippets/$sn/content" >> "$EV"
    done
-   body="$(cf "$Z/snippets/snippet_rules")"; printf '%s' "$body" | ok; printf '%s\n' "$body" >> "$EV"
+   # every Worker in the closure: SOURCE + BINDINGS (a script can reach the new domain via
+   # env/KV/secret/service binding and contain no searchable needle)
+   for sc in $(sort -u "$WORKER_SCRIPTS" | grep -v '^$'); do
+     echo "=== worker script: $sc ===" >> "$EV"
+     cf "$A/workers/scripts/$sc/content/v2" >> "$EV"      # GET is /content/v2 (/content is upload)
+     cf "$A/workers/scripts/$sc/settings" >> "$EV"        # bindings
+   done
 
    # 4. verdict — any reference to us anywhere in the evidence stops the handoff
    if grep -niE "bleadingoptions\.com|976f76d2-e3c8-4887-a11d-21c27f5e8bed|cfargotunnel" "$EV"; then
