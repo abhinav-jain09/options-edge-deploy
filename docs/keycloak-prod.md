@@ -141,15 +141,18 @@ set -uo pipefail   # deliberately NOT -e: every remote write has an ambiguous-ou
 KT="--request-timeout=20s"                                # never hang mid-rotation
 NEW_PW="$(openssl rand -base64 24)"                       # captured ONCE — no manual retyping drift
 OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)"
+# Refuse to mutate anything until both values provably exist — an empty OLD_PW (failed Secret
+# read) or NEW_PW (missing openssl) would corrupt the rotation from the first write.
+[ -n "$NEW_PW" ] && [ -n "$OLD_PW" ] || { echo "ABORT: could not initialize both password values — nothing was changed" >&2; exit 2; }
 kc_exec() { kubectl $KT --pod-running-timeout=20s -n options-edge exec -i deploy/oe-keycloak -- sh -c "$1"; }
 kc_login_ok() {  # does Keycloak accept this password RIGHT NOW? (the only trustworthy state)
   printf '%s\n' "$1" | kc_exec 'IFS= read -r P; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$P"' >/dev/null 2>&1
 }
-kc_setpw() {  # $1=auth-pw $2=new-pw, both via stdin. ONE pod-side `timeout 30` fences the WHOLE
-  # login+write sequence (separate per-command timeouts would let the aggregate exceed the quiesce
-  # window): if the kubectl transport dies, no pod-side write can still be in flight once 30s
-  # have elapsed — so after QUIESCE below, what Keycloak accepts is final.
-  printf '%s\n%s\n' "$1" "$2" | kc_exec 'timeout 30 sh -c '\''set -eu; IFS= read -r AUTHP; IFS= read -r NEWP
+kc_setpw() {  # $1=auth-pw $2=new-pw, both via stdin. ONE pod-side timeout fences the WHOLE
+  # login+write sequence; --kill-after guarantees an uncatchable KILL 5s after TERM (a TERM-
+  # resistant JVM child would otherwise outlive the fence). After the 30s+5s envelope no pod-side
+  # write can still be in flight — so after QUIESCE below, what Keycloak accepts is final.
+  printf '%s\n%s\n' "$1" "$2" | kc_exec 'timeout --kill-after=5s 30s sh -c '\''set -eu; IFS= read -r AUTHP; IFS= read -r NEWP
     /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$AUTHP"
     /opt/keycloak/bin/kcadm.sh set-password -r master --username abhinav --new-password "$NEWP"'\'''
 }
@@ -162,20 +165,29 @@ patch_secret() {  # via stdin (no argv exposure), 3 bounded attempts
   done
   return 1
 }
-indeterminate() {  # never discard either candidate, never print one — persist 0600, point at it
-  RESCUE="$(mktemp /tmp/kc-rotation-rescue.XXXXXX)"; chmod 600 "$RESCUE"
-  printf 'OLD_PW=%s\nNEW_PW=%s\n' "$OLD_PW" "$NEW_PW" > "$RESCUE"
+indeterminate() {  # never discard either candidate, never print one — persist 0600, point at it.
+  # Every rescue step is verified: claiming "preserved" after a failed write (full or read-only
+  # /tmp) would be worse than printing nothing.
   echo "ROTATION INDETERMINATE: $1" >&2
-  echo "  both candidate values preserved at $RESCUE (mode 0600) — reconcile by hand, then shred it" >&2
+  if RESCUE="$(mktemp /tmp/kc-rotation-rescue.XXXXXX)" \
+     && chmod 600 "$RESCUE" \
+     && printf 'OLD_PW=%s\nNEW_PW=%s\n' "$OLD_PW" "$NEW_PW" > "$RESCUE" \
+     && [ -s "$RESCUE" ] \
+     && [ "$(stat -c %a "$RESCUE" 2>/dev/null || stat -f %Lp "$RESCUE")" = "600" ]; then
+    echo "  both candidate values preserved at $RESCUE (mode 0600) — reconcile by hand, then shred it" >&2
+  else
+    echo "  RESCUE WRITE FAILED — credentials were NOT preserved on disk. Do NOT close this shell:" >&2
+    echo "  the OLD/NEW values exist only in this session's variables (\$OLD_PW / \$NEW_PW)." >&2
+  fi
   exit 3
 }
 
 if ! kc_setpw "$OLD_PW" "$NEW_PW"; then
   # Ambiguous transport outcome: the pod-side write may or may not have committed. QUIESCE past
-  # the pod-side 30s fence so no delayed commit can land AFTER we observe the state — an
-  # observation taken inside the fence window would not be final.
-  echo "set-password transport ambiguous — quiescing 35s past the pod-side timeout fence" >&2
-  sleep 35
+  # the FULL 30s+5s TERM->KILL envelope so no delayed commit can land AFTER we observe the state
+  # — an observation taken inside the fence window would not be final.
+  echo "set-password transport ambiguous — quiescing 40s past the 30s+5s TERM->KILL envelope" >&2
+  sleep 40
 fi
 
 # RECONCILE: ask Keycloak which password it accepts NOW (final, thanks to the fence), then drive

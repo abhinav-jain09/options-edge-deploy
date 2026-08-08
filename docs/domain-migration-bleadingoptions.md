@@ -49,8 +49,12 @@ Executed 2026-08-07/08 after the Friday close (CME closed until Sunday 18:00 ET)
 **Phase-1 verification matrix.** `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase dual` automates the edge, issuer,
 allow-list (running-pod env, both clusters), live-realm-client and unauthenticated web rows. The
 **login round-trip and the browser REST behavior are a MANDATORY MANUAL gate** — a curl cannot
-exercise the browser-injected API base, the OIDC redirect dance, or CORS; open the page, log in,
-and watch the network tab before calling the phase accepted:
+exercise the browser-injected API base, the OIDC redirect dance, or CORS. The manual gate MUST
+include the authenticated WebSocket: the 2026-07-31 ServiceLB incident returned a clean
+unauthenticated 401 while every AUTHENTICATED upgrade died, so "401 seen" proves routing, not a
+working socket. On BOTH apex and es hosts: log in, confirm the WS reaches `101 Switching
+Protocols` in the network tab, and watch live board data actually update, before calling the
+phase accepted:
 
 | Check | Old domain | New domain |
 |---|---|---|
@@ -95,8 +99,9 @@ One coordinated change-set (single PR, single deploy window):
    or the next scale-up boots broken) → web (`web-service-deploy ENVIRONMENT=production
    BUILD_IMAGE=false`; confirm the `:prod` tag still resolves to the running digest first) → es4
    `deploy-service` es-feed-gateway + es-web. Prod before es4 (es4 pulls the same image/pattern).
-6. Pre-redirect acceptance (the redirect rules do not exist yet, so the full redirect gate would
-   rightly fail here): `REDIR_HOSTS="" timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect` — proves the
+6. Pre-redirect acceptance (the redirect rules do not exist yet; `--precheck` skips ONLY the
+   redirect section and stamps its output PRECHECK so it can never be mistaken for the full
+   gate): `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect --precheck` — proves the
    flipped issuer and runtime URLs in the RUNNING pods on both clusters and the new-domain serving
    surface — **plus the mandatory manual browser gate**: log in on the new domain, confirm boards
    render and `/api/*` succeeds in the network tab. Old-domain UI now serves pages pointing at

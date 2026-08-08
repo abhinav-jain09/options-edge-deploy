@@ -43,10 +43,12 @@ set -uo pipefail
 PHASE="${TUNNEL_PHASE:-dual}"
 NETWORK_ONLY=0
 SELFTEST=0
+PRECHECK=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --phase) PHASE="${2:?--phase needs dual|redirect|retired}"; shift 2 ;;
     --network-only) NETWORK_ONLY=1; shift ;;
+    --precheck) PRECHECK=1; shift ;;   # skip ONLY the redirect section; output stamped PRECHECK
     --selftest) SELFTEST=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -128,6 +130,20 @@ ABSENT_TUNNEL_HOSTS="${ABSENT_TUNNEL_HOSTS-$ABSENT_TUNNEL_HOSTS_DEFAULT}"
 EXPECTED_KC_REDIRECTS="${EXPECTED_KC_REDIRECTS:-$KC_REDIRECTS_DEFAULT}"
 EXPECTED_KC_WEBORIGINS="${EXPECTED_KC_WEBORIGINS:-$KC_WEBORIGINS_DEFAULT}"
 EXPECTED_KC_POSTLOGOUT="${EXPECTED_KC_POSTLOGOUT:-$KC_POSTLOGOUT_DEFAULT}"
+if [ "$PRECHECK" = "1" ]; then
+  REDIR_HOSTS=""   # the rules deliberately do not exist yet; everything else still runs full
+else
+  # ACCEPTANCE mode: an emptied mandatory set (e.g. an inherited REDIR_HOSTS="" from a precheck
+  # shell) must not silently skip its section and still print VERIFIED.
+  [ -n "$SERVE_APEX" ] && [ -n "$SERVE_ES" ] && [ -n "$SERVE_AUTH" ] \
+    || { echo "FATAL: empty SERVE_* set in acceptance mode — use --precheck for partial runs" >&2; exit 2; }
+  if [ "$PHASE" != "dual" ] && [ -z "$REDIR_HOSTS" ]; then
+    echo "FATAL: empty REDIR_HOSTS in $PHASE acceptance mode — use --precheck for the pre-redirect run" >&2; exit 2
+  fi
+  if [ "$PHASE" = "retired" ] && [ -z "$ABSENT_TUNNEL_HOSTS" ]; then
+    echo "FATAL: empty ABSENT_TUNNEL_HOSTS in retired acceptance mode" >&2; exit 2
+  fi
+fi
 
 redirect_target_for() {  # old host -> new host (host-mapped)
   case "$1" in
@@ -226,7 +242,7 @@ selftest() {
 [ "$SELFTEST" = "1" ] && { selftest; exit $?; }
 
 [ -f "$REPO_COPY" ] || { echo "FATAL: repo copy not found at $REPO_COPY" >&2; exit 2; }
-note "phase=$PHASE $([ "$NETWORK_ONLY" = "1" ] && echo '(network-only diagnostic)')"
+note "phase=$PHASE $([ "$NETWORK_ONLY" = "1" ] && echo '(network-only diagnostic)')$([ "$PRECHECK" = "1" ] && echo '(PRECHECK: redirect section skipped)')"
 
 # 1. live vs repo -----------------------------------------------------------------------------
 live_raw="$(run "cat '$LIVE_PATH' 2>/dev/null")"
@@ -679,5 +695,6 @@ for h in $REDIR_HOSTS; do
   done
 done
 
-[ "$fail" -eq 0 ] && echo "  prod tunnel VERIFIED (phase=$PHASE)" || echo "  prod tunnel has PROBLEMS (see above)" >&2
+stamp="VERIFIED"; [ "$PRECHECK" = "1" ] && stamp="PRECHECK PASSED (redirect section deliberately skipped — NOT the full gate)"
+[ "$fail" -eq 0 ] && echo "  prod tunnel $stamp (phase=$PHASE)" || echo "  prod tunnel has PROBLEMS (see above)" >&2
 exit "$fail"
