@@ -147,7 +147,9 @@ OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath
 # Persist BOTH candidates (0600, verified) BEFORE the first mutation: an interrupt or crash after
 # Keycloak commits but before the Secret reconciles must never orphan the only usable credential.
 # The file outlives every failure path and is shredded ONLY after the end-state proof.
-RESCUE="$(mktemp /tmp/kc-rotation-rescue.XXXXXX)" \
+# /var/tmp, NOT /tmp: /tmp is legitimately cleared at boot, and this file's whole job is to
+# survive a crash/reboot between the two mutations.
+RESCUE="$(mktemp /var/tmp/kc-rotation-rescue.XXXXXX)" \
   && chmod 600 "$RESCUE" \
   && printf 'OLD_PW=%s\nNEW_PW=%s\n' "$OLD_PW" "$NEW_PW" > "$RESCUE" \
   && [ -s "$RESCUE" ] \
@@ -183,9 +185,14 @@ indeterminate() {  # the rescue file was verified-written BEFORE the first mutat
   echo "  both candidate values remain at $RESCUE (mode 0600) — reconcile by hand, then shred it" >&2
   exit 3
 }
-shred_rescue() {  # only after an end-state proof; shred if available, else best-effort overwrite+rm
+shred_rescue() {  # only after an end-state proof; VERIFIED destruction, and the trap is retired
   if command -v shred >/dev/null; then shred -u "$RESCUE"
   else dd if=/dev/urandom of="$RESCUE" bs=1k count=1 conv=notrunc 2>/dev/null; rm -f "$RESCUE"; fi
+  if [ -e "$RESCUE" ]; then
+    echo "WARNING: rescue file could NOT be destroyed — remove $RESCUE by hand before leaving" >&2
+    return 1
+  fi
+  trap - INT TERM   # candidates no longer exist on disk; the announcement would now be false
 }
 
 if ! kc_setpw "$OLD_PW" "$NEW_PW"; then
@@ -210,11 +217,11 @@ if [ "$TARGET" = "$OLD_PW" ]; then
   # Consistent, but NOT rotated — the write never took. End state is proven, so the rescue file
   # (which holds the unused NEW value) is shredded; exit nonzero so nothing upstream treats this
   # safe-rollback state as a completed rotation; retry the sequence.
-  shred_rescue
+  shred_rescue || exit 5   # exit 5: state consistent but credential material left on disk
   echo "rotation DID NOT complete: converged back on the OLD password (consistent; retry needed)" >&2
   exit 4
 fi
-shred_rescue
+shred_rescue || exit 5   # exit 5: rotation done but credential material left on disk — clean up first
 echo "rotation converged on the NEW password"
 # final gate — pass the CURRENT migration phase explicitly (dual | redirect | retired):
 timeout 600 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>

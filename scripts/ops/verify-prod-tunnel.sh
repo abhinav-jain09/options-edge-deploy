@@ -44,11 +44,13 @@ PHASE="${TUNNEL_PHASE:-dual}"
 NETWORK_ONLY=0
 SELFTEST=0
 PRECHECK=0
+PROMOTED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --phase) PHASE="${2:?--phase needs dual|redirect|retired}"; shift 2 ;;
     --network-only) NETWORK_ONLY=1; shift ;;
     --precheck) PRECHECK=1; shift ;;   # skip ONLY the redirect section; output stamped PRECHECK
+    --promoted) PROMOTED=1; shift ;;   # redirect phase after the 307->308 promotion
     --selftest) SELFTEST=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -92,7 +94,7 @@ case "$PHASE" in
     SERVE_ES_DEFAULT="es.bleadingoptions.com"
     SERVE_AUTH_DEFAULT="auth.bleadingoptions.com"
     REDIR_HOSTS_DEFAULT="fullfunding.nl es.fullfunding.nl auth.fullfunding.nl"
-    EXPECTED_REDIRECT_STATUS_DEFAULT="307"   # soak on temporary; 'retired' demands the promoted 308
+    EXPECTED_REDIRECT_STATUS_DEFAULT="307"   # soak on temporary; --promoted / retired demand 308
     EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
     # Old origins stay trusted during the redirect soak; Phase 3 removes them.
     PROD_ORIGINS_DEFAULT="https://fullfunding.nl https://bleadingoptions.com"
@@ -163,7 +165,25 @@ if [ "$NETWORK_ONLY" != "1" ] && [ "${ALLOW_SET_OVERRIDES:-0}" != "1" ]; then
   require_default SERVE_ES "$SERVE_ES" "$SERVE_ES_DEFAULT"
   require_default SERVE_AUTH "$SERVE_AUTH" "$SERVE_AUTH_DEFAULT"
   require_default ABSENT_TUNNEL_HOSTS "$ABSENT_TUNNEL_HOSTS" "$ABSENT_TUNNEL_HOSTS_DEFAULT"
-  [ "$PRECHECK" != "1" ] && require_default REDIR_HOSTS "$REDIR_HOSTS" "$REDIR_HOSTS_DEFAULT"
+  require_default REDIR_HOSTS "$REDIR_HOSTS" "$REDIR_HOSTS_DEFAULT"   # precheck too: it clears the
+                                                                       # list AFTER proving it real
+  # Every acceptance EXPECTATION is phase-locked as well: EXPECTED_REDIRECT_STATUS=301 or a
+  # substituted issuer would otherwise bless a coherently wrong deployment with VERIFIED.
+  require_default EXPECTED_ISSUER "$EXPECTED_ISSUER" "$EXPECTED_ISSUER_DEFAULT"
+  require_default EXPECTED_REDIRECT_STATUS "$EXPECTED_REDIRECT_STATUS" \
+    "$([ "$PROMOTED" = "1" ] && echo 308 || echo "$EXPECTED_REDIRECT_STATUS_DEFAULT")"
+  require_default EXPECTED_PROD_ORIGINS "$EXPECTED_PROD_ORIGINS" "$PROD_ORIGINS_DEFAULT"
+  require_default EXPECTED_ES4_ORIGINS "$EXPECTED_ES4_ORIGINS" "$ES4_ORIGINS_DEFAULT"
+  require_default EXPECTED_KC_REDIRECTS "$EXPECTED_KC_REDIRECTS" "$KC_REDIRECTS_DEFAULT"
+  require_default EXPECTED_KC_WEBORIGINS "$EXPECTED_KC_WEBORIGINS" "$KC_WEBORIGINS_DEFAULT"
+  require_default EXPECTED_KC_POSTLOGOUT "$EXPECTED_KC_POSTLOGOUT" "$KC_POSTLOGOUT_DEFAULT"
+  require_default PRIMARY_APEX "$PRIMARY_APEX" "$PRIMARY_APEX_DEFAULT"
+  require_default PRIMARY_ES "$PRIMARY_ES" "$PRIMARY_ES_DEFAULT"
+fi
+# --promoted: the ONE sanctioned expectation shift — the post-soak 307->308 promotion check.
+if [ "$PROMOTED" = "1" ]; then
+  [ "$PHASE" = "redirect" ] || { echo "FATAL: --promoted is only meaningful with --phase redirect" >&2; exit 2; }
+  EXPECTED_REDIRECT_STATUS="308"
 fi
 if [ "$PRECHECK" = "1" ]; then
   # Precheck exists for exactly one moment: the redirect phase before its rules are created.
@@ -355,7 +375,10 @@ done
 # 1006/000 means it died in a proxy on the way. Covers both clusters (apex=prod, es.*=es4). A
 # brand-new hostname failing here usually means its DNS CNAME is not live yet.
 for h in $SERVE_APEX $SERVE_ES; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 \
+  # --http1.1 is load-bearing: curl negotiates h2 on https by default, and HTTP/2 rejects the
+  # Connection/Upgrade headers — without it this probe degenerates into a plain GET and its 401
+  # proves nothing about the WebSocket path (the exact ServiceLB false-positive class).
+  code="$(curl -s --http1.1 -o /dev/null -w '%{http_code}' -m 20 \
           -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
           -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom | base64)" -H 'Sec-WebSocket-Version: 13' \
           "https://$h/ws/events" 2>/dev/null)"

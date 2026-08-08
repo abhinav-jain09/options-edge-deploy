@@ -68,7 +68,7 @@ opening the new pages exercises the new Origins but NOT the new WS routes:
    read -rs -p "paste token: " TOK; echo
    for host in bleadingoptions.com es.bleadingoptions.com; do
      printf 'header = "Sec-WebSocket-Protocol: oc.bearer, %s"\n' "$TOK" \
-       | curl -s -o /dev/null -w "$host: %{http_code}\n" -m 8 --config /dev/stdin \
+       | curl -s --http1.1 -o /dev/null -w "$host: %{http_code}\n" -m 8 --config /dev/stdin \
            -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
            -H "Origin: https://$host" \
            -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom | base64)" -H 'Sec-WebSocket-Version: 13' \
@@ -150,8 +150,9 @@ One coordinated change-set (single PR, single deploy window):
    redirect section demands exactly 307 on both schemes for all three hostnames with host-mapped
    `Location` preserving path + query — a same-host 301/302 https upgrade on the http leg FAILS
    (it would rewrite POST to GET before the cross-domain hop).
-   At promotion time re-run with the retired lifecycle expectation:
-   `EXPECTED_REDIRECT_STATUS=308 timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect`.
+   At promotion time re-run with the sanctioned promotion flag (a raw EXPECTED_REDIRECT_STATUS
+   override is refused by the gate): `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase
+   redirect --promoted`.
 
 Rollback (before the 308 promotion): revert the PR, redeploy the same set, drop the 307 rules.
 Old-issuer tokens die at the flip in both directions — that is expected, not a defect.
