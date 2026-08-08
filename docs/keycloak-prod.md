@@ -152,10 +152,18 @@ OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath
 kubectl $KT -n options-edge create configmap kc-rotation-lock \
   --from-literal=holder="$(whoami)@$(hostname) $$ $(date -u +%Y%m%dT%H%M%SZ)" \
   || { echo "ABORT: another rotation holds kc-rotation-lock (kubectl -n options-edge get configmap kc-rotation-lock -o yaml to see who) — nothing was changed" >&2; exit 7; }
-release_lock() {  # bounded AND verified — a silently surviving lock would block the next rotation
+release_lock() {  # bounded AND verified — a silently surviving lock would block the next rotation.
+  # The verification must itself be trustworthy: `get` failing does NOT mean the lock is gone —
+  # only an explicit NotFound does; an API error means deletion is UNVERIFIED, which is a failure.
   kubectl $KT -n options-edge delete configmap kc-rotation-lock --ignore-not-found >/dev/null 2>&1
-  if kubectl $KT -n options-edge get configmap kc-rotation-lock >/dev/null 2>&1; then
+  local out
+  if out="$(kubectl $KT -n options-edge get configmap kc-rotation-lock 2>&1)"; then
     echo "WARNING: kc-rotation-lock could NOT be deleted — remove it by hand before the next rotation" >&2
+    return 1
+  elif printf '%s' "$out" | grep -q 'NotFound'; then
+    return 0
+  else
+    echo "WARNING: could not VERIFY kc-rotation-lock deletion (API error: $out) — check and remove it by hand" >&2
     return 1
   fi
 }
