@@ -199,18 +199,14 @@ sub validate_state {
   # Shape first: a malformed SSOT must fail here, not half way through.
   _require($STATE->{$_->[0]}, $_->[1], "expected-state.json: $_->[0]")
     foreach (['bugzilla_version', 'SCALAR'], ['spec_version', 'SCALAR'],
-    ['params', 'HASH'], ['issue_types', 'ARRAY'], ['product_type', 'HASH'],
-    ['product_type_id', 'HASH'], ['fields', 'HASH'], ['statuses', 'ARRAY'],
+    ['params', 'HASH'], ['issue_types', 'ARRAY'],
+    ['fields', 'HASH'], ['statuses', 'ARRAY'],
     ['workflow', 'ARRAY'], ['resolutions', 'ARRAY'], ['products', 'ARRAY'],
     ['enforcement', 'HASH'], ['decommission', 'HASH']);
 
-  foreach my $id (keys %{$STATE->{product_type_id}}) {
-    fatal("product_type_id key '$id' is not a positive integer")
-      if $id !~ /\A[1-9][0-9]*\z/;
-  }
   foreach my $spec (@{$STATE->{products}}) {
     _require($spec->{$_}, 'SCALAR', "products[].$_")
-      foreach qw(name issue_type description classification default_milestone);
+      foreach qw(name description classification default_milestone);
     _require($spec->{$_}, 'ARRAY', "products[$spec->{name}].$_")
       foreach qw(versions milestones components);
     $spec->{is_active}          = _bool($spec->{is_active}, "products[$spec->{name}].is_active");
@@ -290,28 +286,6 @@ sub validate_state {
     fatal("duplicate entry '$type' in issue_types") if $type_values{$type}++;
   }
 
-  # The type is derived from the product, so every product must map to a
-  # declared type and every declared type must own at least one product.
-  my %type_used;
-  foreach my $product (sort keys %{$STATE->{product_type}}) {
-    my $type = $STATE->{product_type}{$product};
-    fatal("product_type maps '$product' to unknown issue type '$type'")
-      if !$type_values{$type};
-    $type_used{$type}++;
-  }
-  foreach my $type (sort keys %type_values) {
-    fatal("no product is mapped to issue type '$type'") if !$type_used{$type};
-  }
-  foreach my $product (@{$STATE->{products}}) {
-    fatal("product '$product->{name}' is not in product_type")
-      if !$STATE->{product_type}{$product->{name}};
-    fatal("product '$product->{name}' declares issue_type "
-        . "'$product->{issue_type}' but product_type says "
-        . "'$STATE->{product_type}{$product->{name}}'")
-      if $product->{issue_type} ne $STATE->{product_type}{$product->{name}};
-  }
-  fatal('product_type names a product that is not declared under products')
-    if keys %{$STATE->{product_type}} != scalar(@{$STATE->{products}});
 
   my %status_is_open = map { $_->{value} => $_->{is_open} } @{$STATE->{statuses}};
   foreach my $value (@{$STATE->{fields}{cf_category}{values}}) {
@@ -404,36 +378,6 @@ sub validate_extension_agreement {
     if $ext_version ne $STATE->{spec_version};
 
   my $enf = $STATE->{enforcement};
-
-  my $product_type = EXTENSION->PRODUCT_TYPE;
-  fatal('extension PRODUCT_TYPE covers a different set of products')
-    if keys %$product_type != keys %{$STATE->{product_type}};
-  foreach my $product (sort keys %{$STATE->{product_type}}) {
-    fatal("extension PRODUCT_TYPE['$product'] is '"
-        . ($product_type->{$product} // 'undef')
-        . "', expected '$STATE->{product_type}{$product}'")
-      if ($product_type->{$product} // '') ne $STATE->{product_type}{$product};
-  }
-
-  my $want_initial = $enf->{initial_status};
-  my $got_initial  = EXTENSION->INITIAL_STATUS;
-  fatal('extension INITIAL_STATUS covers a different set of types')
-    if keys %$got_initial != keys %$want_initial;
-
-  my $want_cat_field = 'cf_category';
-  fatal("extension CATEGORY_FIELD is '" . EXTENSION->CATEGORY_FIELD
-      . "', expected '$want_cat_field'")
-    if EXTENSION->CATEGORY_FIELD ne $want_cat_field;
-
-  my $type_by_id = EXTENSION->PRODUCT_TYPE_ID;
-  my $want_by_id = $STATE->{product_type_id};
-  fatal('extension PRODUCT_TYPE_ID covers a different set of product ids')
-    if keys %$type_by_id != keys %$want_by_id;
-  foreach my $id (sort keys %$want_by_id) {
-    fatal("extension PRODUCT_TYPE_ID[$id] is '"
-        . ($type_by_id->{$id} // 'undef') . "', expected '$want_by_id->{$id}'")
-      if ($type_by_id->{$id} // '') ne $want_by_id->{$id};
-  }
 
   my $initial = EXTENSION->INITIAL_STATUS;
   foreach my $type (sort keys %{$enf->{initial_status}}) {
@@ -677,16 +621,6 @@ sub preflight {
     }
   }
 
-  foreach my $spec (@{$STATE->{products}}) {
-    my $product = Bugzilla::Product->new({name => $spec->{name}}) or next;
-    my $want = $STATE->{product_type_id}{$product->id};
-    fatal("product '$spec->{name}' has id " . $product->id
-        . ", which expected-state.json maps to '"
-        . (defined $want ? $want : 'nothing')
-        . "' rather than '$spec->{issue_type}'. The type is bound to the id as "
-        . 'well as the name, so this mismatch must be resolved by hand.')
-      if !defined $want || $want ne $spec->{issue_type};
-  }
 
   # Field creation spans a DDL implicit commit, so a crash can leave the
   # definition and the physical column out of step. Re-running would then either
@@ -830,9 +764,11 @@ sub audit_existing_bugs {
   # is derived from the product instead of stored per bug.
   my $has_category = Bugzilla::Field->new({name => 'cf_category'}) ? 1 : 0;
   my $has_env      = Bugzilla::Field->new({name => 'cf_environment'}) ? 1 : 0;
+  my $has_type     = Bugzilla::Field->new({name => 'cf_issue_type'}) ? 1 : 0;
 
   my $select
     = 'SELECT b.bug_id, b.bug_status, b.resolution, p.name AS product'
+    . ($has_type     ? ', b.cf_issue_type'  : '')
     . ($has_category ? ', b.cf_category'    : '')
     . ($has_env      ? ', b.cf_environment' : '')
     . ' FROM bugs b JOIN products p ON p.id = b.product_id';
@@ -846,9 +782,16 @@ sub audit_existing_bugs {
 
   my @bad;
   foreach my $bug (@$bugs) {
-    my $type = $STATE->{product_type}{$bug->{product}};
-    if (!defined $type) {
-      push @bad, "bug $bug->{bug_id}: product '$bug->{product}' has no declared type";
+    # No type means LEGACY: filed before the field existed. Those items are
+    # judged as the declared legacy type, which is exactly why they need no
+    # migration.
+    my $stored = $has_type ? $bug->{cf_issue_type} : undef;
+    my $type
+      = (defined $stored && $stored ne '' && $stored ne '---')
+      ? $stored
+      : $enf->{legacy_untyped_is};
+    if (!$enf->{allowed_statuses}{$type}) {
+      push @bad, "bug $bug->{bug_id}: unknown issue type '$type'";
       next;
     }
 
@@ -1293,14 +1236,6 @@ sub ensure_product {
       create_series      => 1,
     });
 
-    # The type is bound to the id, so a product that lands on an unexpected one
-    # would be typed wrongly (or not at all) the moment it holds an item.
-    my $want = $STATE->{product_type_id}{$product->id};
-    fatal("created product '$spec->{name}' with id " . $product->id
-        . ", but expected-state.json maps that id to '"
-        . (defined $want ? $want : 'nothing')
-        . "'. Update product_type_id (and Extension.pm) or remove the product.")
-      if !defined $want || $want ne $spec->{issue_type};
   }
   else {
     my %want = (
@@ -1805,17 +1740,17 @@ my $ok = eval {
 
   # cf_environment is controlled by 'product', which already exists, so the
   # fields can be created and wired in one pass.
-  foreach my $name (qw(cf_category cf_environment)) {
+  foreach my $name (qw(cf_issue_type cf_category cf_environment)) {
     ensure_field($name, $STATE->{fields}{$name});
   }
   flush_caches() if !$DRY;
 
-  foreach my $name (qw(cf_category cf_environment)) {
+  foreach my $name (qw(cf_issue_type cf_category cf_environment)) {
     ensure_field_controls($name, $STATE->{fields}{$name});
   }
   flush_caches() if !$DRY;
 
-  foreach my $name (qw(cf_category cf_environment)) {
+  foreach my $name (qw(cf_issue_type cf_category cf_environment)) {
     ensure_choice($name, $_) foreach @{$STATE->{fields}{$name}{values}};
   }
   flush_caches() if !$DRY;

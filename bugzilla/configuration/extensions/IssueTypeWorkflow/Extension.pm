@@ -10,11 +10,15 @@ package Bugzilla::Extension::IssueTypeWorkflow;
 # resolved FIXED. This extension makes those moves impossible, on every path
 # (UI, bulk edit, XML-RPC/JSON-RPC and REST all funnel through Bugzilla::Bug).
 #
-# The issue type is DERIVED FROM THE PRODUCT (see PRODUCT_TYPE). There is no
-# per-bug type field: bugs.product_id already is the normalised ownership
-# column, a second copy could drift from it, and - decisively - the installation
-# already holds 177 live bugs that must not be written to, which a mandatory
-# custom field over a populated table would have done.
+# The issue type is a per-bug field: the four products are Internal/External per
+# project, and BOTH kinds hold bugs AND requirements, so the product cannot say
+# which lifecycle an item is on.
+#
+# cf_issue_type is OPTIONAL at the database level and REQUIRED on creation by
+# this extension. That split is deliberate. is_mandatory would apply to every
+# future EDIT as well, and the installation already holds 178 items that have no
+# type - they would all become uneditable. An item with no type is treated as
+# LEGACY_TYPE below: those items predate the model and are all BUG-valid.
 #
 # See bugzilla/configuration/expected-state.json for the declarative model this
 # mirrors, and docs/bugzilla-project-lifecycle.md for the design.
@@ -31,47 +35,31 @@ use Bugzilla::Constants;
 use Bugzilla::Error;
 use Bugzilla::Field;
 use Bugzilla::Field::Choice;
-use Bugzilla::Product;
 use Bugzilla::Status;
 
-our $VERSION = '2.0.0';
+our $VERSION = '3.0.0';
 
 # Checked against expected-state.json's spec_version by setup-projects.pl, along
 # with every policy constant below, so the two halves cannot drift apart. They
 # are constants rather than runtime config reads on purpose: an unreadable or
 # half-written config file must never be able to silently turn enforcement off.
-use constant SPEC_VERSION => '2.0.0';
+use constant SPEC_VERSION => '3.0.0';
 
+use constant TYPE_FIELD        => 'cf_issue_type';
 use constant CATEGORY_FIELD    => 'cf_category';
 use constant ENVIRONMENT_FIELD => 'cf_environment';
+
+# What an item with NO type is. The 178 pre-existing items are internal
+# engineering bugs on CONFIRMED/IN_PROGRESS/RESOLVED+FIXED - every one of which
+# is BUG-valid - so treating them as BUG needs no migration and leaves them
+# editable.
+use constant LEGACY_TYPE => 'BUG';
 
 # The unset sentinel Bugzilla creates for every custom select field.
 use constant UNSET => '---';
 
-use constant GUARDED_FIELDS => {CATEGORY_FIELD, 1, 'bug_status', 1, 'resolution', 1};
-
-# The whole type model. A product not listed here has no lifecycle policy.
-use constant PRODUCT_TYPE => {
-  'OptionsEdge'              => 'BUG',
-  'Fullfunding'              => 'BUG',
-  'OptionsEdge Requirements' => 'REQUIREMENT',
-  'Fullfunding Requirements' => 'REQUIREMENT',
-};
-
-# Product NAMES are mutable, so a name-only map can be subverted: rename
-# OptionsEdge aside, rename a requirement product into its place, rename back,
-# and 177 bugs are silently derived as REQUIREMENTs without a single bug row
-# changing. Binding the id as well makes that trip the fail-closed state,
-# because the id cannot be edited from the admin UI.
-#
-# These ids are installation-specific by nature - this repository configures one
-# installation, and expected-state.json already declares its exact topology.
-use constant PRODUCT_TYPE_ID => {
-  1 => 'BUG',
-  2 => 'REQUIREMENT',
-  3 => 'BUG',
-  4 => 'REQUIREMENT',
-};
+use constant GUARDED_FIELDS =>
+  {TYPE_FIELD, 1, CATEGORY_FIELD, 1, 'bug_status', 1, 'resolution', 1};
 
 use constant INITIAL_STATUS => {BUG => 'UNCONFIRMED', REQUIREMENT => 'REQ_DRAFT',};
 
@@ -150,15 +138,14 @@ use constant ALLOWED_CATEGORIES => {
 # Stable WebService codes, so a caller (and verify-projects.py) can tell "the
 # policy refused this" apart from an auth failure, a 404 or a 500.
 use constant ERROR_CODES => {
+  issue_type_required                     => 100001,
+  issue_type_unknown                      => 100002,
   issue_category_mismatch                 => 100004,
   issue_type_initial_status_unavailable   => 100005,
   issue_type_initial_status_needs_comment => 100006,
   issue_type_workflow_misconfigured       => 100007,
-  issue_product_move_cross_type           => 100008,
   issue_type_value_rename_forbidden       => 100009,
   issue_type_value_delete_forbidden       => 100010,
-  issue_type_product_rename_forbidden     => 100011,
-  issue_type_product_delete_forbidden     => 100012,
 };
 
 ###############################
@@ -250,31 +237,30 @@ sub model_is_complete {
   return 0 if $field->value_field;
   return 0 if $field->visibility_field;
 
-  # cf_environment belongs to the BUG products only. It carries no policy, but
-  # it is part of the declared model, and the documentation says so.
+  # cf_environment carries no policy, but it is part of the declared model. It is
+  # uncontrolled now that Internal/External no longer means bug-vs-requirement.
   my $env = Bugzilla::Field->new({name => ENVIRONMENT_FIELD}) or return 0;
   return 0 if !$env->custom || $env->obsolete;
   return 0 if $env->type != FIELD_TYPE_SINGLE_SELECT;
   return 0 if $env->is_mandatory;
-  return 0
-    if !$env->visibility_field || $env->visibility_field->name ne 'product';
-  my %env_visible = map { $_->name => 1 } @{$env->visibility_values || []};
-  my @bug_products = grep { PRODUCT_TYPE->{$_} eq 'BUG' } keys %{(PRODUCT_TYPE)};
-  return 0 if keys %env_visible != scalar(@bug_products);
-  foreach my $name (@bug_products) {
-    return 0 if !$env_visible{$name};
-  }
+  return 0 if $env->visibility_field;
 
-  # Name AND id must agree, or a rename could re-type existing items.
-  my $mapped = 0;
-  foreach my $name (keys %{(PRODUCT_TYPE)}) {
-    my $product = Bugzilla::Product->new({name => $name}) or return 0;
-    return 0 if !$product->is_active;
-    my $by_id = PRODUCT_TYPE_ID->{$product->id};
-    return 0 if !defined $by_id || $by_id ne PRODUCT_TYPE->{$name};
-    $mapped++;
+  # The type field itself, and exactly the two declared values.
+  my $type_field = Bugzilla::Field->new({name => TYPE_FIELD}) or return 0;
+  return 0 if !$type_field->custom || $type_field->obsolete;
+  return 0 if $type_field->type != FIELD_TYPE_SINGLE_SELECT;
+  return 0 if !$type_field->enter_bug;
+
+  # Optional by design: is_mandatory would lock every legacy item out of editing.
+  return 0 if $type_field->is_mandatory;
+
+  my %live_type = map { $_->name => 1 }
+    grep { $_->name ne UNSET && $_->is_active }
+    @{Bugzilla::Field::Choice->type(TYPE_FIELD)->match({})};
+  return 0 if keys %live_type != keys %{(ALLOWED_STATUSES)};
+  foreach my $type (keys %{(ALLOWED_STATUSES)}) {
+    return 0 if !$live_type{$type};
   }
-  return 0 if $mapped != keys %{(PRODUCT_TYPE_ID)};
 
   my %live;
   foreach my $choice (@{Bugzilla::Field::Choice->type(CATEGORY_FIELD)->match({})}) {
@@ -336,21 +322,20 @@ sub model_is_complete {
 # Type derivation             #
 ###############################
 
-sub _type_of_product_name {
-  my ($name) = @_;
-  return undef if !defined $name;
-  return PRODUCT_TYPE->{$name};
+sub _is_known_type {
+  my ($type) = @_;
+  return 0 if !defined $type || $type eq '' || $type eq UNSET;
+  return ALLOWED_STATUSES->{$type} ? 1 : 0;
 }
 
-# Resolved from the id, with the name required to agree. model_is_complete()
-# has already established that they do; this is belt and braces on the hot path.
+# An item with no type is LEGACY: it predates the model, and treating it as
+# LEGACY_TYPE is what keeps the 178 pre-existing items working untouched.
 sub _type_of_bug {
   my ($bug) = @_;
-  my $product = eval { $bug->product_obj } or return undef;
-  my $by_id   = PRODUCT_TYPE_ID->{$product->id};
-  my $by_name = PRODUCT_TYPE->{$product->name};
-  return undef if !defined $by_id || !defined $by_name || $by_id ne $by_name;
-  return $by_id;
+  my $accessor = TYPE_FIELD;
+  my $type = $bug->can($accessor) ? $bug->$accessor : $bug->{+TYPE_FIELD};
+  return LEGACY_TYPE if !_is_known_type($type);
+  return $type;
 }
 
 # A category is valid for a type only if the compiled-in vocabulary and the live
@@ -399,10 +384,29 @@ sub bug_check_can_change_field {
 
   my $type = _type_of_bug($bug);
 
-  # An item in a product outside the type map has no policy to apply. Freeze its
-  # guarded fields rather than guess; the provisioner refuses to run against an
-  # undeclared product, so this only happens after someone adds one.
-  return _deny($priv_results) if !defined $type;
+  # The type is immutable once set - changing it would strand the item on a
+  # status and category belonging to the other lifecycle. A LEGACY item (no
+  # stored type) may be typed once, and only to a type its CURRENT status,
+  # resolution and category are all already valid for, because those fields are
+  # unchanged and so never reach their own checks.
+  if ($field eq TYPE_FIELD) {
+    my $accessor = TYPE_FIELD;
+    my $stored = $bug->can($accessor) ? $bug->$accessor : $bug->{+TYPE_FIELD};
+    return _deny($priv_results) if _is_known_type($stored);
+    return _deny($priv_results) if !_is_known_type($new_value);
+    return _deny($priv_results)
+      if !ALLOWED_STATUSES->{$new_value}{$bug->status->name};
+    my $resolution = $bug->resolution;
+    return _deny($priv_results)
+      if defined $resolution
+      && $resolution ne ''
+      && !ALLOWED_RESOLUTIONS->{$new_value}{$resolution};
+    my $cat_accessor = CATEGORY_FIELD;
+    my $category
+      = $bug->can($cat_accessor) ? $bug->$cat_accessor : $bug->{+CATEGORY_FIELD};
+    return _deny($priv_results) if !_category_ok($new_value, $category);
+    return;
+  }
 
   if ($field eq 'bug_status') {
     return _deny($priv_results) if !ALLOWED_STATUSES->{$type}{$new_value};
@@ -426,56 +430,6 @@ sub bug_check_can_change_field {
   return;
 }
 
-# The product guard cannot live in the hook above: Bugzilla::Bug::_set_product
-# (Bug.pm:2716) changes the object directly instead of routing 'product' through
-# the ordinary setter, so check_can_change_field never sees it.
-#
-# bug_start_of_update (Bug.pm:905) runs after the base update but INSIDE the
-# enclosing transaction, with both the new object and old_bug - so throwing here
-# rolls the whole update back, including any status or category change submitted
-# alongside the move.
-sub bug_start_of_update {
-  my ($self, $args) = @_;
-  my ($bug, $old_bug, $changes) = @$args{qw(bug old_bug changes)};
-
-  my $state = _enforcement_state();
-  return if $state eq 'off';
-  ThrowUserError('issue_type_workflow_misconfigured') if $state eq 'broken';
-
-  # At THIS point the change is still keyed by the database column and carries
-  # ids: Bug.pm:915-922 rewrites product_id/component_id into product/component
-  # with names only AFTER this hook has run. Accept either shape so a future
-  # reordering cannot silently disable the guard.
-  return if !$changes;
-  my ($old_product, $new_product);
-  if ($changes->{product_id}) {
-    my ($old_id, $new_id) = @{$changes->{product_id}};
-    my $old = Bugzilla::Product->new({id => $old_id, cache => 1});
-    my $new = Bugzilla::Product->new({id => $new_id, cache => 1});
-    ($old_product, $new_product)
-      = ($old ? $old->name : undef, $new ? $new->name : undef);
-  }
-  elsif ($changes->{product}) {
-    ($old_product, $new_product) = @{$changes->{product}};
-  }
-  else {
-    return;
-  }
-
-  my $old_type = _type_of_product_name($old_product);
-  my $new_type = _type_of_product_name($new_product);
-
-  # Same-type moves are ordinary product moves; core has already reconciled
-  # component, version and milestone for them.
-  return if defined $old_type && defined $new_type && $old_type eq $new_type;
-
-  ThrowUserError('issue_product_move_cross_type',
-    {old_product => $old_product,
-      new_product => $new_product,
-      old_type    => (defined $old_type ? $old_type : 'unknown'),
-      new_type    => (defined $new_type ? $new_type : 'unknown')});
-}
-
 # Runs at the end of Bugzilla::Bug::run_create_validators: after every field has
 # been validated but before any row is written. bug_status is a Bugzilla::Status
 # OBJECT (Bug.pm:1540), custom selects are strings, and the product has already
@@ -488,9 +442,13 @@ sub bug_end_of_create_validators {
   return if $state eq 'off';
   ThrowUserError('issue_type_workflow_misconfigured') if $state eq 'broken';
 
-  my $product = Bugzilla::Product->new($params->{product_id});
-  my $type    = _type_of_product_name($product ? $product->name : undef);
-  ThrowUserError('issue_type_workflow_misconfigured') if !defined $type;
+  # Required on creation, so every NEW item is typed, while the pre-existing
+  # untyped ones stay editable (is_mandatory would have blocked those too).
+  my $type = $params->{+TYPE_FIELD};
+  ThrowUserError('issue_type_required')
+    if !defined $type || $type eq '' || $type eq UNSET;
+  ThrowUserError('issue_type_unknown', {issue_type => $type})
+    if !_is_known_type($type);
 
   my $category = $params->{+CATEGORY_FIELD};
   ThrowUserError('issue_category_mismatch',
@@ -566,12 +524,6 @@ sub object_before_set {
       if defined $guarded;
   }
 
-  # Renaming a mapped product would re-type every item in it.
-  if ($object->isa('Bugzilla::Product') && $field eq 'name') {
-    my $current = eval { $object->name } // '';
-    ThrowUserError('issue_type_product_rename_forbidden', {product => $current})
-      if PRODUCT_TYPE->{$current};
-  }
 
   return;
 }
@@ -601,11 +553,6 @@ sub object_before_delete {
       if defined $guarded;
   }
 
-  if ($object->isa('Bugzilla::Product')) {
-    my $current = eval { $object->name } // '';
-    ThrowUserError('issue_type_product_delete_forbidden', {product => $current})
-      if PRODUCT_TYPE->{$current};
-  }
 
   return;
 }

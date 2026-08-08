@@ -1,20 +1,20 @@
 [%# Errors raised by the IssueTypeWorkflow extension. %]
 
-[% IF error == "issue_category_mismatch" %]
+[% IF error == "issue_type_required" %]
+  [% title = "Issue Type Required" %]
+  Every new item must be filed as either a <em>BUG</em> or a <em>REQUIREMENT</em>.
+  Please set the <em>Issue Type</em> field. (Items filed before this field
+  existed have no type and are treated as bugs; they are not affected.)
+
+[% ELSIF error == "issue_type_unknown" %]
+  [% title = "Unknown Issue Type" %]
+  <em>[% issue_type FILTER html %]</em> is not a known issue type.
+
+[% ELSIF error == "issue_category_mismatch" %]
   [% title = "Category Does Not Match Issue Type" %]
   The category <em>[% category FILTER html %]</em> does not belong to issue type
-  <em>[% issue_type FILTER html %]</em>, which is determined by this item's
-  product. Bug categories are prefixed <em>BUG_</em> and requirement categories
+  <em>[% issue_type FILTER html %]</em>. Bug categories are prefixed <em>BUG_</em> and requirement categories
   <em>REQ_</em>. Leaving the category empty is always allowed.
-
-[% ELSIF error == "issue_product_move_cross_type" %]
-  [% title = "Cannot Move Between Bugs and Requirements" %]
-  <em>[% old_product FILTER html %]</em> holds
-  <em>[% old_type FILTER html %]</em> items and
-  <em>[% new_product FILTER html %]</em> holds
-  <em>[% new_type FILTER html %]</em> items, so this move would change the
-  item's lifecycle underneath it. File a linked item in the other product
-  instead. Moves between products of the same kind are fine.
 
 [% ELSIF error == "issue_type_initial_status_unavailable" %]
   [% title = "Lifecycle Entry Point Missing" %]
@@ -50,17 +50,5 @@
   <em>[% value FILTER html %]</em> is part of the configured issue-type
   lifecycles; removing it would leave items with no lifecycle. Change
   <em>expected-state.json</em> and re-run <em>setup-projects.pl</em>.
-
-[% ELSIF error == "issue_type_product_rename_forbidden" %]
-  [% title = "That Product Cannot Be Renamed" %]
-  The issue type is derived from the product, so renaming
-  <em>[% product FILTER html %]</em> would change the type of everything in it.
-  Change <em>expected-state.json</em> (and the extension's map) and re-run
-  <em>setup-projects.pl</em>.
-
-[% ELSIF error == "issue_type_product_delete_forbidden" %]
-  [% title = "That Product Cannot Be Deleted" %]
-  <em>[% product FILTER html %]</em> carries an issue type, so deleting it would
-  leave its items with no lifecycle.
 
 [% END %]

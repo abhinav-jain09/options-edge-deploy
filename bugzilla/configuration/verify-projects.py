@@ -121,8 +121,7 @@ def require_shape(state):
         return container[key]
 
     for key, kind in (("spec_version", str), ("bugzilla_version", str),
-                      ("issue_types", list), ("product_type", dict),
-                      ("product_type_id", dict), ("params", dict),
+                      ("issue_types", list), ("params", dict),
                       ("fields", dict), ("statuses", list), ("workflow", list),
                       ("resolutions", list), ("products", list),
                       ("enforcement", dict), ("decommission", dict)):
@@ -283,14 +282,6 @@ def verify_products(bz, state, require_decommissioned):
             continue
         product = products[0]
 
-        # R7-13: the type is bound to the product id, so the id is part of the
-        # declared state and has to be asserted, not assumed.
-        eq(f"product '{name}' id", str(product.get("id")),
-           next((pid for pid, t in state["product_type_id"].items()
-                 if str(product.get("id")) == pid), None))
-        eq(f"product '{name}' id maps to its type",
-           state["product_type_id"].get(str(product.get("id"))),
-           spec["issue_type"])
 
         eq(f"product '{name}' description", product.get("description"),
            spec["description"])
@@ -504,12 +495,9 @@ class Walker:
         self.creation_codes = set(self.enf["error_codes"]["extension"].values())
         self.filed = []
 
-        # The type is the product. Pick a representative product per type.
-        self.product_of = {}
-        for name, issue_type in state["product_type"].items():
-            self.product_of.setdefault(issue_type, []).append(name)
-        for names in self.product_of.values():
-            names.sort()
+        # Every product can hold either type, so a walk just needs one product.
+        self.products = sorted(p["name"] for p in state["products"])
+        self.product_of = {t: self.products for t in state["issue_types"]}
 
         self.reachable = {}
         for edge in state["workflow"]:
@@ -529,13 +517,14 @@ class Walker:
         raise BzTransportError(f"product '{product}' is not declared")
 
     def file(self, product, component, issue_type, category, extra=None):
-        """issue_type is only used for the summary - the product decides it."""
+        """The type is a per-bug field again; the product does not imply it."""
         payload = {
             "product": product,
             "component": component,
             "summary": f"{SMOKE_PREFIX} - {issue_type}",
             "version": self.version_of(product),
             "description": "Filed by verify-projects.py. Closed automatically.",
+            "cf_issue_type": issue_type,
             "cf_category": category,
         }
         payload.update(extra or {})
@@ -557,13 +546,13 @@ class Walker:
             raise BzTransportError(
                 f"cannot read bug {bug_id} (HTTP {status}): {json.dumps(body)[:200]}")
         bug = bugs[0]
-        missing = [k for k in ("status", "resolution", "product",
+        missing = [k for k in ("status", "resolution", "cf_issue_type",
                                "cf_category") if k not in bug]
         if missing:
             raise BzTransportError(
                 f"bug {bug_id} is missing expected field(s) {missing}: the "
                 "custom fields are probably not provisioned")
-        return (bug["status"], bug["resolution"], bug["product"],
+        return (bug["status"], bug["resolution"], bug["cf_issue_type"],
                 bug["cf_category"])
 
     def expect_allowed(self, label, bug_id, **fields):
@@ -751,7 +740,8 @@ def walk_lifecycle(w, issue_type, product, path, closing_resolution):
     # that actually exercises the extension rather than the global matrix.
     w.probe_illegal_statuses(bug_id, issue_type, "VERIFIED")
     w.probe_illegal_categories(bug_id, issue_type)
-    w.probe_product_moves(bug_id, issue_type)
+    w.expect_denied(f"{issue_type} retyped", bug_id,
+                    cf_issue_type=('REQUIREMENT' if issue_type == 'BUG' else 'BUG'))
     w.probe_combined_illegal(bug_id, issue_type)
 
     if reopen_to in w.enf["allowed_statuses"][issue_type]:
@@ -764,21 +754,21 @@ def walk_lifecycle(w, issue_type, product, path, closing_resolution):
 
 
 def verify_every_product(w):
-    """Each type is walked in one representative product, so file into the
-    OTHERS too: a bad mapping for a product the walk never touches would
-    otherwise pass."""
-    print("\n[8] Every product accepts its own type")
-    for product, issue_type in w.state["product_type"].items():
+    """Every product must accept BOTH types - that is the whole point of the
+    Internal/External split not being the type."""
+    print("\n[8] Every product accepts both types")
+    for product in w.products:
+      for issue_type in w.state["issue_types"]:
         category = w.categories[issue_type][0]
         status, body = w.file(product, "General", issue_type, category)
-        if not check(f"file into '{product}' ({issue_type})",
+        if not check(f"file a {issue_type} into '{product}'",
                      status < 400 and body.get("id"),
                      f"HTTP {status}: {json.dumps(body)[:200]}"):
             continue
-        eq(f"'{product}' item starts at {w.enf['initial_status'][issue_type]}",
+        eq(f"'{product}' {issue_type} starts at {w.enf['initial_status'][issue_type]}",
            w.state_of(body["id"])[0], w.enf["initial_status"][issue_type])
         other = next(t for t in w.enf["allowed_statuses"] if t != issue_type)
-        w.expect_denied(f"'{product}' item given {other}'s category",
+        w.expect_denied(f"'{product}' {issue_type} given {other}'s category",
                         body["id"], cf_category=w.categories[other][0])
 
 
@@ -976,7 +966,7 @@ def close_smoke_bugs(w):
     for bug_id in w.filed:
         try:
             status, resolution, product, category = w.state_of(bug_id)
-            issue_type = w.state["product_type"].get(product)
+            issue_type = _unset(product) or w.state["enforcement"]["legacy_untyped_is"]
 
             # Closed is not enough: if a negative probe unexpectedly SUCCEEDED,
             # the malformed bug it produced would look tidy and be left behind.
