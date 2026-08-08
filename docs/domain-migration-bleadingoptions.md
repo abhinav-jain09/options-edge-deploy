@@ -207,7 +207,25 @@ What Phase 3 removes (this change-set):
 
    `success: true` **and** `total_count == 0` is the acceptance evidence (keep the output). If you
    use the dashboard instead, filter the DNS tab by that tunnel target and screenshot the complete
-   filtered result — not one unfiltered page. `bleadingoptions.com` keeps its three proxied CNAMEs.
+   filtered result — not one unfiltered page.
+
+   **Also prove no Cloudflare RULES still act on the retired zone** — DNS records are not the only
+   way that zone can point at us. Read and record its rulesets (redirect rules, page rules,
+   workers routes) and confirm none targets `bleadingoptions.com` or our tunnel:
+
+   ```sh
+   curl -s -H "Authorization: Bearer $CF_TOKEN" \
+     "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/rulesets?per_page=100" \
+     | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; \
+        print(json.dumps([r['name'] for r in d['result']], indent=1))"
+   curl -s -H "Authorization: Bearer $CF_TOKEN" \
+     "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/pagerules" \
+     | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; print('PAGERULES', len(d['result']))"
+   ```
+
+   (This migration never created redirect rules — the domain is being freed, not forwarded — so
+   the expected result is nothing referencing us; record it either way.) `bleadingoptions.com`
+   keeps its three proxied CNAMEs.
 6. **Re-accept after the handoff** — run the gate once more (it proves absence in every config we
    own AND asks cloudflared itself that each retired URL resolves to `http_status:404`), record the
    DNS evidence from step 5, AND repeat the full authenticated smoke on BOTH sites

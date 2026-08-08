@@ -265,6 +265,86 @@ ws_target_for() {  # $1 = hostname; $2 = config text; prints that host's /ws/eve
     /service:/ { if (cur == h && haspath) { print fieldval($0, "service"); exit } haspath=0 }'
 }
 
+retired_suffixes() { for h in $ABSENT_TUNNEL_HOSTS; do printf '%s\n' "$h"; done | awk -F. 'NF>2{print $(NF-1)"."$NF} NF==2{print}' | sort -u; }
+scan_config_for_retired() {  # label, config text
+  local label="$1" cfg="$2" sfx report
+  # STRUCTURAL hostname extraction (PyYAML): flow mappings ({hostname: x, path: y}), anchors/aliases
+  # and any indentation style are all covered — a sed/grep scan sees none of those reliably.
+  # ALL classification happens inside Python: a bare "*" hostname passed through an unquoted shell
+  # expansion would glob against the working directory and vanish before grep ever saw it.
+  report="$(printf '%s\n' "$cfg" | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "
+import os, sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    if not isinstance(rules, list): raise ValueError('ingress is not a list')
+    hosts = sorted({str(r.get('hostname', '')).strip().lower().rstrip('.')
+                    for r in rules if isinstance(r, dict) and str(r.get('hostname', '')).strip()})
+    wild = [h for h in hosts if '*' in h]
+    hits = []
+    for sfx in os.environ.get('RETIRED_SUFFIXES', '').split():
+        sfx = sfx.strip().lower()
+        if not sfx: continue
+        hits += [h for h in hosts if h == sfx or h.endswith('.' + sfx)]
+    if wild: print('WILDCARD ' + '|'.join(wild))
+    elif hits: print('RETIRED ' + '|'.join(sorted(set(hits))))
+    else: print('CLEAN ' + '|'.join(hosts))
+except Exception as e:
+    print('PARSE_FAIL %s' % e)
+" 2>/dev/null)"
+  case "$report" in
+    "CLEAN"*) note "OK   $label declares no wildcard and no retired-domain hostname (structural check; hosts: ${report#CLEAN })" ;;
+    "WILDCARD"*) bad "$label declares WILDCARD hostname(s) — they match the retired domain regardless of spelling: ${report#WILDCARD }" ;;
+    "RETIRED"*) bad "$label still declares retired-domain hostname(s): ${report#RETIRED }" ;;
+    *) bad "$label: could not structurally parse the ingress hostnames ($report)" ;;
+  esac
+  # Hostless rules are legal and match EVERY hostname, so only the terminal http_status:404 may be
+  # hostless. Parse the ingress list STRUCTURALLY (a rule's fields can appear in any order across
+  # multiple lines — a line-oriented scan misses `- path: …` + `service: …` on the next line).
+  local hostless_report
+  hostless_report="$(printf '%s\n' "$cfg" | python3 -c "
+import sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    if not isinstance(rules, list): raise ValueError('ingress is not a list')
+    offenders = [r for r in rules
+                 if isinstance(r, dict) and not str(r.get('hostname', '')).strip()
+                 and str(r.get('service', '')).strip() != 'http_status:404']
+    if offenders:
+        print('OFFENDERS ' + '; '.join(repr(o) for o in offenders))
+    else:
+        print('CLEAN')
+except Exception as e:
+    print('PARSE_FAIL %s' % e)
+" 2>/dev/null)"
+  case "$hostless_report" in
+    CLEAN) note "OK   $label has no hostless rule other than the terminal 404" ;;
+    OFFENDERS*) bad "$label has HOSTLESS ingress rule(s) that are not http_status:404 — they answer for EVERY hostname incl. the retired domain: ${hostless_report#OFFENDERS }" ;;
+    *) bad "$label: could not structurally parse the ingress list to prove no hostless rule ($hostless_report)" ;;
+  esac
+}
+
+resolve_ws_target() {  # $1 = hostname. cloudflared's own first-match answer is authoritative: a
+  # text parser cannot see rule order across flow mappings/aliases, so a SHADOWED wrong rule (an
+  # earlier :8091 ServiceLB entry) would be invisible — exactly the 2026-07-31 outage shape, which
+  # the 401 probe provably cannot catch. FAIL CLOSED if cloudflared cannot answer; the parser is a
+  # labelled fallback in --network-only diagnostics only.
+  local t
+  t="$(run "cloudflared tunnel --config '$LIVE_PATH' ingress rule 'https://$1/ws/events' 2>/dev/null" | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
+  if [ -n "$t" ]; then
+    note "     $1/ws/events -> $t (resolved by cloudflared — authoritative)"
+    printf '%s' "$t"; return
+  fi
+  if [ "$NETWORK_ONLY" = "1" ]; then
+    t="$(ws_target_for "$1" "$live_raw")"
+    note "WARN $1/ws/events -> ${t:-<unset>} (TEXT PARSER fallback — cloudflared unavailable; shadowed rules may be missed)"
+    printf '%s' "$t"; return
+  fi
+  bad "$1/ws/events: cloudflared could not resolve the route — the authoritative check cannot run (use --network-only for a parser-only diagnostic)"
+  printf ''
+}
+
 selftest() {
   local fixture got rc=0
   run_case() {  # host, expected, config, label
@@ -425,6 +505,32 @@ except Exception as e:
   - hostname: keep.example
     service: http://x:1
   - service: http_status:404' "$PY_WILD" "NOWILD"
+  # END-TO-END: exercise the production scan function itself (a snippet copy would not have caught
+  # the shell-glob fail-open that a bare "*" hostname produced).
+  e2e_scan() {  # label, config text, expected substring in output
+    local out
+    out="$( { ABSENT_TUNNEL_HOSTS="fullfunding.nl" scan_config_for_retired "fixture" "$2"; } 2>&1 )"
+    case "$out" in
+      *"$3"*) echo "  OK   selftest: $1" ;;
+      *) echo "  FAIL selftest: $1 (wanted '$3' in: $out)" >&2; rc=1 ;;
+    esac
+  }
+  e2e_scan "e2e: bare '*' hostname is REJECTED by the production scan" \
+    'ingress:
+  - hostname: "*"
+    path: /secret
+    service: http://evil:8080
+  - service: http_status:404' "WILDCARD"
+  e2e_scan "e2e: retired hostname is REJECTED by the production scan" \
+    'ingress:
+  - hostname: es.fullfunding.nl
+    service: http://evil:8080
+  - service: http_status:404' "still declares retired-domain"
+  e2e_scan "e2e: clean config passes the production scan" \
+    'ingress:
+  - hostname: bleadingoptions.com
+    service: http://x:1
+  - service: http_status:404' "no wildcard and no retired-domain"
   struct_case "Ingress hostless rule is flagged" \
     'apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -490,75 +596,6 @@ fi
 # equals or ends in the retired suffix, in ANY quoting/wildcard form, (b) reject a hostless rule
 # whose service is not the terminal http_status:404, and (c) ask cloudflared ITSELF how each
 # retired URL resolves — the only authoritative answer — demanding http_status:404.
-retired_suffixes() { for h in $ABSENT_TUNNEL_HOSTS; do printf '%s\n' "$h"; done | awk -F. 'NF>2{print $(NF-1)"."$NF} NF==2{print}' | sort -u; }
-scan_config_for_retired() {  # label, config text
-  local label="$1" cfg="$2" sfx report
-  # STRUCTURAL hostname extraction (PyYAML): flow mappings ({hostname: x, path: y}), anchors/aliases
-  # and any indentation style are all covered — a sed/grep scan sees none of those reliably.
-  report="$(printf '%s\n' "$cfg" | python3 -c "
-import sys, yaml
-try:
-    doc = yaml.safe_load(sys.stdin) or {}
-    rules = doc.get('ingress') or []
-    if not isinstance(rules, list): raise ValueError('ingress is not a list')
-    hosts = [str(r.get('hostname', '')).strip().lower().rstrip('.')
-             for r in rules if isinstance(r, dict) and str(r.get('hostname', '')).strip()]
-    print('HOSTS ' + ' '.join(sorted(set(hosts))))
-except Exception as e:
-    print('PARSE_FAIL %s' % e)
-" 2>/dev/null)"
-  case "$report" in
-    HOSTS*) : ;;
-    *) bad "$label: could not structurally parse the ingress hostnames ($report)"; return ;;
-  esac
-  local hosts="${report#HOSTS }"
-  # Wildcards cannot be reasoned about safely: "*" and "*.nl" both MATCH the retired domain while
-  # containing none of its labels. In a retirement we own the config, so the rule is absolute —
-  # no wildcard hostname may exist at all.
-  local wild
-  wild="$(printf '%s\n' $hosts | grep -F '*' || true)"
-  if [ -n "$wild" ]; then
-    bad "$label declares WILDCARD hostname(s) — they can match the retired domain regardless of spelling: $(printf '%s' "$wild" | tr '\n' ' ')"
-  else
-    note "OK   $label declares no wildcard hostname"
-  fi
-  for sfx in $(retired_suffixes); do
-    local sfx_re bad_hosts
-    sfx_re="$(printf '%s' "$sfx" | sed 's/\./\\./g')"
-    # matches the apex itself, ANY subdomain of it, and wildcard forms ("*.sfx", "*.sub.sfx")
-    bad_hosts="$(printf '%s\n' $hosts | grep -E "(^|\.)${sfx_re}$" || true)"
-    if [ -n "$bad_hosts" ]; then
-      bad "$label still declares retired-domain hostname(s): $(printf '%s' "$bad_hosts" | tr '\n' ' ')"
-    else
-      note "OK   $label declares no hostname at or under '$sfx' (wildcards/flow-style included)"
-    fi
-  done
-  # Hostless rules are legal and match EVERY hostname, so only the terminal http_status:404 may be
-  # hostless. Parse the ingress list STRUCTURALLY (a rule's fields can appear in any order across
-  # multiple lines — a line-oriented scan misses `- path: …` + `service: …` on the next line).
-  local hostless_report
-  hostless_report="$(printf '%s\n' "$cfg" | python3 -c "
-import sys, yaml
-try:
-    doc = yaml.safe_load(sys.stdin) or {}
-    rules = doc.get('ingress') or []
-    if not isinstance(rules, list): raise ValueError('ingress is not a list')
-    offenders = [r for r in rules
-                 if isinstance(r, dict) and not str(r.get('hostname', '')).strip()
-                 and str(r.get('service', '')).strip() != 'http_status:404']
-    if offenders:
-        print('OFFENDERS ' + '; '.join(repr(o) for o in offenders))
-    else:
-        print('CLEAN')
-except Exception as e:
-    print('PARSE_FAIL %s' % e)
-" 2>/dev/null)"
-  case "$hostless_report" in
-    CLEAN) note "OK   $label has no hostless rule other than the terminal 404" ;;
-    OFFENDERS*) bad "$label has HOSTLESS ingress rule(s) that are not http_status:404 — they answer for EVERY hostname incl. the retired domain: ${hostless_report#OFFENDERS }" ;;
-    *) bad "$label: could not structurally parse the ingress list to prove no hostless rule ($hostless_report)" ;;
-  esac
-}
 if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   scan_config_for_retired "live tunnel config" "$live_raw"
   scan_config_for_retired "repo canonical config" "$(cat "$REPO_COPY")"
@@ -675,9 +712,7 @@ for h in $SERVE_APEX; do
   # cloudflared's OWN first-match resolution is authoritative: a text parser cannot see rule order
   # across flow mappings/aliases, and a SHADOWED wrong rule (e.g. an earlier :8091 ServiceLB entry)
   # would otherwise be invisible — the 2026-07-31 incident proved a broken route still 401s.
-  ws_target="$(run "cloudflared tunnel --config '$LIVE_PATH' ingress rule 'https://$h/ws/events' 2>/dev/null" | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
-  [ -n "$ws_target" ] || ws_target="$(ws_target_for "$h" "$live_raw")"   # fallback: parser
-  note "     $h/ws/events -> ${ws_target:-<unset>} (resolved by cloudflared)"
+  ws_target="$(resolve_ws_target "$h")"
   case "$ws_target" in
     *:8091*) bad "$h/ws/events points at the :8091 ServiceLB — klipper-lb DROPS the WebSocket upgrade (2026-07-31 outage)" ;;
     *:3[0-9][0-9][0-9][0-9]*) note "OK   $h/ws/events uses a NodePort" ;;
@@ -698,9 +733,7 @@ ES4_GW_SVC="${ES4_GW_SVC:-es-feed-gateway}"
 es4_np="$(es4_kubectl "get svc $ES4_GW_SVC -o jsonpath='{.spec.ports[0].nodePort}'")"
 [ -n "$es4_np" ] || unavailable "could not read es4 $ES4_GW_SVC nodePort"
 for h in $SERVE_ES; do
-  ws_target="$(run "cloudflared tunnel --config '$LIVE_PATH' ingress rule 'https://$h/ws/events' 2>/dev/null" | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
-  [ -n "$ws_target" ] || ws_target="$(ws_target_for "$h" "$live_raw")"
-  note "     $h/ws/events -> ${ws_target:-<unset>} (resolved by cloudflared)"
+  ws_target="$(resolve_ws_target "$h")"
   if [ -n "$es4_np" ]; then
     if [ "$ws_target" = "http://192.168.100.4:$es4_np" ]; then
       note "OK   $h/ws/events targets the es4 NodePort $es4_np"
