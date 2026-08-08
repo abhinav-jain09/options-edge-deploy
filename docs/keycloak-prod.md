@@ -166,6 +166,7 @@ RESCUE="$(mktemp /var/tmp/kc-rotation-rescue.XXXXXX)" \
   || { echo "ABORT: could not persist the rescue file — nothing was changed" >&2
        # A partially-written file may still hold the OLD password: destroy it, and say so if
        # even that fails (exit 6 = manual cleanup required, still nothing mutated).
+       release_lock   # nothing was mutated — safe to free the fence
        if [ -n "${RESCUE:-}" ] && [ -e "$RESCUE" ]; then
          rm -f "$RESCUE" 2>/dev/null
          [ -e "$RESCUE" ] && { echo "  AND the partial rescue file could not be removed — delete $RESCUE by hand" >&2; exit 6; }
@@ -174,9 +175,13 @@ RESCUE="$(mktemp /var/tmp/kc-rotation-rescue.XXXXXX)" \
 # The traps EXIT — with no -e, a print-only trap would let an interrupted `sleep` fall straight
 # through into reconciliation INSIDE the quiesce window, exactly the delayed-commit race the
 # fence exists to prevent. Distinct codes: 130 = SIGINT, 143 = SIGTERM.
-trap 'release_lock' EXIT
-trap 'echo "INTERRUPTED (SIGINT) mid-rotation — candidates preserved at $RESCUE (mode 0600). WAIT >=40s (the pod-side write fence) before inspecting or changing EITHER state, then reconcile by hand" >&2; exit 130' INT
-trap 'echo "TERMINATED (SIGTERM) mid-rotation — candidates preserved at $RESCUE (mode 0600). WAIT >=40s (the pod-side write fence) before inspecting or changing EITHER state, then reconcile by hand" >&2; exit 143' TERM
+# NO unconditional EXIT release: on interrupt/indeterminate outcomes the state may still need
+# manual reconciliation, and the lock is what stops a second operator from racing it — those
+# paths deliberately RETAIN the lock (delete kc-rotation-lock yourself once reconciled). The
+# lock is released explicitly only where the state is proven consistent, or where nothing was
+# ever mutated.
+trap 'echo "INTERRUPTED (SIGINT) mid-rotation — candidates preserved at $RESCUE (mode 0600). WAIT >=40s (the pod-side write fence) before inspecting or changing EITHER state, then reconcile by hand. kc-rotation-lock is RETAINED until you delete it" >&2; exit 130' INT
+trap 'echo "TERMINATED (SIGTERM) mid-rotation — candidates preserved at $RESCUE (mode 0600). WAIT >=40s (the pod-side write fence) before inspecting or changing EITHER state, then reconcile by hand. kc-rotation-lock is RETAINED until you delete it" >&2; exit 143' TERM
 # Client-side `timeout 60` is the real bound: --request-timeout limits one API request and
 # --pod-running-timeout only the wait-for-running — neither bounds the remote command itself. An
 # expiry here is exactly the "ambiguous transport" case the reconciler already handles.
@@ -204,6 +209,7 @@ patch_secret() {  # via stdin (no argv exposure), 3 bounded attempts
 indeterminate() {  # the rescue file was verified-written BEFORE the first mutation — point at it
   echo "ROTATION INDETERMINATE: $1" >&2
   echo "  both candidate values remain at $RESCUE (mode 0600) — reconcile by hand, then shred it" >&2
+  echo "  kc-rotation-lock is RETAINED so nobody races your manual reconciliation — delete it when done" >&2
   exit 3
 }
 shred_rescue() {  # only after an end-state proof; VERIFIED destruction, and the trap is retired
@@ -238,10 +244,12 @@ if [ "$TARGET" = "$OLD_PW" ]; then
   # Consistent, but NOT rotated — the write never took. End state is proven, so the rescue file
   # (which holds the unused NEW value) is shredded; exit nonzero so nothing upstream treats this
   # safe-rollback state as a completed rotation; retry the sequence.
+  release_lock             # state proven consistent — the fence has done its job
   shred_rescue || exit 5   # exit 5: state consistent but credential material left on disk
   echo "rotation DID NOT complete: converged back on the OLD password (consistent; retry needed)" >&2
   exit 4
 fi
+release_lock
 shred_rescue || exit 5   # exit 5: rotation done but credential material left on disk — clean up first
 echo "rotation converged on the NEW password"
 # final gate — pass the CURRENT migration phase explicitly (dual | redirect | retired):
