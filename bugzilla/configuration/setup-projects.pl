@@ -1747,7 +1747,27 @@ my $ok = eval {
         . 'to be configuration-only. Restore from the backup taken in runbook '
         . 'step 3 and do not restart the web tier until you know why.')
       if $rows != $BUG_ROWS_BEFORE || $after ne $BUG_DIGEST_BEFORE;
-    note("verified: all $rows existing bug row(s) are byte-for-byte unchanged");
+    note("verified: all $rows pre-existing column(s) of all $rows existing bug "
+        . 'row(s) are byte-for-byte unchanged');
+
+    # The columns we ADDED are not in that digest, and they are not empty
+    # either: Bugzilla defines a single-select as
+    # varchar(64) NOT NULL DEFAULT '---' (Field.pm SQL_DEFINITIONS), so the
+    # ALTER stamps the unset sentinel onto every existing row. That is
+    # unavoidable for any custom field. What must be true is that the sentinel
+    # is ALL it wrote - so assert exactly that rather than looking away.
+    my %before = map { $_ => 1 } @BUG_COLUMNS_BEFORE;
+    foreach my $name (sort keys %{$STATE->{fields}}) {
+      next if $before{$name};
+      my ($odd) = $dbh->selectrow_array(
+        "SELECT COUNT(*) FROM bugs WHERE $name IS NULL OR $name <> '---'");
+      fatal("$name holds a value other than the unset sentinel on $odd "
+          . 'existing bug(s). Creating the field was supposed to leave them '
+          . 'unset; restore from the backup.')
+        if $odd;
+      note("verified: $name is the unset sentinel '---' on every pre-existing "
+          . 'bug - the only thing adding the column wrote');
+    }
   }
 
   # Only meaningful once everything above is in place.

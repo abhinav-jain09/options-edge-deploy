@@ -19,9 +19,13 @@ provisioner and the SSOT are bind-mounted read-only from this repository, so wha
 reviewed. The verifier and the backup/restore scripts run from the host.
 
 > **This installation is live.** It holds 177 bugs in `OptionsEdge` and four products created by
-> separate work. Applying this configuration changes **no existing bug's data**: no status is
-> renamed, no mandatory field is added, nothing is migrated. It does add two *nullable* columns to
-> the `bugs` table (`ALTER TABLE`), which existing rows acquire as empty.
+> separate work. No status is renamed, no field is made mandatory, nothing is migrated.
+>
+> One thing does reach the existing rows, and it is unavoidable: a Bugzilla custom select is
+> `varchar(64) NOT NULL DEFAULT '---'`, so adding the Category and Environment fields writes that
+> unset sentinel into all 177 rows. No NULL-able custom field exists in Bugzilla. The provisioner
+> **proves** that is all that happened — every pre-existing column digested before and after, and
+> each new column asserted to be exactly `---` on every pre-existing row.
 >
 > The issue type is **derived from the product** — `OptionsEdge`/`Fullfunding` are BUG,
 > `* Requirements` are REQUIREMENT — so there is no per-bug type field to backfill.

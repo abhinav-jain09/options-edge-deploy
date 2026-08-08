@@ -20,12 +20,13 @@ created by separate work:
 Two constraints follow, and they decide almost everything below: **the four products are adopted,
 not replaced**, and **no existing bug's data may be modified**.
 
-Stated precisely, because the difference matters: applying this configuration changes no *value* of
-any existing bug. It does add two nullable columns to `bugs` (`Bugzilla::Field->create` issues
-`ALTER TABLE`), which existing rows acquire as empty — and depending on the MariaDB version and DDL
-algorithm, that `ALTER` may rebuild the table physically. What it never does is change a status,
-resolution, product or any other field of a bug that already exists. The provisioner **proves** that
-by digesting every pre-existing row before and after and refusing to finish if anything differs.
+Applying this configuration adds two custom fields, and in Bugzilla a custom select
+is `varchar(64) NOT NULL DEFAULT '---'` (`Field.pm` SQL_DEFINITIONS) — so the `ALTER TABLE` writes
+the unset sentinel `---` into all 177 existing rows. There is no way to add a category field without
+that; a NULL-able custom field does not exist in Bugzilla. What the design guarantees, and what the
+provisioner **proves**, is that this is ALL that happens to them: every pre-existing column of every
+existing bug is digested before and after and must be byte-for-byte identical, and each new column is
+asserted to hold exactly `---` on every pre-existing row.
 
 The constraint is not a preference, it is arithmetic. A mandatory custom select over a populated
 table gives all 177 rows the `---` sentinel. And a status rename is not metadata: Bugzilla

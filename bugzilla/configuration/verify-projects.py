@@ -74,6 +74,12 @@ def eq(name, got, want):
 warnings = []
 
 
+def _unset(value):
+    """Bugzilla stores an unset select as '---' (varchar(64) NOT NULL DEFAULT
+    '---'), so normalise that and the empty string to the same thing."""
+    return "" if value in (None, "", "---") else value
+
+
 def skip(name, why):
     print(f"  ....  {name} - {why}")
 
@@ -672,6 +678,8 @@ class Walker:
         # leaves the pre-existing bugs untouched.
         self.expect_allowed(f"{issue_type}: category cleared", bug_id,
                             cf_category="---")
+        eq(f"{issue_type}: category really is unset",
+           _unset(self.state_of(bug_id)[3]), "")
 
     def probe_product_moves(self, bug_id, issue_type):
         """The product IS the type, so a cross-type move would change the
@@ -792,7 +800,10 @@ def verify_creation_guards(w):
     st, b = w.file(product, component, "BUG", "---")
     if check("file a BUG with no category", st < 400 and b.get("id"),
              f"HTTP {st}: {json.dumps(b)[:200]}"):
-        eq("BUG filed with no category has none", w.state_of(b["id"])[3], "")
+        # '---' is Bugzilla's unset sentinel for a select field, and it is what
+        # REST returns - not an empty string.
+        eq("BUG filed with no category is unset",
+           _unset(w.state_of(b["id"])[3]), "")
 
     print("  ....  issue_type_initial_status_unavailable, "
           "issue_type_initial_status_needs_comment and "
@@ -974,7 +985,7 @@ def close_smoke_bugs(w):
                 and status in w.enf["allowed_statuses"][issue_type]
                 and (not resolution
                      or resolution in w.enf["allowed_resolutions"][issue_type])
-                and (not category
+                and (not _unset(category)
                      or category in w.enf["allowed_categories"][issue_type]))
             if not valid:
                 stuck.append(f"{bug_id} (policy-invalid: {product}/{status}/"
