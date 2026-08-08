@@ -66,37 +66,79 @@ use constant ALLOWED_RESOLUTIONS => {
   REQUIREMENT => {map { $_ => 1 } qw(IMPLEMENTED REJECTED DEFERRED DUPLICATE)},
 };
 
+# The category vocabulary is compiled in as well as being expressed in the
+# database (each cf_category value's visibility_value_id). Both must agree.
+#
+# Reading only the database would make an administrator's editvalues.cgi edit
+# the policy: adding a category would silently widen the vocabulary, and
+# re-pointing one would silently change what an already-stored item means.
+# Reading only the constants would miss a value that has been re-pointed. So a
+# category is accepted only if the constant AND the live controller agree.
+use constant ALLOWED_CATEGORIES => {
+  BUG => {
+    map { $_ => 1 }
+      qw(BUG_INFRA BUG_CODE BUG_CONFIG BUG_DATA BUG_INTEGRATION BUG_CI_CD
+      BUG_SECURITY BUG_PERFORMANCE BUG_RELIABILITY BUG_TEST BUG_DOCUMENTATION)
+  },
+  REQUIREMENT => {
+    map { $_ => 1 }
+      qw(REQ_COSMETIC REQ_LOGIC REQ_WORKFLOW REQ_DATA REQ_INTEGRATION
+      REQ_ACCESS_CONTROL REQ_SECURITY REQ_COMPLIANCE REQ_PERFORMANCE
+      REQ_OPERABILITY REQ_REPORTING REQ_DOCUMENTATION)
+  },
+};
+
+# Set by setup-projects.pl once the whole model is in place. See lib/Config.pm.
+use constant ENFORCED_PARAM => 'issue_type_workflow_enforced';
+
 # Stable WebService codes for the errors this extension raises, so a caller (and
 # verify-projects.py) can tell "the policy refused this" apart from an auth
 # failure, a 404 or a 500. Bugzilla reserves codes below 100000 for itself.
 # Codes not in REST_STATUS_CODE_MAP fall through to its _default, HTTP 400.
 use constant ERROR_CODES => {
-  issue_type_required                   => 100001,
-  issue_type_unknown                    => 100002,
-  issue_category_required               => 100003,
-  issue_category_mismatch               => 100004,
-  issue_type_initial_status_unavailable => 100005,
+  issue_type_required                    => 100001,
+  issue_type_unknown                     => 100002,
+  issue_category_required                => 100003,
+  issue_category_mismatch                => 100004,
+  issue_type_initial_status_unavailable  => 100005,
+  issue_type_initial_status_needs_comment => 100006,
+  issue_type_workflow_misconfigured      => 100007,
 };
 
 #############################
 # Provisioning-state helpers #
 #############################
 
-# Enforcement stays off until setup-projects.pl has finished, because the very
-# first checksetup.pl run loads extensions before the custom fields exist.
+# Enforcement has three states, not two.
 #
-# "Finished" means the whole model is in place - both fields, both issue-type
-# values and every status either lifecycle can reach. Checking only that the
-# fields exist would leave enforcement running against a half-provisioned
-# installation (or off entirely, between the two ALTER TABLEs).
+#   off    - issue_type_workflow_enforced is unset. The installation has not
+#            been provisioned yet (this is also what lets the very first
+#            checksetup.pl run load the extension before the fields exist).
+#            Nothing is enforced.
+#   on     - the parameter is set and the whole model is present. Normal policy.
+#   broken - the parameter is set but something the model needs has been
+#            removed or renamed. Every guarded change is refused until
+#            setup-projects.pl has been re-run.
 #
-# Only a positive answer is cached. A negative answer must not be remembered:
-# a long-lived mod_perl process that once saw an unprovisioned database would
-# otherwise stay permanently fail-open.
-sub _is_provisioned {
+# The 'broken' state is the whole point of having a persistent marker: without
+# it, deleting one status through editvalues.cgi would silently turn
+# enforcement off instead of stopping the installation.
+#
+# Only 'on' is cached. A negative answer must never be remembered, or a
+# long-lived mod_perl worker that once saw an unprovisioned database would stay
+# permanently fail-open.
+sub _enforcement_state {
   my $cache = Bugzilla->request_cache;
-  return 1 if $cache->{itw_provisioned};
+  return 'on' if $cache->{itw_enforcing};
 
+  return 'off' if !Bugzilla->params->{+ENFORCED_PARAM};
+  return 'broken' if !_model_is_complete();
+
+  $cache->{itw_enforcing} = 1;
+  return 'on';
+}
+
+sub _model_is_complete {
   return 0 if !Bugzilla::Field->new({name => TYPE_FIELD});
   return 0 if !Bugzilla::Field->new({name => CATEGORY_FIELD});
 
@@ -113,7 +155,7 @@ sub _is_provisioned {
     return 0 if !Bugzilla::Status->new({name => $status});
   }
 
-  return $cache->{itw_provisioned} = 1;
+  return 1;
 }
 
 sub _is_known_type {
@@ -134,10 +176,8 @@ sub _category_of {
   return $bug->can($accessor) ? $bug->$accessor : $bug->{+CATEGORY_FIELD};
 }
 
-# The category vocabulary is NOT duplicated here. Bugzilla already stores which
-# issue type each cf_category value belongs to, in that value's
-# visibility_value_id (cf_category.value_field is cf_issue_type), so we read the
-# authoritative answer straight from the configuration we provisioned.
+# A category is valid for a type only if the compiled-in vocabulary and the live
+# configuration BOTH say so (see ALLOWED_CATEGORIES).
 #
 # Note Bugzilla 5.2 allows exactly ONE controlling value per field value - the
 # value tables carry a single visibility_value_id column - which is why the two
@@ -150,6 +190,9 @@ sub _category_matches_type {
   my ($type, $category) = @_;
 
   return 0 if !defined $category || $category eq '' || $category eq UNSET;
+
+  # The declared vocabulary. An administrator cannot widen it from the admin UI.
+  return 0 if !ALLOWED_CATEGORIES->{$type}{$category};
 
   my $choice
     = Bugzilla::Field::Choice->type(CATEGORY_FIELD)->new({name => $category});
@@ -197,7 +240,13 @@ sub bug_check_can_change_field {
     = @$args{qw(bug field new_value priv_results)};
 
   return if !defined $field || !GUARDED_FIELDS->{$field};
-  return if !_is_provisioned();
+
+  my $state = _enforcement_state();
+  return if $state eq 'off';
+
+  # Something the model needs has gone missing. Refuse every guarded change
+  # rather than quietly reverting to no policy at all.
+  return _deny($priv_results) if $state eq 'broken';
 
   # New bugs are handled by bug_end_of_create_validators; there is no stored
   # type to judge against until the bug exists.
@@ -256,7 +305,9 @@ sub bug_end_of_create_validators {
   my ($self, $args) = @_;
   my $params = $args->{params};
 
-  return if !_is_provisioned();
+  my $state = _enforcement_state();
+  return if $state eq 'off';
+  ThrowUserError('issue_type_workflow_misconfigured') if $state eq 'broken';
 
   my $type = $params->{+TYPE_FIELD};
   ThrowUserError('issue_type_required')
@@ -285,6 +336,16 @@ sub bug_end_of_create_validators {
     {issue_type => $type, status => $wanted})
     if !$initial;
 
+  # Core validated the comment requirement of the status the caller asked for,
+  # not of the one we are substituting.
+  my $needs_comment = $initial->comment_required_on_change_from(undef);
+  my $comment       = $params->{comment};
+  my $has_comment
+    = ref($comment) ? 1 : (defined $comment && $comment =~ /\S/) ? 1 : 0;
+  ThrowUserError('issue_type_initial_status_needs_comment',
+    {issue_type => $type, status => $wanted})
+    if $needs_comment && !$has_comment;
+
   $params->{bug_status} = $initial;
 
   # _check_bug_status derived everconfirmed from the status it saw (Bug.pm:1584),
@@ -294,6 +355,13 @@ sub bug_end_of_create_validators {
   # Both entry points are open statuses; an item may never be born resolved.
   $params->{resolution} = '';
 
+  return;
+}
+
+sub config_add_panels {
+  my ($self, $args) = @_;
+  $args->{panel_modules}{IssueTypeWorkflow}
+    = 'Bugzilla::Extension::IssueTypeWorkflow::Config';
   return;
 }
 

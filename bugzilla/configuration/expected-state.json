@@ -11,8 +11,17 @@
   "bugzilla_version": "5.2",
 
   "params": {
-    "duplicate_or_move_bug_status": "RESOLVED"
+    "duplicate_or_move_bug_status": "RESOLVED",
+    "useclassification": "0",
+    "issue_type_workflow_enforced": "1"
   },
+  "_params_comment": [
+    "issue_type_workflow_enforced is the extension's persistent 'this installation is",
+    "provisioned' marker (extensions/IssueTypeWorkflow/lib/Config.pm). While it is off nothing",
+    "is enforced, which is what lets the first checksetup.pl run load the extension before the",
+    "fields exist. Once on, any missing piece of the model makes every guarded change FAIL",
+    "CLOSED instead of silently reverting to no policy. setup-projects.pl sets it last."
+  ],
 
   "issue_types": ["BUG", "REQUIREMENT"],
 
@@ -178,6 +187,21 @@
     },
     "issue_type_immutable": true,
 
+    "_allowed_categories_comment": [
+      "Mirrors Extension.pm's ALLOWED_CATEGORIES. The extension compiles the vocabulary in as",
+      "well as reading each value's live controller, and requires both to agree - otherwise an",
+      "editvalues.cgi edit would silently be a policy change. setup-projects.pl asserts this",
+      "list matches the cf_category values above AND the extension's constants."
+    ],
+    "allowed_categories": {
+      "BUG": ["BUG_INFRA", "BUG_CODE", "BUG_CONFIG", "BUG_DATA", "BUG_INTEGRATION", "BUG_CI_CD",
+              "BUG_SECURITY", "BUG_PERFORMANCE", "BUG_RELIABILITY", "BUG_TEST",
+              "BUG_DOCUMENTATION"],
+      "REQUIREMENT": ["REQ_COSMETIC", "REQ_LOGIC", "REQ_WORKFLOW", "REQ_DATA", "REQ_INTEGRATION",
+                      "REQ_ACCESS_CONTROL", "REQ_SECURITY", "REQ_COMPLIANCE", "REQ_PERFORMANCE",
+                      "REQ_OPERABILITY", "REQ_REPORTING", "REQ_DOCUMENTATION"]
+    },
+
     "_error_codes_comment": [
       "illegal_change (115) is core Bugzilla's, raised whenever the extension denies an",
       "UPDATE via priv_results; REST maps it to HTTP 401. The 1000xx codes are the",
@@ -192,7 +216,9 @@
         "issue_type_unknown": 100002,
         "issue_category_required": 100003,
         "issue_category_mismatch": 100004,
-        "issue_type_initial_status_unavailable": 100005
+        "issue_type_initial_status_unavailable": 100005,
+        "issue_type_initial_status_needs_comment": 100006,
+        "issue_type_workflow_misconfigured": 100007
       }
     }
   },
@@ -202,6 +228,7 @@
       "name": "optionedge",
       "description": "OptionEdge trading platform - market-data feeds, stream processing, gateway, UI and the ES4 futures environment.",
       "is_active": true,
+      "classification": "Unclassified",
       "allows_unconfirmed": true,
       "default_milestone": "---",
       "versions": ["unspecified"],
@@ -223,6 +250,7 @@
       "name": "fullfunding",
       "description": "FullFunding requirements portal and its supporting domain, identity and edge infrastructure.",
       "is_active": true,
+      "classification": "Unclassified",
       "allows_unconfirmed": true,
       "default_milestone": "---",
       "versions": ["unspecified"],
@@ -242,6 +270,6 @@
 
   "decommission": {
     "products": ["TestProduct"],
-    "_comment": "Removed only after verification passes and only when bug_count is 0; otherwise deactivated and reported."
+    "_comment": "Opt-in only (--remove-decommissioned), and only after verification has passed. The script ABORTS if the product still holds bugs - it does not deactivate it, because a half-retired product is worse than an obvious failure. Closing bugs does not help; they must be moved to another product or deleted."
   }
 }

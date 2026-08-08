@@ -75,9 +75,24 @@ get the same policy:
 - **`bug_end_of_create_validators`** — creation. Requires a type and a matching category, and
   canonicalises the entry status (BUG → `UNCONFIRMED`, REQUIREMENT → `REQ_DRAFT`).
 
-The category vocabulary is **not** duplicated in the extension: Bugzilla already stores which issue
-type each `cf_category` value belongs to (`visibility_value_id`), so the extension reads the
-authoritative answer from the configuration it was given.
+Enforcement has **three** states, not two. A persistent parameter,
+`issue_type_workflow_enforced`, records that the installation has been provisioned:
+
+| marker | model complete | behaviour |
+|---|---|---|
+| off | — | nothing enforced (this is what lets the first `checksetup.pl` load the extension before the fields exist) |
+| on | yes | normal policy |
+| on | no | **every guarded change refused** until the provisioner is re-run |
+
+That third row is why the marker exists. Without it the extension could only ask "does the model look
+complete?", and an administrator renaming one status in `editvalues.cgi` would silently switch
+enforcement off for the whole installation instead of stopping it.
+
+The category vocabulary is held **both** as a compiled-in list and as each value's live controller
+(`visibility_value_id`), and both must agree. Reading only the database would make an
+`editvalues.cgi` edit a policy change — adding a category would widen the vocabulary, re-pointing one
+would change what already-stored items mean. Reading only the constants would miss a value that had
+been re-pointed. Requiring both closes each hole with the other.
 
 **Bulk edits cannot half-apply.** `Bugzilla::WebService::Bug::update` wraps its whole loop in one
 transaction (`Bug.pm` REST path), and `process_bug.cgi` calls `set_all` on *every* selected bug
@@ -131,12 +146,24 @@ and, before touching anything, it:
 - audits every existing item against the model and aborts if any of them violates it — the extension
   validates fields as they change, so it can never repair an item that was already inconsistent.
 
-During the run it takes a `GET_LOCK` and re-asserts ownership before each destructive phase (the lock
-is connection-scoped and a silent reconnect would drop it), rewrites `status_workflow` in one
-transaction with a read-back comparison and an explicit rollback, and treats a failed cache flush as
-fatal. Anything active but undeclared — an extra status, resolution, field value, component, version
-or milestone — aborts the run rather than being tolerated, so "converged" means the same thing to the
-script and to the verifier.
+Anything present but undeclared — an extra status, resolution, field value, component, version or
+milestone — aborts the run. That check lives in **preflight**, so a predictable failure cannot leave
+a half-provisioned installation and a dry run cannot report "nothing to do" against something the
+verifier would reject. Deactivating an extra is not a valid remedy: REST cannot report it, so the two
+tools would disagree.
+
+During the run it takes a `GET_LOCK` and re-asserts ownership before **every** mutation — each one is
+announced through a single `plan()` chokepoint, which is where the check lives, because the lock is
+connection-scoped and a silent reconnect would drop it. It rewrites `status_workflow` in one
+transaction with a multiset read-back comparison and an explicit rollback, and treats a failed cache
+flush as fatal. The very last thing it does is arm `issue_type_workflow_enforced`, after a second
+audit of every item — arming it earlier, or over items the new mandatory fields had just left
+unset, would take the installation down.
+
+Backup and restore are scripts rather than pasted commands (`backup.sh`, `restore-backup.sh`): the
+backup verifies the dump's own completion footer, because a failed `mariadb-dump` still yields a
+valid *empty* gzip, and the restore verifies everything before it drops anything and leaves Apache
+stopped if any step fails.
 
 The script, the extension and the verifier live in this repository and are bind-mounted read-only
 into the container — the Bugzilla runtime checkout itself is not version controlled, and this design
@@ -165,18 +192,24 @@ exactly like successful enforcement.
 - The extension duplicates the status/resolution policy as Perl constants (it must not depend on a
   config file at runtime). The provisioner asserts they match the JSON on every run, and
   `verify-projects.py` proves them behaviourally.
-- An administrator can still move the goalposts through `editvalues.cgi`/`editworkflow.cgi` — for
-  example by re-pointing a category's controlling issue type. The extension reads category ownership
-  from that configuration by design, so such an edit changes policy immediately and existing items
-  are not re-audited. Re-running the provisioner is what detects it.
+- An administrator editing `editvalues.cgi`/`editworkflow.cgi` can no longer widen policy — the
+  compiled-in vocabulary and the fail-closed marker see to that — but they can still make the
+  installation *stop working* (which is the intended direction), and items stored before such an edit
+  are not re-audited. Re-running the provisioner is what detects and reports it.
+- REST exposes no `is_active` for generic field values and no `sortkey`/`buglist`/`obsolete` for
+  fields, so the verifier cannot prove those. They are covered instead by the provisioner's
+  zero-action dry run, which compares exactly those attributes — the two together are the
+  verification, neither alone.
 - Every Bugzilla upgrade must re-run `verify-projects.py` before the instance takes traffic: a
   changed hook signature would silently stop enforcement or block editing.
 - The verifier talks plain HTTP on the LAN, so its API key is sniffable; run it on `.252` against
   `localhost` and revoke the key afterwards.
 - A dry run makes no persistent change, but it is not literally inert: it opens a database
   connection and takes a server-side advisory lock.
-- The low-privilege-reporter path is covered only by proxy (filing a REQUIREMENT that asks for
-  `UNCONFIRMED`, which exercises the same override in `Bug.pm`); the verifier does not create a
-  second account.
+- The low-privilege-reporter path (`Bug.pm:1526-1536`) is only *really* covered if you hand the
+  verifier an API key for a user without `editbugs`/`canconfirm`, via `--reporter-api-key-env`. The
+  verifier creates no accounts, and without that key it reports the check as **failed/unproven**
+  rather than quietly passing: an admin asking for `UNCONFIRMED` exercises the canonicalisation but
+  not the privilege-dependent override.
 - `REQ_APPROVED` is a state, not an authorisation. Restricting it to named approvers needs a group
   check that is deliberately not built yet.

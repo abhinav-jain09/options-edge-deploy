@@ -26,4 +26,18 @@
   new item. The status workflow no longer matches the configured lifecycles —
   re-run <em>setup-projects.pl</em>.
 
+[% ELSIF error == "issue_type_initial_status_needs_comment" %]
+  [% title = "Comment Required" %]
+  Items of type <em>[% issue_type FILTER html %]</em> are created in status
+  <em>[% status FILTER html %]</em>, and the workflow requires a comment for
+  that transition. Please describe the item.
+
+[% ELSIF error == "issue_type_workflow_misconfigured" %]
+  [% title = "Issue Type Workflow Is Misconfigured" %]
+  This installation is marked as enforcing the issue-type lifecycles, but part
+  of the configuration they depend on is missing — a custom field, an issue
+  type or a status has been removed or renamed. Changes are blocked until
+  <em>setup-projects.pl</em> has been re-run. This is deliberate: the
+  alternative would be to silently stop enforcing the lifecycles.
+
 [% END %]

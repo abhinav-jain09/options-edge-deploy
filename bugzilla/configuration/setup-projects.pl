@@ -105,6 +105,13 @@ my $DRY     = !$OPT{apply};
 
 sub plan {
   my ($msg) = @_;
+
+  # Every persistent change in this script is announced through plan() first,
+  # so this is the one place that can guarantee we still hold the advisory lock
+  # at the moment we mutate. GET_LOCK is connection-scoped and a silent
+  # reconnect drops it, which would let a second run race this one.
+  assert_lock_held($msg);
+
   push @PLAN, $msg;
   $APPLIED++ if !$DRY;
   printf("%s %s\n", $DRY ? '[plan ]' : '[apply]', $msg);
@@ -186,7 +193,12 @@ sub validate_state {
       if !$seen_edge{"$status|$dup"};
   }
 
-  my %resolution_names = map { $_->{value} => 1 } @{$STATE->{resolutions}};
+  my %resolution_names;
+  foreach my $resolution (@{$STATE->{resolutions}}) {
+    fatal("duplicate resolution '$resolution->{value}'")
+      if $resolution_names{$resolution->{value}}++;
+  }
+
   foreach my $field (sort keys %{$STATE->{fields}}) {
     my %value_names;
     foreach my $value (@{$STATE->{fields}{$field}{values}}) {
@@ -197,10 +209,16 @@ sub validate_state {
 
   my %type_values
     = map { $_->{value} => 1 } @{$STATE->{fields}{cf_issue_type}{values}};
+  my %seen_type;
   foreach my $type (@{$STATE->{issue_types}}) {
+    fatal("duplicate entry '$type' in issue_types") if $seen_type{$type}++;
     fatal("issue_types lists '$type', which is not a cf_issue_type value")
       if !$type_values{$type};
   }
+  fatal('issue_types does not cover every cf_issue_type value')
+    if keys %type_values != keys %seen_type;
+
+  my %status_is_open = map { $_->{value} => $_->{is_open} } @{$STATE->{statuses}};
   foreach my $value (@{$STATE->{fields}{cf_category}{values}}) {
     fatal("category '$value->{value}' is controlled by unknown type "
         . "'$value->{controlled_by}'")
@@ -225,9 +243,26 @@ sub validate_state {
           . "resolution '$resolution'")
         if !$resolution_names{$resolution};
     }
+    my $initial = $enf->{initial_status}{$type};
     fatal("enforcement.initial_status['$type'] is not in allowed_statuses")
-      if !grep { $_ eq $enf->{initial_status}{$type} }
-      @{$enf->{allowed_statuses}{$type}};
+      if !grep { $_ eq $initial } @{$enf->{allowed_statuses}{$type}};
+
+    # If the entry point has no creation edge, items of this type could never
+    # be filed at all - the extension canonicalises to it unconditionally.
+    fatal("initial status '$initial' for '$type' has no bug-creation edge")
+      if !$seen_edge{"|$initial"};
+    fatal("initial status '$initial' for '$type' is a closed status")
+      if !$status_is_open{$initial};
+
+    # The category vocabulary is compiled into the extension as well as being
+    # expressed as each value's controller, so all three must agree.
+    my @declared_categories
+      = sort map { $_->{controlled_by} eq $type ? $_->{value} : () }
+      @{$STATE->{fields}{cf_category}{values}};
+    my @enforced_categories = sort @{$enf->{allowed_categories}{$type} || []};
+    fatal("enforcement.allowed_categories['$type'] does not match the "
+        . 'cf_category values controlled by that type')
+      if join('|', @declared_categories) ne join('|', @enforced_categories);
   }
 
   my %product_names;
@@ -241,6 +276,16 @@ sub validate_state {
     foreach my $component (@{$product->{components}}) {
       fatal("duplicate component '$component->{name}' in '$product->{name}'")
         if $component_names{$component->{name}}++;
+    }
+    my %version_names;
+    foreach my $version (@{$product->{versions}}) {
+      fatal("duplicate version '$version' in '$product->{name}'")
+        if $version_names{$version}++;
+    }
+    my %milestone_names;
+    foreach my $milestone (@{$product->{milestones}}) {
+      fatal("duplicate milestone '$milestone' in '$product->{name}'")
+        if $milestone_names{$milestone}++;
     }
   }
 
@@ -274,7 +319,8 @@ sub validate_extension_agreement {
 
   foreach my $pair (
     ['ALLOWED_STATUSES',    $enf->{allowed_statuses}],
-    ['ALLOWED_RESOLUTIONS', $enf->{allowed_resolutions}]
+    ['ALLOWED_RESOLUTIONS', $enf->{allowed_resolutions}],
+    ['ALLOWED_CATEGORIES',  $enf->{allowed_categories}]
     )
   {
     my ($name, $want) = @$pair;
@@ -391,8 +437,80 @@ sub preflight {
   }
 
   audit_existing_bugs(\%renamed_from);
+  assert_nothing_undeclared();
 
   note("preflight OK (Bugzilla $version, acting as " . $admin->login . ')');
+  return;
+}
+
+# Anything present but undeclared is divergence we cannot reason about. This
+# runs in PREFLIGHT - before any mutation and in dry runs too - so a predictable
+# failure cannot leave a half-provisioned installation, and so a dry run cannot
+# print "nothing to do" against an installation the verifier would reject.
+#
+# Inactive objects count as undeclared: Bugzilla's REST serialisation of generic
+# choice values carries no is_active flag, so the verifier cannot tell them
+# apart and would fail on them. Deactivating an extra is therefore NOT a valid
+# remediation - delete it, or declare it.
+sub assert_nothing_undeclared {
+  my @problems;
+
+  foreach my $field_name (sort keys %{$STATE->{fields}}) {
+    next if !Bugzilla::Field->new({name => $field_name});
+    my %declared
+      = map { $_->{value} => 1 } @{$STATE->{fields}{$field_name}{values}};
+    my @extra
+      = grep { $_ ne '' && $_ ne '---' && !$declared{$_} }
+      map { $_->name }
+      @{Bugzilla::Field::Choice->type($field_name)->match({})};
+    push @problems, "$field_name value(s): " . join(', ', sort @extra) if @extra;
+  }
+
+  my %declared_status = map { $_->{value} => 1 } @{$STATE->{statuses}};
+  my %renamed = map { $_->{rename_from} => 1 }
+    grep { $_->{rename_from} } @{$STATE->{statuses}};
+  my @extra_status = grep { !$declared_status{$_} && !$renamed{$_} }
+    map { $_->name } Bugzilla::Status->get_all;
+  push @problems, 'status(es): ' . join(', ', sort @extra_status)
+    if @extra_status;
+
+  my %declared_resolution = map { $_->{value} => 1 } @{$STATE->{resolutions}};
+  my @extra_resolution
+    = grep { $_ ne '' && !$declared_resolution{$_} }
+    map { $_->name }
+    @{Bugzilla::Field::Choice->type('resolution')->match({})};
+  push @problems, 'resolution(s): ' . join(', ', sort @extra_resolution)
+    if @extra_resolution;
+
+  foreach my $spec (@{$STATE->{products}}) {
+    my $product = Bugzilla::Product->new({name => $spec->{name}}) or next;
+    my %want_component = map { $_->{name} => 1 } @{$spec->{components}};
+    my @extra_component
+      = grep { !$want_component{$_} } map { $_->name } @{$product->components};
+    push @problems, "$spec->{name} component(s): " . join(', ', sort @extra_component)
+      if @extra_component;
+
+    my %want_version = map { $_ => 1 } @{$spec->{versions}};
+    my @extra_version
+      = grep { !$want_version{$_} } map { $_->name } @{$product->versions};
+    push @problems, "$spec->{name} version(s): " . join(', ', sort @extra_version)
+      if @extra_version;
+
+    my %want_milestone = map { $_ => 1 } @{$spec->{milestones}};
+    my @extra_milestone
+      = grep { !$want_milestone{$_} } map { $_->name } @{$product->milestones};
+    push @problems,
+      "$spec->{name} milestone(s): " . join(', ', sort @extra_milestone)
+      if @extra_milestone;
+  }
+
+  fatal("the installation contains objects expected-state.json does not "
+      . "declare:\n         " . join("\n         ", @problems)
+      . "\n         Declare them, or delete them (deactivating is not enough - "
+      . 'REST cannot report it).')
+    if @problems;
+
+  note('nothing undeclared is present');
   return;
 }
 
@@ -402,11 +520,23 @@ sub preflight {
 sub audit_existing_bugs {
   my ($renamed_from) = @_;
 
-  my $type_field = Bugzilla::Field->new({name => 'cf_issue_type'});
-  return note('no cf_issue_type field yet: no existing items to audit')
-    if !$type_field;
+  my ($bug_count) = $dbh->selectrow_array('SELECT COUNT(*) FROM bugs');
 
+  my $type_field   = Bugzilla::Field->new({name => 'cf_issue_type'});
   my $has_category = Bugzilla::Field->new({name => 'cf_category'}) ? 1 : 0;
+
+  # Creating a mandatory select field over a populated table gives every
+  # existing row the unset sentinel. Those items would then violate the model
+  # from the moment it is declared, and the extension cannot repair items whose
+  # fields nobody touches. Refuse, rather than "succeed" into that state.
+  if (!$type_field || !$has_category) {
+    fatal("$bug_count existing bug(s) but "
+        . (!$type_field ? 'cf_issue_type' : 'cf_category')
+        . ' does not exist yet. Provisioning would leave them untyped or '
+        . 'uncategorised; migrate or remove them first.')
+      if $bug_count;
+    return note('required fields absent and no existing bugs: nothing to audit');
+  }
   my $select
     = 'SELECT bug_id, bug_status, resolution, cf_issue_type'
     . ($has_category ? ', cf_category' : '')
@@ -518,6 +648,8 @@ sub ensure_field {
 
   fatal("field $name exists with type " . $field->type . ", expected $type")
     if $field->type != $type;
+  fatal("field $name exists but is not a custom field")
+    if !$field->custom;
 
   my %want = (
     description  => $spec->{description},
@@ -545,7 +677,14 @@ sub ensure_field {
 # value_field/visibility_field must be wired only after BOTH fields exist.
 sub ensure_field_controls {
   my ($name, $spec) = @_;
-  my $field = Bugzilla::Field->new({name => $name}) or return;
+
+  my $field = Bugzilla::Field->new({name => $name});
+  if (!$field) {
+    fatal("field $name does not exist") if !$DRY;
+    plan("field $name: wire value_field/visibility control (after the field "
+        . 'is created)');
+    return;
+  }
   my $changed = 0;
 
   my $want_value_field = $spec->{value_field} // '';
@@ -582,7 +721,14 @@ sub ensure_field_controls {
     }
   }
 
-  if ($want_vis_field) {
+  if (!$want_vis_field) {
+    my @stale = map { $_->name } @{$field->visibility_values || []};
+    if (@stale) {
+      plan("field $name: clear stale visibility_values [" . join(', ', sort @stale) . ']');
+      if (!$DRY) { $field->set('visibility_values', []); $changed = 1; }
+    }
+  }
+  else {
     my @want = sort @{$spec->{visibility_values} || []};
     my @have = sort map { $_->name } @{$field->visibility_values || []};
     if (join('|', @want) ne join('|', @have)) {
@@ -669,24 +815,6 @@ sub ensure_choice {
   return;
 }
 
-# Anything active in the installation that the SSOT does not declare is a
-# divergence we cannot reason about - stop rather than pretend we converged.
-sub assert_no_undeclared_choices {
-  my ($field_name, $spec) = @_;
-  my $field = Bugzilla::Field->new({name => $field_name}) or return;
-
-  my %declared = map { $_->{value} => 1 } @{$spec->{values}};
-  my @extra
-    = grep { $_ ne '' && $_ ne '---' && !$declared{$_} }
-    map { $_->is_active ? $_->name : () }
-    @{Bugzilla::Field::Choice->type($field_name)->match({})};
-
-  fatal("$field_name has undeclared active value(s): " . join(', ', sort @extra)
-      . '. Add them to expected-state.json or deactivate them.')
-    if @extra;
-  return;
-}
-
 ########################################################################
 # Statuses, resolutions, workflow
 ########################################################################
@@ -703,8 +831,11 @@ sub ensure_statuses {
         if (!$DRY) {
           $old->set('value', $spec->{value});
           $old->update;
-          $status = $old;
         }
+
+        # Carry the object forward in dry runs too, or the plan would report
+        # the same status as both renamed and created.
+        $status = $old;
       }
     }
 
@@ -748,39 +879,29 @@ sub ensure_statuses {
   }
 
   flush_caches() if !$DRY;
-
-  my %declared = map { $_->{value} => 1 } @{$STATE->{statuses}};
-  my @extra = map { $_->is_active && !$declared{$_->name} ? $_->name : () }
-    Bugzilla::Status->get_all;
-  fatal('undeclared active status(es): ' . join(', ', sort @extra)
-      . '. Add them to expected-state.json or deactivate them.')
-    if @extra && !$DRY;
   return;
 }
 
 sub ensure_resolutions {
   ensure_choice('resolution', $_) foreach @{$STATE->{resolutions}};
   flush_caches() if !$DRY;
-
-  return if $DRY;
-  my %declared = map { $_->{value} => 1 } @{$STATE->{resolutions}};
-  my @extra
-    = grep { $_ ne '' && !$declared{$_} }
-    map { $_->is_active ? $_->name : () }
-    @{Bugzilla::Field::Choice->type('resolution')->match({})};
-  fatal('undeclared active resolution(s): ' . join(', ', sort @extra)
-      . '. Add them to expected-state.json or deactivate them.')
-    if @extra;
   return;
 }
 
 sub rewrite_workflow {
   my %id_of;
   foreach my $spec (@{$STATE->{statuses}}) {
-    my $status = Bugzilla::Status->new({name => $spec->{value}});
+    my $status = Bugzilla::Status->new({name => $spec->{value}})
+      || ($spec->{rename_from}
+      ? Bugzilla::Status->new({name => $spec->{rename_from}})
+      : undef);
     if (!$status) {
-      return note('workflow rewrite skipped in dry run (statuses not created yet)')
-        if $DRY;
+      if ($DRY) {
+        plan('rewrite status_workflow to the declared '
+            . scalar(@{$STATE->{workflow}})
+            . '-edge matrix (exact diff unavailable until the statuses exist)');
+        return;
+      }
       fatal("status '$spec->{value}' missing while rewriting the workflow");
     }
     $id_of{$spec->{value}} = $status->id;
@@ -933,11 +1054,6 @@ sub ensure_versions {
     }
   }
 
-  my %declared = map { $_ => 1 } @{$spec->{versions}};
-  my @extra = grep { !$declared{$_} && $have{$_}->is_active } keys %have;
-  fatal("product '$spec->{name}' has undeclared active version(s): "
-      . join(', ', sort @extra) . '. Add them to expected-state.json.')
-    if @extra;
   return;
 }
 
@@ -959,11 +1075,6 @@ sub ensure_milestones {
     }
   }
 
-  my %declared = map { $_ => 1 } @{$spec->{milestones}};
-  my @extra = grep { !$declared{$_} && $have{$_}->is_active } keys %have;
-  fatal("product '$spec->{name}' has undeclared active milestone(s): "
-      . join(', ', sort @extra) . '. Add them to expected-state.json.')
-    if @extra;
   return;
 }
 
@@ -988,6 +1099,15 @@ sub ensure_components {
       next;
     }
     my $changed = 0;
+    if ($existing->default_assignee->login ne $default_assignee->login) {
+      plan("product '$spec->{name}': component '$comp->{name}' default "
+          . 'assignee ' . $existing->default_assignee->login . ' -> '
+          . $default_assignee->login);
+      if (!$DRY) {
+        $existing->set('initialowner', $default_assignee->login);
+        $changed = 1;
+      }
+    }
     if ($existing->description ne $comp->{description}) {
       plan("product '$spec->{name}': component '$comp->{name}' description updated");
       if (!$DRY) { $existing->set('description', $comp->{description}); $changed = 1; }
@@ -999,11 +1119,6 @@ sub ensure_components {
     $existing->update if $changed && !$DRY;
   }
 
-  my %declared = map { $_->{name} => 1 } @{$spec->{components}};
-  my @extra = grep { !$declared{$_} && $have{$_}->is_active } keys %have;
-  fatal("product '$spec->{name}' has undeclared active component(s): "
-      . join(', ', sort @extra) . '. Add them to expected-state.json.')
-    if @extra;
   return;
 }
 
@@ -1024,8 +1139,12 @@ sub decommission_products {
     }
 
     my $count = $product->bug_count;
+    # Deliberately an abort, not a deactivation: a half-retired product that
+    # still holds items is worse than an obvious failure. Closing the items
+    # does not help - bug_count counts them regardless - so they have to be
+    # moved to another product or deleted.
     fatal("refusing to remove product '$name': it holds $count bug(s). "
-        . 'Move or close them first.')
+        . 'Move them to another product (or delete them) first.')
       if $count;
 
     plan("delete product '$name' (0 bugs)");
@@ -1098,11 +1217,6 @@ my $ok = eval {
   }
   flush_caches() if !$DRY;
 
-  if (!$DRY) {
-    assert_no_undeclared_choices($_, $STATE->{fields}{$_})
-      foreach sort keys %{$STATE->{fields}};
-  }
-
   ensure_statuses();
   ensure_resolutions();
   ensure_product($_) foreach @{$STATE->{products}};
@@ -1111,8 +1225,18 @@ my $ok = eval {
   # add_missing_bug_status_transitions() and would otherwise leave rows behind.
   rewrite_workflow();
 
-  ensure_params();
   decommission_products();
+  flush_caches() if !$DRY;
+
+  # Re-audit AFTER the DDL: creating a mandatory select field over existing rows
+  # would have given them the unset sentinel, and arming enforcement over that
+  # would lock those items out of every guarded edit.
+  audit_existing_bugs({}) if !$DRY;
+
+  # Last of all, because issue_type_workflow_enforced is what makes a missing
+  # piece of the model fail closed. Arming it before the model is complete would
+  # take the installation down.
+  ensure_params();
 
   flush_caches() if !$DRY;
   1;

@@ -27,8 +27,13 @@ extension's own 1000xx codes on creation). A 401 from a bad API key, a 404 or a
 Exits non-zero if anything fails. It changes no configuration, but it does file
 smoke-test bugs (summary prefix [SMOKE]) and closes them again on the way out.
 
-  BZ_API_KEY=... ./verify-projects.py --base-url http://192.168.100.252:8092 \
-                                      --state expected-state.json
+Run it ON the Bugzilla host against loopback: the API key is sent as a header,
+and this instance speaks plain HTTP, so a remote run exposes an admin key to
+anyone who can see that segment. A non-loopback http:// URL needs
+--allow-remote-http.
+
+  read -rs BZ_API_KEY; export BZ_API_KEY
+  ./verify-projects.py --state expected-state.json
 """
 
 import argparse
@@ -86,11 +91,18 @@ class Bz:
 
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
-                status, raw = resp.status, resp.read().decode()
+                status, raw = resp.status, resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
-            status, raw = exc.code, exc.read().decode()
+            try:
+                status, raw = exc.code, exc.read().decode("utf-8")
+            except UnicodeDecodeError as decode_exc:
+                raise BzTransportError(
+                    f"{method} {url}: HTTP {exc.code} with undecodable body"
+                ) from decode_exc
         except (urllib.error.URLError, OSError) as exc:
             raise BzTransportError(f"{method} {url}: {exc}") from exc
+        except UnicodeDecodeError as exc:
+            raise BzTransportError(f"{method} {url}: undecodable body") from exc
 
         try:
             body = json.loads(raw) if raw.strip() else {}
@@ -151,6 +163,8 @@ def verify_products(bz, state):
 
         eq(f"product '{name}' description", product.get("description"),
            spec["description"])
+        eq(f"product '{name}' classification", product.get("classification"),
+           spec["classification"])
         eq(f"product '{name}' is_active", bool(product.get("is_active")),
            spec["is_active"])
         eq(f"product '{name}' has_unconfirmed",
@@ -261,21 +275,23 @@ def verify_statuses_and_workflow(fields, state):
         eq(f"status '{spec['value']}' sort_key", got.get("sort_key"),
            spec["sortkey"])
 
+    # Compared as sorted LISTS, not dicts: status_workflow's UNIQUE index does
+    # not constrain rows whose old_status is NULL, so the creation row can be
+    # duplicated - and a dict would silently collapse the duplicate away.
     want_edges = {}
     for edge in state["workflow"]:
-        want_edges.setdefault(edge["from"], {})[edge["to"]] = \
-            bool(edge["require_comment"])
+        want_edges.setdefault(edge["from"], []).append(
+            (edge["to"], bool(edge["require_comment"])))
 
     for from_status in sorted(set(list(want_edges) + list(values))):
         got_value = values.get(from_status)
         if got_value is None:
             check(f"workflow row for '{from_status}'", False, "status missing")
             continue
-        got = {t["name"]: bool(t.get("comment_required"))
-               for t in got_value.get("can_change_to", [])}
-        eq(f"workflow from '{from_status or '(new bug)'}'",
-           dict(sorted(got.items())),
-           dict(sorted(want_edges.get(from_status, {}).items())))
+        got = sorted((t["name"], bool(t.get("comment_required")))
+                     for t in got_value.get("can_change_to", []))
+        eq(f"workflow from '{from_status or '(new bug)'}'", got,
+           sorted(want_edges.get(from_status, [])))
 
 
 def verify_resolutions(fields, state):
@@ -350,6 +366,12 @@ class Walker:
             raise BzTransportError(
                 f"cannot read bug {bug_id} (HTTP {status}): {json.dumps(body)[:200]}")
         bug = bugs[0]
+        missing = [k for k in ("status", "resolution", "cf_issue_type",
+                               "cf_category") if k not in bug]
+        if missing:
+            raise BzTransportError(
+                f"bug {bug_id} is missing expected field(s) {missing}: the "
+                "custom fields are probably not provisioned")
         return (bug["status"], bug["resolution"], bug["cf_issue_type"],
                 bug["cf_category"])
 
@@ -369,13 +391,14 @@ class Walker:
               f"got HTTP {status} code {code}: {body.get('message', '')[:160]}")
         eq(f"unchanged after denying: {label}", self.state_of(bug_id), before)
 
-    def expect_creation_refused(self, label, **kwargs):
+    def expect_creation_refused(self, label, expected_error, **kwargs):
+        want = self.enf["error_codes"]["extension"][expected_error]
         status, body = self.file(**kwargs)
         code = body.get("code")
         check(f"refused at creation: {label}",
-              status == HTTP_BAD_REQUEST and code in self.creation_codes,
-              f"expected HTTP {HTTP_BAD_REQUEST} and one of "
-              f"{sorted(self.creation_codes)}, got HTTP {status} code {code}: "
+              status == HTTP_BAD_REQUEST and code == want,
+              f"expected HTTP {HTTP_BAD_REQUEST} code {want} "
+              f"({expected_error}), got HTTP {status} code {code}: "
               f"{body.get('message', '')[:160]}")
 
     # -- generated probes -------------------------------------------------
@@ -400,6 +423,26 @@ class Walker:
             self.expect_denied(
                 f"{issue_type} resolved '{resolution}'", bug_id,
                 status="RESOLVED", resolution=resolution)
+
+    def probe_allowed_resolutions(self, bug_id, issue_type, reopen_to):
+        """Every resolution the type MAY use must actually be accepted."""
+        for resolution in sorted(self.enf["allowed_resolutions"][issue_type]):
+            if resolution == "DUPLICATE":
+                continue  # set through dupe_of, covered separately
+            self.expect_allowed(f"{issue_type} resolved '{resolution}'", bug_id,
+                                status="RESOLVED", resolution=resolution)
+            eq(f"{issue_type} is RESOLVED/{resolution}",
+               self.state_of(bug_id)[:2], ("RESOLVED", resolution))
+            self.expect_allowed(f"{issue_type} reopened from '{resolution}'",
+                                bug_id, status=reopen_to, resolution="")
+
+    def probe_allowed_categories(self, bug_id, issue_type):
+        """Every category the type MAY use must actually be accepted."""
+        for category in self.enf["allowed_categories"][issue_type]:
+            self.expect_allowed(f"{issue_type} categorised '{category}'",
+                                bug_id, cf_category=category)
+            eq(f"{issue_type} category is '{category}'",
+               self.state_of(bug_id)[3], category)
 
     def probe_illegal_categories(self, bug_id, issue_type):
         for other, values in self.categories.items():
@@ -440,7 +483,10 @@ def walk_lifecycle(w, issue_type, product, path, closing_resolution):
         current = target
         w.probe_illegal_statuses(bug_id, issue_type, current)
 
+    reopen_to = "BUG_CONFIRMED" if issue_type == "BUG" else "REQ_REVIEW"
+    w.probe_allowed_categories(bug_id, issue_type)
     w.probe_illegal_resolutions(bug_id, issue_type)
+    w.probe_allowed_resolutions(bug_id, issue_type, reopen_to)
     w.expect_allowed(f"{issue_type} -> RESOLVED/{closing_resolution}", bug_id,
                      status="RESOLVED", resolution=closing_resolution)
     eq(f"{issue_type} is RESOLVED/{closing_resolution}",
@@ -458,9 +504,7 @@ def walk_lifecycle(w, issue_type, product, path, closing_resolution):
     w.probe_illegal_categories(bug_id, issue_type)
     w.probe_type_immutable(bug_id, issue_type)
 
-    reopen = w.enf["allowed_statuses"][issue_type]
-    reopen_to = "BUG_CONFIRMED" if issue_type == "BUG" else "REQ_REVIEW"
-    if reopen_to in reopen:
+    if reopen_to in w.enf["allowed_statuses"][issue_type]:
         w.expect_allowed(f"{issue_type} reopens to '{reopen_to}'", bug_id,
                          status=reopen_to, resolution="")
         eq(f"reopened {issue_type} has no resolution",
@@ -475,18 +519,33 @@ def verify_creation_guards(w):
     component = "Cross-Cutting / Other"
 
     w.expect_creation_refused(
-        "BUG with a REQUIREMENT category", product=product, component=component,
-        issue_type="BUG", category=w.categories["REQUIREMENT"][0])
+        "BUG with a REQUIREMENT category", "issue_category_mismatch",
+        product=product, component=component, issue_type="BUG",
+        category=w.categories["REQUIREMENT"][0])
     w.expect_creation_refused(
-        "REQUIREMENT with a BUG category", product="fullfunding",
-        component=component, issue_type="REQUIREMENT",
+        "REQUIREMENT with a BUG category", "issue_category_mismatch",
+        product="fullfunding", component=component, issue_type="REQUIREMENT",
         category=w.categories["BUG"][0])
     w.expect_creation_refused(
-        "no issue type", product=product, component=component,
-        issue_type="---", category=w.categories["BUG"][0])
+        "no issue type", "issue_type_required", product=product,
+        component=component, issue_type="---", category=w.categories["BUG"][0])
     w.expect_creation_refused(
-        "no category", product=product, component=component,
-        issue_type="BUG", category="---")
+        "no category", "issue_category_required", product=product,
+        component=component, issue_type="BUG", category="---")
+
+    # An unknown-but-syntactically-valid type: core's own select validation
+    # rejects a value that is not in the field, so this asserts the FIRST
+    # refusal wins rather than our own code - which is why it is checked
+    # loosely, as a refusal, not as issue_type_unknown.
+    status, body = w.file(product, component, "NOT_A_TYPE",
+                          w.categories["BUG"][0])
+    check("refused at creation: unknown issue type",
+          status >= 400 and body.get("error"),
+          f"HTTP {status}: {json.dumps(body)[:200]}")
+
+    print("  ....  issue_type_initial_status_unavailable and "
+          "issue_type_initial_status_needs_comment are NOT exercised: both "
+          "require deliberately breaking the workflow first")
 
     # Filing onto the other lifecycle's entry point is corrected, not rejected:
     # Bug.pm:1526-1536 forces UNCONFIRMED on any reporter without
@@ -502,10 +561,52 @@ def verify_creation_guards(w):
            w.state_of(body["id"])[0], "REQ_DRAFT")
 
 
+def verify_low_privilege_reporter(bz, state, w, key_env):
+    """The one path a privileged smoke test cannot reach.
+
+    Bug.pm:1526-1536 overrides the requested initial status to UNCONFIRMED for
+    any reporter without editbugs/canconfirm - which is exactly how an external
+    stakeholder files. The canonicalisation in bug_end_of_create_validators is
+    what puts such a REQUIREMENT back on its own lifecycle, so this deserves a
+    real unprivileged account rather than an admin pretending.
+    """
+    print("\n[9] Low-privilege reporter")
+    if not key_env:
+        check("low-privilege reporter path proven", False,
+              "not run: pass --reporter-api-key-env NAME with the API key of a "
+              "user lacking editbugs/canconfirm. The admin-side probe in [8] "
+              "exercises the canonicalisation but NOT the privilege-dependent "
+              "override, so this is unproven.")
+        return
+
+    key = os.environ.get(key_env, "")
+    if not check(f"${key_env} is set", bool(key)):
+        return
+
+    reporter = Bz(bz.base, key)
+    payload = {
+        "product": "fullfunding",
+        "component": "Cross-Cutting / Other",
+        "summary": f"{SMOKE_PREFIX} - REQUIREMENT filed unprivileged",
+        "version": state["products"][0]["versions"][0],
+        "description": "Filed by verify-projects.py as an unprivileged user.",
+        "cf_issue_type": "REQUIREMENT",
+        "cf_category": w.categories["REQUIREMENT"][0],
+    }
+    status, body = reporter.post("/bug", payload)
+    if not check("unprivileged user can file a REQUIREMENT",
+                 status < 400 and body.get("id"),
+                 f"HTTP {status}: {json.dumps(body)[:200]}"):
+        return
+    w.filed.append(body["id"])
+    eq("unprivileged REQUIREMENT still starts at REQ_DRAFT",
+       w.state_of(body["id"])[0], "REQ_DRAFT")
+
+
 def verify_duplicate_path(w):
     """RESOLVED+DUPLICATE must keep working for both types - it is the reason
     the closed tail is shared in the first place."""
-    print("\n[9] Native duplicate handling")
+    print("\n[10] Native duplicate handling")
     for issue_type, product in (("BUG", "optionedge"),
                                 ("REQUIREMENT", "fullfunding")):
         category = w.categories[issue_type][0]
@@ -524,7 +625,7 @@ def verify_duplicate_path(w):
 
 def verify_bulk_atomicity(w):
     """One illegal item in a multi-bug update must abort the whole request."""
-    print("\n[10] Bulk update atomicity")
+    print("\n[11] Bulk update atomicity")
     s1, b1 = w.file("optionedge", "Cross-Cutting / Other", "BUG",
                     w.categories["BUG"][0])
     s2, b2 = w.file("fullfunding", "Cross-Cutting / Other", "REQUIREMENT",
@@ -569,7 +670,7 @@ def close_smoke_bugs(w):
     """Leave the tracker tidy - REST cannot delete bugs, so close them."""
     if not w.filed:
         return
-    print("\n[11] Cleanup")
+    print("\n[12] Cleanup")
     closed, stuck = 0, []
     for bug_id in w.filed:
         try:
@@ -585,17 +686,26 @@ def close_smoke_bugs(w):
                 stuck.append(bug_id)
         except BzTransportError as exc:
             stuck.append(f"{bug_id} ({exc})")
+    check(f"all {len(w.filed)} smoke bug(s) closed", not stuck,
+          f"still open, close by hand: {stuck}")
     print(f"  ....  {closed}/{len(w.filed)} smoke bug(s) closed")
-    if stuck:
-        print(f"  ....  still open, close by hand: {stuck}")
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--base-url", default="http://192.168.100.252:8092")
+    parser.add_argument("--base-url", default="http://localhost:8092")
+    parser.add_argument("--allow-remote-http", action="store_true",
+                        help="permit a non-loopback plain-HTTP base URL "
+                             "(sends the API key in clear over the network)")
     parser.add_argument("--state", default="expected-state.json")
     parser.add_argument("--no-smoke", action="store_true",
                         help="structural assertions only; files no bugs")
+    parser.add_argument("--reporter-api-key-env", default="",
+                        help="name of an env var holding the API key of a user "
+                             "WITHOUT editbugs/canconfirm. Supplying it proves "
+                             "the privilege-dependent status override in "
+                             "Bug.pm:1526-1536 really is corrected; without it "
+                             "that path is only covered by proxy.")
     args = parser.parse_args()
 
     # Deliberately env-only: an --api-key argument would show up in the process
@@ -605,8 +715,21 @@ def main():
         sys.exit("BZ_API_KEY is required: this installation has requirelogin "
                  "enabled, so even read-only endpoints need authentication.")
 
-    with open(args.state, encoding="utf-8") as fh:
-        state = json.load(fh)
+    parsed = urllib.parse.urlparse(args.base_url)
+    if (parsed.scheme == "http"
+            and parsed.hostname not in ("localhost", "127.0.0.1", "::1")
+            and not args.allow_remote_http):
+        sys.exit(f"refusing to send the API key in clear to {parsed.hostname}: "
+                 "run this on the Bugzilla host against localhost, use https, "
+                 "or pass --allow-remote-http if you accept the exposure.")
+
+    try:
+        with open(args.state, encoding="utf-8") as fh:
+            state = json.load(fh)
+    except OSError as exc:
+        sys.exit(f"cannot read {args.state}: {exc}")
+    except json.JSONDecodeError as exc:
+        sys.exit(f"{args.state} is not valid JSON: {exc}")
 
     bz = Bz(args.base_url, api_key)
 
@@ -639,6 +762,8 @@ def main():
                            ["REQ_REVIEW", "REQ_APPROVED", "REQ_IN_PROGRESS"],
                            "IMPLEMENTED")
             verify_creation_guards(walker)
+            verify_low_privilege_reporter(bz, state, walker,
+                                          args.reporter_api_key_env)
             verify_duplicate_path(walker)
             verify_bulk_atomicity(walker)
         except BzTransportError as exc:

@@ -9,6 +9,7 @@ configuration/
                                          workflow matrix, resolutions, enforcement policy
   setup-projects.pl                      idempotent provisioner (dry-run by default)
   verify-projects.py                     structural + behavioural verification
+  backup.sh / restore-backup.sh          verified backup and guarded restore
   extensions/IssueTypeWorkflow/          keeps the two lifecycles apart
 ```
 
@@ -38,8 +39,11 @@ Everything runs on `.252`. Set these once per session:
 BZ=options-edge-bugzilla-web; ADMIN=<admin-login>; TRIAGE=<triage-login>
 ```
 
-Steps that mutate anything: **4** (config) and **6** (files smoke bugs). Steps 1, 2 and 7 are
-read-only; step 3 backs up; step 5 restarts.
+Steps that mutate anything: **4** (configuration) and **6** (files and closes smoke bugs). Steps 1,
+2 and 7 are read-only; step 3 backs up; step 5 restarts the web tier.
+
+Every step is chained with `&&`: if one fails, the next does not run — in particular Apache is not
+restarted over a partially mutated database.
 
 **1. Load and syntax checks** — the extension must parse and Bugzilla must still boot with it
 mounted:
@@ -59,22 +63,17 @@ docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html
 site offline without stopping the container — which matters, because `localconfig` lives inside it.
 
 ```bash
-docker exec $BZ apachectl stop
+docker exec $BZ apachectl stop && configuration/backup.sh
 ```
 
-```bash
-set -o pipefail; TS=$(date +%Y%m%dT%H%M%S); OUT=~/bugzilla-pre-projects-$TS.sql.gz; docker exec $BZ-db sh -c 'mariadb-dump --single-transaction --routines --triggers --events --hex-blob -u root -p"$MARIADB_ROOT_PASSWORD" "$BZ_DB_NAME"' | gzip > "$OUT" && zgrep -q -- "-- Dump completed" "$OUT" && sha256sum "$OUT" | tee "$OUT.sha256" && echo "BACKUP OK: $OUT"
-```
+`backup.sh` dumps the database, checks the dump's own `-- Dump completed` footer, records the schema
+charset and a checksum, and copies `params.json`. The footer check is the point: a failed
+`mariadb-dump` still produces a perfectly valid *empty* gzip that passes `gzip -t`. It also keeps the
+root password out of process arguments by writing a mode-0600 client option file inside the database
+container.
 
-`pipefail` plus the `-- Dump completed` footer check is the point: without both, a failed
-`mariadb-dump` still produces a perfectly valid *empty* gzip that passes `gzip -t`. **If it does not
-print `BACKUP OK`, stop and restart Apache (`docker exec $BZ apachectl start`) — do not apply.**
-
-Also copy the params file (it is rewritten in step 4):
-
-```bash
-docker cp $BZ:/var/www/html/data/params.json ~/bugzilla-params-pre-projects-$TS.json
-```
+**If it does not print `BACKUP OK`, stop — restart Apache with `docker exec $BZ apachectl start` and
+do not apply.**
 
 **4. Apply.** The script refuses to run while Apache is answering on `localhost:80`; that check is
 what guarantees enforcement is never observably half-installed.
@@ -83,7 +82,8 @@ what guarantees enforcement is never observably half-installed.
 docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply
 ```
 
-**5. Restart the web tier** so no process keeps a pre-change field/status cache:
+**5. Restart the web tier** so no process keeps a pre-change field/status cache. Chained to step 4,
+so a failed apply leaves the site down rather than serving a half-provisioned installation:
 
 ```bash
 docker restart $BZ
@@ -95,13 +95,16 @@ run it in a change window. `--no-smoke` gives structural assertions only, but th
 not proven to be enforcing.
 
 ```bash
-BZ_API_KEY=<key> python3 configuration/verify-projects.py --base-url http://192.168.100.252:8092 --state configuration/expected-state.json
+read -rs BZ_API_KEY && export BZ_API_KEY && python3 configuration/verify-projects.py --state configuration/expected-state.json
 ```
 
-The key is read from the environment only, never a flag, so it stays out of `ps` and shell history.
-Note the endpoint is plain HTTP on the LAN — the key is exposed to anyone who can sniff that
-segment. Prefer running the verifier **on `.252` itself** against `http://localhost:8092`, and
-revoke the key afterwards.
+It defaults to `http://localhost:8092` and **refuses** a non-loopback plain-HTTP URL unless you pass
+`--allow-remote-http`, because the endpoint speaks plain HTTP and the key travels in a header. Run it
+on `.252` itself and revoke the key afterwards.
+
+`read -rs` keeps the key out of shell history and out of the command's argv. It is still an
+environment variable of the verifier process, so root — and on a default `hidepid=0` system, any
+process of the same user — can read it from `/proc`; treat it as short-lived, not secret-at-rest.
 
 **7. Re-run the dry run and confirm it reports zero actions** — that is the idempotence proof:
 
@@ -113,8 +116,10 @@ docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html
 normal apply; the script aborts rather than removing a product that still holds bugs.
 
 ```bash
-docker exec $BZ apachectl stop && docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --apply --remove-decommissioned; docker restart $BZ
+docker exec $BZ apachectl stop && docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --apply --remove-decommissioned && docker restart $BZ
 ```
+
+If that fails, Apache stays stopped on purpose. Fix the cause, then re-run the same command.
 
 ## Rollback
 
@@ -122,31 +127,27 @@ docker exec $BZ apachectl stop && docker exec $BZ perl /var/www/html/local/setup
 partial run cannot be undone with a transaction. Rollback is a restore:
 
 ```bash
-docker exec $BZ apachectl stop
-docker exec -i $BZ-db sh -c 'mysql -u root -p"$MARIADB_ROOT_PASSWORD" -e "DROP DATABASE \`$BZ_DB_NAME\`; CREATE DATABASE \`$BZ_DB_NAME\`;"'
-zcat ~/bugzilla-pre-projects-<TS>.sql.gz | docker exec -i $BZ-db sh -c 'mysql -u root -p"$MARIADB_ROOT_PASSWORD" "$BZ_DB_NAME"'
-docker cp ~/bugzilla-params-pre-projects-<TS>.json $BZ:/var/www/html/data/params.json
-docker exec $BZ chown www-data:www-data /var/www/html/data/params.json
-docker restart $BZ
+configuration/restore-backup.sh ~/bugzilla-pre-projects-<TS>.sql.gz
 ```
 
-Then check the *pre-change* shape, not the target shape — `verify-projects.py` asserts the new
-model and is expected to fail against a restored database:
+The script verifies the checksum, the gzip and the dump footer **before** dropping anything,
+recreates the schema with the charset and collation recorded at backup time, checks the table count
+after importing, restores `params.json`, and only then restarts Apache. If any step fails it leaves
+Apache stopped and says so — a half-restored database never serves traffic.
 
-```bash
-curl -s -H "X-BUGZILLA-API-KEY: $BZ_API_KEY" http://localhost:8092/rest/product_selectable
-curl -s -H "X-BUGZILLA-API-KEY: $BZ_API_KEY" "http://localhost:8092/rest/field/bug" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sorted(v["name"] for v in next(f for f in d["fields"] if f["name"]=="bug_status")["values"]))'
-```
-
-That should show the stock statuses and no `cf_issue_type`. Do not try to unpick a partial run with
-ad-hoc `DROP COLUMN`.
+Do not try to unpick a partial run with ad-hoc `DROP COLUMN`.
 
 ## Notes
 
-- The provisioner only ever converges towards `expected-state.json`. It deliberately **aborts** on
-  anything undeclared — an extra active status, resolution, field value, component, version or
-  milestone — rather than silently tolerating it, so the script and the verifier can never disagree
-  about what "converged" means. Add the new thing to the SSOT, or deactivate it.
+- The provisioner only ever converges towards `expected-state.json`. In **preflight** — before any
+  mutation, and in dry runs too — it aborts on anything undeclared: an extra status, resolution,
+  field value, component, version or milestone. Declare it in the SSOT, or delete it. Deactivating
+  is *not* enough: Bugzilla's REST serialisation of field values carries no active flag, so the
+  verifier cannot tell a deactivated extra from a live one and would fail on it.
+- The last thing a successful apply does is set the `issue_type_workflow_enforced` parameter. That
+  marker is what makes a later removal of any part of the model **fail closed**: with it set, a
+  missing field, issue type or status blocks every guarded change until the provisioner is re-run,
+  instead of silently switching enforcement off.
 - It also aborts if an existing item already violates the model (wrong-branch status, wrong
   resolution, mismatched or missing category, no issue type). The extension validates fields as they
   change, so it can never repair an item that was already inconsistent.
