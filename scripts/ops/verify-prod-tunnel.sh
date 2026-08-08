@@ -435,8 +435,10 @@ env_must_equal es4 "$ES4_WEB_DEPLOY" web APP_FEED_GATEWAY_WS_URL "wss://$PRIMARY
 env_must_equal es4 "$ES4_WEB_DEPLOY" web VITE_MISSION_CONTROL_URL "https://$PRIMARY_ES"
 env_must_equal es4 "$ES4_WEB_DEPLOY" web VITE_REPLAY_ORCHESTRATOR_URL "https://$PRIMARY_ES"
 if [ "$PHASE" != "dual" ]; then
-  # WebNav's compiled default still says the old domain; from Phase 2 the env override is mandatory.
+  # WebNav's compiled default still says the old domain; from Phase 2 the env override is
+  # mandatory on BOTH web deployments (es-web renders the same nav).
   env_must_equal prod "$WEB_DEPLOY" web APP_ES_OPTIONS_URL "https://$PRIMARY_ES"
+  env_must_equal es4 "$ES4_WEB_DEPLOY" web APP_ES_OPTIONS_URL "https://$PRIMARY_ES"
 fi
 # spx-mission-control declares 0 replicas — no pod to exec, so its desired template is the
 # strongest available check (a stale issuer there boots broken on the next scale-up).
@@ -594,6 +596,10 @@ try:
     if len(webs) != 1:
         raise ValueError('expected exactly 1 options-edge-web client in the import file, got %d' % len(webs))
     web = webs[0]
+    wattrs = web.get('attributes', {})
+    if (not isinstance(web.get('redirectUris', []), list) or not isinstance(web.get('webOrigins', []), list)
+            or not isinstance(wattrs, dict) or not isinstance(wattrs.get('post.logout.redirect.uris', ''), str)):
+        raise ValueError('options-edge-web fields have unexpected types')
     bz_all = [c for c in req['clients'] if isinstance(c, dict) and c.get('clientId') == 'bugzilla-web']
     if len(bz_all) != 1:
         raise ValueError('expected exactly 1 bugzilla-web client in the import file, got %d' % len(bz_all))

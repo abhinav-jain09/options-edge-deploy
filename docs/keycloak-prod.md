@@ -99,7 +99,7 @@ sudo cp ~/options-edge-stable.yml.new /etc/cloudflared/options-edge-stable.yml.t
 sudo systemctl restart options-edge-cloudflared-stable.service   # the unit name — NOT bare "cloudflared"
 systemctl is-active options-edge-cloudflared-stable.service
 journalctl -u options-edge-cloudflared-stable.service -n 20 --no-pager   # no ERR lines
-scripts/ops/verify-prod-tunnel.sh                                        # phase-appropriate gate
+timeout 600 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>    # bounded, phase-appropriate gate
 # rollback (exact, using the backup taken above):
 #   sudo cp /etc/cloudflared/options-edge-stable.yml.bak-<timestamp> /etc/cloudflared/options-edge-stable.yml
 #   sudo systemctl restart options-edge-cloudflared-stable.service
@@ -141,16 +141,17 @@ set -uo pipefail   # deliberately NOT -e: every remote write has an ambiguous-ou
 KT="--request-timeout=20s"                                # never hang mid-rotation
 NEW_PW="$(openssl rand -base64 24)"                       # captured ONCE — no manual retyping drift
 OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)"
-kc_exec() { kubectl $KT -n options-edge exec -i deploy/oe-keycloak -- sh -c "$1"; }
+kc_exec() { kubectl $KT --pod-running-timeout=20s -n options-edge exec -i deploy/oe-keycloak -- sh -c "$1"; }
 kc_login_ok() {  # does Keycloak accept this password RIGHT NOW? (the only trustworthy state)
   printf '%s\n' "$1" | kc_exec 'IFS= read -r P; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$P"' >/dev/null 2>&1
 }
-kc_setpw() {  # $1=auth-pw $2=new-pw, both via stdin. The POD-SIDE `timeout 30` is the fence that
-  # makes ambiguity resolvable: if the kubectl transport dies, no pod-side write can still be
-  # in flight once 30s have elapsed — so after QUIESCE below, what Keycloak accepts is final.
-  printf '%s\n%s\n' "$1" "$2" | kc_exec 'set -eu; IFS= read -r AUTHP; IFS= read -r NEWP
-    timeout 30 /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$AUTHP"
-    timeout 30 /opt/keycloak/bin/kcadm.sh set-password -r master --username abhinav --new-password "$NEWP"'
+kc_setpw() {  # $1=auth-pw $2=new-pw, both via stdin. ONE pod-side `timeout 30` fences the WHOLE
+  # login+write sequence (separate per-command timeouts would let the aggregate exceed the quiesce
+  # window): if the kubectl transport dies, no pod-side write can still be in flight once 30s
+  # have elapsed — so after QUIESCE below, what Keycloak accepts is final.
+  printf '%s\n%s\n' "$1" "$2" | kc_exec 'timeout 30 sh -c '\''set -eu; IFS= read -r AUTHP; IFS= read -r NEWP
+    /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$AUTHP"
+    /opt/keycloak/bin/kcadm.sh set-password -r master --username abhinav --new-password "$NEWP"'\'''
 }
 secret_now() { kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d; }
 patch_secret() {  # via stdin (no argv exposure), 3 bounded attempts
@@ -161,11 +162,11 @@ patch_secret() {  # via stdin (no argv exposure), 3 bounded attempts
   done
   return 1
 }
-indeterminate() {  # never discard either candidate — the operator must converge by hand
+indeterminate() {  # never discard either candidate, never print one — persist 0600, point at it
+  RESCUE="$(mktemp /tmp/kc-rotation-rescue.XXXXXX)"; chmod 600 "$RESCUE"
+  printf 'OLD_PW=%s\nNEW_PW=%s\n' "$OLD_PW" "$NEW_PW" > "$RESCUE"
   echo "ROTATION INDETERMINATE: $1" >&2
-  echo "  keep BOTH values until reconciled by hand:" >&2
-  echo "  OLD_PW=$OLD_PW" >&2
-  echo "  NEW_PW=$NEW_PW" >&2
+  echo "  both candidate values preserved at $RESCUE (mode 0600) — reconcile by hand, then shred it" >&2
   exit 3
 }
 
@@ -185,11 +186,17 @@ else indeterminate "Keycloak accepts neither value (connectivity?)"; fi
 if [ "$(secret_now)" != "$TARGET" ]; then
   patch_secret "$TARGET" || indeterminate "Keycloak holds its value but the Secret patch keeps failing"
 fi
-# END-STATE PROOF: the Secret's value must authenticate. Only then is the rotation done.
+# END-STATE PROOF: the Secret's value must authenticate. Only then is the state consistent.
 kc_login_ok "$(secret_now)" || indeterminate "Secret and Keycloak still disagree after reconcile"
-echo "rotation converged on $( [ "$TARGET" = "$NEW_PW" ] && echo NEW || echo OLD ) password"
+if [ "$TARGET" = "$OLD_PW" ]; then
+  # Consistent, but NOT rotated — the write never took. Exit nonzero so nothing upstream treats
+  # this safe-rollback state as a completed rotation; retry the sequence.
+  echo "rotation DID NOT complete: converged back on the OLD password (consistent; retry needed)" >&2
+  exit 4
+fi
+echo "rotation converged on the NEW password"
 # final gate — pass the CURRENT migration phase explicitly (dual | redirect | retired):
-scripts/ops/verify-prod-tunnel.sh --phase <current-phase>
+timeout 600 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>
 ```
 
 ```sh

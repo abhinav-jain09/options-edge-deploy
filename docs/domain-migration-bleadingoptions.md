@@ -46,7 +46,7 @@ Executed 2026-08-07/08 after the Friday close (CME closed until Sunday 18:00 ET)
    origins (es4). Deploy: per-service `feed-gateway` production job + `es4-deploy deploy-service
    SERVICE=es-feed-gateway`.
 
-**Phase-1 verification matrix.** `scripts/ops/verify-prod-tunnel.sh --phase dual` automates the edge, issuer,
+**Phase-1 verification matrix.** `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase dual` automates the edge, issuer,
 allow-list (running-pod env, both clusters), live-realm-client and unauthenticated web rows. The
 **login round-trip and the browser REST behavior are a MANDATORY MANUAL gate** — a curl cannot
 exercise the browser-injected API base, the OIDC redirect dance, or CORS; open the page, log in,
@@ -96,7 +96,7 @@ One coordinated change-set (single PR, single deploy window):
    BUILD_IMAGE=false`; confirm the `:prod` tag still resolves to the running digest first) → es4
    `deploy-service` es-feed-gateway + es-web. Prod before es4 (es4 pulls the same image/pattern).
 6. Pre-redirect acceptance (the redirect rules do not exist yet, so the full redirect gate would
-   rightly fail here): `REDIR_HOSTS="" scripts/ops/verify-prod-tunnel.sh --phase redirect` — proves the
+   rightly fail here): `REDIR_HOSTS="" timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect` — proves the
    flipped issuer and runtime URLs in the RUNNING pods on both clusters and the new-domain serving
    surface — **plus the mandatory manual browser gate**: log in on the new domain, confirm boards
    render and `/api/*` succeeds in the network tab. Old-domain UI now serves pages pointing at
@@ -115,11 +115,11 @@ One coordinated change-set (single PR, single deploy window):
    | 2 | `http*://es.fullfunding.nl/*` | `https://es.bleadingoptions.com/${2}` | 307 → 308 |
    | 3 | `http*://auth.fullfunding.nl/*` | `https://auth.bleadingoptions.com/${2}` | 307 → 308 |
 
-8. Full Phase-2 acceptance, AFTER the rules exist: `scripts/ops/verify-prod-tunnel.sh --phase redirect` — the
+8. Full Phase-2 acceptance, AFTER the rules exist: `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect` — the
    redirect section demands exactly 307 on both schemes for all three hostnames with host-mapped
    `Location` preserving path + query (same-host https upgrades on the http leg are recognized).
    At promotion time re-run with the retired lifecycle expectation:
-   `EXPECTED_REDIRECT_STATUS=308 scripts/ops/verify-prod-tunnel.sh --phase redirect`.
+   `EXPECTED_REDIRECT_STATUS=308 timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect`.
 
 Rollback (before the 308 promotion): revert the PR, redeploy the same set, drop the 307 rules.
 Old-issuer tokens die at the flip in both directions — that is expected, not a defect.
@@ -132,5 +132,5 @@ old-domain entries from the realm (live via kcadm + configmap parity), **remove 
 old origins from BOTH gateway allow-lists** — prod feed-gateway `WS_ALLOWED_ORIGINS` drops
 `https://fullfunding.nl`, es4 es-feed-gateway drops `https://es.fullfunding.nl` (the intentional
 es4 LAN origin `http://192.168.100.4:30080` stays) — rename the `req` realm client, sweep
-docs/bookmarks, and accept with `scripts/ops/verify-prod-tunnel.sh --phase retired` (its `retired` expected
+docs/bookmarks, and accept with `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase retired` (its `retired` expected
 origin sets are exactly the post-removal lists, so a leftover trusted old origin fails the gate).
