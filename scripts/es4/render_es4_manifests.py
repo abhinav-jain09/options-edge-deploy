@@ -42,6 +42,9 @@ SERVICES = [
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
     "greek-move-authenticity", "gamma-migration",
     "indicator-service",
+    # es4-ONLY (no dev/prod deployment): its slice is hand-authored as the render source —
+    # see the header of k8s/services/tape-zones/overlays/production/manifest.yaml.
+    "tape-zones",
 ]
 
 ES_ENV = {
