@@ -54,6 +54,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 case "$PHASE" in dual|redirect|retired) ;; *) echo "bad --phase '$PHASE'" >&2; exit 2 ;; esac
+if [ "$NETWORK_ONLY" = "1" ] && [ "$PRECHECK" = "1" ]; then
+  echo "FATAL: --network-only --precheck is meaningless — precheck exists to prove the kube/runtime contracts, which network-only skips" >&2
+  exit 2
+fi
 
 REPO_COPY="${REPO_COPY:-$(cd "$(dirname "$0")/../.." && pwd)/infra/prod/cloudflared/options-edge-stable.yml}"
 LIVE_PATH="${LIVE_PATH:-/etc/cloudflared/options-edge-stable.yml}"
@@ -680,14 +684,10 @@ for h in $REDIR_HOSTS; do
     hdrs="$(curl -s -o /dev/null -D - -m 20 "$scheme://$h/board?x=1" 2>/dev/null)"
     code="$(printf '%s' "$hdrs" | head -1 | awk '{print $2}')"
     loc="$(printf '%s' "$hdrs" | grep -i '^location:' | head -1 | sed -E 's/^[Ll]ocation:[[:space:]]*//; s/\r$//')"
-    # Classify FIRST: a plain-HTTP hit may hop through Cloudflare's own same-host https upgrade
-    # (any 3xx). That leg carries no mapping obligation — the https leg above already proved the
-    # lifecycle status and the host-mapped Location.
-    if [ "$scheme" = "http" ] && [ "$loc" = "https://$h/board?x=1" ]; then
-      case "$code" in
-        30[1278]) note "OK   $scheme://$h upgrades to https ($code); https leg carries the proof"; continue ;;
-      esac
-    fi
+    # STRICT on both schemes: the http*:// Single Redirect matches plain HTTP at the edge BEFORE
+    # any https upgrade, so the http leg must show the same lifecycle status and host-mapped
+    # Location. A same-host 301/302 upgrade here would rewrite POST to GET before the cross-domain
+    # hop — exactly what the 307/308 policy exists to prevent — and therefore FAILS.
     if [ "$code" = "$EXPECTED_REDIRECT_STATUS" ]; then note "OK   $scheme://$h -> $code"
     else bad "$scheme://$h -> ${code:-<none>} (expected exactly $EXPECTED_REDIRECT_STATUS in phase $PHASE)"; fi
     if [ "$loc" = "$want" ]; then note "OK   $scheme://$h Location preserves host-map + path + query"
@@ -695,6 +695,8 @@ for h in $REDIR_HOSTS; do
   done
 done
 
-stamp="VERIFIED"; [ "$PRECHECK" = "1" ] && stamp="PRECHECK PASSED (redirect section deliberately skipped — NOT the full gate)"
+stamp="VERIFIED"
+[ "$PRECHECK" = "1" ] && stamp="PRECHECK PASSED (redirect section deliberately skipped — NOT the full gate)"
+[ "$NETWORK_ONLY" = "1" ] && stamp="NETWORK-ONLY DIAGNOSTIC PASSED (kube/runtime contracts skipped — NOT acceptance)"
 [ "$fail" -eq 0 ] && echo "  prod tunnel $stamp (phase=$PHASE)" || echo "  prod tunnel has PROBLEMS (see above)" >&2
 exit "$fail"

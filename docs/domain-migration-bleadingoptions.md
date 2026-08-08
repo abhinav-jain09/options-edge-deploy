@@ -52,9 +52,27 @@ allow-list (running-pod env, both clusters), live-realm-client and unauthenticat
 exercise the browser-injected API base, the OIDC redirect dance, or CORS. The manual gate MUST
 include the authenticated WebSocket: the 2026-07-31 ServiceLB incident returned a clean
 unauthenticated 401 while every AUTHENTICATED upgrade died, so "401 seen" proves routing, not a
-working socket. On BOTH apex and es hosts: log in, confirm the WS reaches `101 Switching
-Protocols` in the network tab, and watch live board data actually update, before calling the
-phase accepted:
+working socket. Two parts, because in Phase 1 the pages still target the OLD `wss://` hostnames —
+opening the new pages exercises the new Origins but NOT the new WS routes:
+
+1. In the browser (both apex and es pages): log in, confirm the network tab's WS request reaches
+   `101 Switching Protocols` and live board data updates — and note WHICH Request URL that was.
+2. Authenticated direct probe of each NEW WS hostname the pages did not traverse: copy the
+   bearer from the page's WS request (network tab → Authorization header), then for each of
+   `bleadingoptions.com` and `es.bleadingoptions.com`:
+
+   ```sh
+   curl -s -o /dev/null -w '%{http_code}\n' -m 8 \
+     -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+     -H "Origin: https://<host>" -H "Authorization: Bearer <token-from-network-tab>" \
+     -H "Sec-WebSocket-Key: $(head -c16 /dev/urandom | base64)" -H 'Sec-WebSocket-Version: 13' \
+     "https://<host>/ws/events"
+   ```
+
+   `101` = the authenticated upgrade crossed the new route end-to-end (curl then idles until the
+   -m 8 timeout — that is expected). Anything else fails the gate.
+
+Only after both parts pass on both domains is the phase accepted:
 
 | Check | Old domain | New domain |
 |---|---|---|
