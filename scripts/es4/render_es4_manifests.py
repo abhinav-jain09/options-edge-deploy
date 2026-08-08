@@ -61,6 +61,8 @@ ES_ENV = {
         # the admission watermark blocks on UNSEEN partitions, so an under-declared count
         # would silently release records early — must match the live topic exactly.
         {"name": "INDICATOR_INPUT_PARTITIONS", "value": "4", "_override": True},
+        # NO control-topic entry here on purpose (PR #734): TOPIC_PREFIX=es. (es4-common-env)
+        # prefixes the control-topic default at runtime — an explicit value would double-prefix.
     ],
     "close-direction": [
         # es4 chains carry symbol "ES" (the es-prefixed dealer-ledger profile stream); the
