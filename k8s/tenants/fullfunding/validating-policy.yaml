@@ -1,0 +1,70 @@
+# Structural rules the ResourceQuota and PSA cannot express.
+#
+# A ResourceQuota is identity-independent but only counts objects; PSA `restricted` already
+# denies privileged pods, host namespaces and hostPath. What neither covers is WHERE a pod
+# writes and which storage class it claims — and Abhinav's requirement is that nothing of this
+# tenant's is stored on the root filesystem.
+#
+# Measured on the node: PVC data and container writable layers already live on /home (imagefs is
+# /home; only nodefs is /). The two things that DO land on / are disk-medium emptyDir and
+# container logs. Rule 1 removes the first.
+#
+# `failurePolicy: Fail` matters: a policy that fails open is worse than no policy. This mirrors
+# the existing `options-edge-jenkins-only-workloads` policy already running on this cluster.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: fullfunding-tenant-rules
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods", "persistentvolumeclaims"]
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs", "cronjobs"]
+  validations:
+    # 1. No disk-medium emptyDir anywhere: that writes to /var/lib/kubelet on `/`.
+    #    tmpfs (`medium: Memory`) is allowed — it consumes the pod's memory limit, not the disk.
+    - expression: >-
+        !has(object.spec) ? true :
+        (
+          (has(object.spec.volumes) ?
+            object.spec.volumes.all(v, !has(v.emptyDir) || (has(v.emptyDir.medium) && v.emptyDir.medium == 'Memory'))
+            : true)
+          &&
+          (has(object.spec.template) && has(object.spec.template.spec) && has(object.spec.template.spec.volumes) ?
+            object.spec.template.spec.volumes.all(v, !has(v.emptyDir) || (has(v.emptyDir.medium) && v.emptyDir.medium == 'Memory'))
+            : true)
+          &&
+          (has(object.spec.jobTemplate) && has(object.spec.jobTemplate.spec.template.spec.volumes) ?
+            object.spec.jobTemplate.spec.template.spec.volumes.all(v, !has(v.emptyDir) || (has(v.emptyDir.medium) && v.emptyDir.medium == 'Memory'))
+            : true)
+        )
+      message: "fullfunding: emptyDir must set medium: Memory — a disk-medium emptyDir writes to the root filesystem, which this tenant may not use."
+    # 2. Every PVC must name a storage class explicitly. Omitting it inherits the cluster
+    #    default silently; naming it keeps the /home-backed choice visible and reviewable.
+    - expression: >-
+        object.kind != 'PersistentVolumeClaim' ? true :
+        (has(object.spec.storageClassName) && object.spec.storageClassName != '')
+      message: "fullfunding: PVCs must name storageClassName explicitly (it decides which disk the data lands on)."
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: fullfunding-tenant-rules
+spec:
+  policyName: fullfunding-tenant-rules
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        tenant: fullfunding
