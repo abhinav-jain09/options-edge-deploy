@@ -195,10 +195,19 @@ What Phase 3 removes (this change-set):
    until these records are gone, the OptionsEdge tunnel is still the DNS target for that domain.
    Evidence for the record must be CONFIGURATION-level, not a resolver answer: `dig` cannot show
    which tunnel a proxied record targets (and a repointed record still answers from Cloudflare
-   IPs). Capture the zone's record list showing no record pointing at
-   `976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com` — a dashboard screenshot of the DNS tab,
-   or `GET /zones/<fullfunding-zone-id>/dns_records` from the Cloudflare API — and keep it with
-   this migration's notes. `bleadingoptions.com` keeps its three proxied CNAMEs.
+   IPs). It must also be COMPLETE — the DNS-records API is paginated (20 per page by default), so
+   one page proves nothing. Use an exact content filter and assert zero matches:
+
+   ```sh
+   curl -s -H "Authorization: Bearer $CF_TOKEN" \
+     "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?content=976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com&per_page=100" \
+     | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; \
+        print('MATCHES', d['result_info']['total_count']); sys.exit(0 if d['result_info']['total_count']==0 else 1)"
+   ```
+
+   `success: true` **and** `total_count == 0` is the acceptance evidence (keep the output). If you
+   use the dashboard instead, filter the DNS tab by that tunnel target and screenshot the complete
+   filtered result — not one unfiltered page. `bleadingoptions.com` keeps its three proxied CNAMEs.
 6. **Re-accept after the handoff** — run the gate once more (it proves absence in every config we
    own AND asks cloudflared itself that each retired URL resolves to `http_status:404`), record the
    DNS evidence from step 5, AND repeat the full authenticated smoke on BOTH sites
@@ -243,7 +252,9 @@ Phase-3 change, so a blanket `git revert` of it takes the verifier away with it 
 that rejects `--phase rollback`. Roll back selectively — the tunnel file, the manifests' env/host
 values, the realm via the kcadm inverse above — and keep `scripts/ops/verify-prod-tunnel.sh` at its
 Phase-3 version (if you must work from a reverted tree, run the gate from this commit explicitly:
-`git show <phase3-sha>:scripts/ops/verify-prod-tunnel.sh > /tmp/gate.sh && bash /tmp/gate.sh --phase rollback`). ⚠️ This inverse is valid ONLY before the DNS handoff — after it, re-admitting
+`git show <phase3-sha>:scripts/ops/verify-prod-tunnel.sh > /tmp/gate.sh && REPO_ROOT=$(pwd) bash /tmp/gate.sh --phase rollback` —
+`REPO_ROOT` is required because a script outside the tree would otherwise resolve the repo paths
+against `/tmp`). ⚠️ This inverse is valid ONLY before the DNS handoff — after it, re-admitting
 those entries is exactly the hijack risk described below, and the correct move is fix-forward.
 
 **After the handoff there is no rollback that re-admits `fullfunding.nl` — in ANY surface.** That

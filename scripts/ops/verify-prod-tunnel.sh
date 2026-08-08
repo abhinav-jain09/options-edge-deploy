@@ -68,7 +68,10 @@ if [ "$NETWORK_ONLY" = "1" ] && [ "$PRECHECK" = "1" ]; then
   exit 2
 fi
 
-REPO_COPY="${REPO_COPY:-$(cd "$(dirname "$0")/../.." && pwd)/infra/prod/cloudflared/options-edge-stable.yml}"
+# REPO_ROOT lets the gate run from a copy placed anywhere (e.g. a Phase-3 script extracted into
+# /tmp to validate a reverted tree) — without it, $0-derived paths resolve against that location.
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)}"
+REPO_COPY="${REPO_COPY:-$REPO_ROOT/infra/prod/cloudflared/options-edge-stable.yml}"
 LIVE_PATH="${LIVE_PATH:-/etc/cloudflared/options-edge-stable.yml}"
 PROD_SSH="${PROD_SSH:-}"
 ES4_SSH="${ES4_SSH:-ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 abhinav@192.168.100.4}"
@@ -103,7 +106,7 @@ case "$PHASE" in
     SERVE_ES_DEFAULT="es.bleadingoptions.com"
     SERVE_AUTH_DEFAULT="auth.bleadingoptions.com"
     REDIR_HOSTS_DEFAULT="fullfunding.nl es.fullfunding.nl auth.fullfunding.nl"
-    EXPECTED_REDIRECT_STATUS_DEFAULT="307"   # soak on temporary; --promoted / retired demand 308
+    EXPECTED_REDIRECT_STATUS_DEFAULT="307"   # soak on temporary; only --promoted demands 308
     EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
     # Old origins stay trusted during the redirect soak; Phase 3 removes them.
     PROD_ORIGINS_DEFAULT="https://fullfunding.nl https://bleadingoptions.com"
@@ -551,7 +554,7 @@ fi
 # Deliberately NOT gated on ABSENT_TUNNEL_HOSTS: rollback has none, yet still needs this proof.
 case "$PHASE" in retired|rollback) ING_CHECK=1 ;; *) ING_CHECK=0 ;; esac
 if [ "$ING_CHECK" = "1" ]; then
-  ING_FILE="${ING_FILE:-$(cd "$(dirname "$0")/../.." && pwd)/k8s/keycloak/keycloak-ingress.yaml}"
+  ING_FILE="${ING_FILE:-$REPO_ROOT/k8s/keycloak/keycloak-ingress.yaml}"
   # EXACT host-set equality, not absence-of-a-literal: that also rejects wildcard hosts
   # ("*.fullfunding.nl"), a hostless rule (matches every host) and any unexpected extra rule.
   # Deliberately NOT env-overridable: an override could bless an Ingress that re-admits the
@@ -919,7 +922,7 @@ EOF_REQ
 fi
 
 # 6e. the repo realm IMPORT FILE must carry the same sets (parity is a gate, not a hope) ---------
-REALM_CM="${REALM_CM:-$(cd "$(dirname "$0")/../.." && pwd)/k8s/keycloak/keycloak-realm-configmap.yaml}"
+REALM_CM="${REALM_CM:-$REPO_ROOT/k8s/keycloak/keycloak-realm-configmap.yaml}"
 cm_out="$(python3 - "$REALM_CM" <<'PYCM'
 import sys
 try:
@@ -990,7 +993,7 @@ for h in $SERVE_APEX $SERVE_ES; do
 done
 
 # 8. redirect phases: every OLD hostname, BOTH schemes, exact lifecycle status ------------------
-# redirect soak expects 307 (recallable); retired expects the promoted 308. Accepting either would
+# redirect soak expects 307 (recallable); --promoted expects 308. Accepting either would
 # let a premature permanent redirect — or a forgotten promotion — pass silently.
 for h in $REDIR_HOSTS; do
   target_host="$(redirect_target_for "$h")"
