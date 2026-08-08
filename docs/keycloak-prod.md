@@ -145,10 +145,12 @@ kc_exec() { kubectl $KT -n options-edge exec -i deploy/oe-keycloak -- sh -c "$1"
 kc_login_ok() {  # does Keycloak accept this password RIGHT NOW? (the only trustworthy state)
   printf '%s\n' "$1" | kc_exec 'IFS= read -r P; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$P"' >/dev/null 2>&1
 }
-kc_setpw() {  # $1=auth-pw $2=new-pw, both via stdin
+kc_setpw() {  # $1=auth-pw $2=new-pw, both via stdin. The POD-SIDE `timeout 30` is the fence that
+  # makes ambiguity resolvable: if the kubectl transport dies, no pod-side write can still be
+  # in flight once 30s have elapsed — so after QUIESCE below, what Keycloak accepts is final.
   printf '%s\n%s\n' "$1" "$2" | kc_exec 'set -eu; IFS= read -r AUTHP; IFS= read -r NEWP
-    /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$AUTHP"
-    /opt/keycloak/bin/kcadm.sh set-password -r master --username abhinav --new-password "$NEWP"'
+    timeout 30 /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$AUTHP"
+    timeout 30 /opt/keycloak/bin/kcadm.sh set-password -r master --username abhinav --new-password "$NEWP"'
 }
 secret_now() { kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d; }
 patch_secret() {  # via stdin (no argv exposure), 3 bounded attempts
@@ -167,9 +169,16 @@ indeterminate() {  # never discard either candidate — the operator must conver
   exit 3
 }
 
-kc_setpw "$OLD_PW" "$NEW_PW"   # outcome may be lost in transit — the reconciler decides, not $?
+if ! kc_setpw "$OLD_PW" "$NEW_PW"; then
+  # Ambiguous transport outcome: the pod-side write may or may not have committed. QUIESCE past
+  # the pod-side 30s fence so no delayed commit can land AFTER we observe the state — an
+  # observation taken inside the fence window would not be final.
+  echo "set-password transport ambiguous — quiescing 35s past the pod-side timeout fence" >&2
+  sleep 35
+fi
 
-# RECONCILE: ask Keycloak which password it accepts NOW, then drive the Secret to that value.
+# RECONCILE: ask Keycloak which password it accepts NOW (final, thanks to the fence), then drive
+# the Secret to that value.
 if kc_login_ok "$NEW_PW"; then TARGET="$NEW_PW"
 elif kc_login_ok "$OLD_PW"; then TARGET="$OLD_PW"; echo "set-password did not take effect — converging on OLD" >&2
 else indeterminate "Keycloak accepts neither value (connectivity?)"; fi

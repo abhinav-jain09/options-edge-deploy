@@ -32,9 +32,12 @@
 #
 # USAGE
 #   scripts/ops/verify-prod-tunnel.sh [--phase dual|redirect|retired] [--network-only]
-#   PROD_SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 user@192.168.100.252" …  # remote prod reads
-#   ES4_SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 user@192.168.100.4" …      # remote es4 reads
-#   (always BatchMode + ConnectTimeout: a gate must fail closed, never hang on a password prompt)
+#   SSHOPTS="-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
+#   timeout 600 env PROD_SSH="ssh $SSHOPTS user@192.168.100.252" ES4_SSH="ssh $SSHOPTS user@192.168.100.4" \
+#     scripts/ops/verify-prod-tunnel.sh --phase …
+#   (BatchMode+ConnectTimeout stop prompts/handshake hangs; ServerAlive kills stalled established
+#   streams; the outer `timeout 600` is the whole-gate deadline — a gate that never returns is a
+#   gate that failed open)
 set -uo pipefail
 
 PHASE="${TUNNEL_PHASE:-dual}"
@@ -53,7 +56,7 @@ case "$PHASE" in dual|redirect|retired) ;; *) echo "bad --phase '$PHASE'" >&2; e
 REPO_COPY="${REPO_COPY:-$(cd "$(dirname "$0")/../.." && pwd)/infra/prod/cloudflared/options-edge-stable.yml}"
 LIVE_PATH="${LIVE_PATH:-/etc/cloudflared/options-edge-stable.yml}"
 PROD_SSH="${PROD_SSH:-}"
-ES4_SSH="${ES4_SSH:-ssh -o BatchMode=yes -o ConnectTimeout=10 abhinav@192.168.100.4}"
+ES4_SSH="${ES4_SSH:-ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 abhinav@192.168.100.4}"
 GW_SVC="${GW_SVC:-feed-gateway-service}"
 GW_DEPLOY="${GW_DEPLOY:-feed-gateway-service}"
 ES4_GW_DEPLOY="${ES4_GW_DEPLOY:-es-feed-gateway}"
@@ -317,7 +320,13 @@ done
 # --request-timeout bounds every k8s call: ConnectTimeout only bounds the ssh handshake, and an
 # acceptance gate that can hang on a wedged apiserver does not fail closed.
 K8S_TIMEOUT="${K8S_TIMEOUT:-20s}"
+# --request-timeout bounds each API request; exec additionally needs --pod-running-timeout (its own
+# default is 1 minute of waiting for a running pod). Neither bounds a stalled established stream —
+# that is what the ssh ServerAlive options in the documented examples and the recommended outer
+# `timeout 600 …` invocation are for.
+KEXEC_OPTS="--request-timeout=$K8S_TIMEOUT --pod-running-timeout=$K8S_TIMEOUT"
 prod_kubectl() { run "kubectl --request-timeout=$K8S_TIMEOUT -n $NS $1 2>/dev/null"; }
+prod_kexec()   { run "kubectl $KEXEC_OPTS -n $NS exec $1 2>/dev/null"; }
 es4_kubectl()  { run_es4 "KC=\$(command -v kubectl); sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \$KC --request-timeout=$K8S_TIMEOUT -n $NS $1 2>/dev/null"; }
 k8s_on() { if [ "$1" = "prod" ]; then prod_kubectl "$2"; else es4_kubectl "$2"; fi; }
 
@@ -374,7 +383,7 @@ done
 # probes cannot see these values; the running pod's effective environment can (kubectl exec
 # printenv — a template read alone could report a config an unfinished rollout is not serving).
 eff_env() {  # cluster, deploy, container, var — the RUNNING container's effective value
-  k8s_on "$1" "exec deploy/$2 -c $3 -- printenv $4"
+  k8s_on "$1" "exec --pod-running-timeout=$K8S_TIMEOUT deploy/$2 -c $3 -- printenv $4"
 }
 
 env_must_equal() {  # cluster, deploy, container, var, expected
@@ -461,7 +470,7 @@ kc_sets_check() {
   [ -z "$pw" ] && { unavailable "could not read the Keycloak admin secret"; return; }
   # Password travels via stdin end-to-end — never interpolated into shell text, so any character
   # (apostrophes included) is safe; kcadm receives it through the pod-side shell variable.
-  client="$(printf '%s' "$pw" | run_stdin "kubectl --request-timeout=$K8S_TIMEOUT -n $NS exec -i deploy/oe-keycloak -- sh -c 'IFS= read -r KC_PW; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$KC_PW\" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web 2>/dev/null'")"
+  client="$(printf '%s' "$pw" | run_stdin "kubectl $KEXEC_OPTS -n $NS exec -i deploy/oe-keycloak -- sh -c 'IFS= read -r KC_PW; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$KC_PW\" >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web 2>/dev/null'")"
   [ -z "$client" ] && { unavailable "could not read the live options-edge-web client via kcadm"; return; }
   printf '%s' "$client" | python3 -c "
 import json, sys
@@ -506,6 +515,14 @@ except Exception as e:
 kc_out="$(kc_sets_check 2>&1)"
 [ -n "$kc_out" ] && printf '%s\n' "$kc_out"
 printf '%s\n' "$kc_out" | grep -q 'FAIL' && fail=1
+# Completeness: all three client sets must have been judged (a crashed/truncated parser producing
+# fewer rows must not read as green).
+kc_rows="$(printf '%s\n' "$kc_out" | grep -c 'live Keycloak client .* \(matches\|differs\)')"
+if ! printf '%s\n' "$kc_out" | grep -q 'FAIL' && [ "$kc_rows" != "3" ]; then
+  if printf '%s\n' "$kc_out" | grep -q 'WARN'; then :; else
+    bad "Keycloak client verification produced $kc_rows/3 judgements — parser output truncated"
+  fi
+fi
 
 # 6d. the dark req realm's client must follow the domain too (Phase 3 renames it) ----------------
 # Exact per-field sets: the callback URI and the origin are DIFFERENT values and each list must
@@ -513,12 +530,16 @@ printf '%s\n' "$kc_out" | grep -q 'FAIL' && fail=1
 case "$PHASE" in retired) req_host="req.bleadingoptions.com" ;; *) req_host="req.fullfunding.nl" ;; esac
 EXPECTED_REQ_REDIRECTS="${EXPECTED_REQ_REDIRECTS:-https://$req_host/oidc-callback}"
 EXPECTED_REQ_WEBORIGINS="${EXPECTED_REQ_WEBORIGINS:-https://$req_host}"
-req_raw="$(prod_kubectl "exec deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web 2>/dev/null'")"
+req_raw="$(prod_kubectl "exec --pod-running-timeout=$K8S_TIMEOUT deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web 2>/dev/null'")"
 if [ -z "$req_raw" ]; then
   unavailable "could not read the req realm's bugzilla-web client"
   req_out=""
 else
-req_out="$(printf '%s' "$req_raw" | { command -v python3 >/dev/null && python3 -c "
+if ! command -v python3 >/dev/null; then
+  unavailable "python3 needed to parse the req realm client"
+  req_out=""
+else
+req_out="$(printf '%s' "$req_raw" | python3 -c "
 import json, sys
 try:
     arr = json.load(sys.stdin)
@@ -530,7 +551,8 @@ try:
     print('REQ_REDIRECTS\t' + '\t'.join(sorted(str(v) for v in c.get('redirectUris', []))))
     print('REQ_WEBORIGINS\t' + '\t'.join(sorted(str(v) for v in c.get('webOrigins', []))))
 except Exception as e:
-    print('  FAIL: req realm client response unusable: %s' % e)" || true; })"
+    print('  FAIL: req realm client response unusable: %s' % e)")"
+fi
 fi
 if [ -z "$req_out" ]; then
   :  # unavailable already reported above (or python3 missing — the kc_sets_check gate covers that)
@@ -554,6 +576,8 @@ else
   done <<EOF_REQ
 $req_out
 EOF_REQ
+  req_rows="$(printf '%s\n' "$req_out" | grep -cE '^(REQ_REDIRECTS|REQ_WEBORIGINS)\b')"
+  [ "$req_rows" = "2" ] || bad "req client verification produced $req_rows/2 records — parser output truncated"
 fi
 
 # 6e. the repo realm IMPORT FILE must carry the same sets (parity is a gate, not a hope) ---------
@@ -566,7 +590,10 @@ try:
     cm = next(d for d in docs if d and d.get('kind') == 'ConfigMap')
     realm = json.loads(cm['data']['optionsedge-realm.json'])
     req = json.loads(cm['data']['req-realm.json'])
-    web = next(c for c in realm['clients'] if c['clientId'] == 'options-edge-web')
+    webs = [c for c in realm['clients'] if isinstance(c, dict) and c.get('clientId') == 'options-edge-web']
+    if len(webs) != 1:
+        raise ValueError('expected exactly 1 options-edge-web client in the import file, got %d' % len(webs))
+    web = webs[0]
     bz_all = [c for c in req['clients'] if isinstance(c, dict) and c.get('clientId') == 'bugzilla-web']
     if len(bz_all) != 1:
         raise ValueError('expected exactly 1 bugzilla-web client in the import file, got %d' % len(bz_all))
@@ -583,7 +610,9 @@ except Exception as e:
     print('  FAIL: realm configmap unusable: %s' % e)
 PYCM
 )"
-if printf '%s\n' "$cm_out" | grep -q 'FAIL'; then
+if [ -z "$cm_out" ]; then
+  bad "realm configmap parser produced no output — cannot prove import-file parity"
+elif printf '%s\n' "$cm_out" | grep -q 'FAIL'; then
   printf '%s\n' "$cm_out"; fail=1
 else
   while IFS=$'\t' read -r name rest; do
@@ -606,6 +635,8 @@ else
   done <<EOF_CM
 $cm_out
 EOF_CM
+  cm_rows="$(printf '%s\n' "$cm_out" | grep -cE '^CM_(REDIRECTS|WEBORIGINS|POSTLOGOUT|REQ_REDIRECTS|REQ_WEBORIGINS)\b')"
+  [ "$cm_rows" = "5" ] || bad "realm configmap verification produced $cm_rows/5 records — parser output truncated"
 fi
 
 # 7. the web surface itself: page serves, and the REST API refuses anonymous callers ------------
