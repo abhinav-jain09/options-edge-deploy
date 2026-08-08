@@ -1345,28 +1345,42 @@ sub ensure_components {
   my %have = map { $_->name => $_ } @{$product->components};
 
   foreach my $comp (@{$spec->{components}}) {
+    # Declared ownership wins over the CLI fallback, so the SSOT alone
+    # determines the result.
+    my $owner = $comp->{default_assignee};
+    if (defined $owner && $owner ne '') {
+      my $user = Bugzilla::User->new({name => $owner})
+        or fatal("component '$comp->{name}' declares default_assignee "
+          . "'$owner', which is not a Bugzilla account");
+      fatal("declared default_assignee '$owner' is disabled")
+        if !$user->is_enabled;
+      $owner = $user->login;
+    }
+    else {
+      $owner = $default_assignee->login;
+    }
+
     my $existing = $have{$comp->{name}};
     if (!$existing) {
       plan("product '$spec->{name}': create component '$comp->{name}' "
-          . '(default assignee ' . $default_assignee->login . ')');
+          . "(default assignee $owner)");
       next if $DRY;
       Bugzilla::Component->create({
         product       => $product,
         name          => $comp->{name},
         description   => $comp->{description},
-        initialowner  => $default_assignee->login,
+        initialowner  => $owner,
         isactive      => 1,
         create_series => 1,
       });
       next;
     }
     my $changed = 0;
-    if ($existing->default_assignee->login ne $default_assignee->login) {
+    if ($existing->default_assignee->login ne $owner) {
       plan("product '$spec->{name}': component '$comp->{name}' default "
-          . 'assignee ' . $existing->default_assignee->login . ' -> '
-          . $default_assignee->login);
+          . 'assignee ' . $existing->default_assignee->login . " -> $owner");
       if (!$DRY) {
-        $existing->set('initialowner', $default_assignee->login);
+        $existing->set('initialowner', $owner);
         $changed = 1;
       }
     }

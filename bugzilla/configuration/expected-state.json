@@ -266,6 +266,11 @@
     }
   },
 
+  "_component_owner_comment": [
+    "default_assignee is declared here rather than passed on the command line, so two runs with",
+    "different arguments cannot produce two different installations from the same SSOT.",
+    "--default-assignee remains as the fallback for a component that does not name one."
+  ],
   "_products_comment": [
     "These four already exist - created by separate work, with OptionsEdge holding the 177 live",
     "bugs. They are adopted as they are; only descriptions are converged (the OptionsEdge",
@@ -286,7 +291,7 @@
       "versions": ["unspecified"],
       "milestones": ["---"],
       "components": [
-        {"name": "General", "description": "Anything in the OptionsEdge trading platform."}
+        {"name": "General", "description": "Anything in the OptionsEdge trading platform.", "default_assignee": "abhinav.jain09@gmail.com"}
       ]
     },
     {
@@ -300,7 +305,7 @@
       "versions": ["unspecified"],
       "milestones": ["---"],
       "components": [
-        {"name": "General", "description": "Anything requested for the OptionsEdge platform."}
+        {"name": "General", "description": "Anything requested for the OptionsEdge platform.", "default_assignee": "abhinav.jain09@gmail.com"}
       ]
     },
     {
@@ -314,7 +319,7 @@
       "versions": ["unspecified"],
       "milestones": ["---"],
       "components": [
-        {"name": "General", "description": "Anything in the Fullfunding portal and its infrastructure."}
+        {"name": "General", "description": "Anything in the Fullfunding portal and its infrastructure.", "default_assignee": "abhinav.jain09@gmail.com"}
       ]
     },
     {
@@ -328,7 +333,7 @@
       "versions": ["unspecified"],
       "milestones": ["---"],
       "components": [
-        {"name": "General", "description": "Anything requested for the Fullfunding portal."}
+        {"name": "General", "description": "Anything requested for the Fullfunding portal.", "default_assignee": "abhinav.jain09@gmail.com"}
       ]
     }
   ],

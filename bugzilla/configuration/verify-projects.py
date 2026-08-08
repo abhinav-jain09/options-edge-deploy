@@ -310,9 +310,13 @@ def verify_products(bz, state, require_decommissioned):
                got.get("description"), want["description"])
             check(f"component '{name}/{want['name']}' is active",
                   bool(got.get("is_active")))
-            check(f"component '{name}/{want['name']}' has a default assignee",
-                  bool(got.get("default_assigned_to")),
-                  f"default_assigned_to={got.get('default_assigned_to')!r}")
+            if want.get("default_assignee"):
+                eq(f"component '{name}/{want['name']}' default assignee",
+                   got.get("default_assigned_to"), want["default_assignee"])
+            else:
+                check(f"component '{name}/{want['name']}' has a default assignee",
+                      bool(got.get("default_assigned_to")),
+                      f"default_assigned_to={got.get('default_assigned_to')!r}")
 
         # Not filtered by is_active: preflight rejects an undeclared version or
         # milestone whether or not it is active, so the two must agree.

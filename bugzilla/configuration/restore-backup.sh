@@ -131,6 +131,17 @@ fi
 echo "    $(wc -l < "$MANIFEST") tables, exactly as recorded"
 rm -f "$MANIFEST.restored"
 
+echo "==> flushing Bugzilla's memcached, if it has one"
+# Restarting the web container does not clear a SHARED memcached service, and
+# every cached object in it now describes a database that no longer exists.
+docker exec "$WEB" perl -e '
+  use lib qw(/var/www/html /var/www/html/lib /var/www/html/local/lib/perl5);
+  use Bugzilla;
+  my $mc = Bugzilla->memcached;
+  if ($mc && $mc->enabled) { $mc->clear_all; print "    memcached flushed\n" }
+  else                     { print "    no memcached configured\n" }
+' || { echo "FATAL: could not flush memcached; stale objects would describe the old database" >&2; exit 1; }
+
 echo "==> restoring params.json"
 docker cp "$PARAMS" "$WEB:/var/www/html/data/params.json"
 docker exec "$WEB" chown www-data:www-data /var/www/html/data/params.json
