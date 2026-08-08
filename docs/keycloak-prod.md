@@ -144,10 +144,20 @@ OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath
 # Refuse to mutate anything until both values provably exist — an empty OLD_PW (failed Secret
 # read) or NEW_PW (missing openssl) would corrupt the rotation from the first write.
 [ -n "$NEW_PW" ] && [ -n "$OLD_PW" ] || { echo "ABORT: could not initialize both password values — nothing was changed" >&2; exit 2; }
+# Persist BOTH candidates (0600, verified) BEFORE the first mutation: an interrupt or crash after
+# Keycloak commits but before the Secret reconciles must never orphan the only usable credential.
+# The file outlives every failure path and is shredded ONLY after the end-state proof.
+RESCUE="$(mktemp /tmp/kc-rotation-rescue.XXXXXX)" \
+  && chmod 600 "$RESCUE" \
+  && printf 'OLD_PW=%s\nNEW_PW=%s\n' "$OLD_PW" "$NEW_PW" > "$RESCUE" \
+  && [ -s "$RESCUE" ] \
+  && [ "$(stat -c %a "$RESCUE" 2>/dev/null || stat -f %Lp "$RESCUE")" = "600" ] \
+  || { echo "ABORT: could not persist the rescue file — nothing was changed" >&2; exit 2; }
+trap 'echo "INTERRUPTED mid-rotation — candidates preserved at $RESCUE (mode 0600); reconcile by hand" >&2' INT TERM
 # Client-side `timeout 60` is the real bound: --request-timeout limits one API request and
 # --pod-running-timeout only the wait-for-running — neither bounds the remote command itself. An
 # expiry here is exactly the "ambiguous transport" case the reconciler already handles.
-kc_exec() { timeout 60 kubectl $KT --pod-running-timeout=20s -n options-edge exec -i deploy/oe-keycloak -- sh -c "$1"; }
+kc_exec() { timeout --kill-after=5s 60s kubectl $KT --pod-running-timeout=20s -n options-edge exec -i deploy/oe-keycloak -- sh -c "$1"; }
 kc_login_ok() {  # does Keycloak accept this password RIGHT NOW? (the only trustworthy state)
   printf '%s\n' "$1" | kc_exec 'IFS= read -r P; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$P"' >/dev/null 2>&1
 }
@@ -168,21 +178,14 @@ patch_secret() {  # via stdin (no argv exposure), 3 bounded attempts
   done
   return 1
 }
-indeterminate() {  # never discard either candidate, never print one — persist 0600, point at it.
-  # Every rescue step is verified: claiming "preserved" after a failed write (full or read-only
-  # /tmp) would be worse than printing nothing.
+indeterminate() {  # the rescue file was verified-written BEFORE the first mutation — point at it
   echo "ROTATION INDETERMINATE: $1" >&2
-  if RESCUE="$(mktemp /tmp/kc-rotation-rescue.XXXXXX)" \
-     && chmod 600 "$RESCUE" \
-     && printf 'OLD_PW=%s\nNEW_PW=%s\n' "$OLD_PW" "$NEW_PW" > "$RESCUE" \
-     && [ -s "$RESCUE" ] \
-     && [ "$(stat -c %a "$RESCUE" 2>/dev/null || stat -f %Lp "$RESCUE")" = "600" ]; then
-    echo "  both candidate values preserved at $RESCUE (mode 0600) — reconcile by hand, then shred it" >&2
-  else
-    echo "  RESCUE WRITE FAILED — credentials were NOT preserved on disk. Do NOT close this shell:" >&2
-    echo "  the OLD/NEW values exist only in this session's variables (\$OLD_PW / \$NEW_PW)." >&2
-  fi
+  echo "  both candidate values remain at $RESCUE (mode 0600) — reconcile by hand, then shred it" >&2
   exit 3
+}
+shred_rescue() {  # only after an end-state proof; shred if available, else best-effort overwrite+rm
+  if command -v shred >/dev/null; then shred -u "$RESCUE"
+  else dd if=/dev/urandom of="$RESCUE" bs=1k count=1 conv=notrunc 2>/dev/null; rm -f "$RESCUE"; fi
 }
 
 if ! kc_setpw "$OLD_PW" "$NEW_PW"; then
@@ -204,11 +207,14 @@ fi
 # END-STATE PROOF: the Secret's value must authenticate. Only then is the state consistent.
 kc_login_ok "$(secret_now)" || indeterminate "Secret and Keycloak still disagree after reconcile"
 if [ "$TARGET" = "$OLD_PW" ]; then
-  # Consistent, but NOT rotated — the write never took. Exit nonzero so nothing upstream treats
-  # this safe-rollback state as a completed rotation; retry the sequence.
+  # Consistent, but NOT rotated — the write never took. End state is proven, so the rescue file
+  # (which holds the unused NEW value) is shredded; exit nonzero so nothing upstream treats this
+  # safe-rollback state as a completed rotation; retry the sequence.
+  shred_rescue
   echo "rotation DID NOT complete: converged back on the OLD password (consistent; retry needed)" >&2
   exit 4
 fi
+shred_rescue
 echo "rotation converged on the NEW password"
 # final gate — pass the CURRENT migration phase explicitly (dual | redirect | retired):
 timeout 600 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>

@@ -148,16 +148,22 @@ REDIR_HOSTS="$(trimset "$REDIR_HOSTS")"; ABSENT_TUNNEL_HOSTS="$(trimset "$ABSENT
 # In acceptance mode the sets must be EXACTLY the phase defaults: a subset override (e.g. only the
 # new apex) would silently shrink the matrix and still stamp VERIFIED. ALLOW_SET_OVERRIDES=1 is
 # the named escape for deliberate diagnostics — its runs are stamped as such below.
-if [ "$PRECHECK" != "1" ] && [ "$NETWORK_ONLY" != "1" ] && [ "${ALLOW_SET_OVERRIDES:-0}" != "1" ]; then
-  for pair in "SERVE_APEX|$SERVE_APEX|$SERVE_APEX_DEFAULT" "SERVE_ES|$SERVE_ES|$SERVE_ES_DEFAULT" \
-              "SERVE_AUTH|$SERVE_AUTH|$SERVE_AUTH_DEFAULT" "REDIR_HOSTS|$REDIR_HOSTS|$REDIR_HOSTS_DEFAULT" \
-              "ABSENT_TUNNEL_HOSTS|$ABSENT_TUNNEL_HOSTS|$ABSENT_TUNNEL_HOSTS_DEFAULT"; do
-    name="${pair%%|*}"; rest="${pair#*|}"; got="$(trimset "${rest%%|*}")"; want="$(trimset "${rest#*|}")"
-    if [ "$got" != "$want" ]; then
-      echo "FATAL: $name overridden ('$got' != phase default '$want') in acceptance mode — set ALLOW_SET_OVERRIDES=1 for a deliberately reduced diagnostic run (its stamp will say so)" >&2
-      exit 2
-    fi
-  done
+require_default() {  # name, got, phase-default — exact match or FATAL
+  local got want
+  got="$(trimset "$2")"; want="$(trimset "$3")"
+  if [ "$got" != "$want" ]; then
+    echo "FATAL: $1 overridden ('$got' != phase default '$want') — set ALLOW_SET_OVERRIDES=1 for a deliberately reduced diagnostic run (its stamp will say so)" >&2
+    exit 2
+  fi
+}
+if [ "$NETWORK_ONLY" != "1" ] && [ "${ALLOW_SET_OVERRIDES:-0}" != "1" ]; then
+  # Enforced in PRECHECK too — precheck's only concession is not RUNNING the redirect probes;
+  # its serving/absence matrices must be the real ones or its green means nothing.
+  require_default SERVE_APEX "$SERVE_APEX" "$SERVE_APEX_DEFAULT"
+  require_default SERVE_ES "$SERVE_ES" "$SERVE_ES_DEFAULT"
+  require_default SERVE_AUTH "$SERVE_AUTH" "$SERVE_AUTH_DEFAULT"
+  require_default ABSENT_TUNNEL_HOSTS "$ABSENT_TUNNEL_HOSTS" "$ABSENT_TUNNEL_HOSTS_DEFAULT"
+  [ "$PRECHECK" != "1" ] && require_default REDIR_HOSTS "$REDIR_HOSTS" "$REDIR_HOSTS_DEFAULT"
 fi
 if [ "$PRECHECK" = "1" ]; then
   # Precheck exists for exactly one moment: the redirect phase before its rules are created.
@@ -702,30 +708,27 @@ done
 for h in $REDIR_HOSTS; do
   target_host="$(redirect_target_for "$h")"
   if [ -z "$target_host" ]; then bad "no redirect mapping defined for $h"; continue; fi
-  want="https://$target_host/board?x=1"
-  # Method preservation is the entire point of 307/308 — and only a POST can prove it. A
-  # higher-priority or method-scoped rule could redirect GET while mangling POST (Keycloak's
-  # token endpoint is the load-bearing case), so probe POST explicitly.
-  hdrs="$(curl -s -o /dev/null -D - -m 20 -X POST "https://$h/board?x=1" 2>/dev/null)"
-  code="$(printf '%s' "$hdrs" | head -1 | awk '{print $2}')"
-  loc="$(printf '%s' "$hdrs" | grep -i '^location:' | head -1 | sed -E 's/^[Ll]ocation:[[:space:]]*//; s/\r$//')"
-  if [ "$code" = "$EXPECTED_REDIRECT_STATUS" ] && [ "$loc" = "$want" ]; then
-    note "OK   POST https://$h -> $code, Location host-mapped (method-preserving)"
-  else
-    bad "POST https://$h -> ${code:-<none>} Location='${loc:-<none>}' (expected $EXPECTED_REDIRECT_STATUS -> $want; a method-scoped rule may be mangling POST)"
-  fi
-  for scheme in https http; do
-    hdrs="$(curl -s -o /dev/null -D - -m 20 "$scheme://$h/board?x=1" 2>/dev/null)"
-    code="$(printf '%s' "$hdrs" | head -1 | awk '{print $2}')"
-    loc="$(printf '%s' "$hdrs" | grep -i '^location:' | head -1 | sed -E 's/^[Ll]ocation:[[:space:]]*//; s/\r$//')"
-    # STRICT on both schemes: the http*:// Single Redirect matches plain HTTP at the edge BEFORE
-    # any https upgrade, so the http leg must show the same lifecycle status and host-mapped
-    # Location. A same-host 301/302 upgrade here would rewrite POST to GET before the cross-domain
-    # hop — exactly what the 307/308 policy exists to prevent — and therefore FAILS.
-    if [ "$code" = "$EXPECTED_REDIRECT_STATUS" ]; then note "OK   $scheme://$h -> $code"
-    else bad "$scheme://$h -> ${code:-<none>} (expected exactly $EXPECTED_REDIRECT_STATUS in phase $PHASE)"; fi
-    if [ "$loc" = "$want" ]; then note "OK   $scheme://$h Location preserves host-map + path + query"
-    else bad "$scheme://$h Location = '${loc:-<none>}' (expected $want)"; fi
+  # FULL matrix: both schemes x both methods. Only POST proves the method-preservation the
+  # 307/308 policy exists for — a method- or scheme-scoped rule could pass GET https while
+  # mangling POST http (Keycloak's token endpoint is the load-bearing POST, so the auth host is
+  # additionally probed on its real token path). STRICT everywhere: the http*:// Single Redirect
+  # matches plain HTTP at the edge BEFORE any https upgrade, so a same-host 301/302 on the http
+  # leg FAILS — it would rewrite POST to GET before the cross-domain hop.
+  probe_paths="/board?x=1"
+  [ "$h" = "auth.fullfunding.nl" ] && probe_paths="$probe_paths /realms/optionsedge/protocol/openid-connect/token?x=1"
+  for ppath in $probe_paths; do
+    want="https://$target_host$ppath"
+    for scheme in https http; do
+      for method in GET POST; do
+        hdrs="$(curl -s -o /dev/null -D - -m 20 -X "$method" "$scheme://$h$ppath" 2>/dev/null)"
+        code="$(printf '%s' "$hdrs" | head -1 | awk '{print $2}')"
+        loc="$(printf '%s' "$hdrs" | grep -i '^location:' | head -1 | sed -E 's/^[Ll]ocation:[[:space:]]*//; s/\r$//')"
+        if [ "$code" = "$EXPECTED_REDIRECT_STATUS" ]; then note "OK   $method $scheme://$h$ppath -> $code"
+        else bad "$method $scheme://$h$ppath -> ${code:-<none>} (expected exactly $EXPECTED_REDIRECT_STATUS in phase $PHASE; a method/scheme-scoped rule may be interfering)"; fi
+        if [ "$loc" = "$want" ]; then note "OK   $method $scheme://$h$ppath Location preserves host-map + path + query"
+        else bad "$method $scheme://$h$ppath Location = '${loc:-<none>}' (expected $want)"; fi
+      done
+    done
   done
 done
 
