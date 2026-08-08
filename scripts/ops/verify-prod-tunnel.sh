@@ -305,6 +305,37 @@ selftest() {
 [ -f "$REPO_COPY" ] || { echo "FATAL: repo copy not found at $REPO_COPY" >&2; exit 2; }
 note "phase=$PHASE $([ "$NETWORK_ONLY" = "1" ] && echo '(network-only diagnostic)')$([ "$PRECHECK" = "1" ] && echo '(PRECHECK: redirect section skipped)')"
 
+# --request-timeout bounds every k8s call: ConnectTimeout only bounds the ssh handshake, and an
+# acceptance gate that can hang on a wedged apiserver does not fail closed.
+K8S_TIMEOUT="${K8S_TIMEOUT:-20s}"
+# --request-timeout bounds each API request; exec additionally needs --pod-running-timeout (its own
+# default is 1 minute of waiting for a running pod). Neither bounds a stalled established stream —
+# that is what the ssh ServerAlive options in the documented examples and the recommended outer
+# `timeout 600 …` invocation are for.
+KEXEC_OPTS="--request-timeout=$K8S_TIMEOUT --pod-running-timeout=$K8S_TIMEOUT"
+prod_kubectl() { run "kubectl --request-timeout=$K8S_TIMEOUT -n $NS $1 2>/dev/null"; }
+prod_kexec()   { run "kubectl $KEXEC_OPTS -n $NS exec $1 2>/dev/null"; }
+es4_kubectl()  { run_es4 "KC=\$(command -v kubectl); sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \$KC --request-timeout=$K8S_TIMEOUT -n $NS $1 2>/dev/null"; }
+k8s_on() { if [ "$1" = "prod" ]; then prod_kubectl "$2"; else es4_kubectl "$2"; fi; }
+
+rollout_settled() {  # cluster, deploy — a COMPLETE rollout, not a mixed-version snapshot:
+  # generation observed, and desired == total == updated == ready == available ('total' catches a
+  # lingering old replica that would otherwise supply 'ready' while the new pod supplies
+  # 'updated'). 0-replica deploys settle trivially.
+  local fields
+  fields="$(k8s_on "$1" "get deploy $2 -o jsonpath='{.metadata.generation} {.status.observedGeneration} {.spec.replicas} {.status.replicas} {.status.updatedReplicas} {.status.readyReplicas} {.status.availableReplicas}'")"
+  [ -z "$fields" ] && { unavailable "could not read $1/$2 rollout state"; return 1; }
+  set -- $fields
+  local gen="${1:-0}" ogen="${2:-0}" want="${3:-0}" total="${4:-0}" updated="${5:-0}" ready="${6:-0}" avail="${7:-0}"
+  if [ "$gen" != "$ogen" ]; then
+    bad "$1/$2 rollout not observed yet (generation=$gen observed=$ogen) — effective env below may be stale"; return 0
+  fi
+  if [ "$want" = "0" ] && [ "$total" = "0" ]; then return 0; fi
+  if [ "$want" = "$total" ] && [ "$want" = "$updated" ] && [ "$want" = "$ready" ] && [ "$want" = "$avail" ]; then return 0; fi
+  bad "$1/$2 rollout unsettled (spec=$want total=$total updated=$updated ready=$ready available=$avail) — a mixed-version state; effective env below may be stale"
+  return 0
+}
+
 # 1. live vs repo -----------------------------------------------------------------------------
 live_raw="$(run "cat '$LIVE_PATH' 2>/dev/null")"
 if [ -z "$live_raw" ]; then
@@ -415,36 +446,6 @@ for h in $SERVE_APEX $SERVE_ES; do
   esac
 done
 
-# --request-timeout bounds every k8s call: ConnectTimeout only bounds the ssh handshake, and an
-# acceptance gate that can hang on a wedged apiserver does not fail closed.
-K8S_TIMEOUT="${K8S_TIMEOUT:-20s}"
-# --request-timeout bounds each API request; exec additionally needs --pod-running-timeout (its own
-# default is 1 minute of waiting for a running pod). Neither bounds a stalled established stream —
-# that is what the ssh ServerAlive options in the documented examples and the recommended outer
-# `timeout 600 …` invocation are for.
-KEXEC_OPTS="--request-timeout=$K8S_TIMEOUT --pod-running-timeout=$K8S_TIMEOUT"
-prod_kubectl() { run "kubectl --request-timeout=$K8S_TIMEOUT -n $NS $1 2>/dev/null"; }
-prod_kexec()   { run "kubectl $KEXEC_OPTS -n $NS exec $1 2>/dev/null"; }
-es4_kubectl()  { run_es4 "KC=\$(command -v kubectl); sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml \$KC --request-timeout=$K8S_TIMEOUT -n $NS $1 2>/dev/null"; }
-k8s_on() { if [ "$1" = "prod" ]; then prod_kubectl "$2"; else es4_kubectl "$2"; fi; }
-
-rollout_settled() {  # cluster, deploy — a COMPLETE rollout, not a mixed-version snapshot:
-  # generation observed, and desired == total == updated == ready == available ('total' catches a
-  # lingering old replica that would otherwise supply 'ready' while the new pod supplies
-  # 'updated'). 0-replica deploys settle trivially.
-  local fields
-  fields="$(k8s_on "$1" "get deploy $2 -o jsonpath='{.metadata.generation} {.status.observedGeneration} {.spec.replicas} {.status.replicas} {.status.updatedReplicas} {.status.readyReplicas} {.status.availableReplicas}'")"
-  [ -z "$fields" ] && { unavailable "could not read $1/$2 rollout state"; return 1; }
-  set -- $fields
-  local gen="${1:-0}" ogen="${2:-0}" want="${3:-0}" total="${4:-0}" updated="${5:-0}" ready="${6:-0}" avail="${7:-0}"
-  if [ "$gen" != "$ogen" ]; then
-    bad "$1/$2 rollout not observed yet (generation=$gen observed=$ogen) — effective env below may be stale"; return 0
-  fi
-  if [ "$want" = "0" ] && [ "$total" = "0" ]; then return 0; fi
-  if [ "$want" = "$total" ] && [ "$want" = "$updated" ] && [ "$want" = "$ready" ] && [ "$want" = "$avail" ]; then return 0; fi
-  bad "$1/$2 rollout unsettled (spec=$want total=$total updated=$updated ready=$ready available=$avail) — a mixed-version state; effective env below may be stale"
-  return 0
-}
 
 
 # 5. auth hostnames: OIDC discovery must serve the EXACT expected issuer; admin edge-blocked ----
