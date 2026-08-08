@@ -13,7 +13,7 @@ umask 077
 
 WEB=${BZ_WEB_CONTAINER:-options-edge-bugzilla-web}
 DB=${BZ_DB_CONTAINER:-options-edge-bugzilla-db}
-CNF=/tmp/bz-restore-client.$$.cnf
+CNF=/tmp/bz-restore-client.$$.$(od -An -N4 -tx4 /dev/urandom | tr -d " ").cnf
 
 DUMP=${1:-}
 [ -n "$DUMP" ] || { echo "usage: $0 <dump.sql.gz>" >&2; exit 2; }
@@ -23,27 +23,37 @@ BASE=${DUMP%.sql.gz}
 PARAMS="$BASE.params.json"
 CHARSET="$BASE.charset"
 MANIFEST="$BASE.tables"
+ROWS="$BASE.rows"
 SUMS="$BASE.sha256"
 
 apache_stopped=0
+db_touched=0
 restored=0
 finish() {
   docker exec "$DB" rm -f "$CNF" >/dev/null 2>&1 || true
-  if [ "$restored" -ne 1 ]; then
-    echo >&2
+  [ "$restored" -eq 1 ] && return
+  echo >&2
+  if [ "$db_touched" -eq 1 ]; then
+    echo "RESTORE DID NOT COMPLETE, AND THE DATABASE HAS ALREADY BEEN REPLACED." >&2
+    echo "Do not assume the previous state survives. Apache is currently" >&2
     if [ "$apache_stopped" -eq 1 ]; then
-      echo "RESTORE DID NOT COMPLETE - Apache has been left STOPPED on purpose." >&2
-      echo "Fix the problem and re-run; do not start it by hand until this exits 0." >&2
+      echo "  STOPPED - leave it stopped until you know what happened." >&2
     else
-      echo "RESTORE ABORTED before anything was touched - the database and" >&2
-      echo "Apache are exactly as they were." >&2
+      echo "  RUNNING - stop it yourself if the instance must stay dark:" >&2
+      echo "    docker exec $WEB apachectl stop" >&2
     fi
+  elif [ "$apache_stopped" -eq 1 ]; then
+    echo "RESTORE DID NOT COMPLETE - Apache has been left STOPPED on purpose," >&2
+    echo "but the database was NOT touched." >&2
+  else
+    echo "RESTORE ABORTED before anything was touched - the database and" >&2
+    echo "Apache are exactly as they were." >&2
   fi
 }
 trap finish EXIT
 
 echo "==> verifying the backup set before touching anything"
-for f in "$PARAMS" "$CHARSET" "$MANIFEST" "$SUMS"; do
+for f in "$PARAMS" "$CHARSET" "$MANIFEST" "$ROWS" "$SUMS"; do
   [ -f "$f" ] || { echo "FATAL: missing backup artefact: $f" >&2; exit 1; }
 done
 ( cd "$(dirname "$DUMP")" && sha256sum -c "$(basename "$SUMS")" )
@@ -116,7 +126,11 @@ done
 echo "    no Apache processes remain"
 
 echo "==> recreating the schema"
-db_sql "DROP DATABASE IF EXISTS \\\`$DBNAME\\\`; CREATE DATABASE \\\`$DBNAME\\\` CHARACTER SET $CS COLLATE $COLL;"
+db_touched=1
+# $DBNAME, $CS and $COLL are all allowlisted to bare identifiers above, so
+# they need no quoting - and quoting them through two nested shells is how
+# quoting bugs get in.
+db_sql "DROP DATABASE IF EXISTS $DBNAME; CREATE DATABASE $DBNAME CHARACTER SET $CS COLLATE $COLL;"
 
 echo "==> importing"
 gunzip -c "$DUMP" | docker exec -i "$DB" sh -c \
@@ -131,6 +145,19 @@ if ! diff -u "$MANIFEST" "$MANIFEST.restored"; then
 fi
 echo "    $(wc -l < "$MANIFEST") tables, exactly as recorded"
 rm -f "$MANIFEST.restored"
+
+if [ -f "$ROWS" ]; then
+  echo "==> comparing row counts against the backup"
+  db_sql "SELECT CONCAT(TABLE_NAME, ' ', COALESCE(TABLE_ROWS,0)) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$DBNAME' ORDER BY TABLE_NAME" > "$ROWS.restored"
+  BUGS_BEFORE=$(awk '$1 == "bugs" {print $2}' "$ROWS")
+  BUGS_AFTER=$(db_sql "SELECT COUNT(*) FROM $DBNAME.bugs")
+  [ "${BUGS_BEFORE:-0}" = "$BUGS_AFTER" ] || {
+    echo "FATAL: bugs table has $BUGS_AFTER rows, the backup recorded ${BUGS_BEFORE:-unknown}" >&2
+    exit 1
+  }
+  echo "    bugs: $BUGS_AFTER rows, as recorded"
+  rm -f "$ROWS.restored"
+fi
 
 echo "==> flushing Bugzilla's memcached, if it has one"
 # Restarting the web container does not clear a SHARED memcached service, and

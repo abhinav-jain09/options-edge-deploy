@@ -415,6 +415,16 @@ sub validate_extension_agreement {
       if ($product_type->{$product} // '') ne $STATE->{product_type}{$product};
   }
 
+  my $want_initial = $enf->{initial_status};
+  my $got_initial  = EXTENSION->INITIAL_STATUS;
+  fatal('extension INITIAL_STATUS covers a different set of types')
+    if keys %$got_initial != keys %$want_initial;
+
+  my $want_cat_field = 'cf_category';
+  fatal("extension CATEGORY_FIELD is '" . EXTENSION->CATEGORY_FIELD
+      . "', expected '$want_cat_field'")
+    if EXTENSION->CATEGORY_FIELD ne $want_cat_field;
+
   my $type_by_id = EXTENSION->PRODUCT_TYPE_ID;
   my $want_by_id = $STATE->{product_type_id};
   fatal('extension PRODUCT_TYPE_ID covers a different set of product ids')
@@ -471,6 +481,15 @@ sub validate_extension_agreement {
   fatal("extension WORKFLOW does not match the declared matrix:\n"
       . "         extension: $got_edges\n         declared:  $want_edges")
     if $got_edges ne $want_edges;
+
+  # Declared switches that describe the implementation must be checked, or they
+  # are decoration that can drift into a lie.
+  fatal('enforcement.empty_category_allowed is false, but the extension always '
+      . 'accepts an empty category - that is what leaves existing bugs alone')
+    if !$enf->{empty_category_allowed};
+  fatal('enforcement.cross_type_product_move_allowed is true, but the extension '
+      . 'refuses cross-type moves unconditionally')
+    if $enf->{cross_type_product_move_allowed};
 
   my $want_codes = $enf->{error_codes}{extension};
   my $got_codes  = EXTENSION->ERROR_CODES;
@@ -683,6 +702,21 @@ sub preflight {
     fatal("bugs.$name exists but $name is not defined in fielddefs - a "
         . 'previous run died mid-DDL. Repair by hand before re-running.')
       if !$defined && $column;
+  }
+
+  # Resolved here rather than in ensure_components(), which runs after both
+  # DDL operations: a typo in a declared owner would otherwise abort the run
+  # only once the installation was already half changed.
+  foreach my $spec (@{$STATE->{products}}) {
+    foreach my $comp (@{$spec->{components}}) {
+      my $owner = $comp->{default_assignee};
+      next if !defined $owner || $owner eq '';
+      my $user = Bugzilla::User->new({name => $owner})
+        or fatal("component '$spec->{name}/$comp->{name}' declares "
+          . "default_assignee '$owner', which is not a Bugzilla account");
+      fatal("declared default_assignee '$owner' is disabled")
+        if !$user->is_enabled;
+    }
   }
 
   audit_existing_bugs();
@@ -1527,6 +1561,51 @@ sub self_test_fail_closed {
     if !EXTENSION->model_is_complete;
 
   note('fail-closed self-test passed (damage trips it; rollback restored it)');
+  self_test_rename_guards();
+  return;
+}
+
+# The guards that stop an administrator rewriting bug rows through a value
+# rename are the answer to the worst hole found in review, so they get proven
+# the same way: attempt the forbidden operations for real, inside a transaction
+# that is then rolled back.
+sub self_test_rename_guards {
+  return if $DRY;
+
+  my @cases;
+  my $status = Bugzilla::Status->new({name => 'CONFIRMED'});
+  push @cases, ['status CONFIRMED', $status, 'value', 'RENAMED_BY_SELFTEST']
+    if $status;
+  my $category
+    = Bugzilla::Field::Choice->type('cf_category')->new({name => 'BUG_CODE'});
+  push @cases, ['category BUG_CODE', $category, 'value', 'RENAMED_BY_SELFTEST']
+    if $category;
+  my $product = Bugzilla::Product->new({name => 'OptionsEdge'});
+  push @cases, ['product OptionsEdge', $product, 'name', 'RENAMED_BY_SELFTEST']
+    if $product;
+
+  return note('rename-guard self-test skipped: no guarded objects found')
+    if !@cases;
+
+  assert_lock_held('the rename-guard self-test');
+  $dbh->bz_start_transaction();
+  my @unguarded;
+  foreach my $case (@cases) {
+    my ($label, $object, $field, $value) = @$case;
+    my $refused = !eval { $object->set($field, $value); 1 };
+    push @unguarded, $label if !$refused;
+  }
+  eval { $dbh->bz_rollback_transaction(); 1 }
+    or fatal("rename-guard self-test rollback FAILED: $@");
+  flush_caches();
+
+  fatal('rename-guard self-test: renaming ' . join(', ', @unguarded)
+      . ' was NOT refused. An administrator could rewrite bug rows through a '
+      . 'value rename without any hook seeing it.')
+    if @unguarded;
+
+  note('rename-guard self-test passed (' . scalar(@cases)
+      . ' guarded object(s) refused renaming)');
   return;
 }
 
@@ -1640,10 +1719,11 @@ fatal('the setup lock was not held when the run finished; another process may '
 
 if (!@PLAN) {
   print "\nNo changes - the installation already matches expected-state.json.\n";
-  print "(The run still cleared caches"
-    . ($DRY ? '' : ' and ran the fail-closed self-test, which briefly damages '
-      . 'and rolls back the workflow inside a transaction')
-    . ".)\n";
+  print $DRY
+    ? "(A dry run reads only: it took the advisory lock and nothing else.)\n"
+    : "(The run still cleared caches and ran the self-tests, which briefly "
+    . "damage and roll back the workflow and attempt guarded renames, all "
+    . "inside transactions.)\n";
   exit 0;
 }
 

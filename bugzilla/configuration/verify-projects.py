@@ -373,7 +373,13 @@ def fields_by_name(bz):
     if status >= 400 or not isinstance(body.get("fields"), list):
         raise BzTransportError(
             f"cannot read /rest/field/bug (HTTP {status}): {json.dumps(body)[:300]}")
-    return {f["name"]: f for f in body["fields"]}
+    fields = {}
+    for f in body["fields"]:
+        if not isinstance(f, dict) or "name" not in f:
+            raise BzTransportError(
+                f"/rest/field/bug returned an entry without a name: {str(f)[:120]}")
+        fields[f["name"]] = f
+    return fields
 
 
 def verify_custom_fields(fields, state):
@@ -964,10 +970,15 @@ def close_smoke_bugs(w):
                 continue
             wanted = "INVALID" if issue_type == "BUG" else "REJECTED"
             code, body = w.move(bug_id, status="RESOLVED", resolution=wanted)
-            if code < 400 and not body.get("error"):
+            if code >= 400 or body.get("error"):
+                stuck.append(bug_id)
+                continue
+            # A 200 is not proof: read the state back.
+            final_status, final_resolution = w.state_of(bug_id)[:2]
+            if final_status == "RESOLVED" and final_resolution == wanted:
                 closed += 1
             else:
-                stuck.append(bug_id)
+                stuck.append(f"{bug_id} (still {final_status}/{final_resolution})")
         except BzTransportError as exc:
             stuck.append(f"{bug_id} ({exc})")
             check(f"smoke bug {bug_id} final state is known", False, str(exc))

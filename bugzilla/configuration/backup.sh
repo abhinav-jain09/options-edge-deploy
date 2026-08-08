@@ -25,8 +25,9 @@ DUMP="$BASE.sql.gz"
 PARAMS="$BASE.params.json"
 CHARSET="$BASE.charset"
 MANIFEST="$BASE.tables"
+ROWS="$BASE.rows"
 SUMS="$BASE.sha256"
-CNF=/tmp/bz-backup-client.$$.cnf
+CNF=/tmp/bz-backup-client.$$.$(od -An -N4 -tx4 /dev/urandom | tr -d " ").cnf
 
 cleanup() { docker exec "$DB" rm -f "$CNF" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -80,6 +81,8 @@ grep -Eq '^[A-Za-z0-9_]+ [A-Za-z0-9_]+$' "$CHARSET" \
   || { echo "FATAL: unexpected charset/collation: $(cat "$CHARSET")" >&2; exit 1; }
 db_sql "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA='$DBNAME' ORDER BY TABLE_NAME" | sort > "$MANIFEST"
 test -s "$MANIFEST" || { echo "FATAL: the database has no tables" >&2; exit 1; }
+# An exact count for the one table whose completeness actually matters here.
+printf 'bugs %s\n' "$(db_sql "SELECT COUNT(*) FROM $DBNAME.bugs")" > "$ROWS"
 
 echo "==> dumping"
 docker exec "$DB" sh -c \
@@ -104,13 +107,15 @@ python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$PARAMS" \
 
 ( cd "$OUTDIR" && sha256sum \
     "$(basename "$DUMP")" "$(basename "$PARAMS")" \
-    "$(basename "$CHARSET")" "$(basename "$MANIFEST")" > "$(basename "$SUMS")" )
+    "$(basename "$CHARSET")" "$(basename "$MANIFEST")" "$(basename "$ROWS")" \
+    > "$(basename "$SUMS")" )
 
 echo
 echo "BACKUP OK"
 echo "  dump     $DUMP  ($(du -h "$DUMP" | cut -f1))"
 echo "  charset  $(cat "$CHARSET")"
 echo "  tables   $(wc -l < "$MANIFEST")"
+echo "  bugs     $(awk '{print $2}' "$ROWS") rows"
 echo "  params   $PARAMS"
 echo "  sums     $SUMS"
 echo

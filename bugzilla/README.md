@@ -82,11 +82,13 @@ container.
 **If it does not print `BACKUP OK`, stop — restart Apache with `docker exec $BZ apachectl start` and
 do not apply.**
 
-**4. Get an API key into the environment** — the verification in step 5 needs it. It must belong to
-an admin (`requirelogin` is on, and the parameter assertions need `tweakparams`).
+**4. Get two API keys into the environment** — step 5 needs both. `BZ_API_KEY` must belong to an
+admin (`requirelogin` is on, and the parameter assertions need `tweakparams`). `BZ_REPORTER_KEY`
+must belong to a user WITHOUT `editbugs`/`canconfirm` — the verifier checks that before believing
+it — because that is the only way to prove how an external stakeholder's filing actually behaves.
 
 ```bash
-read -rs BZ_API_KEY && export BZ_API_KEY
+read -rs BZ_API_KEY && export BZ_API_KEY && read -rs BZ_REPORTER_KEY && export BZ_REPORTER_KEY
 ```
 
 `read -rs` keeps the key out of shell history and out of any command's argv. It is still an
@@ -106,8 +108,16 @@ bugs** prefixed `[SMOKE]` and closes them again — so run this in a change wind
 ```bash
 docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply \
   && docker restart $BZ \
-  && { python3 configuration/verify-projects.py --state configuration/expected-state.json \
+  && { python3 configuration/verify-projects.py --state configuration/expected-state.json --reporter-api-key-env BZ_REPORTER_KEY --strict \
        || { echo "VERIFICATION FAILED - taking the site down again"; docker exec $BZ apachectl stop; false; }; }
+```
+
+`--strict` and the reporter key are **mandatory for the first apply**: without them the run reports
+success while the path external stakeholders actually use — an unprivileged reporter filing a
+REQUIREMENT — is only a warning. Export both keys in step 4:
+
+```bash
+read -rs BZ_API_KEY && export BZ_API_KEY && read -rs BZ_REPORTER_KEY && export BZ_REPORTER_KEY
 ```
 
 The verifier defaults to `http://localhost:8092` and **refuses** a non-loopback plain-HTTP URL unless
@@ -117,17 +127,8 @@ proven to be enforcing.
 
 Nothing is scheduled for decommissioning, so no product warning is expected.
 
-**5b. The one thing an admin key cannot prove.** That an *unprivileged* reporter's REQUIREMENT still
-lands on `REQ_DRAFT`. Bugzilla overrides the requested status for anyone without
-`editbugs`/`canconfirm` (`Bug.pm:1526-1536`), and that is exactly how external stakeholders file. It
-is reported as `WARN … NOT proven` unless you hand the verifier such a key — which it checks really
-does lack those groups before believing it:
-
-```bash
-read -rs BZ_REPORTER_KEY && export BZ_REPORTER_KEY && python3 configuration/verify-projects.py --state configuration/expected-state.json --reporter-api-key-env BZ_REPORTER_KEY --strict
-```
-
-**6. Re-run the dry run and confirm it reports zero actions** — that is the idempotence proof:
+**6. Re-run the dry run and confirm it reports zero actions.** That is the idempotence proof for the
+configuration; a dry run reads only, so it is safe against the live site:
 
 ```bash
 docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE"
