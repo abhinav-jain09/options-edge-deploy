@@ -199,22 +199,34 @@ What Phase 3 removes (this change-set):
    one page proves nothing. Use an exact content filter and assert zero matches:
 
    ```sh
-   # content.exact is the documented exact-match filter; a bare ?content= is a contains-style
-   # search whose semantics have changed across API versions. Ask for BOTH forms and take the
-   # larger count — a filter that silently matches nothing must not read as "clean".
+   set -euo pipefail                      # a failed query must STOP this, never read as clean
+   CF=(curl --fail-with-body -sS -H "Authorization: Bearer $CF_TOKEN")
+   Z="https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records"
+   # content.exact is the documented exact filter; the legacy contains-style ?content= is asked as
+   # a cross-check. BOTH must return zero — and a nonzero count EXITS nonzero, it does not just print.
    for q in "content.exact=976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com" \
             "content=976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com"; do
-     curl --fail-with-body -sS -H "Authorization: Bearer $CF_TOKEN" \
-       "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?$q&per_page=100" \
-       | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; \
-          print('$q ->', d['result_info']['total_count'], 'match(es)')"
+     "${CF[@]}" "$Z?$q&per_page=100" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); assert d['success'], d
+n=(d.get('result_info') or {}).get('total_count')
+if n is None: sys.exit('no total_count in response — cannot assert zero')
+print('$q ->', n, 'match(es)')
+sys.exit(0 if n == 0 else 'STOP: the retired zone still targets our tunnel')"
    done
-   # ALSO list the zone's records unfiltered and eyeball the three names — the filter is a
-   # convenience, the record list is the evidence.
-   curl --fail-with-body -sS -H "Authorization: Bearer $CF_TOKEN" \
-     "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?per_page=100" \
-     | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['success'], d; \
-        [print(r['type'], r['name'], '->', r['content']) for r in d['result']]"
+   # …and list EVERY record (all pages) so a filter that silently matches nothing cannot pass as
+   # proof: the record list is the evidence, the filter is only a convenience.
+   pg=1
+   while :; do
+     body="$("${CF[@]}" "$Z?per_page=100&page=$pg")"
+     printf '%s' "$body" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); assert d['success'], d
+for r in d['result']: print(r['type'], r['name'], '->', r['content'])
+ri=d.get('result_info') or {}
+sys.exit(0 if (ri.get('total_pages') or 1) <= (ri.get('page') or 1) else 7)" && break || [ $? -eq 7 ] || exit 1
+     pg=$((pg+1))
+   done
    ```
 
    Acceptance evidence: `success: true`, **zero matches on both filter forms**, and a printed
