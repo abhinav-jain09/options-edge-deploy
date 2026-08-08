@@ -9,7 +9,7 @@
 > If this design ever ships, substitute the `*.bleadingoptions.com` equivalents.
 > See [`domain-migration-bleadingoptions.md`](./domain-migration-bleadingoptions.md).
 
-**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 8. AWAITING USER APPROVAL (gatekeeping Gate-1).
+**Status: GATE-1 REQUIREMENTS / PROPOSED — rev 9. AWAITING USER APPROVAL (gatekeeping Gate-1).
 Not implemented.**
 
 **rev 8 — eight internal inconsistencies corrected, no requirement changed.** Every one was a place
@@ -40,6 +40,14 @@ makes impossible and a reduction trigger that D-3 had already applied; and the r
 quoted superseded thresholds without marking them as such. The lesson is recorded rather than just
 the fix: a closed decision has to be propagated to every operative number it touches, not only to
 the decision table.
+
+**USER DECISION RECORDED 2026-08-08 — D-8 (planned downtime) is CLOSED:** the user has accepted a
+full-stack outage for the node-level work. This removes the largest scheduling constraint in the
+plan: **NS-21 + NS-4 run in one announced maintenance window in which OptionsEdge is stopped
+outright**, rather than being engineered around a live pipeline, and the web tier's `Recreate`
+rollout behaviour (NS-8) is likewise accepted rather than treated as a cost to minimise. The
+market-hours rule still governs *when* the window may open (§6), because an outage being acceptable
+is not the same as an outage during regular trading hours being acceptable.
 
 **USER DECISIONS RECORDED 2026-08-04 — D-1, D-3 and D-7 are CLOSED:**
 1. **D-3 → the host reservation wins.** `system-reserved` keeps the full measured host requirement
@@ -598,8 +606,9 @@ cannot be misread.
 
 Three consequences of the smaller envelope, stated rather than discovered later:
 - **The web tier loses its rollout surge.** `bugzilla-req-web` uses **`Recreate`**, so an image
-  update causes a brief outage instead of a rolling handover. For an internal requirement-intake
-  portal that is an acceptable trade, and it is the honest price of D-3.
+  update causes a brief portal outage instead of a rolling handover. **User-accepted (D-8);** no
+  further mitigation is required and none is designed. The portal's own SLO (NS-16) records the
+  expected rollout gap so it is not mistaken for an incident.
 - **One application pod, not two.** A second app pod requires re-opening the NS-4 arithmetic.
 - **ResourceQuota does not *reserve* a slot for the backup Job.** It admits any combination that
   fits the remaining aggregate; the "one transient" shape is what the numbers permit, not something
@@ -939,9 +948,17 @@ rotated logs for **both** projects. k3s's `--data-dir` already moved the rancher
   `/home/k8s/pod-logs` → `/var/log/pods`), not by symlink, because kubelet resolves and mounts
   paths beneath these directories.
 - **k3s must be stopped and every pod terminated for the move**, since `/var/lib/kubelet` holds live
-  volume mounts. It is therefore a full maintenance window — the largest single operation in this
-  plan — and it is scheduled at **§6 step 1.5**, immediately after the measurement step and
-  **before** the node reservation, so the two node-level changes share one window and one restart.
+  volume mounts. **The resulting full-stack outage is user-accepted (D-8)**, so the design does not
+  attempt to avoid it: NS-21 and NS-4 are performed together in **one announced maintenance window**
+  at **§6 step 1.5**, with OptionsEdge deliberately stopped for the duration. That is simpler and
+  safer than any live-migration alternative, and it is why the ordering guarantee below can be made
+  unconditionally.
+- **Window contract, now that downtime is permitted:** announce the window; scale the OptionsEdge
+  workloads down deliberately (rather than letting the k3s stop terminate them); stop k3s; verify no
+  process holds `/var/lib/kubelet`; move; add and activate the mounts; start k3s; run NS-V31 and the
+  OptionsEdge health gate; only then declare the window closed. **The window is not closed on a
+  timer** — it closes on the health gate, and if the gate fails the rollback below is executed
+  inside the same window.
 - **Ordering is a hard requirement:** the mount units must be active **before** k3s starts, or
   kubelet recreates the directories on `/` and the relocation is silently undone.
 - **Rollback:** remove the fstab entries, stop k3s, move the directories back, restart. The
@@ -1011,7 +1028,8 @@ All steps run **outside** Mon–Fri 09:30–16:15 America/New_York **except the 
 and observation steps that by definition require live trading hours** (steps 1, 8b and 11), which
 change nothing.
 
-0. **Pre-flight:** `req.fullfunding.nl` DNS record **absent**; `/home` free ≥ 400 GiB (so NS-7's
+0. **Pre-flight:** the maintenance window is **announced** (D-8 permits the outage; it does not
+   excuse an unannounced one); `req.fullfunding.nl` DNS record **absent**; `/home` free ≥ 400 GiB (so NS-7's
    reserve holds after the 100 GiB image); `/` free recorded; **NS-12 baseline capture begins**
    (it must span a full session, so it starts here).
 0.5. **Clause-map verification** (NS-19 / NS-V28) — Appendix A reviewed against rev 11 with zero
@@ -1037,10 +1055,12 @@ change nothing.
    budget; against the closed D-3 envelope it would have aborted on the expected measurement
    (`R ≈ 13 Gi`, the off-hours floor) every single time — turning a feasibility gate into an
    unconditional stop.
-1.5. **Relocate kubelet state and pod logs off `/`** (NS-21, D-7) — full maintenance window: stop
-   k3s, move `/var/lib/kubelet` and `/var/log/pods` to `/home`, add fstab bind mounts, verify the
-   mounts are active **before** k3s starts. NS-V31 + the OptionsEdge health gate. **Shares the same
-   window and restart as step 2.**
+1.5. **Relocate kubelet state and pod logs off `/`** (NS-21, D-7) — the announced maintenance
+   window, with **OptionsEdge deliberately stopped (D-8)**: scale down, stop k3s, move
+   `/var/lib/kubelet` and `/var/log/pods` to `/home`, add the fstab bind mounts, verify the mounts
+   are active **before** k3s starts, restart, scale back up. NS-V31 + the OptionsEdge health gate
+   close the window. **Shares the one window and one restart with step 2**, which is the whole
+   reason the two node-level changes are adjacent.
 2. **Node reservation** (NS-4) — config + restart in the window; NS-V6. Valuable standalone. An
    enumerated rollback (restore the previous `config.yaml`, restart, re-verify allocatable) and an
    **OptionsEdge health gate — all 55 deployments Ready and pipeline lag nominal** — close this step.
@@ -1113,7 +1133,7 @@ public exposure and teardown is private (NS-14).
 |---|---|---|
 | R-14 | Secrets **unencrypted at rest** in the k3s datastore; readable via the API by tenant-deploy and platform-k8s, mountable by anything that can create pods, and reachable by host-root, any cluster-admin and the node | NS-15(8)'s closed allowlist bounds which pods/ServiceAccounts may use which Secret; same host custody as every other prod secret. Encryption-at-rest is out of scope and recorded as a gap |
 | R-15 | **No disk-I/O or page-cache isolation** | Data-entry workload; separate backing filesystem; NS-12/NS-18 monitoring. If it bites, the answer is a second machine |
-| R-16 | **Shared availability** | Explicitly accepted (NS-13) |
+| R-16 | **Shared availability** — one node, one kernel, one k3s: both projects fail together, and the NS-21/NS-4 window stops both deliberately | Explicitly accepted (NS-13), and **planned downtime is now explicitly authorised by the user (D-8)** rather than merely tolerated. Unplanned shared failure remains unmitigated; independent availability needs a second machine |
 | R-17 | The loopback filesystem adds I/O overhead and takes **100 GiB of `/home` up front**, retained until teardown | The only hard disk wall available without unmounting `/home`; the cost is stated, not hidden |
 | R-18 | The admin surface depends on a **kubeconfig** rather than SSH | Narrower in scope but a new credential to protect (NS-9); rev-11 R-7 still applies |
 | R-19 | **Tenant load escapes the quota through shared services** — Keycloak, traefik, cloudflared, the registry and image pulls sit outside the quota; NS-16's limits bound the **portal route only**, not direct load on `auth.fullfunding.nl` | Bounded, not eliminated: portal-route rate/in-flight/body limits, database connection limits, off-hours soak, NS-18 alerting, NS-12 RTH observation. Rate-limiting the shared Keycloak route is out of scope |
@@ -1137,6 +1157,7 @@ public exposure and teardown is private (NS-14).
 | **D-3** | `system-reserved` `R`, and the tenant `requests.memory` | **CLOSED (user, 2026-08-04): keep the full host reservation (≈13 Gi) and shrink the tenant to 2.25 Gi.** `R` is still confirmed by the §6 step 1 measurement; **if it exceeds 13.0 Gi, launch is blocked** and returns to the user. The formula's knife-edge is 13.01 Gi — where headroom equals the fixed 2.25 Gi tenant — but the gate rounds down to 13.0, since the formula's inputs are rounded to 0.01 Gi and a 0.01 Gi margin is inside that error (NS-4, §6 step 1) |
 | **D-4** | Tenant egress to the public internet | Default **no**; any runtime need becomes an explicit allowlist entry with its own risk row |
 | **D-5** | OIDC back-channel under default-deny egress | **Split front/back-channel (option ii)**, conditional on verifying the packaged module's endpoint overrides and Keycloak's issuer behaviour; fallback (i) is broad outbound HTTPS and must be recorded as such |
+| **D-8** | Is a full-stack outage acceptable for the node-level work (NS-21 + NS-4)? | **CLOSED (user, 2026-08-08): yes, downtime is acceptable.** NS-21 and NS-4 therefore share one announced window with OptionsEdge stopped, and NS-8's `Recreate` rollout gap needs no mitigation. The market-hours rule still governs when the window may open |
 | **D-7** | NS-20 literal zero on `/` | **CLOSED (user, 2026-08-04): relocate `/var/lib/kubelet` and `/var/log/pods` onto `/home`** — option (a). Specified as **NS-21**, executed at §6 step 1.5. Node-wide and independently valuable, since `/` has only 38 GiB free |
 | **D-6** | `pod-max-pids` value `P` | Set from the RTH measurement at §6 step 1, **or dropped entirely** — with the PID vector then removed from every isolation claim rather than claimed unenforced |
 
