@@ -14,8 +14,17 @@ configuration/
 ```
 
 The Bugzilla runtime checkout on `.252` (`/home/options-edge/data/bugzilla/runtime`) is **not**
-version controlled — a pre-existing exception. Nothing here is copied into it: the extension and the
-scripts are bind-mounted read-only from this repository, so what runs is what was reviewed.
+version controlled — a pre-existing exception. Nothing here is copied into it: the extension, the
+provisioner and the SSOT are bind-mounted read-only from this repository, so what runs is what was
+reviewed. The verifier and the backup/restore scripts run from the host.
+
+> **This installation is live.** It holds 177 bugs in `OptionsEdge` and four products created by
+> separate work. Applying this configuration changes **no existing bug's data**: no status is
+> renamed, no mandatory field is added, nothing is migrated. It does add two *nullable* columns to
+> the `bugs` table (`ALTER TABLE`), which existing rows acquire as empty.
+>
+> The issue type is **derived from the product** — `OptionsEdge`/`Fullfunding` are BUG,
+> `* Requirements` are REQUIREMENT — so there is no per-bug type field to backfill.
 
 ## Compose mounts
 
@@ -126,8 +135,9 @@ docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html
 Pass the same `--default-assignee` as step 4: it defaults to `--admin-login`, so omitting it would
 make the script plan a reassignment of every component and the run would not be a no-op.
 
-**7. Only after step 5 passes**, retire `TestProduct`. This is opt-in and never happens during a
-normal apply; the script aborts rather than removing a product that still holds bugs.
+**7. Nothing to decommission.** `decommission.products` is empty: `TestProduct` was renamed to
+`OptionsEdge` by earlier work and holds the 177 live bugs. The command below is kept only for the day
+something genuinely needs retiring; it aborts rather than removing a product that still holds bugs.
 
 ```bash
 docker exec $BZ apachectl stop && docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply --remove-decommissioned && docker restart $BZ
@@ -162,15 +172,17 @@ Do not try to unpick a partial run with ad-hoc `DROP COLUMN`.
   is *not* enough: Bugzilla's REST serialisation of field values carries no active flag, so the
   verifier cannot tell a deactivated extra from a live one and would fail on it.
 - There is **no** "enforcement enabled" switch, deliberately: anyone with `tweakparams` could turn
-  one off. The extension instead treats the presence of `cf_issue_type` as the marker — if the field
-  exists, the *entire* declared model (field wiring, issue types, every category and its controller,
-  resolutions, statuses with their open flags, and the full workflow matrix) must match, or every
-  guarded change is refused until the provisioner is re-run. Getting back to "not provisioned" means
-  deleting `cf_issue_type` itself, which destroys every item's type.
-- It also aborts if an existing item already violates the model (wrong-branch status, wrong
-  resolution, mismatched or missing category, no issue type). The extension validates fields as they
-  change, so it can never repair an item that was already inconsistent.
-- Adding a third project is just another entry under `products`. A third *issue type* additionally
-  needs a `cf_issue_type` value, its controlled category values, a prefixed set of open statuses,
-  the workflow edges, the `enforcement` maps, and the matching constants in `Extension.pm` — the
-  provisioner refuses to run if those two disagree.
+  one off. The extension anchors on `cf_category` instead — if it exists, the declared model
+  (the field's shape, all four products by **name and id**, the category vocabulary, the
+  resolutions, the statuses with their open flags, and the full workflow matrix) must match, or
+  every guarded change is refused until the provisioner is re-run. Deleting the field is not a way
+  out: from a web or API request that is *broken*, not *bootstrap*. Bootstrap has to be claimed
+  explicitly through `BUGZILLA_ITW_BOOTSTRAP`, which only the provisioner sets.
+- It also aborts if an existing item already violates the model — a status or resolution that does
+  not belong to its product's type, or a category belonging to the other type. An **empty** category
+  is always fine; that is exactly what leaves the 177 existing bugs editable. The extension validates
+  fields as they change, so it can never repair an item that was already inconsistent.
+- Adding a project means a new product plus its entry in `product_type` **and** `product_type_id`,
+  mirrored in `Extension.pm`. A third *issue type* additionally needs its category values, a
+  prefixed set of open statuses, the workflow edges and the `enforcement` maps — the provisioner
+  refuses to run if the JSON and the extension's constants disagree.
