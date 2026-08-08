@@ -32,8 +32,9 @@
 #
 # USAGE
 #   scripts/ops/verify-prod-tunnel.sh [--phase dual|redirect|retired] [--network-only]
-#   PROD_SSH="ssh user@192.168.100.252" scripts/ops/verify-prod-tunnel.sh   # remote prod reads
-#   ES4_SSH="ssh user@192.168.100.4"    …                                    # remote es4 reads
+#   PROD_SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 user@192.168.100.252" …  # remote prod reads
+#   ES4_SSH="ssh -o BatchMode=yes -o ConnectTimeout=10 user@192.168.100.4" …      # remote es4 reads
+#   (always BatchMode + ConnectTimeout: a gate must fail closed, never hang on a password prompt)
 set -uo pipefail
 
 PHASE="${TUNNEL_PHASE:-dual}"
@@ -52,7 +53,7 @@ case "$PHASE" in dual|redirect|retired) ;; *) echo "bad --phase '$PHASE'" >&2; e
 REPO_COPY="${REPO_COPY:-$(cd "$(dirname "$0")/../.." && pwd)/infra/prod/cloudflared/options-edge-stable.yml}"
 LIVE_PATH="${LIVE_PATH:-/etc/cloudflared/options-edge-stable.yml}"
 PROD_SSH="${PROD_SSH:-}"
-ES4_SSH="${ES4_SSH:-ssh abhinav@192.168.100.4}"
+ES4_SSH="${ES4_SSH:-ssh -o BatchMode=yes -o ConnectTimeout=10 abhinav@192.168.100.4}"
 GW_SVC="${GW_SVC:-feed-gateway-service}"
 GW_DEPLOY="${GW_DEPLOY:-feed-gateway-service}"
 ES4_GW_DEPLOY="${ES4_GW_DEPLOY:-es-feed-gateway}"
@@ -408,6 +409,9 @@ mc_check MISSION_AUTH_JWK_SET_URI "$EXPECTED_ISSUER/protocol/openid-connect/cert
 # password was re-synced to the KC_BOOTSTRAP_ADMIN_PASSWORD secret on 2026-07-18 — see
 # docs/keycloak-prod.md). Override KC_VERIFY_USER to use a dedicated read-only verifier account.
 KC_VERIFY_USER="${KC_VERIFY_USER:-abhinav}"
+case "$KC_VERIFY_USER" in
+  *[!a-zA-Z0-9._-]*|"") echo "FATAL: KC_VERIFY_USER '$KC_VERIFY_USER' outside [a-zA-Z0-9._-] — refusing to interpolate into a remote shell" >&2; exit 2 ;;
+esac
 run_stdin() {  # like run(), but forwards OUR stdin to the remote command (ssh passes stdin through)
   if [ -n "$PROD_SSH" ]; then $PROD_SSH "$1"; else bash -c "$1"; fi
 }
@@ -465,28 +469,46 @@ kc_out="$(kc_sets_check 2>&1)"
 printf '%s\n' "$kc_out" | grep -q 'FAIL' && fail=1
 
 # 6d. the dark req realm's client must follow the domain too (Phase 3 renames it) ----------------
-case "$PHASE" in retired) req_expect="https://req.bleadingoptions.com" ;; *) req_expect="https://req.fullfunding.nl" ;; esac
-req_uris="$(prod_kubectl "exec deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web 2>/dev/null'" | { command -v python3 >/dev/null && python3 -c "
+# Exact per-field sets: the callback URI and the origin are DIFFERENT values and each list must
+# match its expected set exactly (extra entries are a failure, substrings prove nothing).
+case "$PHASE" in retired) req_host="req.bleadingoptions.com" ;; *) req_host="req.fullfunding.nl" ;; esac
+EXPECTED_REQ_REDIRECTS="${EXPECTED_REQ_REDIRECTS:-https://$req_host/oidc-callback}"
+EXPECTED_REQ_WEBORIGINS="${EXPECTED_REQ_WEBORIGINS:-https://$req_host}"
+req_out="$(prod_kubectl "exec deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web 2>/dev/null'" | { command -v python3 >/dev/null && python3 -c "
 import json, sys
 try:
-    arr = json.load(sys.stdin); c = arr[0]
-    print(' '.join(sorted(set(c.get('redirectUris', []) + c.get('webOrigins', [])))))
-except Exception:
-    pass" || true; })"
-if [ -z "$req_uris" ]; then
+    arr = json.load(sys.stdin)
+    if not isinstance(arr, list) or len(arr) != 1:
+        raise ValueError('expected exactly 1 bugzilla-web client, got %r' % (len(arr) if isinstance(arr, list) else type(arr).__name__))
+    c = arr[0]
+    if not isinstance(c, dict) or not isinstance(c.get('redirectUris', []), list) or not isinstance(c.get('webOrigins', []), list):
+        raise ValueError('client fields have unexpected types')
+    print('REQ_REDIRECTS\t' + '\t'.join(sorted(str(v) for v in c.get('redirectUris', []))))
+    print('REQ_WEBORIGINS\t' + '\t'.join(sorted(str(v) for v in c.get('webOrigins', []))))
+except Exception as e:
+    print('  FAIL: req realm client response unusable: %s' % e)" || true; })"
+if [ -z "$req_out" ]; then
   unavailable "could not read the req realm's bugzilla-web client"
-elif printf '%s' "$req_uris" | grep -q "$req_expect"; then
-  case "$PHASE" in
-    retired)
-      if printf '%s' "$req_uris" | grep -q "req.fullfunding.nl"; then
-        bad "req realm client still references req.fullfunding.nl after retirement ($req_uris)"
-      else
-        note "OK   req realm client is on $req_expect only"
-      fi ;;
-    *) note "OK   req realm client references $req_expect" ;;
-  esac
+elif printf '%s\n' "$req_out" | grep -q 'FAIL'; then
+  printf '%s\n' "$req_out"; fail=1
 else
-  bad "req realm client URIs '$req_uris' missing expected $req_expect"
+  while IFS=$'\t' read -r name rest; do
+    live_sorted="$(printf '%s' "$rest" | tr '\t' '\n' | sort -u)"
+    case "$name" in
+      REQ_REDIRECTS) expected="$EXPECTED_REQ_REDIRECTS"; label="req redirectUris" ;;
+      REQ_WEBORIGINS) expected="$EXPECTED_REQ_WEBORIGINS"; label="req webOrigins" ;;
+      *) continue ;;
+    esac
+    expected_sorted="$(printf '%s\n' $expected | sort -u)"
+    if [ "$live_sorted" = "$expected_sorted" ]; then
+      note "OK   live $label matches the expected set exactly"
+    else
+      bad "live $label differs from the expected set"
+      diff <(printf '%s\n' "$expected_sorted") <(printf '%s\n' "$live_sorted") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
+    fi
+  done <<EOF_REQ
+$req_out
+EOF_REQ
 fi
 
 # 6e. the repo realm IMPORT FILE must carry the same sets (parity is a gate, not a hope) ---------
@@ -523,14 +545,12 @@ else
       *) continue ;;
     esac
     if [ "$label" = "req" ]; then
-      if printf '%s' "$cm_sorted" | grep -q "$req_expect"; then
-        if [ "$PHASE" = "retired" ] && printf '%s' "$cm_sorted" | grep -q "req.fullfunding.nl"; then
-          echo "  FAIL: realm configmap req client still references req.fullfunding.nl after retirement" >&2; fail=1
-        else
-          note "OK   realm configmap req client references $req_expect"
-        fi
+      expected_sorted="$(printf '%s\n' $EXPECTED_REQ_REDIRECTS $EXPECTED_REQ_WEBORIGINS | sort -u)"
+      if [ "$cm_sorted" = "$expected_sorted" ]; then
+        note "OK   realm configmap req client matches the expected sets exactly"
       else
-        echo "  FAIL: realm configmap req client missing expected $req_expect" >&2; fail=1
+        echo "  FAIL: realm configmap req client differs from the expected sets" >&2; fail=1
+        diff <(printf '%s\n' "$expected_sorted") <(printf '%s\n' "$cm_sorted") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
       fi
       continue
     fi

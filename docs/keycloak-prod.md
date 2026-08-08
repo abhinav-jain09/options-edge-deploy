@@ -125,18 +125,21 @@ kubectl -n options-edge rollout status statefulset/oe-keycloak-postgres
 kubectl -n options-edge rollout status deployment/oe-keycloak
 ```
 
-## First admin login + create a user (in-cluster, no public /admin)
+## Admin login + create a user (in-cluster, no public /admin)
 
 Use `kcadm.sh` inside the pod — this targets the local server and does not need the public admin
-console. NOTE (2026-07-18): the bootstrap `admin` account is now DISABLED; the permanent master-realm
-admin is `abhinav`, whose password was re-synced to equal `KC_BOOTSTRAP_ADMIN_PASSWORD` in the
-`oe-keycloak-secrets` Secret. Substitute `--user abhinav` in the examples below:
+console. **Current credential contract (since 2026-07-18):** the bootstrap `admin` account is
+DISABLED; the permanent master-realm admin is **`abhinav`**, and by contract `abhinav`'s password
+EQUALS the `KC_BOOTSTRAP_ADMIN_PASSWORD` key in `oe-keycloak-secrets` — the Deployment still reads
+that key at boot and `scripts/ops/verify-prod-tunnel.sh` authenticates with it, so the key must
+never be removed. Rotation = `kcadm.sh set-password -r master --username abhinav` AND updating the
+Secret key to the same value in the same maintenance window.
 
 ```sh
 ADMIN_PW=$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
 POD=$(kubectl -n options-edge get pod -l app.kubernetes.io/name=oe-keycloak -o name | head -1)
 kubectl -n options-edge exec "$POD" -- /opt/keycloak/bin/kcadm.sh config credentials \
-  --server http://localhost:8080 --realm master --user admin --password "$ADMIN_PW"
+  --server http://localhost:8080 --realm master --user abhinav --password "$ADMIN_PW"
 # create a login user for the option-chain UI
 kubectl -n options-edge exec "$POD" -- /opt/keycloak/bin/kcadm.sh create users -r optionsedge \
   -s username=<user> -s enabled=true
@@ -146,8 +149,6 @@ kubectl -n options-edge exec "$POD" -- /opt/keycloak/bin/kcadm.sh set-password -
 kubectl -n options-edge exec "$POD" -- /opt/keycloak/bin/kcadm.sh add-roles -r optionsedge \
   --username <user> --rolename replay-admin
 ```
-
-After bootstrap, create a permanent admin and rotate `KC_BOOTSTRAP_ADMIN_PASSWORD` out of the Secret.
 
 ## Verify the issuer
 
