@@ -58,8 +58,6 @@ spec:
         - env:
             - name: DEALER_LEDGER_ADVISORY_ENABLED
               value: "true"
-            # SHADOW-live gates (spec dl-shadow-live r3, Codex-approved 2026-08-08) — MUST MIRROR
-            # the monolithic k8s/overlays/production/kustomization.yaml dealer-ledger patch.
             - name: DEALER_LEDGER_ABSORPTION_GATE_MODE
               value: CONFIDENCE
             - name: DEALER_LEDGER_FIRE_GREEKS_MIN_QUALITY
@@ -68,6 +66,8 @@ spec:
               value: "1"
             - name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE
               value: LOW
+            - name: KAFKA_DEALER_LEDGER_MAX_RECORD_BYTES
+              value: "16777216"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms1024m -Xmx6144m
             - name: APP_MARKET_DATA_SOURCE

@@ -184,6 +184,11 @@ patches:
                     value: "1"
                   - name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE
                     value: LOW
+                  # Chain-changelog record hit 4,214,084 B > the 4 MiB default at first SHADOW-live
+                  # boot (open wave accumulates all session deltas until wave-lifecycle repair lands)
+                  # — 16 MiB headroom; existing changelog topics live-altered to match (2026-08-08).
+                  - name: KAFKA_DEALER_LEDGER_MAX_RECORD_BYTES
+                    value: "16777216"
                   - name: JAVA_TOOL_OPTIONS
                     value: -Xms1024m -Xmx6144m
                 resources:
