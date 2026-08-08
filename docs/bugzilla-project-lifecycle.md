@@ -75,24 +75,35 @@ get the same policy:
 - **`bug_end_of_create_validators`** — creation. Requires a type and a matching category, and
   canonicalises the entry status (BUG → `UNCONFIRMED`, REQUIREMENT → `REQ_DRAFT`).
 
-Enforcement has **three** states, not two. A persistent parameter,
-`issue_type_workflow_enforced`, records that the installation has been provisioned:
+Enforcement has **three** states:
 
-| marker | model complete | behaviour |
+| `cf_issue_type` | model matches | behaviour |
 |---|---|---|
-| off | — | nothing enforced (this is what lets the first `checksetup.pl` load the extension before the fields exist) |
-| on | yes | normal policy |
-| on | no | **every guarded change refused** until the provisioner is re-run |
+| absent | — | nothing enforced — the bootstrap window that lets the first `checksetup.pl` load the extension before the fields exist |
+| present | yes | normal policy |
+| present | no | **every guarded change refused** until the provisioner is re-run |
 
-That third row is why the marker exists. Without it the extension could only ask "does the model look
-complete?", and an administrator renaming one status in `editvalues.cgi` would silently switch
-enforcement off for the whole installation instead of stopping it.
+There is deliberately **no** "enforcement enabled" parameter. Any such switch is reachable by anyone
+with `tweakparams`, which would hand administrators the one thing this design exists to deny them.
+The presence of `cf_issue_type` is the marker instead: getting back to "not provisioned" means
+deleting that field, which destroys every item's type — destructive and obvious, not a quiet toggle.
 
-The category vocabulary is held **both** as a compiled-in list and as each value's live controller
-(`visibility_value_id`), and both must agree. Reading only the database would make an
-`editvalues.cgi` edit a policy change — adding a category would widen the vocabulary, re-pointing one
-would change what already-stored items mean. Reading only the constants would miss a value that had
-been re-pointed. Requiring both closes each hole with the other.
+"Matches" means the whole model, not a couple of spot checks: both fields' type, custom, mandatory,
+`enter_bug` and control wiring; exactly the declared issue types; exactly the declared categories,
+each owned by the right type; every resolution the policy hands out; every status, active and with
+the declared `is_open`; and the **entire workflow matrix**, compared as a multiset. So a re-pointed
+category, a flipped `is_open`, a deleted creation edge or an `editworkflow.cgi` shortcut all stop the
+installation rather than quietly redefining the lifecycles.
+
+That is also why the policy — statuses, resolutions, categories, `is_open`, the matrix — is compiled
+into the extension as well as declared in the SSOT. Reading only the database would make an
+`editvalues.cgi` edit *be* the policy; reading only the constants would miss drift. Requiring both to
+agree closes each hole with the other, and `setup-projects.pl` refuses to run if the constants and
+the JSON disagree.
+
+The provisioner then **proves** the fail-closed state at the end of every apply: it deletes the
+bug-creation rows inside a transaction, checks that the extension goes `broken`, and rolls back. A
+regression in that check is otherwise invisible until the day it matters.
 
 **Bulk edits cannot half-apply.** `Bugzilla::WebService::Bug::update` wraps its whole loop in one
 transaction (`Bug.pm` REST path), and `process_bug.cgi` calls `set_all` on *every* selected bug
@@ -178,9 +189,13 @@ reported as such, because they would pass with the extension switched off. It al
 duplicate handling and bulk-update atomicity, and closes its smoke bugs on the way out.
 
 Refusals are asserted by **code**, not by "something went wrong": a denied update is
-`illegal_change` (115, HTTP 401), and the extension registers its own creation errors (100001-100005,
-HTTP 400) through the `webservice_error_codes` hook. Otherwise a bad API key or a 500 would look
-exactly like successful enforcement.
+`illegal_change` (115, HTTP 401), and the extension registers its own creation errors
+(100001-100007, HTTP 400) through the `webservice_error_codes` hook. Otherwise a bad API key or a
+500 would look exactly like successful enforcement. Three of those codes are defence-in-depth rather
+than routinely reachable — core's select validation preempts `issue_type_unknown`, and the
+`initial_status_*` and `workflow_misconfigured` errors only arise once the workflow has been damaged,
+which now also trips the fail-closed state — so the verifier asserts exact codes for the reachable
+ones and says plainly which it cannot induce.
 
 ## 7. Known limits
 

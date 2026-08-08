@@ -60,7 +60,7 @@ use constant LOCK_NAME  => 'bugzilla-project-setup';
 use constant EXTENSION  => 'Bugzilla::Extension::IssueTypeWorkflow';
 
 my %OPT = (
-  state                   => 'expected-state.json',
+  state                   => 'local/expected-state.json',
   'admin-login'           => undef,
   'default-assignee'      => undef,
   apply                   => 0,
@@ -68,19 +68,24 @@ my %OPT = (
   'web-host'              => 'localhost',
   'web-port'              => 80,
   'allow-live'            => 0,
+  'skip-self-test'        => 0,
   help                    => 0,
 );
 
 GetOptions(\%OPT,
   'state=s', 'admin-login=s', 'default-assignee=s', 'apply!',
-  'remove-decommissioned!', 'web-host=s', 'web-port=i', 'allow-live!', 'help!')
+  'remove-decommissioned!', 'web-host=s', 'web-port=i', 'allow-live!',
+  'skip-self-test!', 'help!')
   or die "FATAL: bad options. Try --help.\n";
 
 if ($OPT{help}) {
   print <<'USAGE';
 setup-projects.pl [options]
 
-  --state FILE               expected-state.json (default: ./expected-state.json)
+  --state FILE               expected-state.json. Relative paths resolve from the
+                             Bugzilla root (BUGZILLA_ROOT, default /var/www/html),
+                             which this script chdirs to. Default:
+                             local/expected-state.json
   --admin-login LOGIN        existing, enabled Bugzilla admin to act as (required)
   --default-assignee LOGIN   default assignee for newly created components
                              (default: --admin-login)
@@ -94,6 +99,10 @@ setup-projects.pl [options]
   --allow-live               apply even though the web tier is still serving.
                              UNSAFE - enforcement is observably off part-way
                              through, and config edits race the rewrite.
+  --skip-self-test           do not run the post-apply fail-closed self-test
+                             (it damages the workflow inside a transaction and
+                             rolls it back, to prove enforcement really does
+                             trip; there is no reason to skip it)
   --help                     this text
 USAGE
   exit 0;
@@ -335,6 +344,25 @@ sub validate_extension_agreement {
     }
   }
 
+  my $want_open = {map { $_->{value} => ($_->{is_open} ? 1 : 0) } @{$STATE->{statuses}}};
+  my $got_open  = EXTENSION->STATUS_IS_OPEN;
+  fatal('extension STATUS_IS_OPEN covers a different set of statuses')
+    if keys %$got_open != keys %$want_open;
+  foreach my $status (sort keys %$want_open) {
+    fatal("extension STATUS_IS_OPEN['$status'] is '"
+        . ($got_open->{$status} // 'undef') . "', expected '$want_open->{$status}'")
+      if ($got_open->{$status} // -1) != $want_open->{$status};
+  }
+
+  my $want_edges = join(';',
+    sort map { ($_->{from} // '') . '>' . $_->{to} . '=' . ($_->{require_comment} ? 1 : 0) }
+    @{$STATE->{workflow}});
+  my $got_edges = join(';',
+    sort map { $_->[0] . '>' . $_->[1] . '=' . $_->[2] } @{EXTENSION->WORKFLOW});
+  fatal("extension WORKFLOW does not match the declared matrix:\n"
+      . "         extension: $got_edges\n         declared:  $want_edges")
+    if $got_edges ne $want_edges;
+
   my $want_codes = $enf->{error_codes}{extension};
   my $got_codes  = EXTENSION->ERROR_CODES;
   fatal('extension ERROR_CODES declares a different set of errors')
@@ -436,6 +464,18 @@ sub preflight {
         . 'model; migrate them first');
   }
 
+  foreach my $spec (@{$STATE->{products}}) {
+    my $product = Bugzilla::Product->new({name => $spec->{name}}) or next;
+    # classification is absent from Product::UPDATE_COLUMNS, so this can only
+    # ever be reported, never converged.
+    fatal("product '$spec->{name}' is in classification '"
+        . $product->classification->name
+        . "', but expected-state.json declares '$spec->{classification}'. "
+        . 'Bugzilla cannot move a product between classifications from the '
+        . 'object API; fix it in the admin UI.')
+      if $product->classification->name ne $spec->{classification};
+  }
+
   audit_existing_bugs(\%renamed_from);
   assert_nothing_undeclared();
 
@@ -503,6 +543,20 @@ sub assert_nothing_undeclared {
       "$spec->{name} milestone(s): " . join(', ', sort @extra_milestone)
       if @extra_milestone;
   }
+
+  my %known_product
+    = map { $_ => 1 } (map { $_->{name} } @{$STATE->{products}}),
+    @{$STATE->{decommission}{products} || []};
+  my @extra_product
+    = grep { !$known_product{$_} } map { $_->name } Bugzilla::Product->get_all;
+  push @problems, 'product(s): ' . join(', ', sort @extra_product)
+    if @extra_product;
+
+  my @extra_field
+    = grep { !$STATE->{fields}{$_} }
+    map { $_->name } @{Bugzilla::Field->match({custom => 1})};
+  push @problems, 'custom field(s): ' . join(', ', sort @extra_field)
+    if @extra_field;
 
   fatal("the installation contains objects expected-state.json does not "
       . "declare:\n         " . join("\n         ", @problems)
@@ -601,14 +655,15 @@ sub flush_caches {
   delete $cache->{fields};
   delete $cache->{active_custom_fields};
   delete $cache->{status_bug_state_open};
-  delete $cache->{itw_provisioned};
+  delete $cache->{itw_enforcing};
   foreach my $key (keys %$cache) {
     delete $cache->{$key}
       if $key
       =~ /^Bugzilla::(Field|Field::Choice|Status|Product|Component|Version|Milestone)/;
   }
-  eval { Bugzilla->memcached->clear_all; 1 }
-    or fatal("could not flush memcached: $@");
+  my $flushed = eval { Bugzilla->memcached->clear_all; 1 };
+  fatal('could not flush memcached: ' . ($@ || 'clear_all returned false'))
+    if !$flushed;
   return;
 }
 
@@ -995,6 +1050,7 @@ sub ensure_product {
     $product = Bugzilla::Product->create({
       name               => $spec->{name},
       description        => $spec->{description},
+      classification     => $spec->{classification},
       version            => $spec->{versions}[0],
       defaultmilestone   => $spec->{default_milestone},
       isactive           => $spec->{is_active} ? 1 : 0,
@@ -1029,7 +1085,14 @@ sub ensure_product {
     $product->update if $changed && !$DRY;
   }
 
-  return if $DRY && !$product;
+  if ($DRY && !$product) {
+    plan("product '$spec->{name}': create version(s) "
+        . join(', ', @{$spec->{versions}}) . ", milestone(s) "
+        . join(', ', @{$spec->{milestones}}) . ', and '
+        . scalar(@{$spec->{components}})
+        . ' component(s) assigned to ' . $default_assignee->login);
+    return;
+  }
 
   ensure_versions($product, $spec);
   ensure_milestones($product, $spec);
@@ -1156,6 +1219,52 @@ sub decommission_products {
 }
 
 ########################################################################
+# Post-apply self-test
+########################################################################
+
+# Proves the property everything else rests on: that damaging the model really
+# does put the extension into its 'broken' (refuse-everything) state, rather
+# than silently reverting to no policy at all.
+#
+# It does this for real - by deleting the bug-creation rows - inside a
+# transaction it then rolls back. A regression in model_is_complete() is
+# otherwise invisible until the day it matters.
+sub self_test_fail_closed {
+  return if $DRY;
+
+  fatal('the IssueTypeWorkflow extension does not expose model_is_complete()')
+    if !EXTENSION->can('model_is_complete');
+
+  flush_caches();
+  fatal('self-test: the model is NOT complete after a successful apply')
+    if !EXTENSION->model_is_complete;
+
+  assert_lock_held('the fail-closed self-test');
+  $dbh->bz_start_transaction();
+  my $tripped = eval {
+    $dbh->do('DELETE FROM status_workflow WHERE old_status IS NULL');
+    flush_caches();
+    EXTENSION->model_is_complete ? 0 : 1;
+  };
+  my $err = $@;
+  eval { $dbh->bz_rollback_transaction(); 1 }
+    or fatal("self-test rollback FAILED - the workflow may be damaged: $@");
+  flush_caches();
+
+  fatal("self-test errored: $err") if $err;
+  fatal('self-test: deleting the bug-creation rows did NOT trip the '
+      . 'fail-closed state. Enforcement would silently stop instead of '
+      . 'blocking. Refusing to declare this installation provisioned.')
+    if !$tripped;
+
+  fatal('self-test: the model is not complete again after rollback')
+    if !EXTENSION->model_is_complete;
+
+  note('fail-closed self-test passed (damage trips it; rollback restored it)');
+  return;
+}
+
+########################################################################
 # Params
 ########################################################################
 
@@ -1233,10 +1342,10 @@ my $ok = eval {
   # would lock those items out of every guarded edit.
   audit_existing_bugs({}) if !$DRY;
 
-  # Last of all, because issue_type_workflow_enforced is what makes a missing
-  # piece of the model fail closed. Arming it before the model is complete would
-  # take the installation down.
   ensure_params();
+
+  # Only meaningful once everything above is in place.
+  self_test_fail_closed() if !$OPT{'skip-self-test'};
 
   flush_caches() if !$DRY;
   1;

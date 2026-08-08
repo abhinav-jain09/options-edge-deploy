@@ -39,17 +39,18 @@ Everything runs on `.252`. Set these once per session:
 BZ=options-edge-bugzilla-web; ADMIN=<admin-login>; TRIAGE=<triage-login>
 ```
 
-Steps that mutate anything: **4** (configuration) and **6** (files and closes smoke bugs). Steps 1,
-2 and 7 are read-only; step 3 backs up; step 5 restarts the web tier.
+Steps that mutate anything: **4** (configuration) and **5** (files and closes smoke bugs). Steps 1,
+2 and 6 are read-only; step 3 backs up.
 
-Every step is chained with `&&`: if one fails, the next does not run — in particular Apache is not
-restarted over a partially mutated database.
+Where one step must not run after another has failed, the two are chained with `&&` in a single
+command — notably apply-then-restart, so Apache is never restarted over a partially mutated
+database. Steps that are safe to attempt independently are listed separately.
 
-**1. Load and syntax checks** — the extension must parse and Bugzilla must still boot with it
-mounted:
+**1. Load check** — this compiles the extension *and* loads it the way Bugzilla does, which is the
+part that matters: a broken extension otherwise takes the whole site down at step 4.
 
 ```bash
-docker exec $BZ perl -c /var/www/html/extensions/IssueTypeWorkflow/Extension.pm
+docker exec $BZ perl -e 'use lib qw(/var/www/html /var/www/html/lib /var/www/html/local/lib/perl5); use Bugzilla; my @e = @{Bugzilla->extensions}; die "IssueTypeWorkflow not loaded\n" unless grep { $_->NAME eq "IssueTypeWorkflow" } @e; print "loaded: ", join(", ", map { $_->NAME } @e), "\n"'
 ```
 
 **2. Dry run — read the whole plan before continuing.** This is safe against the live site: it
@@ -75,21 +76,17 @@ container.
 **If it does not print `BACKUP OK`, stop — restart Apache with `docker exec $BZ apachectl start` and
 do not apply.**
 
-**4. Apply.** The script refuses to run while Apache is answering on `localhost:80`; that check is
-what guarantees enforcement is never observably half-installed.
+**4. Apply, then restart** — one command, so a failed apply leaves the site down rather than serving
+a half-provisioned installation. The script refuses to run while Apache is answering on
+`localhost:80`, which is what guarantees enforcement is never observably half-installed; the restart
+is what clears any pre-change field/status cache. The apply ends with a self-test that deletes the
+bug-creation rows inside a transaction, checks that the extension goes fail-closed, and rolls back.
 
 ```bash
-docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply
+docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply && docker restart $BZ
 ```
 
-**5. Restart the web tier** so no process keeps a pre-change field/status cache. Chained to step 4,
-so a failed apply leaves the site down rather than serving a half-provisioned installation:
-
-```bash
-docker restart $BZ
-```
-
-**6. Verify.** Needs an admin API key (`requirelogin` is on, and the parameter assertions need
+**5. Verify.** Needs an admin API key (`requirelogin` is on, and the parameter assertions need
 `tweakparams`). This step **files smoke-test bugs** prefixed `[SMOKE]` and closes them again;
 run it in a change window. `--no-smoke` gives structural assertions only, but then the extension is
 not proven to be enforcing.
@@ -97,6 +94,18 @@ not proven to be enforcing.
 ```bash
 read -rs BZ_API_KEY && export BZ_API_KEY && python3 configuration/verify-projects.py --state configuration/expected-state.json
 ```
+
+One thing an admin key cannot prove: that an *unprivileged* reporter's REQUIREMENT still lands on
+`REQ_DRAFT`. Bugzilla overrides the requested status for anyone without `editbugs`/`canconfirm`
+(`Bug.pm:1526-1536`), and that is exactly how external stakeholders file. The run reports it as
+`WARN … NOT proven` unless you also hand it such a key — the verifier checks the account really does
+lack those groups before believing it:
+
+```bash
+read -rs BZ_REPORTER_KEY && export BZ_REPORTER_KEY && python3 configuration/verify-projects.py --state configuration/expected-state.json --reporter-api-key-env BZ_REPORTER_KEY --strict
+```
+
+`TestProduct` is also reported as `WARN` until step 7 retires it; that is expected on a first run.
 
 It defaults to `http://localhost:8092` and **refuses** a non-loopback plain-HTTP URL unless you pass
 `--allow-remote-http`, because the endpoint speaks plain HTTP and the key travels in a header. Run it
@@ -106,20 +115,24 @@ on `.252` itself and revoke the key afterwards.
 environment variable of the verifier process, so root — and on a default `hidepid=0` system, any
 process of the same user — can read it from `/proc`; treat it as short-lived, not secret-at-rest.
 
-**7. Re-run the dry run and confirm it reports zero actions** — that is the idempotence proof:
+**6. Re-run the dry run and confirm it reports zero actions** — that is the idempotence proof:
 
 ```bash
-docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN"
+docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE"
 ```
 
-**8. Only after step 6 passes**, retire `TestProduct`. This is opt-in and never happens during a
+Pass the same `--default-assignee` as step 4: it defaults to `--admin-login`, so omitting it would
+make the script plan a reassignment of every component and the run would not be a no-op.
+
+**7. Only after step 5 passes**, retire `TestProduct`. This is opt-in and never happens during a
 normal apply; the script aborts rather than removing a product that still holds bugs.
 
 ```bash
-docker exec $BZ apachectl stop && docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --apply --remove-decommissioned && docker restart $BZ
+docker exec $BZ apachectl stop && docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply --remove-decommissioned && docker restart $BZ
 ```
 
-If that fails, Apache stays stopped on purpose. Fix the cause, then re-run the same command.
+If that fails, Apache stays stopped on purpose. Fix the cause, then re-run the same command. Then
+re-run step 5 with `--require-decommissioned` to assert it is really gone.
 
 ## Rollback
 
@@ -144,10 +157,12 @@ Do not try to unpick a partial run with ad-hoc `DROP COLUMN`.
   field value, component, version or milestone. Declare it in the SSOT, or delete it. Deactivating
   is *not* enough: Bugzilla's REST serialisation of field values carries no active flag, so the
   verifier cannot tell a deactivated extra from a live one and would fail on it.
-- The last thing a successful apply does is set the `issue_type_workflow_enforced` parameter. That
-  marker is what makes a later removal of any part of the model **fail closed**: with it set, a
-  missing field, issue type or status blocks every guarded change until the provisioner is re-run,
-  instead of silently switching enforcement off.
+- There is **no** "enforcement enabled" switch, deliberately: anyone with `tweakparams` could turn
+  one off. The extension instead treats the presence of `cf_issue_type` as the marker — if the field
+  exists, the *entire* declared model (field wiring, issue types, every category and its controller,
+  resolutions, statuses with their open flags, and the full workflow matrix) must match, or every
+  guarded change is refused until the provisioner is re-run. Getting back to "not provisioned" means
+  deleting `cf_issue_type` itself, which destroys every item's type.
 - It also aborts if an existing item already violates the model (wrong-branch status, wrong
   resolution, mismatched or missing category, no issue type). The extension validates fields as they
   change, so it can never repair an item that was already inconsistent.

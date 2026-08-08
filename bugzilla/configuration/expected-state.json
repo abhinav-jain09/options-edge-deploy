@@ -12,15 +12,15 @@
 
   "params": {
     "duplicate_or_move_bug_status": "RESOLVED",
-    "useclassification": "0",
-    "issue_type_workflow_enforced": "1"
+    "useclassification": "0"
   },
-  "_params_comment": [
-    "issue_type_workflow_enforced is the extension's persistent 'this installation is",
-    "provisioned' marker (extensions/IssueTypeWorkflow/lib/Config.pm). While it is off nothing",
-    "is enforced, which is what lets the first checksetup.pl run load the extension before the",
-    "fields exist. Once on, any missing piece of the model makes every guarded change FAIL",
-    "CLOSED instead of silently reverting to no policy. setup-projects.pl sets it last."
+  "_enforcement_switch_comment": [
+    "There is deliberately NO 'enforcement enabled' parameter. Any such switch would be",
+    "reachable by anyone with tweakparams, which would defeat denying administrators too.",
+    "The extension instead derives its state: cf_issue_type absent = never provisioned",
+    "(bootstrap, nothing enforced); cf_issue_type present = the ENTIRE model below must match,",
+    "or every guarded change is refused. Getting back to 'off' means deleting cf_issue_type,",
+    "which destroys every item's type - destructive and obvious, not a quiet toggle."
   ],
 
   "issue_types": ["BUG", "REQUIREMENT"],
@@ -207,7 +207,12 @@
       "UPDATE via priv_results; REST maps it to HTTP 401. The 1000xx codes are the",
       "extension's own creation-time errors, registered through the webservice_error_codes",
       "hook and mapped to HTTP 400. verify-projects.py asserts these exact codes so that an",
-      "auth failure, a 404 or a 500 can never be mistaken for successful enforcement."
+      "auth failure, a 404 or a 500 can never be mistaken for successful enforcement.",
+      "Two of these are defence-in-depth rather than routinely reachable: core's own select",
+      "validation rejects an unknown cf_issue_type before issue_type_unknown can fire, and",
+      "issue_type_initial_status_unavailable / _needs_comment / workflow_misconfigured only",
+      "occur after the workflow has been damaged - which now also trips the fail-closed state.",
+      "verify-projects.py asserts exact codes for the reachable ones and says so for the rest."
     ],
     "error_codes": {
       "core_illegal_change": 115,

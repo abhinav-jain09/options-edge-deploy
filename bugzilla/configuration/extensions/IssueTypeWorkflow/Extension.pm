@@ -61,6 +61,54 @@ use constant ALLOWED_STATUSES => {
   },
 };
 
+# is_open for every status the lifecycles use. Compiled in so that flipping one
+# through the admin UI is detected rather than silently changing which items
+# count as open.
+use constant STATUS_IS_OPEN => {
+  UNCONFIRMED     => 1,
+  BUG_CONFIRMED   => 1,
+  BUG_IN_PROGRESS => 1,
+  REQ_DRAFT       => 1,
+  REQ_REVIEW      => 1,
+  REQ_APPROVED    => 1,
+  REQ_IN_PROGRESS => 1,
+  RESOLVED        => 0,
+  VERIFIED        => 0,
+};
+
+# The complete global matrix, as [from, to, require_comment]; '' is the
+# bug-creation row. Compiled in for the same reason as everything else here: an
+# editworkflow.cgi edit - removing a creation edge, adding an intra-branch
+# shortcut, changing a comment requirement - is a change to the declared
+# lifecycles, and must stop the installation rather than quietly redefine it.
+use constant WORKFLOW => [
+  ['',                'UNCONFIRMED',     0],
+  ['',                'REQ_DRAFT',       0],
+  ['UNCONFIRMED',     'BUG_CONFIRMED',   0],
+  ['UNCONFIRMED',     'BUG_IN_PROGRESS', 0],
+  ['UNCONFIRMED',     'RESOLVED',        1],
+  ['BUG_CONFIRMED',   'BUG_IN_PROGRESS', 0],
+  ['BUG_CONFIRMED',   'RESOLVED',        1],
+  ['BUG_IN_PROGRESS', 'BUG_CONFIRMED',   1],
+  ['BUG_IN_PROGRESS', 'RESOLVED',        1],
+  ['REQ_DRAFT',       'REQ_REVIEW',      0],
+  ['REQ_DRAFT',       'RESOLVED',        1],
+  ['REQ_REVIEW',      'REQ_DRAFT',       1],
+  ['REQ_REVIEW',      'REQ_APPROVED',    0],
+  ['REQ_REVIEW',      'RESOLVED',        1],
+  ['REQ_APPROVED',    'REQ_REVIEW',      1],
+  ['REQ_APPROVED',    'REQ_IN_PROGRESS', 0],
+  ['REQ_APPROVED',    'RESOLVED',        1],
+  ['REQ_IN_PROGRESS', 'REQ_APPROVED',    1],
+  ['REQ_IN_PROGRESS', 'RESOLVED',        1],
+  ['RESOLVED',        'BUG_CONFIRMED',   1],
+  ['RESOLVED',        'REQ_REVIEW',      1],
+  ['RESOLVED',        'VERIFIED',        0],
+  ['VERIFIED',        'BUG_CONFIRMED',   1],
+  ['VERIFIED',        'REQ_REVIEW',      1],
+  ['VERIFIED',        'RESOLVED',        1],
+];
+
 use constant ALLOWED_RESOLUTIONS => {
   BUG => {map { $_ => 1 } qw(FIXED INVALID WONTFIX DUPLICATE WORKSFORME)},
   REQUIREMENT => {map { $_ => 1 } qw(IMPLEMENTED REJECTED DEFERRED DUPLICATE)},
@@ -88,9 +136,6 @@ use constant ALLOWED_CATEGORIES => {
   },
 };
 
-# Set by setup-projects.pl once the whole model is in place. See lib/Config.pm.
-use constant ENFORCED_PARAM => 'issue_type_workflow_enforced';
-
 # Stable WebService codes for the errors this extension raises, so a caller (and
 # verify-projects.py) can tell "the policy refused this" apart from an auth
 # failure, a 404 or a 500. Bugzilla reserves codes below 100000 for itself.
@@ -109,50 +154,128 @@ use constant ERROR_CODES => {
 # Provisioning-state helpers #
 #############################
 
-# Enforcement has three states, not two.
+# Enforcement has three states, and none of them can be switched off from the
+# admin UI.
 #
-#   off    - issue_type_workflow_enforced is unset. The installation has not
-#            been provisioned yet (this is also what lets the very first
-#            checksetup.pl run load the extension before the fields exist).
-#            Nothing is enforced.
-#   on     - the parameter is set and the whole model is present. Normal policy.
-#   broken - the parameter is set but something the model needs has been
-#            removed or renamed. Every guarded change is refused until
+#   off    - cf_issue_type does not exist. The installation has never been
+#            provisioned; this is what lets the very first checksetup.pl load
+#            the extension before the fields exist. Nothing is enforced.
+#   on     - the whole declared model is present and matches. Normal policy.
+#   broken - cf_issue_type exists but something the model needs is missing or
+#            has been altered. EVERY guarded change is refused until
 #            setup-projects.pl has been re-run.
 #
-# The 'broken' state is the whole point of having a persistent marker: without
-# it, deleting one status through editvalues.cgi would silently turn
-# enforcement off instead of stopping the installation.
+# There is deliberately no "enforcement enabled" parameter: any such switch is
+# reachable by anyone with tweakparams, which would defeat the point of denying
+# administrators too. The only way back to 'off' is to delete cf_issue_type
+# itself - a destructive, obvious act that takes every item's type with it, not
+# a quiet toggle.
 #
-# Only 'on' is cached. A negative answer must never be remembered, or a
-# long-lived mod_perl worker that once saw an unprovisioned database would stay
-# permanently fail-open.
+# Only 'on' is cached, and only for the current request. A negative answer must
+# never be remembered, or a long-lived mod_perl worker that once saw an
+# unprovisioned database would stay permanently fail-open.
 sub _enforcement_state {
   my $cache = Bugzilla->request_cache;
   return 'on' if $cache->{itw_enforcing};
 
-  return 'off' if !Bugzilla->params->{+ENFORCED_PARAM};
-  return 'broken' if !_model_is_complete();
+  return 'off' if !Bugzilla::Field->new({name => TYPE_FIELD});
+  return 'broken' if !model_is_complete();
 
   $cache->{itw_enforcing} = 1;
   return 'on';
 }
 
-sub _model_is_complete {
-  return 0 if !Bugzilla::Field->new({name => TYPE_FIELD});
-  return 0 if !Bugzilla::Field->new({name => CATEGORY_FIELD});
+# Every part of the model the policy depends on. Checking only that a couple of
+# objects exist would leave most broken installations classified as 'on':
+# a re-pointed category, a flipped is_open, a removed creation edge or an
+# editworkflow.cgi shortcut would all still be "complete".
+#
+# Public because setup-projects.pl --self-test-fail-closed calls it to prove,
+# inside a transaction it then rolls back, that damage really does trip the
+# 'broken' state.
+sub model_is_complete {
+  my $type_field = Bugzilla::Field->new({name => TYPE_FIELD})     or return 0;
+  my $cat_field  = Bugzilla::Field->new({name => CATEGORY_FIELD}) or return 0;
 
+  foreach my $field ($type_field, $cat_field) {
+    return 0 if !$field->custom;
+    return 0 if $field->type != FIELD_TYPE_SINGLE_SELECT;
+    return 0 if !$field->is_mandatory;
+    return 0 if $field->obsolete;
+    return 0 if !$field->enter_bug;
+  }
+  return 0
+    if !$cat_field->value_field
+    || $cat_field->value_field->name ne TYPE_FIELD;
+
+  # Issue types: exactly the declared set, all active.
+  my @type_values
+    = @{Bugzilla::Field::Choice->type(TYPE_FIELD)->match({isactive => 1})};
+  my %live_type = map { $_->name => 1 } grep { $_->name ne UNSET } @type_values;
+  return 0 if keys %live_type != keys %{(INITIAL_STATUS)};
   foreach my $type (keys %{(INITIAL_STATUS)}) {
-    return 0
-      if !Bugzilla::Field::Choice->type(TYPE_FIELD)->new({name => $type});
+    return 0 if !$live_type{$type};
   }
 
-  my %needed;
-  foreach my $type (keys %{(ALLOWED_STATUSES)}) {
-    $needed{$_} = 1 foreach keys %{ALLOWED_STATUSES->{$type}};
+  # Categories: exactly the declared vocabulary, each owned by the right type.
+  my %live_category;
+  foreach my $choice (@{Bugzilla::Field::Choice->type(CATEGORY_FIELD)->match({})}) {
+    next if $choice->name eq UNSET;
+    return 0 if !$choice->is_active;
+    my $controller = $choice->visibility_value or return 0;
+    $live_category{$controller->name}{$choice->name} = 1;
   }
-  foreach my $status (keys %needed) {
-    return 0 if !Bugzilla::Status->new({name => $status});
+  foreach my $type (keys %{(ALLOWED_CATEGORIES)}) {
+    my $want = ALLOWED_CATEGORIES->{$type};
+    my $got  = $live_category{$type} || {};
+    return 0 if keys %$got != keys %$want;
+    foreach my $category (keys %$want) {
+      return 0 if !$got->{$category};
+    }
+  }
+  # No category may be controlled by anything outside the declared types.
+  foreach my $controller (keys %live_category) {
+    return 0 if !ALLOWED_CATEGORIES->{$controller};
+  }
+
+  # Resolutions the policy hands out must exist and be usable.
+  my %live_resolution
+    = map { $_->name => 1 }
+    grep { $_->is_active }
+    @{Bugzilla::Field::Choice->type('resolution')->match({})};
+  foreach my $type (keys %{(ALLOWED_RESOLUTIONS)}) {
+    foreach my $resolution (keys %{ALLOWED_RESOLUTIONS->{$type}}) {
+      return 0 if !$live_resolution{$resolution};
+    }
+  }
+
+  # Statuses: present, active, and open/closed as declared.
+  my %status_id;
+  foreach my $name (keys %{(STATUS_IS_OPEN)}) {
+    my $status = Bugzilla::Status->new({name => $name}) or return 0;
+    return 0 if !$status->is_active;
+    return 0 if (($status->is_open ? 1 : 0) != STATUS_IS_OPEN->{$name});
+    $status_id{$name} = $status->id;
+  }
+
+  # The workflow matrix, exactly. Compared as a multiset: status_workflow's
+  # UNIQUE index does not constrain rows whose old_status is NULL.
+  my %want;
+  foreach my $edge (@{(WORKFLOW)}) {
+    my ($from, $to, $comment) = @$edge;
+    my $from_id = $from eq '' ? 'NULL' : $status_id{$from};
+    return 0 if !defined $from_id;
+    $want{"$from_id|$status_id{$to}|$comment"}++;
+  }
+  my $rows = Bugzilla->dbh->selectall_arrayref(
+    'SELECT old_status, new_status, require_comment FROM status_workflow');
+  my %got;
+  foreach my $row (@$rows) {
+    $got{(defined $row->[0] ? $row->[0] : 'NULL') . "|$row->[1]|$row->[2]"}++;
+  }
+  return 0 if keys %got != keys %want;
+  foreach my $key (keys %want) {
+    return 0 if ($got{$key} // 0) != $want{$key};
   }
 
   return 1;
@@ -340,8 +463,13 @@ sub bug_end_of_create_validators {
   # not of the one we are substituting.
   my $needs_comment = $initial->comment_required_on_change_from(undef);
   my $comment       = $params->{comment};
+  my $comment_text
+    = ref($comment) eq 'HASH'  ? $comment->{body}
+    : ref($comment) eq 'ARRAY' ? join('', grep { !ref } @$comment)
+    : ref($comment)            ? undef
+    :                            $comment;
   my $has_comment
-    = ref($comment) ? 1 : (defined $comment && $comment =~ /\S/) ? 1 : 0;
+    = (defined $comment_text && $comment_text =~ /\S/) ? 1 : 0;
   ThrowUserError('issue_type_initial_status_needs_comment',
     {issue_type => $type, status => $wanted})
     if $needs_comment && !$has_comment;
@@ -355,13 +483,6 @@ sub bug_end_of_create_validators {
   # Both entry points are open statuses; an item may never be born resolved.
   $params->{resolution} = '';
 
-  return;
-}
-
-sub config_add_panels {
-  my ($self, $args) = @_;
-  $args->{panel_modules}{IssueTypeWorkflow}
-    = 'Bugzilla::Extension::IssueTypeWorkflow::Config';
   return;
 }
 

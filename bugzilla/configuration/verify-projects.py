@@ -71,14 +71,69 @@ def eq(name, got, want):
     return check(name, got == want, f"got {got!r}, want {want!r}")
 
 
+warnings = []
+
+
 def skip(name, why):
     print(f"  ....  {name} - {why}")
+
+
+def warn(name, why):
+    """Something this run could not prove. Loud, listed in the summary, and
+    fatal under --strict, but not a failure of the installation itself."""
+    print(f"  WARN  {name}\n          {why}")
+    warnings.append(name)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib copies custom headers across redirects, API key included, so a
+    loopback endpoint could bounce the key to a remote host and sail past the
+    --allow-remote-http check. Refuse redirects outright."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise BzTransportError(
+            f"refusing to follow a {code} redirect to {newurl}: that would "
+            "send the API key to another origin")
+
+
+def require_shape(state):
+    """Fail with one clear sentence rather than a KeyError six calls deep."""
+    def need(container, key, kind, where):
+        if key not in container:
+            raise ValueError(f"missing {where}{key}")
+        if not isinstance(container[key], kind):
+            raise ValueError(
+                f"{where}{key} must be {kind.__name__}, got "
+                f"{type(container[key]).__name__}")
+        return container[key]
+
+    for key, kind in (("bugzilla_version", str), ("params", dict),
+                      ("fields", dict), ("statuses", list), ("workflow", list),
+                      ("resolutions", list), ("products", list),
+                      ("enforcement", dict), ("decommission", dict)):
+        need(state, key, kind, "")
+
+    enf = state["enforcement"]
+    for key in ("initial_status", "allowed_statuses", "allowed_resolutions",
+                "allowed_categories", "error_codes"):
+        need(enf, key, dict, "enforcement.")
+    need(enf["error_codes"], "core_illegal_change", int, "enforcement.error_codes.")
+    need(enf["error_codes"], "extension", dict, "enforcement.error_codes.")
+    need(state["fields"], "cf_category", dict, "fields.")
+    need(state["decommission"], "products", list, "decommission.")
+
+    for product in state["products"]:
+        for key in ("name", "description", "classification", "default_milestone"):
+            need(product, key, str, "products[].")
+        for key in ("components", "versions", "milestones"):
+            need(product, key, list, f"products[{product.get('name')}].")
 
 
 class Bz:
     def __init__(self, base_url, api_key):
         self.base = base_url.rstrip("/")
         self.api_key = api_key
+        self.opener = urllib.request.build_opener(_NoRedirect)
 
     def _request(self, method, path, payload=None):
         url = f"{self.base}/rest{path}"
@@ -90,7 +145,7 @@ class Bz:
             req.add_header("X-BUGZILLA-API-KEY", self.api_key)
 
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with self.opener.open(req, timeout=30) as resp:
                 status, raw = resp.status, resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             try:
@@ -150,7 +205,7 @@ def verify_parameters(bz, state):
         eq(f"param {name}", params[name], want)
 
 
-def verify_products(bz, state):
+def verify_products(bz, state, require_decommissioned):
     print("\n[3] Products, components, versions, milestones")
     for spec in state["products"]:
         name = spec["name"]
@@ -189,21 +244,26 @@ def verify_products(bz, state):
                   bool(got.get("default_assigned_to")),
                   f"default_assigned_to={got.get('default_assigned_to')!r}")
 
+        # Not filtered by is_active: preflight rejects an undeclared version or
+        # milestone whether or not it is active, so the two must agree.
         eq(f"product '{name}' versions",
-           sorted(v["name"] for v in product.get("versions", [])
-                  if v.get("is_active", True)),
+           sorted(v["name"] for v in product.get("versions", [])),
            sorted(spec["versions"]))
         eq(f"product '{name}' milestones",
-           sorted(m["name"] for m in product.get("milestones", [])
-                  if m.get("is_active", True)),
+           sorted(m["name"] for m in product.get("milestones", [])),
            sorted(spec["milestones"]))
 
     for name in state["decommission"]["products"]:
         _, body = bz.get("/product?names=" + urllib.parse.quote(name))
         gone = not (body.get("products") or [])
-        inactive = not gone and not body["products"][0].get("is_active")
-        check(f"decommissioned product '{name}' is gone or inactive",
-              gone or inactive)
+        if require_decommissioned:
+            # Deletion, not deactivation: preflight rejects an undeclared
+            # product whether or not it is active.
+            check(f"decommissioned product '{name}' is gone", gone)
+        elif not gone:
+            warn(f"'{name}' is still present",
+                 "expected until runbook step 8 retires it; re-run with "
+                 "--require-decommissioned afterwards to assert it is gone")
 
 
 def fields_by_name(bz):
@@ -572,11 +632,11 @@ def verify_low_privilege_reporter(bz, state, w, key_env):
     """
     print("\n[9] Low-privilege reporter")
     if not key_env:
-        check("low-privilege reporter path proven", False,
-              "not run: pass --reporter-api-key-env NAME with the API key of a "
-              "user lacking editbugs/canconfirm. The admin-side probe in [8] "
-              "exercises the canonicalisation but NOT the privilege-dependent "
-              "override, so this is unproven.")
+        warn("low-privilege reporter path is NOT proven",
+             "pass --reporter-api-key-env NAME with the API key of a user "
+             "lacking editbugs/canconfirm. The admin-side probe in [8] "
+             "exercises the canonicalisation but not the privilege-dependent "
+             "override at Bug.pm:1526-1536.")
         return
 
     key = os.environ.get(key_env, "")
@@ -584,6 +644,26 @@ def verify_low_privilege_reporter(bz, state, w, key_env):
         return
 
     reporter = Bz(bz.base, key)
+
+    # Trusting the operator's label would let an admin key pass this probe and
+    # prove nothing, so establish who the key belongs to and what they can do.
+    status, body = reporter.get("/whoami")
+    login = body.get("name")
+    if not check("reporter key identifies a user", status < 400 and login,
+                 f"HTTP {status}: {json.dumps(body)[:200]}"):
+        return
+    _, body = bz.get("/user?names=" + urllib.parse.quote(login)
+                     + "&include_fields=name,groups")
+    users = body.get("users") or []
+    if not check(f"admin key can read '{login}' group membership", bool(users),
+                 json.dumps(body)[:200]):
+        return
+    groups = {g["name"] for g in users[0].get("groups", [])}
+    if not check(f"'{login}' has neither editbugs nor canconfirm",
+                 not (groups & {"editbugs", "canconfirm"}),
+                 f"groups: {sorted(groups)} - this key is NOT low privilege, so "
+                 "the probe would prove nothing"):
+        return
     payload = {
         "product": "fullfunding",
         "component": "Cross-Cutting / Other",
@@ -700,6 +780,12 @@ def main():
     parser.add_argument("--state", default="expected-state.json")
     parser.add_argument("--no-smoke", action="store_true",
                         help="structural assertions only; files no bugs")
+    parser.add_argument("--require-decommissioned", action="store_true",
+                        help="assert the decommissioned products are gone "
+                             "(use after runbook step 8)")
+    parser.add_argument("--strict", action="store_true",
+                        help="treat warnings (things this run could not prove) "
+                             "as failures")
     parser.add_argument("--reporter-api-key-env", default="",
                         help="name of an env var holding the API key of a user "
                              "WITHOUT editbugs/canconfirm. Supplying it proves "
@@ -716,6 +802,8 @@ def main():
                  "enabled, so even read-only endpoints need authentication.")
 
     parsed = urllib.parse.urlparse(args.base_url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        sys.exit(f"--base-url must be an http(s) URL, got {args.base_url!r}")
     if (parsed.scheme == "http"
             and parsed.hostname not in ("localhost", "127.0.0.1", "::1")
             and not args.allow_remote_http):
@@ -731,12 +819,17 @@ def main():
     except json.JSONDecodeError as exc:
         sys.exit(f"{args.state} is not valid JSON: {exc}")
 
+    try:
+        require_shape(state)
+    except ValueError as exc:
+        sys.exit(f"{args.state}: {exc}")
+
     bz = Bz(args.base_url, api_key)
 
     try:
         verify_version(bz, state)
         verify_parameters(bz, state)
-        verify_products(bz, state)
+        verify_products(bz, state, args.require_decommissioned)
         fields = fields_by_name(bz)
         verify_custom_fields(fields, state)
         verify_statuses_and_workflow(fields, state)
@@ -778,12 +871,19 @@ def main():
     if walker and walker.filed:
         print("smoke test bugs: "
               + ", ".join(str(i) for i in walker.filed))
+    if warnings:
+        print(f"{len(warnings)} thing(s) this run could NOT prove:")
+        for name in warnings:
+            print(f"  ? {name}")
     if failures:
         print(f"FAILED  {len(failures)}/{checks} checks failed:")
         for name in failures:
             print(f"  - {name}")
         sys.exit(1)
-    print(f"OK  all {checks} checks passed")
+    if warnings and args.strict:
+        sys.exit("FAILED  --strict: unproven checks above are treated as failures")
+    print(f"OK  all {checks} checks passed"
+          + (f" ({len(warnings)} unproven)" if warnings else ""))
 
 
 if __name__ == "__main__":
