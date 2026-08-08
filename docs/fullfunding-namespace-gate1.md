@@ -1,5 +1,14 @@
 # Gate-1 — `fullfunding` tenant namespace on the prod k3s node, and the req-portal's migration into it
 
+> **⚠️ 2026-08-08 MIGRATION NOTE (added after this document was written):** every
+> `*.fullfunding.nl` hostname below is HISTORICAL — it records what was observed/planned at
+> the stated dates. The platform migrated to `bleadingoptions.com` on 2026-08-08 and
+> `fullfunding.nl` was RETIRED with no redirect (it is being reused for unrelated
+> applications), so nothing here may be used as a current routing/DNS reference and no
+> `*.fullfunding.nl` hostname may be re-added to our tunnel, Ingress, realm or WS origins.
+> If this design ever ships, substitute the `*.bleadingoptions.com` equivalents.
+> See [`domain-migration-bleadingoptions.md`](./domain-migration-bleadingoptions.md).
+
 **Status: GATE-1 REQUIREMENTS / PROPOSED — rev 9. AWAITING USER APPROVAL (gatekeeping Gate-1).
 Not implemented.**
 

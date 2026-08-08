@@ -17,11 +17,18 @@
 # the cheap check that would have caught either in seconds.
 #
 # PHASES (fullfunding.nl -> bleadingoptions.com migration; docs/domain-migration-bleadingoptions.md)
-#   --phase dual      both domains serve everything (Phase 1 acceptance gate; default)
-#   --phase redirect  new domain serves; every OLD hostname 307/308-redirects, host-mapped, with
-#                     path+query preserved (Phase 2 acceptance gate)
-#   --phase retired   like redirect, but the old origins must be GONE from both gateway
-#                     allow-lists (Phase 3 acceptance gate)
+#   --phase retired   the CURRENT steady state (default since 2026-08-08): only
+#                     bleadingoptions.com serves, and every fullfunding.nl trace must be GONE from
+#                     the tunnel, the Ingress, the realm and both gateway allow-lists. The operator
+#                     retired that domain WITHOUT redirects so it can host unrelated applications —
+#                     so nothing here may reference or claim it.
+#   --phase rollback  a Phase-3 revert BEFORE the DNS handoff: the old routes/trust lists are back
+#                     (both domains serve, both origin sets trusted, realm carries both) while the
+#                     ISSUER and the served URLs stay on the new domain — that is Phase-2 state, so
+#                     neither `dual` (old issuer) nor `retired` (absence) describes it.
+#   --phase dual      historical Phase-1 gate (both domains served); kept for auditability.
+#   --phase redirect  historical Phase-2 gate (old hostnames 307/308-redirect). NOT USED: the
+#                     migration ended with retirement, not redirection.
 #
 # MODES
 #   default           GATE mode: every check that cannot run (e.g. kubectl unreachable) FAILS —
@@ -31,7 +38,7 @@
 #   --selftest        run the embedded ingress-parser fixtures and exit.
 #
 # USAGE
-#   scripts/ops/verify-prod-tunnel.sh [--phase dual|redirect|retired] [--network-only]
+#   scripts/ops/verify-prod-tunnel.sh [--phase retired|rollback|dual|redirect] [--network-only]
 #   SSHOPTS="-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3"
 #   timeout 600 env PROD_SSH="ssh $SSHOPTS user@192.168.100.252" ES4_SSH="ssh $SSHOPTS user@192.168.100.4" \
 #     scripts/ops/verify-prod-tunnel.sh --phase …
@@ -40,14 +47,14 @@
 #   gate that failed open)
 set -uo pipefail
 
-PHASE="${TUNNEL_PHASE:-dual}"
+PHASE="${TUNNEL_PHASE:-retired}"   # steady state; dual/redirect are historical phases
 NETWORK_ONLY=0
 SELFTEST=0
 PRECHECK=0
 PROMOTED=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --phase) PHASE="${2:?--phase needs dual|redirect|retired}"; shift 2 ;;
+    --phase) PHASE="${2:?--phase needs retired|rollback|dual|redirect}"; shift 2 ;;
     --network-only) NETWORK_ONLY=1; shift ;;
     --precheck) PRECHECK=1; shift ;;   # skip ONLY the redirect section; output stamped PRECHECK
     --promoted) PROMOTED=1; shift ;;   # redirect phase after the 307->308 promotion
@@ -55,13 +62,16 @@ while [ $# -gt 0 ]; do
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
-case "$PHASE" in dual|redirect|retired) ;; *) echo "bad --phase '$PHASE'" >&2; exit 2 ;; esac
+case "$PHASE" in dual|redirect|retired|rollback) ;; *) echo "bad --phase '$PHASE' (want retired|rollback|dual|redirect)" >&2; exit 2 ;; esac
 if [ "$NETWORK_ONLY" = "1" ] && [ "$PRECHECK" = "1" ]; then
   echo "FATAL: --network-only --precheck is meaningless — precheck exists to prove the kube/runtime contracts, which network-only skips" >&2
   exit 2
 fi
 
-REPO_COPY="${REPO_COPY:-$(cd "$(dirname "$0")/../.." && pwd)/infra/prod/cloudflared/options-edge-stable.yml}"
+# REPO_ROOT lets the gate run from a copy placed anywhere (e.g. a Phase-3 script extracted into
+# /tmp to validate a reverted tree) — without it, $0-derived paths resolve against that location.
+REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)}"
+REPO_COPY="${REPO_COPY:-$REPO_ROOT/infra/prod/cloudflared/options-edge-stable.yml}"
 LIVE_PATH="${LIVE_PATH:-/etc/cloudflared/options-edge-stable.yml}"
 PROD_SSH="${PROD_SSH:-}"
 ES4_SSH="${ES4_SSH:-ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 abhinav@192.168.100.4}"
@@ -96,9 +106,25 @@ case "$PHASE" in
     SERVE_ES_DEFAULT="es.bleadingoptions.com"
     SERVE_AUTH_DEFAULT="auth.bleadingoptions.com"
     REDIR_HOSTS_DEFAULT="fullfunding.nl es.fullfunding.nl auth.fullfunding.nl"
-    EXPECTED_REDIRECT_STATUS_DEFAULT="307"   # soak on temporary; --promoted / retired demand 308
+    EXPECTED_REDIRECT_STATUS_DEFAULT="307"   # soak on temporary; only --promoted demands 308
     EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
     # Old origins stay trusted during the redirect soak; Phase 3 removes them.
+    PROD_ORIGINS_DEFAULT="https://fullfunding.nl https://bleadingoptions.com"
+    ES4_ORIGINS_DEFAULT="https://es.fullfunding.nl https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
+    PRIMARY_APEX_DEFAULT="bleadingoptions.com"; PRIMARY_ES_DEFAULT="es.bleadingoptions.com"
+    ABSENT_TUNNEL_HOSTS_DEFAULT=""
+    KC_REDIRECTS_DEFAULT="https://fullfunding.nl/* https://es.fullfunding.nl/* https://bleadingoptions.com/* https://es.bleadingoptions.com/* http://192.168.100.4:30080/* http://192.168.100.252:8094/* http://192.168.100.103:8094/*"
+    KC_WEBORIGINS_DEFAULT="https://fullfunding.nl https://es.fullfunding.nl https://bleadingoptions.com https://es.bleadingoptions.com http://192.168.100.4:30080 http://192.168.100.252:8094 http://192.168.100.103:8094"
+    KC_POSTLOGOUT_DEFAULT="https://fullfunding.nl/* https://es.fullfunding.nl/* https://bleadingoptions.com/* https://es.bleadingoptions.com/*"
+    ;;
+  rollback)
+    # Phase-2 state: both domains SERVE and are trusted again, issuer/URLs remain new-domain.
+    SERVE_APEX_DEFAULT="fullfunding.nl bleadingoptions.com"
+    SERVE_ES_DEFAULT="es.fullfunding.nl es.bleadingoptions.com"
+    SERVE_AUTH_DEFAULT="auth.fullfunding.nl auth.bleadingoptions.com"
+    REDIR_HOSTS_DEFAULT=""
+    EXPECTED_REDIRECT_STATUS_DEFAULT=""
+    EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
     PROD_ORIGINS_DEFAULT="https://fullfunding.nl https://bleadingoptions.com"
     ES4_ORIGINS_DEFAULT="https://es.fullfunding.nl https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
     PRIMARY_APEX_DEFAULT="bleadingoptions.com"; PRIMARY_ES_DEFAULT="es.bleadingoptions.com"
@@ -111,8 +137,9 @@ case "$PHASE" in
     SERVE_APEX_DEFAULT="bleadingoptions.com"
     SERVE_ES_DEFAULT="es.bleadingoptions.com"
     SERVE_AUTH_DEFAULT="auth.bleadingoptions.com"
-    REDIR_HOSTS_DEFAULT="fullfunding.nl es.fullfunding.nl auth.fullfunding.nl"
-    EXPECTED_REDIRECT_STATUS_DEFAULT="308"
+    # No redirects: the old domain is being reused elsewhere, so it must NOT resolve here at all.
+    REDIR_HOSTS_DEFAULT=""
+    EXPECTED_REDIRECT_STATUS_DEFAULT=""
     EXPECTED_ISSUER_DEFAULT="https://auth.bleadingoptions.com/realms/optionsedge"
     PROD_ORIGINS_DEFAULT="https://bleadingoptions.com"
     ES4_ORIGINS_DEFAULT="https://es.bleadingoptions.com $ES4_LAN_ORIGIN"
@@ -147,6 +174,14 @@ EXPECTED_KC_POSTLOGOUT="${EXPECTED_KC_POSTLOGOUT:-$KC_POSTLOGOUT_DEFAULT}"
 case "$PHASE" in retired) REQ_HOST_DEFAULT="req.bleadingoptions.com" ;; *) REQ_HOST_DEFAULT="req.fullfunding.nl" ;; esac
 EXPECTED_REQ_REDIRECTS="${EXPECTED_REQ_REDIRECTS:-https://$REQ_HOST_DEFAULT/oidc-callback}"
 EXPECTED_REQ_WEBORIGINS="${EXPECTED_REQ_WEBORIGINS:-https://$REQ_HOST_DEFAULT}"
+# The LIVE Bugzilla client is a different object from the dark req-realm one above: it lives in
+# realm `optionsedge`, is named `bugzilla`, uses mod_auth_openidc's /oauth2callback, and carries the
+# LAN origin alongside the public one because the same Apache serves both. It went public on
+# 2026-08-08 and was outside every check here until then — a client with a public redirect URI that
+# the domain gate could not see drift on.
+BZ_HOST_DEFAULT="$REQ_HOST_DEFAULT"
+EXPECTED_BZ_REDIRECTS="${EXPECTED_BZ_REDIRECTS:-https://$BZ_HOST_DEFAULT/oauth2callback http://192.168.100.252:8092/oauth2callback}"
+EXPECTED_BZ_WEBORIGINS="${EXPECTED_BZ_WEBORIGINS:-https://$BZ_HOST_DEFAULT http://192.168.100.252:8092}"
 # Normalize every host set first: whitespace-only values would satisfy -n yet expand to zero loop
 # iterations — the exact fail-open the guards exist to stop.
 trimset() { printf '%s' "$1" | xargs 2>/dev/null || true; }
@@ -181,7 +216,7 @@ if [ "$NETWORK_ONLY" != "1" ] && [ "${ALLOW_SET_OVERRIDES:-0}" != "1" ]; then
   # Every acceptance EXPECTATION is phase-locked as well: EXPECTED_REDIRECT_STATUS=301 or a
   # substituted issuer would otherwise bless a coherently wrong deployment with VERIFIED.
   require_default EXPECTED_ISSUER "$EXPECTED_ISSUER" "$EXPECTED_ISSUER_DEFAULT"
-  require_default EXPECTED_REDIRECT_STATUS "$EXPECTED_REDIRECT_STATUS" "$EXPECTED_REDIRECT_STATUS_DEFAULT"
+  [ "$PHASE" = "redirect" ] && require_default EXPECTED_REDIRECT_STATUS "$EXPECTED_REDIRECT_STATUS" "$EXPECTED_REDIRECT_STATUS_DEFAULT"
   require_default EXPECTED_PROD_ORIGINS "$EXPECTED_PROD_ORIGINS" "$PROD_ORIGINS_DEFAULT"
   require_default EXPECTED_ES4_ORIGINS "$EXPECTED_ES4_ORIGINS" "$ES4_ORIGINS_DEFAULT"
   require_default EXPECTED_KC_REDIRECTS "$EXPECTED_KC_REDIRECTS" "$KC_REDIRECTS_DEFAULT"
@@ -191,6 +226,8 @@ if [ "$NETWORK_ONLY" != "1" ] && [ "${ALLOW_SET_OVERRIDES:-0}" != "1" ]; then
   require_default PRIMARY_ES "$PRIMARY_ES" "$PRIMARY_ES_DEFAULT"
   require_default EXPECTED_REQ_REDIRECTS "$EXPECTED_REQ_REDIRECTS" "https://$REQ_HOST_DEFAULT/oidc-callback"
   require_default EXPECTED_REQ_WEBORIGINS "$EXPECTED_REQ_WEBORIGINS" "https://$REQ_HOST_DEFAULT"
+  require_default EXPECTED_BZ_REDIRECTS "$EXPECTED_BZ_REDIRECTS" "https://$BZ_HOST_DEFAULT/oauth2callback http://192.168.100.252:8092/oauth2callback"
+  require_default EXPECTED_BZ_WEBORIGINS "$EXPECTED_BZ_WEBORIGINS" "https://$BZ_HOST_DEFAULT http://192.168.100.252:8092"
 fi
 
 if [ "$PRECHECK" = "1" ]; then
@@ -198,8 +235,10 @@ if [ "$PRECHECK" = "1" ]; then
   [ "$PHASE" = "redirect" ] || { echo "FATAL: --precheck is only meaningful with --phase redirect" >&2; exit 2; }
   REDIR_HOSTS=""   # the ONLY exemption precheck grants
 else
-  if [ "$PHASE" != "dual" ] && [ -z "$REDIR_HOSTS" ]; then
-    echo "FATAL: empty REDIR_HOSTS in $PHASE acceptance mode — use --precheck for the pre-redirect run" >&2; exit 2
+  # 'redirect' is the only phase that asserts redirects; 'retired' deliberately has none (the old
+  # domain was freed for unrelated use, not redirected) and 'dual' predates them.
+  if [ "$PHASE" = "redirect" ] && [ -z "$REDIR_HOSTS" ]; then
+    echo "FATAL: empty REDIR_HOSTS in redirect acceptance mode — use --precheck for the pre-redirect run" >&2; exit 2
   fi
   if [ "$PHASE" = "retired" ] && [ -z "$ABSENT_TUNNEL_HOSTS" ]; then
     echo "FATAL: empty ABSENT_TUNNEL_HOSTS in retired acceptance mode" >&2; exit 2
@@ -234,6 +273,168 @@ ws_target_for() {  # $1 = hostname; $2 = config text; prints that host's /ws/eve
     /^[[:space:]]*-[[:space:]]*hostname:/ { cur=fieldval($0, "hostname"); next }
     /path:[[:space:]]*\/ws\/events([[:space:]]|$)/ { if (cur == h) haspath=1; next }
     /service:/ { if (cur == h && haspath) { print fieldval($0, "service"); exit } haspath=0 }'
+}
+
+retired_suffixes() { for h in $ABSENT_TUNNEL_HOSTS; do printf '%s\n' "$h"; done | awk -F. 'NF>2{print $(NF-1)"."$NF} NF==2{print}' | sort -u; }
+scan_config_for_retired() {  # label, config text
+  local label="$1" cfg="$2" sfx report
+  # STRUCTURAL hostname extraction (PyYAML): flow mappings ({hostname: x, path: y}), anchors/aliases
+  # and any indentation style are all covered — a sed/grep scan sees none of those reliably.
+  # ALL classification happens inside Python: a bare "*" hostname passed through an unquoted shell
+  # expansion would glob against the working directory and vanish before grep ever saw it.
+  report="$(printf '%s\n' "$cfg" | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "
+import os, sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    if not isinstance(rules, list): raise ValueError('ingress is not a list')
+    hosts = sorted({str(r.get('hostname', '')).strip().lower().rstrip('.')
+                    for r in rules if isinstance(r, dict) and str(r.get('hostname', '')).strip()})
+    wild = [h for h in hosts if '*' in h]
+    hits = []
+    for sfx in os.environ.get('RETIRED_SUFFIXES', '').split():
+        sfx = sfx.strip().lower()
+        if not sfx: continue
+        hits += [h for h in hosts if h == sfx or h.endswith('.' + sfx)]
+    if wild: print('WILDCARD ' + '|'.join(wild))
+    elif hits: print('RETIRED ' + '|'.join(sorted(set(hits))))
+    else: print('CLEAN ' + '|'.join(hosts))
+except Exception as e:
+    print('PARSE_FAIL %s' % e)
+" 2>/dev/null)"
+  case "$report" in
+    "CLEAN"*) note "OK   $label declares no wildcard and no retired-domain hostname (structural check; hosts: ${report#CLEAN })" ;;
+    "WILDCARD"*) bad "$label declares WILDCARD hostname(s) — they match the retired domain regardless of spelling: ${report#WILDCARD }" ;;
+    "RETIRED"*) bad "$label still declares retired-domain hostname(s): ${report#RETIRED }" ;;
+    *) bad "$label: could not structurally parse the ingress hostnames ($report)" ;;
+  esac
+  # Hostless rules are legal and match EVERY hostname, so only the terminal http_status:404 may be
+  # hostless. Parse the ingress list STRUCTURALLY (a rule's fields can appear in any order across
+  # multiple lines — a line-oriented scan misses `- path: …` + `service: …` on the next line).
+  local hostless_report
+  hostless_report="$(printf '%s\n' "$cfg" | python3 -c "
+import sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    if not isinstance(rules, list): raise ValueError('ingress is not a list')
+    offenders = [r for r in rules
+                 if isinstance(r, dict) and not str(r.get('hostname', '')).strip()
+                 and str(r.get('service', '')).strip() != 'http_status:404']
+    if offenders:
+        print('OFFENDERS ' + '; '.join(repr(o) for o in offenders))
+    else:
+        print('CLEAN')
+except Exception as e:
+    print('PARSE_FAIL %s' % e)
+" 2>/dev/null)"
+  case "$hostless_report" in
+    CLEAN) note "OK   $label has no hostless rule other than the terminal 404" ;;
+    OFFENDERS*) bad "$label has HOSTLESS ingress rule(s) that are not http_status:404 — they answer for EVERY hostname incl. the retired domain: ${hostless_report#OFFENDERS }" ;;
+    *) bad "$label: could not structurally parse the ingress list to prove no hostless rule ($hostless_report)" ;;
+  esac
+}
+
+resolve_ws_target() {  # $1 = hostname. cloudflared's own first-match answer is authoritative: a
+  # text parser cannot see rule order across flow mappings/aliases, so a SHADOWED wrong rule (an
+  # earlier :8091 ServiceLB entry) would be invisible — exactly the 2026-07-31 outage shape, which
+  # the 401 probe provably cannot catch. FAIL CLOSED if cloudflared cannot answer; the parser is a
+  # labelled fallback in --network-only diagnostics only.
+  # stdout carries ONLY the target — every diagnostic goes to stderr, or a caller capturing
+  # stdout would compare a multi-line blob against the expected NodePort and reject a good route.
+  local t
+  t="$(run "cloudflared tunnel --config '$LIVE_PATH' ingress rule 'https://$1/ws/events' 2>/dev/null" | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
+  if [ -n "$t" ]; then
+    echo "       $1/ws/events -> $t (resolved by cloudflared — authoritative)" >&2
+    printf '%s' "$t"; return
+  fi
+  if [ "$NETWORK_ONLY" = "1" ]; then
+    t="$(ws_target_for "$1" "$live_raw")"
+    echo "  WARN $1/ws/events -> ${t:-<unset>} (TEXT PARSER fallback — cloudflared unavailable; shadowed rules may be missed)" >&2
+    printf '%s' "$t"; return
+  fi
+  bad "$1/ws/events: cloudflared could not resolve the route — the authoritative check cannot run (use --network-only for a parser-only diagnostic)"
+  printf ''
+}
+
+# --- THE retirement classifier — ONE implementation, used by the live-realm scan, the deployed
+# ConfigMap scan and the selftests. Duplicating it is how a case-sensitivity regression survived
+# a green suite in round 18: the tests exercised a copy while production kept the bug.
+# stdin: JSON {"sources":[{"label":..,"clients":[client,…]},…]}; stdout: CLEAN/PROBLEMS.
+RETIREMENT_CLASSIFIER_PY='
+import json, os, sys
+from urllib.parse import urlparse, urljoin
+
+SFXS = [x.strip().lower() for x in os.environ.get("RETIRED_SUFFIXES", "").split() if x.strip()]
+
+def host_hits(u):
+    """Normalised host test: case, trailing dot, port, query strings, and any subdomain."""
+    try: h = (urlparse(str(u)).hostname or "").strip().lower().rstrip(".")
+    except Exception: return False
+    return bool(h) and any(h == s or h.endswith("." + s) for s in SFXS)
+
+def catch_all(v):
+    """Effective catch-alls admit ANY host, retired one included (scheme case-insensitive)."""
+    v = str(v).strip(); lv = v.lower()
+    return v in ("*", "/*") or lv.startswith("http://*") or lv.startswith("https://*") \
+        or lv in ("http*", "http*://*")
+
+def client_problems(label, c):
+    out = []
+    if not isinstance(c, dict):
+        return ["%s: non-object client entry" % label]
+    cid = c.get("clientId", "?"); root = str(c.get("rootUrl") or "")
+    def judge(kind, v):
+        v = str(v)
+        if not v: return
+        if catch_all(v): out.append("%s/%s %s=%s is an effective CATCH-ALL" % (label, cid, kind, v))
+        elif host_hits(v): out.append("%s/%s %s=%s" % (label, cid, kind, v))
+        elif v.startswith("/") and root and host_hits(urljoin(root + "/", v.lstrip("/"))):
+            out.append("%s/%s %s=%s (resolved against rootUrl %s)" % (label, cid, kind, v, root))
+    for field in ("redirectUris", "webOrigins"):
+        for v in (c.get(field) or []): judge(field, v)
+    for field in ("rootUrl", "baseUrl", "adminUrl"):
+        if c.get(field): judge(field, c.get(field))
+    attrs = c.get("attributes") or {}
+    if isinstance(attrs, dict):
+        for ak, av in attrs.items():
+            if av is None: continue
+            parts = str(av).split("##") if ak == "post.logout.redirect.uris" else [str(av)]
+            for v in parts:
+                if not v: continue
+                looks_url = "://" in v or v.startswith("/")
+                if looks_url or ak.lower().endswith(("url", "uri", "uris")): judge("attr " + ak, v)
+    return out
+
+try:
+    doc = json.loads(sys.stdin.read())
+    sources = doc.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("no sources to scan")
+    problems, n = [], 0
+    for src in sources:
+        label = src.get("label", "?")
+        clients = src.get("clients")
+        if not isinstance(clients, list):
+            problems.append("%s: client list unreadable (enumeration incomplete)" % label); continue
+        n += 1
+        for c in clients: problems += client_problems(label, c)
+    print("PROBLEMS " + " | ".join(problems) if problems else "CLEAN %d source(s) scanned" % n)
+except Exception as e:
+    print("SCAN_FAIL %s" % e)
+'
+
+realm_verdict() {  # $1 = marker from realm_scan. THE production verdict — the selftest calls this
+  # very function, so a regression in its failure handling cannot hide behind a copied handler.
+  case "$1" in
+    CLEAN*) note "OK   no client in any live realm can reach the retired domain ($1)" ;;
+    PROBLEMS*) bad "LIVE Keycloak still admits the retired domain: ${1#PROBLEMS }" ;;
+    SCAN_FAIL*) if [ "$NETWORK_ONLY" = "1" ]; then note "WARN realm-wide scan skipped (${1#SCAN_FAIL })"
+                else bad "realm-wide retirement scan could not complete — ${1#SCAN_FAIL } (an incomplete enumeration is not evidence)"; fi ;;
+    "") if [ "$NETWORK_ONLY" = "1" ]; then note "WARN realm-wide scan produced no output (network-only)"
+        else bad "realm-wide retirement scan produced NO output — the decisive realm gate did not run"; fi ;;
+    *) bad "realm-wide retirement scan produced unusable output: $1" ;;
+  esac
 }
 
 selftest() {
@@ -298,6 +499,185 @@ selftest() {
   - hostname: auth.example
     service: http://kc:8080'
   run_case auth.example "" "$fixture" "non-ws path rule never reports its service"
+
+  # --- structural retirement parsers (the checks that keep the retired domain out) ---------------
+  struct_case() {  # label, config-text, python-snippet-selector, expected-prefix
+    local got
+    got="$(printf '%s\n' "$2" | python3 -c "$3" 2>/dev/null)"
+    case "$got" in
+      "$4"*) echo "  OK   selftest: $1" ;;
+      *) echo "  FAIL selftest: $1 (got '$got', wanted prefix '$4')" >&2; rc=1 ;;
+    esac
+  }
+  PY_TUNNEL_HOSTS="import sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    if not isinstance(rules, list): raise ValueError('ingress is not a list')
+    hosts = [str(r.get('hostname', '')).strip().lower().rstrip('.')
+             for r in rules if isinstance(r, dict) and str(r.get('hostname', '')).strip()]
+    print('HOSTS ' + ' '.join(sorted(set(hosts))))
+except Exception as e:
+    print('PARSE_FAIL %s' % e)"
+  struct_case "flow-mapping hostname is extracted (sed-invisible)" \
+    'ingress:
+  - {hostname: retired.example, path: /x, service: "http://evil:8080"}
+  - service: http_status:404' "$PY_TUNNEL_HOSTS" "HOSTS retired.example"
+  PY_HOSTLESS="import sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    if not isinstance(rules, list): raise ValueError('ingress is not a list')
+    offenders = [r for r in rules
+                 if isinstance(r, dict) and not str(r.get('hostname', '')).strip()
+                 and str(r.get('service', '')).strip() != 'http_status:404']
+    print('OFFENDERS' if offenders else 'CLEAN')
+except Exception as e:
+    print('PARSE_FAIL %s' % e)"
+  struct_case "multi-line hostless rule is flagged" \
+    'ingress:
+  - path: /unprobed
+    service: http://evil:8080
+  - service: http_status:404' "$PY_HOSTLESS" "OFFENDERS"
+  struct_case "terminal 404 alone is clean" \
+    'ingress:
+  - hostname: keep.example
+    service: http://x:1
+  - service: http_status:404' "$PY_HOSTLESS" "CLEAN"
+  PY_ING="import sys, yaml
+hosts, hostless = [], 0
+try:
+    for doc in yaml.safe_load_all(sys.stdin):
+        if not isinstance(doc, dict): continue
+        docs = (doc.get('items') or []) if doc.get('kind') == 'List' else [doc]
+        for d in docs:
+            if not isinstance(d, dict) or d.get('kind') != 'Ingress': continue
+            spec = d.get('spec') or {}
+            if spec.get('defaultBackend'):
+                print('DEFAULTBACKEND'); sys.exit(0)
+            for r in spec.get('rules') or []:
+                h = str((r or {}).get('host', '')).strip()
+                if h: hosts.append(h.lower())
+                else: hostless += 1
+    print('HOSTLESS' if hostless else 'HOSTS ' + ' '.join(sorted(set(hosts))))
+except Exception as e:
+    print('PARSE_FAIL %s' % e)"
+  struct_case "Ingress defaultBackend catch-all is flagged" \
+    'apiVersion: networking.k8s.io/v1
+kind: Ingress
+spec:
+  defaultBackend:
+    service:
+      name: oe-keycloak
+      port: {number: 8080}
+  rules:
+    - host: auth.keep.example
+      http: {paths: []}' "$PY_ING" "DEFAULTBACKEND"
+  PY_WILD="import sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    hosts = [str(r.get('hostname','')).strip() for r in rules if isinstance(r, dict) and str(r.get('hostname','')).strip()]
+    wild = [h for h in hosts if '*' in h]
+    print('WILDCARD ' + ' '.join(wild) if wild else 'NOWILD')
+except Exception as e:
+    print('PARSE_FAIL %s' % e)"
+  struct_case "bare '*' wildcard hostname is flagged (matches everything)" \
+    'ingress:
+  - hostname: "*"
+    service: http://evil:8080
+  - service: http_status:404' "$PY_WILD" "WILDCARD"
+  struct_case "TLD wildcard '*.nl' is flagged (matches the retired apex)" \
+    'ingress:
+  - hostname: "*.nl"
+    service: http://evil:8080
+  - service: http_status:404' "$PY_WILD" "WILDCARD"
+  struct_case "plain hostnames are not flagged as wildcards" \
+    'ingress:
+  - hostname: keep.example
+    service: http://x:1
+  - service: http_status:404' "$PY_WILD" "NOWILD"
+  # END-TO-END: exercise the production scan function itself (a snippet copy would not have caught
+  # the shell-glob fail-open that a bare "*" hostname produced).
+  e2e_scan() {  # label, config text, expected substring in output
+    local out
+    out="$( { ABSENT_TUNNEL_HOSTS="fullfunding.nl" scan_config_for_retired "fixture" "$2"; } 2>&1 )"
+    case "$out" in
+      *"$3"*) echo "  OK   selftest: $1" ;;
+      *) echo "  FAIL selftest: $1 (wanted '$3' in: $out)" >&2; rc=1 ;;
+    esac
+  }
+  e2e_scan "e2e: bare '*' hostname is REJECTED by the production scan" \
+    'ingress:
+  - hostname: "*"
+    path: /secret
+    service: http://evil:8080
+  - service: http_status:404' "WILDCARD"
+  e2e_scan "e2e: retired hostname is REJECTED by the production scan" \
+    'ingress:
+  - hostname: es.fullfunding.nl
+    service: http://evil:8080
+  - service: http_status:404' "still declares retired-domain"
+  e2e_scan "e2e: clean config passes the production scan" \
+    'ingress:
+  - hostname: bleadingoptions.com
+    service: http://x:1
+  - service: http_status:404' "no wildcard and no retired-domain"
+  # The resolver's CONTRACT: stdout is exactly the target, nothing else (a diagnostic leaking into
+  # stdout made every ES route comparison fail).
+  resolver_contract_case() {
+    local out lines
+    out="$(LIVE_PATH=/nonexistent NETWORK_ONLY=1 live_raw='ingress:
+  - hostname: probe.example
+    path: /ws/events
+    service: http://10.0.0.1:30091
+  - service: http_status:404' resolve_ws_target probe.example 2>/dev/null)"
+    lines="$(printf '%s' "$out" | wc -l | tr -d ' ')"
+    if [ "$out" = "http://10.0.0.1:30091" ] && [ "$lines" = "0" ]; then
+      echo "  OK   selftest: resolver stdout is exactly the target (no diagnostics leak)"
+    else
+      echo "  FAIL selftest: resolver stdout contract (got '$out')" >&2; rc=1
+    fi
+  }
+  resolver_contract_case
+  # These drive the PRODUCTION classifier ($RETIREMENT_CLASSIFIER_PY) — the same code the live
+  # realm scan and the ConfigMap scan run. A copy would let a production-only regression pass.
+  cls_case() {  # label, client-json, expected-prefix
+    local got
+    got="$(printf '{"sources":[{"label":"t","clients":[%s]}]}' "$2" \
+      | RETIRED_SUFFIXES="fullfunding.nl" python3 -c "$RETIREMENT_CLASSIFIER_PY" 2>/dev/null)"
+    case "$got" in
+      "$3"*) echo "  OK   selftest: $1" ;;
+      *) echo "  FAIL selftest: $1 (got '$got', wanted '$3')" >&2; rc=1 ;;
+    esac
+  }
+  cls_case "redirectUris=['*'] is an effective catch-all" '{"clientId":"x","redirectUris":["*"]}' "PROBLEMS"
+  cls_case "UPPERCASE scheme catch-all HTTPS://* is caught" '{"clientId":"x","redirectUris":["HTTPS://*"]}' "PROBLEMS"
+  cls_case "http*://* form is caught" '{"clientId":"x","webOrigins":["HTTP*://*"]}' "PROBLEMS"
+  cls_case "rootUrl + relative redirect resolves onto the retired host" '{"clientId":"x","rootUrl":"https://fullfunding.nl","redirectUris":["/*"]}' "PROBLEMS"
+  cls_case "query-string literal on the retired host is caught" '{"clientId":"x","redirectUris":["https://fullfunding.nl?x=1"]}' "PROBLEMS"
+  cls_case "trailing-dot (DNS-equivalent) retired host is caught" '{"clientId":"x","redirectUris":["https://fullfunding.nl./cb"]}' "PROBLEMS"
+  cls_case "backchannel logout URL on the retired host is caught" '{"clientId":"x","attributes":{"backchannel.logout.url":"https://fullfunding.nl/logout"}}' "PROBLEMS"
+  cls_case "post-logout ## list entry on the retired host is caught" '{"clientId":"x","attributes":{"post.logout.redirect.uris":"https://ok.example/*##https://fullfunding.nl/*"}}' "PROBLEMS"
+  cls_case "adminUrl on the retired host is caught" '{"clientId":"x","adminUrl":"https://es.fullfunding.nl/admin"}' "PROBLEMS"
+  cls_case "new-domain client is clean" '{"clientId":"x","redirectUris":["https://bleadingoptions.com/*"],"webOrigins":["https://bleadingoptions.com"]}' "CLEAN"
+  # unreadable client list must be a problem, never silence
+  cls_case_raw() {
+    local got
+    got="$(printf '%s' "$2" | RETIRED_SUFFIXES="fullfunding.nl" python3 -c "$RETIREMENT_CLASSIFIER_PY" 2>/dev/null)"
+    case "$got" in "$3"*) echo "  OK   selftest: $1" ;; *) echo "  FAIL selftest: $1 (got '$got')" >&2; rc=1 ;; esac
+  }
+  cls_case_raw "unreadable client list is reported, not skipped" '{"sources":[{"label":"t","clients":null}]}' "PROBLEMS"
+  cls_case_raw "empty source set is SCAN_FAIL, never CLEAN" '{"sources":[]}' "SCAN_FAIL"
+  cls_case_raw "malformed payload is SCAN_FAIL" 'not-json' "SCAN_FAIL"
+  struct_case "Ingress hostless rule is flagged" \
+    'apiVersion: networking.k8s.io/v1
+kind: Ingress
+spec:
+  rules:
+    - host: auth.keep.example
+      http: {paths: []}
+    - http: {paths: []}' "$PY_ING" "HOSTLESS"
   return $rc
 }
 [ "$SELFTEST" = "1" ] && { selftest; exit $?; }
@@ -350,40 +730,114 @@ else
 fi
 
 # 1b. retirement is proven in the config text, not hidden behind the edge redirects --------------
-for h in $ABSENT_TUNNEL_HOSTS; do
-  h_re="$(printf '%s' "$h" | sed 's/\./\\./g')"
-  if printf '%s\n' "$live_raw" | grep -qiE "hostname:[[:space:]]*[\"']?$h_re[\"']?([[:space:]]|\$)"; then
-    bad "retired hostname '$h' still has ingress rules in the LIVE tunnel config"
-  else
-    note "OK   retired hostname '$h' absent from the live tunnel config"
-  fi
-  if grep -qiE "hostname:[[:space:]]*[\"']?$h_re[\"']?([[:space:]]|\$)" "$REPO_COPY"; then
-    bad "retired hostname '$h' still has ingress rules in the REPO canonical config"
-  else
-    note "OK   retired hostname '$h' absent from the repo canonical config"
-  fi
-done
-
-# 1c. retired: the legacy traefik Ingress must not route the old auth hostname either ------------
+# Literal-name checks are NOT sufficient: cloudflared supports wildcard hostnames ("*.domain") and
+# hostname-less rules that match EVERY hostname. So we (a) reject any declared hostname that
+# equals or ends in the retired suffix, in ANY quoting/wildcard form, (b) reject a hostless rule
+# whose service is not the terminal http_status:404, and (c) ask cloudflared ITSELF how each
+# retired URL resolves — the only authoritative answer — demanding http_status:404.
 if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
-  ING_FILE="${ING_FILE:-$(cd "$(dirname "$0")/../.." && pwd)/k8s/keycloak/keycloak-ingress.yaml}"
+  scan_config_for_retired "live tunnel config" "$live_raw"
+  scan_config_for_retired "repo canonical config" "$(cat "$REPO_COPY")"
+  # (c) authoritative resolution, on the box that owns cloudflared
+  for h in $ABSENT_TUNNEL_HOSTS; do
+    # Include an arbitrary unprobed path: a path-scoped rule (e.g. `path: /secret`) would sit
+    # behind the three "expected" paths and never be sampled by them.
+    for u in "https://$h/" "https://$h/ws/events" "https://$h/admin" "https://$h/zz-unprobed-$$"; do
+      got="$(run "cloudflared tunnel --config '$LIVE_PATH' ingress rule '$u' 2>/dev/null" | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
+      if [ -z "$got" ]; then
+        unavailable "could not resolve $u through cloudflared on the prod host"
+      elif [ "$got" = "http_status:404" ]; then
+        note "OK   $u resolves to http_status:404 (we no longer serve it)"
+      else
+        bad "$u still resolves to '$got' — this tunnel would hijack the retired domain"
+      fi
+    done
+  done
+fi
+
+# 1b2. retired: our tunnel must not answer for the retired domain at all. It may now legitimately
+# belong to someone else's application, so we assert only what is OURS to assert: that no ingress
+# rule of ours names it (checked in 1b) and that OUR canonical config carries no such target.
+# (A live HTTP probe is deliberately NOT a failure signal here — whatever answers that domain now
+# is not ours to judge.)
+
+# 1c. the legacy traefik Ingress host set — validated in the phases that make a claim about it:
+# 'retired' (only the new host may remain) and 'rollback' (the old host is legitimately back).
+# Deliberately NOT gated on ABSENT_TUNNEL_HOSTS: rollback has none, yet still needs this proof.
+case "$PHASE" in retired|rollback) ING_CHECK=1 ;; *) ING_CHECK=0 ;; esac
+if [ "$ING_CHECK" = "1" ]; then
+  ING_FILE="${ING_FILE:-$REPO_ROOT/k8s/keycloak/keycloak-ingress.yaml}"
+  # EXACT host-set equality, not absence-of-a-literal: that also rejects wildcard hosts
+  # ("*.fullfunding.nl"), a hostless rule (matches every host) and any unexpected extra rule.
+  # Deliberately NOT env-overridable: an override could bless an Ingress that re-admits the
+  # retired host without tripping ALLOW_SET_OVERRIDES or the diagnostic stamp. (A pre-handoff
+  # rollback legitimately restores the old host, so that phase expects both — still not from env.)
+  case "$PHASE" in
+    rollback) EXPECTED_ING_HOSTS="auth.bleadingoptions.com auth.fullfunding.nl" ;;
+    *)        EXPECTED_ING_HOSTS="auth.bleadingoptions.com" ;;
+  esac
+  ing_hostset_check() {  # label, whitespace-separated host list as deployed/declared
+    local label="$1" got want
+    got="$(printf '%s\n' $2 | sed '/^$/d' | tr 'A-Z' 'a-z' | sort -u)"
+    want="$(printf '%s\n' $EXPECTED_ING_HOSTS | sort -u)"
+    if [ -z "$got" ]; then bad "$label declares NO Ingress host — a hostless rule matches every hostname, including the retired domain"; return; fi
+    if [ "$got" = "$want" ]; then note "OK   $label Ingress host set is exactly: $(printf '%s' "$got" | tr '\n' ' ')"
+    else
+      bad "$label Ingress host set differs from the expected set"
+      diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
+    fi
+  }
+  # Structural parse of the FULL rules array: a rule with NO host matches every hostname, and a
+  # host-only extraction (sed/jsonpath) silently omits it — so count rules and demand each has one.
+  ing_structural() {  # label, yaml-or-json text
+    printf '%s\n' "$2" | python3 -c "
+import sys, yaml
+try:
+    hosts, hostless = [], 0
+    for doc in yaml.safe_load_all(sys.stdin):   # JSON is valid YAML, so one parser covers both
+        if not isinstance(doc, dict): continue
+        if doc.get('kind') == 'List':
+            docs = doc.get('items') or []
+        else:
+            docs = [doc]
+        for d in docs:
+            if not isinstance(d, dict) or d.get('kind') != 'Ingress': continue
+            spec = d.get('spec') or {}
+            if spec.get('defaultBackend'):
+                print('DEFAULTBACKEND %r' % (spec.get('defaultBackend'),)); sys.exit(0)
+            for r in spec.get('rules') or []:
+                h = str((r or {}).get('host', '')).strip()
+                if h: hosts.append(h.lower())
+                else: hostless += 1
+    if hostless: print('HOSTLESS %d' % hostless)
+    else: print('HOSTS ' + ' '.join(sorted(set(hosts))))
+except Exception as e:
+    print('PARSE_FAIL %s' % e)
+" 2>/dev/null
+  }
   if [ ! -r "$ING_FILE" ]; then
     bad "repo keycloak-ingress.yaml not readable at $ING_FILE — cannot prove ingress retirement"
   else
-    grep -qiE "host:[[:space:]]*[\"']?auth\.fullfunding\.nl[\"']?([[:space:]]|\$)" "$ING_FILE"
-    case $? in
-      0) bad "repo keycloak-ingress.yaml still routes auth.fullfunding.nl after retirement" ;;
-      1) note "OK   repo keycloak-ingress.yaml carries no old auth host" ;;
-      *) bad "grep error reading $ING_FILE — cannot prove ingress retirement" ;;
+    rep="$(ing_structural "repo keycloak-ingress.yaml" "$(cat "$ING_FILE")")"
+    case "$rep" in
+      HOSTS*) ing_hostset_check "repo keycloak-ingress.yaml" "${rep#HOSTS }" ;;
+      HOSTLESS*) bad "repo keycloak-ingress.yaml has ${rep#HOSTLESS } rule(s) with NO host — such a rule matches EVERY hostname, including the retired domain" ;;
+      DEFAULTBACKEND*) bad "repo keycloak-ingress.yaml declares spec.defaultBackend — it catches EVERY unmatched Host, including the retired domain: ${rep#DEFAULTBACKEND }" ;;
+      *) bad "repo keycloak-ingress.yaml: could not structurally parse spec.rules ($rep)" ;;
     esac
   fi
-  live_ing_hosts="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get ingress oe-keycloak -o jsonpath='{.spec.rules[*].host}' 2>/dev/null")"
-  if [ -z "$live_ing_hosts" ]; then
-    unavailable "could not read the live oe-keycloak Ingress host set"
-  elif printf '%s' "$live_ing_hosts" | grep -qi "auth\.fullfunding\.nl"; then
-    bad "live oe-keycloak Ingress still routes auth.fullfunding.nl after retirement ($live_ing_hosts)"
+  # ALL Ingresses in the namespace: a second object could re-admit the retired host just as well.
+  live_ing_json="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get ingress -o json 2>/dev/null")"
+  if [ -z "$live_ing_json" ]; then
+    unavailable "could not read the live oe-keycloak Ingress"
   else
-    note "OK   live oe-keycloak Ingress carries no old auth host ($live_ing_hosts)"
+    rep="$(ing_structural "live oe-keycloak" "$live_ing_json")"
+    case "$rep" in
+      HOSTS*) ing_hostset_check "live oe-keycloak" "${rep#HOSTS }" ;;
+      HOSTLESS*) bad "live oe-keycloak Ingress has ${rep#HOSTLESS } rule(s) with NO host — such a rule matches EVERY hostname, including the retired domain" ;;
+      DEFAULTBACKEND*) bad "live oe-keycloak Ingress declares spec.defaultBackend — it catches EVERY unmatched Host, including the retired domain: ${rep#DEFAULTBACKEND }" ;;
+      *) bad "live oe-keycloak Ingress: could not structurally parse spec.rules ($rep)" ;;
+    esac
   fi
 fi
 
@@ -394,8 +848,10 @@ fi
 want_np="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get svc $GW_SVC -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null")"
 [ -n "$want_np" ] || unavailable "could not read $GW_SVC nodePort"
 for h in $SERVE_APEX; do
-  ws_target="$(ws_target_for "$h" "$live_raw")"
-  note "     $h/ws/events -> ${ws_target:-<unset>}"
+  # cloudflared's OWN first-match resolution is authoritative: a text parser cannot see rule order
+  # across flow mappings/aliases, and a SHADOWED wrong rule (e.g. an earlier :8091 ServiceLB entry)
+  # would otherwise be invisible — the 2026-07-31 incident proved a broken route still 401s.
+  ws_target="$(resolve_ws_target "$h")"
   case "$ws_target" in
     *:8091*) bad "$h/ws/events points at the :8091 ServiceLB — klipper-lb DROPS the WebSocket upgrade (2026-07-31 outage)" ;;
     *:3[0-9][0-9][0-9][0-9]*) note "OK   $h/ws/events uses a NodePort" ;;
@@ -416,8 +872,7 @@ ES4_GW_SVC="${ES4_GW_SVC:-es-feed-gateway}"
 es4_np="$(es4_kubectl "get svc $ES4_GW_SVC -o jsonpath='{.spec.ports[0].nodePort}'")"
 [ -n "$es4_np" ] || unavailable "could not read es4 $ES4_GW_SVC nodePort"
 for h in $SERVE_ES; do
-  ws_target="$(ws_target_for "$h" "$live_raw")"
-  note "     $h/ws/events -> ${ws_target:-<unset>}"
+  ws_target="$(resolve_ws_target "$h")"
   if [ -n "$es4_np" ]; then
     if [ "$ws_target" = "http://192.168.100.4:$es4_np" ]; then
       note "OK   $h/ws/events targets the es4 NodePort $es4_np"
@@ -680,8 +1135,60 @@ EOF_REQ
   [ "$req_rows" = "2" ] || bad "req client verification produced $req_rows/2 records — parser output truncated"
 fi
 
+# 6d2. the LIVE Bugzilla client (realm optionsedge) — the one actually serving req.<domain> -------
+# Separate from 6d on purpose: that checks the DARK req realm's bugzilla-web client, which is not
+# serving anything. This checks the client behind the hostname people actually reach. Both claim the
+# same hostname with different callback paths, so drifting either one is worth catching.
+bz_raw="$(prod_kubectl "exec --pod-running-timeout=$K8S_TIMEOUT deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=bugzilla 2>/dev/null'")"
+if [ -z "$bz_raw" ]; then
+  unavailable "could not read the optionsedge realm's bugzilla client"
+  bz_out=""
+elif ! command -v python3 >/dev/null; then
+  unavailable "python3 needed to parse the bugzilla client"
+  bz_out=""
+else
+bz_out="$(printf '%s' "$bz_raw" | python3 -c "
+import json, sys
+try:
+    arr = json.load(sys.stdin)
+    if not isinstance(arr, list) or len(arr) != 1:
+        raise ValueError('expected exactly 1 bugzilla client, got %r' % (len(arr) if isinstance(arr, list) else type(arr).__name__))
+    c = arr[0]
+    if not isinstance(c.get('redirectUris', []), list) or not isinstance(c.get('webOrigins', []), list):
+        raise ValueError('client fields have unexpected types')
+    print('BZ_REDIRECTS\t' + '\t'.join(sorted(str(v) for v in c.get('redirectUris', []))))
+    print('BZ_WEBORIGINS\t' + '\t'.join(sorted(str(v) for v in c.get('webOrigins', []))))
+except Exception as e:
+    print('  FAIL: bugzilla client response unusable: %s' % e)")"
+fi
+if [ -z "$bz_out" ]; then
+  :  # unavailable already reported
+elif printf '%s\n' "$bz_out" | grep -q 'FAIL'; then
+  printf '%s\n' "$bz_out"; fail=1
+else
+  while IFS=$'\t' read -r name rest; do
+    live_sorted="$(printf '%s' "$rest" | tr '\t' '\n' | sort -u)"
+    case "$name" in
+      BZ_REDIRECTS) expected="$EXPECTED_BZ_REDIRECTS"; label="bugzilla redirectUris" ;;
+      BZ_WEBORIGINS) expected="$EXPECTED_BZ_WEBORIGINS"; label="bugzilla webOrigins" ;;
+      *) continue ;;
+    esac
+    expected_sorted="$(printf '%s\n' $expected | sort -u)"
+    if [ "$live_sorted" = "$expected_sorted" ]; then
+      note "OK   live $label matches the expected set exactly"
+    else
+      bad "live $label differs from the expected set"
+      diff <(printf '%s\n' "$expected_sorted") <(printf '%s\n' "$live_sorted") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
+    fi
+  done <<EOF_BZ
+$bz_out
+EOF_BZ
+  bz_rows="$(printf '%s\n' "$bz_out" | grep -cE '^(BZ_REDIRECTS|BZ_WEBORIGINS)\b')"
+  [ "$bz_rows" = "2" ] || bad "bugzilla client verification produced $bz_rows/2 records — parser output truncated"
+fi
+
 # 6e. the repo realm IMPORT FILE must carry the same sets (parity is a gate, not a hope) ---------
-REALM_CM="${REALM_CM:-$(cd "$(dirname "$0")/../.." && pwd)/k8s/keycloak/keycloak-realm-configmap.yaml}"
+REALM_CM="${REALM_CM:-$REPO_ROOT/k8s/keycloak/keycloak-realm-configmap.yaml}"
 cm_out="$(python3 - "$REALM_CM" <<'PYCM'
 import sys
 try:
@@ -743,6 +1250,72 @@ EOF_CM
   [ "$cm_rows" = "5" ] || bad "realm configmap verification produced $cm_rows/5 records — parser output truncated"
 fi
 
+# 6f. the realm-wide invariant: NO client in ANY live realm may reach a retired hostname ---------
+# The per-client checks above cover the two clients we manage; the runbook's claim is realm-WIDE.
+# A stale/hand-made public client would let the domain's next owner complete an auth-code flow and
+# receive the code at a hostname they control (a server-side token exchange is not protected by
+# browser Origin checks). This is finite enumeration of OUR OWN state — done structurally:
+#   * per-realm failures FAIL (marker-only output is not evidence),
+#   * relative redirects are resolved against rootUrl/baseUrl/adminUrl,
+#   * effective catch-alls ("*", "http://*", a wildcard web origin) FAIL regardless of spelling,
+#   * hostnames are normalised (trailing dot, port, case) before the suffix test.
+
+realm_scan() {
+  # NOTE: runs inside $(...), so it must NEVER call bad/unavailable — their effect would die with
+  # the subshell. It returns a MARKER; realm_verdict (the caller) decides.
+  # Kept deliberately simple: one exec per step. An earlier version built the whole JSON document
+  # inside a nested pod-side shell and the quoting collapsed — kcadm returned nothing and the gate
+  # (correctly) failed closed, but for a tooling reason rather than a real finding.
+  local pw realms json
+  command -v python3 >/dev/null || { echo "SCAN_FAIL python3 unavailable"; return; }
+  pw="$(prod_kubectl "get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}'" | base64 -d)"
+  [ -n "$pw" ] || { echo "SCAN_FAIL could not read the Keycloak admin secret"; return; }
+  kc() {  # $1 = kcadm arguments (authenticates first; password via stdin, never argv)
+    printf '%s\n' "$pw" | run_stdin "kubectl $KEXEC_OPTS -n $NS exec -i deploy/oe-keycloak -- sh -c 'set -eu; IFS= read -r P; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user $KC_VERIFY_USER --password \"\$P\" >/dev/null 2>&1; /opt/keycloak/bin/kcadm.sh $1 2>/dev/null'"
+  }
+  realms="$(kc "get realms --fields realm --format csv --noquotes")"
+  [ -n "$realms" ] || { echo "SCAN_FAIL could not list realms (auth failure? pod unreachable?)"; return; }
+  json='{"sources":['
+  local first=1 r clients
+  for r in $realms; do
+    clients="$(kc "get clients -r $r --fields clientId,rootUrl,baseUrl,adminUrl,redirectUris,webOrigins,attributes")"
+    [ -n "$clients" ] || { echo "SCAN_FAIL client list unreadable for realm $r"; return; }
+    [ "$first" = "1" ] || json="$json,"
+    first=0
+    json="$json{\"label\":\"realm $r\",\"clients\":$clients}"
+  done
+  json="$json]}"
+  printf '%s' "$json" | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "$RETIREMENT_CLASSIFIER_PY" 2>/dev/null
+}
+if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
+  realm_verdict "$(realm_scan)"
+
+  # 6g. the DEPLOYED realm import ConfigMap — if common-infra-deploy did not land while the manual
+  # kcadm patch did, a later DB recreate would re-import stale URIs and restore the retired domain.
+  live_cm="$(prod_kubectl "get configmap oe-keycloak-realm -o json")"
+  if [ -z "$live_cm" ]; then
+    unavailable "could not read the LIVE oe-keycloak-realm ConfigMap"
+  else
+    cm_out="$(printf '%s' "$live_cm" | python3 -c "
+import json, sys
+try:
+    data = (json.loads(sys.stdin.read()).get('data') or {})
+    if not data: raise ValueError('ConfigMap has no data')
+    srcs = []
+    for key, blob in data.items():
+        srcs.append({'label': 'configmap ' + key, 'clients': (json.loads(blob).get('clients') or [])})
+    print(json.dumps({'sources': srcs}))
+except Exception as e:
+    print(json.dumps({'sources': []}))
+" 2>/dev/null | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "$RETIREMENT_CLASSIFIER_PY" 2>/dev/null)"
+    case "$cm_out" in
+      CLEAN*) note "OK   the deployed realm import ConfigMap admits no retired hostname ($cm_out)" ;;
+      PROBLEMS*) bad "the DEPLOYED oe-keycloak-realm ConfigMap still admits the retired domain (a DB recreate would re-import it): ${cm_out#PROBLEMS }" ;;
+      *) bad "deployed realm ConfigMap scan unusable: $cm_out" ;;
+    esac
+  fi
+fi
+
 # 7. the web surface itself: page serves, and the REST API refuses anonymous callers ------------
 for h in $SERVE_APEX $SERVE_ES; do
   code="$(curl -s -o /dev/null -w '%{http_code}' -m 20 "https://$h/" 2>/dev/null)"
@@ -752,7 +1325,7 @@ for h in $SERVE_APEX $SERVE_ES; do
 done
 
 # 8. redirect phases: every OLD hostname, BOTH schemes, exact lifecycle status ------------------
-# redirect soak expects 307 (recallable); retired expects the promoted 308. Accepting either would
+# redirect soak expects 307 (recallable); --promoted expects 308. Accepting either would
 # let a premature permanent redirect — or a forgotten promotion — pass silently.
 for h in $REDIR_HOSTS; do
   target_host="$(redirect_target_for "$h")"

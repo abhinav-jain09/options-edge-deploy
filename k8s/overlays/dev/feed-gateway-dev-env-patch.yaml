@@ -1,7 +1,7 @@
 # DEV-ONLY feed-gateway config. This replaces the retired hand-run host gateway (:8093): its dev env
 # (ci/config/feed-gateway.env) is mirrored here so the k8s gateway (feed-gateway-service, :8091) is the
 # single gateway in dev and Jenkins owns it. The base manifest hardcodes PROD WS auth/origins
-# (https://fullfunding.nl, auth.fullfunding.nl) as direct container env, which override the configmap;
+# (https://bleadingoptions.com, auth.bleadingoptions.com) as direct container env, which override the configmap;
 # this patch overrides them back to dev so a http://localhost:8090 browser with a dev-Keycloak token is
 # accepted. Prod overlay is untouched (keeps the base prod values).
 apiVersion: apps/v1

@@ -77,7 +77,7 @@ spec:
             - name: WS_AUTH_AUDIENCE
               value: "options-edge-web"
             - name: WS_ALLOWED_ORIGINS
-              value: "https://fullfunding.nl,https://bleadingoptions.com"
+              value: "https://bleadingoptions.com"
           envFrom:
             - configMapRef:
                 name: options-edge-config

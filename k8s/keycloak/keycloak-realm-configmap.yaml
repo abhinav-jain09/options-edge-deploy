@@ -1,9 +1,21 @@
 # Production realm import for Keycloak (mounted at /opt/keycloak/data/import; consumed by `start --import-realm`).
 # Hardened vs the dev import: no test user (users are admin-provisioned), the web client has NO direct-access
 # grant, registration disabled, and redirect URIs / web origins are pinned to the real prod option-chain
-# origins (https://fullfunding.nl and https://bleadingoptions.com during the domain migration, plus their
-# es. subdomains). Import is idempotent: an already-present realm is skipped on later boots,
+# origins (https://bleadingoptions.com plus its es. subdomain; fullfunding.nl retired 2026-08-08).
+# Import is idempotent: an already-present realm is skipped on later boots,
 # so realm drift must be reconciled out-of-band (kcadm) — see docs/keycloak-prod.md.
+#
+# ⚠️ The client's authenticationFlowBindingOverrides is NOT recorded here and cannot be: it
+# references generated flow IDs that do not exist until import creates them. After a rebuild the
+# binding must be re-applied with kcadm/the admin REST API — Clients > options-edge-web > Advanced
+# > Authentication flow overrides: Browser = trading-browser, Direct Grant = trading-direct-grant.
+# Without it the flows exist and enforce nothing. (kcadm silently drops that field; the raw admin
+# REST API sets it.)
+#
+# ⚠️ Because import is creation-only, editing this file changes NOTHING on a running Keycloak.
+# It is the desired state: what a rebuild-from-empty must reproduce. Anything added here must
+# already have been applied live with kcadm in the same change (REQ-1 of the req-portal design),
+# which is the case for the `bugzilla` client, its `groups` mapper, and the group tree below.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -34,7 +46,8 @@ data:
           { "name": "replay:stop", "description": "Stop replay runs" },
           { "name": "replay:evidence", "description": "Download replay evidence" },
           { "name": "replay:delete", "description": "Delete replay runs" },
-          { "name": "replay-admin", "description": "Full replay administration (any operation)" }
+          { "name": "replay-admin", "description": "Full replay administration (any operation)" },
+          { "name": "trading-user", "description": "Grants access to the trading UI and feed gateway. Carried automatically by membership of /optionsedge — see the group block and the trading-browser / trading-direct-grant flows below." }
         ]
       },
       "clients": [
@@ -44,11 +57,11 @@ data:
           "publicClient": true,
           "standardFlowEnabled": true,
           "directAccessGrantsEnabled": false,
-          "redirectUris": ["https://fullfunding.nl/*", "https://es.fullfunding.nl/*", "https://bleadingoptions.com/*", "https://es.bleadingoptions.com/*", "http://192.168.100.4:30080/*", "http://192.168.100.252:8094/*", "http://192.168.100.103:8094/*"],
-          "webOrigins": ["https://fullfunding.nl", "https://es.fullfunding.nl", "https://bleadingoptions.com", "https://es.bleadingoptions.com", "http://192.168.100.4:30080", "http://192.168.100.252:8094", "http://192.168.100.103:8094"],
+          "redirectUris": ["https://bleadingoptions.com/*", "https://es.bleadingoptions.com/*", "http://192.168.100.4:30080/*", "http://192.168.100.252:8094/*", "http://192.168.100.103:8094/*"],
+          "webOrigins": ["https://bleadingoptions.com", "https://es.bleadingoptions.com", "http://192.168.100.4:30080", "http://192.168.100.252:8094", "http://192.168.100.103:8094"],
           "attributes": {
             "pkce.code.challenge.method": "S256",
-            "post.logout.redirect.uris": "https://fullfunding.nl/*##https://es.fullfunding.nl/*##https://bleadingoptions.com/*##https://es.bleadingoptions.com/*"
+            "post.logout.redirect.uris": "https://bleadingoptions.com/*##https://es.bleadingoptions.com/*"
           },
           "protocolMappers": [
             {
@@ -74,6 +87,238 @@ data:
               }
             }
           ]
+        },
+        {
+          "//": "Bugzilla (http://192.168.100.252:8092) authenticates through this realm using",
+          "//2": "mod_auth_openidc in its own Apache. Confidential: Keycloak generates the secret at",
+          "//3": "import and it is transferred server-side into /home/options-edge/config/bugzilla-oidc.env",
+          "//4": "(0600) — it is never committed here, exactly as for the req portal client below.",
+          "//5": "The `groups` mapper is load-bearing, not cosmetic: Bugzilla's Env login can only read",
+          "//6": "auth_env_id/email/realname, so group membership can ONLY reach it through this claim,",
+          "//7": "which the KeycloakGroups Bugzilla extension turns into Bugzilla group membership.",
+          "//8": "full.path=true is required — the paths (/optionsedge/internal) are what map onto the",
+          "//9": "Bugzilla group names (optionsedge-internal); bare names would collide across apps.",
+          "clientId": "bugzilla",
+          "protocol": "openid-connect",
+          "publicClient": false,
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "serviceAccountsEnabled": false,
+          "redirectUris": ["http://192.168.100.252:8092/oauth2callback"],
+          "webOrigins": ["http://192.168.100.252:8092"],
+          "protocolMappers": [
+            {
+              "name": "groups",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "consentRequired": false,
+              "config": {
+                "full.path": "true",
+                "claim.name": "groups",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true"
+              }
+            }
+          ]
+        }
+      ],
+      "//groups": "Access model: one parent group per application, with an `internal` and an",
+      "//groups2": "`external` child. Membership here is the single place access is granted — the",
+      "//groups3": "KeycloakGroups Bugzilla extension mirrors these paths onto Bugzilla groups named",
+      "//groups4": "<app>-<tier> at each login. Adding an application means adding one parent and two",
+      "//groups5": "children here, plus the matching Bugzilla groups and products.",
+      "groups": [
+        {
+          "//": "realmRoles here is load-bearing: membership of /optionsedge is what confers",
+          "//2": "trading-user, which the two flows below require. Access is therefore granted by",
+          "//3": "putting someone in a group, never by hand-assigning a role.",
+          "name": "optionsedge",
+          "path": "/optionsedge",
+          "realmRoles": ["trading-user"],
+          "subGroups": [
+            { "name": "internal", "path": "/optionsedge/internal" },
+            { "name": "external", "path": "/optionsedge/external" }
+          ]
+        },
+        {
+          "name": "fullfunding",
+          "path": "/fullfunding",
+          "subGroups": [
+            { "name": "internal", "path": "/fullfunding/internal" },
+            { "name": "external", "path": "/fullfunding/external" }
+          ]
+        }
+      ],
+      "//flows": "Two copies of the built-in flows, each with a CONDITIONAL sub-flow that denies anyone",
+      "//flows2": "without trading-user. ORDER IS LOAD-BEARING: the check must come AFTER the step that",
+      "//flows3": "identifies the user (Username Password Form / Username Validation). Placed first it silently",
+      "//flows4": "does nothing — Keycloak has no user in context yet, the condition cannot evaluate, the",
+      "//flows5": "sub-flow is skipped and login proceeds. The structure looks correct either way.",
+      "authenticationFlows": [
+        {
+          "id": "6f5ba44b-49ab-4d0c-8b4a-a2b00a18cd23",
+          "alias": "require-trading-user",
+          "description": "deny users without trading-user",
+          "providerId": "basic-flow",
+          "topLevel": false,
+          "builtIn": false,
+          "authenticationExecutions": [
+            {
+              "authenticatorConfig": "require-trading-user-browser-cfg",
+              "authenticator": "conditional-user-role",
+              "authenticatorFlow": false,
+              "requirement": "REQUIRED",
+              "priority": 0,
+              "autheticatorFlow": false,
+              "userSetupAllowed": false
+            },
+            {
+              "authenticator": "deny-access-authenticator",
+              "authenticatorFlow": false,
+              "requirement": "REQUIRED",
+              "priority": 0,
+              "autheticatorFlow": false,
+              "userSetupAllowed": false
+            }
+          ]
+        },
+        {
+          "id": "4288891e-8216-4c97-bd24-32c97627091f",
+          "alias": "require-trading-user-dg",
+          "description": "",
+          "providerId": "basic-flow",
+          "topLevel": false,
+          "builtIn": false,
+          "authenticationExecutions": [
+            {
+              "authenticatorConfig": "require-trading-user-dg-cfg",
+              "authenticator": "conditional-user-role",
+              "authenticatorFlow": false,
+              "requirement": "REQUIRED",
+              "priority": 0,
+              "autheticatorFlow": false,
+              "userSetupAllowed": false
+            },
+            {
+              "authenticator": "deny-access-authenticator",
+              "authenticatorFlow": false,
+              "requirement": "REQUIRED",
+              "priority": 0,
+              "autheticatorFlow": false,
+              "userSetupAllowed": false
+            }
+          ]
+        },
+        {
+          "id": "45869f56-f8b5-40d1-94e5-c5a782ba3ee4",
+          "alias": "trading-browser",
+          "description": "Browser based authentication",
+          "providerId": "basic-flow",
+          "topLevel": true,
+          "builtIn": false,
+          "authenticationExecutions": [
+            {
+              "authenticator": "auth-cookie",
+              "authenticatorFlow": false,
+              "requirement": "ALTERNATIVE",
+              "priority": 10,
+              "autheticatorFlow": false,
+              "userSetupAllowed": false
+            },
+            {
+              "authenticator": "auth-spnego",
+              "authenticatorFlow": false,
+              "requirement": "DISABLED",
+              "priority": 20,
+              "autheticatorFlow": false,
+              "userSetupAllowed": false
+            },
+            {
+              "authenticator": "identity-provider-redirector",
+              "authenticatorFlow": false,
+              "requirement": "ALTERNATIVE",
+              "priority": 25,
+              "autheticatorFlow": false,
+              "userSetupAllowed": false
+            },
+            {
+              "authenticatorFlow": true,
+              "requirement": "ALTERNATIVE",
+              "priority": 26,
+              "autheticatorFlow": true,
+              "flowAlias": "trading-browser Organization",
+              "userSetupAllowed": false
+            },
+            {
+              "authenticatorFlow": true,
+              "requirement": "ALTERNATIVE",
+              "priority": 30,
+              "autheticatorFlow": true,
+              "flowAlias": "trading-browser forms",
+              "userSetupAllowed": false
+            }
+          ]
+        },
+        {
+          "id": "2a9111bb-4c68-4564-a5ce-96b0b67c247e",
+          "alias": "trading-direct-grant",
+          "description": "OpenID Connect Resource Owner Grant",
+          "providerId": "basic-flow",
+          "topLevel": true,
+          "builtIn": false,
+          "authenticationExecutions": [
+            {
+              "authenticator": "direct-grant-validate-username",
+              "authenticatorFlow": false,
+              "requirement": "REQUIRED",
+              "priority": 0,
+              "autheticatorFlow": false,
+              "userSetupAllowed": false
+            },
+            {
+              "authenticator": "direct-grant-validate-password",
+              "authenticatorFlow": false,
+              "requirement": "REQUIRED",
+              "priority": 10,
+              "autheticatorFlow": false,
+              "userSetupAllowed": false
+            },
+            {
+              "authenticatorFlow": true,
+              "requirement": "CONDITIONAL",
+              "priority": 20,
+              "autheticatorFlow": true,
+              "flowAlias": "trading-direct-grant Direct Grant - Conditional OTP",
+              "userSetupAllowed": false
+            },
+            {
+              "authenticatorFlow": true,
+              "requirement": "CONDITIONAL",
+              "priority": 30,
+              "autheticatorFlow": true,
+              "flowAlias": "require-trading-user-dg",
+              "userSetupAllowed": false
+            }
+          ]
+        }
+      ],
+      "authenticatorConfig": [
+        {
+          "id": "0c9b6c72-a5f6-4152-aa47-aae8ef18348d",
+          "alias": "require-trading-user-browser-cfg",
+          "config": {
+            "condUserRole": "trading-user",
+            "negate": "true"
+          }
+        },
+        {
+          "id": "111f1ac6-fde7-4984-bc99-9c410836a3c5",
+          "alias": "require-trading-user-dg-cfg",
+          "config": {
+            "condUserRole": "trading-user",
+            "negate": "true"
+          }
         }
       ]
     }
@@ -81,7 +326,7 @@ data:
   # Requirement-intake portal realm (docs/req-portal-bugzilla-keycloak-sso.md, REQ-1 + REQ-2).
   #
   # Deliberately ISOLATED from `optionsedge`: a `req` user has no account in the trading realm, so
-  # they can never authenticate at https://fullfunding.nl, and the trading web client/API accept
+  # they can never authenticate at https://bleadingoptions.com, and the trading web client/API accept
   # only the `optionsedge` issuer. Nothing in this key touches the realm above.
   #
   # Import is CREATION-ONLY — `start --import-realm` skips a realm that already exists. This file is
@@ -131,8 +376,8 @@ data:
           "implicitFlowEnabled": false,
           "directAccessGrantsEnabled": false,
           "serviceAccountsEnabled": false,
-          "redirectUris": ["https://req.fullfunding.nl/oidc-callback"],
-          "webOrigins": ["https://req.fullfunding.nl"],
+          "redirectUris": ["https://req.bleadingoptions.com/oidc-callback"],
+          "webOrigins": ["https://req.bleadingoptions.com"],
           "attributes": {
             "pkce.code.challenge.method": "S256"
           }
