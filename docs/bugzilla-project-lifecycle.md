@@ -111,11 +111,12 @@ all get the same policy:
 
 Enforcement has **three** states:
 
-| `cf_category` | model matches | behaviour |
-|---|---|---|
-| absent | — | nothing enforced — the bootstrap window that lets the first `checksetup.pl` load the extension before the fields exist |
-| present | yes | normal policy |
-| present | no | **every guarded change refused** until the provisioner is re-run |
+| `cf_category` | `REQ_*` statuses | model matches | behaviour |
+|---|---|---|---|
+| absent | absent | — | never provisioned — nothing enforced, so `checksetup.pl`, the first mount and the first apply all work |
+| absent | present | — | **broken** — the anchor was removed after provisioning |
+| present | — | yes | normal policy |
+| present | — | no | **broken** — every guarded change refused until the provisioner is re-run |
 
 There is deliberately **no** "enforcement enabled" parameter. Any such switch is reachable by anyone
 with `tweakparams`, which would hand administrators the one thing this design exists to deny them.
@@ -123,12 +124,18 @@ with `tweakparams`, which would hand administrators the one thing this design ex
 `REQ_*` statuses, which cannot be removed while items sit on them, so a missing category field with
 those statuses present reads as `broken`, not `bootstrap`.
 
-"Matches" means the whole model, not a couple of spot checks: both fields' type, custom, mandatory,
-`enter_bug` and control wiring; exactly the declared issue types; exactly the declared categories,
-each owned by the right type; every resolution the policy hands out; every status, active and with
-the declared `is_open`; and the **entire workflow matrix**, compared as a multiset. So a re-pointed
-category, a flipped `is_open`, a deleted creation edge or an `editworkflow.cgi` shortcut all stop the
-installation rather than quietly redefining the lifecycles.
+"Matches" means everything that can change what the policy **permits**, and deliberately not more:
+`cf_category`'s type/custom/optional/`enter_bug` and the absence of any controller on it;
+`cf_environment` present and visible for exactly the BUG products; every mapped product present,
+active, and agreeing on **both name and id**; exactly the declared category vocabulary, all active;
+every resolution the policy hands out; every status, active and with the declared `is_open`; and the
+**entire workflow matrix**, compared as a multiset. So a re-pointed category, a flipped `is_open`, a
+deleted creation edge or an `editworkflow.cgi` shortcut all stop the installation rather than
+quietly redefining the lifecycles.
+
+Cosmetics — descriptions, sort keys, `buglist` flags — are not checked here, because they cannot
+widen anything and would be paid for on every request; the provisioner's zero-change dry run covers
+them instead.
 
 That is also why the policy — statuses, resolutions, categories, `is_open`, the matrix — is compiled
 into the extension as well as declared in the SSOT. Reading only the database would make an
