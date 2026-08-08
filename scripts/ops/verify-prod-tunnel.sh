@@ -256,10 +256,15 @@ done
 # 1c. retired: the legacy traefik Ingress must not route the old auth hostname either ------------
 if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   ING_FILE="${ING_FILE:-$(cd "$(dirname "$0")/../.." && pwd)/k8s/keycloak/keycloak-ingress.yaml}"
-  if grep -qiE "host:[[:space:]]*[\"']?auth\.fullfunding\.nl[\"']?([[:space:]]|\$)" "$ING_FILE" 2>/dev/null; then
-    bad "repo keycloak-ingress.yaml still routes auth.fullfunding.nl after retirement"
+  if [ ! -r "$ING_FILE" ]; then
+    bad "repo keycloak-ingress.yaml not readable at $ING_FILE — cannot prove ingress retirement"
   else
-    note "OK   repo keycloak-ingress.yaml carries no old auth host"
+    grep -qiE "host:[[:space:]]*[\"']?auth\.fullfunding\.nl[\"']?([[:space:]]|\$)" "$ING_FILE"
+    case $? in
+      0) bad "repo keycloak-ingress.yaml still routes auth.fullfunding.nl after retirement" ;;
+      1) note "OK   repo keycloak-ingress.yaml carries no old auth host" ;;
+      *) bad "grep error reading $ING_FILE — cannot prove ingress retirement" ;;
+    esac
   fi
   live_ing_hosts="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get ingress oe-keycloak -o jsonpath='{.spec.rules[*].host}' 2>/dev/null")"
   if [ -z "$live_ing_hosts" ]; then

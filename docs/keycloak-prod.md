@@ -136,34 +136,50 @@ never be removed. Rotation is ONE fail-fast sequence (single captured value, fre
 after the password change succeeded; the verifier re-run catches any residue):
 
 ```sh
-set -euo pipefail
+set -uo pipefail   # deliberately NOT -e: every remote write has an ambiguous-outcome branch that
+                   # is inspected explicitly — the reconciler below decides, never a blind exit.
 KT="--request-timeout=20s"                                # never hang mid-rotation
 NEW_PW="$(openssl rand -base64 24)"                       # captured ONCE — no manual retyping drift
 OLD_PW="$(kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)"
-kc_setpw() {  # $1=auth-pw $2=new-pw — fresh login + set-password inside the pod, both via stdin
-  printf '%s\n%s\n' "$1" "$2" | kubectl $KT -n options-edge exec -i deploy/oe-keycloak -- sh -c '
-    set -eu; IFS= read -r AUTHP; IFS= read -r NEWP
+kc_exec() { kubectl $KT -n options-edge exec -i deploy/oe-keycloak -- sh -c "$1"; }
+kc_login_ok() {  # does Keycloak accept this password RIGHT NOW? (the only trustworthy state)
+  printf '%s\n' "$1" | kc_exec 'IFS= read -r P; /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$P"' >/dev/null 2>&1
+}
+kc_setpw() {  # $1=auth-pw $2=new-pw, both via stdin
+  printf '%s\n%s\n' "$1" "$2" | kc_exec 'set -eu; IFS= read -r AUTHP; IFS= read -r NEWP
     /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$AUTHP"
     /opt/keycloak/bin/kcadm.sh set-password -r master --username abhinav --new-password "$NEWP"'
 }
-kc_setpw "$OLD_PW" "$NEW_PW"
-# set-password is irreversible from here — the Secret patch below MUST land or be compensated.
-# Patch travels via stdin (no NEW_PW in argv); retried because a lost success response leaves the
-# credential split; on persistent failure, COMPENSATE by restoring the old Keycloak password.
-patched=false
-for attempt in 1 2 3; do
-  if printf '{"stringData":{"KC_BOOTSTRAP_ADMIN_PASSWORD":"%s"}}' "$NEW_PW" \
-     | kubectl $KT -n options-edge patch secret oe-keycloak-secrets --patch-file /dev/stdin; then
-    patched=true; break
-  fi
-  sleep 2
-done
-if [ "$patched" != true ]; then
-  echo "Secret patch failed 3x — restoring the OLD Keycloak password so admin+Secret stay in sync" >&2
-  kc_setpw "$NEW_PW" "$OLD_PW"
-  exit 1
+secret_now() { kubectl $KT -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d; }
+patch_secret() {  # via stdin (no argv exposure), 3 bounded attempts
+  for _ in 1 2 3; do
+    printf '{"stringData":{"KC_BOOTSTRAP_ADMIN_PASSWORD":"%s"}}' "$1" \
+      | kubectl $KT -n options-edge patch secret oe-keycloak-secrets --patch-file /dev/stdin && return 0
+    sleep 2
+  done
+  return 1
+}
+indeterminate() {  # never discard either candidate — the operator must converge by hand
+  echo "ROTATION INDETERMINATE: $1" >&2
+  echo "  keep BOTH values until reconciled by hand:" >&2
+  echo "  OLD_PW=$OLD_PW" >&2
+  echo "  NEW_PW=$NEW_PW" >&2
+  exit 3
+}
+
+kc_setpw "$OLD_PW" "$NEW_PW"   # outcome may be lost in transit — the reconciler decides, not $?
+
+# RECONCILE: ask Keycloak which password it accepts NOW, then drive the Secret to that value.
+if kc_login_ok "$NEW_PW"; then TARGET="$NEW_PW"
+elif kc_login_ok "$OLD_PW"; then TARGET="$OLD_PW"; echo "set-password did not take effect — converging on OLD" >&2
+else indeterminate "Keycloak accepts neither value (connectivity?)"; fi
+if [ "$(secret_now)" != "$TARGET" ]; then
+  patch_secret "$TARGET" || indeterminate "Keycloak holds its value but the Secret patch keeps failing"
 fi
-# final proof — pass the CURRENT migration phase explicitly (dual | redirect | retired):
+# END-STATE PROOF: the Secret's value must authenticate. Only then is the rotation done.
+kc_login_ok "$(secret_now)" || indeterminate "Secret and Keycloak still disagree after reconcile"
+echo "rotation converged on $( [ "$TARGET" = "$NEW_PW" ] && echo NEW || echo OLD ) password"
+# final gate — pass the CURRENT migration phase explicitly (dual | redirect | retired):
 scripts/ops/verify-prod-tunnel.sh --phase <current-phase>
 ```
 
