@@ -174,6 +174,14 @@ EXPECTED_KC_POSTLOGOUT="${EXPECTED_KC_POSTLOGOUT:-$KC_POSTLOGOUT_DEFAULT}"
 case "$PHASE" in retired) REQ_HOST_DEFAULT="req.bleadingoptions.com" ;; *) REQ_HOST_DEFAULT="req.fullfunding.nl" ;; esac
 EXPECTED_REQ_REDIRECTS="${EXPECTED_REQ_REDIRECTS:-https://$REQ_HOST_DEFAULT/oidc-callback}"
 EXPECTED_REQ_WEBORIGINS="${EXPECTED_REQ_WEBORIGINS:-https://$REQ_HOST_DEFAULT}"
+# The LIVE Bugzilla client is a different object from the dark req-realm one above: it lives in
+# realm `optionsedge`, is named `bugzilla`, uses mod_auth_openidc's /oauth2callback, and carries the
+# LAN origin alongside the public one because the same Apache serves both. It went public on
+# 2026-08-08 and was outside every check here until then — a client with a public redirect URI that
+# the domain gate could not see drift on.
+BZ_HOST_DEFAULT="$REQ_HOST_DEFAULT"
+EXPECTED_BZ_REDIRECTS="${EXPECTED_BZ_REDIRECTS:-https://$BZ_HOST_DEFAULT/oauth2callback http://192.168.100.252:8092/oauth2callback}"
+EXPECTED_BZ_WEBORIGINS="${EXPECTED_BZ_WEBORIGINS:-https://$BZ_HOST_DEFAULT http://192.168.100.252:8092}"
 # Normalize every host set first: whitespace-only values would satisfy -n yet expand to zero loop
 # iterations — the exact fail-open the guards exist to stop.
 trimset() { printf '%s' "$1" | xargs 2>/dev/null || true; }
@@ -218,6 +226,8 @@ if [ "$NETWORK_ONLY" != "1" ] && [ "${ALLOW_SET_OVERRIDES:-0}" != "1" ]; then
   require_default PRIMARY_ES "$PRIMARY_ES" "$PRIMARY_ES_DEFAULT"
   require_default EXPECTED_REQ_REDIRECTS "$EXPECTED_REQ_REDIRECTS" "https://$REQ_HOST_DEFAULT/oidc-callback"
   require_default EXPECTED_REQ_WEBORIGINS "$EXPECTED_REQ_WEBORIGINS" "https://$REQ_HOST_DEFAULT"
+  require_default EXPECTED_BZ_REDIRECTS "$EXPECTED_BZ_REDIRECTS" "https://$BZ_HOST_DEFAULT/oauth2callback http://192.168.100.252:8092/oauth2callback"
+  require_default EXPECTED_BZ_WEBORIGINS "$EXPECTED_BZ_WEBORIGINS" "https://$BZ_HOST_DEFAULT http://192.168.100.252:8092"
 fi
 
 if [ "$PRECHECK" = "1" ]; then
@@ -1123,6 +1133,58 @@ $req_out
 EOF_REQ
   req_rows="$(printf '%s\n' "$req_out" | grep -cE '^(REQ_REDIRECTS|REQ_WEBORIGINS)\b')"
   [ "$req_rows" = "2" ] || bad "req client verification produced $req_rows/2 records — parser output truncated"
+fi
+
+# 6d2. the LIVE Bugzilla client (realm optionsedge) — the one actually serving req.<domain> -------
+# Separate from 6d on purpose: that checks the DARK req realm's bugzilla-web client, which is not
+# serving anything. This checks the client behind the hostname people actually reach. Both claim the
+# same hostname with different callback paths, so drifting either one is worth catching.
+bz_raw="$(prod_kubectl "exec --pod-running-timeout=$K8S_TIMEOUT deploy/oe-keycloak -- sh -c '/opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=bugzilla 2>/dev/null'")"
+if [ -z "$bz_raw" ]; then
+  unavailable "could not read the optionsedge realm's bugzilla client"
+  bz_out=""
+elif ! command -v python3 >/dev/null; then
+  unavailable "python3 needed to parse the bugzilla client"
+  bz_out=""
+else
+bz_out="$(printf '%s' "$bz_raw" | python3 -c "
+import json, sys
+try:
+    arr = json.load(sys.stdin)
+    if not isinstance(arr, list) or len(arr) != 1:
+        raise ValueError('expected exactly 1 bugzilla client, got %r' % (len(arr) if isinstance(arr, list) else type(arr).__name__))
+    c = arr[0]
+    if not isinstance(c.get('redirectUris', []), list) or not isinstance(c.get('webOrigins', []), list):
+        raise ValueError('client fields have unexpected types')
+    print('BZ_REDIRECTS\t' + '\t'.join(sorted(str(v) for v in c.get('redirectUris', []))))
+    print('BZ_WEBORIGINS\t' + '\t'.join(sorted(str(v) for v in c.get('webOrigins', []))))
+except Exception as e:
+    print('  FAIL: bugzilla client response unusable: %s' % e)")"
+fi
+if [ -z "$bz_out" ]; then
+  :  # unavailable already reported
+elif printf '%s\n' "$bz_out" | grep -q 'FAIL'; then
+  printf '%s\n' "$bz_out"; fail=1
+else
+  while IFS=$'\t' read -r name rest; do
+    live_sorted="$(printf '%s' "$rest" | tr '\t' '\n' | sort -u)"
+    case "$name" in
+      BZ_REDIRECTS) expected="$EXPECTED_BZ_REDIRECTS"; label="bugzilla redirectUris" ;;
+      BZ_WEBORIGINS) expected="$EXPECTED_BZ_WEBORIGINS"; label="bugzilla webOrigins" ;;
+      *) continue ;;
+    esac
+    expected_sorted="$(printf '%s\n' $expected | sort -u)"
+    if [ "$live_sorted" = "$expected_sorted" ]; then
+      note "OK   live $label matches the expected set exactly"
+    else
+      bad "live $label differs from the expected set"
+      diff <(printf '%s\n' "$expected_sorted") <(printf '%s\n' "$live_sorted") | sed 's/^</       missing: /; s/^>/       unexpected: /' | grep -v '^---' | sed 's/^/  /'
+    fi
+  done <<EOF_BZ
+$bz_out
+EOF_BZ
+  bz_rows="$(printf '%s\n' "$bz_out" | grep -cE '^(BZ_REDIRECTS|BZ_WEBORIGINS)\b')"
+  [ "$bz_rows" = "2" ] || bad "bugzilla client verification produced $bz_rows/2 records — parser output truncated"
 fi
 
 # 6e. the repo realm IMPORT FILE must carry the same sets (parity is a gate, not a hope) ---------
