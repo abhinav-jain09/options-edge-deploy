@@ -401,6 +401,30 @@ spec:
   rules:
     - host: auth.keep.example
       http: {paths: []}' "$PY_ING" "DEFAULTBACKEND"
+  PY_WILD="import sys, yaml
+try:
+    doc = yaml.safe_load(sys.stdin) or {}
+    rules = doc.get('ingress') or []
+    hosts = [str(r.get('hostname','')).strip() for r in rules if isinstance(r, dict) and str(r.get('hostname','')).strip()]
+    wild = [h for h in hosts if '*' in h]
+    print('WILDCARD ' + ' '.join(wild) if wild else 'NOWILD')
+except Exception as e:
+    print('PARSE_FAIL %s' % e)"
+  struct_case "bare '*' wildcard hostname is flagged (matches everything)" \
+    'ingress:
+  - hostname: "*"
+    service: http://evil:8080
+  - service: http_status:404' "$PY_WILD" "WILDCARD"
+  struct_case "TLD wildcard '*.nl' is flagged (matches the retired apex)" \
+    'ingress:
+  - hostname: "*.nl"
+    service: http://evil:8080
+  - service: http_status:404' "$PY_WILD" "WILDCARD"
+  struct_case "plain hostnames are not flagged as wildcards" \
+    'ingress:
+  - hostname: keep.example
+    service: http://x:1
+  - service: http_status:404' "$PY_WILD" "NOWILD"
   struct_case "Ingress hostless rule is flagged" \
     'apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -488,6 +512,16 @@ except Exception as e:
     *) bad "$label: could not structurally parse the ingress hostnames ($report)"; return ;;
   esac
   local hosts="${report#HOSTS }"
+  # Wildcards cannot be reasoned about safely: "*" and "*.nl" both MATCH the retired domain while
+  # containing none of its labels. In a retirement we own the config, so the rule is absolute —
+  # no wildcard hostname may exist at all.
+  local wild
+  wild="$(printf '%s\n' $hosts | grep -F '*' || true)"
+  if [ -n "$wild" ]; then
+    bad "$label declares WILDCARD hostname(s) — they can match the retired domain regardless of spelling: $(printf '%s' "$wild" | tr '\n' ' ')"
+  else
+    note "OK   $label declares no wildcard hostname"
+  fi
   for sfx in $(retired_suffixes); do
     local sfx_re bad_hosts
     sfx_re="$(printf '%s' "$sfx" | sed 's/\./\\./g')"
@@ -530,7 +564,9 @@ if [ -n "$ABSENT_TUNNEL_HOSTS" ]; then
   scan_config_for_retired "repo canonical config" "$(cat "$REPO_COPY")"
   # (c) authoritative resolution, on the box that owns cloudflared
   for h in $ABSENT_TUNNEL_HOSTS; do
-    for u in "https://$h/" "https://$h/ws/events" "https://$h/admin"; do
+    # Include an arbitrary unprobed path: a path-scoped rule (e.g. `path: /secret`) would sit
+    # behind the three "expected" paths and never be sampled by them.
+    for u in "https://$h/" "https://$h/ws/events" "https://$h/admin" "https://$h/zz-unprobed-$$"; do
       got="$(run "cloudflared tunnel --config '$LIVE_PATH' ingress rule '$u' 2>/dev/null" | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
       if [ -z "$got" ]; then
         unavailable "could not resolve $u through cloudflared on the prod host"
@@ -614,7 +650,8 @@ except Exception as e:
       *) bad "repo keycloak-ingress.yaml: could not structurally parse spec.rules ($rep)" ;;
     esac
   fi
-  live_ing_json="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get ingress oe-keycloak -o json 2>/dev/null")"
+  # ALL Ingresses in the namespace: a second object could re-admit the retired host just as well.
+  live_ing_json="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get ingress -o json 2>/dev/null")"
   if [ -z "$live_ing_json" ]; then
     unavailable "could not read the live oe-keycloak Ingress"
   else
@@ -635,8 +672,12 @@ fi
 want_np="$(run "kubectl --request-timeout=${K8S_TIMEOUT:-20s} -n $NS get svc $GW_SVC -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null")"
 [ -n "$want_np" ] || unavailable "could not read $GW_SVC nodePort"
 for h in $SERVE_APEX; do
-  ws_target="$(ws_target_for "$h" "$live_raw")"
-  note "     $h/ws/events -> ${ws_target:-<unset>}"
+  # cloudflared's OWN first-match resolution is authoritative: a text parser cannot see rule order
+  # across flow mappings/aliases, and a SHADOWED wrong rule (e.g. an earlier :8091 ServiceLB entry)
+  # would otherwise be invisible — the 2026-07-31 incident proved a broken route still 401s.
+  ws_target="$(run "cloudflared tunnel --config '$LIVE_PATH' ingress rule 'https://$h/ws/events' 2>/dev/null" | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
+  [ -n "$ws_target" ] || ws_target="$(ws_target_for "$h" "$live_raw")"   # fallback: parser
+  note "     $h/ws/events -> ${ws_target:-<unset>} (resolved by cloudflared)"
   case "$ws_target" in
     *:8091*) bad "$h/ws/events points at the :8091 ServiceLB — klipper-lb DROPS the WebSocket upgrade (2026-07-31 outage)" ;;
     *:3[0-9][0-9][0-9][0-9]*) note "OK   $h/ws/events uses a NodePort" ;;
@@ -657,8 +698,9 @@ ES4_GW_SVC="${ES4_GW_SVC:-es-feed-gateway}"
 es4_np="$(es4_kubectl "get svc $ES4_GW_SVC -o jsonpath='{.spec.ports[0].nodePort}'")"
 [ -n "$es4_np" ] || unavailable "could not read es4 $ES4_GW_SVC nodePort"
 for h in $SERVE_ES; do
-  ws_target="$(ws_target_for "$h" "$live_raw")"
-  note "     $h/ws/events -> ${ws_target:-<unset>}"
+  ws_target="$(run "cloudflared tunnel --config '$LIVE_PATH' ingress rule 'https://$h/ws/events' 2>/dev/null" | sed -n 's/^[[:space:]]*service:[[:space:]]*//p' | head -1)"
+  [ -n "$ws_target" ] || ws_target="$(ws_target_for "$h" "$live_raw")"
+  note "     $h/ws/events -> ${ws_target:-<unset>} (resolved by cloudflared)"
   if [ -n "$es4_np" ]; then
     if [ "$ws_target" = "http://192.168.100.4:$es4_np" ]; then
       note "OK   $h/ws/events targets the es4 NodePort $es4_np"
