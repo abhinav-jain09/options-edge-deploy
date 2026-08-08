@@ -5,8 +5,8 @@ the scheduled Phase-1 blips and the declared Phase-2 outage window (both section
 bounds), the old domain keeps serving until Phase 2 completes. The canonical tunnel desired state lives in
 [`infra/prod/cloudflared/options-edge-stable.yml`](../infra/prod/cloudflared/options-edge-stable.yml)
 (this doc references it, never repeats it); `scripts/ops/verify-prod-tunnel.sh` proves live == repo
-and is the acceptance gate for each phase — run it in the matching mode: `--phase dual` after
-Phase 1, `--phase redirect` after Phase 2, `--phase retired` after Phase 3. It fails closed: a
+and is the acceptance gate — the steady state is `--phase retired` (its default). `--phase dual`
+and `--phase redirect` are the historical Phase-1/2 gates, kept for auditability. It fails closed: a
 check it cannot run (unreachable kubectl, etc.) is a FAIL, not a skip (`--network-only` exists for
 credential-less diagnostics only, never for acceptance).
 
@@ -15,7 +15,7 @@ credential-less diagnostics only, never for acceptance).
 | `fullfunding.nl` | `bleadingoptions.com` | prod web `.252:8094`, WS `.252:30097` |
 | `es.fullfunding.nl` | `es.bleadingoptions.com` | es4 es-web `.4:30080`, WS `.4:30091` |
 | `auth.fullfunding.nl` | `auth.bleadingoptions.com` | Keycloak ClusterIP `:8080` (`/admin` + `/realms/master` edge-404) |
-| `req.fullfunding.nl` | `req.bleadingoptions.com` | dark today (realm client exists; no DNS, no tunnel route) — renamed in the realm at Phase 3, wired up only if the portal ever ships |
+| `req.fullfunding.nl` | `req.bleadingoptions.com` | dark (realm client only; no DNS, no tunnel route) — renamed at Phase 3, wired up only if the portal ever ships |
 
 Both zones sit in the SAME Cloudflare account (same nameserver pair), so no registrar/account moves
 are involved; the tunnel (`options-edge-option-chain`, `976f76d2-e3c8-4887-a11d-21c27f5e8bed`) is
@@ -92,80 +92,265 @@ Only after both parts pass on both domains is the phase accepted:
 | Authenticated login round-trip | ✅ | ✅ (issuer still `auth.fullfunding.nl` — by design) |
 | REST `/api/*` from the browser | ✅ | ❌ **known-blocked**: the served page points at absolute `https://fullfunding.nl` API bases and the web backend serves no CORS headers, so cross-origin fetches are browser-blocked until the Phase-2 env flip. Do not "fix" this with CORS — Phase 2 removes the cross-origin condition itself. |
 
-## Phase 2 — cutover (a declared AUTH/UI OUTAGE WINDOW, not a seamless flip)
+## Phase 2 — cutover (EXECUTED 2026-08-08, a declared auth/UI outage window)
 
-Be explicit about what this window is: from the Keycloak deploy until the last consumer deploy +
-redirect, authentication is NOT continuously available on either domain, and there are transient
-mixed states (Keycloak's RollingUpdate briefly runs old-issuer and new-issuer pods side by side, so
-a token minted in that overlap may be rejected by a consumer; after the web env flip and before the
-redirect, an old-domain page calls new-domain APIs cross-origin and those fetches are
-browser-blocked). None of these states are avoidable with single-replica services and a
-single-valued `KC_HOSTNAME` — the mitigation is scheduling, not engineering: run the whole window
-while the market is closed (weekend), expect every session to be invalidated, and verify the new
-domain end-to-end before leaving the window. Bound: minutes per deploy step, dominated by the
-Keycloak and feed-gateway rollouts.
+No web image rebuild was needed: the served URLs come from RUNTIME env (`RuntimeProfileConfig`
+injects `window.__OPTIONS_EDGE_ENV__` from pod env each request), so the cutover was an env flip
+plus rollouts. Jenkins URL matrices are build-time image defaults (they matter for runs outside
+k8s) and were flipped in the same change-set.
 
-No web image rebuild: the served URLs come from RUNTIME env (`RuntimeProfileConfig` injects
-`window.__OPTIONS_EDGE_ENV__` from pod env each request). The Jenkins URL matrices are build-time
-defaults/documentation only — keep them in sync, but the deployed truth is the k8s env.
+What shipped (deploy PR #746), in this order:
 
-One coordinated change-set (single PR, single deploy window):
+1. Keycloak `KC_HOSTNAME` → `https://auth.bleadingoptions.com` (+ config-nonce). This is the TOKEN
+   ISSUER and is single-valued, so every consumer had to move in the same window; all sessions
+   were invalidated by design.
+2. Issuer/JWKS consumers: prod feed-gateway, spx-mission-control (base **and** the production
+   per-service slice — the per-service job applies the slice, not `k8s/base`), es4 es-feed-gateway.
+3. Web runtime URLs on BOTH web deployments: `VITE_AUTH_ISSUER`, `VITE_WS_URL`,
+   `APP_FEED_GATEWAY_WS_URL`, `VITE_API_BASE_URL`, `VITE_MISSION_CONTROL_URL`,
+   `VITE_REPLAY_ORCHESTRATOR_URL`, plus `APP_ES_OPTIONS_URL` (WebNav's compiled default still
+   names the old es host, so the env override is mandatory).
+4. Deploy order actually run: `common-infra-deploy ENVIRONMENT=production` (Keycloak; it PAUSES on
+   an "Apply to production?" input — approve it or the build ABORTS on timeout, as build #32 did)
+   → `service-deploy` feed-gateway → spx-mission-control → web (all `BUILD_IMAGES=false`) →
+   `es4-deploy deploy-service` es-feed-gateway → es-web.
+5. Acceptance: `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect --precheck` passed
+   (running-pod issuer/URL contracts on both clusters, live realm + configmap set equality).
 
-1. Keycloak `KC_HOSTNAME` → `https://auth.bleadingoptions.com` (+ config-nonce bump). This changes
-   the TOKEN ISSUER — partial deploys leave services rejecting every token, so the whole set below
-   ships together.
-2. Every issuer/JWKS consumer: prod feed-gateway `WS_AUTH_ISSUER_URI`, spx-mission-control
-   `MISSION_AUTH_ISSUER_URI` + JWK URI, es4 es-feed-gateway issuer, web `VITE_AUTH_ISSUER`.
-3. Web runtime URLs (prod web deployment + es4 es-web): `VITE_API_BASE_URL`, `VITE_WS_URL`,
-   `APP_FEED_GATEWAY_WS_URL`, `VITE_MISSION_CONTROL_URL`, `VITE_REPLAY_ORCHESTRATOR_URL` → new
-   domain; add `APP_ES_OPTIONS_URL=https://es.bleadingoptions.com` (the WebNav default still
-   points at the old domain).
-4. Jenkinsfile URL matrices (`Jenkinsfile.web-service`, `Jenkinsfile.bring-up-all`) → new domain.
-5. Deploy order: keycloak (base pipeline — the common-infra path owns Keycloak only, it does NOT
-   apply service workloads) → feed-gateway (per-service job) → spx-mission-control (per-service
-   job; it declares 0 replicas today, but its desired state must not stay pinned to a dead issuer
-   or the next scale-up boots broken) → web (`web-service-deploy ENVIRONMENT=production
-   BUILD_IMAGE=false`; confirm the `:prod` tag still resolves to the running digest first) → es4
-   `deploy-service` es-feed-gateway + es-web. Prod before es4 (es4 pulls the same image/pattern).
-6. Pre-redirect acceptance (the redirect rules do not exist yet; `--precheck` skips ONLY the
-   redirect section and stamps its output PRECHECK so it can never be mistaken for the full
-   gate): `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect --precheck` — proves the
-   flipped issuer and runtime URLs in the RUNNING pods on both clusters and the new-domain serving
-   surface — **plus the mandatory manual browser gate**: log in on the new domain, confirm boards
-   render and `/api/*` succeeds in the network tab. Old-domain UI now serves pages pointing at
-   new-domain APIs — shadowed by the redirect created next.
-7. **Cloudflare dashboard** — three separate Single Redirects on the `fullfunding.nl` zone (one
-   per hostname; a fixed target cannot host-map). Patterns use `http*://` so plain-HTTP hits
-   redirect too (per Cloudflare's cross-domain example) — with that scheme wildcard, `${1}`
-   captures the scheme suffix and **`${2}` is the path**. Preserve query string; start every rule
-   as **307** (temporary) for rollback safety — a cached permanent redirect cannot be recalled
-   from browsers — and promote to **308** (not 301: 301 may rewrite POST to GET; 308 preserves
-   the method) after the soak:
+## Phase 3 — RETIREMENT (no redirect: the old domain is freed for other applications)
 
-   | # | Wildcard pattern | Target | Status |
-   |---|---|---|---|
-   | 1 | `http*://fullfunding.nl/*` | `https://bleadingoptions.com/${2}` | 307 → 308 |
-   | 2 | `http*://es.fullfunding.nl/*` | `https://es.bleadingoptions.com/${2}` | 307 → 308 |
-   | 3 | `http*://auth.fullfunding.nl/*` | `https://auth.bleadingoptions.com/${2}` | 307 → 308 |
+⚠️ **Operator decision (2026-08-08): `fullfunding.nl` is NOT redirected.** It is being reused for
+unrelated applications, so our platform must stop claiming it entirely. Consequences that make
+this stricter than a redirect-based retirement:
 
-8. Full Phase-2 acceptance, AFTER the rules exist: `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase redirect` — the
-   redirect section demands exactly 307 on both schemes for all three hostnames with host-mapped
-   `Location` preserving path + query — a same-host 301/302 https upgrade on the http leg FAILS
-   (it would rewrite POST to GET before the cross-domain hop).
-   At promotion time re-run with the sanctioned promotion flag (a raw EXPECTED_REDIRECT_STATUS
-   override is refused by the gate): `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase
-   redirect --promoted`.
+- Re-adding any `*.fullfunding.nl` ingress rule to this tunnel would HIJACK traffic belonging to
+  whatever now owns that domain. The canonical tunnel file says so at the top of its ingress list.
+- The acceptance gate's `retired` phase (now the DEFAULT) asserts absence in the configs we own —
+  the live tunnel, the repo canonical copy, the Keycloak Ingress, both gateway allow-lists, the
+  live realm client, the realm import file and the `req` client. It deliberately does NOT probe
+  the retired hostnames over HTTP: whatever answers them is no longer ours to judge.
+- Old links simply break (there is no forwarding). That is the accepted trade-off for freeing the
+  domain; communicate the new URLs to anyone who has the old ones bookmarked.
 
-Rollback (before the 308 promotion): revert the PR, redeploy the same set, drop the 307 rules.
-Old-issuer tokens die at the flip in both directions — that is expected, not a defect.
+What Phase 3 removes (this change-set):
 
-## Phase 3 — retire
+| Surface | Change |
+|---|---|
+| Canonical tunnel + live `/etc/cloudflared/options-edge-stable.yml` | all three `*.fullfunding.nl` ingress blocks deleted |
+| `k8s/keycloak/keycloak-ingress.yaml` | `auth.fullfunding.nl` host rule deleted |
+| prod feed-gateway + es4 es-feed-gateway | `WS_ALLOWED_ORIGINS` drops the old origins (es4 keeps its intentional LAN origin `http://192.168.100.4:30080`) |
+| Realm import + LIVE realm client `options-edge-web` | old redirectUris / webOrigins / post-logout entries removed |
+| Realm `req` client `bugzilla-web` | `req.fullfunding.nl` → `req.bleadingoptions.com` |
+| Comments/docs across `k8s/`, `docs/` | old hostnames swept |
 
-After soak: remove old-domain ingress blocks from the canonical YAML + live (verifier keeps them
-honest) and the `auth.fullfunding.nl` rule from `k8s/keycloak/keycloak-ingress.yaml`, drop
-old-domain entries from the realm (live via kcadm + configmap parity), **remove the
-old origins from BOTH gateway allow-lists** — prod feed-gateway `WS_ALLOWED_ORIGINS` drops
-`https://fullfunding.nl`, es4 es-feed-gateway drops `https://es.fullfunding.nl` (the intentional
-es4 LAN origin `http://192.168.100.4:30080` stays) — rename the `req` realm client, sweep
-docs/bookmarks, and accept with `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase retired` (its `retired` expected
-origin sets are exactly the post-removal lists, so a leftover trusted old origin fails the gate).
+### Apply order (each step verifiable; the new domain never breaks)
+
+1. **Tunnel** — install the new canonical file per the fail-safe procedure in
+   `docs/keycloak-prod.md` (stage → validate → route-table preflight → backup → atomic install →
+   restart `options-edge-cloudflared-stable.service` → journal check). The retired hostnames now
+   fall through to the terminal `http_status:404`.
+2. **Workloads** — `common-infra-deploy ENVIRONMENT=production` (Ingress host removal + realm
+   import file; it PAUSES on an "Apply to production?" input — approve it, or the build ABORTS on
+   timeout), then `service-deploy SERVICE=feed-gateway ENVIRONMENT=production BUILD_IMAGES=false`,
+   then `es4-deploy deploy-service SERVICE=es-feed-gateway`.
+3. **LIVE realm** (the import file never mutates an existing realm — this is the only path that
+   changes what login actually enforces). Read first, patch by client UUID, read back:
+
+   ```sh
+   POD=$(kubectl -n options-edge get pod -l app.kubernetes.io/name=oe-keycloak -o name | head -1)
+   ADMIN_PW=$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
+   printf '%s\n' "$ADMIN_PW" | kubectl -n options-edge exec -i "$POD" -- sh -c '
+     set -eu; IFS= read -r P
+     /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$P"
+     ID=$(/opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web --fields id --format csv --noquotes)
+     # BOTH lists are REPLACED wholesale — keep every new-domain + LAN entry, drop only the retired ones
+     /opt/keycloak/bin/kcadm.sh update "clients/$ID" -r optionsedge \
+       -s "redirectUris=[\"https://bleadingoptions.com/*\",\"https://es.bleadingoptions.com/*\",\"http://192.168.100.4:30080/*\",\"http://192.168.100.252:8094/*\",\"http://192.168.100.103:8094/*\"]" \
+       -s "webOrigins=[\"https://bleadingoptions.com\",\"https://es.bleadingoptions.com\",\"http://192.168.100.4:30080\",\"http://192.168.100.252:8094\",\"http://192.168.100.103:8094\"]" \
+       -s "attributes.\"post.logout.redirect.uris\"=https://bleadingoptions.com/*##https://es.bleadingoptions.com/*"
+     RID=$(/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web --fields id --format csv --noquotes)
+     /opt/keycloak/bin/kcadm.sh update "clients/$RID" -r req \
+       -s "redirectUris=[\"https://req.bleadingoptions.com/oidc-callback\"]" \
+       -s "webOrigins=[\"https://req.bleadingoptions.com\"]"
+     # read back EVERYTHING mutated: both clients, all three fields
+     /opt/keycloak/bin/kcadm.sh get "clients/$ID" -r optionsedge --fields redirectUris,webOrigins,attributes
+     /opt/keycloak/bin/kcadm.sh get "clients/$RID" -r req --fields redirectUris,webOrigins'
+   ```
+
+   The acceptance gate compares these sets exactly, so a slip is caught immediately — but re-read
+   the output above before moving on, because a wrong replacement here breaks login on the NEW
+   domain too.
+4. **Accept BEFORE the one-way step** — `timeout 600 scripts/ops/verify-prod-tunnel.sh` (defaults
+   to `--phase retired`) must be fully green FIRST, and the FULL authenticated smoke must pass on
+   BOTH sites (`https://bleadingoptions.com` and `https://es.bleadingoptions.com`): log in, boards
+   render with live data, and the WS request reaches `101 Switching Protocols` in the network tab.
+   Both sites matter because Phase 3 changes the ES allow-list and the shared realm. Nothing in
+   the scripted gate depends on old-domain DNS, so everything it can catch — a stale live Ingress
+   rule, a leftover origin, a wrong realm set, a hostless/wildcard/defaultBackend catch-all — must
+   be caught while ordinary rollback is still available.
+5. **Cloudflare — the DNS handoff that actually frees the domain** (operator, dashboard):
+   in zone `fullfunding.nl`, DELETE the `@`, `es` and `auth` records that point at
+   `976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com` (or repoint them at whatever new
+   application takes the domain). Removing our ingress rules only makes the tunnel answer 404 —
+   until these records are gone, the OptionsEdge tunnel is still the DNS target for that domain.
+   Evidence for the record must be CONFIGURATION-level, not a resolver answer: `dig` cannot show
+   which tunnel a proxied record targets (and a repointed record still answers from Cloudflare
+   IPs). It must also be COMPLETE — the DNS-records API is paginated (20 per page by default), so
+   one page proves nothing. Use an exact content filter and assert zero matches:
+
+   ```sh
+   set -euo pipefail                      # a failed query must STOP this, never read as clean
+   CF=(curl --fail-with-body -sS -H "Authorization: Bearer $CF_TOKEN")
+   API="https://api.cloudflare.com/client/v4"
+   # Bind the evidence to the RETIRED zone by name — a mistyped/stale ZONE_ID would otherwise
+   # produce a clean-looking report about somebody else's zone.
+   "${CF[@]}" "$API/zones/$ZONE_ID" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+if not d.get('success'): sys.exit('API call failed: %s' % d)
+name=d['result']['name']
+print('zone under audit:', name)
+sys.exit(0 if name == 'fullfunding.nl' else 'STOP: ZONE_ID is not the retired zone')"
+   Z="$API/zones/$ZONE_ID/dns_records"
+   # content.exact is the documented exact filter; the legacy contains-style ?content= is asked as
+   # a cross-check. BOTH must return zero — and a nonzero count EXITS nonzero, it does not just print.
+   # content.exact = documented exact filter; content.contains = documented substring filter.
+   # (A bare ?content= is not in the current API contract — requiring it could block the handoff.)
+   for q in "content.exact=976f76d2-e3c8-4887-a11d-21c27f5e8bed.cfargotunnel.com" \
+            "content.contains=cfargotunnel.com"; do
+     "${CF[@]}" "$Z?$q&per_page=100" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+if not d.get('success'): sys.exit('API call failed: %s' % d)
+n=(d.get('result_info') or {}).get('total_count')
+if n is None: sys.exit('no total_count in response — cannot assert zero')
+print('$q ->', n, 'match(es)')
+sys.exit(0 if n == 0 else 'STOP: the retired zone still targets our tunnel')"
+   done
+   # …and list EVERY record (all pages) so a filter that silently matches nothing cannot pass as
+   # proof: the record list is the evidence, the filter is only a convenience.
+   pg=1
+   while :; do
+     body="$("${CF[@]}" "$Z?per_page=100&page=$pg")"
+     # exit 0 = last page, 7 = more pages, anything else = a real error that must stop us
+     set +e
+     printf '%s' "$body" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+if not d.get('success'): sys.exit('API call failed: %s' % d)
+for r in d['result']: print(r['type'], r['name'], '->', r['content'])
+ri=d.get('result_info') or {}
+tp, pg = ri.get('total_pages'), ri.get('page') or 1
+if tp is None: sys.exit('no total_pages in response — cannot prove the listing is complete')
+sys.exit(0 if tp <= pg else 7)"
+     rc=$?; set -e
+     case "$rc" in 0) break ;; 7) pg=$((pg+1)) ;; *) echo "STOP: record listing incomplete (rc=$rc)"; exit 1 ;; esac
+   done
+   ```
+
+   Acceptance evidence: `success: true`, **zero matches on both filter forms**, and a printed
+   record list in which `@`, `es` and `auth` no longer point at
+   `976f76d2-…cfargotunnel.com` (keep the output). If you use the dashboard instead, screenshot
+   the zone's full DNS tab, not a filtered page.
+
+   **What actually makes this safe — and what does not.** It is tempting to try to *prove absence*
+   by enumerating every Cloudflare object that could still route the retired zone to us: rulesets,
+   page rules, worker routes, worker custom domains, bulk redirects, snippets — each paginated,
+   each able to reach us through a binding or a secret that no text search can see. That proof can
+   never be completed, and treating an incomplete sweep as an acceptance gate is worse than not
+   running it, because it manufactures false confidence at a one-way boundary.
+
+   The invariant we actually rely on is the opposite direction, and it IS machine-provable:
+
+   > **Our platform refuses the retired hostnames.** The tunnel resolves every retired URL to
+   > `http_status:404` (cloudflared's own first-match answer, asserted by the gate), no Ingress of
+   > ours names them, no gateway trusts their origins, and the realm issues nothing for them.
+
+   That holds no matter what the retired zone contains or who owns it next — which is precisely
+   why retirement is safer than a redirect here. `scripts/ops/verify-prod-tunnel.sh` proves it, and
+   its `retired` phase fails closed on wildcards, hostless rules, `defaultBackend` catch-alls,
+   shadowed routes and unprobed paths.
+
+   **Still do a best-effort zone sweep — for the domain's NEXT owner, not as our gate.** A stale
+   redirect or worker left in that zone would confuse whatever you host there next:
+
+   ```sh
+   set -euo pipefail
+   Z="https://api.cloudflare.com/client/v4/zones/$ZONE_ID"
+   A="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID"
+   cf() { curl --fail-with-body -sS -H "Authorization: Bearer $CF_TOKEN" "$@"; }
+   for u in "$Z/dns_records?per_page=100" "$Z/rulesets?per_page=50" "$Z/pagerules" \
+            "$Z/workers/routes" "$Z/snippets" "$A/workers/domains?per_page=100" \
+            "$A/rules/lists?per_page=100"; do
+     echo "=== $u ==="; cf "$u"; echo
+   done | tee /tmp/cf-retired-zone-sweep.txt
+   grep -niE "976f76d2-e3c8-4887-a11d-21c27f5e8bed|cfargotunnel|bleadingoptions\.com" \
+     /tmp/cf-retired-zone-sweep.txt || echo "(no obvious reference to us — note that paginated
+     results, worker bindings and secrets are NOT covered; this is a courtesy sweep, not a proof)"
+   ```
+
+   Then do the one thing that is decisive and needs no enumeration: **delete (or repoint) the
+   `@`, `es` and `auth` records in the `fullfunding.nl` zone**, and record the zone's DNS tab
+   showing they are gone. `bleadingoptions.com` keeps its three proxied CNAMEs.
+
+6. **Re-accept AFTER the handoff, then destroy the rollback path** — rerun
+   `timeout 600 scripts/ops/verify-prod-tunnel.sh` (defaults to `--phase retired`) and keep its
+   output with the DNS evidence from step 5; repeat the authenticated smoke on BOTH sites (login,
+   boards live, WS `101`) because the handoff changed DNS for a domain browsers may have cached.
+   ONLY once that is green: delete the pre-Phase-3 tunnel backup taken in step 1, so the old
+   ingress rules cannot be restored by reflex (see the boundary below).
+
+### Rollback boundary (one-way after the DNS handoff)
+
+Before the handoff (steps 1-4) rollback is revert-and-redeploy for the tunnel (restore the step-1
+backup) and the workloads — **but NOT for the realm**: `--import-realm` never updates an existing
+realm, so a git revert cannot put the old client entries back. The realm inverse is an explicit
+kcadm run (same shape as step 3, old values restored, with a readback):
+
+```sh
+POD=$(kubectl -n options-edge get pod -l app.kubernetes.io/name=oe-keycloak -o name | head -1)
+ADMIN_PW=$(kubectl -n options-edge get secret oe-keycloak-secrets -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
+printf '%s\n' "$ADMIN_PW" | kubectl -n options-edge exec -i "$POD" -- sh -c '
+  set -eu; IFS= read -r P
+  /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user abhinav --password "$P"
+  ID=$(/opt/keycloak/bin/kcadm.sh get clients -r optionsedge -q clientId=options-edge-web --fields id --format csv --noquotes)
+  /opt/keycloak/bin/kcadm.sh update "clients/$ID" -r optionsedge \
+    -s "redirectUris=[\"https://fullfunding.nl/*\",\"https://es.fullfunding.nl/*\",\"https://bleadingoptions.com/*\",\"https://es.bleadingoptions.com/*\",\"http://192.168.100.4:30080/*\",\"http://192.168.100.252:8094/*\",\"http://192.168.100.103:8094/*\"]" \
+    -s "webOrigins=[\"https://fullfunding.nl\",\"https://es.fullfunding.nl\",\"https://bleadingoptions.com\",\"https://es.bleadingoptions.com\",\"http://192.168.100.4:30080\",\"http://192.168.100.252:8094\",\"http://192.168.100.103:8094\"]" \
+    -s "attributes.\"post.logout.redirect.uris\"=https://fullfunding.nl/*##https://es.fullfunding.nl/*##https://bleadingoptions.com/*##https://es.bleadingoptions.com/*"
+  RID=$(/opt/keycloak/bin/kcadm.sh get clients -r req -q clientId=bugzilla-web --fields id --format csv --noquotes)
+  /opt/keycloak/bin/kcadm.sh update "clients/$RID" -r req \
+    -s "redirectUris=[\"https://req.fullfunding.nl/oidc-callback\"]" -s "webOrigins=[\"https://req.fullfunding.nl\"]"
+  # read back EVERYTHING restored: both clients, all three fields
+  /opt/keycloak/bin/kcadm.sh get "clients/$ID" -r optionsedge --fields redirectUris,webOrigins,attributes
+  /opt/keycloak/bin/kcadm.sh get "clients/$RID" -r req --fields redirectUris,webOrigins'
+```
+
+Verify the restore with `timeout 600 scripts/ops/verify-prod-tunnel.sh --phase rollback` — that
+mode describes exactly what a Phase-3 revert produces: both domains serving and trusted again while
+the issuer and served URLs stay on the new domain (Phase-2 state). `--phase dual` would wrongly
+demand the OLD issuer and `--phase retired` would wrongly demand absence, so neither can pass here.
+
+⚠️ **Revert the DESIRED STATE, never this whole commit.** `--phase rollback` is introduced BY the
+Phase-3 change, so a blanket `git revert` of it takes the verifier away with it and leaves a script
+that rejects `--phase rollback`. Roll back selectively — the tunnel file, the manifests' env/host
+values, the realm via the kcadm inverse above — and keep `scripts/ops/verify-prod-tunnel.sh` at its
+Phase-3 version (if you must work from a reverted tree, run the gate from this commit explicitly:
+`git show <phase3-sha>:scripts/ops/verify-prod-tunnel.sh > /tmp/gate.sh && REPO_ROOT=$(pwd) bash /tmp/gate.sh --phase rollback` —
+`REPO_ROOT` is required because a script outside the tree would otherwise resolve the repo paths
+against `/tmp`). ⚠️ This inverse is valid ONLY before the DNS handoff — after it, re-admitting
+those entries is exactly the hijack risk described below, and the correct move is fix-forward.
+
+**After the handoff there is no rollback that re-admits `fullfunding.nl` — in ANY surface.** That
+domain may already serve someone else's application, so re-adding it would not merely be untidy:
+- restoring the tunnel hostnames would hijack their HTTP traffic;
+- restoring the old Keycloak redirect URIs / web origins would let a page on THEIR domain start an
+  OIDC flow against our realm and receive tokens;
+- restoring the old gateway `WS_ALLOWED_ORIGINS` would let their page open our authenticated
+  WebSocket;
+- restoring the old Ingress host would route their Host header into Keycloak.
+
+So post-handoff recovery is **fix-forward with new-domain-only configuration**: revert a workload
+to a previous IMAGE if needed, but never to a config revision that names the retired domain. Delete
+the pre-Phase-3 tunnel backup once the post-handoff gate (step 6) is green so it cannot be restored by reflex,
+and note that the `retired` gate fails loudly if any surface re-acquires that domain.

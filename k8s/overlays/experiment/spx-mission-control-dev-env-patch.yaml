@@ -1,5 +1,5 @@
 # DEV-ONLY spx-mission-control auth env. The base deployment hardcodes PROD Keycloak
-# (https://auth.fullfunding.nl/realms/optionsedge) as direct container env, which
+# (https://auth.bleadingoptions.com/realms/optionsedge) as direct container env, which
 # overrides any configmap value. On dev the cluster cannot reach the prod issuer, so
 # JWT validation would fail and (more importantly at boot) the JWK fetch the verifier
 # performs against an unreachable host would either hang or fail. This patch overrides
