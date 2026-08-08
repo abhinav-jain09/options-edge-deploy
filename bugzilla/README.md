@@ -48,12 +48,9 @@ Everything runs on `.252`. Set these once per session:
 BZ=options-edge-bugzilla-web; ADMIN=<admin-login>; TRIAGE=<triage-login>
 ```
 
-Steps that mutate anything: **4** (configuration) and **5** (files and closes smoke bugs). Steps 1,
-2 and 6 are read-only; step 3 backs up.
-
-Where one step must not run after another has failed, the two are chained with `&&` in a single
-command — notably apply-then-restart, so Apache is never restarted over a partially mutated
-database. Steps that are safe to attempt independently are listed separately.
+Step **5** is the only one that changes anything: it applies the configuration and then files and
+closes smoke bugs. Steps 1, 2, 4 and 6 are read-only; step 3 backs up. Step 5 is deliberately a
+single `&&` chain, so a failure at any point stops the rest and leaves the site down.
 
 **1. Load check** — this compiles the extension *and* loads it the way Bugzilla does, which is the
 part that matters: a broken extension otherwise takes the whole site down at step 4.
@@ -85,13 +82,26 @@ container.
 **If it does not print `BACKUP OK`, stop — restart Apache with `docker exec $BZ apachectl start` and
 do not apply.**
 
-**4. Apply, then restart, then verify** — chained, so a failed apply leaves the site down rather
-than serving a half-provisioned installation, and a failed verification is seen immediately. **If
-verification fails, stop Apache again** (`docker exec $BZ apachectl stop`) before investigating:
-until it passes, enforcement is unproven. The script refuses to run while Apache is answering on
-`localhost:80`, which is what guarantees enforcement is never observably half-installed; the restart
-is what clears any pre-change field/status cache. The apply ends with a self-test that deletes the
-bug-creation rows inside a transaction, checks that the extension goes fail-closed, and rolls back.
+**4. Get an API key into the environment** — the verification in step 5 needs it. It must belong to
+an admin (`requirelogin` is on, and the parameter assertions need `tweakparams`).
+
+```bash
+read -rs BZ_API_KEY && export BZ_API_KEY
+```
+
+`read -rs` keeps the key out of shell history and out of any command's argv. It is still an
+environment variable of the verifier process, so root — and on a default `hidepid=0` system, any
+process of the same user — can read it from `/proc`; treat it as short-lived, not secret-at-rest.
+Revoke it when you are done.
+
+**5. Apply, restart, verify — one operation.** A failed apply never restarts; a failed verification
+takes Apache down again by itself, rather than leaving traffic flowing through unproven enforcement.
+
+The provisioner refuses to run while Apache is answering on `localhost:80`, which is what guarantees
+enforcement is never observably half-installed. The restart clears any pre-change field/status
+cache. The apply ends with a self-test that deletes the bug-creation rows inside a transaction,
+checks that the extension goes fail-closed, and rolls back. Verification then **files smoke-test
+bugs** prefixed `[SMOKE]` and closes them again — so run this in a change window.
 
 ```bash
 docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html/local/expected-state.json --admin-login "$ADMIN" --default-assignee "$TRIAGE" --apply \
@@ -100,38 +110,22 @@ docker exec $BZ perl /var/www/html/local/setup-projects.pl --state /var/www/html
        || { echo "VERIFICATION FAILED - taking the site down again"; docker exec $BZ apachectl stop; false; }; }
 ```
 
-Read as one operation: a failed apply never restarts, and a failed verification takes Apache down
-again by itself rather than leaving traffic flowing through unproven enforcement. Export `BZ_API_KEY`
-first (see step 5) — the verifier needs it.
+The verifier defaults to `http://localhost:8092` and **refuses** a non-loopback plain-HTTP URL unless
+you pass `--allow-remote-http`: the endpoint speaks plain HTTP and the key travels in a header. Run
+it on `.252` itself. `--no-smoke` gives structural assertions only, but then the extension is not
+proven to be enforcing.
 
-**5. Verify.** Needs an admin API key (`requirelogin` is on, and the parameter assertions need
-`tweakparams`). This step **files smoke-test bugs** prefixed `[SMOKE]` and closes them again;
-run it in a change window. `--no-smoke` gives structural assertions only, but then the extension is
-not proven to be enforcing.
+Nothing is scheduled for decommissioning, so no product warning is expected.
 
-```bash
-read -rs BZ_API_KEY && export BZ_API_KEY && python3 configuration/verify-projects.py --state configuration/expected-state.json
-```
-
-One thing an admin key cannot prove: that an *unprivileged* reporter's REQUIREMENT still lands on
-`REQ_DRAFT`. Bugzilla overrides the requested status for anyone without `editbugs`/`canconfirm`
-(`Bug.pm:1526-1536`), and that is exactly how external stakeholders file. The run reports it as
-`WARN … NOT proven` unless you also hand it such a key — the verifier checks the account really does
-lack those groups before believing it:
+**5b. The one thing an admin key cannot prove.** That an *unprivileged* reporter's REQUIREMENT still
+lands on `REQ_DRAFT`. Bugzilla overrides the requested status for anyone without
+`editbugs`/`canconfirm` (`Bug.pm:1526-1536`), and that is exactly how external stakeholders file. It
+is reported as `WARN … NOT proven` unless you hand the verifier such a key — which it checks really
+does lack those groups before believing it:
 
 ```bash
 read -rs BZ_REPORTER_KEY && export BZ_REPORTER_KEY && python3 configuration/verify-projects.py --state configuration/expected-state.json --reporter-api-key-env BZ_REPORTER_KEY --strict
 ```
-
-Nothing is scheduled for decommissioning, so no product warning is expected here.
-
-It defaults to `http://localhost:8092` and **refuses** a non-loopback plain-HTTP URL unless you pass
-`--allow-remote-http`, because the endpoint speaks plain HTTP and the key travels in a header. Run it
-on `.252` itself and revoke the key afterwards.
-
-`read -rs` keeps the key out of shell history and out of the command's argv. It is still an
-environment variable of the verifier process, so root — and on a default `hidepid=0` system, any
-process of the same user — can read it from `/proc`; treat it as short-lived, not secret-at-rest.
 
 **6. Re-run the dry run and confirm it reports zero actions** — that is the idempotence proof:
 
