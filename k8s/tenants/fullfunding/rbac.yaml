@@ -1,0 +1,57 @@
+# A deploy identity scoped to this namespace only, so the tenant's Jenkins job cannot touch
+# options-edge — and cannot edit its own boundary either.
+#
+# Deliberately NOT granted: networkpolicies, ingresses (the public route is platform-owned),
+# resourcequotas, limitranges, and any cluster-scoped verb. A credential that can rewrite its own
+# quota or network policy does not have a boundary.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fullfunding-deployer
+  namespace: fullfunding
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: fullfunding-deployer-token
+  namespace: fullfunding
+  annotations:
+    kubernetes.io/service-account.name: fullfunding-deployer
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fullfunding-deployer
+  namespace: fullfunding
+rules:
+  - apiGroups: [""]
+    resources: [configmaps, secrets, services, serviceaccounts, persistentvolumeclaims, pods, pods/log]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["apps"]
+    resources: [deployments, deployments/scale, statefulsets, statefulsets/scale]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: ["batch"]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Read-only visibility so a deploy can verify its own guardrails are still in place.
+  - apiGroups: [""]
+    resources: [resourcequotas, limitranges]
+    verbs: [get, list, watch]
+  - apiGroups: ["networking.k8s.io"]
+    resources: [networkpolicies, ingresses]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fullfunding-deployer
+  namespace: fullfunding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fullfunding-deployer
+subjects:
+  - kind: ServiceAccount
+    name: fullfunding-deployer
+    namespace: fullfunding

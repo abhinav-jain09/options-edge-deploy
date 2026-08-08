@@ -1,0 +1,16 @@
+# NEGATIVE priority, so that under node pressure the tenant is preferred as the eviction
+# victim over options-edge — WITHOUT touching a single options-edge manifest. Trading pods stay
+# at the default priority 0; -100 ranks below that.
+#
+# Honest scope: node-pressure eviction ranks pods first by whether usage exceeds requests and
+# only THEN by priority, so this is a strong preference, not a guarantee that options-edge is
+# never the victim. `preemptionPolicy: Never` additionally stops the tenant from ever evicting
+# a running pod to schedule itself.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: fullfunding-low
+value: -100
+preemptionPolicy: Never
+globalDefault: false
+description: "fullfunding tenant workloads. Must lose to options-edge under any node pressure."
