@@ -310,16 +310,44 @@ S
           "$KBIN/kafka-topics" --bootstrap-server "$TGT" --create --if-not-exists --topic "$TOPIC" \
             --partitions "$PARTS" --replication-factor 1 \
             --config cleanup.policy="$POLICY" --config retention.ms="$RET" 2>&1 | tail -1
-          # ...and because --if-not-exists silently keeps an EXISTING malformed topic, assert the
-          # target's ACTUAL shape now, BEFORE any persistent artifact (plist) is written. A
-          # partition-count mismatch would silently re-shard the key->partition mapping mid-stream;
-          # a cleanup.policy mismatch would strip compaction and destroy the last-value view; a
-          # retention mismatch would age the board out from under the page.
+          # ...and assert the IMMUTABLE part of the shape FIRST, before touching anything. Partition
+          # count is not auto-repairable -- adding partitions re-shards the key->partition mapping --
+          # so a target with the wrong count must be refused, and refused UNTOUCHED. Doing the config
+          # reconcile below first would enable compaction on exactly the topic the job is about to
+          # reject, and compaction eventually discards superseded records: a failed install would
+          # have changed the data semantics of a target it declared unsafe to adopt.
           TD=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>/dev/null) \
             || { echo "FAIL: cannot describe target $TOPIC after create"; exit 1; }
           printf '%s\\n' "$TD" | grep -q "Topic: $TOPIC" || { echo "FAIL: target $TOPIC absent after create"; exit 1; }
           TP=$(printf '%s\\n' "$TD" | awk -F'PartitionCount:' 'NR==1{split($2,a," "); print a[1]}')
-          [ "$TP" = "$PARTS" ] || { echo "FAIL: target $TOPIC exists with $TP partitions (want $PARTS): $TD"; exit 1; }
+          [ "$TP" = "$PARTS" ] || { echo "FAIL: target $TOPIC exists with $TP partitions (want $PARTS); refusing, and leaving its config untouched: $TD"; exit 1; }
+
+          # Partition count is right, so this target is adoptable -- now RECONCILE the two mutable
+          # contract configs. --create --if-not-exists leaves an EXISTING topic's configuration
+          # completely untouched, and that is not hypothetical: on the first prod install (build #1,
+          # 2026-08-09) es.tape-zones.board ALREADY existed on 192.168.100.252 with NO cleanup.policy
+          # at all -- broker auto-create defaults, i.e. plain delete -- so the mirror would have fed a
+          # compacted source into a target that quietly aged records out and kept no last value. The
+          # assertion below caught it and failed the install; this step is the repair.
+          #
+          # The alter is additive and structural, not destructive: kafka-configs --alter --add-config
+          # is incremental (verified: an unrelated segment.ms override survives it) and never deletes
+          # or recreates the topic. It does turn compaction ON, which by design lets the log cleaner
+          # eventually drop superseded records for a repeated key -- that IS the board's contract,
+          # and it is why the partition assertion above has to come first.
+          #
+          # A value containing a comma MUST be bracket-wrapped or kafka-configs splits the config
+          # list on it and rejects the argument ("all configs to be added must be in the format
+          # key=val"). Same rule as kafka_config_value() in scripts/kafka/apply-topics.sh.
+          POLICY_CFG="$POLICY"
+          case "$POLICY" in *,*) POLICY_CFG="[$POLICY]" ;; esac
+          "$KBIN/kafka-configs" --bootstrap-server "$TGT" --alter --topic "$TOPIC" \
+            --add-config "cleanup.policy=$POLICY_CFG,retention.ms=$RET" \
+            || { echo "FAIL: cannot reconcile $TOPIC config on $TGT to cleanup.policy=$POLICY, retention.ms=$RET"; exit 1; }
+
+          # Assert what the reconcile was supposed to achieve, BEFORE any persistent artifact (plist)
+          # is written. A cleanup.policy mismatch would strip compaction and destroy the last-value
+          # view; a retention mismatch would age the board out from under the page.
           TC=$("$KBIN/kafka-configs" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>/dev/null) \
             || { echo "FAIL: cannot read target config for $TOPIC"; exit 1; }
           TCP=$(printf '%s\\n' "$TC" | awk '$1 ~ /^cleanup\\.policy=/ {print $1; exit}')
