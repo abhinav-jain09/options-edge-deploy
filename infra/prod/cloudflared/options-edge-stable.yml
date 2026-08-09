@@ -76,12 +76,10 @@ ingress:
   # https://req.bleadingoptions.com/oauth2callback redirect URI.
   - hostname: req.bleadingoptions.com
     service: http://127.0.0.1:8092
-  # fullfunding.nl is NOT the trading platform any more. Phase 3 retired it from
-  # options-edge (see the note above); the domain now belongs to the FullFunding
-  # jaarrekening app, which is a different application in its own namespace.
-  # Static files only, served by traefik from the fullfunding namespace — so this
-  # goes to traefik on :80 and is matched by Host, not to a NodePort or ClusterIP
-  # that a Service recreation would invalidate.
-  - hostname: fullfunding.nl
-    service: http://127.0.0.1:80
+  # fullfunding.nl was served here until 2026-08-09. It now has its OWN tunnel
+  # (5c86fa1d-8307-43d8-9ccf-aa240b7156e1, config /etc/cloudflared/fullfunding.yml),
+  # because it is a different application: restarting the trading platform tunnel
+  # should not interrupt it, and vice versa. Its DNS points at that tunnel, so this
+  # route was dead weight — a hostname listed here that no request can ever reach
+  # reads as working config and hides which tunnel actually serves the domain.
   - service: http_status:404
