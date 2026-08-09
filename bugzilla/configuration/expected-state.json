@@ -306,6 +306,11 @@
       "require_comment": false
     },
     {
+      "from": "",
+      "to": "CONFIRMED",
+      "require_comment": false
+    },
+    {
       "from": "UNCONFIRMED",
       "to": "CONFIRMED",
       "require_comment": false
@@ -481,6 +486,24 @@
     "initial_status": {
       "BUG": "UNCONFIRMED",
       "REQUIREMENT": "REQ_DRAFT"
+    },
+    "_initial_statuses_comment": [
+      "Every status an item of this type may be CREATED in. initial_status above is the",
+      "DEFAULT - what an item falls back to when the reporter had no say, which is the",
+      "normal case for an external reporter: Bug.pm:1526-1536 forces UNCONFIRMED for",
+      "anyone without editbugs/canconfirm, and for a REQUIREMENT that would land it on",
+      "the BUG lifecycle. CONFIRMED is here because it is how this installation has",
+      "always worked: of the 178 bugs that predate this work, 78 were filed straight",
+      "into CONFIRMED and never moved. Removing that was a regression, not a policy."
+    ],
+    "initial_statuses": {
+      "BUG": [
+        "UNCONFIRMED",
+        "CONFIRMED"
+      ],
+      "REQUIREMENT": [
+        "REQ_DRAFT"
+      ]
     },
     "allowed_resolutions": {
       "BUG": [

@@ -61,7 +61,21 @@ use constant UNSET => '---';
 use constant GUARDED_FIELDS =>
   {TYPE_FIELD, 1, CATEGORY_FIELD, 1, 'bug_status', 1, 'resolution', 1};
 
+# The DEFAULT entry point per type - what an item falls back to when the
+# reporter had no say. That is the normal case for an external reporter:
+# Bug.pm:1526-1536 forces UNCONFIRMED for anyone without editbugs/canconfirm,
+# and for a REQUIREMENT that would land it on the BUG lifecycle.
 use constant INITIAL_STATUS => {BUG => 'UNCONFIRMED', REQUIREMENT => 'REQ_DRAFT',};
+
+# Every status an item of this type may be CREATED in. A privileged reporter
+# who picks one of these keeps it; anything else is replaced by the default
+# above. CONFIRMED is here because it is how this installation has always
+# worked - of the 178 bugs predating this work, 78 were filed straight into
+# CONFIRMED and never moved - so leaving it out was a regression.
+use constant INITIAL_STATUSES => {
+  BUG         => {map { $_ => 1 } qw(UNCONFIRMED CONFIRMED)},
+  REQUIREMENT => {map { $_ => 1 } qw(REQ_DRAFT)},
+};
 
 # The BUG branch keeps Bugzilla's stock status names. Renaming them would be an
 # UPDATE against the live bugs sitting on them (Bugzilla/Field/Choice.pm:158),
@@ -88,6 +102,7 @@ use constant STATUS_IS_OPEN => {
 
 use constant WORKFLOW => [
   ['',                'UNCONFIRMED',     0],
+  ['',                'CONFIRMED',       0],
   ['',                'REQ_DRAFT',       0],
   ['UNCONFIRMED',     'CONFIRMED',       0],
   ['UNCONFIRMED',     'IN_PROGRESS',     0],
@@ -484,10 +499,24 @@ sub bug_end_of_create_validators {
     {issue_type => $type, category => $category})
     if !_category_ok($type, $category);
 
-  # Canonicalise the entry point. Not just convenience: Bug.pm:1526-1536 forces
-  # UNCONFIRMED for any reporter without editbugs/canconfirm, which would drop
-  # every externally filed requirement onto the BUG lifecycle.
-  my $wanted = INITIAL_STATUS->{$type};
+  # Canonicalise the entry point.
+  #
+  # Honour what the reporter asked for when it is a legal entry point for this
+  # type - filing a bug straight into CONFIRMED is how this installation has
+  # always worked. Otherwise substitute the type's default. That substitution
+  # is not a convenience: Bug.pm:1526-1536 forces UNCONFIRMED for any reporter
+  # without editbugs/canconfirm, which would drop every externally filed
+  # requirement onto the BUG lifecycle.
+  #
+  # bug_status is a STRING here - _check_bug_status returns $new_status->name
+  # (Bug.pm:1588) - and core has already rejected anything that is not a legal
+  # initial status, so the only question left is whether it suits the TYPE.
+  my $entry_point = INITIAL_STATUSES->{$type} || {};
+  my $asked = $params->{bug_status};
+  $asked = $asked->name if blessed($asked) && $asked->can('name');
+  my $wanted
+    = (defined $asked && $entry_point->{$asked}) ? $asked : INITIAL_STATUS->{$type};
+
   my ($initial)
     = grep { $_->name eq $wanted } @{Bugzilla::Status->can_change_to};
   ThrowUserError('issue_type_initial_status_unavailable',

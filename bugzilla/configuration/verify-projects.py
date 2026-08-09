@@ -128,8 +128,8 @@ def require_shape(state):
         need(state, key, kind, "")
 
     enf = state["enforcement"]
-    for key in ("initial_status", "allowed_statuses", "allowed_resolutions",
-                "allowed_categories", "error_codes"):
+    for key in ("initial_status", "initial_statuses", "allowed_statuses",
+                "allowed_resolutions", "allowed_categories", "error_codes"):
         need(enf, key, dict, "enforcement.")
     need(enf["error_codes"], "core_illegal_change", int, "enforcement.error_codes.")
     need(enf["error_codes"], "extension", dict, "enforcement.error_codes.")
