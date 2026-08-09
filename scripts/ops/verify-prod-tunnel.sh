@@ -766,7 +766,12 @@ fi
 # Deliberately NOT gated on ABSENT_TUNNEL_HOSTS: rollback has none, yet still needs this proof.
 case "$PHASE" in retired|rollback) ING_CHECK=1 ;; *) ING_CHECK=0 ;; esac
 if [ "$ING_CHECK" = "1" ]; then
-  ING_FILE="${ING_FILE:-$REPO_ROOT/k8s/keycloak/keycloak-ingress.yaml}"
+  # Keycloak's manifests moved to the infra-deploy repo on 2026-08-09. This check stays here
+  # — the tunnel's correctness depends on that Ingress host set — it just reads them from the
+  # other repo now, assumed to be a sibling checkout. INFRA_REPO overrides that assumption.
+  # If the file is not found the check FAILS at line ~818 rather than being skipped: a
+  # verifier that quietly stops verifying and still reports OK is worse than no verifier.
+  ING_FILE="${ING_FILE:-${INFRA_REPO:-$REPO_ROOT/../infra-deploy}/infra/keycloak/keycloak-ingress.yaml}"
   # EXACT host-set equality, not absence-of-a-literal: that also rejects wildcard hosts
   # ("*.fullfunding.nl"), a hostless rule (matches every host) and any unexpected extra rule.
   # Deliberately NOT env-overridable: an override could bless an Ingress that re-admits the
@@ -1188,7 +1193,10 @@ EOF_BZ
 fi
 
 # 6e. the repo realm IMPORT FILE must carry the same sets (parity is a gate, not a hope) ---------
-REALM_CM="${REALM_CM:-$REPO_ROOT/k8s/keycloak/keycloak-realm-configmap.yaml}"
+# Same move as ING_FILE above: the realm import file now lives in infra-deploy. The parser
+# below raises if it cannot read it, so a missing checkout fails this gate rather than
+# silently dropping the repo-vs-live parity proof.
+REALM_CM="${REALM_CM:-${INFRA_REPO:-$REPO_ROOT/../infra-deploy}/infra/keycloak/keycloak-realm-configmap.yaml}"
 cm_out="$(python3 - "$REALM_CM" <<'PYCM'
 import sys
 try:

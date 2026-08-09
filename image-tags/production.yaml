@@ -1,6 +1,4 @@
 images:
-  # fullfunding tenant — built on .252 (amd64 native); the app is static files only.
-  fullfunding-app: 192.168.100.252:5000/fullfunding-app:v1
   raw-to-display-service: 192.168.100.252:5000/options-edge-raw-to-display:prod
   databento-mission-sandwich-service: 192.168.100.252:5000/options-edge-databento-mission-sandwich:prod
   directional-pressure-service: 192.168.100.252:5000/options-edge-directional-pressure:prod

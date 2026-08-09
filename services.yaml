@@ -42,21 +42,6 @@ services:
     producedTopics: []
     requiredConfigKeys: [KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, POSTGRES_JDBC_URL]
 
-  # --- fullfunding tenant --------------------------------------------------------------
-  # The `namespace` field is what routes this away from options-edge. Without it the deploy
-  # would default to options-edge and the render/registry guard would refuse it.
-  - name: fullfunding-app
-    namespace: fullfunding
-    managedBy: standalone
-    image: fullfunding-app
-    deployments: [fullfunding-app]
-    container: web
-    sourceRepo: fullfunding-workspace
-    envs: [production]
-    dependsOnInfraOnly: true
-    consumedTopics: []
-    producedTopics: []
-    requiredConfigKeys: []
   # --- monolith (deployed by options-edge-deploy; migrate in batches) ------------------
   - { name: databento-feed,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-feed,               deployments: [options-edge-databento-feed], buildJob: options-edge-databento-feed-deploy }
   - { name: databento-sr3-feed,           managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-sr3-feed,           deployments: [databento-sr3-feed-service], buildJob: options-edge-databento-sr3-feed-deploy }

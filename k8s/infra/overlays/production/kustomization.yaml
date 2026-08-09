@@ -5,10 +5,14 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - ../../base
-  # Production identity provider (Keycloak) — production-ONLY infra (dev uses the docker
-  # Keycloak on :8089). Moved here from k8s/overlays/production: Keycloak is shared infra
-  # (auth for every service), so it belongs to the common-infra layer, not the app deploy.
-  - ../../../keycloak
+  # Keycloak is NOT here any more. It moved to the infra-deploy repo on 2026-08-09, with
+  # its own Jenkins job, because it is shared by both applications rather than owned by
+  # this one: a trading-platform deploy should not be able to disturb the login path, and
+  # a Keycloak change should not have to queue behind trading-platform CI.
+  #
+  # Removing it from this list does not delete anything. common-infra applies without
+  # --prune, so the live Keycloak in the options-edge namespace is simply no longer
+  # touched from here. It is owned by infra-deploy now, and by only that.
 patches:
   # Prod is a STANDALONE SINGLE-BROKER Kafka node — force RF=1 (moved here from
   # k8s/overlays/production; it patches the shared configmap, which is infra).
