@@ -1104,10 +1104,32 @@ sub ensure_choice {
     return;
   }
 
-  # No choice in this model carries its own controller: cf_category is a flat
-  # vocabulary the extension checks against the product-derived type, and
-  # cf_environment is controlled at FIELD level by product.
+  # A value may be controlled by a value of another field: cf_category's
+  # BUG_*/REQ_* values are shown only for the matching cf_issue_type, so the
+  # form cannot offer a category belonging to the other lifecycle. Purely
+  # presentational - the extension still refuses a mismatch server-side, which
+  # is what protects API clients and anyone with scripting off.
   my $controller_id;
+  my $controller_value = $spec->{issue_type};
+  if (defined $controller_value && $controller_value ne '') {
+    my $controlling_field = $STATE->{fields}{$field_name}{value_field}
+      or fatal("$field_name value '$spec->{value}' declares issue_type but the "
+        . 'field declares no value_field to interpret it');
+    my $controller
+      = Bugzilla::Field::Choice->type($controlling_field)
+      ->new({name => $controller_value});
+    if (!$controller) {
+      # Ordering, not corruption: on a first run the controlling field's values
+      # may not exist yet. ensure_field_values runs them before this field.
+      fatal("$controlling_field value '$controller_value', which controls "
+          . "$field_name value '$spec->{value}', does not exist")
+        if !$DRY;
+      plan("$field_name value '$spec->{value}': control by $controlling_field "
+          . "'$controller_value' (after that value is created)");
+      return;
+    }
+    $controller_id = $controller->id;
+  }
 
   my $class  = Bugzilla::Field::Choice->type($field_name);
   my $choice = $class->new({name => $spec->{value}});
@@ -1134,11 +1156,16 @@ sub ensure_choice {
     plan("$field_name value '$spec->{value}': reactivate");
     if (!$DRY) { $choice->set_is_active(1); $changed = 1; }
   }
-  # Clear any controller a previous model left on the value.
+  # Converge the value's controller on what is declared - which includes
+  # clearing one a previous model left behind, when nothing is declared now.
   my $have_controller = $choice->visibility_value ? $choice->visibility_value->id : 0;
-  if ($have_controller) {
-    plan("$field_name value '$spec->{value}': clear its value controller");
-    if (!$DRY) { $choice->set_visibility_value(undef); $changed = 1; }
+  if ($have_controller != ($controller_id // 0)) {
+    plan("$field_name value '$spec->{value}': "
+        . ($controller_id
+          ? "control by $STATE->{fields}{$field_name}{value_field} "
+            . "'$controller_value'"
+          : 'clear its value controller'));
+    if (!$DRY) { $choice->set_visibility_value($controller_id); $changed = 1; }
   }
   $choice->update if $changed && !$DRY;
   return;

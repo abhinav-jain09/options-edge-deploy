@@ -64,10 +64,17 @@
       "buglist": true,
       "is_mandatory": false,
       "sortkey": 1100,
+      "value_field": "cf_issue_type",
       "_comment": [
-        "OPTIONAL and uncontrolled: one flat BUG_*/REQ_* vocabulary that the extension checks against",
-        "the item's issue type. An empty category is always valid, which is what leaves the 178",
-        "pre-existing rows freely editable."
+        "OPTIONAL, and its values are controlled by cf_issue_type: each BUG_* value is shown only",
+        "when the item's type is BUG, each REQ_* value only for REQUIREMENT, and an untyped item",
+        "(the 178 that predate this work) is offered nothing but the empty value. That is",
+        "PRESENTATION - it stops the form offering a category from the other lifecycle, which was",
+        "reported as a confusing 'only a user with the required permissions' refusal. The real",
+        "enforcement stays server-side in the extension, which is what covers API clients and",
+        "anyone with scripting off. An empty category remains valid for every type, which is what",
+        "leaves the pre-existing rows freely editable - verified: an unrelated edit of an untyped",
+        "bug is still allowed with this wiring in place."
       ],
       "values": [
         {
@@ -565,7 +572,8 @@
         "issue_type_value_rename_forbidden": 100009,
         "issue_type_value_delete_forbidden": 100010,
         "issue_type_required": 100001,
-        "issue_type_unknown": 100002
+        "issue_type_unknown": 100002,
+        "issue_type_resolution_mismatch": 100011
       }
     },
     "legacy_untyped_is": "BUG",
