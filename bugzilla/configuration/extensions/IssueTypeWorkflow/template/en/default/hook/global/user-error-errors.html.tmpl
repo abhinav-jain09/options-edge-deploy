@@ -48,7 +48,10 @@
 [% ELSIF error == "issue_type_value_delete_forbidden" %]
   [% title = "That Value Cannot Be Deleted" %]
   <em>[% value FILTER html %]</em> is part of the configured issue-type
-  lifecycles; removing it would leave items with no lifecycle. Change
-  <em>expected-state.json</em> and re-run <em>setup-projects.pl</em>.
+  lifecycles, so deleting it takes a configured lifecycle value away and no
+  future item could be filed with it. (Bugzilla separately refuses to delete a
+  value that items are still using; this refusal covers the ones that are
+  currently unused.) Change <em>expected-state.json</em> and re-run
+  <em>setup-projects.pl</em>.
 
 [% END %]

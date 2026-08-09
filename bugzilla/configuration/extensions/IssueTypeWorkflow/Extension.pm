@@ -383,9 +383,14 @@ sub bug_check_can_change_field {
   # change renders the field READ-ONLY for everybody, which is how Category and
   # Resolution vanished from the edit form.
   #
-  # 1 is not a legal value of any field this extension guards, so it is
-  # unambiguous here.
-  my $is_probe = defined $new_value && "$new_value" eq '1';
+  # A literal 1 is only a probe if 1 is not something this field can actually
+  # be set TO. Assuming that outright would be a fail-OPEN bug: an admin is
+  # free to add resolution values, model_is_complete() tolerates extras, and a
+  # resolution named "1" would then sail through the probe branch below without
+  # ever being checked against ALLOWED_RESOLUTIONS. So ask, rather than assume.
+  my $is_probe = defined $new_value
+    && "$new_value" eq '1'
+    && !_value_exists($field, '1');
 
   my $state = _enforcement_state();
   return if $state eq 'off';
@@ -594,6 +599,33 @@ sub webservice_error_codes {
 ##############
 #  Internals #
 ##############
+
+# Is $value a real, selectable value of $field on THIS installation?
+#
+# Used only to tell an editability probe from a genuine change (see
+# bug_check_can_change_field). The answer must be conservative: returning
+# false when the value really does exist would let that value skip the
+# lifecycle check, so anything unexpected answers TRUE, which merely costs the
+# caller a real check instead of a probe shortcut.
+#
+# Cheap enough to do per call: it runs only for the four guarded fields, and
+# Bugzilla already caches field values for the life of the request. It is
+# deliberately NOT memoised across requests - under mod_perl a process lives
+# for hours, and a stale "no such value" is precisely the fail-open answer.
+sub _value_exists {
+  my ($field, $value) = @_;
+  return 1 if !defined $field || !defined $value;
+
+  my $found = eval {
+    if ($field eq 'bug_status') {
+      return Bugzilla::Status->new({name => $value}) ? 1 : 0;
+    }
+    return Bugzilla::Field::Choice->type($field)->new({name => $value}) ? 1 : 0;
+  };
+  # An exception here means we could not establish that the value is absent.
+  return 1 if !defined $found;
+  return $found;
+}
 
 sub _deny {
   my ($priv_results) = @_;

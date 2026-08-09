@@ -1627,8 +1627,9 @@ sub self_test_rename_guards {
 }
 
 
-# Deleting a guarded value would strip the lifecycle out from under live items,
-# so object_before_delete gets the same treatment.
+# Deleting a guarded value removes part of a configured lifecycle - nothing
+# could be filed with it again - so object_before_delete gets the same
+# treatment. (Values that live items are ON are already protected by core.)
 sub self_test_delete_guards {
   return if $DRY;
 
@@ -1639,24 +1640,43 @@ sub self_test_delete_guards {
   # only that core works - our guard is never consulted. That is not a
   # weakness in the guard: core already protects used values, and the guard
   # exists precisely for the unused ones, which core would happily delete even
-  # though removing them takes a lifecycle category away.
+  # though that takes a configured lifecycle value away for good.
   #
   # This originally hard-coded BUG_CODE and passed only while cf_category was
   # empty. The first real bug filed against BUG_CODE turned the test red.
-  my $type = Bugzilla::Field::Choice->type('cf_category');
-  my $in_use = $dbh->selectcol_arrayref(
-    'SELECT DISTINCT cf_category FROM bugs WHERE cf_category IS NOT NULL');
-  my %used = map { $_ => 1 } @$in_use;
+  # Candidates come from all three guarded value families, not just categories.
+  # With one family the test skips itself the day every category is in use, and
+  # a skipped test that still reports success is indistinguishable from a
+  # disconnected hook. Across categories, resolutions and statuses, an unused
+  # declared value effectively always exists - and if one truly does not, that
+  # is a fatal inability to prove the guard, not something to pass over.
+  my @families = (
+    ['cf_category', 'cf_category',
+      [map { $_->{value} } @{$STATE->{fields}{cf_category}{values}}]],
+    ['resolution',  'resolution',
+      [grep { length } map { $_->{value} } @{$STATE->{resolutions}}]],
+    ['bug_status',  'bug_status',
+      [map { $_->{value} } @{$STATE->{statuses}}]],
+  );
 
-  my ($category, $chosen);
-  foreach my $spec (@{$STATE->{fields}{cf_category}{values}}) {
-    next if $used{$spec->{value}};
-    my $candidate = $type->new({name => $spec->{value}}) or next;
-    ($category, $chosen) = ($candidate, $spec->{value});
-    last;
+  my ($category, $chosen, $chosen_field);
+  FAMILY: foreach my $family (@families) {
+    my ($field, $column, $values) = @$family;
+    my $in_use = $dbh->selectcol_arrayref(
+      "SELECT DISTINCT $column FROM bugs WHERE $column IS NOT NULL");
+    my %used = map { $_ => 1 } @$in_use;
+    my $type = Bugzilla::Field::Choice->type($field);
+    foreach my $value (@$values) {
+      next if $used{$value};
+      my $candidate = $type->new({name => $value}) or next;
+      ($category, $chosen, $chosen_field) = ($candidate, $value, $field);
+      last FAMILY;
+    }
   }
-  return note('delete-guard self-test skipped: every declared category is in '
-      . 'use, so core would refuse the deletion before the guard is reached')
+  fatal('delete-guard self-test: every declared category, resolution and '
+      . 'status is in use by at least one bug, so core refuses the deletion '
+      . 'before the guard is ever reached and the guard cannot be proven. '
+      . 'Refusing to report a pass it did not earn.')
     if !$category;
 
   assert_lock_held('the delete-guard self-test');
@@ -1667,14 +1687,16 @@ sub self_test_delete_guards {
     or fatal("delete-guard self-test rollback FAILED: $@");
   flush_caches();
 
-  fatal("delete-guard self-test: deleting the category '$chosen' was NOT refused")
+  fatal("delete-guard self-test: deleting $chosen_field value '$chosen' was "
+      . 'NOT refused')
     if $ok;
   my $message = ref($err) ? (eval { $err->{error} } // "$err") : "$err";
-  fatal("delete-guard self-test: deletion of '$chosen' was refused by "
-      . "'$message', not by the delete guard")
-    if $message !~ /removing\s+it\s+would\s+leave\s+items\s+with\s+no\s+lifecycle/;
+  fatal("delete-guard self-test: deletion of $chosen_field value '$chosen' was "
+      . "refused by '$message', not by the delete guard")
+    if $message !~ /takes\s+a\s+configured\s+lifecycle\s+value\s+away/;
 
-  note("delete-guard self-test passed (category '$chosen', which no bug uses)");
+  note("delete-guard self-test passed ($chosen_field value '$chosen', "
+      . 'which no bug uses)');
   self_test_unprivileged_initial_status();
   return;
 }
