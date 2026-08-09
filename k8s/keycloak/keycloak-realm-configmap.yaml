@@ -123,11 +123,11 @@ data:
           ]
         }
       ],
-      "//groups": "Access model: one parent group per application, with an `internal` and an",
-      "//groups2": "`external` child. Membership here is the single place access is granted — the",
+      "//groups": "Access model for THIS realm, which serves options-edge only. FullFunding has",
+      "//groups2": "its own realm (`fullfunding`) and its own Bugzilla; nothing of it belongs here.",
       "//groups3": "KeycloakGroups Bugzilla extension mirrors these paths onto Bugzilla groups named",
       "//groups4": "<app>-<tier> at each login. Adding an application means adding one parent and two",
-      "//groups5": "children here, plus the matching Bugzilla groups and products.",
+      "//groups5": "Membership is the single place access is granted; the KeycloakGroups extension",
       "groups": [
         {
           "//": "realmRoles here is load-bearing: membership of /optionsedge is what confers",
@@ -139,14 +139,6 @@ data:
           "subGroups": [
             { "name": "internal", "path": "/optionsedge/internal" },
             { "name": "external", "path": "/optionsedge/external" }
-          ]
-        },
-        {
-          "name": "fullfunding",
-          "path": "/fullfunding",
-          "subGroups": [
-            { "name": "internal", "path": "/fullfunding/internal" },
-            { "name": "external", "path": "/fullfunding/external" }
           ]
         }
       ],
