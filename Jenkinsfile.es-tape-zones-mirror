@@ -373,16 +373,56 @@ S
           [ "$GONE" = "1" ] || { echo "FAIL: a process for $MDIR is still running after unload:"; pgrep -fl "$MDIR/" || true; exit 1; }
           echo "no process left for this unit"
 
-          # 3. rewind the group, if it exists at all. A group that does not exist yet needs nothing:
-          # auto.offset.reset=earliest already forces the new process to read the whole (compacted,
-          # tiny) log, which includes the reference record.
-          if "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --list 2>/dev/null | grep -qxF "$GROUP"; then
-            "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --group "$GROUP" \
-              --topic "$TOPIC:0" --reset-offsets --to-offset "$REFOFF" --execute \
-              || { echo "FAIL: could not rewind group $GROUP to offset $REFOFF -- the install cannot be honestly verified"; exit 1; }
-            echo "group $GROUP rewound to $REFOFF"
+          # 3. Make the group start at or before the reference record.
+          #
+          # "Does the group exist?" must be ANSWERED, not guessed: a broker or CLI failure here
+          # would otherwise look exactly like "no such group", skip the rewind, and re-open the
+          # stale-record false pass this whole stage exists to close. So capture the listing to a
+          # file, require the CLI to succeed, and only then decide.
+          GLIST="$MDIR/source-consumer-groups.txt"
+          rm -f "$GLIST" "$GLIST.err"
+          "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --list > "$GLIST" 2>"$GLIST.err" \
+            || { echo "FAIL: cannot list consumer groups on $SRC -- refusing to guess whether $GROUP exists"; cat "$GLIST.err" 2>/dev/null || true; exit 1; }
+          if grep -qxF "$GROUP" "$GLIST"; then
+            GEXISTS=1
           else
-            echo "group $GROUP does not exist yet; auto.offset.reset=earliest will seed it"
+            rc=$?; [ "$rc" = 1 ] || { echo "FAIL: group-list scan errored (grep rc=$rc)"; exit 1; }
+            GEXISTS=0
+          fi
+
+          if [ "$GEXISTS" = "0" ]; then
+            echo "group $GROUP does not exist yet; auto.offset.reset=earliest will seed it from 0, which crosses the reference record"
+          else
+            GARM="$MDIR/arm-group-describe.txt"
+            rm -f "$GARM" "$GARM.err"
+            "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --describe --group "$GROUP" > "$GARM" 2>"$GARM.err" \
+              || { echo "FAIL: cannot describe group $GROUP on $SRC"; cat "$GARM.err" 2>/dev/null || true; exit 1; }
+            CUR=$(awk -v t="$TOPIC" '$2 == t && $3 == "0" {print $4; exit}' "$GARM")
+            case "${CUR:-}" in
+              ''|'-')
+                # Group exists but has never committed for this partition: earliest applies, same as
+                # a brand-new group. Nothing to rewind.
+                echo "group $GROUP has no committed offset for $TOPIC:0; auto.offset.reset=earliest applies"
+                ;;
+              *[!0-9]*)
+                echo "FAIL: committed offset for $GROUP / $TOPIC:0 is not a number (got '$CUR')"; exit 1
+                ;;
+              *)
+                # ONLY EVER REWIND. Resetting unconditionally to $REFOFF would move a LAGGING group
+                # FORWARD and permanently skip every source record between its position and the
+                # reference one -- on this session-keyed compacted board, whole session dates. A
+                # group already at or behind $REFOFF needs no help: consuming forward from there
+                # necessarily crosses the reference record, which is all the proof requires.
+                if [ "$CUR" -gt "$REFOFF" ]; then
+                  "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --group "$GROUP" \
+                    --topic "$TOPIC:0" --reset-offsets --to-offset "$REFOFF" --execute \
+                    || { echo "FAIL: could not rewind group $GROUP from $CUR to $REFOFF -- the install cannot be honestly verified"; exit 1; }
+                  echo "group $GROUP rewound from $CUR to $REFOFF"
+                else
+                  echo "group $GROUP is at $CUR, at or behind the reference offset $REFOFF; left untouched (forward consumption must cross it)"
+                fi
+                ;;
+            esac
           fi
         '''
       }
