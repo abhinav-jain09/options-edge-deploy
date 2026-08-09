@@ -66,6 +66,49 @@ my %FIELD_TYPE = (single_select => FIELD_TYPE_SINGLE_SELECT,);
 
 use constant EXTENSION  => 'Bugzilla::Extension::IssueTypeWorkflow';
 
+# Bugzilla::Object::set is protected - it dies when called from outside a
+# subclass - so every attribute this script converges has to go through the
+# public setter instead. Those setters are not named consistently upstream:
+# Milestone and Component have set_is_active, Version spells the same thing
+# set_isactive (Version.pm:176), and Field::Choice calls a rename set_name.
+# Getting one wrong is invisible until the day an attribute actually differs,
+# which could be halfway through an apply. PREFLIGHT_SETTERS lists every
+# (class, method) pair the converge path can reach so preflight can prove they
+# all resolve BEFORE anything is written.
+use constant FIELD_SETTERS => {
+  description  => 'set_description',
+  enter_bug    => 'set_enter_bug',
+  buglist      => 'set_buglist',
+  is_mandatory => 'set_is_mandatory',
+  sortkey      => 'set_sortkey',
+  obsolete     => 'set_obsolete',
+};
+use constant PRODUCT_SETTERS => {
+  description        => 'set_description',
+  isactive           => 'set_is_active',
+  allows_unconfirmed => 'set_allows_unconfirmed',
+  defaultmilestone   => 'set_default_milestone',
+};
+use constant PREFLIGHT_SETTERS => [
+  (map { ['Bugzilla::Field',   $_] } sort values %{+FIELD_SETTERS}),
+  ['Bugzilla::Field', 'set_value_field'],
+  ['Bugzilla::Field', 'set_visibility_field'],
+  ['Bugzilla::Field', 'set_visibility_values'],
+  (map { ['Bugzilla::Product', $_] } sort values %{+PRODUCT_SETTERS}),
+  ['Bugzilla::Field::Choice', 'set_name'],
+  ['Bugzilla::Field::Choice', 'set_sortkey'],
+  ['Bugzilla::Field::Choice', 'set_is_active'],
+  ['Bugzilla::Field::Choice', 'set_visibility_value'],
+  ['Bugzilla::Status',    'set_name'],
+  ['Bugzilla::Status',    'set_sortkey'],
+  ['Bugzilla::Status',    'set_is_active'],
+  ['Bugzilla::Version',   'set_isactive'],
+  ['Bugzilla::Milestone', 'set_is_active'],
+  ['Bugzilla::Component', 'set_is_active'],
+  ['Bugzilla::Component', 'set_description'],
+  ['Bugzilla::Component', 'set_default_assignee'],
+];
+
 my %OPT = (
   state                   => 'local/expected-state.json',
   'admin-login'           => undef,
@@ -553,6 +596,21 @@ sub preflight {
   fatal("expected Bugzilla $STATE->{bugzilla_version}, found $version")
     if $version ne $STATE->{bugzilla_version};
 
+  # Prove every public setter the converge path can call actually exists on
+  # this Bugzilla, while nothing has been written yet. Without this, a setter
+  # that was renamed upstream - or that we simply spelled wrong - only shows up
+  # on the run where that attribute happens to differ, and it shows up as a
+  # die() partway through an apply.
+  my @missing;
+  foreach my $pair (@{+PREFLIGHT_SETTERS}) {
+    my ($class, $method) = @$pair;
+    push @missing, "$class->$method" if !$class->can($method);
+  }
+  fatal('this Bugzilla does not provide the setter(s) this script converges '
+      . 'through: ' . join(', ', @missing)
+      . '. The object API has changed; fix the calls before running an apply.')
+    if @missing;
+
   my %target_status = map { $_->{value} => 1 } @{$STATE->{statuses}};
 
   # Statuses are never renamed. Bugzilla implements a value rename as
@@ -925,7 +983,9 @@ sub ensure_field {
     next if "$current" eq "$want{$attr}";
     plan("field $name: set $attr from '$current' to '$want{$attr}'");
     next if $DRY;
-    $field->set($attr, $want{$attr});
+    my $method = FIELD_SETTERS->{$attr}
+      or fatal("no public setter for field attribute '$attr'");
+    $field->$method($want{$attr});
     $changed = 1;
   }
   if ($changed && !$DRY) { $field->update; flush_caches(); }
@@ -958,7 +1018,7 @@ sub ensure_field_controls {
           or fatal("value_field '$want_value_field' for $name does not exist");
         $id = $controller->id;
       }
-      $field->set('value_field_id', $id);
+      $field->set_value_field($id);
       $changed = 1;
     }
   }
@@ -975,7 +1035,7 @@ sub ensure_field_controls {
           or fatal("visibility_field '$want_vis_field' for $name does not exist");
         $id = $controller->id;
       }
-      $field->set('visibility_field_id', $id);
+      $field->set_visibility_field($id);
       $changed = 1;
     }
   }
@@ -984,7 +1044,7 @@ sub ensure_field_controls {
     my @stale = map { $_->name } @{$field->visibility_values || []};
     if (@stale) {
       plan("field $name: clear stale visibility_values [" . join(', ', sort @stale) . ']');
-      if (!$DRY) { $field->set('visibility_values', []); $changed = 1; }
+      if (!$DRY) { $field->set_visibility_values([]); $changed = 1; }
     }
   }
   else {
@@ -1001,7 +1061,7 @@ sub ensure_field_controls {
               . 'does not exist');
           push @ids, $choice->id;
         }
-        $field->set('visibility_values', \@ids);
+        $field->set_visibility_values(\@ids);
         $changed = 1;
       }
     }
@@ -1047,17 +1107,17 @@ sub ensure_choice {
   if (($choice->sortkey // -1) != $spec->{sortkey}) {
     plan("$field_name value '$spec->{value}': sortkey "
         . ($choice->sortkey // 'undef') . " -> $spec->{sortkey}");
-    if (!$DRY) { $choice->set('sortkey', $spec->{sortkey}); $changed = 1; }
+    if (!$DRY) { $choice->set_sortkey($spec->{sortkey}); $changed = 1; }
   }
   if (!$choice->is_active) {
     plan("$field_name value '$spec->{value}': reactivate");
-    if (!$DRY) { $choice->set('isactive', 1); $changed = 1; }
+    if (!$DRY) { $choice->set_is_active(1); $changed = 1; }
   }
   # Clear any controller a previous model left on the value.
   my $have_controller = $choice->visibility_value ? $choice->visibility_value->id : 0;
   if ($have_controller) {
     plan("$field_name value '$spec->{value}': clear its value controller");
-    if (!$DRY) { $choice->set('visibility_value_id', undef); $changed = 1; }
+    if (!$DRY) { $choice->set_visibility_value(undef); $changed = 1; }
   }
   $choice->update if $changed && !$DRY;
   return;
@@ -1093,11 +1153,11 @@ sub ensure_statuses {
     if (($status->sortkey // -1) != $spec->{sortkey}) {
       plan("status '$spec->{value}': sortkey "
           . ($status->sortkey // 'undef') . " -> $spec->{sortkey}");
-      if (!$DRY) { $status->set('sortkey', $spec->{sortkey}); $changed = 1; }
+      if (!$DRY) { $status->set_sortkey($spec->{sortkey}); $changed = 1; }
     }
     if (!$status->is_active) {
       plan("status '$spec->{value}': reactivate");
-      if (!$DRY) { $status->set('isactive', 1); $changed = 1; }
+      if (!$DRY) { $status->set_is_active(1); $changed = 1; }
     }
     $status->update if $changed && !$DRY;
 
@@ -1259,7 +1319,9 @@ sub ensure_product {
       next if "$current" eq "$want{$attr}";
       plan("product '$spec->{name}': set $attr from '$current' to '$want{$attr}'");
       next if $DRY;
-      $product->set($attr, $want{$attr});
+      my $method = PRODUCT_SETTERS->{$attr}
+        or fatal("no public setter for product attribute '$attr'");
+      $product->$method($want{$attr});
       $changed = 1;
     }
     $product->update if $changed && !$DRY;
@@ -1293,7 +1355,10 @@ sub ensure_versions {
     }
     if (!$have{$name}->is_active) {
       plan("product '$spec->{name}': reactivate version '$name'");
-      if (!$DRY) { $have{$name}->set('isactive', 1); $have{$name}->update; }
+      # set_isactive, not set_is_active: Version.pm:176 spells it without the
+      # second underscore, unlike Milestone and Component. PREFLIGHT_SETTERS
+      # is what keeps that discrepancy from becoming a mid-apply crash.
+      if (!$DRY) { $have{$name}->set_isactive(1); $have{$name}->update; }
     }
   }
 
@@ -1314,7 +1379,7 @@ sub ensure_milestones {
     }
     if (!$have{$name}->is_active) {
       plan("product '$spec->{name}': reactivate milestone '$name'");
-      if (!$DRY) { $have{$name}->set('isactive', 1); $have{$name}->update; }
+      if (!$DRY) { $have{$name}->set_is_active(1); $have{$name}->update; }
     }
   }
 
@@ -1361,17 +1426,17 @@ sub ensure_components {
       plan("product '$spec->{name}': component '$comp->{name}' default "
           . 'assignee ' . $existing->default_assignee->login . " -> $owner");
       if (!$DRY) {
-        $existing->set('initialowner', $owner);
+        $existing->set_default_assignee($owner);
         $changed = 1;
       }
     }
     if ($existing->description ne $comp->{description}) {
       plan("product '$spec->{name}': component '$comp->{name}' description updated");
-      if (!$DRY) { $existing->set('description', $comp->{description}); $changed = 1; }
+      if (!$DRY) { $existing->set_description($comp->{description}); $changed = 1; }
     }
     if (!$existing->is_active) {
       plan("product '$spec->{name}': reactivate component '$comp->{name}'");
-      if (!$DRY) { $existing->set('isactive', 1); $changed = 1; }
+      if (!$DRY) { $existing->set_is_active(1); $changed = 1; }
     }
     $existing->update if $changed && !$DRY;
   }
@@ -1516,17 +1581,15 @@ sub self_test_fail_closed {
 sub self_test_rename_guards {
   return if $DRY;
 
+  # Through set_name, not set(): Bugzilla::Object::set is protected and dies
+  # when called from outside a subclass, which would give us that error instead
+  # of the guard's - proving nothing.
   my @cases;
   my $status = Bugzilla::Status->new({name => 'CONFIRMED'});
-  push @cases, ['status CONFIRMED', $status, 'value', 'RENAMED_BY_SELFTEST']
-    if $status;
+  push @cases, ['status CONFIRMED', $status] if $status;
   my $category
     = Bugzilla::Field::Choice->type('cf_category')->new({name => 'BUG_CODE'});
-  push @cases, ['category BUG_CODE', $category, 'value', 'RENAMED_BY_SELFTEST']
-    if $category;
-  my $product = Bugzilla::Product->new({name => 'OptionsEdge'});
-  push @cases, ['product OptionsEdge', $product, 'name', 'RENAMED_BY_SELFTEST']
-    if $product;
+  push @cases, ['category BUG_CODE', $category] if $category;
 
   return note('rename-guard self-test skipped: no guarded objects found')
     if !@cases;
@@ -1535,16 +1598,18 @@ sub self_test_rename_guards {
   $dbh->bz_start_transaction();
   my @unguarded;
   foreach my $case (@cases) {
-    my ($label, $object, $field, $value) = @$case;
-    my $ok  = eval { $object->set($field, $value); 1 };
+    my ($label, $object) = @$case;
+    my $ok  = eval { $object->set_name('RENAMED_BY_SELFTEST'); 1 };
     my $err = $@;
     if ($ok) { push @unguarded, "$label (allowed)"; next; }
 
     # Any exception is not proof: it must be OUR refusal, not a validation
-    # error that would disappear with a different test value.
+    # error that would disappear with a different test value. In cmdline mode
+    # Bugzilla dies with the RENDERED template text, not the error name, so
+    # match wording only this extension produces.
     my $message = ref($err) ? (eval { $err->{error} } // "$err") : "$err";
     push @unguarded, "$label (refused, but by '$message', not the rename guard)"
-      if $message !~ /issue_type_(?:value|product)_rename_forbidden/;
+      if $message !~ /rewrites\s+it\s+on\s+every\s+item\s+already\s+using\s+it/;
   }
   eval { $dbh->bz_rollback_transaction(); 1 }
     or fatal("rename-guard self-test rollback FAILED: $@");
@@ -1562,14 +1627,57 @@ sub self_test_rename_guards {
 }
 
 
-# Deleting a guarded value would strip the lifecycle out from under live items,
-# so object_before_delete gets the same treatment.
+# Deleting a guarded value removes part of a configured lifecycle - nothing
+# could be filed with it again - so object_before_delete gets the same
+# treatment. (Values that live items are ON are already protected by core.)
 sub self_test_delete_guards {
   return if $DRY;
 
-  my $category
-    = Bugzilla::Field::Choice->type('cf_category')->new({name => 'BUG_CODE'})
-    or return note('delete-guard self-test skipped: BUG_CODE not present');
+  # The value has to be one NO bug is sitting on.
+  #
+  # Field::Choice::remove_from_db refuses an in-use value on its own, before
+  # object_before_delete is ever fired, so testing against a used value proves
+  # only that core works - our guard is never consulted. That is not a
+  # weakness in the guard: core already protects used values, and the guard
+  # exists precisely for the unused ones, which core would happily delete even
+  # though that takes a configured lifecycle value away for good.
+  #
+  # This originally hard-coded BUG_CODE and passed only while cf_category was
+  # empty. The first real bug filed against BUG_CODE turned the test red.
+  # Candidates come from all three guarded value families, not just categories.
+  # With one family the test skips itself the day every category is in use, and
+  # a skipped test that still reports success is indistinguishable from a
+  # disconnected hook. Across categories, resolutions and statuses, an unused
+  # declared value effectively always exists - and if one truly does not, that
+  # is a fatal inability to prove the guard, not something to pass over.
+  my @families = (
+    ['cf_category', 'cf_category',
+      [map { $_->{value} } @{$STATE->{fields}{cf_category}{values}}]],
+    ['resolution',  'resolution',
+      [grep { length } map { $_->{value} } @{$STATE->{resolutions}}]],
+    ['bug_status',  'bug_status',
+      [map { $_->{value} } @{$STATE->{statuses}}]],
+  );
+
+  my ($category, $chosen, $chosen_field);
+  FAMILY: foreach my $family (@families) {
+    my ($field, $column, $values) = @$family;
+    my $in_use = $dbh->selectcol_arrayref(
+      "SELECT DISTINCT $column FROM bugs WHERE $column IS NOT NULL");
+    my %used = map { $_ => 1 } @$in_use;
+    my $type = Bugzilla::Field::Choice->type($field);
+    foreach my $value (@$values) {
+      next if $used{$value};
+      my $candidate = $type->new({name => $value}) or next;
+      ($category, $chosen, $chosen_field) = ($candidate, $value, $field);
+      last FAMILY;
+    }
+  }
+  fatal('delete-guard self-test: every declared category, resolution and '
+      . 'status is in use by at least one bug, so core refuses the deletion '
+      . 'before the guard is ever reached and the guard cannot be proven. '
+      . 'Refusing to report a pass it did not earn.')
+    if !$category;
 
   assert_lock_held('the delete-guard self-test');
   $dbh->bz_start_transaction();
@@ -1579,14 +1687,16 @@ sub self_test_delete_guards {
     or fatal("delete-guard self-test rollback FAILED: $@");
   flush_caches();
 
-  fatal('delete-guard self-test: deleting the category BUG_CODE was NOT refused')
+  fatal("delete-guard self-test: deleting $chosen_field value '$chosen' was "
+      . 'NOT refused')
     if $ok;
   my $message = ref($err) ? (eval { $err->{error} } // "$err") : "$err";
-  fatal("delete-guard self-test: deletion was refused by '$message', not by the "
-      . 'delete guard')
-    if $message !~ /issue_type_value_delete_forbidden/;
+  fatal("delete-guard self-test: deletion of $chosen_field value '$chosen' was "
+      . "refused by '$message', not by the delete guard")
+    if $message !~ /takes\s+a\s+configured\s+lifecycle\s+value\s+away/;
 
-  note('delete-guard self-test passed');
+  note("delete-guard self-test passed ($chosen_field value '$chosen', "
+      . 'which no bug uses)');
   self_test_unprivileged_initial_status();
   return;
 }
@@ -1615,10 +1725,11 @@ sub self_test_unprivileged_initial_status {
   # The declared model, not the extension's copy of it: this script owns
   # expected-state.json, and a divergence between the two is itself a failure the
   # other checks catch.
-  my ($product_name)
-    = grep { ($STATE->{product_type}{$_} // '') eq 'REQUIREMENT' }
-      sort keys %{$STATE->{product_type}};
-  return note('unprivileged-status self-test skipped: no REQUIREMENT product')
+  # Any product will do: the type is a per-bug field, so a REQUIREMENT can be
+  # filed anywhere. What is being tested is the status substitution, not where
+  # it was filed.
+  my $product_name = $STATE->{products}[0]{name};
+  return note('unprivileged-status self-test skipped: no product declared')
     if !$product_name;
   my $product = Bugzilla::Product->new({name => $product_name})
     or return note("unprivileged-status self-test skipped: '$product_name' absent");
@@ -1651,6 +1762,7 @@ sub self_test_unprivileged_initial_status {
       if Bugzilla->user->in_group('editbugs') || Bugzilla->user->in_group('canconfirm');
 
     my $bug = Bugzilla::Bug->create({
+      cf_issue_type => 'REQUIREMENT',
       product     => $product->name,
       component   => $component->name,
       version     => $product->versions->[0]->name,
@@ -1661,7 +1773,8 @@ sub self_test_unprivileged_initial_status {
       bug_severity=> 'normal',
       priority    => '---',
     });
-    $status = $bug->bug_status;
+    # ->bug_status is a Bugzilla::Status OBJECT here; compare the name.
+    $status = ref($bug->bug_status) ? $bug->bug_status->name : $bug->bug_status;
     1;
   };
   $err = $@;
