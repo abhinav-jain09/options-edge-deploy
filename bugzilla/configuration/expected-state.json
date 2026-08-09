@@ -18,7 +18,8 @@
   ],
   "bugzilla_version": "5.2",
   "params": {
-    "duplicate_or_move_bug_status": "RESOLVED"
+    "duplicate_or_move_bug_status": "RESOLVED",
+    "defaultpriority": "---"
   },
   "_enforcement_switch_comment": [
     "There is deliberately NO 'enforcement enabled' parameter: anyone with tweakparams could",
@@ -559,11 +560,19 @@
     "empty_category_allowed": true,
     "_error_codes_comment": [
       "illegal_change (115) is core Bugzilla's, raised whenever the extension denies an UPDATE via",
-      "priv_results; REST maps it to HTTP 401. The 1000xx codes are the extension's own, registered",
-      "through the webservice_error_codes hook and mapped to HTTP 400."
+      "priv_results; REST maps it to HTTP 401. The 1000xx codes are the extension's own, thrown",
+      "directly, and REST maps them to HTTP 400.",
+      "",
+      "illegal_bug_status_transition (123) is what a refused STATUS change actually surfaces as.",
+      "The extension denies a cross-lifecycle status through priv_results, which makes",
+      "_refine_available_statuses drop it from the available list - so by the time core validates",
+      "the submission the target simply is not offered, and core reports 123 rather than 115.",
+      "That filtering is the point: it is also what keeps the status dropdown showing only the",
+      "item's own lifecycle."
     ],
     "error_codes": {
       "core_illegal_change": 115,
+      "core_illegal_bug_status_transition": 123,
       "extension": {
         "issue_category_mismatch": 100004,
         "issue_type_initial_status_unavailable": 100005,
@@ -690,6 +699,12 @@
   "_params_comment": [
     "Only what this work actually needs. useclassification is deliberately NOT declared: it is on",
     "in this installation, that is somebody else's decision, and flipping it would change the UI",
-    "for reasons unrelated to lifecycles."
+    "for reasons unrelated to lifecycles.",
+    "",
+    "defaultpriority IS declared, because it was broken: it held '--' while the priority values",
+    "are '---', 'Highest', 'High', 'Normal', 'Low', 'Lowest'. Bug.create falls back to that param",
+    "when a client omits priority, so EVERY REST/API filing failed with \"There is no Priority",
+    "named '--'\". The web form never hit it because it always submits a priority. Nothing that",
+    "worked before changes: only the path that was already failing starts working."
   ]
 }
