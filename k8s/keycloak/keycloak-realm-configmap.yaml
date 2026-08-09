@@ -104,8 +104,17 @@ data:
           "standardFlowEnabled": true,
           "directAccessGrantsEnabled": false,
           "serviceAccountsEnabled": false,
-          "redirectUris": ["http://192.168.100.252:8092/oauth2callback"],
-          "webOrigins": ["http://192.168.100.252:8092"],
+          "redirectUris": ["http://192.168.100.252:8092/oauth2callback", "https://req.bleadingoptions.com/oauth2callback"],
+          "webOrigins": ["http://192.168.100.252:8092", "https://req.bleadingoptions.com"],
+          "//logout": "post.logout.redirect.uris must list EVERY hostname Bugzilla is reached on.",
+          "//logout2": "mod_auth_openidc sends the current request's own base URL as the",
+          "//logout3": "post_logout_redirect_uri, so a host that is missing here fails logout with",
+          "//logout4": "Keycloak's 'Invalid redirect uri' — which is what happened when",
+          "//logout5": "req.bleadingoptions.com went live. Both schemes are listed for the public host",
+          "//logout6": "because Apache sits behind cloudflared and sees plain HTTP.",
+          "attributes": {
+            "post.logout.redirect.uris": "http://192.168.100.252:8092/*##https://req.bleadingoptions.com/*##http://req.bleadingoptions.com/*"
+          },
           "protocolMappers": [
             {
               "name": "groups",
