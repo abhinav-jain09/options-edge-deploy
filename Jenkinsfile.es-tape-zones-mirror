@@ -24,8 +24,12 @@
 // reuse one label and one run-mirror.sh path and silently OVERWRITE (and kill) the mirror already
 // installed there. The indicator job's identity is (target, topic), which is the correct one: LABEL,
 // PLIST, MDIR (config + logs + baseline) here all carry the sanitized TOPIC, and the service name
-// prefix is `es-tape-zones-mirror`, so a unit installed by this job can never collide with the
-// indicator / strike-intel / futures-flow units, nor with a future second tape-zones topic.
+// prefix is `es-tape-zones-mirror`, so a unit installed by this job cannot collide with the
+// indicator / strike-intel / futures-flow units (different prefixes) nor with the same topic on a
+// different target. NOTE the sanitizer is lossy -- it folds every non-[A-Za-z0-9-] character to '-',
+// so two hypothetical topic names differing only in punctuation (`a.b` vs `a-b`) would slug the
+// same. The one-entry frozen TOPIC allow-list below is what makes that unreachable; widening the
+// allow-list means re-checking slug uniqueness at the same time.
 //
 // The job runs on the 'local-mac' agent (the dev Mac, which IS the target for dev). It generates
 // the config + installs a KeepAlive launchd unit; NOTHING is hand-edited.
@@ -79,11 +83,13 @@ pipeline {
           echo "PLIST=$PLIST"
           echo "MDIR=$MDIR"
           if [ -f "$PLIST" ]; then echo "plist: present"; else echo "plist: ABSENT (not installed)"; fi
-          if launchctl list | grep -q "$LABEL"; then
-            echo "launchd: $(launchctl list | grep "$LABEL")"
-          else
-            echo "launchd: NOT loaded"
-          fi
+          # exact label-field match: $LABEL contains dots, which an unanchored grep would treat as
+          # wildcards, and the PID/status columns are the part worth reading anyway.
+          ROW=$(launchctl list | awk -v L="$LABEL" -F'\\t' '$3 == L {print "pid=" $1 " last-status=" $2}') || ROW=""
+          echo "launchd: ${ROW:-NOT loaded}"
+          echo "consumer group on source: es-tape-zones-mirror-${TARGET_SPX_CLUSTER_IP}-${TARGET_PORT}-${TOPIC}"
+          "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --describe \
+            --group "es-tape-zones-mirror-${TARGET_SPX_CLUSTER_IP}-${TARGET_PORT}-${TOPIC}" 2>/dev/null || true
           echo "--- target $TGT topic $TOPIC ---"
           "$KBIN/kafka-topics" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>&1 | head -3 || true
           "$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null || true
@@ -115,7 +121,26 @@ pipeline {
         sh '''
           set -euo pipefail
           echo "SOURCE=$SRC  TARGET=$TGT  TOPIC=$TOPIC"
-          # SAFETY: source and target must be different clusters
+
+          # INPUT VALIDATION. The four endpoint parameters are free-form strings that end up inside
+          # generated .properties files and a launchd plist, so constrain them before they are used:
+          # dotted-quad IPv4 and a numeric port, nothing else. This also removes the host-alias hole
+          # in the source!=target check below (`localhost` vs `127.0.0.1` would spell differently
+          # while naming the same broker).
+          for hostvar in SOURCE_ES_CLUSTER_IP TARGET_SPX_CLUSTER_IP; do
+            eval "hv=\\$$hostvar"
+            printf '%s' "$hv" | grep -Eq '^[0-9]{1,3}(\\.[0-9]{1,3}){3}$' \
+              || { echo "FAIL: $hostvar='$hv' is not a dotted-quad IPv4 address"; exit 1; }
+          done
+          for portvar in SOURCE_PORT TARGET_PORT; do
+            eval "pv=\\$$portvar"
+            case "$pv" in ''|*[!0-9]*) echo "FAIL: $portvar='$pv' is not numeric"; exit 1 ;; esac
+            [ "$pv" -ge 1 ] && [ "$pv" -le 65535 ] || { echo "FAIL: $portvar='$pv' out of range"; exit 1; }
+          done
+
+          # SAFETY: source and target must be different clusters. Spelling is checked first (cheap),
+          # then CLUSTER IDENTITY -- two different listeners of the SAME Kafka cluster spell
+          # differently but would make this job mirror a topic onto itself.
           [ "$SOURCE_ES_CLUSTER_IP:$SOURCE_PORT" != "$TARGET_SPX_CLUSTER_IP:$TARGET_PORT" ] || { echo "FAIL: source==target"; exit 1; }
           # source broker reachable
           nc -z -w5 "$SOURCE_ES_CLUSTER_IP" "$SOURCE_PORT" || { echo "FAIL: source $SRC unreachable"; exit 1; }
@@ -135,6 +160,17 @@ pipeline {
           { echo "#BASELINE build=$BUILD_NUMBER target=$TGT"; cat "$BASE.tmp"; } > "$BASE"
           rm -f "$BASE.tmp"
           echo "baseline: $(grep -vc '^#' "$BASE" || true) topic(s) on $TGT before install"
+
+          # CLUSTER IDENTITY GATE. Both brokers are now proven usable, so compare what they actually
+          # ARE, not how they were spelled. Mirroring a topic onto its own cluster would make MM1
+          # consume its own output; identical cluster IDs mean exactly that, whatever the addresses.
+          SCID=$("$KBIN/kafka-cluster" cluster-id --bootstrap-server "$SRC" 2>/dev/null | awk '/Cluster ID:/ {print $NF; exit}') \
+            || { echo "FAIL: cannot read cluster id of source $SRC"; exit 1; }
+          TCID=$("$KBIN/kafka-cluster" cluster-id --bootstrap-server "$TGT" 2>/dev/null | awk '/Cluster ID:/ {print $NF; exit}') \
+            || { echo "FAIL: cannot read cluster id of target $TGT"; exit 1; }
+          [ -n "$SCID" ] && [ -n "$TCID" ] || { echo "FAIL: empty cluster id (source='$SCID' target='$TCID')"; exit 1; }
+          [ "$SCID" != "$TCID" ] || { echo "FAIL: $SRC and $TGT are the SAME Kafka cluster (id $SCID) -- a mirror would consume its own output"; exit 1; }
+          echo "cluster ids distinct: source=$SCID target=$TCID"
 
           # GROWTH GATE (fail-closed). A delta guard ALONE would launder pollution: junk created by
           # an earlier failed/aborted build lands in the next build's baseline and gets grandfathered
@@ -231,10 +267,16 @@ pipeline {
           # leaves ~one record per session date (4 records total on 2026-08-09), unlike an
           # append-only history topic where earliest would replay the whole retention window.
           # Re-copying after a group reset is harmless: identical keys, and compaction collapses them.
+          #
+          # offset.commit.interval.ms: MM1 commits the SOURCE offsets it has successfully produced.
+          # The payload-verification stage uses that committed offset as the proof that THIS unit
+          # has actually consumed past the reference record, so the default 60s would make every
+          # install stage sit and wait a minute for evidence it could have had in five seconds.
           cat > "$MDIR/consumer.properties" <<C
 bootstrap.servers=$SRC
 group.id=es-tape-zones-mirror-${TARGET_SPX_CLUSTER_IP}-${TARGET_PORT}-${TOPIC}
 auto.offset.reset=earliest
+offset.commit.interval.ms=5000
 key.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
 value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
 C
@@ -318,7 +360,30 @@ PL
         sh '''
           set -euo pipefail
           sleep 8
-          launchctl list | grep "$LABEL" || { echo "FAIL: service not running"; exit 1; }
+          # LIVENESS, not registration. `launchctl list | grep "$LABEL"` proves only that the job is
+          # LOADED: a KeepAlive unit whose program crashes on every start still appears there, with
+          # '-' in the PID column and its last exit status beside it. So parse the EXACT label row
+          # (field equality, not an unanchored regex -- $LABEL contains dots), demand a numeric PID,
+          # demand that the PID really is OUR mirror process, and re-check after a delay so a
+          # crash-restart loop (which changes the PID) cannot present itself as a healthy unit.
+          pid_of_label() {
+            launchctl list | awk -v L="$LABEL" -F'\\t' '$3 == L {print $1; found=1} END{ exit found?0:1 }'
+          }
+          PID1=$(pid_of_label) || { echo "FAIL: launchd unit $LABEL is not loaded"; exit 1; }
+          case "$PID1" in ''|*[!0-9]*) echo "FAIL: launchd unit $LABEL is loaded but NOT running (PID column='$PID1'); last status: $(launchctl list | awk -v L="$LABEL" -F'\\t' '$3 == L {print $2}')"; exit 1 ;; esac
+          # run-mirror.sh `exec`s kafka-mirror-maker, which itself `exec`s java, so the PID survives
+          # but the command line changes as the chain unwinds. $MDIR appears in EVERY phase (script
+          # path, --consumer.config argument, KAFKA_LOG4J_OPTS) and is unique to this (target,
+          # topic), so it is the phase-independent identity marker.
+          ps -p "$PID1" -o command= | grep -qF "$MDIR/" \
+            || { echo "FAIL: PID $PID1 registered for $LABEL is not this mirror's process (no $MDIR marker in its command line)"; exit 1; }
+          sleep 12
+          PID2=$(pid_of_label) || { echo "FAIL: launchd unit $LABEL disappeared while verifying"; exit 1; }
+          [ "$PID1" = "$PID2" ] || { echo "FAIL: $LABEL restarted between checks (PID $PID1 -> $PID2) -- the mirror is crash-looping"; exit 1; }
+          # By now (20s after load) the exec chain has reached the JVM, so demand the real thing.
+          ps -p "$PID2" -o command= | grep -qF "kafka.tools.MirrorMaker" \
+            || { echo "FAIL: PID $PID2 for $LABEL is not a MirrorMaker JVM: $(ps -p "$PID2" -o command= | head -c 200)"; exit 1; }
+          echo "launchd unit $LABEL alive and stable: PID $PID1 (kafka.tools.MirrorMaker)"
           # pollution guard: MM1 must NOT ADD es4.* / es.es.es / heartbeat / mm2 topics to the target.
           # Judged as a DELTA against the pre-install baseline captured in Preflight: topics that were
           # already there (prod's dead-MM2 leftovers) are grandfathered, anything new fails the build.
@@ -361,11 +426,18 @@ PL
         sh '''
           set -euo pipefail
           # The board payload is PLAIN JSON, not Avro, so there is no schema-registry id to check.
-          # This stage is the equally strict replacement: it proves, on the TARGET broker, that a
-          # real source record arrived BYTE-IDENTICAL (key and value) and that it satisfies the
-          # board's structural contract (parses as a JSON object carrying a `sessionDate` date
-          # string and a boolean `terminalFlushed`). A green launchd unit proves nothing about data;
-          # this is the check that does.
+          # This stage is the equally strict replacement, and it is deliberately a THREE-PART proof,
+          # because no one part is sufficient:
+          #   (a) THIS unit consumed: the MM1 consumer group on the SOURCE has a LIVE MEMBER and a
+          #       committed offset at or past the reference record. Without this, a reinstall over
+          #       an already-populated (and compacted, hence idempotent) target would find the
+          #       record from an EARLIER run and call a dead mirror healthy.
+          #   (b) the record is on the TARGET, identical in key and value to the source's.
+          #   (c) the target copy satisfies the board's structural contract.
+          # Note on (b): the comparison is on the console-consumer's rendered `key<SEP>value` line.
+          # That is equality of the rendered bytes, not of the raw record bytes; the assertions in
+          # (c) pin the encoding down (single line, no CR, UTF-8-decodable, exactly one separator,
+          # key == "ES|" + sessionDate) so the two coincide for this topic's contract.
           #
           # Reference record = the LAST record on the SOURCE. Preflight proved the source is
           # non-empty and single-partition, so partition 0 / (end-1) always exists.
@@ -382,44 +454,52 @@ PL
             --partition 0 --offset "$REFOFF" --max-messages 1 --timeout-ms 30000 \
             --property print.key=true --property key.separator="$KVSEP" > "$REF" 2>/dev/null || true
           [ -s "$REF" ] || { echo "FAIL: could not read source record at offset $REFOFF"; exit 1; }
-          RLINES=$(wc -l < "$REF" | tr -d ' ')
-          # One record MUST be one line. A multi-line value would make the byte-comparison below
-          # compare fragments, so refuse to reason about it at all.
-          [ "$RLINES" = "1" ] || { echo "FAIL: source record spans $RLINES lines; the board contract is one single-line JSON object per record"; exit 1; }
 
           # Structural contract on the reference record itself (fail-closed: any parse or type
-          # violation exits non-zero and fails the build).
-          KVSEP="$KVSEP" python3 - "$REF" <<'PY'
-import json, os, re, sys
-sep = os.environ["KVSEP"]
-line = open(sys.argv[1], encoding="utf-8").read().rstrip("\\n")
-if sep not in line:
-    sys.exit("FAIL: no key separator in the consumed record -- record was not read with print.key=true")
-key, value = line.split(sep, 1)
-try:
-    doc = json.loads(value)
-except Exception as exc:
-    sys.exit("FAIL: board value is not valid JSON: %s" % exc)
-if not isinstance(doc, dict):
-    sys.exit("FAIL: board value is not a JSON object (got %s)" % type(doc).__name__)
-sd = doc.get("sessionDate")
-if not isinstance(sd, str) or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", sd):
-    sys.exit("FAIL: board record has no valid `sessionDate` (got %r)" % (sd,))
-tf = doc.get("terminalFlushed")
-if not isinstance(tf, bool):
-    sys.exit("FAIL: board record has no boolean `terminalFlushed` (got %r)" % (tf,))
-print("source reference record OK: key=%s sessionDate=%s terminalFlushed=%s" % (key, sd, tf))
-PY
+          # violation exits non-zero and fails the build). Shared with the target-side check below.
+          KVSEP="$KVSEP" python3 "$WORKSPACE/scripts/kafka/assert-tape-zones-board-record.py" "$REF" "source reference"
 
-          # Now wait for THAT EXACT record (key + value bytes) to show up on the target. Retried,
-          # because MM1 has just started and may still be catching up; a timeout is a FAIL, never a
+          # (a) PROVE THIS UNIT CONSUMED. Committed offsets live on the SOURCE under the MM1 group,
+          # and a live group MEMBER can only exist while the MM1 process is running and joined. A
+          # crashed unit has no member; a unit that never read anything has no committed offset at
+          # or past SEND. Either one keeps this loop going until it fails.
+          GROUP="es-tape-zones-mirror-${TARGET_SPX_CLUSTER_IP}-${TARGET_PORT}-${TOPIC}"
+          GDESC="$MDIR/verify-group.txt"
+          GOK=0
+          for attempt in $(seq 1 20); do
+            rm -f "$GDESC"
+            if "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --describe --group "$GROUP" > "$GDESC" 2>"$GDESC.err"; then
+              # Columns: GROUP TOPIC PARTITION CURRENT-OFFSET LOG-END-OFFSET LAG CONSUMER-ID ...
+              # Require partition 0 of THIS topic: a numeric committed offset >= SEND and a
+              # CONSUMER-ID that is not the '-' placeholder (i.e. an assigned, live member).
+              if awk -v t="$TOPIC" -v want="$SEND" '$2 == t && $3 == "0" { if ($4 ~ /^[0-9]+$/ && $4 + 0 >= want + 0 && $7 != "-" && $7 != "") { ok = 1 } } END { exit ok ? 0 : 1 }' "$GDESC"; then
+                GOK=1; break
+              fi
+            fi
+            echo "attempt $attempt: MM1 group $GROUP not yet caught up to source offset $SEND with a live member; waiting 5s"
+            sleep 5
+          done
+          if [ "$GOK" != "1" ]; then
+            echo "FAIL: the MM1 consumer group $GROUP never reached source offset $SEND with a live member -- this unit is NOT consuming"
+            echo "--- last kafka-consumer-groups --describe output ---"; cat "$GDESC" 2>/dev/null || true
+            echo "--- stderr ---"; cat "$GDESC.err" 2>/dev/null || true
+            echo "--- mirror.err.log (tail) ---"; tail -30 "$MDIR/mirror.err.log" 2>/dev/null || true
+            exit 1
+          fi
+          echo "MM1 group $GROUP has a live member and has committed past source offset $SEND:"
+          cat "$GDESC"
+
+          # (b) Now require THAT EXACT rendered record on the target. The group proof above means
+          # the produce has already happened, so this normally matches on the first read; the short
+          # retry only covers the produce/commit ordering window. A timeout is a FAIL, never a
           # pass-with-a-warning.
           TOUT="$MDIR/verify-target-records.txt"
           TFOUND=0
-          for attempt in $(seq 1 12); do
+          for attempt in $(seq 1 6); do
             # A broker read error here must not abort the retry loop -- it is exactly the transient
             # this loop exists for. An unusable value is normalised to 0 and retried; running out of
-            # attempts is the FAIL.
+            # attempts is the FAIL. Consumer stderr is KEPT (not /dev/null'd) and printed on failure,
+            # so a misinvocation is never indistinguishable from "the record is not there yet".
             TEND=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null | awk -F: 'NR==1{print $3}') || TEND=""
             case "${TEND:-}" in ''|*[!0-9]*) TEND=0 ;; esac
             if [ "$TEND" -gt 0 ]; then
@@ -436,42 +516,28 @@ PY
               # consumer then stops on --timeout-ms instead of --max-messages; that is fine, we
               # grep whatever it managed to read and retry if the reference is not among it.
               "$KBIN/kafka-console-consumer" --bootstrap-server "$TGT" --topic "$TOPIC" \
-                --partition 0 --offset "$START" --max-messages "$CNT" --timeout-ms 15000 \
-                --property print.key=true --property key.separator="$KVSEP" > "$TOUT" 2>/dev/null || true
+                --partition 0 --offset "$START" --max-messages "$CNT" --timeout-ms 10000 \
+                --property print.key=true --property key.separator="$KVSEP" > "$TOUT" 2>"$TOUT.err" || true
               if [ -s "$TOUT" ] && grep -qxFf "$REF" "$TOUT"; then TFOUND=1; break; fi
             fi
             echo "attempt $attempt: target end offset=$TEND, reference record not mirrored yet; waiting 5s"
             sleep 5
           done
-          [ "$TFOUND" = "1" ] || { echo "FAIL: the source reference record never appeared on $TGT/$TOPIC -- the launchd unit is up but NO DATA is flowing"; exit 1; }
+          if [ "$TFOUND" != "1" ]; then
+            echo "FAIL: the source reference record never appeared on $TGT/$TOPIC even though the MM1 group committed past it"
+            echo "--- target consumer stderr ---"; tail -30 "$TOUT.err" 2>/dev/null || true
+            echo "--- mirror.err.log (tail) ---"; tail -30 "$MDIR/mirror.err.log" 2>/dev/null || true
+            exit 1
+          fi
 
-          # Re-assert the structural contract against the TARGET copy. Byte-identity already implies
-          # it, but this is what the /zones page actually reads, so it is what gets proved.
+          # (c) Re-assert the structural contract against the TARGET copy. Line equality already
+          # implies it, but this is what the /zones page actually reads, so it is what gets proved.
           TREF="$MDIR/verify-target-record.txt"
           grep -xFf "$REF" "$TOUT" | tail -1 > "$TREF"
           [ -s "$TREF" ] || { echo "FAIL: matched record vanished from $TOUT"; exit 1; }
-          KVSEP="$KVSEP" python3 - "$TREF" <<'PY'
-import json, os, re, sys
-sep = os.environ["KVSEP"]
-line = open(sys.argv[1], encoding="utf-8").read().rstrip("\\n")
-if sep not in line:
-    sys.exit("FAIL: no key separator in the mirrored record")
-key, value = line.split(sep, 1)
-try:
-    doc = json.loads(value)
-except Exception as exc:
-    sys.exit("FAIL: mirrored board value is not valid JSON: %s" % exc)
-if not isinstance(doc, dict):
-    sys.exit("FAIL: mirrored board value is not a JSON object (got %s)" % type(doc).__name__)
-sd, tf = doc.get("sessionDate"), doc.get("terminalFlushed")
-if not isinstance(sd, str) or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}", sd):
-    sys.exit("FAIL: mirrored board record has no valid `sessionDate` (got %r)" % (sd,))
-if not isinstance(tf, bool):
-    sys.exit("FAIL: mirrored board record has no boolean `terminalFlushed` (got %r)" % (tf,))
-print("MIRRORED RECORD VERIFIED on the target: key=%s sessionDate=%s terminalFlushed=%s engineVersion=%s"
-      % (key, sd, tf, doc.get("engineVersion")))
-PY
-          echo "PAYLOAD VERIFIED: byte-identical board record present on $TGT/$TOPIC."
+          KVSEP="$KVSEP" python3 "$WORKSPACE/scripts/kafka/assert-tape-zones-board-record.py" "$TREF" "mirrored target"
+          echo "PAYLOAD VERIFIED on $TGT/$TOPIC: MM1 group caught up with a live member, and the"
+          echo "source's newest board record is present with an identical key and value."
         '''
       }
     }
