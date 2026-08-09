@@ -156,6 +156,7 @@ use constant ERROR_CODES => {
   issue_type_required                     => 100001,
   issue_type_unknown                      => 100002,
   issue_category_mismatch                 => 100004,
+  issue_type_resolution_mismatch          => 100011,
   issue_type_initial_status_unavailable   => 100005,
   issue_type_initial_status_needs_comment => 100006,
   issue_type_workflow_misconfigured       => 100007,
@@ -247,9 +248,17 @@ sub model_is_complete {
   # Optional by design: this is what leaves the pre-existing bugs alone.
   return 0 if $field->is_mandatory;
 
-  # Flat and uncontrolled: a controller on the category would make an
-  # editvalues.cgi edit the policy.
-  return 0 if $field->value_field;
+  # The category vocabulary is PRESENTED per issue type: the field is
+  # controlled by the type field, and each value carries the controller its
+  # prefix implies, so the form cannot offer a category from the other
+  # lifecycle. The per-value half is checked below, with the values.
+  #
+  # This once forbade a controller outright, reasoning that one would let
+  # editvalues.cgi edit the policy. Requiring the EXACT topology answers that
+  # concern more strictly: any rewiring through editvalues.cgi now makes the
+  # model incomplete, and an incomplete model fails closed.
+  my $value_field = $field->value_field;
+  return 0 if !$value_field || $value_field->name ne TYPE_FIELD;
   return 0 if $field->visibility_field;
 
   # cf_environment carries no policy, but it is part of the declared model. It is
@@ -277,10 +286,28 @@ sub model_is_complete {
     return 0 if !$live_type{$type};
   }
 
+  # Which type each category belongs to, from the policy itself rather than
+  # from the name - the BUG_/REQ_ prefixes are a convention for humans, and the
+  # allow-lists are what the extension actually enforces against.
+  my %category_type;
+  foreach my $type (keys %{(ALLOWED_CATEGORIES)}) {
+    $category_type{$_} = $type foreach keys %{ALLOWED_CATEGORIES->{$type}};
+  }
+
   my %live;
   foreach my $choice (@{Bugzilla::Field::Choice->type(CATEGORY_FIELD)->match({})}) {
     next if $choice->name eq UNSET;
     return 0 if !$choice->is_active;
+
+    # Every category must be shown for its own type and no other. A value left
+    # uncontrolled would be offered on both lifecycles; one pointed at the
+    # wrong type would be offered on the wrong one. Either way the form and the
+    # policy disagree, and the model is not the one that was provisioned.
+    my $controller = $choice->visibility_value;
+    return 0 if !$controller;
+    my $belongs_to = $category_type{$choice->name} or return 0;
+    return 0 if $controller->name ne $belongs_to;
+
     $live{$choice->name} = 1;
   }
   my %want;
@@ -457,18 +484,40 @@ sub bug_check_can_change_field {
     return;
   }
 
+  # From here on the refusal is explained rather than disguised as a privilege
+  # problem. _deny() makes core say "only a user with the required permissions
+  # may change that field", which is simply untrue - no privilege lets a BUG
+  # take a REQ_ category - and it sends the reader looking for an admin who
+  # cannot help them.
+  #
+  # Throwing is safe for exactly these two fields. Every render-time call for a
+  # custom field is the editability probe (field.name, 0, 1), handled above;
+  # the one place core evaluates REAL values while drawing a page is
+  # _refine_available_statuses (Bug.pm:3926), and that asks only about
+  # bug_status - which is why bug_status keeps _deny, where being refused
+  # quietly filters the dropdown to the item's own lifecycle.
   if ($field eq 'resolution') {
 
     # Clearing the resolution (reopening) is always allowed; core keeps the
     # open-status/empty-resolution invariant itself.
     return if !defined $new_value || $new_value eq '';
-    return _deny($priv_results) if !ALLOWED_RESOLUTIONS->{$type}{$new_value};
-    return;
+    return if ALLOWED_RESOLUTIONS->{$type}{$new_value};
+    ThrowUserError('issue_type_resolution_mismatch', {
+      issue_type => $type,
+      resolution => $new_value,
+      # From the policy, so the message cannot drift out of date the way a
+      # hand-written list already did.
+      allowed    => [sort keys %{ALLOWED_RESOLUTIONS->{$type} || {}}],
+    });
   }
 
   if ($field eq CATEGORY_FIELD) {
-    return _deny($priv_results) if !_category_ok($type, $new_value);
-    return;
+    return if _category_ok($type, $new_value);
+    ThrowUserError('issue_category_mismatch', {
+      issue_type => $type,
+      category   => $new_value,
+      allowed    => [sort keys %{ALLOWED_CATEGORIES->{$type} || {}}],
+    });
   }
 
   return;
@@ -495,8 +544,11 @@ sub bug_end_of_create_validators {
     if !_is_known_type($type);
 
   my $category = $params->{+CATEGORY_FIELD};
-  ThrowUserError('issue_category_mismatch',
-    {issue_type => $type, category => $category})
+  ThrowUserError('issue_category_mismatch', {
+    issue_type => $type,
+    category   => $category,
+    allowed    => [sort keys %{ALLOWED_CATEGORIES->{$type} || {}}],
+    })
     if !_category_ok($type, $category);
 
   # Canonicalise the entry point.

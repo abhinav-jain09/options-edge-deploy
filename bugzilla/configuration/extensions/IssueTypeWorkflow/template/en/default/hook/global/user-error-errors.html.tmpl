@@ -13,8 +13,26 @@
 [% ELSIF error == "issue_category_mismatch" %]
   [% title = "Category Does Not Match Issue Type" %]
   The category <em>[% category FILTER html %]</em> does not belong to issue type
-  <em>[% issue_type FILTER html %]</em>. Bug categories are prefixed <em>BUG_</em> and requirement categories
-  <em>REQ_</em>. Leaving the category empty is always allowed.
+  <em>[% issue_type FILTER html %]</em>. Leaving the category empty is always
+  allowed. This is not a permissions problem - no account can put a category of
+  one issue type on an item of the other.
+  [% IF allowed.size %]
+    <p>Allowed for <em>[% issue_type FILTER html %]</em>:
+    [% FOREACH c = allowed %]<em>[% c FILTER html %]</em>[% ', ' UNLESS loop.last %][% END %].</p>
+  [% END %]
+
+[% ELSIF error == "issue_type_resolution_mismatch" %]
+  [% title = "Resolution Does Not Match Issue Type" %]
+  <em>[% resolution FILTER html %]</em> is not a resolution an item of type
+  <em>[% issue_type FILTER html %]</em> can be closed with.
+  [%# Listed from the policy itself. Spelling the sets out by hand is how this
+      message came to claim a bug could only be FIXED, when INVALID, WONTFIX,
+      DUPLICATE and WORKSFORME are equally allowed. %]
+  [% IF allowed.size %]
+    Allowed for <em>[% issue_type FILTER html %]</em>:
+    [% FOREACH r = allowed %]<em>[% r FILTER html %]</em>[% ', ' UNLESS loop.last %][% END %].
+  [% END %]
+  This is not a permissions problem - no account can set it.
 
 [% ELSIF error == "issue_type_initial_status_unavailable" %]
   [% title = "Lifecycle Entry Point Missing" %]
