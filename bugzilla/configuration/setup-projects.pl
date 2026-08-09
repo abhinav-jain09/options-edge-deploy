@@ -370,6 +370,26 @@ sub validate_state {
     fatal("initial status '$initial' for '$type' is a closed status")
       if !$status_is_open{$initial};
 
+    # Every additional entry point has to clear the same three bars, or the
+    # extension would honour a reporter's choice that leads nowhere: it must be
+    # on this type's lifecycle, be creatable at all, and be open. The default
+    # must itself be one of them, otherwise the fallback is unreachable.
+    my $entry = $enf->{initial_statuses}{$type};
+    fatal("enforcement.initial_statuses has no entry for '$type'")
+      if ref($entry) ne 'ARRAY' || !@$entry;
+    foreach my $status (@$entry) {
+      fatal("enforcement.initial_statuses['$type'] names '$status', which is "
+          . 'not in allowed_statuses for that type')
+        if !grep { $_ eq $status } @{$enf->{allowed_statuses}{$type}};
+      fatal("entry point '$status' for '$type' has no bug-creation edge")
+        if !$seen_edge{"|$status"};
+      fatal("entry point '$status' for '$type' is a closed status")
+        if !$status_is_open{$status};
+    }
+    fatal("enforcement.initial_status['$type'] ('$initial') is not among "
+        . 'that type\'s initial_statuses')
+      if !grep { $_ eq $initial } @$entry;
+
     # The category vocabulary is compiled into the extension as well as being
     # expressed as each value's controller, so all three must agree.
     my @declared_categories
@@ -436,7 +456,8 @@ sub validate_extension_agreement {
   foreach my $pair (
     ['ALLOWED_STATUSES',    $enf->{allowed_statuses}],
     ['ALLOWED_RESOLUTIONS', $enf->{allowed_resolutions}],
-    ['ALLOWED_CATEGORIES',  $enf->{allowed_categories}]
+    ['ALLOWED_CATEGORIES',  $enf->{allowed_categories}],
+    ['INITIAL_STATUSES',    $enf->{initial_statuses}]
     )
   {
     my ($name, $want) = @$pair;
