@@ -376,6 +376,17 @@ sub bug_check_can_change_field {
 
   return if !defined $field || !GUARDED_FIELDS->{$field};
 
+  # Bugzilla asks "is this field editable at all?" with a placeholder NEW value
+  # of 1 - check_can_change_field($field, 0, 1) in bug/edit.html.tmpl, and
+  # check_can_change_field('resolution', bug.resolution, 1) in knob.html.tmpl,
+  # so the OLD side varies and cannot be relied on. Judging those as a real
+  # change renders the field READ-ONLY for everybody, which is how Category and
+  # Resolution vanished from the edit form.
+  #
+  # 1 is not a legal value of any field this extension guards, so it is
+  # unambiguous here.
+  my $is_probe = defined $new_value && "$new_value" eq '1';
+
   my $state = _enforcement_state();
   return if $state eq 'off';
   return _deny($priv_results) if $state eq 'broken';
@@ -383,6 +394,19 @@ sub bug_check_can_change_field {
   return if !blessed($bug) || !$bug->isa('Bugzilla::Bug') || !$bug->id;
 
   my $type = _type_of_bug($bug);
+
+  # An editability probe carries no value to judge. Category, status and
+  # resolution ARE editable - answering "no" makes Bugzilla render them
+  # read-only - so let the probe through and judge the real submission later.
+  # The type is the exception: it is immutable once set, and rendering it
+  # read-only is exactly right.
+  if ($is_probe) {
+    return if $field ne TYPE_FIELD;
+    my $accessor = TYPE_FIELD;
+    my $stored = $bug->can($accessor) ? $bug->$accessor : $bug->{+TYPE_FIELD};
+    return _deny($priv_results) if _is_known_type($stored);
+    return;
+  }
 
   # The type is immutable once set - changing it would strand the item on a
   # status and category belonging to the other lifecycle. A LEGACY item (no
@@ -431,9 +455,9 @@ sub bug_check_can_change_field {
 }
 
 # Runs at the end of Bugzilla::Bug::run_create_validators: after every field has
-# been validated but before any row is written. bug_status is a Bugzilla::Status
-# OBJECT (Bug.pm:1540), custom selects are strings, and the product has already
-# been resolved into $params->{product_id}.
+# been validated but before any row is written. bug_status is a STRING here -
+# _check_bug_status returns $new_status->name (Bug.pm:1588) - as are the custom
+# selects.
 sub bug_end_of_create_validators {
   my ($self, $args) = @_;
   my $params = $args->{params};
@@ -478,7 +502,10 @@ sub bug_end_of_create_validators {
     if $initial->comment_required_on_change_from(undef)
     && !(defined $text && $text =~ /\S/);
 
-  $params->{bug_status} = $initial;
+  # The NAME, not the object: _check_bug_status returns $new_status->name
+  # (Bug.pm:1588), so params carries a string here. Assigning the object would
+  # write "Bugzilla::Status=HASH(0x...)" into bugs.bug_status.
+  $params->{bug_status} = $initial->name;
 
   # _check_bug_status derived everconfirmed from the status it saw
   # (Bug.pm:1584), before we replaced it.
