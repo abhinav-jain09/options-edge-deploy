@@ -27,10 +27,27 @@ extension's own 1000xx codes on creation). A 401 from a bad API key, a 404 or a
 Exits non-zero if anything fails. It changes no configuration, but it does file
 smoke-test bugs (summary prefix [SMOKE]) and closes them again on the way out.
 
-Run it ON the Bugzilla host against loopback: the API key is sent as a header,
-and this instance speaks plain HTTP, so a remote run exposes an admin key to
-anyone who can see that segment. A non-loopback http:// URL needs
---allow-remote-http.
+Run it ON the Bugzilla host against loopback. This instance speaks plain HTTP,
+so a remote run exposes an admin key to anyone who can see that segment. A
+non-loopback http:// URL needs --allow-remote-http.
+
+HOW THE KEY IS SENT, AND WHY IT ENDS UP IN A LOG
+------------------------------------------------
+Bugzilla 5.2 has no X-BUGZILLA-API-KEY header. Auth/Login/APIKey.pm reads the
+key from `Bugzilla->input_params->{Bugzilla_api_key}` and nothing else, and
+WebService/Server/REST.pm parses a JSON body only when the method is NOT GET
+(_retrieve_json_params). So on a GET - which is every read this script makes -
+the key can only travel in the QUERY STRING, and Apache's combined log format
+records the query string.
+
+That means each run writes the admin API key into access.log in clear text.
+This is a property of Bugzilla 5.2, not of this script; the header approach
+this file used to describe never worked here and silently fell back to
+anonymous, unauthenticated requests.
+
+Treat the key as disclosed to anyone who can read that log, and prefer one of:
+  * redact query strings for this vhost, e.g. log "%m %U" instead of "%r";
+  * or rotate the key after each run (Preferences -> API Keys).
 
   read -rs BZ_API_KEY; export BZ_API_KEY
   ./verify-projects.py --state expected-state.json
@@ -159,8 +176,11 @@ def require_shape(state):
                 need(value, "issue_type", str, "fields.cf_category.values[].")
 
     for product in state["products"]:
-        for key in ("name", "description", "classification", "default_milestone",
-                    "issue_type"):
+        # No issue_type here: the type is a per-BUG field, so every product
+        # holds both kinds. An earlier design derived it from the product and
+        # this check outlived it.
+        for key in ("name", "description", "classification",
+                    "default_milestone"):
             need(product, key, str, "products[].")
         for key in ("is_active", "allows_unconfirmed"):
             need(product, key, bool, "products[].")
@@ -178,13 +198,28 @@ class Bz:
             _NoRedirect, urllib.request.ProxyHandler({}))
 
     def _request(self, method, path, payload=None):
+        # Bugzilla 5.2 reads the key from input_params only (Auth/Login/
+        # APIKey.pm), and REST parses a body only for non-GET requests
+        # (_retrieve_json_params). So a GET must carry it in the query string;
+        # for anything else it goes in the body, where no log will see it.
+        # See the module docstring - each GET therefore writes the key into
+        # Apache's access log.
+        payload_out = payload
         url = f"{self.base}/rest{path}"
-        data = json.dumps(payload).encode() if payload is not None else None
+        if self.api_key:
+            if method == "GET":
+                sep = "&" if "?" in url else "?"
+                url += sep + urllib.parse.urlencode(
+                    {"Bugzilla_api_key": self.api_key})
+            else:
+                payload_out = dict(payload or {})
+                payload_out["Bugzilla_api_key"] = self.api_key
+
+        data = (json.dumps(payload_out).encode()
+                if payload_out is not None else None)
         req = urllib.request.Request(url, data=data, method=method)
         req.add_header("Content-Type", "application/json")
         req.add_header("Accept", "application/json")
-        if self.api_key:
-            req.add_header("X-BUGZILLA-API-KEY", self.api_key)
 
         try:
             with self.opener.open(req, timeout=30) as resp:
@@ -415,13 +450,18 @@ def verify_custom_fields(fields, state):
             eq(f"field {name} value '{want['value']}' sort_key",
                got.get("sort_key"), want["sortkey"])
             # Bugzilla 5.2 stores one controller per value, so this list is
-            # either empty or exactly one issue type long.
-            # No choice carries its own controller in this model: cf_category
-            # is a flat vocabulary the extension checks against the
-            # product-derived type, and cf_environment is controlled at FIELD
-            # level by product.
-            eq(f"field {name} value '{want['value']}' has no value controller",
-               got.get("visibility_values") or [], [])
+            # either empty or exactly one entry long.
+            #
+            # A cf_category value is controlled by the issue type it belongs
+            # to, so the form only offers categories of the item's own type.
+            # Everything else in this model is uncontrolled. This used to
+            # assert that NOTHING carried a controller, which was true of an
+            # earlier design and is now the opposite of the requirement.
+            controllers = got.get("visibility_values") or []
+            want_controller = ([want["issue_type"]]
+                               if want.get("issue_type") else [])
+            eq(f"field {name} value '{want['value']}' value controller",
+               controllers, want_controller)
 
 
 def verify_statuses_and_workflow(fields, state):
@@ -430,7 +470,12 @@ def verify_statuses_and_workflow(fields, state):
     if not check("bug_status field present", field is not None):
         return
 
-    values = {v["name"]: v for v in field.get("values", [])}
+    # REST returns the "no status" placeholder - the one carrying the
+    # bug-creation edges - with a null name, while the state file spells that
+    # same thing "". Normalise to "" so the two line up: keeping None made
+    # sorting raise TypeError and aborted the run, and dropping the entry
+    # instead left the creation edges unverifiable.
+    values = {(v.get("name") or ""): v for v in field.get("values", [])}
     eq("status set", sorted(n for n in values if n != ""),
        sorted(s["value"] for s in state["statuses"]))
 
@@ -526,6 +571,17 @@ class Walker:
             "description": "Filed by verify-projects.py. Closed automatically.",
             "cf_issue_type": issue_type,
             "cf_category": category,
+            # This installation leaves defaultplatform/defaultopsys empty, so
+            # Bugzilla refuses a filing that omits them ("You must select/enter
+            # a OS"). The web form fills them in from the browser; a REST
+            # client has to say so itself.
+            "op_sys": "Other",
+            "rep_platform": "Other",
+            # Sent explicitly rather than relying on defaultpriority. That
+            # param is verified separately, and a check that silently depends
+            # on the thing it is checking proves nothing.
+            "priority": "---",
+            "severity": "normal",
         }
         payload.update(extra or {})
         status, body = self.bz.post("/bug", payload)
@@ -555,6 +611,20 @@ class Walker:
         return (bug["status"], bug["resolution"], bug["cf_issue_type"],
                 bug["cf_category"])
 
+    def product_of_bug(self, bug_id):
+        """Deliberately NOT part of state_of(): that tuple is the lifecycle
+        state compared before and after every refusal, and the product is not
+        part of it. Indexing state_of() for the product is how the old
+        product-move probe came to compare a product name against an issue
+        type."""
+        status, body = self.bz.get(f"/bug/{bug_id}")
+        bugs = body.get("bugs")
+        if (status >= 400 or not isinstance(bugs, list) or not bugs
+                or "product" not in bugs[0]):
+            raise BzTransportError(
+                f"cannot read the product of bug {bug_id} (HTTP {status})")
+        return bugs[0]["product"]
+
     def expect_allowed(self, label, bug_id, **fields):
         status, body = self.move(bug_id, **fields)
         check(f"allowed: {label}", status < 400 and not body.get("error"),
@@ -572,6 +642,41 @@ class Walker:
               status == HTTP_BAD_REQUEST and code == want,
               f"expected HTTP {HTTP_BAD_REQUEST} code {want} ({error}), got "
               f"HTTP {status} code {code}: {body.get('message','')[:160]}")
+        eq(f"unchanged after denying: {label}", self.state_of(bug_id), before)
+
+    def expect_denied_status(self, label, bug_id, **fields):
+        """A cross-lifecycle STATUS change, refused as an impossible
+        transition. Pinned to that one code so a genuine privilege problem, a
+        404 or a 500 cannot pass as enforcement."""
+        want = self.enf["error_codes"]["core_illegal_bug_status_transition"]
+        before = self.state_of(bug_id)
+        status, body = self.move(bug_id, **fields)
+        code = body.get("code")
+        check(f"denied: {label}",
+              status == HTTP_BAD_REQUEST and code == want,
+              f"expected HTTP {HTTP_BAD_REQUEST} code {want}, got HTTP {status} "
+              f"code {code}: {body.get('message','')[:160]}")
+        eq(f"unchanged after denying: {label}", self.state_of(bug_id), before)
+
+    def expect_denied_any(self, label, bug_id, **fields):
+        """Refused, by any of THIS policy's refusals - core's illegal_change or
+        one of the extension's own codes - and nothing moved.
+
+        For submissions where several guards apply at once and the winner is
+        decided by set_all's field ordering rather than by policy. A stray 404,
+        500 or auth failure still fails: the code has to be one we recognise.
+        """
+        want = {self.enf["error_codes"]["core_illegal_change"],
+                self.enf["error_codes"]["core_illegal_bug_status_transition"]}
+        want |= set(self.enf["error_codes"]["extension"].values())
+        before = self.state_of(bug_id)
+        status, body = self.move(bug_id, **fields)
+        code = body.get("code")
+        check(f"denied: {label}",
+              status in (HTTP_DENIED, HTTP_BAD_REQUEST) and code in want,
+              f"expected HTTP {HTTP_DENIED}/{HTTP_BAD_REQUEST} with one of "
+              f"{sorted(want)}, got HTTP {status} code {code}: "
+              f"{body.get('message','')[:160]}")
         eq(f"unchanged after denying: {label}", self.state_of(bug_id), before)
 
     def expect_denied(self, label, bug_id, **fields):
@@ -607,15 +712,26 @@ class Walker:
                  "extension-only")
             return
         for target in illegal:
-            self.expect_denied(f"{issue_type} on '{current}' -> '{target}'",
-                               bug_id, status=target)
+            # A refused STATUS surfaces as illegal_bug_status_transition, not
+            # illegal_change. The extension denies through priv_results, which
+            # makes _refine_available_statuses drop the target from the
+            # available list, so core rejects it as an impossible transition
+            # before it ever weighs privileges. That filtering is deliberate -
+            # it is what keeps the dropdown showing one lifecycle.
+            self.expect_denied_status(
+                f"{issue_type} on '{current}' -> '{target}'",
+                bug_id, status=target)
 
     def probe_illegal_resolutions(self, bug_id, issue_type):
+        # Its own code, not core's illegal_change: refusing a resolution
+        # through priv_results made Bugzilla claim a permissions problem, which
+        # was untrue and unactionable, so the extension throws instead.
         allowed = set(self.enf["allowed_resolutions"][issue_type])
         for resolution in sorted(
                 {r["value"] for r in self.state["resolutions"]} - allowed):
-            self.expect_denied(
-                f"{issue_type} resolved '{resolution}'", bug_id,
+            self.expect_denied_with(
+                f"{issue_type} resolved '{resolution}'",
+                "issue_type_resolution_mismatch", bug_id,
                 status="RESOLVED", resolution=resolution)
 
     def probe_allowed_resolutions(self, bug_id, issue_type, reopen_to):
@@ -643,8 +759,9 @@ class Walker:
             if other == issue_type:
                 continue
             for value in values:
-                self.expect_denied(f"{issue_type} given category '{value}'",
-                                   bug_id, cf_category=value)
+                self.expect_denied_with(
+                    f"{issue_type} given category '{value}'",
+                    "issue_category_mismatch", bug_id, cf_category=value)
 
     def probe_combined_illegal(self, bug_id, issue_type):
         """Several guarded fields changing at once, which is where a
@@ -655,12 +772,17 @@ class Walker:
              if s in self.enf["allowed_statuses"][other]
              and s not in self.enf["allowed_statuses"][issue_type]), None)
         if other_status:
-            self.expect_denied(
+            # Deliberately NOT pinned to one code. Several guards apply at
+            # once and which fires first is set_all's field ordering, not
+            # policy; asserting a particular code here would be asserting that
+            # ordering. What must hold is that it is refused and nothing moved.
+            self.expect_denied_any(
                 f"{issue_type}: status+resolution+category all flipped to "
                 f"{other}'s", bug_id, status=other_status, resolution="",
                 cf_category=self.categories[other][0])
-        self.expect_denied(
-            f"{issue_type}: given {other}'s category", bug_id,
+        self.expect_denied_with(
+            f"{issue_type}: given {other}'s category",
+            "issue_category_mismatch", bug_id,
             cf_category=self.categories[other][0])
 
         # Clearing the category must be ALLOWED: an empty category is what
@@ -671,30 +793,38 @@ class Walker:
            _unset(self.state_of(bug_id)[3]), "")
 
     def probe_product_moves(self, bug_id, issue_type):
-        """The product IS the type, so a cross-type move would change the
-        item's lifecycle underneath it; a same-type move is ordinary."""
-        for other_type, products in self.product_of.items():
-            if other_type == issue_type:
-                continue
-            self.expect_denied_with(
-                f"{issue_type} moved to '{products[0]}' ({other_type})",
-                "issue_product_move_cross_type", bug_id,
-                product=products[0], component="General",
-                version=self.version_of(products[0]))
+        """A move between products is ordinary, and must not disturb the type.
 
-        same = [p for p in self.product_of[issue_type]
-                if p != self.state_of(bug_id)[2]]
-        if same:
-            home = self.state_of(bug_id)[2]
-            self.expect_allowed(f"{issue_type} moved to '{same[0]}' (same type)",
-                                bug_id, product=same[0], component="General",
-                                version=self.version_of(same[0]))
-            eq(f"{issue_type} really is in '{same[0]}' now",
-               self.state_of(bug_id)[2], same[0])
-            self.expect_allowed(f"{issue_type} moved back to '{home}'", bug_id,
-                                product=home, component="General",
-                                version=self.version_of(home))
-            eq(f"{issue_type} is back in '{home}'", self.state_of(bug_id)[2], home)
+        The type is a per-bug field, so every product holds both kinds and no
+        move is cross-lifecycle. This once asserted the opposite - that moving
+        to another product was refused - because an earlier design derived the
+        type FROM the product. What matters now is the other half: that the
+        item keeps its type, status and category across the move, since those
+        are what the lifecycle is enforced against.
+        """
+        home = self.product_of_bug(bug_id)
+        elsewhere = [p for p in self.products if p != home]
+        if not elsewhere:
+            skip(f"{issue_type} product move", "only one product is declared")
+            return
+
+        for target in elsewhere:
+            before = self.state_of(bug_id)
+            self.expect_allowed(f"{issue_type} moved to '{target}'", bug_id,
+                                product=target, component="General",
+                                version=self.version_of(target))
+            eq(f"{issue_type} really is in '{target}' now",
+               self.product_of_bug(bug_id), target)
+            # The whole lifecycle state - status, resolution, type, category -
+            # must survive a move untouched. Only the product may differ.
+            eq(f"{issue_type} kept its lifecycle across the move to '{target}'",
+               self.state_of(bug_id), before)
+
+        self.expect_allowed(f"{issue_type} moved back to '{home}'", bug_id,
+                            product=home, component="General",
+                            version=self.version_of(home))
+        eq(f"{issue_type} is back in '{home}'",
+           self.product_of_bug(bug_id), home)
 
 
 def walk_lifecycle(w, issue_type, product, path, closing_resolution):
@@ -708,8 +838,15 @@ def walk_lifecycle(w, issue_type, product, path, closing_resolution):
     bug_id = body["id"]
     print(f"  ....  bug {bug_id}")
 
-    initial = w.enf["initial_status"][issue_type]
-    eq(f"{issue_type} starts at '{initial}'", w.state_of(bug_id)[0], initial)
+    # Any DECLARED entry point, not just the default. A BUG filed by someone
+    # with editbugs lands on CONFIRMED, because core picks the first available
+    # status that is not UNCONFIRMED - and CONFIRMED is a legal entry point
+    # here, which is how 78 of the 178 pre-existing bugs were filed.
+    entry_points = w.enf["initial_statuses"][issue_type]
+    initial = w.state_of(bug_id)[0]
+    check(f"{issue_type} starts at a declared entry point",
+          initial in entry_points,
+          f"got '{initial}', want one of {entry_points}")
 
     current = initial
     w.probe_illegal_statuses(bug_id, issue_type, current)
@@ -765,11 +902,15 @@ def verify_every_product(w):
                      status < 400 and body.get("id"),
                      f"HTTP {status}: {json.dumps(body)[:200]}"):
             continue
-        eq(f"'{product}' {issue_type} starts at {w.enf['initial_status'][issue_type]}",
-           w.state_of(body["id"])[0], w.enf["initial_status"][issue_type])
+        entry_points = w.enf["initial_statuses"][issue_type]
+        got = w.state_of(body["id"])[0]
+        check(f"'{product}' {issue_type} starts at a declared entry point",
+              got in entry_points, f"got '{got}', want one of {entry_points}")
         other = next(t for t in w.enf["allowed_statuses"] if t != issue_type)
-        w.expect_denied(f"'{product}' {issue_type} given {other}'s category",
-                        body["id"], cf_category=w.categories[other][0])
+        w.expect_denied_with(
+            f"'{product}' {issue_type} given {other}'s category",
+            "issue_category_mismatch", body["id"],
+            cf_category=w.categories[other][0])
 
 
 def verify_creation_guards(w):
@@ -948,8 +1089,14 @@ def verify_bulk_atomicity(w):
         "resolution": "",
         "comment": {"body": "verify-projects.py bulk atomicity probe"},
     })
+    # The illegal half here is a cross-lifecycle STATUS, so it surfaces as
+    # illegal_bug_status_transition rather than illegal_change - see the
+    # error-code note in expected-state.json. What this actually proves is the
+    # two assertions below: neither bug moved.
     check("bulk update containing one illegal item is refused",
-          status == HTTP_DENIED and body.get("code") == w.denied_code,
+          status == HTTP_BAD_REQUEST
+          and body.get("code")
+              == w.enf["error_codes"]["core_illegal_bug_status_transition"],
           f"HTTP {status} code {body.get('code')}: {body.get('message','')[:160]}")
     eq("legal item in the bulk update was NOT changed", w.state_of(bug_id),
        before_bug)
@@ -1060,6 +1207,23 @@ def main():
         sys.exit(f"{args.state}: {exc}")
 
     bz = Bz(args.base_url, api_key)
+
+    # Prove the key actually authenticates before anything else runs.
+    #
+    # Bugzilla answers some endpoints anonymously and refuses others, so a key
+    # that is not being applied at all does not announce itself - it shows up
+    # as a scatter of unrelated-looking failures much further down. That is
+    # exactly what happened when this script sent an X-BUGZILLA-API-KEY header
+    # that Bugzilla 5.2 does not read: version and parameters "passed" while
+    # every product read failed.
+    status, body = bz.get("/user?match=&include_fields=id,name")
+    if status >= 400 or not isinstance(body.get("users"), list):
+        sys.exit(
+            f"\nABORTED: the API key was not accepted (HTTP {status}): "
+            f"{str(body.get('message', body))[:200]}\n"
+            "Check the key is not revoked, and that it belongs to an account "
+            "that still exists.")
+    print(f"authenticated (key accepted by {args.base_url})\n")
 
     try:
         verify_version(bz, state)
