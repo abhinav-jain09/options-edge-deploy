@@ -73,7 +73,20 @@ while IFS= read -r name; do
       echo "FAIL: $overlay image basename '$base' != services.yaml image '$img'" >&2
       fail=1
     fi
-    # mirror rule: standalone render == the same workload extracted from the monolith
+    # mirror rule: standalone render == the same workload extracted from the monolith.
+    #
+    # It only applies to options-edge. The rule exists because a standalone slice and the
+    # monolithic overlay describe the SAME workload and must not drift — but a tenant service
+    # has no monolithic counterpart at all (the monolith renders one namespace, and it is not
+    # theirs). Diffing against it compares a real render with an empty one and always fails.
+    #
+    # The exemption is deliberately keyed on the registry's namespace, not on a name pattern:
+    # a service that forgets to declare its namespace stays under the rule, which is the safe
+    # direction to fail in.
+    svc_ns="$(yq -r ".services[] | select(.name == \"$name\") | .namespace // \"options-edge\"" services.yaml | head -1)"
+    if [ "$svc_ns" != "options-edge" ]; then
+      echo "  note: $name/$e mirror rule skipped (namespace '$svc_ns' has no monolithic overlay)"
+    else
     for dep in $(yq -r ".services[] | select(.name == \"$name\") | .deployments[]" services.yaml); do
       yq "select(.metadata.name == \"$dep\")" "$TMP/mono-$e.yaml" \
         | yq ea '[.] | sort_by(.kind) | .[] | splitDoc' >"$TMP/mirror-mono.yaml"
@@ -86,6 +99,7 @@ while IFS= read -r name; do
         fail=1
       fi
     done
+    fi
     # env image-tag CONSISTENCY guard (review): a service mapped in ANY image-tags env file
     # must be mapped in EVERY env it deploys to — a partial mapping means the production
     # fast path fails closed at deploy time (the render carries the base dev-registry ref
