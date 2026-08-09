@@ -268,15 +268,10 @@ pipeline {
           # append-only history topic where earliest would replay the whole retention window.
           # Re-copying after a group reset is harmless: identical keys, and compaction collapses them.
           #
-          # offset.commit.interval.ms: MM1 commits the SOURCE offsets it has successfully produced.
-          # The payload-verification stage uses that committed offset as the proof that THIS unit
-          # has actually consumed past the reference record, so the default 60s would make every
-          # install stage sit and wait a minute for evidence it could have had in five seconds.
           cat > "$MDIR/consumer.properties" <<C
 bootstrap.servers=$SRC
 group.id=es-tape-zones-mirror-${TARGET_SPX_CLUSTER_IP}-${TARGET_PORT}-${TOPIC}
 auto.offset.reset=earliest
-offset.commit.interval.ms=5000
 key.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
 value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
 C
@@ -294,6 +289,10 @@ log4j.appender.stdout.layout.ConversionPattern=%d{ISO8601} %-5p %c{1} - %m%n
 L
           # escape dots for the MM1 whitelist regex (exact single topic)
           RE=$(printf '%s' "$TOPIC" | sed 's/\\./\\\\./g')
+          # --offset.commit.interval.ms is a MIRRORMAKER CLI option, NOT a consumer property
+          # (kafka-mirror-maker --help; default 60000). It must be passed here or the committed
+          # offset -- which the payload stage uses as the per-install proof that THIS process
+          # consumed the reference record -- would lag by up to a minute on every install.
           cat > "$MDIR/run-mirror.sh" <<S
 #!/usr/bin/env bash
 set -euo pipefail
@@ -301,6 +300,7 @@ export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:$MDIR/log4j.properties"
 exec "$KBIN/kafka-mirror-maker" \\
   --consumer.config "$MDIR/consumer.properties" \\
   --producer.config "$MDIR/producer.properties" \\
+  --offset.commit.interval.ms 5000 \\
   --whitelist '$RE' --num.streams 1
 S
           chmod +x "$MDIR/run-mirror.sh"
@@ -327,6 +327,63 @@ S
           TRET=$(printf '%s\\n' "$TC" | awk '$1 ~ /^retention\\.ms=/ {print $1; exit}')
           [ "$TRET" = "retention.ms=$RET" ] || { echo "FAIL: target $TOPIC retention.ms is '${TRET:-<unset>}', want retention.ms=$RET"; exit 1; }
           echo "config generated; target $TOPIC verified: $PARTS partition(s), $POLICY, retention.ms=$RET"
+        '''
+      }
+    }
+
+    stage('Stop any running unit + arm per-install freshness') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          # WHY THIS STAGE EXISTS. The MM1 consumer group and the target topic both OUTLIVE an
+          # install, and the target is compacted, so a re-install of a BROKEN mirror could otherwise
+          # be verified entirely by artefacts of an earlier, working install: the reference record
+          # is already on the target, and the group's committed offset is already at the source end,
+          # so a fresh process could join the group, consume NOTHING, and still satisfy every check.
+          #
+          # So arm the verification: stop whatever is running for this (target, topic), snapshot the
+          # source end offset, and rewind the group to the reference record. The new process must
+          # then re-consume and re-produce that record itself before the committed offset can reach
+          # the snapshot again -- which is exactly the evidence the payload stage demands. Replaying
+          # one record into a compacted, keyed topic is idempotent: same key, same bytes.
+          GROUP="es-tape-zones-mirror-${TARGET_SPX_CLUSTER_IP}-${TARGET_PORT}-${TOPIC}"
+
+          # 1. snapshot the source end offset, and persist it: later stages are separate shells.
+          SEND=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | awk -F: 'NR==1{print $3}') \
+            || { echo "FAIL: cannot read source end offset for $TOPIC"; exit 1; }
+          case "${SEND:-}" in ''|*[!0-9]*) echo "FAIL: source end offset is not a number (got '${SEND:-}')"; exit 1 ;; esac
+          [ "$SEND" -gt 0 ] || { echo "FAIL: source topic $TOPIC is EMPTY"; exit 1; }
+          REFOFF=$((SEND - 1))
+          # Stamped with the build, exactly like the pollution baseline: a leftover file from an
+          # earlier build must never be able to stand in as this build's arming evidence.
+          printf 'build=%s send=%s\\n' "$BUILD_NUMBER" "$SEND" > "$MDIR/source-end-offset.txt"
+          echo "armed against source end offset $SEND (reference record at offset $REFOFF)"
+
+          # 2. stop this (target, topic) unit and WAIT for the process to be gone. --reset-offsets
+          # refuses to touch a group with an active member, and a surviving old process would also
+          # keep committing offsets underneath the verification.
+          launchctl unload "$PLIST" 2>/dev/null || true
+          pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
+          pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
+          GONE=0
+          for i in $(seq 1 30); do
+            if pgrep -f "$MDIR/" >/dev/null 2>&1; then sleep 2; else GONE=1; break; fi
+          done
+          [ "$GONE" = "1" ] || { echo "FAIL: a process for $MDIR is still running after unload:"; pgrep -fl "$MDIR/" || true; exit 1; }
+          echo "no process left for this unit"
+
+          # 3. rewind the group, if it exists at all. A group that does not exist yet needs nothing:
+          # auto.offset.reset=earliest already forces the new process to read the whole (compacted,
+          # tiny) log, which includes the reference record.
+          if "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --list 2>/dev/null | grep -qxF "$GROUP"; then
+            "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --group "$GROUP" \
+              --topic "$TOPIC:0" --reset-offsets --to-offset "$REFOFF" --execute \
+              || { echo "FAIL: could not rewind group $GROUP to offset $REFOFF -- the install cannot be honestly verified"; exit 1; }
+            echo "group $GROUP rewound to $REFOFF"
+          else
+            echo "group $GROUP does not exist yet; auto.offset.reset=earliest will seed it"
+          fi
         '''
       }
     }
@@ -428,10 +485,13 @@ PL
           # The board payload is PLAIN JSON, not Avro, so there is no schema-registry id to check.
           # This stage is the equally strict replacement, and it is deliberately a THREE-PART proof,
           # because no one part is sufficient:
-          #   (a) THIS unit consumed: the MM1 consumer group on the SOURCE has a LIVE MEMBER and a
-          #       committed offset at or past the reference record. Without this, a reinstall over
-          #       an already-populated (and compacted, hence idempotent) target would find the
-          #       record from an EARLIER run and call a dead mirror healthy.
+          #   (a) THIS unit consumed: the MM1 consumer group on the SOURCE has a LIVE MEMBER and has
+          #       committed back up to the offset snapshotted in the arming stage. Because that
+          #       stage stopped the old process and REWOUND the group to the reference record, the
+          #       committed offset can only get back there by this process re-consuming and (MM1
+          #       commits only after a successful produce) re-producing it. Without the rewind this
+          #       check was satisfiable by an earlier install's committed offset, so a dead mirror
+          #       over an already-populated compacted target would have passed.
           #   (b) the record is on the TARGET, identical in key and value to the source's.
           #   (c) the target copy satisfies the board's structural contract.
           # Note on (b): the comparison is on the console-consumer's rendered `key<SEP>value` line.
@@ -439,12 +499,14 @@ PL
           # (c) pin the encoding down (single line, no CR, UTF-8-decodable, exactly one separator,
           # key == "ES|" + sessionDate) so the two coincide for this topic's contract.
           #
-          # Reference record = the LAST record on the SOURCE. Preflight proved the source is
-          # non-empty and single-partition, so partition 0 / (end-1) always exists.
-          SEND=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | awk -F: 'NR==1{print $3}') \
-            || { echo "FAIL: cannot read source end offset for $TOPIC"; exit 1; }
-          case "${SEND:-}" in ''|*[!0-9]*) echo "FAIL: source end offset is not a number (got '${SEND:-}')"; exit 1 ;; esac
-          [ "$SEND" -gt 0 ] || { echo "FAIL: source $TOPIC went empty between Preflight and Verify"; exit 1; }
+          # Reference record = the record the arming stage rewound the group to. Read the SNAPSHOT,
+          # not a fresh end offset: the snapshot is what the rewind was computed against, and a
+          # record published since then would move the goalposts mid-proof.
+          SNAP="$MDIR/source-end-offset.txt"
+          [ -s "$SNAP" ] || { echo "FAIL: arming snapshot $SNAP missing -- cannot prove this install consumed anything"; exit 1; }
+          SEND=$(awk -v b="build=$BUILD_NUMBER" 'NR==1 && $1 == b { sub(/^send=/, "", $2); print $2 }' "$SNAP")
+          case "${SEND:-}" in ''|*[!0-9]*) echo "FAIL: arming snapshot is not from this build or is malformed (file: $(cat "$SNAP"))"; exit 1 ;; esac
+          [ "$SEND" -gt 0 ] || { echo "FAIL: arming snapshot is 0"; exit 1; }
           REFOFF=$((SEND - 1))
           REF="$MDIR/verify-source-record.txt"
           rm -f "$REF"
