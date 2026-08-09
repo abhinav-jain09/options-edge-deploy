@@ -76,4 +76,12 @@ ingress:
   # https://req.bleadingoptions.com/oauth2callback redirect URI.
   - hostname: req.bleadingoptions.com
     service: http://127.0.0.1:8092
+  # fullfunding.nl is NOT the trading platform any more. Phase 3 retired it from
+  # options-edge (see the note above); the domain now belongs to the FullFunding
+  # jaarrekening app, which is a different application in its own namespace.
+  # Static files only, served by traefik from the fullfunding namespace — so this
+  # goes to traefik on :80 and is matched by Host, not to a NodePort or ClusterIP
+  # that a Service recreation would invalidate.
+  - hostname: fullfunding.nl
+    service: http://127.0.0.1:80
   - service: http_status:404
