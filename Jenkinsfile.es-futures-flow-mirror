@@ -24,7 +24,14 @@ pipeline {
     string(name: 'SOURCE_PORT',          defaultValue: '9092',          description: 'Source Kafka port.')
     string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '127.0.0.1',     description: 'Target env broker IP (dev = 127.0.0.1).')
     string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092).')
-    string(name: 'TOPIC',                defaultValue: 'es.futures.aggressor-flow', description: 'Single topic to mirror (exact).')
+    // FROZEN ALLOW-LIST, not a free-text box (2026-08-10). As a `string` an operator could type any
+    // topic name, and this job would mirror it onto the target and CREATE it there with THIS
+    // topic's shape (1 partition, compact,delete) whatever the real one is. It would also be a
+    // topic nothing declares, so scripts/ci/validate-mirrored-topic-contracts.sh could not see it
+    // and cleanup-topics.sh would treat it as unwanted. The two sibling jobs
+    // (es-indicator/es-tape-zones) were already choice lists for this reason; the shape contract in
+    // 'Generate config' is only a contract if the topic it applies to cannot change under it.
+    choice(name: 'TOPIC', choices: ['es.futures.aggressor-flow'], description: 'Topic to mirror (frozen allow-list — the shape this job creates the target with is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
   }
   options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
