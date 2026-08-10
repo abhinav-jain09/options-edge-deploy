@@ -128,11 +128,18 @@ retention_in() { # list, topic -> declared override, or the literal <default> wh
 retention_of() { retention_in "$RETENTIONS" "$1"; }
 
 # --- what each mirror job says ------------------------------------------------------------------
-# The single topic (string param) or frozen allow-list (choice param) the job mirrors.
+# The frozen allow-list of topics the job may mirror. ONLY a `choice` parameter counts: a
+# `string(name: 'TOPIC', defaultValue: ...)` is a free-text box, so the default is a suggestion and
+# not a set. Reading the default as if it were the allow-list is how this validator could report
+# full coverage while an operator typed any name they liked into the same job — which would create
+# that topic on the target with THIS topic's hardcoded shape, undeclared and therefore invisible
+# both to this check and to cleanup-topics.sh's approved list. Enumerating a set the job does not
+# actually constrain is a coverage claim that is not true, so an unconstrained job is an error.
 job_topics() {
-  { sed -nE "s/.*(string|choice)\(name: 'TOPIC',.*/&/p" "$1" \
+  { sed -nE "s/.*choice\(name: 'TOPIC',.*/&/p" "$1" \
     | grep -oE "es\.[A-Za-z0-9._-]+" || true; } | sort -u
 }
+job_topic_is_freetext() { grep -qE "string\(name: 'TOPIC'," "$1"; }
 
 # The FROZEN per-topic contract arms: `<topic>) PARTS=1; POLICY=compact,delete; RET=-1 ;;`.
 # A job may repeat its arm (the tape-zones mirror asserts the contract against the source in
@@ -161,10 +168,18 @@ fi
 checked=0
 for job in "${JOBS[@]}"; do
   jobname="$(basename "$job")"
+  if job_topic_is_freetext "$job"; then
+    echo "FAIL: $jobname declares TOPIC as a free-text string parameter, so the set of topics it can"
+    echo "      mirror is unbounded and nothing here can cover it — an operator could run it against"
+    echo "      any name, and the job would create that topic on the target with the shape hardcoded"
+    echo "      for its default. Make it a choice() allow-list, as the sibling mirror jobs are."
+    fail=1
+    continue
+  fi
   topics="$(job_topics "$job")"
   if [ -z "$topics" ]; then
-    echo "FAIL: $jobname declares no TOPIC parameter this validator can read — it cannot be checked,"
-    echo "      and an unchecked mirror is how this failure class started. Update the parser."
+    echo "FAIL: $jobname declares no TOPIC choice() parameter this validator can read — it cannot be"
+    echo "      checked, and an unchecked mirror is how this failure class started. Update the parser."
     fail=1
     continue
   fi

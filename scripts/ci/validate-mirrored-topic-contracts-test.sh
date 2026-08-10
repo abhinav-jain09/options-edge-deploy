@@ -141,8 +141,13 @@ expect_fail "$R" "es4 retention declared twice" "declares the same topic more th
 echo "--- the parser itself must fail closed, never silently check less ---"
 R="$(mkfixture)"; edit "$R" Jenkinsfile.es-tape-zones-mirror 's/PARTS=1; POLICY=compact,delete; RET=-1/PARTS="1" ; POLICY="compact,delete" ; RET="-1"/'
 expect_fail "$R" "frozen arm reformatted out of recognition" "neither a frozen"
-R="$(mkfixture)"; edit "$R" Jenkinsfile.es-futures-flow-mirror "s/string(name: 'TOPIC',/string(name: 'MIRROR_TOPIC',/"
-expect_fail "$R" "TOPIC parameter renamed" "no TOPIC parameter"
+R="$(mkfixture)"; edit "$R" Jenkinsfile.es-futures-flow-mirror "s/choice(name: 'TOPIC',/choice(name: 'MIRROR_TOPIC',/"
+expect_fail "$R" "TOPIC parameter renamed" "no TOPIC choice"
+# A free-text TOPIC makes the job's topic set unbounded, so no enumeration can cover it. Reading the
+# defaultValue as if it were an allow-list would report full coverage over a set the job does not
+# constrain (found by Codex, fourth review pass).
+R="$(mkfixture)"; edit "$R" Jenkinsfile.es-strike-intel-mirror "s/choice(name: 'TOPIC', choices: \['es.strike-intelligence-by-strike'\]/string(name: 'TOPIC', defaultValue: 'es.strike-intelligence-by-strike'/"
+expect_fail "$R" "TOPIC downgraded to a free-text parameter" "free-text string parameter"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=.*$/OPTIONS_EDGE_ES4_COMPACTED_TOPICS=""/'
 expect_fail "$R" "a parsed declaration emptied" "parsed an EMPTY"
 R="$(mkfixture)"; rm -f "$R"/Jenkinsfile.es-*-mirror
