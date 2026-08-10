@@ -87,13 +87,40 @@ for v in DECLARED COMPACTED RETENTIONS ES4_DECLARED ES4_COMPACTED; do
   [ -n "${!v}" ] || { echo "FAIL: parsed an EMPTY $v from $TOPICS_ENV — the parser and the file have diverged, and the checks below would pass vacuously" >&2; exit 1; }
 done
 
+# NO TOPIC MAY BE DECLARED TWICE IN ONE LIST. This is rejected outright rather than resolved,
+# because every resolution rule is a different one and they do not agree:
+# apply-topics.sh's topic_retention_ms()/topic_cleanup_policy() RETURN ON THE FIRST match, while its
+# main loop iterates EVERY entry of OPTIONS_EDGE_TOPICS and calls alter_topic_config once per
+# occurrence — so for a duplicated topic the LAST entry decides the applied config while the FIRST
+# decides the retention within each call. A validator that picked either would be reporting a number
+# the deploy may not use, i.e. checking less than it claims while printing the contract back.
+# There are no duplicates today; this keeps it that way instead of encoding a precedence.
+dupes_in() { printf '%s\n' "$1" | sed -E "$2" | sort | uniq -d; }
+check_unique() { # human name, list, sed script reducing an entry to its topic name
+  local d; d="$(dupes_in "$2" "$3")"
+  [ -z "$d" ] && return 0
+  echo "FAIL: $1 in $TOPICS_ENV declares the same topic more than once:" >&2
+  printf '%s\n' "$d" | sed 's/^/        /' >&2
+  echo "      apply-topics.sh resolves a duplicate differently per call site, so no single declared" >&2
+  echo "      value can be checked. Remove the duplicate." >&2
+  exit 1
+}
+check_unique OPTIONS_EDGE_TOPICS                   "$DECLARED"      's/:[0-9]+$//'
+check_unique OPTIONS_EDGE_ES4_TOPICS               "$ES4_DECLARED"  's/:[0-9]+$//'
+check_unique OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES "$RETENTIONS"   's/=.*$//'
+check_unique OPTIONS_EDGE_COMPACTED_TOPICS         "$COMPACTED"     's/^//'
+check_unique OPTIONS_EDGE_ES4_COMPACTED_TOPICS     "$ES4_COMPACTED" 's/^//'
+
+# head -1, not tail -1: with duplicates rejected above these are single-valued, but where
+# apply-topics.sh does have a precedence it is FIRST match (topic_retention_ms returns on the first
+# hit), and a lookup here must never read a different entry than the deploy would.
 partitions_in() { # list, topic -> partition count, empty if undeclared
-  printf '%s\n' "$1" | awk -F: -v t="$2" '$1 == t { print $2 }' | tail -1
+  printf '%s\n' "$1" | awk -F: -v t="$2" '$1 == t { print $2 }' | head -1
 }
 in_list() { printf '%s\n' "$1" | grep -qx "$2"; }
 retention_of() { # topic -> declared override, or the literal <default> when unlisted
   local v
-  v="$(printf '%s\n' "$RETENTIONS" | awk -F= -v t="$1" '$1 == t { print $2 }' | tail -1)"
+  v="$(printf '%s\n' "$RETENTIONS" | awk -F= -v t="$1" '$1 == t { print $2 }' | head -1)"
   printf '%s\n' "${v:-<default>}"
 }
 

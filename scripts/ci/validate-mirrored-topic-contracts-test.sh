@@ -55,9 +55,26 @@ expect_fail() {
 }
 
 # sed -i is not portable between GNU and BSD, so every mutation rewrites through a temp file.
+#
+# A sed expression that matches NOTHING is the way this whole suite rots: the fixture stays pristine,
+# the validator correctly says OK, and expect_fail reports "expected FAILURE, validator said OK" —
+# which reads like a hole in the validator when it is really drift in the test. So assert here that
+# the file actually changed, and name the mutation that failed to apply.
 edit() { # root, relative path, sed script
-  local f="$1/$2"; shift 2
-  sed "$1" "$f" >"$f.new" && mv "$f.new" "$f"
+  local f="$1/$2" script="$3"
+  cp "$f" "$f.pre"
+  sed "$script" "$f.pre" >"$f"
+  if cmp -s "$f.pre" "$f"; then
+    printf '  FAIL %-52s sed matched nothing: %s\n' "(mutation setup)" "$script"; rc=1
+  fi
+  rm -f "$f.pre"
+}
+
+# Appending a whole assignment line, rather than splicing one in with sed: BSD and GNU sed disagree
+# about both ERE groups and `\n` in a replacement, and list_of collects EVERY assignment of a
+# variable wherever it appears, so the end of the file is as good as the middle.
+append_line() { # root, relative path, line
+  printf '%s\n' "$3" >>"$1/$2"
 }
 
 echo "--- baseline: the REAL declarations must pass ---"
@@ -90,6 +107,23 @@ R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/es\.tape-zones\.board:1 es\.tape-zone
 expect_fail "$R" "source and target disagree on partitions" "must agree"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.tape-zones\.cells es\.tape-zones\.board"/ es.tape-zones.cells"/'
 expect_fail "$R" "source and target disagree on compaction" "compaction disagrees across"
+
+echo "--- a duplicated declaration is rejected, not silently resolved ---"
+# apply-topics.sh resolves duplicates differently per call site (topic_retention_ms returns on the
+# FIRST match; the main loop calls alter_topic_config once per occurrence, so the LAST entry decides
+# the applied config). A validator that quietly picked one would approve a number the deploy may not
+# use. So both orders are exercised: one where only a FIRST-match reader sees the wrong value, one
+# where only a LAST-match reader does. Neither may pass.
+R="$(mkfixture)"
+edit "$R" "$TENV_REL" 's/es\.tape-zones\.board=-1/es.tape-zones.board=86400000/'
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="$OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES es.tape-zones.board=-1"'
+expect_fail "$R" "wrong retention, correct value duplicated after" "declares the same topic more than once"
+R="$(mkfixture)"
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_TOPICS es.tape-zones.board:32"'
+expect_fail "$R" "correct partitions, wrong value duplicated after" "declares the same topic more than once"
+R="$(mkfixture)"
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.futures.aggressor-flow"'
+expect_fail "$R" "compaction membership declared twice" "declares the same topic more than once"
 
 echo "--- the parser itself must fail closed, never silently check less ---"
 R="$(mkfixture)"; edit "$R" Jenkinsfile.es-tape-zones-mirror 's/PARTS=1; POLICY=compact,delete; RET=-1/PARTS="1" ; POLICY="compact,delete" ; RET="-1"/'
