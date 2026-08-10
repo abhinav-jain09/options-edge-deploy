@@ -2,7 +2,7 @@
 # validate-mirrored-topic-contracts.sh — CI invariant.
 #
 # Every topic an MM1 mirror job copies from es4 onto the dev/prod brokers must be DECLARED in the
-# default topic set of scripts/kafka/topics.env, with the SAME shape the mirror job states.
+# default topic set of scripts/kafka/topics.env, at the shape its mirror job states.
 #
 # WHY THIS EXISTS. A mirrored topic has two owners that each write its shape, and until they were
 # forced to agree they silently did not:
@@ -30,34 +30,67 @@
 # which is exactly the step that does not happen when the NEXT single-topic mirror is added. A new
 # Jenkinsfile.es-*-mirror is picked up here automatically and must bring its declaration with it.
 #
+# TWO CONTRACT SCHEMAS, BOTH EXPLICIT. The mirror jobs state their target's shape in one of two
+# ways, and a job that fits NEITHER is an error rather than a topic that quietly gets checked less:
+#
+#   FROZEN  — the job carries a per-topic case arm `<topic>) PARTS=n; POLICY=p; RET=r ;;` and
+#             asserts it. All three dimensions are authoritative and all three are checked.
+#   COPIED  — the job derives the target's shape from the SOURCE at install time. There is no
+#             number in the job to compare against, so the authority is es4's own declaration of
+#             the same topic in topics.env: the mirror is a byte-for-byte record copy, so the
+#             target's partition count IS the mirrored key->partition mapping and must equal the
+#             source's. Membership of the es4 set is REQUIRED under this schema, not optional.
+#             Its create-time `retention.ms` is deliberately NOT treated as a contract: --create
+#             --if-not-exists only binds a topic that does not exist yet, and the job never
+#             re-asserts the value, so the enforced number is whatever topics.env declares. That
+#             exemption is REPORTED per topic below rather than left implicit.
+#
+# Whenever a topic appears in BOTH the dev/prod and es4 sets, the two are cross-checked against each
+# other as well — a record copy whose source and target disagree about partitions or compaction is
+# the same defect wearing different clothes.
+#
 # Both files are PARSED, never sourced or executed.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-TOPICS_ENV="scripts/kafka/topics.env"
+# Injectable ONLY so scripts/ci/validate-mirrored-topic-contracts-test.sh can drive this script
+# against crafted fixtures. Unlike the reset keep-list's pinned path, an ambient override here is
+# harmless: this script reads, reports and exits, and can destroy nothing.
+ROOT="${MTC_ROOT:-.}"
+TOPICS_ENV="$ROOT/scripts/kafka/topics.env"
 fail=0
 
 [ -r "$TOPICS_ENV" ] || { echo "FAIL: cannot read $TOPICS_ENV" >&2; exit 1; }
 
-# --- the declared dev/prod set, resolved without sourcing --------------------------------------
-# OPTIONS_EDGE_TOPICS is assigned more than once (a base list plus append lines of the form
-# VAR="$VAR more:4"), so take the quoted value of EVERY assignment and concatenate. The es4 set
-# lives in its own OPTIONS_EDGE_ES4_* variables and is deliberately NOT matched: apply-topics.sh
-# swaps that set in wholesale under TOPIC_SET=es4, and these mirrors target dev/prod.
-declared_entries() { sed -nE 's/^OPTIONS_EDGE_TOPICS="(.*)"$/\1/p' "$TOPICS_ENV" | tr ' ' '\n' | grep -v '^\$OPTIONS_EDGE_TOPICS$' | grep -v '^$'; }
-compacted_list()   { sed -nE 's/^OPTIONS_EDGE_COMPACTED_TOPICS="(.*)"$/\1/p' "$TOPICS_ENV" | tr ' ' '\n' | grep -v '^\$OPTIONS_EDGE_COMPACTED_TOPICS$' | grep -v '^$'; }
-retention_pairs()  { sed -nE 's/^OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" | tr ' ' '\n' | grep -v '^$'; }
-
-DECLARED="$(declared_entries)"
-COMPACTED="$(compacted_list)"
-RETENTIONS="$(retention_pairs)"
-
-[ -n "$DECLARED" ] || { echo "FAIL: parsed an EMPTY declared topic set from $TOPICS_ENV — the parser and the file have diverged, and every check below would pass vacuously" >&2; exit 1; }
-
-declared_partitions() { # topic -> partition count, empty if undeclared
-  printf '%s\n' "$DECLARED" | awk -F: -v t="$1" '$1 == t { print $2 }' | tail -1
+# --- the declared sets, resolved without sourcing -----------------------------------------------
+# Each variable is assigned more than once (a base list plus append lines of the form
+# VAR="$VAR more:4"), so take the quoted value of EVERY assignment and concatenate, dropping the
+# self-reference token. The es4 set lives in its own OPTIONS_EDGE_ES4_* variables: apply-topics.sh
+# swaps that set in wholesale under TOPIC_SET=es4, so the two are read separately and compared,
+# never merged.
+# The trailing `|| true` is what lets the explicit emptiness guard below do the talking: a grep
+# that matches nothing exits 1, and under `set -e -o pipefail` that killed the whole script at the
+# assignment — failing closed, but with no diagnostic at all, which is indistinguishable from a
+# crash. An empty parse must be REPORTED as an empty parse.
+list_of() { # variable name -> its whitespace-split values, minus the "$VAR" self-reference
+  { sed -nE "s/^$1=\"(.*)\"$/\\1/p" "$TOPICS_ENV" | tr ' ' '\n' | grep -v "^\\\$$1$" | grep -v '^$'; } || true
 }
-is_compacted() { printf '%s\n' "$COMPACTED" | grep -qx "$1"; }
+
+DECLARED="$(list_of OPTIONS_EDGE_TOPICS)"
+COMPACTED="$(list_of OPTIONS_EDGE_COMPACTED_TOPICS)"
+RETENTIONS="$(list_of OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES)"
+ES4_DECLARED="$(list_of OPTIONS_EDGE_ES4_TOPICS)"
+ES4_COMPACTED="$(list_of OPTIONS_EDGE_ES4_COMPACTED_TOPICS)"
+
+# Fail closed on a parser that has drifted from the file, so no check below can pass vacuously.
+for v in DECLARED COMPACTED RETENTIONS ES4_DECLARED ES4_COMPACTED; do
+  [ -n "${!v}" ] || { echo "FAIL: parsed an EMPTY $v from $TOPICS_ENV — the parser and the file have diverged, and the checks below would pass vacuously" >&2; exit 1; }
+done
+
+partitions_in() { # list, topic -> partition count, empty if undeclared
+  printf '%s\n' "$1" | awk -F: -v t="$2" '$1 == t { print $2 }' | tail -1
+}
+in_list() { printf '%s\n' "$1" | grep -qx "$2"; }
 retention_of() { # topic -> declared override, or the literal <default> when unlisted
   local v
   v="$(printf '%s\n' "$RETENTIONS" | awk -F= -v t="$1" '$1 == t { print $2 }' | tail -1)"
@@ -71,7 +104,7 @@ job_topics() {
     | grep -oE "es\.[A-Za-z0-9._-]+" || true; } | sort -u
 }
 
-# The frozen per-topic contract arms: `<topic>) PARTS=1; POLICY=compact,delete; RET=-1 ;;`.
+# The FROZEN per-topic contract arms: `<topic>) PARTS=1; POLICY=compact,delete; RET=-1 ;;`.
 # A job may repeat its arm (the tape-zones mirror asserts the contract against the source in
 # Preflight and against the target when it creates it); identical repeats collapse, and a job that
 # contradicts ITSELF is reported rather than resolved by whichever copy sorts first.
@@ -80,26 +113,27 @@ job_contracts() {
     | sed -E 's/\) +PARTS=/ /; s/; *POLICY=/ /; s/; *RET=/ /' | sort -u
 }
 
-# The cleanup.policy the job passes to `kafka-topics --create` for its target. The jobs that carry
-# a frozen arm interpolate "$POLICY" there, so a literal value only appears for the jobs that do
-# not — which is precisely where it is the only statement of the policy.
+# The cleanup.policy a COPIED-schema job passes to `kafka-topics --create` for its target. The
+# FROZEN jobs interpolate "$POLICY" there, so a literal value only appears in the jobs that have no
+# arm — which is precisely where it is the only statement of the policy.
 job_literal_policy() {
   { grep -oE -- "--config cleanup\.policy=[a-z,]+" "$1" || true; } | sed -E 's/.*cleanup\.policy=//' | sort -u
 }
 
 shopt -s nullglob
-JOBS=(Jenkinsfile.es-*-mirror)
+JOBS=("$ROOT"/Jenkinsfile.es-*-mirror)
 shopt -u nullglob
 if [ "${#JOBS[@]}" -eq 0 ]; then
-  echo "FAIL: no Jenkinsfile.es-*-mirror found — the glob and the repo layout have diverged" >&2
+  echo "FAIL: no Jenkinsfile.es-*-mirror found under $ROOT — the glob and the repo layout have diverged" >&2
   exit 1
 fi
 
 checked=0
 for job in "${JOBS[@]}"; do
+  jobname="$(basename "$job")"
   topics="$(job_topics "$job")"
   if [ -z "$topics" ]; then
-    echo "FAIL: $job declares no TOPIC parameter this validator can read — it cannot be checked,"
+    echo "FAIL: $jobname declares no TOPIC parameter this validator can read — it cannot be checked,"
     echo "      and an unchecked mirror is how this failure class started. Update the parser."
     fail=1
     continue
@@ -113,9 +147,9 @@ for job in "${JOBS[@]}"; do
 
     # 1) DECLARED AT ALL. This is the deletion exposure: undeclared means absent from
     #    cleanup-topics.sh's approved list and unmatched by PROTECTED_TOPIC_REGEX.
-    parts="$(declared_partitions "$topic")"
+    parts="$(partitions_in "$DECLARED" "$topic")"
     if [ -z "$parts" ]; then
-      echo "FAIL: $job mirrors '$topic' onto the dev/prod brokers, but it is NOT declared in"
+      echo "FAIL: $jobname mirrors '$topic' onto the dev/prod brokers, but it is NOT declared in"
       echo "      OPTIONS_EDGE_TOPICS in $TOPICS_ENV. cleanup-topics.sh with"
       echo "      KAFKA_DELETE_UNWANTED_TOPICS=true would delete it as unwanted, and the mirror"
       echo "      would re-create it via broker auto-create at the DEFAULT shape."
@@ -123,70 +157,105 @@ for job in "${JOBS[@]}"; do
       continue
     fi
 
-    # 2) THE FROZEN CONTRACT, where the job states one.
     arm="$(printf '%s\n' "$contracts" | awk -v t="$topic" '$1 == t')"
     n_arms="$(printf '%s' "$arm" | grep -c . || true)"
     if [ "$n_arms" -gt 1 ]; then
-      echo "FAIL: $job states MORE THAN ONE contract for '$topic':"
+      echo "FAIL: $jobname states MORE THAN ONE contract for '$topic':"
       printf '%s\n' "$arm" | sed 's/^/        /'
       fail=1
       continue
     fi
+
+    es4_parts="$(partitions_in "$ES4_DECLARED" "$topic")"
+
     if [ "$n_arms" -eq 1 ]; then
+      # --- SCHEMA: FROZEN. All three dimensions are authoritative. --------------------------------
+      schema=FROZEN
       want_parts="$(printf '%s\n' "$arm" | awk '{print $2}')"
-      want_policy="$(printf '%s\n' "$arm" | awk '{print $3}')"
+      expect_policy="$(printf '%s\n' "$arm" | awk '{print $3}')"
       want_ret="$(printf '%s\n' "$arm" | awk '{print $4}')"
 
       # Partitions must be EQUAL, not merely compatible. apply-topics.sh treats a declared count as
       # a MINIMUM, so an under-declaration is silently accepted against a re-drifted topic — and for
       # a record-copy mirror the target's partition count IS the mirrored key->partition mapping.
       if [ "$parts" != "$want_parts" ]; then
-        echo "FAIL: '$topic' is declared :$parts in $TOPICS_ENV but $job freezes it at $want_parts partition(s)."
+        echo "FAIL: '$topic' is declared :$parts in $TOPICS_ENV but $jobname freezes it at $want_parts partition(s)."
         fail=1
       fi
       if [ "$(retention_of "$topic")" != "$want_ret" ]; then
         echo "FAIL: '$topic' has retention '$(retention_of "$topic")' in OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES"
-        echo "      but $job asserts retention.ms=$want_ret. apply-topics.sh writes retention.ms on"
+        echo "      but $jobname asserts retention.ms=$want_ret. apply-topics.sh writes retention.ms on"
         echo "      every declared topic, so the deploy would reconcile the mirror's contract away."
         fail=1
       fi
-      expect_policy="$want_policy"
+      dims="partitions=$parts policy=$expect_policy retention=$want_ret"
     else
-      # No frozen arm: the create-time --config is the job's only statement of the policy. It is
-      # ambiguous if the job passes several, and these jobs mirror one topic each.
+      # --- SCHEMA: COPIED. The source's declaration is the authority. -----------------------------
+      schema=COPIED
       n_pol="$(printf '%s' "$literal_policies" | grep -c . || true)"
       if [ "$n_pol" -ne 1 ]; then
-        echo "FAIL: $job states neither a frozen PARTS/POLICY/RET arm for '$topic' nor exactly one"
-        echo "      literal --config cleanup.policy= (found ${n_pol}). Its shape cannot be checked."
+        echo "FAIL: $jobname states neither a frozen '<topic>) PARTS=..; POLICY=..; RET=..' arm for"
+        echo "      '$topic' nor exactly one literal --config cleanup.policy= (found ${n_pol}), so this"
+        echo "      validator cannot tell what shape it intends. Give the job a frozen arm."
         fail=1
         continue
       fi
       expect_policy="$literal_policies"
-      # Retention is deliberately NOT checked here. These jobs pass a create-time value that they
-      # never re-assert, so it binds only a topic that does not exist yet; the enforced value is
-      # whatever topics.env declares, and the two are allowed to differ.
+
+      # A COPIED job derives the target's partition count from the source, so the ONLY place a
+      # reviewable number exists is es4's own declaration. Requiring it here is what keeps this
+      # schema from being the weaker one: without the es4 entry there is nothing to check against,
+      # and "nothing to check against" must not read as "checked".
+      if [ -z "$es4_parts" ]; then
+        echo "FAIL: $jobname copies '$topic' from es4 and takes the target's partition count FROM THE"
+        echo "      SOURCE, but '$topic' is not declared in OPTIONS_EDGE_ES4_TOPICS — so no reviewed"
+        echo "      partition count exists for it anywhere, on either cluster."
+        fail=1
+        continue
+      fi
+      dims="partitions=$parts(=es4) policy=$expect_policy retention=NOT-A-CONTRACT(create-time only)"
     fi
 
-    # 3) COMPACTION. The trap this file's own history is full of: declaring a compacted topic
+    # 2) COMPACTION. The trap this file's own history is full of: declaring a compacted topic
     #    without listing it makes apply-topics.sh reconcile cleanup.policy to plain delete.
     case "$expect_policy" in
       *compact*) want_compacted=yes ;;
       *)         want_compacted=no  ;;
     esac
     have_compacted=no
-    is_compacted "$topic" && have_compacted=yes
+    in_list "$COMPACTED" "$topic" && have_compacted=yes
     if [ "$want_compacted" != "$have_compacted" ]; then
       if [ "$want_compacted" = yes ]; then
-        echo "FAIL: $job creates '$topic' with cleanup.policy=$expect_policy, but it is NOT in"
+        echo "FAIL: $jobname creates '$topic' with cleanup.policy=$expect_policy, but it is NOT in"
         echo "      OPTIONS_EDGE_COMPACTED_TOPICS. apply-topics.sh would reconcile it to plain"
         echo "      delete on every deploy and STRIP the compaction."
       else
-        echo "FAIL: '$topic' is listed in OPTIONS_EDGE_COMPACTED_TOPICS, but $job creates it with"
+        echo "FAIL: '$topic' is listed in OPTIONS_EDGE_COMPACTED_TOPICS, but $jobname creates it with"
         echo "      cleanup.policy=$expect_policy. Compacting an append-only topic collapses it to"
         echo "      one record per key."
       fi
       fail=1
     fi
+
+    # 3) SOURCE vs TARGET, whenever es4 declares the same name. A byte-for-byte record copy whose
+    #    two declarations disagree is the same defect as a target that disagrees with its job.
+    if [ -n "$es4_parts" ]; then
+      if [ "$es4_parts" != "$parts" ]; then
+        echo "FAIL: '$topic' is declared :$parts for dev/prod but :$es4_parts on es4, and $jobname copies"
+        echo "      it record-for-record. The target's partition count IS the mirrored key->partition"
+        echo "      mapping, so the two declarations must agree."
+        fail=1
+      fi
+      es4_compacted=no
+      in_list "$ES4_COMPACTED" "$topic" && es4_compacted=yes
+      if [ "$es4_compacted" != "$have_compacted" ]; then
+        echo "FAIL: '$topic' compaction disagrees across the clusters it is mirrored between:"
+        echo "      OPTIONS_EDGE_ES4_COMPACTED_TOPICS=$es4_compacted, OPTIONS_EDGE_COMPACTED_TOPICS=$have_compacted."
+        fail=1
+      fi
+    fi
+
+    echo "  $jobname  $topic  [$schema]  $dims"
   done
 done
 

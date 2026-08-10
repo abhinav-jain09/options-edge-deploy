@@ -76,6 +76,13 @@ jobs:
       - name: Validate mirrored es4 topic contracts (mirror jobs vs topics.env)
         run: bash scripts/ci/validate-mirrored-topic-contracts.sh
 
+      # "checked 5 mirrored topic(s)" proves only that five names were found. This drives the
+      # validator against crafted fixtures — one broken dimension each, plus the mutations that
+      # make its own parsing return nothing — so a checker that quietly starts approving
+      # everything fails here instead of going green.
+      - name: Mirrored-topic contract validator mutation suite
+        run: bash scripts/ci/validate-mirrored-topic-contracts-test.sh
+
       - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
         run: scripts/ci/validate-image-pinning.sh
 

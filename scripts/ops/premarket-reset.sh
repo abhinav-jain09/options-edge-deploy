@@ -209,12 +209,15 @@ log "identity guards PASSED"
 # is deliberately narrow — a broad `gamma-migration.*-changelog` also matched the SESSION
 # changelog, which would have carried yesterday's dwell and ladder into today through a reset
 # whose whole purpose is to start clean.
-# es.tape-zones.board added 2026-08-10: declared retention=-1 + RESET-PRESERVED in topics.env. This
-# reset's default BOOTSTRAP spans BOTH .252 and .4, and the arm is correct on each for a different
-# reason. On .4 it is the SOURCE board, keyed ES|<sessionDate> and compacted, so the keep costs one
-# record per session date. On prod it is an MM1 mirror target with no local producer at all: MM1
-# commits its offsets on the source cluster, so purging the copy here does not make it re-copy —
-# the /zones page simply stays blank until es4 next publishes a board.
+# es.tape-zones.board added 2026-08-10: declared retention=-1 + RESET-PRESERVED in topics.env.
+# The arm has to be right for EITHER cluster this script can be pointed at, because the name means
+# something different on each. The default BOOTSTRAP lists endpoints on both .252 and .4, but that
+# is a seed list for ONE logical cluster, not a two-cluster sweep: the run reads a single cluster-id
+# above and dies unless it equals EXPECTED_KAFKA_CLUSTER_ID, so any one invocation purges exactly
+# the cluster it bound to. On .4 the board is the SOURCE, keyed ES|<sessionDate> and compacted, so
+# the keep costs about one record per session date. On prod it is an MM1 mirror target with no
+# local producer at all: MM1 commits its offsets on the source cluster, so purging the copy here
+# does not make it re-copy — the /zones page simply stays blank until es4 next publishes a board.
 PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^es\.reversal\.hunt\.(state|alerts)$|^options\.spx\.wall-break-rates\.dataset$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring$|^options\.databento\.oi\.anchor-manifest$|^es\.tape-zones\.board$|gamma-migration-scorer-changelog$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
 log "durable keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
