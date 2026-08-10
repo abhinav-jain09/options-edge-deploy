@@ -63,7 +63,7 @@ spec:
             - name: OI_SHADOW_ENABLED
               value: "true"
             - name: OI_SHADOW_SEED_COEFFICIENTS_ENABLED
-              value: "false"
+              value: "true"
             - name: HEALTH_PORT
               value: "8150"
             - name: OI_SHADOW_SYMBOL
