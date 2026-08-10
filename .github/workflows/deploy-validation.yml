@@ -65,6 +65,17 @@ jobs:
       - name: Validate dev GEX availability safeguards
         run: bash scripts/ci/validate-gex-dev-safety.sh
 
+      # A mirrored es4 topic has two owners that both write its shape — the MM1 job that creates
+      # and asserts it, and apply-topics.sh, which rewrites retention.ms + cleanup.policy on every
+      # declared topic on every deploy. Undeclared, it was a deletion candidate for
+      # cleanup-topics.sh; declared with the wrong shape, the deploy reconciles the mirror's own
+      # contract away. This makes the two declarations unmergeable when they disagree.
+      # (The retention=-1 preserved-or-rebuildable classification that es.tape-zones.board now
+      # depends on is already gated: validate-services.sh runs
+      # scripts/ci/validate-durable-topic-preservation.sh as its section 6.)
+      - name: Validate mirrored es4 topic contracts (mirror jobs vs topics.env)
+        run: bash scripts/ci/validate-mirrored-topic-contracts.sh
+
       - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
         run: scripts/ci/validate-image-pinning.sh
 
