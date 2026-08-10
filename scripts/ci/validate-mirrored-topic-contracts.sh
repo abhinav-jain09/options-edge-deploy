@@ -81,9 +81,10 @@ COMPACTED="$(list_of OPTIONS_EDGE_COMPACTED_TOPICS)"
 RETENTIONS="$(list_of OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES)"
 ES4_DECLARED="$(list_of OPTIONS_EDGE_ES4_TOPICS)"
 ES4_COMPACTED="$(list_of OPTIONS_EDGE_ES4_COMPACTED_TOPICS)"
+ES4_RETENTIONS="$(list_of OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES)"
 
 # Fail closed on a parser that has drifted from the file, so no check below can pass vacuously.
-for v in DECLARED COMPACTED RETENTIONS ES4_DECLARED ES4_COMPACTED; do
+for v in DECLARED COMPACTED RETENTIONS ES4_DECLARED ES4_COMPACTED ES4_RETENTIONS; do
   [ -n "${!v}" ] || { echo "FAIL: parsed an EMPTY $v from $TOPICS_ENV — the parser and the file have diverged, and the checks below would pass vacuously" >&2; exit 1; }
 done
 
@@ -110,6 +111,7 @@ check_unique OPTIONS_EDGE_ES4_TOPICS               "$ES4_DECLARED"  's/:[0-9]+$/
 check_unique OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES "$RETENTIONS"   's/=.*$//'
 check_unique OPTIONS_EDGE_COMPACTED_TOPICS         "$COMPACTED"     's/^//'
 check_unique OPTIONS_EDGE_ES4_COMPACTED_TOPICS     "$ES4_COMPACTED" 's/^//'
+check_unique OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES "$ES4_RETENTIONS" 's/=.*$//'
 
 # head -1, not tail -1: with duplicates rejected above these are single-valued, but where
 # apply-topics.sh does have a precedence it is FIRST match (topic_retention_ms returns on the first
@@ -118,11 +120,12 @@ partitions_in() { # list, topic -> partition count, empty if undeclared
   printf '%s\n' "$1" | awk -F: -v t="$2" '$1 == t { print $2 }' | head -1
 }
 in_list() { printf '%s\n' "$1" | grep -qx "$2"; }
-retention_of() { # topic -> declared override, or the literal <default> when unlisted
+retention_in() { # list, topic -> declared override, or the literal <default> when unlisted
   local v
-  v="$(printf '%s\n' "$RETENTIONS" | awk -F= -v t="$1" '$1 == t { print $2 }' | head -1)"
+  v="$(printf '%s\n' "$1" | awk -F= -v t="$2" '$1 == t { print $2 }' | head -1)"
   printf '%s\n' "${v:-<default>}"
 }
+retention_of() { retention_in "$RETENTIONS" "$1"; }
 
 # --- what each mirror job says ------------------------------------------------------------------
 # The single topic (string param) or frozen allow-list (choice param) the job mirrors.
@@ -215,8 +218,10 @@ for job in "${JOBS[@]}"; do
         echo "      every declared topic, so the deploy would reconcile the mirror's contract away."
         fail=1
       fi
+      frozen_ret="$want_ret"
       dims="partitions=$parts policy=$expect_policy retention=$want_ret"
     else
+      frozen_ret=""
       # --- SCHEMA: COPIED. The source's declaration is the authority. -----------------------------
       schema=COPIED
       n_pol="$(printf '%s' "$literal_policies" | grep -c . || true)"
@@ -279,6 +284,24 @@ for job in "${JOBS[@]}"; do
         echo "FAIL: '$topic' compaction disagrees across the clusters it is mirrored between:"
         echo "      OPTIONS_EDGE_ES4_COMPACTED_TOPICS=$es4_compacted, OPTIONS_EDGE_COMPACTED_TOPICS=$have_compacted."
         fail=1
+      fi
+      # THE SOURCE CARRIES THE FROZEN RETENTION TOO, and it is a SEPARATE declaration:
+      # apply-topics.sh swaps OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES in wholesale under
+      # TOPIC_SET=es4, which is how scripts/es4/create-es-topics.sh runs it — at
+      # KAFKA_TOPIC_RETENTION_MS=43200000, so an unlisted topic is stamped 12h on .4. Checking only
+      # the dev/prod list would have left the es4 half of this exact bug ungated: the tape-zones
+      # mirror asserts retention.ms against the SOURCE in its Preflight, BEFORE it asserts anything
+      # about the target, so an es4 deploy alone can hard-fail the install.
+      if [ -n "$frozen_ret" ]; then
+        es4_ret="$(retention_in "$ES4_RETENTIONS" "$topic")"
+        if [ "$es4_ret" != "$frozen_ret" ]; then
+          echo "FAIL: '$topic' has retention '$es4_ret' in OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES but"
+          echo "      $jobname freezes it at retention.ms=$frozen_ret, and asserts that against the SOURCE."
+          echo "      create-es-topics.sh runs apply-topics.sh with TOPIC_SET=es4, so the es4 declaration"
+          echo "      is what gets written to .4 — a separate list, needing the same number."
+          fail=1
+        fi
+        dims="$dims es4Retention=$es4_ret"
       fi
     fi
 

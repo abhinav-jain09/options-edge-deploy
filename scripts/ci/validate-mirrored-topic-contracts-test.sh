@@ -108,6 +108,16 @@ expect_fail "$R" "source and target disagree on partitions" "must agree"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.tape-zones\.cells es\.tape-zones\.board"/ es.tape-zones.cells"/'
 expect_fail "$R" "source and target disagree on compaction" "compaction disagrees across"
 
+echo "--- the SOURCE cluster's retention is a separate declaration and is gated too ---"
+# The es4 half of the same bug: apply-topics.sh swaps OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES in
+# wholesale under TOPIC_SET=es4, so an unlisted topic is stamped create-es-topics.sh's 12h default
+# on .4 — and the tape-zones mirror asserts retention against the SOURCE before it looks at the
+# target. Checking only the dev/prod list left this ungated (found by Codex, third review pass).
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.signal-follower\.hot-strike=604800000 es\.tape-zones\.board=-1"/ es.signal-follower.hot-strike=604800000"/'
+expect_fail "$R" "es4 retention override dropped" "asserts that against the SOURCE"
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.tape-zones\.board=-1"/ es.tape-zones.board=43200000"/'
+expect_fail "$R" "es4 retention differing from the frozen contract" "asserts that against the SOURCE"
+
 echo "--- a duplicated declaration is rejected, not silently resolved ---"
 # apply-topics.sh resolves duplicates differently per call site (topic_retention_ms returns on the
 # FIRST match; the main loop calls alter_topic_config once per occurrence, so the LAST entry decides
@@ -124,6 +134,9 @@ expect_fail "$R" "correct partitions, wrong value duplicated after" "declares th
 R="$(mkfixture)"
 append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.futures.aggressor-flow"'
 expect_fail "$R" "compaction membership declared twice" "declares the same topic more than once"
+R="$(mkfixture)"
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES="$OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES es.tape-zones.board=43200000"'
+expect_fail "$R" "es4 retention declared twice" "declares the same topic more than once"
 
 echo "--- the parser itself must fail closed, never silently check less ---"
 R="$(mkfixture)"; edit "$R" Jenkinsfile.es-tape-zones-mirror 's/PARTS=1; POLICY=compact,delete; RET=-1/PARTS="1" ; POLICY="compact,delete" ; RET="-1"/'
