@@ -15,6 +15,23 @@ spec:
     spec:
       containers:
         - name: databento-feed
+          # DEV-ONLY memory headroom: 2Gi -> 3Gi. On 2026-08-10 the dev feed was OOMKilled
+          # (exit 137) at 09:32:16 ET — inside the first three minutes of the RTH open — and the
+          # ~2-minute restart produced ZERO options.databento.raw records, so no DATABENTO GEX
+          # record reached any strike and the pre-open UI stayed stuck on "Switching to live
+          # data…" (truthfully: live data had not arrived). The open is this container's peak:
+          # the OPRA subscription resolve (396 contracts) and the first full-chain snapshot burst
+          # land together, on top of the ES-basis engine and the 1DTE AUTO_NEXT_SESSION track that
+          # only dev carries. Requests stay 512Mi, so this raises the ceiling without changing
+          # scheduling pressure on the capacity-limited dev node. PROD IS UNTOUCHED (base stays
+          # 2Gi): prod has neither the extra 1DTE track nor this failure, and its own limit should
+          # be judged on its own evidence, not on dev's.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 3Gi
           env:
             # 2026-07-29: 1000 -> 5000, matching prod SPX. At 1000ms dev was producing 5x prod's
             # snapshot volume, and every one of those snapshots becomes a gex.strike record and then a
