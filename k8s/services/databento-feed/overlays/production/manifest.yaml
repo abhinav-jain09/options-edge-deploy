@@ -61,7 +61,7 @@ spec:
             - name: DATABENTO_PUBLISH_INTERVAL_MS
               value: "5000"
             - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: ""
+              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
             - name: ES_SPX_BASIS_CLOSE_PRINCIPALS
