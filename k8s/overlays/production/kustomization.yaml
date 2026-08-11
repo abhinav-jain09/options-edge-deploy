@@ -469,6 +469,23 @@ patches:
   # spx-mission-control is kept OFF (replicas:0) in prod (USER 2026-07-09). MUST MIRROR the standalone
   # slice k8s/services/spx-mission-control/overlays/production (validate-services: mono==slice). Re-enable
   # by removing this patch AND setting the slice back to replicas:1.
+  # oi-shadow-service is HELD DOWN in every environment (USER 2026-08-10: "bring down this service
+  # ... until further notice"). Retired rather than deleted: it validates only END-OF-DAY 1DTE OI
+  # (29% error against frozen OI's 47%) while the desk trades 0DTE, where no next-day settled print
+  # exists to score against, and its intraday path is an assumption that OPRA's once-daily 06:30 OI
+  # publication can never confirm. See docs/oi-nowcast-retirement.md.
+  #
+  # replicas:0 here so EVERY render brings it down; the name is also in morning-autostart.sh
+  # KEEP_DOWN so an environment bring-up does not scale it back. Re-enable = remove this patch AND
+  # that entry, and flip OI_SHADOW_ENABLED / OI_SHADOW_SEED_COEFFICIENTS_ENABLED /
+  # DATABENTO_GEX_DYNAMIC_OI_ENABLED back to "true".
+  - target:
+      kind: Deployment
+      name: oi-shadow-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   - target:
       kind: Deployment
       name: spx-mission-control-service
