@@ -1,0 +1,18 @@
+# Immutable input manifest for the reversal-hunt 28t/31b volume calibration.
+# calibrate.py verifies every sha256_gz before replaying and refuses to run on
+# a mismatch. Files live on the NAS under
+#   /mnt/nas/optionsedge/kafka/es4/es.underlying.es.trades/<dt_dir>/
+# and are read-only there; they are NOT committed (each is ~2-4 MB compressed,
+# ~100-143 MB raw). `order` is the canonical file order within a session and is
+# LOAD-BEARING: it supplies the file-index component of the total bucket key
+# (eventTime, sequence, file index, line index), because `sequence` alone is the
+# venue message sequence and is not unique. Changing `order` can change open/close
+# in buckets whose edge trades share a venue sequence across partitions; the
+# replay checks that sensitivity by re-running with the order reversed.
+#
+# session	order	dt_dir	filename	bytes_gz	sha256_gz	records
+2026-08-10	0	dt=2026-08-10	es.underlying.es.trades.p0.101469-174239.dt20260810.20260810T210101Z.jsonl.gz	1798557	a116021d8f0c857f63f20ba4c11f46f215d61b14ba56b6470fb6cd65049afbb1	72770
+2026-08-10	1	dt=2026-08-10	es.underlying.es.trades.p1.101036-173770.dt20260810.20260810T210101Z.jsonl.gz	1799033	7e14bc6fd232c86bf1167a6917e3268d9c7374632640a4292390161c286e1418	72734
+2026-08-10	2	dt=2026-08-10	es.underlying.es.trades.p2.101584-174689.dt20260810.20260810T210101Z.jsonl.gz	1805620	759c58269fd34b6c1ac86f72a11fa5ffd687a9c7e15b59ab445f08b8eb098908	73105
+2026-08-10	3	dt=2026-08-10	es.underlying.es.trades.p3.101126-173872.dt20260810.20260810T210101Z.jsonl.gz	1796976	a1cda6e442f81ee4c386f1f6f3d3546c4d248080c376dda23260990580c71919	72746
+2026-08-11	0	dt=2026-08-11	es.underlying.es.trades.calibration-copy.dt20260811.jsonl.gz	4004380	b040139fd7e7163f820202540d495229ccda4565724e70616fb3f9a4f63f42c2	237351

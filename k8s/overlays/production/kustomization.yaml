@@ -57,11 +57,25 @@ patches:
         value:
           name: REVERSAL_HUNT_SPX_BOOTSTRAP
           value: 192.168.100.252:9092
+      # Hunt geometry. Notification-VOLUME calibration only — see
+      # docs/evidence/reversal-hunt-28t31b/README.md for the pinned source map,
+      # the checksummed inputs, the runnable replay, the observation window and
+      # the rollback triggers. Replaying the 2026-08-10 and 2026-08-11 ES RTH
+      # sessions, the previous 40t/60s yields 1 voice-eligible candidate per
+      # session and 28t/62s yields 4.5. 28t/31b is the shallowest admissible
+      # pair BY DEPTH under HuntConfig.validateAgainst against the passive
+      # 28t/30b engine (29t/30b is the other minimal pair, along duration
+      # instead). The passive engine geometry above is deliberately untouched.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_MIN_DECLINE_TICKS
+          value: "28"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
           name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS
-          value: "30"
+          value: "31"
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:

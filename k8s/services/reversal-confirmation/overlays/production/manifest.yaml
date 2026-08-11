@@ -120,8 +120,10 @@ spec:
               value: "true"
             - name: REVERSAL_HUNT_SPX_BOOTSTRAP
               value: 192.168.100.252:9092
+            - name: REVERSAL_HUNT_MIN_DECLINE_TICKS
+              value: "28"
             - name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS
-              value: "30"
+              value: "31"
             - name: REVERSAL_HUNT_AUTO_ARM
               value: "true"
           envFrom:
