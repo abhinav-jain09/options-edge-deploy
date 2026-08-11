@@ -86,23 +86,14 @@ pipeline {
         // INSTALLED index already is. Read it from the running pod (its mount is the same
         // hostPath the producer writes) and put that in the alert, not just "the build failed".
         // Every step here is best-effort: alerting must never fail on its own diagnostics.
-        // Bounded and non-fatal: a stalled kubectl against a degraded API server must not eat
-        // the rest of the pipeline timeout and swallow the alert that matters most.
-        def installed = 'installed index age UNKNOWN'
+        // The wrapper cannot `kubectl exec` (the deployer SA has no pods/exec), so the age
+        // diagnostic comes from the file the wrapper leaves in the workspace rather than from a
+        // live read here. Absent file = the run failed before it learned anything.
+        def installed = 'installed index generation UNKNOWN (the run failed before reading it)'
         try {
-          timeout(time: 2, unit: 'MINUTES') {
-            def out = sh(returnStdout: true, script: '''
-              set +e
-              kubectl -n options-edge exec deploy/stock-gex-service -c stock-gex -- python -c "
-import gzip, json, datetime
-d = json.load(gzip.open('/oi-index/stock-gex-oi-index.json.gz', 'rt'))
-td = datetime.date.fromisoformat(d['tradeDate'])
-age = (datetime.datetime.now(datetime.timezone.utc).date() - td).days
-print('installed index tradeDate=' + d['tradeDate'] + ' age=' + str(age) + 'd (service goes NotReady past 5d)')
-" 2>/dev/null
-              true
-            ''').trim()
-            if (out) { installed = out }
+          if (fileExists('oi-installed-generation.txt')) {
+            def g = readFile('oi-installed-generation.txt').trim()
+            if (g) { installed = "installed index ${g}" }
           }
         } catch (err) {
           echo "installed-index diagnostic unavailable: ${err}"

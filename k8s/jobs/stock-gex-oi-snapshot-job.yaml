@@ -124,6 +124,15 @@ spec:
             # staging directory even if the lock were somehow bypassed.
             - name: JOB_NAME
               value: "__JOB_NAME__"
+            # produce = the nightly pull + verify + publish. read = print the installed
+            # generation and exit, changing nothing. READ MODE EXISTS BECAUSE THE DEPLOYER
+            # SERVICE ACCOUNT CANNOT `kubectl exec`: `pods/exec` is not in its Role (verified —
+            # and note `kubectl auth can-i create pods/exec` LIES about it; only
+            # `--subresource=exec` answers correctly). A Job is the one way this identity can
+            # read a file on that hostPath, so the wrapper asks for one instead of shelling into
+            # the service pod. Read mode takes no writer lock and touches nothing.
+            - name: MODE
+              value: "__MODE__"
             # The service's own default (STOCK_GEX_MAX_INDEX_AGE_DAYS). The verification below
             # runs the service's loader with THIS value, so a freshly built index the service
             # would refuse fails the Job instead of being published as a success.
@@ -151,7 +160,7 @@ spec:
           command: ["python", "-c"]
           args:
             - |
-              import fcntl, gzip, hashlib, json, os, shutil, stat, subprocess, sys, tempfile
+              import fcntl, gzip, hashlib, io, json, os, shutil, stat, subprocess, sys, tempfile
               from datetime import date as date_cls
               from datetime import datetime, timezone
 
@@ -217,10 +226,40 @@ spec:
                           except OSError:
                               pass
 
-              print("=== stock-gex OI snapshot %s ==="
-                    % datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), flush=True)
+              MODE = os.environ.get("MODE", "produce").strip() or "produce"
+              if MODE not in ("produce", "read"):
+                  fatal("MODE=%r is neither 'produce' nor 'read'" % MODE)
+
+              print("=== stock-gex OI snapshot %s (mode=%s) ==="
+                    % (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), MODE), flush=True)
               print("uid=%d gid=%d job=%s trade_date=%s"
                     % (os.getuid(), os.getgid(), JOB_NAME, TRADE_DATE or "<auto>"), flush=True)
+
+              def generation(path):
+                  """(tradeDate, sha256) read through ONE descriptor, so the hash and the session
+                  can never come from two different files across an atomic rename."""
+                  h = hashlib.sha256()
+                  with open(path, "rb") as fh:
+                      for b in iter(lambda: fh.read(1 << 20), b""):
+                          h.update(b)
+                      fh.seek(0)
+                      with gzip.GzipFile(fileobj=fh) as gz:
+                          d = json.load(io.TextIOWrapper(gz, encoding="utf-8"))
+                  return d["tradeDate"], h.hexdigest()
+
+              def report_installed():
+                  """The wrapper's only way to see what is installed — it cannot exec."""
+                  try:
+                      trade_date, digest = generation(FINAL)
+                  except FileNotFoundError:
+                      print("STOCK_GEX_OI_INSTALLED MISSING", flush=True)
+                      return None
+                  print("STOCK_GEX_OI_INSTALLED %s %s" % (trade_date, digest), flush=True)
+                  return trade_date, digest
+
+              if MODE == "read":
+                  report_installed()
+                  raise SystemExit(0)
 
               # 0o022 so every file this job or the producer creates is group/other
               # readable; the published index's mode is then set explicitly and re-checked.
@@ -242,10 +281,12 @@ spec:
               os.makedirs(SNAPSHOTS, exist_ok=True)
               probe_writable(SNAPSHOTS)
 
-              # --- baseline: the index this run would replace, for the deviation guard below.
-              baseline = None
-              if os.path.exists(FINAL):
-                  baseline = summary(FINAL)
+              # --- baseline: the index this run would replace, for the deviation guard below,
+              # and the machine-readable line the wrapper needs to tell a publication from a
+              # failure without being able to read the file itself.
+              installed_before = report_installed()
+              baseline = summary(FINAL) if installed_before is not None else None
+              if baseline is not None:
                   print("installed index: tradeDate=%s roots=%d contracts=%d" % baseline, flush=True)
               else:
                   print("no installed index yet — absolute floors only", flush=True)
