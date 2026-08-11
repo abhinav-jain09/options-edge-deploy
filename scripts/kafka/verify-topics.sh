@@ -79,6 +79,49 @@ if [[ "$pure_compact_fail" -ne 0 ]]; then
 fi
 echo "[verify-topics] pure-compact contract OK ($(echo $PURE_COMPACT_LIST | wc -w | tr -d ' ') topic(s), TOPIC_SET='${TOPIC_SET:-default}')"
 
+# --- COMPACTED enforcement, EVERY environment ---
+# The pure-compact check above covers only the PURE-compact list. The ordinary COMPACTED
+# list -- the topics that must be 'compact,delete' -- was verified NOWHERE, which is how
+# es.options.indicators.snapshot.current came to sit at cleanup.policy=delete after the
+# fleet had "provisioned" it: a declaration in topics.env had been glued to its neighbour
+# into one nonsense token, so the topic was silently absent from the compacted list and
+# es.drop.outcome silently lost the compaction it already had. Every CI validator passed.
+#
+# This closes the same class the comment above describes, for the other list, and it is
+# what makes the contract survive the NEXT cleanup: cleanup-topics.sh either deletes these
+# topics or shrinks their retention, and apply-topics.sh re-applies the policy immediately
+# afterwards -- but nothing ever CHECKED that the re-application produced the declared
+# policy. A partition change takes the same reconcile path and is covered by the same check.
+case "${TOPIC_SET:-}" in
+  "")   COMPACTED_LIST="${OPTIONS_EDGE_COMPACTED_TOPICS:-}" ;;
+  es4)  COMPACTED_LIST="${OPTIONS_EDGE_ES4_COMPACTED_TOPICS:-}" ;;
+esac
+
+compacted_fail=0
+for topic in $COMPACTED_LIST; do
+  if ! kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$topic" >/dev/null 2>&1; then
+    echo "FAIL: compacted topic $topic is ABSENT" >&2
+    compacted_fail=1
+    continue
+  fi
+  policy="$(pure_compact_policy "$topic")"
+  case "$policy" in
+    *compact*) ;;
+    *)
+      echo "FAIL: topic $topic cleanup.policy='${policy:-<none, inherits the broker default>}' but" >&2
+      echo "      topics.env declares it COMPACTED. Without compaction the latest value per key is" >&2
+      echo "      dropped once retention elapses, so a consumer that reads the topic for CURRENT" >&2
+      echo "      state finds nothing." >&2
+      compacted_fail=1
+      ;;
+  esac
+done
+if [[ "$compacted_fail" -ne 0 ]]; then
+  echo "[verify-topics] compacted contract FAILED" >&2
+  exit 1
+fi
+echo "[verify-topics] compacted contract OK ($(echo $COMPACTED_LIST | wc -w | tr -d ' ') topic(s), TOPIC_SET='${TOPIC_SET:-default}')"
+
 # --- PROD-ONLY contract enforcement (VIX feed separation design §6.6, r2 finding 14) ---
 # Same exact predicate as apply-topics.sh: ENVIRONMENT EXPLICITLY 'production' AND the
 # default (non-es4) topic set. Unset/empty ENVIRONMENT fails CLOSED (checks skipped with
