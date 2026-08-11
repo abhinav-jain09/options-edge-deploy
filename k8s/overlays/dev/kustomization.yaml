@@ -53,14 +53,25 @@ patches:
             containers:
               - name: oi-shadow
                 env:
+                  # RETIRED 2026-08-10. Not broken -- measured, and the measurement did not justify
+                  # the surface. What it can validate is END-OF-DAY 1DTE OI against the next
+                  # morning's print: 29% error against frozen OI's 47%, over 178 walk-forward
+                  # sessions. What it cannot validate is anything the desk actually trades on:
+                  # the intraday path is an assumption (OI accrues with volume) and there is no
+                  # intraday OI anywhere to check it against -- OPRA publishes once, 06:30 ET, one
+                  # print per contract, verified. And 0DTE has no next-day print at all, so on the
+                  # expiring chain the model can never be scored.
+                  #
+                  # Archived rather than deleted: the anchor is exact (2534/2534) and the harness,
+                  # coefficients and evidence are all in git. See docs/oi-nowcast-retirement.md.
                   - name: OI_SHADOW_ENABLED
-                    value: "true"
+                    value: "false"
                   # Re-enabled 2026-08-10 after the quarantine's cause was removed: the cells the
                   # service assigns now ARE the cells the panel fitted (signed band, DTE {0,1}/{2,3}
                   # /{4-7}), and the nine coefficients were refitted on them over the full
                   # 251-session panel -- 190+ independent sessions per cell.
                   - name: OI_SHADOW_SEED_COEFFICIENTS_ENABLED
-                    value: "true"
+                    value: "false"
   # greek-move-authenticity: ENABLED on DEV (the SPX proving ground — advisory-only, in-session
   # baseline bootstrap). Strategic-merge on env name (namespace required for the dev overlay).
   # MUST MIRROR the standalone slice k8s/services/greek-move-authenticity/overlays/dev (validate-services).
