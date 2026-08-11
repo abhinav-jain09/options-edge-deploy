@@ -90,12 +90,15 @@ JOB_LABEL="app.kubernetes.io/name=stock-gex-oi-snapshot"
 DEPLOYER="system:serviceaccount:options-edge:jenkins-deployer"
 INDEX_PATH="/oi-index/stock-gex-oi-index.json.gz"
 SHA_ANNOTATION="options-edge.io/oi-index-sha"
-HEALTH_PORT=8022
 JOB_NAME=""
 JOB_OWNED=false
 SUCCESS=false
 
 fatal() { echo "FATAL: $*" >&2; exit 1; }
+
+# A stale diagnostic from an earlier build in this workspace must never be reported as this
+# build's state. Written again below, only from a generation that actually parsed.
+rm -f oi-installed-generation.txt
 
 # An abandoned RUNNING Job keeps the container's writer lock, so an unsuccessful exit (failure,
 # Jenkins abort) must take it down — but ONLY a Job this invocation actually created
@@ -228,28 +231,46 @@ service_pod() {
   kubectl -n "$NAMESPACE" get pods -l "$SELECTOR" --field-selector=status.phase=Running \
     --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null || true
 }
-# "<tradeDate> <sha256>" for the index the service pod can see, read through ONE descriptor so
-# the hash and the tradeDate cannot come from two different files across an atomic rename.
-# Prints MISSING when the file positively does not exist, and nothing at all when the read
-# failed — callers must never treat an empty result as "unchanged".
-installed_generation() {
-  local pod="$1"
-  [ -n "$pod" ] || return 0
-  kubectl -n "$NAMESPACE" exec "$pod" -c "$SERVICE_CONTAINER" -- python -c "
-import gzip, hashlib, io, json, sys
-try:
-    fh = open('$INDEX_PATH', 'rb')
-except FileNotFoundError:
-    print('MISSING')
-    sys.exit(0)
-with fh:
-    h = hashlib.sha256()
-    for b in iter(lambda: fh.read(1 << 20), b''):
-        h.update(b)
-    fh.seek(0)
-    with gzip.GzipFile(fileobj=fh) as gz:
-        d = json.load(io.TextIOWrapper(gz, encoding='utf-8'))
-print(d['tradeDate'] + ' ' + h.hexdigest())" 2>/dev/null | tr -d '\r' || true
+# "<tradeDate> <sha256>" for the index installed on the node — read by a short-lived Job, NOT by
+# `kubectl exec`. The deployer service account has no pods/exec permission (verified: `kubectl
+# auth can-i create pods --subresource=exec` says no — the older `create pods/exec` spelling
+# answers "yes" and is WRONG), so creating a Job is the only way this identity can read a file on
+# that hostPath. Prints nothing when the read fails; callers must never treat that as
+# "unchanged". Prints "MISSING <sha of nothing>" never — a positively absent file yields the
+# literal MISSING marker, which fails the generation grammar on purpose.
+INSTALLED_RE='^STOCK_GEX_OI_INSTALLED (MISSING|[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9a-f]{64})$'
+read_installed_generation() {
+  # $1 = node to read on; defaults to the node this run pinned everything to. After a rollout the
+  # replacement pod may sit on a DIFFERENT node, and its index is a different file — reading the
+  # old node's copy would "verify" a generation the new pod never opened.
+  local node="${1:-$NODE_NAME}" name render logs line
+  name="stock-gex-oi-read-$(date -u +%Y%m%d-%H%M%S)-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
+  render="$(mktemp)"; logs="$(mktemp)"
+  sed -e "s|__IMAGE__|${PINNED_IMAGE}|g" \
+      -e "s|__JOB_NAME__|${name}|g" \
+      -e "s|__TRADE_DATE__||g" \
+      -e "s|__NODE_NAME__|${node}|g" \
+      -e "s|__MODE__|read|g" \
+      "$TEMPLATE" >"$render"
+  if ! kubectl -n "$NAMESPACE" create -f "$render" >/dev/null 2>&1; then
+    rm -f "$render" "$logs"; return 0
+  fi
+  # Reading one 4.5 MB file: seconds, not minutes. The cap is for a wedged scheduler.
+  local deadline=$(( $(date +%s) + 180 )) st
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    st="$(kubectl -n "$NAMESPACE" get "job/$name" -o json 2>/dev/null \
+      | jq -r 'if ((.status.succeeded // 0) >= 1) then "succeeded"
+          elif ([(.status.conditions // [])[] | select(.type == "Failed" and .status == "True")] | length) >= 1 then "failed"
+          else "active" end' 2>/dev/null || echo 'unreadable')"
+    case "$st" in succeeded|failed) break ;; esac
+    sleep 3
+  done
+  kubectl -n "$NAMESPACE" logs "job/$name" --tail=-1 >"$logs" 2>/dev/null || true
+  line="$(grep -E "$INSTALLED_RE" "$logs" | tail -1 || true)"
+  kubectl -n "$NAMESPACE" delete "job/$name" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  rm -f "$render" "$logs"
+  # Strip the marker; MISSING passes through and fails valid_generation at the call site.
+  printf '%s' "${line#STOCK_GEX_OI_INSTALLED }"
 }
 # One anchored grammar for a generation string, used everywhere one is consumed.
 valid_generation() {
@@ -264,7 +285,12 @@ SERVICE_POD="$(service_pod)"
        the index hostPath, nor read the installed generation. Bring the service up first."
 NODE_NAME="$(kubectl -n "$NAMESPACE" get pod "$SERVICE_POD" -o jsonpath='{.spec.nodeName}')"
 [ -n "$NODE_NAME" ] || fatal "pod $SERVICE_POD reports no nodeName"
-PRE_GENERATION="$(installed_generation "$SERVICE_POD")"
+# DRY_RUN creates NOTHING — not even the read-only reader Job — so it cannot learn the installed
+# generation and must not pretend to.
+PRE_GENERATION=""
+if [ "$DRY_RUN" != "true" ]; then
+  PRE_GENERATION="$(read_installed_generation)"
+fi
 DESIRED_SHA="$(desired_sha "$DEPLOY_JSON")"
 echo "service pod: $SERVICE_POD on node $NODE_NAME"
 echo "installed generation (before): ${PRE_GENERATION:-<unreadable>}"
@@ -272,11 +298,28 @@ echo "pod-template ${SHA_ANNOTATION}: ${DESIRED_SHA:-<unset>}"
 # An unreadable pre-run generation must not be compared later as if it were a value: an empty
 # string differs from every real generation and would turn a failed producer into a false
 # "publication happened". Refuse up front instead.
-valid_generation "$PRE_GENERATION" \
-  || fatal "could not read the installed generation from $SERVICE_POD (got '${PRE_GENERATION:-<nothing>}').
+if [ "$DRY_RUN" != "true" ]; then
+  valid_generation "$PRE_GENERATION" \
+    || fatal "the reader Job could not report the installed generation (got '${PRE_GENERATION:-<nothing>}').
        Refusing to start: without a trustworthy before-value this run cannot tell a publication
-       from a failure. Check $INDEX_PATH on node $NODE_NAME."
+       from a failure. Check $INDEX_PATH on node $NODE_NAME (MISSING means there is no index at
+       all — publish one with an explicit TRADE_DATE first)."
+fi
 PRE_SHA="${PRE_GENERATION##* }"
+# Left for the Jenkins post block: it has no way to read the cluster once the run has failed (no
+# pods/exec for this identity), and "how old is the index right now" is what makes an alert
+# actionable. Written ONLY from a generation that actually parsed, and rewritten after a
+# successful publish. (The file is removed at startup, so a previous build's value can never be
+# reported as this build's.)
+write_generation_file() {
+  # $1 = "<tradeDate> <sha>", $2 = free-text note. Age is computed from the trade date, never
+  # assumed: a holiday rebuild or a drift reconciliation can carry an older session.
+  local gen="$1" note="$2" age
+  valid_generation "$gen" || return 0
+  age="$(python3 -c "import datetime,sys; print((datetime.datetime.now(datetime.timezone.utc).date() - datetime.date.fromisoformat(sys.argv[1])).days)" "${gen%% *}" 2>/dev/null || echo '?')"
+  printf 'generation %s (age %s days, %s)\n' "$gen" "$age" "$note" >oi-installed-generation.txt || true
+}
+write_generation_file "$PRE_GENERATION" "installed before this run"
 
 # RESTART_SERVICE=false publishes deliberately without rolling out, and relies on the annotation
 # still naming the OLD generation so the next run sees drift and recovers. With no annotation at
@@ -294,7 +337,7 @@ fi
 # the rollout trigger, so the pod cannot fail to be replaced, and it is the durable record the
 # next run reads.
 rollout_to() {
-  local sha="$1" trade_date="$2" json old_uid old_ann pod pod_uid pod_ann boot live ready
+  local sha="$1" trade_date="$2" json old_uid old_ann pod pod_uid pod_ann pod_node probe boot live ready
   json="$(deployment_json)"
   # Re-check the image RIGHT BEFORE rolling: a service-deploy that landed while the Job was
   # producing would mean rolling a pod whose loader never validated this file.
@@ -344,19 +387,36 @@ rollout_to() {
     || fatal "$pod did not load the expected index (wanted tradeDate=$trade_date)"
   # (c) the file on the mount must STILL be that generation. It is not a read of the pod's
   #     in-memory copy — that is not observable — but with (a) it pins what the pod opened.
-  live="$(installed_generation "$pod")"
+  pod_node="$(kubectl -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.spec.nodeName}')"
+  [ -n "$pod_node" ] || fatal "$pod reports no nodeName"
+  live="$(read_installed_generation "$pod_node")"
   valid_generation "$live" || fatal "could not re-read the installed generation from $pod"
   [ "${live##* }" = "$sha" ] \
     || fatal "the index on the mount ($live) is no longer the generation this rollout targeted
        ($sha) — another writer replaced it"
-  # (d) /readyz is the service's own freshness gate (engine.ready() re-runs is_fresh on the
-  #     LOADED index), so a 200 from the pod's own health port is independent proof.
-  ready="$(kubectl -n "$NAMESPACE" exec "$pod" -c "$SERVICE_CONTAINER" -- python -c "
-import urllib.request
-print(urllib.request.urlopen('http://127.0.0.1:${HEALTH_PORT}/readyz', timeout=10).status)" 2>/dev/null | tr -d '\r')"
-  [ "$ready" = "200" ] || fatal "$pod /readyz returned '${ready:-<no answer>}', expected 200"
+  # (d) READINESS. The pod's Ready condition is set by the kubelet from the readinessProbe, and
+  #     that probe is an httpGet of /readyz — the service's own freshness gate (engine.ready()
+  #     re-runs is_fresh on the LOADED index). So a Ready pod IS a /readyz 200, observed without
+  #     exec (which this identity does not have). The probe path is asserted, not assumed: if
+  #     someone repoints it, this check must stop claiming to prove readiness.
+  probe="$(printf '%s' "$json" | jq -r --arg c "$SERVICE_CONTAINER" \
+    '.spec.template.spec.containers[] | select(.name == $c) | .readinessProbe.httpGet.path // ""')"
+  [ "$probe" = "/readyz" ] \
+    || fatal "$DEPLOYMENT's readinessProbe path is '${probe:-<none>}', not /readyz — the Ready
+       condition no longer proves the service accepted this index. Update this check."
+  ready="$(kubectl -n "$NAMESPACE" get pod "$pod" -o json \
+    | jq -r '[(.status.conditions // [])[] | select(.type == "Ready") | .status] | join("")')"
+  [ "$ready" = "True" ] \
+    || fatal "$pod Ready condition is '${ready:-<none>}' — the kubelet's /readyz probe is not
+       passing, so the service has not accepted this index"
   DESIRED_SHA="$sha"
   SERVICE_POD="$pod"
+  # Adopt the verified pod's node for everything that follows (the producer Job's nodeSelector,
+  # later reads): the index that matters is the one THIS pod mounts.
+  if [ "$pod_node" != "$NODE_NAME" ]; then
+    echo "note: the service moved from node $NODE_NAME to $pod_node — following it"
+    NODE_NAME="$pod_node"
+  fi
   echo "OK: $DEPLOYMENT is serving OI index tradeDate=$trade_date sha256=$sha"
 }
 
@@ -364,10 +424,9 @@ print(urllib.request.urlopen('http://127.0.0.1:${HEALTH_PORT}/readyz', timeout=1
 # annotation is not drift — service-deploy's apply drops it, and that must not cost a restart.
 # DRY_RUN is excluded: it promises to create and change NOTHING, and reconciling drift would
 # patch the Deployment and restart the pod.
-if [ "$DRY_RUN" = "true" ] && [ -n "$DESIRED_SHA" ] && [ "$DESIRED_SHA" != "$PRE_SHA" ]; then
-  echo "DRY_RUN=true — NOT reconciling the existing drift (${SHA_ANNOTATION}=$DESIRED_SHA vs"
-  echo "               installed $PRE_SHA); a real run would roll the service onto the installed"
-  echo "               index first."
+if [ "$DRY_RUN" = "true" ]; then
+  echo "DRY_RUN=true — the installed generation was NOT read (that needs a Job), so no drift"
+  echo "               claim can be made here; a real run reads it and reconciles first."
 fi
 if [ "$DRY_RUN" != "true" ] && [ -n "$DESIRED_SHA" ] && [ "$DESIRED_SHA" != "$PRE_SHA" ]; then
   echo "DRIFT: the pod template asks for $DESIRED_SHA but the installed index is $PRE_SHA —"
@@ -392,6 +451,7 @@ sed -e "s|__IMAGE__|${PINNED_IMAGE}|g" \
     -e "s|__JOB_NAME__|${JOB_NAME}|g" \
     -e "s|__TRADE_DATE__|${TRADE_DATE}|g" \
     -e "s|__NODE_NAME__|${NODE_NAME}|g" \
+    -e "s|__MODE__|produce|g" \
     "$TEMPLATE" >"$RENDER"
 grep -q '__[A-Z_]*__' "$RENDER" && fatal "unsubstituted placeholder left in the render"
 _ns="$(yq -r '.metadata.namespace' "$RENDER")"
@@ -468,8 +528,9 @@ else
   # container can be killed between os.replace and the receipt, and logs can be unavailable. Ask
   # the mount what is installed now and compare with the pre-run generation.
   echo "no usable receipt (state=$state, receipts=$RECEIPT_COUNT) — reconciling the installed generation"
-  RECON_POD="$(service_pod)"
-  POST_GENERATION="$(installed_generation "$RECON_POD")"
+  # The producer's own STOCK_GEX_OI_INSTALLED line reports what was installed BEFORE it ran, so
+  # it cannot answer this question — ask the node for the CURRENT generation.
+  POST_GENERATION="$(read_installed_generation)"
   echo "installed generation (after): ${POST_GENERATION:-<unreadable>}"
   valid_generation "$POST_GENERATION" \
     || fatal "$JOB_NAME produced no receipt (state=$state) AND the installed index could not be
@@ -508,6 +569,9 @@ valid_generation "$PUBLISHED_TRADE_DATE $PUBLISHED_SHA" \
 if [ -n "$TRADE_DATE" ] && [ "$PUBLISHED_TRADE_DATE" != "$TRADE_DATE" ]; then
   fatal "requested TRADE_DATE=$TRADE_DATE but the published index says $PUBLISHED_TRADE_DATE"
 fi
+# Publication is established HERE, before the rollout can fail — so an alert after a failed
+# rollout reports what is actually on disk, not the pre-run value.
+write_generation_file "$PUBLISHED_TRADE_DATE $PUBLISHED_SHA" "published by this run, rollout pending"
 
 prune_terminal_jobs() {
   # Best-effort and LAST: nothing else prunes these (there is no CronJob history limit), but a
