@@ -15,17 +15,33 @@ spec:
     spec:
       containers:
         - name: databento-feed
-          # DEV-ONLY memory headroom: 2Gi -> 3Gi. On 2026-08-10 the dev feed was OOMKilled
-          # (exit 137) at 09:32:16 ET — inside the first three minutes of the RTH open — and the
-          # ~2-minute restart produced ZERO options.databento.raw records, so no DATABENTO GEX
-          # record reached any strike and the pre-open UI stayed stuck on "Switching to live
-          # data…" (truthfully: live data had not arrived). The open is this container's peak:
-          # the OPRA subscription resolve (396 contracts) and the first full-chain snapshot burst
-          # land together, on top of the ES-basis engine and the 1DTE AUTO_NEXT_SESSION track that
-          # only dev carries. Requests stay 512Mi, so this raises the ceiling without changing
-          # scheduling pressure on the capacity-limited dev node. PROD IS UNTOUCHED (base stays
-          # 2Gi): prod has neither the extra 1DTE track nor this failure, and its own limit should
-          # be judged on its own evidence, not on dev's.
+          # DEV-ONLY memory headroom: 2Gi -> 3Gi. This is a MITIGATION, not a diagnosed fix.
+          #
+          # WHAT IS ESTABLISHED: on 2026-08-10 the dev feed was OOMKilled (exit 137) at 09:32:16
+          # ET, ~3 minutes into the RTH open. During the ~2-minute restart it produced ZERO
+          # options.databento.raw records, so no DATABENTO record reached any strike and the board
+          # held "Switching to live data…" — the chip flips per strike on that strike's first live
+          # record, and there were none. After the restart: raw +990/15s, gex.strike +3851/20s.
+          # That proves 2Gi was insufficient at that moment. It does NOT prove what consumed the
+          # memory, nor that 3Gi is sufficient.
+          #
+          # HYPOTHESIS (unproven): the open is this container's peak — the OPRA subscription
+          # resolve (396 contracts) and the first full-chain snapshot burst coincide, on top of
+          # the ES-basis engine and the 1DTE AUTO_NEXT_SESSION track that only dev carries.
+          # A leak or an unbounded buffer would present identically in a single OOM sample.
+          # WHAT WOULD DISTINGUISH THEM: an RSS/working-set series across startup -> open ->
+          # several hours. Bounded post-open memory supports the peak-pressure reading; continued
+          # growth means a leak and this ceiling only buys time. Dev has no metrics-server, so
+          # that series is not captured yet; if this OOMs again at 3Gi, treat it as a leak and
+          # stop raising the limit.
+          #
+          # CAPACITY (measured 2026-08-10): node allocatable 63.2 GiB; sum of ALL running pod
+          # memory limits 9.4 GiB, requests 2.0 GiB. The extra 1 GiB of ceiling is negligible
+          # against that headroom. Requests stay 512Mi, so scheduling pressure and the Burstable
+          # QoS class are unchanged.
+          #
+          # PROD IS UNTOUCHED (base stays 2Gi): prod carries neither the extra 1DTE track nor
+          # this failure, and its limit should be judged on its own evidence, not on dev's.
           resources:
             requests:
               cpu: 250m
