@@ -503,18 +503,17 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
-  # stock-gex is DEV-FIRST and ON-DEMAND: registered for production so the slice exists and stays
-  # mirror-validated, but held at replicas:0 until the nightly OI-index builder job exists on prod
-  # (without /var/lib/options-edge/stock-gex-oi/stock-gex-oi-index.json.gz the readiness probe can
-  # never pass by design). Paired with a morning-autostart KEEP_DOWN entry — replicas:0 without one
-  # would be scaled back to 1 at 06:15 ET. Enable = remove this patch AND the KEEP_DOWN entry.
-  - target:
-      kind: Deployment
-      name: stock-gex-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 0
+  # stock-gex is ON in prod (USER 2026-08-11: "deploy everything in dev and prod"), so the
+  # replicas:0 hold and its morning-autostart KEEP_DOWN entry were BOTH removed together —
+  # replicas:0 without a KEEP_DOWN entry gets scaled back to 1 at 06:15 ET anyway, and a
+  # KEEP_DOWN entry without the patch would fight the deploy. Base already renders 1.
+  # PRECONDITION, enforced by the readiness probe rather than by this file: the nightly
+  # OI index must exist at /var/lib/options-edge/stock-gex-oi/stock-gex-oi-index.json.gz on
+  # the prod node. Without it the pod starts and stays NOT READY by design (fail-loud), it
+  # does not serve a wrong board.
+  # ⚠️ The 10-name market-open soak that the design named as the PRODUCTION gate (2x ingest
+  # headroom, p99 event->SSE < 2s, zero silent gaps) has NOT been run — enabling prod ahead
+  # of it is a deliberate USER decision, recorded here so it is not mistaken for a passed gate.
   # databento-maxpain is ON in prod ONLY (USER 2026-08-01: "turn on prod only"; supersedes the
   # 2026-07-30 all-env hold, PR #652). Base stays replicas:0 so dev/experiment render it down;
   # this patch flips prod to 1. Also removed from morning-autostart.sh KEEP_DOWN (prod wake-up)
