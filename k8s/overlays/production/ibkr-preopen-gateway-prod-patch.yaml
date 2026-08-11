@@ -1,0 +1,21 @@
+# PROD gate (gamma), gateway half — mirrors k8s/overlays/dev/ibkr-preopen-gateway-dev-patch.yaml.
+#
+# Lets the gateway relay the pre-open status stream (options.ibkr.gex.status) to the UI, which is
+# what drives the per-strike FRESH/STALE/GATED states and the D12++ SWITCHING/LIVE chips. Without
+# it the gex values would reach the board with no status plane: the UI could not tell a modelled
+# pre-open number from a live one, which is precisely the mislabelling the dev gate refused to ship.
+#
+# Rollback = drop this patch (the gateway then ignores the status topic; values fall back to the
+# pre-existing Databento-only presentation).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feed-gateway-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: feed-gateway
+          env:
+            - { name: GATEWAY_IBKR_PREOPEN_ENABLED, value: "true" }
