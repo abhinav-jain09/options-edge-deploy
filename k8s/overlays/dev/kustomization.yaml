@@ -565,6 +565,9 @@ images:
     newName: host.docker.internal:5001/options-edge-spot-vol-regime
   - name: 192.168.100.252:5000/options-edge-indicator-service
     newName: host.docker.internal:5001/options-edge-indicator-service
+  - name: 192.168.100.252:5000/options-edge-stock-gex
+    newName: host.docker.internal:5001/options-edge-stock-gex
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-shadow
     newName: host.docker.internal:5001/options-edge-oi-shadow
     newTag: dev

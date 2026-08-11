@@ -59,7 +59,11 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   END-OF-DAY 1DTE open interest and the desk trades 0DTE, where no next-day settled
 #   print exists to score it. Also replicas:0 in both overlays. See
 #   docs/oi-nowcast-retirement.md.
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service}"
+#   stock-gex-service: DEV-FIRST/on-demand. Registered for production and replicas:0 in the prod
+#   overlay until the nightly OI-index builder job exists there; without this entry autostart
+#   would scale it to 1 every morning (replicas:0 and a missing KEEP_DOWN entry are mutually
+#   exclusive). Turning it on in prod = drop this entry AND the prod overlay replicas:0 patch.
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service stock-gex-service}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only

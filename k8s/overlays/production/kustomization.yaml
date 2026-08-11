@@ -503,6 +503,18 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
+  # stock-gex is DEV-FIRST and ON-DEMAND: registered for production so the slice exists and stays
+  # mirror-validated, but held at replicas:0 until the nightly OI-index builder job exists on prod
+  # (without /var/lib/options-edge/stock-gex-oi/stock-gex-oi-index.json.gz the readiness probe can
+  # never pass by design). Paired with a morning-autostart KEEP_DOWN entry — replicas:0 without one
+  # would be scaled back to 1 at 06:15 ET. Enable = remove this patch AND the KEEP_DOWN entry.
+  - target:
+      kind: Deployment
+      name: stock-gex-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # databento-maxpain is ON in prod ONLY (USER 2026-08-01: "turn on prod only"; supersedes the
   # 2026-07-30 all-env hold, PR #652). Base stays replicas:0 so dev/experiment render it down;
   # this patch flips prod to 1. Also removed from morning-autostart.sh KEEP_DOWN (prod wake-up)
