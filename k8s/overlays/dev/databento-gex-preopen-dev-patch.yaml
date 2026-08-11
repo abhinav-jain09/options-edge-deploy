@@ -147,7 +147,7 @@ spec:
             #
             # ROLLBACK: set this to "false" here and re-run generate-service-slices.sh — the
             # generated slice carries its own copy.
-            - { name: DATABENTO_GEX_DYNAMIC_OI_ENABLED, value: "true" }
+            - { name: DATABENTO_GEX_DYNAMIC_OI_ENABLED, value: "false" }
             # DEV-FIRST validation of the EXPERIMENTAL smile-IV fallback (proc commit 3fe1a2f7,
             # Codex round-3 APPROVE): rebuild short-dated legs whose IV solve failed on the measured
             # BELOW-INTRINSIC branch from the freshest near-ATM solved IV. The measured 0DTE failure

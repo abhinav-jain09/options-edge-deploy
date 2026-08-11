@@ -61,7 +61,7 @@ spec:
             - name: GEX_SMILE_IV_FALLBACK
               value: "true"
             - name: DATABENTO_GEX_DYNAMIC_OI_ENABLED
-              value: "true"
+              value: "false"
             - name: OI_ANCHOR_MANIFEST_ENABLED
               value: "true"
             - name: APP_MARKET_DATA_SOURCE
