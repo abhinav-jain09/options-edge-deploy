@@ -10,18 +10,28 @@
 # so there was no way to tell them apart. This produces the missing series.
 #
 # HOW TO READ THE OUTPUT. One CSV row per sample:
-#   ts_utc,ts_et,phase,pod,restarts,current_bytes,peak_bytes,limit_bytes,pct_of_limit
+#   ts_utc,ts_et,phase,pod,restarts,last_term,current_bytes,peak_bytes,limit_bytes,pct_of_limit
 # Bounded memory that rises into the open and then plateaus => open-burst peak; the raised ceiling
 # is the right fix. Memory that keeps climbing across the session, or whose peak creeps up day
 # over day, => leak/unbounded buffer, and RAISING THE LIMIT AGAIN IS THE WRONG MOVE (see the
 # stop-rule in k8s/overlays/dev/databento-feed-dev-patch.yaml).
 #
-# `peak_bytes` is the cgroup's own high-water mark since container start (memory.peak on cgroup v2,
-# memory.max_usage_in_bytes on v1) — it survives between samples, so a spike BETWEEN two samples is
-# still caught. That is what makes a 60s interval honest rather than a hope.
+# `peak_bytes` is the cgroup's own high-water mark, but ONLY WITHIN ONE CONTAINER LIFETIME
+# (memory.peak on cgroup v2, memory.max_usage_in_bytes on v1). It catches a spike that happens
+# BETWEEN two samples — but a restart DESTROYS it: the replacement container starts a fresh cgroup,
+# so the next row shows a low peak and the burst that killed the old container is gone from this
+# series. That is precisely the event under investigation, so the script does not rely on the peak
+# to report it: every sample also carries `restarts`, and `last_term` reports the previous
+# container's termination (e.g. OOMKilled:137) read from the pod's lastState, which SURVIVES the
+# restart. A row where last_term contains OOMKilled is the evidence; the peak column is not.
 #
-# READ-ONLY: kubectl get/exec only. Never scales, patches, or deletes anything. Safe to run at any
-# time; it no-ops quietly when dev is scaled down (off-hours) rather than logging noise.
+# Sample fast enough that the shape is visible, not just the endpoint: 60s is adequate for a
+# session-long trend, but use INTERVAL_SECONDS=10 across the open if the goal is the burst profile.
+#
+# NON-MUTATING, not zero-impact: it only ever runs get/exec — never scales, patches or deletes —
+# but `exec` does start a short-lived sh/cat INSIDE the feed's own cgroup, so it borrows a few
+# MiB and a PID from the very budget being measured. Immaterial at 4% of limit, worth knowing if
+# the container is ever near its ceiling. It no-ops quietly when dev is scaled down (off-hours).
 set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
@@ -69,7 +79,7 @@ read_cgroup() {
 }
 
 sample_once() {
-  local pod restarts vals cur peak lim pct
+  local pod restarts last_term vals cur peak lim pct
   pod=$($K get pods -l app.kubernetes.io/name="$DEPLOY" \
         -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{"\n"}{end}' 2>/dev/null | head -1)
   # Fall back to a name match when the label differs from the deployment name.
@@ -79,6 +89,10 @@ sample_once() {
   fi
 
   restarts=$($K get pod "$pod" -o jsonpath="{.status.containerStatuses[?(@.name=='$CONTAINER')].restartCount}" 2>/dev/null)
+  # The previous container's exit SURVIVES the restart that wipes the cgroup peak — this, not the
+  # peak column, is what proves an OOM happened between two samples.
+  last_term=$($K get pod "$pod" -o jsonpath="{.status.containerStatuses[?(@.name=='$CONTAINER')].lastState.terminated.reason}:{.status.containerStatuses[?(@.name=='$CONTAINER')].lastState.terminated.exitCode}" 2>/dev/null)
+  [ "$last_term" = ":" ] && last_term=""
   vals=$(read_cgroup "$pod")
   cur=${vals%%,*}; peak=$(echo "$vals" | cut -d, -f2); lim=$(echo "$vals" | cut -d, -f3)
   [ -z "$cur" ] && { log "WARN: could not read cgroup memory for $pod (exec failed or files absent)"; return 0; }
@@ -89,13 +103,13 @@ sample_once() {
     pct=$(awk -v c="$cur" -v l="$lim" 'BEGIN{printf "%.1f", (c/l)*100}')
   fi
 
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$(date -u '+%FT%TZ')" "$(TZ=America/New_York date '+%FT%T')" "$(phase_for)" \
-    "$pod" "${restarts:-}" "$cur" "$peak" "$lim" "$pct" >>"$OUT"
+    "$pod" "${restarts:-}" "${last_term:-}" "$cur" "$peak" "$lim" "$pct" >>"$OUT"
 }
 
 mkdir -p "$(dirname "$OUT")" || { log "FATAL: cannot create $(dirname "$OUT")"; exit 1; }
-[ -s "$OUT" ] || echo "ts_utc,ts_et,phase,pod,restarts,current_bytes,peak_bytes,limit_bytes,pct_of_limit" >"$OUT"
+[ -s "$OUT" ] || echo "ts_utc,ts_et,phase,pod,restarts,last_term,current_bytes,peak_bytes,limit_bytes,pct_of_limit" >"$OUT"
 
 $K get deploy "$DEPLOY" >/dev/null 2>&1 || { log "FATAL: cannot reach $NS/$DEPLOY on context $CTX"; exit 1; }
 
