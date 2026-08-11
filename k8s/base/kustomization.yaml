@@ -53,6 +53,8 @@ resources:
   - spot-vol-regime-service.yaml
   - indicator-service-deployment.yaml
   - indicator-service-service.yaml
+  - stock-gex-deployment.yaml
+  - stock-gex-service.yaml
   - oi-shadow-deployment.yaml
   - oi-shadow-service.yaml
   - vix-option-inteligence-deployment.yaml

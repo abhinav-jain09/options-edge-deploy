@@ -95,6 +95,10 @@ services:
   - { name: close-direction,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-close-direction,              deployments: [close-direction-service] }
   - { name: spot-vol-regime,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spot-vol-regime,              deployments: [spot-vol-regime-service] }
   - { name: indicator-service,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-indicator-service,            deployments: [indicator-service] }
+  # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
+  # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
+  # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.
+  - { name: stock-gex,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-stock-gex,                    deployments: [stock-gex-service], buildJob: options-edge-stock-gex-deploy }
   # SPXW session-close open-interest shadow experiment. Ships DISABLED (OI_SHADOW_ENABLED=false):
   # the requirement's observation calendar starts at a NAMED session, so being deployed must not
   # be the same thing as having started. No consumers by design.

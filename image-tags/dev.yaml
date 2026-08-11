@@ -43,6 +43,9 @@ images:
   close-direction-service: 192.168.100.252:5000/options-edge-close-direction:dev
   spot-vol-regime-service: 192.168.100.252:5000/options-edge-spot-vol-regime:dev
   indicator-service: 192.168.100.252:5000/options-edge-indicator-service:dev
+  # stock-gex builds in the options-edge-databento-feed repo and pushes to the local dev
+  # registry (host.docker.internal:5001 — the same registry as .252:5000, by its other name).
+  stock-gex-service: host.docker.internal:5001/options-edge-stock-gex:dev
   vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev
   greek-move-authenticity-service: 192.168.100.252:5000/options-edge-greek-move-authenticity:dev
   es-open-direction-postgres-writer: 192.168.100.252:5000/options-edge-es-open-direction-postgres-writer:dev

@@ -37,6 +37,16 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
+  # stock-gex is dev+production only (services.yaml envs) — same pattern again. Experiment builds
+  # no :dev image for it, its hostPath OI index does not exist on .2, and a live Databento
+  # subscription there would burn a connection slot for nothing. Keep it OFF.
+  - target:
+      kind: Deployment
+      name: stock-gex-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   - path: web-dev-env-patch.yaml
   # EXPERIMENT: give the k8s feed-gateway the .2 WS auth/origins/replay config, so the browser's live
   # WS (ws://localhost:18091, tunnel -> .2:8091) is accepted from the web origin http://localhost:18090.

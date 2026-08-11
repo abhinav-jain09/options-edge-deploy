@@ -59,6 +59,7 @@ pipeline {
     string(name: 'INDICATOR_SERVICE_IMAGE', defaultValue: '', description: '0DTE indicator service image')
     string(name: 'DROP_CLASSIFIER_IMAGE', defaultValue: '', description: 'Drop classifier service image')
     string(name: 'OI_SHADOW_IMAGE', defaultValue: '', description: 'SPXW open-interest shadow experiment image')
+    string(name: 'STOCK_GEX_IMAGE', defaultValue: '', description: 'SPX-500 single-stock GEX service image (builds in the databento-feed repo)')
     string(name: 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'ES open-direction postgres writer image')
     string(name: 'REVERSAL_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Reversal calibration postgres writer image')
     string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', defaultValue: '', description: 'Strike-flow Avro adapter image (unified-sr FLOW producer)')
@@ -388,6 +389,7 @@ pipeline {
             'CLOSE_DIRECTION_IMAGE': 'close-direction',
             'SPOT_VOL_REGIME_IMAGE': 'spot-vol-regime',
             'INDICATOR_SERVICE_IMAGE': 'indicator-service',
+            'STOCK_GEX_IMAGE': 'stock-gex',
             'OI_SHADOW_IMAGE': 'oi-shadow',
             'REVERSAL_POSTGRES_WRITER_IMAGE': 'reversal-postgres-writer',
             'STRIKE_FLOW_AVRO_ADAPTER_IMAGE': 'strike-flow-avro-adapter', 'GEX_DELTA_REDIS_WRITER_IMAGE': 'gex-delta-redis-writer',
