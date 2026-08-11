@@ -9,7 +9,7 @@
 #
 #   Incident 2026-07-31 (market hours, board dark ~2h): this line read
 #       service: http://192.168.100.252:8091      # feed-gateway-service LoadBalancer
-#   and every WebSocket handshake from https://fullfunding.nl died with close code 1006.
+#   and every WebSocket handshake from the public apex (then fullfunding.nl) died with code 1006.
 #   k3s's ServiceLB (klipper-lb) proxies plain HTTP fine — GET /health returned 200 and an
 #   unauthenticated upgrade returned a clean 401 — but it does not carry the WebSocket upgrade
 #   through, so the connection never reached the gateway: its `clients` counter sat at 0 for
@@ -32,29 +32,56 @@ no-autoupdate: true
 
 ingress:
   # Order matters: the path rule must precede the catch-all for the same hostname.
-  - hostname: fullfunding.nl
+  #
+  # fullfunding.nl / es. / auth. were RETIRED on 2026-08-08 (migration Phase 3, no redirect by
+  # operator decision): that domain is being reused for unrelated applications, so it must NOT
+  # route here at all. Re-adding any of those hostnames would hijack traffic from whatever now
+  # owns the domain. See docs/domain-migration-bleadingoptions.md.
+  - hostname: bleadingoptions.com
     path: /ws/events
     service: http://192.168.100.252:30097     # feed-gateway-service NodePort — NOT the 8091 ServiceLB
-  - hostname: fullfunding.nl
+  - hostname: bleadingoptions.com
     service: http://192.168.100.252:8094
-  - hostname: auth.fullfunding.nl
+  # ⚠️ Hardcoded ClusterIP: it survives pod restarts but NOT a delete+recreate of the Service.
+  # If auth.bleadingoptions.com starts 502-ing, re-read it with
+  #   kubectl -n options-edge get svc oe-keycloak -o jsonpath='{.spec.clusterIP}'
+  # The /admin + /realms/master 404 blocks MUST precede the hostname catch-all (first match wins).
+  - hostname: auth.bleadingoptions.com
     path: /admin
     service: http_status:404
-  - hostname: auth.fullfunding.nl
+  - hostname: auth.bleadingoptions.com
     path: /realms/master
     service: http_status:404
-  # ⚠️ Hardcoded ClusterIP: it survives pod restarts but NOT a delete+recreate of the Service.
-  # If auth.fullfunding.nl starts 502-ing, re-read it with
-  #   kubectl -n options-edge get svc oe-keycloak -o jsonpath='{.spec.clusterIP}'
-  - hostname: auth.fullfunding.nl
+  - hostname: auth.bleadingoptions.com
     service: http://10.43.127.26:8080         # Keycloak ClusterIP (host-reachable; traefik :80 is broken)
     originRequest:
-      httpHostHeader: auth.fullfunding.nl
+      httpHostHeader: auth.bleadingoptions.com
   # es4 already routed /ws/events to a NodePort — which is why the ES board kept working
   # through the prod outage and was the control that isolated the bug.
-  - hostname: es.fullfunding.nl
+  - hostname: es.bleadingoptions.com
     path: /ws/events
     service: http://192.168.100.4:30091
-  - hostname: es.fullfunding.nl
+  - hostname: es.bleadingoptions.com
     service: http://192.168.100.4:30080
+  # Bugzilla, served by its own Apache as a host container on :8092 — deliberately NOT moved into
+  # Kubernetes: it is memory-hungry and lives where the memory is, while the hostname it answers on
+  # is just routing. Reaching it needs no NodePort and no ClusterIP, so nothing here breaks when a
+  # Service is recreated.
+  #
+  # This works only because OIDCRedirectURI in /home/options-edge/config/bugzilla-oidc.conf is
+  # PATH-ONLY (/oauth2callback) with OIDCXForwardedHeaders trusting X-Forwarded-Proto/Host. Pinned
+  # to a single hostname, as it was until 2026-08-08, mod_auth_openidc answers every request for
+  # any OTHER host with a 500 — so a hostname added here without that change would look broken
+  # rather than merely misrouted. Keycloak client `bugzilla` carries the matching
+  # https://req.bleadingoptions.com/oauth2callback redirect URI.
+  - hostname: req.bleadingoptions.com
+    service: http://127.0.0.1:8092
+  # fullfunding.nl is NOT the trading platform any more. Phase 3 retired it from
+  # options-edge (see the note above); the domain now belongs to the FullFunding
+  # jaarrekening app, which is a different application in its own namespace.
+  # Static files only, served by traefik from the fullfunding namespace — so this
+  # goes to traefik on :80 and is matched by Host, not to a NodePort or ClusterIP
+  # that a Service recreation would invalidate.
+  - hostname: fullfunding.nl
+    service: http://127.0.0.1:80
   - service: http_status:404

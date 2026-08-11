@@ -41,7 +41,18 @@ spec:
             # EXTRA_INSTRUMENTS='[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
             # and DATABENTO_VIX_PRICE_ENABLED="true", then redeploy databento-feed.
             - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: ""
+              # The 1DTE track. Empty here meant prod resolved only the 0DTE slice (396 contracts
+              # against dev's 792), and the OI nowcast buckets by DTE_1/DTE_2/DTE_3_7 -- 0DTE maps
+              # to no bucket at all. Measured on prod 2026-08-10: 388,633 snapshots seen, 388,633
+              # skipped for no band, ZERO nowcast records, while dev with the same manifest
+              # (SPX|20260810, 2780 legs) published 72,859 and applied 29,790 dynamic-OI updates.
+              # Every one of dev's published legs was expiry 20260811 -- i.e. this track alone.
+              #
+              # Strike range MIRRORS the primary 0DTE track exactly (configmap
+              # DATABENTO_MIN_STRIKE/MAX_STRIKE/STRIKE_STEP = 7000/8000/5, shared with dev). The
+              # two tracks must cover the same strikes or the 0DTE and 1DTE surfaces are not
+              # comparable and constant-one-day-vol interpolates across a hole.
+              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
             # ES->SPX basis engine (ES-SPX-TRANSLATION-ENGINE.md, Codex-approved).

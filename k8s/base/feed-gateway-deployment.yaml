@@ -73,11 +73,11 @@ spec:
             - name: WS_AUTH_ENABLED
               value: "true"
             - name: WS_AUTH_ISSUER_URI
-              value: "https://auth.fullfunding.nl/realms/optionsedge"
+              value: "https://auth.bleadingoptions.com/realms/optionsedge"
             - name: WS_AUTH_AUDIENCE
               value: "options-edge-web"
             - name: WS_ALLOWED_ORIGINS
-              value: "https://fullfunding.nl"
+              value: "https://bleadingoptions.com"
           envFrom:
             - configMapRef:
                 name: options-edge-config

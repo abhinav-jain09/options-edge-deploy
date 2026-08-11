@@ -59,6 +59,8 @@ spec:
     spec:
       containers:
         - env:
+            - name: GATEWAY_IBKR_PREOPEN_ENABLED
+              value: "true"
             - name: OE_WATCH_JDBC_URL
               value: jdbc:postgresql://192.168.100.252:5432/options_flow
             - name: OE_WATCH_DB_USER
@@ -106,11 +108,11 @@ spec:
             - name: WS_AUTH_ENABLED
               value: "true"
             - name: WS_AUTH_ISSUER_URI
-              value: https://auth.fullfunding.nl/realms/optionsedge
+              value: https://auth.bleadingoptions.com/realms/optionsedge
             - name: WS_AUTH_AUDIENCE
               value: options-edge-web
             - name: WS_ALLOWED_ORIGINS
-              value: https://fullfunding.nl
+              value: https://bleadingoptions.com
           envFrom:
             - configMapRef:
                 name: options-edge-config

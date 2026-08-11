@@ -45,7 +45,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: oi-shadow-service
@@ -61,9 +61,9 @@ spec:
       containers:
         - env:
             - name: OI_SHADOW_ENABLED
-              value: "true"
+              value: "false"
             - name: OI_SHADOW_SEED_COEFFICIENTS_ENABLED
-              value: "true"
+              value: "false"
             - name: HEALTH_PORT
               value: "8150"
             - name: OI_SHADOW_SYMBOL

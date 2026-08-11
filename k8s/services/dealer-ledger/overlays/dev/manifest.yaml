@@ -60,12 +60,16 @@ spec:
               value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms1024m -Xmx6144m
+            - name: DEALER_LEDGER_ABSORPTION_GATE_MODE
+              value: CONFIDENCE
+            - name: DEALER_LEDGER_FIRE_GREEKS_MIN_QUALITY
+              value: DEGRADED
             - name: DEALER_LEDGER_ABSORB_MIN_FRACTION
               value: "0.50"
             - name: DEALER_LEDGER_ABSORB_MIN_NOTIONAL
               value: "2000000"
             - name: DEALER_LEDGER_ABSORB_MIN_WAVES
-              value: "2"
+              value: "1"
             - name: DEALER_LEDGER_WAVE_MIN_NOTIONAL
               value: "750000"
             - name: DEALER_LEDGER_WAVE_GAP_MS
@@ -107,7 +111,9 @@ spec:
             - name: DEALER_LEDGER_MIN_LEDGER_NOTIONAL
               value: "7500000"
             - name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE
-              value: MEDIUM
+              value: LOW
+            - name: KAFKA_DEALER_LEDGER_MAX_RECORD_BYTES
+              value: "16777216"
             - name: DEALER_LEDGER_GROSS_NET_MAX
               value: "6.0"
             - name: APP_MARKET_DATA_SOURCE

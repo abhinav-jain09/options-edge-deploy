@@ -17,13 +17,21 @@
 #
 # Full clean deletes every non-system topic + every *-streams-state PVC, trims the broker logs, and
 # prunes docker-engine build cache. Keeps __consumer_offsets/__transaction_state/_schemas + Keycloak.
-# Needs bash 4+ and the jenkins-deployer SA (docker-desktop enforces the jenkins-only admission policy).
+# Needs the jenkins-deployer SA (docker-desktop enforces the jenkins-only admission policy). Keep this
+# file POSIX-ish/bash-3.2 safe: the shebang resolves against the INHERITED PATH, so under launchd it
+# can be /bin/bash 3.2 — no associative arrays, no namerefs.
 set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 K="kubectl --context docker-desktop -n options-edge --as=system:serviceaccount:options-edge:jenkins-deployer"
 KK="kubectl --context docker-desktop -n options-edge"
 KT=/Users/abhinav/kafka-4.3.0/bin/kafka-topics.sh
+# kafka-configs is the SIBLING of $KT on purpose: ensure_topics reconciles topic config with the
+# same CLI generation that creates the topics. `--alter --add-config` is INCREMENTAL here (Kafka
+# 2.3+ uses incrementalAlterConfigs for topic entities), so it merges rather than replacing the
+# config set — the legacy whole-set alter is what silently dropped cleanup.policy=compact off 12
+# dealer-ledger changelogs on 2026-08-08.
+KC="$(dirname "$KT")/kafka-configs.sh"
 BS=localhost:19092
 KAFKA_DATA=/Users/abhinav/development/kafka-options-edge/data
 KEEP='keycloak'                                          # deployments to leave running (regex)
@@ -82,28 +90,163 @@ clean_logs() {
   [ -d "$LOGDIR2" ] && find "$LOGDIR2" -name '*.log.20*' -type f -mtime +1 -delete 2>/dev/null
 }
 
+# topic_desired NAME -> sets DPOL/DPARTS/DRET/DDR from the eval'd topics.env lists. Globals, not an
+# associative array: this file's `#!/usr/bin/env bash` resolves against the INHERITED PATH (the
+# export at the top of this script runs too late to matter), so under launchd it can be /bin/bash
+# 3.2, which has neither `declare -A` nor namerefs. Mirrors apply-topics.sh's topic_cleanup_policy /
+# topic_retention_ms / topic_delete_retention_ms so a dev clean and the canonical applier cannot
+# disagree about the values BOTH derive from topics.env.
+#
+# SCOPE, stated so nobody reads more assurance into the check below than it gives: this covers
+# cleanup.policy, the per-topic retention.ms / delete.retention.ms OVERRIDES, and partition count —
+# the things topics.env alone determines. It does NOT cover the GLOBAL retention.ms or
+# min.insync.replicas that apply-topics.sh stamps on every topic, because those come from the
+# deploy's own environment (RETENTION_MS / MIN_ISR), which this script has no access to. A topic
+# left at a wrong global retention — e.g. by a cleanup-topics.sh retention-shrink run that never
+# restored it — is therefore still invisible here and is repaired by the next real deploy.
+topic_desired() {
+  local name="$1" spec entry
+  DPOL=delete; DPARTS=32; DRET=""; DDR=""
+  for spec in $OPTIONS_EDGE_TOPICS; do
+    [ "${spec%%:*}" = "$name" ] && [ -n "${spec##*:}" ] && DPARTS="${spec##*:}"
+  done
+  # PURE compact only for the pure-compact list, compact,delete for the ordinary compacted list,
+  # delete otherwise. This used to collapse to a bare `compact` for EVERY compacted topic, so a wipe
+  # rebuilt them with a policy the canonical applier never assigns — and the es-indicator mirror job,
+  # which asserts cleanup.policy=compact,delete before it will install, refuses such a topic.
+  case " $OPTIONS_EDGE_COMPACTED_TOPICS " in *" $name "*) DPOL=compact,delete ;; esac
+  case " ${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-} " in *" $name "*) DPOL=compact ;; esac
+  # Per-topic retention override. Without this a wipe rebuilt every override-carrying topic on the
+  # dev broker default (retention.ms=-1), i.e. unbounded — the opposite of the declaration.
+  for entry in ${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-}; do
+    [ "${entry%%=*}" = "$name" ] && DRET="${entry#*=}"
+  done
+  # Tombstone survival (R-WIRE.2): the recreate path must honour the SAME per-topic
+  # delete.retention.ms contract apply-topics.sh enforces — without it every nightly wipe
+  # silently stripped the 48h guarantee.
+  for entry in ${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}; do
+    [ "${entry%%=*}" = "$name" ] && DDR="${entry#*=}"
+  done
+}
+
+# reconcile_declared_topics: ONE bulk describe, then fix only the SCOPED fields that differ
+# (cleanup.policy + the per-topic retention overrides; partition count is reported, never changed).
+#
+# This is the race guard for those fields. `--create --if-not-exists` no-ops silently on an existing topic, and the
+# create loop above is ~130 Kafka CLI JVM launches long, so an external producer can auto-create its
+# topic at ANY point during it — a snapshot taken before the loop cannot see that, which is why this
+# is a pass AFTER the loop rather than a per-topic check inside it. It runs for every caller, so a
+# transient failure is retried by the next start instead of surviving unnoticed.
+#
+# Config drift is repaired here with the same incremental add-config the canonical applier makes:
+# idempotent, but not free of consequence — raising a topic from an inherited retention.ms=-1 to a
+# declared 7d window will purge segments older than that window, and a consumer lagging beyond it
+# gets OffsetOutOfRange. That is the declared contract being applied, and dev is entitled to it.
+# Partition drift is NOT repaired: Kafka only grows partition counts, and
+# ensure_topics also runs from do_start/do_start_overnight where a delete+recreate would destroy
+# live data. It is reported loudly instead and left to apply-topics.sh, which fails closed on
+# OPTIONS_EDGE_EXACT_PARTITION_TOPICS and carries the gated destructive repair.
+reconcile_declared_topics() {
+  local desc line spec name cfg have_pol have_ret have_dr have_parts need polcfg fixed=0 drift=0
+  desc="$($KT --bootstrap-server $BS --describe 2>/dev/null | grep '^Topic:')"
+  if [ -z "$desc" ]; then
+    echo "  WARNING: could not describe topics — declared shapes NOT verified this run."
+    return 0
+  fi
+  for spec in $OPTIONS_EDGE_TOPICS; do
+    name="${spec%%:*}"
+    line="$(printf '%s\n' "$desc" | awk -v t="$name" '$2==t && /PartitionCount:/ {print; exit}')"
+    if [ -z "$line" ]; then
+      echo "  WARNING: declared topic $name is ABSENT right after create — apps may recreate it with broker defaults."
+      drift=$((drift+1)); continue
+    fi
+    topic_desired "$name"
+    have_parts="$(printf '%s' "$line" | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p')"
+    # cleanup.policy is matched longest-first because "compact,delete" contains "compact"; an empty
+    # result means the topic carries no override and inherits the broker default (delete).
+    case "$line" in
+      *cleanup.policy=compact,delete*) have_pol=compact,delete ;;
+      *cleanup.policy=compact*)        have_pol=compact ;;
+      *cleanup.policy=delete*)         have_pol=delete ;;
+      *)                               have_pol="" ;;
+    esac
+    # delete.retention.ms ENDS IN retention.ms, so mask it before reading retention.ms itself.
+    cfg="$(printf '%s' "$line" | sed 's/delete\.retention\.ms/DELRET/g')"
+    have_ret="$(printf '%s' "$cfg" | sed -n 's/.*[,: ]retention\.ms=\(-\{0,1\}[0-9]*\).*/\1/p')"
+    have_dr="$(printf '%s' "$cfg" | sed -n 's/.*DELRET=\([0-9]*\).*/\1/p')"
+    need=""
+    case "$DPOL" in
+      # A declared-plain topic that simply inherits the broker default is CORRECT — only an
+      # explicitly wrong policy (e.g. left compacted) is drift. Without this the pass would rewrite
+      # ~110 plain topics on every single run.
+      delete) [ -n "$have_pol" ] && [ "$have_pol" != delete ] && need="cleanup.policy=delete" ;;
+      *)      if [ "$have_pol" != "$DPOL" ]; then
+                case "$DPOL" in *,*) polcfg="[$DPOL]" ;; *) polcfg="$DPOL" ;; esac
+                need="cleanup.policy=$polcfg"
+              fi ;;
+    esac
+    [ -n "$DRET" ] && [ "$have_ret" != "$DRET" ] && need="$need${need:+,}retention.ms=$DRET"
+    [ -n "$DDR" ]  && [ "$have_dr"  != "$DDR"  ] && need="$need${need:+,}delete.retention.ms=$DDR"
+    if [ -n "$need" ]; then
+      # `--add-config` separates entries with commas, so a comma-BEARING value must be bracketed
+      # (cleanup.policy=[compact,delete]) or the broker reads "delete" as a second, malformed entry.
+      # apply-topics.sh does the same in kafka_config_value(); the `--create --config` form needs no
+      # brackets because each --config is already its own argv entry.
+      if $KC --bootstrap-server $BS --entity-type topics --entity-name "$name" --alter \
+           --add-config "$need" >/dev/null 2>&1; then
+        echo "  reconciled $name -> $need"
+        fixed=$((fixed+1))
+      else
+        echo "  WARNING: could not reconcile $name -> $need"
+        drift=$((drift+1))
+      fi
+    fi
+    # Partition verdict must use the SAME rule apply-topics.sh uses, or this pass cries wolf. The
+    # canonical applier treats EXCESS partitions as compatible (more parallelism) for ordinary
+    # topics and demands equality only for OPTIONS_EDGE_EXACT_PARTITION_TOPICS. Warning about
+    # something no tool will ever repair just teaches the reader to skip the warnings that matter.
+    case " ${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-} " in
+      *" $name "*)
+        if [ "$have_parts" != "$DPARTS" ]; then
+          echo "  WARNING: EXACT-partition topic $name has $have_parts partitions, declared $DPARTS — a producer beat the create through auto.create.topics.enable. Kafka cannot shrink partitions, so apply-topics.sh FAILS CLOSED on this until an operator runs the gated destructive repair (KAFKA_RECREATE_MISMATCHED_TOPICS=true)."
+          drift=$((drift+1))
+        fi ;;
+      *)
+        if [ "$have_parts" -lt "$DPARTS" ] 2>/dev/null; then
+          echo "  WARNING: topic $name has $have_parts partitions, declared at least $DPARTS — a GATED deploy grows it (apply-topics.sh needs KAFKA_RECREATE_MISMATCHED_TOPICS=true; without it the deploy fails closed)."
+          drift=$((drift+1))
+        fi ;;
+    esac
+  done
+  echo "  shape check: $fixed config(s) reconciled, $drift unresolved."
+}
+
 # ensure_topics: pre-create the platform topics from the deploy repo's topics.env (source of truth).
 # Best-effort fetch so we pick up the latest reviewed config; if offline we use the last-fetched origin/main.
+#
+# After creating, it VERIFIES every declared topic against one bulk describe and reconciles the
+# config of any that does not match. That second pass is what makes this race-proof, and the
+# reason it is a pass rather than an in-loop check: `--create --if-not-exists` no-ops silently on a
+# topic that already exists, and the creating loop is ~130 Kafka CLI JVM launches long, so a
+# still-running external producer can auto-create its topic at ANY point during it — including
+# after any snapshot taken at the start. The pass runs on every caller, not just the wipe, so a
+# transient failure is retried by the next start instead of surviving until someone notices.
 ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
-    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|TOPIC_DELETE_RETENTION_OVERRIDES)=')"
-    local n=0 spec name parts pol extra dr entry
+    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES)=')"
+    local n=0 spec name extra rt
     for spec in $OPTIONS_EDGE_TOPICS; do
-      name="${spec%%:*}"; parts="${spec##*:}"; pol=delete
-      case " $OPTIONS_EDGE_COMPACTED_TOPICS " in *" $name "*) pol=compact ;; esac
-      # Tombstone survival (R-WIRE.2): the recreate path must honour the SAME per-topic
-      # delete.retention.ms contract the canonical applier (apply-topics.sh) enforces —
-      # without this, every nightly wipe silently stripped the 48h guarantee.
-      extra=""
-      for entry in ${OPTIONS_EDGE_TOPIC_DELETE_RETENTION_OVERRIDES:-}; do
-        if [ "${entry%%=*}" = "$name" ]; then dr="${entry#*=}"; extra="--config delete.retention.ms=$dr"; fi
-      done
+      name="${spec%%:*}"
+      topic_desired "$name"
+      extra=""; [ -n "$DDR" ]  && extra="--config delete.retention.ms=$DDR"
+      rt="";    [ -n "$DRET" ] && rt="--config retention.ms=$DRET"
       $KT --bootstrap-server $BS --create --if-not-exists --topic "$name" \
-        --partitions "${parts:-32}" --replication-factor 1 --config cleanup.policy="$pol" $extra >/dev/null 2>&1 && n=$((n+1))
+        --partitions "$DPARTS" --replication-factor 1 --config cleanup.policy="$DPOL" $extra $rt >/dev/null 2>&1 && n=$((n+1))
     done
     echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
+    reconcile_declared_topics
     echo "  topics present now: $($KT --bootstrap-server $BS --list 2>/dev/null | grep -vcE '^__|^_schemas')"
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $TOPICS_ENV_REF) — apps will create their topics on startup (slower to READY)."
@@ -329,7 +472,8 @@ for p in json.load(sys.stdin)["items"]:
   # 4. CLEAN + RECREATE the topics — ONLY on a WIPE_KAFKA reset (default true, 2026-07-11). Retention is
   #    now ETERNAL (-1), so data is deleted HERE (manual wipe), NOT by a TTL. After deleting every
   #    non-system topic we RECREATE the deploy repo's platform/feed topics (ensure_topics) so they exist
-  #    empty with eternal retention; each service self-creates its own output + Streams-internal topics on
+  #    empty at their declared shape (per-topic retention overrides included; unlisted topics inherit
+  #    the broker default); each service self-creates its own output + Streams-internal topics on
   #    startup. (_schemas + __consumer_offsets/__transaction_state are never deleted.)
   if [ "$WIPE_KAFKA" != true ]; then
     echo "4) keeping topics (WIPE_KAFKA=false)"

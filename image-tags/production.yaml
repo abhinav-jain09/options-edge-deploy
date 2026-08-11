@@ -1,4 +1,6 @@
 images:
+  # fullfunding tenant — built on .252 (amd64 native); the app is static files only.
+  fullfunding-app: 192.168.100.252:5000/fullfunding-app:v1
   raw-to-display-service: 192.168.100.252:5000/options-edge-raw-to-display:prod
   databento-mission-sandwich-service: 192.168.100.252:5000/options-edge-databento-mission-sandwich:prod
   directional-pressure-service: 192.168.100.252:5000/options-edge-directional-pressure:prod
@@ -36,6 +38,9 @@ images:
   es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:prod
   close-direction-service: 192.168.100.252:5000/options-edge-close-direction:prod
   spot-vol-regime-service: 192.168.100.252:5000/options-edge-spot-vol-regime:prod
+  # Required even though prod holds stock-gex at replicas:0: without a production mapping the
+  # per-service fast path fails closed (service-deploy.sh would otherwise pin the dev registry).
+  stock-gex-service: 192.168.100.252:5000/options-edge-stock-gex:prod
   indicator-service: 192.168.100.252:5000/options-edge-indicator-service:prod
   vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:prod
   greek-move-authenticity-service: 192.168.100.252:5000/options-edge-greek-move-authenticity:prod

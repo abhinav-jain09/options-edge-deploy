@@ -14,6 +14,13 @@
 # image:      the image basename in the env registry (oeProfile prepends the registry).
 # managedBy:  standalone = has its own <svc>-deploy fast path;
 #             monolith   = still deployed by the monolithic options-edge-deploy.
+# namespace:  WHICH APPLICATION the service belongs to. Optional; unset means `options-edge`,
+#             so every pre-existing entry keeps its behaviour and nothing needs back-filling.
+#             Set it to `fullfunding` (or a future tenant) and service-deploy applies there
+#             instead — the build reads this rather than assuming, and refuses if the rendered
+#             manifests disagree with what is registered here.
+#             The namespace itself is created by its own tenant/infra job, never by a service
+#             deploy: see k8s/tenants/<tenant>/bootstrap.
 # Migration COMPLETE for the processing repo (2026-07-02): every processing service is
 # standalone. sliceGenerated entries get their overlays from
 # scripts/deploy/generate-service-slices.sh (the monolith render of just that service —
@@ -35,6 +42,21 @@ services:
     producedTopics: []
     requiredConfigKeys: [KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, POSTGRES_JDBC_URL]
 
+  # --- fullfunding tenant --------------------------------------------------------------
+  # The `namespace` field is what routes this away from options-edge. Without it the deploy
+  # would default to options-edge and the render/registry guard would refuse it.
+  - name: fullfunding-app
+    namespace: fullfunding
+    managedBy: standalone
+    image: fullfunding-app
+    deployments: [fullfunding-app]
+    container: web
+    sourceRepo: fullfunding-workspace
+    envs: [production]
+    dependsOnInfraOnly: true
+    consumedTopics: []
+    producedTopics: []
+    requiredConfigKeys: []
   # --- monolith (deployed by options-edge-deploy; migrate in batches) ------------------
   - { name: databento-feed,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-feed,               deployments: [options-edge-databento-feed], buildJob: options-edge-databento-feed-deploy }
   - { name: databento-sr3-feed,           managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-sr3-feed,           deployments: [databento-sr3-feed-service], buildJob: options-edge-databento-sr3-feed-deploy }
@@ -73,6 +95,10 @@ services:
   - { name: close-direction,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-close-direction,              deployments: [close-direction-service] }
   - { name: spot-vol-regime,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spot-vol-regime,              deployments: [spot-vol-regime-service] }
   - { name: indicator-service,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-indicator-service,            deployments: [indicator-service] }
+  # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
+  # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
+  # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.
+  - { name: stock-gex,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-stock-gex,                    deployments: [stock-gex-service], buildJob: options-edge-stock-gex-deploy }
   # SPXW session-close open-interest shadow experiment. Ships DISABLED (OI_SHADOW_ENABLED=false):
   # the requirement's observation calendar starts at a NAMED session, so being deployed must not
   # be the same thing as having started. No consumers by design.

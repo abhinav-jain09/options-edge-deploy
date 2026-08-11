@@ -56,12 +56,24 @@ spec:
     spec:
       containers:
         - env:
+            - name: PREOPEN_GEX_ENABLED
+              value: "false"
+            - name: IBKR_GEX_CONSUME_ENABLED
+              value: "true"
+            - name: IBKR_GEX_PUBLISH_ENABLED
+              value: "true"
+            - name: IBKR_GEX_TOPIC_STAGE
+              value: live
+            - name: IBKR_GEX_SPOT_TOPIC
+              value: underlying.spx.index.price
+            - name: IBKR_GEX_TOPIC
+              value: options.databento.gex.strike
             - name: DATABENTO_GEX_FLOW_TOP_N
               value: "40"
             - name: GEX_SMILE_IV_FALLBACK
               value: "true"
             - name: DATABENTO_GEX_DYNAMIC_OI_ENABLED
-              value: "true"
+              value: "false"
             - name: OI_ANCHOR_MANIFEST_ENABLED
               value: "true"
             - name: APP_MARKET_DATA_SOURCE
@@ -112,8 +124,6 @@ spec:
               value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms1g -Xmx4g
-            - name: PREOPEN_GEX_ENABLED
-              value: "false"
             - name: PREOPEN_GEX_PUBLISH_ENABLED
               value: "false"
             - name: PREOPEN_GEX_SYMBOL

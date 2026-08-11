@@ -58,6 +58,16 @@ spec:
         - env:
             - name: DEALER_LEDGER_ADVISORY_ENABLED
               value: "true"
+            - name: DEALER_LEDGER_ABSORPTION_GATE_MODE
+              value: CONFIDENCE
+            - name: DEALER_LEDGER_FIRE_GREEKS_MIN_QUALITY
+              value: DEGRADED
+            - name: DEALER_LEDGER_ABSORB_MIN_WAVES
+              value: "1"
+            - name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE
+              value: LOW
+            - name: KAFKA_DEALER_LEDGER_MAX_RECORD_BYTES
+              value: "16777216"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms1024m -Xmx6144m
             - name: APP_MARKET_DATA_SOURCE

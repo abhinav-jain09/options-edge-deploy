@@ -64,13 +64,17 @@ spec:
         # browser loads show an empty chain all evening (options-edge PR#258). SPX now aligns to 17:30.
         - name: IB_EXPIRY_ROLL_AFTER
           value: "17:30"
+        # GexStrikeTopicListener does not apply TOPIC_PREFIX to its app default. Bind the ES topic
+        # explicitly so /api/greeks consumes the live ES per-strike snapshots.
+        - name: KAFKA_GEX_STRIKE_TOPIC
+          value: es.options.databento.gex.strike
         - name: DEALER_LEDGER_UI_VISIBLE
           value: "true"
         # PRODUCTION Keycloak auth (same realm + client + audience as prod).
         - name: VITE_AUTH_ENABLED
           value: "true"
         - name: VITE_AUTH_ISSUER
-          value: "https://auth.fullfunding.nl/realms/optionsedge"
+          value: "https://auth.bleadingoptions.com/realms/optionsedge"
         - name: VITE_AUTH_CLIENT_ID
           value: "options-edge-web"
         - name: VITE_AUTH_AUDIENCE
@@ -78,24 +82,28 @@ spec:
         - name: AUTH_AUDIENCE
           value: "options-edge-web"
         # Browser-facing URLs go through the public edge (Cloudflare -> cloudflared -> ES svcs on .4),
-        # so they are https/wss on es.fullfunding.nl. TLS terminates at Cloudflare; the tunnel forwards
+        # so they are https/wss on es.bleadingoptions.com. TLS terminates at Cloudflare; the tunnel forwards
         # /ws/events -> ES gateway and everything else -> ES web.
         - name: APP_FEED_GATEWAY_WS_URL
-          value: "wss://es.fullfunding.nl/ws/events"
+          value: "wss://es.bleadingoptions.com/ws/events"
         - name: VITE_WS_URL
-          value: "wss://es.fullfunding.nl/ws/events"
+          value: "wss://es.bleadingoptions.com/ws/events"
         # Server-to-server health uses Kubernetes Service DNS. Avoid the node NodePort hairpin: a brief
         # 500 ms failure there falsely returned feedGatewayAvailable=false and reset the browser board.
         - name: APP_FEED_GATEWAY_HEALTH_URL
           value: "http://es-feed-gateway:18091/health"
         - name: VITE_API_BASE_URL
-          value: "https://es.fullfunding.nl"
+          value: "https://es.bleadingoptions.com"
         # Required-in-prod by RuntimeProfileConfig.validate(). No mission-control/replay backend runs
         # on es4, so these point at the UI's own https origin to satisfy validation (features inert).
         - name: VITE_MISSION_CONTROL_URL
-          value: "https://es.fullfunding.nl"
+          value: "https://es.bleadingoptions.com"
         - name: VITE_REPLAY_ORCHESTRATOR_URL
-          value: "https://es.fullfunding.nl"
+          value: "https://es.bleadingoptions.com"
+        # WebNav's compiled default still points at the OLD es domain; mandatory from Phase 2 on
+        # (the acceptance gate checks it on this deployment too).
+        - name: APP_ES_OPTIONS_URL
+          value: "https://es.bleadingoptions.com"
         # Per-strike delta-flow freshness TTL (ms). ES 0DTE overnight trades VERY sparsely (~a few prints
         # per strike per session), so a short TTL blanks strikes between prints even though sessionNetDeltaFlow
         # is a cumulative session total that stays valid all session. Raise to 4h so a strike's session flow
