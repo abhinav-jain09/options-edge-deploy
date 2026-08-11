@@ -452,6 +452,13 @@ patches:
   # PLAINTEXT_ACCEPTED because that server has no TLS (visible on the page, not silent).
   # MUST MIRROR the standalone slice k8s/services/feed-gateway/overlays/production (validate-services).
   - path: feed-gateway-prod-env-patch.yaml
+  # Pre-open IBKR GEX production gate (gamma) — OVERNIGHT-IBKR-GEX rev13+D15. These three land
+  # together and must not be split: the gate turns the publisher on, the gateway relays the status
+  # plane that keeps the values honestly labelled, and the hold stops the D15 fan-out from waking
+  # production's legacy IBKR display builder. Rollback = remove all three.
+  - path: ibkr-preopen-gate-prod-patch.yaml
+  - path: ibkr-preopen-gateway-prod-patch.yaml
+  - path: ibkr-raw-to-display-prod-hold-patch.yaml
   # PROD-ONLY: strike-liquidity-heatmap CPU request 100m -> 750m. At 100m the single stream
   # thread stalled >10s under busy-open contention, tripping the EOS transaction timeout and
   # fencing the producer (2026-07-16, twice; processing PR #356 raised the timeout to 60s as

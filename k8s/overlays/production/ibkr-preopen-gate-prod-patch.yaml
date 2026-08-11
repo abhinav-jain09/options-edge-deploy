@@ -1,0 +1,46 @@
+# PROD gate (gamma) for the pre-open IBKR GEX path — OVERNIGHT-IBKR-GEX rev13+D15.
+#
+# BASE keeps every IBKR_GEX_* flag "false" (dormant everywhere); this patch is the ONLY place
+# production turns them on, mirroring k8s/overlays/dev/ibkr-preopen-gate-dev-patch.yaml.
+#
+# R-PREOPEN one-publisher invariant: the legacy PREOPEN_GEX_ENABLED publisher is pinned OFF here
+# because the two are mutually exclusive BY CONSTRUCTION — IbkrPreOpenConfig REFUSES BOOT when
+# both are true. It is already false in the production base; pinning it explicitly means a future
+# base change cannot silently create the both-true state that crashes the pod on boot. The legacy
+# path stays available as the next-session rollback (drop this patch).
+#
+# Stage "live" publishes the window's values onto options.databento.gex.strike — the SAME topic
+# the UI already reads (USER D14). The 09:25 fence, the 09:25-09:30 freeze and the source-scoped
+# 09:30 eviction all live in the service; nothing here widens them.
+#
+# Spot topic is underlying.spx.index.price — the IBKR SPX cash index that the feed fans to BOTH
+# clusters (IBKR_SPX_KAFKA_TARGETS, long-standing). Production therefore reads its own local copy;
+# no cross-cluster read is introduced by this patch.
+#
+# PREREQUISITES, all verified before this gate (2026-08-10):
+#   - processing main carries Phase 2 (#545) AND the R-DOWN dispositions (#552), so pre-open
+#     records never enter the gamma-flow topology or the gex history series;
+#   - the prod web UI carries the ibkr-preopen handler (#439), so IBKR values render with their
+#     own provenance instead of being labelled Databento;
+#   - options.ibkr.gex.status / options.ibkr.gex.strike.shadow are declared in topics.env and must
+#     EXIST on the prod cluster before this is rolled (apply topics first);
+#   - the prod IBKR fan-out and the raw-to-display disposition land together with this patch
+#     (see ibkr-raw-to-display-prod-hold-patch.yaml) — a fan-out without that hold would activate
+#     the legacy chain-display pipeline on production.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databento-gex-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: databento-gex
+          env:
+            - { name: PREOPEN_GEX_ENABLED, value: "false" }
+            - { name: IBKR_GEX_CONSUME_ENABLED, value: "true" }
+            - { name: IBKR_GEX_PUBLISH_ENABLED, value: "true" }
+            - { name: IBKR_GEX_TOPIC_STAGE, value: "live" }
+            - { name: IBKR_GEX_SPOT_TOPIC, value: "underlying.spx.index.price" }
+            - { name: IBKR_GEX_TOPIC, value: "options.databento.gex.strike" }

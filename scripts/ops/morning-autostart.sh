@@ -53,13 +53,19 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   databento-vix-feed (VIX feed separation PR-2): pre-evidence default; the shadow
 #   commit removes this — replicas:1 and a KEEP_DOWN entry are mutually exclusive
 #   (autostart would scale the shadow to 0 at 06:15 mid-session; design §5).
+#   raw-to-display-service ADDED to KEEP_DOWN 2026-08-10 (pre-open IBKR GEX prod gate): it is
+#   the LEGACY IBKR display builder (src=IBKR, consumes options.ibkr.raw -> options.ibkr.display,
+#   which the prod gateway reads). The prod overlay pins it to replicas 0 so the D15 chain fan-out
+#   cannot wake that pipeline, but this script would scale it back to 1 at 06:15 — inside the very
+#   pre-open window the fan-out is live — silently undoing the hold. NOT the Databento display
+#   builder: raw-to-display-databento-service is a SEPARATE deployment and must stay at 1.
 #   databento-maxpain-service REMOVED from KEEP_DOWN 2026-08-01 (USER: "turn on prod
 #   only") — prod overlay patches replicas:1; dev stays down via dev-cleanup DISABLED_DEV.
 #   oi-shadow-service (2026-08-10 USER hold: retired until further notice). It scores only
 #   END-OF-DAY 1DTE open interest and the desk trades 0DTE, where no next-day settled
 #   print exists to score it. Also replicas:0 in both overlays. See
 #   docs/oi-nowcast-retirement.md.
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service}"
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only
