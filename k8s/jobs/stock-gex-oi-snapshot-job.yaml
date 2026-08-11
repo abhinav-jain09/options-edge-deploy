@@ -1,0 +1,389 @@
+# Nightly OPRA snapshot pull + OI-index build for the stock-gex service.
+#
+# WHY THIS IS A JOB TEMPLATE AND *NOT* A CronJob
+#
+#   1. The cluster enforces a ValidatingAdmissionPolicy (options-edge-jenkins-only-workloads,
+#      failurePolicy: Fail) that DENIES batch/jobs + batch/cronjobs CREATE to every principal
+#      except system:serviceaccount:options-edge:jenkins-deployer. A CronJob's Jobs are created
+#      by the cluster controller's identity, not the Jenkins deployer identity, so a native
+#      firing is rejected every night — which is why the two CronJobs this repo already carries
+#      are suspend:true and exist only as Job templates for a Jenkins companion job.
+#   2. stock-gex is deployed ONLY through the standalone path
+#      (Jenkinsfile.service-deploy -> service-deploy.sh, SERVICE=stock-gex), never the monolith.
+#      That path cannot carry a CronJob: generate-service-slices.sh extracts only
+#      `kind == Deployment or kind == Service`, and service-deploy.sh remaps + digest-pins only
+#      `select(.kind == "Deployment") | .spec.template.spec.containers[]`. A CronJob dropped into
+#      k8s/base/ would therefore be applied ONLY by the monolithic deploy and would never be
+#      image-remapped or digest-pinned.
+#
+#   So there is no CronJob OBJECT at all. This file is the single source of truth for the Job,
+#   and scripts/ops/stock-gex-oi-snapshot.sh (run from Jenkinsfile.stockgex-oi-snapshot on the ET
+#   schedule) substitutes __IMAGE__/__JOB_NAME__/__TRADE_DATE__ and creates it under the deployer
+#   identity. Nothing has to be applied to the cluster in advance. That removes the
+#   applied-or-not question for the WORKLOAD — but it does NOT make the pipeline self-proving:
+#   if the Jenkins job is never created, or its timer is disabled, these files sit in git and the
+#   index still expires. That liveness belongs to a separate check on the Jenkins job's
+#   last-success time; see the runbook note in scripts/ops/stock-gex-oi-snapshot.sh.
+#
+# WHAT IT RUNS: options-edge-stock-gex-oi-snapshot (a console script of the SAME python package
+# the service image already ships — verified present at /usr/local/bin in the running image).
+# It resolves the latest COMPLETED session from the in-code market calendar (never before the
+# 20:00 ET settle guard), pulls the ~506-root universe x 3 schemas from Databento historical in
+# <=25-parent chunks, and is all-or-nothing about coverage: plan_chunks enumerates every
+# (schema, chunk) request for the session, every chunk must come back at least
+# --min-chunk-bytes (1024) after up to 4 attempts, and ANY chunk failure aborts with no index
+# written. It md5-manifests the snapshot, re-reads every chunk to verify it, checks the built
+# payload BEFORE writing, and writes atomically (temp + fsync + os.replace + dir fsync).
+#
+# PUBLICATION IS A TRANSACTION. The CLI is pointed at a per-Job STAGING directory, never at the
+# live index path: the producer's own "index-preserving" property only covers failures BEFORE it
+# writes, and the checks this Job adds (ownership/mode, the service's loader, population floors,
+# deviation from the index being replaced) all happen AFTER. Staging keeps the installed index
+# untouched until every one of those checks has passed — including mode, ownership and the
+# digest, all taken on the STAGED file — and only then is it published with a single os.replace
+# + directory fsync. The one state this cannot make atomic is the gap between the rename and the
+# receipt: a container killed there leaves a fully verified index installed with nothing printed.
+# The wrapper is built for exactly that case — it re-reads the installed generation and compares
+# it with the pre-run one instead of assuming a missing receipt means nothing happened.
+#
+# IDENTITY: the image's own USER is 10001, but the hostPath directory on the prod node is owned
+# by uid 1000 / gid 1001 (mode 0755), so the container MUST run as 1000:1001 to write there.
+# The published index is chmod'ed to exactly 0644 — the service pod runs as uid 10001 and a
+# tighter mode crash-loops it.
+#
+# CONCURRENCY: an flock on <mount>/.writer.lock is held for the whole produce -> verify ->
+# publish sequence. disableConcurrentBuilds() in Jenkins only serialises ONE job definition;
+# the lock is what actually prevents a second writer (a manual run, a second Jenkins job, a
+# leftover Job from an aborted build) from interleaving with this one. The lock is an open file
+# descriptor, so it is released by the kernel even if the pod is killed.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: stock-gex-oi-snapshot
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: maintenance
+spec:
+  # NO k8s-level retry. The CLI already retries each chunk (--max-attempts 4, 15s backoff); a
+  # backoffLimit > 0 would re-run the whole ~0.5 GB pull from scratch on a late failure and could
+  # still be running when the next night's job starts.
+  backoffLimit: 0
+  # 90 min. A full pull is 63 requests (21 chunks x 3 schemas) at 3-way concurrency; the CLI's own
+  # per-request HTTP timeout is 1800s, so this cap is the outer bound that keeps a wedged vendor
+  # request from holding the slot until the next firing. The wrapper's client-side wait is
+  # deliberately LONGER than this (see stock-gex-oi-snapshot.sh) so the deadline is enforced by
+  # the one component that can actually stop the work.
+  activeDeadlineSeconds: 5400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: stock-gex-oi-snapshot
+    spec:
+      restartPolicy: Never
+      # NODE PINNING (required, not an optimisation): the index lives on a node-local hostPath,
+      # so this Job must run on the SAME node as the service pod it feeds. The wrapper reads that
+      # node from the running stock-gex pod and substitutes it here; on any other node the Job
+      # would either hit a kubelet-created root-owned directory or, worse, quietly write a
+      # different node's copy — and the writer lock, being a file on that hostPath, would not be
+      # the same lock either.
+      nodeSelector:
+        kubernetes.io/hostname: __NODE_NAME__
+      # This Job never talks to the k8s API — the token would be an unnecessary credential in a
+      # pod that holds a Databento key.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000        # MUST match the hostPath dir owner on the node (abhinav)
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: oi-snapshot
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            # A pod that holds the Databento key AND write access to the production index
+            # directory gets the full unprivileged treatment.
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: DATABENTO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-databento-feed-env
+                  key: DATABENTO_API_KEY
+            # Optional pinned session (operator override). Empty = the calendar resolves the
+            # latest COMPLETED session, which is what the scheduled run must always do.
+            - name: TRADE_DATE
+              value: "__TRADE_DATE__"
+            # Staging/lock paths are keyed by the Job name so two writers can never share a
+            # staging directory even if the lock were somehow bypassed.
+            - name: JOB_NAME
+              value: "__JOB_NAME__"
+            # The service's own default (STOCK_GEX_MAX_INDEX_AGE_DAYS). The verification below
+            # runs the service's loader with THIS value, so a freshly built index the service
+            # would refuse fails the Job instead of being published as a success.
+            - name: INDEX_MAX_AGE_DAYS
+              value: "5"
+            # ABSOLUTE floors — the first-run guard, and the backstop against a structurally
+            # empty result. Reference point: the 2026-08-07 index is 505 roots / 525,012
+            # contracts, so these sit ~5% / ~25% below a real session rather than pretending to
+            # know the exact count (roots whose contracts all have zero OI are dropped by the
+            # builder, so the count legitimately moves).
+            - name: MIN_ROOTS
+              value: "480"
+            - name: MIN_CONTRACTS
+              value: "400000"
+            # RELATIVE floors — measured against the index this run would REPLACE, which is the
+            # only completeness reference that adapts to the market. Per-request coverage itself
+            # is already all-or-nothing inside the CLI (see the header), so these catch the
+            # residual case: a session that builds cleanly but is materially smaller than the
+            # one before it. Contracts swing much harder than roots around expiries, hence the
+            # looser bound.
+            - name: MIN_ROOTS_FRACTION_OF_PREVIOUS
+              value: "0.90"
+            - name: MIN_CONTRACTS_FRACTION_OF_PREVIOUS
+              value: "0.70"
+          command: ["python", "-c"]
+          args:
+            - |
+              import fcntl, gzip, hashlib, json, os, shutil, stat, subprocess, sys, tempfile
+              from datetime import date as date_cls
+              from datetime import datetime, timezone
+
+              from options_edge_databento_feed.stock_gex_service import OiIndex
+
+              MOUNT = "/oi-index"
+              INDEX_NAME = "stock-gex-oi-index.json.gz"   # fixed: the service resolves this name
+              FINAL = os.path.join(MOUNT, INDEX_NAME)
+              SNAPSHOTS = os.path.join(MOUNT, "snapshots")
+              LOCK = os.path.join(MOUNT, ".writer.lock")
+              JOB_NAME = os.environ["JOB_NAME"]
+              STAGING = os.path.join(MOUNT, ".staging", JOB_NAME)
+              TRADE_DATE = os.environ.get("TRADE_DATE", "").strip()
+
+              def fatal(msg):
+                  print("FATAL: " + msg, file=sys.stderr, flush=True)
+                  raise SystemExit(1)
+
+              def env_int(name):
+                  return int(os.environ[name])
+
+              def env_float(name):
+                  return float(os.environ[name])
+
+              def summary(path):
+                  """(tradeDate, roots, contracts) straight off the file, without building the
+                  in-memory index. Used for the baseline AND for the staged file, so the peak
+                  footprint is one parse at a time, never the loader's index plus a second full
+                  document."""
+                  with gzip.open(path, "rt", encoding="utf-8") as fh:
+                      d = json.load(fh)
+                  return d.get("tradeDate"), len(d.get("roots") or {}), int(d.get("contracts", 0))
+
+              def sha256(path):
+                  h = hashlib.sha256()
+                  with open(path, "rb") as fh:
+                      for block in iter(lambda: fh.read(1 << 20), b""):
+                          h.update(block)
+                  return h.hexdigest()
+
+              def probe_writable(directory):
+                  # mkstemp: O_EXCL + a random name. A fixed name would collide between
+                  # containers (PIDs repeat across pod namespaces) and, worse, an attacker-or-
+                  # accident-placed symlink of that name would be FOLLOWED by open(..., "w") and
+                  # could truncate its target — including the live index.
+                  fd = None
+                  probe = None
+                  try:
+                      fd, probe = tempfile.mkstemp(dir=directory, prefix=".write-probe.")
+                      os.write(fd, b"x")
+                  except OSError as exc:
+                      fatal("%s is not writable by uid %d gid %d (%s). On the node, "
+                            "/home/options-edge/stock-gex-oi and its snapshots/ subdirectory "
+                            "must be owned 1000:1001 and mode 0755; a kubelet-created hostPath "
+                            "(type DirectoryOrCreate) is root-owned and needs a one-off chown."
+                            % (directory, os.getuid(), os.getgid(), exc))
+                  finally:
+                      if fd is not None:
+                          os.close(fd)
+                      if probe is not None:
+                          try:
+                              os.unlink(probe)
+                          except OSError:
+                              pass
+
+              print("=== stock-gex OI snapshot %s ==="
+                    % datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), flush=True)
+              print("uid=%d gid=%d job=%s trade_date=%s"
+                    % (os.getuid(), os.getgid(), JOB_NAME, TRADE_DATE or "<auto>"), flush=True)
+
+              # 0o022 so every file this job or the producer creates is group/other
+              # readable; the published index's mode is then set explicitly and re-checked.
+              os.umask(0o022)
+
+              # --- writer lock FIRST, held to the end of publication (see the header). Taken
+              # before the probes so two writers cannot interleave even in the preflight.
+              lock_fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+              try:
+                  fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+              except OSError:
+                  fatal("another writer holds %s — refusing to run two producers against the "
+                        "same index directory" % LOCK)
+
+              # --- preflight: fail on a non-writable mount BEFORE the ~0.5 GB pull, not 20
+              # minutes into it. Both directories are probed: the index lands in one and the
+              # chunks in the other, and they can have different ownership.
+              probe_writable(MOUNT)
+              os.makedirs(SNAPSHOTS, exist_ok=True)
+              probe_writable(SNAPSHOTS)
+
+              # --- baseline: the index this run would replace, for the deviation guard below.
+              baseline = None
+              if os.path.exists(FINAL):
+                  baseline = summary(FINAL)
+                  print("installed index: tradeDate=%s roots=%d contracts=%d" % baseline, flush=True)
+              else:
+                  print("no installed index yet — absolute floors only", flush=True)
+
+              # --- produce into STAGING. The live index is not touched by this step at all.
+              # try/finally: the staging directory is disposable and index-sized, and failed
+              # Jobs are deliberately kept for post-mortem, so it must not survive them.
+              if os.path.isdir(STAGING):
+                  shutil.rmtree(STAGING)
+              os.makedirs(STAGING, exist_ok=True)
+              try:
+                  cmd = ["options-edge-stock-gex-oi-snapshot",
+                         "--index-dir", STAGING, "--snapshot-root", SNAPSHOTS]
+                  if TRADE_DATE:
+                      cmd += ["--trade-date", TRADE_DATE]
+                  print("running: %s" % " ".join(cmd), flush=True)
+                  rc = subprocess.call(cmd)
+                  if rc != 0:
+                      fatal("producer exited %d — nothing published, the installed index is "
+                            "untouched (it was never the write target)" % rc)
+
+                  staged = os.path.join(STAGING, INDEX_NAME)
+                  if not os.path.isfile(staged):
+                      fatal("producer exited 0 but wrote no %s" % staged)
+
+                  print("=== verification (staged, not yet published) ===", flush=True)
+                  trade_date, roots, contracts = summary(staged)
+
+                  # THE decisive check: the service's own loader, with the service's own max age.
+                  # Covers schemaVersion, expiryConvention, md5 integrity, full semantic
+                  # validation of every entry, its self-consistency counters, and the
+                  # -1 <= age <= max_age freshness predicate. Passing it means the service's
+                  # INDEX LOADER accepts this file — it is not a promise that the pod boots
+                  # (that also needs its config, secret and the Databento live session).
+                  idx = OiIndex.load(staged, max_age_days=env_int("INDEX_MAX_AGE_DAYS"))
+                  if (idx.trade_date, idx.root_count) != (trade_date, roots):
+                      fatal("loader and raw summary disagree: loader says %s/%d, file says %s/%d"
+                            % (idx.trade_date, idx.root_count, trade_date, roots))
+                  del idx
+
+                  if TRADE_DATE and trade_date != TRADE_DATE:
+                      fatal("requested --trade-date %s but the index claims %s"
+                            % (TRADE_DATE, trade_date))
+                  if roots < env_int("MIN_ROOTS"):
+                      fatal("index has %d roots, absolute floor is %d — empty or partial vendor "
+                            "result" % (roots, env_int("MIN_ROOTS")))
+                  if contracts < env_int("MIN_CONTRACTS"):
+                      fatal("index has %d contracts, absolute floor is %d"
+                            % (contracts, env_int("MIN_CONTRACTS")))
+                  if baseline is not None:
+                      prev_date, prev_roots, prev_contracts = baseline
+                      # MONOTONIC session: an operator override may rebuild the installed
+                      # session (a holiday re-run is legitimate) but must never walk the board
+                      # BACKWARDS — an older session can still be inside the 5-day age budget
+                      # and would sail through every other check here.
+                      if date_cls.fromisoformat(trade_date) < date_cls.fromisoformat(prev_date):
+                          fatal("staged index is session %s but the installed one is %s — "
+                                "refusing to replace an index with an OLDER session"
+                                % (trade_date, prev_date))
+                      min_roots = env_float("MIN_ROOTS_FRACTION_OF_PREVIOUS") * prev_roots
+                      min_contracts = env_float("MIN_CONTRACTS_FRACTION_OF_PREVIOUS") * prev_contracts
+                      if roots < min_roots:
+                          fatal("index has %d roots vs %d in the installed %s index (floor %.0f) "
+                                "— refusing to replace a fuller index with a thinner one"
+                                % (roots, prev_roots, prev_date, min_roots))
+                      if contracts < min_contracts:
+                          fatal("index has %d contracts vs %d in the installed %s index "
+                                "(floor %.0f)"
+                                % (contracts, prev_contracts, prev_date, min_contracts))
+
+                  # EVERYTHING that can fail is done on the STAGED file, before the rename:
+                  # mode, ownership, regular-file status, size and digest. After os.replace the
+                  # only remaining steps are the directory fsync and the receipt, so a failure
+                  # there cannot leave a half-validated file installed — it can only leave a
+                  # FULLY validated one installed without a receipt, which is exactly the case
+                  # the wrapper reconciles by comparing the installed generation.
+                  os.chmod(staged, 0o644)
+                  st = os.stat(staged)
+                  if not stat.S_ISREG(st.st_mode):
+                      fatal("%s is not a regular file" % staged)
+                  mode = stat.S_IMODE(st.st_mode)
+                  if mode != 0o644:
+                      fatal("%s mode is %04o, want 0644 (the service pod runs as uid 10001 and "
+                            "cannot read a tighter file)" % (staged, mode))
+                  if (st.st_uid, st.st_gid) != (1000, 1001):
+                      fatal("%s owner is %d:%d, want 1000:1001" % (staged, st.st_uid, st.st_gid))
+                  digest = sha256(staged)
+                  fd = os.open(staged, os.O_RDONLY)
+                  try:
+                      os.fsync(fd)
+                  finally:
+                      os.close(fd)
+                  print("checks passed: tradeDate=%s roots=%d contracts=%d bytes=%d sha256=%s"
+                        % (trade_date, roots, contracts, st.st_size, digest), flush=True)
+
+                  # --- publish: one atomic rename, then durability of the rename itself.
+                  os.replace(staged, FINAL)
+                  dir_fd = os.open(MOUNT, os.O_RDONLY)
+                  try:
+                      os.fsync(dir_fd)
+                  finally:
+                      os.close(dir_fd)
+
+                  # The receipt is the contract with the wrapper: printed ONLY after the file is
+                  # published. sha256 identifies THIS generation, so a rebuild of the same
+                  # session is still distinguishable from the one it replaced.
+                  print("STOCK_GEX_OI_INDEX_OK tradeDate=%s roots=%d contracts=%d bytes=%d "
+                        "sha256=%s" % (trade_date, roots, contracts, st.st_size, digest),
+                        flush=True)
+              finally:
+                  # NOT ignore_errors: an index-sized directory left behind on every failure
+                  # would fill the hostPath invisibly. A missing directory is the only benign
+                  # outcome; anything else is reported (and fails the Job if the run was
+                  # otherwise about to succeed).
+                  try:
+                      shutil.rmtree(STAGING)
+                  except FileNotFoundError:
+                      pass
+                  except OSError as exc:
+                      print("FATAL: could not remove staging directory %s (%s) — remove it by "
+                            "hand before it accumulates" % (STAGING, exc), file=sys.stderr,
+                            flush=True)
+                      raise
+          volumeMounts:
+            - name: oi-index
+              mountPath: /oi-index      # READ-WRITE on purpose: this job is the writer.
+            - name: tmp
+              mountPath: /tmp           # readOnlyRootFilesystem: python/urllib need a temp dir
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: oi-index
+          hostPath:
+            path: /home/options-edge/stock-gex-oi
+            type: DirectoryOrCreate
+        - name: tmp
+          emptyDir: {}
