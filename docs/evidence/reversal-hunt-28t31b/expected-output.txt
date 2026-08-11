@@ -1,0 +1,29 @@
+self-test: PASS
+
+voice-eligible pivot candidates under the partial replay (NOT production call counts)
+
+### 2026-08-10  RTH 09:30-16:00 ET   11,317 valid 2s buckets
+  40t/60s (before)   eligible  1  voice-eligible  1   bottom 1  top 0
+      09:35:30 FIND_BOTTOM ES  7771.25  12.25p /  96s
+  28t/62s (after)    eligible  5  voice-eligible  5   bottom 5  top 0
+      09:35:30 FIND_BOTTOM ES  7771.25  12.25p /  96s
+      09:52:46 FIND_BOTTOM ES  7771.25   9.75p /  96s
+      15:52:22 FIND_BOTTOM ES  7771.25   7.50p / 118s
+      15:53:40 FIND_BOTTOM ES  7770.50   8.25p / 196s
+      15:54:28 FIND_BOTTOM ES  7771.75   7.00p / 244s
+
+### 2026-08-11  RTH 09:30-16:00 ET   11,444 valid 2s buckets
+  40t/60s (before)   eligible  1  voice-eligible  1   bottom 1  top 0
+      14:30:24 FIND_BOTTOM ES  7738.00  13.00p / 210s
+  28t/62s (after)    eligible  4  voice-eligible  4   bottom 2  top 2
+      09:42:48 FIND_TOP    ES  7783.50   8.75p / 166s
+      14:29:34 FIND_BOTTOM ES  7743.50   7.50p / 160s
+      14:30:24 FIND_BOTTOM ES  7738.00  13.00p / 210s
+      14:32:36 FIND_TOP    ES  7745.75   7.75p / 132s
+
+### totals
+  setting            voice-eligible  per session
+  40t/60s (before)                2          1.0
+  28t/62s (after)                 9          4.5
+
+file-order sensitivity: replaying with the manifest order reversed leaves every row above unchanged
