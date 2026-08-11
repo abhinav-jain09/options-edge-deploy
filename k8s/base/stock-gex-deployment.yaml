@@ -44,9 +44,15 @@ spec:
                   name: options-edge-databento-feed-env
                   key: DATABENTO_API_KEY
             # Nightly-built open-interest index, produced OUTSIDE this pod. Wired the way this
-            # repo already hands a pod a file another process writes: a hostPath under
-            # /var/lib/options-edge (precedent: k8s/replay/dev/databento-timewarp-replay-job.yaml
-            # mounts /var/lib/options-edge/historical-data). The builder job does not exist yet,
+            # repo already hands a pod a file another process writes: a hostPath. The path is
+            # /home/options-edge/stock-gex-oi, NOT /var/lib/options-edge — rule.md's Home Dir
+            # Storage rule puts ALL runtime files under /home/options-edge and explicitly
+            # excludes /var. (k8s/replay/dev/databento-timewarp-replay-job.yaml uses
+            # /var/lib/options-edge/historical-data, but that is a dev-only job predating the
+            # rule; it is not a licence to add another. On prod /var/lib/options-edge does not
+            # exist and needs root, while /home/options-edge is already there and writable by
+            # the archive user — so the rule is also the only path that actually works.)
+            # The builder job does not exist yet,
             # so the mount uses DirectoryOrCreate rather than the precedent's Directory: a
             # missing directory must leave the pod UNREADY (a readiness probe that reports the
             # index is stale/absent), not unschedulable with no diagnosis.
@@ -91,5 +97,5 @@ spec:
       volumes:
         - name: oi-index
           hostPath:
-            path: /var/lib/options-edge/stock-gex-oi
+            path: /home/options-edge/stock-gex-oi
             type: DirectoryOrCreate

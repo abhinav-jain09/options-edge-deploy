@@ -103,6 +103,6 @@ spec:
               readOnly: true
       volumes:
         - hostPath:
-            path: /var/lib/options-edge/stock-gex-oi
+            path: /home/options-edge/stock-gex-oi
             type: DirectoryOrCreate
           name: oi-index

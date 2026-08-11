@@ -508,7 +508,7 @@ patches:
   # replicas:0 without a KEEP_DOWN entry gets scaled back to 1 at 06:15 ET anyway, and a
   # KEEP_DOWN entry without the patch would fight the deploy. Base already renders 1.
   # PRECONDITION, enforced by the readiness probe rather than by this file: the nightly
-  # OI index must exist at /var/lib/options-edge/stock-gex-oi/stock-gex-oi-index.json.gz on
+  # OI index must exist at /home/options-edge/stock-gex-oi/stock-gex-oi-index.json.gz on
   # the prod node. Without it the pod starts and stays NOT READY by design (fail-loud), it
   # does not serve a wrong board.
   # ⚠️ The 10-name market-open soak that the design named as the PRODUCTION gate (2x ingest
