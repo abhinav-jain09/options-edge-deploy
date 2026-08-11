@@ -61,15 +61,11 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   builder: raw-to-display-databento-service is a SEPARATE deployment and must stay at 1.
 #   databento-maxpain-service REMOVED from KEEP_DOWN 2026-08-01 (USER: "turn on prod
 #   only") — prod overlay patches replicas:1; dev stays down via dev-cleanup DISABLED_DEV.
-<<<<<<< HEAD
 #   oi-shadow-service (2026-08-10 USER hold: retired until further notice). It scores only
 #   END-OF-DAY 1DTE open interest and the desk trades 0DTE, where no next-day settled
 #   print exists to score it. Also replicas:0 in both overlays. See
 #   docs/oi-nowcast-retirement.md.
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service}"
-=======
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service raw-to-display-service}"
->>>>>>> e4671bb (fix(prod-gate): hold raw-to-display-service down in morning-autostart too)
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only
