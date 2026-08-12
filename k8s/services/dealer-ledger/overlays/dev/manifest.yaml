@@ -102,8 +102,6 @@ spec:
               value: "8"
             - name: DEALER_LEDGER_UNWIND_SPENT_PCT
               value: "0.80"
-            - name: DEALER_LEDGER_REARM_FLOW_USD
-              value: "3000000"
             - name: DEALER_LEDGER_REARM_MINUTES
               value: "12"
             - name: DEALER_LEDGER_REARM_COOLOFF_MS
