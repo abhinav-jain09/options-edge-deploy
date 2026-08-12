@@ -19,13 +19,20 @@ import groovy.json.JsonOutput
 // no CronJob object and how publication is staged so a failed verification cannot replace a
 // good index.
 //
-// SCHEDULE: 20:30 America/New_York, Mon-Fri.
-//   * The snapshot CLI will not claim session D before 20:00 ET (vendor settlement guard), so
-//     20:30 is the earliest honest slot.
-//   * The IANA zone (not a fixed UTC hour) keeps it at 20:30 ET across DST.
+// SCHEDULE: 08:20 America/New_York, Mon-Fri — the MORNING BEFORE THE OPEN, not the evening.
+//   * The obvious slot was 20:30 ET, right after the CLI's own 20:00 ET settlement guard. It ran
+//     once, on 2026-08-11, and failed at the first assertion: `stock-gex-service has
+//     spec.replicas=0`. 20:30 ET is exactly when the prod off-hours lifecycle scales the platform
+//     down — 52 deployments at zero — so the evening slot can never succeed, and the window
+//     between the settle guard and the scale-down is 30 minutes against a ~16-minute pull.
+//   * 08:20 ET is strictly better than squeezing into that window: the platform is back up
+//     (morning-autostart runs ~07:30 ET), the session resolved is yesterday's — settled since
+//     20:00 ET the previous evening — and the fresh index plus its pod restart land BEFORE the
+//     09:30 open rather than the night before. Age at the open is 1 day.
+//   * The IANA zone (not a fixed UTC hour) keeps it at 08:20 ET across DST.
 //   * It runs on exchange holidays too, ON PURPOSE: the scheduler must not second-guess the
 //     market calendar. The CLI resolves the latest COMPLETED session itself and rebuilds the
-//     same index harmlessly, which also means a holiday cannot silently skip a night.
+//     same index harmlessly, which also means a holiday cannot silently skip a day.
 //   * Weekends are excluded because there is no new session to fetch and a weekend date returns
 //     all-zero-size chunks from the vendor; the 5-day age budget covers Sat/Sun.
 //
@@ -49,7 +56,9 @@ pipeline {
       description: 'How many most-recent TERMINAL snapshot Jobs to retain (nothing else prunes them — there is no CronJob history limit here). 1..100.')
   }
   triggers {
-    cron('TZ=America/New_York\n30 20 * * 1-5')
+    // 08:20 ET, weekdays — after morning-autostart, before the open. NOT the evening: the
+    // off-hours scale-down owns 20:30 ET (see the header).
+    cron('TZ=America/New_York\n20 8 * * 1-5')
   }
   options {
     disableConcurrentBuilds()
