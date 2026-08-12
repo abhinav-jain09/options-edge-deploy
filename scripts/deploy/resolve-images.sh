@@ -70,6 +70,7 @@ EOF
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$registry/options-edge-short-premium-agent:$image_tag
 SIGNAL_FOLLOWER_IMAGE=$registry/options-edge-signal-follower:$image_tag
+CONTEXT_TAPE_IMAGE=$registry/options-edge-context-tape:$image_tag
 EOF
             fi
           else
@@ -132,6 +133,7 @@ EOF
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$SHORT_PREMIUM_AGENT_IMAGE
 SIGNAL_FOLLOWER_IMAGE=$SIGNAL_FOLLOWER_IMAGE
+CONTEXT_TAPE_IMAGE=$CONTEXT_TAPE_IMAGE
 EOF
             fi
           fi

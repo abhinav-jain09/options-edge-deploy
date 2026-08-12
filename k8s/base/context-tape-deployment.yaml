@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: context-tape-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: context-tape-service
+    app.kubernetes.io/component: context-tape-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: context-tape-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: context-tape-service
+        app.kubernetes.io/component: context-tape-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: context-tape
+          image: 192.168.100.252:5000/options-edge-context-tape:dev
+          imagePullPolicy: Always
+          # Shared platform config/secret provide KAFKA_BOOTSTRAP_SERVERS (+ the rest of the
+          # platform defaults) exactly like every sibling service.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8135"
+            # --- inputs (env-overridable; es4 overrides the spot source in
+            # scripts/es4/render_es4_manifests.py ES_ENV) ---
+            - name: CONTEXT_TAPE_SPOT_TOPIC
+              value: underlying.spx.index.price
+            - name: CONTEXT_TAPE_GEX_HISTORY_TOPIC
+              value: options.databento.gex.strike.history
+            - name: CONTEXT_TAPE_ES_TRADES_TOPIC
+              value: underlying.es.trades
+            # Full session held in memory + a ~2.2M-record backfill pass; heap sized under
+            # the 1Gi container limit.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx768m"
+          ports:
+            - name: api
+              containerPort: 8134
+            - name: health
+              containerPort: 8135
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            # readiness stays 503 until the session backfill completes (typically <2 min).
+            # failureThreshold 30 only keeps an already-Ready pod from flapping unready on
+            # transient probe failures — it does NOT extend initial-rollout headroom. That
+            # comes from progressDeadlineSeconds (the dev/prod overlays' fleet-wide 1200s
+            # patch, inherited here) and the deploy jobs' rollout-status timeouts.
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 30
+          # CPU limit intentionally absent, matching every sibling service.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
