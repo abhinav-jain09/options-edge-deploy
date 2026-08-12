@@ -68,6 +68,8 @@ spec:
                   name: options-edge-databento-feed-env
             - name: STOCK_GEX_OI_INDEX
               value: /oi-index/stock-gex-oi-index.json.gz
+            - name: STOCK_GEX_CLOSE_DIR
+              value: /oi-index/close
             - name: HEALTH_PORT
               value: "8022"
           image: host.docker.internal:5001/options-edge-stock-gex:dev
