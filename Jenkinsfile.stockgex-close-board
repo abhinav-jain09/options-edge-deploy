@@ -98,19 +98,31 @@ pipeline {
         // leaves a marker when a session was promoted, and the alert reads it. Absent marker =
         // nothing was published. Every step here is best-effort: alerting must never fail on
         // its own diagnostics.
-        def published = null
+        def marker = null
         try {
           if (fileExists('close-board-published.txt')) {
-            published = readFile('close-board-published.txt').trim() ?: null
+            marker = readFile('close-board-published.txt').trim() ?: null
           }
         } catch (err) {
-          echo "published-marker diagnostic unavailable: ${err}"
+          echo "publication-state diagnostic unavailable: ${err}"
         }
-        def state = published
-            ? "A SESSION WAS PUBLISHED AND IS VISIBLE NOW (${published}); the run failed AFTER " +
-              "that, so it may have been built against the wrong image or node. Re-run to " +
-              "replace it — a re-run publishes a new generation and swaps atomically."
-            : "Nothing was published: the previous session is exactly as it was."
+        // THREE answers, and the middle one is the truthful shape of a question the wrapper
+        // cannot decide: the promote happens inside the container and the container can be
+        // killed between that move and the receipt it prints.
+        def state
+        if (marker == null) {
+          state = "Nothing was published: no Job was created, so the previous session is " +
+                  "exactly as it was."
+        } else if (marker.startsWith('PUBLISHED')) {
+          state = "A SESSION WAS PUBLISHED AND IS VISIBLE NOW (${marker}); the run failed AFTER " +
+                  "that, so it may have been built against the wrong image or node. Re-run to " +
+                  "replace it — a re-run publishes a new generation and swaps atomically."
+        } else if (marker.startsWith('NONE')) {
+          state = "Nothing was published (${marker})."
+        } else {
+          state = "PUBLICATION STATE UNKNOWN. A Job was created and no receipt was read, so a " +
+                  "session may or may not have been promoted. ${marker}"
+        }
         echo "stock-gex closing-board freeze ${currentBuild.currentResult} for session '${env.SESSION ?: 'today ET'}' — ${state}"
         withCredentials([string(credentialsId: 'offhours-discord-webhook',
                                 variable: 'DISCORD_WEBHOOK_URL')]) {

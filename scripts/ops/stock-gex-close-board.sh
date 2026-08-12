@@ -95,9 +95,21 @@ SUCCESS=false
 
 fatal() { echo "FATAL: $*" >&2; exit 1; }
 
-# A marker left by an earlier build in this workspace must never be reported as this build's
-# state. Written again only when a session has actually been promoted.
-rm -f close-board-published.txt
+# PUBLICATION STATE, for the Jenkins alert — which cannot read the cluster once the run has
+# failed (this identity has no pods/exec). Three values, and the middle one is the honest answer
+# to a question this script genuinely cannot decide:
+#
+#   (absent)  the Job was never created, so nothing can have been published.
+#   UNKNOWN   the Job was created. The promote happens INSIDE the container, atomically, and the
+#             container can be killed between that move and the receipt it prints. So from the
+#             moment the Job exists, "was a session promoted" is unanswerable from here.
+#   PUBLISHED a receipt naming this session was read: a session is visible now.
+#
+# The old marker was written only on a receipt, which made a killed-after-promote container
+# report "nothing was published" while the session was live.
+PUBLISH_STATE_FILE="close-board-published.txt"
+rm -f "$PUBLISH_STATE_FILE"
+publish_state() { printf '%s\n' "$*" >"$PUBLISH_STATE_FILE" || true; }
 
 # An abandoned RUNNING Job holds a Databento key and half a session's chunks, so an unsuccessful
 # exit must take it down — but ONLY one this invocation created, never one whose name matches. A
@@ -300,6 +312,11 @@ echo "=== creating Job $JOB_NAME (session $SESSION, node $NODE_NAME) ==="
 # agent is killed between the call and the assignment. Claiming late left that Job running, still
 # writing, and blocking every later run on the active-Job check.
 JOB_OWNED=true
+# UNKNOWN goes down BEFORE the create call, not after: a create whose response is lost still
+# started a container that can promote.
+publish_state "UNKNOWN session=$SESSION node=$NODE_NAME — a Job was created; whether it promoted
+a session before it stopped cannot be decided from here. Check what dt=$SESSION points at under
+/home/options-edge/stock-gex-oi/close on $NODE_NAME."
 kubectl -n "$NAMESPACE" create -f "$RENDER"
 
 # --- 5. wait, then require the receipt --------------------------------------------------
@@ -347,14 +364,22 @@ SKIP="$(grep -E "$SKIP_RE" "$LOGS" | tail -1 || true)"
 OUTCOMES="$(grep -cE "$ANY_OUTCOME_RE" "$LOGS" || true)"
 
 if [ "$state" != "succeeded" ]; then
-  fatal "$JOB_NAME did not succeed (state=$state). Nothing was published for $SESSION; the
-       previously published sessions are untouched — the builder writes its manifest last, so a
-       half-written session is invisible to the service."
+  # NOT "nothing was published". A container can promote and then exit nonzero, or be killed
+  # before the Job records success — the promote is atomic and happens before the receipt is
+  # printed. The marker already says UNKNOWN; this message must not contradict it.
+  fatal "$JOB_NAME did not succeed (state=$state). Whether a session was promoted for $SESSION
+       is UNKNOWN: the promote happens inside the container, before its receipt, and this
+       identity cannot read the node. Check what dt=$SESSION points at under
+       /home/options-edge/stock-gex-oi/close on $NODE_NAME. Every OTHER session is untouched —
+       a build only ever writes a new generation and moves one symlink."
 fi
 # EXACTLY ONE outcome line, and it must be the one for the session that was asked for.
 [ "${OUTCOMES:-0}" = "1" ] || fatal "$JOB_NAME printed ${OUTCOMES:-0} outcome lines — expected
        exactly one. Refusing to guess which session, if any, was published."
 if [ -n "$SKIP" ]; then
+  # The CLI refuses a non-session day BEFORE it builds anything, so this is the one post-create
+  # path on which "nothing was published" is a fact rather than an assumption.
+  publish_state "NONE session=$SESSION — not a trading day; the CLI exited before building."
   SUCCESS=true
   echo "$SKIP"
   echo "OK: $SESSION is not a trading day — nothing to freeze."
@@ -372,8 +397,7 @@ ROOTS="$(printf '%s' "$RECEIPT" | sed -n 's/.* roots=\([0-9]*\) .*/\1/p')"
 # it cannot take it back: the promote happened inside the container, on a node this identity has
 # no filesystem access to. The marker below is what lets the Jenkins alert say which of the two
 # happened instead of asserting the comfortable one.
-printf 'published session %s (roots %s) on node %s\n' "$SESSION" "${ROOTS:-?}" "$NODE_NAME" \
-  >close-board-published.txt || true
+publish_state "PUBLISHED session=$SESSION roots=${ROOTS:-?} node=$NODE_NAME"
 echo "$RECEIPT"
 
 # THE STATE AT PUBLICATION TIME, re-read against the SERVING pod. A service-deploy during the
