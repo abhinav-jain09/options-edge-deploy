@@ -56,8 +56,10 @@ pipeline {
     cron('TZ=America/New_York\n10 16 * * 1-5')
   }
   options {
-    // Two runs would interleave writes into one session directory. The wrapper also refuses to
-    // start alongside an active close-board Job, which covers a manual run this cannot see.
+    // Not for correctness — two runs produce two generations and the later promote simply wins —
+    // but each spends a full vendor pull and drops the other's fetch scratch, so they are
+    // serialised. The wrapper additionally refuses to start beside an active close-board Job,
+    // which covers a manual run this option cannot see.
     disableConcurrentBuilds()
     // The Job is capped at 30 min (activeDeadlineSeconds) and the wrapper waits 35, so this
     // leaves room for the image pin and the prune on top.
@@ -104,9 +106,11 @@ pipeline {
           def payload = JsonOutput.toJson([
             content: ":snowflake: stock-gex closing-board freeze ${currentBuild.currentResult} " +
                      "(build ${env.BUILD_NUMBER}, session ${env.SESSION ?: 'today ET'}). The LIVE " +
-                     "board and every previously published session are UNAFFECTED — the only loss " +
-                     "is that this day cannot be viewed after hours. Re-runnable with SESSION set " +
-                     "while the vendor still serves that window. ${env.BUILD_URL}"
+                     "board and every previously published session are UNAFFECTED — a build " +
+                     "publishes a whole new generation and only the final symlink move makes it " +
+                     "visible, so a failed run leaves the last good session exactly as it was. " +
+                     "The only loss is that this day cannot be viewed after hours. Re-runnable " +
+                     "with SESSION set while the vendor still serves that window. ${env.BUILD_URL}"
           ])
           writeFile file: 'discord-payload.json', text: payload
           // Bounded: a stalled webhook must not eat the remaining timeout on a build that has

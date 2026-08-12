@@ -13,9 +13,10 @@
 #
 #   Closing boards have no such state. CloseBoardStore rescans the directory every 60 seconds and
 #   opens the requested root's file per request, so a published session is live within a minute
-#   with nothing restarted. There is no generation to record, nothing to be in drift with, and no
-#   pod to prove anything about. The publication barrier is the manifest, written last by the
-#   builder inside the session directory.
+#   with nothing restarted. There is no generation to record in the cluster, nothing to be in
+#   drift with, and no pod to prove anything about. Publication is the builder moving the
+#   dt=<session> symlink onto a finished generation directory: one atomic step, so a session is
+#   replaced whole or not at all, and a killed run leaves a generation nothing points at.
 #
 # WHAT IT STILL DOES, fail-closed at every step — these are not optional:
 #   1. asserts the kubectl identity IS the deployer SA (the only principal the
@@ -30,16 +31,19 @@
 #   5. creates the Job, waits, prints its whole log, and requires the receipt.
 #
 # WHAT IT DELIBERATELY DOES NOT DO:
-#   * It does not require the service to be at replicas=1 for its own sake — it only needs ONE
-#     Running pod to learn the node. It does refuse when there is none, because without it the
-#     Job would land wherever the scheduler chose and write a copy nobody reads.
 #   * It does not restart anything. See above.
 #
 # ACCEPTED RESIDUAL RISKS (stated, not papered over):
-#   * A concurrent `service-deploy SERVICE=stock-gex` can move the service image mid-run. Unlike
-#     the index job this is not fatal to correctness — nothing is validated against the running
-#     pod's loader — so it is checked once, at the start, and not re-checked before a rollout that
-#     does not happen.
+#   * THE SESSIONS LIVE ON ONE NODE. That is checked (replicas=1, and the Job is pinned to the
+#     pod's node) but not GUARANTEED by this script: if the service is ever rescheduled onto a
+#     different node, its published history does not follow, and the new node starts with no
+#     sessions until this job runs again. Moving the pod means moving
+#     /home/options-edge/stock-gex-oi/close. Shared storage is the real fix and is out of scope
+#     here.
+#   * A concurrent `service-deploy SERVICE=stock-gex` can move the image, and the node, DURING
+#     the run. The image and node are therefore re-checked after the Job finishes, before the run
+#     is called a success — the initial check alone proves nothing about the state at publication
+#     time. The two pipelines are still not mutually excluded; Jenkins has no shared lock.
 #   * Nothing here notices a Jenkins job that never runs. Whatever watches prod should alert on
 #     `stockgex-close-board` having no successful build on a trading day.
 #
@@ -193,6 +197,15 @@ SELECTOR="$(printf '%s' "$DEPLOY_JSON" | jq -r '.spec.selector.matchLabels | to_
 # select the wrong pods.
 [ "$(printf '%s' "$DEPLOY_JSON" | jq -r '(.spec.selector.matchExpressions // []) | length')" = "0" ] \
   || fatal "$DEPLOYMENT uses selector matchExpressions — this script only understands matchLabels"
+# ONE replica, and that is load-bearing rather than incidental: the boards live on a node-local
+# hostPath, so with replicas on two nodes a reader routed to the other one sees no frozen session
+# at all. stock-gex is single-writer by design (replicas: 1 + Recreate, one Databento live
+# subscription per env); if that ever changes, this job needs shared storage, not a bigger loop.
+REPLICAS="$(printf '%s' "$DEPLOY_JSON" | jq -r '.spec.replicas')"
+[ "$REPLICAS" = "1" ] \
+  || fatal "$DEPLOYMENT has spec.replicas=$REPLICAS. Closing boards are written to ONE node's
+       hostPath, so a second replica on another node would serve a session that does not exist
+       there. Give this service shared storage before scaling it out."
 SERVICE_POD="$(kubectl -n "$NAMESPACE" get pods -l "$SELECTOR" --field-selector=status.phase=Running \
   --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null || true)"
 [ -n "$SERVICE_POD" ] || fatal "no Running $DEPLOYMENT pod — cannot determine the node that owns
@@ -200,6 +213,9 @@ SERVICE_POD="$(kubectl -n "$NAMESPACE" get pods -l "$SELECTOR" --field-selector=
 NODE_NAME="$(kubectl -n "$NAMESPACE" get pod "$SERVICE_POD" -o jsonpath='{.spec.nodeName}')"
 [ -n "$NODE_NAME" ] || fatal "pod $SERVICE_POD reports no nodeName"
 echo "service pod: $SERVICE_POD on node $NODE_NAME"
+echo "NOTE: published sessions live on $NODE_NAME only. If the service is ever rescheduled to a
+      different node, its history does NOT follow — that node starts with no sessions and this job
+      republishes one per run. Moving the pod means moving /home/options-edge/stock-gex-oi/close."
 
 # --- 3b. refuse to start alongside another close-board Job ---------------------------------
 # Two runs for one session would interleave writes into a single directory: each per-root file
@@ -238,8 +254,13 @@ if [ "$DRY_RUN" = "true" ]; then
 fi
 
 echo "=== creating Job $JOB_NAME (session $SESSION, node $NODE_NAME) ==="
-kubectl -n "$NAMESPACE" create -f "$RENDER"
+# OWNERSHIP IS CLAIMED FIRST, not after a successful create. The name carries 8 random bytes and
+# has never been used, so a Job with that name can only be this invocation's — including the case
+# the old order could not clean up: the API server creates it and the response is lost, or the
+# agent is killed between the call and the assignment. Claiming late left that Job running, still
+# writing, and blocking every later run on the active-Job check.
 JOB_OWNED=true
+kubectl -n "$NAMESPACE" create -f "$RENDER"
 
 # --- 5. wait, then require the receipt --------------------------------------------------
 echo "waiting up to ${JOB_TIMEOUT_S}s for $JOB_NAME ..."
@@ -275,24 +296,55 @@ echo "===== end log ====="
 
 # Anchored grammars. A holiday SKIP is a legitimate, successful outcome and must be reported as
 # what it is — reading it as "no receipt" would fail every exchange holiday.
-RECEIPT_RE='^STOCK_GEX_CLOSE_BOARD_OK session=[0-9]{4}-[0-9]{2}-[0-9]{2} oiTradeDate=[0-9]{4}-[0-9]{2}-[0-9]{2} roots=[0-9]+ quotes=[0-9]+$'
-SKIP_RE='^STOCK_GEX_CLOSE_BOARD_SKIP session=[0-9]{4}-[0-9]{2}-[0-9]{2} reason=[A-Z_]+$'
+# The grammars are BOUND TO THE REQUESTED SESSION, not merely well-formed. A CLI regression that
+# froze or skipped a different date would otherwise be reported as this session succeeding —
+# the wrapper would say the day was published and nothing would have been.
+RECEIPT_RE="^STOCK_GEX_CLOSE_BOARD_OK session=${SESSION} oiTradeDate=[0-9]{4}-[0-9]{2}-[0-9]{2} roots=[0-9]+ quotes=[0-9]+$"
+SKIP_RE="^STOCK_GEX_CLOSE_BOARD_SKIP session=${SESSION} reason=[A-Z_]+$"
+ANY_OUTCOME_RE='^STOCK_GEX_CLOSE_BOARD_(OK|SKIP) '
 RECEIPT="$(grep -E "$RECEIPT_RE" "$LOGS" | tail -1 || true)"
 SKIP="$(grep -E "$SKIP_RE" "$LOGS" | tail -1 || true)"
+OUTCOMES="$(grep -cE "$ANY_OUTCOME_RE" "$LOGS" || true)"
 
 if [ "$state" != "succeeded" ]; then
   fatal "$JOB_NAME did not succeed (state=$state). Nothing was published for $SESSION; the
        previously published sessions are untouched — the builder writes its manifest last, so a
        half-written session is invisible to the service."
 fi
+# EXACTLY ONE outcome line, and it must be the one for the session that was asked for.
+[ "${OUTCOMES:-0}" = "1" ] || fatal "$JOB_NAME printed ${OUTCOMES:-0} outcome lines — expected
+       exactly one. Refusing to guess which session, if any, was published."
 if [ -n "$SKIP" ]; then
   SUCCESS=true
   echo "$SKIP"
   echo "OK: $SESSION is not a trading day — nothing to freeze."
   exit 0
 fi
-[ -n "$RECEIPT" ] || fatal "$JOB_NAME reported success but printed no receipt. Refusing to call
-       this a publish: treat it as a failure and re-run."
+[ -n "$RECEIPT" ] || fatal "$JOB_NAME reported success but printed no receipt naming $SESSION.
+       Refusing to call this a publish: treat it as a failure and re-run."
+# THE STATE AT PUBLICATION TIME, not at start-up. A service-deploy during the ~10-minute build
+# can move the image (the freeze then used arithmetic the running service does not have) or the
+# node (the boards were written where the current pod cannot read them). Both are silent.
+AFTER_JSON="$(kubectl -n "$NAMESPACE" get deployment "$DEPLOYMENT" -o json 2>/dev/null)" \
+  || fatal "deployment/$DEPLOYMENT disappeared during the run — cannot confirm what was published"
+AFTER_IMAGE="$(printf '%s' "$AFTER_JSON" | jq -er --arg c "$SERVICE_CONTAINER" \
+  '[.spec.template.spec.containers[] | select(.name == $c)] | if length == 1 then .[0].image else error("x") end')" \
+  || fatal "$DEPLOYMENT no longer has exactly one container named '$SERVICE_CONTAINER'"
+[ "${AFTER_IMAGE##*@}" = "${RUNNING_IMAGE##*@}" ] \
+  || fatal "$DEPLOYMENT changed image during this run (${RUNNING_IMAGE##*@} -> ${AFTER_IMAGE##*@}).
+       The board was frozen with the OLD build's arithmetic. Re-run this job now that the deploy
+       has settled; the published session is from a build the service no longer runs."
+AFTER_POD="$(kubectl -n "$NAMESPACE" get pods -l "$SELECTOR" --field-selector=status.phase=Running \
+  --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null || true)"
+AFTER_NODE=""
+[ -n "$AFTER_POD" ] && AFTER_NODE="$(kubectl -n "$NAMESPACE" get pod "$AFTER_POD" -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)"
+[ -n "$AFTER_NODE" ] \
+  || fatal "no Running $DEPLOYMENT pod after the build — cannot confirm the boards were written
+       where the service can read them."
+[ "$AFTER_NODE" = "$NODE_NAME" ] \
+  || fatal "$DEPLOYMENT moved from node $NODE_NAME to $AFTER_NODE during this run. The session was
+       written to $NODE_NAME's hostPath, which the current pod does not mount — it is published
+       nowhere the service can see. Re-run this job."
 echo "$RECEIPT"
 # roots=0 cannot occur (the builder refuses an empty session), but a receipt is only useful if it
 # is READ — parse it and say the number out loud so a collapse is visible in the build log.
@@ -307,11 +359,20 @@ TERMINAL="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json 2>/dev/null
            | sort_by(.metadata.creationTimestamp) | .[].metadata.name' 2>/dev/null || echo '')"
 COUNT="$(printf '%s\n' "$TERMINAL" | grep -c . || true)"
 if [ "${COUNT:-0}" -gt "$KEEP_JOBS" ]; then
-  printf '%s\n' "$TERMINAL" | head -n $(( COUNT - KEEP_JOBS )) | while read -r old; do
+  # No pipeline into `head`: under `pipefail`, head closing early can SIGPIPE the writer and fail
+  # the whole run — publication would have succeeded and the build would still alert. The list is
+  # small and already sorted, so a plain loop with a counter is both simpler and can't do that.
+  DROP=$(( COUNT - KEEP_JOBS ))
+  i=0
+  while IFS= read -r old; do
     [ -n "$old" ] || continue
+    i=$(( i + 1 ))
+    [ "$i" -le "$DROP" ] || break
     echo "pruning old close-board Job $old"
     kubectl -n "$NAMESPACE" delete "job/$old" --ignore-not-found --wait=false >/dev/null 2>&1 || true
-  done
+  done <<EOF
+$TERMINAL
+EOF
 else
   echo "no old close-board Jobs to prune (terminal=${COUNT:-0}, keep=$KEEP_JOBS)"
 fi

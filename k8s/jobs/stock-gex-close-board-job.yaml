@@ -19,19 +19,20 @@
 #     to carry the intent, and no drift between "what was published" and "what the pod is serving".
 #   * NO WRITER LOCK against the index producer. This job never touches the index or the snapshot
 #     directory: it reads the index (read-only, by path) and writes only under close/.
-#   * NO STAGING DIRECTORY. The publication barrier is the manifest, written LAST inside the
-#     session directory. A killed run leaves loose per-root files that no reader will look at,
-#     which is exactly the property staging would have bought.
+#   * PUBLICATION IS ONE SYMLINK MOVE. The builder writes a whole GENERATION directory
+#     (dt=<session>.gen-<stamp>/) and then moves the dt=<session> symlink onto it, so a rebuild
+#     replaces a session entirely or not at all. A killed run leaves a generation nothing points
+#     at, which readers cannot see however complete it is. That is also why two concurrent runs
+#     cannot corrupt a session: they produce two generations, and the later promote simply wins.
 #
 # WHAT IT DOES NOT PROTECT AGAINST, stated rather than implied:
-#   * Two concurrent runs for the SAME session would interleave writes into one directory. Each
-#     per-root file is written atomically, so the result is still a directory of whole boards, but
-#     the manifest could name a set that a later run then changed. Jenkins serialises this job
-#     (disableConcurrentBuilds) and the wrapper refuses to start when another close-board Job is
-#     active; there is no in-container lock beyond that.
 #   * A run for a session the vendor has not published yet fails on the chunk size floor — an
 #     empty response is a failed attempt, never data. That is the intended outcome: publishing a
 #     hollow session is worse than publishing nothing.
+#   * Two concurrent runs still both spend a full vendor pull, and each drops the OTHER'S
+#     .fetch scratch directory at start-up (they only keep their own session's). The publication
+#     is safe; the waste is not prevented here. Jenkins serialises this pipeline and the wrapper
+#     refuses to start beside an active close-board Job, which is where that is handled.
 #
 # NODE PINNING is required for the same reason as the index job: /oi-index is a node-local
 # hostPath, so this must run on the node the service pod runs on, or it writes a copy nobody
