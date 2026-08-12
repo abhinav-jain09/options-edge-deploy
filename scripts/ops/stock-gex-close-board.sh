@@ -65,7 +65,9 @@
 #                    what the scheduled post-close run must always use. A non-trading day is
 #                    SKIPPED by the CLI, not failed (--skip-non-session).
 #   KEEP_SESSIONS    published sessions to retain, default 10 (~21 MB each)
-#   JOB_TIMEOUT_S    client-side wait, default 2100 (> the Job's own 1800s activeDeadlineSeconds)
+#   WAIT_FOR_VENDOR_S  how long the CLI may wait for the vendor archive to reach the closing
+#                    minute, default 3600, max 4800 (the Job deadline is 6000)
+#   JOB_TIMEOUT_S    client-side wait, default 6300 (> the Job's own 6000s activeDeadlineSeconds)
 #   KEEP_JOBS        terminal Jobs to retain, default 5
 #   NAMESPACE        default options-edge
 #   EXPECTED_API_SERVER  default https://192.168.100.252:6443
@@ -77,7 +79,8 @@ ENVIRONMENT="${ENVIRONMENT:-production}"
 NAMESPACE="${NAMESPACE:-options-edge}"
 SESSION="${SESSION:-}"
 KEEP_SESSIONS="${KEEP_SESSIONS:-10}"
-JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-2100}"
+WAIT_FOR_VENDOR_S="${WAIT_FOR_VENDOR_S:-3600}"
+JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-6300}"
 KEEP_JOBS="${KEEP_JOBS:-5}"
 DRY_RUN="${DRY_RUN:-false}"
 EXPECTED_API_SERVER="${EXPECTED_API_SERVER:-https://192.168.100.252:6443}"
@@ -142,8 +145,13 @@ case "$DRY_RUN" in true|false) : ;; *) fatal "DRY_RUN must be true or false, got
 case "$JOB_TIMEOUT_S" in ''|*[!0-9]*) fatal "JOB_TIMEOUT_S must be digits, got '$JOB_TIMEOUT_S'" ;; esac
 case "$KEEP_JOBS" in ''|*[!0-9]*) fatal "KEEP_JOBS must be digits, got '$KEEP_JOBS'" ;; esac
 case "$KEEP_SESSIONS" in ''|*[!0-9]*) fatal "KEEP_SESSIONS must be digits, got '$KEEP_SESSIONS'" ;; esac
-[ "$JOB_TIMEOUT_S" -ge 1900 ] && [ "$JOB_TIMEOUT_S" -le 7200 ] \
-  || fatal "JOB_TIMEOUT_S must be within 1900..7200 (the Job's own deadline is 1800s), got $JOB_TIMEOUT_S"
+case "$WAIT_FOR_VENDOR_S" in ''|*[!0-9]*) fatal "WAIT_FOR_VENDOR_S must be digits, got '$WAIT_FOR_VENDOR_S'" ;; esac
+# The Job's own deadline is 6000s; a wait that outlived it would be killed with no message of
+# its own, turning "the vendor was late" into an unexplained timeout.
+[ "$WAIT_FOR_VENDOR_S" -le 4800 ] \
+  || fatal "WAIT_FOR_VENDOR_S must be <= 4800 (the Job deadline is 6000s), got $WAIT_FOR_VENDOR_S"
+[ "$JOB_TIMEOUT_S" -ge 6100 ] && [ "$JOB_TIMEOUT_S" -le 14400 ] \
+  || fatal "JOB_TIMEOUT_S must be within 6100..14400 (the Job's own deadline is 6000s), got $JOB_TIMEOUT_S"
 [ "$KEEP_JOBS" -ge 1 ] && [ "$KEEP_JOBS" -le 100 ] || fatal "KEEP_JOBS must be within 1..100, got $KEEP_JOBS"
 [ "$KEEP_SESSIONS" -ge 1 ] && [ "$KEEP_SESSIONS" -le 400 ] \
   || fatal "KEEP_SESSIONS must be within 1..400, got $KEEP_SESSIONS"
@@ -292,6 +300,7 @@ sed -e "s|__IMAGE__|${PINNED_IMAGE}|g" \
     -e "s|__SESSION__|${SESSION}|g" \
     -e "s|__NODE_NAME__|${NODE_NAME}|g" \
     -e "s|__KEEP_SESSIONS__|${KEEP_SESSIONS}|g" \
+    -e "s|__WAIT_FOR_VENDOR_S__|${WAIT_FOR_VENDOR_S}|g" \
     "$TEMPLATE" >"$RENDER"
 grep -q '__[A-Z_]*__' "$RENDER" && fatal "unsubstituted placeholder left in the render"
 _ns="$(yq -r '.metadata.namespace' "$RENDER")"

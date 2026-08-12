@@ -50,10 +50,12 @@ spec:
   # NO k8s-level retry: the CLI retries each chunk itself (--max-attempts), and a backoffLimit > 0
   # would restart the whole pull from scratch on a late failure.
   backoffLimit: 0
-  # 30 min. The pull is ONE schema over ~21 chunks (the index job's is three schemas), and the
-  # build is CPU work over ~500 roots. The wrapper waits LONGER than this on purpose, so the
-  # deadline is enforced by the component that can actually stop the work.
-  activeDeadlineSeconds: 1800
+  # 100 min, and most of it is the vendor WAIT rather than work. The CLI polls
+  # metadata.get_dataset_range until the archive covers the closing minute (up to 60 min by
+  # default) before spending a single data request; the pull itself is ONE schema over ~21
+  # chunks and the build is CPU work over ~500 roots. The wrapper waits LONGER than this on
+  # purpose, so the deadline is enforced by the component that can actually stop the work.
+  activeDeadlineSeconds: 6000
   template:
     metadata:
       labels:
@@ -93,6 +95,13 @@ spec:
               value: "__SESSION__"
             - name: KEEP_SESSIONS
               value: "__KEEP_SESSIONS__"
+            # How long to wait for the vendor's archive to reach the closing minute before
+            # pulling. The lag is NOT a constant — measured 20.6 min, then still climbing at 32
+            # — so the job asks rather than the schedule guessing. Must stay comfortably under
+            # activeDeadlineSeconds so the wait fails with its own message rather than being
+            # killed without one.
+            - name: WAIT_FOR_VENDOR_S
+              value: "__WAIT_FOR_VENDOR_S__"
           command: ["sh", "-c"]
           args:
             - |
@@ -123,6 +132,7 @@ spec:
                 --snapshot-dir "${SNAP}" \
                 --out-root /oi-index/close \
                 --keep-sessions "${KEEP_SESSIONS}" \
+                --wait-for-vendor-s "${WAIT_FOR_VENDOR_S}" \
                 --skip-non-session \
                 --fetch
               # Only on SUCCESS. The chunks are ~350 MB and nothing else reads them once the
