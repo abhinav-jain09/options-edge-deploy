@@ -15,21 +15,28 @@ import groovy.json.JsonOutput
 // therefore needs an annotation, a rollout and a proof — closing boards are read per request, off
 // a directory the service rescans every 60 seconds. A published session is live within a minute.
 //
-// SCHEDULE: 16:10 America/New_York, Mon-Fri — TEN MINUTES AFTER THE BELL, and that is the whole
+// SCHEDULE: 16:35 America/New_York, Mon-Fri — after the bell on the SAME DAY, which is the whole
 // design goal. Piggybacking on the 08:20 index job would have been free, and would have meant
 // today's closing board first appearing TOMORROW MORNING; the point of the feature is the evening
 // of the day itself.
 //   * It needs no new open interest, which is why same-day is possible at all: the board is
 //     priced on the index the service was ALREADY serving (the previous session's), so the 20:00
 //     ET settlement guard that governs the index job does not apply here.
-//   * Ten minutes is a margin over vendor publication of a minute that ended at 16:00, not a
-//     measurement of it. If a run ever fails on empty chunks, move the slot later rather than
-//     retrying into the same window.
-//   * 16:10 sits between the close and the 20:30 ET off-hours scale-down, so the service pod is
-//     up — the wrapper needs a Running pod to learn which node owns the hostPath.
-//   * The IANA zone (not a fixed UTC hour) keeps it at 16:10 ET across DST. On an EARLY CLOSE
-//     (13:00 ET) the run is simply three hours late, which costs nothing: the window is resolved
-//     from the market calendar, not from the firing time.
+//   * 35 MINUTES IS A MEASUREMENT, NOT A GUESS. The first draft said 16:10 and would have failed
+//     every day. Measured against OPRA.PILLAR on 2026-08-12: historical `available_end` advances
+//     in TEN-MINUTE steps, and the 09:20 ET boundary first appeared at 09:40:37 ET — a lag of
+//     20.6 minutes. A request whose `start` is past `available_end` returns HTTP 422
+//     (`data_start_after_available_end`), whose 544-byte body the chunk-size floor correctly
+//     treats as a failed attempt rather than as data; the CLI's four retries span ~2.5 minutes,
+//     which does not cover a ten-minute miss. So the freeze needs `available_end >= 16:00`,
+//     expected ~16:20, and 16:35 leaves roughly 15 minutes of margin.
+//     If a run ever does fail on empty chunks, MOVE THE SLOT LATER — do not raise the retries.
+//   * 16:35 sits between the close and the 20:30 ET off-hours scale-down, so the service pod is
+//     up — the wrapper needs a READY pod to learn which node owns the hostPath.
+//   * The IANA zone (not a fixed UTC hour) keeps it at 16:35 ET across DST. On an EARLY CLOSE
+//     (13:00 ET) the run is simply three and a half hours late, which costs nothing: the window
+//     is resolved from the market calendar, not from the firing time — and the extra delay only
+//     makes vendor availability more certain, never less.
 //   * It runs on exchange holidays too, ON PURPOSE: a Mon-Fri timer must not second-guess the
 //     market calendar. The CLI skips a non-session day itself (--skip-non-session) and the
 //     wrapper reports that as a success, so a holiday is not nine false alarms a year.
@@ -52,8 +59,9 @@ pipeline {
       description: 'How many most-recent TERMINAL close-board Jobs to retain (nothing else prunes them). 1..100.')
   }
   triggers {
-    // 16:10 ET, weekdays — after the bell, well before the 20:30 ET off-hours scale-down.
-    cron('TZ=America/New_York\n10 16 * * 1-5')
+    // 16:35 ET, weekdays. The minute is set by the MEASURED vendor publication lag (see the
+    // header), not by taste, and it is well before the 20:30 ET off-hours scale-down.
+    cron('TZ=America/New_York\n35 16 * * 1-5')
   }
   options {
     // Not for correctness — two runs produce two generations and the later promote simply wins —
