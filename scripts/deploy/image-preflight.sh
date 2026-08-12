@@ -84,6 +84,7 @@
             images="$images
             SHORT_PREMIUM_AGENT_IMAGE=${SHORT_PREMIUM_AGENT_IMAGE:-}
             SIGNAL_FOLLOWER_IMAGE=${SIGNAL_FOLLOWER_IMAGE:-}
+            CONTEXT_TAPE_IMAGE=${CONTEXT_TAPE_IMAGE:-}
             "
           fi
 

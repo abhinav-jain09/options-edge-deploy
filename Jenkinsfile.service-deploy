@@ -33,7 +33,7 @@ pipeline {
       'directional-pressure', 'es-open-direction', 'es-open-direction-postgres-writer', 'close-direction', 'spot-vol-regime', 'indicator-service', 'vix-option-inteligence', 'greek-move-authenticity', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
       'option-truth-engine', 'market-carry', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
       'invasion-postgres-writer', 'reversal-confirmation', 'drop-classifier', 'reversal-postgres-writer', 'short-premium-agent', 'es-spx-align', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
-      'oi-shadow', 'unified-sr', 'volume-pace', 'signal-follower', 'web', 'ibkr-feed', 'stock-gex',
+      'oi-shadow', 'unified-sr', 'volume-pace', 'signal-follower', 'web', 'ibkr-feed', 'stock-gex', 'context-tape',
       // fullfunding tenant. Same job: the target namespace comes from services.yaml,
       // and the deploy refuses if the render disagrees with what is registered there.
       'fullfunding-app'

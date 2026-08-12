@@ -75,7 +75,11 @@ if [ -z "$DRY" ]; then
          continue ;;
       ''|*[!0-9]*) echo "IMAGE VERIFY FAILED: cannot read desired replicas for $name (got '$want')" >&2; exit 1 ;;
     esac
-    kubectl -n options-edge rollout status "$d" --timeout=240s || {
+    # 600s mirrors the standalone path's default (service-deploy.sh ROLLOUT_TIMEOUT).
+    # The old 240s was shorter than documented startup allowances (e.g. context-tape's
+    # session backfill), so a valid slow start failed the build AFTER the apply had
+    # already mutated the cluster.
+    kubectl -n options-edge rollout status "$d" --timeout=600s || {
       echo "ROLLOUT FAILED: $d (manifest $MANIFEST)" >&2; exit 1; }
     expected=$(grep -oE "image: [^ ]+@sha256:[0-9a-f]{64}" "$OUT" | head -1 | grep -oE "sha256:[0-9a-f]{64}")
     running=$(kubectl -n options-edge get pods -l "app.kubernetes.io/name=${name}" \
