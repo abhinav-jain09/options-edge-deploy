@@ -250,6 +250,15 @@ PYEOF
           . scripts/kafka/load-kafka-settings.sh
           export TOPIC_PREFIX
           export DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}"
+          # The Streams app id names the internal changelog the barrier checks. It is
+          # NOT derivable from ENVIRONMENT: prod's ENVIRONMENT is "production" but its
+          # app id is indicator-service-prod. The suffix comes from the SAME configmap
+          # value the service itself reads, so the barrier can never check a topic the
+          # service does not use.
+          SUFFIX=$(kubectl -n options-edge get configmap options-edge-config \
+            -o jsonpath='{.data.KAFKA_APPLICATION_ID_SUFFIX}' 2>/dev/null || true)
+          : "${SUFFIX:?KAFKA_APPLICATION_ID_SUFFIX not readable — refusing to guess the app id}"
+          export INDICATOR_APP_ID="indicator-service${SUFFIX}"
           scripts/kafka/ensure-indicator-topics.sh
         '''
       }
