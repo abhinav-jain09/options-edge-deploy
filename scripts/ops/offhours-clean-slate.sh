@@ -105,7 +105,16 @@ WIPE_DB="${WIPE_DB:-false}"
 # 2026-07-13: oe-keycloak MUST be in this set — options-edge-web depends on the auth issuer at boot, and
 # with Keycloak down the whole site (incl. the Cloudflare tunnel origin) wedges → prod appears down. Keep
 # oe-keycloak first so auth is up before web starts.
-OVERNIGHT_SET="${OVERNIGHT_SET:-oe-keycloak es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web}"
+#
+# 2026-08-12: stock-gex-service joins the set, and it is the one member here that is NOT tracking
+# anything overnight. It serves the FROZEN CLOSING BOARD (/api/stock-gex/close-board), which is read
+# from disk after the session ends — and the evening is exactly when someone looks at how the day
+# went. Scaled to 0 at 20:30 the feature would work for four hours and then be gone for the sixteen
+# that matter. The cost is measured, not assumed: the pod holds the OI index at a ~300Mi floor and
+# spends essentially no CPU while no board is subscribed, because the tick loop only has work when a
+# symbol is on the wire (2026-08-11 prod RTH sizing: ~50m CPU and ~7Mi per ACTIVE board, over that
+# floor). It cannot subscribe anything overnight either — OPRA is closed.
+OVERNIGHT_SET="${OVERNIGHT_SET:-oe-keycloak es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web stock-gex-service}"
 
 # Market-hours guard: refuse to run between open and close+buffer. The calendar
 # already knows the per-day close (incl. early-close days); we add a buffer so the

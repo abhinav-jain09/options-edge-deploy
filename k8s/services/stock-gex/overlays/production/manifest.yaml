@@ -68,6 +68,13 @@ spec:
                   name: options-edge-databento-feed-env
             - name: STOCK_GEX_OI_INDEX
               value: /oi-index/stock-gex-oi-index.json.gz
+            # Frozen closing boards, under the SAME hostPath as the index rather than a second
+            # mount: they are written by the same producer, onto the same node, and a separate
+            # volume would only add a way for the two to end up on different disks. Unset would
+            # disable the after-hours view; it is NOT a boot gate (a missing directory empties
+            # that view, while a bad OI index must stop the service).
+            - name: STOCK_GEX_CLOSE_DIR
+              value: /oi-index/close
             - name: HEALTH_PORT
               value: "8022"
           image: 192.168.100.252:5000/options-edge-stock-gex:dev

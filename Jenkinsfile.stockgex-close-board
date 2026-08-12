@@ -1,0 +1,125 @@
+@Library('oe') _
+import groovy.json.JsonOutput
+
+// FREEZE THE CLOSING GEX BOARD, THE SAME DAY IT CLOSES.
+//
+// A live stock-gex board is retired 900s after its last subscriber and dies with the process, so
+// the picture someone watched all afternoon is gone the moment the session ends. This job runs
+// scripts/ops/stock-gex-close-board.sh, which creates the Job in
+// k8s/jobs/stock-gex-close-board-job.yaml under the deployer identity (the only principal the
+// options-edge-jenkins-only-workloads admission policy permits to create Jobs). That Job pulls the
+// session's LAST MINUTE of cbbo-1s, prices it against the OI index the service was serving all
+// day, and writes one gzip'd board per root under /oi-index/close/dt=<session>/.
+//
+// NOTHING IS RESTARTED. Unlike the OI index — which the service loads once, in main(), and which
+// therefore needs an annotation, a rollout and a proof — closing boards are read per request, off
+// a directory the service rescans every 60 seconds. A published session is live within a minute.
+//
+// SCHEDULE: 16:10 America/New_York, Mon-Fri — TEN MINUTES AFTER THE BELL, and that is the whole
+// design goal. Piggybacking on the 08:20 index job would have been free, and would have meant
+// today's closing board first appearing TOMORROW MORNING; the point of the feature is the evening
+// of the day itself.
+//   * It needs no new open interest, which is why same-day is possible at all: the board is
+//     priced on the index the service was ALREADY serving (the previous session's), so the 20:00
+//     ET settlement guard that governs the index job does not apply here.
+//   * Ten minutes is a margin over vendor publication of a minute that ended at 16:00, not a
+//     measurement of it. If a run ever fails on empty chunks, move the slot later rather than
+//     retrying into the same window.
+//   * 16:10 sits between the close and the 20:30 ET off-hours scale-down, so the service pod is
+//     up — the wrapper needs a Running pod to learn which node owns the hostPath.
+//   * The IANA zone (not a fixed UTC hour) keeps it at 16:10 ET across DST. On an EARLY CLOSE
+//     (13:00 ET) the run is simply three hours late, which costs nothing: the window is resolved
+//     from the market calendar, not from the firing time.
+//   * It runs on exchange holidays too, ON PURPOSE: a Mon-Fri timer must not second-guess the
+//     market calendar. The CLI skips a non-session day itself (--skip-non-session) and the
+//     wrapper reports that as a success, so a holiday is not nine false alarms a year.
+//
+// PRODUCTION ONLY. Dev has no closing-board mount and is scaled to zero nightly.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['production'],
+      description: 'Target environment. Production only — see the header.')
+    string(name: 'SESSION', defaultValue: '',
+      description: 'Operator override, YYYY-MM-DD. EMPTY on scheduled runs so the wrapper uses TODAY in America/New_York — never pin a date on the timer. A backfill of an older session works too, as long as its cbbo-1s window is still available from the vendor.')
+    string(name: 'KEEP_SESSIONS', defaultValue: '10',
+      description: 'Published sessions to retain on the node (~21 MB each). 1..400.')
+    booleanParam(name: 'DRY_RUN', defaultValue: false,
+      description: 'true = resolve + digest-pin + server-side validate the Job only; creates nothing and publishes nothing.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    string(name: 'KEEP_JOBS', defaultValue: '5',
+      description: 'How many most-recent TERMINAL close-board Jobs to retain (nothing else prunes them). 1..100.')
+  }
+  triggers {
+    // 16:10 ET, weekdays — after the bell, well before the 20:30 ET off-hours scale-down.
+    cron('TZ=America/New_York\n10 16 * * 1-5')
+  }
+  options {
+    // Two runs would interleave writes into one session directory. The wrapper also refuses to
+    // start alongside an active close-board Job, which covers a manual run this cannot see.
+    disableConcurrentBuilds()
+    // The Job is capped at 30 min (activeDeadlineSeconds) and the wrapper waits 35, so this
+    // leaves room for the image pin and the prune on top.
+    timeout(time: 60, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+  }
+  environment {
+    KUBECONFIG    = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT   = "${params.ENVIRONMENT}"
+    SESSION       = "${params.SESSION}"
+    KEEP_SESSIONS = "${params.KEEP_SESSIONS}"
+    DRY_RUN       = "${params.DRY_RUN}"
+    KEEP_JOBS     = "${params.KEEP_JOBS}"
+  }
+  stages {
+    stage('Freeze closing board') {
+      steps {
+        sh '''
+          set -euo pipefail
+          chmod +x scripts/ops/stock-gex-close-board.sh
+          scripts/ops/stock-gex-close-board.sh
+        '''
+      }
+    }
+  }
+  post {
+    // `unsuccessful`, NOT `failure`: the pipeline timeout and a manual stop both produce ABORTED,
+    // and a session that was never frozen is exactly as gone either way.
+    unsuccessful {
+      script {
+        // What a miss actually costs, stated plainly so the alert is not read as an outage: the
+        // LIVE board is untouched, the previously published sessions are untouched, and the only
+        // loss is that ONE day cannot be looked at after hours. It is also recoverable — the
+        // vendor keeps the window — so the alert says how.
+        echo "stock-gex closing-board freeze ${currentBuild.currentResult} for session '${env.SESSION ?: 'today ET'}'"
+        withCredentials([string(credentialsId: 'offhours-discord-webhook',
+                                variable: 'DISCORD_WEBHOOK_URL')]) {
+          // The same PROD ops webhook the off-hours job and the error-watch use. The pod-log
+          // error-watch cannot see this on its own: a short-lived Job's pod may be gone between
+          // its 5-minute scans, and a Jenkins/plumbing failure never reaches a pod log at all.
+          //
+          // Built with JsonOutput and handed to curl on stdin, so a BUILD_URL containing a quote
+          // or backslash cannot break the JSON and lose the alert.
+          def payload = JsonOutput.toJson([
+            content: ":snowflake: stock-gex closing-board freeze ${currentBuild.currentResult} " +
+                     "(build ${env.BUILD_NUMBER}, session ${env.SESSION ?: 'today ET'}). The LIVE " +
+                     "board and every previously published session are UNAFFECTED — the only loss " +
+                     "is that this day cannot be viewed after hours. Re-runnable with SESSION set " +
+                     "while the vendor still serves that window. ${env.BUILD_URL}"
+          ])
+          writeFile file: 'discord-payload.json', text: payload
+          // Bounded: a stalled webhook must not eat the remaining timeout on a build that has
+          // already failed. The exit status stays ignored on purpose.
+          sh '''
+            set +e
+            curl -fsS --connect-timeout 10 --max-time 30 --retry 2 \
+              -H 'Content-Type: application/json' \
+              --data-binary @discord-payload.json "${DISCORD_WEBHOOK_URL}"
+            true
+          '''
+        }
+      }
+    }
+  }
+}

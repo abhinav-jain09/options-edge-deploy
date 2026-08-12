@@ -1,0 +1,150 @@
+# FREEZE ONE SESSION'S CLOSING GEX BOARD.
+#
+# A live board is retired 900s after its last subscriber and dies with the process, so at 16:05
+# there is nothing left to look at. This Job writes the closing picture down, per root, into
+# /oi-index/close/dt=YYYY-MM-DD/, where the service reads it on demand.
+#
+# WHY THIS IS A JOB TEMPLATE IN GIT AND NOT A CronJob OBJECT — the same reason as
+# stock-gex-oi-snapshot-job.yaml (read that header): the options-edge-jenkins-only-workloads
+# admission policy (failurePolicy: Fail) permits batch/jobs and batch/cronjobs ONLY to
+# system:serviceaccount:options-edge:jenkins-deployer, so the schedule lives in Jenkins — the one
+# principal that can create the workload — and the workload itself is rendered from this file per
+# run. A CronJob would also fire on a node the wrapper did not choose.
+#
+# WHAT MAKES THIS JOB MUCH SIMPLER THAN THE INDEX ONE, and it is not an oversight:
+#
+#   * NO ROLLOUT. The service does not load closing boards at boot; CloseBoardStore rescans the
+#     directory every 60 seconds and opens the requested root's file per request. So publishing is
+#     complete when the manifest lands — there is nothing to restart, no pod-template annotation
+#     to carry the intent, and no drift between "what was published" and "what the pod is serving".
+#   * NO WRITER LOCK against the index producer. This job never touches the index or the snapshot
+#     directory: it reads the index (read-only, by path) and writes only under close/.
+#   * NO STAGING DIRECTORY. The publication barrier is the manifest, written LAST inside the
+#     session directory. A killed run leaves loose per-root files that no reader will look at,
+#     which is exactly the property staging would have bought.
+#
+# WHAT IT DOES NOT PROTECT AGAINST, stated rather than implied:
+#   * Two concurrent runs for the SAME session would interleave writes into one directory. Each
+#     per-root file is written atomically, so the result is still a directory of whole boards, but
+#     the manifest could name a set that a later run then changed. Jenkins serialises this job
+#     (disableConcurrentBuilds) and the wrapper refuses to start when another close-board Job is
+#     active; there is no in-container lock beyond that.
+#   * A run for a session the vendor has not published yet fails on the chunk size floor — an
+#     empty response is a failed attempt, never data. That is the intended outcome: publishing a
+#     hollow session is worse than publishing nothing.
+#
+# NODE PINNING is required for the same reason as the index job: /oi-index is a node-local
+# hostPath, so this must run on the node the service pod runs on, or it writes a copy nobody
+# reads.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: stock-gex-close-board
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: maintenance
+spec:
+  # NO k8s-level retry: the CLI retries each chunk itself (--max-attempts), and a backoffLimit > 0
+  # would restart the whole pull from scratch on a late failure.
+  backoffLimit: 0
+  # 30 min. The pull is ONE schema over ~21 chunks (the index job's is three schemas), and the
+  # build is CPU work over ~500 roots. The wrapper waits LONGER than this on purpose, so the
+  # deadline is enforced by the component that can actually stop the work.
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: stock-gex-close-board
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: __NODE_NAME__
+      # This Job never talks to the k8s API — the token would be an unnecessary credential in a
+      # pod that holds a Databento key.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000        # MUST match the hostPath dir owner on the node (abhinav)
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: close-board
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: DATABENTO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-databento-feed-env
+                  key: DATABENTO_API_KEY
+            # The session to freeze, YYYY-MM-DD. ALWAYS explicit — resolved by the wrapper from
+            # the market calendar, never defaulted in here. A freeze is about ONE named day, and a
+            # job that picked its own day could silently refreeze yesterday after a late start.
+            - name: SESSION
+              value: "__SESSION__"
+            - name: KEEP_SESSIONS
+              value: "__KEEP_SESSIONS__"
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              test -n "${SESSION}" || { echo "FATAL: SESSION is empty" >&2; exit 1; }
+              # The download lands in a per-session scratch directory under close/. The name
+              # starts with a dot, so it is not a dt= directory and the service's session scan
+              # cannot see it; and it is NOT in the nightly snapshot root, which the index
+              # producer prunes on its own schedule and would not expect to find a stray session
+              # in.
+              FETCH="/oi-index/close/.fetch"
+              SNAP="${FETCH}/dt=${SESSION}"
+              # Leftovers from a FAILED run of ANOTHER session are dropped first. This session's
+              # own leftovers are kept on purpose: the CLI skips chunks that are already complete,
+              # so a re-run resumes instead of re-billing ~350 MB of vendor traffic.
+              if [ -d "${FETCH}" ]; then
+                for d in "${FETCH}"/dt=*; do
+                  [ -d "${d}" ] || continue
+                  [ "${d}" = "${SNAP}" ] && continue
+                  echo "dropping stale fetch scratch ${d}"
+                  rm -rf "${d}"
+                done
+              fi
+              mkdir -p "${SNAP}"
+              options-edge-stock-gex-close-board \
+                --session "${SESSION}" \
+                --index /oi-index/stock-gex-oi-index.json.gz \
+                --snapshot-dir "${SNAP}" \
+                --out-root /oi-index/close \
+                --keep-sessions "${KEEP_SESSIONS}" \
+                --skip-non-session \
+                --fetch
+              # Only on SUCCESS. The chunks are ~350 MB and nothing else reads them once the
+              # boards exist, but on a failure they are what makes the re-run cheap — see above.
+              rm -rf "${SNAP}"
+          volumeMounts:
+            - name: oi-index
+              mountPath: /oi-index      # READ-WRITE: this job writes under close/.
+            - name: tmp
+              mountPath: /tmp           # readOnlyRootFilesystem: python/urllib need a temp dir
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            # The build holds ONE chunk's symbology and last quotes at a time (25 roots), never
+            # the whole session, so this is bounded by the largest chunk rather than by the
+            # universe. 2Gi matches the index job's ceiling.
+            limits:
+              memory: 2Gi
+      volumes:
+        - name: oi-index
+          hostPath:
+            path: /home/options-edge/stock-gex-oi
+            type: DirectoryOrCreate
+        - name: tmp
+          emptyDir: {}
