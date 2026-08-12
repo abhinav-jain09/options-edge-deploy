@@ -25,6 +25,35 @@ resources:
   # broker/profile/image.
   - ../../services/databento-vix-feed/base
 patches:
+  # TEMPORARY, dev only, 2026-08-12. dev's Kafka was cleaned, so the epoch lineage
+  # is gone and indicator-service fail-closes rather than inventing one — exactly
+  # as the base comment prescribes ("set true EXACTLY ONCE via a temporary overlay
+  # patch on first deployment per environment, then revert").
+  #
+  # REVERT THIS BLOCK once dev has genesis'd and is RUNNING. Left in place, any
+  # future wipe re-genesis silently, which is the whole thing the fence prevents.
+  #
+  # Cleared alongside it: indicator-service-dev-indicator-state-changelog existed
+  # with 32 partitions against a topology expecting 4, so Streams sat in ERROR
+  # while the pod reported RESTORING. Same class as the es4 crash-loop but on a
+  # STREAMS-INTERNAL topic, which ensure-indicator-topics does not cover.
+  - target:
+      kind: Deployment
+      name: indicator-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: indicator-service
+        namespace: options-edge
+      spec:
+        template:
+          spec:
+            containers:
+              - name: indicator-service
+                env:
+                  - name: INDICATOR_EPOCH_GENESIS
+                    value: "true"
   # oi-shadow: ENABLED on DEV, with the SEEDED arm on. The service reads the anchor manifest and
   # the raw chain and writes one record per strike to options.databento.oi.nowcast.by-strike; that
   # topic is now CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED), so what this service

@@ -60,6 +60,8 @@ spec:
     spec:
       containers:
         - env:
+            - name: INDICATOR_EPOCH_GENESIS
+              value: "true"
             - name: HEALTH_PORT
               value: "8133"
             - name: INDICATOR_SOURCE_MODE
@@ -69,14 +71,6 @@ spec:
             - name: INDICATOR_INPUT_PARTITIONS
               value: "1"
             - name: INDICATOR_COLD_BOOTSTRAP
-              value: "true"
-            # ONE-TIME GRANT (2026-08-12). dev's Kafka was wiped, so the epoch
-            # lineage is gone and the service fail-closes rather than inventing
-            # one. This is granted deliberately and MUST be reverted to "false"
-            # once dev has genesis'd — leaving it true would let any future wipe
-            # silently re-genesis, which is exactly what the fail-closed guard
-            # exists to prevent.
-            - name: INDICATOR_EPOCH_GENESIS
               value: "true"
             - name: INDICATOR_SESSION_BACKFILL
               value: "true"
