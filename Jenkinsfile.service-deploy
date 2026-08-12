@@ -230,6 +230,30 @@ PYEOF
         '''
       }
     }
+    stage('Verify indicator topics') {
+      // BEFORE the rollout, same barrier and same reason as the OI anchor stage above. MEASURED
+      // on 2026-08-11: prod's options.indicators.snapshot.current had NO dynamic config at all --
+      // neither the declared compaction nor the declared 7-day retention -- because the broker had
+      // auto-created it and apply-topics lives in a different job. es4's sat at cleanup.policy=
+      // delete for a different reason (a glued topics.env token). snapshot.current is the
+      // CURRENT-state topic the UI and gateway read; without compaction its latest value per key
+      // is dropped once retention elapses and the board blanks while the topic looks healthy.
+      // Reconciles policy/retention, FAILS CLOSED on a partition mismatch (Kafka cannot shrink a
+      // topic and recreating one would destroy the accumulated bar history).
+      when {
+        expression { params.SERVICE == 'indicator-service' }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          export TOPIC_PREFIX
+          export DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}"
+          scripts/kafka/ensure-indicator-topics.sh
+        '''
+      }
+    }
     stage('Verify gamma-tilt evidence ledger') {
       // GMT Stage-1 (Codex code-review c1-6): the shadow evidence ledger must exist with the
       // right shape (1 partition, delete, retention.ms=-1) BEFORE strike-intelligence rolls out.
