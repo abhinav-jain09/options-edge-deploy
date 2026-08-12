@@ -28,7 +28,16 @@
 #      running service would not have drawn,
 #   3. pins the Job to the node the service pod runs on (the boards are a node-local hostPath),
 #   4. refuses to start while another close-board Job is active,
-#   5. creates the Job, waits, prints its whole log, and requires the receipt.
+#   5. creates the Job, waits, prints its whole log, and requires a receipt NAMING this session,
+#   6. re-reads the SERVING pod's image and node AFTER the build, because the start-up check
+#      proves nothing about the state at publication time.
+#
+# THE ONE THING IT CANNOT UNDO. The promote happens inside the container, on a node this identity
+# has no filesystem access to (the deployer SA has no pods/exec). So step 6 can only DISCOVER
+# that a published session should not be live; it cannot retract it. When that happens the run
+# fails, says so in those words, and leaves close-board-published.txt in the workspace so the
+# Jenkins alert reports "a session IS visible and may be wrong" rather than the comfortable
+# "nothing was published". A re-run replaces it atomically.
 #
 # WHAT IT DELIBERATELY DOES NOT DO:
 #   * It does not restart anything. See above.
@@ -85,6 +94,10 @@ JOB_OWNED=false
 SUCCESS=false
 
 fatal() { echo "FATAL: $*" >&2; exit 1; }
+
+# A marker left by an earlier build in this workspace must never be reported as this build's
+# state. Written again only when a session has actually been promoted.
+rm -f close-board-published.txt
 
 # An abandoned RUNNING Job holds a Databento key and half a session's chunks, so an unsuccessful
 # exit must take it down — but ONLY one this invocation created, never one whose name matches. A
@@ -206,13 +219,40 @@ REPLICAS="$(printf '%s' "$DEPLOY_JSON" | jq -r '.spec.replicas')"
   || fatal "$DEPLOYMENT has spec.replicas=$REPLICAS. Closing boards are written to ONE node's
        hostPath, so a second replica on another node would serve a session that does not exist
        there. Give this service shared storage before scaling it out."
-SERVICE_POD="$(kubectl -n "$NAMESPACE" get pods -l "$SELECTOR" --field-selector=status.phase=Running \
-  --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null || true)"
-[ -n "$SERVICE_POD" ] || fatal "no Running $DEPLOYMENT pod — cannot determine the node that owns
-       the closing-board hostPath. On any other node this Job writes a copy nothing reads."
-NODE_NAME="$(kubectl -n "$NAMESPACE" get pod "$SERVICE_POD" -o jsonpath='{.spec.nodeName}')"
-[ -n "$NODE_NAME" ] || fatal "pod $SERVICE_POD reports no nodeName"
-echo "service pod: $SERVICE_POD on node $NODE_NAME"
+# THE POD THAT IS ACTUALLY SERVING, not the Deployment's intent. During a rollout the template
+# already names the new image while the newest Running pod is still unready or still on the old
+# digest — and it is the SERVING pod whose node owns the hostPath and whose code will read what
+# this job writes. Prints "<pod> <node> <image digest>" for a READY pod, or nothing.
+serving_pod() {
+  kubectl -n "$NAMESPACE" get pods -l "$SELECTOR" --field-selector=status.phase=Running -o json 2>/dev/null \
+    | jq -r --arg c "$SERVICE_CONTAINER" '
+        [ .items[]
+          | select([ (.status.conditions // [])[] | select(.type == "Ready" and .status == "True") ] | length > 0)
+          | . as $p
+          | ($p.status.containerStatuses // [])[]
+          | select(.name == $c)
+          | { pod: $p.metadata.name, node: $p.spec.nodeName, image: .imageID,
+              t: $p.metadata.creationTimestamp } ]
+        | sort_by(.t) | last
+        | if . == null then "" else "\(.pod) \(.node) \(.image)" end' 2>/dev/null || true
+}
+read -r SERVICE_POD NODE_NAME POD_IMAGE_ID <<EOF
+$(serving_pod)
+EOF
+[ -n "${SERVICE_POD:-}" ] && [ -n "${NODE_NAME:-}" ] \
+  || fatal "no READY $DEPLOYMENT pod — cannot determine the node that owns the closing-board
+       hostPath, and a rollout in progress would have this job publish onto whichever node the
+       scheduler happened to pick. Wait for the rollout to finish, then re-run."
+# imageID is the digest the kubelet actually pulled, e.g. registry/repo@sha256:...
+POD_DIGEST="${POD_IMAGE_ID##*@}"
+[ -n "$POD_DIGEST" ] || fatal "pod $SERVICE_POD reports no resolvable image digest for container
+       '$SERVICE_CONTAINER' — refusing to freeze against an unknown build"
+[ "$POD_DIGEST" = "${PINNED_IMAGE##*@}" ] \
+  || fatal "the READY pod $SERVICE_POD is running $POD_DIGEST, but image-tags/${ENVIRONMENT}.yaml
+       resolves to ${PINNED_IMAGE##*@}. The freeze shares its arithmetic with the code that will
+       READ the board, so it must be built from the digest that pod is running. A rollout is
+       probably in flight — wait for it and re-run."
+echo "service pod: $SERVICE_POD on node $NODE_NAME (image $POD_DIGEST)"
 echo "NOTE: published sessions live on $NODE_NAME only. If the service is ever rescheduled to a
       different node, its history does NOT follow — that node starts with no sessions and this job
       republishes one per run. Moving the pod means moving /home/options-edge/stock-gex-oi/close."
@@ -322,33 +362,42 @@ if [ -n "$SKIP" ]; then
 fi
 [ -n "$RECEIPT" ] || fatal "$JOB_NAME reported success but printed no receipt naming $SESSION.
        Refusing to call this a publish: treat it as a failure and re-run."
+# roots=0 cannot occur (the builder refuses below its coverage floor), but a receipt is only
+# useful if it is READ — parse it so a collapse is visible in the build log and the alert.
+ROOTS="$(printf '%s' "$RECEIPT" | sed -n 's/.* roots=\([0-9]*\) .*/\1/p')"
 # THE STATE AT PUBLICATION TIME, not at start-up. A service-deploy during the ~10-minute build
 # can move the image (the freeze then used arithmetic the running service does not have) or the
 # node (the boards were written where the current pod cannot read them). Both are silent.
-AFTER_JSON="$(kubectl -n "$NAMESPACE" get deployment "$DEPLOYMENT" -o json 2>/dev/null)" \
-  || fatal "deployment/$DEPLOYMENT disappeared during the run — cannot confirm what was published"
-AFTER_IMAGE="$(printf '%s' "$AFTER_JSON" | jq -er --arg c "$SERVICE_CONTAINER" \
-  '[.spec.template.spec.containers[] | select(.name == $c)] | if length == 1 then .[0].image else error("x") end')" \
-  || fatal "$DEPLOYMENT no longer has exactly one container named '$SERVICE_CONTAINER'"
-[ "${AFTER_IMAGE##*@}" = "${RUNNING_IMAGE##*@}" ] \
-  || fatal "$DEPLOYMENT changed image during this run (${RUNNING_IMAGE##*@} -> ${AFTER_IMAGE##*@}).
-       The board was frozen with the OLD build's arithmetic. Re-run this job now that the deploy
-       has settled; the published session is from a build the service no longer runs."
-AFTER_POD="$(kubectl -n "$NAMESPACE" get pods -l "$SELECTOR" --field-selector=status.phase=Running \
-  --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}' 2>/dev/null || true)"
-AFTER_NODE=""
-[ -n "$AFTER_POD" ] && AFTER_NODE="$(kubectl -n "$NAMESPACE" get pod "$AFTER_POD" -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)"
-[ -n "$AFTER_NODE" ] \
-  || fatal "no Running $DEPLOYMENT pod after the build — cannot confirm the boards were written
-       where the service can read them."
+# A SESSION IS NOW LIVE. Everything past this point can only DISCOVER that it should not be —
+# it cannot take it back: the promote happened inside the container, on a node this identity has
+# no filesystem access to. The marker below is what lets the Jenkins alert say which of the two
+# happened instead of asserting the comfortable one.
+printf 'published session %s (roots %s) on node %s\n' "$SESSION" "${ROOTS:-?}" "$NODE_NAME" \
+  >close-board-published.txt || true
+echo "$RECEIPT"
+
+# THE STATE AT PUBLICATION TIME, re-read against the SERVING pod. A service-deploy during the
+# ~10-minute build can move the image (the freeze then used arithmetic the reader does not have)
+# or the node (the boards are where the current pod cannot see them). Both are silent otherwise.
+read -r AFTER_POD AFTER_NODE AFTER_IMAGE_ID <<EOF
+$(serving_pod)
+EOF
+[ -n "${AFTER_NODE:-}" ] \
+  || fatal "no READY $DEPLOYMENT pod after the build — the session for $SESSION IS PUBLISHED, and
+       this run cannot confirm the pod that will read it. Check the deployment, then re-run this
+       job to replace the session."
+[ "${AFTER_IMAGE_ID##*@}" = "$POD_DIGEST" ] \
+  || fatal "the serving pod changed image during this run ($POD_DIGEST -> ${AFTER_IMAGE_ID##*@}).
+       THE SESSION FOR $SESSION IS ALREADY PUBLISHED and was frozen with the old build's
+       arithmetic — it is visible now. Re-run this job once the deploy has settled; the re-run
+       publishes a new generation and replaces it atomically."
 [ "$AFTER_NODE" = "$NODE_NAME" ] \
   || fatal "$DEPLOYMENT moved from node $NODE_NAME to $AFTER_NODE during this run. The session was
        written to $NODE_NAME's hostPath, which the current pod does not mount — it is published
-       nowhere the service can see. Re-run this job."
-echo "$RECEIPT"
+       nowhere the service can see, and $NODE_NAME still holds it. Re-run this job to publish on
+       $AFTER_NODE."
 # roots=0 cannot occur (the builder refuses an empty session), but a receipt is only useful if it
 # is READ — parse it and say the number out loud so a collapse is visible in the build log.
-ROOTS="$(printf '%s' "$RECEIPT" | sed -n 's/.* roots=\([0-9]*\) .*/\1/p')"
 echo "OK: closing board published for $SESSION — ${ROOTS:-?} roots"
 SUCCESS=true
 

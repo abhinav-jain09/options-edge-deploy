@@ -90,11 +90,28 @@ pipeline {
     // and a session that was never frozen is exactly as gone either way.
     unsuccessful {
       script {
-        // What a miss actually costs, stated plainly so the alert is not read as an outage: the
-        // LIVE board is untouched, the previously published sessions are untouched, and the only
-        // loss is that ONE day cannot be looked at after hours. It is also recoverable — the
-        // vendor keeps the window — so the alert says how.
-        echo "stock-gex closing-board freeze ${currentBuild.currentResult} for session '${env.SESSION ?: 'today ET'}'"
+        // WHICH OF THE TWO HAPPENED, rather than the comfortable one. Most failures leave the
+        // previous session exactly as it was — a build publishes a whole new generation and only
+        // the final symlink move makes it visible. But the post-publication checks run AFTER
+        // that move and can only DISCOVER that the session should not be live; the promote
+        // happened inside the container, on a node this identity cannot reach. The wrapper
+        // leaves a marker when a session was promoted, and the alert reads it. Absent marker =
+        // nothing was published. Every step here is best-effort: alerting must never fail on
+        // its own diagnostics.
+        def published = null
+        try {
+          if (fileExists('close-board-published.txt')) {
+            published = readFile('close-board-published.txt').trim() ?: null
+          }
+        } catch (err) {
+          echo "published-marker diagnostic unavailable: ${err}"
+        }
+        def state = published
+            ? "A SESSION WAS PUBLISHED AND IS VISIBLE NOW (${published}); the run failed AFTER " +
+              "that, so it may have been built against the wrong image or node. Re-run to " +
+              "replace it — a re-run publishes a new generation and swaps atomically."
+            : "Nothing was published: the previous session is exactly as it was."
+        echo "stock-gex closing-board freeze ${currentBuild.currentResult} for session '${env.SESSION ?: 'today ET'}' — ${state}"
         withCredentials([string(credentialsId: 'offhours-discord-webhook',
                                 variable: 'DISCORD_WEBHOOK_URL')]) {
           // The same PROD ops webhook the off-hours job and the error-watch use. The pod-log
@@ -105,12 +122,9 @@ pipeline {
           // or backslash cannot break the JSON and lose the alert.
           def payload = JsonOutput.toJson([
             content: ":snowflake: stock-gex closing-board freeze ${currentBuild.currentResult} " +
-                     "(build ${env.BUILD_NUMBER}, session ${env.SESSION ?: 'today ET'}). The LIVE " +
-                     "board and every previously published session are UNAFFECTED — a build " +
-                     "publishes a whole new generation and only the final symlink move makes it " +
-                     "visible, so a failed run leaves the last good session exactly as it was. " +
-                     "The only loss is that this day cannot be viewed after hours. Re-runnable " +
-                     "with SESSION set while the vendor still serves that window. ${env.BUILD_URL}"
+                     "(build ${env.BUILD_NUMBER}, session ${env.SESSION ?: 'today ET'}). " +
+                     "${state} The LIVE board is unaffected either way. Re-runnable with SESSION " +
+                     "set while the vendor still serves that window. ${env.BUILD_URL}"
           ])
           writeFile file: 'discord-payload.json', text: payload
           // Bounded: a stalled webhook must not eat the remaining timeout on a build that has
