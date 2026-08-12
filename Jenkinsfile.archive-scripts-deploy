@@ -1,0 +1,233 @@
+@Library('oe') _
+
+// ARCHIVE-SCRIPTS DEPLOY — installs the Kafka->NAS archiver onto the prod host from THIS commit.
+//
+// WHY THIS JOB EXISTS
+// These scripts used to live only at /home/abhinav/oe-ops/ on the prod host, untracked, updated by
+// scp. That is a deployment, and rule.md admits exactly one path: commit -> push -> Jenkins job
+// from the pushed commit. It also left the thing guarding every day's market data with no
+// reviewable history, no rollback, and no way to tell whether the host copy still matched anything
+// anyone had reviewed. scripts/ops/archive/ is now the source of truth and this job is the only
+// way it reaches the host.
+//
+// WHERE EACH STEP RUNS (rule.md: no build, test or package step executes ON the production host)
+//   * the test suite runs HERE, on the CI agent, inside a Linux container — the archiver needs
+//     flock, which the Mac agent does not have, and the suite needs curl to prove alerts are
+//     actually delivered rather than merely logged
+//   * the production host receives ONLY the finished artifact and the commands that place it
+//
+// SAFETY ORDER
+//   1. refuse to deploy anything but main
+//   2. run the suite on the agent; a red suite stops the job before the host is touched
+//   3. check the live copies still match what THIS job last installed — a hand edit since then is
+//      someone else's work and is not silently overwritten
+//   4. stage every file, then swap them ALL, restoring the backups if any swap fails: the crons
+//      must never see a half-old, half-new unit
+//   5. verify the installed bytes against the tested bytes, and record them for step 3 next time
+//
+// The archiver is READ-ONLY against Kafka and writes only to the NAS archive tree, so installing it
+// changes no running service; the next cron run picks it up.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
+      description: 'SSH target that runs the archive crons (Kafka + the NAS mount are local there).')
+    string(name: 'INSTALL_DIR', defaultValue: '/home/abhinav/oe-ops',
+      description: 'Live directory the archive crons execute from.')
+    string(name: 'TEST_IMAGE', defaultValue: 'python:3-slim@sha256:ce40764625a4ff50df3548277632e7f96c4e77fe75fa848aae9885476e7df5a4',
+      description: 'Linux image used to run the suite on the AGENT, PINNED BY DIGEST. A tag could be re-pointed at an image whose entrypoint exits 0 without running anything.')
+    booleanParam(name: 'RUN_TESTS_ONLY', defaultValue: false,
+      description: 'Run the suite and stop, without touching the host.')
+    booleanParam(name: 'ALLOW_HOST_DRIFT', defaultValue: false,
+      description: 'Overwrite live files that no longer match what this job last installed. Only tick this having looked at what changed and why.')
+  }
+  options {
+    disableConcurrentBuilds()
+    timeout(time: 30, unit: 'MINUTES')
+  }
+  environment {
+    PROD_HOST   = "${params.PROD_HOST}"
+    INSTALL_DIR = "${params.INSTALL_DIR}"
+    STAGE_DIR   = "/home/abhinav/oe-ops-staging/build-${BUILD_NUMBER}"
+    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh"
+    // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
+    // interpolate — without them here the scripts would see an unset variable under `set -u`.
+    TEST_IMAGE       = "${params.TEST_IMAGE}"
+    ALLOW_HOST_DRIFT = "${params.ALLOW_HOST_DRIFT}"
+  }
+  stages {
+    stage('Refuse anything but main') {
+      steps {
+        sh '''
+          set -euo pipefail
+          # Fail CLOSED. A deploy job that will run whatever it was pointed at turns the review
+          # gate into a suggestion.
+          #
+          # The test is ANCESTRY, not the branch name: Jenkins checks out a detached HEAD, so
+          # `git rev-parse --abbrev-ref HEAD` says "HEAD" and BRANCH_NAME is set only for
+          # multibranch jobs. Asking "is this commit on origin/main" answers the question the rule
+          # actually cares about, and cannot be satisfied by a branch that merely calls itself main.
+          commit=$(git rev-parse HEAD)
+          echo "deploying commit $commit (ref: ${GIT_BRANCH:-${BRANCH_NAME:-detached}})"
+          git fetch -q origin main
+          if ! git merge-base --is-ancestor "$commit" origin/main; then
+            echo "REFUSING: $commit is not on origin/main — this job deploys only merged work." >&2
+            exit 1
+          fi
+          echo "confirmed: the commit is on origin/main"
+        '''
+      }
+    }
+
+    stage('Run the suite on the agent') {
+      steps {
+        sh '''
+          set -euo pipefail
+          # In a container, NOT on the production host: rule.md forbids executing test steps there,
+          # and the suite needs flock, which this Mac agent does not provide. The suite is
+          # self-contained — a Kafka CLI shim and throwaway directories — so it reaches no broker,
+          # no NAS path and no real checkpoint.
+          # --entrypoint bash: an image is not trusted to run what it is handed. A custom
+          # ENTRYPOINT that ignores its arguments and exits 0 would otherwise turn this gate into a
+          # rubber stamp. :ro on the mount: the container must not be able to edit the very files
+          # this job goes on to install. The suite writes only under mktemp, never into /w.
+          docker run --rm --entrypoint bash \
+            -v "$WORKSPACE/scripts/ops/archive:/w:ro" -w /w "$TEST_IMAGE" \
+            -c 'apt-get -qq update >/dev/null && apt-get -qq install -y curl >/dev/null && ./test-archive-reset.sh' \
+            | tee "$WORKSPACE/.suite.out"
+          # Exit status alone is not proof the suite ran: assert its own completion line, and that
+          # the assertion count matches what the committed suite can produce.
+          grep -Fq "test-archive-reset: ALL PASS" "$WORKSPACE/.suite.out" \
+            || { echo "the suite did not report ALL PASS — refusing" >&2; exit 1; }
+          ran=$(grep -c "^PASS" "$WORKSPACE/.suite.out")
+          echo "suite reported $ran passing assertions"
+          [ "$ran" -ge 50 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+        '''
+      }
+    }
+
+    stage('Check the host has not drifted') {
+      when { expression { !params.RUN_TESTS_ONLY } }
+      steps {
+        sh '''
+          set -euo pipefail
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$PROD_HOST" \
+            "INSTALL_DIR='$INSTALL_DIR' UNIT='$UNIT' ALLOW_DRIFT='${ALLOW_HOST_DRIFT}' bash -s" <<'EOSSH'
+set -euo pipefail
+record="$INSTALL_DIR/.archive-unit.sha256"
+if [ ! -f "$record" ]; then
+  echo "no install record yet — this is the first deploy through this job; nothing to compare"
+  exit 0
+fi
+drift=0
+for f in $UNIT; do
+  want=$(awk -v f="$f" '$2==f{print $1}' "$record")
+  have=$(sha256sum "$INSTALL_DIR/$f" 2>/dev/null | cut -d' ' -f1)
+  [ -n "$want" ] || { echo "no record for $f — treating as drift"; drift=1; continue; }
+  if [ "$want" != "$have" ]; then
+    echo "DRIFT $f: installed=$have but this job last installed $want"
+    drift=1
+  fi
+done
+if [ "$drift" -ne 0 ] && [ "$ALLOW_DRIFT" != "true" ]; then
+  echo "REFUSING: the live copies were changed outside this job. Reconcile that change into git" >&2
+  echo "first, or re-run with ALLOW_HOST_DRIFT to overwrite it deliberately." >&2
+  exit 1
+fi
+EOSSH
+        '''
+      }
+    }
+
+    stage('Install, all or nothing') {
+      when { expression { !params.RUN_TESTS_ONLY } }
+      steps {
+        script { env.STAGED = 'true' }
+        sh '''
+          set -euo pipefail
+          ssh -o BatchMode=yes "$PROD_HOST" "mkdir -p '$STAGE_DIR'"
+          # The whole unit travels together: the archiver, the alert helper it sources, the topic
+          # policy it refuses to start without, and the suite. Shipping the archiver alone would
+          # leave its dependencies as whatever happened to be on the host.
+          for f in $UNIT; do
+            scp -o BatchMode=yes "scripts/ops/archive/$f" "$PROD_HOST:$STAGE_DIR/$f"
+          done
+
+          ssh -o BatchMode=yes "$PROD_HOST" \
+            "INSTALL_DIR='$INSTALL_DIR' STAGE_DIR='$STAGE_DIR' UNIT='$UNIT' BUILD='${BUILD_NUMBER}' bash -s" <<'EOSSH'
+set -euo pipefail
+bak="$INSTALL_DIR/.bak-build$BUILD"
+mkdir -p "$bak"
+
+# Every file lands beside its target first, so the swap loop can be short and uninterruptible in
+# practice. If any step fails, the backups go back — the crons must never find a unit that is half
+# one version and half another.
+restore() {
+  echo "install failed — restoring the previous unit from $bak" >&2
+  for f in $UNIT; do
+    [ -f "$bak/$f" ] && mv -f "$bak/$f" "$INSTALL_DIR/$f" || true
+  done
+}
+trap restore ERR
+
+for f in $UNIT; do
+  [ -f "$INSTALL_DIR/$f" ] && cp -p "$INSTALL_DIR/$f" "$bak/$f"
+  cp "$STAGE_DIR/$f" "$INSTALL_DIR/.incoming.$f"
+done
+for f in $UNIT; do
+  mv -f "$INSTALL_DIR/.incoming.$f" "$INSTALL_DIR/$f"
+done
+trap - ERR
+
+chmod +x "$INSTALL_DIR/oe-archive-kafka.sh" "$INSTALL_DIR/test-archive-reset.sh"
+
+# The record step 3 reads on the NEXT deploy. Written last, so it only ever describes a unit that
+# is fully in place.
+: > "$INSTALL_DIR/.archive-unit.sha256"
+for f in $UNIT; do
+  sha256sum "$INSTALL_DIR/$f" | awk -v f="$f" '{print $1, f}' >> "$INSTALL_DIR/.archive-unit.sha256"
+done
+echo "installed:"; cat "$INSTALL_DIR/.archive-unit.sha256"
+EOSSH
+        '''
+      }
+    }
+
+    stage('Verify installed == tested') {
+      when { expression { !params.RUN_TESTS_ONLY } }
+      steps {
+        sh '''
+          set -euo pipefail
+          # Compare the bytes now running against the bytes the suite passed against, computed HERE
+          # from the workspace. Trusting the previous stage's exit status is the same reasoning the
+          # archive incident this change fixes was built on.
+          for f in $UNIT; do
+            local_sha=$(sha256sum "scripts/ops/archive/$f" | cut -d' ' -f1)
+            host_sha=$(ssh -o BatchMode=yes "$PROD_HOST" "sha256sum '$INSTALL_DIR/$f' | cut -d' ' -f1")
+            if [ "$local_sha" != "$host_sha" ]; then
+              echo "MISMATCH $f: tested=$local_sha installed=$host_sha" >&2
+              exit 1
+            fi
+            echo "ok $f $host_sha"
+          done
+        '''
+      }
+    }
+  }
+  post {
+    always {
+      // Only reach for the host if this run actually staged something there. A branch rejection, a
+      // red suite, or RUN_TESTS_ONLY must not touch production at all — a cleanup that always
+      // SSHes contradicts the guarantee the earlier stages advertise.
+      script {
+        if (!params.RUN_TESTS_ONLY && env.STAGED == 'true') {
+          sh '''
+            ssh -o BatchMode=yes "$PROD_HOST" "rm -rf '$STAGE_DIR'" 2>/dev/null || true
+          '''
+        } else {
+          echo 'nothing was staged on the host — no cleanup needed'
+        }
+      }
+    }
+  }
+}
