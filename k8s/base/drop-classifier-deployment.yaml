@@ -51,8 +51,13 @@ spec:
               value: 192.168.100.4:9092
             - name: DROP_FLOW_TOPIC
               value: es.delta-flow-by-trade
+            # outputs live on the PROD broker: the es4 broker (.4) is wiped
+            # nightly by the es4 clean-reset BY DESIGN — no corpus survives
+            # there (learned 2026-08-12: a week of es.drop.* and even
+            # es.reversal.* vanished nightly). Prod-side RESET_PRESERVED /
+            # retention / premarket-regex / archive contracts all apply here.
             - name: DROP_OUTPUT_BOOTSTRAP
-              value: 192.168.100.4:9092
+              value: 192.168.100.252:9092
             # SHADOW corpus persistence (owner requirement): final-summary and
             # outcome topics are compacted; nowcast retention is pinned by the
             # service (default 7 d) and nightly-archived by oe-archive-kafka.

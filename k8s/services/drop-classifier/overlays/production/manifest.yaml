@@ -71,7 +71,7 @@ spec:
             - name: DROP_FLOW_TOPIC
               value: es.delta-flow-by-trade
             - name: DROP_OUTPUT_BOOTSTRAP
-              value: 192.168.100.4:9092
+              value: 192.168.100.252:9092
             - name: DROP_NOWCAST_RETENTION_MS
               value: "604800000"
             - name: DROP_GAMMA_BOOTSTRAP
