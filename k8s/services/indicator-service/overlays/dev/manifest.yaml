@@ -70,8 +70,14 @@ spec:
               value: "1"
             - name: INDICATOR_COLD_BOOTSTRAP
               value: "true"
+            # ONE-TIME GRANT (2026-08-12). dev's Kafka was wiped, so the epoch
+            # lineage is gone and the service fail-closes rather than inventing
+            # one. This is granted deliberately and MUST be reverted to "false"
+            # once dev has genesis'd — leaving it true would let any future wipe
+            # silently re-genesis, which is exactly what the fail-closed guard
+            # exists to prevent.
             - name: INDICATOR_EPOCH_GENESIS
-              value: "false"
+              value: "true"
             - name: INDICATOR_SESSION_BACKFILL
               value: "true"
             - name: INDICATOR_STATE_DIR
