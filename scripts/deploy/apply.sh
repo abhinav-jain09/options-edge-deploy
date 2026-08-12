@@ -178,7 +178,7 @@
           # `DEPLOY_TARGET=all` renders pass the digest gate below; experiment never renders it and this
           # block is skipped there (so pin_ref is never asked to resolve a non-existent experiment image).
           if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
-            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE; do
+            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE CONTEXT_TAPE_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1
@@ -373,6 +373,12 @@ EOF
           kubectl -n options-edge rollout restart deployment/gex-delta-redis-writer
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout restart deployment/databento-maxpain-service
+          # context-tape renders in dev+production only (same category/guard as
+          # short-premium-agent below). Restart so ConfigMap/Secret-only changes reach its
+          # envFrom (the apply above does not roll pods on config-only changes).
+          if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
+            kubectl -n options-edge rollout restart deployment/context-tape-service
+          fi
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/options-edge-web --timeout=1260s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=1260s
@@ -417,6 +423,9 @@ EOF
           # experiment.
           if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
             kubectl -n options-edge rollout status deployment/short-premium-agent-service --timeout=1260s
+            # context-tape: same dev+production guard. An unready/crashlooping backfill must
+            # fail the all-deploy, not leave it green with the pod NOT READY.
+            kubectl -n options-edge rollout status deployment/context-tape-service --timeout=1260s
           fi
           scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
           # Identity migration cleanup occurs only after the replacement has rolled out and

@@ -55,6 +55,8 @@ resources:
   - indicator-service-service.yaml
   - stock-gex-deployment.yaml
   - stock-gex-service.yaml
+  - context-tape-deployment.yaml
+  - context-tape-service.yaml
   - oi-shadow-deployment.yaml
   - oi-shadow-service.yaml
   - vix-option-inteligence-deployment.yaml

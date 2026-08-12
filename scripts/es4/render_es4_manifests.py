@@ -42,6 +42,7 @@ SERVICES = [
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
     "greek-move-authenticity", "gamma-migration",
     "indicator-service",
+    "context-tape",
     # es4-ONLY (no dev/prod deployment): its slice is hand-authored as the render source —
     # see the header of k8s/services/tape-zones/overlays/production/manifest.yaml.
     "tape-zones",
@@ -63,6 +64,23 @@ ES_ENV = {
         {"name": "INDICATOR_INPUT_PARTITIONS", "value": "4", "_override": True},
         # NO control-topic entry here on purpose (PR #734): TOPIC_PREFIX=es. (es4-common-env)
         # prefixes the control-topic default at runtime — an explicit value would double-prefix.
+    ],
+    "context-tape": [
+        # es4 has NO underlying.spx.index.price — its spot stream is underlying.spx.price
+        # (prefixed to es.underlying.spx.price by TOPIC_PREFIX at runtime, like every
+        # env-supplied topic), carrying source SYNTHETIC_OPTION_SPOT with NO priceField.
+        # The prod slice sets the SPX index topic, so es4's value must win explicitly.
+        {"name": "CONTEXT_TAPE_SPOT_TOPIC", "value": "underlying.spx.price", "_override": True},
+        # Not set in the prod slice (SPX defaults apply there); appended here. If prod ever
+        # starts setting them, assert_no_silent_prod_wins forces the decision explicitly.
+        {"name": "CONTEXT_TAPE_SPOT_SOURCE_FILTER", "value": "SYNTHETIC_OPTION_SPOT"},
+        # "ANY" sentinel, not "": KafkaSettings treats a blank env value as unset and
+        # would silently restore the "LAST" fallback — the synthetic feed has no
+        # priceField at all, so the filter must be explicitly cleared.
+        {"name": "CONTEXT_TAPE_SPOT_FIELD_FILTER", "value": "ANY"},
+        # es4's GEX history producer runs DATABENTO_SYMBOL=ES — the SPX default
+        # would silently drop every record there.
+        {"name": "CONTEXT_TAPE_GEX_SYMBOL_FILTER", "value": "ES"},
     ],
     "close-direction": [
         # es4 chains carry symbol "ES" (the es-prefixed dealer-ledger profile stream); the
