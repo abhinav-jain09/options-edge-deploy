@@ -61,6 +61,10 @@ spec:
           value: options.databento.gex.strike.history
         - name: CONTEXT_TAPE_ES_TRADES_TOPIC
           value: underlying.es.trades
+        - name: CONTEXT_TAPE_SESSION_MODE
+          value: GLOBEX
+        - name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES
+          value: '4194304'
         - name: JAVA_TOOL_OPTIONS
           value: -Xms256m -Xmx768m
         - name: CONTEXT_TAPE_SPOT_SOURCE_FILTER
@@ -69,10 +73,6 @@ spec:
           value: ANY
         - name: CONTEXT_TAPE_GEX_SYMBOL_FILTER
           value: ES
-        - name: CONTEXT_TAPE_SESSION_MODE
-          value: GLOBEX
-        - name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES
-          value: '4194304'
         envFrom:
         - configMapRef:
             name: es4-base-env

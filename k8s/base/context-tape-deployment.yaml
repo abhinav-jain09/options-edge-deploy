@@ -43,6 +43,18 @@ spec:
               value: options.databento.gex.strike.history
             - name: CONTEXT_TAPE_ES_TRADES_TOPIC
               value: underlying.es.trades
+            # The session IS the ET calendar day: it opens at 00:00 ET, so at midnight the tape
+            # rolls to the new day and the pre-market hours draw on it instead of yesterday's
+            # completed chart sitting there until 09:00 (USER 2026-08-13). rthOpen/rthClose and
+            # every RTH semantic are unchanged. es4 overrides this to GLOBEX (prior-evening
+            # 18:00 ET open) in scripts/es4/render_es4_manifests.py.
+            - name: CONTEXT_TAPE_SESSION_MODE
+              value: PREMARKET
+            # A midnight-open day builds ~192 five-minute buckets (vs ~84 from 09:00), so the
+            # snapshot is ~2.3x the RTH-only one (~330 KB measured on a 112-strike prod session).
+            # 2 MiB keeps real headroom under the service's 4 MiB hard cap.
+            - name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES
+              value: "2097152"
             # Full session held in memory + a ~2.2M-record backfill pass; heap sized under
             # the 1Gi container limit.
             - name: JAVA_TOOL_OPTIONS
