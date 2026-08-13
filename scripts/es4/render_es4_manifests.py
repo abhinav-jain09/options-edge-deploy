@@ -91,14 +91,14 @@ ES_ENV = {
         {"name": "CONTEXT_TAPE_GEX_SYMBOL_FILTER", "value": "ES"},
         # es4 shadows CME ES, which trades ~23h — frame the FULL Globex session (opens the prior
         # 18:00 ET) so overnight/pre-market ES gamma is in-session, not rejected as far-future.
-        # SPX/prod stays NYSE_RTH (the service default).
-        # The prod slice now sets PREMARKET (midnight-open SPX day), so es4's GLOBEX must win
-        # EXPLICITLY — an implicit append would be exactly the silent-prod-win this guard exists
-        # to catch.
+        # The prod slice sets NYSE_RTH with a 07:00 ET pre-open (CONTEXT_TAPE_PRE_OPEN_ET, inherited
+        # by es4 but IGNORED under GLOBEX — Globex derives its start from the 18:00 rule). es4's
+        # GLOBEX must win EXPLICITLY — an implicit append would be exactly the silent-prod-win this
+        # guard exists to catch.
         {"name": "CONTEXT_TAPE_SESSION_MODE", "value": "GLOBEX", "_override": True},
         # The 23h session builds ~264 buckets; raise the byte cap to match (service HARD_CAP 4 MiB).
-        # The prod slice now sets 2 MiB (its midnight-open day is ~192 buckets); es4's 23h
-        # session is wider still, so its 4 MiB must win explicitly.
+        # The prod slice sets 1 MiB (its 07:00-open NYSE_RTH day is ~108 buckets, and NYSE_RTH caps
+        # at 1 MiB anyway); es4's 23h session is far wider, so its 4 MiB must win explicitly.
         {"name": "CONTEXT_TAPE_MAX_SNAPSHOT_BYTES", "value": "4194304", "_override": True},
     ],
     "close-direction": [
