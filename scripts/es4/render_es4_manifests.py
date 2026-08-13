@@ -19,6 +19,14 @@ Transforms per manifest:
      moving tag production builds push to this registry (:dev entries are stale dev pushes).
   3. per-service ES env appended (q=r for gex; multiplier 50 for strike-flow /
      delta-flow; gex OI fetch disabled — the OPRA/OSI symbology doesn't apply to GLBX).
+  4. per-service env families DROPPED (DROP_ENV_PREFIXES) — prod wiring for pipelines that do
+     not exist on es4 and must not be carried in by a re-render.
+
+NOTE the direction of authority: this generator is the source of truth, and the committed
+k8s/es4/services/*.yaml are its output. Anything es4 needs must be expressed HERE — a value
+hand-edited into a generated file (or merely inherited from prod and left alone) survives only
+until the next re-render, and a comment written into one is lost outright, because PyYAML does
+not emit comments. .github/workflows/deploy-validation.yml fails any PR where the two disagree.
 """
 
 import copy
@@ -118,6 +126,19 @@ ES_ENV = {
         # restart-durable using the same DB path SPX uses, without the GLBX symbology adapter.
         {"name": "DATABENTO_GEX_OI_BASELINE_BACKFILL_ENABLED", "value": "true"},
         {"name": "DATABENTO_GEX_OI_PERSIST_LIVE_ENABLED", "value": "true"},
+        # The OI nowcast has no place on es4, and this pin is what keeps it out. The prod chain is
+        # anchor-manifest -> oi-shadow-service -> GEX (this flag): with it ON, gex consumes
+        # oi-shadow's options.databento.oi.nowcast.by-strike. es4 has NO oi-shadow-service (it is
+        # absent from SERVICES) and no es.options.databento.oi.nowcast.* topic, so ON here is the
+        # DATABENTO_GEX_DYNAMIC_CARRY_ENABLED failure shape again — a GlobalKTable over a
+        # producer-less topic. It is also wrong on the merits twice over: ES OI rides LIVE in the
+        # feed (GLBX statistics stat_type=9) rather than arriving as one 06:30 OPRA print to
+        # extrapolate from, and the nowcast's coefficients are SPX-fitted. Retired on dev+prod
+        # 2026-08-10 (#783, docs/oi-nowcast-retirement.md) — but prod's kustomization documents the
+        # revival path as "flip DATABENTO_GEX_DYNAMIC_OI_ENABLED back to true", so WITHOUT this pin
+        # that revival silently re-arms a producer-less consumer on the live es4 box at the next
+        # unrelated re-render. es4 was carrying 'true' from exactly that inheritance until 2026-08-13.
+        {"name": "DATABENTO_GEX_DYNAMIC_OI_ENABLED", "value": "false", "_override": True},
         # DATABENTO_GEX_FLOW_TOP_N: es4 now INHERITS the production slice's value (40 as of
         # 2026-08-03). The former es4 pin of 3 (proc #466/#467 rollout) starved strike-intelligence
         # — its ONLY GEX input is the flow topic this gate feeds, so top-3 left ~65% of the es4
@@ -249,6 +270,30 @@ ES_ENV = {
 # IBKR-variant workloads have no place in the ES pipeline (Codex finding #5).
 DROP_WORKLOADS = {"raw-to-display-service", "directional-pressure-service"}
 
+# Same rule, one level down: env FAMILIES the prod slice sets that must never render into es4.
+# DROP_WORKLOADS removes whole IBKR workloads; this removes IBKR wiring bolted onto a workload
+# es4 *does* run. Prefix-matched on purpose — prod is actively growing this path
+# (OVERNIGHT-IBKR-GEX rev13+D15), and a new IBKR_GEX_* knob must not need a second incident to
+# be excluded here.
+#
+# databento-gex / IBKR_GEX_*: k8s/overlays/production/ibkr-preopen-gate-prod-patch.yaml arms the
+# pre-open IBKR SPX GEX path (CONSUME+PUBLISH true, stage live). Rendered onto es4 that is not
+# inert, it is a contamination bug:
+#   - IBKR_GEX_TOPIC=options.databento.gex.strike -> es.options.databento.gex.strike, which IS the
+#     es4 primary GEX topic (strike-intelligence, the SPX bridge, gex-delta-redis-writer and the
+#     history series all read it). PUBLISH=true would inject IBKR SPX cash-index gamma, on SPX
+#     strikes at the SPX 100 multiplier, into the ES board.
+#   - IBKR_GEX_SPOT_TOPIC=underlying.spx.index.price -> es.underlying.spx.index.price, which es4
+#     does not have at all (its spot stream is es.underlying.spx.price; see the context-tape
+#     ES_ENV block, which already had to work around exactly this).
+#   - CONSUME reads es.options.ibkr.gex.* — no producer and not declared in topics.env's es4 set.
+# The mutual-exclusion boot guard does NOT save us: IbkrPreOpenConfig only refuses boot when
+# PREOPEN_GEX_ENABLED is also true, and the same prod patch pins that false. es4 would boot clean
+# and publish quietly. es4 has no IBKR fan-out and never will — this is the ES pipeline.
+DROP_ENV_PREFIXES = {
+    "databento-gex": ("IBKR_GEX_",),
+}
+
 # Rendered at replicas:0 on es4 ONLY — still defined, still deployable, just not running.
 # USER 2026-07-26, "until further notice": the .4 box was carrying load average 18.4 on 12 cores
 # with CPU limits unset cluster-wide, and these two were its heaviest tenants
@@ -324,6 +369,11 @@ def transform(svc, docs):
                 claim_names.append(pvc)
         for c in doc["spec"]["template"]["spec"]["containers"]:
             c["envFrom"] = transform_env_from(c.get("envFrom"))
+            # drop the env families that have no place on es4 (see DROP_ENV_PREFIXES). Done
+            # BEFORE the ES_ENV merge so a dropped name can never shadow an es4 intent.
+            drop = DROP_ENV_PREFIXES.get(svc)
+            if drop and c.get("env"):
+                c["env"] = [e for e in c["env"] if not e.get("name", "").startswith(drop)]
             # redis runs in the es4 compose stack on the HOST, not in-cluster
             for e in c.get("env") or []:
                 if e.get("value") == "options-edge-redis":
@@ -389,7 +439,26 @@ def assert_no_silent_prod_wins(svc, docs):
                 f"entry if prod's is now correct for es4 too.")
 
 
+def assert_drop_prefixes_are_coherent():
+    """DROP_ENV_PREFIXES must name real services and must not contradict ES_ENV.
+
+    Both are cheap mistakes with silent consequences: a prefix keyed on a service that is not
+    rendered does nothing at all, and a prefix that also matches an ES_ENV entry would delete the
+    es4 intent the entry exists to state (and would confuse assert_no_silent_prod_wins, which
+    compares against the RAW prod env, i.e. before the drop).
+    """
+    for svc, prefixes in DROP_ENV_PREFIXES.items():
+        if svc not in SERVICES:
+            sys.exit(f"DROP_ENV_PREFIXES names {svc!r}, which is not in SERVICES — it would never apply.")
+        for item in ES_ENV.get(svc, []):
+            if item["name"].startswith(tuple(prefixes)):
+                sys.exit(
+                    f"DROP_ENV_PREFIXES/ES_ENV CONTRADICTION in {svc}: {item['name']} is both "
+                    f"dropped and set as es4 intent. Pick one.")
+
+
 def main():
+    assert_drop_prefixes_are_coherent()
     os.makedirs(OUT_DIR, exist_ok=True)
     for svc in SERVICES:
         src = f"k8s/services/{svc}/overlays/production/manifest.yaml"

@@ -62,8 +62,6 @@ spec:
           value: 'true'
         - name: INDICATOR_EPOCH_GENESIS
           value: 'false'
-        # TOPIC_PREFIX=es. (es4-common-env) prefixes the control-topic default at
-        # runtime — an explicit value here would double-prefix.
         - name: INDICATOR_SESSION_BACKFILL
           value: 'true'
         - name: INDICATOR_STATE_DIR
