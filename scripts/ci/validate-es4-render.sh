@@ -32,6 +32,12 @@
 #      it. Their manifests still say "GENERATED", deploy-all still applies them, and the renderer
 #      has not produced them since. Only check (B) sees this class.
 #
+# Precisely on (3): this gate catches a NEW dropout, and QUARANTINES the two existing ones in
+# KNOWN_STALE rather than failing on them — see that list for why re-rendering them is a
+# behaviour change and not a regeneration. "Must only shrink" is a review rule, not an enforced
+# one: adding a name to KNOWN_STALE will pass CI, so treat any growth of that list as the change
+# under review rather than as housekeeping.
+#
 # The gate does not decide which side is right — it makes the difference impossible to merge
 # without someone looking at it. That is the whole point.
 #
@@ -122,9 +128,28 @@ KNOWN_STALE = {
     "vix-option-inteligence",
 }
 
-on_disk = {f[:-5] for f in os.listdir(OUT_DIR) if f.endswith(".yaml")}
+# REGULAR files only, and no symlinks. Classifying on filename alone would let a committed
+# symlink or a directory named "<something>.yaml" inherit an allowlisted name — and a symlink on
+# a RENDERED path is worse than a bypass, because the renderer's open(...,"w") follows it and
+# writes through to the target while this directory still looks clean.
+on_disk, irregular = set(), []
+for f in sorted(os.listdir(OUT_DIR)):
+    if not f.endswith(".yaml"):
+        continue
+    p = os.path.join(OUT_DIR, f)
+    if os.path.islink(p) or not os.path.isfile(p):
+        irregular.append(f)
+    else:
+        on_disk.add(f[:-5])
+
 accounted = rendered | HAND_AUTHORED | KNOWN_STALE
 fail = False
+
+if irregular:
+    fail = True
+    print(f"FAIL: {OUT_DIR} holds non-regular .yaml entries (symlink or directory): "
+          f"{', '.join(irregular)}", file=sys.stderr)
+    print("      Every deployable path here must be a plain committed file.", file=sys.stderr)
 
 unaccounted = sorted(on_disk - accounted)
 if unaccounted:
@@ -159,6 +184,15 @@ for n in sorted(HAND_AUTHORED & rendered):
     fail = True
     print(f"FAIL: {n} is both rendered by SERVICES and declared HAND_AUTHORED. Pick one.",
           file=sys.stderr)
+
+# PRESENCE, not just permission. Without this the allowlist is one-directional: a committed
+# deletion of es-web.yaml leaves the worktree clean, so check A sees nothing, and check B would
+# happily report "4 hand-authored" while counting files that are gone. These are deploy-all
+# inputs; losing one silently is the same class of miss as gaining one.
+for n in sorted(HAND_AUTHORED - on_disk):
+    fail = True
+    print(f"FAIL: {n} is declared HAND_AUTHORED but has no manifest in {OUT_DIR}. If it was "
+          f"removed on purpose, drop it from HAND_AUTHORED.", file=sys.stderr)
 
 if fail:
     sys.exit(1)
