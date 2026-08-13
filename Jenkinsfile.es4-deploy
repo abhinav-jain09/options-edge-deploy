@@ -173,6 +173,12 @@ pipeline {
           bash scripts/es4/assert-cluster-identity.sh "$KUBECONFIG"      es4  "$ES4_NS_UID"
           bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
 
+          # Dependency-scoped FIRE-input verdict (processing PR #594): es4 applies the COMMITTED
+          # k8s/es4/services/*.yaml directly, so no overlay render exists for the other deploy paths'
+          # guard to have caught. Assert here, BEFORE the first apply, and unconditionally — the
+          # deploy-service path can target dealer-ledger, and deploy-all always includes it.
+          bash scripts/ci/validate-dealer-ledger-fire-quality.sh
+
           kubectl apply $DRY -f k8s/es4/es4-base-env.yaml
           kubectl apply $DRY -f k8s/es4/es4-common-env.yaml
           # es-feed's OWN Databento configmap. Applied for every es4 deploy so the feed can

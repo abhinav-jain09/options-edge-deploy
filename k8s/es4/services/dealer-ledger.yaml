@@ -98,6 +98,10 @@ spec:
           value: SHADOW
         - name: DEALER_LEDGER_QUOTE_STALE_MS
           value: '600000'
+        - name: DEALER_LEDGER_FIRE_QUALITY_DEPENDENCY_SCOPED
+          value: 'false'
+        - name: DEALER_LEDGER_FIRE_OFFSPAN_MATERIALITY_FRAC
+          value: '0.01'
         envFrom:
         - configMapRef:
             name: es4-base-env
