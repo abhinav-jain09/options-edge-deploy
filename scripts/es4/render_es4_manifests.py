@@ -81,6 +81,13 @@ ES_ENV = {
         # es4's GEX history producer runs DATABENTO_SYMBOL=ES — the SPX default
         # would silently drop every record there.
         {"name": "CONTEXT_TAPE_GEX_SYMBOL_FILTER", "value": "ES"},
+        # es4 shadows CME ES, which trades ~23h — frame the FULL Globex session (opens the prior
+        # 18:00 ET) so overnight/pre-market ES gamma is in-session, not rejected as far-future.
+        # SPX/prod stays NYSE_RTH (the service default).
+        {"name": "CONTEXT_TAPE_SESSION_MODE", "value": "GLOBEX"},   # prod slice never sets it; assert_no_silent_prod_wins guards
+        # The 23h session builds ~264 buckets (vs ~84 RTH); raise the byte cap to match (the
+        # service HARD_CAP is 4 MiB). Not set in the prod slice (RTH stays well under the default).
+        {"name": "CONTEXT_TAPE_MAX_SNAPSHOT_BYTES", "value": "4194304"},
     ],
     "close-direction": [
         # es4 chains carry symbol "ES" (the es-prefixed dealer-ledger profile stream); the

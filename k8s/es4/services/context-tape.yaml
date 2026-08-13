@@ -69,6 +69,10 @@ spec:
           value: ANY
         - name: CONTEXT_TAPE_GEX_SYMBOL_FILTER
           value: ES
+        - name: CONTEXT_TAPE_SESSION_MODE
+          value: GLOBEX
+        - name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES
+          value: '4194304'
         envFrom:
         - configMapRef:
             name: es4-base-env
