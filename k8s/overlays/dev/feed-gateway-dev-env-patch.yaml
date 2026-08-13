@@ -70,6 +70,11 @@ spec:
                   optional: true
             - name: OE_ENV
               value: "dev"
+            # Dev drop-classifier runs in SPX_PRICE mode and publishes spx.drop.* on the dev broker;
+            # the gateway default (es.drop.nowcast) exists only on prod .252. Without this override the
+            # optional-topic handling keeps dev healthy but the board strip stays permanently empty.
+            - name: KAFKA_DROP_NOWCAST_TOPIC
+              value: "spx.drop.nowcast"
             # This Postgres has no TLS ("server does not support SSL"), and every other service
             # already talks to it unencrypted on the same host/LAN. Accept plaintext EXPLICITLY: the
             # endpoint then reports ledger.transport=PLAINTEXT_ACCEPTED and the page shows a

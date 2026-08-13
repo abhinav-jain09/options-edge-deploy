@@ -97,6 +97,8 @@ spec:
                   optional: true
             - name: OE_ENV
               value: dev
+            - name: KAFKA_DROP_NOWCAST_TOPIC
+              value: spx.drop.nowcast
             - name: OE_WATCH_ALLOW_PLAINTEXT
               value: "true"
             - name: OE_SYSTEM_STATUS_TOPICS
