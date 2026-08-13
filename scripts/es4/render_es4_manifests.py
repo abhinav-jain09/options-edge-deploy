@@ -84,10 +84,14 @@ ES_ENV = {
         # es4 shadows CME ES, which trades ~23h — frame the FULL Globex session (opens the prior
         # 18:00 ET) so overnight/pre-market ES gamma is in-session, not rejected as far-future.
         # SPX/prod stays NYSE_RTH (the service default).
-        {"name": "CONTEXT_TAPE_SESSION_MODE", "value": "GLOBEX"},   # prod slice never sets it; assert_no_silent_prod_wins guards
-        # The 23h session builds ~264 buckets (vs ~84 RTH); raise the byte cap to match (the
-        # service HARD_CAP is 4 MiB). Not set in the prod slice (RTH stays well under the default).
-        {"name": "CONTEXT_TAPE_MAX_SNAPSHOT_BYTES", "value": "4194304"},
+        # The prod slice now sets PREMARKET (midnight-open SPX day), so es4's GLOBEX must win
+        # EXPLICITLY — an implicit append would be exactly the silent-prod-win this guard exists
+        # to catch.
+        {"name": "CONTEXT_TAPE_SESSION_MODE", "value": "GLOBEX", "_override": True},
+        # The 23h session builds ~264 buckets; raise the byte cap to match (service HARD_CAP 4 MiB).
+        # The prod slice now sets 2 MiB (its midnight-open day is ~192 buckets); es4's 23h
+        # session is wider still, so its 4 MiB must win explicitly.
+        {"name": "CONTEXT_TAPE_MAX_SNAPSHOT_BYTES", "value": "4194304", "_override": True},
     ],
     "close-direction": [
         # es4 chains carry symbol "ES" (the es-prefixed dealer-ledger profile stream); the
