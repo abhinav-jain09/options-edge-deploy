@@ -198,6 +198,25 @@ patches:
                     value: "1"
                   - name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE
                     value: LOW
+                  # SHADOW EVIDENCE for the dependency-scoped FIRE verdict (processing#624). Emits a
+                  # schema-tagged FQS2 entry on the state record's decisionTrace for every
+                  # grace-surviving G-FIRE row, on BOTH gate outcomes — the legacy verdict still
+                  # decides; this only RECORDS what the proposed verdict would have done.
+                  # PRODUCTION ONLY, and deliberately: dev cannot serve as the shadow population
+                  # (UNWIND_ARM_MIN 7.5e7 vs prod 1e8 changes both candidate selection and the
+                  # off-span tolerance, and dev is SPX-only on synthetic spot).
+                  # WHY the trace and not /metrics: prod Prometheus was `systemctl disable --now`
+                  # on 2026-07-23 by USER instruction, so nothing scrapes :8113 and nothing survives
+                  # the 20:30 ET scale-to-zero. `dealer-ledger-state` is delete-only (never compacted)
+                  # and is already in the nightly NAS archive set with a sha256 manifest and a
+                  # completeness floor — the only artifact that survives the night.
+                  # This does NOT enable the new verdict: DEALER_LEDGER_FIRE_QUALITY_DEPENDENCY_SCOPED
+                  # stays false in the base, and the CI guard keeps ALLOW_TRUE_ENVS empty until the
+                  # bar is evidenced (N>=500 legacy-PASS rows over >=5 RTH sessions and >=3 dates,
+                  # legacy-PASS-proposed-FAIL / N <= 1.0% with 95% Wilson upper <= 2.0%,
+                  # CONTRIBUTOR-DEFECT == 0, FIRE_INPUT_INVARIANT_VIOLATIONS == 0).
+                  - name: DEALER_LEDGER_FIRE_SHADOW_EVIDENCE
+                    value: "true"
                   # Chain-changelog record hit 4,214,084 B > the 4 MiB default at first SHADOW-live
                   # boot (open wave accumulates all session deltas until wave-lifecycle repair lands)
                   # — 16 MiB headroom; existing changelog topics live-altered to match (2026-08-08).

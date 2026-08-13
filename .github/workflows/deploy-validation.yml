@@ -51,6 +51,23 @@ jobs:
           fi
           echo "Service slices are up to date."
 
+      # The same drift class one environment over, and a worse blast radius: k8s/es4/services/**
+      # is generated from the PRODUCTION slices, so a prod env change silently queues itself up
+      # for es4 — a LIVE environment — and lands whenever someone next re-renders for an
+      # unrelated reason. Three such problems were sitting on main when this gate was added: an
+      # inherited DATABENTO_GEX_DYNAMIC_OI_ENABLED flip, the IBKR_GEX_* pre-open wiring, and two
+      # manifests that fell out of the renderer's SERVICES list yet are still deployed by
+      # deploy-all. The gate therefore checks the file SET as well as file contents — deploy-all
+      # globs the directory, so an un-rendered or uncommitted file there still reaches the box.
+      # PyYAML is pinned to the version the committed manifests were rendered with: the check
+      # compares emitted YAML byte-for-byte, so a formatting change between releases would read
+      # as drift.
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet 'pyyaml==6.0.3'
+
+      - name: es4 manifests are regenerated and fully accounted for (no drift)
+        run: bash scripts/ci/validate-es4-render.sh
+
       - name: Validate service registry (completeness + mirror + image name)
         run: scripts/ci/validate-services.sh
 
