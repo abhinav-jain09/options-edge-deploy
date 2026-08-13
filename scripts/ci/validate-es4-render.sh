@@ -129,9 +129,13 @@ KNOWN_STALE = {
 }
 
 # REGULAR files only, and no symlinks. Classifying on filename alone would let a committed
-# symlink or a directory named "<something>.yaml" inherit an allowlisted name — and a symlink on
-# a RENDERED path is worse than a bypass, because the renderer's open(...,"w") follows it and
-# writes through to the target while this directory still looks clean.
+# symlink or a directory named "<something>.yaml" inherit an allowlisted name.
+#
+# On a RENDERED path the renderer refuses to write at all (open(...,"w") follows a symlink, so
+# it would otherwise overwrite the target while this directory still looked clean) — that guard
+# is in render_es4_manifests.py because it has to fire BEFORE the write, and this script renders
+# first. What is left for here is the HAND_AUTHORED and unaccounted paths, which the renderer
+# never touches and so never inspects.
 on_disk, irregular = set(), []
 for f in sorted(os.listdir(OUT_DIR)):
     if not f.endswith(".yaml"):

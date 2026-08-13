@@ -470,10 +470,19 @@ def main():
         docs = transform(svc, docs)
         buf = io.StringIO()
         yaml.safe_dump_all(docs, buf, sort_keys=False, default_flow_style=False)
-        with open(f"{OUT_DIR}/{svc}.yaml", "w") as f:
+        out = f"{OUT_DIR}/{svc}.yaml"
+        # Refuse to write through a symlink or onto a non-regular path. open(...,"w") FOLLOWS a
+        # symlink, so a manifest path replaced by one would silently overwrite its target while
+        # this directory still looks clean. Checked here rather than only in
+        # scripts/ci/validate-es4-render.sh because by the time that script's file-set check runs
+        # the render has already happened — and because the renderer is normally run by hand.
+        if os.path.islink(out) or (os.path.exists(out) and not os.path.isfile(out)):
+            sys.exit(f"REFUSING to write {out}: not a regular file (symlink or directory). "
+                     f"Every es4 manifest path must be a plain file.")
+        with open(out, "w") as f:
             f.write(HEADER.format(src=src))
             f.write(buf.getvalue())
-        print(f"rendered {OUT_DIR}/{svc}.yaml")
+        print(f"rendered {out}")
     print(f"done: {len(SERVICES)} services")
 
 
