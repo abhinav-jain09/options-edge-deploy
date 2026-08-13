@@ -128,6 +128,12 @@ PYEOF
         sh '''
           set -euo pipefail
           bash scripts/ci/validate-services.sh
+          # Dependency-scoped FIRE-input verdict (processing PR #594): the standalone dealer-ledger
+          # deploy path must refuse a render that enables the flag without shadow evidence, or that
+          # carries a malformed materiality fraction. Unconditional — this job deploys ANY service,
+          # and the guard reads the rendered overlays, not the selected service, so it costs one
+          # kustomize per env and cannot be skipped by picking a different SERVICE parameter.
+          bash scripts/ci/validate-dealer-ledger-fire-quality.sh
         '''
       }
     }

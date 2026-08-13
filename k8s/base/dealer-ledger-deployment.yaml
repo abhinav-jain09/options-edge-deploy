@@ -101,6 +101,51 @@ spec:
             # resting quote isn't thrown away; reduce gradually once firing is confirmed. Both envs (base).
             - name: DEALER_LEDGER_QUOTE_STALE_MS
               value: "600000"
+            # --- DEPENDENCY-SCOPED FIRE-INPUT QUALITY (processing PR #594, b704ba42) — REGISTERED
+            #     DORMANT. The merged verdict was inert: neither knob existed in any manifest, so the
+            #     fix could not be reasoned about, grepped for, or flipped without first rediscovering
+            #     it in the service source. Both live in the BASE so every rendered env states them
+            #     explicitly; the eventual enable is a PRODUCTION-ONLY name-keyed override, NOT a base
+            #     edit (a base flip would silently hand dev and experiment production signal semantics).
+            #
+            # The defect: the G-FIRE emission gate judges the CHAIN-WIDE aggregateQuality, and
+            # greeksQualityFlags is a UNION across strikes (ProfileEngine:292), so ONE weak EDGE strike
+            # vetoes the whole chain while the near-money strikes the decision rests on are healthy.
+            # Measured on prod 2026-08-12: MISSING_IV on 90.9% of profile rows; 12:00-14:59 ET was 100%
+            # INSUFFICIENT. Today only the blunt lever FIRE_GREEKS_MIN_QUALITY=DEGRADED (production
+            # overlay) permits a fire; the chain-veto incoherence itself is untouched.
+            #
+            # ⚠ STAYS false UNTIL THE SHADOW EVIDENCE EXISTS (Codex rollout gate, PR #594 review +
+            # 2026-08-13 design ruling). The gating counters (StateMachine.FIRE_COUNTERFACTUAL,
+            # keys `proposed-blocks-legacy-pass` and `counterfactual-fire|CONTRIBUTOR-DEFECT`) are
+            # gated on DealerLedgerDiag.ENABLED and, as merged, have NO READOUT PATH FROM A RUNNING
+            # POD: they are absent from DealerLedgerStreams.metricsText(), so /metrics on HEALTH_PORT
+            # 8113 does not carry them; they are not logged, not on the state record's decisionTrace,
+            # and not on any topic. Setting DEALER_LEDGER_DIAG_COUNTERS=true today would therefore
+            # count into unreadable process memory that dies with the 20:30 ET off-hours scale-to-zero.
+            # DEALER_LEDGER_DIAG_COUNTERS is DELIBERATELY NOT REGISTERED HERE: enabling collection
+            # before the readout exists buys nothing and would imply evidence that cannot be produced.
+            # Order of operations: (1) this registration; (2) a SERVICE-repo PR exporting the FIRE_*
+            # maps and FIRE_INPUT_INVARIANT_VIOLATIONS through metricsText() with durable scraping;
+            # (3) register DIAG_COUNTERS=true; (4) shadow with the flag still false; (5) flip.
+            - name: DEALER_LEDGER_FIRE_QUALITY_DEPENDENCY_SCOPED
+              value: "false"
+            # Materiality tolerance for an OFF-SPAN positioned leg that the FIRE verdict had to drop,
+            # expressed as a FRACTION of DEALER_LEDGER_UNWIND_ARM_MIN — the only threshold suShortGamma
+            # is ever compared against (G-ARM: |suShortGamma| >= UNWIND_ARM_MIN). Effective dollar
+            # tolerance is FRAC * UNWIND_ARM_MIN, so the SAME 0.01 means different money per env:
+            #   production/experiment/es4  UNWIND_ARM_MIN = code default 1e8  ->  $1,000,000
+            #   dev                        UNWIND_ARM_MIN = 7.5e7 (dev patch) ->  $750,000
+            # Pinned here rather than inherited so the deploy manifest owns the effective value of a
+            # safety-sensitive rollout parameter (Codex 2026-08-13, question (d)) — it happens to equal
+            # the current code default, and scripts/ci/validate-dealer-ledger-fire-quality.sh asserts
+            # the rendered value stays finite and non-negative in every env.
+            # ⚠ DIRECTION: SMALLER is STRICTER. ProfileEngine.offSpanDropIsImmaterial returns FALSE
+            # (BLOCK) when the tolerance is non-finite or <= 0, so 0 is fail-closed-maximal, NOT a
+            # crash-loop — unlike DEALER_LEDGER_REARM_FLOW_USD, which crash-loops the pod below its
+            # derived floor. Consumed ONLY while DEPENDENCY_SCOPED is true; inert while it is false.
+            - name: DEALER_LEDGER_FIRE_OFFSPAN_MATERIALITY_FRAC
+              value: "0.01"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms384m -Xmx1024m"
           ports:

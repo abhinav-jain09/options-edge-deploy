@@ -43,3 +43,10 @@ echo "Effective build/deploy image platform: $effective_build_platform"
 # standalone databento-vix-feed would publish the real underlying.vix.price — this
 # stage precedes the deploy stage, so a violating commit never reaches kubectl.
 bash scripts/ci/validate-vix-single-publisher.sh
+# The dependency-scoped FIRE-input verdict changes which greeks quality gates a G-FIRE EMISSION.
+# Its two knobs are registered dormant in the base; this stage refuses a render that turns the flag
+# on without the shadow evidence, or that carries a materiality fraction the service would read as
+# "block every off-span drop". Runs before the deploy stage, so a violating commit never reaches
+# kubectl on the MONOLITH path; Jenkinsfile.service-deploy runs the same script for the standalone
+# dealer-ledger path.
+bash scripts/ci/validate-dealer-ledger-fire-quality.sh
