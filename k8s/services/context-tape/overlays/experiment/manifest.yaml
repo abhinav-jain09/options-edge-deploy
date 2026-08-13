@@ -70,9 +70,11 @@ spec:
             - name: CONTEXT_TAPE_ES_TRADES_TOPIC
               value: underlying.es.trades
             - name: CONTEXT_TAPE_SESSION_MODE
-              value: PREMARKET
+              value: NYSE_RTH
+            - name: CONTEXT_TAPE_PRE_OPEN_ET
+              value: "07:00"
             - name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES
-              value: "2097152"
+              value: "1048576"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx768m
           envFrom:
