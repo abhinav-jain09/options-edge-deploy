@@ -59,15 +59,20 @@
 #   ENVIRONMENT=production KUBECONFIG=<deployer kubeconfig> scripts/ops/stock-gex-oi-snapshot.sh
 #
 # Env:
-#   ENVIRONMENT      production (the only supported env today — dev parity is deliberately out of
-#                    scope: dev is scaled to 0 nightly and its hostPath lives inside the
-#                    docker-desktop VM, so it needs an artifact-copy step, not a second pull)
+#   ENVIRONMENT      production | dev. Dev runs the SAME path, not a copy of prod's artefact:
+#                    the pull is plan-covered, dev is up at 08:20 ET (the scale-down owns 20:30),
+#                    and its hostPath is reachable from the Job that mounts it. The earlier
+#                    "production only" restriction had no mechanism behind it, and its only
+#                    effect was that dev's hand-placed index expired unattended.
 #   TRADE_DATE       optional YYYY-MM-DD operator override; EMPTY on the scheduled run
 #   RESTART_SERVICE  true (default) | false — false publishes but leaves the pod on its old index
 #   JOB_TIMEOUT_S    client-side wait, default 5700 (> the Job's own 5400s activeDeadlineSeconds)
 #   KEEP_JOBS        default 5 (total retained, including this run's Job)
 #   NAMESPACE        default options-edge
-#   EXPECTED_API_SERVER  default https://192.168.100.252:6443
+#   EXPECTED_API_SERVER  production: default https://192.168.100.252:6443, pinned exactly.
+#                    dev: NOT pinned — docker-desktop's API port changes across restarts, so a
+#                    pin there fails for the wrong reason. The guard that matters is inverted
+#                    instead: a dev run must not be pointing at PRODUCTION.
 #   DRY_RUN          true = render + pin + server-side validate only; creates nothing
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -79,7 +84,8 @@ RESTART_SERVICE="${RESTART_SERVICE:-true}"
 JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-5700}"
 KEEP_JOBS="${KEEP_JOBS:-5}"
 DRY_RUN="${DRY_RUN:-false}"
-EXPECTED_API_SERVER="${EXPECTED_API_SERVER:-https://192.168.100.252:6443}"
+PRODUCTION_API_SERVER="https://192.168.100.252:6443"
+EXPECTED_API_SERVER="${EXPECTED_API_SERVER:-}"
 
 TEMPLATE="k8s/jobs/stock-gex-oi-snapshot-job.yaml"
 DEPLOYMENT="stock-gex-service"
@@ -98,7 +104,7 @@ fatal() { echo "FATAL: $*" >&2; exit 1; }
 
 # A stale diagnostic from an earlier build in this workspace must never be reported as this
 # build's state. Written again below, only from a generation that actually parsed.
-rm -f oi-installed-generation.txt
+rm -f oi-installed-generation.txt oi-resolved-session.txt
 
 # An abandoned RUNNING Job keeps the container's writer lock, so an unsuccessful exit (failure,
 # Jenkins abort) must take it down — but ONLY a Job this invocation actually created
@@ -127,8 +133,11 @@ trap 'exit 143' TERM
 # These arrive as free-text Jenkins parameters and are used in arithmetic and in kubectl
 # arguments. Bash evaluates arithmetic operands recursively, so an unvalidated string here is a
 # code-execution surface on the agent, and a malformed one is an unpredictable failure.
-[ "$ENVIRONMENT" = "production" ] \
-  || fatal "ENVIRONMENT='$ENVIRONMENT' is not supported (production only for now — see header)"
+case "$ENVIRONMENT" in
+  production) EXPECTED_API_SERVER="${EXPECTED_API_SERVER:-$PRODUCTION_API_SERVER}" ;;
+  dev)        : ;;   # not pinned; the inverted check below is the guard
+  *)          fatal "ENVIRONMENT must be production or dev, got '$ENVIRONMENT'" ;;
+esac
 case "$RESTART_SERVICE" in true|false) : ;; *) fatal "RESTART_SERVICE must be true or false, got '$RESTART_SERVICE'" ;; esac
 case "$DRY_RUN" in true|false) : ;; *) fatal "DRY_RUN must be true or false, got '$DRY_RUN'" ;; esac
 case "$JOB_TIMEOUT_S" in ''|*[!0-9]*) fatal "JOB_TIMEOUT_S must be digits, got '$JOB_TIMEOUT_S'" ;; esac
@@ -158,10 +167,21 @@ echo "kubectl identity: ${WHOAMI:-<unknown>}"
        options-edge-jenkins-only-workloads admission policy."
 API_SERVER="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}' 2>/dev/null || echo '')"
 echo "api server: ${API_SERVER:-<unknown>}"
-[ "$API_SERVER" = "$EXPECTED_API_SERVER" ] \
-  || fatal "kubeconfig points at '${API_SERVER:-<unknown>}', expected '$EXPECTED_API_SERVER'.
+if [ -n "$EXPECTED_API_SERVER" ]; then
+  [ "$API_SERVER" = "$EXPECTED_API_SERVER" ] \
+    || fatal "kubeconfig points at '${API_SERVER:-<unknown>}', expected '$EXPECTED_API_SERVER'.
        The deployer service-account name alone does not identify a cluster — refusing to write
-       a production index against an unexpected API server."
+       a $ENVIRONMENT index against an unexpected API server."
+else
+  # DEV. Its API server is a docker-desktop port that changes across restarts, so pinning it
+  # fails for the wrong reason. What must be impossible is the direction that does damage: a
+  # run labelled dev writing into PRODUCTION. The deployer identity is the same in both
+  # clusters, so it cannot tell them apart — this can.
+  [ "$API_SERVER" != "$PRODUCTION_API_SERVER" ] \
+    || fatal "ENVIRONMENT='$ENVIRONMENT' but the kubeconfig points at PRODUCTION
+       ($PRODUCTION_API_SERVER) — refusing to publish a '$ENVIRONMENT' index there."
+  [ -n "$API_SERVER" ] || fatal "the kubeconfig names no API server — refusing to guess a cluster."
+fi
 
 # Reads the CURRENT Deployment. Called again before the rollout: the image must not change under
 # this run (a concurrent service-deploy) and the annotation is read where it is written.
@@ -523,6 +543,11 @@ if [ -n "$RECEIPT" ] && [ "$state" = "succeeded" ]; then
   PUBLISHED_TRADE_DATE="$(printf '%s' "$RECEIPT" | sed -n 's/^.* tradeDate=\([0-9-]*\) .*$/\1/p')"
   PUBLISHED_SHA="$(printf '%s' "$RECEIPT" | sed -n 's/^.* sha256=\([0-9a-f]*\)$/\1/p')"
   echo "index receipt: $RECEIPT"
+  # The session this run actually published, for a caller that must pin the SAME one — the dev
+  # refresh chained off a production build. Left to resolve the date itself, a dev run that
+  # crossed the 20:00 ET settle cutoff would build a DIFFERENT session and the two environments
+  # would silently diverge on the very thing they are meant to share.
+  printf '%s\n' "$PUBLISHED_TRADE_DATE" >oi-resolved-session.txt || true
 else
   # NO RECEIPT (or a Job the API says did not succeed) does not prove nothing was published: the
   # container can be killed between os.replace and the receipt, and logs can be unavailable. Ask

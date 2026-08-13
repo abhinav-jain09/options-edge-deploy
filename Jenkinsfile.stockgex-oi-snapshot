@@ -36,18 +36,32 @@ import groovy.json.JsonOutput
 //   * Weekends are excluded because there is no new session to fetch and a weekend date returns
 //     all-zero-size chunks from the vendor; the 5-day age budget covers Sat/Sun.
 //
-// PRODUCTION ONLY for now (USER 2026-08-11). Dev keeps its hand-placed copy: its hostPath lives
-// inside the docker-desktop VM and dev is scaled to zero nightly, so parity needs an
-// artifact-copy step rather than a second (free, but pointless) Databento pull.
+// BOTH ENVIRONMENTS. This was production-only from 2026-08-11 to 2026-08-13, on the reasoning
+// that dev could keep a hand-placed copy. That reasoning does not survive contact:
+//   * "dev is scaled to zero nightly" — the scale-down owns 20:30 ET; this cron is 08:20 ET,
+//     when dev is up. It was never in the way.
+//   * "its hostPath lives inside the docker-desktop VM" — so does the Job that mounts it.
+//   * "a second, free but pointless pull" — free is free, and it is not pointless: it is the
+//     only thing that keeps dev's index from expiring.
+// The observed cost of the restriction: dev's index sat at 2026-08-10 with no producer and was
+// three days from taking the dev service NotReady, while every one of the job's eleven builds
+// had been production because dev was not an option. Dev now runs the SAME path.
+//
+// The cron stays production-only, because a timer fires with DEFAULT parameters and there is no
+// parameterized-scheduler plugin on this controller. Dev is chained off a successful production
+// run instead, which is strictly better than a second timer: dev can only ever be refreshed by
+// a path production has just proven works.
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
-    choice(name: 'ENVIRONMENT', choices: ['production'],
-      description: 'Target environment. Production only today — see the header.')
+    choice(name: 'ENVIRONMENT', choices: ['production', 'dev'],
+      description: 'Target environment. PRODUCTION FIRST on purpose: the timer fires with default parameters, so the scheduled run must be the production one. Dev is chained off a successful production run (see the header) and can also be selected by hand.')
     string(name: 'TRADE_DATE', defaultValue: '',
       description: 'Operator override, YYYY-MM-DD. EMPTY on scheduled runs so the market calendar resolves the latest COMPLETED session — never pin a date on the timer.')
     booleanParam(name: 'RESTART_SERVICE', defaultValue: true,
       description: 'Rollout-restart stock-gex-service after a successful publish. Leave true: the service loads the OI index once at boot, so without this the running pod keeps serving the OLD index.')
+    booleanParam(name: 'CHAIN_DEV', defaultValue: true,
+      description: 'After a SUCCESSFUL production run, start the same job for dev. Ignored when ENVIRONMENT is already dev — a chained run must never chain again.')
     booleanParam(name: 'DRY_RUN', defaultValue: false,
       description: 'true = resolve + digest-pin + server-side validate the Job only; creates nothing and touches no index.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
@@ -87,6 +101,38 @@ pipeline {
     }
   }
   post {
+    success {
+      script {
+        // Dev follows production, and only production. The guards are all three necessary:
+        // ENVIRONMENT keeps a chained dev run from chaining again (an infinite ladder of
+        // builds), CHAIN_DEV lets an operator pull a one-off production index without
+        // disturbing dev, and DRY_RUN must not trigger real work.
+        // The session production actually published. Absent, the chain is SKIPPED rather than
+        // started unpinned: a dev run that resolved its own date could build a different session
+        // from the one it is meant to mirror, which is the failure this pin exists to prevent.
+        def session = fileExists('oi-resolved-session.txt')
+                    ? readFile('oi-resolved-session.txt').trim() : ''
+        if (params.ENVIRONMENT == 'production' && params.CHAIN_DEV && !params.DRY_RUN && session) {
+          echo "production index published for ${session} — starting the dev refresh"
+          build job: env.JOB_NAME,
+                parameters: [
+                  string(name: 'ENVIRONMENT', value: 'dev'),
+                  // The SAME session, pinned. Left empty, dev would resolve the latest completed
+                  // session itself, and a run that crosses the settle cutoff would give dev a
+                  // DIFFERENT date from the production index it is meant to mirror.
+                  string(name: 'TRADE_DATE', value: session),
+                  booleanParam(name: 'RESTART_SERVICE', value: params.RESTART_SERVICE),
+                  booleanParam(name: 'CHAIN_DEV', value: false),
+                  booleanParam(name: 'DRY_RUN', value: false),
+                ],
+                // Not waited on: dev's outcome must not colour production's build result, and a
+                // dev cluster that is down must not hold a production build open.
+                wait: false, propagate: false
+        } else if (params.ENVIRONMENT == 'production' && params.CHAIN_DEV && !params.DRY_RUN) {
+          echo 'dev refresh SKIPPED: this run published no resolved session to pin'
+        }
+      }
+    }
     // `unsuccessful`, NOT `failure`: the pipeline timeout and a manual stop both produce ABORTED,
     // and an aborted refresh is exactly as silent — and as consequential — as a failed one.
     unsuccessful {
