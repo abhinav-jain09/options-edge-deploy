@@ -51,6 +51,12 @@ LOG_TAIL="${LOG_TAIL:-2000}"                            # per-service log lines 
 TOP_N_ERRORS="${TOP_N_ERRORS:-5}"
 CLOCK_SKEW_MAX_S="${CLOCK_SKEW_MAX_S:-15}"
 
+# Tier-5 end-to-end canary (injects ONE synthetic far-OTM record into the raw
+# topic and checks downstream flow). OFF by default — it is the only WRITE this
+# otherwise read-only sweep performs, so it must be opted into. Typically enable
+# it on ONLY ONE of the four sweeps (e.g. T-1h) to avoid repeated injections.
+CANARY_ENABLED="${CANARY_ENABLED:-false}"
+
 # Identity-guard expectations (read-only assert in P1; HARD gate in P3).
 EXPECTED_ENV="${EXPECTED_ENV:-prod}"
 EXPECTED_KAFKA_CLUSTER_ID="${EXPECTED_KAFKA_CLUSTER_ID:-}"   # empty -> advisory only
@@ -330,7 +336,7 @@ fi
 if have "$KAFKA_CG"; then
   LAGGED=$("$KAFKA_CG" --bootstrap-server "$KAFKA_BOOTSTRAP" --all-groups --describe 2>/dev/null \
     | awk -v th="$LAG_THRESHOLD" 'NR>1 && $6 ~ /^[0-9]+$/ && $6+0 > th {print $1":"$6}' \
-    | grep -viE 'ibkr|replay|smoke' | sort -u | head -10)
+    | grep -viE 'ibkr|replay|smoke|bt-loc|^bt-' | sort -u | head -10)
   [ -n "$LAGGED" ] && warn "consumer lag > $LAG_THRESHOLD: $(echo "$LAGGED" | tr '\n' ' ')"
 fi
 if have "$KAFKA_GETOFF"; then
@@ -344,12 +350,38 @@ fi
 # ---------------------------------------------------------------------------
 # 5. Expiry rollover detection (WARN only until gateway-consumes-control lands)
 # ---------------------------------------------------------------------------
+SEL=""
 if [ -n "$GATEWAY_CONFIG_URL" ] && [ -n "$TODAY_EXPIRY" ] && have curl; then
   CFG=$(curl -fsS --max-time 8 "$GATEWAY_CONFIG_URL" 2>/dev/null)
   SEL=$(echo "$CFG" | grep -oE '"expiry"[^,}]*' | head -1 | grep -oE '[0-9]{8}' | head -1)
   if [ -n "$SEL" ]; then
     if [ "$SEL" = "$TODAY_EXPIRY" ]; then ok "UI expiry == today ($TODAY_EXPIRY)"
     else warn "UI expiry STALE: gateway=$SEL, today=$TODAY_EXPIRY — needs rollover (control msg / re-resolve)"; fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5b. Tier-5 end-to-end canary (opt-in) — proves data actually FLOWS.
+# Injects one synthetic far-OTM record into the raw topic via premarket-canary.sh
+# and checks downstream advance. Uses the pipeline's ACTIVE expiry (gateway
+# selection if known, else today) so it propagates through the filtering stages.
+# A canary failure is a hard FAIL — that's the whole point of the check.
+# ---------------------------------------------------------------------------
+if [ "$CANARY_ENABLED" = "true" ]; then
+  CANARY_SH="$SCRIPT_DIR/premarket-canary.sh"
+  if [ ! -x "$CANARY_SH" ]; then
+    fail "Tier-5 canary enabled but premarket-canary.sh not found/executable"
+  else
+    CANARY_EXP="${SEL:-$TODAY_EXPIRY}"
+    if DRY_RUN=false CANARY_EXPIRY="$CANARY_EXP" \
+        KAFKA_BIN="$KAFKA_BIN" KAFKA_BOOTSTRAP_SERVERS="$KAFKA_BOOTSTRAP" \
+        SCHEMA_REGISTRY_URL="$SCHEMA_REGISTRY_URL" CALENDAR_DIR="$CALENDAR_DIR" \
+        DISCORD_WEBHOOK_URL="" "$CANARY_SH" >/tmp/pmr-canary.out 2>&1; then
+      ok "Tier-5 canary: data flows ($(grep -oE '[0-9]+ advanced' /tmp/pmr-canary.out | head -1))"
+    else
+      fail "Tier-5 canary: synthetic record did NOT propagate — pipeline may be stalled ($(grep -oE 'canary result:.*' /tmp/pmr-canary.out | head -1))"
+    fi
+    rm -f /tmp/pmr-canary.out
   fi
 fi
 
@@ -369,7 +401,13 @@ if have kubectl; then
   done
   ERROR_DIGEST=$(sort "$tmp" | uniq -c | sort -rn | head -"$TOP_N_ERRORS" \
     | sed -E 's/^ *([0-9]+) (.*)$/  x\1  \2/' | cut -c1-160)
+  # RecordTooLargeException-aware: a serialized record exceeding Kafka's 1MB
+  # default is the usual cause of DLQ growth. Surface it specifically (with the
+  # offending service) and the actionable fix, since it won't show in top-N if
+  # other errors are noisier.
+  RTL_SVCS=$(grep -i 'RecordTooLarge' "$tmp" 2>/dev/null | sed -E 's/\| .*//' | sort -u | tr '\n' ' ')
   rm -f "$tmp"
+  [ -n "$RTL_SVCS" ] && warn "RecordTooLargeException in: ${RTL_SVCS}— record > Kafka 1MB limit; raise producer max.request.size + topic max.message.bytes (mirror MissionPaceStreams). Likely the DLQ driver."
   [ -n "$ERROR_DIGEST" ] && warn "top error signatures present (see digest)"
 fi
 
