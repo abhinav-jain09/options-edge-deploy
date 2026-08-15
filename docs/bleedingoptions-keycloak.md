@@ -71,18 +71,29 @@ Keycloak then fails authentication and CrashLoops. Rotate in this order:
 > step 4 fails. Do this in a maintenance window and expect Keycloak to be unavailable from step 1
 > until the restart in step 4 completes.
 
-1. Change the role inside the running database. The new value goes over **stdin**, never in argv —
-   `kubectl exec ... -c "ALTER ROLE ... '<new>'"` would expose it in the process list on the
-   workstation *and* in the pod, which is the exposure the deploy job itself was fixed to avoid.
-   `psql`'s `:'pw'` substitution also quotes correctly, so a password containing a single quote is
-   handled rather than producing a syntax error or a truncated password.
+1. Change the role inside the running database using psql's **`\password`** meta-command, at an
+   interactive prompt:
 
    ```bash
-   read -rs -p 'new password: ' NEWPW   # -s keeps it off the screen; not a shell-history entry
-   printf "\\set pw '%s'\nALTER ROLE keycloak PASSWORD :'pw';\n" "$NEWPW" \
-     | kubectl -n bleedingoptions exec -i sts/bo-keycloak-postgres -- \
-         psql -U keycloak -d keycloak -v ON_ERROR_STOP=1
+   kubectl -n bleedingoptions exec -it sts/bo-keycloak-postgres -- psql -U keycloak -d keycloak
    ```
+   ```text
+   keycloak=# \password keycloak
+   Enter new password:            <-- not echoed
+   Enter it again:
+   keycloak=# \q
+   ```
+
+   Use `\password`, not `ALTER ROLE ... PASSWORD '<new>'`, and do not try to script it by feeding
+   SQL on stdin. `\password` reads the value from the terminal and sends it **already hashed**, so
+   the plaintext never appears in argv on either side, in the server log, in `pg_stat_activity`, or in
+   this document. Because it is typed at a prompt rather than substituted into SQL, no shell or psql
+   escaping applies and every character is safe.
+
+   An earlier version of this runbook piped `\set pw '<value>'` on stdin and claimed it quoted
+   correctly. It does not: tested against psql 16.14, a password containing `'` is rejected
+   (`unterminated quoted string`) and one containing `\` is silently stored with the backslash
+   **dropped** — a rotation that reports success and leaves a password nobody can reproduce.
 
    Note `sts/` — `bo-keycloak-postgres` is a **StatefulSet**, so `deploy/` fails with "no matches".
 2. Update the `bo-keycloak-postgres-password` credential in Jenkins to exactly that value.
@@ -90,7 +101,6 @@ Keycloak then fails authentication and CrashLoops. Rotate in this order:
 4. Restart Keycloak so it re-reads the Secret:
    `kubectl -n bleedingoptions rollout restart deploy/bo-keycloak`. Until this completes Keycloak is
    still presenting the old password, which is why step 1 comes first and why the window exists.
-5. Clear the variable: `unset NEWPW`.
 
 **Rollback:** re-run step 1 with the old password, restore the Jenkins credential, re-run the job and
 restart again. Postgres keeps serving its data throughout — only authentication changes — so there is
