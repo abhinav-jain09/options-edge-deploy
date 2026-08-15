@@ -136,13 +136,13 @@ pipeline {
           #              per bar, so compaction never destroys it; -1 because this IS the history
           #              consumers backfill from, and a finite retention deletes overnight bars
           #              mid-session)
-          #   cvd      : 1 partition, compact,delete, retention 12 h (1 Hz last-value snapshot —
-          #              only the live view matters; compaction+retention keep it tiny)
+          #   cvd      : 1 partition, compact,delete, retention -1 (matches the LIVE es4 topic; the
+          #              snapshot compacts to last-value so infinite retention stays tiny)
           # The TOPIC parameter is a choice list, but re-assert here fail-closed so a job-config
           # drift can never mirror an unknown topic with a guessed shape.
           case "$TOPIC" in
             es.futures.cvd.bars) PARTS=1; POLICY=compact,delete; RET=-1 ;;
-            es.futures.cvd)      PARTS=1; POLICY=compact,delete; RET=43200000 ;;
+            es.futures.cvd)      PARTS=1; POLICY=compact,delete; RET=-1 ;;
             *) echo "FAIL: topic $TOPIC not in the cvd-mirror allow-list"; exit 1 ;;
           esac
 
@@ -150,7 +150,10 @@ pipeline {
           cat > "$MDIR/consumer.properties" <<C
 bootstrap.servers=$SRC
 group.id=es-cvd-mirror-${TARGET_SPX_CLUSTER_IP}-${TOPIC}
-auto.offset.reset=latest
+# earliest, deliberately (merge-gate finding 1): the FIRST install must copy the retained history
+# — for cvd.bars the whole point is that dev/prod can backfill overnight bars; `latest` would skip
+# everything already on es4. Re-installs are unaffected: the group's committed offsets win.
+auto.offset.reset=earliest
 key.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
 value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
 C
@@ -179,6 +182,23 @@ exec "$KBIN/kafka-mirror-maker" \\
 S
           chmod +x "$MDIR/run-mirror.sh"
 
+          # EFFECTIVE config reader (merge-gate finding 2): first match of kafka-configs --describe
+          # for the named config — dynamic if set, else the broker-default synonym; empty output is
+          # a query FAILURE, never an implicit pass.
+          eff() { # broker topic config-name -> effective value, or nonzero
+            local out
+            out=$("$KBIN/kafka-configs" --bootstrap-server "$1" --entity-type topics \
+                  --entity-name "$2" --describe 2>/dev/null | grep -oE "$3=[^ ]+" | head -1 | cut -d= -f2)
+            [ -n "$out" ] || { echo "FAIL: cannot read $3 for $2 on $1"; return 1; }
+            printf '%s' "$out"
+          }
+          # SOURCE shape assert against the SAME frozen arm — the shape contract must hold at both
+          # ends, or the byte-copy propagates a wrong shape's records under a right shape's name.
+          SPOL=$(eff "$SRC" "$TOPIC" cleanup.policy) || exit 1
+          [ "$SPOL" = "$POLICY" ] || { echo "FAIL: source $TOPIC cleanup.policy=$SPOL, frozen contract says $POLICY"; exit 1; }
+          SRET=$(eff "$SRC" "$TOPIC" retention.ms) || exit 1
+          [ "$SRET" = "$RET" ] || { echo "FAIL: source $TOPIC retention.ms=$SRET, frozen contract says $RET"; exit 1; }
+
           # pre-create target topic to the FROZEN contract (idempotent; §7.3 forbids ever
           # recreating/truncating an existing target)...
           "$KBIN/kafka-topics" --bootstrap-server "$TGT" --create --if-not-exists --topic "$TOPIC" \
@@ -194,6 +214,11 @@ S
             compact,delete) printf '%s\\n' "$TC" | grep -q "cleanup.policy=compact,delete" || { echo "FAIL: target $TOPIC not compact,delete: $TC"; exit 1; } ;;
             delete)         printf '%s\\n' "$TC" | grep -q "cleanup.policy=compact" && { echo "FAIL: target $TOPIC unexpectedly compacted: $TC"; exit 1; } || true ;;
           esac
+          # Target EFFECTIVE retention must equal the frozen contract even for a PRE-EXISTING topic
+          # (merge-gate finding 2): --create --if-not-exists binds nothing on an existing topic, and
+          # a cvd.bars sitting at a finite default would silently delete overnight history.
+          TRET=$(eff "$TGT" "$TOPIC" retention.ms) || exit 1
+          [ "$TRET" = "$RET" ] || { echo "FAIL: target $TOPIC retention.ms=$TRET, frozen contract says $RET"; exit 1; }
           echo "config generated; target $TOPIC verified: $PARTS partition(s), $POLICY"
         '''
       }
@@ -228,7 +253,11 @@ PL
         sh '''
           set -euo pipefail
           sleep 8
-          launchctl list | grep "$LABEL" || { echo "FAIL: service not running"; exit 1; }
+          # A loaded-but-crashed unit still appears in `launchctl list` — require a NUMERIC PID
+          # (merge-gate finding 3). Column 1 is the PID or "-".
+          PID=$(launchctl list | awk -v l="$LABEL" '$3==l{print $1}')
+          case "$PID" in (*[!0-9]*|"") echo "FAIL: service not running (launchctl pid='$PID')"; exit 1;; esac
+          echo "mirror process pid=$PID"
           # pollution guard: MM1 must NOT ADD es4.* / es.es.es / heartbeat / mm2 topics to the target.
           # Judged as a DELTA against the pre-install baseline captured in Preflight: topics that were
           # already there (prod's dead-MM2 leftovers) are grandfathered, anything new fails the build.
@@ -260,7 +289,21 @@ PL
             [ "$J" = "0" ] || { echo "FAIL: mirror polluted the target with $J NEW junk topic(s):"; printf '%s\\n' "$NEW" | sed 's/^/  /'; exit 1; }
             sleep 2
           done
-          echo "VERIFIED: $LABEL running, only $TOPIC mirrored, no NEW pollution on $TGT."
+          # End-to-end progress proof (merge-gate finding 3): the mirror consumer-group lag on the
+          # SOURCE must drain to <= 5 within 180s. Works in every topic state: empty topic = lag 0
+          # immediately; history topic = drains the earliest-bootstrap copy; live 1 Hz topic =
+          # proves continuous replication. (Cross-broker offset comparison cannot do this:
+          # compaction makes source offsets sparse and target offsets dense.)
+          GRP="es-cvd-mirror-${TARGET_SPX_CLUSTER_IP}-${TOPIC}"
+          ok=""; LAG=unread
+          for i in $(seq 1 36); do
+            LAG=$("$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --describe --group "$GRP" 2>/dev/null \
+                  | awk -v t="$TOPIC" '$1==t {s+=($6=="-"?0:$6)} END{print s+0}')
+            if [ -n "$LAG" ] && [ "$LAG" -le 5 ] 2>/dev/null; then ok=yes; echo "replication lag=$LAG (drained)"; break; fi
+            sleep 5
+          done
+          [ "$ok" = yes ] || { echo "FAIL: mirror group $GRP lag did not drain within 180s (last=$LAG)"; exit 1; }
+          echo "VERIFIED: $LABEL running (pid=$PID), only $TOPIC mirrored, lag drained, no NEW pollution on $TGT."
         '''
       }
     }
