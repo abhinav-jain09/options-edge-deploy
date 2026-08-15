@@ -29,3 +29,4 @@ resources:
   - keycloak-realm-configmap.yaml
   - keycloak-postgres.yaml
   - keycloak-deployment.yaml
+  - backup-and-quota.yaml

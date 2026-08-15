@@ -57,6 +57,12 @@ data:
       "revokeRefreshToken": true,
       "refreshTokenMaxReuse": 0,
 
+      "comment_events": "PGL-062. Auditing is ON for both user and admin events, with 90-day retention. Without it there is no record of who registered, who was approved, who was de-approved or who changed the realm — on the one component where those are the questions an incident actually asks. adminEventsDetailsEnabled records the representation of each change, not merely that one happened.",
+      "eventsEnabled": true,
+      "eventsExpiration": 7776000,
+      "adminEventsEnabled": true,
+      "adminEventsDetailsEnabled": true,
+
       "otpPolicyType": "totp",
       "otpPolicyAlgorithm": "HmacSHA1",
       "otpPolicyDigits": 6,

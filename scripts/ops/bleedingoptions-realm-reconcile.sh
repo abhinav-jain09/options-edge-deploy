@@ -124,6 +124,10 @@ REALM_KEYS=(registrationAllowed registrationEmailAsUsername loginWithEmailAllowe
             ssoSessionIdleTimeout ssoSessionMaxLifespan revokeRefreshToken refreshTokenMaxReuse
             otpPolicyType otpPolicyAlgorithm otpPolicyDigits otpPolicyPeriod otpPolicyLookAheadWindow
             sslRequired)
+# NOTE the event settings (PGL-062) are NOT in this list: Keycloak exposes them through a separate
+# endpoint (/admin/realms/<realm>/events/config), not as realm attributes, so a realm PUT silently
+# ignores them. They are reconciled explicitly below — an omission here would have left auditing off
+# while every other setting reported clean.
 # NOTE browserFlow is deliberately NOT in this list. It is not in the import manifest either (see the
 # realm ConfigMap header), so a manifest-vs-live comparison would read "absent" and skip it. The flow
 # section further down owns it explicitly, against a constant.
@@ -467,6 +471,31 @@ while read -r ra; do
     fi
   fi
 done < <(jq -c '.requiredActions[]?' "$WORK/desired.json")
+
+# --- event auditing (PGL-062) --------------------------------------------------------------------
+# Who registered, who was approved, who was de-approved, who changed the realm. On the component
+# where those are the questions an incident actually asks, "we do not log that" is not an answer.
+echo "==> Event auditing"
+WANT_EVENTS="$(jq -c '{eventsEnabled, eventsExpiration, adminEventsEnabled, adminEventsDetailsEnabled}' \
+  "$WORK/desired.json")"
+LIVE_EVENTS="$(api GET "$KC_REALM/events/config" 2>/dev/null || true)"
+if ! jq -e 'type == "object"' <<<"${LIVE_EVENTS:-}" >/dev/null 2>&1; then
+  die "could not read the realm's event configuration. Auditing is a control, so an unreadable answer is a failure rather than an assumption that it is on."
+fi
+for key in eventsEnabled eventsExpiration adminEventsEnabled adminEventsDetailsEnabled; do
+  want="$(jq -r --arg k "$key" '.[$k]' <<<"$WANT_EVENTS")"
+  have="$(jq -r --arg k "$key" '.[$k] // "ABSENT"' <<<"$LIVE_EVENTS")"
+  if [[ "$want" != "$have" ]]; then
+    drift "events.$key: live='$have' manifest='$want'"
+    if [[ "$MODE" == "apply" ]]; then
+      note "correcting events.$key"
+      api PUT "$KC_REALM/events/config" \
+        -d "$(jq -c --argjson want "$WANT_EVENTS" '. * $want' <<<"$LIVE_EVENTS")" >/dev/null \
+        || die "could not update the realm event configuration"
+      LIVE_EVENTS="$(api GET "$KC_REALM/events/config")"
+    fi
+  fi
+done
 
 # --- the public client ---------------------------------------------------------------------------
 # Redirect URIs and web origins are the client's real security boundary: an extra entry is an open
