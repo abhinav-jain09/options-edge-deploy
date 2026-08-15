@@ -1,0 +1,63 @@
+# The one hole the public tier is allowed through into `options-edge` (PGL-035).
+#
+# This object lives in the INTERNAL namespace deliberately, even though it exists to serve the public
+# one: a NetworkPolicy governs the namespace it sits in, so the permission to reach stock-gex-service
+# has to be granted here. Keeping it in this directory rather than under k8s/services/stock-gex means
+# the whole public-tenant boundary is readable in one place — someone auditing what the public tier
+# can touch should not have to notice a rule filed under an internal service.
+#
+# WHY THIS PATH AT ALL. The public tier reads the Gamma Lab board directly from stock-gex-service
+# rather than through the feed gateway, because the gateway validates bearers against exactly one
+# issuer and a `bleedingoptions` token would be rejected — and teaching the internal gateway to trust
+# a public identity provider would widen the internal trust boundary, which is the thing this whole
+# design exists to avoid. stock-gex-service needs no credential (it has no authentication at all; the
+# gateway does not forward one either), so the public tier reaches it with NO token, having stripped
+# the caller's (PGL-050, proven by PGL-052).
+#
+# ⚠️ ORDERING. Nothing may use this until PGL-050/051/052 pass on the deployed digest (PGL-072). With
+# the Gate-1 image the board proxy still resolves through the feed gateway and would carry the
+# caller's bearer, so this rule existing does not make the path safe — it makes it possible once the
+# path is correct. The selected pod does not exist yet, so today this grants nothing.
+#
+# NOTE this policy is ADDITIVE and stock-gex-service is not otherwise policy-selected: on a cluster
+# with no default-deny in `options-edge`, adding a NetworkPolicy that selects it starts restricting
+# it — every other client (the feed gateway) must remain permitted. The second `from` block below is
+# what keeps the internal path working; deleting it would cut the internal desk off from its own data.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: stock-gex-ingress-public-tenant
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: tenant-boundary
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: stock-gex-service
+  policyTypes: ["Ingress"]
+  ingress:
+    # The public Gamma Lab tier, by namespace label + pod label. Named by LABEL rather than by
+    # namespace name string so a renamed namespace fails closed instead of silently matching nothing.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              oe/tenant: bleedingoptions
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bleedingoptions-gamma-lab
+      ports:
+        - protocol: TCP
+          port: 8021
+    # Everything already inside options-edge — chiefly the feed gateway, which is how every internal
+    # board reaches this service. Selecting a pod with a NetworkPolicy denies all ingress not named,
+    # so omitting this would take the internal platform's own access away.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: options-edge
+      ports:
+        - protocol: TCP
+          port: 8021
+        - protocol: TCP
+          port: 8022
