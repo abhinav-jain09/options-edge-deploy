@@ -1,4 +1,11 @@
-# Backups (PGL-059) and the namespace's resource envelope (PGL-064).
+# Backups (PGL-059, PARTIAL) and the namespace's resource envelope (PGL-064).
+#
+# ⚠️ WHAT THIS IS NOT. PGL-059 requires off-node storage, encryption at rest with a key held outside
+# the cluster, operator-only readability, a recorded Postgres-major compatibility note, stated RPO/RTO,
+# and a REHEARSED RESTORE. This object delivers the daily consistent dump, content verification and
+# 30-day retention — and none of the rest. A dump that has never been restored is a file, not a
+# backup, and the difference is only discovered on the day it matters. The remaining half is tracked,
+# not implied: see the reconciliation matrix.
 #
 # Both are here rather than in the runbook because a backup that depends on someone remembering to run
 # it is not a backup, and a resource bound that lives in a document is not a bound.
@@ -26,10 +33,12 @@ metadata:
     app.kubernetes.io/part-of: bleedingoptions
     app.kubernetes.io/component: backup
 spec:
-  # 02:00 ET. The node runs UTC, so this is 06:00 UTC during EST and 07:00 during EDT — it drifts by
-  # an hour across the DST boundary, which is accepted: nothing here is time-critical to the minute,
-  # and a cron expression that chases DST is a cron expression that eventually fires twice.
-  schedule: "0 6 * * *"
+  # 02:00 America/New_York, expressed with an explicit timeZone rather than a UTC offset. An earlier
+  # version used "0 6 * * *" and a comment claiming it was 02:00 ET — it is 02:00 EDT and 01:00 EST,
+  # so the comment was wrong half the year. Naming the zone means the schedule is what it says.
+  # (timeZone requires Kubernetes >= 1.27; this cluster runs 1.35.)
+  timeZone: "America/New_York"
+  schedule: "0 2 * * *"
   concurrencyPolicy: Forbid          # a second dump while one is running would fight for the same disk
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 7          # keep failures longer than successes — they are what you look at
@@ -47,8 +56,37 @@ spec:
           securityContext:
             runAsNonRoot: true
             runAsUser: 70            # postgres in the alpine image
+            # fsGroup does NOT apply to hostPath volumes — the kubelet creates the directory owned by
+            # root with default permissions, and a uid-70 process then cannot write to it. That is a
+            # backup that fails every night while the CronJob looks configured. The initContainer
+            # below fixes ownership once; without it this whole object is decoration.
+            fsGroup: 70
             seccompProfile:
               type: RuntimeDefault
+          initContainers:
+            - name: prepare-backup-dir
+              image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+              imagePullPolicy: IfNotPresent
+              # Runs as root ONLY to chown the directory the unprivileged dump then writes to. It
+              # touches nothing else and holds no capability beyond the one it needs.
+              securityContext:
+                runAsNonRoot: false
+                runAsUser: 0
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                  add: ["CHOWN", "FOWNER"]
+              command: ["/bin/sh", "-c"]
+              args: ["chown 70:70 /backup && chmod 700 /backup"]
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 64Mi
           containers:
             - name: dump
               image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
@@ -79,7 +117,12 @@ spec:
                   # the SQL actually contains Keycloak's tables — an empty-but-valid gzip would
                   # otherwise pass for 30 days of retention.
                   gzip -t "${out}"
-                  if ! zcat "${out}" | grep -q 'CREATE TABLE.*user_entity'; then
+                  # grep -c, not grep -q. `grep -q` exits at the FIRST match, which can hand zcat a
+                  # SIGPIPE — and under `set -o pipefail` that turns a SUCCESSFUL verification into a
+                  # failed one, intermittently, depending on buffering. Counting consumes the whole
+                  # stream, so the pipeline's status reflects the check rather than the race.
+                  tables="$(zcat "${out}" | grep -c 'CREATE TABLE.*user_entity' || true)"
+                  if [ "${tables}" -lt 1 ]; then
                     echo "FATAL: the dump does not contain Keycloak's user_entity table" >&2
                     exit 1
                   fi

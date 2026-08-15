@@ -124,6 +124,20 @@ if [[ -n "$TOKEN_APPROVED" ]]; then
 else
   skip "PGL-041 (public->internal): pass --token-approved"
 fi
+if [[ -n "$TOKEN_APPROVED" ]]; then
+  # The design requires BOTH internal consumers. The gateway validates tokens independently, so "the
+  # web tier refused it" says nothing about what the gateway would do with the same token.
+  expect_denied "a bleedingoptions token is refused by the FEED GATEWAY" \
+    "$(status "$INTERNAL_HOST/api/system-status" -H "Authorization: Bearer $TOKEN_APPROVED")"
+fi
+# POSITIVE CONTROL. Every rejection above is also what an unreachable host, a typo'd path or a broken
+# deployment produces — so without this, PGL-041 passes most convincingly when the site is down.
+if [[ -n "$TOKEN_INTERNAL" ]]; then
+  expect "the internal endpoint DOES serve its own realm's token (control)" 200 \
+    "$(status "$INTERNAL_HOST/api/stock-gex/board?symbol=$SYMBOL" -H "Authorization: Bearer $TOKEN_INTERNAL")"
+else
+  skip "PGL-041 control: without it the rejections above prove only that something said no"
+fi
 
 echo
 echo "=== PGL-042: the approval lifecycle ==="
@@ -154,7 +168,15 @@ echo "        needs a wall-clock wait and an admin action between two observatio
 echo
 echo "=== PGL-043: the INTERNAL deployment is untouched ==="
 # The regression that would matter most: this whole project must not have changed the desk's site.
-for path in /option-chain /greeks /system-status /gamma-lab /stock-gex; do
+#
+# NOTE this checks REACHABILITY of every internal board. It does NOT compare the internal deployment's
+# environment or its API payloads against a pre-change baseline, which PGL-043 also asks for — capture
+# `kubectl -n options-edge get deploy options-edge-web -o yaml` before and after and diff the env
+# block. A site that serves HTML while its API has regressed is not "unchanged", and the shells are
+# the half most likely to keep working when something underneath has broken.
+for path in /option-chain /greeks /system-status /gamma-lab /stock-gex /context-tape /zones \
+            /paper-trades /delta-flow /reversal /mission-control /indicators /liquidity-wall \
+            /session-flow /risk-reversal /gamma-migration /es-open-direction /option-price-behavior; do
   code="$(status "$INTERNAL_HOST$path")"
   if [[ "$code" == "200" ]]; then
     pass "internal $path still served"
@@ -175,13 +197,29 @@ if [[ -n "$TOKEN_APPROVED" ]]; then
         "$PUBLIC_HOST/api/stock-gex/board?symbol=$SYMBOL&byExpiry=true" > "$tmp/$i.json" ) &
   done
   wait
-  distinct="$(md5 -q "$tmp"/*.json 2>/dev/null | sort -u | wc -l | tr -d ' ')"
-  if [[ "$distinct" == "1" ]]; then
-    pass "20 concurrent viewers received ONE identical cached board"
+  # Identical bodies alone prove nothing: twenty identical 401s, 403s or empty responses are also
+  # identical. Shape is checked FIRST, so the equality assertion is about twenty genuine boards.
+  bad=0
+  for i in $(seq 1 20); do
+    [[ -s "$tmp/$i.json" ]] || bad=$((bad+1))
+    grep -q '"strikes"' "$tmp/$i.json" 2>/dev/null || bad=$((bad+1))
+  done
+  if [[ "$bad" -ne 0 ]]; then
+    fail "PGL-044: $bad of 20 concurrent responses were not a usable board — the equality check would have been meaningless"
   else
-    fail "20 concurrent viewers received $distinct distinct bodies — single-flight/caching is not holding"
+    distinct="$(md5 -q "$tmp"/*.json 2>/dev/null | sort -u | wc -l | tr -d ' ')"
+    if [[ "$distinct" == "1" ]]; then
+      pass "20 concurrent viewers received ONE identical board (all 20 verified as real boards)"
+    else
+      fail "20 concurrent viewers received $distinct distinct bodies — single-flight/caching is not holding"
+    fi
   fi
   rm -rf "$tmp"
+  # The part this script CANNOT establish, recorded as a failure rather than a note: twenty identical
+  # successful responses are equally consistent with twenty upstream calls, because the upstream would
+  # return the same board to each. Only its own counter distinguishes "the cache worked" from "the
+  # cache did nothing and the board happens to be stable".
+  fail "PGL-044 NOT ESTABLISHED HERE: read stock-gex-service's own request counter across this window, confirm ONE call per cache key rather than twenty, and record the number. Deliberately marked failed until that observation exists."
   echo "  NOTE  confirm against the upstream's own request counter that it saw ONE call, not twenty."
 else
   skip "PGL-044: pass --token-approved"
@@ -195,4 +233,6 @@ if [[ "$SKIP" -gt 0 ]]; then
 fi
 [[ "$FAIL" -eq 0 ]] || exit 1
 [[ "$SKIP" -eq 0 ]] || exit 2
-echo "All Gate 5 reachable proofs passed."
+echo "All checks that CAN be automated here passed."
+echo "That is NOT the same as Gate 5 being complete: PGL-042's revocation timing, PGL-043's"
+echo "environment diff and PGL-044's upstream counter are observations a script cannot make."
