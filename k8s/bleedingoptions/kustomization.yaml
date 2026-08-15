@@ -3,11 +3,10 @@
 # second Keycloak on a dev machine would only be a second thing to keep patched.
 #
 # GATE 4a SCOPE — what is deliberately NOT here:
-#   * the public web Deployment ships at replicas: 0 (Gate 4b). PGL-050/051/052 have landed in the
-#     application repo, so the code path is now correct — but the gate is written against the DEPLOYED
-#     IMAGE DIGEST, and scripts/deploy/verify-public-gate.sh refuses a scale-up without evidence tied
-#     to that digest. Raising replicas is therefore a reviewed change carrying that evidence, not an
-#     edit anyone can make in passing.
+#   * no public web Deployment. It is an APPLICATION workload, and common-infra.sh refuses those by
+#     design — infra carries the namespace, the identity provider and shared state, never app pods.
+#     It lives in its own slice: k8s/services/bleedingoptions-gamma-lab/, at replicas: 0 until
+#     PGL-072's evidence exists for the deployed digest.
 #   * no tunnel route and no DNS (PGL-032, PGL-036). Keycloak is reachable on the LAN and in-cluster
 #     only. Publishing it is a separate, reviewable change.
 #   * no Secret. bo-keycloak-secrets is created out-of-band and never enters git
@@ -30,4 +29,3 @@ resources:
   - keycloak-realm-configmap.yaml
   - keycloak-postgres.yaml
   - keycloak-deployment.yaml
-  - gamma-lab-deployment.yaml

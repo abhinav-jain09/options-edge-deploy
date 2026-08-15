@@ -20,23 +20,41 @@
 #   * replicas > 0 with evidence for a DIFFERENT image digest than the manifest deploys
 #   * evidence that does not record all three requirement ids as passing
 #
-# WHAT IT DOES NOT DO
-#   It cannot re-run the tests; those live in the application repo. It checks that someone ran them
-#   against this digest and recorded it. That is a deliberately modest claim, and it is why the
-#   evidence file must be written by CI from a real test run rather than by hand.
+# WHAT IT DOES NOT DO — READ THIS BEFORE TRUSTING IT
+#   It cannot re-run the tests; those live in the application repo. It verifies that a CI-produced
+#   record exists, names this exact digest, and reports all three ids as PASS.
+#
+#   That record is NOT cryptographically attested. Anyone who can write to the Jenkins agent's
+#   filesystem can write a passing one. What this gate genuinely prevents is the realistic failure —
+#   scaling up while nobody has checked, or while the evidence belongs to a different build — not a
+#   determined insider. Two mitigations narrow it, and neither closes it:
+#
+#     * the evidence must live OUTSIDE this repository, so "commit a JSON file saying PASS" is not
+#       the path of least resistance, and a passing gate cannot be introduced by a pull request;
+#     * it must name the CI build that produced it and the source revision tested, so a human
+#       reviewing a scale-up has something to check rather than a bare assertion.
+#
+#   Proper attestation — a signed provenance statement bound to the image digest, verified here — is
+#   the real answer and is tracked as follow-up work. Until it exists, do not describe this gate as
+#   proof that the tests ran; describe it as proof that someone recorded that they did.
 #
 # USAGE
-#   verify-public-gate.sh [--manifest k8s/bleedingoptions/gamma-lab-deployment.yaml]
-#                         [--evidence evidence/public-gate-<digest>.json]
+#   verify-public-gate.sh [--overlay k8s/services/bleedingoptions-gamma-lab/overlays/production]
+#                         [--evidence /path/outside/the/repo/public-gate-<digest>.json]
 set -euo pipefail
 
-MANIFEST="k8s/bleedingoptions/gamma-lab-deployment.yaml"
+# The RENDERED overlay, not the base file. An earlier version parsed the committed base with
+# indentation-sensitive awk while Jenkins applied kustomize output — so an overlay patch or image
+# transformer could change replicas or the image AFTER the check, which is exactly the class of edit
+# this gate claims to prevent.
+OVERLAY="k8s/services/bleedingoptions-gamma-lab/overlays/production"
+DEPLOYMENT_NAME="bleedingoptions-gamma-lab"
 EVIDENCE_DIR="${PUBLIC_GATE_EVIDENCE_DIR:-evidence}"
 REQUIRED_IDS=(PGL-050 PGL-051 PGL-052)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --manifest)  MANIFEST="$2"; shift 2 ;;
+    --overlay)   OVERLAY="$2"; shift 2 ;;
     --evidence)  EVIDENCE_FILE="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -45,16 +63,22 @@ done
 die() { echo "GATE FAIL: $*" >&2; exit 1; }
 ok()  { echo "  OK: $*"; }
 
-[[ -f "$MANIFEST" ]] || die "manifest not found: $MANIFEST"
+[[ -d "$OVERLAY" ]] || die "overlay not found: $OVERLAY"
 command -v jq >/dev/null || die "jq is required"
+command -v yq >/dev/null || die "yq is required"
 
-# `replicas:` under the Deployment. Deliberately a plain read of the file rather than a cluster query:
-# this runs BEFORE the apply, on what is about to be applied.
-REPLICAS="$(awk '/^kind: Deployment$/{d=1} d && /^  replicas:/{print $2; exit}' "$MANIFEST")"
-[[ -n "$REPLICAS" ]] || die "could not read replicas from $MANIFEST"
+# Render exactly what will be applied, then select the Deployment STRUCTURALLY. A structural read
+# cannot be fooled by indentation or by a field appearing in a comment.
+RENDERED="$(mktemp)"
+trap 'rm -f "$RENDERED"' EXIT
+kubectl kustomize "$OVERLAY" >"$RENDERED" || die "could not render $OVERLAY"
+
+REPLICAS="$(yq -r "select(.kind == \"Deployment\" and .metadata.name == \"$DEPLOYMENT_NAME\") | .spec.replicas" "$RENDERED")"
+[[ -n "$REPLICAS" && "$REPLICAS" != "null" ]] \
+  || die "could not read .spec.replicas for Deployment/$DEPLOYMENT_NAME from the rendered $OVERLAY"
 
 echo "==> public Gamma Lab gate (PGL-072)"
-echo "  manifest: $MANIFEST"
+echo "  overlay:  $OVERLAY (rendered)"
 echo "  replicas: $REPLICAS"
 
 if [[ "$REPLICAS" == "0" ]]; then
@@ -63,8 +87,8 @@ if [[ "$REPLICAS" == "0" ]]; then
   exit 0
 fi
 
-IMAGE="$(awk '/^          image: /{print $2; exit}' "$MANIFEST")"
-[[ -n "$IMAGE" ]] || die "could not read the image from $MANIFEST"
+IMAGE="$(yq -r "select(.kind == \"Deployment\" and .metadata.name == \"$DEPLOYMENT_NAME\") | .spec.template.spec.containers[0].image" "$RENDERED")"
+[[ -n "$IMAGE" && "$IMAGE" != "null" ]] || die "could not read the image from the rendered $OVERLAY"
 echo "  image:    $IMAGE"
 
 # The digest is what the evidence must be tied to. A tag can be re-pushed; a digest cannot, which is
@@ -85,6 +109,25 @@ EVIDENCE_FILE="${EVIDENCE_FILE:-$EVIDENCE_DIR/public-gate-${DIGEST/:/-}.json}"
        unverified, a board request may still carry the caller's bearer into the internal namespace."
 
 jq empty "$EVIDENCE_FILE" 2>/dev/null || die "$EVIDENCE_FILE is not valid JSON"
+
+# The evidence must NOT live in this repository. If it could, the way to satisfy this gate would be to
+# add a file saying PASS — which is not evidence, it is a wish, and it would arrive through a pull
+# request that looks like configuration.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+EVIDENCE_REAL="$(cd "$(dirname "$EVIDENCE_FILE")" && pwd -P)/$(basename "$EVIDENCE_FILE")"
+if [[ "$EVIDENCE_REAL" == "$REPO_ROOT"/* ]]; then
+  die "the gate evidence is inside this repository ($EVIDENCE_REAL).
+       It must come from the CI workspace that ran the tests. Evidence that can be committed is
+       evidence that can be written by anyone opening a pull request."
+fi
+
+# Provenance a human can actually check when reviewing a scale-up.
+for field in ciBuildUrl sourceRevision; do
+  value="$(jq -r --arg f "$field" '.[$f] // empty' "$EVIDENCE_FILE")"
+  [[ -n "$value" ]] || die "$EVIDENCE_FILE does not record '$field'. Without the build that produced
+       it and the revision it tested, this file asserts a result with nothing behind it."
+  ok "$field: $value"
+done
 
 EV_DIGEST="$(jq -r '.imageDigest // empty' "$EVIDENCE_FILE")"
 [[ -n "$EV_DIGEST" ]] || die "$EVIDENCE_FILE does not record an imageDigest"
