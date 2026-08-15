@@ -316,11 +316,12 @@ PL
             # accident (merge-gate round 2: matching $1 made an absent group read as lag 0).
             LAG=$("$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --describe --group "$GRP" 2>/dev/null \
                   | awk -v t="$TOPIC" '$2==t {
-                        if ($6 ~ /^[0-9]+$/)                { s+=$6; n++ }        # committed: real lag
+                        if ($5 !~ /^[0-9]+$/)               { bad++ }             # LOG-END must be numeric on EVERY row
+                        else if ($6 ~ /^[0-9]+$/)           { s+=$6; n++ }        # committed: real lag
                         else if ($6=="-" && $5=="0")        { n++ }               # EMPTY partition: 0 to copy IS drained
-                        else if ($6=="-" && $5 ~ /^[0-9]+$/){ }                   # pre-commit on a non-empty log: wait
+                        else if ($6=="-")                   { wait++ }            # pre-commit on a non-empty log: WHOLE read waits
                         else                                { bad++ }
-                     } END{ if (bad > 0) exit 0; if (n > 0) print s+0 }')
+                     } END{ if (bad > 0 || wait > 0) exit 0; if (n > 0) print s+0 }')
             if [ -n "$LAG" ] && [ "$LAG" -le 5 ] 2>/dev/null; then ok=yes; echo "replication lag=$LAG (drained)"; break; fi
             sleep 5
           done
