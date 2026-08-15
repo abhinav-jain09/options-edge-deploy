@@ -186,12 +186,27 @@ mkdir -p "$bak"
 # prevent), and reinstates the live crontab that was in force when the transaction began.
 prev_cron=$(crontab -l 2>/dev/null || true)
 had_cron=$([ -n "$prev_cron" ] && echo yes || echo no)
+# PHASE 0 — UNARMED and mutation-free: record which targets EXIST and take a VERIFIED backup of
+# each. Existence is recorded independently of backup success, so rollback can never mistake
+# "backup failed" for "file was new" and delete a pre-existing file; a backup that fails or does
+# not verify aborts HERE, before anything has changed.
+EXISTED=""
+for f in $UNIT; do
+  if [ -f "$INSTALL_DIR/$f" ]; then
+    EXISTED="$EXISTED $f"
+    cp -p "$INSTALL_DIR/$f" "$bak/$f" \
+      || { echo "backup of $f failed — aborting with nothing mutated" >&2; exit 1; }
+    cmp -s "$INSTALL_DIR/$f" "$bak/$f" \
+      || { echo "backup of $f did not verify — aborting with nothing mutated" >&2; exit 1; }
+  fi
+done
 restore() {
   echo "install failed — restoring the previous unit from $bak" >&2
   for f in $UNIT; do
-    if [ -f "$bak/$f" ]; then mv -f "$bak/$f" "$INSTALL_DIR/$f" || true
-    else rm -f "$INSTALL_DIR/$f" || true
-    fi
+    case " $EXISTED " in
+      *" $f "*) mv -f "$bak/$f" "$INSTALL_DIR/$f" || true ;;
+      *)        rm -f "$INSTALL_DIR/$f" || true ;;
+    esac
   done
   if [ "$had_cron" = yes ]; then printf '%s\n' "$prev_cron" | crontab - || true
   else crontab -r 2>/dev/null || true
@@ -200,7 +215,6 @@ restore() {
 trap restore ERR
 
 for f in $UNIT; do
-  [ -f "$INSTALL_DIR/$f" ] && cp -p "$INSTALL_DIR/$f" "$bak/$f"
   cp "$STAGE_DIR/$f" "$INSTALL_DIR/.incoming.$f"
 done
 for f in $UNIT; do
@@ -217,10 +231,14 @@ echo "crontab installed and verified byte-for-byte"
 
 # The record step 3 reads on the NEXT deploy. Written last, so it only ever describes a unit that
 # is fully in place — and the transaction stays armed until it exists.
-: > "$INSTALL_DIR/.archive-unit.sha256"
+# Built in a temp file and renamed atomically: a failure mid-generation must leave the PREVIOUS
+# record intact, or the next deploy would read a truncated record and report phantom drift.
+rec_tmp="$INSTALL_DIR/.archive-unit.sha256.tmp"
+: > "$rec_tmp"
 for f in $UNIT; do
-  sha256sum "$INSTALL_DIR/$f" | awk -v f="$f" '{print $1, f}' >> "$INSTALL_DIR/.archive-unit.sha256"
+  sha256sum "$INSTALL_DIR/$f" | awk -v f="$f" '{print $1, f}' >> "$rec_tmp"
 done
+mv -f "$rec_tmp" "$INSTALL_DIR/.archive-unit.sha256"
 echo "installed:"; cat "$INSTALL_DIR/.archive-unit.sha256"
 trap - ERR
 EOSSH
