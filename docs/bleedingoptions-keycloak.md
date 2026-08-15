@@ -35,15 +35,18 @@ the Secret job requires the namespace and refuses to create it, so that one obje
 
 | # | Job | Parameters | Why here |
 |---|---|---|---|
-| 1 | `common-infra` | `ENVIRONMENT=production`, **`RECONCILE_REALM=false`** | Creates the namespace, the NetworkPolicies and the workloads. Keycloak will not start yet — the Secret is missing — and that is expected. |
-| 2 | `bleedingoptions-secrets-deploy` | `ENVIRONMENT=production`, `DEPLOY_DRY_RUN=false` | Writes the Secret. Keycloak and Postgres then boot and the realm is imported. |
+| 1 | `common-infra` | `ENVIRONMENT=production`, **`DEPLOY_DRY_RUN=false`**, **`RECONCILE_REALM=false`** | Creates the namespace, the NetworkPolicies and the workloads. Keycloak will not start yet — the Secret is missing — and that is expected. |
+| 2 | `bleedingoptions-secrets-deploy` | `ENVIRONMENT=production`, **`DEPLOY_DRY_RUN=false`** | Writes the Secret. Keycloak and Postgres then boot and the realm is imported. |
 | 3 | — | — | Retire the bootstrap admin (§2), then create the reconciler client (§3). |
-| 4 | `common-infra` | `ENVIRONMENT=production`, `RECONCILE_REALM=true` | Now the reconciler exists, so the realm can be reconciled. |
+| 4 | `common-infra` | `ENVIRONMENT=production`, **`DEPLOY_DRY_RUN=false`**, `RECONCILE_REALM=true` | Now the reconciler exists, so the realm can be reconciled. |
 
-> **`RECONCILE_REALM` must be `false` on the first run.** It defaults to `true`, and the reconcile
-> stage binds the `bo-keycloak-reconciler-secret` credential — a client that cannot exist until
-> Keycloak has booted and imported the realm. Leaving the default on a first run applies every
-> resource and *then* fails the build, which reads like a broken deploy when it is only ordering.
+> **Both parameters default to the safe value, and both must be overridden.** `DEPLOY_DRY_RUN`
+> defaults to `true` on *every* job here, so a run left at the defaults renders and diffs and creates
+> nothing — step 2 would then fail on a namespace that step 1 never made. `RECONCILE_REALM` defaults
+> to `true`, and its stage binds the `bo-keycloak-reconciler-secret` credential — a client that cannot
+> exist until Keycloak has booted and imported the realm — so leaving it on for the first run applies
+> every resource and *then* fails the build, which reads like a broken deploy when it is only
+> ordering.
 
 > **The app password currently sits in the git-tracked `url.md`.** It has not been committed, but a
 > credential in a tracked file is one `git add -A` from being in GitHub history permanently, where
@@ -62,16 +65,36 @@ admin password is read only at first boot, and Keycloak picks up a new SMTP pass
 role password it already has — so changing the Secret changes only what Keycloak *presents*, and
 Keycloak then fails authentication and CrashLoops. Rotate in this order:
 
-1. Change the role inside the running database first, so both values are momentarily valid:
-   `kubectl -n bleedingoptions exec deploy/bo-keycloak-postgres -- psql -U keycloak -c "ALTER ROLE keycloak PASSWORD '<new>';"`
-2. Update the `bo-keycloak-postgres-password` credential in Jenkins to the same value.
-3. Run `bleedingoptions-secrets-deploy` with `DEPLOY_DRY_RUN=false`.
-4. Restart Keycloak so it re-reads the Secret: `kubectl -n bleedingoptions rollout restart deploy/bo-keycloak`.
-   Until this step Keycloak is still using the old password, which is why step 1 comes first.
+> **This is a short planned outage, not a seamless rotation.** Postgres has no dual-password support:
+> `ALTER ROLE ... PASSWORD` invalidates the old password for every NEW connection the instant it
+> runs. Keycloak's already-established pool connections survive, but any reconnect between step 1 and
+> step 4 fails. Do this in a maintenance window and expect Keycloak to be unavailable from step 1
+> until the restart in step 4 completes.
 
-**Rollback:** if Keycloak does not come back, set the role password back to the old value with the
-same `ALTER ROLE`, restore the Jenkins credential, and re-run the job. Postgres keeps serving
-throughout — only Keycloak's ability to authenticate changes — so there is no data-loss window.
+1. Change the role inside the running database. The new value goes over **stdin**, never in argv —
+   `kubectl exec ... -c "ALTER ROLE ... '<new>'"` would expose it in the process list on the
+   workstation *and* in the pod, which is the exposure the deploy job itself was fixed to avoid.
+   `psql`'s `:'pw'` substitution also quotes correctly, so a password containing a single quote is
+   handled rather than producing a syntax error or a truncated password.
+
+   ```bash
+   read -rs -p 'new password: ' NEWPW   # -s keeps it off the screen; not a shell-history entry
+   printf "\\set pw '%s'\nALTER ROLE keycloak PASSWORD :'pw';\n" "$NEWPW" \
+     | kubectl -n bleedingoptions exec -i sts/bo-keycloak-postgres -- \
+         psql -U keycloak -d keycloak -v ON_ERROR_STOP=1
+   ```
+
+   Note `sts/` — `bo-keycloak-postgres` is a **StatefulSet**, so `deploy/` fails with "no matches".
+2. Update the `bo-keycloak-postgres-password` credential in Jenkins to exactly that value.
+3. Run `bleedingoptions-secrets-deploy` with `DEPLOY_DRY_RUN=false`.
+4. Restart Keycloak so it re-reads the Secret:
+   `kubectl -n bleedingoptions rollout restart deploy/bo-keycloak`. Until this completes Keycloak is
+   still presenting the old password, which is why step 1 comes first and why the window exists.
+5. Clear the variable: `unset NEWPW`.
+
+**Rollback:** re-run step 1 with the old password, restore the Jenkins credential, re-run the job and
+restart again. Postgres keeps serving its data throughout — only authentication changes — so there is
+no data-loss window, only an availability one.
 
 ---
 
