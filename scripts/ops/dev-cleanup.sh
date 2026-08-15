@@ -608,8 +608,18 @@ PY
     #
     # ensure_topics creates what is missing and reconcile_declared_topics — the bulk-describe pass
     # inside it — repairs the config of what already exists, which is the half a bare
-    # `--create --if-not-exists` can never do. Safe to run at any time, including mid-session:
-    # it alters topic CONFIG only, never deletes a topic or a record.
+    # `--create --if-not-exists` can never do.
+    #
+    # WHAT THIS DOES AND DOES NOT PROMISE. It issues no delete of any kind: no topic is dropped and
+    # no record is explicitly removed. It is NOT, however, a no-op on data. Turning a topic's
+    # cleanup.policy to `compact` AUTHORISES the log cleaner to drop superseded values for a key,
+    # asynchronously and on its own schedule — compaction is not gated on consumer offsets, and
+    # `retention.ms=-1` disables TIME-based deletion, not compaction. For the topics this applies
+    # it to that is the declared intent (they are keyed state whose contract IS "latest value per
+    # key"), but a consumer that needs every historical transition of such a key, or a tombstone
+    # older than delete.retention.ms, can legitimately lose it. So: safe for the declared contract,
+    # not unconditionally safe for an arbitrary reader — check what reads a topic before widening
+    # this to one whose history someone depends on.
     ensure_topics
     ;;
   *) echo "usage: dev-cleanup [ | now | start | overnight | topics | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
