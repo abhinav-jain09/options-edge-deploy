@@ -43,6 +43,14 @@ spec:
         app.kubernetes.io/name: es-cvd-service
         app.kubernetes.io/part-of: options-edge
     spec:
+      # The dev broker advertises host.docker.internal:19092 (a Docker-Desktop-on-the-Mac name).
+      # Bootstrap reaches 192.168.100.102 fine, but the ADVERTISED listener is what the client must
+      # dial for fetches — unresolvable from this cluster without this alias. Scoped to this pod:
+      # nothing else on es4 consumes the dev broker.
+      hostAliases:
+      - ip: "192.168.100.102"
+        hostnames:
+        - "host.docker.internal"
       containers:
       - name: es-cvd
         image: 192.168.100.252:5000/options-edge-es-cvd:prod
