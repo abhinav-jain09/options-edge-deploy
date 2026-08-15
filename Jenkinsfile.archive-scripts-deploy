@@ -49,7 +49,7 @@ pipeline {
     PROD_HOST   = "${params.PROD_HOST}"
     INSTALL_DIR = "${params.INSTALL_DIR}"
     STAGE_DIR   = "/home/abhinav/oe-ops-staging/build-${BUILD_NUMBER}"
-    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh"
+    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -129,6 +129,14 @@ for f in $UNIT; do
     drift=1
   fi
 done
+# The LIVE crontab is installed state too: compare it against the crontab file this job last
+# installed. A hand edit is exactly the untracked mutation the Jenkins-only rule forbids.
+if [ -f "$INSTALL_DIR/oe-archive.crontab" ] && awk -v f="oe-archive.crontab" '$2==f{found=1} END{exit !found}' "$record"; then
+  if ! crontab -l 2>/dev/null | diff -q - "$INSTALL_DIR/oe-archive.crontab" >/dev/null 2>&1; then
+    echo "DRIFT crontab: the live crontab differs from the last-installed oe-archive.crontab"
+    drift=1
+  fi
+fi
 if [ "$drift" -ne 0 ] && [ "$ALLOW_DRIFT" != "true" ]; then
   echo "REFUSING: the live copies were changed outside this job. Reconcile that change into git" >&2
   echo "first, or re-run with ALLOW_HOST_DRIFT to overwrite it deliberately." >&2
@@ -180,6 +188,23 @@ done
 trap - ERR
 
 chmod +x "$INSTALL_DIR/oe-archive-kafka.sh" "$INSTALL_DIR/test-archive-reset.sh"
+
+# Load the repo-managed crontab and prove the kernel of the deployment: what cron will actually
+# run is byte-for-byte what this commit says. A failed load restores the previous unit.
+prev_cron=$(crontab -l 2>/dev/null || true)
+if ! crontab "$INSTALL_DIR/oe-archive.crontab"; then
+  echo "crontab load failed — restoring previous unit" >&2
+  printf '%s\n' "$prev_cron" | crontab - || true
+  restore
+  exit 1
+fi
+if ! crontab -l | diff - "$INSTALL_DIR/oe-archive.crontab"; then
+  echo "crontab readback differs from the installed file — restoring" >&2
+  printf '%s\n' "$prev_cron" | crontab - || true
+  restore
+  exit 1
+fi
+echo "crontab installed and verified byte-for-byte"
 
 # The record step 3 reads on the NEXT deploy. Written last, so it only ever describes a unit that
 # is fully in place.
