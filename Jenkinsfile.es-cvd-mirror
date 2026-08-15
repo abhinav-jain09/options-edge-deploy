@@ -308,11 +308,19 @@ PL
           for i in $(seq 1 36); do
             # Column layout: GROUP TOPIC PARTITION CURRENT LOG-END LAG ... — the topic is $2 and the
             # lag is $6, and the sum is emitted ONLY when at least one partition row matched: a
-            # missing group, malformed output, a malformed LAG field, or an uncommitted "-" lag all
+            # EMPTY-topic rule (install #6): an earliest-bootstrap consumer on a ZERO-record log never
+            # commits, so its row shows CURRENT '-' forever — with LOG-END 0 there is nothing to
+            # copy and that IS drained; with LOG-END > 0 it is merely pre-commit and we wait.
+            # missing group, malformed output, or a malformed LAG/LOG-END field all
             # print NOTHING (round 3: awk's string->0 coercion made NOT_A_LAG read as drained), so
             # accident (merge-gate round 2: matching $1 made an absent group read as lag 0).
             LAG=$("$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --describe --group "$GRP" 2>/dev/null \
-                  | awk -v t="$TOPIC" '$2==t { if ($6 ~ /^[0-9]+$/) { s+=$6; n++ } else if ($6 != "-") bad++ } END{ if (bad > 0) exit 0; if (n > 0) print s }')
+                  | awk -v t="$TOPIC" '$2==t {
+                        if ($6 ~ /^[0-9]+$/)                { s+=$6; n++ }        # committed: real lag
+                        else if ($6=="-" && $5=="0")        { n++ }               # EMPTY partition: 0 to copy IS drained
+                        else if ($6=="-" && $5 ~ /^[0-9]+$/){ }                   # pre-commit on a non-empty log: wait
+                        else                                { bad++ }
+                     } END{ if (bad > 0) exit 0; if (n > 0) print s+0 }')
             if [ -n "$LAG" ] && [ "$LAG" -le 5 ] 2>/dev/null; then ok=yes; echo "replication lag=$LAG (drained)"; break; fi
             sleep 5
           done
