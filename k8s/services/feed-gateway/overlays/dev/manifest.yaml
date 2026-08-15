@@ -117,6 +117,16 @@ spec:
               value: "true"
             - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
               value: es.futures.aggressor-flow
+            # ES CVD stream (ES-CVD-DESIGN.md Gates 2-3; es-cvd-service on es4, mirrored here as
+            # es.futures.cvd / es.futures.cvd.bars by Jenkinsfile.es-cvd-mirror). Opt-in flag; the
+            # topics are the mirrored es.-prefixed names on dev+prod (es4 itself resolves the
+            # unprefixed defaults through TOPIC_PREFIX).
+            - name: GATEWAY_ES_CVD_ENABLED
+              value: "true"
+            - name: KAFKA_ES_CVD_TOPIC
+              value: es.futures.cvd
+            - name: KAFKA_ES_CVD_BARS_TOPIC
+              value: es.futures.cvd.bars
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS

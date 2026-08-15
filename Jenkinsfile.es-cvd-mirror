@@ -1,0 +1,268 @@
+// ES-CVD MIRROR — stand up a clean SINGLE-TOPIC .4->target mirror as a managed launchd service.
+//
+// Requirement (0DTE-INDICATOR-SERVICE rev 14 §7.3, compute-once + mirror): es4 is the SOLE ES
+// indicator producer; its two output topics are mirrored VERBATIM (record-copy, identity name,
+// ES-keyed records only) to dev and prod so all three envs share one uniform ES view. NO local
+// ES fallback on the targets — a broken mirror means ES goes STALE there, never different.
+//
+// WHY MM1 (kafka-mirror-maker), NOT MM2 (connect-mirror-maker): MM2's Heartbeat/Checkpoint
+// connectors replicate .4's runaway `es.es.es...heartbeats` junk (its own broken es4 MM2) and
+// create es4.* / mm2-*.internal topics on the target -> pollution. MM1 --whitelist mirrors ONLY
+// the one topic, byte-copy, identity name, no heartbeat/checkpoint machinery. (Verified 2026-07-19.)
+//
+// The Verify stage enforces that as a DELTA, not an absolute: Preflight snapshots the target's
+// topic list before install and Verify fails only on pattern matches that appear AFTER it. Prod
+// permanently carries four dead-MM2 leftovers (heartbeats, mm2-{configs,offsets,status}.es4.internal)
+// that an absolute check read as this mirror's pollution, failing every prod install (2026-08-06).
+//
+// Unlike the strike-intel/futures-flow mirrors (one topic family each, target-only slug), this
+// job serves BOTH indicator topics, so the launchd identity includes the TOPIC: one unit per
+// (target, topic) — dev+prod x snapshot+bars = four coexisting units, none overwriting another.
+//
+// The job runs on the 'local-mac' agent (the dev Mac, which IS the target for dev). It generates
+// the config + installs a KeepAlive launchd unit; NOTHING is hand-edited.
+pipeline {
+  agent { label 'local-mac' }
+  parameters {
+    string(name: 'SOURCE_ES_CLUSTER_IP', defaultValue: '192.168.100.4', description: 'ES source-of-truth broker IP (.4).')
+    string(name: 'SOURCE_PORT',          defaultValue: '9092',          description: 'Source Kafka port.')
+    string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '127.0.0.1',     description: 'Target env broker IP (dev = 127.0.0.1, prod = 192.168.100.252).')
+    string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092, prod = 9092).')
+    choice(name: 'TOPIC', choices: ['es.futures.cvd.bars', 'es.futures.cvd'], description: 'CVD topic to mirror (frozen allow-list — the shape contract below is per-topic).')
+    choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
+  }
+  options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
+  environment {
+    KBIN  = '/Users/abhinav/development/confluent-7.3.1/bin'
+    // Per-(TARGET,TOPIC) identity: dev/prod each mirror BOTH indicator topics from .4, so every
+    // (env, topic) pair must be an independent launchd unit instead of one shared label/dir.
+    SLUG  = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT + '-' + params.TOPIC).replaceAll('[^A-Za-z0-9-]', '-')}"
+    MDIR  = "/Users/abhinav/oe-ops/es-cvd-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT + '-' + params.TOPIC).replaceAll('[^A-Za-z0-9-]', '-')}"
+    LABEL = "com.optionsedge.es-cvd-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT + '-' + params.TOPIC).replaceAll('[^A-Za-z0-9-]', '-')}"
+    PLIST = "/Users/abhinav/Library/LaunchAgents/com.optionsedge.es-cvd-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT + '-' + params.TOPIC).replaceAll('[^A-Za-z0-9-]', '-')}.plist"
+    SRC   = "${params.SOURCE_ES_CLUSTER_IP}:${params.SOURCE_PORT}"
+    TGT   = "${params.TARGET_SPX_CLUSTER_IP}:${params.TARGET_PORT}"
+    // Target-only slug (no topic): the approved-legacy-topics allow-list is a property of the
+    // BROKER, shared by both indicator topics mirrored to it.
+    TSLUG = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
+    // Single definition of the MM2-pollution pattern, shared by the Preflight baseline capture and
+    // the Verify guard. It MUST be one string: if the two stages ever matched different patterns,
+    // a pre-existing topic could be missing from the baseline and fail the build as "new".
+    JUNK_RE = '^es4\\.|es\\.es\\.es|heartbeat|mm2-.*\\.internal'
+  }
+  stages {
+
+    stage('Teardown') {
+      when { expression { params.ACTION == 'teardown' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          launchctl unload "$PLIST" 2>/dev/null || true
+          rm -f "$PLIST"
+          # unit-specific: kill ONLY this (target, topic) mirror via its own run script, never a sibling
+          pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
+          pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
+          echo "mirror service removed (topic + data left intact)"
+        '''
+      }
+    }
+
+    stage('Preflight (fail-closed)') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          echo "SOURCE=$SRC  TARGET=$TGT  TOPIC=$TOPIC"
+          # SAFETY: source and target must be different clusters
+          [ "$SOURCE_ES_CLUSTER_IP:$SOURCE_PORT" != "$TARGET_SPX_CLUSTER_IP:$TARGET_PORT" ] || { echo "FAIL: source==target"; exit 1; }
+          # source broker reachable
+          nc -z -w5 "$SOURCE_ES_CLUSTER_IP" "$SOURCE_PORT" || { echo "FAIL: source $SRC unreachable"; exit 1; }
+          # target broker reachable + usable — and CAPTURE ITS PRE-INSTALL TOPIC LIST.
+          # The Verify pollution guard diffs against this baseline so it fails only on junk THIS
+          # install introduced. Prod (192.168.100.252:9092) permanently carries four legacy topics
+          # from the old, stopped es4 MM2 setup (heartbeats, mm2-{configs,offsets,status}.es4.internal)
+          # that match JUNK_RE; the previous absolute match-count check therefore failed every prod
+          # install (builds #6/#7/#8, 2026-08-06) even though the mirror was clean.
+          mkdir -p "$MDIR"
+          BASE="$MDIR/target-topics-preinstall.txt"
+          rm -f "$BASE" "$BASE.tmp"
+          "$KBIN/kafka-topics" --bootstrap-server "$TGT" --list > "$BASE.tmp" || { echo "FAIL: target $TGT unusable"; exit 1; }
+          # Header stamps build+target so Verify can never grandfather from a stale file, and keeps
+          # the file non-empty (an empty broker is a legitimate baseline). No Kafka topic name can
+          # ever collide with it: '#' and ' ' are not legal topic-name characters.
+          { echo "#BASELINE build=$BUILD_NUMBER target=$TGT"; cat "$BASE.tmp"; } > "$BASE"
+          rm -f "$BASE.tmp"
+          echo "baseline: $(grep -vc '^#' "$BASE" || true) topic(s) on $TGT before install"
+
+          # GROWTH GATE (fail-closed). A delta guard ALONE would launder pollution: junk created by
+          # an earlier failed/aborted build lands in the next build's baseline and gets grandfathered
+          # forever. So the pre-install junk set must be a SUBSET of this target's durable,
+          # code-reviewed allow-list. Approving prod's four dead-MM2 leftovers is a reviewed commit
+          # to that file — never something this job grants itself. No file = nothing approved = any
+          # junk-pattern topic blocks the install (which is why dev, being clean, needs no file).
+          APPROVED="$WORKSPACE/config/es-mirror-approved-legacy-topics/$TSLUG.txt"
+          # Every grep below handles status EXPLICITLY: 1 = "no lines matched" (a legitimate result),
+          # anything >1 is a real grep/read error. A blanket `|| true` would convert an unreadable
+          # file into "no junk found" and pass the gate vacuously.
+          PRE=$(grep -E "$JUNK_RE" "$BASE") || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: junk scan of $BASE errored (grep rc=$rc)"; exit 1; }; PRE=""; }
+          if [ -n "$PRE" ]; then
+            [ -f "$APPROVED" ] || { echo "FAIL: $TGT already carries junk-pattern topic(s), but config/es-mirror-approved-legacy-topics/$TSLUG.txt does not exist to approve them:"; printf '%s\\n' "$PRE" | sed 's/^/  /'; exit 1; }
+            CLEAN="$MDIR/approved-legacy.clean.txt"
+            grep -vE '^[[:space:]]*(#|$)' "$APPROVED" > "$CLEAN" || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: cannot read $APPROVED (grep rc=$rc)"; exit 1; }; : > "$CLEAN"; }
+            UNAPPROVED=$(printf '%s\\n' "$PRE" | grep -vxFf "$CLEAN") || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: allow-list subtraction errored (grep rc=$rc)"; exit 1; }; UNAPPROVED=""; }
+            [ -z "$UNAPPROVED" ] || { echo "FAIL: $TGT carries junk-pattern topic(s) NOT approved in config/es-mirror-approved-legacy-topics/$TSLUG.txt — clean the target, or get the allow-list extended by review:"; printf '%s\\n' "$UNAPPROVED" | sed 's/^/  /'; exit 1; }
+            echo "pre-existing junk topics on $TGT (all approved; Verify will grandfather them):"
+            printf '%s\\n' "$PRE" | sed 's/^/  /'
+          else
+            echo "pre-existing junk topics on $TGT: <none>"
+          fi
+          # source topic exists (nothing to mirror otherwise)
+          "$KBIN/kafka-topics" --bootstrap-server "$SRC" --describe --topic "$TOPIC" >/dev/null 2>&1 || { echo "FAIL: source topic $TOPIC missing"; exit 1; }
+          # MM1 binary present
+          [ -x "$KBIN/kafka-mirror-maker" ] || { echo "FAIL: kafka-mirror-maker missing"; exit 1; }
+          echo "preflight OK"
+        '''
+      }
+    }
+
+    stage('Generate config + match target topic') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+
+          # FROZEN per-topic shape contract (ES-CVD-DESIGN.md R31 + scripts/kafka/topics.env — keep in sync):
+          #   cvd.bars : 1 partition, compact,delete, retention -1   (keyed bar history — unique key
+          #              per bar, so compaction never destroys it; -1 because this IS the history
+          #              consumers backfill from, and a finite retention deletes overnight bars
+          #              mid-session)
+          #   cvd      : 1 partition, compact,delete, retention 12 h (1 Hz last-value snapshot —
+          #              only the live view matters; compaction+retention keep it tiny)
+          # The TOPIC parameter is a choice list, but re-assert here fail-closed so a job-config
+          # drift can never mirror an unknown topic with a guessed shape.
+          case "$TOPIC" in
+            es.futures.cvd.bars) PARTS=1; POLICY=compact,delete; RET=-1 ;;
+            es.futures.cvd)      PARTS=1; POLICY=compact,delete; RET=43200000 ;;
+            *) echo "FAIL: topic $TOPIC not in the cvd-mirror allow-list"; exit 1 ;;
+          esac
+
+          mkdir -p "$MDIR"
+          cat > "$MDIR/consumer.properties" <<C
+bootstrap.servers=$SRC
+group.id=es-cvd-mirror-${TARGET_SPX_CLUSTER_IP}-${TOPIC}
+auto.offset.reset=latest
+key.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+C
+          cat > "$MDIR/producer.properties" <<P
+bootstrap.servers=$TGT
+key.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
+value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
+acks=1
+P
+          cat > "$MDIR/log4j.properties" <<L
+log4j.rootLogger=INFO, stdout
+log4j.appender.stdout=org.apache.log4j.ConsoleAppender
+log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
+log4j.appender.stdout.layout.ConversionPattern=%d{ISO8601} %-5p %c{1} - %m%n
+L
+          # escape dots for the MM1 whitelist regex (exact single topic)
+          RE=$(printf '%s' "$TOPIC" | sed 's/\\./\\\\./g')
+          cat > "$MDIR/run-mirror.sh" <<S
+#!/usr/bin/env bash
+set -euo pipefail
+export KAFKA_LOG4J_OPTS="-Dlog4j.configuration=file:$MDIR/log4j.properties"
+exec "$KBIN/kafka-mirror-maker" \\
+  --consumer.config "$MDIR/consumer.properties" \\
+  --producer.config "$MDIR/producer.properties" \\
+  --whitelist '$RE' --num.streams 1
+S
+          chmod +x "$MDIR/run-mirror.sh"
+
+          # pre-create target topic to the FROZEN contract (idempotent; §7.3 forbids ever
+          # recreating/truncating an existing target)...
+          "$KBIN/kafka-topics" --bootstrap-server "$TGT" --create --if-not-exists --topic "$TOPIC" \
+            --partitions "$PARTS" --replication-factor 1 \
+            --config cleanup.policy="$POLICY" --config retention.ms="$RET" 2>&1 | tail -1
+          # ...and because --if-not-exists silently keeps an EXISTING malformed topic, assert the
+          # target's ACTUAL shape now. A partition-count mismatch would silently re-shard the
+          # key->partition mapping mid-stream; a policy mismatch would truncate the live view.
+          TD=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>/dev/null)
+          printf '%s\\n' "$TD" | grep -q "PartitionCount: $PARTS" || { echo "FAIL: target $TOPIC exists with wrong partition count (want $PARTS): $TD"; exit 1; }
+          TC=$("$KBIN/kafka-configs" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>/dev/null || true)
+          case "$POLICY" in
+            compact,delete) printf '%s\\n' "$TC" | grep -q "cleanup.policy=compact,delete" || { echo "FAIL: target $TOPIC not compact,delete: $TC"; exit 1; } ;;
+            delete)         printf '%s\\n' "$TC" | grep -q "cleanup.policy=compact" && { echo "FAIL: target $TOPIC unexpectedly compacted: $TC"; exit 1; } || true ;;
+          esac
+          echo "config generated; target $TOPIC verified: $PARTS partition(s), $POLICY"
+        '''
+      }
+    }
+
+    stage('Install launchd service') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          cat > "$PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>$MDIR/run-mirror.sh</string></array>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>$MDIR/mirror.out.log</string>
+  <key>StandardErrorPath</key><string>$MDIR/mirror.err.log</string>
+</dict></plist>
+PL
+          launchctl unload "$PLIST" 2>/dev/null || true
+          launchctl load "$PLIST"
+          echo "launchd unit $LABEL loaded"
+        '''
+      }
+    }
+
+    stage('Verify (running + zero pollution)') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          sleep 8
+          launchctl list | grep "$LABEL" || { echo "FAIL: service not running"; exit 1; }
+          # pollution guard: MM1 must NOT ADD es4.* / es.es.es / heartbeat / mm2 topics to the target.
+          # Judged as a DELTA against the pre-install baseline captured in Preflight: topics that were
+          # already there (prod's dead-MM2 leftovers) are grandfathered, anything new fails the build.
+          # Fail-closed: no baseline from THIS build, or an unreadable topic list, is a FAIL — never a
+          # silent pass, because either one would make the delta vacuously empty.
+          BASE="$MDIR/target-topics-preinstall.txt"
+          [ -f "$BASE" ] || { echo "FAIL: pre-install topic baseline $BASE missing — cannot distinguish new pollution from legacy topics"; exit 1; }
+          head -1 "$BASE" | grep -qxF "#BASELINE build=$BUILD_NUMBER target=$TGT" \
+            || { echo "FAIL: baseline $BASE is not from this build/target (got: $(head -1 "$BASE"))"; exit 1; }
+          # Everything the delta grandfathers was already proved approved by Preflight's growth gate,
+          # so this is a report, not a decision — but print it every build so the approved set stays
+          # visible in the log next to the result it licensed.
+          GRAND=$(grep -E "$JUNK_RE" "$BASE" | tr '\\n' ' ') || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: junk scan of $BASE errored (grep rc=$rc)"; exit 1; }; GRAND=""; }
+          echo "grandfathered pre-existing junk topics on $TGT: ${GRAND:-<none>}"
+          # (read twice — kafka-topics --list gives flaky counts during MM startup)
+          for i in 1 2; do
+            L=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --list 2>/dev/null) \
+              || { echo "FAIL: cannot list topics on $TGT"; exit 1; }
+            # Both greps handle status EXPLICITLY (1 = no match, >1 = real error). This is the
+            # decisive guard: a blanket `|| true` here would turn an unreadable baseline file into
+            # an empty delta and PASS a genuinely polluted target.
+            JUNK=$(printf '%s\\n' "$L" | grep -E "$JUNK_RE") || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: junk scan of $TGT errored (grep rc=$rc)"; exit 1; }; JUNK=""; }
+            NEW=""
+            if [ -n "$JUNK" ]; then
+              NEW=$(printf '%s\\n' "$JUNK" | grep -vxFf "$BASE") || { rc=$?; [ "$rc" = 1 ] || { echo "FAIL: baseline subtraction errored (grep rc=$rc)"; exit 1; }; NEW=""; }
+            fi
+            if [ -n "$NEW" ]; then J=$(printf '%s\\n' "$NEW" | wc -l | tr -d ' '); else J=0; fi
+            echo "read $i: new-junk-topics=$J  target-topic-present=$(printf '%s\\n' "$L" | grep -c "^$TOPIC$")"
+            [ "$J" = "0" ] || { echo "FAIL: mirror polluted the target with $J NEW junk topic(s):"; printf '%s\\n' "$NEW" | sed 's/^/  /'; exit 1; }
+            sleep 2
+          done
+          echo "VERIFIED: $LABEL running, only $TOPIC mirrored, no NEW pollution on $TGT."
+        '''
+      }
+    }
+  }
+}
