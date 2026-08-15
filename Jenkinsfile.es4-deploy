@@ -38,7 +38,7 @@ pipeline {
       'directional-pressure', 'gex-delta-redis-writer', 'option-price-behavior', 'option-truth-engine', 'pin-postgres-writer',
       'pressure-postgres-writer', 'raw-to-display', 'strike-flow-avro-adapter', 'strike-flow-classifier',
       'strike-liquidity-heatmap', 'volume-pace',
-      'strike-intelligence', 'vix-option-inteligence', 'greek-move-authenticity', 'gamma-migration', 'indicator-service', 'context-tape', 'tape-zones', 'es-aggressor-flow', 'es-feed-gateway', 'es-web',
+      'strike-intelligence', 'vix-option-inteligence', 'greek-move-authenticity', 'gamma-migration', 'indicator-service', 'context-tape', 'tape-zones', 'es-aggressor-flow', 'es-cvd', 'es-feed-gateway', 'es-web',
       'es-feed',
       // The held spread-skew stack is deploy-service-only ON PURPOSE: deploy-all excludes it, so the
       // ONLY sanctioned way to reconcile the ES4_KEEP_DOWN replicas:0 hold onto live pods (or to ever
