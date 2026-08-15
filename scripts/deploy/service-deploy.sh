@@ -71,11 +71,6 @@ fi
 export DEPLOY_PLATFORM
 export REGISTRY_SCHEME="${REGISTRY_SCHEME:-http}"
 
-# --- PGL-072: the public Gamma Lab may not scale up without its evidence ---------------
-# This runs HERE, on the workload's ACTUAL apply path, not in common-infra. The gate first lived in
-# Jenkinsfile.common-infra — and when the Deployment correctly moved out of the infra component into
-# this service slice, the gate stayed behind and stopped guarding anything. A control on a path the
-# thing does not travel is not a control.
 RENDER="$WORK_DIR/${SERVICE}-${ENVIRONMENT}.yaml"
 
 echo "=== service-deploy: render $OVERLAY (platform=$DEPLOY_PLATFORM) ==="
@@ -196,8 +191,10 @@ unpinned="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[
 [ -z "$unpinned" ] || { echo "FATAL: rendered image not digest-pinned: $unpinned" >&2; exit 1; }
 
 # --- PGL-072: the public Gamma Lab may not scale up without evidence for THIS digest ---
-# Placed HERE, on the workload's real apply path and AFTER the image has been remapped for the
-# environment and pinned — not against the overlay. The overlay carries the dev-registry ref, which
+# Placed HERE for two reasons, each learned by getting it wrong. It is on the workload's ACTUAL apply
+# path: the gate first lived in Jenkinsfile.common-infra, and when the Deployment correctly moved out
+# of the infra component into a service slice the gate stayed behind and guarded nothing. And it runs
+# AFTER the image has been remapped for the environment and digest-pinned, not against the overlay. The overlay carries the dev-registry ref, which
 # production remaps and re-resolves, so an overlay-based check could accept evidence for one digest
 # while a different one was applied moments later. This reads the exact manifest about to be applied.
 if [ "$SERVICE" = "bleedingoptions-gamma-lab" ]; then
