@@ -71,6 +71,17 @@ fi
 export DEPLOY_PLATFORM
 export REGISTRY_SCHEME="${REGISTRY_SCHEME:-http}"
 
+# --- PGL-072: the public Gamma Lab may not scale up without its evidence ---------------
+# This runs HERE, on the workload's ACTUAL apply path, not in common-infra. The gate first lived in
+# Jenkinsfile.common-infra — and when the Deployment correctly moved out of the infra component into
+# this service slice, the gate stayed behind and stopped guarding anything. A control on a path the
+# thing does not travel is not a control.
+if [ "$SERVICE" = "bleedingoptions-gamma-lab" ]; then
+  echo "=== service-deploy: public gate (PGL-072) ==="
+  bash "$(dirname "$0")/verify-public-gate.sh" --overlay "$OVERLAY" \
+    || { echo "FATAL: the public Gamma Lab gate refused this deploy" >&2; exit 1; }
+fi
+
 RENDER="$WORK_DIR/${SERVICE}-${ENVIRONMENT}.yaml"
 
 echo "=== service-deploy: render $OVERLAY (platform=$DEPLOY_PLATFORM) ==="

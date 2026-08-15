@@ -42,6 +42,27 @@ services:
     producedTopics: []
     requiredConfigKeys: [KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, POSTGRES_JDBC_URL]
 
+  # --- bleedingoptions tenant (the PUBLIC Gamma Lab) ------------------------------------
+  # The `namespace` field routes this away from options-edge; without it the deploy would default
+  # there and the render/registry guard would refuse it.
+  #
+  # ⚠️ Ships at replicas: 0. scripts/deploy/verify-public-gate.sh runs on this service's apply path
+  # (service-deploy.sh) and refuses a scale-up without PGL-050/051/052 evidence for the exact image
+  # digest. Same image as `web` — one codebase, one image, one PUBLIC_SURFACE switch.
+  - name: bleedingoptions-gamma-lab
+    managedBy: standalone
+    namespace: bleedingoptions
+    image: options-edge-web
+    deployments: [bleedingoptions-gamma-lab]
+    container: web
+    buildJob: options-edge-web-deploy
+    sourceRepo: options-edge
+    envs: [production]
+    dependsOnInfraOnly: true
+    consumedTopics: []       # the public tier reads one REST endpoint; it touches no Kafka at all
+    producedTopics: []
+    requiredConfigKeys: [PUBLIC_SURFACE, PUBLIC_BOARD_UPSTREAM_URL, VITE_AUTH_ISSUER, AUTH_JWK_SET_URI]
+
   # --- fullfunding tenant --------------------------------------------------------------
   # The `namespace` field is what routes this away from options-edge. Without it the deploy
   # would default to options-edge and the render/registry guard would refuse it.

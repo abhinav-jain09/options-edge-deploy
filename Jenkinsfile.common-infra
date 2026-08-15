@@ -36,11 +36,13 @@ pipeline {
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN}"
   }
   stages {
-    // BEFORE anything renders or applies. PGL-072: the public Gamma Lab workload may not carry a
-    // replica until the bearer-stripping tests have passed against the exact image digest it runs.
-    // Checking here means a scale-up that lacks that evidence never reaches the cluster, rather than
-    // being caught by whoever happens to read the diff.
-    stage('Public gate (PGL-072)') {
+    // SECONDARY check. The public Gamma Lab is an application workload deployed by service-deploy.sh,
+    // which runs this same gate on its own apply path — that is the primary and the one that matters,
+    // because a control on a path the workload does not travel guards nothing. This copy runs here
+    // too because infra and the service slice are deployed by different jobs at different times, and
+    // an infra deploy is a natural moment to notice that the public workload has been scaled up
+    // without evidence. Cheap, and it fails the same way.
+    stage('Public gate (PGL-072, secondary)') {
       when { expression { params.ENVIRONMENT == 'production' } }
       steps {
         sh '''
