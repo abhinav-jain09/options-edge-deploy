@@ -89,15 +89,18 @@ R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/es\.options\.indicators\.bars:8/es.op
 expect_fail "$R" "partition count below the frozen contract" "freezes it at 8 partition"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/es\.tape-zones\.board=-1/es.tape-zones.board=86400000/'
 expect_fail "$R" "retention differing from the frozen contract" "asserts retention.ms=-1"
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.tape-zones\.board=-1"/"/'
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/\(es\.options\.indicators\.bars=3888000000\) es\.tape-zones\.board=-1/\1/'
 expect_fail "$R" "retention override dropped entirely" "asserts retention.ms=-1"
 
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.futures\.cvd=43200000/ es.futures.cvd=-1/'
+expect_fail "$R" "cvd snapshot retention drifted from the frozen arm" "asserts retention.ms=43200000"
+
 echo "--- compaction, in both directions ---"
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.options\.indicators\.snapshot\.current es\.futures\.aggressor-flow"/ es.futures.aggressor-flow"/'
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.options\.indicators\.snapshot\.current es\.futures\.aggressor-flow/ es.futures.aggressor-flow/'
 expect_fail "$R" "compacted FROZEN topic dropped from the list" "STRIP the compaction"
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.futures\.aggressor-flow"/"/'
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.futures\.aggressor-flow es\.futures\.cvd/ es.futures.cvd/'
 expect_fail "$R" "compacted COPIED topic dropped from the list" "STRIP the compaction"
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.futures\.aggressor-flow"/ es.futures.aggressor-flow es.options.indicators.bars"/'
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.futures\.aggressor-flow es\.futures\.cvd/ es.futures.aggressor-flow es.options.indicators.bars es.futures.cvd/'
 expect_fail "$R" "append-only topic wrongly compacted" "collapses it to"
 
 echo "--- COPIED schema: es4's declaration is the authority, and it is REQUIRED ---"
@@ -113,9 +116,9 @@ echo "--- the SOURCE cluster's retention is a separate declaration and is gated 
 # wholesale under TOPIC_SET=es4, so an unlisted topic is stamped create-es-topics.sh's 12h default
 # on .4 — and the tape-zones mirror asserts retention against the SOURCE before it looks at the
 # target. Checking only the dev/prod list left this ungated (found by Codex, third review pass).
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.signal-follower\.hot-strike=604800000 es\.tape-zones\.board=-1"/ es.signal-follower.hot-strike=604800000"/'
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/\(hot-strike=604800000\) es\.tape-zones\.board=-1/\1/'
 expect_fail "$R" "es4 retention override dropped" "asserts that against the SOURCE"
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.tape-zones\.board=-1"/ es.tape-zones.board=43200000"/'
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/\(hot-strike=604800000\) es\.tape-zones\.board=-1/\1 es.tape-zones.board=43200000/'
 expect_fail "$R" "es4 retention differing from the frozen contract" "asserts that against the SOURCE"
 
 echo "--- a duplicated declaration is rejected, not silently resolved ---"
