@@ -13,7 +13,10 @@ Design and requirement ids: `bleedingoptions-public-gamma-lab.md` in the `option
 
 ## 1. Before the first deploy — the Secret
 
-`bo-keycloak-secrets` is created **out of band and never enters git** (PGL-030). Three keys:
+`bo-keycloak-secrets` **never enters git** (PGL-030), and it is **not created by hand**. An earlier
+version of this section printed a `kubectl create secret` command — that is a hand-deploy, which the
+Absolute Jenkins-Only Deployment Rule forbids for Secrets by name. The sanctioned path is the
+`bleedingoptions-secrets-deploy` job (`Jenkinsfile.bleedingoptions-secrets`). Three keys:
 
 | Key | What it is |
 |---|---|
@@ -21,22 +24,54 @@ Design and requirement ids: `bleedingoptions-public-gamma-lab.md` in the `option
 | `KC_BOOTSTRAP_ADMIN_PASSWORD` | Bootstrap admin only — disabled after §2 |
 | `KC_SMTP_PASSWORD` | The Gmail app password for `info@bleedingoptions.com` |
 
-```bash
-kubectl create namespace bleedingoptions --dry-run=client -o yaml | kubectl apply -f -
+**Step 1 — store the values in Jenkins once.** Generate the two passwords rather than reusing one
+(`openssl rand -base64 30`), and add them as *Secret text* credentials with these exact ids:
+`bo-keycloak-postgres-password`, `bo-keycloak-admin-password`, `bo-keycloak-smtp-password`. The job
+reads them from the credential store, so no value ever appears in this repo, in a manifest, in a job
+parameter or in a build log.
 
-kubectl -n bleedingoptions create secret generic bo-keycloak-secrets \
-  --from-literal=POSTGRES_PASSWORD='<generate>' \
-  --from-literal=KC_BOOTSTRAP_ADMIN_PASSWORD='<generate>' \
-  --from-literal=KC_SMTP_PASSWORD='<the app password>'
-```
+**Step 2 — run the jobs in this order.** The namespace and the workloads are owned by `common-infra`;
+the Secret job requires the namespace and refuses to create it, so that one object has one owner.
 
-Generate the two passwords rather than reusing one: `openssl rand -base64 30`.
+| # | Job | Parameters | Why here |
+|---|---|---|---|
+| 1 | `common-infra` | `ENVIRONMENT=production`, **`RECONCILE_REALM=false`** | Creates the namespace, the NetworkPolicies and the workloads. Keycloak will not start yet — the Secret is missing — and that is expected. |
+| 2 | `bleedingoptions-secrets-deploy` | `ENVIRONMENT=production`, `DEPLOY_DRY_RUN=false` | Writes the Secret. Keycloak and Postgres then boot and the realm is imported. |
+| 3 | — | — | Retire the bootstrap admin (§2), then create the reconciler client (§3). |
+| 4 | `common-infra` | `ENVIRONMENT=production`, `RECONCILE_REALM=true` | Now the reconciler exists, so the realm can be reconciled. |
+
+> **`RECONCILE_REALM` must be `false` on the first run.** It defaults to `true`, and the reconcile
+> stage binds the `bo-keycloak-reconciler-secret` credential — a client that cannot exist until
+> Keycloak has booted and imported the realm. Leaving the default on a first run applies every
+> resource and *then* fails the build, which reads like a broken deploy when it is only ordering.
 
 > **The app password currently sits in the git-tracked `url.md`.** It has not been committed, but a
 > credential in a tracked file is one `git add -A` from being in GitHub history permanently, where
 > deleting the file does not remove it. Revoke it at
 > [Google account security](https://myaccount.google.com/apppasswords), issue a fresh one, and put
-> the new one only here.
+> the new one only in the Jenkins credential store.
+
+### 1a. Rotating `POSTGRES_PASSWORD` — not a one-field change
+
+The other two keys rotate by editing the Jenkins credential and re-running the job: the bootstrap
+admin password is read only at first boot, and Keycloak picks up a new SMTP password on restart.
+
+`POSTGRES_PASSWORD` is different, and getting it wrong takes the realm down. The value is read by
+*both* sides, but only one of them is authoritative: `POSTGRES_PASSWORD` initialises the database role
+**on an empty data directory only**. On an existing volume Postgres ignores it entirely and keeps the
+role password it already has — so changing the Secret changes only what Keycloak *presents*, and
+Keycloak then fails authentication and CrashLoops. Rotate in this order:
+
+1. Change the role inside the running database first, so both values are momentarily valid:
+   `kubectl -n bleedingoptions exec deploy/bo-keycloak-postgres -- psql -U keycloak -c "ALTER ROLE keycloak PASSWORD '<new>';"`
+2. Update the `bo-keycloak-postgres-password` credential in Jenkins to the same value.
+3. Run `bleedingoptions-secrets-deploy` with `DEPLOY_DRY_RUN=false`.
+4. Restart Keycloak so it re-reads the Secret: `kubectl -n bleedingoptions rollout restart deploy/bo-keycloak`.
+   Until this step Keycloak is still using the old password, which is why step 1 comes first.
+
+**Rollback:** if Keycloak does not come back, set the role password back to the old value with the
+same `ALTER ROLE`, restore the Jenkins credential, and re-run the job. Postgres keeps serving
+throughout — only Keycloak's ability to authenticate changes — so there is no data-loss window.
 
 ---
 
