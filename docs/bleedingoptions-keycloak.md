@@ -115,6 +115,32 @@ user having configured an authenticator, so an account with no authenticator sig
 alone. `CONFIGURE_TOTP` as a default required action covers new users, but not an account whose OTP
 credential was later deleted — §6 does exactly that for a lost phone.
 
+### 3b. SMTP is NOT configured by hand — the reconciler owns it
+
+`bleedingoptions.com` is a Workspace **user alias domain** (added 2026-08-15: Admin → Domains →
+Manage domains → Add a domain → *User alias domain*, chosen over a secondary domain because an alias
+is free and reuses existing users while a secondary bills per user). Google added the verification
+TXT through its Cloudflare integration, Gmail activated free, and the MX (`@` → `smtp.google.com`,
+priority 1, proxy OFF) was added by hand.
+
+**Do not type the SMTP settings into the admin console.** `bleedingoptions-realm-reconcile.sh --apply`
+writes them from the manifest, taking the password from `KC_SMTP_PASSWORD`, and it is authoritative —
+anything typed by hand is either overwritten on the next run or becomes drift the run then reports.
+The settings it applies:
+
+| Field | Value | Why |
+|---|---|---|
+| host / port | `smtp.gmail.com` / `587`, StartTLS | Standard Gmail submission |
+| auth username | **`info@amskel.nl`** | Gmail authenticates as the ACCOUNT. The app password belongs to it |
+| from / replyTo | **`info@bleedingoptions.com`** | The alias is what recipients see — the point of having one |
+
+⚠️ The username and the From address are DIFFERENT on purpose. Authenticating as the alias fails SMTP
+auth outright: no mail at all, discovered when the first person registers.
+
+⚠️ A user alias domain mirrors EXISTING users — `info@amskel.nl` becomes `info@bleedingoptions.com`.
+An address whose local part has no matching user (`admin@`, say) does not exist unless
+`admin@amskel.nl` does. Set `from` to an alias that resolves, or Gmail rejects the send.
+
 ## 4. Reconcile the realm
 
 ```bash
