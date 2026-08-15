@@ -52,9 +52,16 @@ DEPLOYMENT_NAME="bleedingoptions-gamma-lab"
 EVIDENCE_DIR="${PUBLIC_GATE_EVIDENCE_DIR:-evidence}"
 REQUIRED_IDS=(PGL-050 PGL-051 PGL-052)
 
+RENDERED_IN=""
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --overlay)   OVERLAY="$2"; shift 2 ;;
+    # The FINAL render, after the deploy has remapped the image for the environment and pinned it to a
+    # digest. This is the mode the apply path uses, and it is the only one that inspects what will
+    # actually run: the overlay carries the dev-registry ref, which production remaps and re-pins, so
+    # validating the overlay could accept evidence for one digest while a different one is applied.
+    --rendered)  RENDERED_IN="$2"; shift 2 ;;
     --evidence)  EVIDENCE_FILE="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -63,22 +70,29 @@ done
 die() { echo "GATE FAIL: $*" >&2; exit 1; }
 ok()  { echo "  OK: $*"; }
 
-[[ -d "$OVERLAY" ]] || die "overlay not found: $OVERLAY"
 command -v jq >/dev/null || die "jq is required"
 command -v yq >/dev/null || die "yq is required"
 
-# Render exactly what will be applied, then select the Deployment STRUCTURALLY. A structural read
-# cannot be fooled by indentation or by a field appearing in a comment.
-RENDERED="$(mktemp)"
-trap 'rm -f "$RENDERED"' EXIT
-kubectl kustomize "$OVERLAY" >"$RENDERED" || die "could not render $OVERLAY"
+# Select the Deployment STRUCTURALLY from the manifest that will be applied. A structural read cannot
+# be fooled by indentation or by a field appearing in a comment.
+if [[ -n "$RENDERED_IN" ]]; then
+  [[ -f "$RENDERED_IN" ]] || die "rendered manifest not found: $RENDERED_IN"
+  RENDERED="$RENDERED_IN"
+  SOURCE_DESC="$RENDERED_IN (final render, post image-pin)"
+else
+  [[ -d "$OVERLAY" ]] || die "overlay not found: $OVERLAY"
+  RENDERED="$(mktemp)"
+  trap 'rm -f "$RENDERED"' EXIT
+  kubectl kustomize "$OVERLAY" >"$RENDERED" || die "could not render $OVERLAY"
+  SOURCE_DESC="$OVERLAY (overlay render — NOT image-remapped; use --rendered on the apply path)"
+fi
 
 REPLICAS="$(yq -r "select(.kind == \"Deployment\" and .metadata.name == \"$DEPLOYMENT_NAME\") | .spec.replicas" "$RENDERED")"
 [[ -n "$REPLICAS" && "$REPLICAS" != "null" ]] \
   || die "could not read .spec.replicas for Deployment/$DEPLOYMENT_NAME from the rendered $OVERLAY"
 
 echo "==> public Gamma Lab gate (PGL-072)"
-echo "  overlay:  $OVERLAY (rendered)"
+echo "  source:   $SOURCE_DESC"
 echo "  replicas: $REPLICAS"
 
 if [[ "$REPLICAS" == "0" ]]; then
