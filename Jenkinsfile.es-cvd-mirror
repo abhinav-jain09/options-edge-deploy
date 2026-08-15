@@ -190,10 +190,11 @@ S
             local out
             out=$("$KBIN/kafka-configs" --bootstrap-server "$1" --entity-type topics \
                   --entity-name "$2" --describe 2>/dev/null \
-                  | grep -oE "(^|[ ,])$3=[^ ,]+" | head -1 | sed 's/^[ ,]*//' | cut -d= -f2)
-            # boundary-anchored: a bare "$3=" grep substring-matched delete.retention.ms BEFORE
-            # retention.ms (kafka-configs lists it first) and returned the wrong config entirely —
-            # found live on the very first install attempt (es-cvd-mirror #1).
+                  | grep -oE "(^|[ ])$3=[^ ]+" | head -1 | sed 's/^ *//' | cut -d= -f2)
+            # boundary-anchored on SPACE only: a bare "$3=" grep substring-matched
+            # delete.retention.ms before retention.ms (install #1), and a comma in the terminator
+            # class then truncated the VALUE "compact,delete" to "compact" (install #2) — in
+            # kafka-configs' space-delimited output, commas belong to values, never to delimiters.
             [ -n "$out" ] || { echo "FAIL: cannot read $3 for $2 on $1"; return 1; }
             printf '%s' "$out"
           }
