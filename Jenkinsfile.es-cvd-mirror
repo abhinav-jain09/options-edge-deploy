@@ -194,6 +194,9 @@ S
           }
           # SOURCE shape assert against the SAME frozen arm — the shape contract must hold at both
           # ends, or the byte-copy propagates a wrong shape's records under a right shape's name.
+          SD=$("$KBIN/kafka-topics" --bootstrap-server "$SRC" --describe --topic "$TOPIC" 2>/dev/null)
+          printf '%s\n' "$SD" | grep -q "PartitionCount: $PARTS" \
+            || { echo "FAIL: source $TOPIC partition count does not match frozen contract PARTS=$PARTS: $SD"; exit 1; }
           SPOL=$(eff "$SRC" "$TOPIC" cleanup.policy) || exit 1
           [ "$SPOL" = "$POLICY" ] || { echo "FAIL: source $TOPIC cleanup.policy=$SPOL, frozen contract says $POLICY"; exit 1; }
           SRET=$(eff "$SRC" "$TOPIC" retention.ms) || exit 1
