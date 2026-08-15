@@ -206,6 +206,19 @@ if ! awk -v f="oe-archive.crontab" '$2==f{found=1} END{exit !found}' "$INSTALL_D
   fi
 fi
 
+# The checksum record is transactional state too: back it up in phase 0 so rollback restores a
+# COHERENT triple (files, crontab, record) — without this, a signal delivered between the record
+# rename and the disarm rolled back files+crontab but left the new record describing them.
+record_file="$INSTALL_DIR/.archive-unit.sha256"
+had_record=no
+if [ -f "$record_file" ]; then
+  had_record=yes
+  cp -p "$record_file" "$bak/.archive-unit.sha256" \
+    || { echo "backup of the checksum record failed — aborting with nothing mutated" >&2; exit 1; }
+  cmp -s "$record_file" "$bak/.archive-unit.sha256" \
+    || { echo "checksum-record backup did not verify — aborting with nothing mutated" >&2; exit 1; }
+fi
+
 EXISTED=""
 for f in $UNIT; do
   if [ -f "$INSTALL_DIR/$f" ]; then
@@ -226,6 +239,9 @@ restore() {
   done
   if [ "$had_cron" = yes ]; then printf '%s\n' "$prev_cron" | crontab - || true
   else crontab -r 2>/dev/null || true
+  fi
+  if [ "$had_record" = yes ]; then mv -f "$bak/.archive-unit.sha256" "$record_file" || true
+  else rm -f "$record_file" || true
   fi
 }
 # ERR alone does not cover a Jenkins abort or a dropped session: SIGINT/SIGTERM/SIGHUP during
@@ -258,7 +274,10 @@ for f in $UNIT; do
   sha256sum "$INSTALL_DIR/$f" | awk -v f="$f" '{print $1, f}' >> "$rec_tmp"
 done
 mv -f "$rec_tmp" "$INSTALL_DIR/.archive-unit.sha256"
-trap - ERR INT TERM HUP        # the rename IS the commit point — diagnostics must not roll back
+trap - ERR INT TERM HUP
+# Even if a deferred signal fires between the rename above and the disarm, restore() now puts
+# back the phase-0 record alongside the files and crontab — every rollback is coherent, so the
+# rename needs no signal-timing guarantees.
 echo "installed:"; cat "$INSTALL_DIR/.archive-unit.sha256"
 EOSSH
         '''
