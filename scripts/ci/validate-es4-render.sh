@@ -107,6 +107,7 @@ HAND_AUTHORED = {
     "es-feed-gateway",    # prod feed-gateway binary, env-only divergence
     "es-web",             # prod web binary, env-only divergence
     "es-aggressor-flow",  # ES-only continuous futures aggressor analysis
+    "es-cvd",             # ES-only session-anchored CVD; cross-env SPX wiring, no production slice
 }
 
 # KNOWN STALE — generated files the renderer no longer produces. c12e87c removed
