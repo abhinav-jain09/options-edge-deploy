@@ -341,6 +341,33 @@ has  "payload scopes the loss honestly"    "after its last successful checkpoint
 hasnt "payload does not claim the checkpoint was ahead when it was not" \
       "The checkpoint was ahead" "$payload"
 
+# ================= 11. the es4 selection path is the policy file, end to end ==================
+# 2026-08-15: es.futures.cvd.bars shipped through three Codex-gated release gates while the es4
+# archive cron carried a pasted topic list that predated it — the set the cron ACTUALLY used was
+# defined nowhere reviewable. These cases pin the whole chain: the env file defines OE_ES4_TOPICS,
+# the archiver derives exactly that set for ENV=es4, refuses to run without it, and the deployed
+# crontab passes no override.
+es4_expected=$(. "$OE/oe-topics.env"; printf '%s' "$OE_ES4_TOPICS")
+want "oe-topics.env defines a non-empty es4 set" 0 "$([ -n "$es4_expected" ]; echo $?)"
+has  "  the es4 set carries the CVD history topic" "es.futures.cvd.bars" "$es4_expected"
+es4_derived=$(ARCHIVE_DIR="$T" ENV=es4 PRINT_TOPICS=true KAFKA_BIN="$BIN" bash "$ARCH" 2>/dev/null)
+want "ENV=es4 derives exactly OE_ES4_TOPICS" "$es4_expected" "$es4_derived"
+
+stripped="$T/topics-no-es4.env"
+grep -v '^OE_ES4_TOPICS=' "$OE/oe-topics.env" > "$stripped"
+missing_out=$(ARCHIVE_DIR="$T" ENV=es4 PRINT_TOPICS=true KAFKA_BIN="$BIN" OE_TOPICS_ENV="$stripped" bash "$ARCH" 2>&1)
+missing_rc=$?
+want "a policy file without OE_ES4_TOPICS is refused" 1 "$([ "$missing_rc" -ne 0 ]; echo $((1-$?)))"
+has  "  and says why" "OE_ES4_TOPICS" "$missing_out"
+
+crontab_file="$OE/oe-archive.crontab"
+want "the repo-managed crontab exists" 0 "$([ -f "$crontab_file" ]; echo $?)"
+es4_line=$(grep -c '^1 17 \* \* 1-5 .*ENV=es4 .*oe-archive-kafka\.sh' "$crontab_file")
+want "exactly one scheduled es4 archiver entry" 1 "$es4_line"
+es4_entry=$(grep '^1 17 \* \* 1-5 .*ENV=es4' "$crontab_file")
+hasnt "the es4 entry carries NO TOPICS override (the policy file is the one definition)" \
+      "TOPICS=" "$es4_entry"
+
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }
 echo "test-archive-reset: $FAILED FAILURE(S)"; exit 1

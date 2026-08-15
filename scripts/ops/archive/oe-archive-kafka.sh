@@ -91,16 +91,26 @@ OE_TOPICS_ENV="${OE_TOPICS_ENV:-$(dirname "$0")/oe-topics.env}"
 # below and let a caller archive a different set behind the canonical file's back — equality by
 # luck, not by construction. Require the file, then discard anything inherited.
 [ -r "$OE_TOPICS_ENV" ] || { echo "FATAL: '$OE_TOPICS_ENV' missing or unreadable — refusing to archive an unknown evidence set" >&2; exit 1; }
-unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_prod
+unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_prod OE_ES4_TOPICS
 # shellcheck source=/dev/null
 . "$OE_TOPICS_ENV"
 : "${DEALER_LEDGER_EVIDENCE:?oe-topics.env did not define DEALER_LEDGER_EVIDENCE}"
 : "${OE_ALL_TOPICS_prod:?oe-topics.env did not define OE_ALL_TOPICS_prod}"
+: "${OE_ES4_TOPICS:?oe-topics.env did not define OE_ES4_TOPICS}"
 
 DEFAULT_TOPICS_prod="$OE_ALL_TOPICS_prod"
-DEFAULT_TOPICS_es4="es.underlying.spx.price es.underlying.es.trades es.options.databento.events.raw es.options.databento.display es.dealer-ledger-outcome-scored es.close.direction.signal"
+# One definition, every caller: the es4 set comes from oe-topics.env, REQUIRED above — there is
+# deliberately no fallback (the deploy swaps script and env file as one atomic unit, so a version
+# skew between them is a fault to surface, not to paper over), and the 17:01 cron passes no
+# TOPICS override (oe-archive.crontab).
+DEFAULT_TOPICS_es4="$OE_ES4_TOPICS"
 DEFAULT_TOPICS_dev="$DEFAULT_TOPICS_prod"
 eval "TOPICS=\"\${TOPICS:-\$DEFAULT_TOPICS_${ENV_NAME}}\""
+
+# Test seam: print the EFFECTIVE topic set and exit, touching nothing. The suite proves with this
+# that ENV=es4 derives exactly OE_ES4_TOPICS from oe-topics.env — the selection path the 17:01
+# cron depends on — without needing a broker.
+if [ "${PRINT_TOPICS:-}" = "true" ]; then printf '%s\n' "$TOPICS"; exit 0; fi
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 die() { echo "FATAL: $*" >&2; exit 1; }
