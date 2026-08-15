@@ -67,8 +67,13 @@ spec:
             - name: prepare-backup-dir
               image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
               imagePullPolicy: IfNotPresent
-              # Runs as root ONLY to chown the directory the unprivileged dump then writes to. It
-              # touches nothing else and holds no capability beyond the one it needs.
+              # ⚠️ PGL-061 EXCEPTION, recorded rather than quietly taken. That requirement says all
+              # capabilities dropped and non-root everywhere; this container runs as root and adds
+              # CHOWN/FOWNER. It exists because fsGroup does not apply to hostPath, so nothing else
+              # can make a root-created directory writable by the uid-70 dump. It runs for one
+              # command, touches only the backup directory, holds no other capability, and the
+              # long-lived container beside it keeps the full restriction. The exception is scoped to
+              # the smallest thing that removes the problem — and it is in the matrix, not only here.
               securityContext:
                 runAsNonRoot: false
                 runAsUser: 0

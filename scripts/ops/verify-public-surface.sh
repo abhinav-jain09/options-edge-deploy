@@ -136,7 +136,16 @@ if [[ -n "$TOKEN_INTERNAL" ]]; then
   expect "the internal endpoint DOES serve its own realm's token (control)" 200 \
     "$(status "$INTERNAL_HOST/api/stock-gex/board?symbol=$SYMBOL" -H "Authorization: Bearer $TOKEN_INTERNAL")"
 else
-  skip "PGL-041 control: without it the rejections above prove only that something said no"
+  skip "PGL-041 control (web tier): without it the rejections above prove only that something said no"
+fi
+# The gateway needs its OWN control, on its OWN route. The control above exercises the board endpoint
+# while the gateway leg exercises /api/system-status — so a broken or unreachable system-status route
+# would score as a successful rejection, which is the same false pass one route down.
+if [[ -n "$TOKEN_INTERNAL" ]]; then
+  expect "the FEED GATEWAY route DOES serve its own realm's token (control)" 200 \
+    "$(status "$INTERNAL_HOST/api/system-status" -H "Authorization: Bearer $TOKEN_INTERNAL")"
+else
+  skip "PGL-041 control (gateway): the gateway rejection above is unproven without it"
 fi
 
 echo
