@@ -36,6 +36,19 @@ pipeline {
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN}"
   }
   stages {
+    // BEFORE anything renders or applies. PGL-072: the public Gamma Lab workload may not carry a
+    // replica until the bearer-stripping tests have passed against the exact image digest it runs.
+    // Checking here means a scale-up that lacks that evidence never reaches the cluster, rather than
+    // being caught by whoever happens to read the diff.
+    stage('Public gate (PGL-072)') {
+      when { expression { params.ENVIRONMENT == 'production' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/deploy/verify-public-gate.sh
+        '''
+      }
+    }
     stage('Render + Diff (always)') {
       steps {
         sh '''
