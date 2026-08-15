@@ -123,7 +123,17 @@ drift=0
 for f in $UNIT; do
   want=$(awk -v f="$f" '$2==f{print $1}' "$record")
   have=$(sha256sum "$INSTALL_DIR/$f" 2>/dev/null | cut -d' ' -f1)
-  [ -n "$want" ] || { echo "no record for $f — treating as drift"; drift=1; continue; }
+  if [ -z "$want" ]; then
+    # Not in the record: either this deploy introduces a newly MANAGED file (a migration — the
+    # record cannot know it yet) or something unmanaged is squatting on the name (drift).
+    if [ -e "$INSTALL_DIR/$f" ]; then
+      echo "DRIFT $f: exists on the host but this job never installed it"
+      drift=1
+    else
+      echo "NEW $f: first deployment of a newly managed file — not drift"
+    fi
+    continue
+  fi
   if [ "$want" != "$have" ]; then
     echo "DRIFT $f: installed=$have but this job last installed $want"
     drift=1
@@ -170,11 +180,22 @@ mkdir -p "$bak"
 # Every file lands beside its target first, so the swap loop can be short and uninterruptible in
 # practice. If any step fails, the backups go back — the crons must never find a unit that is half
 # one version and half another.
+# ONE transaction: the trap stays armed from the first mutation through the durable checksum
+# record. It restores backed-up files, REMOVES files this deploy introduced (a new file has no
+# backup — leaving it installed would be exactly the mixed old/new state the trap exists to
+# prevent), and reinstates the live crontab that was in force when the transaction began.
+prev_cron=$(crontab -l 2>/dev/null || true)
+had_cron=$([ -n "$prev_cron" ] && echo yes || echo no)
 restore() {
   echo "install failed — restoring the previous unit from $bak" >&2
   for f in $UNIT; do
-    [ -f "$bak/$f" ] && mv -f "$bak/$f" "$INSTALL_DIR/$f" || true
+    if [ -f "$bak/$f" ]; then mv -f "$bak/$f" "$INSTALL_DIR/$f" || true
+    else rm -f "$INSTALL_DIR/$f" || true
+    fi
   done
+  if [ "$had_cron" = yes ]; then printf '%s\n' "$prev_cron" | crontab - || true
+  else crontab -r 2>/dev/null || true
+  fi
 }
 trap restore ERR
 
@@ -185,34 +206,23 @@ done
 for f in $UNIT; do
   mv -f "$INSTALL_DIR/.incoming.$f" "$INSTALL_DIR/$f"
 done
-trap - ERR
-
 chmod +x "$INSTALL_DIR/oe-archive-kafka.sh" "$INSTALL_DIR/test-archive-reset.sh"
 
 # Load the repo-managed crontab and prove the kernel of the deployment: what cron will actually
-# run is byte-for-byte what this commit says. A failed load restores the previous unit.
-prev_cron=$(crontab -l 2>/dev/null || true)
-if ! crontab "$INSTALL_DIR/oe-archive.crontab"; then
-  echo "crontab load failed — restoring previous unit" >&2
-  printf '%s\n' "$prev_cron" | crontab - || true
-  restore
-  exit 1
-fi
-if ! crontab -l | diff - "$INSTALL_DIR/oe-archive.crontab"; then
-  echo "crontab readback differs from the installed file — restoring" >&2
-  printf '%s\n' "$prev_cron" | crontab - || true
-  restore
-  exit 1
-fi
+# run is byte-for-byte what this commit says. Still inside the transaction — any failure here
+# (or at the record below) rolls back files AND the live crontab together.
+crontab "$INSTALL_DIR/oe-archive.crontab"
+crontab -l | diff - "$INSTALL_DIR/oe-archive.crontab"
 echo "crontab installed and verified byte-for-byte"
 
 # The record step 3 reads on the NEXT deploy. Written last, so it only ever describes a unit that
-# is fully in place.
+# is fully in place — and the transaction stays armed until it exists.
 : > "$INSTALL_DIR/.archive-unit.sha256"
 for f in $UNIT; do
   sha256sum "$INSTALL_DIR/$f" | awk -v f="$f" '{print $1, f}' >> "$INSTALL_DIR/.archive-unit.sha256"
 done
 echo "installed:"; cat "$INSTALL_DIR/.archive-unit.sha256"
+trap - ERR
 EOSSH
         '''
       }
