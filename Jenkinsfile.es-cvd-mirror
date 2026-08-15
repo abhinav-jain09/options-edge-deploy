@@ -136,13 +136,14 @@ pipeline {
           #              per bar, so compaction never destroys it; -1 because this IS the history
           #              consumers backfill from, and a finite retention deletes overnight bars
           #              mid-session)
-          #   cvd      : 1 partition, compact,delete, retention -1 (matches the LIVE es4 topic; the
-          #              snapshot compacts to last-value so infinite retention stays tiny)
-          # The TOPIC parameter is a choice list, but re-assert here fail-closed so a job-config
-          # drift can never mirror an unknown topic with a guessed shape.
+          #   cvd      : 1 partition, compact,delete, retention 12 h — the U15 snapshot contract. The
+          #              live es4 topic was created with -1; the es4 create-topics reconcile applies
+          #              the declared 12 h BEFORE any mirror install (operational ordering in the
+          #              PR), so the source assert below holds. Safe: the 1 Hz writer keeps the
+          #              latest value in the active segment, which time-retention never deletes.
           case "$TOPIC" in
             es.futures.cvd.bars) PARTS=1; POLICY=compact,delete; RET=-1 ;;
-            es.futures.cvd)      PARTS=1; POLICY=compact,delete; RET=-1 ;;
+            es.futures.cvd)      PARTS=1; POLICY=compact,delete; RET=43200000 ;;
             *) echo "FAIL: topic $TOPIC not in the cvd-mirror allow-list"; exit 1 ;;
           esac
 
@@ -195,7 +196,7 @@ S
           # SOURCE shape assert against the SAME frozen arm — the shape contract must hold at both
           # ends, or the byte-copy propagates a wrong shape's records under a right shape's name.
           SD=$("$KBIN/kafka-topics" --bootstrap-server "$SRC" --describe --topic "$TOPIC" 2>/dev/null)
-          printf '%s\n' "$SD" | grep -q "PartitionCount: $PARTS" \
+          printf '%s\n' "$SD" | grep -Eq "PartitionCount: ${PARTS}([[:space:]]|$)" \
             || { echo "FAIL: source $TOPIC partition count does not match frozen contract PARTS=$PARTS: $SD"; exit 1; }
           SPOL=$(eff "$SRC" "$TOPIC" cleanup.policy) || exit 1
           [ "$SPOL" = "$POLICY" ] || { echo "FAIL: source $TOPIC cleanup.policy=$SPOL, frozen contract says $POLICY"; exit 1; }
@@ -211,7 +212,7 @@ S
           # target's ACTUAL shape now. A partition-count mismatch would silently re-shard the
           # key->partition mapping mid-stream; a policy mismatch would truncate the live view.
           TD=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>/dev/null)
-          printf '%s\\n' "$TD" | grep -q "PartitionCount: $PARTS" || { echo "FAIL: target $TOPIC exists with wrong partition count (want $PARTS): $TD"; exit 1; }
+          printf '%s\\n' "$TD" | grep -Eq "PartitionCount: ${PARTS}([[:space:]]|$)" || { echo "FAIL: target $TOPIC exists with wrong partition count (want $PARTS): $TD"; exit 1; }
           TC=$("$KBIN/kafka-configs" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>/dev/null || true)
           case "$POLICY" in
             compact,delete) printf '%s\\n' "$TC" | grep -q "cleanup.policy=compact,delete" || { echo "FAIL: target $TOPIC not compact,delete: $TC"; exit 1; } ;;

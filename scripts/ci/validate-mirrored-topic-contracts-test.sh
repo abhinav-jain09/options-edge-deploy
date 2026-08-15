@@ -92,6 +92,9 @@ expect_fail "$R" "retention differing from the frozen contract" "asserts retenti
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/\(es\.options\.indicators\.bars=3888000000\) es\.tape-zones\.board=-1/\1/'
 expect_fail "$R" "retention override dropped entirely" "asserts retention.ms=-1"
 
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.futures\.cvd=43200000/ es.futures.cvd=-1/'
+expect_fail "$R" "cvd snapshot retention drifted from the frozen arm" "asserts retention.ms=43200000"
+
 echo "--- compaction, in both directions ---"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.options\.indicators\.snapshot\.current es\.futures\.aggressor-flow/ es.futures.aggressor-flow/'
 expect_fail "$R" "compacted FROZEN topic dropped from the list" "STRIP the compaction"
