@@ -56,6 +56,37 @@ ingress:
     service: http://10.43.127.26:8080         # Keycloak ClusterIP (host-reachable; traefik :80 is broken)
     originRequest:
       httpHostHeader: auth.bleadingoptions.com
+  # ---------------------------------------------------------------------------------------------
+  # PUBLIC GAMMA LAB — bleedingoptions.com (correct spelling; the internal platform keeps the
+  # differently-spelled bleadingoptions.com). NOT ENABLED YET, and deliberately left commented.
+  #
+  # TWO reasons it cannot simply be pasted in:
+  #   1. Both targets are ClusterIPs that DO NOT EXIST yet — the `bleedingoptions` namespace has not
+  #      been applied. cloudflared routes at the IP because traefik :80 is broken on this cluster, so
+  #      the addresses can only be read AFTER the first apply:
+  #        kubectl -n bleedingoptions get svc bo-keycloak              -o jsonpath='{.spec.clusterIP}'
+  #        kubectl -n bleedingoptions get svc bleedingoptions-gamma-lab -o jsonpath='{.spec.clusterIP}'
+  #      Writing a guessed IP here would route public traffic at whatever else holds it.
+  #   2. PGL-072 forbids the public workload above zero replicas until PGL-050/051/052 pass on the
+  #      deployed digest. Publishing the apex route before then advertises a site that is not there.
+  #
+  # The /admin and /realms/master 404 blocks MUST precede the hostname catch-all (first match wins),
+  # exactly as they do for the internal auth host above.
+  #
+  # - hostname: auth.bleedingoptions.com
+  #   path: /admin
+  #   service: http_status:404
+  # - hostname: auth.bleedingoptions.com
+  #   path: /realms/master
+  #   service: http_status:404
+  # - hostname: auth.bleedingoptions.com
+  #   service: http://<bo-keycloak CLUSTERIP>:8080
+  #   originRequest:
+  #     httpHostHeader: auth.bleedingoptions.com
+  # - hostname: bleedingoptions.com
+  #   service: http://<bleedingoptions-gamma-lab CLUSTERIP>:8080
+  # ---------------------------------------------------------------------------------------------
+
   # es4 already routed /ws/events to a NodePort — which is why the ES board kept working
   # through the prod outage and was the control that isolated the bug.
   - hostname: es.bleadingoptions.com
