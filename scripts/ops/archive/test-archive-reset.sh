@@ -375,6 +375,13 @@ want "oe-topics.env defines a non-empty es4 set" 0 "$([ -n "$es4_expected" ]; ec
 has  "  the es4 set carries the CVD history topic" "es.futures.cvd.bars" "$es4_expected"
 es4_derived=$(ARCHIVE_DIR="$T" ENV=es4 PRINT_TOPICS=true KAFKA_BIN="$BIN" bash "$ARCH" 2>/dev/null)
 want "ENV=es4 derives exactly OE_ES4_TOPICS" "$es4_expected" "$es4_derived"
+# Pinned safety invariant (2026-08-15): es.futures.cvd — the 1 Hz snapshot — STRUCTURALLY starves
+# the bounded consumer (compaction makes --max-messages unreachable; a 1 Hz producer means the 60s
+# idle exit never fires) and fails EVERY run until the 900s kill. Reintroducing it recreates a
+# permanent daily false alarm. Token match, not substring: es.futures.cvd.bars CONTAINS the
+# forbidden name and must keep passing.
+hasnt "the always-hot snapshot topic es.futures.cvd must NEVER rejoin the es4 archive set" \
+      " es.futures.cvd " " $es4_expected "
 
 stripped="$T/topics-no-es4.env"
 grep -v '^OE_ES4_TOPICS=' "$OE/oe-topics.env" > "$stripped"
