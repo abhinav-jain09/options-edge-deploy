@@ -595,5 +595,22 @@ PY
       *) [ "${DKC_DRYRUN:-0}" = 1 ] && echo "DRYRUN: off-slot ($SLOTINFO) -> nothing to do" ;;
     esac
     ;;
-  *) echo "usage: dev-cleanup [ | now | start | overnight | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
+  topics)
+    # TOPICS-ONLY: apply the topics.env contract and nothing else — no wipe, no scaling, no
+    # service restarts. Exists because the contract had NO non-destructive applier: it rode on
+    # `now` (which WIPES Kafka) or `start` (which scales the whole dev stack up), so the only way
+    # to repair a drifted topic was to accept a side effect nobody asked for. On 2026-08-14 that
+    # gap cost two dev deploy attempts — `databento-gex` fails closed on
+    # options.databento.oi.anchor-manifest being PURE compact with retention -1, and dev had it as
+    # `delete` with no retention override because a client auto-created it (dev leaves
+    # auto.create.topics.enable at its TRUE default and num.partitions=1, which is exactly the
+    # shape that appeared).
+    #
+    # ensure_topics creates what is missing and reconcile_declared_topics — the bulk-describe pass
+    # inside it — repairs the config of what already exists, which is the half a bare
+    # `--create --if-not-exists` can never do. Safe to run at any time, including mid-session:
+    # it alters topic CONFIG only, never deletes a topic or a record.
+    ensure_topics
+    ;;
+  *) echo "usage: dev-cleanup [ | now | start | overnight | topics | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
 esac
