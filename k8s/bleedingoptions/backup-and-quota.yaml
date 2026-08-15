@@ -1,0 +1,202 @@
+# Backups (PGL-059, PARTIAL) and the namespace's resource envelope (PGL-064).
+#
+# ⚠️ WHAT THIS IS NOT. PGL-059 requires off-node storage, encryption at rest with a key held outside
+# the cluster, operator-only readability, a recorded Postgres-major compatibility note, stated RPO/RTO,
+# and a REHEARSED RESTORE. This object delivers the daily consistent dump, content verification and
+# 30-day retention — and none of the rest. A dump that has never been restored is a file, not a
+# backup, and the difference is only discovered on the day it matters. The remaining half is tracked,
+# not implied: see the reconciliation matrix.
+#
+# Both are here rather than in the runbook because a backup that depends on someone remembering to run
+# it is not a backup, and a resource bound that lives in a document is not a bound.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bo-keycloak-backup
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: backup
+---
+# A LOGICAL dump, not a volume snapshot (PGL-059).
+#
+# `local-path` PVs are node-affine, so a node loss strands the data a PVC was supposed to protect —
+# and copying the volume of a RUNNING Postgres captures a torn database that restores to nothing.
+# pg_dump asks Postgres for a consistent snapshot instead, which is the only kind worth keeping.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bo-keycloak-backup
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-keycloak-backup
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: backup
+spec:
+  # 02:00 America/New_York, expressed with an explicit timeZone rather than a UTC offset. An earlier
+  # version used "0 6 * * *" and a comment claiming it was 02:00 ET — it is 02:00 EDT and 01:00 EST,
+  # so the comment was wrong half the year. Naming the zone means the schedule is what it says.
+  # (timeZone requires Kubernetes >= 1.27; this cluster runs 1.35.)
+  timeZone: "America/New_York"
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid          # a second dump while one is running would fight for the same disk
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 7          # keep failures longer than successes — they are what you look at
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: bo-keycloak-backup
+          automountServiceAccountToken: false
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: "true"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70            # postgres in the alpine image
+            # fsGroup does NOT apply to hostPath volumes — the kubelet creates the directory owned by
+            # root with default permissions, and a uid-70 process then cannot write to it. That is a
+            # backup that fails every night while the CronJob looks configured. The initContainer
+            # below fixes ownership once; without it this whole object is decoration.
+            fsGroup: 70
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            - name: prepare-backup-dir
+              image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+              imagePullPolicy: IfNotPresent
+              # ⚠️ PGL-061 EXCEPTION, recorded rather than quietly taken. That requirement says all
+              # capabilities dropped and non-root everywhere; this container runs as root and adds
+              # CHOWN/FOWNER. It exists because fsGroup does not apply to hostPath, so nothing else
+              # can make a root-created directory writable by the uid-70 dump. It runs for one
+              # command, touches only the backup directory, holds no other capability, and the
+              # long-lived container beside it keeps the full restriction. The exception is scoped to
+              # the smallest thing that removes the problem — and it is in the matrix, not only here.
+              securityContext:
+                runAsNonRoot: false
+                runAsUser: 0
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                  add: ["CHOWN", "FOWNER"]
+              command: ["/bin/sh", "-c"]
+              args: ["chown 70:70 /backup && chmod 700 /backup"]
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  memory: 64Mi
+          containers:
+            - name: dump
+              image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: PGHOST
+                  value: bo-keycloak-postgres-db.bleedingoptions.svc
+                - name: PGUSER
+                  value: keycloak
+                - name: PGDATABASE
+                  value: keycloak
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: bo-keycloak-secrets
+                      key: POSTGRES_PASSWORD
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  stamp="$(date -u +%Y-%m-%dT%H%M%SZ)"
+                  out="/backup/bo-keycloak-${stamp}.sql.gz"
+                  echo "dumping to ${out}"
+                  # --clean --if-exists so the dump restores onto a non-empty database without a human
+                  # hand-editing it at the moment they can least afford to.
+                  pg_dump --clean --if-exists --no-owner | gzip -9 > "${out}"
+                  # A dump that cannot be read back is not a backup. Verify the gzip stream and that
+                  # the SQL actually contains Keycloak's tables — an empty-but-valid gzip would
+                  # otherwise pass for 30 days of retention.
+                  gzip -t "${out}"
+                  # grep -c, not grep -q. `grep -q` exits at the FIRST match, which can hand zcat a
+                  # SIGPIPE — and under `set -o pipefail` that turns a SUCCESSFUL verification into a
+                  # failed one, intermittently, depending on buffering. Counting consumes the whole
+                  # stream, so the pipeline's status reflects the check rather than the race.
+                  tables="$(zcat "${out}" | grep -c 'CREATE TABLE.*user_entity' || true)"
+                  if [ "${tables}" -lt 1 ]; then
+                    echo "FATAL: the dump does not contain Keycloak's user_entity table" >&2
+                    exit 1
+                  fi
+                  echo "verified ${out} ($(stat -c %s "${out}") bytes)"
+                  # 30-day retention (§5.0).
+                  find /backup -name 'bo-keycloak-*.sql.gz' -mtime +30 -delete
+                  ls -la /backup
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  memory: 512Mi
+          volumes:
+            - name: backup
+              # ⚠️ hostPath under /home/options-edge per the Home Directory Storage Rule. This is on the
+              # SAME NODE as the PVC it backs up, so it protects against database corruption, a bad
+              # migration and accidental deletion — NOT against losing the node. Off-node copying and
+              # encryption at rest with a key held outside the cluster are the remaining half of
+              # PGL-059 and are an operator step until there is somewhere to put them.
+              hostPath:
+                path: /home/options-edge/backups/bo-keycloak
+                type: DirectoryOrCreate
+---
+# The namespace's total envelope (PGL-064). Without it, one workload's runaway memory is the whole
+# node's problem — and this namespace is the internet-facing one, so it is where a runaway is most
+# likely to be someone else's doing.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: bleedingoptions-quota
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  hard:
+    # Sized for the three workloads at their §5.0 limits plus headroom for one rollout surge:
+    # keycloak 1/1536Mi, postgres 500m/512Mi, web 1/1Gi.
+    requests.cpu: "3"
+    requests.memory: 3Gi
+    limits.cpu: "6"
+    limits.memory: 6Gi
+    pods: "12"
+    persistentvolumeclaims: "2"
+---
+# Defaults and per-container ceilings, so a workload added later cannot arrive unbounded (PGL-064).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: bleedingoptions-limits
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      max:
+        cpu: "2"
+        memory: 2Gi

@@ -1,0 +1,208 @@
+# The PUBLIC identity provider (PGL-030). Realm `bleedingoptions`, serving bleedingoptions.com only.
+#
+# WHY A SEPARATE INSTANCE, not a second realm on oe-keycloak: realms isolate users, clients and keys
+# logically, but they share one JVM, one database, one admin console and one patch cadence. Serving
+# public self-registration from the internal Keycloak would put the identity provider for the whole
+# trading platform on the internet for self-service signup — a Keycloak CVE would then sit in front of
+# the realm that guards /api/orders/spread. This instance's blast radius ends at a database of public
+# read-only accounts.
+#
+# NOTHING internal trusts this. options-edge-web and feed-gateway never fetch this realm's JWKS, so a
+# token minted here authenticates nowhere on the internal platform — a property of the topology, not
+# of configuration discipline (PGL-041 proves both directions).
+#
+# GATE 4a SCOPE: this is infrastructure only. There is no public DNS and no tunnel route yet
+# (PGL-032/PGL-036 are later), and no public web workload — PGL-072 forbids one above zero replicas
+# until PGL-050/051/052 land. Keycloak here is reachable on the LAN and in-cluster, nowhere else.
+apiVersion: v1
+kind: Service
+metadata:
+  name: bo-keycloak
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-keycloak
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: auth
+spec:
+  type: ClusterIP
+  # ⚠️ clusterIP is deliberately NOT pinned yet. The internal instance pins 10.43.127.26 because
+  # cloudflared routes at the IP and it must survive redeploys — but pinning an IP that has not been
+  # assigned risks colliding with one the allocator already handed out. PGL-032 pins it: read the
+  # assigned value after the first apply
+  #     kubectl -n bleedingoptions get svc bo-keycloak -o jsonpath='{.spec.clusterIP}'
+  # and write it here IN THE SAME CHANGE as the tunnel rule that targets it. Until then the address is
+  # dynamic, which is safe precisely because nothing external routes to it yet.
+  selector:
+    app.kubernetes.io/name: bo-keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# LAN-only admin access. The public host will 404 /admin and /realms/master at the Cloudflare edge
+# (PGL-032), so the admin console is reachable only from the trusted LAN — here on host port 8189.
+# 8089 is taken by the internal instance's oe-keycloak-lan; a collision would make one of the two
+# silently unreachable.
+apiVersion: v1
+kind: Service
+metadata:
+  name: bo-keycloak-lan
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-keycloak
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: auth
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: bo-keycloak
+  ports:
+    - name: http
+      port: 8189
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bo-keycloak
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-keycloak
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: auth
+spec:
+  # One replica is durable — all state is in Postgres. HA would need KC_CACHE_* and a headless Service
+  # so replicas form one Infinispan cluster; deliberately not done, and the single-node availability
+  # limit is accepted explicitly in PGL-064 rather than left implied.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bo-keycloak
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      annotations:
+        # The realm ConfigMap is a plain resource and `--import-realm` only runs at container start, so
+        # editing the realm does not by itself roll the pod. Bump this nonce in the SAME commit as any
+        # bo-keycloak-realm change. Note this only matters for a rebuild-from-empty: on an existing
+        # realm the import is skipped entirely and the RECONCILER is what applies changes (PGL-031A).
+        oe/config-nonce: "2026-08-15-gate-4a-initial"
+      labels:
+        app.kubernetes.io/name: bo-keycloak
+        app.kubernetes.io/part-of: bleedingoptions
+        app.kubernetes.io/component: auth
+    spec:
+      # Control-plane node: CoreDNS lives there and pods on oe-failover-56 cannot reach it, so a pod
+      # scheduled elsewhere cannot resolve its own Postgres Service and dies on a JDBC timeout.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      automountServiceAccountToken: false   # PGL-061: Keycloak never calls the Kubernetes API
+      securityContext:
+        # PGL-061. The Keycloak image already runs as uid 1000; declaring it means the kubelet REFUSES
+        # to start the pod if a future image change makes it root, rather than quietly running as root
+        # on the internet-facing component.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: keycloak
+          # Tag + manifest-list digest pinned together, matching the internal instance so both upgrade
+          # in step. PGL-063: patch within 30 days of a release, 7 days for a High-or-above CVE.
+          image: quay.io/keycloak/keycloak:26.0@sha256:09a381c715ab0b111835b70f2905955274843a219c6f27efb348e4d9f4086858
+          imagePullPolicy: IfNotPresent
+          args: ["start", "--import-realm"]
+          env:
+            # --- Database ---
+            - name: KC_DB
+              value: postgres
+            # ClusterIP Service, not the headless one — see keycloak-postgres.yaml.
+            - name: KC_DB_URL
+              value: jdbc:postgresql://bo-keycloak-postgres-db.bleedingoptions.svc:5432/keycloak
+            - name: KC_DB_USERNAME
+              value: keycloak
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bo-keycloak-secrets
+                  # SAME key Postgres reads for POSTGRES_PASSWORD, so the two can never drift into a
+                  # mismatch that makes Keycloak fail to boot after Postgres has initialised its account.
+                  key: POSTGRES_PASSWORD
+            # --- Hostname / TLS (PGL-031D). TLS terminates at the Cloudflare edge; traefik and
+            # cloudflared forward X-Forwarded-*, so Keycloak must be told its public identity or it
+            # will mint tokens and redirects pointing at an internal address. ---
+            - name: KC_HOSTNAME
+              value: "https://auth.bleedingoptions.com"
+            # Admin console answers on the LAN URL so operators can use it by IP while the public
+            # /admin stays 404 at the edge.
+            - name: KC_HOSTNAME_ADMIN
+              value: "http://192.168.100.252:8189"
+            - name: KC_PROXY_HEADERS
+              value: xforwarded
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            # --- Health/metrics on the management port (9000), never published by either Service above.
+            # PGL-058: an internet-visible health endpoint tells an attacker when the upstream is down
+            # and tells no one else anything useful. ---
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_METRICS_ENABLED
+              value: "true"
+            # --- Bootstrap admin. PGL-031C: this is a BOOTSTRAP credential, not a standing one — it
+            # creates the first real admin and is then disabled. Leaving it live would be a permanent
+            # well-known username on the internet-facing IdP. ---
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: admin
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bo-keycloak-secrets
+                  key: KC_BOOTSTRAP_ADMIN_PASSWORD
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 9000
+          startupProbe:
+            httpGet:
+              path: /health/started
+              port: 9000
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 9000
+            periodSeconds: 20
+          volumeMounts:
+            - name: realm-import
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          # §5.0 sizing.
+          resources:
+            requests:
+              cpu: 500m
+              memory: 768Mi
+            limits:
+              cpu: "1"
+              memory: 1536Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # NOT readOnlyRootFilesystem: Keycloak writes its augmented build and transient state under
+            # /opt/keycloak at start. Forcing a read-only root would need emptyDir mounts for each of
+            # those paths, and getting that wrong fails at boot rather than visibly — the honest state
+            # is that this control is not applied here, and why.
+      volumes:
+        - name: realm-import
+          configMap:
+            name: bo-keycloak-realm

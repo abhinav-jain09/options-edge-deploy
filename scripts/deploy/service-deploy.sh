@@ -190,6 +190,19 @@ unpinned="$(yq -r 'select(.kind=="Deployment") | .spec.template.spec.containers[
   | { grep '/options-edge-' || true; } | { grep -v '@sha256:' || true; })"
 [ -z "$unpinned" ] || { echo "FATAL: rendered image not digest-pinned: $unpinned" >&2; exit 1; }
 
+# --- PGL-072: the public Gamma Lab may not scale up without evidence for THIS digest ---
+# Placed HERE for two reasons, each learned by getting it wrong. It is on the workload's ACTUAL apply
+# path: the gate first lived in Jenkinsfile.common-infra, and when the Deployment correctly moved out
+# of the infra component into a service slice the gate stayed behind and guarded nothing. And it runs
+# AFTER the image has been remapped for the environment and digest-pinned, not against the overlay. The overlay carries the dev-registry ref, which
+# production remaps and re-resolves, so an overlay-based check could accept evidence for one digest
+# while a different one was applied moments later. This reads the exact manifest about to be applied.
+if [ "$SERVICE" = "bleedingoptions-gamma-lab" ]; then
+  echo "=== service-deploy: public gate (PGL-072) ==="
+  bash "$(dirname "$0")/verify-public-gate.sh" --rendered "$RENDER" \
+    || { echo "FATAL: the public Gamma Lab gate refused this deploy" >&2; exit 1; }
+fi
+
 # --- §13.2 record the CURRENT image for rollback BEFORE mutating -----------------------
 PREV_FILE="$WORK_DIR/${SERVICE}-${ENVIRONMENT}-previous.txt"; : >"$PREV_FILE"
 for dep in $DEPLOYMENTS; do

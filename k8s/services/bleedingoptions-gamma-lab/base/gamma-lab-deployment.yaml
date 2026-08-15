@@ -1,0 +1,165 @@
+# The PUBLIC Gamma Lab web tier (PGL-034, PGL-034A).
+#
+# ⚠️ SHIPS AT ZERO REPLICAS AND MUST STAY THERE until PGL-072's preconditions are met on the exact
+# image digest this runs:
+#
+#     PGL-050  the caller's bearer is stripped before the upstream request
+#     PGL-051  a dedicated, validated, non-gateway upstream is used
+#     PGL-052  a test has OBSERVED the real outbound request and found no credential on it
+#
+# The first two describe intent; only the third checks. That distinction is the whole reason this
+# deployment is not simply scaled up: with the Gate-1 image a board request still resolved through the
+# feed gateway carrying the caller's token, and a green build would not have said so.
+#
+# scripts/deploy/verify-public-gate.sh enforces this, so scaling up is not a matter of remembering.
+#
+# There is also no tunnel route and no DNS record yet (PGL-036), so even at replicas>0 this is
+# reachable only in-cluster. Publishing it is a separate, reviewable change made after Gate 2's
+# capacity controls and Gate 5's proofs.
+apiVersion: v1
+kind: Service
+metadata:
+  name: bleedingoptions-gamma-lab
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bleedingoptions-gamma-lab
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: web
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: bleedingoptions-gamma-lab
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bleedingoptions-gamma-lab
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bleedingoptions-gamma-lab
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: web
+  annotations:
+    oe/gate: "PGL-072"
+    oe/scale-up-requires: "PGL-050 + PGL-051 + PGL-052 green on the deployed image digest"
+spec:
+  # ZERO. See the header. scripts/deploy/verify-public-gate.sh fails the deploy if this is raised
+  # without the evidence file that records those three requirements passing on this digest.
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bleedingoptions-gamma-lab
+  strategy:
+    # Recreate, not RollingUpdate (D-5). The cache, single-flight map and rate limiter are
+    # process-local, so two pods briefly overlapping would double the upstream request rate and halve
+    # the effectiveness of the rate limit. The cost is a rollout gap of tens of seconds on a page that
+    # polls every 15 s, which is the accepted trade.
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bleedingoptions-gamma-lab
+        app.kubernetes.io/part-of: bleedingoptions
+        app.kubernetes.io/component: web
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          # The SAME image as the internal web tier. One codebase, one image, one surface switch —
+          # a separate public build would be a second copy of the page and the OIDC client to drift.
+          image: 192.168.100.252:5000/options-edge-web:dev
+          imagePullPolicy: IfNotPresent
+          env:
+            # --- The surface switch. Everything else here follows from it. ---
+            - name: PUBLIC_SURFACE
+              value: "gamma-lab"
+            - name: APP_PROFILE
+              value: "prod"
+
+            # --- Auth: the PUBLIC realm, and only it. options-edge-web validates against the internal
+            # issuer; this validates against bleedingoptions. Neither fetches the other's keys, which
+            # is what makes a token from one useless at the other. ---
+            - name: VITE_AUTH_ENABLED
+              value: "true"
+            - name: VITE_AUTH_ISSUER
+              value: "https://auth.bleedingoptions.com/realms/bleedingoptions"
+            - name: VITE_AUTH_CLIENT_ID
+              value: "bleedingoptions-web"
+            - name: AUTH_AUDIENCE
+              value: "bleedingoptions-web"
+            # PGL-035A. The issuer hostname resolves to Cloudflare, and a NetworkPolicy cannot allow a
+            # destination by DNS name — so validating tokens by fetching keys from the public issuer
+            # would either need internet egress or fail after a cold start or key rotation. Keys come
+            # from the in-cluster Service; `iss` is still validated against the public issuer above.
+            - name: AUTH_JWK_SET_URI
+              value: "http://bo-keycloak.bleedingoptions.svc:8080/realms/bleedingoptions/protocol/openid-connect/certs"
+            # The realm role that means "approved" (PGL-004). Granted only by membership of
+            # /gamma-lab-approved.
+            - name: AUTH_GAMMA_LAB_ROLE
+              value: "gamma-lab"
+
+            # --- The board upstream (PGL-051). stock-gex-service DIRECTLY, never the feed gateway:
+            # the gateway trusts one issuer and would reject a bleedingoptions token, and teaching it
+            # to trust a public IdP would widen the internal trust boundary. The app validates this
+            # value at startup and refuses to boot on anything that is not an in-cluster, http,
+            # explicit-port, non-gateway Service address. ---
+            - name: PUBLIC_BOARD_UPSTREAM_URL
+              value: "http://stock-gex-service.options-edge.svc.cluster.local:8021"
+
+            # --- Order placement OFF. The public surface denies the order route and never constructs
+            # an order client, and RuntimeProfileConfig refuses to start if this says otherwise —
+            # three independent statements of the same thing, because it is the one that matters. ---
+            - name: ORDER_PLACEMENT_ENABLED
+              value: "false"
+
+            # NOTHING ELSE. Deliberately absent: KAFKA_BOOTSTRAP_SERVERS, POSTGRES_*, IBKR_*,
+            # SCHEMA_REGISTRY_URL, FEED_GATEWAY_REST_URL, APP_FEED_GATEWAY_HEALTH_URL and every other
+            # internal address. Public mode has its own smaller startup contract precisely so an
+            # operator is never asked to invent a plausible-looking value for infrastructure this pod
+            # must never reach (PGL-034A) — an invented value is how a wrong one ends up live.
+          ports:
+            - name: http
+              containerPort: 8080
+            # Management port for probes. NOT in the Service above and never published to the tunnel
+            # (PGL-058): an internet-visible health endpoint tells an attacker when the upstream is
+            # down and tells nobody else anything useful.
+            - name: management
+              containerPort: 8081
+          startupProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: management
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: management
+            periodSeconds: 20
+          # §5.0 sizing.
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

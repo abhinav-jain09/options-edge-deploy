@@ -1,0 +1,9 @@
+# STANDALONE public Gamma Lab overlay — production.
+#
+# ⚠️ The Deployment ships at replicas: 0 and stays there until PGL-072's evidence exists for the
+# exact image digest (scripts/deploy/verify-public-gate.sh). Raising it is a reviewed change that
+# carries that evidence, not an edit made in passing.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base

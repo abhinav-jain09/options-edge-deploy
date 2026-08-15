@@ -1,0 +1,32 @@
+# The public tenant (PGL-030) — a self-contained component, referenced only by the PRODUCTION infra
+# overlay. Dev has no public tenant: there is nothing to expose to the internet from a laptop, and a
+# second Keycloak on a dev machine would only be a second thing to keep patched.
+#
+# GATE 4a SCOPE — what is deliberately NOT here:
+#   * no public web Deployment. It is an APPLICATION workload, and common-infra.sh refuses those by
+#     design — infra carries the namespace, the identity provider and shared state, never app pods.
+#     It lives in its own slice: k8s/services/bleedingoptions-gamma-lab/, at replicas: 0 until
+#     PGL-072's evidence exists for the deployed digest.
+#   * no tunnel route and no DNS (PGL-032, PGL-036). Keycloak is reachable on the LAN and in-cluster
+#     only. Publishing it is a separate, reviewable change.
+#   * no Secret. bo-keycloak-secrets is created out-of-band and never enters git
+#     (docs/bleedingoptions-keycloak.md).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - networkpolicies.yaml
+  # stock-gex-ingress-from-public.yaml is DELIBERATELY NOT APPLIED IN GATE 4a.
+  #
+  # It adds a NetworkPolicy in the `options-edge` namespace selecting the LIVE stock-gex-service. That
+  # service currently has no policy selecting it, so applying one starts ingress isolation on a
+  # running internal service — and anything reaching it from outside `options-edge` (ad-hoc
+  # diagnostics, monitoring, a port-forward from another namespace) would be cut off the moment it
+  # lands. Gate 4a gains nothing from it: the pod it grants access to does not exist yet.
+  #
+  # It moves into Gate 4b alongside the public workload, after an inventory of who actually talks to
+  # that service and a deployed connectivity check. The file is kept, unreferenced, as prepared work.
+  - keycloak-realm-configmap.yaml
+  - keycloak-postgres.yaml
+  - keycloak-deployment.yaml
+  - backup-and-quota.yaml

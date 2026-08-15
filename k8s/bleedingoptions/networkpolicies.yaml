@@ -1,0 +1,223 @@
+# Default-deny both directions, then open exactly what is needed (PGL-035, PGL-035B).
+#
+# Revision 1 of the design restricted only the public web pod, which left a compromised public
+# Keycloak free to scan the cluster and contradicted the claim that its blast radius "ends at a
+# database". Every workload in this namespace is therefore covered.
+#
+# ⚠️ ENFORCEMENT IS NOT ASSUMED. A NetworkPolicy on a cluster whose CNI ignores them is a comment.
+# k3s ships flannel, which does NOT enforce NetworkPolicy unless the embedded kube-router network
+# policy controller is running. PGL-035 requires a DEPLOYED NEGATIVE TEST — from a pod in this
+# namespace, prove a denied destination is actually refused — before these are treated as a control.
+# Until that test passes, treat this file as declared intent, and do not let it be cited as the reason
+# something else is safe. The verification command is in docs/bleedingoptions-keycloak.md.
+#
+# ⚠️ IPv4-ONLY, STATED RATHER THAN ASSUMED (PGL-035). Every ipBlock below is an IPv4 CIDR, and
+# `0.0.0.0/0` does NOT cover IPv6. On a single-stack IPv4 cluster — which this one is — that expresses
+# the intended boundary exactly. If the cluster is ever made dual-stack, the SMTP egress rule in
+# particular becomes wrong in the dangerous direction: its `except` blocks for the RFC1918 ranges have
+# no IPv6 equivalent here, so an IPv6 path to internal hosts would not be excluded. Adding IPv6 to
+# this cluster therefore requires revisiting this file, not just the cluster config.
+#
+# ⚠️ TUNNEL INGRESS IS NOT EXPRESSIBLE HERE. cloudflared runs as a systemd process on the host, not as
+# a pod, and reaches Services via kube-proxy — so there is no pod or namespace selector that means
+# "from the tunnel". Ingress below is therefore written in terms of what CAN be selected, and the
+# actual public entry point is controlled at the tunnel's own ingress rules (PGL-036).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  # Empty selector = every pod in the namespace. Both directions denied; the policies below add back.
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# DNS for everything. Without this every other rule is moot: a pod that cannot resolve
+# bo-keycloak-postgres-db has no way to use the egress permission it was granted.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Keycloak -> its own Postgres, and nothing else in-cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-egress-postgres
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bo-keycloak
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bo-keycloak-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Keycloak -> SMTP. Required for signup verification and password reset (D-2). Note this is the ONLY
+# egress to the public internet any pod here is granted, and it is a single port.
+#
+# It cannot be narrowed to Gmail's addresses by selector — a NetworkPolicy matches CIDRs, not DNS
+# names, and Google's SMTP ranges are large and change. Restricting to port 587 is the achievable
+# bound; the meaningful control on what Keycloak may send is that it only ever sends realm mail.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-egress-smtp
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bo-keycloak
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # Never the private ranges: SMTP egress must not become a path into the LAN or the
+              # cluster. Without these exceptions this rule would grant Keycloak port-587 access to
+              # every internal host as well as to Gmail.
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 587
+---
+# Postgres accepts from its own Keycloak and no one else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-ingress-keycloak-only
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bo-keycloak-postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bo-keycloak
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Keycloak's HTTP port, reachable in-cluster and from the node (the LAN LoadBalancer and, later, the
+# tunnel). ipBlock is used rather than a pod selector because both of those arrive via kube-proxy from
+# the node rather than from a pod the policy could select — see the file header.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: keycloak-ingress-http
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bo-keycloak
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# The public web tier's egress, declared now so the policy exists BEFORE the workload it governs.
+#
+# Three destinations and no others: DNS (above), this namespace's Keycloak for the in-cluster JWKS
+# fetch (PGL-035A — the issuer hostname resolves to Cloudflare and a NetworkPolicy cannot match a DNS
+# name, so validation must not depend on egressing to the public issuer), and exactly one read-only
+# port on one service in `options-edge`.
+#
+# The pod this selects does not exist yet and must not until PGL-050/051/052 pass (PGL-072). A policy
+# that selects nothing is inert, which is the correct state for Gate 4a.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: public-web-egress
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bleedingoptions-gamma-lab
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bo-keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: options-edge
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: stock-gex-service
+      ports:
+        - protocol: TCP
+          port: 8021
+---
+# Ingress to the public web tier: its HTTP port only. Same ipBlock caveat as Keycloak's — the tunnel
+# is not a selectable source.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: public-web-ingress-http
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bleedingoptions-gamma-lab
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 8080

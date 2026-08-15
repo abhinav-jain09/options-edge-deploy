@@ -33,8 +33,12 @@ yq -r '.services[].deployments[]' services.yaml | sort -u >"$TMP/registered.txt"
 for e in "${ENVS[@]}"; do
   yq -r 'select(.kind=="Deployment") | .metadata.name' "$TMP/mono-$e.yaml"
 done | grep -v '^---$' | sort -u >"$TMP/rendered.txt"
-# Keycloak & friends are infra-owned, not service-registry entries.
-unregistered="$(comm -23 "$TMP/rendered.txt" "$TMP/registered.txt" | { grep -vE '^(oe-keycloak|keycloak)' || true; })"
+# Keycloak & friends are infra-owned, not service-registry entries. BOTH identity providers qualify:
+# `oe-keycloak*` is the internal one and `bo-keycloak*` the public one for bleedingoptions.com, and a
+# second identity provider is still an identity provider. The public WEB tier is deliberately NOT
+# excluded — it is an application workload, it IS registered in services.yaml, and this check is what
+# would notice if it ever stopped being.
+unregistered="$(comm -23 "$TMP/rendered.txt" "$TMP/registered.txt" | { grep -vE '^(oe-keycloak|keycloak|bo-keycloak)' || true; })"
 if [ -n "$unregistered" ]; then
   echo "FAIL: Deployments rendered by the overlays but NOT registered in services.yaml:" >&2
   printf '  %s\n' $unregistered >&2
