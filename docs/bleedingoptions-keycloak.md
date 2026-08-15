@@ -13,7 +13,10 @@ Design and requirement ids: `bleedingoptions-public-gamma-lab.md` in the `option
 
 ## 1. Before the first deploy — the Secret
 
-`bo-keycloak-secrets` is created **out of band and never enters git** (PGL-030). Three keys:
+`bo-keycloak-secrets` **never enters git** (PGL-030), and it is **not created by hand**. An earlier
+version of this section printed a `kubectl create secret` command — that is a hand-deploy, which the
+Absolute Jenkins-Only Deployment Rule forbids for Secrets by name. The sanctioned path is the
+`bleedingoptions-secrets-deploy` job (`Jenkinsfile.bleedingoptions-secrets`). Three keys:
 
 | Key | What it is |
 |---|---|
@@ -21,22 +24,87 @@ Design and requirement ids: `bleedingoptions-public-gamma-lab.md` in the `option
 | `KC_BOOTSTRAP_ADMIN_PASSWORD` | Bootstrap admin only — disabled after §2 |
 | `KC_SMTP_PASSWORD` | The Gmail app password for `info@bleedingoptions.com` |
 
-```bash
-kubectl create namespace bleedingoptions --dry-run=client -o yaml | kubectl apply -f -
+**Step 1 — store the values in Jenkins once.** Generate the two passwords rather than reusing one
+(`openssl rand -base64 30`), and add them as *Secret text* credentials with these exact ids:
+`bo-keycloak-postgres-password`, `bo-keycloak-admin-password`, `bo-keycloak-smtp-password`. The job
+reads them from the credential store, so no value ever appears in this repo, in a manifest, in a job
+parameter or in a build log.
 
-kubectl -n bleedingoptions create secret generic bo-keycloak-secrets \
-  --from-literal=POSTGRES_PASSWORD='<generate>' \
-  --from-literal=KC_BOOTSTRAP_ADMIN_PASSWORD='<generate>' \
-  --from-literal=KC_SMTP_PASSWORD='<the app password>'
-```
+**Step 2 — run the jobs in this order.** The namespace and the workloads are owned by `common-infra`;
+the Secret job requires the namespace and refuses to create it, so that one object has one owner.
 
-Generate the two passwords rather than reusing one: `openssl rand -base64 30`.
+| # | Job | Parameters | Why here |
+|---|---|---|---|
+| 1 | `common-infra` | `ENVIRONMENT=production`, **`DEPLOY_DRY_RUN=false`**, **`RECONCILE_REALM=false`** | Creates the namespace, the NetworkPolicies and the workloads. Keycloak will not start yet — the Secret is missing — and that is expected. |
+| 2 | `bleedingoptions-secrets-deploy` | `ENVIRONMENT=production`, **`DEPLOY_DRY_RUN=false`** | Writes the Secret. Keycloak and Postgres then boot and the realm is imported. |
+| 3 | — | — | Retire the bootstrap admin (§2), then create the reconciler client (§3). |
+| 4 | `common-infra` | `ENVIRONMENT=production`, **`DEPLOY_DRY_RUN=false`**, `RECONCILE_REALM=true` | Now the reconciler exists, so the realm can be reconciled. |
+
+> **Both parameters default to the safe value, and both must be overridden.** `DEPLOY_DRY_RUN`
+> defaults to `true` on *every* job here, so a run left at the defaults renders and diffs and creates
+> nothing — step 2 would then fail on a namespace that step 1 never made. `RECONCILE_REALM` defaults
+> to `true`, and its stage binds the `bo-keycloak-reconciler-secret` credential — a client that cannot
+> exist until Keycloak has booted and imported the realm — so leaving it on for the first run applies
+> every resource and *then* fails the build, which reads like a broken deploy when it is only
+> ordering.
 
 > **The app password currently sits in the git-tracked `url.md`.** It has not been committed, but a
 > credential in a tracked file is one `git add -A` from being in GitHub history permanently, where
 > deleting the file does not remove it. Revoke it at
 > [Google account security](https://myaccount.google.com/apppasswords), issue a fresh one, and put
-> the new one only here.
+> the new one only in the Jenkins credential store.
+
+### 1a. Rotating `POSTGRES_PASSWORD` — not a one-field change
+
+The other two keys rotate by editing the Jenkins credential and re-running the job: the bootstrap
+admin password is read only at first boot, and Keycloak picks up a new SMTP password on restart.
+
+`POSTGRES_PASSWORD` is different, and getting it wrong takes the realm down. The value is read by
+*both* sides, but only one of them is authoritative: `POSTGRES_PASSWORD` initialises the database role
+**on an empty data directory only**. On an existing volume Postgres ignores it entirely and keeps the
+role password it already has — so changing the Secret changes only what Keycloak *presents*, and
+Keycloak then fails authentication and CrashLoops. Rotate in this order:
+
+> **This is a short planned outage, not a seamless rotation.** Postgres has no dual-password support:
+> `ALTER ROLE ... PASSWORD` invalidates the old password for every NEW connection the instant it
+> runs. Keycloak's already-established pool connections survive, but any reconnect between step 1 and
+> step 4 fails. Do this in a maintenance window and expect Keycloak to be unavailable from step 1
+> until the restart in step 4 completes.
+
+1. Change the role inside the running database using psql's **`\password`** meta-command, at an
+   interactive prompt:
+
+   ```bash
+   kubectl -n bleedingoptions exec -it sts/bo-keycloak-postgres -- psql -U keycloak -d keycloak
+   ```
+   ```text
+   keycloak=# \password keycloak
+   Enter new password:            <-- not echoed
+   Enter it again:
+   keycloak=# \q
+   ```
+
+   Use `\password`, not `ALTER ROLE ... PASSWORD '<new>'`, and do not try to script it by feeding
+   SQL on stdin. `\password` reads the value from the terminal and sends it **already hashed**, so
+   the plaintext never appears in argv on either side, in the server log, in `pg_stat_activity`, or in
+   this document. Because it is typed at a prompt rather than substituted into SQL, no shell or psql
+   escaping applies and every character is safe.
+
+   An earlier version of this runbook piped `\set pw '<value>'` on stdin and claimed it quoted
+   correctly. It does not: tested against psql 16.14, a password containing `'` is rejected
+   (`unterminated quoted string`) and one containing `\` is silently stored with the backslash
+   **dropped** — a rotation that reports success and leaves a password nobody can reproduce.
+
+   Note `sts/` — `bo-keycloak-postgres` is a **StatefulSet**, so `deploy/` fails with "no matches".
+2. Update the `bo-keycloak-postgres-password` credential in Jenkins to exactly that value.
+3. Run `bleedingoptions-secrets-deploy` with `DEPLOY_DRY_RUN=false`.
+4. Restart Keycloak so it re-reads the Secret:
+   `kubectl -n bleedingoptions rollout restart deploy/bo-keycloak`. Until this completes Keycloak is
+   still presenting the old password, which is why step 1 comes first and why the window exists.
+
+**Rollback:** re-run step 1 with the old password, restore the Jenkins credential, re-run the job and
+restart again. Postgres keeps serving its data throughout — only authentication changes — so there is
+no data-loss window, only an availability one.
 
 ---
 
@@ -114,6 +182,32 @@ tell you whether OTP is genuinely enforced either way.
 user having configured an authenticator, so an account with no authenticator signs in with a password
 alone. `CONFIGURE_TOTP` as a default required action covers new users, but not an account whose OTP
 credential was later deleted — §6 does exactly that for a lost phone.
+
+### 3b. SMTP is NOT configured by hand — the reconciler owns it
+
+`bleedingoptions.com` is a Workspace **user alias domain** (added 2026-08-15: Admin → Domains →
+Manage domains → Add a domain → *User alias domain*, chosen over a secondary domain because an alias
+is free and reuses existing users while a secondary bills per user). Google added the verification
+TXT through its Cloudflare integration, Gmail activated free, and the MX (`@` → `smtp.google.com`,
+priority 1, proxy OFF) was added by hand.
+
+**Do not type the SMTP settings into the admin console.** `bleedingoptions-realm-reconcile.sh --apply`
+writes them from the manifest, taking the password from `KC_SMTP_PASSWORD`, and it is authoritative —
+anything typed by hand is either overwritten on the next run or becomes drift the run then reports.
+The settings it applies:
+
+| Field | Value | Why |
+|---|---|---|
+| host / port | `smtp.gmail.com` / `587`, StartTLS | Standard Gmail submission |
+| auth username | **`info@amskel.nl`** | Gmail authenticates as the ACCOUNT. The app password belongs to it |
+| from / replyTo | **`info@bleedingoptions.com`** | The alias is what recipients see — the point of having one |
+
+⚠️ The username and the From address are DIFFERENT on purpose. Authenticating as the alias fails SMTP
+auth outright: no mail at all, discovered when the first person registers.
+
+⚠️ A user alias domain mirrors EXISTING users — `info@amskel.nl` becomes `info@bleedingoptions.com`.
+An address whose local part has no matching user (`admin@`, say) does not exist unless
+`admin@amskel.nl` does. Set `from` to an alias that resolves, or Gmail rejects the send.
 
 ## 4. Reconcile the realm
 

@@ -75,10 +75,11 @@ data:
         "starttls": "true",
         "ssl": "false",
         "auth": "true",
+        "comment_smtp_identity": "FROM and USER are DIFFERENT on purpose. Gmail authenticates as the ACCOUNT; info@bleedingoptions.com is an ALIAS of info@amskel.nl, and the app password belongs to the account. Authenticating as the alias fails SMTP auth outright and no mail sends at all — an earlier version of this file did exactly that. The alias is still what recipients see, which is the point of using one.",
         "from": "info@bleedingoptions.com",
         "fromDisplayName": "Bleeding Options",
         "replyTo": "info@bleedingoptions.com",
-        "user": "info@bleedingoptions.com"
+        "user": "info@amskel.nl"
       },
 
       "roles": {
