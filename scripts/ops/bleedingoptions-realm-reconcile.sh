@@ -244,10 +244,19 @@ done < <(jq -r '.groups[]?.name' "$WORK/desired.json")
 #
 # This is checked explicitly, and any approval-bearing role found there is REMOVED, not reported.
 echo "==> Default-role composites"
+#
+# FAILS CLOSED. An earlier version fell back to an empty composite list when the API call failed,
+# which meant an unreachable or forbidden endpoint produced a GREEN result on the one check standing
+# between "approved by an operator" and "approved by registering" — the precise false-green this
+# script exists to prevent. A composite set that cannot be READ is not a composite set that is EMPTY.
 DEFAULT_ROLE="default-roles-$KC_REALM"
-if api GET "$KC_REALM/roles/$DEFAULT_ROLE" >/dev/null 2>&1; then
-  DR_ID="$(api GET "$KC_REALM/roles/$DEFAULT_ROLE" | jq -r '.id')"
-  DR_COMPOSITES="$(api GET "$KC_REALM/roles-by-id/$DR_ID/composites" 2>/dev/null || echo '[]')"
+DR_ROLE_JSON="$(api GET "$KC_REALM/roles/$DEFAULT_ROLE" 2>/dev/null || true)"
+if [[ -n "$DR_ROLE_JSON" ]] && jq -e '.id' <<<"$DR_ROLE_JSON" >/dev/null 2>&1; then
+  DR_ID="$(jq -r '.id' <<<"$DR_ROLE_JSON")"
+  DR_COMPOSITES="$(api GET "$KC_REALM/roles-by-id/$DR_ID/composites" 2>/dev/null || true)"
+  # An unreadable list is a FAILURE, never an empty one.
+  jq -e 'type == "array"' <<<"${DR_COMPOSITES:-}" >/dev/null 2>&1 \
+    || die "could not read the composites of $DEFAULT_ROLE. This is the check that proves no role grants approval to every registered user, so an unreadable answer is treated as a failure, not as 'no composites'. Confirm the reconciler client holds view-realm."
   while read -r guarded; do
     [[ -z "$guarded" ]] && continue
     if jq -e --arg r "$guarded" '.[] | select(.name==$r)' <<<"$DR_COMPOSITES" >/dev/null 2>&1; then
@@ -261,9 +270,10 @@ if api GET "$KC_REALM/roles/$DEFAULT_ROLE" >/dev/null 2>&1; then
     fi
   done < <(jq -r '.roles.realm[]?.name' "$WORK/desired.json")
 else
-  # Not fatal — a realm may name its default role differently — but it must not pass silently, because
-  # an unchecked default composite is exactly the bypass above.
-  echo "WARN: could not read $DEFAULT_ROLE; the default-composite bypass is UNVERIFIED on this realm." >&2
+  # Also fails closed. A realm could in principle name its default role differently, but "the role I
+  # expected is not there" and "I could not check the bypass" are indistinguishable from here, and only
+  # one of them is safe to assume.
+  die "could not read $DEFAULT_ROLE. The default-role composite is how every registered user could be granted approval at once; leaving it unverified is not an option. If this realm names its default role differently, set it explicitly and re-run."
 fi
 
 # --- direct role assignment audit (PGL-021A) -----------------------------------------------------
@@ -331,8 +341,14 @@ echo "==> Browser flow ($FLOW, OTP REQUIRED)"
 
 # Does the flow actually ENFORCE what it claims? Presence of the alias is not the question — a run
 # that created the top-level flow and then failed partway leaves an alias behind with no OTP step in
-# it, and binding that produces a PASSWORD-ONLY login while every "flow exists" check passes. So the
-# structure is verified: a REQUIRED password form and a REQUIRED OTP form must both be present.
+# it, and binding that produces a PASSWORD-ONLY login while every "flow exists" check passes.
+#
+# WHAT THIS PROVES, AND WHAT IT DOES NOT. It asserts that the flow contains a REQUIRED password form
+# and a REQUIRED OTP form. That is enough to catch every partial-build case, which is what it is for.
+# It is NOT a proof that the authentication graph as a whole demands both: nesting, ordering and
+# ALTERNATIVE siblings could in principle still admit a path around them. Verifying the graph properly
+# means attempting a real login and observing that a password alone is refused — a deployed proof
+# (Gate 5), not something a config read can establish. Do not read a pass here as "MFA is proven".
 flow_enforces_otp() {
   local execs
   execs="$(api GET "$KC_REALM/authentication/flows/$FLOW/executions" 2>/dev/null || echo '[]')"

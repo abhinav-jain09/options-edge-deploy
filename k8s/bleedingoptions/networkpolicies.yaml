@@ -11,6 +11,13 @@
 # Until that test passes, treat this file as declared intent, and do not let it be cited as the reason
 # something else is safe. The verification command is in docs/bleedingoptions-keycloak.md.
 #
+# ⚠️ IPv4-ONLY, STATED RATHER THAN ASSUMED (PGL-035). Every ipBlock below is an IPv4 CIDR, and
+# `0.0.0.0/0` does NOT cover IPv6. On a single-stack IPv4 cluster — which this one is — that expresses
+# the intended boundary exactly. If the cluster is ever made dual-stack, the SMTP egress rule in
+# particular becomes wrong in the dangerous direction: its `except` blocks for the RFC1918 ranges have
+# no IPv6 equivalent here, so an IPv6 path to internal hosts would not be excluded. Adding IPv6 to
+# this cluster therefore requires revisiting this file, not just the cluster config.
+#
 # ⚠️ TUNNEL INGRESS IS NOT EXPRESSIBLE HERE. cloudflared runs as a systemd process on the host, not as
 # a pod, and reaches Services via kube-proxy — so there is no pod or namespace selector that means
 # "from the tunnel". Ingress below is therefore written in terms of what CAN be selected, and the

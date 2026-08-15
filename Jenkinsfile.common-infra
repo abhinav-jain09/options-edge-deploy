@@ -75,8 +75,27 @@ pipeline {
     // drifted into the default composite (PGL-031A/PGL-031B).
     //
     // RECONCILE_REALM defaults to true and the stage FAILS THE BUILD on drift it cannot correct. It is
-    // skipped only when the operator has no reconciler credential to hand, and skipping is logged
-    // loudly rather than passing quietly.
+    // skipped only when the operator has no reconciler credential to hand, and skipping marks the
+    // build UNSTABLE (see the stage above) rather than passing quietly.
+    // Skipping is announced, not silent. The comment above used to claim this was "logged loudly"
+    // while nothing actually logged it — a build that quietly omitted realm reconciliation would have
+    // looked identical to one that performed it.
+    stage('WARN: realm reconciliation skipped') {
+      when {
+        allOf {
+          expression { params.ENVIRONMENT == 'production' }
+          expression { !params.DEPLOY_DRY_RUN }
+          expression { !params.RECONCILE_REALM }
+        }
+      }
+      steps {
+        script {
+          unstable('RECONCILE_REALM=false: the public realm was NOT reconciled. Its login settings, ' +
+                   'OTP policy, approval groups and browser-flow binding are whatever is currently ' +
+                   'live, NOT what the repo says. Applying manifests does not configure the realm.')
+        }
+      }
+    }
     stage('Reconcile public realm') {
       when {
         allOf {

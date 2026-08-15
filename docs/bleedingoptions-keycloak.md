@@ -176,7 +176,7 @@ QR code.
 > recovery-codes required action, add its execution to the browser flow as an alternative to the OTP
 > form, and verify a real user can actually use one.
 
-> **Confirm identity out of band before doing (2).** "I lost my phone" is also exactly how an attacker
+> **Confirm identity out of band before resetting anyone's second factor.** "I lost my phone" is also exactly how an attacker
 > asks you to remove someone's second factor. Use a channel you already trust for that person — not
 > the email address on the account, which is what an attacker with mailbox access would be using.
 
