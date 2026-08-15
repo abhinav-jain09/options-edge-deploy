@@ -210,6 +210,29 @@ has  "  logs the undelivered alert"        "ALERT (undelivered" "$OUT"
 want "  and archived the new log"               120 "$(runs records)"
 want "  and delivered NOTHING to the endpoint"    0 "$(alerts)"
 
+# ===== 6b. TopicId PRESENT and UNCHANGED but the end offset reads 0 — a BAD READ, not a reset ===
+# The prod incident this exists for (2026-08-14):
+#   "RESET options.databento.gex.strike p0: checkpoint 1882516 is AHEAD of log end 0"
+# Log end ZERO on a topic holding 58 million records — an empty/failed kafka-get-offsets answer.
+# The archiver re-baselined on it and threw the checkpoint away, and the day's session was lost.
+# Across twelve archived days only two ended up with a full session.
+#
+# The TopicId is the AUTHORITY on re-creation and the offset test is a heuristic, so when the id
+# is readable and unchanged the heuristic must not be allowed to fire.
+A="$T/f2"; mkdir -p "$A/kafka/prod/_manifest"
+reset_alerts
+fixture "topicid JJJJJJJJJJJJJJJJJJJJJJ" "0 0 500" "1 0 500"
+run >/dev/null
+CKPT_BEFORE=$(cat "$A/kafka/prod/_manifest/$TOPIC.offsets" 2>/dev/null)
+fixture "topicid JJJJJJJJJJJJJJJJJJJJJJ" "0 0 0" "1 0 0"        # the bad reading
+OUT=$(run)
+has  "a zero end with an UNCHANGED TopicId is a failed read" "FAILED offset read" "$OUT"
+hasnt "  and is NOT reported as a reset"              "AHEAD of log end" "$OUT"
+want "  nothing re-baselined"                     0 "$(runs rebaselined)"
+want "  no alert raised"                          0 "$(alerts)"
+want "  the checkpoint is left ALONE" "$CKPT_BEFORE" \
+     "$(cat "$A/kafka/prod/_manifest/$TOPIC.offsets" 2>/dev/null)"
+
 # ================= 7. TopicId UNAVAILABLE — the offset detector must still work ================
 # Older broker, or a kafka-topics.sh that fails. The identity file is then never written and the
 # fallback is all there is; without this case the fallback could rot untested behind the id path.

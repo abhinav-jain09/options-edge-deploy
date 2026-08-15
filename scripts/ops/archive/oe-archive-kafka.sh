@@ -324,6 +324,7 @@ for topic in $TOPICS; do
   offfile="$MAN/$topic.offsets"
   touch "$offfile"
   topic_records=0
+  skipped_bad_end=0
 
   # --- SOURCE IDENTITY: the authoritative re-creation detector --------------------------------
   # Offsets alone cannot answer "is this the same log?". They catch a re-created topic only while
@@ -403,6 +404,23 @@ for topic in $TOPICS; do
       if [ "$topic_recreated" = true ]; then
         reset_why="TopicId changed"; reset_tag="topic-id"
       elif [ "$from" -gt "$log_end" ]; then
+        # ⚠️ The offset test is a HEURISTIC and the TopicId is the authority — so when the id is
+        # readable and UNCHANGED, a checkpoint above the reported end cannot be a re-creation. It
+        # is a bad reading of the end offset, and re-baselining on it DESTROYS the checkpoint.
+        #
+        # 2026-08-14 in prod: "RESET options.databento.gex.strike p0: checkpoint 1882516 is AHEAD
+        # of log end 0" — log end ZERO on a topic holding 58 million records, i.e. an empty/failed
+        # kafka-get-offsets response. The archiver re-baselined and the day's session was lost;
+        # across twelve archived days only two came out with a full session, and the corpus was
+        # unusable for any backtest.
+        if [ -n "$topic_id" ] && [ -n "$prev_id" ] && [ "$topic_id" = "$prev_id" ]; then
+          log "  SKIP $topic p$part: checkpoint $from is above the reported end $log_end, but the" \
+              "TopicId is UNCHANGED ($topic_id) — treating this as a FAILED offset read, not a" \
+              "re-created log. Nothing archived and the checkpoint is left alone; the next run" \
+              "resumes from it."
+          skipped_bad_end=$((skipped_bad_end + 1))
+          continue
+        fi
         reset_why="checkpoint $from is AHEAD of log end $log_end"; reset_tag="offset-ahead"
       fi
     fi
