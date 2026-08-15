@@ -49,7 +49,7 @@ pipeline {
     PROD_HOST   = "${params.PROD_HOST}"
     INSTALL_DIR = "${params.INSTALL_DIR}"
     STAGE_DIR   = "/home/abhinav/oe-ops-staging/build-${BUILD_NUMBER}"
-    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab"
+    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -172,7 +172,7 @@ EOSSH
           done
 
           ssh -o BatchMode=yes "$PROD_HOST" \
-            "INSTALL_DIR='$INSTALL_DIR' STAGE_DIR='$STAGE_DIR' UNIT='$UNIT' BUILD='${BUILD_NUMBER}' bash -s" <<'EOSSH'
+            "INSTALL_DIR='$INSTALL_DIR' STAGE_DIR='$STAGE_DIR' UNIT='$UNIT' BUILD='${BUILD_NUMBER}' ALLOW_DRIFT='${ALLOW_HOST_DRIFT}' bash -s" <<'EOSSH'
 set -euo pipefail
 bak="$INSTALL_DIR/.bak-build$BUILD"
 mkdir -p "$bak"
@@ -190,6 +190,22 @@ had_cron=$([ -n "$prev_cron" ] && echo yes || echo no)
 # each. Existence is recorded independently of backup success, so rollback can never mistake
 # "backup failed" for "file was new" and delete a pre-existing file; a backup that fails or does
 # not verify aborts HERE, before anything has changed.
+# FIRST-TIME CRONTAB ADOPTION (migration rule): when the record does not yet track
+# oe-archive.crontab, installing would replace the account's ENTIRE live crontab — so the live
+# crontab must equal the committed, reviewed predecessor byte-for-byte. Anything else is an
+# unrecorded host edit this deploy would silently destroy: refuse unless ALLOW_HOST_DRIFT.
+if ! awk -v f="oe-archive.crontab" '$2==f{found=1} END{exit !found}' "$INSTALL_DIR/.archive-unit.sha256" 2>/dev/null; then
+  if ! crontab -l 2>/dev/null | diff - "$STAGE_DIR/oe-archive.crontab.predecessor"; then
+    if [ "$ALLOW_DRIFT" != "true" ]; then
+      echo "REFUSING: the live crontab differs from the committed predecessor" >&2
+      echo "(scripts/ops/archive/oe-archive.crontab.predecessor). Reconcile the live crontab into" >&2
+      echo "git first, or re-run with ALLOW_HOST_DRIFT to overwrite it deliberately." >&2
+      exit 1
+    fi
+    echo "ALLOW_HOST_DRIFT: overwriting a live crontab that differs from the committed predecessor"
+  fi
+fi
+
 EXISTED=""
 for f in $UNIT; do
   if [ -f "$INSTALL_DIR/$f" ]; then
@@ -212,7 +228,10 @@ restore() {
   else crontab -r 2>/dev/null || true
   fi
 }
-trap restore ERR
+# ERR alone does not cover a Jenkins abort or a dropped session: SIGINT/SIGTERM/SIGHUP during
+# any mutation must roll back exactly like a failed command, and the transaction must exit
+# nonzero either way.
+trap 'restore; exit 1' ERR INT TERM HUP
 
 for f in $UNIT; do
   cp "$STAGE_DIR/$f" "$INSTALL_DIR/.incoming.$f"
@@ -239,8 +258,8 @@ for f in $UNIT; do
   sha256sum "$INSTALL_DIR/$f" | awk -v f="$f" '{print $1, f}' >> "$rec_tmp"
 done
 mv -f "$rec_tmp" "$INSTALL_DIR/.archive-unit.sha256"
+trap - ERR INT TERM HUP        # the rename IS the commit point — diagnostics must not roll back
 echo "installed:"; cat "$INSTALL_DIR/.archive-unit.sha256"
-trap - ERR
 EOSSH
         '''
       }
