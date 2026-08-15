@@ -101,6 +101,13 @@ spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
       automountServiceAccountToken: false   # PGL-061: Keycloak never calls the Kubernetes API
+      securityContext:
+        # PGL-061. The Keycloak image already runs as uid 1000; declaring it means the kubelet REFUSES
+        # to start the pod if a future image change makes it root, rather than quietly running as root
+        # on the internet-facing component.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: keycloak
           # Tag + manifest-list digest pinned together, matching the internal instance so both upgrade
@@ -191,6 +198,10 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            # NOT readOnlyRootFilesystem: Keycloak writes its augmented build and transient state under
+            # /opt/keycloak at start. Forcing a read-only root would need emptyDir mounts for each of
+            # those paths, and getting that wrong fails at boot rather than visibly — the honest state
+            # is that this control is not applied here, and why.
       volumes:
         - name: realm-import
           configMap:

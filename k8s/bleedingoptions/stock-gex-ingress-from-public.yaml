@@ -1,3 +1,14 @@
+# ⚠️ NOT APPLIED IN GATE 4a — this file is intentionally absent from kustomization.yaml.
+#
+# Applying it would begin ingress isolation on the LIVE stock-gex-service, which today has no
+# NetworkPolicy selecting it. Selecting a pod denies every ingress the policy does not name, so any
+# caller outside `options-edge` — ad-hoc diagnostics, monitoring, a port-forward from another
+# namespace — is cut off the moment this lands. That risk buys nothing in Gate 4a, because the pod it
+# grants access to does not exist yet.
+#
+# It is applied in Gate 4b, together with the public workload, after an inventory of who actually
+# reaches that service and a deployed connectivity check proving nothing internal broke.
+#
 # The one hole the public tier is allowed through into `options-edge` (PGL-035).
 #
 # This object lives in the INTERNAL namespace deliberately, even though it exists to serve the public

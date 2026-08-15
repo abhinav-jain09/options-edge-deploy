@@ -14,7 +14,16 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - networkpolicies.yaml
-  - stock-gex-ingress-from-public.yaml
+  # stock-gex-ingress-from-public.yaml is DELIBERATELY NOT APPLIED IN GATE 4a.
+  #
+  # It adds a NetworkPolicy in the `options-edge` namespace selecting the LIVE stock-gex-service. That
+  # service currently has no policy selecting it, so applying one starts ingress isolation on a
+  # running internal service — and anything reaching it from outside `options-edge` (ad-hoc
+  # diagnostics, monitoring, a port-forward from another namespace) would be cut off the moment it
+  # lands. Gate 4a gains nothing from it: the pod it grants access to does not exist yet.
+  #
+  # It moves into Gate 4b alongside the public workload, after an inventory of who actually talks to
+  # that service and a deployed connectivity check. The file is kept, unreferenced, as prepared work.
   - keycloak-realm-configmap.yaml
   - keycloak-postgres.yaml
   - keycloak-deployment.yaml

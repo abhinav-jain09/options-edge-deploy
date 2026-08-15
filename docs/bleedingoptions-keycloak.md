@@ -162,12 +162,19 @@ until then; that is the accepted contract, not a bug. Also end their sessions
 ## 6. Lost phone / lost authenticator (PGL-028B)
 
 Login requires a TOTP code at every sign-in, so a lost or wiped phone locks the person out
-permanently unless you act.
+permanently unless you act. **Assume every one of these reaches you**, and see the note below.
 
-1. **Recovery codes.** Generated when they set up TOTP; they were told once to save them. If they
-   have one, they use it and set up a new authenticator themselves. No operator involvement.
-2. **Operator reset.** Users → *the person* → Credentials → delete the **otp** credential. Their next
-   login fires `CONFIGURE_TOTP` and they re-enrol with a fresh QR code.
+**Operator reset — the reliable path, and today the only one.** Users → *the person* → Credentials →
+delete the **otp** credential. Their next login fires `CONFIGURE_TOTP` and they re-enrol with a fresh
+QR code.
+
+> **Recovery codes are NOT currently in play, despite what the design's PGL-028B assumes.** Enabling
+> `CONFIGURE_TOTP` does not by itself generate recovery codes — Keycloak's Recovery Authentication
+> Codes are a separate required action and flow step that this realm does not configure, and the
+> browser flow built in §3a has no recovery-code execution. So every lost phone currently lands on
+> you. If self-service recovery matters before launch, that is a distinct piece of work: enable the
+> recovery-codes required action, add its execution to the browser flow as an alternative to the OTP
+> form, and verify a real user can actually use one.
 
 > **Confirm identity out of band before doing (2).** "I lost my phone" is also exactly how an attacker
 > asks you to remove someone's second factor. Use a channel you already trust for that person — not

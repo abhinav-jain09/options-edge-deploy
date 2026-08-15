@@ -84,6 +84,11 @@ spec:
       automountServiceAccountToken: false   # PGL-061: nothing here talks to the Kubernetes API
       securityContext:
         fsGroup: 999          # postgres group, so the mounted volume is writable
+        # PGL-061. postgres:16-alpine runs as uid 70; declaring it means a future image that runs as
+        # root fails to start instead of silently gaining privilege.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: postgres
           # Pinned to the tag's current manifest-list digest, matching the internal instance so both
@@ -131,6 +136,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            # NOT readOnlyRootFilesystem: postgres writes to /tmp and /var/run during normal operation.
   volumeClaimTemplates:
     - metadata:
         name: pgdata

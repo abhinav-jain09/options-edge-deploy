@@ -235,6 +235,48 @@ while read -r gname; do
   done <<<"$have_roles"
 done < <(jq -r '.groups[]?.name' "$WORK/desired.json")
 
+# --- default-role composites: THE approval bypass ------------------------------------------------
+# Keycloak grants every user the realm's `default-roles-<realm>` composite automatically. If
+# `gamma-lab` is ever added to that composite — by a mis-click, or deliberately — then EVERY
+# self-registrant is approved the moment they register, and every check elsewhere in this script still
+# passes: the groups are right, the default group is right, the role exists. Group membership would
+# have stopped being the record of who is approved, and nothing would say so.
+#
+# This is checked explicitly, and any approval-bearing role found there is REMOVED, not reported.
+echo "==> Default-role composites"
+DEFAULT_ROLE="default-roles-$KC_REALM"
+if api GET "$KC_REALM/roles/$DEFAULT_ROLE" >/dev/null 2>&1; then
+  DR_ID="$(api GET "$KC_REALM/roles/$DEFAULT_ROLE" | jq -r '.id')"
+  DR_COMPOSITES="$(api GET "$KC_REALM/roles-by-id/$DR_ID/composites" 2>/dev/null || echo '[]')"
+  while read -r guarded; do
+    [[ -z "$guarded" ]] && continue
+    if jq -e --arg r "$guarded" '.[] | select(.name==$r)' <<<"$DR_COMPOSITES" >/dev/null 2>&1; then
+      drift "SECURITY: role '$guarded' is a composite of $DEFAULT_ROLE — EVERY registered user is approved"
+      if [[ "$MODE" == "apply" ]]; then
+        note "removing $guarded from $DEFAULT_ROLE"
+        rep="$(api GET "$KC_REALM/roles/$guarded")"
+        api DELETE "$KC_REALM/roles-by-id/$DR_ID/composites" -d "[$rep]" >/dev/null \
+          || die "could not remove $guarded from $DEFAULT_ROLE"
+      fi
+    fi
+  done < <(jq -r '.roles.realm[]?.name' "$WORK/desired.json")
+else
+  # Not fatal — a realm may name its default role differently — but it must not pass silently, because
+  # an unchecked default composite is exactly the bypass above.
+  echo "WARN: could not read $DEFAULT_ROLE; the default-composite bypass is UNVERIFIED on this realm." >&2
+fi
+
+# --- direct role assignment audit (PGL-021A) -----------------------------------------------------
+# The realm documents that `gamma-lab` is held only via /gamma-lab-approved, but Keycloak lets an
+# administrator assign a realm role straight to a user, and this script is deliberately blind to users
+# so it can never touch approval state. That blindness means it CANNOT audit direct assignments — so
+# rather than let the "group membership is the single record of approval" claim stand unqualified,
+# say plainly where the gap is and who closes it.
+echo "==> Direct role assignment"
+note "NOT CHECKED HERE: this reconciler cannot read users (PGL-031A1), so a role assigned directly to"
+note "a user is invisible to it. Approval must only ever be granted by group membership. Audit with:"
+note "  GET /admin/realms/$KC_REALM/roles/gamma-lab/users   (as an admin, not as this service account)"
+
 # --- default groups ------------------------------------------------------------------------------
 # New registrations must land in /pending-approval. If this is wrong, either signups get no group at
 # all (harmless but unreviewable) or — the dangerous case — they land somewhere that maps a role.
@@ -286,7 +328,33 @@ FLOW="bleedingoptions-browser"
 SUBFLOW="bleedingoptions-browser-forms"
 
 echo "==> Browser flow ($FLOW, OTP REQUIRED)"
-if ! api GET "$KC_REALM/authentication/flows" | jq -e --arg f "$FLOW" '.[] | select(.alias==$f)' >/dev/null 2>&1; then
+
+# Does the flow actually ENFORCE what it claims? Presence of the alias is not the question — a run
+# that created the top-level flow and then failed partway leaves an alias behind with no OTP step in
+# it, and binding that produces a PASSWORD-ONLY login while every "flow exists" check passes. So the
+# structure is verified: a REQUIRED password form and a REQUIRED OTP form must both be present.
+flow_enforces_otp() {
+  local execs
+  execs="$(api GET "$KC_REALM/authentication/flows/$FLOW/executions" 2>/dev/null || echo '[]')"
+  jq -e '
+    (any(.[]; .providerId=="auth-username-password-form" and .requirement=="REQUIRED"))
+    and
+    (any(.[]; .providerId=="auth-otp-form" and .requirement=="REQUIRED"))
+  ' <<<"$execs" >/dev/null 2>&1
+}
+
+FLOW_EXISTS=0
+api GET "$KC_REALM/authentication/flows" | jq -e --arg f "$FLOW" '.[] | select(.alias==$f)' >/dev/null 2>&1 && FLOW_EXISTS=1
+
+if [[ "$FLOW_EXISTS" == "1" ]] && ! flow_enforces_otp; then
+  # The dangerous middle state: something is there, but it does not do the job.
+  drift "SECURITY: flow '$FLOW' exists but does NOT contain a REQUIRED password form AND a REQUIRED OTP form — binding it would give password-only logins"
+  if [[ "$MODE" == "apply" ]]; then
+    die "refusing to repair a partially-built flow automatically: delete '$FLOW' in the admin console and re-run, or build it by hand (docs/bleedingoptions-keycloak.md 3a). Half-repairing an auth flow is how a login ends up neither working nor safe."
+  fi
+fi
+
+if [[ "$FLOW_EXISTS" == "0" ]]; then
   drift "browser flow '$FLOW' is MISSING (login would fall back to the stock CONDITIONAL-OTP flow)"
   if [[ "$MODE" == "apply" ]]; then
     note "creating $FLOW"
@@ -326,20 +394,63 @@ if ! api GET "$KC_REALM/authentication/flows" | jq -e --arg f "$FLOW" '.[] | sel
     set_requirement "$FLOW"    "$SUBFLOW"                    "ALTERNATIVE"
     set_requirement "$SUBFLOW" "auth-username-password-form" "REQUIRED"
     set_requirement "$SUBFLOW" "auth-otp-form"               "REQUIRED"
+
+    # Prove what was just built before anything binds it. A flow assembled by a sequence of calls that
+    # each returned 200 can still be wrong; this asks the server what it actually has.
+    flow_enforces_otp \
+      || die "built '$FLOW' but it does not enforce a REQUIRED password + REQUIRED OTP — refusing to bind it. Build it by hand (docs/bleedingoptions-keycloak.md 3a)."
+    note "verified: $FLOW enforces REQUIRED password + REQUIRED OTP"
   fi
 fi
 
-# Bind it. A flow that exists but is not bound enforces nothing — the realm keeps using the stock
-# browser flow and every login is password-only for anyone without an authenticator configured.
+# Bind it — but ONLY once it has been proven to enforce OTP. Binding is the step that makes the flow
+# real for every login, so a flow that has not been verified must never reach it: that is how a
+# password-only login ships while the deploy reports success.
 LIVE_BROWSER_FLOW="$(jq -r '.browserFlow // ""' <<<"$LIVE_REALM")"
 if [[ "$LIVE_BROWSER_FLOW" != "$FLOW" ]]; then
   drift "realm.browserFlow: live='$LIVE_BROWSER_FLOW' expected='$FLOW' (OTP is NOT being enforced)"
   if [[ "$MODE" == "apply" ]]; then
+    flow_enforces_otp \
+      || die "refusing to bind '$FLOW': it does not enforce a REQUIRED password + REQUIRED OTP"
     note "binding browserFlow=$FLOW"
     api PUT "$KC_REALM" -d "$(jq -nc --arg f "$FLOW" '{browserFlow:$f}')" >/dev/null \
       || die "could not bind browser flow"
   fi
+elif ! flow_enforces_otp; then
+  # Bound AND broken is the worst combination: every login is going through a flow that does not ask
+  # for a second factor, and the binding check alone would have called that healthy.
+  drift "SECURITY: '$FLOW' is BOUND but does not enforce OTP — logins are password-only right now"
 fi
+
+# --- required actions ----------------------------------------------------------------------------
+# CONFIGURE_TOTP as a DEFAULT action is what makes every new account set up an authenticator. If it is
+# disabled or stops being default, new users register with no second factor at all — and with the flow
+# above requiring an OTP form they would be unable to log in, so this breaks signup rather than
+# silently weakening it. Either way it must not drift.
+echo "==> Required actions"
+LIVE_ACTIONS="$(api GET "$KC_REALM/authentication/required-actions" 2>/dev/null || echo '[]')"
+while read -r ra; do
+  [[ -z "$ra" ]] && continue
+  alias="$(jq -r '.alias' <<<"$ra")"
+  want_enabled="$(jq -r '.enabled' <<<"$ra")"
+  want_default="$(jq -r '.defaultAction' <<<"$ra")"
+  live="$(jq -c --arg a "$alias" '.[] | select(.alias==$a)' <<<"$LIVE_ACTIONS")"
+  if [[ -z "$live" ]]; then
+    drift "required action '$alias' is MISSING"
+    continue
+  fi
+  have_enabled="$(jq -r '.enabled' <<<"$live")"
+  have_default="$(jq -r '.defaultAction' <<<"$live")"
+  if [[ "$want_enabled" != "$have_enabled" || "$want_default" != "$have_default" ]]; then
+    drift "required action '$alias': live enabled=$have_enabled default=$have_default; manifest enabled=$want_enabled default=$want_default"
+    if [[ "$MODE" == "apply" ]]; then
+      note "correcting required action $alias"
+      api PUT "$KC_REALM/authentication/required-actions/$alias" \
+        -d "$(jq -c --argjson e "$want_enabled" --argjson d "$want_default" '. + {enabled:$e, defaultAction:$d}' <<<"$live")" \
+        >/dev/null || die "could not update required action $alias"
+    fi
+  fi
+done < <(jq -c '.requiredActions[]?' "$WORK/desired.json")
 
 # --- the public client ---------------------------------------------------------------------------
 # Redirect URIs and web origins are the client's real security boundary: an extra entry is an open
