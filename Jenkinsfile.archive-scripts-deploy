@@ -122,7 +122,11 @@ fi
 drift=0
 for f in $UNIT; do
   want=$(awk -v f="$f" '$2==f{print $1}' "$record")
-  have=$(sha256sum "$INSTALL_DIR/$f" 2>/dev/null | cut -d' ' -f1)
+  # `|| true`: under set -e + pipefail a MISSING file makes this substitution's pipeline fail and
+  # silently kills the whole drift check before one line of output (archive-scripts-deploy #2,
+  # the first run after new files joined UNIT). Absence is a legitimate state the classification
+  # below handles; it must never be a crash.
+  have=$(sha256sum "$INSTALL_DIR/$f" 2>/dev/null | cut -d' ' -f1 || true)
   if [ -z "$want" ]; then
     # Not in the record: either this deploy introduces a newly MANAGED file (a migration — the
     # record cannot know it yet) or something unmanaged is squatting on the name (drift).
