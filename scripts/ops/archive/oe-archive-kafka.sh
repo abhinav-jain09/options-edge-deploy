@@ -91,14 +91,17 @@ OE_TOPICS_ENV="${OE_TOPICS_ENV:-$(dirname "$0")/oe-topics.env}"
 # below and let a caller archive a different set behind the canonical file's back — equality by
 # luck, not by construction. Require the file, then discard anything inherited.
 [ -r "$OE_TOPICS_ENV" ] || { echo "FATAL: '$OE_TOPICS_ENV' missing or unreadable — refusing to archive an unknown evidence set" >&2; exit 1; }
-unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_prod
+unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_prod OE_ES4_TOPICS
 # shellcheck source=/dev/null
 . "$OE_TOPICS_ENV"
 : "${DEALER_LEDGER_EVIDENCE:?oe-topics.env did not define DEALER_LEDGER_EVIDENCE}"
 : "${OE_ALL_TOPICS_prod:?oe-topics.env did not define OE_ALL_TOPICS_prod}"
 
 DEFAULT_TOPICS_prod="$OE_ALL_TOPICS_prod"
-DEFAULT_TOPICS_es4="es.underlying.spx.price es.underlying.es.trades es.options.databento.events.raw es.options.databento.display es.dealer-ledger-outcome-scored es.close.direction.signal"
+# The es4 default now follows oe-topics.env (one definition, every caller); the literal fallback
+# only covers a mid-swap window where the new script meets an old env file, and mirrors the set
+# the 17:01 cron passes explicitly.
+DEFAULT_TOPICS_es4="${OE_ES4_TOPICS:-es.underlying.es.trades es.tape-zones.cells es.futures.cvd.bars es.futures.cvd}"
 DEFAULT_TOPICS_dev="$DEFAULT_TOPICS_prod"
 eval "TOPICS=\"\${TOPICS:-\$DEFAULT_TOPICS_${ENV_NAME}}\""
 
