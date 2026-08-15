@@ -83,18 +83,8 @@ pipeline {
         '''
       }
     }
-    // Applying the manifests does NOT configure the public realm. `--import-realm` skips a realm that
-    // already exists, so on every deploy after the first the realm's login settings, OTP policy,
-    // approval groups and browser-flow binding come from whatever is live — not from the repo. Without
-    // this stage the job would report success while MFA was unbound or an approval-bearing role had
-    // drifted into the default composite (PGL-031A/PGL-031B).
-    //
-    // RECONCILE_REALM defaults to true and the stage FAILS THE BUILD on drift it cannot correct. It is
-    // skipped only when the operator has no reconciler credential to hand, and skipping marks the
-    // build UNSTABLE (see the stage above) rather than passing quietly.
-    // Skipping is announced, not silent. The comment above used to claim this was "logged loudly"
-    // while nothing actually logged it — a build that quietly omitted realm reconciliation would have
-    // looked identical to one that performed it.
+    // Skipping realm reconciliation is ANNOUNCED, not silent: a build that quietly omitted it would
+    // look identical to one that performed it.
     stage('WARN: realm reconciliation skipped') {
       when {
         allOf {
@@ -111,6 +101,12 @@ pipeline {
         }
       }
     }
+    // Applying the manifests does NOT configure the public realm. `--import-realm` skips a realm that
+    // already exists, so on every deploy after the first the realm's login settings, OTP policy,
+    // approval groups and browser-flow binding come from whatever is live — not from the repo. Without
+    // this stage the job would report success while MFA was unbound or an approval-bearing role had
+    // drifted into the default composite (PGL-031A/PGL-031B). It FAILS THE BUILD on drift it cannot
+    // correct.
     stage('Reconcile public realm') {
       when {
         allOf {
