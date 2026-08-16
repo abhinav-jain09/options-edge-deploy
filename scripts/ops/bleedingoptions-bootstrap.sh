@@ -45,14 +45,21 @@ command -v curl    >/dev/null || fail "curl not on PATH"
 JPASS="${JENKINS_PASS:-$(kubectl --context="$KCTX_JENKINS" get secret -n jenkins jenkins -o jsonpath='{.data.jenkins-admin-password}' 2>/dev/null | base64 -d)}"
 [ -n "$JPASS" ] || fail "no Jenkins password (set JENKINS_PASS, or ensure kubectl can read secret/jenkins in ns jenkins)"
 
-COOKIES="$(mktemp)"; trap 'rm -f "$COOKIES"' EXIT
-CRUMB="$(curl -fsS -u "$JUSER:$JPASS" -c "$COOKIES" \
+# One trapped dir for the cookie jar and the netrc. Jenkins basic-auth via --netrc-file keeps the
+# admin password out of curl's argv, where `ps` would show it on every one of the dozens of calls.
+umask 077
+WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+COOKIES="$WORK/cookies"
+NETRC="$WORK/netrc"
+printf 'machine %s login %s password %s\n' "$(printf '%s' "$JENKINS_URL" | sed -E 's#https?://##; s#:.*##')" "$JUSER" "$JPASS" > "$NETRC"
+J=(curl --netrc-file "$NETRC" -b "$COOKIES")
+CRUMB="$("${J[@]}" -fsS -c "$COOKIES" \
   "$JENKINS_URL/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,\":\",//crumb)" 2>/dev/null)" \
   || fail "cannot authenticate to Jenkins at $JENKINS_URL"
 echo "  Jenkins: reachable, authenticated"
 
 # `jq`-free JSON probing keeps this script dependency-light; Jenkins' api/json is predictable enough.
-jenkins_job_exists() { curl -fsS -u "$JUSER:$JPASS" -b "$COOKIES" "$JENKINS_URL/job/$1/api/json" >/dev/null 2>&1; }
+jenkins_job_exists() { "${J[@]}" -fsS "$JENKINS_URL/job/$1/api/json" >/dev/null 2>&1; }
 for job in common-infra-deploy bleedingoptions-secrets-deploy; do
   jenkins_job_exists "$job" || fail "Jenkins job '$job' does not exist. Register it before running this."
   echo "  job: $job"
@@ -89,15 +96,34 @@ case $KC_SMTP_PASSWORD in *"
 # Generated here, seen by nobody. -base64 30 gives ~40 chars from 240 bits; tr strips the characters
 # that make shell quoting and JDBC URLs unpleasant rather than reducing entropy meaningfully.
 gen() { openssl rand -base64 30 | tr -d '\n/+=' ; }
-PG_PASSWORD="$(gen)"
-KC_ADMIN_PASSWORD="$(gen)"
+
+cred_exists() { "${J[@]}" -fsS "$JENKINS_URL/credentials/store/system/domain/_/credential/$1/api/json" >/dev/null 2>&1; }
+
+# NEVER regenerate POSTGRES_PASSWORD on a rerun. `POSTGRES_PASSWORD` initialises the database role
+# only on an EMPTY data directory: on an existing volume Postgres keeps the password it already has,
+# so a fresh value changes only what Keycloak PRESENTS, and Keycloak then fails authentication and
+# CrashLoops. A script advertised as rerunnable that silently breaks the database on its second run
+# is worse than one that refuses to run twice. Rotation is a deliberate, documented procedure
+# (docs/bleedingoptions-keycloak.md 1a), not a side effect of re-running bootstrap.
+REUSED=0
+if cred_exists bo-keycloak-postgres-password; then
+  echo "  bo-keycloak-postgres-password: already exists — KEEPING it (regenerating would break the existing database)"
+  REUSED=1
+else
+  PG_PASSWORD="$(gen)"
+fi
+if cred_exists bo-keycloak-admin-password; then
+  echo "  bo-keycloak-admin-password: already exists — keeping it"
+else
+  KC_ADMIN_PASSWORD="$(gen)"
+fi
 
 # Values go over stdin via curl's @- form, never in argv. `ps` on this machine shows only the URL.
 put_credential() {
   local id="$1" secret="$2" desc="$3"
   # Delete first so this is idempotent: Jenkins has no upsert for credentials, and a second run
   # should replace the value rather than fail with "already exists".
-  curl -fsS -u "$JUSER:$JPASS" -b "$COOKIES" -H "$CRUMB" -X POST \
+  "${J[@]}" -fsS -H "$CRUMB" -X POST \
     "$JENKINS_URL/credentials/store/system/domain/_/credential/$id/doDelete" >/dev/null 2>&1 || true
 
   python3 -c '
@@ -106,14 +132,16 @@ print(json.dumps({"": "0", "credentials": {
   "scope": "GLOBAL", "id": sys.argv[1], "secret": sys.argv[2], "description": sys.argv[3],
   "$class": "org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl"}}))
 ' "$id" "$secret" "$desc" \
-    | curl -fsS -u "$JUSER:$JPASS" -b "$COOKIES" -H "$CRUMB" -X POST \
-        --data-urlencode json@- "$JENKINS_URL/credentials/store/system/domain/_/createCredentials" >/dev/null \
+    | "${J[@]}" -fsS -H "$CRUMB" -X POST \
+        --data-urlencode json@- "$url" >/dev/null \
     || fail "could not store credential '$id'"
   echo "  stored: $id"
 }
 
-put_credential bo-keycloak-postgres-password "$PG_PASSWORD"       "bleedingoptions: Postgres + Keycloak JDBC (generated)"
-put_credential bo-keycloak-admin-password    "$KC_ADMIN_PASSWORD" "bleedingoptions: Keycloak bootstrap admin (generated)"
+[ -n "${PG_PASSWORD:-}" ] \
+  && put_credential bo-keycloak-postgres-password "$PG_PASSWORD" "bleedingoptions: Postgres + Keycloak JDBC (generated)"
+[ -n "${KC_ADMIN_PASSWORD:-}" ] \
+  && put_credential bo-keycloak-admin-password "$KC_ADMIN_PASSWORD" "bleedingoptions: Keycloak bootstrap admin (generated)"
 put_credential bo-keycloak-smtp-password     "$KC_SMTP_PASSWORD"  "bleedingoptions: Gmail app password for info@bleedingoptions.com"
 
 # ---------------------------------------------------------------- job running
@@ -126,7 +154,7 @@ run_job() {
 
   say "Jenkins: $job ($*)"
   local queue
-  queue="$(curl -fsS -u "$JUSER:$JPASS" -b "$COOKIES" -H "$CRUMB" -X POST \
+  queue="$("${J[@]}" -fsS -H "$CRUMB" -X POST \
             "${args[@]}" -D - -o /dev/null \
             "$JENKINS_URL/job/$job/buildWithParameters" \
           | tr -d '\r' | awk 'tolower($1)=="location:"{print $2}')"
@@ -134,7 +162,7 @@ run_job() {
 
   local build="" i=0
   while [ -z "$build" ] && [ $i -lt 60 ]; do
-    build="$(curl -fsS -u "$JUSER:$JPASS" -b "$COOKIES" "${queue}api/json" 2>/dev/null \
+    build="$("${J[@]}" -fsS "${queue}api/json" 2>/dev/null \
              | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("executable") or {}).get("number",""))' 2>/dev/null || true)"
     [ -n "$build" ] || { sleep 2; i=$((i+1)); }
   done
@@ -143,13 +171,28 @@ run_job() {
 
   local result="" j=0
   while [ -z "$result" ] && [ $j -lt 900 ]; do
-    result="$(curl -fsS -u "$JUSER:$JPASS" -b "$COOKIES" "$JENKINS_URL/job/$job/$build/api/json" 2>/dev/null \
+    result="$("${J[@]}" -fsS "$JENKINS_URL/job/$job/$build/api/json" 2>/dev/null \
               | python3 -c 'import json,sys; print(json.load(sys.stdin).get("result") or "")' 2>/dev/null || true)"
     if [ -z "$result" ]; then
-      # An input step parks the build without finishing it. Approve it when unattended.
+      # An input step parks the build without finishing it, and BOTH jobs have one. The input id is
+      # a content hash, not a stable name — an earlier version guessed `Proceed` and silently never
+      # approved anything, leaving the build parked until the 30-minute timeout. Ask Jenkins for the
+      # pending action and post to the URL it hands back.
       if [ "$UNATTENDED" = true ]; then
-        curl -fsS -u "$JUSER:$JPASS" -b "$COOKIES" -H "$CRUMB" -X POST \
-          "$JENKINS_URL/job/$job/$build/input/Proceed/proceedEmpty" >/dev/null 2>&1 || true
+        local purl
+        purl="$("${J[@]}" -fsS \
+                 "$JENKINS_URL/job/$job/$build/wfapi/nextPendingInputAction" 2>/dev/null \
+               | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("id",""))
+except Exception: print("")' 2>/dev/null || true)"
+        if [ -n "$purl" ]; then
+          # proceedEmpty, NOT the wfapi proceedUrl the same response advertises: posting to
+          # inputSubmit without its expected form body returns 200 and does nothing, so the build
+          # stays parked while this loop cheerfully "approves" it every two seconds.
+          echo "  approving input $purl"
+          "${J[@]}" -fsS -H "$CRUMB" -X POST \
+            "$JENKINS_URL/job/$job/$build/input/$purl/proceedEmpty" >/dev/null 2>&1 || true
+        fi
       fi
       sleep 2; j=$((j+1))
     fi
@@ -157,7 +200,16 @@ run_job() {
   [ -n "$result" ] || fail "$job build #$build did not finish within 30 minutes"
   case $result in
     SUCCESS)  echo "  result: SUCCESS" ;;
-    UNSTABLE) echo "  result: UNSTABLE (continuing — check the console above)" ;;
+    UNSTABLE)
+      # Exactly ONE unstable outcome is expected and safe: common-infra marks itself unstable when
+      # RECONCILE_REALM=false, to say out loud that the realm was not reconciled. Anything else
+      # unstable is a real signal and must not be walked past on the way to further mutations.
+      if [ "$job" = common-infra-deploy ] && printf '%s\n' "$@" | grep -qx 'RECONCILE_REALM=false'; then
+        echo "  result: UNSTABLE — expected here (RECONCILE_REALM=false says the realm was skipped)"
+      else
+        fail "$job build #$build finished UNSTABLE, which is not an expected outcome for this step — see $JENKINS_URL/job/$job/$build/console"
+      fi
+      ;;
     *)        fail "$job build #$build finished $result — see $JENKINS_URL/job/$job/$build/console" ;;
   esac
 }
@@ -174,7 +226,7 @@ say "Priming Jenkins parameter definitions (dry run — writes nothing)"
 run_job common-infra-deploy ENVIRONMENT=production DEPLOY_DRY_RUN=true
 
 have_param() {
-  curl -fsS -u "$JUSER:$JPASS" -b "$COOKIES" -g \
+  "${J[@]}" -fsS -g \
     "$JENKINS_URL/job/$1/api/json?tree=property%5BparameterDefinitions%5Bname%5D%5D" \
   | python3 -c 'import json,sys; print(any(d["name"]==sys.argv[1] for p in json.load(sys.stdin).get("property",[]) for d in p.get("parameterDefinitions",[])))' "$2"
 }
@@ -202,16 +254,32 @@ PF=$!; trap 'kill $PF 2>/dev/null; rm -f "$COOKIES"' EXIT
 for i in $(seq 30); do curl -fsS "$KC/realms/master" >/dev/null 2>&1 && break; sleep 1; done
 
 # Admin token. --data-urlencode keeps the password out of argv.
+# After the runbook's first-boot step the `admin` account is DISABLED, so a rerun cannot use it.
+# Let the operator name the real administrator they created, and skip this whole section when the
+# reconciler client already exists — which it will on every run after the first.
+KC_ADMIN_USER="${KC_ADMIN_USER:-admin}"
+if [ -n "${KC_ADMIN_PASSWORD:-}" ]; then :; else
+  KC_ADMIN_PASSWORD="${KC_ADMIN_PASSWORD_OVERRIDE:-}"
+fi
+
+if cred_exists bo-keycloak-reconciler-secret; then
+  echo "  realm-reconciler already provisioned — skipping (rerun-safe)"
+  RECON_SECRET=""
+else
+[ -n "${KC_ADMIN_PASSWORD:-}" ] || fail "the bootstrap admin password is not available in this run (it is only generated on the FIRST run). If the reconciler client still needs creating, pass the administrator you created at first boot: KC_ADMIN_USER=<you> KC_ADMIN_PASSWORD_OVERRIDE=<password>"
+
 TOKEN="$(printf '%s' "$KC_ADMIN_PASSWORD" \
   | curl -fsS -X POST "$KC/realms/master/protocol/openid-connect/token" \
-      -d client_id=admin-cli -d grant_type=password -d username=admin \
+      -d client_id=admin-cli -d grant_type=password -d username="$KC_ADMIN_USER" \
       --data-urlencode password@- \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')" \
   || fail "could not get a Keycloak admin token"
 
-RECON_SECRET="$(python3 - "$KC" "$TOKEN" <<'PY'
-import json,sys,urllib.request
-kc, tok = sys.argv[1], sys.argv[2]
+# KC and TOKEN go through the ENVIRONMENT, not argv — a bearer token in the process list is as good
+# as the admin password for as long as it lives.
+RECON_SECRET="$(OE_KC="$KC" OE_TOKEN="$TOKEN" python3 - <<'PY'
+import json,os,sys,urllib.request
+kc, tok = os.environ["OE_KC"], os.environ["OE_TOKEN"]
 def req(method, path, body=None):
     r = urllib.request.Request(f"{kc}{path}", method=method,
         data=json.dumps(body).encode() if body is not None else None,
@@ -234,19 +302,37 @@ found = [c for c in req("GET", "/admin/realms/bleedingoptions/clients?clientId=r
 if not found: sys.exit("realm-reconciler client was not created")
 cid = found[0]["id"]
 
-# Least privilege (PGL-031A1): only the realm-management roles the reconciler actually uses.
+# Least privilege (PGL-031A1). EXACTLY the six roles docs/bleedingoptions-keycloak.md section 3
+# specifies — not `realm-admin`, which is the blanket role that doc explicitly forbids because it
+# carries manage-users, view-users and impersonation. The reconciler's whole contract is that it
+# never touches users: approval state lives in group membership, and a reconciler able to edit
+# memberships could un-approve everyone.
 sa   = req("GET", f"/admin/realms/bleedingoptions/clients/{cid}/service-account-user")
 mgmt = req("GET", "/admin/realms/bleedingoptions/clients?clientId=realm-management")[0]
-want = {"realm-admin"}
-roles = [r for r in req("GET", f"/admin/realms/bleedingoptions/clients/{mgmt['id']}/roles") if r["name"] in want]
+want = {"view-realm", "manage-realm", "view-clients", "manage-clients",
+        "query-groups", "manage-authorization"}
+forbidden = {"realm-admin", "manage-users", "view-users", "impersonation"}
+available = req("GET", f"/admin/realms/bleedingoptions/clients/{mgmt['id']}/roles")
+roles = [r for r in available if r["name"] in want]
+missing = want - {r["name"] for r in roles}
+if missing:
+    sys.exit(f"realm-management is missing expected roles: {sorted(missing)}")
 if roles:
     req("POST", f"/admin/realms/bleedingoptions/users/{sa['id']}/role-mappings/clients/{mgmt['id']}", roles)
+
+# Prove the negative rather than assume it: a prior run, or a hand edit, could have left the
+# forbidden roles mapped, and this client is supposed to be incapable of touching users.
+held = {r["name"] for r in (req("GET", f"/admin/realms/bleedingoptions/users/{sa['id']}/role-mappings/clients/{mgmt['id']}") or [])}
+leaked = held & forbidden
+if leaked:
+    sys.exit(f"realm-reconciler holds forbidden roles {sorted(leaked)} — it must never manage users")
 
 print(req("GET", f"/admin/realms/bleedingoptions/clients/{cid}/client-secret")["value"])
 PY
 )" || fail "could not create the realm-reconciler client"
 
 put_credential bo-keycloak-reconciler-secret "$RECON_SECRET" "bleedingoptions: realm-reconciler client secret"
+fi
 kill $PF 2>/dev/null || true
 
 # 4. Now the reconciler exists, so the realm can be reconciled into its desired state.

@@ -20,11 +20,14 @@ kind: ClusterRole
 metadata:
   name: bleedingoptions-tenant-bootstrap
 rules:
-  # `create` cannot be restricted by resourceNames — the name is not known until the request is
-  # made. Every other verb is pinned to this tenant's own namespace.
-  - apiGroups: [""]
-    resources: [namespaces]
-    verbs: [create, list]
+  # NO `create` and no `list`, unlike fullfunding's. `create` cannot be bounded by resourceNames —
+  # the name is not known until the request is made — so granting it would let the deployer make
+  # arbitrary namespaces cluster-wide (name-squatting, and new namespaces that other policies'
+  # namespaceSelectors might match). `list` would expose every namespace on the cluster.
+  #
+  # Neither is needed: the README already requires a cluster-admin to create `bleedingoptions`
+  # before any of this applies, and common-infra's `kubectl apply` of the namespace manifest needs
+  # only get+patch on the one that already exists. Every verb here is pinned to this tenant.
   - apiGroups: [""]
     resources: [namespaces]
     resourceNames: [bleedingoptions]
