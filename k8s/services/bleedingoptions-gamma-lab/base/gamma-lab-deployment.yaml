@@ -94,6 +94,14 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             # --- The surface switch. Everything else here follows from it. ---
+            # The page is served at /gamma-lab but the API lives at the ROOT. feed-url.js's
+            # resolveApiBase falls back to the PAGE PATH PREFIX when this is empty, so every board
+            # call went to /gamma-lab/api/stock-gex/board — which is not in PUBLIC_SURFACE_API_PATHS
+            # and therefore hit anyRequest().denyAll(): a 403 the page reported as "Not available."
+            # Internally the app IS served under a path prefix, which is why the fallback is right
+            # there and wrong here. "/" pins the API to the origin root.
+            - name: VITE_API_BASE_URL
+              value: "/"
             - name: PUBLIC_SURFACE
               value: "gamma-lab"
             - name: APP_PROFILE
