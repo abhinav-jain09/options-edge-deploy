@@ -185,6 +185,21 @@ S
           chmod +x "$MDIR/run-mirror.sh"
 
           # >>> BEGIN SHAPE ASSERTIONS (extracted verbatim by scripts/ci/es-cvd-mirror-shape-test.sh) <<<
+          # TARGET SCOPE, FAIL-CLOSED, BEFORE ANY MUTATION (ES-CVD-SPX-LEVELS-DESIGN.md CL-R6 L1/M1).
+          # U16's normative scope is es4 + PRODUCTION only: the dev resources must stay ABSENT. This
+          # job's target parameters DEFAULT to dev (127.0.0.1:19092), and `--create --if-not-exists`
+          # on an absent dev topic would create it at the matching shape — after which every
+          # assertion below passes and the forbidden resource exists. So the production-only topics
+          # are gated on the EXACT production target here, before the create.
+          case "$TOPIC" in
+            es.futures.cvd.levels)
+              [ "$TGT" = "192.168.100.252:9092" ] || {
+                echo "FAIL: $TOPIC is PRODUCTION-ONLY (CL-R6 L1/M1) but the target is $TGT."
+                echo "      Re-run with TARGET_SPX_CLUSTER_IP=192.168.100.252 TARGET_PORT=9092."
+                echo "      Dev resources for U16 must stay absent until the design says otherwise."
+                exit 1
+              } ;;
+          esac
           # EFFECTIVE config reader (merge-gate finding 2): first match of kafka-configs --describe
           # for the named config — dynamic if set, else the broker-default synonym; empty output is
           # a query FAILURE, never an implicit pass.

@@ -25,7 +25,8 @@ fail=0
 body="$(awk '/BEGIN SHAPE ASSERTIONS/{f=1;next} /END SHAPE ASSERTIONS/{f=0} f' "$JOB")"
 [ -n "$body" ] || { echo "FAIL: shape-assertion markers not found in $JOB — the extraction and the job have diverged" >&2; exit 1; }
 # Sanity: the extracted text must actually contain the assertions this file claims to test.
-for needle in 'eff()' 'source $TOPIC cleanup.policy' 'target $TOPIC cleanup.policy' 'PartitionCount'; do
+for needle in 'eff()' 'source $TOPIC cleanup.policy' 'target $TOPIC cleanup.policy' 'PartitionCount' \
+              'PRODUCTION-ONLY'; do
   printf '%s' "$body" | grep -qF "$needle" \
     || { echo "FAIL: extracted block is missing '$needle' — parser drift, refusing to test vacuously" >&2; exit 1; }
 done
@@ -39,7 +40,7 @@ cat > "$WORK/bin/kafka-topics" <<'EOF'
 broker=""; prev=""
 for a in "$@"; do [ "$prev" = "--bootstrap-server" ] && broker="$a"; prev="$a"; done
 if [[ "$*" == *--describe* ]]; then
-  if [ "$broker" = "SRC" ]; then parts="$SRC_PARTS"; else parts="$TGT_PARTS"; fi
+  if [ "$broker" = "${SRC_BROKER:-SRC}" ]; then parts="$SRC_PARTS"; else parts="$TGT_PARTS"; fi
   echo "Topic: $MOCK_TOPIC TopicId: ID PartitionCount: $parts ReplicationFactor: 1"
 fi
 exit 0
@@ -48,7 +49,7 @@ cat > "$WORK/bin/kafka-configs" <<'EOF'
 #!/usr/bin/env bash
 broker=""; prev=""
 for a in "$@"; do [ "$prev" = "--bootstrap-server" ] && broker="$a"; prev="$a"; done
-if [ "$broker" = "SRC" ]; then pol="$SRC_POLICY"; ret="$SRC_RET"; else pol="$TGT_POLICY"; ret="$TGT_RET"; fi
+if [ "$broker" = "${SRC_BROKER:-SRC}" ]; then pol="$SRC_POLICY"; ret="$SRC_RET"; else pol="$TGT_POLICY"; ret="$TGT_RET"; fi
 # Real kafka-configs emits delete.retention.ms BEFORE retention.ms — the ordering that broke the
 # reader once already, reproduced here so the boundary anchoring stays under test.
 echo "Dynamic configs for topic $MOCK_TOPIC are: delete.retention.ms=86400000 sensitive=false, cleanup.policy=$pol sensitive=false, retention.ms=$ret sensitive=false"
@@ -59,9 +60,9 @@ chmod +x "$WORK/bin/kafka-topics" "$WORK/bin/kafka-configs"
 run() { # -> exit status; output in $OUT
   OUT="$WORK/out.txt"
   set +e
-  env PATH="$WORK/bin:$PATH" KBIN="$WORK/bin" SRC=SRC TGT=TGT \
+  env PATH="$WORK/bin:$PATH" KBIN="$WORK/bin" SRC="${SRC_BROKER:-SRC}" TGT="${TGT_BROKER:-192.168.100.252:9092}" \
       TOPIC="$MOCK_TOPIC" PARTS="$PARTS" POLICY="$POLICY" RET="$RET" \
-      MOCK_TOPIC="$MOCK_TOPIC" \
+      MOCK_TOPIC="$MOCK_TOPIC" SRC_BROKER="${SRC_BROKER:-SRC}" \
       SRC_PARTS="$SRC_PARTS" SRC_POLICY="$SRC_POLICY" SRC_RET="$SRC_RET" \
       TGT_PARTS="$TGT_PARTS" TGT_POLICY="$TGT_POLICY" TGT_RET="$TGT_RET" \
       bash "$WORK/assertions.sh" >"$OUT" 2>&1
@@ -101,6 +102,34 @@ check "levels: target partition drift FAILS" 1 "wrong partition count"
 
 TGT_PARTS=1 SRC_POLICY=compact,delete
 check "levels: SOURCE at compact,delete FAILS" 1 "source es.futures.cvd.levels cleanup.policy=compact,delete"
+
+# ── the PRODUCTION-ONLY boundary (CL-R6 L1/M1): dev targets are refused BEFORE any create ───────
+MOCK_TOPIC=es.futures.cvd.levels PARTS=1 POLICY=compact RET=-1
+SRC_PARTS=1 SRC_POLICY=compact SRC_RET=-1 TGT_PARTS=1 TGT_POLICY=compact TGT_RET=-1
+TGT_BROKER=192.168.100.252:9092
+check "levels: the exact production target is accepted" 0
+
+TGT_BROKER=127.0.0.1:19092
+check "levels: the DEV DEFAULT target is refused" 1 "PRODUCTION-ONLY"
+TGT_BROKER=localhost:19092
+check "levels: any other dev spelling is refused" 1 "PRODUCTION-ONLY"
+TGT_BROKER=192.168.100.252:19092
+check "levels: production IP on the wrong port is refused" 1 "PRODUCTION-ONLY"
+TGT_BROKER=192.168.100.4:9092
+check "levels: the SOURCE cluster as target is refused" 1 "PRODUCTION-ONLY"
+
+# The guard must precede every mutation: with a dev target the job may not even reach the create.
+TGT_BROKER=127.0.0.1:19092
+run || true
+grep -q "cleanup.policy" "$OUT" && { echo "  FAIL levels: dev target reached the shape stage"; fail=1; } \
+  || printf '  ok   %-52s exit 1\n' "levels: dev target dies BEFORE any create/assert"
+
+# The sibling topics are NOT production-only and must still install to dev.
+TGT_BROKER=127.0.0.1:19092
+MOCK_TOPIC=es.futures.cvd.bars PARTS=1 POLICY=compact,delete RET=-1
+SRC_PARTS=1 SRC_POLICY=compact,delete SRC_RET=-1 TGT_PARTS=1 TGT_POLICY=compact,delete TGT_RET=-1
+check "bars: dev target still allowed (not production-only)" 0
+TGT_BROKER=192.168.100.252:9092
 
 # ── the compact,delete siblings must still pass, and must not accept pure compact ───────────────
 MOCK_TOPIC=es.futures.cvd.bars PARTS=1 POLICY=compact,delete RET=-1
