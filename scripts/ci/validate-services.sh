@@ -195,22 +195,59 @@ done
 echo "auto-hunt flags: effective REVERSAL_HUNT_ENABLED + REVERSAL_HUNT_AUTO_ARM = true in both rendered mirrors"
 
 echo "=== 8) U16 CVD-levels cross-service timing inequalities (ES-CVD-SPX-LEVELS-DESIGN.md CL-R10/G14) ==="
-# Resolved per environment: an env var in the rendered production manifests overrides the code
-# default. The inequalities keep staleness windows wider than the attestation heartbeats they
-# watch (+2s margin; UI adds the 5s browser-skew allowance).
-cvd_env() { # var default -> resolved value from the production render (or the default)
-  local v
-  v="$(grep -A1 "name: $1\b" "$TMP/mono-production.yaml" 2>/dev/null | sed -nE 's/ *value: "?([0-9]+)"?/\1/p' | head -1)"
-  echo "${v:-$2}"
+# Resolved STRUCTURALLY from each variable's OWNING deployment/container (grep-first-match would
+# accept a hit on the wrong workload or a commented duplicate). Rules: the owning container must
+# exist; the var may appear at most once on it (name-projection, duplicate-safe); a present entry
+# must be a literal integer (valueFrom/indirect is undeterminable here → FAIL, never defaulted);
+# an absent entry resolves to the code default. The inequalities keep staleness windows wider
+# than the attestation heartbeats they watch (+2s margin; UI adds the 5s browser-skew allowance).
+cvd_env() { # file deployment container var default -> value (FAILs the run on any ambiguity)
+  local f="$1" dep="$2" ctr="$3" var="$4" def="$5" q n v
+  q='select(.kind=="Deployment" and .metadata.name=="'"$dep"'")
+      | .spec.template.spec.containers[] | select(.name=="'"$ctr"'")'
+  n="$(yq -r "$q | .name" "$f" | grep -c "^${ctr}\$" || true)"
+  if [ "$n" != "1" ]; then
+    echo "FAIL: expected exactly one container '$ctr' in Deployment '$dep' of $f (found $n) — cannot resolve $var" >&2
+    return 1
+  fi
+  n="$(yq -r "$q | .env[]? | select(.name==\"$var\") | .name" "$f" | grep -c "^${var}\$" || true)"
+  case "$n" in
+    0) echo "$def"; return 0 ;;
+    1) ;;
+    *) echo "FAIL: $var appears $n times on $dep/$ctr in $f (need at most 1)" >&2; return 1 ;;
+  esac
+  v="$(yq -r "$q | .env[]? | select(.name==\"$var\") | .value // \"\"" "$f")"
+  if ! printf '%s' "$v" | grep -qE '^[0-9]+$'; then
+    echo "FAIL: $var on $dep/$ctr in $f is not a literal integer (got '$v'; valueFrom/indirect values are undeterminable) " >&2
+    return 1
+  fi
+  echo "$v"
 }
-if [ -f "$TMP/mono-production.yaml" ]; then
-  HB="$(cvd_env CVD_LEVELS_HEARTBEAT_MS 5000)"
-  SRC_STALE="$(cvd_env CVD_LEVELS_SOURCE_STALE_MS 15000)"
-  ALIGN_HB="$(cvd_env CVD_LEVELS_ALIGN_HEARTBEAT_MS 5000)"
-  UI_STALE="$(cvd_env CVD_LEVELS_UI_STALE_MS 20000)"
-  [ "$SRC_STALE" -gt "$((HB + 2000))" ] || { echo "FAIL: CVD_LEVELS_SOURCE_STALE_MS ($SRC_STALE) must exceed CVD_LEVELS_HEARTBEAT_MS ($HB) + 2000"; exit 1; }
-  [ "$UI_STALE" -gt "$((ALIGN_HB + 7000))" ] || { echo "FAIL: CVD_LEVELS_UI_STALE_MS ($UI_STALE) must exceed CVD_LEVELS_ALIGN_HEARTBEAT_MS ($ALIGN_HB) + 7000 (5s skew + 2s margin)"; exit 1; }
-  echo "cvd-levels timing: SOURCE_STALE=$SRC_STALE > HB=$HB+2000; UI_STALE=$UI_STALE > ALIGN_HB=$ALIGN_HB+7000"
-fi
+# Misplacement guard: each var may live ONLY on its owning deployment. A patch that lands the
+# env on the wrong workload must fail here, not silently satisfy (or dodge) the inequality.
+cvd_only_on() { # file var allowed-deployment(or "-" for none)
+  local f="$1" var="$2" allowed="$3" hits
+  hits="$(yq -r 'select(.kind=="Deployment")
+      | select([.spec.template.spec.containers[].env[]? | select(.name=="'"$var"'")] | length > 0)
+      | .metadata.name' "$f" | { grep -v "^${allowed}\$" || true; })"
+  if [ -n "$hits" ]; then
+    echo "FAIL: $var set on non-owning deployment(s) in $f: $(printf '%s' "$hits" | tr '\n' ' ')" >&2
+    return 1
+  fi
+}
+ES4_CVD_MANIFEST="k8s/es4/services/es-cvd.yaml"
+[ -s "$ES4_CVD_MANIFEST" ] || { echo "FAIL: $ES4_CVD_MANIFEST missing — cannot resolve CVD_LEVELS_HEARTBEAT_MS"; exit 1; }
+[ -s "$TMP/mono-production.yaml" ] || { echo "FAIL: rendered mono-production.yaml missing — cannot resolve CVD_LEVELS_* vars"; exit 1; }
+HB="$(cvd_env "$ES4_CVD_MANIFEST" es-cvd-service es-cvd CVD_LEVELS_HEARTBEAT_MS 5000)"
+SRC_STALE="$(cvd_env "$TMP/mono-production.yaml" es-spx-align-service es-spx-align CVD_LEVELS_SOURCE_STALE_MS 15000)"
+ALIGN_HB="$(cvd_env "$TMP/mono-production.yaml" es-spx-align-service es-spx-align CVD_LEVELS_ALIGN_HEARTBEAT_MS 5000)"
+UI_STALE="$(cvd_env "$TMP/mono-production.yaml" options-edge-web web CVD_LEVELS_UI_STALE_MS 20000)"
+cvd_only_on "$TMP/mono-production.yaml" CVD_LEVELS_HEARTBEAT_MS "-"
+cvd_only_on "$TMP/mono-production.yaml" CVD_LEVELS_SOURCE_STALE_MS es-spx-align-service
+cvd_only_on "$TMP/mono-production.yaml" CVD_LEVELS_ALIGN_HEARTBEAT_MS es-spx-align-service
+cvd_only_on "$TMP/mono-production.yaml" CVD_LEVELS_UI_STALE_MS options-edge-web
+[ "$SRC_STALE" -gt "$((HB + 2000))" ] || { echo "FAIL: CVD_LEVELS_SOURCE_STALE_MS ($SRC_STALE) must exceed CVD_LEVELS_HEARTBEAT_MS ($HB) + 2000"; exit 1; }
+[ "$UI_STALE" -gt "$((ALIGN_HB + 7000))" ] || { echo "FAIL: CVD_LEVELS_UI_STALE_MS ($UI_STALE) must exceed CVD_LEVELS_ALIGN_HEARTBEAT_MS ($ALIGN_HB) + 7000 (5s skew + 2s margin)"; exit 1; }
+echo "cvd-levels timing: SOURCE_STALE=$SRC_STALE > HB=$HB+2000; UI_STALE=$UI_STALE > ALIGN_HB=$ALIGN_HB+7000 (structural, owner-scoped)"
 
 echo "=== validate-services: OK ==="

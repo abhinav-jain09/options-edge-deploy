@@ -1,7 +1,7 @@
 # promtool unit series (O3/P4): per declared instance — firing, disabled-gateway suppression,
 # out-of-RTH suppression, and an RTH-boundary reset for the `for:`-windowed rules.
 rule_files:
-  - cvd-spx-levels-alerts.yml
+  - cvd-spx-levels-alerts.yaml
 evaluation_interval: 1m
 tests:
   # unavailable WARN fires after 10 continuous in-RTH minutes; HIGH not yet at 12m
@@ -99,3 +99,67 @@ tests:
             exp_annotations:
               summary: "CVD levels profile OVERFLOW latched (raise CVD_LEVELS_MAX_BUCKETS or investigate tape corruption; resolves at the session roll)"
       - { eval_time: 11m, alertname: CvdLevelsOverflowHigh, exp_alerts: [] }
+  # unavailable HIGH fires after 30 continuous in-RTH minutes (WARN also still firing)
+  - interval: 1m
+    input_series:
+      - series: 'align_cvd_levels_unavailable_active{reason="source_absent"}'
+        values: '1x40'
+      - series: 'gateway_cvd_spx_levels_enabled'
+        values: '1x40'
+      - series: 'es_session_rth_active'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 32m
+        alertname: CvdSpxLevelsUnavailableHigh
+        exp_alerts:
+          - exp_labels: { severity: high, reason: source_absent }
+            exp_annotations:
+              summary: "CVD SPX levels unavailable (source_absent) for 30 in-RTH minutes"
+  # producer publish failures fire WARN as soon as the 5m increase is > 0
+  - interval: 1m
+    input_series:
+      - series: 'cvd_levels_publish_failures_total'
+        values: '0x5 0+1x10'
+      - series: 'gateway_cvd_spx_levels_enabled'
+        values: '1x15'
+      - series: 'es_session_rth_active'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: CvdLevelsPublishFailuresWarn
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "CVD levels producer publish failures in the last 5m (broker health)"
+  # aligner publish failures fire WARN on any 5m increase
+  - interval: 1m
+    input_series:
+      - series: 'align_cvd_levels_publish_failures_total'
+        values: '0x5 0+1x10'
+      - series: 'gateway_cvd_spx_levels_enabled'
+        values: '1x15'
+      - series: 'es_session_rth_active'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: CvdSpxLevelsAlignPublishFailuresWarn
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "CVD SPX levels aligner publish failures in the last 5m (broker health)"
+  # gateway validation drops fire WARN on any 5m increase
+  - interval: 1m
+    input_series:
+      - series: 'gateway_cvd_spx_levels_drops_total'
+        values: '0x5 0+1x10'
+      - series: 'gateway_cvd_spx_levels_enabled'
+        values: '1x15'
+      - series: 'es_session_rth_active'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: CvdSpxLevelsGatewayDropsWarn
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Gateway dropped invalid CVD SPX levels records in the last 5m"

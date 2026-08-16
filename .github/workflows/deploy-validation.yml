@@ -111,5 +111,11 @@ jobs:
       - name: Validate feed configuration is fully explicit (no inherited library defaults)
         run: bash scripts/ci/validate-feed-config-explicit.sh
 
+      # U16 (CL-R10 L4/O3): promtool check + unit tests over the CVD SPX levels paging rules.
+      # The script downloads a sha256-pinned promtool when none is on PATH, so it is mandatory
+      # here on the GitHub-hosted runner, not just runnable where prometheus is installed.
+      - name: Validate CVD SPX levels alert rules (promtool check + test)
+        run: bash scripts/ci/validate-cvd-levels-alerts.sh
+
       - name: Validate deploy image locks
         run: scripts/deploy/validate-image-lock-ci.sh
