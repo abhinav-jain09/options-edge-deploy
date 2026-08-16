@@ -1,0 +1,91 @@
+# Bootstrap RBAC for the bleedingoptions (public Gamma Lab) tenant deploy.
+#
+# Modelled directly on k8s/tenants/fullfunding/bootstrap/01-bootstrap-rbac.yaml, and for the same
+# reason: the Jenkins deployer SA lives in options-edge and is scoped to it, so creating a namespace
+# and the objects that bound it is inherently outside the credential being used. The deploy cannot
+# hand itself the rights it needs to run.
+#
+# Discovered exactly as fullfunding's was — by running it. common-infra-deploy build #35 failed
+# cleanly, before any mutation, with:
+#   Error from server (Forbidden): namespaces "bleedingoptions" is forbidden:
+#   User "system:serviceaccount:options-edge:jenkins-deployer" cannot get resource "namespaces"
+#
+# This is applied ONCE by a cluster-admin and is deliberately NOT part of any kustomization: it is
+# the platform/tenant split, not a deploy step. It is also deliberately narrow — cluster-scoped
+# verbs are pinned by resourceNames to this tenant's own objects, so it cannot reach options-edge's
+# or fullfunding's, and every namespaced right is bound INSIDE bleedingoptions only, never
+# cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: bleedingoptions-tenant-bootstrap
+rules:
+  # NO `create` and no `list`, unlike fullfunding's. `create` cannot be bounded by resourceNames —
+  # the name is not known until the request is made — so granting it would let the deployer make
+  # arbitrary namespaces cluster-wide (name-squatting, and new namespaces that other policies'
+  # namespaceSelectors might match). `list` would expose every namespace on the cluster.
+  #
+  # Neither is needed: the README already requires a cluster-admin to create `bleedingoptions`
+  # before any of this applies, and common-infra's `kubectl apply` of the namespace manifest needs
+  # only get+patch on the one that already exists. Every verb here is pinned to this tenant.
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [bleedingoptions]
+    verbs: [get, watch, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: bleedingoptions-tenant-bootstrap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: bleedingoptions-tenant-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deployer
+    namespace: options-edge
+---
+# Everything namespaced is granted here, and only here — inside bleedingoptions. A RoleBinding, never
+# a ClusterRoleBinding: the latter would grant the built-in `admin` role in every namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-deployer-tenant
+  namespace: bleedingoptions
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deployer
+    namespace: options-edge
+---
+# ResourceQuota and LimitRange are deliberately EXCLUDED from the built-in `admin` ClusterRole —
+# Kubernetes treats them as cluster policy rather than namespace administration. k8s/bleedingoptions/
+# backup-and-quota.yaml creates both, so without this the deploy cannot create the very budget that
+# bounds the tenant. Same finding as fullfunding's 02-policy-rbac.yaml.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-deployer-policy
+  namespace: bleedingoptions
+rules:
+  - apiGroups: [""]
+    resources: [resourcequotas, limitranges]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-deployer-policy
+  namespace: bleedingoptions
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jenkins-deployer-policy
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deployer
+    namespace: options-edge
