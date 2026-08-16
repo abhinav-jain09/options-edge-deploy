@@ -86,7 +86,12 @@ spec:
         # postgres:16-alpine is uid/gid 70 — NOT 999, which is the Debian variant's. An earlier
         # version set fsGroup: 999 while its own comment said 70, so the mounted volume would have
         # been group-owned by a group the process is not in.
-        fsGroup: 70           # postgres group, so the mounted volume is writable
+        # fsGroup: 70 matches alpine's postgres group. NOTE it is not what actually makes this
+        # work on k3s: for local-path/hostPath volumes the kubelet may not apply fsGroup ownership
+        # at all. Startup succeeds because the provisioner creates the mount root writable, so uid
+        # 70 can create the `pgdata` SUBDIRECTORY (PGDATA is deliberately below the mount root, not
+        # at it — initdb refuses a directory containing lost+found).
+        fsGroup: 70
         # PGL-061. The image declares NO `USER`: it starts as ROOT and drops to postgres via its
         # entrypoint's gosu. So `runAsNonRoot: true` alone rejected the pod before the entrypoint
         # ever ran — CreateContainerConfigError, "image will run as root", for 8 hours. Naming the
