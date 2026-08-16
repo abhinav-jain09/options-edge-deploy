@@ -45,6 +45,15 @@ spec:
               value: es.open-direction.forecast
             - name: KAFKA_ES_OPEN_DIRECTION_OUTCOME_TOPIC
               value: es.open-direction.outcome
+            # --- U14 OPEN10_CVD inputs: the es4 CVD topics arrive on THIS broker via MM1
+            # byte-copy, which preserves the source names — so dev/prod must address them by
+            # the LITERAL es.* names (TOPIC_PREFIX is empty here; topicValue would otherwise
+            # resolve the un-prefixed defaults to topics that do not exist). Consumers read
+            # their OWN broker's mirror, never es4 directly (U15). ---
+            - name: ES_OD_CVD_BARS_TOPIC
+              value: es.futures.cvd.bars
+            - name: ES_OD_CVD_SNAPSHOT_TOPIC
+              value: es.futures.cvd
             # --- Postgres: same source as hpsf-postgres-writer (options-edge-config carries
             # POSTGRES_JDBC_URL/USER; options-edge-runtime-secrets carries the password) ---
             - name: ES_OD_PG_URL
