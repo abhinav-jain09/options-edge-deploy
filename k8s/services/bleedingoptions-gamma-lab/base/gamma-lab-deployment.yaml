@@ -74,6 +74,15 @@ spec:
         node-role.kubernetes.io/control-plane: "true"
       automountServiceAccountToken: false
       securityContext:
+        # The image declares NO `USER`, so it starts as root and `runAsNonRoot: true` alone rejected
+        # the pod outright — CreateContainerConfigError, "image will run as root". Naming the uid is
+        # what makes the hardening enforceable rather than merely declared. Verified against this
+        # exact digest: uid 1000 exists in the image and /app/app.jar is world-readable.
+        #
+        # The INTERNAL options-edge-web runs this same digest with an empty securityContext, i.e. as
+        # root. The public surface deliberately does not.
+        runAsUser: 1000
+        runAsGroup: 1000
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
