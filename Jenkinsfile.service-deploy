@@ -36,7 +36,19 @@ pipeline {
       'oi-shadow', 'unified-sr', 'volume-pace', 'signal-follower', 'web', 'ibkr-feed', 'stock-gex', 'context-tape',
       // fullfunding tenant. Same job: the target namespace comes from services.yaml,
       // and the deploy refuses if the render disagrees with what is registered there.
-      'fullfunding-app'
+      'fullfunding-app',
+      // bleedingoptions tenant — the PUBLIC Gamma Lab web tier.
+      //
+      // It BELONGS HERE, in the Jenkinsfile, and not in the job's config.xml. This job is a
+      // CpsScmFlowDefinition: Jenkins regenerates its parameter definitions from THIS file on every
+      // build, so a choice added through the UI or the script console survives exactly until the next
+      // run and then vanishes. That happened twice on 2026-08-16, and the symptom is unhelpful — the
+      // build request fails with a bare HTTP 500 and no message naming the rejected value, because a
+      // parameter outside the declared choices is refused before the pipeline starts.
+      //
+      // The deploy for this service additionally passes through verify-public-gate.sh (PGL-072),
+      // which refuses any replica count above zero without gate evidence for the exact image digest.
+      'bleedingoptions-gamma-lab'
     ], description: 'Which service to deploy (dir under k8s/services; spread-skew and its writer are intentionally unavailable under the 2026-07-26 operator hold).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
