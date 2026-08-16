@@ -118,24 +118,46 @@ else
   KC_ADMIN_PASSWORD="$(gen)"
 fi
 
-# Values go over stdin via curl's @- form, never in argv. `ps` on this machine shows only the URL.
+# Credential writes. Three properties this must have, each learned the hard way:
+#   * the value never reaches argv — `python3 -c prog "$SECRET"` publishes it to the process list;
+#   * no delete-then-create — a failure between the two leaves NO credential, and the jobs that bind
+#     it then fail on a missing binding rather than a stale value;
+#   * `$url` is chosen before use, not referenced into existence (an earlier edit left it unset, and
+#     under `set -u` every write aborted AFTER the delete had already happened).
 put_credential() {
   local id="$1" secret="$2" desc="$3"
-  # Delete first so this is idempotent: Jenkins has no upsert for credentials, and a second run
-  # should replace the value rather than fail with "already exists".
-  "${J[@]}" -fsS -H "$CRUMB" -X POST \
-    "$JENKINS_URL/credentials/store/system/domain/_/credential/$id/doDelete" >/dev/null 2>&1 || true
 
-  python3 -c '
-import json,sys
+  if cred_exists "$id"; then
+    # UPDATE via config.xml. `updateSubmit` expects a full Stapler form and returns 500 for the same
+    # JSON that createCredentials accepts (verified against this Jenkins), and delete-then-create
+    # would leave no credential at all if anything failed in between.
+    OE_ID="$id" OE_SECRET="$secret" OE_DESC="$desc" python3 -c '
+import os
+from xml.sax.saxutils import escape
+print("<org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl>"
+      "<scope>GLOBAL</scope><id>%s</id><description>%s</description><secret>%s</secret>"
+      "</org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl>"
+      % (escape(os.environ["OE_ID"]), escape(os.environ["OE_DESC"]), escape(os.environ["OE_SECRET"])))
+' \
+      | "${J[@]}" -fsS -H "$CRUMB" -H 'Content-Type: application/xml' -X POST \
+          --data-binary @- \
+          "$JENKINS_URL/credentials/store/system/domain/_/credential/$id/config.xml" >/dev/null \
+      || fail "could not update credential '$id'"
+    echo "  updated: $id"
+  else
+    OE_ID="$id" OE_SECRET="$secret" OE_DESC="$desc" python3 -c '
+import json, os
 print(json.dumps({"": "0", "credentials": {
-  "scope": "GLOBAL", "id": sys.argv[1], "secret": sys.argv[2], "description": sys.argv[3],
+  "scope": "GLOBAL", "id": os.environ["OE_ID"], "secret": os.environ["OE_SECRET"],
+  "description": os.environ["OE_DESC"],
   "$class": "org.jenkinsci.plugins.plaincredentials.impl.StringCredentialsImpl"}}))
-' "$id" "$secret" "$desc" \
-    | "${J[@]}" -fsS -H "$CRUMB" -X POST \
-        --data-urlencode json@- "$url" >/dev/null \
-    || fail "could not store credential '$id'"
-  echo "  stored: $id"
+' \
+      | "${J[@]}" -fsS -H "$CRUMB" -X POST \
+          --data-urlencode json@- \
+          "$JENKINS_URL/credentials/store/system/domain/_/createCredentials" >/dev/null \
+      || fail "could not create credential '$id'"
+    echo "  stored: $id"
+  fi
 }
 
 [ -n "${PG_PASSWORD:-}" ] \
@@ -250,7 +272,7 @@ kprod -n "$NS" rollout status deploy/bo-keycloak --timeout=600s \
 say "Creating the realm-reconciler client"
 KC=http://127.0.0.1:18189
 kprod -n "$NS" port-forward svc/bo-keycloak 18189:8080 >/dev/null 2>&1 &
-PF=$!; trap 'kill $PF 2>/dev/null; rm -f "$COOKIES"' EXIT
+PF=$!; trap 'kill $PF 2>/dev/null; rm -rf "$WORK"' EXIT   # WORK, not just the cookie jar: it holds the netrc
 for i in $(seq 30); do curl -fsS "$KC/realms/master" >/dev/null 2>&1 && break; sleep 1; done
 
 # Admin token. --data-urlencode keeps the password out of argv.
@@ -262,9 +284,13 @@ if [ -n "${KC_ADMIN_PASSWORD:-}" ]; then :; else
   KC_ADMIN_PASSWORD="${KC_ADMIN_PASSWORD_OVERRIDE:-}"
 fi
 
-if cred_exists bo-keycloak-reconciler-secret; then
-  echo "  realm-reconciler already provisioned — skipping (rerun-safe)"
-  RECON_SECRET=""
+# On a rerun the credential already exists, so there is nothing to store — but the client's ROLES
+# are still worth re-asserting, and skipping the whole section meant a drifted client (someone adding
+# manage-users by hand) would never be caught. Only the credential write is conditional.
+RECON_EXISTS=0
+cred_exists bo-keycloak-reconciler-secret && RECON_EXISTS=1
+if [ "$RECON_EXISTS" = 1 ] && [ -z "${KC_ADMIN_PASSWORD:-}${KC_ADMIN_PASSWORD_OVERRIDE:-}" ]; then
+  echo "  realm-reconciler already provisioned; no admin credential this run, so roles were not re-checked"
 else
 [ -n "${KC_ADMIN_PASSWORD:-}" ] || fail "the bootstrap admin password is not available in this run (it is only generated on the FIRST run). If the reconciler client still needs creating, pass the administrator you created at first boot: KC_ADMIN_USER=<you> KC_ADMIN_PASSWORD_OVERRIDE=<password>"
 
@@ -320,18 +346,30 @@ if missing:
 if roles:
     req("POST", f"/admin/realms/bleedingoptions/users/{sa['id']}/role-mappings/clients/{mgmt['id']}", roles)
 
-# Prove the negative rather than assume it: a prior run, or a hand edit, could have left the
-# forbidden roles mapped, and this client is supposed to be incapable of touching users.
-held = {r["name"] for r in (req("GET", f"/admin/realms/bleedingoptions/users/{sa['id']}/role-mappings/clients/{mgmt['id']}") or [])}
-leaked = held & forbidden
-if leaked:
-    sys.exit(f"realm-reconciler holds forbidden roles {sorted(leaked)} — it must never manage users")
+# Assert the held set is EXACTLY the six, not merely "contains them and none of four named bad
+# ones". A prior run, a hand edit, or a future default could leave some other realm-management role
+# mapped, and an allowlist that only rejects names it thought of is not an allowlist. Extras are
+# removed rather than reported, so the end state is the documented one either way.
+held_roles = req("GET", f"/admin/realms/bleedingoptions/users/{sa['id']}/role-mappings/clients/{mgmt['id']}") or []
+extra = [r for r in held_roles if r["name"] not in want]
+if extra:
+    req("DELETE", f"/admin/realms/bleedingoptions/users/{sa['id']}/role-mappings/clients/{mgmt['id']}",
+        [{"id": r["id"], "name": r["name"]} for r in extra])
+    held_roles = req("GET", f"/admin/realms/bleedingoptions/users/{sa['id']}/role-mappings/clients/{mgmt['id']}") or []
+
+held = {r["name"] for r in held_roles}
+if held != want:
+    sys.exit(f"realm-reconciler roles are {sorted(held)}, expected exactly {sorted(want)}")
 
 print(req("GET", f"/admin/realms/bleedingoptions/clients/{cid}/client-secret")["value"])
 PY
 )" || fail "could not create the realm-reconciler client"
 
-put_credential bo-keycloak-reconciler-secret "$RECON_SECRET" "bleedingoptions: realm-reconciler client secret"
+if [ "$RECON_EXISTS" = 1 ]; then
+  echo "  realm-reconciler already provisioned — roles re-asserted, credential left as is"
+else
+  put_credential bo-keycloak-reconciler-secret "$RECON_SECRET" "bleedingoptions: realm-reconciler client secret"
+fi
 fi
 kill $PF 2>/dev/null || true
 
