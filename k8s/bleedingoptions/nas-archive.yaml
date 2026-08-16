@@ -4,12 +4,14 @@
 # the data, so losing that node loses the database and every backup of it together. PGL-059's
 # off-node clause has been unmet since the tenant was built.
 #
-# TWO JOBS, because they answer different questions:
-#   * wal-ship  — every minute, moves completed WAL segments off the node. This is the "asynchronous
-#     backup of every update": archive_command drops segments in a local spool and never blocks a
-#     commit on the NAS, and this ships the spool. Recovery point ~= archive_timeout (60s).
-#   * base-backup — nightly pg_basebackup. WAL ALONE RESTORES NOTHING; it replays onto a base. An
-#     archive without a base is an expensive directory of files.
+# WHAT THIS FILE IS NOW. Only the shared configuration. The WAL shipper itself is a SIDECAR in the
+# bo-app-postgres pod (see app-postgres.yaml), because the spool is a ReadWriteOnce volume that pod
+# already holds — a separate CronJob would have to mount it alongside a running database.
+#
+# STILL MISSING, and it matters: the periodic pg_basebackup. WAL ALONE RESTORES NOTHING; it replays
+# onto a base. Until that exists this archive is an expensive directory of files, and PGL-104 is
+# unmet. It is not written here because a base backup that has never been restored from proves
+# nothing either — PGL-108's drill and PGL-104 belong in the same change.
 #
 # NAS: 192.168.100.100, backups under `database/` (given 2026-08-16). Layout keeps the two clusters
 # in SEPARATE prefixes (PGL-103A) — both generate identical WAL filenames, and a shared flat
@@ -19,9 +21,10 @@
 #   /volume1/database/bleedingoptions/bo-app/{base,wal}/
 #
 # ⚠️ NOT YET ACTIVE. `nas-backup-credentials` does not exist and no key is trusted on the NAS — SSH
-# from the production node returns "Permission denied (publickey,password)" as of 2026-08-16. These
-# manifests are correct but INERT until PGL-131's dedicated account exists and its key is stored via
-# the Jenkins path (PGL-132). They are suspended so they cannot half-run and report success.
+# from the production node returns "Permission denied (publickey,password)" as of 2026-08-16. The
+# sidecar mounts that Secret as OPTIONAL, so the database starts without it and the shipper simply
+# retries and fails; a missing backup credential must not be an outage. Nothing is archived off-node
+# until PGL-131's account exists and its key is stored via the Jenkins path (PGL-132).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -38,84 +41,20 @@ data:
   NAS_USER: "bo-backup"
   # PGL-122. Independently recoverable generations kept on the NAS.
   KEEP_GENERATIONS: "3"
----
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: bo-wal-ship
-  namespace: bleedingoptions
-  labels:
-    app.kubernetes.io/name: bo-wal-ship
-    app.kubernetes.io/part-of: bleedingoptions
-    app.kubernetes.io/component: backup
-spec:
-  schedule: "* * * * *"          # every minute; the spool is usually empty and the run costs nothing
-  timeZone: America/New_York
-  suspend: true                  # INERT until the NAS account exists — see the header
-  concurrencyPolicy: Forbid      # a slow NAS must not stack runs on top of each other
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 3      # keep failures visible; this is the alerting surface (PGL-106)
-  jobTemplate:
-    spec:
-      backoffLimit: 2
-      template:
-        spec:
-          restartPolicy: Never
-          automountServiceAccountToken: false
-          nodeSelector:
-            node-role.kubernetes.io/control-plane: "true"
-          securityContext:
-            runAsUser: 70
-            runAsGroup: 70
-            runAsNonRoot: true
-            fsGroup: 70
-            seccompProfile:
-              type: RuntimeDefault
-          containers:
-            - name: ship
-              image: alpine:3.20
-              command: ["/bin/sh", "-c"]
-              args:
-                - |
-                  set -eu
-                  # rsync over SSH, not an NFS mount, and deliberately (PGL-130). A stale NFS mount
-                  # can hang indefinitely; this returns a non-zero exit the CronJob records as a
-                  # failure, which is what makes PGL-106's alert possible at all.
-                  apk add --no-cache openssh-client rsync >/dev/null
-                  install -m 700 -d ~/.ssh
-                  install -m 600 /creds/id_ed25519 ~/.ssh/id_ed25519
-                  install -m 644 /creds/known_hosts ~/.ssh/known_hosts
-                  for CLUSTER in bo-keycloak bo-app; do
-                    SPOOL="/archive/$CLUSTER/wal"
-                    [ -d "$SPOOL" ] || continue
-                    # --remove-source-files empties the spool ONLY for files that transferred, so a
-                    # partial run leaves the rest to retry rather than losing segments. The spool
-                    # filling is the signal that shipping has stopped (PGL-106).
-                    rsync -a --remove-source-files \
-                      -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
-                      "$SPOOL"/ "$NAS_USER@$NAS_HOST:$NAS_ROOT/$CLUSTER/wal/"
-                  done
-              envFrom:
-                - configMapRef:
-                    name: nas-archive-config
-              volumeMounts:
-                - name: archive
-                  mountPath: /archive
-                - name: creds
-                  mountPath: /creds
-                  readOnly: true
-              resources:
-                requests: { cpu: 50m, memory: 64Mi }
-                limits:   { cpu: 200m, memory: 128Mi }
-              securityContext:
-                allowPrivilegeEscalation: false
-                capabilities:
-                  drop: ["ALL"]
-          volumes:
-            - name: archive
-              persistentVolumeClaim:
-                claimName: archive-bo-app-postgres-0
-            - name: creds
-              secret:
-                secretName: nas-backup-credentials
-                defaultMode: 0400
+# ⚠️ WHAT IS NOT HERE, DELIBERATELY: the Keycloak database's archive.
+#
+# §2 of the design decides bo-keycloak-postgres is backed up FIRST, and this PR does not do it. Saying
+# so plainly, because a half-built backup that nobody knows is half-built is the failure this whole
+# piece of work exists to prevent.
+#
+# The reason it is separate: bo-keycloak-postgres is RUNNING and serving real users. Turning on
+# archive_mode requires a RESTART, and adding an archive volume to a live StatefulSet means recreating
+# its pod. That is a deliberate maintenance action on the tenant's identity provider, not something to
+# fold into the PR that introduces an unrelated database.
+#
+# An earlier draft of this file had a CronJob looping over BOTH clusters — including a bo-keycloak
+# spool directory that does not exist and never would have. It would have run every minute, found
+# nothing, exited zero, and looked exactly like a working backup.
+#
+# Keycloak's archive is the next change: add the volume and the two settings, restart in a window,
+# then prove a restore (PGL-108) before trusting either.

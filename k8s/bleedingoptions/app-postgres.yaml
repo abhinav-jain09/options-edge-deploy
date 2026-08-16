@@ -135,7 +135,7 @@ spec:
             # command touches local disk only. A non-zero exit makes Postgres RETAIN the segment and
             # retry — correct, and why PGL-106 alerts on the spool filling.
             - -c
-            - archive_command=test ! -f /archive/wal/%f && cp %p /archive/wal/%f
+            - archive_command=test ! -f /archive/spool/%f && cp %p /archive/spool/%f
           volumeMounts:
             - name: pgdata
               mountPath: /var/lib/postgresql/data
@@ -164,6 +164,62 @@ spec:
             capabilities:
               drop: ["ALL"]
             # NOT readOnlyRootFilesystem: postgres writes to /tmp and /var/run in normal operation.
+
+        # PGL-103. The WAL shipper is a SIDECAR, not a CronJob, and that is load-bearing.
+        #
+        # The spool lives on a ReadWriteOnce PVC already mounted by this pod. A CronJob pod would have
+        # to mount the SAME RWO volume while the database holds it — which is at best node-dependent
+        # and at worst silently never schedules, leaving an archive that appears configured and ships
+        # nothing. In the pod, the shipper shares the volume by construction.
+        #
+        # It also fails in the right place: if shipping stops, the spool fills, and the alert is about
+        # THIS pod rather than a job whose absence nobody notices.
+        - name: wal-ship
+          image: alpine:3.20
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              apk add --no-cache openssh-client rsync >/dev/null
+              install -m 700 -d /tmp/.ssh
+              install -m 600 /creds/id_ed25519 /tmp/.ssh/id_ed25519
+              install -m 644 /creds/known_hosts /tmp/.ssh/known_hosts
+              mkdir -p /archive/spool
+              while true; do
+                # --remove-source-files empties the spool ONLY for segments that transferred, so a
+                # partial run leaves the rest to retry rather than losing WAL. A non-zero exit is
+                # tolerated and retried: the spool filling is the real signal (PGL-106), not a
+                # crashlooping sidecar that would take the DATABASE down with it.
+                rsync -a --remove-source-files \
+                  -e "ssh -i /tmp/.ssh/id_ed25519 -o UserKnownHostsFile=/tmp/.ssh/known_hosts -o StrictHostKeyChecking=yes" \
+                  /archive/spool/ "$NAS_USER@$NAS_HOST:$NAS_ROOT/bo-app/wal/" || true
+                sleep 30
+              done
+          envFrom:
+            - configMapRef:
+                name: nas-archive-config
+          volumeMounts:
+            - name: archive
+              mountPath: /archive
+            - name: nas-creds
+              mountPath: /creds
+              readOnly: true
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits:   { cpu: 100m, memory: 96Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: nas-creds
+          secret:
+            secretName: nas-backup-credentials
+            defaultMode: 0400
+            # OPTIONAL so the pod starts before the NAS account exists. Without this the whole
+            # StatefulSet — the database — would be unschedulable until a backup credential is
+            # created, which makes a missing backup into an outage.
+            optional: true
   volumeClaimTemplates:
     - metadata:
         name: pgdata
