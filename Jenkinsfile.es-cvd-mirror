@@ -28,7 +28,7 @@ pipeline {
     string(name: 'SOURCE_PORT',          defaultValue: '9092',          description: 'Source Kafka port.')
     string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '127.0.0.1',     description: 'Target env broker IP (dev = 127.0.0.1, prod = 192.168.100.252).')
     string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092, prod = 9092).')
-    choice(name: 'TOPIC', choices: ['es.futures.cvd.bars', 'es.futures.cvd'], description: 'CVD topic to mirror (frozen allow-list — the shape contract below is per-topic).')
+    choice(name: 'TOPIC', choices: ['es.futures.cvd.bars', 'es.futures.cvd', 'es.futures.cvd.levels'], description: 'CVD topic to mirror (frozen allow-list — the shape contract below is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
   }
   options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
@@ -144,6 +144,7 @@ pipeline {
           case "$TOPIC" in
             es.futures.cvd.bars) PARTS=1; POLICY=compact,delete; RET=-1 ;;
             es.futures.cvd)      PARTS=1; POLICY=compact,delete; RET=43200000 ;;
+            es.futures.cvd.levels) PARTS=1; POLICY=compact; RET=-1 ;;   # U16 AA1: pure compact, never expires
             *) echo "FAIL: topic $TOPIC not in the cvd-mirror allow-list"; exit 1 ;;
           esac
 
@@ -183,6 +184,22 @@ exec "$KBIN/kafka-mirror-maker" \\
 S
           chmod +x "$MDIR/run-mirror.sh"
 
+          # >>> BEGIN SHAPE ASSERTIONS (extracted verbatim by scripts/ci/es-cvd-mirror-shape-test.sh) <<<
+          # TARGET SCOPE, FAIL-CLOSED, BEFORE ANY MUTATION (ES-CVD-SPX-LEVELS-DESIGN.md CL-R6 L1/M1).
+          # U16's normative scope is es4 + PRODUCTION only: the dev resources must stay ABSENT. This
+          # job's target parameters DEFAULT to dev (127.0.0.1:19092), and `--create --if-not-exists`
+          # on an absent dev topic would create it at the matching shape — after which every
+          # assertion below passes and the forbidden resource exists. So the production-only topics
+          # are gated on the EXACT production target here, before the create.
+          case "$TOPIC" in
+            es.futures.cvd.levels)
+              [ "$TGT" = "192.168.100.252:9092" ] || {
+                echo "FAIL: $TOPIC is PRODUCTION-ONLY (CL-R6 L1/M1) but the target is $TGT."
+                echo "      Re-run with TARGET_SPX_CLUSTER_IP=192.168.100.252 TARGET_PORT=9092."
+                echo "      Dev resources for U16 must stay absent until the design says otherwise."
+                exit 1
+              } ;;
+          esac
           # EFFECTIVE config reader (merge-gate finding 2): first match of kafka-configs --describe
           # for the named config — dynamic if set, else the broker-default synonym; empty output is
           # a query FAILURE, never an implicit pass.
@@ -218,17 +235,22 @@ S
           # key->partition mapping mid-stream; a policy mismatch would truncate the live view.
           TD=$("$KBIN/kafka-topics" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>/dev/null)
           printf '%s\\n' "$TD" | grep -Eq "PartitionCount: ${PARTS}([[:space:]]|$)" || { echo "FAIL: target $TOPIC exists with wrong partition count (want $PARTS): $TD"; exit 1; }
-          TC=$("$KBIN/kafka-configs" --bootstrap-server "$TGT" --describe --topic "$TOPIC" 2>/dev/null || true)
-          case "$POLICY" in
-            compact,delete) printf '%s\\n' "$TC" | grep -q "cleanup.policy=compact,delete" || { echo "FAIL: target $TOPIC not compact,delete: $TC"; exit 1; } ;;
-            delete)         printf '%s\\n' "$TC" | grep -q "cleanup.policy=compact" && { echo "FAIL: target $TOPIC unexpectedly compacted: $TC"; exit 1; } || true ;;
-          esac
+          # EXACT policy equality, read the same way the source side reads it. The old per-policy
+          # `case` matched SUBSTRINGS, so it could not express the U16 pure-compact contract at all:
+          # a pre-existing es.futures.cvd.levels sitting at compact,delete satisfied a
+          # "grep compact" arm while its delete half ages out the latest attestation — the one
+          # record the producer reads back at startup (AA1). --create --if-not-exists repairs
+          # nothing on an existing topic, so this assertion is the only thing standing between a
+          # drifted target and a mirror that runs against it.
+          TPOL=$(eff "$TGT" "$TOPIC" cleanup.policy) || exit 1
+          [ "$TPOL" = "$POLICY" ] || { echo "FAIL: target $TOPIC cleanup.policy=$TPOL, frozen contract says $POLICY"; exit 1; }
           # Target EFFECTIVE retention must equal the frozen contract even for a PRE-EXISTING topic
           # (merge-gate finding 2): --create --if-not-exists binds nothing on an existing topic, and
           # a cvd.bars sitting at a finite default would silently delete overnight history.
           TRET=$(eff "$TGT" "$TOPIC" retention.ms) || exit 1
           [ "$TRET" = "$RET" ] || { echo "FAIL: target $TOPIC retention.ms=$TRET, frozen contract says $RET"; exit 1; }
           echo "config generated; target $TOPIC verified: $PARTS partition(s), $POLICY"
+          # >>> END SHAPE ASSERTIONS <<<
         '''
       }
     }

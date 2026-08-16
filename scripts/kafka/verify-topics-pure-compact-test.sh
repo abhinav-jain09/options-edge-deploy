@@ -17,6 +17,7 @@ DECLARED="$OPTIONS_EDGE_TOPICS ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}"
 # answers FROM the declarations, so the positive case means "a broker that matches topics.env"
 # rather than "a broker that matches a constant somebody typed here twice".
 PROD_ONLY_NAMES="$(printf '%s' "${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}" | tr ' ' '\n' | cut -d: -f1 | tr '\n' ' ')"
+PURE_COMPACT_NAMES="${OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS:-}"   # U16: these report compact at the fake broker
 RETENTIONS="${OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES:-}"
 
 OUT="$(mktemp)"
@@ -45,9 +46,11 @@ EOF
 #!/usr/bin/env bash
 name=""; prev=""
 for a in "\$@"; do [ "\$prev" = "--entity-name" ] && name="\$a"; prev="\$a"; done
-# Compact everywhere except the prod-only topics, which topics.env declares plain delete.
+# Compact everywhere except the prod-only topics, which topics.env declares plain delete —
+# EXCEPT the pure-compact prod-only topics (U16), which are compact by contract.
 pol=compact
 case " $PROD_ONLY_NAMES " in *" \$name "*) pol=delete;; esac
+case " $PURE_COMPACT_NAMES " in *" \$name "*) pol=compact;; esac
 [ "\$name" = "spx.basis.state" ] && pol="$policy"
 case "$pol_ov" in "\$name="*) pol="${pol_ov#*=}";; esac
 ret=\$(printf '%s' "$RETENTIONS" | tr ' ' '\\n' | awk -F= -v n="\$name" '\$1 == n {print \$2; exit}')
@@ -89,9 +92,15 @@ check "delete FAILS the contract"              1 delete         "cleanup.policy=
 check "compact,delete FAILS (the delete half)" 1 compact,delete  "cleanup.policy='compact,delete'"
 check "delete,compact FAILS"                   1 delete,compact  "cleanup.policy='delete,compact'"
 
-# es4 declares its own topics and NO pure-compact ones, so the SPX contract must not be applied
-# to it -- the drift on spx.basis.state must be invisible here because that topic is not es4's.
-SET=es4  check "es4 checks its OWN (empty) list"     0 delete "TOPIC_SET='es4'"
+# es4 checks its OWN pure-compact list, never the SPX one -- the drift on spx.basis.state must be
+# invisible here because that topic is not es4's. Since U16 the es4 list is NON-empty
+# (es.futures.cvd.levels, AA1: pure compact so the latest attestation never ages out), so the
+# positive case proves the es4 contract is satisfied rather than skipped, and the negative case
+# below proves it is actually enforced.
+SET=es4  check "es4 checks its OWN list, not the SPX one" 0 delete "TOPIC_SET='es4'"
+SET=es4 POL_OVERRIDE="es.futures.cvd.levels=compact,delete" \
+  check "es4 pure-compact is enforced" 1 delete \
+  "topic es.futures.cvd.levels cleanup.policy='compact,delete' but topics.env"
 SET=bogus check "unknown TOPIC_SET is refused"       1 compact "unknown TOPIC_SET"
 
 # Production enforces a SECOND contract on top of the pure-compact one, and nothing exercised it.

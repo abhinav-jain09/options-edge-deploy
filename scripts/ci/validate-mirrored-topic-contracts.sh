@@ -76,15 +76,34 @@ list_of() { # variable name -> its whitespace-split values, minus the "$VAR" sel
   { sed -nE "s/^$1=\"(.*)\"$/\\1/p" "$TOPICS_ENV" | tr ' ' '\n' | grep -v "^\\\$$1$" | grep -v '^$'; } || true
 }
 
-DECLARED="$(list_of OPTIONS_EDGE_TOPICS)"
-COMPACTED="$(list_of OPTIONS_EDGE_COMPACTED_TOPICS)"
-RETENTIONS="$(list_of OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES)"
+# U16 (ES-CVD-SPX-LEVELS-DESIGN.md L1/M1): production-only topics are DECLARED topics too — the
+# mirror install for one targets the production broker, where the PROD_ONLY sets apply; a dev
+# install of a prod-only topic fails its install-time shape assert (fail-closed by design).
+# PURE_COMPACT entries carry cleanup.policy=compact (no delete) and count as compacted here.
+DECLARED="$(list_of OPTIONS_EDGE_TOPICS)
+$(list_of OPTIONS_EDGE_PROD_ONLY_TOPICS)"
+COMPACTED="$(list_of OPTIONS_EDGE_COMPACTED_TOPICS)
+$(list_of OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS)"
+RETENTIONS="$(list_of OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES)
+$(list_of OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES)"
+# PURE-compact is a DIFFERENT policy from compacted, not a stronger flavour of it:
+# apply-topics.sh's topic_cleanup_policy() writes "compact" for a pure-compact topic and
+# "compact,delete" for a merely-compacted one. Comparing only a compacted boolean approved a
+# mirror that freezes POLICY=compact against a declaration that reconciles to compact,delete —
+# whose delete half ages out the very record the U16 producer reads back at startup.
+PURE_COMPACT="$(list_of OPTIONS_EDGE_PURE_COMPACT_TOPICS)
+$(list_of OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS)"
+EXACT_PARTITION="$(list_of OPTIONS_EDGE_EXACT_PARTITION_TOPICS)
+$(list_of OPTIONS_EDGE_PROD_ONLY_EXACT_PARTITION_TOPICS)"
 ES4_DECLARED="$(list_of OPTIONS_EDGE_ES4_TOPICS)"
 ES4_COMPACTED="$(list_of OPTIONS_EDGE_ES4_COMPACTED_TOPICS)"
+ES4_PURE_COMPACT="$(list_of OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS)"
+ES4_EXACT_PARTITION="$(list_of OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS)"
 ES4_RETENTIONS="$(list_of OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES)"
 
 # Fail closed on a parser that has drifted from the file, so no check below can pass vacuously.
-for v in DECLARED COMPACTED RETENTIONS ES4_DECLARED ES4_COMPACTED ES4_RETENTIONS; do
+for v in DECLARED COMPACTED RETENTIONS PURE_COMPACT EXACT_PARTITION \
+         ES4_DECLARED ES4_COMPACTED ES4_PURE_COMPACT ES4_EXACT_PARTITION ES4_RETENTIONS; do
   [ -n "${!v}" ] || { echo "FAIL: parsed an EMPTY $v from $TOPICS_ENV — the parser and the file have diverged, and the checks below would pass vacuously" >&2; exit 1; }
 done
 
@@ -111,6 +130,10 @@ check_unique OPTIONS_EDGE_ES4_TOPICS               "$ES4_DECLARED"  's/:[0-9]+$/
 check_unique OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES "$RETENTIONS"   's/=.*$//'
 check_unique OPTIONS_EDGE_COMPACTED_TOPICS         "$COMPACTED"     's/^//'
 check_unique OPTIONS_EDGE_ES4_COMPACTED_TOPICS     "$ES4_COMPACTED" 's/^//'
+check_unique OPTIONS_EDGE_PURE_COMPACT_TOPICS      "$PURE_COMPACT"   's/^//'
+check_unique OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS  "$ES4_PURE_COMPACT" 's/^//'
+check_unique OPTIONS_EDGE_EXACT_PARTITION_TOPICS   "$EXACT_PARTITION" 's/^//'
+check_unique OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS "$ES4_EXACT_PARTITION" 's/^//'
 check_unique OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES "$ES4_RETENTIONS" 's/=.*$//'
 
 # head -1, not tail -1: with duplicates rejected above these are single-valued, but where
@@ -263,24 +286,36 @@ for job in "${JOBS[@]}"; do
       dims="partitions=$parts(=es4) policy=$expect_policy retention=NOT-A-CONTRACT(create-time only)"
     fi
 
-    # 2) COMPACTION. The trap this file's own history is full of: declaring a compacted topic
-    #    without listing it makes apply-topics.sh reconcile cleanup.policy to plain delete.
-    case "$expect_policy" in
-      *compact*) want_compacted=yes ;;
-      *)         want_compacted=no  ;;
-    esac
+    # 2) CLEANUP POLICY, EXACTLY. Not "is it compacted": apply-topics.sh's topic_cleanup_policy()
+    #    resolves a PURE-compact declaration to "compact", a merely-compacted one to "compact,delete"
+    #    (pure wins — it is checked first), and anything else to the environment default (delete).
+    #    Comparing a boolean made `compact` and `compact,delete` interchangeable, which is precisely
+    #    the mismatch that silently ages out a compacted-forever attestation.
+    effective_policy() { # pure-list, compacted-list, topic -> the policy apply-topics.sh would write
+      if in_list "$1" "$3"; then echo "compact"
+      elif in_list "$2" "$3"; then echo "compact,delete"
+      else echo "delete"; fi
+    }
+    have_policy="$(effective_policy "$PURE_COMPACT" "$COMPACTED" "$topic")"
+    if [ "$have_policy" != "$expect_policy" ]; then
+      echo "FAIL: $jobname creates '$topic' with cleanup.policy=$expect_policy, but topics.env resolves"
+      echo "      it to '$have_policy' (pure-compact list: $(in_list "$PURE_COMPACT" "$topic" && echo yes || echo no),"
+      echo "      compacted list: $(in_list "$COMPACTED" "$topic" && echo yes || echo no)). apply-topics.sh"
+      echo "      rewrites cleanup.policy on every declared topic, so the deploy would reconcile the"
+      echo "      mirror's contract away — and 'compact,delete' where 'compact' is frozen ages out the"
+      echo "      latest value per key once retention elapses."
+      fail=1
+    fi
     have_compacted=no
-    in_list "$COMPACTED" "$topic" && have_compacted=yes
-    if [ "$want_compacted" != "$have_compacted" ]; then
-      if [ "$want_compacted" = yes ]; then
-        echo "FAIL: $jobname creates '$topic' with cleanup.policy=$expect_policy, but it is NOT in"
-        echo "      OPTIONS_EDGE_COMPACTED_TOPICS. apply-topics.sh would reconcile it to plain"
-        echo "      delete on every deploy and STRIP the compaction."
-      else
-        echo "FAIL: '$topic' is listed in OPTIONS_EDGE_COMPACTED_TOPICS, but $jobname creates it with"
-        echo "      cleanup.policy=$expect_policy. Compacting an append-only topic collapses it to"
-        echo "      one record per key."
-      fi
+    case "$have_policy" in *compact*) have_compacted=yes ;; esac
+
+    # 2b) EXACT PARTITION MEMBERSHIP. A frozen PARTS=n is only enforced by the deploy if the topic is
+    #     in the exact-partition set; otherwise apply-topics.sh treats the declared count as a FLOOR
+    #     and a widened topic reconciles clean while breaking the mirror's key->partition mapping.
+    if [ "$n_arms" -eq 1 ] && ! in_list "$EXACT_PARTITION" "$topic"; then
+      echo "FAIL: $jobname freezes '$topic' at $want_parts partition(s), but it is NOT in"
+      echo "      OPTIONS_EDGE_EXACT_PARTITION_TOPICS (nor the prod-only set), so apply-topics.sh treats"
+      echo "      the declared count as a MINIMUM and a widened topic would pass reconciliation."
       fail=1
     fi
 
@@ -293,11 +328,25 @@ for job in "${JOBS[@]}"; do
         echo "      mapping, so the two declarations must agree."
         fail=1
       fi
-      es4_compacted=no
-      in_list "$ES4_COMPACTED" "$topic" && es4_compacted=yes
-      if [ "$es4_compacted" != "$have_compacted" ]; then
-        echo "FAIL: '$topic' compaction disagrees across the clusters it is mirrored between:"
-        echo "      OPTIONS_EDGE_ES4_COMPACTED_TOPICS=$es4_compacted, OPTIONS_EDGE_COMPACTED_TOPICS=$have_compacted."
+      # The SOURCE resolves its own policy from its OWN lists (apply-topics.sh swaps the es4 set in
+      # wholesale under TOPIC_SET=es4). Compare the EXACT policies, not two booleans: a FROZEN job
+      # asserts POLICY against the SOURCE in its preflight, so a compact-vs-compact,delete drift here
+      # hard-fails the install rather than merely disagreeing on paper.
+      es4_policy="$(effective_policy "$ES4_PURE_COMPACT" "$ES4_COMPACTED" "$topic")"
+      if [ "$es4_policy" != "$have_policy" ]; then
+        echo "FAIL: '$topic' cleanup.policy disagrees across the clusters it is mirrored between:"
+        echo "      es4 resolves '$es4_policy', dev/prod resolves '$have_policy'."
+        fail=1
+      fi
+      if [ "$n_arms" -eq 1 ] && [ "$es4_policy" != "$expect_policy" ]; then
+        echo "FAIL: '$topic' resolves to cleanup.policy='$es4_policy' on es4 but $jobname freezes"
+        echo "      POLICY=$expect_policy and asserts it against the SOURCE in its preflight."
+        fail=1
+      fi
+      if [ "$n_arms" -eq 1 ] && ! in_list "$ES4_EXACT_PARTITION" "$topic"; then
+        echo "FAIL: '$topic' is not in OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS, so es4 reconciliation"
+        echo "      treats :$es4_parts as a MINIMUM while $jobname freezes the SOURCE at $want_parts"
+        echo "      partition(s) — a widened source silently violates the record-copy contract."
         fail=1
       fi
       # THE SOURCE CARRIES THE FROZEN RETENTION TOO, and it is a SEPARATE declaration:

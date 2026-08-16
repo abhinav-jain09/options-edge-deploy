@@ -42,10 +42,11 @@ done
 # Unconditional on purpose. A contract that only holds on production is not a contract, and the
 # environment where this was caught was dev.
 # Resolved by TOPIC_SET, the same switch apply-topics.sh makes. Without this the SPX list would
-# be verified against the es4 broker -- es4 declares its own topics and, today, NO pure-compact
-# ones at all, so the correct es4 behaviour is to check nothing rather than to check the wrong
-# cluster's contract. (es4 currently reaches apply-topics via scripts/es4/create-es-topics.sh and
-# never runs this script, but a check that is only correct because nobody calls it is not correct.)
+# be verified against the es4 broker -- es4 declares its own topics and its own pure-compact list
+# (since U16: es.futures.cvd.levels, AA1), so the correct es4 behaviour is to check THAT list
+# rather than the wrong cluster's contract. (es4 currently reaches apply-topics via
+# scripts/es4/create-es-topics.sh and never runs this script, but a check that is only correct
+# because nobody calls it is not correct.)
 case "${TOPIC_SET:-}" in
   "")   PURE_COMPACT_LIST="${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-}" ;;
   es4)  PURE_COMPACT_LIST="${OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS:-}" ;;
