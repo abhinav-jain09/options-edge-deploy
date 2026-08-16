@@ -49,7 +49,11 @@ metadata:
 spec:
   # ZERO. See the header. scripts/deploy/verify-public-gate.sh fails the deploy if this is raised
   # without the evidence file that records those three requirements passing on this digest.
-  replicas: 0
+  # Raised to 1 with PGL-072 evidence in hand: options-edge-web-deploy #960 built digest
+  # sha256:34d94e5e… from revision ac554eb9ff06, and the PGL-050/051/052 tests were run against that
+  # same revision (52 tests, 0 failures) — including PublicBoardUpstreamRequestTest, the one that
+  # observes the real outbound request and asserts no credential rides on it.
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: bleedingoptions-gamma-lab
