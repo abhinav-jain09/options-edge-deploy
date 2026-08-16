@@ -83,9 +83,18 @@ spec:
         node-role.kubernetes.io/control-plane: "true"
       automountServiceAccountToken: false   # PGL-061: nothing here talks to the Kubernetes API
       securityContext:
-        fsGroup: 999          # postgres group, so the mounted volume is writable
-        # PGL-061. postgres:16-alpine runs as uid 70; declaring it means a future image that runs as
-        # root fails to start instead of silently gaining privilege.
+        # postgres:16-alpine is uid/gid 70 — NOT 999, which is the Debian variant's. An earlier
+        # version set fsGroup: 999 while its own comment said 70, so the mounted volume would have
+        # been group-owned by a group the process is not in.
+        fsGroup: 70           # postgres group, so the mounted volume is writable
+        # PGL-061. The image declares NO `USER`: it starts as ROOT and drops to postgres via its
+        # entrypoint's gosu. So `runAsNonRoot: true` alone rejected the pod before the entrypoint
+        # ever ran — CreateContainerConfigError, "image will run as root", for 8 hours. Naming the
+        # uid explicitly is what actually makes the intent enforceable: the container now starts AS
+        # postgres, and a future image that tries to run as root still fails to start rather than
+        # silently gaining privilege.
+        runAsUser: 70
+        runAsGroup: 70
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
