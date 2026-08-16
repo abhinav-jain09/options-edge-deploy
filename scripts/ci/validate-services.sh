@@ -148,7 +148,8 @@ bash scripts/ci/validate-durable-topic-preservation.sh
 for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure-oi-anchor-topic-e2e-test.sh \
          scripts/kafka/verify-topics-pure-compact-test.sh \
          scripts/kafka/reset-preserved-topics-test.sh \
-         scripts/ci/validate-durable-topic-preservation-mutation-test.sh; do
+         scripts/ci/validate-durable-topic-preservation-mutation-test.sh \
+         scripts/ci/es-cvd-mirror-shape-test.sh; do
   if [ ! -x "$t" ]; then
     echo "FAIL: $t missing or not executable"
     exit 1
