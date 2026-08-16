@@ -146,23 +146,27 @@ spec:
             # Management port for probes. NOT in the Service above and never published to the tunnel
             # (PGL-058): an internet-visible health endpoint tells an attacker when the upstream is
             # down and tells nobody else anything useful.
-            - name: management
-              containerPort: 8081
           startupProbe:
             httpGet:
-              path: /actuator/health/readiness
-              port: management
+              path: /gamma-lab
+              port: http
             failureThreshold: 30
             periodSeconds: 5
           readinessProbe:
             httpGet:
-              path: /actuator/health/readiness
-              port: management
+              path: /gamma-lab
+              port: http
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /actuator/health/liveness
-              port: management
+              # /gamma-lab, NOT an actuator endpoint on a "management" port. This app runs no
+              # separate management server — it listens on 8080 only — so the probes dialled 8081
+              # and got connection refused, and the kubelet killed the pod on the startup probe
+              # before it could ever serve. Actuator answers 401 here anyway: the public security
+              # chain seals it, which is correct and makes it useless as a probe.
+              # /gamma-lab returns 200 unauthenticated (verified in-pod) — it is the page itself.
+              path: /gamma-lab
+              port: http
             periodSeconds: 20
           # §5.0 sizing.
           resources:
