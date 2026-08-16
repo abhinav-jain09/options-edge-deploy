@@ -76,9 +76,16 @@ list_of() { # variable name -> its whitespace-split values, minus the "$VAR" sel
   { sed -nE "s/^$1=\"(.*)\"$/\\1/p" "$TOPICS_ENV" | tr ' ' '\n' | grep -v "^\\\$$1$" | grep -v '^$'; } || true
 }
 
-DECLARED="$(list_of OPTIONS_EDGE_TOPICS)"
-COMPACTED="$(list_of OPTIONS_EDGE_COMPACTED_TOPICS)"
-RETENTIONS="$(list_of OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES)"
+# U16 (ES-CVD-SPX-LEVELS-DESIGN.md L1/M1): production-only topics are DECLARED topics too — the
+# mirror install for one targets the production broker, where the PROD_ONLY sets apply; a dev
+# install of a prod-only topic fails its install-time shape assert (fail-closed by design).
+# PURE_COMPACT entries carry cleanup.policy=compact (no delete) and count as compacted here.
+DECLARED="$(list_of OPTIONS_EDGE_TOPICS)
+$(list_of OPTIONS_EDGE_PROD_ONLY_TOPICS)"
+COMPACTED="$(list_of OPTIONS_EDGE_COMPACTED_TOPICS)
+$(list_of OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS)"
+RETENTIONS="$(list_of OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES)
+$(list_of OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES)"
 ES4_DECLARED="$(list_of OPTIONS_EDGE_ES4_TOPICS)"
 ES4_COMPACTED="$(list_of OPTIONS_EDGE_ES4_COMPACTED_TOPICS)"
 ES4_RETENTIONS="$(list_of OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES)"

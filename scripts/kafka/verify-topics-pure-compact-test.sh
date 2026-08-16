@@ -17,6 +17,7 @@ DECLARED="$OPTIONS_EDGE_TOPICS ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}"
 # answers FROM the declarations, so the positive case means "a broker that matches topics.env"
 # rather than "a broker that matches a constant somebody typed here twice".
 PROD_ONLY_NAMES="$(printf '%s' "${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}" | tr ' ' '\n' | cut -d: -f1 | tr '\n' ' ')"
+PURE_COMPACT_NAMES="${OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS:-}"   # U16: these report compact at the fake broker
 RETENTIONS="${OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES:-}"
 
 OUT="$(mktemp)"
@@ -45,9 +46,11 @@ EOF
 #!/usr/bin/env bash
 name=""; prev=""
 for a in "\$@"; do [ "\$prev" = "--entity-name" ] && name="\$a"; prev="\$a"; done
-# Compact everywhere except the prod-only topics, which topics.env declares plain delete.
+# Compact everywhere except the prod-only topics, which topics.env declares plain delete —
+# EXCEPT the pure-compact prod-only topics (U16), which are compact by contract.
 pol=compact
 case " $PROD_ONLY_NAMES " in *" \$name "*) pol=delete;; esac
+case " $PURE_COMPACT_NAMES " in *" \$name "*) pol=compact;; esac
 [ "\$name" = "spx.basis.state" ] && pol="$policy"
 case "$pol_ov" in "\$name="*) pol="${pol_ov#*=}";; esac
 ret=\$(printf '%s' "$RETENTIONS" | tr ' ' '\\n' | awk -F= -v n="\$name" '\$1 == n {print \$2; exit}')

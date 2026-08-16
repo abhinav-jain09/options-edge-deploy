@@ -1,0 +1,101 @@
+# promtool unit series (O3/P4): per declared instance — firing, disabled-gateway suppression,
+# out-of-RTH suppression, and an RTH-boundary reset for the `for:`-windowed rules.
+rule_files:
+  - cvd-spx-levels-alerts.yml
+evaluation_interval: 1m
+tests:
+  # unavailable WARN fires after 10 continuous in-RTH minutes; HIGH not yet at 12m
+  - interval: 1m
+    input_series:
+      - series: 'align_cvd_levels_unavailable_active{reason="source_stale"}'
+        values: '1x15'
+      - series: 'gateway_cvd_spx_levels_enabled'
+        values: '1x15'
+      - series: 'es_session_rth_active'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: CvdSpxLevelsUnavailableWarn
+        exp_alerts:
+          - exp_labels: { severity: warning, reason: source_stale }
+            exp_annotations:
+              summary: "CVD SPX levels unavailable (source_stale) for 10 in-RTH minutes"
+      - eval_time: 12m
+        alertname: CvdSpxLevelsUnavailableHigh
+        exp_alerts: []
+  # disabled gateway suppresses every rule
+  - interval: 1m
+    input_series:
+      - series: 'align_cvd_levels_unavailable_active{reason="source_absent"}'
+        values: '1x40'
+      - series: 'cvd_levels_overflow_active'
+        values: '1x40'
+      - series: 'cvd_levels_publish_failures_total'
+        values: '0+1x40'
+      - series: 'align_cvd_levels_publish_failures_total'
+        values: '0+1x40'
+      - series: 'gateway_cvd_spx_levels_drops_total'
+        values: '0+1x40'
+      - series: 'gateway_cvd_spx_levels_enabled'
+        values: '0x40'
+      - series: 'es_session_rth_active'
+        values: '1x40'
+    alert_rule_test:
+      - { eval_time: 35m, alertname: CvdSpxLevelsUnavailableWarn, exp_alerts: [] }
+      - { eval_time: 35m, alertname: CvdSpxLevelsUnavailableHigh, exp_alerts: [] }
+      - { eval_time: 35m, alertname: CvdLevelsOverflowHigh, exp_alerts: [] }
+      - { eval_time: 35m, alertname: CvdLevelsPublishFailuresWarn, exp_alerts: [] }
+      - { eval_time: 35m, alertname: CvdSpxLevelsAlignPublishFailuresWarn, exp_alerts: [] }
+      - { eval_time: 35m, alertname: CvdSpxLevelsGatewayDropsWarn, exp_alerts: [] }
+  # out-of-RTH suppresses every rule
+  - interval: 1m
+    input_series:
+      - series: 'align_cvd_levels_unavailable_active{reason="source_stale"}'
+        values: '1x40'
+      - series: 'cvd_levels_overflow_active'
+        values: '1x40'
+      - series: 'cvd_levels_publish_failures_total'
+        values: '0+1x40'
+      - series: 'align_cvd_levels_publish_failures_total'
+        values: '0+1x40'
+      - series: 'gateway_cvd_spx_levels_drops_total'
+        values: '0+1x40'
+      - series: 'gateway_cvd_spx_levels_enabled'
+        values: '1x40'
+      - series: 'es_session_rth_active'
+        values: '0x40'
+    alert_rule_test:
+      - { eval_time: 35m, alertname: CvdSpxLevelsUnavailableWarn, exp_alerts: [] }
+      - { eval_time: 35m, alertname: CvdSpxLevelsUnavailableHigh, exp_alerts: [] }
+      - { eval_time: 35m, alertname: CvdLevelsOverflowHigh, exp_alerts: [] }
+      - { eval_time: 35m, alertname: CvdLevelsPublishFailuresWarn, exp_alerts: [] }
+      - { eval_time: 35m, alertname: CvdSpxLevelsAlignPublishFailuresWarn, exp_alerts: [] }
+      - { eval_time: 35m, alertname: CvdSpxLevelsGatewayDropsWarn, exp_alerts: [] }
+  # RTH boundary crossing RESETS the for: window (8 in-RTH minutes, gap, 8 more: no WARN)
+  - interval: 1m
+    input_series:
+      - series: 'align_cvd_levels_unavailable_active{reason="source_stale"}'
+        values: '1x20'
+      - series: 'gateway_cvd_spx_levels_enabled'
+        values: '1x20'
+      - series: 'es_session_rth_active'
+        values: '1x8 0x3 1x9'
+    alert_rule_test:
+      - { eval_time: 19m, alertname: CvdSpxLevelsUnavailableWarn, exp_alerts: [] }
+  # overflow fires HIGH after 5 in-RTH minutes and resets at the roll (gauge back to 0)
+  - interval: 1m
+    input_series:
+      - series: 'cvd_levels_overflow_active'
+        values: '1x7 0x5'
+      - series: 'gateway_cvd_spx_levels_enabled'
+        values: '1x12'
+      - series: 'es_session_rth_active'
+        values: '1x12'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: CvdLevelsOverflowHigh
+        exp_alerts:
+          - exp_labels: { severity: high }
+            exp_annotations:
+              summary: "CVD levels profile OVERFLOW latched (raise CVD_LEVELS_MAX_BUCKETS or investigate tape corruption; resolves at the session roll)"
+      - { eval_time: 11m, alertname: CvdLevelsOverflowHigh, exp_alerts: [] }

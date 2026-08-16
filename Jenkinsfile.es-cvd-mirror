@@ -28,7 +28,7 @@ pipeline {
     string(name: 'SOURCE_PORT',          defaultValue: '9092',          description: 'Source Kafka port.')
     string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '127.0.0.1',     description: 'Target env broker IP (dev = 127.0.0.1, prod = 192.168.100.252).')
     string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092, prod = 9092).')
-    choice(name: 'TOPIC', choices: ['es.futures.cvd.bars', 'es.futures.cvd'], description: 'CVD topic to mirror (frozen allow-list — the shape contract below is per-topic).')
+    choice(name: 'TOPIC', choices: ['es.futures.cvd.bars', 'es.futures.cvd', 'es.futures.cvd.levels'], description: 'CVD topic to mirror (frozen allow-list — the shape contract below is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
   }
   options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
@@ -144,6 +144,7 @@ pipeline {
           case "$TOPIC" in
             es.futures.cvd.bars) PARTS=1; POLICY=compact,delete; RET=-1 ;;
             es.futures.cvd)      PARTS=1; POLICY=compact,delete; RET=43200000 ;;
+            es.futures.cvd.levels) PARTS=1; POLICY=compact; RET=-1 ;;   # U16 AA1: pure compact, never expires
             *) echo "FAIL: topic $TOPIC not in the cvd-mirror allow-list"; exit 1 ;;
           esac
 

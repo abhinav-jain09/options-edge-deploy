@@ -94,6 +94,10 @@ expect_fail "$R" "retention override dropped entirely" "asserts retention.ms=-1"
 
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.futures\.cvd=43200000/ es.futures.cvd=-1/'
 expect_fail "$R" "cvd snapshot retention drifted from the frozen arm" "asserts retention.ms=43200000"
+# U16: the pure-compact levels topic must keep retention -1 (AA1: the latest attestation never
+# ages out — a finite retention would erase the ownership-then-scan baseline).
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES=/s/ es\.futures\.cvd\.levels=-1/ es.futures.cvd.levels=43200000/'
+expect_fail "$R" "cvd levels retention drifted from the frozen arm" "asserts retention.ms=-1"
 
 echo "--- compaction, in both directions ---"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.options\.indicators\.snapshot\.current es\.futures\.aggressor-flow/ es.futures.aggressor-flow/'
@@ -108,7 +112,7 @@ R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.strike-intelligence-by-strike:32
 expect_fail "$R" "COPIED topic missing from the es4 set" "no reviewed"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/es\.tape-zones\.board:1 es\.tape-zones\.cells:4/es.tape-zones.board:4 es.tape-zones.cells:4/'
 expect_fail "$R" "source and target disagree on partitions" "must agree"
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.tape-zones\.cells es\.tape-zones\.board"/ es.tape-zones.cells"/'
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/s/ es\.tape-zones\.board / /'
 expect_fail "$R" "source and target disagree on compaction" "compaction disagrees across"
 
 echo "--- the SOURCE cluster's retention is a separate declaration and is gated too ---"

@@ -194,4 +194,23 @@ for r in "$TMP/mono-production.yaml" "$TMP/svc-reversal-confirmation-production.
 done
 echo "auto-hunt flags: effective REVERSAL_HUNT_ENABLED + REVERSAL_HUNT_AUTO_ARM = true in both rendered mirrors"
 
+echo "=== 8) U16 CVD-levels cross-service timing inequalities (ES-CVD-SPX-LEVELS-DESIGN.md CL-R10/G14) ==="
+# Resolved per environment: an env var in the rendered production manifests overrides the code
+# default. The inequalities keep staleness windows wider than the attestation heartbeats they
+# watch (+2s margin; UI adds the 5s browser-skew allowance).
+cvd_env() { # var default -> resolved value from the production render (or the default)
+  local v
+  v="$(grep -A1 "name: $1\b" "$TMP/mono-production.yaml" 2>/dev/null | sed -nE 's/ *value: "?([0-9]+)"?/\1/p' | head -1)"
+  echo "${v:-$2}"
+}
+if [ -f "$TMP/mono-production.yaml" ]; then
+  HB="$(cvd_env CVD_LEVELS_HEARTBEAT_MS 5000)"
+  SRC_STALE="$(cvd_env CVD_LEVELS_SOURCE_STALE_MS 15000)"
+  ALIGN_HB="$(cvd_env CVD_LEVELS_ALIGN_HEARTBEAT_MS 5000)"
+  UI_STALE="$(cvd_env CVD_LEVELS_UI_STALE_MS 20000)"
+  [ "$SRC_STALE" -gt "$((HB + 2000))" ] || { echo "FAIL: CVD_LEVELS_SOURCE_STALE_MS ($SRC_STALE) must exceed CVD_LEVELS_HEARTBEAT_MS ($HB) + 2000"; exit 1; }
+  [ "$UI_STALE" -gt "$((ALIGN_HB + 7000))" ] || { echo "FAIL: CVD_LEVELS_UI_STALE_MS ($UI_STALE) must exceed CVD_LEVELS_ALIGN_HEARTBEAT_MS ($ALIGN_HB) + 7000 (5s skew + 2s margin)"; exit 1; }
+  echo "cvd-levels timing: SOURCE_STALE=$SRC_STALE > HB=$HB+2000; UI_STALE=$UI_STALE > ALIGN_HB=$ALIGN_HB+7000"
+fi
+
 echo "=== validate-services: OK ==="
