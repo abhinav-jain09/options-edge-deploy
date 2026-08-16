@@ -1,0 +1,121 @@
+# Durable backup to the NAS (PGL-103..PGL-132).
+#
+# WHAT THIS REPLACES. bo-keycloak-backup writes pg_dump output to a hostPath on the SAME k3s node as
+# the data, so losing that node loses the database and every backup of it together. PGL-059's
+# off-node clause has been unmet since the tenant was built.
+#
+# TWO JOBS, because they answer different questions:
+#   * wal-ship  — every minute, moves completed WAL segments off the node. This is the "asynchronous
+#     backup of every update": archive_command drops segments in a local spool and never blocks a
+#     commit on the NAS, and this ships the spool. Recovery point ~= archive_timeout (60s).
+#   * base-backup — nightly pg_basebackup. WAL ALONE RESTORES NOTHING; it replays onto a base. An
+#     archive without a base is an expensive directory of files.
+#
+# NAS: 192.168.100.100, backups under `database/` (given 2026-08-16). Layout keeps the two clusters
+# in SEPARATE prefixes (PGL-103A) — both generate identical WAL filenames, and a shared flat
+# directory lets one silently overwrite the other's segments, discovered only at restore.
+#
+#   /volume1/database/bleedingoptions/bo-keycloak/{base,wal}/
+#   /volume1/database/bleedingoptions/bo-app/{base,wal}/
+#
+# ⚠️ NOT YET ACTIVE. `nas-backup-credentials` does not exist and no key is trusted on the NAS — SSH
+# from the production node returns "Permission denied (publickey,password)" as of 2026-08-16. These
+# manifests are correct but INERT until PGL-131's dedicated account exists and its key is stored via
+# the Jenkins path (PGL-132). They are suspended so they cannot half-run and report success.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nas-archive-config
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+data:
+  NAS_HOST: "192.168.100.100"
+  NAS_ROOT: "/volume1/database/bleedingoptions"
+  # PGL-131. NOT an administrator, and NOT the account the production node uses. It needs write into
+  # this share and nothing else — a backup target reachable with the production credential is a copy,
+  # not a backup (PGL-127).
+  NAS_USER: "bo-backup"
+  # PGL-122. Independently recoverable generations kept on the NAS.
+  KEEP_GENERATIONS: "3"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bo-wal-ship
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-wal-ship
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "* * * * *"          # every minute; the spool is usually empty and the run costs nothing
+  timeZone: America/New_York
+  suspend: true                  # INERT until the NAS account exists — see the header
+  concurrencyPolicy: Forbid      # a slow NAS must not stack runs on top of each other
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3      # keep failures visible; this is the alerting surface (PGL-106)
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: "true"
+          securityContext:
+            runAsUser: 70
+            runAsGroup: 70
+            runAsNonRoot: true
+            fsGroup: 70
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: ship
+              image: alpine:3.20
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  # rsync over SSH, not an NFS mount, and deliberately (PGL-130). A stale NFS mount
+                  # can hang indefinitely; this returns a non-zero exit the CronJob records as a
+                  # failure, which is what makes PGL-106's alert possible at all.
+                  apk add --no-cache openssh-client rsync >/dev/null
+                  install -m 700 -d ~/.ssh
+                  install -m 600 /creds/id_ed25519 ~/.ssh/id_ed25519
+                  install -m 644 /creds/known_hosts ~/.ssh/known_hosts
+                  for CLUSTER in bo-keycloak bo-app; do
+                    SPOOL="/archive/$CLUSTER/wal"
+                    [ -d "$SPOOL" ] || continue
+                    # --remove-source-files empties the spool ONLY for files that transferred, so a
+                    # partial run leaves the rest to retry rather than losing segments. The spool
+                    # filling is the signal that shipping has stopped (PGL-106).
+                    rsync -a --remove-source-files \
+                      -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes" \
+                      "$SPOOL"/ "$NAS_USER@$NAS_HOST:$NAS_ROOT/$CLUSTER/wal/"
+                  done
+              envFrom:
+                - configMapRef:
+                    name: nas-archive-config
+              volumeMounts:
+                - name: archive
+                  mountPath: /archive
+                - name: creds
+                  mountPath: /creds
+                  readOnly: true
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits:   { cpu: 200m, memory: 128Mi }
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+          volumes:
+            - name: archive
+              persistentVolumeClaim:
+                claimName: archive-bo-app-postgres-0
+            - name: creds
+              secret:
+                secretName: nas-backup-credentials
+                defaultMode: 0400

@@ -221,3 +221,60 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+---
+# PGL-101. The application database accepts connections from the PUBLIC WEB POD ONLY.
+#
+# It holds watchlists, written through the first mutation endpoint the public surface has ever had.
+# Keycloak has no business here and neither has anything else in the namespace, so the selector names
+# exactly one client rather than allowing the namespace.
+#
+# ⚠️ NOT ENFORCED TODAY. Verified 2026-08-16: k3s/flannel does not enforce NetworkPolicies without
+# kube-router, and the public pod can already reach `options-edge` freely. This declares the intended
+# boundary and must NOT be relied upon as one until enforcement is proven (PGL-035). Writing it now
+# means the intent is recorded and takes effect the moment enforcement lands.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-postgres-ingress-web-only
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bo-app-postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bleedingoptions-gamma-lab
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# PGL-129. The public web pod may reach the application database — inside this namespace only.
+#
+# The existing public-web-egress policy allows exactly bo-keycloak:8080 and stock-gex-service:8021.
+# A NetworkPolicy is additive across policies selecting the same pod, so this grants the new hop
+# without reopening the two that already exist, and adds NO cross-namespace reach.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: public-web-egress-app-postgres
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bleedingoptions-gamma-lab
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bo-app-postgres
+      ports:
+        - protocol: TCP
+          port: 5432

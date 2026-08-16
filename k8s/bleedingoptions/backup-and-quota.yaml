@@ -171,14 +171,19 @@ metadata:
     app.kubernetes.io/part-of: bleedingoptions
 spec:
   hard:
-    # Sized for the three workloads at their §5.0 limits plus headroom for one rollout surge:
-    # keycloak 1/1536Mi, postgres 500m/512Mi, web 1/1Gi.
+    # Sized for the four workloads at their §5.0 limits plus headroom for one rollout surge:
+    # keycloak 1/1536Mi, keycloak-postgres 500m/512Mi, web 1/1Gi, app-postgres 300m/384Mi.
     requests.cpu: "3"
     requests.memory: 3Gi
     limits.cpu: "6"
     limits.memory: 6Gi
     pods: "12"
-    persistentvolumeclaims: "2"
+    # RAISED from 2 for bo-app-postgres (PGL-092), which needs TWO: its data volume and a SEPARATE
+    # WAL spool. At 2 the StatefulSet would have been admitted and then never got volumes — the
+    # quota refuses the PVC, not the pod, so the failure appears as a StatefulSet stuck at 0/1 with
+    # nothing obviously wrong in the pod spec.
+    #   1 keycloak pgdata + 1 app pgdata + 1 app archive = 3, plus one spare.
+    persistentvolumeclaims: "4"
 ---
 # Defaults and per-container ceilings, so a workload added later cannot arrive unbounded (PGL-064).
 apiVersion: v1

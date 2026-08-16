@@ -29,4 +29,9 @@ resources:
   - keycloak-realm-configmap.yaml
   - keycloak-postgres.yaml
   - keycloak-deployment.yaml
+  # PGL-092. The application database, for the watchlist. Separate instance from Keycloak's on
+  # purpose — see the header of app-postgres.yaml.
+  - app-postgres.yaml
+  # PGL-103. WAL and base backups to the NAS. SUSPENDED until the NAS account exists.
+  - nas-archive.yaml
   - backup-and-quota.yaml
