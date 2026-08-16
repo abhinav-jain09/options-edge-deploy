@@ -497,6 +497,31 @@ for key in eventsEnabled eventsExpiration adminEventsEnabled adminEventsDetailsE
   fi
 done
 
+# --- master realm frontend URL (PGL-036B) --------------------------------------------------------
+# The MASTER realm — the one holding the Keycloak superuser — must authenticate over the LAN, not
+# over the public hostname.
+#
+# Keycloak derives every realm's frontend URL from KC_HOSTNAME, which is the PUBLIC name. The tunnel
+# deliberately 404s /realms/master and /admin so the master realm and the admin console are not on
+# the internet. Those two facts together broke the LAN admin console: it loaded from
+# 192.168.100.252:8189, then sent the browser to https://auth.bleedingoptions.com/realms/master to
+# authenticate — a URL our own rule blocks. The console showed "somethingWentWrong" with untranslated
+# i18n keys, which is what its JS renders when it cannot reach the auth server, while every asset
+# served 200 and the admin password was valid.
+#
+# Setting frontendUrl on master makes the configuration match the intent that master is LAN-only.
+# It does NOT expose anything: the tunnel keeps 404-ing master either way.
+MASTER_FRONTEND_URL="${MASTER_FRONTEND_URL:-http://192.168.100.252:8189}"
+MASTER_LIVE="$(api GET "master" | jq -r '.attributes.frontendUrl // ""')"
+if [[ "$MASTER_LIVE" != "$MASTER_FRONTEND_URL" ]]; then
+  drift "master realm frontendUrl is '${MASTER_LIVE:-<unset>}', want '$MASTER_FRONTEND_URL'"
+  if [[ "$MODE" == "apply" ]]; then
+    note "setting master realm frontendUrl"
+    api PUT "master" -d "$(jq -nc --arg u "$MASTER_FRONTEND_URL" '{attributes:{frontendUrl:$u}}')" >/dev/null \
+      || die "could not set master frontendUrl"
+  fi
+fi
+
 # --- the public client ---------------------------------------------------------------------------
 # Redirect URIs and web origins are the client's real security boundary: an extra entry is an open
 # redirect for the authorization code, so extras are overwritten, not merged.
