@@ -595,5 +595,32 @@ PY
       *) [ "${DKC_DRYRUN:-0}" = 1 ] && echo "DRYRUN: off-slot ($SLOTINFO) -> nothing to do" ;;
     esac
     ;;
-  *) echo "usage: dev-cleanup [ | now | start | overnight | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
+  topics)
+    # TOPICS-ONLY: apply the topics.env contract and nothing else — no wipe, no scaling, no
+    # service restarts. Exists because the contract had NO non-destructive applier: it rode on
+    # `now` (which WIPES Kafka) or `start` (which scales the whole dev stack up), so the only way
+    # to repair a drifted topic was to accept a side effect nobody asked for. On 2026-08-14 that
+    # gap cost two dev deploy attempts — `databento-gex` fails closed on
+    # options.databento.oi.anchor-manifest being PURE compact with retention -1, and dev had it as
+    # `delete` with no retention override because a client auto-created it (dev leaves
+    # auto.create.topics.enable at its TRUE default and num.partitions=1, which is exactly the
+    # shape that appeared).
+    #
+    # ensure_topics creates what is missing and reconcile_declared_topics — the bulk-describe pass
+    # inside it — repairs the config of what already exists, which is the half a bare
+    # `--create --if-not-exists` can never do.
+    #
+    # WHAT THIS DOES AND DOES NOT PROMISE. It issues no delete of any kind: no topic is dropped and
+    # no record is explicitly removed. It is NOT, however, a no-op on data. Turning a topic's
+    # cleanup.policy to `compact` AUTHORISES the log cleaner to drop superseded values for a key,
+    # asynchronously and on its own schedule — compaction is not gated on consumer offsets, and
+    # `retention.ms=-1` disables TIME-based deletion, not compaction. For the topics this applies
+    # it to that is the declared intent (they are keyed state whose contract IS "latest value per
+    # key"), but a consumer that needs every historical transition of such a key, or a tombstone
+    # older than delete.retention.ms, can legitimately lose it. So: safe for the declared contract,
+    # not unconditionally safe for an arbitrary reader — check what reads a topic before widening
+    # this to one whose history someone depends on.
+    ensure_topics
+    ;;
+  *) echo "usage: dev-cleanup [ | now | start | overnight | topics | logs ]  (no arg = calendar-gated auto for launchd)"; exit 2 ;;
 esac

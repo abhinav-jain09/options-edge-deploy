@@ -90,6 +90,16 @@ spec:
           value: "true"
         - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
           value: futures.aggressor-flow
+        # ES CVD stream (Gate 2 of ES-CVD-DESIGN.md): live 1 Hz snapshot + compacted bar-close
+        # records, published by es-cvd-service on this cluster. Opt-in for the same reason as the
+        # aggressor card — the ES-only topics do not exist on the SPX production cluster. Topic
+        # names are unprefixed; the gateway's TOPIC_PREFIX=es. resolves them to es.futures.cvd*.
+        - name: GATEWAY_ES_CVD_ENABLED
+          value: "true"
+        - name: KAFKA_ES_CVD_TOPIC
+          value: futures.cvd
+        - name: KAFKA_ES_CVD_BARS_TOPIC
+          value: futures.cvd.bars
         # es4 serves ES, not SPX: the gateway's active market-data selection symbol is IB_SYMBOL
         # (default SPX). Without this the selection is SPX and the ES option records (underlying=ES)
         # never match -> empty chain even at market open. IB_EXPIRY stays unset = AUTO (0DTE daily roll).

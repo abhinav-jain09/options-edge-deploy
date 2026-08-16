@@ -1,0 +1,57 @@
+# oe-archive.crontab — THE crontab of abhinav@192.168.100.252, repo-managed since 2026-08-15.
+# Installed and verified ONLY by Jenkins archive-scripts-deploy (crontab <this file>, then a
+# byte-for-byte readback diff). Hand edits are drift: the next deploy refuses until reconciled.
+@reboot /usr/bin/sg input -c /home/abhinav/disk_space_beep.sh >/tmp/disk_space_beep.log 2>&1
+17 * * * * /home/abhinav/oe-ops/ibkr-raw-retention.sh
+
+# --- daily training-data archive -------------------------------------------------------------
+# CRON_TZ applies to the entries BELOW it. The box runs Europe/Madrid; pinning the schedule to
+# New York keeps this at 17:10 ET (market close + 1h10m) across BOTH daylight-saving switches.
+# Converting to local time and hardcoding it would drift an hour, twice a year, in opposite
+# directions. The script itself skips market holidays via market_calendar.py.
+CRON_TZ=America/New_York
+10 17 * * 1-5 /home/abhinav/oe-ops/oe-archive-daily.sh >> /home/abhinav/oe-ops/archive-daily.cron.log 2>&1
+# Spot ticks must be archived FAR more often than once a day. underlying.spx.price is
+# cleanup.policy=compact,delete with min.cleanable.dirty.ratio=0.01 and segment.ms=1h, so a
+# closed segment is compacted almost at once: on 2026-08-03 only 3,306 of 804,629 offsets were
+# still readable (99.6% gone) and the daily 17:10 run captured 9,464. Only the ACTIVE segment is
+# safe from the cleaner, so archiving every 10 min captures the ticks while they are still there.
+# Cheap and incremental — a no-op run costs nothing because offsets are checkpointed.
+#
+# ARCHIVE_JOB=spot is load-bearing, not a label. Until 2026-08-12 this entry and the 17:10 daily
+# run shared ONE lock keyed only on (env, destination); this job held it at 17:10 and the daily job
+# exited 0 having archived nothing, every weekday from 08-10. The job name is half the lock key now,
+# and the topic list here must stay DISJOINT from OE_HEAVY_TOPICS_prod in oe-topics.env — the list
+# below is exactly OE_SPOT_TOPICS.
+*/10 * * * * TOPICS="underlying.spx.price underlying.spx.index.price underlying.es.price spx.basis.state" ARCHIVE_DIR=/mnt/nas/optionsedge ENV=prod ARCHIVE_JOB=spot JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-spot.log 2>&1
+# dev dealer-ledger evidence every 2h: dev signal-fired has a 24h retention the service re-stamps,
+# so a once-daily capture is one missed run from losing a session permanently. 2026-08-08.
+5 */2 * * * /home/abhinav/oe-ops/oe-archive-dev.sh >> /home/abhinav/oe-ops/archive-dev.cron.log 2>&1
+# es4 tape at 17:01 ET, IMMEDIATELY at the ES close: the session is prev-day 18:00 -> 17:00,
+# and the market reopens at 18:00 — capture must land in the 17:00-18:00 break so the dt=<date>
+# folder holds exactly one session, never the next session's first records. (A 2h cron was
+# tried 2026-08-08 and replaced same day: its post-close runs would mix the reopened session
+# into the same dt folder.) es.underlying.es.trades has 24h retention and was archived nowhere
+# — Friday 08-07 tape expired mid-study and was re-pulled from Databento at cost. The 17:10
+# nightly wrapper archives the same topics into the same manifest as a backstop (a no-op when
+# this run succeeded). Sunday-evening records are captured by Monday's run, still inside 24h.
+#
+# NO TOPICS override here, deliberately (2026-08-15): the es4 set is OE_ES4_TOPICS in
+# oe-topics.env — one definition, every caller — and the archiver REQUIRES it. A list pasted
+# here is how es.futures.cvd.bars went unarchived while three gates shipped against it.
+1 17 * * 1-5 ARCHIVE_DIR=/mnt/nas/optionsedge ENV=es4 ARCHIVE_JOB=es4 BOOTSTRAP=192.168.100.4:9092 JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-es4.log 2>&1
+# Completeness check — THE safety net, and deliberately its own cron entry rather than a step at
+# the end of the nightly job. The 2026-08-10..08-11 loss was invisible precisely because every
+# piece of evidence came from the job that was failing: its exit status, its log, its own
+# self-report. This entry reads the files that are actually on the NAS and alerts on a missing or
+# partial date whether or not the 17:10 job ran, succeeded, or existed at all. If you ever find
+# yourself moving this inside oe-archive-daily.sh, re-read this paragraph.
+#
+# 20:00 ET, i.e. 2h50m after the nightly job starts. That margin is not padding: measured on
+# 2026-08-11, options.databento.gex.strike alone costs ~33 min because it is compact,delete and the
+# consumer therefore waits out its full 60s idle timeout on each of 33 partitions. A verifier that
+# fires while the job it checks is still writing reports PARTIAL and pages someone for nothing, and
+# an alarm people learn to ignore is worse than no alarm. If the nightly run ever grows past this
+# margin, move THIS entry later — do not shorten the consumer timeout, because an early timeout is
+# indistinguishable from a clean read and would checkpoint over a short read silently.
+0 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify.cron.log 2>&1

@@ -210,6 +210,29 @@ has  "  logs the undelivered alert"        "ALERT (undelivered" "$OUT"
 want "  and archived the new log"               120 "$(runs records)"
 want "  and delivered NOTHING to the endpoint"    0 "$(alerts)"
 
+# ===== 6b. TopicId PRESENT and UNCHANGED but the end offset reads 0 — a BAD READ, not a reset ===
+# The prod incident this exists for (2026-08-14):
+#   "RESET options.databento.gex.strike p0: checkpoint 1882516 is AHEAD of log end 0"
+# Log end ZERO on a topic holding 58 million records — an empty/failed kafka-get-offsets answer.
+# The archiver re-baselined on it and threw the checkpoint away, and the day's session was lost.
+# Across twelve archived days only two ended up with a full session.
+#
+# The TopicId is the AUTHORITY on re-creation and the offset test is a heuristic, so when the id
+# is readable and unchanged the heuristic must not be allowed to fire.
+A="$T/f2"; mkdir -p "$A/kafka/prod/_manifest"
+reset_alerts
+fixture "topicid JJJJJJJJJJJJJJJJJJJJJJ" "0 0 500" "1 0 500"
+run >/dev/null
+CKPT_BEFORE=$(cat "$A/kafka/prod/_manifest/$TOPIC.offsets" 2>/dev/null)
+fixture "topicid JJJJJJJJJJJJJJJJJJJJJJ" "0 0 0" "1 0 0"        # the bad reading
+OUT=$(run)
+has  "a zero end with an UNCHANGED TopicId is a failed read" "FAILED offset read" "$OUT"
+hasnt "  and is NOT reported as a reset"              "AHEAD of log end" "$OUT"
+want "  nothing re-baselined"                     0 "$(runs rebaselined)"
+want "  no alert raised"                          0 "$(alerts)"
+want "  the checkpoint is left ALONE" "$CKPT_BEFORE" \
+     "$(cat "$A/kafka/prod/_manifest/$TOPIC.offsets" 2>/dev/null)"
+
 # ================= 7. TopicId UNAVAILABLE — the offset detector must still work ================
 # Older broker, or a kafka-topics.sh that fails. The identity file is then never written and the
 # fallback is all there is; without this case the fallback could rot untested behind the id path.
@@ -340,6 +363,40 @@ has  "payload names the detector"          "detected by:" "$payload"
 has  "payload scopes the loss honestly"    "after its last successful checkpoint" "$payload"
 hasnt "payload does not claim the checkpoint was ahead when it was not" \
       "The checkpoint was ahead" "$payload"
+
+# ================= 11. the es4 selection path is the policy file, end to end ==================
+# 2026-08-15: es.futures.cvd.bars shipped through three Codex-gated release gates while the es4
+# archive cron carried a pasted topic list that predated it — the set the cron ACTUALLY used was
+# defined nowhere reviewable. These cases pin the whole chain: the env file defines OE_ES4_TOPICS,
+# the archiver derives exactly that set for ENV=es4, refuses to run without it, and the deployed
+# crontab passes no override.
+es4_expected=$(. "$OE/oe-topics.env"; printf '%s' "$OE_ES4_TOPICS")
+want "oe-topics.env defines a non-empty es4 set" 0 "$([ -n "$es4_expected" ]; echo $?)"
+has  "  the es4 set carries the CVD history topic" "es.futures.cvd.bars" "$es4_expected"
+es4_derived=$(ARCHIVE_DIR="$T" ENV=es4 PRINT_TOPICS=true KAFKA_BIN="$BIN" bash "$ARCH" 2>/dev/null)
+want "ENV=es4 derives exactly OE_ES4_TOPICS" "$es4_expected" "$es4_derived"
+# Pinned safety invariant (2026-08-15): es.futures.cvd — the 1 Hz snapshot — STRUCTURALLY starves
+# the bounded consumer (compaction makes --max-messages unreachable; a 1 Hz producer means the 60s
+# idle exit never fires) and fails EVERY run until the 900s kill. Reintroducing it recreates a
+# permanent daily false alarm. Token match, not substring: es.futures.cvd.bars CONTAINS the
+# forbidden name and must keep passing.
+hasnt "the always-hot snapshot topic es.futures.cvd must NEVER rejoin the es4 archive set" \
+      " es.futures.cvd " " $es4_expected "
+
+stripped="$T/topics-no-es4.env"
+grep -v '^OE_ES4_TOPICS=' "$OE/oe-topics.env" > "$stripped"
+missing_out=$(ARCHIVE_DIR="$T" ENV=es4 PRINT_TOPICS=true KAFKA_BIN="$BIN" OE_TOPICS_ENV="$stripped" bash "$ARCH" 2>&1)
+missing_rc=$?
+want "a policy file without OE_ES4_TOPICS is refused" 1 "$([ "$missing_rc" -ne 0 ]; echo $((1-$?)))"
+has  "  and says why" "OE_ES4_TOPICS" "$missing_out"
+
+crontab_file="$OE/oe-archive.crontab"
+want "the repo-managed crontab exists" 0 "$([ -f "$crontab_file" ]; echo $?)"
+es4_line=$(grep -c '^1 17 \* \* 1-5 .*ENV=es4 .*oe-archive-kafka\.sh' "$crontab_file")
+want "exactly one scheduled es4 archiver entry" 1 "$es4_line"
+es4_entry=$(grep '^1 17 \* \* 1-5 .*ENV=es4' "$crontab_file")
+hasnt "the es4 entry carries NO TOPICS override (the policy file is the one definition)" \
+      "TOPICS=" "$es4_entry"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }

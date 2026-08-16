@@ -49,7 +49,7 @@ pipeline {
     PROD_HOST   = "${params.PROD_HOST}"
     INSTALL_DIR = "${params.INSTALL_DIR}"
     STAGE_DIR   = "/home/abhinav/oe-ops-staging/build-${BUILD_NUMBER}"
-    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh"
+    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -122,13 +122,35 @@ fi
 drift=0
 for f in $UNIT; do
   want=$(awk -v f="$f" '$2==f{print $1}' "$record")
-  have=$(sha256sum "$INSTALL_DIR/$f" 2>/dev/null | cut -d' ' -f1)
-  [ -n "$want" ] || { echo "no record for $f — treating as drift"; drift=1; continue; }
+  # `|| true`: under set -e + pipefail a MISSING file makes this substitution's pipeline fail and
+  # silently kills the whole drift check before one line of output (archive-scripts-deploy #2,
+  # the first run after new files joined UNIT). Absence is a legitimate state the classification
+  # below handles; it must never be a crash.
+  have=$(sha256sum "$INSTALL_DIR/$f" 2>/dev/null | cut -d' ' -f1 || true)
+  if [ -z "$want" ]; then
+    # Not in the record: either this deploy introduces a newly MANAGED file (a migration — the
+    # record cannot know it yet) or something unmanaged is squatting on the name (drift).
+    if [ -e "$INSTALL_DIR/$f" ]; then
+      echo "DRIFT $f: exists on the host but this job never installed it"
+      drift=1
+    else
+      echo "NEW $f: first deployment of a newly managed file — not drift"
+    fi
+    continue
+  fi
   if [ "$want" != "$have" ]; then
     echo "DRIFT $f: installed=$have but this job last installed $want"
     drift=1
   fi
 done
+# The LIVE crontab is installed state too: compare it against the crontab file this job last
+# installed. A hand edit is exactly the untracked mutation the Jenkins-only rule forbids.
+if [ -f "$INSTALL_DIR/oe-archive.crontab" ] && awk -v f="oe-archive.crontab" '$2==f{found=1} END{exit !found}' "$record"; then
+  if ! crontab -l 2>/dev/null | diff -q - "$INSTALL_DIR/oe-archive.crontab" >/dev/null 2>&1; then
+    echo "DRIFT crontab: the live crontab differs from the last-installed oe-archive.crontab"
+    drift=1
+  fi
+fi
 if [ "$drift" -ne 0 ] && [ "$ALLOW_DRIFT" != "true" ]; then
   echo "REFUSING: the live copies were changed outside this job. Reconcile that change into git" >&2
   echo "first, or re-run with ALLOW_HOST_DRIFT to overwrite it deliberately." >&2
@@ -154,7 +176,7 @@ EOSSH
           done
 
           ssh -o BatchMode=yes "$PROD_HOST" \
-            "INSTALL_DIR='$INSTALL_DIR' STAGE_DIR='$STAGE_DIR' UNIT='$UNIT' BUILD='${BUILD_NUMBER}' bash -s" <<'EOSSH'
+            "INSTALL_DIR='$INSTALL_DIR' STAGE_DIR='$STAGE_DIR' UNIT='$UNIT' BUILD='${BUILD_NUMBER}' ALLOW_DRIFT='${ALLOW_HOST_DRIFT}' bash -s" <<'EOSSH'
 set -euo pipefail
 bak="$INSTALL_DIR/.bak-build$BUILD"
 mkdir -p "$bak"
@@ -162,31 +184,104 @@ mkdir -p "$bak"
 # Every file lands beside its target first, so the swap loop can be short and uninterruptible in
 # practice. If any step fails, the backups go back — the crons must never find a unit that is half
 # one version and half another.
+# ONE transaction: the trap stays armed from the first mutation through the durable checksum
+# record. It restores backed-up files, REMOVES files this deploy introduced (a new file has no
+# backup — leaving it installed would be exactly the mixed old/new state the trap exists to
+# prevent), and reinstates the live crontab that was in force when the transaction began.
+prev_cron=$(crontab -l 2>/dev/null || true)
+had_cron=$([ -n "$prev_cron" ] && echo yes || echo no)
+# PHASE 0 — UNARMED and mutation-free: record which targets EXIST and take a VERIFIED backup of
+# each. Existence is recorded independently of backup success, so rollback can never mistake
+# "backup failed" for "file was new" and delete a pre-existing file; a backup that fails or does
+# not verify aborts HERE, before anything has changed.
+# FIRST-TIME CRONTAB ADOPTION (migration rule): when the record does not yet track
+# oe-archive.crontab, installing would replace the account's ENTIRE live crontab — so the live
+# crontab must equal the committed, reviewed predecessor byte-for-byte. Anything else is an
+# unrecorded host edit this deploy would silently destroy: refuse unless ALLOW_HOST_DRIFT.
+if ! awk -v f="oe-archive.crontab" '$2==f{found=1} END{exit !found}' "$INSTALL_DIR/.archive-unit.sha256" 2>/dev/null; then
+  if ! crontab -l 2>/dev/null | diff - "$STAGE_DIR/oe-archive.crontab.predecessor"; then
+    if [ "$ALLOW_DRIFT" != "true" ]; then
+      echo "REFUSING: the live crontab differs from the committed predecessor" >&2
+      echo "(scripts/ops/archive/oe-archive.crontab.predecessor). Reconcile the live crontab into" >&2
+      echo "git first, or re-run with ALLOW_HOST_DRIFT to overwrite it deliberately." >&2
+      exit 1
+    fi
+    echo "ALLOW_HOST_DRIFT: overwriting a live crontab that differs from the committed predecessor"
+  fi
+fi
+
+# The checksum record is transactional state too: back it up in phase 0 so rollback restores a
+# COHERENT triple (files, crontab, record) — without this, a signal delivered between the record
+# rename and the disarm rolled back files+crontab but left the new record describing them.
+record_file="$INSTALL_DIR/.archive-unit.sha256"
+had_record=no
+if [ -f "$record_file" ]; then
+  had_record=yes
+  cp -p "$record_file" "$bak/.archive-unit.sha256" \
+    || { echo "backup of the checksum record failed — aborting with nothing mutated" >&2; exit 1; }
+  cmp -s "$record_file" "$bak/.archive-unit.sha256" \
+    || { echo "checksum-record backup did not verify — aborting with nothing mutated" >&2; exit 1; }
+fi
+
+EXISTED=""
+for f in $UNIT; do
+  if [ -f "$INSTALL_DIR/$f" ]; then
+    EXISTED="$EXISTED $f"
+    cp -p "$INSTALL_DIR/$f" "$bak/$f" \
+      || { echo "backup of $f failed — aborting with nothing mutated" >&2; exit 1; }
+    cmp -s "$INSTALL_DIR/$f" "$bak/$f" \
+      || { echo "backup of $f did not verify — aborting with nothing mutated" >&2; exit 1; }
+  fi
+done
 restore() {
   echo "install failed — restoring the previous unit from $bak" >&2
   for f in $UNIT; do
-    [ -f "$bak/$f" ] && mv -f "$bak/$f" "$INSTALL_DIR/$f" || true
+    case " $EXISTED " in
+      *" $f "*) mv -f "$bak/$f" "$INSTALL_DIR/$f" || true ;;
+      *)        rm -f "$INSTALL_DIR/$f" || true ;;
+    esac
   done
+  if [ "$had_cron" = yes ]; then printf '%s\n' "$prev_cron" | crontab - || true
+  else crontab -r 2>/dev/null || true
+  fi
+  if [ "$had_record" = yes ]; then mv -f "$bak/.archive-unit.sha256" "$record_file" || true
+  else rm -f "$record_file" || true
+  fi
 }
-trap restore ERR
+# ERR alone does not cover a Jenkins abort or a dropped session: SIGINT/SIGTERM/SIGHUP during
+# any mutation must roll back exactly like a failed command, and the transaction must exit
+# nonzero either way.
+trap 'restore; exit 1' ERR INT TERM HUP
 
 for f in $UNIT; do
-  [ -f "$INSTALL_DIR/$f" ] && cp -p "$INSTALL_DIR/$f" "$bak/$f"
   cp "$STAGE_DIR/$f" "$INSTALL_DIR/.incoming.$f"
 done
 for f in $UNIT; do
   mv -f "$INSTALL_DIR/.incoming.$f" "$INSTALL_DIR/$f"
 done
-trap - ERR
-
 chmod +x "$INSTALL_DIR/oe-archive-kafka.sh" "$INSTALL_DIR/test-archive-reset.sh"
 
+# Load the repo-managed crontab and prove the kernel of the deployment: what cron will actually
+# run is byte-for-byte what this commit says. Still inside the transaction — any failure here
+# (or at the record below) rolls back files AND the live crontab together.
+crontab "$INSTALL_DIR/oe-archive.crontab"
+crontab -l | diff - "$INSTALL_DIR/oe-archive.crontab"
+echo "crontab installed and verified byte-for-byte"
+
 # The record step 3 reads on the NEXT deploy. Written last, so it only ever describes a unit that
-# is fully in place.
-: > "$INSTALL_DIR/.archive-unit.sha256"
+# is fully in place — and the transaction stays armed until it exists.
+# Built in a temp file and renamed atomically: a failure mid-generation must leave the PREVIOUS
+# record intact, or the next deploy would read a truncated record and report phantom drift.
+rec_tmp="$INSTALL_DIR/.archive-unit.sha256.tmp"
+: > "$rec_tmp"
 for f in $UNIT; do
-  sha256sum "$INSTALL_DIR/$f" | awk -v f="$f" '{print $1, f}' >> "$INSTALL_DIR/.archive-unit.sha256"
+  sha256sum "$INSTALL_DIR/$f" | awk -v f="$f" '{print $1, f}' >> "$rec_tmp"
 done
+mv -f "$rec_tmp" "$INSTALL_DIR/.archive-unit.sha256"
+trap - ERR INT TERM HUP
+# Even if a deferred signal fires between the rename above and the disarm, restore() now puts
+# back the phase-0 record alongside the files and crontab — every rollback is coherent, so the
+# rename needs no signal-timing guarantees.
 echo "installed:"; cat "$INSTALL_DIR/.archive-unit.sha256"
 EOSSH
         '''
