@@ -89,6 +89,12 @@ spec:
               value: "true"
             - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
               value: es.futures.aggressor-flow
+            - name: GATEWAY_ES_CVD_ENABLED
+              value: "true"
+            - name: KAFKA_ES_CVD_TOPIC
+              value: es.futures.cvd
+            - name: KAFKA_ES_CVD_BARS_TOPIC
+              value: es.futures.cvd.bars
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS
