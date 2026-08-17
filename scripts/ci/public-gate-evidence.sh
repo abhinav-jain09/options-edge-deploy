@@ -45,6 +45,8 @@ REQUIRED_IDS=(PGL-050 PGL-051 PGL-052)
 # every future attestation, which is the opposite of the point.
 TESTS="PublicBoardUpstreamRequestTest,PublicBoardUpstreamTest,PublicSurfaceSecurityChainTest,PublicSurfaceRoutesTest,PublicLogHygieneTest,PublicSurfaceTest,PublicSurfaceStartupInvariantTest,PublicSurfaceIsolationTest"
 
+WORK_HDR="$(mktemp)"
+trap 'rm -f "$WORK_HDR"' EXIT
 die() { echo "EVIDENCE FAIL: $*" >&2; exit 1; }
 ok()  { echo "  OK: $*"; }
 
@@ -83,29 +85,60 @@ echo "  revision: $REVISION"
 # exists to prevent. The image carries no `org.opencontainers.image.revision` label, so for a while
 # it looked as though only a change to the shared build could fix this.
 #
-# It already fixes itself. The web build pushes an IMMUTABLE tag alongside the mutable one:
+# WHAT THIS ACTUALLY ESTABLISHES — and it is not cryptographic proof. The web build pushes a
+# second, versioned tag alongside the mutable one:
 #   VERSIONED_IMAGE="${IMAGE%:*}:prod-${BUILD_NUMBER}-$(git rev-parse --short=12 HEAD)"
 # so the registry holds `prod-970-8daf949c18d1` pointing at the same digest as `:prod`. The tag NAME
-# carries the build number and the revision. Finding the immutable tag that shares the deployed
-# digest therefore recovers the revision FROM THE REGISTRY, verifiable by anyone, with no change to
-# the build and nothing taken on the caller's word.
+# carries the build number and the revision. Finding the versioned tag that shares the deployed
+# digest recovers the revision FROM THE REGISTRY rather than from whoever is running this script —
+# which is the property that matters against the failure this gate is really about: a well-meaning
+# operator attesting the wrong thing.
+#
+# TRUST BOUNDARY, stated rather than glossed: a tag name is an ASSERTION by whoever pushed it. This
+# registry authenticates nobody, so anyone able to push could mint prod-<n>-<sha> pointing at any
+# digest and this derivation would believe it. That is worth being explicit about — and it is also
+# not the weak link: anyone who can write arbitrary tags can push a malicious image to :prod
+# directly, which no evidence requirement would catch. Closing it properly needs the registry to
+# restrict pushes and refuse tag overwrites, or a signed attestation (cosign et al) binding image to
+# source. Until then this defends against MISTAKE, not against an attacker who already owns the
+# registry, and the evidence should be read that way.
 resolve_revision() {
-  local registry repo_path
+  local target="$1" registry repo_path url tags page t d found=""
   registry="${IMAGE%%/*}"
   repo_path="${IMAGE#*/}"; repo_path="${repo_path%:*}"
-  local tags
-  tags="$(curl -sS -m 30 "http://${registry}/v2/${repo_path}/tags/list" \
-    | tr ',' '\n' | tr -d '"[]{}' | sed -n 's/.*\(prod-[0-9][0-9]*-[0-9a-f]\{7,\}\).*/\1/p' | sort -u)"
-  local t d
+  # Paginate. A truncated listing that happens to omit the genuine tag would otherwise leave only
+  # whatever else matched, which is the wrong way for this to fail.
+  url="http://${registry}/v2/${repo_path}/tags/list?n=1000"
+  tags=""
+  while [ -n "$url" ]; do
+    page="$(curl -sS -m 30 -D "$WORK_HDR" "$url")" || die "could not list tags at $url"
+    # jq, not sed: a hand-rolled parse of JSON is its own source of wrong answers.
+    tags="$tags $(printf '%s' "$page" | jq -r '.tags[]? // empty')"
+    url="$(tr -d '\r' < "$WORK_HDR" | sed -n 's/^[Ll]ink:.*<\([^>]*\)>.*rel="next".*/\1/p' | tail -1)"
+    [ -n "$url" ] && case "$url" in /*) url="http://${registry}${url}" ;; esac
+  done
   for t in $tags; do
+    # EXACTLY the shape the build emits: prod-<build>-<12 hex>. A looser pattern accepts more
+    # things that were never produced by that build.
+    case "$t" in
+      prod-[0-9]*-*) : ;;
+      *) continue ;;
+    esac
+    printf '%s' "${t##*-}" | grep -qE '^[0-9a-f]{12}$' || continue
     d="$(curl -sS -m 30 -o /dev/null -D - \
       -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
       -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
       "http://${registry}/v2/${repo_path}/manifests/${t}" \
       | tr -d '\r' | awk 'tolower($1)=="docker-content-digest:"{print $2}' | tail -1)"
-    if [ "$d" = "$1" ]; then printf '%s' "${t##*-}"; return 0; fi
+    [ "$d" = "$target" ] || continue
+    if [ -n "$found" ] && [ "$found" != "${t##*-}" ]; then
+      die "two different revisions claim this digest: $found and ${t##*-}.
+       One of them is wrong, and picking either would be a guess."
+    fi
+    found="${t##*-}"
   done
-  return 1
+  [ -n "$found" ] || return 1
+  printf '%s' "$found"
 }
 
 # ---------------------------------------------------------------- 1. the revision must be REAL
