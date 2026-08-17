@@ -11,6 +11,19 @@
 # WHAT IT DOES. Builds the AST and throws it away. Nothing executes, so it is safe to run on a
 # Jenkinsfile that deploys to production.
 #
+# WHAT IT IS NOT. This is not Jenkins' own parser, and it does not know the declarative schema. It
+# runs whatever Groovy 4 is in ~/.m2, which is not necessarily the controller's Groovy version, so
+# it can accept syntax the controller would reject — a false NEGATIVE, the same class of miss it
+# exists to reduce. It also cannot catch a well-formed pipeline that is structurally invalid (an
+# unknown directive, a step outside `steps`, a bad `when`). Treat a pass as "the file lexes and
+# parses as Groovy", nothing more.
+#
+# The definitive check is the controller's own linter, which validates against the real schema and
+# the real Groovy:
+#   curl -X POST -F "jenkinsfile=<Jenkinsfile.x" $JENKINS/pipeline-model-converter/validate
+# It needs authentication, which is why it is not the default here. Use it in CI, and use this
+# locally for the fast pass that needs nothing but a jar.
+#
 # The @Library annotation is stripped first: it resolves only inside Jenkins, and leaving it in
 # fails with "unable to resolve class Library" — a CLASS RESOLUTION error, not a syntax one, which
 # would mask the syntax result this script exists to report. Nothing that string escaping can break
