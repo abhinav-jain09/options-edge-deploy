@@ -79,6 +79,10 @@ spec:
               value: underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard,market.spx.market-carry-service.current
             - name: OE_SYSTEM_STATUS_LAG_REGISTRY
               value: databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo
+            - name: GATEWAY_ES_CVD_SPX_LEVELS_ENABLED
+              value: "true"
+            - name: KAFKA_ES_CVD_SPX_LEVELS_TOPIC
+              value: options.es-cvd-spx-levels
             - name: APP_WEB_PORT
               value: "18091"
             - name: GATEWAY_ES_GEX_ENABLED
