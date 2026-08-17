@@ -157,12 +157,18 @@ case "$MUTABLE_IMAGE" in
   *)          PIN_IS_AUTHORITATIVE=false ;;
 esac
 
-if [ "$PIN_IS_AUTHORITATIVE" = true ] && [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ] \
-   && [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
-  echo "render pins a digest — NOT remapping to $ENV_IMAGE; deploying exactly $MUTABLE_IMAGE"
-fi
-
-if [ "$PIN_IS_AUTHORITATIVE" = false ] && [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ]; then
+# The authoritative case is an OUTER branch, not an extra condition on the existing chain. Written
+# as a separate `if` it fell through to the `elif [ "$ENVIRONMENT" = "production" ]` below and
+# aborted with "no entry in image-tags/production.yaml" — so a digest-pinned render could never
+# deploy at all. That fatal exists to stop a DEV-REGISTRY ref reaching production, a risk a digest
+# pin naming the production registry does not carry; it simply does not apply here.
+if [ "$PIN_IS_AUTHORITATIVE" = true ]; then
+  if [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ] && [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
+    echo "render pins a digest — NOT remapping to $ENV_IMAGE; deploying exactly $MUTABLE_IMAGE"
+  else
+    echo "render pins a digest — deploying exactly $MUTABLE_IMAGE"
+  fi
+elif [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ]; then
   if [ "$ENVIRONMENT" = "production" ] && [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
     echo "remapping render image -> env image: $MUTABLE_IMAGE -> $ENV_IMAGE"
     MUTABLE_IMAGE="$ENV_IMAGE"
