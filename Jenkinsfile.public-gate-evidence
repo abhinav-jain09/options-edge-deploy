@@ -1,0 +1,121 @@
+// Jenkinsfile.public-gate-evidence — build the public web image and EARN the PGL-072 gate evidence
+// for the exact digest that build produced.
+//
+// WHY THIS JOB EXISTS. verify-public-gate.sh refuses to run the public Gamma Lab above zero replicas
+// without a JSON record naming the deployed digest and reporting PGL-050/051/052 as PASS. Nothing
+// produced that record, so a freshly built image could never be deployed publicly — service-deploy
+// failed at the gate with "there is no gate evidence for the digest it runs" (build #1373). The
+// deploy path existed; the qualification path did not.
+//
+// WHY BUILD AND ATTEST IN ONE RUN. The image carries no `org.opencontainers.image.revision` label,
+// so a digest cannot be traced to a revision from the registry alone. Building here and attesting
+// immediately afterwards makes that tie FIRST-HAND: this run knows which revision it checked out and
+// which digest that build pushed. The alternative — stamping the revision into the image — is the
+// stronger, permanent fix, but it belongs in the application repo's Dockerfile and its build
+// Jenkinsfile, and that Jenkinsfile builds every service image on the platform. It is deliberately
+// not bundled into this change.
+//
+// WHAT THIS JOB CANNOT DO. It cannot mark a requirement PASS. scripts/ci/public-gate-evidence.sh
+// runs the tests itself and writes nothing if they fail; there is no parameter here that asserts a
+// result. Scaling the public workload remains a separate, reviewed act — this job only makes the
+// evidence exist so that act can be judged on merit.
+pipeline {
+  agent { label 'local-mac' }
+
+  parameters {
+    string(name: 'SOURCE_REVISION', defaultValue: 'main',
+      description: 'options-edge ref to build and test. A branch name is resolved to a commit and the COMMIT is what the evidence records.')
+    booleanParam(name: 'BUILD_IMAGE', defaultValue: true,
+      description: 'Build+push the production web image first. false = attest the image already on :prod (only honest when this run did not need to change it).')
+  }
+
+  options {
+    timeout(time: 60, unit: 'MINUTES')
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '50'))
+  }
+
+  environment {
+    IMAGE_REGISTRY = '192.168.100.252:5000'
+    IMAGE_REF      = "192.168.100.252:5000/options-edge-web:prod"
+    APP_REPO       = 'git@github.com:abhinav-jain09/options-edge.git'
+    // OUTSIDE this repository, by the gate's own rule. Same location the deploy path reads.
+    EVIDENCE_DIR   = "${WORKSPACE}/../public-gate-evidence"
+    REMOTE_BUILD_HOST = '192.168.100.252'
+    REMOTE_BUILD_ROOT = '/home/abhinav/ci/remote-builds'
+  }
+
+  stages {
+    stage('Checkout the app at the revision under test') {
+      steps {
+        dir('app') {
+          checkout([$class: 'GitSCM',
+                    branches: [[name: "*/${params.SOURCE_REVISION}"]],
+                    userRemoteConfigs: [[url: env.APP_REPO]]])
+          script {
+            // Resolve to a COMMIT. Evidence that names a branch names something that moves.
+            env.RESOLVED_REVISION = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
+            echo "revision under test: ${env.RESOLVED_REVISION}"
+          }
+        }
+      }
+    }
+
+    stage('Build the production web image') {
+      when { expression { params.BUILD_IMAGE } }
+      steps {
+        // Same contract the web deploy path uses: native amd64 build on .252, pushed to :prod.
+        build job: 'options-edge-web-deploy',
+              parameters: [
+                string(name: 'PROFILE',           value: 'prod'),
+                string(name: 'BUILD_PLATFORM',    value: 'linux/amd64'),
+                booleanParam(name: 'PUSH_IMAGE',  value: true),
+                booleanParam(name: 'RUN_LOCAL',   value: false),
+                string(name: 'IMAGE',             value: env.IMAGE_REF),
+                string(name: 'REMOTE_BUILD_HOST', value: env.REMOTE_BUILD_HOST),
+                string(name: 'REMOTE_BUILD_ROOT', value: env.REMOTE_BUILD_ROOT),
+                booleanParam(name: 'SKIP_SELENIUM_SMOKE', value: true)
+              ],
+              wait: true, propagate: true
+      }
+    }
+
+    stage('Earn the evidence') {
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/public-gate-evidence.sh \
+            --repo "${WORKSPACE}/app" \
+            --image "${IMAGE_REF}" \
+            --revision "${RESOLVED_REVISION}" \
+            --ci-build-url "${BUILD_URL}" \
+            --out-dir "${EVIDENCE_DIR}"
+        '''
+      }
+    }
+
+    stage('Show what the gate will now see') {
+      steps {
+        sh '''
+          set -euo pipefail
+          echo "evidence directory: ${EVIDENCE_DIR}"
+          ls -la "${EVIDENCE_DIR}"
+          echo
+          echo "The public deploy is still a SEPARATE act:"
+          echo "  service-deploy  SERVICE=bleedingoptions-gamma-lab  ENVIRONMENT=production"
+          echo "It will pass the PGL-072 gate only because this evidence was earned, not asserted."
+        '''
+      }
+    }
+  }
+
+  post {
+    success {
+      archiveArtifacts artifacts: '', allowEmptyArchive: true
+      echo "Evidence produced for the digest now on ${env.IMAGE_REF}."
+    }
+    failure {
+      echo 'No evidence was written. If the PGL tests failed, that is the gate working: the public surface must not carry a replica while the bearer-strip is unproven for this build.'
+    }
+  }
+}
