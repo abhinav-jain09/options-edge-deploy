@@ -221,3 +221,105 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+---
+# PGL-101. The application database accepts connections from the PUBLIC WEB POD ONLY.
+#
+# It holds watchlists, written through the first mutation endpoint the public surface has ever had.
+# Keycloak has no business here and neither has anything else in the namespace, so the selector names
+# exactly one client rather than allowing the namespace.
+#
+# ⚠️ NOT ENFORCED TODAY. Verified 2026-08-16: k3s/flannel does not enforce NetworkPolicies without
+# kube-router, and the public pod can already reach `options-edge` freely. This declares the intended
+# boundary and must NOT be relied upon as one until enforcement is proven (PGL-035). Writing it now
+# means the intent is recorded and takes effect the moment enforcement lands.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-postgres-ingress-web-only
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bo-app-postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bleedingoptions-gamma-lab
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# PGL-129. The public web pod may reach the application database — inside this namespace only.
+#
+# The existing public-web-egress policy allows exactly bo-keycloak:8080 and stock-gex-service:8021.
+# A NetworkPolicy is additive across policies selecting the same pod, so this grants the new hop
+# without reopening the two that already exist, and adds NO cross-namespace reach.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: public-web-egress-app-postgres
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bleedingoptions-gamma-lab
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bo-app-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# PGL-134. The WAL shipper's egress. Without this the sidecar is caught by default-deny-all and every
+# archive run fails the moment NetworkPolicy enforcement starts working — a backup that is fine in
+# testing and silently dead in production, which is the exact failure this design keeps guarding
+# against.
+#
+# Two destinations, and no more: the NAS over SSH, and a package mirror (PGL-133 — the sidecar still
+# installs rsync and ssh at startup; a purpose-built image would remove this second rule entirely).
+# DNS is already granted to the whole namespace by allow-dns.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-postgres-egress-nas
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bo-app-postgres
+  policyTypes: ["Egress"]
+  egress:
+    # The NAS, by address and port. Named explicitly rather than allowing the LAN: the backup target
+    # is the one host this pod has any business reaching, and a wider rule would let a compromised
+    # sidecar reach the rest of 192.168.100.0/24 including the production node.
+    - to:
+        - ipBlock:
+            cidr: 192.168.100.100/32
+      ports:
+        - protocol: TCP
+          port: 22
+    # Package mirrors, until PGL-133's purpose-built image removes the need. Deliberately excludes
+    # RFC1918 space so this cannot become a path to anything internal.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80

@@ -1,0 +1,266 @@
+# bo-app-postgres — the public tenant's APPLICATION database (PGL-092).
+#
+# WHY A SECOND POSTGRES, rather than a table in bo-keycloak-postgres.
+# Application tables in the IdP's own database couple their lifecycles: restoring Keycloak to recover
+# an account mistake would roll back user data with it, and a schema error reaches authentication.
+# They share the namespace and nothing else — separate instance, database, role, credentials, PVC.
+#
+# WHAT LIVES HERE. Watchlists to begin with (PGL-096..102). This is deliberately NOT a general
+# datastore for the public surface: everything added here is reachable, eventually, from a write
+# endpoint exposed to the internet.
+#
+# TRAPS ALREADY PAID FOR — all four cost hours on bo-keycloak-postgres on 2026-08-16:
+#   * uid/gid 70, named explicitly. The alpine image declares NO `USER`, starts as root and drops to
+#     postgres via gosu, so `runAsNonRoot: true` ALONE rejects the pod with CreateContainerConfigError
+#     and the message "image will run as root" — for eight hours, in that case.
+#   * fsGroup 70, not 999. 999 is the DEBIAN variant's gid; this is alpine.
+#   * PGDATA below the mount root. initdb refuses a directory containing lost+found.
+#   * storageClassName left implicit. It is IMMUTABLE, and hard-coding one that disagrees with a live
+#     PVC is what failed prod deploys #490/#502.
+#
+# NOT ON THE NAS. The data directory is local-path on this node (PGL-093, PGL-109). Postgres over NFS
+# has unreliable locking and corrupts silently, discovered at restore time. The NAS holds BACKUPS.
+apiVersion: v1
+kind: Service
+metadata:
+  name: bo-app-postgres
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-app-postgres
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: appdb
+spec:
+  # Headless, like its sibling: a StatefulSet's stable identity is the point, and nothing outside the
+  # namespace should be resolving this at all.
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: bo-app-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bo-app-postgres-db
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-app-postgres
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: appdb
+spec:
+  selector:
+    app.kubernetes.io/name: bo-app-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bo-app-postgres
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-app-postgres
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: appdb
+spec:
+  serviceName: bo-app-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bo-app-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bo-app-postgres
+        app.kubernetes.io/part-of: bleedingoptions
+        app.kubernetes.io/component: appdb
+    spec:
+      # Same node as the rest of the tenant. Pods on the oe-failover-56 node cannot reach CoreDNS, and
+      # local-path PVs are node-affine — changing this requires deleting the PVC so a new one
+      # provisions on the new node.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      automountServiceAccountToken: false   # PGL-061: nothing here talks to the Kubernetes API
+      initContainers:
+        # PGL-103. Creates the spool BEFORE postgres can archive into it. A fresh PVC contains only
+        # its root, so `cp %p /archive/spool/%f` fails on every segment — and Postgres responds by
+        # RETAINING the WAL and retrying forever, filling pg_wal until it refuses writes. An archive
+        # that has never once succeeded looks exactly like one that is merely behind.
+        #
+        # NOT left to the sidecar's own mkdir: that is a race. Postgres can complete a checkpoint and
+        # archive its first segment before a sibling container has finished starting.
+        - name: init-spool
+          image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+          command: ["sh", "-c", "mkdir -p /archive/spool && chmod 700 /archive/spool"]
+          volumeMounts:
+            - name: archive
+              mountPath: /archive
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      securityContext:
+        fsGroup: 70
+        runAsUser: 70
+        runAsGroup: 70
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: bleedingoptions
+            - name: POSTGRES_USER
+              value: bleedingoptions
+            # SEPARATE key from the Keycloak database's. Sharing one password would mean a compromise
+            # of the application database reads the identity provider's, which is most of the reason
+            # these are two instances.
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bo-keycloak-secrets
+                  key: APP_POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            # PGL-112. wal_level=replica is what makes the WAL archive REPLAYABLE. At `minimal` the
+            # log omits information a replay needs, and no archive taken at that level can restore —
+            # discovered only during recovery. It is set here, at the server, not in the archive job.
+            - name: POSTGRES_INITDB_ARGS
+              value: "--data-checksums"
+          args:
+            - postgres
+            - -c
+            - wal_level=replica
+            - -c
+            - archive_mode=on
+            # PGL-105. Segments are 16MB and a watchlist will not fill one for weeks; without a
+            # timeout, "continuous" archiving ships roughly monthly and the real recovery window is
+            # unchanged. 60s bounds the RPO (PGL-121).
+            - -c
+            - archive_timeout=60
+            # PGL-103/PGL-129. Writes the completed segment to the archive spool, which the sidecar
+            # ships to the NAS. Postgres must NEVER block a commit on the NAS being reachable, so the
+            # command touches local disk only. A non-zero exit makes Postgres RETAIN the segment and
+            # retry — correct, and why PGL-106 alerts on the spool filling.
+            - -c
+            - archive_command=test ! -f /archive/spool/%f && cp %p /archive/spool/%f
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+            - name: archive
+              mountPath: /archive
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U bleedingoptions -d bleedingoptions"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U bleedingoptions -d bleedingoptions"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          # Smaller than the Keycloak instance: this holds lists of symbols, not sessions.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # NOT readOnlyRootFilesystem: postgres writes to /tmp and /var/run in normal operation.
+
+        # PGL-103. The WAL shipper is a SIDECAR, not a CronJob, and that is load-bearing.
+        #
+        # The spool lives on a ReadWriteOnce PVC already mounted by this pod. A CronJob pod would have
+        # to mount the SAME RWO volume while the database holds it — which is at best node-dependent
+        # and at worst silently never schedules, leaving an archive that appears configured and ships
+        # nothing. In the pod, the shipper shares the volume by construction.
+        #
+        # It also fails in the right place: if shipping stops, the spool fills, and the alert is about
+        # THIS pod rather than a job whose absence nobody notices.
+        - name: wal-ship
+          image: alpine:3.20
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              # PGL-133. Installed ONCE at startup rather than per run — but this remains the weakest
+              # part of the design: it puts a package download on the path of a backup, so a mirror
+              # outage degrades the archive to "not shipping". The proper fix is a purpose-built image
+              # with rsync and ssh baked in and pinned by digest. Recorded, not hidden — and the
+              # failure is loud rather than a container that quietly ships nothing.
+              apk add --no-cache openssh-client rsync >/dev/null || {
+                echo "FATAL: could not install rsync/ssh. WAL is NOT shipping — this is a backup outage." >&2
+                exit 1
+              }
+              install -m 700 -d /tmp/.ssh
+              install -m 600 /creds/id_ed25519 /tmp/.ssh/id_ed25519
+              install -m 644 /creds/known_hosts /tmp/.ssh/known_hosts
+              while true; do
+                # --remove-source-files empties the spool ONLY for segments that transferred, so a
+                # partial run leaves the rest to retry rather than losing WAL. A non-zero exit is
+                # tolerated and retried: the spool filling is the real signal (PGL-106), not a
+                # crashlooping sidecar that would take the DATABASE down with it.
+                rsync -a --remove-source-files \
+                  -e "ssh -i /tmp/.ssh/id_ed25519 -o UserKnownHostsFile=/tmp/.ssh/known_hosts -o StrictHostKeyChecking=yes" \
+                  /archive/spool/ "$NAS_USER@$NAS_HOST:$NAS_ROOT/bo-app/wal/" || true
+                sleep 30
+              done
+          envFrom:
+            - configMapRef:
+                name: nas-archive-config
+          volumeMounts:
+            - name: archive
+              mountPath: /archive
+            - name: nas-creds
+              mountPath: /creds
+              readOnly: true
+          resources:
+            requests: { cpu: 25m, memory: 32Mi }
+            limits:   { cpu: 100m, memory: 96Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: nas-creds
+          secret:
+            secretName: nas-backup-credentials
+            defaultMode: 0400
+            # OPTIONAL so the pod starts before the NAS account exists. Without this the whole
+            # StatefulSet — the database — would be unschedulable until a backup credential is
+            # created, which makes a missing backup into an outage.
+            optional: true
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+    - metadata:
+        name: archive
+      spec:
+        # The WAL SPOOL, not the archive itself. Segments land here and a job ships them to the NAS.
+        # Deliberately separate from pgdata: if the spool fills, archiving stops and Postgres retains
+        # WAL — but the DATA volume still has room, so the database keeps accepting writes while the
+        # alert is acted on. Sharing one volume turns a backup outage into a database outage.
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
