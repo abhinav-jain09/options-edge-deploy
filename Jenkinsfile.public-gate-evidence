@@ -39,8 +39,14 @@ pipeline {
     IMAGE_REGISTRY = '192.168.100.252:5000'
     IMAGE_REF      = "192.168.100.252:5000/options-edge-web:prod"
     APP_REPO       = 'git@github.com:abhinav-jain09/options-edge.git'
-    // OUTSIDE this repository, by the gate's own rule. Same location the deploy path reads.
-    EVIDENCE_DIR   = "${WORKSPACE}/../public-gate-evidence"
+    // THE SAME LOCATION THE DEPLOY PATH READS — taken from the global Jenkins environment variable
+    // that verify-public-gate.sh already consults, never re-derived here. Deriving it from
+    // ${WORKSPACE} was tried and was WRONG: this job's workspace is one level deeper than the
+    // agent's workspace root, so evidence landed in .../workspace/workspace/public-gate-evidence
+    // while the gate looked in .../workspace/public-gate-evidence. The job would have reported
+    // success and the deploy would still have been refused, which is the worst kind of green.
+    // One source of truth, so producer and consumer cannot drift.
+    EVIDENCE_DIR   = "${env.PUBLIC_GATE_EVIDENCE_DIR ?: '/Users/abhinav/jenkins-agent/hpsf-replay-mac/workspace/public-gate-evidence'}"
     REMOTE_BUILD_HOST = '192.168.100.252'
     REMOTE_BUILD_ROOT = '/home/abhinav/ci/remote-builds'
   }
@@ -84,6 +90,12 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          # If the global variable is ever renamed, stop rather than write evidence somewhere the
+          # gate will never read.
+          case "${EVIDENCE_DIR}" in
+            /*) : ;;
+            *)  echo "EVIDENCE_DIR is not an absolute path: ${EVIDENCE_DIR}" >&2; exit 1 ;;
+          esac
           bash scripts/ci/public-gate-evidence.sh \
             --repo "${WORKSPACE}/app" \
             --image "${IMAGE_REF}" \
