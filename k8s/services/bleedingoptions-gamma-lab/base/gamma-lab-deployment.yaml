@@ -104,6 +104,26 @@ spec:
               value: "/"
             - name: PUBLIC_SURFACE
               value: "gamma-lab"
+            # PGL-096. The APPLICATION database, for watchlists.
+            #
+            # APP_POSTGRES_*, deliberately NOT the platform-wide POSTGRES_* the internal history
+            # services read. The public surface must not reach the internal trading database by
+            # inheriting its connection settings — that isolation is why this tenant runs its own
+            # Keycloak and its own Postgres, and a shared variable name would quietly undo it.
+            #
+            # WITHOUT THESE the store finds no configuration and degrades to an empty list forever.
+            # That degrade is deliberate (a watchlist must never stop the board rendering), which is
+            # exactly why its absence would present as "the feature silently does nothing" rather
+            # than as an error anyone would chase.
+            - name: APP_POSTGRES_JDBC_URL
+              value: "jdbc:postgresql://bo-app-postgres-db.bleedingoptions.svc:5432/bleedingoptions"
+            - name: APP_POSTGRES_USER
+              value: "bleedingoptions"
+            - name: APP_POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bo-keycloak-secrets
+                  key: APP_POSTGRES_PASSWORD
             - name: APP_PROFILE
               value: "prod"
 
