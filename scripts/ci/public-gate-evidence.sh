@@ -200,7 +200,11 @@ ok "checkout matches the revision the registry associates with this image"
 REPORT_DIR="$REPO/target/surefire-reports"
 rm -rf "$REPORT_DIR"
 echo "==> running $TESTS at $REVISION"
-( cd "$REPO" && mvn -B -q -Dtest="$TESTS" -DfailIfNoSpecifiedTests=true test ) \
+# CLEAN, not just test. Deleting surefire-reports is not enough: Maven happily reuses
+# target/classes and target/test-classes, so a workspace that previously built a DIFFERENT revision
+# can produce fresh-looking reports from stale bytecode — evidence naming revision R for a test run
+# that never compiled R. A clean git tree says nothing about ignored build output.
+( cd "$REPO" && mvn -B -q clean -Dtest="$TESTS" -DfailIfNoSpecifiedTests=true test ) \
   || die "the PGL tests did not pass at $REVISION — no evidence written.
        That is the correct outcome: the gate exists because a public user's bearer must not reach
        the internal namespace, and these tests are what observe that it does not."
