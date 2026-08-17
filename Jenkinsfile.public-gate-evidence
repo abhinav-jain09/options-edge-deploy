@@ -33,7 +33,7 @@ pipeline {
     string(name: 'SOURCE_REVISION', defaultValue: 'main',
       description: 'options-edge ref to build and test. A branch name is resolved to a commit and the COMMIT is what the evidence records.')
     booleanParam(name: 'BUILD_IMAGE', defaultValue: true,
-      description: 'Build+push the production web image first. false attests whatever is already on :prod — safe now, because the revision is DERIVED from the registry rather than taken from this job.')
+      description: 'Build+push the production web image first. false attests whatever is already on :prod — the digest is resolved either way, so both paths pin what they attest.')
   }
 
   options {
@@ -93,8 +93,16 @@ pipeline {
                 booleanParam(name: 'SKIP_SELENIUM_SMOKE', value: true)
               ],
               wait: true, propagate: true
-        // Resolve the digest the moment the build finishes and REQUIRE the producer to see the same
-        // one. This does not make the window zero — options-edge-web-deploy does not return the
+      }
+    }
+
+    stage('Resolve the digest under test') {
+      steps {
+        script {
+        // Resolve the digest and REQUIRE the producer to see the same one. This runs on BOTH paths:
+        // with BUILD_IMAGE=false there is no build to follow, but the run must still pin what it
+        // attests. (It previously sat inside the build-only stage, so the false path left
+        // EXPECTED_DIGEST unset and died under set -u — a documented mode that could not run.) This does not make the window zero — options-edge-web-deploy does not return the
         // digest it pushed, and another job could repush :prod between its completion and this
         // read — but it closes the window to that gap instead of leaving it open across the whole
         // test run, and any movement after this point is caught rather than silently attested.
@@ -102,7 +110,6 @@ pipeline {
         // It FAILS CLOSED. An empty capture used to fall through `${EXPECTED_DIGEST:+...}`, which
         // silently dropped --expect-digest and let the run attest whatever :prod resolved to later
         // — the opposite of the guard's purpose.
-        script {
           env.EXPECTED_DIGEST = sh(returnStdout: true, script: '''
             set -euo pipefail
             curl -sS -m 30 -o /dev/null -D - \
@@ -112,10 +119,10 @@ pipeline {
               | tr -d "\r" | awk "tolower(\\$1)==\"docker-content-digest:\"{print \\$2}" | tail -1
           ''').trim()
           if (!(env.EXPECTED_DIGEST ==~ /^sha256:[0-9a-f]{64}$/)) {
-            error("could not resolve the digest this build pushed (got '${env.EXPECTED_DIGEST}'). " +
+            error("could not resolve the digest under test (got '${env.EXPECTED_DIGEST}'). " +
                   "Refusing to continue: without it the attestation could name a different image.")
           }
-          echo "digest pushed by this build: ${env.EXPECTED_DIGEST}"
+          echo "digest under test: ${env.EXPECTED_DIGEST}"
         }
       }
     }

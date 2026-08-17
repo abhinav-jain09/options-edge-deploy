@@ -16,7 +16,7 @@
 #
 #   asserts     revision R passed the PGL-050/051/052 tests, and the registry ASSOCIATES digest D
 #               with R through a versioned tag that some pusher created
-#   does NOT    prove D was built from R. Nothing here can: the tag is an assertion by whoever
+#   does NOT    establish that D was produced from R. Nothing here can: the tag is an assertion by whoever
 #               pushed it, and this registry authenticates nobody.
 #
 # See the trust boundary below. This is a control against attesting the WRONG THING by mistake.
@@ -171,14 +171,15 @@ DERIVED_REV="$(resolve_revision "$DIGEST_BEFORE" || true)"
        $DIGEST_BEFORE.
        Without one there is nothing tying this image to a revision, and an attestation that cannot
        name what it tested is not evidence. (Was this image pushed by the normal web build?)"
-ok "registry ties $DIGEST_BEFORE to revision $DERIVED_REV"
+ok "registry associates $DIGEST_BEFORE with revision $DERIVED_REV"
 
 # expand the 12-char tag sha to the full commit, and require the checkout to BE it
 FULL_REV="$(git -C "$REPO" rev-parse "$DERIVED_REV^{commit}" 2>/dev/null || true)"
 [ -n "$FULL_REV" ] || die "the registry names revision $DERIVED_REV, which is not in $REPO.
-       Fetch it before attesting — the tests must run on the revision the image was built from."
+       Fetch it before attesting — the tests must run on the revision the registry associates with
+       this image."
 if [ -n "$REVISION" ] && [ "$REVISION" != "$FULL_REV" ] && [ "$REVISION" != "$DERIVED_REV" ]; then
-  die "the caller asked to record $REVISION, but the registry says this digest was built from
+  die "the caller asked to record $REVISION, but the registry associates this digest with
        $FULL_REV. Recording the caller's answer would be exactly the substitution the gate exists
        to prevent."
 fi
@@ -186,9 +187,9 @@ REVISION="$FULL_REV"
 
 HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
 [ "$HEAD_SHA" = "$REVISION" ] \
-  || die "the checkout is at $HEAD_SHA but this digest was built from $REVISION.
+  || die "the checkout is at $HEAD_SHA but the registry associates this digest with $REVISION.
        The tests run against the working tree, so check that revision out first."
-ok "checkout is at the revision this image was built from"
+ok "checkout matches the revision the registry associates with this image"
 
 # ---------------------------------------------------------------- 3. RUN the tests
 # No result is accepted as input. If this fails, the script exits and no evidence exists.
