@@ -228,6 +228,35 @@ fi
 
 echo "=== apply (service-scoped) ==="
 kubectl apply -f "$RENDER"
+
+# --- FORCE_RESTART: roll pods whose SPEC did not change --------------------------------
+# Applying an unchanged manifest is a no-op to Kubernetes: same digest, same pod template, so no
+# new ReplicaSet and no new pods. That is normally exactly right — but it means this job CANNOT
+# pick up a changed Secret or ConfigMap, because those are injected as environment variables and
+# environment variables are fixed for the life of a container.
+#
+# So a credential rotation that followed "write the Secret, then deploy" would report a clean,
+# green rollout while every pod carried on using the OLD value. For the bleedingoptions watchlist
+# that failure is silent by construction: WatchlistStore degrades to an empty list rather than
+# erroring, so the page keeps working and merely stops storing anything.
+#
+# This sets the same annotation `kubectl rollout restart` sets, which is what makes the pod
+# template genuinely different and forces new pods on the SAME image digest. It exists so that
+# rotation has a sanctioned Jenkins path (docs/bleedingoptions-app-db-rotation.md) instead of a
+# hand-run kubectl, which the Absolute Jenkins-Only Deployment Rule forbids.
+#
+# Opt-in, default false: every ordinary deploy already rolls pods by changing the digest, and
+# restarting on every run would throw away the no-op property that makes re-running a deploy safe.
+if [ "${FORCE_RESTART:-false}" = "true" ]; then
+  echo "=== FORCE_RESTART: rolling pods on the unchanged image digest ==="
+  stamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  for dep in $DEPLOYMENTS; do
+    kubectl -n "$NAMESPACE" patch "deployment/$dep" --type=strategic -p \
+      "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"kubectl.kubernetes.io/restartedAt\":\"$stamp\"}}}}}"
+    echo "  patched $dep with restartedAt=$stamp"
+  done
+fi
+
 echo "=== rollout (all deployments of this service) ==="
 for dep in $DEPLOYMENTS; do
   kubectl -n "$NAMESPACE" rollout status "deployment/$dep" --timeout="$ROLLOUT_TIMEOUT"

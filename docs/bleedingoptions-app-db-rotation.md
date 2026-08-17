@@ -69,7 +69,14 @@ exists.
 - Job: `service-deploy` (`Jenkinsfile.service-deploy`) — one generic job for every service, not a
   per-service job
 - `SERVICE = bleedingoptions-gamma-lab`, `ENVIRONMENT = production`, `DEPLOY_DRY_RUN = false`,
-  `BUILD_IMAGES = false`
+  `BUILD_IMAGES = false`, **`FORCE_RESTART = true`**
+
+`FORCE_RESTART = true` is not optional here, and it is the step most easily got wrong. Applying an
+unchanged manifest is a **no-op** to Kubernetes: same image digest, same pod template, therefore no
+new ReplicaSet and no new pods. The Secret is injected as an environment variable, and environment
+variables are fixed for the life of a container — so without it the job reports a clean, green
+rollout while every pod carries on using the **old** password. The watchlist would stay broken and
+the deploy would look successful.
 
 `BUILD_IMAGES = false` matters: this is a Secret rotation, not a release. There is no new image to
 build, and building one would change the digest the overlay pins and require fresh PGL-072 evidence

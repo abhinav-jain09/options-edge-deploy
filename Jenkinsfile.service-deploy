@@ -58,6 +58,8 @@ pipeline {
       description: 'true = render + digest-pin + server-side validate only; nothing changes.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
       description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    booleanParam(name: 'FORCE_RESTART', defaultValue: false,
+      description: 'false (DEFAULT). true = also roll the pods even when the manifest is UNCHANGED. Applying an identical manifest is a no-op to Kubernetes — same digest, same pod template, no new pods — so a deploy CANNOT pick up a changed Secret or ConfigMap, because those are injected as environment variables and those are fixed for the life of a container. Needed for credential rotation (docs/bleedingoptions-app-db-rotation.md), which would otherwise report a green rollout while every pod kept using the old value. Leave false for ordinary deploys: they already roll pods by changing the digest, and restarting every run would discard the no-op property that makes re-running a deploy safe.')
   }
   options {
     disableConcurrentBuilds()
@@ -71,6 +73,7 @@ pipeline {
     ENVIRONMENT          = "${params.ENVIRONMENT}"
     SERVICE_PARAM        = "${params.SERVICE}"
     DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
+    FORCE_RESTART        = "${params.FORCE_RESTART}"
   }
   stages {
     stage('Intent dedup') {
