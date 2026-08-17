@@ -116,7 +116,7 @@ pipeline {
               -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
               -H "Accept: application/vnd.oci.image.manifest.v1+json" \
               "http://192.168.100.252:5000/v2/options-edge-web/manifests/prod" \
-              | tr -d "\r" | awk "tolower(\\$1)==\"docker-content-digest:\"{print \\$2}" | tail -1
+              | tr -d '\r' | awk '$1 == "Docker-Content-Digest:" || tolower($1) == "docker-content-digest:" {print $2}' | tail -1
           ''').trim()
           if (!(env.EXPECTED_DIGEST ==~ /^sha256:[0-9a-f]{64}$/)) {
             error("could not resolve the digest under test (got '${env.EXPECTED_DIGEST}'). " +
