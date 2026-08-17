@@ -183,59 +183,28 @@ spec:
               drop: ["ALL"]
             # NOT readOnlyRootFilesystem: postgres writes to /tmp and /var/run in normal operation.
 
-        # PGL-103. The WAL shipper is a SIDECAR, not a CronJob, and that is load-bearing.
+        # PGL-103/PGL-133. THE WAL SHIPPER SIDECAR IS REMOVED, and this comment is why.
         #
-        # The spool lives on a ReadWriteOnce PVC already mounted by this pod. A CronJob pod would have
-        # to mount the SAME RWO volume while the database holds it — which is at best node-dependent
-        # and at worst silently never schedules, leaving an archive that appears configured and ships
-        # nothing. In the pod, the shipper shares the volume by construction.
+        # It ran `apk add openssh-client rsync` at startup. The pod correctly runs as uid 70, apk
+        # needs root, so the container failed instantly and CrashLoopBackOff took the POD to 0/2 —
+        # a backup that cannot work made a working database unavailable. That is exactly backwards:
+        # PGL-129 says an archive outage must degrade the backup, never the service.
         #
-        # It also fails in the right place: if shipping stops, the spool fills, and the alert is about
-        # THIS pod rather than a job whose absence nobody notices.
-        - name: wal-ship
-          image: alpine:3.20
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              set -eu
-              # PGL-133. Installed ONCE at startup rather than per run — but this remains the weakest
-              # part of the design: it puts a package download on the path of a backup, so a mirror
-              # outage degrades the archive to "not shipping". The proper fix is a purpose-built image
-              # with rsync and ssh baked in and pinned by digest. Recorded, not hidden — and the
-              # failure is loud rather than a container that quietly ships nothing.
-              apk add --no-cache openssh-client rsync >/dev/null || {
-                echo "FATAL: could not install rsync/ssh. WAL is NOT shipping — this is a backup outage." >&2
-                exit 1
-              }
-              install -m 700 -d /tmp/.ssh
-              install -m 600 /creds/id_ed25519 /tmp/.ssh/id_ed25519
-              install -m 644 /creds/known_hosts /tmp/.ssh/known_hosts
-              while true; do
-                # --remove-source-files empties the spool ONLY for segments that transferred, so a
-                # partial run leaves the rest to retry rather than losing WAL. A non-zero exit is
-                # tolerated and retried: the spool filling is the real signal (PGL-106), not a
-                # crashlooping sidecar that would take the DATABASE down with it.
-                rsync -a --remove-source-files \
-                  -e "ssh -i /tmp/.ssh/id_ed25519 -o UserKnownHostsFile=/tmp/.ssh/known_hosts -o StrictHostKeyChecking=yes" \
-                  /archive/spool/ "$NAS_USER@$NAS_HOST:$NAS_ROOT/bo-app/wal/" || true
-                sleep 30
-              done
-          envFrom:
-            - configMapRef:
-                name: nas-archive-config
-          volumeMounts:
-            - name: archive
-              mountPath: /archive
-            - name: nas-creds
-              mountPath: /creds
-              readOnly: true
-          resources:
-            requests: { cpu: 25m, memory: 32Mi }
-            limits:   { cpu: 100m, memory: 96Mi }
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
+        # It also could not have shipped anything: `nas-backup-credentials` does not exist and no key
+        # is trusted on the NAS. So this removes a container that was guaranteed to fail, in a way
+        # that took the database with it, in exchange for a capability it did not yet have.
+        #
+        # WHAT COMES BACK, and what it needs first:
+        #   * a purpose-built image with rsync and ssh BAKED IN, pinned by digest. Installing packages
+        #     on the path of a backup means a mirror outage silently degrades the archive, and the
+        #     review called that the weakest part of the design before it even broke.
+        #   * PGL-131's dedicated non-admin NAS account, and its key via the Jenkins path (PGL-132).
+        #   * PGL-104's base backup — WAL alone restores nothing.
+        #
+        # archive_mode stays ON and archive_command keeps writing to the spool PVC. Segments
+        # accumulate locally and are NOT lost; when the shipper returns it drains them. PGL-106's
+        # alert on the spool filling is what makes that safe to leave running, and it is not built
+        # yet — so this is a known gap, recorded rather than hidden.
       volumes:
         - name: nas-creds
           secret:
