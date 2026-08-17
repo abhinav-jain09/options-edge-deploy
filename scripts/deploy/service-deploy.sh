@@ -139,7 +139,30 @@ ENV_IMAGE=""
 if [ -f "image-tags/${ENVIRONMENT}.yaml" ]; then
   ENV_IMAGE="$(yq -r ".images | to_entries[] | select(.value | test(\"/${IMAGE_BASENAME}:\")) | .value" "image-tags/${ENVIRONMENT}.yaml" | awk 'NR==1')"
 fi
-if [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ]; then
+# A render that ALREADY PINS A DIGEST is authoritative and is never remapped.
+#
+# The remap below rewrites the rendered image to image-tags/<env>.yaml's mutable tag, and the
+# digest-pin step then resolves whatever that tag points at RIGHT NOW. For an overlay that pins a
+# digest in git — the public Gamma Lab does, under PGL-072 — that silently discarded the pin and
+# deployed the tag's current contents instead. The overlay's own comment claimed the opposite ("a
+# digest is already pinned, so its remap finds no :dev to rewrite and its pin is a no-op"), so the
+# file documented a guarantee the deploy path did not provide.
+#
+# That is not a theoretical race: on 2026-08-16 `:prod` resolved to four different digests inside
+# twenty minutes. Gate evidence (PGL-072) is keyed to an exact digest, so deploying a different one
+# than the pin names would mean running an image whose evidence was never earned — while the gate
+# still passed, because it checks the RENDER.
+case "$MUTABLE_IMAGE" in
+  *@sha256:*) PIN_IS_AUTHORITATIVE=true ;;
+  *)          PIN_IS_AUTHORITATIVE=false ;;
+esac
+
+if [ "$PIN_IS_AUTHORITATIVE" = true ] && [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ] \
+   && [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
+  echo "render pins a digest — NOT remapping to $ENV_IMAGE; deploying exactly $MUTABLE_IMAGE"
+fi
+
+if [ "$PIN_IS_AUTHORITATIVE" = false ] && [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ]; then
   if [ "$ENVIRONMENT" = "production" ] && [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
     echo "remapping render image -> env image: $MUTABLE_IMAGE -> $ENV_IMAGE"
     MUTABLE_IMAGE="$ENV_IMAGE"
@@ -180,6 +203,17 @@ PINNED_IMAGE="$(pin_ref "$MUTABLE_IMAGE")" || {
   exit 1
 }
 echo "pinned $MUTABLE_IMAGE -> $PINNED_IMAGE"
+
+# ASSERT the resolution did not move the pin. When the render already named a digest, pin_ref must
+# return that same digest — it is resolving a reference that is already exact. If these ever differ,
+# something between the render and here has substituted a different image, and the gate evidence
+# (which was checked against the RENDER) would no longer describe what is about to run. Refusing is
+# the only safe answer; a warning would be read after the fact, if at all.
+if [ "$PIN_IS_AUTHORITATIVE" = true ] && [ "$PINNED_IMAGE" != "$MUTABLE_IMAGE" ]; then
+  echo "FATAL: the render pinned $MUTABLE_IMAGE but resolution produced $PINNED_IMAGE." >&2
+  echo "  A digest-pinned render must deploy exactly the digest it names. Nothing was applied." >&2
+  exit 1
+fi
 # Pin EVERY container that carries the shared service image (RENDER_IMAGE0), not just
 # containers[0] — a single-container Deployment is unchanged, while a multi-container pod
 # (agent-a + agent-b) gets its sidecar pinned too instead of failing the digest-pin gate below.
