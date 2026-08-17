@@ -58,6 +58,15 @@ spec:
         - env:
             - name: PREOPEN_GEX_ENABLED
               value: "false"
+            # The pre-open path puts this in its trade-date ownership key AND in its
+            # transactional producer id. Undeclared it defaults to "dev" IN CODE, so a
+            # production pod identifies itself as dev: prod's ownership rows were keyed
+            # "dev" and its producer was named
+            # producer-ibkr-preopen|dev|options.databento.gex.strike|<date>. Two
+            # environments sharing one identity is a collision waiting for the day they
+            # share a store. Declared here so the code can later refuse to guess.
+            - name: DEPLOY_ENVIRONMENT
+              value: "dev"
             - name: IBKR_GEX_CONSUME_ENABLED
               value: "true"
             - name: IBKR_GEX_PUBLISH_ENABLED
