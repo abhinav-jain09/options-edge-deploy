@@ -7,12 +7,16 @@
 // failed at the gate with "there is no gate evidence for the digest it runs" (build #1373). The
 // deploy path existed; the qualification path did not.
 //
-// HOW THE DIGEST IS TIED TO A REVISION, without trusting this job. The web build already pushes an
-// IMMUTABLE tag beside the mutable one — `prod-<build>-<sha12>` — so the registry itself records
-// which revision produced which digest. The producer finds the immutable tag sharing the deployed
-// digest and DERIVES the revision from it, then refuses unless the checkout under test is that
-// revision. Nothing here asserts provenance; it is recovered from the registry and enforced.
-// That is why no change to the shared build Jenkinsfile was needed after all.
+// HOW THE REVISION IS OBTAINED, without this job asserting it. The web build pushes a versioned tag
+// beside the mutable one — `prod-<build>-<sha12>` — so the registry ASSOCIATES a digest with a
+// revision. The producer finds the versioned tag sharing the deployed digest, takes the revision
+// from it, and refuses unless the checkout under test is that revision.
+//
+// That association is NOT proof: the tag is an assertion by whoever pushed it, and this registry
+// authenticates nobody. What it buys is that the revision comes from somewhere other than the
+// person running the job — which is the failure this guards against, an operator attesting the
+// wrong thing. An adversary with registry write access is out of scope here and would not be
+// stopped by any evidence requirement, since they could push straight to :prod.
 //
 // WHAT THIS JOB CANNOT DO. It cannot mark a requirement PASS. scripts/ci/public-gate-evidence.sh
 // runs the tests itself and writes nothing if they fail; there is no parameter here that asserts a
@@ -94,6 +98,10 @@ pipeline {
         // digest it pushed, and another job could repush :prod between its completion and this
         // read — but it closes the window to that gap instead of leaving it open across the whole
         // test run, and any movement after this point is caught rather than silently attested.
+        //
+        // It FAILS CLOSED. An empty capture used to fall through `${EXPECTED_DIGEST:+...}`, which
+        // silently dropped --expect-digest and let the run attest whatever :prod resolved to later
+        // — the opposite of the guard's purpose.
         script {
           env.EXPECTED_DIGEST = sh(returnStdout: true, script: '''
             set -euo pipefail
@@ -103,6 +111,10 @@ pipeline {
               "http://192.168.100.252:5000/v2/options-edge-web/manifests/prod" \
               | tr -d "\r" | awk "tolower(\\$1)==\"docker-content-digest:\"{print \\$2}" | tail -1
           ''').trim()
+          if (!(env.EXPECTED_DIGEST ==~ /^sha256:[0-9a-f]{64}$/)) {
+            error("could not resolve the digest this build pushed (got '${env.EXPECTED_DIGEST}'). " +
+                  "Refusing to continue: without it the attestation could name a different image.")
+          }
           echo "digest pushed by this build: ${env.EXPECTED_DIGEST}"
         }
       }
@@ -125,7 +137,7 @@ verify-public-gate.sh reads; without it this job cannot know where the gate look
             --image "${IMAGE_REF}" \
             --ci-build-url "${BUILD_URL}" \
             --out-dir "${EVIDENCE_DIR}" \
-            ${EXPECTED_DIGEST:+--expect-digest "${EXPECTED_DIGEST}"}
+            --expect-digest "${EXPECTED_DIGEST}"
         '''
       }
     }

@@ -12,21 +12,14 @@
 # evidence — "evidence that can be committed is evidence that can be written by anyone opening a
 # pull request".
 #
-# WHAT THE EVIDENCE HONESTLY ASSERTS, and what it does not:
+# WHAT THE EVIDENCE ASSERTS, and what it does not:
 #
-#   asserts     the source revision R passed the PGL-050/051/052 tests, and at the moment of writing
-#               the tag T resolved to digest D
-#   does NOT    prove by itself that D was built FROM R — the image carries no revision label today
+#   asserts     revision R passed the PGL-050/051/052 tests, and the registry ASSOCIATES digest D
+#               with R through a versioned tag that some pusher created
+#   does NOT    prove D was built from R. Nothing here can: the tag is an assertion by whoever
+#               pushed it, and this registry authenticates nobody.
 #
-# That gap is closed by WHERE this runs, not by what it writes: the caller builds the image from R
-# and calls this immediately afterwards, in the same pipeline run, so the tie between R and D is
-# first-hand. The digest is re-resolved after the tests and required to be unchanged, so a
-# concurrent push to the same mutable tag cannot silently swap the artifact under the attestation.
-#
-# The stronger fix is to stamp `org.opencontainers.image.revision` into the image at build time,
-# after which the R->D tie is verifiable by anyone, forever, from the registry alone. That belongs
-# in the application repo's Dockerfile and its build Jenkinsfile, and is deliberately NOT bundled
-# here: that Jenkinsfile builds every service image on the platform.
+# See the trust boundary below. This is a control against attesting the WRONG THING by mistake.
 #
 # Usage:
 #   public-gate-evidence.sh --repo <options-edge checkout> --image <ref:tag> --revision <sha>
@@ -120,11 +113,9 @@ resolve_revision() {
   for t in $tags; do
     # EXACTLY the shape the build emits: prod-<build>-<12 hex>. A looser pattern accepts more
     # things that were never produced by that build.
-    case "$t" in
-      prod-[0-9]*-*) : ;;
-      *) continue ;;
-    esac
-    printf '%s' "${t##*-}" | grep -qE '^[0-9a-f]{12}$' || continue
+    # A glob cannot express this: `prod-[0-9]*-*` is one digit then anything, so `prod-1oops-<sha>`
+    # would pass. Validate the WHOLE tag against the exact shape the build emits.
+    printf '%s' "$t" | grep -qE '^prod-[0-9]+-[0-9a-f]{12}$' || continue
     d="$(curl -sS -m 30 -o /dev/null -D - \
       -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
       -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
@@ -176,7 +167,7 @@ fi
 # The revision is DERIVED from the registry, never taken on trust. If --revision was supplied it is
 # treated as a CHECK on that derivation, not as the source of it.
 DERIVED_REV="$(resolve_revision "$DIGEST_BEFORE" || true)"
-[ -n "$DERIVED_REV" ] || die "no immutable prod-<build>-<sha> tag in the registry shares the digest
+[ -n "$DERIVED_REV" ] || die "no versioned prod-<build>-<sha> tag in the registry shares the digest
        $DIGEST_BEFORE.
        Without one there is nothing tying this image to a revision, and an attestation that cannot
        name what it tested is not evidence. (Was this image pushed by the normal web build?)"
