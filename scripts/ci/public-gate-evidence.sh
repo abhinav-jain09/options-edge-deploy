@@ -63,7 +63,7 @@ done
 
 # NOTE: the Jenkins agent is macOS, whose /bin/bash is 3.2.57 — `${v,,}` is a bash 4 construct and
 # fails there with "bad substitution" at RUNTIME while still parsing cleanly. Lowercased with tr.
-for v in REPO IMAGE REVISION CI_BUILD_URL OUT_DIR; do
+for v in REPO IMAGE CI_BUILD_URL OUT_DIR; do
   if [ -z "${!v}" ]; then
     die "--$(printf '%s' "$v" | tr '[:upper:]_' '[:lower:]-') is required"
   fi
@@ -75,13 +75,42 @@ echo "  repo:     $REPO"
 echo "  image:    $IMAGE"
 echo "  revision: $REVISION"
 
+# ------------------------------------------------- 0. DERIVE the revision from the registry
+#
+# THE PROVENANCE PROBLEM, AND WHY THIS SOLVES IT. Evidence has to say "revision R passed, and
+# revision R is what digest D runs". Being TOLD R by the caller proves nothing — a caller can test
+# any revision and staple the result to any image, which is exactly the false attestation the gate
+# exists to prevent. The image carries no `org.opencontainers.image.revision` label, so for a while
+# it looked as though only a change to the shared build could fix this.
+#
+# It already fixes itself. The web build pushes an IMMUTABLE tag alongside the mutable one:
+#   VERSIONED_IMAGE="${IMAGE%:*}:prod-${BUILD_NUMBER}-$(git rev-parse --short=12 HEAD)"
+# so the registry holds `prod-970-8daf949c18d1` pointing at the same digest as `:prod`. The tag NAME
+# carries the build number and the revision. Finding the immutable tag that shares the deployed
+# digest therefore recovers the revision FROM THE REGISTRY, verifiable by anyone, with no change to
+# the build and nothing taken on the caller's word.
+resolve_revision() {
+  local registry repo_path
+  registry="${IMAGE%%/*}"
+  repo_path="${IMAGE#*/}"; repo_path="${repo_path%:*}"
+  local tags
+  tags="$(curl -sS -m 30 "http://${registry}/v2/${repo_path}/tags/list" \
+    | tr ',' '\n' | tr -d '"[]{}' | sed -n 's/.*\(prod-[0-9][0-9]*-[0-9a-f]\{7,\}\).*/\1/p' | sort -u)"
+  local t d
+  for t in $tags; do
+    d="$(curl -sS -m 30 -o /dev/null -D - \
+      -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+      -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+      "http://${registry}/v2/${repo_path}/manifests/${t}" \
+      | tr -d '\r' | awk 'tolower($1)=="docker-content-digest:"{print $2}' | tail -1)"
+    if [ "$d" = "$1" ]; then printf '%s' "${t##*-}"; return 0; fi
+  done
+  return 1
+}
+
 # ---------------------------------------------------------------- 1. the revision must be REAL
 # `-d .git` is WRONG for a git worktree, where .git is a FILE pointing at the real git dir. Ask git.
 git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || die "$REPO is not a git checkout"
-HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
-[[ "$HEAD_SHA" == "$REVISION" ]] \
-  || die "the checkout is at $HEAD_SHA but the evidence would claim $REVISION.
-       The tests run against the working tree, so the revision recorded must be the revision tested."
 # `git diff` misses UNTRACKED files, and an untracked Java source, test, resource or
 # .mvn/maven.config changes what Maven compiles and runs while the evidence still names the
 # committed HEAD. --porcelain covers tracked AND untracked.
@@ -89,7 +118,7 @@ DIRT="$(git -C "$REPO" status --porcelain)"
 [ -z "$DIRT" ] || die "the checkout at $REPO is not clean:
 $DIRT
        Evidence must name a revision anyone else can check out and re-run."
-ok "checkout is clean and at $REVISION"
+ok "checkout is clean"
 
 # ---------------------------------------------------------------- 2. resolve the digest BEFORE
 resolve_digest() {
@@ -110,6 +139,32 @@ if [[ -n "$EXPECT_DIGEST" && "$EXPECT_DIGEST" != "$DIGEST_BEFORE" ]]; then
   die "the caller expected $EXPECT_DIGEST but $IMAGE resolves to $DIGEST_BEFORE.
        Something re-pushed this tag between the build and this attestation."
 fi
+
+# The revision is DERIVED from the registry, never taken on trust. If --revision was supplied it is
+# treated as a CHECK on that derivation, not as the source of it.
+DERIVED_REV="$(resolve_revision "$DIGEST_BEFORE" || true)"
+[ -n "$DERIVED_REV" ] || die "no immutable prod-<build>-<sha> tag in the registry shares the digest
+       $DIGEST_BEFORE.
+       Without one there is nothing tying this image to a revision, and an attestation that cannot
+       name what it tested is not evidence. (Was this image pushed by the normal web build?)"
+ok "registry ties $DIGEST_BEFORE to revision $DERIVED_REV"
+
+# expand the 12-char tag sha to the full commit, and require the checkout to BE it
+FULL_REV="$(git -C "$REPO" rev-parse "$DERIVED_REV^{commit}" 2>/dev/null || true)"
+[ -n "$FULL_REV" ] || die "the registry names revision $DERIVED_REV, which is not in $REPO.
+       Fetch it before attesting — the tests must run on the revision the image was built from."
+if [ -n "$REVISION" ] && [ "$REVISION" != "$FULL_REV" ] && [ "$REVISION" != "$DERIVED_REV" ]; then
+  die "the caller asked to record $REVISION, but the registry says this digest was built from
+       $FULL_REV. Recording the caller's answer would be exactly the substitution the gate exists
+       to prevent."
+fi
+REVISION="$FULL_REV"
+
+HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
+[ "$HEAD_SHA" = "$REVISION" ] \
+  || die "the checkout is at $HEAD_SHA but this digest was built from $REVISION.
+       The tests run against the working tree, so check that revision out first."
+ok "checkout is at the revision this image was built from"
 
 # ---------------------------------------------------------------- 3. RUN the tests
 # No result is accepted as input. If this fails, the script exits and no evidence exists.

@@ -7,13 +7,12 @@
 // failed at the gate with "there is no gate evidence for the digest it runs" (build #1373). The
 // deploy path existed; the qualification path did not.
 //
-// WHY BUILD AND ATTEST IN ONE RUN. The image carries no `org.opencontainers.image.revision` label,
-// so a digest cannot be traced to a revision from the registry alone. Building here and attesting
-// immediately afterwards makes that tie FIRST-HAND: this run knows which revision it checked out and
-// which digest that build pushed. The alternative — stamping the revision into the image — is the
-// stronger, permanent fix, but it belongs in the application repo's Dockerfile and its build
-// Jenkinsfile, and that Jenkinsfile builds every service image on the platform. It is deliberately
-// not bundled into this change.
+// HOW THE DIGEST IS TIED TO A REVISION, without trusting this job. The web build already pushes an
+// IMMUTABLE tag beside the mutable one — `prod-<build>-<sha12>` — so the registry itself records
+// which revision produced which digest. The producer finds the immutable tag sharing the deployed
+// digest and DERIVES the revision from it, then refuses unless the checkout under test is that
+// revision. Nothing here asserts provenance; it is recovered from the registry and enforced.
+// That is why no change to the shared build Jenkinsfile was needed after all.
 //
 // WHAT THIS JOB CANNOT DO. It cannot mark a requirement PASS. scripts/ci/public-gate-evidence.sh
 // runs the tests itself and writes nothing if they fail; there is no parameter here that asserts a
@@ -30,7 +29,7 @@ pipeline {
     string(name: 'SOURCE_REVISION', defaultValue: 'main',
       description: 'options-edge ref to build and test. A branch name is resolved to a commit and the COMMIT is what the evidence records.')
     booleanParam(name: 'BUILD_IMAGE', defaultValue: true,
-      description: 'Build+push the production web image first. false = attest the image already on :prod (only honest when this run did not need to change it).')
+      description: 'Build+push the production web image first. false attests whatever is already on :prod — safe now, because the revision is DERIVED from the registry rather than taken from this job.')
   }
 
   options {
@@ -124,7 +123,6 @@ verify-public-gate.sh reads; without it this job cannot know where the gate look
           bash scripts/ci/public-gate-evidence.sh \
             --repo "${WORKSPACE}/app" \
             --image "${IMAGE_REF}" \
-            --revision "${RESOLVED_REVISION}" \
             --ci-build-url "${BUILD_URL}" \
             --out-dir "${EVIDENCE_DIR}" \
             ${EXPECTED_DIGEST:+--expect-digest "${EXPECTED_DIGEST}"}
