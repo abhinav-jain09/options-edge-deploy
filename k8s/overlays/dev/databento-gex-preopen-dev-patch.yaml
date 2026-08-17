@@ -73,6 +73,23 @@ spec:
             # DATABENTO_GEX_FLOW_TOP_N, GEX_SMILE_IV_FALLBACK, DATABENTO_GEX_STALE_AFTER_MS and
             # GEX_FLOW_READINESS_GATE were never in the dev render at all. The file said one thing
             # and the cluster ran another, with no error anywhere to say so.
+            # TICK-AWARE SPREAD FLOOR — LIVE ON DEV ONLY (2026-08-17). Production keeps the code
+            # default, `shadow`; do NOT mirror this line into the production overlay.
+            #
+            # The floor moves the INCLUSIVE gex aggregates the boards, heatmap, delta-flow and the
+            # dealer ledger all read, so promotion was gated on a session of evidence. Dev is where
+            # that evidence is bought: same code, same feed shape, no consumer whose decisions matter.
+            #
+            # Measured on BOTH environments over the same 14:30 ET window on 2026-08-17: of the
+            # strikes whose PUT carries a real two-sided quote but no IV, 105 are quoted
+            # 0.05 x 0.10 -- ONE TICK -- refused only by the relative 25% gate. Solving those exact
+            # quotes against the same Black-Scholes routine the service uses returns a usable IV for
+            # 107 of 107 (~233-253%, inside the short-dated 1000% ceiling), so admitting them yields
+            # IVs rather than moving the population to IV_SOLVER_FAILED.
+            #
+            # Compare dev's tick_spread_total{outcome="LIVE_ADMITTED"} with prod's
+            # SHADOW_WOULD_ADMIT for the same session before promoting production.
+            - { name: GEX_TICK_SPREAD_FLOOR_MODE, value: live }
             - { name: PREOPEN_GEX_ENABLED, value: "true" }
             - { name: PREOPEN_GEX_PUBLISH_ENABLED, value: "true" }
             # Dev now receives the same market-derived carry as production. Static carry remains an explicit
