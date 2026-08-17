@@ -40,19 +40,23 @@ REQUIRED_IDS=(PGL-050 PGL-051 PGL-052)
 # Authorization, no Cookie and no forwarded identity header, on the dedicated upstream — it carries
 # all three ids. PublicSurfaceIsolationTest corroborates PGL-051 from the other direction (the
 # public image constructs no internal client at all).
-TESTS="PublicBoardUpstreamRequestTest,PublicSurfaceIsolationTest"
+# The SAME classes the evidence for the currently-running public image recorded (7 classes, 52
+# tests, via options-edge-web-deploy #963). A narrower producer would quietly LOWER the bar for
+# every future attestation, which is the opposite of the point.
+TESTS="PublicBoardUpstreamRequestTest,PublicBoardUpstreamTest,PublicSurfaceSecurityChainTest,PublicSurfaceRoutesTest,PublicLogHygieneTest,PublicSurfaceTest,PublicSurfaceStartupInvariantTest,PublicSurfaceIsolationTest"
 
 die() { echo "EVIDENCE FAIL: $*" >&2; exit 1; }
 ok()  { echo "  OK: $*"; }
 
+need_value() { [ "$2" -ge 2 ] || die "$1 requires a value"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --repo)           REPO="$2"; shift 2 ;;
-    --image)          IMAGE="$2"; shift 2 ;;
-    --revision)       REVISION="$2"; shift 2 ;;
-    --ci-build-url)   CI_BUILD_URL="$2"; shift 2 ;;
-    --out-dir)        OUT_DIR="$2"; shift 2 ;;
-    --expect-digest)  EXPECT_DIGEST="$2"; shift 2 ;;
+    --repo)           need_value "$1" $#; REPO="$2"; shift 2 ;;
+    --image)          need_value "$1" $#; IMAGE="$2"; shift 2 ;;
+    --revision)       need_value "$1" $#; REVISION="$2"; shift 2 ;;
+    --ci-build-url)   need_value "$1" $#; CI_BUILD_URL="$2"; shift 2 ;;
+    --out-dir)        need_value "$1" $#; OUT_DIR="$2"; shift 2 ;;
+    --expect-digest)  need_value "$1" $#; EXPECT_DIGEST="$2"; shift 2 ;;
     *) die "unknown argument: $1" ;;
   esac
 done
@@ -78,9 +82,13 @@ HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
 [[ "$HEAD_SHA" == "$REVISION" ]] \
   || die "the checkout is at $HEAD_SHA but the evidence would claim $REVISION.
        The tests run against the working tree, so the revision recorded must be the revision tested."
-git -C "$REPO" diff --quiet && git -C "$REPO" diff --cached --quiet \
-  || die "the checkout at $REPO has uncommitted changes. Evidence must name a revision anyone else
-       can check out and re-run; a dirty tree is not that revision."
+# `git diff` misses UNTRACKED files, and an untracked Java source, test, resource or
+# .mvn/maven.config changes what Maven compiles and runs while the evidence still names the
+# committed HEAD. --porcelain covers tracked AND untracked.
+DIRT="$(git -C "$REPO" status --porcelain)"
+[ -z "$DIRT" ] || die "the checkout at $REPO is not clean:
+$DIRT
+       Evidence must name a revision anyone else can check out and re-run."
 ok "checkout is clean and at $REVISION"
 
 # ---------------------------------------------------------------- 2. resolve the digest BEFORE
@@ -105,6 +113,12 @@ fi
 
 # ---------------------------------------------------------------- 3. RUN the tests
 # No result is accepted as input. If this fails, the script exits and no evidence exists.
+#
+# THE REPORTS DIRECTORY IS DESTROYED FIRST. Without this, a Maven run that exits 0 without executing
+# the named tests is indistinguishable from one that ran them, because reports from a PREVIOUS run
+# in the same workspace still satisfy the postcondition below — a false attestation by leftovers.
+REPORT_DIR="$REPO/target/surefire-reports"
+rm -rf "$REPORT_DIR"
 echo "==> running $TESTS at $REVISION"
 ( cd "$REPO" && mvn -B -q -Dtest="$TESTS" -DfailIfNoSpecifiedTests=true test ) \
   || die "the PGL tests did not pass at $REVISION — no evidence written.
@@ -116,16 +130,26 @@ echo "==> running $TESTS at $REVISION"
 # rather than the run. But the near-miss is the point: "green" and "actually executed the tests I
 # named" are different claims, and this file exists to make only the second one. So each named test
 # must have produced a report showing a positive run count and no failures or errors.
+TOTAL_TESTS=0
 for t in $(printf '%s' "$TESTS" | tr ',' ' '); do
-  report="$(ls "$REPO"/target/surefire-reports/*."$t".txt 2>/dev/null | head -1)"
-  [ -n "$report" ] || die "$t produced no surefire report. Maven exited 0, but nothing proves this
-       test ran — and an attestation from a run that executed nothing is exactly the 'wish' the gate
-       refuses."
-  grep -qE "Tests run: [1-9][0-9]*, Failures: 0, Errors: 0" "$report" \
-    || die "$t did not report a clean, non-empty run:
-$(grep -E 'Tests run:' "$report" | head -1)"
-  ok "$t $(grep -oE 'Tests run: [0-9]+' "$report" | head -1)"
+  # The XML report is machine-readable; the .txt is formatted for humans and was never a contract.
+  xml=""
+  for cand in "$REPORT_DIR"/TEST-*."$t".xml; do
+    [ -f "$cand" ] && xml="$cand" && break
+  done
+  [ -n "$xml" ] || die "$t produced no surefire XML in a directory this run created from empty.
+       Maven exited 0, but nothing proves this test ran, and an attestation from a run that executed
+       nothing is exactly the 'wish' the gate refuses."
+  runs="$(sed -n 's/.*[^a-z]tests="\([0-9]*\)".*/\1/p' "$xml" | head -1)"
+  fails="$(sed -n 's/.*failures="\([0-9]*\)".*/\1/p' "$xml" | head -1)"
+  errs="$(sed -n 's/.*errors="\([0-9]*\)".*/\1/p' "$xml" | head -1)"
+  [ -n "$runs" ] && [ "$runs" -gt 0 ] || die "$t reported $runs tests — a zero-test run is not a pass"
+  [ "${fails:-1}" = "0" ] && [ "${errs:-1}" = "0" ] \
+    || die "$t reported failures=$fails errors=$errs"
+  TOTAL_TESTS=$((TOTAL_TESTS + runs))
+  ok "$t tests=$runs failures=0 errors=0"
 done
+ok "total tests executed: $TOTAL_TESTS"
 
 ok "PGL tests passed"
 
@@ -154,9 +178,15 @@ jq -n \
   --arg producedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg tests "$TESTS" \
   --argjson requirements "$REQ_JSON" \
+  --argjson testsRun "$TOTAL_TESTS" \
   '{imageDigest:$imageDigest, image:$image, sourceRevision:$sourceRevision, ciBuildUrl:$ciBuildUrl,
     producedAt:$producedAt, tests:($tests|split(",")), requirements:$requirements,
-    producedBy:"scripts/ci/public-gate-evidence.sh"}' > "$EVIDENCE_FILE"
+    testRun:{testsRun:$testsRun, failures:0, errors:0},
+    producedBy:"scripts/ci/public-gate-evidence.sh"}' > "$EVIDENCE_FILE.tmp.$$"
+# Validate then RENAME. Truncating the real path up front would destroy previously valid evidence
+# on a failure, or leave partial JSON where the gate expects a record.
+jq empty "$EVIDENCE_FILE.tmp.$$" || { rm -f "$EVIDENCE_FILE.tmp.$$"; die "produced invalid JSON"; }
+mv "$EVIDENCE_FILE.tmp.$$" "$EVIDENCE_FILE"
 
 ok "wrote $EVIDENCE_FILE"
 cat "$EVIDENCE_FILE"
