@@ -152,10 +152,32 @@ fi
 # twenty minutes. Gate evidence (PGL-072) is keyed to an exact digest, so deploying a different one
 # than the pin names would mean running an image whose evidence was never earned — while the gate
 # still passed, because it checks the RENDER.
-case "$MUTABLE_IMAGE" in
-  *@sha256:*) PIN_IS_AUTHORITATIVE=true ;;
-  *)          PIN_IS_AUTHORITATIVE=false ;;
-esac
+# A pin is authoritative only if it is WELL-FORMED and, in production, names the SAME repository the
+# production mapping names. Matching on `*@sha256:*` alone was not enough: a production render
+# pinned to a DEV-REGISTRY digest would then bypass the remap AND the missing-mapping fatal, sail
+# through the assertion (which only checks the reference did not change), and deploy a dev image to
+# the public site — the exact failure that fatal exists to prevent, reintroduced by the guard meant
+# to strengthen it. The registry check is what makes the earlier claim ("a digest pin naming the
+# production registry does not carry that risk") actually true rather than merely asserted.
+PIN_REPO="${MUTABLE_IMAGE%@*}"          # registry[:port]/repo, digest removed
+PIN_DIGEST="${MUTABLE_IMAGE#*@}"        # sha256:...
+PIN_IS_AUTHORITATIVE=false
+if [ "$PIN_REPO" != "$MUTABLE_IMAGE" ] \
+   && printf '%s' "$PIN_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+  if [ "$ENVIRONMENT" != "production" ]; then
+    PIN_IS_AUTHORITATIVE=true
+  elif [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ] && [ "${ENV_IMAGE%:*}" = "$PIN_REPO" ]; then
+    # `%:*` strips the TAG, not the registry port: the shortest match from the end leaves
+    # `host:port/repo` intact. `%%:*` would truncate at the port and compare nonsense.
+    PIN_IS_AUTHORITATIVE=true
+  else
+    echo "FATAL: production render pins $MUTABLE_IMAGE, whose repository does not match the" >&2
+    echo "       image-tags/production.yaml entry (${ENV_IMAGE:-<none>})." >&2
+    echo "       Refusing rather than remapping: silently replacing a pinned digest is how an" >&2
+    echo "       image without PGL-072 evidence reaches the public site." >&2
+    exit 1
+  fi
+fi
 
 # The authoritative case is an OUTER branch, not an extra condition on the existing chain. Written
 # as a separate `if` it fell through to the `elif [ "$ENVIRONMENT" = "production" ]` below and
