@@ -52,6 +52,14 @@ echo "rendered: $total_docs docs ($pvc_docs PVCs, $((total_docs - pvc_docs)) oth
 # for bleedingoptions.com. The PUBLIC WEB TIER is deliberately NOT allowlisted — it is an
 # application workload and lives in its own slice, k8s/services/bleedingoptions-gamma-lab/, which
 # is exactly what this guard exists to insist on.)
+#
+# `bo-app-postgres` joins them for the same reason bo-keycloak-postgres did: a DATABASE is infra.
+# It has no image built from this repository, it is not deployed per-release, and it has the same
+# lifecycle as the namespace and its NetworkPolicies. Putting it in a service slice would mean a
+# service deploy could roll a database, which is the opposite of what that separation is for.
+#
+# The distinction this guard actually enforces is "does a release deploy it", not "is it a
+# StatefulSet" — the public web tier stays out precisely because it ships on every release.
 # NOTE: yq emits a bare '---' document separator BETWEEN multiple selected scalars, so with >=2
 # allowlisted workloads (oe-keycloak Deployment + oe-keycloak-postgres StatefulSet) the raw output is
 # "oe-keycloak\n---\noe-keycloak-postgres". Strip the '---' separators and blank lines FIRST, otherwise
@@ -59,7 +67,7 @@ echo "rendered: $total_docs docs ($pvc_docs PVCs, $((total_docs - pvc_docs)) oth
 # was added — every prod infra deploy failed). Only genuine non-keycloak workload names remain.
 unexpected="$(yq -r 'select(.kind == "Deployment" or .kind == "StatefulSet") | .metadata.name' "$RENDER" \
   | { grep -vE '^(---)?$' || true; } \
-  | { grep -vE '^(oe-keycloak|keycloak|bo-keycloak)' || true; })"
+  | { grep -vE '^(oe-keycloak|keycloak|bo-keycloak|bo-app-postgres)' || true; })"
 if [ -n "$unexpected" ]; then
   echo "FATAL: infra overlay renders app workloads (belongs in a service slice or k8s/base):" >&2
   printf '%s\n' "$unexpected" >&2
