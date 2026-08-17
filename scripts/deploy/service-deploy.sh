@@ -139,7 +139,74 @@ ENV_IMAGE=""
 if [ -f "image-tags/${ENVIRONMENT}.yaml" ]; then
   ENV_IMAGE="$(yq -r ".images | to_entries[] | select(.value | test(\"/${IMAGE_BASENAME}:\")) | .value" "image-tags/${ENVIRONMENT}.yaml" | awk 'NR==1')"
 fi
-if [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ]; then
+# A render that ALREADY PINS A DIGEST is authoritative and is never remapped.
+#
+# The remap below rewrites the rendered image to image-tags/<env>.yaml's mutable tag, and the
+# digest-pin step then resolves whatever that tag points at RIGHT NOW. For an overlay that pins a
+# digest in git — the public Gamma Lab does, under PGL-072 — that silently discarded the pin and
+# deployed the tag's current contents instead. The overlay's own comment claimed the opposite ("a
+# digest is already pinned, so its remap finds no :dev to rewrite and its pin is a no-op"), so the
+# file documented a guarantee the deploy path did not provide.
+#
+# That is not a theoretical race: on 2026-08-16 `:prod` resolved to four different digests inside
+# twenty minutes. Gate evidence (PGL-072) is keyed to an exact digest, so deploying a different one
+# than the pin names would mean running an image whose evidence was never earned — while the gate
+# still passed, because it checks the RENDER.
+# A pin is authoritative only if it is WELL-FORMED and, in production, names the SAME repository the
+# production mapping names. Matching on `*@sha256:*` alone was not enough: a production render
+# pinned to a DEV-REGISTRY digest would then bypass the remap AND the missing-mapping fatal, sail
+# through the assertion (which only checks the reference did not change), and deploy a dev image to
+# the public site — the exact failure that fatal exists to prevent, reintroduced by the guard meant
+# to strengthen it. The registry check is what makes the earlier claim ("a digest pin naming the
+# production registry does not carry that risk") actually true rather than merely asserted.
+# The repository part of an image reference, with any digest and any tag removed.
+#
+# `${ref%:*}` alone is wrong for two shapes: a TAGLESS `host:port/repo` truncates at the port and
+# yields `host`, and a digest-valued `repo@sha256:...` yields `repo@sha256`. Neither can occur with
+# today's image-tags entries — the selector further up only matches values containing
+# `/<basename>:` — but a comparison that is only correct for the inputs that happen to exist is the
+# kind that fails the first time someone adds a tagless mapping, in the branch that decides whether
+# a pin may bypass the production remap.
+#
+# So: drop the digest first, then strip a tag ONLY if the final path segment actually carries one.
+repo_of() {
+  _r="${1%%@*}"                         # drop any digest
+  case "${_r##*/}" in                   # look only at the LAST path segment
+    *:*) printf '%s' "${_r%:*}" ;;      #   it has a tag -> strip it
+    *)   printf '%s' "$_r" ;;           #   tagless -> the port colon is safe
+  esac
+}
+
+PIN_REPO="${MUTABLE_IMAGE%@*}"          # registry[:port]/repo, digest removed
+PIN_DIGEST="${MUTABLE_IMAGE#*@}"        # sha256:...
+PIN_IS_AUTHORITATIVE=false
+if [ "$PIN_REPO" != "$MUTABLE_IMAGE" ] \
+   && printf '%s' "$PIN_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+  if [ "$ENVIRONMENT" != "production" ]; then
+    PIN_IS_AUTHORITATIVE=true
+  elif [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ] && [ "$(repo_of "$ENV_IMAGE")" = "$PIN_REPO" ]; then
+    PIN_IS_AUTHORITATIVE=true
+  else
+    echo "FATAL: production render pins $MUTABLE_IMAGE, whose repository does not match the" >&2
+    echo "       image-tags/production.yaml entry (${ENV_IMAGE:-<none>})." >&2
+    echo "       Refusing rather than remapping: silently replacing a pinned digest is how an" >&2
+    echo "       image without PGL-072 evidence reaches the public site." >&2
+    exit 1
+  fi
+fi
+
+# The authoritative case is an OUTER branch, not an extra condition on the existing chain. Written
+# as a separate `if` it fell through to the `elif [ "$ENVIRONMENT" = "production" ]` below and
+# aborted with "no entry in image-tags/production.yaml" — so a digest-pinned render could never
+# deploy at all. That fatal exists to stop a DEV-REGISTRY ref reaching production, a risk a digest
+# pin naming the production registry does not carry; it simply does not apply here.
+if [ "$PIN_IS_AUTHORITATIVE" = true ]; then
+  if [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ] && [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
+    echo "render pins a digest — NOT remapping to $ENV_IMAGE; deploying exactly $MUTABLE_IMAGE"
+  else
+    echo "render pins a digest — deploying exactly $MUTABLE_IMAGE"
+  fi
+elif [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ]; then
   if [ "$ENVIRONMENT" = "production" ] && [ "$ENV_IMAGE" != "$MUTABLE_IMAGE" ]; then
     echo "remapping render image -> env image: $MUTABLE_IMAGE -> $ENV_IMAGE"
     MUTABLE_IMAGE="$ENV_IMAGE"
@@ -180,6 +247,17 @@ PINNED_IMAGE="$(pin_ref "$MUTABLE_IMAGE")" || {
   exit 1
 }
 echo "pinned $MUTABLE_IMAGE -> $PINNED_IMAGE"
+
+# ASSERT the resolution did not move the pin. When the render already named a digest, pin_ref must
+# return that same digest — it is resolving a reference that is already exact. If these ever differ,
+# something between the render and here has substituted a different image, and the gate evidence
+# (which was checked against the RENDER) would no longer describe what is about to run. Refusing is
+# the only safe answer; a warning would be read after the fact, if at all.
+if [ "$PIN_IS_AUTHORITATIVE" = true ] && [ "$PINNED_IMAGE" != "$MUTABLE_IMAGE" ]; then
+  echo "FATAL: the render pinned $MUTABLE_IMAGE but resolution produced $PINNED_IMAGE." >&2
+  echo "  A digest-pinned render must deploy exactly the digest it names. Nothing was applied." >&2
+  exit 1
+fi
 # Pin EVERY container that carries the shared service image (RENDER_IMAGE0), not just
 # containers[0] — a single-container Deployment is unchanged, while a multi-container pod
 # (agent-a + agent-b) gets its sidecar pinned too instead of failing the digest-pin gate below.

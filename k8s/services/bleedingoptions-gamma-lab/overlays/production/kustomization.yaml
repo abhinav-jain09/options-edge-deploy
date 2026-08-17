@@ -22,10 +22,16 @@ resources:
 # then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
 # no-op. Both paths therefore agree on one immutable image.
 #
-# THIS DIGEST HAS EVIDENCE: public-gate-sha256-3de76b5d….json on the Jenkins agent, and it is the
-# image currently serving bleedingoptions.com. Changing this line means producing evidence for the
-# new digest first — that is the point of it being a reviewed edit rather than a deploy-time lookup.
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #4 built
+# sha256:d45aac94… from revision 38fcf338ecfa (the squash-merge of options-edge#564, the watchlist)
+# and recorded PGL-050/051/052 as PASS against that exact digest. The job resolves the revision from
+# the registry rather than taking it from the operator, and refuses unless the checkout under test
+# matches — so the evidence names an image nobody attested by hand.
+#
+# Changing this line means producing evidence for the new digest FIRST — that is the point of it
+# being a reviewed edit rather than a deploy-time lookup. The previous digest, sha256:3de76b5d…,
+# predates the watchlist and is what has been serving bleedingoptions.com until now.
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:3de76b5d9fda3b8e8003025f1b1145328ee1d5cb74b5c7822d3bdd2c1a5e16e7
+    digest: sha256:d45aac94b673db5f60575f5f58748fed120541b79b25ec1c4bfb3b1d65e86054
