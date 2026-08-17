@@ -278,3 +278,48 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
+---
+# PGL-134. The WAL shipper's egress. Without this the sidecar is caught by default-deny-all and every
+# archive run fails the moment NetworkPolicy enforcement starts working — a backup that is fine in
+# testing and silently dead in production, which is the exact failure this design keeps guarding
+# against.
+#
+# Two destinations, and no more: the NAS over SSH, and a package mirror (PGL-133 — the sidecar still
+# installs rsync and ssh at startup; a purpose-built image would remove this second rule entirely).
+# DNS is already granted to the whole namespace by allow-dns.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-postgres-egress-nas
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bo-app-postgres
+  policyTypes: ["Egress"]
+  egress:
+    # The NAS, by address and port. Named explicitly rather than allowing the LAN: the backup target
+    # is the one host this pod has any business reaching, and a wider rule would let a compromised
+    # sidecar reach the rest of 192.168.100.0/24 including the production node.
+    - to:
+        - ipBlock:
+            cidr: 192.168.100.100/32
+      ports:
+        - protocol: TCP
+          port: 22
+    # Package mirrors, until PGL-133's purpose-built image removes the need. Deliberately excludes
+    # RFC1918 space so this cannot become a path to anything internal.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80

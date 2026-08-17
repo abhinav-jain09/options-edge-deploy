@@ -85,6 +85,24 @@ spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
       automountServiceAccountToken: false   # PGL-061: nothing here talks to the Kubernetes API
+      initContainers:
+        # PGL-103. Creates the spool BEFORE postgres can archive into it. A fresh PVC contains only
+        # its root, so `cp %p /archive/spool/%f` fails on every segment — and Postgres responds by
+        # RETAINING the WAL and retrying forever, filling pg_wal until it refuses writes. An archive
+        # that has never once succeeded looks exactly like one that is merely behind.
+        #
+        # NOT left to the sidecar's own mkdir: that is a race. Postgres can complete a checkpoint and
+        # archive its first segment before a sibling container has finished starting.
+        - name: init-spool
+          image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+          command: ["sh", "-c", "mkdir -p /archive/spool && chmod 700 /archive/spool"]
+          volumeMounts:
+            - name: archive
+              mountPath: /archive
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
       securityContext:
         fsGroup: 70
         runAsUser: 70
@@ -180,11 +198,18 @@ spec:
           args:
             - |
               set -eu
-              apk add --no-cache openssh-client rsync >/dev/null
+              # PGL-133. Installed ONCE at startup rather than per run — but this remains the weakest
+              # part of the design: it puts a package download on the path of a backup, so a mirror
+              # outage degrades the archive to "not shipping". The proper fix is a purpose-built image
+              # with rsync and ssh baked in and pinned by digest. Recorded, not hidden — and the
+              # failure is loud rather than a container that quietly ships nothing.
+              apk add --no-cache openssh-client rsync >/dev/null || {
+                echo "FATAL: could not install rsync/ssh. WAL is NOT shipping — this is a backup outage." >&2
+                exit 1
+              }
               install -m 700 -d /tmp/.ssh
               install -m 600 /creds/id_ed25519 /tmp/.ssh/id_ed25519
               install -m 644 /creds/known_hosts /tmp/.ssh/known_hosts
-              mkdir -p /archive/spool
               while true; do
                 # --remove-source-files empties the spool ONLY for segments that transferred, so a
                 # partial run leaves the rest to retry rather than losing WAL. A non-zero exit is
