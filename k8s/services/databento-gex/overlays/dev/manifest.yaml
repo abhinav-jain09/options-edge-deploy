@@ -56,6 +56,24 @@ spec:
     spec:
       containers:
         - env:
+            # TICK-AWARE SPREAD FLOOR — LIVE ON DEV ONLY (2026-08-17). Prod stays `shadow`.
+            #
+            # The floor ships in shadow because it moves the INCLUSIVE gex aggregates that boards,
+            # the heatmap, delta-flow and the dealer ledger all read, and that promotion was gated
+            # on a session of evidence. Dev is where that evidence is bought: same code, same
+            # feed shape, no consumer whose decisions matter.
+            #
+            # What it is expected to admit, measured on BOTH environments over the same 14:30 ET
+            # window on 2026-08-17: of the strikes whose PUT has a real two-sided quote but no IV,
+            # 105 are quoted 0.05 x 0.10 — ONE TICK wide, refused only by the relative 25% gate.
+            # Solving those quotes offline against the same Black-Scholes solver the service uses
+            # returns a usable IV for 107 of 107 (~233-253%, inside the short-dated 1000% ceiling),
+            # so admitting them yields IVs rather than moving them to IV_SOLVER_FAILED.
+            #
+            # Read `options_edge_databento_gex_tick_spread_total{outcome="LIVE_ADMITTED"}` here and
+            # compare against prod's SHADOW_WOULD_ADMIT for the same session before promoting prod.
+            - name: GEX_TICK_SPREAD_FLOOR_MODE
+              value: live
             - name: PREOPEN_GEX_ENABLED
               value: "false"
             - name: IBKR_GEX_CONSUME_ENABLED
