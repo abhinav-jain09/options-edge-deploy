@@ -42,6 +42,10 @@ SET log_min_error_statement = 'panic';   -- so a failed ALTER does not log the s
 \password bleedingoptions
 ```
 
+This step is a hand-run `kubectl exec`, and deliberately so: the Jenkins-only rule governs
+DEPLOYING Kubernetes objects, and this deploys nothing — it changes a password inside a running
+database. Automating it was tried and removed for the reasons at the top of this file.
+
 `\password` is the point of doing this interactively: psql hashes the password **client-side** and
 sends a SCRAM verifier, so the cleartext never reaches the server, never enters the statement text,
 and cannot be logged. Type the new value at the two prompts. Do not paste it into an `ALTER ROLE`
@@ -49,11 +53,11 @@ statement — that is the thing being avoided.
 
 **2. Store the same value in Jenkins**, in the `bo-app-postgres-password` credential.
 
-**3. Write the Secret**, with the preflight deliberately overridden:
+**3. Write the Secret**, letting the preflight check it:
 
 - Job: `bleedingoptions-secrets`
 - `DEPLOY_DRY_RUN = false`
-- `ALLOW_APP_DB_ROLE_MISMATCH = **false**` — leave it off
+- `ALLOW_APP_DB_ROLE_MISMATCH = false` — **leave it off**
 
 **Leave the override off.** If step 1 was done correctly the preflight simply passes: it
 authenticates against the role you just changed. Turning the override on here would skip the only
@@ -88,8 +92,6 @@ build, and building one would change the digest the overlay pins and require fre
 for no reason.
 
 The deployment uses `Recreate`, so expect a gap of tens of seconds on a page that polls every 15 s.
-Note that the overlay pins an image **digest** (PGL-072), so this rolls the *same* image with the
-new Secret — it is not a release, and it needs no new gate evidence.
 
 **5. Verify the feature, not just the pod.** A green rollout only proves the container started;
 the watchlist degrades quietly, so it will look fine either way. Sign in at
