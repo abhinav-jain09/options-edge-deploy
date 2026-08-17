@@ -53,13 +53,18 @@ statement — that is the thing being avoided.
 
 - Job: `bleedingoptions-secrets`
 - `DEPLOY_DRY_RUN = false`
-- `ALLOW_APP_DB_ROLE_MISMATCH = true`
+- `ALLOW_APP_DB_ROLE_MISMATCH = **false**` — leave it off
 
-If step 1 was done correctly the preflight will simply **pass**, because it authenticates against
-the role you just changed — so the override is usually not needed at all. It exists for the one case
-the preflight refuses on purpose: the database is up but unverifiable, or it is deliberately being
-brought back into agreement. Setting it on a routine run means something else is wrong, and the flag
-is not the answer. Every build that has it enabled says so in its log, on every path.
+**Leave the override off.** If step 1 was done correctly the preflight simply passes: it
+authenticates against the role you just changed. Turning the override on here would skip the only
+check that catches the most likely mistake in this whole procedure — typing a *different* value into
+the Jenkins credential than the one you set on the role. Those two values are entered separately,
+minutes apart, by hand, and nothing else compares them. A preflight failure at this step is not an
+obstacle; it is the procedure working.
+
+The override exists for genuine recovery — a database that is up but unverifiable, or absent while
+the Secret already holds a password — and it is always a deliberate, explained choice. Every build
+with it enabled says so in its log, on every path.
 
 **4. Roll the web tier** so the new value is actually picked up. Do this through **Jenkins**, not by
 hand: the Absolute Jenkins-Only Deployment Rule applies here as everywhere, and a hand-run
