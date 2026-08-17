@@ -159,6 +159,24 @@ fi
 # the public site — the exact failure that fatal exists to prevent, reintroduced by the guard meant
 # to strengthen it. The registry check is what makes the earlier claim ("a digest pin naming the
 # production registry does not carry that risk") actually true rather than merely asserted.
+# The repository part of an image reference, with any digest and any tag removed.
+#
+# `${ref%:*}` alone is wrong for two shapes: a TAGLESS `host:port/repo` truncates at the port and
+# yields `host`, and a digest-valued `repo@sha256:...` yields `repo@sha256`. Neither can occur with
+# today's image-tags entries — the selector further up only matches values containing
+# `/<basename>:` — but a comparison that is only correct for the inputs that happen to exist is the
+# kind that fails the first time someone adds a tagless mapping, in the branch that decides whether
+# a pin may bypass the production remap.
+#
+# So: drop the digest first, then strip a tag ONLY if the final path segment actually carries one.
+repo_of() {
+  _r="${1%%@*}"                         # drop any digest
+  case "${_r##*/}" in                   # look only at the LAST path segment
+    *:*) printf '%s' "${_r%:*}" ;;      #   it has a tag -> strip it
+    *)   printf '%s' "$_r" ;;           #   tagless -> the port colon is safe
+  esac
+}
+
 PIN_REPO="${MUTABLE_IMAGE%@*}"          # registry[:port]/repo, digest removed
 PIN_DIGEST="${MUTABLE_IMAGE#*@}"        # sha256:...
 PIN_IS_AUTHORITATIVE=false
@@ -166,9 +184,7 @@ if [ "$PIN_REPO" != "$MUTABLE_IMAGE" ] \
    && printf '%s' "$PIN_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
   if [ "$ENVIRONMENT" != "production" ]; then
     PIN_IS_AUTHORITATIVE=true
-  elif [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ] && [ "${ENV_IMAGE%:*}" = "$PIN_REPO" ]; then
-    # `%:*` strips the TAG, not the registry port: the shortest match from the end leaves
-    # `host:port/repo` intact. `%%:*` would truncate at the port and compare nonsense.
+  elif [ -n "$ENV_IMAGE" ] && [ "$ENV_IMAGE" != "null" ] && [ "$(repo_of "$ENV_IMAGE")" = "$PIN_REPO" ]; then
     PIN_IS_AUTHORITATIVE=true
   else
     echo "FATAL: production render pins $MUTABLE_IMAGE, whose repository does not match the" >&2
