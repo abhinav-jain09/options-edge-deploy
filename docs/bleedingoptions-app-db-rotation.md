@@ -55,19 +55,29 @@ statement — that is the thing being avoided.
 - `DEPLOY_DRY_RUN = false`
 - `ALLOW_APP_DB_ROLE_MISMATCH = true`
 
-The override is needed here and *only* here. The preflight connects from inside the database pod
-and will now succeed anyway if step 1 was done correctly — the flag exists for the case where it
-cannot confirm, not as a routine setting. If you find yourself setting it on a normal run,
-something is wrong and the flag is not the answer.
+If step 1 was done correctly the preflight will simply **pass**, because it authenticates against
+the role you just changed — so the override is usually not needed at all. It exists for the one case
+the preflight refuses on purpose: the database is up but unverifiable, or it is deliberately being
+brought back into agreement. Setting it on a routine run means something else is wrong, and the flag
+is not the answer. Every build that has it enabled says so in its log, on every path.
 
-**4. Roll the web tier** so the new value is actually picked up:
+**4. Roll the web tier** so the new value is actually picked up. Do this through **Jenkins**, not by
+hand: the Absolute Jenkins-Only Deployment Rule applies here as everywhere, and a hand-run
+`kubectl rollout restart` is exactly the out-of-band change it forbids — the sanctioned path already
+exists.
 
-```bash
-kubectl -n bleedingoptions rollout restart deploy/bleedingoptions-gamma-lab
-kubectl -n bleedingoptions rollout status  deploy/bleedingoptions-gamma-lab --timeout=180s
-```
+- Job: `service-deploy` (`Jenkinsfile.service-deploy`) — one generic job for every service, not a
+  per-service job
+- `SERVICE = bleedingoptions-gamma-lab`, `ENVIRONMENT = production`, `DEPLOY_DRY_RUN = false`,
+  `BUILD_IMAGES = false`
+
+`BUILD_IMAGES = false` matters: this is a Secret rotation, not a release. There is no new image to
+build, and building one would change the digest the overlay pins and require fresh PGL-072 evidence
+for no reason.
 
 The deployment uses `Recreate`, so expect a gap of tens of seconds on a page that polls every 15 s.
+Note that the overlay pins an image **digest** (PGL-072), so this rolls the *same* image with the
+new Secret — it is not a release, and it needs no new gate evidence.
 
 **5. Verify the feature, not just the pod.** A green rollout only proves the container started;
 the watchlist degrades quietly, so it will look fine either way. Sign in at
