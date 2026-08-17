@@ -166,8 +166,12 @@ verify-public-gate.sh reads; without it this job cannot know where the gate look
 
   post {
     success {
-      archiveArtifacts artifacts: '', allowEmptyArchive: true
-      echo "Evidence produced for the digest now on ${env.IMAGE_REF}."
+      // No archiveArtifacts: the evidence deliberately lives OUTSIDE the workspace, in the
+      // directory the gate reads, and an empty artifact pattern FAILS the build outright
+      // ("No artifacts are configured for archiving") — which failed run #2 after it had already
+      // done all its work correctly.
+      echo "Evidence produced for the digest on ${env.IMAGE_REF}. Deploying is a separate act: " +
+           "service-deploy SERVICE=bleedingoptions-gamma-lab ENVIRONMENT=production"
     }
     failure {
       echo 'No evidence was written. If the PGL tests failed, that is the gate working: the public surface must not carry a replica while the bearer-strip is unproven for this build.'
