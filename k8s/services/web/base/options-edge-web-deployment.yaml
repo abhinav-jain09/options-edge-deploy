@@ -77,6 +77,15 @@ spec:
             # cluster DNS name rather than hairpinning through the node's external address.
             - name: APP_FEED_GATEWAY_HEALTH_URL
               value: "http://feed-gateway-service:8091/health"
+            # ⛔ The /multileg page proxies through this tier to the multileg service's own SSE
+            # endpoint. The app's COMPILED default is http://options-edge-multileg:8080 — a name and
+            # port that exist nowhere: the service is registered as multileg-structure-service on
+            # 8136 (k8s/base/multileg-structure-service.yaml), following the same <name>-service
+            # convention as every sibling. Without this the proxy dials a name DNS cannot resolve and
+            # the page sits on "disconnected — retrying" for ever, which is exactly how it looked
+            # after the service itself was deployed and healthy.
+            - name: MULTILEG_SERVICE_BASE
+              value: "http://multileg-structure-service:8136"
             - name: VITE_API_BASE_URL
               value: "https://bleadingoptions.com"
             - name: VITE_MISSION_CONTROL_URL
