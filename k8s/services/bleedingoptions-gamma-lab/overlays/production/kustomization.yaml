@@ -22,16 +22,25 @@ resources:
 # then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
 # no-op. Both paths therefore agree on one immutable image.
 #
-# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #4 built
-# sha256:d45aac94… from revision 38fcf338ecfa (the squash-merge of options-edge#564, the watchlist)
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #5 built
+# sha256:2fb7ee2d… from revision 02c9bc387301 (options-edge#571 — watchlist writes now survive an
+# expired access token; the previous image, sha256:d45aac94…, shipped a watchlist whose WRITES
+# silently failed about a minute after each page load, because the 60-second token expired and the
+# mutation had no 401 recovery)
 # and recorded PGL-050/051/052 as PASS against that exact digest. The job resolves the revision from
 # the registry rather than taking it from the operator, and refuses unless the checkout under test
 # matches — so the evidence names an image nobody attested by hand.
 #
 # Changing this line means producing evidence for the new digest FIRST — that is the point of it
-# being a reviewed edit rather than a deploy-time lookup. The previous digest, sha256:3de76b5d…,
-# predates the watchlist and is what has been serving bleedingoptions.com until now.
+# being a reviewed edit rather than a deploy-time lookup.
+#
+# ROLLBACK TARGET: the OUTGOING digest is sha256:d45aac94…, which is what has been serving
+# bleedingoptions.com until now. Note what rolling back to it costs: it carries the watchlist, but
+# one whose WRITES silently fail about a minute after each page load. (sha256:3de76b5d… is older
+# still and predates the watchlist entirely — it was the outgoing image one deploy ago, and naming
+# it here as "currently serving" is exactly the sort of stale line that sends someone rolling back
+# to the wrong place under pressure.)
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:d45aac94b673db5f60575f5f58748fed120541b79b25ec1c4bfb3b1d65e86054
+    digest: sha256:2fb7ee2d6d2128d4f3c60ec47bb0ef5d49d1feaec0fd0bc09ad656d45f29c351
