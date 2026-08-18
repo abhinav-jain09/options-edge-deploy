@@ -117,6 +117,10 @@ services:
   - { name: spot-vol-regime,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spot-vol-regime,              deployments: [spot-vol-regime-service] }
   - { name: indicator-service,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-indicator-service,            deployments: [indicator-service] }
   - { name: context-tape,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-context-tape,                 deployments: [context-tape-service] }
+  # multileg-structure: DESCRIPTIVE co-print observation surface (options.opra.tcbbo -> ranked
+  # observations + per-window status). It claims no ownership, direction or dealer attribution —
+  # OPRA carries no multi-leg marker (measured 2026-08-18) — so it is a screening surface only.
+  - { name: multileg-structure,           managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-multileg-structure,           deployments: [multileg-structure-service] }
   # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
   # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
   # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.

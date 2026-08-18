@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: multileg-structure-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: multileg-structure-service
+    app.kubernetes.io/component: multileg-structure-service
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8136"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: multileg-structure-service
+  ports:
+    - name: http
+      port: 8136
+      targetPort: http

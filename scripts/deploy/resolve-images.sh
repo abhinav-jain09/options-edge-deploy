@@ -71,6 +71,7 @@ EOF
 SHORT_PREMIUM_AGENT_IMAGE=$registry/options-edge-short-premium-agent:$image_tag
 SIGNAL_FOLLOWER_IMAGE=$registry/options-edge-signal-follower:$image_tag
 CONTEXT_TAPE_IMAGE=$registry/options-edge-context-tape:$image_tag
+MULTILEG_STRUCTURE_IMAGE=$registry/options-edge-multileg-structure:$image_tag
 EOF
             fi
           else
@@ -134,6 +135,7 @@ EOF
 SHORT_PREMIUM_AGENT_IMAGE=$SHORT_PREMIUM_AGENT_IMAGE
 SIGNAL_FOLLOWER_IMAGE=$SIGNAL_FOLLOWER_IMAGE
 CONTEXT_TAPE_IMAGE=$CONTEXT_TAPE_IMAGE
+MULTILEG_STRUCTURE_IMAGE=$MULTILEG_STRUCTURE_IMAGE
 EOF
             fi
           fi

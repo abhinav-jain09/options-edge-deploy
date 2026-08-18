@@ -57,6 +57,8 @@ resources:
   - stock-gex-service.yaml
   - context-tape-deployment.yaml
   - context-tape-service.yaml
+  - multileg-structure-deployment.yaml
+  - multileg-structure-service.yaml
   - oi-shadow-deployment.yaml
   - oi-shadow-service.yaml
   - vix-option-inteligence-deployment.yaml

@@ -57,6 +57,15 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
+  # multileg-structure is dev+production only (services.yaml envs) — same pattern as
+  # context-tape above: experiment builds no image for it, so keep it OFF here.
+  - target:
+      kind: Deployment
+      name: multileg-structure-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   - path: web-dev-env-patch.yaml
   # EXPERIMENT: give the k8s feed-gateway the .2 WS auth/origins/replay config, so the browser's live
   # WS (ws://localhost:18091, tunnel -> .2:8091) is accepted from the web origin http://localhost:18090.
