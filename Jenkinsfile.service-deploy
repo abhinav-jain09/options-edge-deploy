@@ -22,8 +22,18 @@
 // (apply.sh: `kubectl set image deployment/options-edge-web`), so a green options-edge-web-deploy
 // left the running pod on the old image and looked like a successful deploy. Build there first,
 // then deploy here with BUILD_IMAGES=false.
+// The 'Validate service registry' stage is pure LOCAL rendering (yq + `kubectl kustomize` +
+// bash mock-CLI suites — no cluster access, no kubeconfig) and is the expensive stage: its
+// topic-contract suites fork thousands of processes — 2-6 min on an idle box, 45-107 min on
+// the dev Mac during US market hours (builds #405-#408, #1407). It runs on the .74 builders
+// (strict preference resolved at runtime; fallback = the old agent). Everything that needs
+// the deploy host (kubeconfigs, the intent ledger, cluster reachability) stays pinned there
+// via per-stage agents below — `agent none` here so a fallback resolution can never hold two
+// executors on the same box at once.
+VALIDATE_AGENT_LABEL = oeBuildAgent.labels('build-mac-74', 'hpsf-replay-mac')
+
 pipeline {
-  agent { label 'hpsf-replay-mac' }
+  agent none
   parameters {
     string(name: 'INTENT_ID', defaultValue: '',
       description: 'Optional idempotency key (0DTE pipeline automation). Empty = normal manual build. With a value: at most ONE build per intent ever reaches the deploy stages — a second submission aborts as NOOP_DUPLICATE (intent-dedup.json artifact names the winner).')
@@ -77,7 +87,12 @@ pipeline {
   }
   stages {
     stage('Intent dedup') {
-      when { expression { params.INTENT_ID?.trim() } }
+      // Host-pinned: the durable intent ledger lives on hpsf-replay-mac (~/oe-ops).
+      agent { label 'hpsf-replay-mac' }
+      when {
+        beforeAgent true
+        expression { params.INTENT_ID?.trim() }
+      }
       steps { script {
         def rc = sh(returnStatus: true, script: '''
         set -euo pipefail
@@ -139,6 +154,9 @@ PYEOF
       } }
     }
     stage('Validate service registry') {
+      // Own agent = own fresh `checkout scm` of the same build revision. The stage is a
+      // pure gate: it reads only the checkout and produces nothing later stages consume.
+      agent { label VALIDATE_AGENT_LABEL }
       steps {
         sh '''
           set -euo pipefail
@@ -152,6 +170,12 @@ PYEOF
         '''
       }
     }
+    // ALL remaining stages share ONE agent and ONE workspace on the deploy host — the
+    // kubeconfigs, the intent ledger and cluster reachability exist only there. Bodies
+    // unchanged, original indentation kept for reviewability.
+    stage('Deploy path') {
+      agent { label 'hpsf-replay-mac' }
+      stages {
     stage('Build image (this service only)') {
       when { expression { params.BUILD_IMAGES && !params.DEPLOY_DRY_RUN } }
       steps {
@@ -535,9 +559,9 @@ PYEOF
         '''
       }
     }
-  }
-  post {
-    always {
+      }
+      post {
+        always {
       // Guaranteed un-pause. The pause above is the only step in this pipeline that can leave a
       // service DOWN if a later step fails: if the prune or the deploy dies after scale-down,
       // nothing else would ever scale it back and the service stays at zero replicas
@@ -548,6 +572,8 @@ PYEOF
         bash scripts/deploy/vix-unpause.sh "$WORKSPACE/.jenkins-tmp/vix-paused-replicas"
       '''
       archiveArtifacts artifacts: '.jenkins-tmp/*-*.yaml', allowEmptyArchive: true
+        }
+      }
     }
   }
 }

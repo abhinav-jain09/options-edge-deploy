@@ -15,8 +15,14 @@
 //   infra kind (§13.5). Common infra must already be in place (Jenkinsfile.common-infra).
 // * Rollback never rebuilds: the job log prints the previously-running digest and the
 //   exact re-point command (§13.2).
+// The validate stage is pure local rendering and the expensive part (44+ min on the loaded
+// dev Mac during market hours vs 2-4 min idle) — it runs on the .74 builders; everything
+// that needs the deploy host stays pinned there. `agent none` so a fallback resolution can
+// never hold two executors at once.
+VALIDATE_AGENT_LABEL = oeBuildAgent.labels('build-mac-74', 'hpsf-replay-mac')
+
 pipeline {
-  agent { label 'hpsf-replay-mac' }
+  agent none
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production', 'experiment'],
       description: 'Target environment — selects k8s/services/web/overlays/<env> and the deployer kubeconfig (oeProfile).')
@@ -63,6 +69,22 @@ pipeline {
     DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
   }
   stages {
+    stage('Validate service registry') {
+      // Own agent = own fresh `checkout scm` of the same build revision; pure gate,
+      // nothing later stages consume.
+      agent { label VALIDATE_AGENT_LABEL }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-services.sh
+        '''
+      }
+    }
+    // Everything below needs the deploy host (kubeconfigs, kubectl, the chained build's
+    // digest-pin flow) — one agent, one workspace. Bodies unchanged.
+    stage('Deploy path') {
+      agent { label 'hpsf-replay-mac' }
+      stages {
     stage('Resolve profile') {
       steps {
         script {
@@ -71,14 +93,6 @@ pipeline {
           env.BUILD_PLATFORM = p.platform
           echo "web-service resolved (env=${params.ENVIRONMENT}): registry=${env.IMAGE_REGISTRY} platform=${env.BUILD_PLATFORM}"
         }
-      }
-    }
-    stage('Validate service registry') {
-      steps {
-        sh '''
-          set -euo pipefail
-          bash scripts/ci/validate-services.sh
-        '''
       }
     }
     stage('Build web image (native)') {
@@ -122,10 +136,12 @@ pipeline {
         '''
       }
     }
-  }
-  post {
-    always {
-      archiveArtifacts artifacts: '.jenkins-tmp/web-*.yaml', allowEmptyArchive: true
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: '.jenkins-tmp/web-*.yaml', allowEmptyArchive: true
+        }
+      }
     }
   }
 }
