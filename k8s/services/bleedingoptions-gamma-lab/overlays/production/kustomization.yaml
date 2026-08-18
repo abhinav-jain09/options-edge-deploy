@@ -32,8 +32,14 @@ resources:
 # matches — so the evidence names an image nobody attested by hand.
 #
 # Changing this line means producing evidence for the new digest FIRST — that is the point of it
-# being a reviewed edit rather than a deploy-time lookup. The previous digest, sha256:3de76b5d…,
-# predates the watchlist and is what has been serving bleedingoptions.com until now.
+# being a reviewed edit rather than a deploy-time lookup.
+#
+# ROLLBACK TARGET: the OUTGOING digest is sha256:d45aac94…, which is what has been serving
+# bleedingoptions.com until now. Note what rolling back to it costs: it carries the watchlist, but
+# one whose WRITES silently fail about a minute after each page load. (sha256:3de76b5d… is older
+# still and predates the watchlist entirely — it was the outgoing image one deploy ago, and naming
+# it here as "currently serving" is exactly the sort of stale line that sends someone rolling back
+# to the wrong place under pressure.)
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
