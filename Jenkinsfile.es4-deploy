@@ -161,12 +161,61 @@ pipeline {
         '''
       }
     }
+    stage('Assert prod images fresh') {
+      // FRESHNESS GATE (runs BEFORE any apply): es4 pins the :prod tag at deploy time, so a :prod
+      // that has NOT been updated by the intended build deploys STALE code — and "the build job said
+      // SUCCESS" is not evidence the push landed (it can race the deploy, fail silently, or be a
+      // no-op). For every options-edge-* image these manifests deploy, assert the live :prod digest
+      // equals the digest a SUCCESSFUL prod build actually RECORDED pushing (its archived
+      // image-lock.env), and refuse if a prod build is still in flight. Fail-closed. An image not
+      // rebuilt in the recent window is steady-state (nothing to prove) and is skipped, not failed.
+      // Reads build artifacts via the Jenkins API — set JENKINS_API_CREDENTIAL_ID (a username/token
+      // credential) if the default id is not present.
+      when { expression { params.ACTION == 'deploy-service' || params.ACTION == 'deploy-all' } }
+      steps {
+        withCredentials([usernamePassword(credentialsId: env.JENKINS_API_CREDENTIAL_ID ?: 'jenkins-api',
+                                          usernameVariable: 'ES4_JU', passwordVariable: 'ES4_JP')]) {
+          sh '''
+            set -euo pipefail
+            # es-feed is NOT freshness-gated here: it is applied at replicas 0 and only started by the
+            # separate activate-es-feed action, which is where its digest must be checked (that check
+            # is a follow-up — this gate does not cover it). Exclude it so we make no false claim.
+            if [ "$ACTION" = "deploy-service" ] && [ "$SERVICE" = "es-feed" ]; then
+              # Still create the (empty) handoff so the Deploy stage's fail-closed "gate must have run"
+              # check passes; es-feed is absent from it, so pin-and-apply resolves its :prod normally.
+              mkdir -p "$WORKSPACE/.jenkins-tmp"; : > "$WORKSPACE/.jenkins-tmp/es4-verified-digests.env"
+              echo "es-feed: applied at replicas 0; freshness is checked at activation, not here."; exit 0
+            fi
+            if [ "$ACTION" = "deploy-all" ]; then
+              FILES=$(ls k8s/es4/services/*.yaml | { grep -Ev '/(es-feed|spread-skew|spread-skew-postgres-writer)[.]yaml$' || true; })
+            else
+              FILES="k8s/es4/services/${SERVICE}.yaml"
+            fi
+            [ -n "$FILES" ] || { echo "freshness gate: no service manifests resolved" >&2; exit 1; }
+            # the options-edge-* images these manifests deploy from THIS registry
+            IMAGES=$(grep -hoE "image: ${REGISTRY}/[a-z0-9._-]+:" $FILES | sed -E "s|image: ${REGISTRY}/||; s|:$||" | sort -u)
+            [ -n "$IMAGES" ] || { echo "freshness gate: no ${REGISTRY} images in the manifests" >&2; exit 1; }
+            mkdir -p "$WORKSPACE/.jenkins-tmp"
+            # Hand the PROVEN digests to the apply step so it pins exactly what was verified (TOCTOU).
+            JENKINS_URL="${JENKINS_URL:-http://localhost:8080}" JENKINS_AUTH="${ES4_JU}:${ES4_JP}" \
+            VERIFIED_DIGESTS_FILE="$WORKSPACE/.jenkins-tmp/es4-verified-digests.env" \
+              bash scripts/es4/assert-prod-images-fresh.sh "$REGISTRY" $IMAGES
+          '''
+        }
+      }
+    }
     stage('Deploy to es4') {
       when { expression { params.ACTION == 'deploy-service' || params.ACTION == 'deploy-all' } }
       steps {
         sh '''
           set -euo pipefail
           export KUBECONFIG="$ES4_KUBECONFIG"
+          # pin-and-apply pins exactly the digests the freshness gate proved (TOCTOU-close). The gate
+          # runs before this stage for every deploy-service/deploy-all (dry-run included) and always
+          # writes this file — possibly empty (es-feed) — so a MISSING file makes pin-and-apply fail
+          # closed (the gate did not run); an image simply ABSENT from the file was steady-state and is
+          # resolved normally.
+          export VERIFIED_DIGESTS_FILE="$WORKSPACE/.jenkins-tmp/es4-verified-digests.env"
           DRY=""; [ "${DEPLOY_DRY_RUN:-false}" = "true" ] && DRY="--dry-run=server"
           # Identity FIRST: this stage mutates through $KUBECONFIG (es4). Proving identity after the
           # first apply would mean a mispointed kubeconfig had already written to the wrong cluster.
