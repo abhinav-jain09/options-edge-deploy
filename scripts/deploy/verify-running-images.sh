@@ -71,6 +71,7 @@ IMAGE_MAP = {
     ("stock-gex-service", "stock-gex"): "STOCK_GEX_IMAGE",
     ("drop-classifier-service", "drop-classifier"): "DROP_CLASSIFIER_IMAGE",
     ("context-tape-service", "context-tape"): "CONTEXT_TAPE_IMAGE",
+    ("multileg-structure-service", "multileg"): "MULTILEG_STRUCTURE_IMAGE",
     ("oi-shadow-service", "oi-shadow"): "OI_SHADOW_IMAGE",
     ("reversal-postgres-writer", "reversal-postgres-writer"): "REVERSAL_POSTGRES_WRITER_IMAGE",
 }

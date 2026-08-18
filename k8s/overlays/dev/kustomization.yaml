@@ -609,6 +609,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-context-tape
     newName: host.docker.internal:5001/options-edge-context-tape
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-multileg-structure
+    newName: host.docker.internal:5001/options-edge-multileg-structure
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-oi-shadow
     newName: host.docker.internal:5001/options-edge-oi-shadow
     newTag: dev
