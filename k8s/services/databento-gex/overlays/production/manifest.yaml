@@ -76,6 +76,8 @@ spec:
               value: "false"
             - name: OI_ANCHOR_MANIFEST_ENABLED
               value: "true"
+            - name: GEX_TICK_SPREAD_FLOOR_MODE
+              value: live
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: DATABENTO_DATASET
