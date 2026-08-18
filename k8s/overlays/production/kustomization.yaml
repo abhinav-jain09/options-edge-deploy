@@ -322,6 +322,51 @@ patches:
                   # both surviving the nightly wipe.
                   - name: OI_ANCHOR_MANIFEST_ENABLED
                     value: "true"
+                  # TICK-AWARE SPREAD FLOOR, PROMOTED shadow -> live (2026-08-18). A quote at most
+                  # 4 ticks wide is admitted whatever its mark; the relative maxSpreadPct gate is
+                  # untouched, so genuinely wide quotes on priced legs still refuse. Admitted legs
+                  # carry TICK_SPREAD and are excluded from netGexStrict and from anchor eligibility.
+                  #
+                  # EVIDENCE, stated at its real strength (Codex round-1 correction). Dev ran live
+                  # while prod ran shadow on 2026-08-18 with the market open, chain SPX 20260818:
+                  #   - prod SHADOW_WOULD_ADMIT 607,323 vs dev LIVE_ADMITTED 598,426.
+                  #   - dealer-ledger 0DTE profiles: suShortGamma NUMERIC on 73% of dev vs 25% of
+                  #     prod; MISSING_IV on 75/105 (dev) vs 126/126 (prod).
+                  #   - dev reached ARMED 508 times and emitted the ledger's FIRST fire in ~30 days
+                  #     (12:14:03 ET, CALL, anchor 7700, inputQuality DEGRADED, calibrationQuality
+                  #     INSUFFICIENT_DATA); prod stayed at ARMING all session.
+                  # ⚠️This is CORROBORATIVE, not a proof that shadow predicted live. The two counts
+                  # come from different pods over different input populations — dev prices against a
+                  # SYNTHETIC cascaded ES-basis spot, prod against the live index — and they are raw
+                  # totals, not a record-by-record comparison of the same quotes. Read the ~1.5% gap
+                  # as "the same order of magnitude, same direction", nothing stronger. The decisive
+                  # test would replay ONE captured stream through both modes and diff the per-leg
+                  # admission decisions; that has NOT been done.
+                  #
+                  # BLAST RADIUS. Inclusive per-strike netGex changes, so EVERY consumer of
+                  # options.databento.gex.strike sees different numbers: the UI board and heatmap,
+                  # delta-flow, dealer-ledger, option-price-behavior, option-truth-engine,
+                  # unified-sr, strike-invasion, gex-delta-redis-writer and databento-gex-history.
+                  # The magnet topic and strike-intelligence read the inclusive stage-1 result too,
+                  # so their behaviour can move as well. netGexStrict and anchor eligibility are
+                  # protected by the TICK_SPREAD exclusion in the SERVICE code (proc #638) — this
+                  # repository cannot prove that invariant, it only sets the flag.
+                  #
+                  # ROLLBACK is CONFIGURATION ONLY: set this to "shadow" HERE and re-run
+                  # scripts/deploy/generate-service-slices.sh (the generated slice carries its own
+                  # copy, so editing one without the other either drifts or fails validate-services).
+                  # That stops future live admissions; it does NOT undo what live produced —
+                  # TICK_SPREAD-era values persist in the compacted gex.strike topic until they are
+                  # superseded, in the immutable gex.strike.history archive (so backtest and replay
+                  # datasets will straddle both regimes), in any dealer-ledger signal already fired,
+                  # in every consumer's OWN output topics (delta-flow, option-price-behavior,
+                  # option-truth-engine, strike-invasion, strike-intelligence and the magnet all
+                  # publish derived records that outlive the flag), in gex-delta-redis-writer's
+                  # EXTERNAL Redis keys, and in downstream Kafka Streams state stores. Any
+                  # remediation of those is a separate, explicit exercise. "off" additionally disables the floor's shadow
+                  # accounting and is NOT the ordinary rollback target.
+                  - name: GEX_TICK_SPREAD_FLOOR_MODE
+                    value: live
   # oi-shadow: ENABLED on PRODUCTION with the SEEDED arm, 2026-08-04. It reads the anchor manifest
   # and the raw chain and writes one record per strike to options.databento.oi.nowcast.by-strike.
   # That topic is now CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED above), so what this
