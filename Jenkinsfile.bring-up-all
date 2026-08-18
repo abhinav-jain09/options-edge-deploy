@@ -110,8 +110,11 @@ pipeline {
       parallel {
         stage('Processing / streams') {
           steps {
+            // ALLOW_FULL_REACTOR: BUILD_TARGET=all is locked in the processing job (a full
+            // reactor blocks every service deploy for an hour+); this umbrella is the ONE
+            // deliberate full-rebuild path, so it carries the explicit override.
             build job: 'options-edge-processing',
-                  parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGES', value: env.PUSH_IMAGE == 'true'), string(name: 'REMOTE_BUILD_HOST', value: env.REMOTE_BUILD_HOST), string(name: 'REMOTE_BUILD_ROOT', value: env.REMOTE_BUILD_ROOT)],
+                  parameters: [string(name: 'ENVIRONMENT', value: env.ENVIRONMENT), string(name: 'BUILD_PLATFORM', value: env.BUILD_PLATFORM), string(name: 'IMAGE_REGISTRY', value: env.IMAGE_REGISTRY), booleanParam(name: 'PUSH_IMAGES', value: env.PUSH_IMAGE == 'true'), booleanParam(name: 'ALLOW_FULL_REACTOR', value: true), string(name: 'REMOTE_BUILD_HOST', value: env.REMOTE_BUILD_HOST), string(name: 'REMOTE_BUILD_ROOT', value: env.REMOTE_BUILD_ROOT)],
                   wait: true, propagate: !params.CONTINUE_ON_FAILURE
           }
         }
