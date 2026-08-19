@@ -187,6 +187,23 @@ log "identity guards PASSED"
 # (es.reversal.verdicts/strength, hunt status/commands) stay purgeable by
 # design.
 #
+# es.reversal.hunt.swing.candidates added 2026-08-19: the SESSION-SCALE swing
+# path's evidence stream, 30-day delete retention by contract
+# (ReversalHuntSwingTopics.SPECS, purgeExempt). It is the corpus the threshold
+# question is answered from — every evaluated candidate, spoken or NOT, with
+# the reason it stayed quiet — so a nightly purge would leave it permanently one
+# session deep, which is the same as not having it and exactly the 30 days'
+# opposite. It is NOT declared retention.ms=-1 and therefore is not
+# reset-preserved in topics.env: 30 days is a real bound and the topic should
+# age out on it. This keep-list is about the RESET, not about time.
+#
+# The restart path reads it: the candidate sequence and the 80-tick chain are
+# session-scoped facts about what was PUBLISHED, and the service recovers them
+# from this topic rather than from a deeper replay. A purge mid-session would
+# therefore renumber the session and forget a call already made — but the
+# pre-market reset runs before the open, when the topic holds no records for
+# the session about to start, so the ordering is safe by construction.
+#
 # spx.basis.state (2026-07-28) is the ES->SPX basis engine's CROSS-DAY durable
 # state by design (retention.ms=-1: STATE_CURRENT restart authority, per-
 # generation STATE history, daily close anchors/acks, A1 certificates —
@@ -218,7 +235,7 @@ log "identity guards PASSED"
 # the keep costs about one record per session date. On prod it is an MM1 mirror target with no
 # local producer at all: MM1 commits its offsets on the source cluster, so purging the copy here
 # does not make it re-copy — the /zones page simply stays blank until es4 next publishes a board.
-PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^es\.reversal\.hunt\.(state|alerts)$|^options\.spx\.wall-break-rates\.dataset$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring$|^options\.databento\.oi\.anchor-manifest$|^es\.tape-zones\.board$|gamma-migration-scorer-changelog$'
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^es\.reversal\.hunt\.(state|alerts)$|^es\.reversal\.hunt\.swing\.candidates$|^options\.spx\.wall-break-rates\.dataset$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring$|^options\.databento\.oi\.anchor-manifest$|^es\.tape-zones\.board$|gamma-migration-scorer-changelog$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
 log "durable keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
 CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)

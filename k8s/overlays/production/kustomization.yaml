@@ -108,6 +108,54 @@ patches:
         value:
           name: REVERSAL_HUNT_AUTO_ARM
           value: "true"
+      # SESSION-SCALE SWING PATH (Gate-1 REVERSAL-HUNT-SESSION-SCALE-DEPTH).
+      # Measured from the highest counter-swing in a ROLLING 90-MINUTE window
+      # rather than the deployed 62-second one, so the call the deployed rule
+      # cannot make — a decline that paused and resumed — gets made. Every
+      # evaluated candidate is written to es.reversal.hunt.swing.candidates,
+      # SPOKEN OR NOT, with the reason it stayed quiet; that corpus is how the
+      # thresholds get answered rather than argued.
+      #
+      # The two settings below are its PRECONDITIONS, not preferences, and the
+      # service refuses to start without them:
+      #   * a 90-minute window cannot be rebuilt from a 25-minute replay, so a
+      #     restart an hour after the reference formed would go silent exactly
+      #     where the continuous process calls — the failure this whole change
+      #     exists to remove, reintroduced by a restart;
+      #   * the ring must hold that replay (replay/2s + 60 buckets). 2790
+      #     buckets is ~93 minutes of ES and option buckets, well under a
+      #     megabyte; the real cost is a longer BOOT REPLAY, which is the price
+      #     of a session-scale reference and is paid once per start.
+      # Both change what the deployed hunt REPLAYS at boot; neither changes a
+      # rule it applies.
+      #
+      # THIS ROLLOUT TERMINATES ANY ARMED LEG HUNT, ONCE, BY DESIGN.
+      # REVERSAL_RING_CAPACITY_BUCKETS is part of the deployed hunt's config
+      # FINGERPRINT, and a restored hunt whose fingerprint no longer matches is
+      # terminated CONFIG_CHANGED — the mechanism that stops a hunt continuing
+      # under geometry it was not armed for. It is correct and it fires here,
+      # because a 90-minute reference genuinely needs a bigger ring.
+      #
+      # So: APPLY THIS OUTSIDE RTH. Auto-arm is on, so both modes re-arm on
+      # their own at the next open and the only cost is the terminal alert. An
+      # INTRADAY apply would kill live hunts mid-session and put two
+      # CONFIG_CHANGED terminations on the alerts topic — a change to the
+      # deployed stream, which is the one thing this program may not do.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_REPLAY_LOOKBACK_SECONDS
+          value: "5460"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_RING_CAPACITY_BUCKETS
+          value: "2790"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_SWING_ENABLED
+          value: "true"
   # greek-move-authenticity: ENABLED on PROD (go-live — advisory-only, CHARM_SIGN pinned by the
   # Gate-1 fixture, options-edge-processing #409). Strategic-merge on env name (namespace required).
   # MUST MIRROR the standalone slice k8s/services/greek-move-authenticity/overlays/production (validate-services).
