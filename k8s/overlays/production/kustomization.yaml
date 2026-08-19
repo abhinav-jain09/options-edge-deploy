@@ -26,6 +26,33 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PROD-ONLY: the position-flow Leaderboard store (LeaderboardStore reads APP_POSTGRES_*,
+  # the public tenant's variable names) pointed at the PLATFORM Postgres for the INTERNAL
+  # web — the internal surface has no bo-app-postgres and the nightly publisher writes the
+  # board into options_flow as well. MIRRORS k8s/services/web/overlays/production exactly —
+  # validate-services enforces the render equality.
+  - target:
+      kind: Deployment
+      name: options-edge-web
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: APP_POSTGRES_JDBC_URL
+          value: jdbc:postgresql://192.168.100.252:5432/options_flow
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: APP_POSTGRES_USER
+          value: options_flow
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: APP_POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: options-edge-runtime-secrets
+              key: POSTGRES_PASSWORD
   # PROD-ONLY: the ES GEX strike topic for the databento display service. MIRRORS the standalone
   # slice k8s/services/raw-to-display/overlays/production, which #714 added it to without the
   # matching top-level patch — validate-services caught the drift and blocked every deploy.
