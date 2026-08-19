@@ -306,6 +306,11 @@ DROP_ENV_PREFIXES = {
 # list. Re-enable = delete the name here, re-render, deploy that service.
 ES4_KEEP_DOWN = {
     "dealer-ledger-service",
+    # USER 2026-08-18: hold the whole dealer-ledger family down on es4 until further notice.
+    # dealer-ledger-service was already listed; its two calibration workers were not, so a deploy
+    # would render them at replicas:1 and quietly bring half the family back.
+    "dealer-ledger-calibration-accumulator",
+    "dealer-ledger-calibration-scorer",
     "volume-pace-databento-service",
     "directional-pressure-databento-service",
     # USER 2026-07-30: strike-liquidity-heatmap RE-ENABLED on es4 to evaluate the wall-line /
