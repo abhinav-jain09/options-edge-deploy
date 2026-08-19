@@ -64,6 +64,8 @@ spec:
               value: options.databento.raw
             - name: KAFKA_UNIFIED_SR_OUTPUT_TOPIC
               value: options.spx.strike-sr.current
+            - name: KAFKA_UNIFIED_SR_HISTORY_TOPIC
+              value: options.spx.strike-sr.history
             - name: KAFKA_UNIFIED_SR_STREAMS_APP_ID
               value: options-edge-unified-sr
             - name: KAFKA_UNIFIED_SR_STREAMS_COMMIT_INTERVAL_MS
