@@ -23,8 +23,7 @@ resources:
 # no-op. Both paths therefore agree on one immutable image.
 #
 # THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #11 attested
-# sha256:120b534f… from revision test)
-f614e7 (main with options-edge#619 — the simple net-lean
+# sha256:120b534f… from revision f614e73b81a8 (main with options-edge#619 — the simple net-lean
 # default view: top-5 bullish/bearish-LEANING lists in plain language, detail behind a toggle;
 # includes #618's both-wings help note) and recorded PGL-050/051/052 as PASS against that digest.
 # The job resolves the revision from the registry rather than taking it from the operator, and
