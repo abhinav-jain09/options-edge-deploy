@@ -126,6 +126,19 @@ spec:
               value: "31"
             - name: REVERSAL_HUNT_AUTO_ARM
               value: "true"
+            # SESSION-SCALE SWING PATH — see the mirrored block in
+            # k8s/overlays/production/kustomization.yaml for why the two
+            # settings above it are preconditions the service refuses to start
+            # without.
+            # APPLY OUTSIDE RTH: the ring capacity is part of the deployed
+            # hunt's config fingerprint, so this rollout terminates any armed
+            # hunt CONFIG_CHANGED, once. Auto-arm re-arms at the next open.
+            - name: REVERSAL_REPLAY_LOOKBACK_SECONDS
+              value: "5460"
+            - name: REVERSAL_RING_CAPACITY_BUCKETS
+              value: "2790"
+            - name: REVERSAL_HUNT_SWING_ENABLED
+              value: "true"
           envFrom:
             - configMapRef:
                 name: options-edge-config
