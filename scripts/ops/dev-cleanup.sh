@@ -46,7 +46,12 @@ KEEP='keycloak'                                          # deployments to leave 
 DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+30) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 06:15 ET full start. (2026-08-03: was 07:30)
-OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web'
+# databento-gex-service is kept alive overnight so its eager OI prefetch fires at 06:30 ET EVERY session
+# (the fetch is a direct Databento historical statistics call — OPRA/SPXW OI is plan-covered = $0 — so a
+# 24/7 dev pod adds no data cost). Without this the pod is at 0 at 06:30, the day's settled OI baseline is
+# never pulled, and GEX/pre-open read a stale prior-session baseline until a manual bring-up. It also keeps
+# the pod alive through the 16:30-20:00 ET pre-open NBBO capture window. (2026-08-20)
+OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web databento-gex-service'
 # ES overnight-tracking services that SHUT DOWN at ~09:17 ET (before the 09:30 SPX open): the overnight ES
 # session is over, so these scale to 0. feed-gateway-service + options-edge-web STAY UP (they serve the
 # SPX day session). Fired by the ESDOWN calendar slot below.
