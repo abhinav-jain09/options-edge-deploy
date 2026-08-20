@@ -63,6 +63,24 @@ services:
     producedTopics: []
     requiredConfigKeys: [PUBLIC_SURFACE, PUBLIC_BOARD_UPSTREAM_URL, VITE_AUTH_ISSUER, AUTH_JWK_SET_URI]
 
+  # The tenant's email sender (approval notices today; any outbound mail from here on).
+  # Its own image and repo, deliberately NOT the web image: that surface has a small startup
+  # contract on purpose, and putting an SMTP credential into it would widen exactly the boundary
+  # PGL-034A draws. Single replica — see the Deployment header for why that is correctness.
+  - name: bleedingoptions-email
+    managedBy: standalone
+    namespace: bleedingoptions
+    image: oe-email-service
+    deployments: [bleedingoptions-email]
+    container: email
+    buildJob: oe-email-service-deploy
+    sourceRepo: oe-email-service
+    envs: [production]
+    dependsOnInfraOnly: true
+    consumedTopics: []       # it reads Keycloak over HTTP and its own ledger; no Kafka at all
+    producedTopics: []
+    requiredConfigKeys: [SMTP_HOST, SMTP_USERNAME, MAIL_FROM, POSTGRES_JDBC_URL, KEYCLOAK_BASE_URL, KEYCLOAK_CLIENT_ID, APPROVED_GROUP]
+
   # --- fullfunding tenant --------------------------------------------------------------
   # The `namespace` field is what routes this away from options-edge. Without it the deploy
   # would default to options-edge and the render/registry guard would refuse it.
