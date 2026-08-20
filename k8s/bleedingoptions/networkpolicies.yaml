@@ -249,6 +249,12 @@ spec:
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: bleedingoptions-gamma-lab
+        # The email service keeps its ledger here too. BOTH SIDES have to allow the hop: an egress
+        # rule on the client is only half of it, and the half that is missing fails as
+        # "Connection refused" from Postgres -- which reads as a database problem, not a policy one.
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bleedingoptions-email
       ports:
         - protocol: TCP
           port: 5432
