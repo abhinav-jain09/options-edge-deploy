@@ -40,7 +40,10 @@ KEEP='keycloak'                                          # deployments to leave 
 # DEV-disabled deployments — held at 0 by do_start (exact full-name match via grep -x). MUST include
 # databento-timewarp-snapshot-replay: if it boots even briefly it replays snapshots into
 # options.databento.raw and poisons the chain. Keep in sync with premarket-check.sh DISABLED (dev).
-DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service'
+# stock-gex-service is PROD-ONLY (USER 2026-08-18): the public Gamma Lab page reads it there,
+# and it pulls straight from Databento (billed) rather than from Kafka — a dev copy spends
+# money serving a page dev does not host, and it was sitting at 0/1 on dev anyway.
+DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volume-pace-databento-service|volume-sandwich-service|volume-sandwich-databento-service|databento-timewarp-snapshot-replay|strike-flow-classifier-ibkr|options-edge-integration-test|databento-mission-pressure-service|databento-mission-pace-service|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|directional-pressure-databento-service|databento-maxpain-service|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|stock-gex-service'
 # OVERNIGHT ES-tracking set — the ONLY services brought up right after the (calendar-aware, close+30) clean,
 # so ES futures are tracked overnight. Everything else stays at 0 until the 06:15 ET full start. (2026-08-03: was 07:30)
 OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web'
