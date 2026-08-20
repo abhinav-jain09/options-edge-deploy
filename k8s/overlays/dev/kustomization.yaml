@@ -25,6 +25,64 @@ resources:
   # broker/profile/image.
   - ../../services/databento-vix-feed/base
 patches:
+  # THE SESSION-SCALE SWING PATH ON DEV. MIRRORS the standalone overlay
+  # k8s/services/reversal-confirmation/overlays/dev exactly — validate-services
+  # enforces the render equality, and it caught this block's absence.
+  #
+  # Only safe because of REVERSAL_HUNT_INSTANCE_ID (processing #700): dev and
+  # production both point REVERSAL_ES_BOOTSTRAP_SERVERS at the SAME es4 broker,
+  # so without an identity this hunt would have shared production's transactional
+  # id — fencing its producer and killing the deployed hunt — put dev's calls on
+  # the real alerts topic in production's voice, and mixed dev candidates into
+  # the corpus the thresholds are to be decided from. "PROD-ONLY" was the
+  # workaround for exactly that. The service now REFUSES to start if any owned
+  # resource is configured outside the namespace.
+  - target:
+      kind: Deployment
+      name: reversal-confirmation-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_INSTANCE_ID
+          value: dev
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_ENABLED
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_AUTO_ARM
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_MIN_DECLINE_TICKS
+          value: "28"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS
+          value: "31"
+      # Preconditions, not preferences: a 90-minute reference cannot be rebuilt
+      # from a 25-minute replay, and the ring must hold that replay.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_REPLAY_LOOKBACK_SECONDS
+          value: "5460"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_RING_CAPACITY_BUCKETS
+          value: "2790"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_SWING_ENABLED
+          value: "true"
   # TEMPORARY, dev only, 2026-08-12. dev's Kafka was cleaned, so the epoch lineage
   # is gone and indicator-service fail-closes rather than inventing one — exactly
   # as the base comment prescribes ("set true EXACTLY ONCE via a temporary overlay
