@@ -66,6 +66,11 @@ spec:
               value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
+            # Pre-market LIVE OI: while OPRA is closed, drain the OI-aware statistics replay and publish the
+            # settled OI so pre-open GEX prices with LIVE OI (not the historical batch). DEV first. Forces its
+            # own replay window, so it works even though the dev main loop runs use_live_replay=false.
+            - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED
+              value: "true"
             - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
               value: "true"
             - name: ES_SPX_BASIS_SAMPLES_ENABLED
