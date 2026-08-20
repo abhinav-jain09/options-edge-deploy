@@ -3,4 +3,3 @@ kind: Kustomization
 namespace: bleedingoptions
 resources:
   - email-deployment.yaml
-  - networkpolicies.yaml
