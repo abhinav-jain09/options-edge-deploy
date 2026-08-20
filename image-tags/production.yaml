@@ -1,4 +1,8 @@
 images:
+  # bleedingoptions tenant — the email sender. Its overlay PINS A DIGEST, so this tag is not
+  # what gets deployed; it is what service-deploy compares the pin's repository against, and it
+  # must therefore exist in the registry (the build pushes it).
+  bleedingoptions-email: 192.168.100.252:5000/oe-email-service:prod
   # fullfunding tenant — built on .252 (amd64 native); the app is static files only.
   fullfunding-app: 192.168.100.252:5000/fullfunding-app:v1
   raw-to-display-service: 192.168.100.252:5000/options-edge-raw-to-display:prod
