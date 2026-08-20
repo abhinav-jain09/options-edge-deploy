@@ -1,0 +1,102 @@
+# The namespace runs default-deny-all, so this service reaches nothing until it is named here.
+# Three egresses and no ingress rule of its own beyond the send API, because those are the only
+# four things it does: read the approved group, write the ledger, hand a message to Gmail, answer
+# a probe.
+#
+# DNS is already granted namespace-wide by allow-dns; without it every hostname below fails to
+# resolve and the failures look like outages rather than policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: email-egress-postgres
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bleedingoptions-email
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bo-app-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Keycloak's HTTP port, to ask who is approved. NOT Keycloak's Postgres: this service has no
+# business in the identity provider's database, and the separate password would not stop it if the
+# network did.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: email-egress-keycloak
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bleedingoptions-email
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: bo-keycloak
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# SMTP, on the same terms Keycloak already has it: port 587 to the public internet, with the
+# private ranges EXCLUDED so this never becomes a path into the LAN or the rest of the cluster.
+# It cannot be narrowed to Gmail by selector — a NetworkPolicy matches CIDRs, not DNS names.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: email-egress-smtp
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bleedingoptions-email
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 587
+---
+# Ingress: the send API and the probes, from inside this namespace only. There is no tunnel route
+# and no DNS record for this service, and there must not be — an internet-reachable sender that
+# holds our From address is the definition of an open relay.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: email-ingress-in-namespace-only
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bleedingoptions-email
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: bleedingoptions
+      ports:
+        - protocol: TCP
+          port: 8080

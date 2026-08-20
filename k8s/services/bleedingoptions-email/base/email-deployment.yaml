@@ -1,0 +1,172 @@
+# The email service for the bleedingoptions tenant.
+#
+# WHY IT EXISTS. Until now the only mail leaving this platform came from Keycloak's own auth flows,
+# so an approved user was never told they had been approved — they had to guess and try again. This
+# service is the one place that sends mail, and its first job is that notice.
+#
+# WHY A SERVICE AND NOT A CRONJOB. Its first act on a fresh database is to SEED: record everyone
+# already approved as "told" so that 33 existing users are not mailed "you have been approved" days
+# after the fact. Seeding must happen exactly once, with the whole membership in view. An externally
+# scheduled job can be run twice concurrently, or by hand, by whoever holds the schedule; a loop
+# inside a single-replica Deployment cannot.
+apiVersion: v1
+kind: Service
+metadata:
+  name: bleedingoptions-email
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bleedingoptions-email
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: email
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: bleedingoptions-email
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bleedingoptions-email
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bleedingoptions-email
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: email
+spec:
+  # ONE. Not a capacity choice — a correctness one. Two replicas would seed twice on a fresh
+  # ledger and would reconcile concurrently, and the window between "send" and "record" is exactly
+  # where a second replica sends the same notice again.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bleedingoptions-email
+  strategy:
+    # Recreate, for the same reason as replicas:1 — RollingUpdate briefly runs two pods.
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bleedingoptions-email
+        app.kubernetes.io/part-of: bleedingoptions
+        app.kubernetes.io/component: email
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: email
+          image: 192.168.100.252:5000/oe-email-service:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            # --- SMTP. ⚠️ THE USERNAME AND THE FROM ADDRESS ARE DIFFERENT, DELIBERATELY.
+            # bleedingoptions.com is a Workspace USER ALIAS domain: Gmail authenticates the real
+            # account and recipients see the alias. Authenticating as the alias fails SMTP auth
+            # outright — no mail at all, which is how it was found the first time someone
+            # registered. The same split is documented for Keycloak in docs/bleedingoptions-keycloak.md §3b.
+            - name: SMTP_HOST
+              value: smtp.gmail.com
+            - name: SMTP_PORT
+              value: "587"
+            - name: SMTP_USERNAME
+              value: info@amskel.nl
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bo-keycloak-secrets
+                  key: KC_SMTP_PASSWORD
+            - name: MAIL_FROM
+              value: info@bleedingoptions.com
+            - name: MAIL_FROM_NAME
+              value: Bleeding Options
+
+            # --- The ledger. The APPLICATION database, never Keycloak's: this service must not be
+            # able to read the identity provider's tables, and the two already hold separate
+            # passwords for that reason.
+            - name: POSTGRES_JDBC_URL
+              value: jdbc:postgresql://bo-app-postgres-db.bleedingoptions.svc:5432/bleedingoptions
+            - name: POSTGRES_USER
+              value: bleedingoptions
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bo-keycloak-secrets
+                  key: APP_POSTGRES_PASSWORD
+
+            # --- Keycloak, via the IN-CLUSTER Service. The public issuer resolves to Cloudflare and
+            # a NetworkPolicy cannot allow a destination by DNS name, so reaching the public host
+            # would need internet egress this pod does not have.
+            - name: KEYCLOAK_BASE_URL
+              value: http://bo-keycloak.bleedingoptions.svc:8080
+            - name: KEYCLOAK_REALM
+              value: bleedingoptions
+            # Its OWN service-account client, holding view-users and nothing else. NOT the realm
+            # reconciler's credential: that client is deliberately denied every user-reading role
+            # (see the runbook §3), and borrowing it would have quietly granted what that document
+            # goes out of its way to withhold.
+            - name: KEYCLOAK_CLIENT_ID
+              value: approval-notifier
+            - name: KEYCLOAK_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: bo-email-secrets
+                  key: KEYCLOAK_CLIENT_SECRET
+            - name: APPROVED_GROUP
+              value: gamma-lab-approved
+
+            # --- The send API's bearer. Without it any pod in the namespace could send mail
+            # wearing our From address.
+            - name: SEND_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: bo-email-secrets
+                  key: SEND_API_TOKEN
+
+            - name: SIGN_IN_URL
+              value: https://bleedingoptions.com/gamma-lab
+            - name: RECONCILE_INTERVAL_SECONDS
+              value: "120"
+            - name: MAX_SENDS_PER_TICK
+              value: "20"
+          ports:
+            - name: http
+              containerPort: 8080
+          # /api/email/health, not an actuator port: this app listens on 8080 only. The public
+          # gamma-lab deployment learned that the hard way — its probes dialled 8081, got connection
+          # refused, and the kubelet killed the pod before it could serve.
+          startupProbe:
+            httpGet:
+              path: /api/email/health
+              port: http
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /api/email/health
+              port: http
+            periodSeconds: 20
+          livenessProbe:
+            httpGet:
+              path: /api/email/health
+              port: http
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
