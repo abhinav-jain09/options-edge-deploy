@@ -1,19 +1,26 @@
-# DEV-ONLY gate β/γ for the pre-open IBKR GEX window (OVERNIGHT-IBKR-GEX-GATE1-REQUIREMENT.md
-# rev13+D15). BASE keeps every IBKR_GEX_* flag "false" (prod dormant); this patch is the ONLY
-# place the feature is live, exactly like the legacy databento-gex-preopen-dev-patch.yaml it
-# replaces on dev.
+# DEV-ONLY pre-open publisher SELECT (OVERNIGHT-IBKR-GEX-GATE1-REQUIREMENT.md rev13+D15). BASE
+# keeps every IBKR_GEX_* flag AND PREOPEN_GEX_ENABLED "false" (prod dormant); this last-applied
+# dev patch picks which single pre-open publisher is live.
 #
-# R-PREOPEN one-publisher invariant: the legacy PREOPEN_GEX_ENABLED publisher is turned OFF here
-# because the two are mutually exclusive by construction — IbkrPreOpenConfig REFUSES BOOT when
-# both are true. The legacy path stays available as the next-session rollback (flip this patch).
+# R-PREOPEN one-publisher invariant: the Databento in-service PREOPEN_GEX publisher and the IBKR
+# pre-open window are mutually exclusive by construction — IbkrPreOpenConfig REFUSES BOOT when
+# both are true. So exactly one of {PREOPEN_GEX_ENABLED, IBKR_GEX_CONSUME/PUBLISH} may be true.
+#
+# CURRENT SELECTION (2026-08-20, USER): DATABENTO in-service pre-open is LIVE on dev
+# (PREOPEN_GEX_ENABLED=true, Task A capture@close + Task B compute→publish before 09:30). The IBKR
+# window is turned OFF here (CONSUME/PUBLISH=false). To roll back to the IBKR window, flip this
+# patch: IBKR CONSUME/PUBLISH → true and PREOPEN_GEX_ENABLED → false (never both true).
+#
+# databento-gex-preopen-dev-patch.yaml (applied BEFORE this one) already sets PREOPEN_GEX_ENABLED
+# =true; keeping it true here makes the render unambiguous regardless of patch order.
 #
 # R-DOWN PREREQUISITE (satisfied): options-edge-processing feat/rdown-dispositions filters
 # pre-open records out of the gamma-flow topology AND the gex history series, so publishing the
-# window onto the shared live topic cannot contaminate either RTH construct. That change must be
-# merged and deployed BEFORE this patch goes live.
+# window onto the shared live topic cannot contaminate either RTH construct.
 #
-# Stage: "live" publishes the window's values onto the SAME live topic the UI already reads
-# (USER D14 same-topic), which is what makes the pre-open GEX visible on the option chain.
+# Databento Task B spot source is underlying.spx.price (PR6 PreOpenUnderlyingSpotReader) — the
+# feed's live ES-basis SPX, NOT the flat SYNTHETIC_OPTION_SPOT that would fail IV solves; Task B
+# fail-loud abstains if that spot is missing/stale rather than pricing against a bad number.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,16 +32,11 @@ spec:
       containers:
         - name: databento-gex
           env:
-            - { name: PREOPEN_GEX_ENABLED, value: "false" }
-            - { name: IBKR_GEX_CONSUME_ENABLED, value: "true" }
-            - { name: IBKR_GEX_PUBLISH_ENABLED, value: "true" }
+            - { name: PREOPEN_GEX_ENABLED, value: "true" }
+            - { name: IBKR_GEX_CONSUME_ENABLED, value: "false" }
+            - { name: IBKR_GEX_PUBLISH_ENABLED, value: "false" }
+            # The lines below are inert while IBKR consume/publish are false; they are retained so a
+            # rollback to the IBKR window is a three-flag flip (the two above + PREOPEN_GEX_ENABLED).
             - { name: IBKR_GEX_TOPIC_STAGE, value: "live" }
-            # PRE-OPEN SPOT (2026-08-05). The default spot topic carries dev's SYNTHETIC_OPTION_SPOT
-            # (a flat 7500.0), and pricing 7635-7840 strikes against it puts every put below
-            # intrinsic — the IV solver then fails and the whole window publishes
-            # GATED/PUT:IV_SOLVER_FAILED with a good OI baseline and real CBOE quotes. The IBKR feed
-            # now publishes IBKR's own option MODEL UNDERLYING here while the cash index has nothing
-            # live (it only prints CLOSE before 09:30), which is by definition the underlying IBKR
-            # priced these contracts against. Verified live at 12:30Z: 7776.20 and moving.
             - { name: IBKR_GEX_SPOT_TOPIC, value: "underlying.spx.index.price" }
             - { name: IBKR_GEX_TOPIC, value: "options.databento.gex.strike" }
