@@ -58,7 +58,10 @@ pipeline {
       //
       // The deploy for this service additionally passes through verify-public-gate.sh (PGL-072),
       // which refuses any replica count above zero without gate evidence for the exact image digest.
-      'bleedingoptions-gamma-lab'
+      'bleedingoptions-gamma-lab',
+      // bleedingoptions tenant — the email sender. Same reason it lives here and not in
+      // config.xml: this job regenerates its parameters from this file on every build.
+      'bleedingoptions-email'
     ], description: 'Which service to deploy (dir under k8s/services; spread-skew and its writer are intentionally unavailable under the 2026-07-26 operator hold).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
