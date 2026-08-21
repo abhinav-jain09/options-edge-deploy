@@ -34,6 +34,13 @@ spec:
           env:
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
+            # Per-strike inflow conflation ahead of the single-partition chain-key rekey
+            # (gex-flow-topn-rekey). At the 2s default the post-reboot fleet-wide catch-up left the
+            # rekey partition drain slower than inflow (2026-08-21: lag +4k/min, flow event-times
+            # minutes old -> strike-intel flagged GEX stale chain-wide). 10s keeps per-strike flow
+            # far inside strike-intel's 120s freshness gate while cutting hot-partition inflow ~5x.
+            - name: DATABENTO_GEX_FLOW_TOPN_THROTTLE_INTERVAL_MS
+              value: "10000"
             - name: DATABENTO_DATASET
               valueFrom:
                 configMapKeyRef:
