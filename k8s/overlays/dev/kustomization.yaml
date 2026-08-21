@@ -645,6 +645,8 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-reversal-confirmation
     newName: host.docker.internal:5001/options-edge-reversal-confirmation
+  - name: 192.168.100.252:5000/options-edge-corridor-gauge
+    newName: host.docker.internal:5001/options-edge-corridor-gauge
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-drop-classifier
     newName: host.docker.internal:5001/options-edge-drop-classifier
