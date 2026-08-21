@@ -7,7 +7,7 @@
 # green is not necessarily the one that runs. On 2026-08-16 a tag on the web image resolved to four
 # different digests inside twenty minutes for exactly this reason.
 #
-# This digest is oe-email-service-deploy #9, built from revision 30d2a4e with all 10 tests green on
+# This digest is oe-email-service-deploy #10, built from revision 9bc16de with all 10 tests green on
 # the agent — including the ones that assert seeding sends nothing and a failed send is retried
 # rather than marked done. Changing this line means a new build whose tests passed, not a lookup at
 # deploy time.
@@ -21,4 +21,4 @@ resources:
 images:
   - name: 192.168.100.252:5000/oe-email-service
     newName: 192.168.100.252:5000/oe-email-service
-    digest: sha256:1f0a53c326282ee32fd71718428b2d3b023db58f4c7531e63d464105363653e8
+    digest: sha256:c9eb2f622c96b9687c2ad98fa5f29027facba38e71543010b19187bdf89cb803
