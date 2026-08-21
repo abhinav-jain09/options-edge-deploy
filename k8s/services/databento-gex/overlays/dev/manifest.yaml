@@ -92,6 +92,8 @@ spec:
               value: "true"
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
+            - name: DATABENTO_GEX_FLOW_TOPN_THROTTLE_INTERVAL_MS
+              value: "10000"
             - name: DATABENTO_DATASET
               valueFrom:
                 configMapKeyRef:
