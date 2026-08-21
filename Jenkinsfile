@@ -52,6 +52,7 @@ pipeline {
     string(name: 'INVASION_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Strike-invasion postgres writer image')
     string(name: 'SPREAD_SKEW_IMAGE', defaultValue: '', description: 'Spread-skew service image')
     string(name: 'REVERSAL_CONFIRMATION_IMAGE', defaultValue: '', description: 'Reversal-confirmation service image')
+    string(name: 'CORRIDOR_GAUGE_IMAGE', defaultValue: '', description: 'Corridor-gauge service image (shadow mode)')
     string(name: 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Spread-skew postgres writer image')
     string(name: 'ES_OPEN_DIRECTION_IMAGE', defaultValue: '', description: 'ES open-direction service image')
     string(name: 'CLOSE_DIRECTION_IMAGE', defaultValue: '', description: 'SPX close-direction service image')
@@ -385,6 +386,7 @@ pipeline {
             'VIX_OPTION_INTELIGENCE_IMAGE': 'vix-option-inteligence',
             'GREEK_MOVE_AUTHENTICITY_IMAGE': 'greek-move-authenticity',
             'INVASION_POSTGRES_WRITER_IMAGE': 'invasion-postgres-writer', 'SPREAD_SKEW_IMAGE': 'spread-skew', 'REVERSAL_CONFIRMATION_IMAGE': 'reversal-confirmation',
+            'CORRIDOR_GAUGE_IMAGE': 'corridor-gauge',
             'DROP_CLASSIFIER_IMAGE': 'drop-classifier',
             'SPREAD_SKEW_POSTGRES_WRITER_IMAGE': 'spread-skew-postgres-writer', 'ES_OPEN_DIRECTION_IMAGE': 'es-open-direction',
             'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE': 'es-open-direction-postgres-writer',
@@ -794,7 +796,7 @@ void promoteToProduction() {
       'FEED_GATEWAY_IMAGE', 'HPSF_PROCESSING_IMAGE', 'HPSF_POSTGRES_WRITER_IMAGE', 'SPX_MISSION_CONTROL_IMAGE',
       'STRIKE_FLOW_CLASSIFIER_IMAGE', 'DELTA_FLOW_IMAGE', 'DEALER_LEDGER_IMAGE', 'DEALER_LEDGER_CALIBRATION_IMAGE',
       'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'OPTION_TRUTH_ENGINE_IMAGE', 'MARKET_CARRY_IMAGE', 'ES_SPX_ALIGN_IMAGE', 'DATABENTO_SR3_FEED_IMAGE', 'VIX_OPTION_INTELIGENCE_IMAGE', 'GREEK_MOVE_AUTHENTICITY_IMAGE', 'STRIKE_INVASION_IMAGE',
-      'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE',
+      'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE', 'CORRIDOR_GAUGE_IMAGE',
       'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'CLOSE_DIRECTION_IMAGE', 'SPOT_VOL_REGIME_IMAGE', 'OI_SHADOW_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
       'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',
       'CONTEXT_TAPE_IMAGE', 'MULTILEG_STRUCTURE_IMAGE',

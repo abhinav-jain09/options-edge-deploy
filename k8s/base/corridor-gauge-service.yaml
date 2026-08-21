@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: corridor-gauge-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: corridor-gauge-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  selector:
+    app.kubernetes.io/name: corridor-gauge-service
+  ports:
+    - name: health
+      port: 8080
+      targetPort: health

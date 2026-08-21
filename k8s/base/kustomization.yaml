@@ -99,6 +99,8 @@ resources:
   - pin-postgres-writer-service.yaml
   - volume-pace-databento-deployment.yaml
   - databento-gex-history-deployment.yaml
+  - corridor-gauge-deployment.yaml
+  - corridor-gauge-service.yaml
   - gamma-migration-deployment.yaml
   - databento-gex-history-service.yaml
   - gamma-migration-service.yaml
