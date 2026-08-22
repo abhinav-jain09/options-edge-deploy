@@ -151,6 +151,12 @@ edit memberships could un-approve everyone.
 > `view-users` is read-only; the write roles stay forbidden, so the un-approve-everyone failure
 > mode remains impossible. `view-events`/`manage-events` are needed because the event-auditing
 > config (PGL-062) lives on its own endpoint with its own permission.
+>
+> `view-users` buys READS only. Group **writes** — creating a group, adding or removing a group's
+> role mapping — are gated behind `manage-users` (verified live 2026-08-22: `POST /groups` and the
+> role-mapping POST both return 403 with the full nine-role set), and fine-grained admin permissions
+> are a disabled PREVIEW feature on Keycloak 26.0.8. So the reconciler *detects* group drift and
+> *blocks the deploy before writing anything*; the correction itself is always a console action.
 
 Verify the negative — the token itself is the authorization, so read the claim rather than probing
 endpoints (a probe that "proves" writability would BE a write):
@@ -235,9 +241,14 @@ scripts/ops/bleedingoptions-realm-reconcile.sh --check    # report drift, change
 scripts/ops/bleedingoptions-realm-reconcile.sh --apply    # correct it
 ```
 
-`--check` exits non-zero on any drift so a pipeline fails on it rather than logging it (PGL-031B). It
-is **authoritative, not add-only**: an unexpected role on `/gamma-lab-approved` is removed, not
-merely reported, because reporting leaves the grant live for every member of that group.
+`--check` exits non-zero on any drift so a pipeline fails on it rather than logging it (PGL-031B).
+For the realm settings, roles, flows, required actions, events and the client it is **authoritative,
+not add-only**: drift is corrected, extras are removed. **Group drift is the one exception —
+detect-and-block**: Keycloak 26 gates every group write (create, mapping add, mapping remove) behind
+`manage-users`, which the reconciler must never hold, so an unexpected role on `/gamma-lab-approved`
+cannot be removed by the script. Instead `--apply` refuses **before performing any write**, listing
+the exact console actions; the grant is live for every member of that group until an operator
+removes it, which is why the run fails loudly rather than logging.
 
 Concurrency is handled by the Jenkins job's `disableConcurrentBuilds()`, so the script takes no lock
 and needs no Kubernetes API access.

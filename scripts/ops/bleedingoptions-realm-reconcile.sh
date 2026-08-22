@@ -18,9 +18,18 @@
 #
 #   AUTHORITATIVE (this script owns; drift is corrected):
 #     realm login/registration settings, brute-force settings, token and session lifespans,
-#     OTP policy, required actions, the browser flow binding, realm roles, group->role mappings,
+#     OTP policy, required actions, the browser flow binding, realm roles,
 #     default groups, and the bleedingoptions-web client's redirect URIs, web origins, flags and
 #     protocol mappers.
+#
+#   DETECTED AND BLOCKING, but corrected by the OPERATOR: group existence and group->role mappings.
+#     Keycloak 26 gates every group WRITE — creation, mapping add, mapping remove — behind
+#     manage-users (verified live 2026-08-22: POST /groups and role-mapping POST both return 403
+#     with the full nine-role set), and manage-users is the one role this account must never hold.
+#     So group drift cannot be auto-corrected here; instead the preflight fails the run BEFORE any
+#     write, naming the exact console actions. Reporting-without-blocking would leave a
+#     security-relaxing grant live (PGL-031B); blocking-after-writing would half-apply. This is the
+#     only remaining shape: block first, name the fix, write nothing.
 #
 #   NEVER TOUCHED (operator data, not manifest data):
 #     users, their group memberships, their credentials, and their sessions. Approval state is
@@ -207,6 +216,45 @@ while read -r role; do
       ;;
   esac
 done < <(jq -r '.roles.realm[]?.name' "$WORK/desired.json")
+# Group WRITES are impossible for this account BY CONTRACT: Keycloak 26 gates group creation and
+# group role-mapping changes behind manage-users (verified live 2026-08-22: POST /groups -> 403 and
+# role-mapping POST -> 403, both with the full nine-role set), and manage-users must never be held
+# (PGL-031A1). So group drift is detect-and-block: in apply mode it must fail HERE, before the
+# first write anywhere, or the run would apply the realm settings and then die at the groups
+# section — the half-apply this preflight exists to prevent. Each blocker names its console fix.
+GROUP_BLOCKERS=""
+while read -r gname; do
+  [[ -z "$gname" ]] && continue
+  gid="$(jq -r --arg n "$gname" '.[] | select(.name==$n) | .id // empty' <<<"$PREFLIGHT_GROUPS")"
+  if [[ -z "$gid" ]]; then
+    GROUP_BLOCKERS+="  create group '$gname'  (console: Groups > Create group)"$'\n'
+    # ...and everything the new group must carry, so ONE console visit satisfies the whole list —
+    # a blocker list that reveals itself one rerun at a time is a list nobody trusts.
+    while read -r r; do
+      [[ -z "$r" ]] && continue
+      GROUP_BLOCKERS+="  grant role '$r' to group '$gname'  (console: Groups > $gname > Role mapping)"$'\n'
+    done < <(jq -r --arg n "$gname" '.groups[] | select(.name==$n) | .realmRoles[]?' "$WORK/desired.json")
+    continue
+  fi
+  want_roles="$(jq -r --arg n "$gname" '.groups[] | select(.name==$n) | .realmRoles[]?' "$WORK/desired.json" | sort)"
+  have_roles="$(api GET "$KC_REALM/groups/$gid/role-mappings/realm" | jq -r '.[].name' | sort)" \
+    || die "preflight: cannot read role mappings of group '$gname'"
+  while read -r r; do
+    [[ -z "$r" ]] && continue
+    grep -qxF "$r" <<<"$have_roles" \
+      || GROUP_BLOCKERS+="  grant role '$r' to group '$gname'  (console: Groups > $gname > Role mapping)"$'\n'
+  done <<<"$want_roles"
+  while read -r r; do
+    [[ -z "$r" ]] && continue
+    grep -qxF "$r" <<<"$want_roles" \
+      || GROUP_BLOCKERS+="  REMOVE role '$r' from group '$gname'  (SECURITY: the grant is live for every member)"$'\n'
+  done <<<"$have_roles"
+done < <(jq -r '.groups[]?.name' "$WORK/desired.json")
+if [[ -n "$GROUP_BLOCKERS" && "$MODE" == "apply" ]]; then
+  echo "group drift exists, and group writes require manage-users — a role this account must never hold (PGL-031A1):" >&2
+  printf '%s' "$GROUP_BLOCKERS" >&2
+  die "apply refused BEFORE any write (nothing was changed). Perform the console actions above, then re-run."
+fi
 note "all managed resources readable — no write can now fail on a permission it should have had"
 
 # --- realm-level settings ------------------------------------------------------------------------
@@ -293,47 +341,41 @@ LIVE_GROUPS="$(api GET "$KC_REALM/groups")" || die "cannot list groups"
 while read -r gname; do
   [[ -z "$gname" ]] && continue
   gid="$(jq -r --arg n "$gname" '.[] | select(.name==$n) | .id // empty' <<<"$LIVE_GROUPS")"
+  # No write branches here, deliberately: group writes need manage-users (403 for this account,
+  # verified live 2026-08-22), so in apply mode the PREFLIGHT already refused before any write. The
+  # `die` backstops below fire only if that guard somehow let an apply through — reaching one means
+  # a bug, and dying is still better than a curl 403 masquerading as a transient failure.
   if [[ -z "$gid" ]]; then
     drift "group '$gname' is MISSING"
     if [[ "$MODE" == "apply" ]]; then
-      note "creating group $gname"
-      api POST "$KC_REALM/groups" -d "$(jq -nc --arg n "$gname" '{name:$n}')" >/dev/null \
-        || die "could not create group $gname"
-      LIVE_GROUPS="$(api GET "$KC_REALM/groups")"
-      gid="$(jq -r --arg n "$gname" '.[] | select(.name==$n) | .id' <<<"$LIVE_GROUPS")"
-    else
-      continue
+      die "group '$gname' is missing and this account cannot create groups (manage-users is forbidden, PGL-031A1). The preflight should have refused this apply before any write — create the group in the console and re-run."
     fi
+    continue
   fi
 
   want_roles="$(jq -r --arg n "$gname" '.groups[] | select(.name==$n) | .realmRoles[]?' "$WORK/desired.json" | sort)"
   have_roles="$(api GET "$KC_REALM/groups/$gid/role-mappings/realm" | jq -r '.[].name' | sort)"
 
-  # Missing -> add.
+  # Missing -> report; the console grant is the operator's (see the preflight block for why).
   while read -r r; do
     [[ -z "$r" ]] && continue
     if ! grep -qxF "$r" <<<"$have_roles"; then
       drift "group '$gname' is MISSING role '$r'"
       if [[ "$MODE" == "apply" ]]; then
-        note "granting $r to $gname"
-        rep="$(api GET "$KC_REALM/roles/$r")"
-        api POST "$KC_REALM/groups/$gid/role-mappings/realm" -d "[$rep]" >/dev/null \
-          || die "could not map $r to $gname"
+        die "cannot grant '$r' to '$gname' (group writes need manage-users, PGL-031A1). The preflight should have refused this apply before any write — grant it in the console and re-run."
       fi
     fi
   done <<<"$want_roles"
 
-  # Extra -> REMOVE. This is the add-only trap the design called out: an accidental role here grants
-  # data access to every member of the group, and reporting it without removing it leaves the grant live.
+  # Extra -> report AND block. This is the add-only trap the design called out: an accidental role
+  # here grants data access to every member of the group, and it stays live until an operator
+  # removes it in the console — which is why drift here fails the build rather than logging.
   while read -r r; do
     [[ -z "$r" ]] && continue
     if ! grep -qxF "$r" <<<"$want_roles"; then
-      drift "group '$gname' has UNEXPECTED role '$r' (security-relaxing)"
+      drift "group '$gname' has UNEXPECTED role '$r' (security-relaxing — the grant is LIVE for every member until removed in the console)"
       if [[ "$MODE" == "apply" ]]; then
-        note "removing $r from $gname"
-        rep="$(api GET "$KC_REALM/roles/$r")"
-        api DELETE "$KC_REALM/groups/$gid/role-mappings/realm" -d "[$rep]" >/dev/null \
-          || die "could not unmap $r from $gname"
+        die "cannot remove '$r' from '$gname' (group writes need manage-users, PGL-031A1). The preflight should have refused this apply before any write — remove it in the console NOW and re-run."
       fi
     fi
   done <<<"$have_roles"
