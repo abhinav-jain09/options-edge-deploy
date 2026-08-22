@@ -136,22 +136,38 @@ access grants **off**. Then grant its service-account user exactly these `realm-
 
 ```text
 view-realm  manage-realm  view-clients  manage-clients  query-groups  manage-authorization
+view-users  view-events   manage-events
 ```
 
-**It must NOT hold `manage-users`, `view-users` or `impersonation`.** The blanket phrase
-"realm-management" would include them, and the reconciler's whole contract is that it never touches
-users — approval state lives in group membership, and a reconciler able to edit memberships could
-un-approve everyone. Verify the negative:
+**It must NOT hold `manage-users`, `impersonation`, or `realm-admin`.** The reconciler's contract is
+that it never *writes* users — approval state lives in group membership, and a reconciler able to
+edit memberships could un-approve everyone.
+
+> **Why `view-users` is in the list** (changed 2026-08-22, was originally forbidden): Keycloak 26
+> hides groups entirely from a service account without it — `GET /groups` returns `[]` with HTTP
+> 200, `group-by-path` returns 403 — verified against the live realm. Under the original six-role
+> set the reconcile script therefore saw every group as MISSING, applied the realm settings, and
+> died on a 409 creating a group that existed all along: a half-reconciled realm on every run.
+> `view-users` is read-only; the write roles stay forbidden, so the un-approve-everyone failure
+> mode remains impossible. `view-events`/`manage-events` are needed because the event-auditing
+> config (PGL-062) lives on its own endpoint with its own permission.
+
+Verify the negative — the token itself is the authorization, so read the claim rather than probing
+endpoints (a probe that "proves" writability would BE a write):
 
 ```bash
-# Expect 403. If this returns a user list, the service account is over-privileged — fix before use.
+# Expect the nine roles above PLUS query-clients and query-users — the token carries the EFFECTIVE
+# set, and view-clients/view-users are composites that expand to those two (Keycloak 26.0.8).
+# manage-users / impersonation / realm-admin must not appear.
 TOKEN=$(curl -fsS -X POST http://192.168.100.252:8189/realms/bleedingoptions/protocol/openid-connect/token \
   -d grant_type=client_credentials -d client_id=realm-reconciler -d client_secret="$KC_ADMIN_SECRET" \
   | jq -r .access_token)
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H "Authorization: Bearer $TOKEN" \
-  http://192.168.100.252:8189/admin/realms/bleedingoptions/users
+cut -d. -f2 <<<"$TOKEN" | tr '_-' '/+' | { p=$(cat); while [ $(( ${#p} % 4 )) -ne 0 ]; do p="$p="; done; \
+  printf '%s' "$p"; } | base64 -d | jq -r '.resource_access["realm-management"].roles | sort[]'
 ```
+
+The reconcile script asserts the same thing in its preflight on every run and refuses to write
+anything if the set is not exact, so a drifted grant fails the deploy rather than riding along.
 
 Store its secret alongside the others and pass it as `KC_ADMIN_SECRET`.
 

@@ -25,8 +25,12 @@
 #   NEVER TOUCHED (operator data, not manifest data):
 #     users, their group memberships, their credentials, and their sessions. Approval state is
 #     recorded by group membership; a reconciler that "corrected" memberships would un-approve
-#     everyone Abhinav had approved. Its service account is not even permitted to read users
-#     (PGL-031A1) so this cannot happen by mistake.
+#     everyone Abhinav had approved. Its service account can READ users (view-users — Keycloak 26
+#     hides groups entirely from a service account without it, verified live 2026-08-22: GET
+#     /groups returned [] under the original six-role set, which made this script half-apply and
+#     die on a 409), but it holds no role that can WRITE them: no manage-users, no impersonation,
+#     no realm-admin (PGL-031A1). The preflight below proves that from the token itself before a
+#     single write.
 #
 # SERIALISATION: none here, deliberately. Concurrency is prevented by the Jenkins job's existing
 # disableConcurrentBuilds() (Jenkinsfile.common-infra:28). An earlier design took a Kubernetes Lease,
@@ -115,6 +119,96 @@ drift() {
   echo "DRIFT: $*"
 }
 
+# --- preflight: prove authorization and readability BEFORE any write -----------------------------
+# Why this exists: the first real run (2026-08-22) authenticated fine, applied the realm settings,
+# and then died on `POST /groups` -> 409 — because the service account could not SEE the groups it
+# was told to create. A permission gap that surfaces mid-apply leaves a half-reconciled identity
+# provider, and Keycloak has no transaction to roll that back. So every authorization fact and every
+# managed resource is proven readable here, and the first write happens only after all of them pass.
+#
+# The role check reads the access token itself rather than calling an endpoint: the token's
+# `resource_access.realm-management.roles` claim IS the authorization, so asserting it needs no
+# extra permission and cannot mutate anything. It is asserted EXACTLY — not "contains what I need",
+# and not "lacks three names I thought of" — because both weaker forms let a drifted grant ride
+# along silently (PGL-031A1).
+#
+# The claim carries the EFFECTIVE set, with composites expanded: view-clients brings query-clients,
+# view-users brings query-users (both verified against Keycloak 26.0.8, 2026-08-22). So the list
+# below is the nine documented DIRECT roles plus those two children — eleven names. If a Keycloak
+# upgrade changes the expansion, this check fails loudly and the list gets re-verified rather than
+# the difference passing unnoticed: an unexpected name in an ADMIN token is never a detail.
+echo "==> Preflight"
+b64url_dec() {
+  local p="${1//-/+}"; p="${p//_//}"
+  while (( ${#p} % 4 )); do p+="="; done
+  printf '%s' "$p" | base64 -d 2>/dev/null
+}
+CLAIMS="$(b64url_dec "$(cut -d. -f2 <<<"$TOKEN")")" \
+  && jq -e 'type == "object"' <<<"$CLAIMS" >/dev/null 2>&1 \
+  || die "could not decode the access token's claims"
+
+WANT_ROLES="$(printf '%s\n' manage-authorization manage-clients manage-events manage-realm \
+  query-clients query-groups query-users view-clients view-events view-realm view-users | sort)"
+HELD_ROLES="$(jq -r '.resource_access["realm-management"].roles[]?' <<<"$CLAIMS" | sort)"
+if [[ "$HELD_ROLES" != "$WANT_ROLES" ]]; then
+  echo "token's effective realm-management roles: ${HELD_ROLES//$'\n'/ }" >&2
+  echo "expected effective set:                   ${WANT_ROLES//$'\n'/ }" >&2
+  for forbidden in manage-users impersonation realm-admin; do
+    grep -qxF "$forbidden" <<<"$HELD_ROLES" \
+      && die "the reconciler holds '$forbidden', which PGL-031A1 forbids — it must never be able to write users or approval memberships. Remove it (scripts/ops/bleedingoptions-bootstrap.sh re-asserts the exact set) before this script will run."
+  done
+  die "the reconciler's effective roles are not EXACTLY the documented set (docs/bleedingoptions-keycloak.md 3). With less than this, Keycloak 26 hides groups or the event config and an apply would fail half-way; with more, the least-privilege contract is broken. Fix the direct grants, then re-run."
+fi
+note "roles: exactly the documented set, none forbidden"
+
+# Every resource a later section reads or writes, read NOW. Each `die` here happens before any
+# write anywhere, so a failure in this block leaves the realm untouched.
+api GET "$KC_REALM" >/dev/null                                  || die "preflight: cannot read realm $KC_REALM"
+PREFLIGHT_GROUPS="$(api GET "$KC_REALM/groups")"                || die "preflight: cannot list groups"
+jq -e 'type == "array"' <<<"$PREFLIGHT_GROUPS" >/dev/null 2>&1  || die "preflight: group list is not an array"
+# view-users is what makes the group list REAL in Keycloak 26 — without it the same call returns []
+# with HTTP 200 and every group looks MISSING. The role assertion above already proved view-users is
+# held, so from here on an absent group can be trusted to actually be absent.
+api GET "$KC_REALM/events/config" | jq -e 'type == "object"' >/dev/null 2>&1 \
+                                                                || die "preflight: cannot read the event configuration (needs view-events)"
+api GET "$KC_REALM/authentication/flows" >/dev/null             || die "preflight: cannot read authentication flows"
+api GET "$KC_REALM/authentication/required-actions" >/dev/null  || die "preflight: cannot read required actions"
+api GET "$KC_REALM/default-groups" >/dev/null                   || die "preflight: cannot read default groups"
+# The direct-assignment audit's reads happen HERE too, cached for the audit section below — its
+# section runs after the first writes, and a read that fails there is the half-apply path again.
+# A role the manifest names but the realm lacks yet has NO direct holders by construction (it will
+# be created by this very run, and a just-created role cannot have been hand-assigned), so a
+# PROVEN 404 caches as an empty list rather than failing a fresh realm. Only a 404: a 403, a 500
+# or a timeout is not absence, and guessing "absent" on those would send the realm-roles section
+# into a POST that 409s mid-apply — the exact path this preflight exists to close.
+api_code() {  # method path -> prints the HTTP status; the body is discarded
+  local method="$1" path="$2"
+  curl -sS -o /dev/null -w '%{http_code}' -X "$method" "$KC_URL/admin/realms/$path" \
+    -H "Authorization: Bearer $TOKEN"
+}
+mkdir -p "$WORK/direct-holders" "$WORK/roles-present"
+while read -r role; do
+  [[ -z "$role" ]] && continue
+  code="$(api_code GET "$KC_REALM/roles/$role")" \
+    || die "preflight: could not query realm role '$role'"
+  case "$code" in
+    200)
+      touch "$WORK/roles-present/$role"
+      api GET "$KC_REALM/roles/$role/users" > "$WORK/direct-holders/$role.json" 2>/dev/null \
+        || die "preflight: cannot list direct holders of realm role '$role'"
+      jq -e 'type == "array"' "$WORK/direct-holders/$role.json" >/dev/null 2>&1 \
+        || die "preflight: direct-holder list for '$role' is not an array"
+      ;;
+    404)
+      printf '[]' > "$WORK/direct-holders/$role.json"
+      ;;
+    *)
+      die "preflight: reading realm role '$role' returned HTTP $code — that is not 'absent', so refusing to proceed and guess"
+      ;;
+  esac
+done < <(jq -r '.roles.realm[]?.name' "$WORK/desired.json")
+note "all managed resources readable — no write can now fail on a permission it should have had"
+
 # --- realm-level settings ------------------------------------------------------------------------
 # Only the keys this script owns are sent. A whole-realm PUT would also overwrite fields the manifest
 # does not mention, which is how a reconciler quietly reverts something nobody meant it to manage.
@@ -137,9 +231,12 @@ LIVE_REALM="$(api GET "$KC_REALM")" || die "cannot read realm $KC_REALM"
 DESIRED_REALM="$(jq -c --argjson keys "$(printf '%s\n' "${REALM_KEYS[@]}" | jq -R . | jq -s .)" \
   'with_entries(select(.key as $k | $keys | index($k)))' "$WORK/desired.json")"
 
+# `has($k)`, not `// "ABSENT"`: jq's // treats false (and null) as empty, so with // every
+# false-valued manifest key read as ABSENT and was silently skipped — a manifest that says
+# `duplicateEmailsAllowed: false` was never enforced, and a live `false` displayed as ABSENT.
 for key in "${REALM_KEYS[@]}"; do
-  want="$(jq -r --arg k "$key" '.[$k] // "ABSENT"' <<<"$DESIRED_REALM")"
-  have="$(jq -r --arg k "$key" '.[$k] // "ABSENT"' <<<"$LIVE_REALM")"
+  want="$(jq -r --arg k "$key" 'if has($k) then (.[$k]|tostring) else "ABSENT" end' <<<"$DESIRED_REALM")"
+  have="$(jq -r --arg k "$key" 'if has($k) then (.[$k]|tostring) else "ABSENT" end' <<<"$LIVE_REALM")"
   [[ "$want" == "ABSENT" ]] && continue
   if [[ "$want" != "$have" ]]; then
     drift "realm.$key: live='$have' manifest='$want'"
@@ -170,9 +267,12 @@ fi
 
 # --- realm roles ---------------------------------------------------------------------------------
 echo "==> Realm roles"
+# Existence comes from the preflight's PROVEN 200/404 verdict, not from a fresh probe: a probe here
+# that failed with a 500 would read as "missing" and drive a POST that 409s mid-apply. The realm has
+# no concurrent writer (the Jenkins job disables concurrent builds), so the verdict cannot go stale.
 while read -r role; do
   [[ -z "$role" ]] && continue
-  if ! api GET "$KC_REALM/roles/$role" >/dev/null 2>&1; then
+  if [[ ! -e "$WORK/roles-present/$role" ]]; then
     drift "realm role '$role' is MISSING"
     if [[ "$MODE" == "apply" ]]; then
       note "creating role $role"
@@ -282,14 +382,27 @@ fi
 
 # --- direct role assignment audit (PGL-021A) -----------------------------------------------------
 # The realm documents that `gamma-lab` is held only via /gamma-lab-approved, but Keycloak lets an
-# administrator assign a realm role straight to a user, and this script is deliberately blind to users
-# so it can never touch approval state. That blindness means it CANNOT audit direct assignments — so
-# rather than let the "group membership is the single record of approval" claim stand unqualified,
-# say plainly where the gap is and who closes it.
+# administrator assign a realm role straight to a user. This used to be "NOT CHECKED HERE" because
+# the six-role contract could not read users; with view-users (which Keycloak 26 requires for group
+# visibility anyway) the audit is possible, so it runs. `roles/<r>/users` returns DIRECT
+# assignments only — group-derived holders do not appear — which is exactly the drift in question.
+#
+# Report-only, deliberately: correcting it would edit a user's role mappings, and this reconciler
+# holds no role that can write users — by contract, not by accident. The drift still FAILS the
+# build (PGL-031B), so it cannot be ignored; an operator removes the assignment in the console.
 echo "==> Direct role assignment"
-note "NOT CHECKED HERE: this reconciler cannot read users (PGL-031A1), so a role assigned directly to"
-note "a user is invisible to it. Approval must only ever be granted by group membership. Audit with:"
-note "  GET /admin/realms/$KC_REALM/roles/gamma-lab/users   (as an admin, not as this service account)"
+while read -r role; do
+  [[ -z "$role" ]] && continue
+  # Read from the preflight cache, not live: preflight proved these readable BEFORE any write, so
+  # this section can no longer be the read that dies half-way through an apply. The snapshot is
+  # seconds old and this script performs no user writes in between, so it cannot be self-stale.
+  [[ -s "$WORK/direct-holders/$role.json" ]] \
+    || die "no preflight snapshot of direct holders for '$role'. This audit is what backs the claim that group membership is the only record of approval, so a missing answer is a failure."
+  n="$(jq 'length' "$WORK/direct-holders/$role.json")"
+  if [[ "$n" != "0" ]]; then
+    drift "SECURITY: realm role '$role' is assigned DIRECTLY to $n user(s) — approval must only be granted via group membership. Remove in the console; this reconciler cannot write users and will not."
+  fi
+done < <(jq -r '.roles.realm[]?.name' "$WORK/desired.json")
 
 # --- default groups ------------------------------------------------------------------------------
 # New registrations must land in /pending-approval. If this is wrong, either signups get no group at
@@ -482,9 +595,11 @@ LIVE_EVENTS="$(api GET "$KC_REALM/events/config" 2>/dev/null || true)"
 if ! jq -e 'type == "object"' <<<"${LIVE_EVENTS:-}" >/dev/null 2>&1; then
   die "could not read the realm's event configuration. Auditing is a control, so an unreadable answer is a failure rather than an assumption that it is on."
 fi
+# Same has()-not-// rule as the realm settings above: a live `false` must compare as "false",
+# not vanish into "ABSENT" and drift forever against a manifest `false`.
 for key in eventsEnabled eventsExpiration adminEventsEnabled adminEventsDetailsEnabled; do
   want="$(jq -r --arg k "$key" '.[$k]' <<<"$WANT_EVENTS")"
-  have="$(jq -r --arg k "$key" '.[$k] // "ABSENT"' <<<"$LIVE_EVENTS")"
+  have="$(jq -r --arg k "$key" 'if has($k) then (.[$k]|tostring) else "ABSENT" end' <<<"$LIVE_EVENTS")"
   if [[ "$want" != "$have" ]]; then
     drift "events.$key: live='$have' manifest='$want'"
     if [[ "$MODE" == "apply" ]]; then
@@ -497,30 +612,19 @@ for key in eventsEnabled eventsExpiration adminEventsEnabled adminEventsDetailsE
   fi
 done
 
-# --- master realm frontend URL (PGL-036B) --------------------------------------------------------
-# The MASTER realm — the one holding the Keycloak superuser — must authenticate over the LAN, not
-# over the public hostname.
-#
-# Keycloak derives every realm's frontend URL from KC_HOSTNAME, which is the PUBLIC name. The tunnel
-# deliberately 404s /realms/master and /admin so the master realm and the admin console are not on
-# the internet. Those two facts together broke the LAN admin console: it loaded from
-# 192.168.100.252:8189, then sent the browser to https://auth.bleedingoptions.com/realms/master to
-# authenticate — a URL our own rule blocks. The console showed "somethingWentWrong" with untranslated
-# i18n keys, which is what its JS renders when it cannot reach the auth server, while every asset
-# served 200 and the admin password was valid.
-#
-# Setting frontendUrl on master makes the configuration match the intent that master is LAN-only.
-# It does NOT expose anything: the tunnel keeps 404-ing master either way.
-MASTER_FRONTEND_URL="${MASTER_FRONTEND_URL:-http://192.168.100.252:8189}"
-MASTER_LIVE="$(api GET "master" | jq -r '.attributes.frontendUrl // ""')"
-if [[ "$MASTER_LIVE" != "$MASTER_FRONTEND_URL" ]]; then
-  drift "master realm frontendUrl is '${MASTER_LIVE:-<unset>}', want '$MASTER_FRONTEND_URL'"
-  if [[ "$MODE" == "apply" ]]; then
-    note "setting master realm frontendUrl"
-    api PUT "master" -d "$(jq -nc --arg u "$MASTER_FRONTEND_URL" '{attributes:{frontendUrl:$u}}')" >/dev/null \
-      || die "could not set master frontendUrl"
-  fi
-fi
+# --- master realm frontend URL (PGL-036B): NOT CHECKED HERE --------------------------------------
+# The master realm's frontendUrl must stay pinned to the LAN address, but this reconciler cannot be
+# the one to check it: its roles live in the BLEEDINGOPTIONS realm's realm-management client, which
+# scopes its admin rights to that realm alone — GET /admin/realms/master returns 403 (verified live
+# 2026-08-22). An earlier version of this script read and PUT master here, which could never have
+# worked with this credential; granting the reconciler master-realm rights to make it work would
+# hand the realm-scoped service account the superuser realm, which is exactly backwards.
+# The check-and-set lives in scripts/ops/bleedingoptions-bootstrap.sh, which already authenticates
+# as a master administrator and re-asserts the reconciler's roles on every rerun.
+echo "==> Master realm frontendUrl"
+note "NOT CHECKED HERE: this reconciler is scoped to the $KC_REALM realm and cannot read master."
+note "bleedingoptions-bootstrap.sh asserts it (PGL-036B); manually:"
+note "  GET /admin/realms/master -> .attributes.frontendUrl == http://192.168.100.252:8189  (as a master admin)"
 
 # --- the public client ---------------------------------------------------------------------------
 # Redirect URIs and web origins are the client's real security boundary: an extra entry is an open

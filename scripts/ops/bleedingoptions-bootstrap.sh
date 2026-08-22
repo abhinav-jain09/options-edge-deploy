@@ -328,16 +328,20 @@ found = [c for c in req("GET", "/admin/realms/bleedingoptions/clients?clientId=r
 if not found: sys.exit("realm-reconciler client was not created")
 cid = found[0]["id"]
 
-# Least privilege (PGL-031A1). EXACTLY the six roles docs/bleedingoptions-keycloak.md section 3
-# specifies — not `realm-admin`, which is the blanket role that doc explicitly forbids because it
-# carries manage-users, view-users and impersonation. The reconciler's whole contract is that it
-# never touches users: approval state lives in group membership, and a reconciler able to edit
-# memberships could un-approve everyone.
+# Least privilege (PGL-031A1). EXACTLY the nine roles docs/bleedingoptions-keycloak.md section 3
+# specifies — not `realm-admin`, the blanket role the doc explicitly forbids because it carries
+# manage-users and impersonation. The reconciler's contract is that it never WRITES users: approval
+# state lives in group membership, and a reconciler able to edit memberships could un-approve
+# everyone. view-users is read-only and is included out of necessity, not preference: Keycloak 26
+# hides groups entirely from a service account without it (GET /groups returns [] with HTTP 200,
+# verified live 2026-08-22), which made the reconcile script apply realm settings and then die on a
+# 409 for a group that existed all along. view-events/manage-events are what let the script read
+# and reconcile the event-auditing config (PGL-062), which is exposed on its own endpoint.
 sa   = req("GET", f"/admin/realms/bleedingoptions/clients/{cid}/service-account-user")
 mgmt = req("GET", "/admin/realms/bleedingoptions/clients?clientId=realm-management")[0]
 want = {"view-realm", "manage-realm", "view-clients", "manage-clients",
-        "query-groups", "manage-authorization"}
-forbidden = {"realm-admin", "manage-users", "view-users", "impersonation"}
+        "query-groups", "manage-authorization", "view-users", "view-events", "manage-events"}
+forbidden = {"realm-admin", "manage-users", "impersonation"}
 available = req("GET", f"/admin/realms/bleedingoptions/clients/{mgmt['id']}/roles")
 roles = [r for r in available if r["name"] in want]
 missing = want - {r["name"] for r in roles}
@@ -346,7 +350,7 @@ if missing:
 if roles:
     req("POST", f"/admin/realms/bleedingoptions/users/{sa['id']}/role-mappings/clients/{mgmt['id']}", roles)
 
-# Assert the held set is EXACTLY the six, not merely "contains them and none of four named bad
+# Assert the held set is EXACTLY the nine, not merely "contains them and none of three named bad
 # ones". A prior run, a hand edit, or a future default could leave some other realm-management role
 # mapped, and an allowlist that only rejects names it thought of is not an allowlist. Extras are
 # removed rather than reported, so the end state is the documented one either way.
@@ -360,6 +364,25 @@ if extra:
 held = {r["name"] for r in held_roles}
 if held != want:
     sys.exit(f"realm-reconciler roles are {sorted(held)}, expected exactly {sorted(want)}")
+
+# Master realm frontendUrl (PGL-036B). This lives HERE, not in the reconcile script, because the
+# reconciler's roles are scoped to the bleedingoptions realm — GET /admin/realms/master returns 403
+# for it (verified 2026-08-22) — while this script already authenticates as a master administrator.
+# Keycloak derives every realm's frontend URL from KC_HOSTNAME (the PUBLIC name), and the tunnel
+# 404s /realms/master, so without the pin the LAN admin console sends the browser to a URL our own
+# edge rule blocks and fails with "somethingWentWrong" while every asset loads fine.
+MASTER_FRONTEND_URL = "http://192.168.100.252:8189"
+master = req("GET", "/admin/realms/master")
+if (master.get("attributes") or {}).get("frontendUrl") != MASTER_FRONTEND_URL:
+    # Send the WHOLE attributes map with one key changed: a realm PUT replaces the attributes map
+    # as a unit, so a bare {frontendUrl} would drop every other attribute master carries.
+    attrs = dict(master.get("attributes") or {})
+    attrs["frontendUrl"] = MASTER_FRONTEND_URL
+    req("PUT", "/admin/realms/master", {"attributes": attrs})
+    lived = (req("GET", "/admin/realms/master").get("attributes") or {}).get("frontendUrl")
+    if lived != MASTER_FRONTEND_URL:
+        sys.exit(f"master frontendUrl is {lived!r} after setting it, expected {MASTER_FRONTEND_URL!r}")
+    print("master realm frontendUrl pinned to the LAN address", file=sys.stderr)
 
 print(req("GET", f"/admin/realms/bleedingoptions/clients/{cid}/client-secret")["value"])
 PY
