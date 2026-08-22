@@ -22,22 +22,22 @@ resources:
 # then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
 # no-op. Both paths therefore agree on one immutable image.
 #
-# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #18 attested
-# sha256:adf419f6… from revision 048fb8a0bf2e (main with the leaderboard readability set:
-# data/refresh stamp under the title where the auth chip cannot cover it, options-edge#636;
-# dominant-expiry per row + expiry-week caption #637 with its test repair #638; and the
-# chip ×N legend — "same flow confirmed on N of the last 5 trading days" — #639) and
-# recorded PGL-050/051/052 as PASS against that exact digest. The job resolves the
-# revision from the registry rather than taking it from the operator, and refuses unless
-# the checkout under test matches — so the evidence names an image nobody attested by hand.
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #19 attested
+# sha256:a7514eb7… from revision 05b73117e530 (main with the chip-legend CORRECTION,
+# options-edge#640: ×N counts N separate OI-confirmed position changes — distinct
+# contracts — within the last 5 trading days, not "N of the last 5 days"; the outgoing
+# image's legend was arithmetically impossible next to a ×7 chip) and recorded
+# PGL-050/051/052 as PASS against that exact digest. The job resolves the revision from
+# the registry rather than taking it from the operator, and refuses unless the checkout
+# under test matches — so the evidence names an image nobody attested by hand.
 #
 # Changing this line means producing evidence for the new digest FIRST — that is the point of it
 # being a reviewed edit rather than a deploy-time lookup.
 #
-# ROLLBACK TARGET: the OUTGOING digest is sha256:7c2c95b5… (evidence #15) — consolidated
-# side-aware chips but no stamp/expiry/legend. Rolling back only loses readability
-# features, no data correctness.
+# ROLLBACK TARGET: the OUTGOING digest is sha256:adf419f6… (evidence #18) — same feature
+# set but with the wrong ("N of last 5 days") chip legend. Prefer rolling FORWARD; the
+# outgoing image actively mislabels the chips.
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:adf419f6c62ff496173e7181d56b351b1e1033e805c9b66246fd0c5b6692bbb5
+    digest: sha256:a7514eb7aeb3e2a1ffd1ad3b96fbd37fc787922b7b0366a3af51edd6be0a4417
