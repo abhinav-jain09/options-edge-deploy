@@ -22,20 +22,21 @@ resources:
 # then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
 # no-op. Both paths therefore agree on one immutable image.
 #
-# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #11 attested
-# sha256:120b534f… from revision f614e73b81a8 (main with options-edge#619 — the simple net-lean
-# default view: top-5 bullish/bearish-LEANING lists in plain language, detail behind a toggle;
-# includes #618's both-wings help note) and recorded PGL-050/051/052 as PASS against that digest.
-# The job resolves the revision from the registry rather than taking it from the operator, and
-# refuses unless the checkout under test matches — so the evidence names an image nobody attested
-# by hand.
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #12 attested
+# sha256:75316d3b… from revision c02370cf5a19 (main with the simple-view Leaderboard plus the
+# follow-ups: last-updated stamp + quiet nightly refresh (#626), lean-dot chips (#631),
+# both-wings help note (#618), and the intervening mainline web changes) and recorded
+# PGL-050/051/052 as PASS against that exact digest. The job resolves the revision from
+# the registry rather than taking it from the operator, and refuses unless the checkout
+# under test matches — so the evidence names an image nobody attested by hand.
 #
 # Changing this line means producing evidence for the new digest FIRST — that is the point of it
 # being a reviewed edit rather than a deploy-time lookup.
 #
-# ROLLBACK TARGET: the OUTGOING digest is sha256:34b512ac… (evidence #9, options-edge#614) —
-# the detailed-boards-only Leaderboard. Rolling back loses the simple net-lean default view.
+# ROLLBACK TARGET: the OUTGOING digest is sha256:120b534f… (evidence #11) — the simple-view
+# Leaderboard without the last-updated stamp, auto-refresh, or lean-dot chips. Rolling back
+# loses only those refinements.
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:120b534fea08f887701995d8c6834f0662745fbb46236e1d414982e7cd58df5d
+    digest: sha256:75316d3bf4872663a3c3e93eab94de81b47d84f0717b1425f2ca31b6bb683f7f
