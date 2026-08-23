@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: approach-monitor-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: approach-monitor-service
+    app.kubernetes.io/component: approach-monitor-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: approach-monitor-service
+  ports:
+    - name: health
+      port: 8130
+      targetPort: health

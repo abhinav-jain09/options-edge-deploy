@@ -29,6 +29,8 @@ resources:
   - dealer-ledger-calibration-accumulator-deployment.yaml
   - strike-intelligence-deployment.yaml
   - strike-intelligence-service.yaml
+  - approach-monitor-deployment.yaml
+  - approach-monitor-service.yaml
   - strike-invasion-deployment.yaml
   - strike-invasion-service.yaml
   - invasion-postgres-writer-deployment.yaml
