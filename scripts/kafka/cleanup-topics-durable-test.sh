@@ -123,9 +123,17 @@ assert_status 0 "cleanup itself succeeded"
 # auto-create to stamp broker defaults over a last-value view.
 echo "--- delete-unwanted: prod-only topics are DECLARED on production and must survive ---"
 # DERIVED from topics.env, not hard-coded: naming two of the three would let a partial merge that
-# happens to cover the named ones pass, and would silently stop covering a prod-only topic added
-# later. Parsed rather than sourced, so this cannot be fooled by a variable this file also uses.
-PROD_ONLY="$(sed -nE 's/^OPTIONS_EDGE_PROD_ONLY_TOPICS="(.*)"$/\1/p' "$HERE/topics.env" | tr ' ' '\n' | sed 's/:[0-9]*$//' | grep -v '^$')"
+# happens to cover the named ones pass, and would stop covering a prod-only topic added later.
+#
+# SOURCED, not parsed. The first version matched `^OPTIONS_EDGE_PROD_ONLY_TOPICS="(.*)"$` with sed,
+# which reads exactly ONE assignment form -- and topics.env routinely appends to its lists. Codex
+# demonstrated the hole: appending `OPTIONS_EDGE_PROD_ONLY_TOPICS+=" review.appended.prod.only:1"`
+# left cleanup-topics.sh protecting four topics while this suite still tested three and reported OK,
+# which is precisely the silent narrowing the comment claimed was impossible. cleanup-topics.sh
+# SOURCES this file, so only sourcing resolves the value it will actually see. The command
+# substitution is its own subshell, so nothing leaks into the test's environment.
+PROD_ONLY="$( . "$HERE/topics.env"; printf '%s\n' ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-} )"
+PROD_ONLY="$(printf '%s\n' $PROD_ONLY | sed 's/:[0-9]*$//' | grep -v '^$')"
 if [ -z "$PROD_ONLY" ]; then
   echo "  FAIL could not parse OPTIONS_EDGE_PROD_ONLY_TOPICS from topics.env — this whole section would pass vacuously"; fail=1
 fi
