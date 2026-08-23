@@ -79,6 +79,18 @@ jobs:
       - name: VIX single-publisher assertion test matrix
         run: python3 -m unittest -v tests.test_vix_single_publisher
 
+      # Every tests/test_*.py must be COLLECTABLE by unittest, the only runner this repo has.
+      # Three files were written as bare module-level test_ functions (pytest style) and so ran as
+      # "0 tests ... OK" — including one carrying a genuinely failing assertion nobody could see.
+      - name: Test files are collectable by unittest (no silently-empty suites)
+        run: bash scripts/ci/validate-tests-are-collectable.sh
+
+      # The es4 topic contract: topics.env is the single source of truth for the es4 broker, and
+      # these two modules are what hold it to that. Both were among the uncollectable files above,
+      # so neither had ever run here.
+      - name: es4 topic SSOT + partition contract
+        run: python3 -m unittest -v tests.test_es4_topics_ssot tests.test_es4_topic_partition_contract tests.test_remove_retired_workloads
+
       - name: Validate dev GEX availability safeguards
         run: bash scripts/ci/validate-gex-dev-safety.sh
 
