@@ -40,24 +40,31 @@ for f in "${files[@]}"; do
   # of this gate like a healthy one-test module. That is the same "looks like coverage" failure this
   # script exists to catch, so loader.errors is the thing to check (found by Codex).
   #
-  # Output is captured whole and validated as a number rather than trusted via `|| echo ERR`:
-  # partial stdout followed by a crash would otherwise be read as a count.
-  out="$(python3 - "$mod" <<'PY' 2>&1
-import sys, unittest
+  # THE COUNT IS DELIMITED, AND THE MODULE'S OWN STDOUT IS REDIRECTED AWAY. Importing a test module
+  # runs its top level, so anything it prints lands in the same capture: a file containing only
+  # `print("1", end="")` collects ZERO tests, yet its "1" concatenated with the count "0" read as
+  # "10" and sailed through a bare is-this-a-number check (found by Codex). So the load runs with
+  # stdout redirected to stderr -- where it stays visible in the CI log -- and the count is emitted
+  # on its own COLLECT line, which is the only line parsed.
+  out="$(python3 - "$mod" <<'PY'
+import contextlib, sys, unittest
 loader = unittest.TestLoader()
 try:
-    suite = loader.loadTestsFromName(sys.argv[1])
-except Exception as e:
-    print("ERR: %s: %s" % (type(e).__name__, e)); raise SystemExit(0)
+    with contextlib.redirect_stdout(sys.stderr):
+        suite = loader.loadTestsFromName(sys.argv[1])
+except BaseException as e:
+    print("COLLECT ERR %s: %s" % (type(e).__name__, e)); raise SystemExit(0)
 if loader.errors:
-    print("ERR: %s" % loader.errors[0].splitlines()[-1]); raise SystemExit(0)
-print(suite.countTestCases())
+    print("COLLECT ERR %s" % loader.errors[0].strip().splitlines()[-1]); raise SystemExit(0)
+print("COLLECT %d" % suite.countTestCases())
 PY
-)" || out="ERR: python3 exited non-zero"
-  case "$out" in
-    ''|*[!0-9]*)
+)" || out="COLLECT ERR python3 exited non-zero"
+  n="$({ printf '%s\n' "$out" | grep '^COLLECT ' || true; } | tail -1)"
+  n="${n#COLLECT }"
+  case "$n" in
+    ''|ERR*|*[!0-9]*)
       echo "FAIL: $mod is not importable/collectable by unittest:"
-      printf '%s\n' "$out" | tail -3 | sed 's/^/        /'
+      printf '%s\n' "${n:-<no COLLECT line: the module replaced or suppressed stdout>}" | sed 's/^/        /'
       fail=1
       ;;
     0)
