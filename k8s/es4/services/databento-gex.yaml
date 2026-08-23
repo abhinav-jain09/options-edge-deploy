@@ -56,8 +56,12 @@ spec:
           value: 'false'
         - name: OI_ANCHOR_MANIFEST_ENABLED
           value: 'true'
+        - name: GEX_TICK_SPREAD_FLOOR_MODE
+          value: shadow
         - name: APP_MARKET_DATA_SOURCE
           value: DATABENTO
+        - name: DATABENTO_GEX_FLOW_TOPN_THROTTLE_INTERVAL_MS
+          value: '10000'
         - name: DATABENTO_DATASET
           valueFrom:
             configMapKeyRef:
