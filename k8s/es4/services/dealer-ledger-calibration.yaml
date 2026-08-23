@@ -13,7 +13,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: dealer-ledger-calibration-scorer
@@ -91,7 +91,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: dealer-ledger-calibration-accumulator

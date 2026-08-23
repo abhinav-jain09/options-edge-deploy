@@ -148,6 +148,35 @@ ES_ENV = {
         # — its ONLY GEX input is the flow topic this gate feeds, so top-3 left ~65% of the es4
         # near-ATM ladder GEX-missing (measured on es.strike-intelligence-by-strike). Dev+prod both
         # run 40 with zero streams lag. Watch es4 gex lag after rollout; the rollback is a pin here.
+        # TICK-AWARE SPREAD FLOOR: es4 is PINNED to "shadow"; production runs "live" (#866,
+        # 2026-08-18). Without this pin the next re-render promotes es4 to live too, purely by
+        # inheritance, and #866's own evidence does not reach that far:
+        #   - The promotion A/B was dev-live vs prod-shadow on chain SPX 20260818. Every number in
+        #     it (admissions, suShortGamma, MISSING_IV, the single ledger fire) is SPX. The prod
+        #     overlay labels its own evidence CORROBORATIVE, not proof — no per-leg replay was run.
+        #   - The gate is "at most 4 ticks wide", so it is priced in TICKS. SPX options and GLBX ES
+        #     options do not share a tick regime, and es4 prices Black-76 on the future at the ES 50
+        #     multiplier (see the carry and OI pins above). An admission rule calibrated on the SPX
+        #     chain has no measured meaning on the ES chain.
+        #   - Blast radius on es4 mirrors prod's: inclusive netGex moves for every consumer of
+        #     es.options.databento.gex.strike, and the prod comment is explicit that live-era values
+        #     are NOT undone by a rollback — they persist in the compacted topic, the immutable
+        #     history archive, gex-delta-redis-writer's external Redis keys and downstream state
+        #     stores. On a LIVE box that is a one-way door taken without ES evidence.
+        # "shadow" is what es4 runs TODAY (the code default; the name is absent from the committed
+        # manifest), so this pin changes NOTHING on the box — it only stops an unreviewed
+        # promotion riding in on an unrelated re-render, and keeps the counterfactual accounting
+        # running so an ES-side promotion can be argued on ES numbers. Promote = change this to
+        # "live" and re-render.
+        {"name": "GEX_TICK_SPREAD_FLOOR_MODE", "value": "shadow", "_override": True},
+        # DATABENTO_GEX_FLOW_TOPN_THROTTLE_INTERVAL_MS: es4 INHERITS production's 10000 (#895,
+        # 2026-08-21, raised from the 2000 code default). Deliberate, not drift: the knob throttles
+        # the single-partition gex-flow-topn-rekey drain, and the reasoning transfers to es4 intact
+        # — strike-intelligence is the flow topic's consumer here too (see the FLOW_TOP_N note
+        # above) and its 120s freshness gate leaves a 10s per-strike cadence with ample margin,
+        # while ~5x less hot-partition inflow is worth more on the capacity-bound .4 box than on
+        # prod. Unlike the floor above this is a throughput knob, not an admission rule, so it
+        # carries no chain-specific calibration. Rollback is a pin here.
         # ES-GEX-on-SPX bridge (DatabentoGexBridge, behind ES_GEX_SPXBRIDGE_ENABLED): republish the raw
         # es gex.strike as self-describing JSON on KAFKA_ES_GEX_SPXBRIDGE_TOPIC (default
         # options.databento.gex.spxbridge -> es.options.databento.gex.spxbridge via TOPIC_PREFIX). The
