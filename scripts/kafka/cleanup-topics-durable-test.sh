@@ -65,11 +65,12 @@ assert_status() { # want-status | description
   else printf '  FAIL %s — exit %s, want %s\n' "$2" "$got" "$1"; fail=1; fi
 }
 
-# assert() is a SUBSTRING match, which is wrong for a topic name that is a PREFIX of another one:
-# "--delete --topic underlying.vix.price" matches inside a line deleting underlying.vix.price.shadow,
-# so the assertion that the durable vix topic survives passed for the wrong reason the moment a
-# .shadow sibling entered the approved list. The delete call puts the topic LAST on the line, so
-# anchoring at end-of-line makes the match exact. Use this for every topic-delete assertion.
+# assert() is a SUBSTRING match, which is ambiguous for a topic name that is a PREFIX of another:
+# "--delete --topic underlying.vix.price" also matches a line deleting underlying.vix.price.shadow.
+# The direction of the error depends on the assertion -- a survival check ("absent") reads the
+# sibling's delete as its own and fails spuriously, while a deletion check ("present") is satisfied
+# by a topic it never named. Neither is a claim about the topic under test. The delete call puts the
+# topic LAST on the line, so anchoring at end-of-line makes the match exact.
 assert_delete() { # description | log | topic | present|absent
   local desc="$1" log="$2" topic="$3" want="$4" got
   if printf '%s' "$log" | grep -qE -- "--delete --topic $(printf '%s' "$topic" | sed 's/[.[\*^$]/\\&/g')$"; then got=present; else got=absent; fi
@@ -121,13 +122,20 @@ assert_status 0 "cleanup itself succeeded"
 # them IS, so a code-only redeploy with cleanup on could delete them and leave the producer's
 # auto-create to stamp broker defaults over a last-value view.
 echo "--- delete-unwanted: prod-only topics are DECLARED on production and must survive ---"
-PROD_ONLY_PLAIN="underlying.vix.price.shadow"   # prod-only, 1d, plain delete
-PROD_ONLY_COMPACT="es.futures.cvd.levels"       # prod-only, PURE COMPACT + retention -1
+# DERIVED from topics.env, not hard-coded: naming two of the three would let a partial merge that
+# happens to cover the named ones pass, and would silently stop covering a prod-only topic added
+# later. Parsed rather than sourced, so this cannot be fooled by a variable this file also uses.
+PROD_ONLY="$(sed -nE 's/^OPTIONS_EDGE_PROD_ONLY_TOPICS="(.*)"$/\1/p' "$HERE/topics.env" | tr ' ' '\n' | sed 's/:[0-9]*$//' | grep -v '^$')"
+if [ -z "$PROD_ONLY" ]; then
+  echo "  FAIL could not parse OPTIONS_EDGE_PROD_ONLY_TOPICS from topics.env — this whole section would pass vacuously"; fail=1
+fi
 JUNK="es4.some-mm2-leftover"                    # declared nowhere; the loop exists to remove this
-L="$(LIST_TOPICS="$PROD_ONLY_PLAIN $PROD_ONLY_COMPACT $SWEPT $JUNK" DELETE_UNWANTED=true ALLOW_PROD=true \
+echo "  (prod-only declarations under test: $(printf '%s ' $PROD_ONLY))"
+L="$(LIST_TOPICS="$PROD_ONLY $SWEPT $JUNK" DELETE_UNWANTED=true ALLOW_PROD=true \
      run_cleanup retention production)"
-assert_delete "prod-only plain topic NOT deleted as unwanted"   "$L" "$PROD_ONLY_PLAIN"   absent
-assert_delete "prod-only compacted topic NOT deleted as unwanted" "$L" "$PROD_ONLY_COMPACT" absent
+for t in $PROD_ONLY; do
+  assert_delete "prod-only '$t' NOT deleted as unwanted" "$L" "$t" absent
+done
 assert_delete "base-declared topic NOT deleted as unwanted"     "$L" "$SWEPT"             absent
 assert_delete "genuinely undeclared topic IS deleted"           "$L" "$JUNK"              present
 assert_status 0 "cleanup itself succeeded"
@@ -136,11 +144,31 @@ assert_status 0 "cleanup itself succeeded"
 # those topics are genuinely undeclared and the sweep is CORRECT. Same shape as the vix retention
 # assertion above -- a keep-list that keeps everywhere is not environment-scoped, it is just broken.
 echo "--- delete-unwanted: the same topics are undeclared on dev and MUST still be swept ---"
-L="$(LIST_TOPICS="$PROD_ONLY_PLAIN $PROD_ONLY_COMPACT $JUNK" DELETE_UNWANTED=true \
+L="$(LIST_TOPICS="$PROD_ONLY $JUNK" DELETE_UNWANTED=true \
      run_cleanup retention dev)"
-assert_delete "prod-only plain topic IS deleted on dev"    "$L" "$PROD_ONLY_PLAIN"   present
-assert_delete "prod-only compacted topic IS deleted on dev" "$L" "$PROD_ONLY_COMPACT" present
+for t in $PROD_ONLY; do
+  assert_delete "prod-only '$t' IS deleted on dev" "$L" "$t" present
+done
 assert_delete "undeclared topic IS deleted on dev"         "$L" "$JUNK"              present
+assert_status 0 "cleanup itself succeeded"
+
+# The other half of the fix: prod-only topics are DECLARED (not swept as unwanted) but are NOT
+# APPROVED (not managed by the destructive modes). Merging the two lists would have been the smaller
+# change and would have started delete-recreating them on production -- and since the Kafka Cleanup
+# stage is not gated on SKIP_KAFKA_TOPICS while the Kafka Topics stage that recreates them is, a
+# code-only redeploy could leave a pure-compact retention=-1 topic absent with nothing to restore
+# it. A topic that survives a flag combination today must still survive it after a fix whose whole
+# purpose is to stop deleting it.
+echo "--- prod-only topics are declared, but NOT swept by the destructive modes ---"
+L="$(ALLOW_PROD=true run_cleanup delete-recreate production)"
+for t in $PROD_ONLY; do
+  assert_delete "prod-only '$t' NOT delete-recreated" "$L" "$t" absent
+done
+assert_status 0 "cleanup itself succeeded"
+L="$(ALLOW_PROD=true run_cleanup retention production)"
+for t in $PROD_ONLY; do
+  assert "prod-only '$t' NOT retention-shrunk" "$L" "--entity-name $t --alter" absent
+done
 assert_status 0 "cleanup itself succeeded"
 
 echo "--- TOPIC_SET is refused, not silently applied to the wrong cluster ---"
