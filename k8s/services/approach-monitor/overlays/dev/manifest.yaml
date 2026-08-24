@@ -79,7 +79,7 @@ spec:
             - name: APPROACH_EOS_ENABLED
               value: "true"
             - name: APPROACH_STREAMS_AUTO_OFFSET_RESET
-              value: latest
+              value: earliest
             - name: ENVIRONMENT
               value: dev
             - name: KAFKA_STREAMS_STATE_DIR

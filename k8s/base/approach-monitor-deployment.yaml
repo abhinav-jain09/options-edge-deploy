@@ -17,10 +17,11 @@ metadata:
     #   2. Operator-approved numeric promotion gates (§12.5). The thresholds compiled into the
     #      image are explicitly labelled provisional and are NOT promotion-approved.
     #
-    # Product 1 (pre-touch approach warning) is additionally SHADOW-ONLY: it had 3 positive
-    # examples in the holdout (CI [0.700, 0.997]) and validates nothing yet.
-    # Product 2 (recovery-failure warning) is the validated path: holdout AUC 0.837
-    # CI [0.754, 0.879], Brier skill +0.152.
+    # NEITHER product validates. On an honest pipeline (as-of lookup, contract-end horizon, gap
+    # censoring, and feature vectors produced by the live engine) product 2 scores at CHANCE
+    # (holdout AUC 0.500) and product 1 has two holdout sessions. Earlier figures in this file
+    # claimed 0.837 for product 2; that was leakage plus an offline/live divergence, not signal.
+    # The binding constraint is the corpus, not the model.
     options-edge/dark-deployed: "true"
     options-edge/blocked-on: "MIN_ACTIONABLE_LEAD_MS drill; operator-approved promotion gates"
     options-edge/gate-evidence: "APPROACH-MONITOR-GATE2.md, research/out/GATE3-MODEL.md"
@@ -89,10 +90,16 @@ spec:
             - name: APPROACH_EOS_ENABLED
               value: "true"
             - name: APPROACH_STREAMS_AUTO_OFFSET_RESET
-              # latest, deliberately: a fresh application id reading from earliest would replay
-              # retained spot and registry history and write historical records into the alert
-              # outbox with no backlog fence.
-              value: latest
+              # EARLIEST. The registry is compacted and is the authoritative current-position
+              # snapshot: starting at `latest` puts a fresh application id AFTER every existing
+              # compacted record, so no live position is registered until one happens to be
+              # updated — the service would run believing the operator holds nothing.
+              #
+              # This previously said `latest` and silently defeated the code default. Historical
+              # alerts are fenced by the wall-clock backlog gate in the processor, which is the
+              # right place for it: skipping the authoritative position source is not a fence,
+              # it is blindness.
+              value: earliest
             - name: ENVIRONMENT
               value: dev
             - name: KAFKA_STREAMS_STATE_DIR
@@ -103,6 +110,8 @@ spec:
               value: "false"
             # Product 1 emits to the audit log only until it has data to validate on.
             - name: APPROACH_PRODUCT1_SHADOW_ONLY
+              # Both products are effectively shadow: delivery is disabled above. This flag stays
+              # true so that enabling delivery does not silently start product-1 notifications.
               value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms512m -Xmx2048m"
