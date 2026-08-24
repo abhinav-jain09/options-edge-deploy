@@ -68,6 +68,8 @@ spec:
               value: /oi-index/stock-gex-oi-index.json.gz
             - name: STOCK_GEX_CLOSE_DIR
               value: /oi-index/close
+            - name: STOCK_GEX_TICK_S
+              value: "5"
             - name: HEALTH_PORT
               value: "8022"
           image: 192.168.100.252:5000/options-edge-stock-gex:dev

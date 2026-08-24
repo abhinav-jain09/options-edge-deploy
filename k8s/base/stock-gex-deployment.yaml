@@ -69,6 +69,38 @@ spec:
             # empty there — whereas a bad OI index must stop the service outright.
             - name: STOCK_GEX_CLOSE_DIR
               value: /oi-index/close
+            # TEMPORARY CAPACITY MEASURE, 2026-08-24. Recompute every 5 s instead of every 1 s.
+            #
+            # WHY. The node is at 81% CPU and this container requests 200m while actually using
+            # ~1001m — five times its request, with no CPU limit. Each root's recompute was taking
+            # 250-350 ms against a 250 ms budget, and with 14 active boards that is roughly 4.2 s
+            # of work per 1 s tick: a four-fold overload. The engine could not warm everything, so
+            # the outcome was arbitrary winners and losers rather than uniform slowness —
+            # SPY reached `live` with 12,459 quoted contracts while TSLA sat at
+            # WARM_DEADLINE_EXCEEDED with ZERO quoted and 4,144 unverified multipliers for a whole
+            # session. A reader on TSLA saw the frozen closing board, and its older open interest,
+            # all day with nothing on the page to say the live board had never warmed.
+            #
+            # WHY THE TICK AND NOT max_symbols. Capping symbols was the first attempt and it is
+            # WRONG here: past the cap the engine answers HTTP 429 MAX_SYMBOLS (it only evicts a
+            # board with no listeners idle beyond idle_ttl_s, 900 s), so the first N actively
+            # polled symbols become arbitrary winners and everyone else is REFUSED OUTRIGHT. That
+            # trades degraded data for no data. The arithmetic does not work either: 8 roots at
+            # ~300 ms is still 2.4 s against a 1 s tick.
+            #
+            # 5 s absorbs ~4.2 s of work with headroom and refuses nobody. It is invisible to the
+            # page, which polls every 15 s — the board is still refreshed three times between
+            # reads — and `stale_after_s` is 30 s, comfortably clear. The derived ready deadline
+            # (max(MIN_READY_DEADLINE_S, 5 x tick_s, ...)) grows with it, which is the safe
+            # direction.
+            #
+            # Raising the CPU request is the real fix and is deliberately NOT done here: on a node
+            # already at 81%, a larger request risks the pod failing to schedule on its next
+            # restart, turning a degraded service into a down one.
+            #
+            # REMOVE THIS when stock-gex moves to the new machine (expected week of 2026-08-31).
+            - name: STOCK_GEX_TICK_S
+              value: "5"
             - name: HEALTH_PORT
               value: "8022"
           volumeMounts:
