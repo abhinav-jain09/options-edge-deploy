@@ -90,6 +90,27 @@ pipeline {
   // this pipeline does NOT manage them — it assumes they are already running before a bring-up.
 
   stages {
+    // 0) UI-ONLY GATE. bring-up-all rebuilds the ENTIRE processing monorepo from source
+    //    (28 images via options-edge-processing, incl. tests + docker build/push) and then
+    //    redeploys the full stack — a heavy, prod-wide op. It must NEVER run unattended from
+    //    an API/remote trigger. This `input` pauses the build the instant it starts and only
+    //    a human clicking "Bring up" in the Jenkins UI can continue it; an API
+    //    buildWithParameters POST cannot get past this gate. `agent none` so the wait holds no
+    //    executor; the timeout auto-aborts an abandoned (e.g. scripted) trigger.
+    stage('Manual approval (UI only)') {
+      agent none
+      steps {
+        script {
+          def causes = currentBuild.getBuildCauses()
+          echo "bring-up-all triggered by: ${causes*.shortDescription.join('; ')}"
+          timeout(time: 15, unit: 'MINUTES') {
+            input message: "bring-up-all rebuilds ALL processing images from source and redeploys the full '${params.PROFILE}' stack (~30 min). Approve ONLY from the Jenkins UI — API/remote triggers must not proceed. Continue?",
+                  ok: 'Bring up'
+          }
+        }
+      }
+    }
+
     stage('Resolve profile') {
       steps {
         script {
