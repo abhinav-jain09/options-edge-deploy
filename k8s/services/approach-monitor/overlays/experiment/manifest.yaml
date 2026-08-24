@@ -78,6 +78,8 @@ spec:
               value: "true"
             - name: APPROACH_STREAMS_AUTO_OFFSET_RESET
               value: latest
+            - name: ENVIRONMENT
+              value: dev
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
             - name: APPROACH_DELIVERY_ENABLED
@@ -115,9 +117,25 @@ spec:
             requests:
               cpu: 100m
               memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
               name: kafka-streams-state
+            - mountPath: /tmp
+              name: tmp
+      securityContext:
+        fsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
       volumes:
         - emptyDir: {}
           name: kafka-streams-state
+        - emptyDir: {}
+          name: tmp

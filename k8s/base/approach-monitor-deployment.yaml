@@ -39,10 +39,23 @@ spec:
         app.kubernetes.io/component: approach-monitor-service
         app.kubernetes.io/part-of: options-edge
     spec:
+      # The service needs no privileges and holds none. A Streams app that can write outside its
+      # state dir or escalate is a larger blast radius than the job requires.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: approach-monitor
           image: 192.168.100.252:5000/options-edge-approach-monitor:dev
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -76,7 +89,12 @@ spec:
             - name: APPROACH_EOS_ENABLED
               value: "true"
             - name: APPROACH_STREAMS_AUTO_OFFSET_RESET
+              # latest, deliberately: a fresh application id reading from earliest would replay
+              # retained spot and registry history and write historical records into the alert
+              # outbox with no backlog fence.
               value: latest
+            - name: ENVIRONMENT
+              value: dev
             - name: KAFKA_STREAMS_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
             # Voice/Discord delivery stays OFF until the gates pass. The service still writes
@@ -106,6 +124,9 @@ spec:
           volumeMounts:
             - name: kafka-streams-state
               mountPath: /var/lib/options-edge/kafka-streams
+            # readOnlyRootFilesystem needs an explicit writable /tmp for the JVM.
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 100m
@@ -117,4 +138,6 @@ spec:
         # lost local dir costs restore time, not correctness — and per the platform's PVC incident
         # a Deployment does NOT recreate a deleted PVC, so a volumeClaimTemplate here would be a trap.
         - name: kafka-streams-state
+          emptyDir: {}
+        - name: tmp
           emptyDir: {}
