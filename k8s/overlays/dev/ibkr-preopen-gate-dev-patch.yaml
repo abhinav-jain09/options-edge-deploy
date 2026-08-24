@@ -32,9 +32,9 @@ spec:
       containers:
         - name: databento-gex
           env:
-            - { name: PREOPEN_GEX_ENABLED, value: "true" }
-            - { name: IBKR_GEX_CONSUME_ENABLED, value: "false" }
-            - { name: IBKR_GEX_PUBLISH_ENABLED, value: "false" }
+            - { name: PREOPEN_GEX_ENABLED, value: "false" }
+            - { name: IBKR_GEX_CONSUME_ENABLED, value: "true" }
+            - { name: IBKR_GEX_PUBLISH_ENABLED, value: "true" }
             # The lines below are inert while IBKR consume/publish are false; they are retained so a
             # rollback to the IBKR window is a three-flag flip (the two above + PREOPEN_GEX_ENABLED).
             - { name: IBKR_GEX_TOPIC_STAGE, value: "live" }
