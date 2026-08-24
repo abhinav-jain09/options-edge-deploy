@@ -13,7 +13,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: dealer-ledger-calibration-scorer
@@ -34,8 +34,8 @@ spec:
           value: '8080'
         - name: SCORER_INPUT_SIGNAL_FIRED_TOPIC
           value: dealer-ledger-signal-fired
-        - name: SCORER_INPUT_RAW_TOPIC
-          value: options.databento.raw
+        - name: SCORER_INPUT_SPOT_TOPIC
+          value: underlying.spx.price
         - name: SCORER_OUTPUT_OUTCOME_SCORED_TOPIC
           value: dealer-ledger-outcome-scored
         - name: KAFKA_STREAMS_STATE_DIR
@@ -91,7 +91,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: dealer-ledger-calibration-accumulator

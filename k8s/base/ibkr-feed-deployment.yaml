@@ -7,7 +7,16 @@ metadata:
     app.kubernetes.io/name: ibkr-feed-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # PRODUCTION-DISABLED (USER 2026-07-30): ibkr-feed-service must NEVER be deployed to
+  # production. That hold lives in the production overlay (replicas:0 patch) and in
+  # morning-autostart.sh KEEP_DOWN — both independent of this base value.
+  # DEV STILL RUNS IT and must keep running it: the dev overlay patches replicas back to 1
+  # because the IB Gateway lives on the dev Mac and that ONE pod dual-produces
+  # underlying.spx.index.price into BOTH clusters (priority-1 SPX cash-index spot, rev4).
+  # Base stays 0 as a fail-closed default; both overlays state their intent explicitly.
+  # Do NOT add ibkr-feed-service to dev-cleanup.sh DISABLED_DEV — that list overrides the
+  # dev overlay and silently strips prod's tier-1 spot source (2026-07-31 regression).
+  replicas: 0
   strategy:
     type: Recreate
   selector:

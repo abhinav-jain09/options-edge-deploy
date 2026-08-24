@@ -34,6 +34,13 @@ spec:
           env:
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
+            # Per-strike inflow conflation ahead of the single-partition chain-key rekey
+            # (gex-flow-topn-rekey). At the 2s default the post-reboot fleet-wide catch-up left the
+            # rekey partition drain slower than inflow (2026-08-21: lag +4k/min, flow event-times
+            # minutes old -> strike-intel flagged GEX stale chain-wide). 10s keeps per-strike flow
+            # far inside strike-intel's 120s freshness gate while cutting hot-partition inflow ~5x.
+            - name: DATABENTO_GEX_FLOW_TOPN_THROTTLE_INTERVAL_MS
+              value: "10000"
             - name: DATABENTO_DATASET
               valueFrom:
                 configMapKeyRef:
@@ -60,6 +67,30 @@ spec:
             # exist, ~19k). Both envs. This was the root cause of recurring "missing GEX on strikes".
             - name: DATABENTO_GEX_OI_FETCH_LIMIT
               value: "200000"
+            # The DEFINITION query's own limit, deliberately NOT sharing DATABENTO_GEX_OI_FETCH_LIMIT.
+            # Two queries with different response sizes and different growth do not belong on one
+            # knob. The universe fetch was refused on every attempt while it inherited a 10,000
+            # default against a ~20,200-record definition response, so no anchor manifest could
+            # ever be built.
+            - name: DATABENTO_GEX_OI_DEFINITION_FETCH_LIMIT
+              value: "200000"
+            # OI anchor manifest. Reconciles the settled open-interest statistics response against
+            # an independent instrument-definition universe and publishes ONE immutable manifest per
+            # session to options.databento.oi.anchor-manifest.
+            #
+            # OFF in base, ON in the dev AND production overlays (production 2026-08-03, after
+            # two watched dev sessions). It is enabled on production because the capture must not
+            # miss sessions -- the record's whole value is the day-over-day difference, and dev is
+            # brought up by hand each morning, so a late start leaves a permanent hole in the
+            # series.
+            #
+            # THIS IS NO LONGER A DEAD END. It used to be: nothing read the manifest and oi-shadow
+            # sat at zero replicas. As of 2026-08-04 oi-shadow runs on both environments and GEX
+            # consumes what it publishes, so the chain is
+            #     anchor manifest -> oi-shadow -> GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED)
+            # and this record is on the path to the live gamma surface.
+            - name: OI_ANCHOR_MANIFEST_ENABLED
+              value: "false"
             - name: HEALTH_PORT
               value: "8100"
             - name: KAFKA_DATABENTO_RAW_TOPIC
@@ -73,6 +104,16 @@ spec:
               # 2026-07-24; Streams state rebuilds from the compacted gex.strike topic within minutes).
               value: options-databento-gex-streams
             - name: KAFKA_GEX_STREAMS_NUM_THREADS
+              value: "8"
+            # gex-flow streams thread count. WITHOUT this the flow topology (gex.strike ->
+            # GammaFlowProcessor -> 7 flow topics) runs at the code default of 2 threads over the
+            # 32-partition gex.strike input. During heavy market flow each record does 3 RocksDB
+            # state-store writes (LATEST/SESSION/WINDOW) + a 7-topic produce fan-out with record
+            # cache disabled, so the 2 threads block on state/produce I/O and lag climbs into the
+            # millions while CPU stays idle (verified prod 2026-08-01: 10.6M lag evenly across all
+            # 32 partitions, CPU available). 8 matches the main compute stage above and quadruples
+            # the flow drain parallelism. Both envs; env-overridable (DatabentoGexBridge#flowStreamsProperties).
+            - name: KAFKA_GEX_FLOW_STREAMS_NUM_THREADS
               value: "8"
             # Dealer-positioning sign: NAIVE (call +1 / put -1).
             # The 1-year SPXW 0DTE backtest (gex-backtest, run phase3-1w-...-b10, 252 days /

@@ -23,6 +23,8 @@ pipeline {
       description: 'true = render + diff + server-side validate only (DEFAULT). Set false to actually apply.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
       description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    booleanParam(name: 'RECONCILE_REALM', defaultValue: true,
+      description: 'Reconcile the public bleedingoptions realm after applying (production only). Applying manifests does NOT configure the realm — --import-realm skips an existing one — so leaving this off means MFA binding, approval groups and OTP policy are whatever is live. Turn off ONLY when no reconciler credential is available.')
   }
   options {
     disableConcurrentBuilds()
@@ -34,6 +36,21 @@ pipeline {
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN}"
   }
   stages {
+    // SECONDARY check. The public Gamma Lab is an application workload deployed by service-deploy.sh,
+    // which runs this same gate on its own apply path — that is the primary and the one that matters,
+    // because a control on a path the workload does not travel guards nothing. This copy runs here
+    // too because infra and the service slice are deployed by different jobs at different times, and
+    // an infra deploy is a natural moment to notice that the public workload has been scaled up
+    // without evidence. Cheap, and it fails the same way.
+    stage('Public gate (PGL-072, secondary)') {
+      when { expression { params.ENVIRONMENT == 'production' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/deploy/verify-public-gate.sh
+        '''
+      }
+    }
     stage('Render + Diff (always)') {
       steps {
         sh '''
@@ -64,6 +81,53 @@ pipeline {
           set -euo pipefail
           DEPLOY_DRY_RUN=false WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/common-infra.sh
         '''
+      }
+    }
+    // Skipping realm reconciliation is ANNOUNCED, not silent: a build that quietly omitted it would
+    // look identical to one that performed it.
+    stage('WARN: realm reconciliation skipped') {
+      when {
+        allOf {
+          expression { params.ENVIRONMENT == 'production' }
+          expression { !params.DEPLOY_DRY_RUN }
+          expression { !params.RECONCILE_REALM }
+        }
+      }
+      steps {
+        script {
+          unstable('RECONCILE_REALM=false: the public realm was NOT reconciled. Its login settings, ' +
+                   'OTP policy, approval groups and browser-flow binding are whatever is currently ' +
+                   'live, NOT what the repo says. Applying manifests does not configure the realm.')
+        }
+      }
+    }
+    // Applying the manifests does NOT configure the public realm. `--import-realm` skips a realm that
+    // already exists, so on every deploy after the first the realm's login settings, OTP policy,
+    // approval groups and browser-flow binding come from whatever is live — not from the repo. Without
+    // this stage the job would report success while MFA was unbound or an approval-bearing role had
+    // drifted into the default composite (PGL-031A/PGL-031B). It FAILS THE BUILD on drift it cannot
+    // correct.
+    stage('Reconcile public realm') {
+      when {
+        allOf {
+          expression { params.ENVIRONMENT == 'production' }
+          expression { !params.DEPLOY_DRY_RUN }
+          expression { params.RECONCILE_REALM }
+        }
+      }
+      steps {
+        withCredentials([
+          string(credentialsId: 'bo-keycloak-reconciler-secret', variable: 'KC_ADMIN_SECRET'),
+          string(credentialsId: 'bo-keycloak-smtp-password',     variable: 'KC_SMTP_PASSWORD')
+        ]) {
+          sh '''
+            set -euo pipefail
+            bash scripts/ops/bleedingoptions-realm-reconcile.sh --apply
+            # Re-read after applying. A reconciler that says it corrected something, and a realm that
+            # is actually correct afterwards, are two different claims — this asserts the second.
+            bash scripts/ops/bleedingoptions-realm-reconcile.sh --check
+          '''
+        }
       }
     }
   }

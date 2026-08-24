@@ -1,0 +1,146 @@
+@Library('oe') _
+import groovy.json.JsonOutput
+
+// NIGHTLY OI-INDEX REFRESH FOR stock-gex.
+//
+// The stock-gex service serves every board off a nightly open-interest index and REFUSES to run
+// on a stale one: OiIndex.load fails the process at boot past STOCK_GEX_MAX_INDEX_AGE_DAYS (5),
+// and engine.ready() re-checks the SAME predicate, so an ageing index takes the pod NotReady
+// while it is running. Until this job existed nothing produced that index — it was placed by
+// hand once (tradeDate 2026-08-07), which gave the service a hard expiry date.
+//
+// This job is the producer. It runs scripts/ops/stock-gex-oi-snapshot.sh, which creates the Job
+// defined in k8s/jobs/stock-gex-oi-snapshot-job.yaml under the deployer identity (the only
+// principal the options-edge-jenkins-only-workloads admission policy permits to create Jobs),
+// establishes whether an index was published (its receipt, or — when the receipt is missing —
+// by comparing the installed generation before and after), then rollout-restarts
+// stock-gex-service: the service loads the index ONCE, in main(), and has no hot-reload, so a
+// fresh file without a restart changes nothing. Read the Job template's header for why there is
+// no CronJob object and how publication is staged so a failed verification cannot replace a
+// good index.
+//
+// SCHEDULE: 08:20 America/New_York, Mon-Fri — the MORNING BEFORE THE OPEN, not the evening.
+//   * The obvious slot was 20:30 ET, right after the CLI's own 20:00 ET settlement guard. It ran
+//     once, on 2026-08-11, and failed at the first assertion: `stock-gex-service has
+//     spec.replicas=0`. 20:30 ET is exactly when the prod off-hours lifecycle scales the platform
+//     down — 52 deployments at zero — so the evening slot can never succeed, and the window
+//     between the settle guard and the scale-down is 30 minutes against a ~16-minute pull.
+//   * 08:20 ET is strictly better than squeezing into that window: the platform is back up
+//     (morning-autostart runs ~07:30 ET), the session resolved is yesterday's — settled since
+//     20:00 ET the previous evening — and the fresh index plus its pod restart land BEFORE the
+//     09:30 open rather than the night before. Age at the open is 1 day.
+//   * The IANA zone (not a fixed UTC hour) keeps it at 08:20 ET across DST.
+//   * It runs on exchange holidays too, ON PURPOSE: the scheduler must not second-guess the
+//     market calendar. The CLI resolves the latest COMPLETED session itself and rebuilds the
+//     same index harmlessly, which also means a holiday cannot silently skip a day.
+//   * Weekends are excluded because there is no new session to fetch and a weekend date returns
+//     all-zero-size chunks from the vendor; the 5-day age budget covers Sat/Sun.
+//
+// PRODUCTION ONLY for now (USER 2026-08-11). Dev keeps its hand-placed copy: its hostPath lives
+// inside the docker-desktop VM and dev is scaled to zero nightly, so parity needs an
+// artifact-copy step rather than a second (free, but pointless) Databento pull.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['production'],
+      description: 'Target environment. Production only today — see the header.')
+    string(name: 'TRADE_DATE', defaultValue: '',
+      description: 'Operator override, YYYY-MM-DD. EMPTY on scheduled runs so the market calendar resolves the latest COMPLETED session — never pin a date on the timer.')
+    booleanParam(name: 'RESTART_SERVICE', defaultValue: true,
+      description: 'Rollout-restart stock-gex-service after a successful publish. Leave true: the service loads the OI index once at boot, so without this the running pod keeps serving the OLD index.')
+    booleanParam(name: 'DRY_RUN', defaultValue: false,
+      description: 'true = resolve + digest-pin + server-side validate the Job only; creates nothing and touches no index.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    string(name: 'KEEP_JOBS', defaultValue: '5',
+      description: 'How many most-recent TERMINAL snapshot Jobs to retain (nothing else prunes them — there is no CronJob history limit here). 1..100.')
+  }
+  triggers {
+    // 08:20 ET, weekdays — after morning-autostart, before the open. NOT the evening: the
+    // off-hours scale-down owns 20:30 ET (see the header).
+    cron('TZ=America/New_York\n20 8 * * 1-5')
+  }
+  options {
+    disableConcurrentBuilds()
+    // The Job itself is capped at 90 min (activeDeadlineSeconds) and the wrapper waits 95 min,
+    // so this outer cap must leave room for the restart + verification on top of that.
+    timeout(time: 150, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+  }
+  environment {
+    KUBECONFIG      = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT     = "${params.ENVIRONMENT}"
+    TRADE_DATE      = "${params.TRADE_DATE}"
+    RESTART_SERVICE = "${params.RESTART_SERVICE}"
+    DRY_RUN         = "${params.DRY_RUN}"
+    KEEP_JOBS       = "${params.KEEP_JOBS}"
+  }
+  stages {
+    stage('Refresh OI index') {
+      steps {
+        sh '''
+          set -euo pipefail
+          chmod +x scripts/ops/stock-gex-oi-snapshot.sh
+          scripts/ops/stock-gex-oi-snapshot.sh
+        '''
+      }
+    }
+  }
+  post {
+    // `unsuccessful`, NOT `failure`: the pipeline timeout and a manual stop both produce ABORTED,
+    // and an aborted refresh is exactly as silent — and as consequential — as a failed one.
+    unsuccessful {
+      script {
+        // The index has a 5-day budget, so the urgency of a miss is a function of how old the
+        // INSTALLED index already is. Read it from the running pod (its mount is the same
+        // hostPath the producer writes) and put that in the alert, not just "the build failed".
+        // Every step here is best-effort: alerting must never fail on its own diagnostics.
+        // The wrapper cannot `kubectl exec` (the deployer SA has no pods/exec), so the age
+        // diagnostic comes from the file the wrapper leaves in the workspace rather than from a
+        // live read here. Absent file = the run failed before it learned anything.
+        def installed = 'installed index generation UNKNOWN (the run failed before reading it)'
+        try {
+          if (fileExists('oi-installed-generation.txt')) {
+            def g = readFile('oi-installed-generation.txt').trim()
+            if (g) { installed = "installed index ${g}" }
+          }
+        } catch (err) {
+          echo "installed-index diagnostic unavailable: ${err}"
+        }
+        echo "stock-gex OI index refresh ${currentBuild.currentResult} — ${installed}"
+        withCredentials([string(credentialsId: 'offhours-discord-webhook',
+                                variable: 'DISCORD_WEBHOOK_URL')]) {
+          // Reuses the PROD ops webhook: this is the channel the off-hours job and the prod
+          // error-watch already alert on, and a stale OI index is a prod-ops event. The pod-log
+          // error-watch cannot see this on its own — a short-lived Job's pod may be gone between
+          // its 5-minute scans, and a Jenkins/plumbing failure never reaches a pod log at all.
+          //
+          // The body is built with JsonOutput and handed to curl on stdin: a BUILD_URL or a
+          // diagnostic containing a quote or backslash must not be able to break the JSON and
+          // lose the alert.
+          // Do NOT claim the installed index was left alone: the wrapper reconciles that case
+          // explicitly, and a run can fail AFTER a verified index was published (rollout or
+          // post-restart proof). The build log states which of the two happened; the alert says
+          // where to look instead of asserting the wrong one.
+          def payload = JsonOutput.toJson([
+            content: ":rotating_light: stock-gex OI index refresh ${currentBuild.currentResult} " +
+                     "(build ${env.BUILD_NUMBER}) — ${installed}. A verified index may already " +
+                     "have been published: check the build log for the Job receipt or the " +
+                     "installed-generation reconciliation, then the rollout result. " +
+                     "stock-gex goes NotReady once the index passes 5 days. ${env.BUILD_URL}"
+          ])
+          writeFile file: 'discord-payload.json', text: payload
+          // Bounded: a stalled webhook must not eat the remaining pipeline timeout on a build
+          // that has already failed. The exit status stays ignored on purpose.
+          sh '''
+            set +e
+            curl -fsS --connect-timeout 10 --max-time 30 --retry 2 \
+              -H 'Content-Type: application/json' \
+              --data-binary @discord-payload.json "${DISCORD_WEBHOOK_URL}"
+            true
+          '''
+        }
+      }
+    }
+  }
+}

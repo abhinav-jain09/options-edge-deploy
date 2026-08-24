@@ -24,6 +24,7 @@ DATABENTO_MISSION_SANDWICH_IMAGE=$registry/options-edge-databento-mission-sandwi
 VOLUME_PACE_IMAGE=$registry/options-edge-volume-pace:$image_tag
 DIRECTIONAL_PRESSURE_IMAGE=$registry/options-edge-directional-pressure:$image_tag
 DATABENTO_GEX_HISTORY_IMAGE=$registry/options-edge-databento-gex-history:$image_tag
+GAMMA_MIGRATION_IMAGE=$registry/options-edge-gamma-migration:$image_tag
 RAW_POSTGRES_WRITER_IMAGE=$registry/options-edge-raw-postgres-writer:$image_tag
 PRESSURE_POSTGRES_WRITER_IMAGE=$registry/options-edge-pressure-postgres-writer:$image_tag
 PIN_POSTGRES_WRITER_IMAGE=$registry/options-edge-pin-postgres-writer:$image_tag
@@ -42,6 +43,7 @@ OPTION_TRUTH_ENGINE_IMAGE=$registry/options-edge-option-truth-engine:$image_tag
 MARKET_CARRY_IMAGE=$registry/options-edge-market-carry:$image_tag
 ES_SPX_ALIGN_IMAGE=$registry/options-edge-es-spx-align:$image_tag
 VIX_OPTION_INTELIGENCE_IMAGE=$registry/options-edge-vix-option-inteligence:$image_tag
+GREEK_MOVE_AUTHENTICITY_IMAGE=$registry/options-edge-greek-move-authenticity:$image_tag
 STRIKE_FLOW_AVRO_ADAPTER_IMAGE=$registry/options-edge-strike-flow-avro-adapter:$image_tag
 GEX_DELTA_REDIS_WRITER_IMAGE=$registry/options-edge-gex-delta-redis-writer:$image_tag
 IBKR_FEED_IMAGE=$registry/options-edge-ibkr-feed:$image_tag
@@ -50,10 +52,16 @@ STRIKE_INVASION_IMAGE=$registry/options-edge-strike-invasion:$image_tag
 INVASION_POSTGRES_WRITER_IMAGE=$registry/options-edge-invasion-postgres-writer:$image_tag
 SPREAD_SKEW_IMAGE=$registry/options-edge-spread-skew:$image_tag
 REVERSAL_CONFIRMATION_IMAGE=$registry/options-edge-reversal-confirmation:$image_tag
+CORRIDOR_GAUGE_IMAGE=$registry/options-edge-corridor-gauge:$image_tag
+DROP_CLASSIFIER_IMAGE=$registry/options-edge-drop-classifier:$image_tag
 SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$registry/options-edge-spread-skew-postgres-writer:$image_tag
 ES_OPEN_DIRECTION_IMAGE=$registry/options-edge-es-open-direction:$image_tag
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$registry/options-edge-es-open-direction-postgres-writer:$image_tag
 CLOSE_DIRECTION_IMAGE=$registry/options-edge-close-direction:$image_tag
+SPOT_VOL_REGIME_IMAGE=$registry/options-edge-spot-vol-regime:$image_tag
+INDICATOR_SERVICE_IMAGE=$registry/options-edge-indicator-service:$image_tag
+STOCK_GEX_IMAGE=$registry/options-edge-stock-gex:$image_tag
+OI_SHADOW_IMAGE=$registry/options-edge-oi-shadow:$image_tag
 REVERSAL_POSTGRES_WRITER_IMAGE=$registry/options-edge-reversal-postgres-writer:$image_tag
 EOF
             # approach-monitor is DEV-ONLY (services.yaml envs: [dev]); the production and
@@ -72,6 +80,8 @@ EOF
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$registry/options-edge-short-premium-agent:$image_tag
 SIGNAL_FOLLOWER_IMAGE=$registry/options-edge-signal-follower:$image_tag
+CONTEXT_TAPE_IMAGE=$registry/options-edge-context-tape:$image_tag
+MULTILEG_STRUCTURE_IMAGE=$registry/options-edge-multileg-structure:$image_tag
 EOF
             fi
           else
@@ -87,6 +97,7 @@ DATABENTO_MISSION_SANDWICH_IMAGE=$DATABENTO_MISSION_SANDWICH_IMAGE
 VOLUME_PACE_IMAGE=$VOLUME_PACE_IMAGE
 DIRECTIONAL_PRESSURE_IMAGE=$DIRECTIONAL_PRESSURE_IMAGE
 DATABENTO_GEX_HISTORY_IMAGE=$DATABENTO_GEX_HISTORY_IMAGE
+GAMMA_MIGRATION_IMAGE=$GAMMA_MIGRATION_IMAGE
 RAW_POSTGRES_WRITER_IMAGE=$RAW_POSTGRES_WRITER_IMAGE
 PIN_POSTGRES_WRITER_IMAGE=$PIN_POSTGRES_WRITER_IMAGE
 PRESSURE_POSTGRES_WRITER_IMAGE=$PRESSURE_POSTGRES_WRITER_IMAGE
@@ -105,6 +116,7 @@ OPTION_TRUTH_ENGINE_IMAGE=$OPTION_TRUTH_ENGINE_IMAGE
 MARKET_CARRY_IMAGE=$MARKET_CARRY_IMAGE
 ES_SPX_ALIGN_IMAGE=$ES_SPX_ALIGN_IMAGE
 VIX_OPTION_INTELIGENCE_IMAGE=$VIX_OPTION_INTELIGENCE_IMAGE
+GREEK_MOVE_AUTHENTICITY_IMAGE=$GREEK_MOVE_AUTHENTICITY_IMAGE
 STRIKE_FLOW_AVRO_ADAPTER_IMAGE=$STRIKE_FLOW_AVRO_ADAPTER_IMAGE
 GEX_DELTA_REDIS_WRITER_IMAGE=$GEX_DELTA_REDIS_WRITER_IMAGE
 IBKR_FEED_IMAGE=$IBKR_FEED_IMAGE
@@ -113,10 +125,16 @@ STRIKE_INVASION_IMAGE=$STRIKE_INVASION_IMAGE
 INVASION_POSTGRES_WRITER_IMAGE=$INVASION_POSTGRES_WRITER_IMAGE
 SPREAD_SKEW_IMAGE=$SPREAD_SKEW_IMAGE
 REVERSAL_CONFIRMATION_IMAGE=$REVERSAL_CONFIRMATION_IMAGE
+CORRIDOR_GAUGE_IMAGE=$CORRIDOR_GAUGE_IMAGE
 SPREAD_SKEW_POSTGRES_WRITER_IMAGE=$SPREAD_SKEW_POSTGRES_WRITER_IMAGE
 ES_OPEN_DIRECTION_IMAGE=$ES_OPEN_DIRECTION_IMAGE
 ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE=$ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE
 CLOSE_DIRECTION_IMAGE=$CLOSE_DIRECTION_IMAGE
+SPOT_VOL_REGIME_IMAGE=$SPOT_VOL_REGIME_IMAGE
+INDICATOR_SERVICE_IMAGE=$INDICATOR_SERVICE_IMAGE
+STOCK_GEX_IMAGE=$STOCK_GEX_IMAGE
+DROP_CLASSIFIER_IMAGE=$DROP_CLASSIFIER_IMAGE
+OI_SHADOW_IMAGE=$OI_SHADOW_IMAGE
 REVERSAL_POSTGRES_WRITER_IMAGE=$REVERSAL_POSTGRES_WRITER_IMAGE
 EOF
             # approach-monitor is dev-only; on the promoted path emit it for dev alone.
@@ -133,6 +151,8 @@ EOF
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$SHORT_PREMIUM_AGENT_IMAGE
 SIGNAL_FOLLOWER_IMAGE=$SIGNAL_FOLLOWER_IMAGE
+CONTEXT_TAPE_IMAGE=$CONTEXT_TAPE_IMAGE
+MULTILEG_STRUCTURE_IMAGE=$MULTILEG_STRUCTURE_IMAGE
 EOF
             fi
           fi

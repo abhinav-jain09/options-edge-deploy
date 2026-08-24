@@ -15,8 +15,14 @@
 //   infra kind (§13.5). Common infra must already be in place (Jenkinsfile.common-infra).
 // * Rollback never rebuilds: the job log prints the previously-running digest and the
 //   exact re-point command (§13.2).
+// The validate stage is pure local rendering and the expensive part (44+ min on the loaded
+// dev Mac during market hours vs 2-4 min idle) — it runs on the .74 builders; everything
+// that needs the deploy host stays pinned there. `agent none` so a fallback resolution can
+// never hold two executors at once.
+VALIDATE_AGENT_LABEL = oeBuildAgent.labels('build-mac-74', 'hpsf-replay-mac')
+
 pipeline {
-  agent { label 'hpsf-replay-mac' }
+  agent none
   parameters {
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production', 'experiment'],
       description: 'Target environment — selects k8s/services/web/overlays/<env> and the deployer kubeconfig (oeProfile).')
@@ -33,21 +39,27 @@ pipeline {
     // §13.6 deploy locking: one web deploy at a time (covers all envs of this job —
     // conservative, plugin-free serialisation).
     disableConcurrentBuilds()
-    timeout(time: 45, unit: 'MINUTES')
+    // 120 min, not 45: during US market hours the agent Mac runs the dev k8s stack plus live
+    // trading apps (load avg 60+), and the validate-services.sh stage alone has been measured
+    // at 44+ min (builds #405/#406, 2026-08-06) vs its ~2-4 min idle baseline. 45 min made
+    // market-hours deploys abort mid-chain; the lock above still serialises runs.
+    timeout(time: 120, unit: 'MINUTES')
   }
   environment {
     KUBECONFIG  = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
     ENVIRONMENT = "${params.ENVIRONMENT}"
-    // Per-env web URLs baked into the image at BUILD time — the exact matrix the
-    // bring-up-all umbrella uses (keep in sync with Jenkinsfile.bring-up-all).
+    // Per-env web URL matrix (kept in sync with Jenkinsfile.bring-up-all). NOTE: these are
+    // BUILD-time image defaults/documentation only — the deployed truth is the k8s runtime env
+    // (RuntimeProfileConfig injects pod env into the served page), so a URL flip needs a manifest
+    // change + rollout, not a rebuild.
     IS_PROD         = "${params.ENVIRONMENT == 'production' ? 'true' : 'false'}"
     // Same PROFILE contract as Jenkinsfile.bring-up-all: production -> 'prod',
     // dev -> 'dev', experiment -> 'experiment' (the web job branches on it).
     WEB_PROFILE     = "${params.ENVIRONMENT == 'production' ? 'prod' : params.ENVIRONMENT}"
-    WEB_WS_URL      = "${params.ENVIRONMENT == 'production' ? 'wss://fullfunding.nl/ws/events' : 'ws://localhost:8091/ws/events'}"
-    WEB_API_BASE    = "${params.ENVIRONMENT == 'production' ? 'https://fullfunding.nl' : 'http://localhost:8090'}"
-    WEB_AUTH_ISSUER = "${params.ENVIRONMENT == 'production' ? 'https://auth.fullfunding.nl/realms/optionsedge' : 'http://192.168.100.102:8089/realms/optionsedge'}"
-    WEB_REPLAY_URL  = "${params.ENVIRONMENT == 'production' ? 'https://fullfunding.nl' : 'http://localhost:8095'}"
+    WEB_WS_URL      = "${params.ENVIRONMENT == 'production' ? 'wss://bleadingoptions.com/ws/events' : 'ws://localhost:8091/ws/events'}"
+    WEB_API_BASE    = "${params.ENVIRONMENT == 'production' ? 'https://bleadingoptions.com' : 'http://localhost:8090'}"
+    WEB_AUTH_ISSUER = "${params.ENVIRONMENT == 'production' ? 'https://auth.bleadingoptions.com/realms/optionsedge' : 'http://192.168.100.102:8089/realms/optionsedge'}"
+    WEB_REPLAY_URL  = "${params.ENVIRONMENT == 'production' ? 'https://bleadingoptions.com' : 'http://localhost:8095'}"
     REMOTE_BUILD_HOST = "${params.ENVIRONMENT == 'experiment' ? '192.168.100.2' : '192.168.100.252'}"
     REMOTE_BUILD_ROOT = "${params.ENVIRONMENT == 'experiment' ? '/Users/rajuljain/ci/remote-builds' : '/home/abhinav/ci/remote-builds'}"
     HEALTH_URL_DEFAULT = "${params.ENVIRONMENT == 'production' ? 'http://192.168.100.252:8094/' : (params.ENVIRONMENT == 'dev' ? 'http://localhost:8090/' : '')}"
@@ -57,6 +69,22 @@ pipeline {
     DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
   }
   stages {
+    stage('Validate service registry') {
+      // Own agent = own fresh `checkout scm` of the same build revision; pure gate,
+      // nothing later stages consume.
+      agent { label VALIDATE_AGENT_LABEL }
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-services.sh
+        '''
+      }
+    }
+    // Everything below needs the deploy host (kubeconfigs, kubectl, the chained build's
+    // digest-pin flow) — one agent, one workspace. Bodies unchanged.
+    stage('Deploy path') {
+      agent { label 'hpsf-replay-mac' }
+      stages {
     stage('Resolve profile') {
       steps {
         script {
@@ -65,14 +93,6 @@ pipeline {
           env.BUILD_PLATFORM = p.platform
           echo "web-service resolved (env=${params.ENVIRONMENT}): registry=${env.IMAGE_REGISTRY} platform=${env.BUILD_PLATFORM}"
         }
-      }
-    }
-    stage('Validate service registry') {
-      steps {
-        sh '''
-          set -euo pipefail
-          bash scripts/ci/validate-services.sh
-        '''
       }
     }
     stage('Build web image (native)') {
@@ -116,10 +136,12 @@ pipeline {
         '''
       }
     }
-  }
-  post {
-    always {
-      archiveArtifacts artifacts: '.jenkins-tmp/web-*.yaml', allowEmptyArchive: true
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: '.jenkins-tmp/web-*.yaml', allowEmptyArchive: true
+        }
+      }
     }
   }
 }

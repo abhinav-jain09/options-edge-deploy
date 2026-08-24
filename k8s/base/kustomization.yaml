@@ -40,6 +40,9 @@ resources:
   - spread-skew-service.yaml
   - reversal-confirmation-deployment.yaml
   - reversal-confirmation-service.yaml
+  - drop-classifier-deployment.yaml
+  - drop-classifier-service.yaml
+  - drop-classifier-size-stats-configmap.yaml
   - spread-skew-postgres-writer-deployment.yaml
   - spread-skew-postgres-writer-service.yaml
   - strike-liquidity-heatmap-deployment.yaml
@@ -48,8 +51,22 @@ resources:
   - es-open-direction-service.yaml
   - close-direction-deployment.yaml
   - close-direction-service.yaml
+  - spot-vol-regime-deployment.yaml
+  - spot-vol-regime-service.yaml
+  - indicator-service-deployment.yaml
+  - indicator-service-service.yaml
+  - stock-gex-deployment.yaml
+  - stock-gex-service.yaml
+  - context-tape-deployment.yaml
+  - context-tape-service.yaml
+  - multileg-structure-deployment.yaml
+  - multileg-structure-service.yaml
+  - oi-shadow-deployment.yaml
+  - oi-shadow-service.yaml
   - vix-option-inteligence-deployment.yaml
   - vix-option-inteligence-service.yaml
+  - greek-move-authenticity-deployment.yaml
+  - greek-move-authenticity-service.yaml
   - option-truth-engine-deployment.yaml
   - option-truth-engine-service.yaml
   - market-carry-deployment.yaml
@@ -84,7 +101,11 @@ resources:
   - pin-postgres-writer-service.yaml
   - volume-pace-databento-deployment.yaml
   - databento-gex-history-deployment.yaml
+  - corridor-gauge-deployment.yaml
+  - corridor-gauge-service.yaml
+  - gamma-migration-deployment.yaml
   - databento-gex-history-service.yaml
+  - gamma-migration-service.yaml
   - option-price-behavior-deployment.yaml
   - option-price-behavior-service.yaml
   - feed-gateway-nightly-restart-cronjob.yaml

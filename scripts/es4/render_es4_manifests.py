@@ -19,6 +19,14 @@ Transforms per manifest:
      moving tag production builds push to this registry (:dev entries are stale dev pushes).
   3. per-service ES env appended (q=r for gex; multiplier 50 for strike-flow /
      delta-flow; gex OI fetch disabled — the OPRA/OSI symbology doesn't apply to GLBX).
+  4. per-service env families DROPPED (DROP_ENV_PREFIXES) — prod wiring for pipelines that do
+     not exist on es4 and must not be carried in by a re-render.
+
+NOTE the direction of authority: this generator is the source of truth, and the committed
+k8s/es4/services/*.yaml are its output. Anything es4 needs must be expressed HERE — a value
+hand-edited into a generated file (or merely inherited from prod and left alone) survives only
+until the next re-render, and a comment written into one is lost outright, because PyYAML does
+not emit comments. .github/workflows/deploy-validation.yml fails any PR where the two disagree.
 """
 
 import copy
@@ -40,9 +48,59 @@ SERVICES = [
     "directional-pressure", "gex-delta-redis-writer", "option-price-behavior", "option-truth-engine", "pin-postgres-writer",
     "pressure-postgres-writer", "raw-to-display", "strike-flow-avro-adapter", "strike-flow-classifier",
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
+    "greek-move-authenticity", "gamma-migration",
+    "indicator-service",
+    "context-tape",
+    # es4-ONLY (no dev/prod deployment): its slice is hand-authored as the render source —
+    # see the header of k8s/services/tape-zones/overlays/production/manifest.yaml.
+    "tape-zones",
 ]
 
 ES_ENV = {
+    "indicator-service": [
+        # 0DTE indicator service (rev 14 §7.3): es4 is the SOLE ES indicator producer. The
+        # production slice ships SPX mode; flip every mode-scoped knob here. Topics prefix via
+        # TOPIC_PREFIX at runtime (outputs land as es.options.indicators.* and the two output
+        # topics are mirrored VERBATIM to dev+prod by Jenkinsfile.es-indicator-mirror).
+        {"name": "INDICATOR_SOURCE_MODE", "value": "ES_TRADES", "_override": True},
+        # ES trades flow ~23h/day; the shared liveness gate must watch the Globex session,
+        # not NYSE RTH, or the pod restarts all night on a healthy feed.
+        {"name": "LIVENESS_SESSION", "value": "globex", "_override": True},
+        # es4's es.underlying.es.trades is 4 partitions (the es4 topic-partition contract);
+        # the admission watermark blocks on UNSEEN partitions, so an under-declared count
+        # would silently release records early — must match the live topic exactly.
+        {"name": "INDICATOR_INPUT_PARTITIONS", "value": "4", "_override": True},
+        # NO control-topic entry here on purpose (PR #734): TOPIC_PREFIX=es. (es4-common-env)
+        # prefixes the control-topic default at runtime — an explicit value would double-prefix.
+    ],
+    "context-tape": [
+        # es4 has NO underlying.spx.index.price — its spot stream is underlying.spx.price
+        # (prefixed to es.underlying.spx.price by TOPIC_PREFIX at runtime, like every
+        # env-supplied topic), carrying source SYNTHETIC_OPTION_SPOT with NO priceField.
+        # The prod slice sets the SPX index topic, so es4's value must win explicitly.
+        {"name": "CONTEXT_TAPE_SPOT_TOPIC", "value": "underlying.spx.price", "_override": True},
+        # Not set in the prod slice (SPX defaults apply there); appended here. If prod ever
+        # starts setting them, assert_no_silent_prod_wins forces the decision explicitly.
+        {"name": "CONTEXT_TAPE_SPOT_SOURCE_FILTER", "value": "SYNTHETIC_OPTION_SPOT"},
+        # "ANY" sentinel, not "": KafkaSettings treats a blank env value as unset and
+        # would silently restore the "LAST" fallback — the synthetic feed has no
+        # priceField at all, so the filter must be explicitly cleared.
+        {"name": "CONTEXT_TAPE_SPOT_FIELD_FILTER", "value": "ANY"},
+        # es4's GEX history producer runs DATABENTO_SYMBOL=ES — the SPX default
+        # would silently drop every record there.
+        {"name": "CONTEXT_TAPE_GEX_SYMBOL_FILTER", "value": "ES"},
+        # es4 shadows CME ES, which trades ~23h — frame the FULL Globex session (opens the prior
+        # 18:00 ET) so overnight/pre-market ES gamma is in-session, not rejected as far-future.
+        # The prod slice sets NYSE_RTH with a 07:00 ET pre-open (CONTEXT_TAPE_PRE_OPEN_ET, inherited
+        # by es4 but IGNORED under GLOBEX — Globex derives its start from the 18:00 rule). es4's
+        # GLOBEX must win EXPLICITLY — an implicit append would be exactly the silent-prod-win this
+        # guard exists to catch.
+        {"name": "CONTEXT_TAPE_SESSION_MODE", "value": "GLOBEX", "_override": True},
+        # The 23h session builds ~264 buckets; raise the byte cap to match (service HARD_CAP 4 MiB).
+        # The prod slice sets 1 MiB (its 07:00-open NYSE_RTH day is ~108 buckets, and NYSE_RTH caps
+        # at 1 MiB anyway); es4's 23h session is far wider, so its 4 MiB must win explicitly.
+        {"name": "CONTEXT_TAPE_MAX_SNAPSHOT_BYTES", "value": "4194304", "_override": True},
+    ],
     "close-direction": [
         # es4 chains carry symbol "ES" (the es-prefixed dealer-ledger profile stream); the
         # engine's 0DTE chain selector must match it, not the SPX default. Topics prefix via
@@ -53,6 +111,16 @@ ES_ENV = {
     "databento-gex": [
         {"name": "DATABENTO_GEX_RISK_FREE_RATE", "value": "0.04"},
         {"name": "DATABENTO_GEX_DIVIDEND_YIELD", "value": "0.04"},   # q=r -> Black-76 on the future
+        # es4 has NO market-carry-service (it is an SPX put-call-parity service; the SERVICES list
+        # correctly omits it), so nothing produces the market-carry topic here. The prod slice runs
+        # dynamic carry ON (long-standing; PR #582 later widened the age gate to 660s for the 5-min
+        # cadence and enabled STATIC_FALLBACK) — without this pin a re-render flips es4 gex to a
+        # GlobalKTable over a producer-less auto-created topic and parks every record on the
+        # STATIC_FALLBACK rescue path (observed live: 3.07M fallback-priced records after the
+        # 2026-07-25 re-render deploy). es4 gex intentionally prices with the static Black-76 carry
+        # above (regime STATIC_CONFIG); with dynamic carry off, gex does not even build the carry
+        # GlobalKTable.
+        {"name": "DATABENTO_GEX_DYNAMIC_CARRY_ENABLED", "value": "false", "_override": True},
         # OI on ES rides live in the feed (GLBX statistics stat_type=9 -> openInterest on every record),
         # NOT via the OPRA/OSI REST fetch (which can't parse CME symbols) -> keep the direct fetch OFF.
         {"name": "DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED", "value": "false", "_override": True},
@@ -62,11 +130,53 @@ ES_ENV = {
         # restart-durable using the same DB path SPX uses, without the GLBX symbology adapter.
         {"name": "DATABENTO_GEX_OI_BASELINE_BACKFILL_ENABLED", "value": "true"},
         {"name": "DATABENTO_GEX_OI_PERSIST_LIVE_ENABLED", "value": "true"},
-        # Top-3 fade/lifecycle gate (proc #466/#467; dev deploy #584, prod deploy #585+#813): fade +
-        # lifecycle publish only the top-3 |netGex| strikes per chain; stage-1 per-strike netGex unchanged.
-        # Mirrors prod so ES badges land on the SAME top-gamma strikes the board highlights. Enabling
-        # switches fade+lifecycle to isolated "-topn" store lineages (one-time state reset, by design).
-        {"name": "DATABENTO_GEX_FLOW_TOP_N", "value": "3"},
+        # The OI nowcast has no place on es4, and this pin is what keeps it out. The prod chain is
+        # anchor-manifest -> oi-shadow-service -> GEX (this flag): with it ON, gex consumes
+        # oi-shadow's options.databento.oi.nowcast.by-strike. es4 has NO oi-shadow-service (it is
+        # absent from SERVICES) and no es.options.databento.oi.nowcast.* topic, so ON here is the
+        # DATABENTO_GEX_DYNAMIC_CARRY_ENABLED failure shape again — a GlobalKTable over a
+        # producer-less topic. It is also wrong on the merits twice over: ES OI rides LIVE in the
+        # feed (GLBX statistics stat_type=9) rather than arriving as one 06:30 OPRA print to
+        # extrapolate from, and the nowcast's coefficients are SPX-fitted. Retired on dev+prod
+        # 2026-08-10 (#783, docs/oi-nowcast-retirement.md) — but prod's kustomization documents the
+        # revival path as "flip DATABENTO_GEX_DYNAMIC_OI_ENABLED back to true", so WITHOUT this pin
+        # that revival silently re-arms a producer-less consumer on the live es4 box at the next
+        # unrelated re-render. es4 was carrying 'true' from exactly that inheritance until 2026-08-13.
+        {"name": "DATABENTO_GEX_DYNAMIC_OI_ENABLED", "value": "false", "_override": True},
+        # DATABENTO_GEX_FLOW_TOP_N: es4 now INHERITS the production slice's value (40 as of
+        # 2026-08-03). The former es4 pin of 3 (proc #466/#467 rollout) starved strike-intelligence
+        # — its ONLY GEX input is the flow topic this gate feeds, so top-3 left ~65% of the es4
+        # near-ATM ladder GEX-missing (measured on es.strike-intelligence-by-strike). Dev+prod both
+        # run 40 with zero streams lag. Watch es4 gex lag after rollout; the rollback is a pin here.
+        # TICK-AWARE SPREAD FLOOR: es4 is PINNED to "shadow"; production runs "live" (#866,
+        # 2026-08-18). Without this pin the next re-render promotes es4 to live too, purely by
+        # inheritance, and #866's own evidence does not reach that far:
+        #   - The promotion A/B was dev-live vs prod-shadow on chain SPX 20260818. Every number in
+        #     it (admissions, suShortGamma, MISSING_IV, the single ledger fire) is SPX. The prod
+        #     overlay labels its own evidence CORROBORATIVE, not proof — no per-leg replay was run.
+        #   - The gate is "at most 4 ticks wide", so it is priced in TICKS. SPX options and GLBX ES
+        #     options do not share a tick regime, and es4 prices Black-76 on the future at the ES 50
+        #     multiplier (see the carry and OI pins above). An admission rule calibrated on the SPX
+        #     chain has no measured meaning on the ES chain.
+        #   - Blast radius on es4 mirrors prod's: inclusive netGex moves for every consumer of
+        #     es.options.databento.gex.strike, and the prod comment is explicit that live-era values
+        #     are NOT undone by a rollback — they persist in the compacted topic, the immutable
+        #     history archive, gex-delta-redis-writer's external Redis keys and downstream state
+        #     stores. On a LIVE box that is a one-way door taken without ES evidence.
+        # "shadow" is what es4 runs TODAY (the code default; the name is absent from the committed
+        # manifest), so this pin changes NOTHING on the box — it only stops an unreviewed
+        # promotion riding in on an unrelated re-render, and keeps the counterfactual accounting
+        # running so an ES-side promotion can be argued on ES numbers. Promote = change this to
+        # "live" and re-render.
+        {"name": "GEX_TICK_SPREAD_FLOOR_MODE", "value": "shadow", "_override": True},
+        # DATABENTO_GEX_FLOW_TOPN_THROTTLE_INTERVAL_MS: es4 INHERITS production's 10000 (#895,
+        # 2026-08-21, raised from the 2000 code default). Deliberate, not drift: the knob throttles
+        # the single-partition gex-flow-topn-rekey drain, and the reasoning transfers to es4 intact
+        # — strike-intelligence is the flow topic's consumer here too (see the FLOW_TOP_N note
+        # above) and its 120s freshness gate leaves a 10s per-strike cadence with ample margin,
+        # while ~5x less hot-partition inflow is worth more on the capacity-bound .4 box than on
+        # prod. Unlike the floor above this is a throughput knob, not an admission rule, so it
+        # carries no chain-specific calibration. Rollback is a pin here.
         # ES-GEX-on-SPX bridge (DatabentoGexBridge, behind ES_GEX_SPXBRIDGE_ENABLED): republish the raw
         # es gex.strike as self-describing JSON on KAFKA_ES_GEX_SPXBRIDGE_TOPIC (default
         # options.databento.gex.spxbridge -> es.options.databento.gex.spxbridge via TOPIC_PREFIX). The
@@ -82,12 +192,13 @@ ES_ENV = {
         # day, found nothing, and held ES GEX NOT_READY (the documented 00:00-06:00 ET OI loss).
         # 18:00-ET rollover = timestamps at/after Globex open belong to the NEXT trade date.
         {"name": "DATABENTO_GEX_OI_SESSION_ROLL_AFTER", "value": "18:00"},
-        # ES overnight prior-session OI carry (es-overnight-oi-carry-gate1.md, PR#543): overnight the current
-        # session has no published OI (rolls at 18:00), so serve the most-recent prior session's settled OI —
-        # labelled CARRIED_PRIOR_SESSION — instead of fail-closed/blank. ES-ONLY, provider guard is hard ES.
-        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_ENABLED", "value": "true"},
-        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_SYMBOLS", "value": "ES"},
-        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_MAX_CALENDAR_DAYS", "value": "4"},
+        # Overnight OI carry (PR#543) is DISABLED here (USER 2026-08-03): the ES feed stamps live GLBX
+        # open interest onto every snapshot, so ES's OI source is the FEED, not the Postgres baseline —
+        # and the es4 persist-live table only ever holds each session's own 0DTE expiry, so a prior-session
+        # row for TODAY's expiry never exists (0DTE: yesterday's expiry died yesterday). The carry could
+        # never fire usefully here; leaving it enabled just adds a dead DB probe per chain. The code stays
+        # merged (flag-off default) for expiring-later products / other envs if ever needed.
+        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_ENABLED", "value": "false"},
         # P2: ES contract multiplier is 50 (E-mini), not the SPX 100 the persist SQL used to
         # hardcode; live rows now stamp the snapshot's own multiplier and this covers any path
         # that has no per-record value. Existing same-key rows self-heal on the next upsert.
@@ -100,6 +211,12 @@ ES_ENV = {
     ],
     "strike-flow-classifier": [
         {"name": "STRIKE_FLOW_CONTRACT_MULTIPLIER", "value": "50", "_override": True},
+        # STRIKE_FLOW_SYMBOL is an AUTHORITATIVE allow-list since processing PR#494. The classifier
+        # derives each trade's symbol from the payload `underlying` field, which is "ES" for every GLBX
+        # ES-option record (weekly roots E1A..E4E/EW arrive as `product`, not the symbol). The inherited
+        # production "SPX" rejected 100% of es4 input once the allow-list went live (2026-07-27 outage:
+        # rejected_symbol_total 1073+, processed 0) — this override is the durable fix.
+        {"name": "STRIKE_FLOW_SYMBOL", "value": "ES", "_override": True},
     ],
     # ES trades ~23h on CME Globex (Sun 18:00 ET - Fri 17:00 ET, daily 17:00-18:00 halt); the default
     # spx-rth calendar wrongly forced the pace board + spot model to SESSION_IDLE outside 09:30-16:15 ET.
@@ -170,6 +287,12 @@ ES_ENV = {
         # magnitudes. Self-calibrating — no per-session scale numbers. SPX keeps the flag OFF (default).
         {"name": "STRIKE_INTEL_ADAPTIVE_SCALE_ENABLED", "value": "true"},
     ],
+    # greek-move-authenticity on es4: the SAME engine measures ES greeks to authenticate ES moves.
+    "greek-move-authenticity": [
+        {"name": "GREEK_MOVE_AUTH_ENABLED", "value": "true", "_override": True},
+        {"name": "GREEK_MOVE_AUTH_SYMBOL", "value": "ES", "_override": True},
+        {"name": "GREEK_MOVE_AUTH_INPUT_SPOT_TOPIC", "value": "underlying.es.price", "_override": True},
+    ],
     "vix-option-inteligence": [
         # On es4 the same deterministic engine analyzes the ES 0DTE option tape. TOPIC_PREFIX
         # still isolates all input/output topics on the .4 broker.
@@ -180,19 +303,61 @@ ES_ENV = {
 # IBKR-variant workloads have no place in the ES pipeline (Codex finding #5).
 DROP_WORKLOADS = {"raw-to-display-service", "directional-pressure-service"}
 
+# Same rule, one level down: env FAMILIES the prod slice sets that must never render into es4.
+# DROP_WORKLOADS removes whole IBKR workloads; this removes IBKR wiring bolted onto a workload
+# es4 *does* run. Prefix-matched on purpose — prod is actively growing this path
+# (OVERNIGHT-IBKR-GEX rev13+D15), and a new IBKR_GEX_* knob must not need a second incident to
+# be excluded here.
+#
+# databento-gex / IBKR_GEX_*: k8s/overlays/production/ibkr-preopen-gate-prod-patch.yaml arms the
+# pre-open IBKR SPX GEX path (CONSUME+PUBLISH true, stage live). Rendered onto es4 that is not
+# inert, it is a contamination bug:
+#   - IBKR_GEX_TOPIC=options.databento.gex.strike -> es.options.databento.gex.strike, which IS the
+#     es4 primary GEX topic (strike-intelligence, the SPX bridge, gex-delta-redis-writer and the
+#     history series all read it). PUBLISH=true would inject IBKR SPX cash-index gamma, on SPX
+#     strikes at the SPX 100 multiplier, into the ES board.
+#   - IBKR_GEX_SPOT_TOPIC=underlying.spx.index.price -> es.underlying.spx.index.price, which es4
+#     does not have at all (its spot stream is es.underlying.spx.price; see the context-tape
+#     ES_ENV block, which already had to work around exactly this).
+#   - CONSUME reads es.options.ibkr.gex.* — no producer and not declared in topics.env's es4 set.
+# The mutual-exclusion boot guard does NOT save us: IbkrPreOpenConfig only refuses boot when
+# PREOPEN_GEX_ENABLED is also true, and the same prod patch pins that false. es4 would boot clean
+# and publish quietly. es4 has no IBKR fan-out and never will — this is the ES pipeline.
+DROP_ENV_PREFIXES = {
+    "databento-gex": ("IBKR_GEX_",),
+}
+
 # Rendered at replicas:0 on es4 ONLY — still defined, still deployable, just not running.
 # USER 2026-07-26, "until further notice": the .4 box was carrying load average 18.4 on 12 cores
 # with CPU limits unset cluster-wide, and these two were its heaviest tenants
-# (dealer-ledger ~1015m/1088Mi, directional-pressure ~697m/867Mi, volume-pace ~401m/2434Mi,
-# option-price-behavior ~80m/1563Mi — that one is a memory tenant rather than a CPU one).
+# (dealer-ledger ~1015m/1088Mi, directional-pressure ~697m/867Mi, volume-pace ~401m/2434Mi).
 # Prod and dev are NOT affected by this
 # list. Re-enable = delete the name here, re-render, deploy that service.
 ES4_KEEP_DOWN = {
     "dealer-ledger-service",
+    # USER 2026-08-18: hold the whole dealer-ledger family down on es4 until further notice.
+    # dealer-ledger-service was already listed; its two calibration workers were not, so a deploy
+    # would render them at replicas:1 and quietly bring half the family back.
+    "dealer-ledger-calibration-accumulator",
+    "dealer-ledger-calibration-scorer",
     "volume-pace-databento-service",
     "directional-pressure-databento-service",
-    "option-price-behavior-service",
-    "strike-liquidity-heatmap-service",
+    # USER 2026-07-30: strike-liquidity-heatmap RE-ENABLED on es4 to evaluate the wall-line /
+    # buy-bubble overlay against the ES chain. Measured headroom before removing it: .4 was at
+    # 8251m/12 cores (68%) live with 39Gi memory available, so its 750m/512Mi request fits.
+    # KNOWN AND ACCEPTED (USER decided after being shown the measurement): es.options.databento.
+    # strike-flow held only 37 records at the time, so the ribbon colour and wall line (both fed by
+    # es.options.databento.events.raw, verified 100% cbbo-1s) will render but the trade bubbles will
+    # not until that topic is populated. See the es4 strike-flow wiring follow-up.
+    # USER 2026-07-27: disable the skew service on es4. The feature is RETIRED; the postgres writer
+    # goes down with its producer (nothing to consume, and the es4 box has no spare capacity).
+    "spread-skew-service",
+    "spread-skew-postgres-writer",
+    # USER 2026-07-31: "disable truth service on es env until further notice."
+    # Already OFF on production (base replicas:0 + morning-autostart KEEP_DOWN); es4 was still
+    # running it. Listing it here is the load-bearing part: a hand-set replicas:0 on the box is
+    # undone by the next re-render, and es4 has no morning-autostart to hold it down.
+    "option-truth-engine-service",
 }
 
 HEADER = """\
@@ -242,6 +407,11 @@ def transform(svc, docs):
                 claim_names.append(pvc)
         for c in doc["spec"]["template"]["spec"]["containers"]:
             c["envFrom"] = transform_env_from(c.get("envFrom"))
+            # drop the env families that have no place on es4 (see DROP_ENV_PREFIXES). Done
+            # BEFORE the ES_ENV merge so a dropped name can never shadow an es4 intent.
+            drop = DROP_ENV_PREFIXES.get(svc)
+            if drop and c.get("env"):
+                c["env"] = [e for e in c["env"] if not e.get("name", "").startswith(drop)]
             # redis runs in the es4 compose stack on the HOST, not in-cluster
             for e in c.get("env") or []:
                 if e.get("value") == "options-edge-redis":
@@ -307,7 +477,26 @@ def assert_no_silent_prod_wins(svc, docs):
                 f"entry if prod's is now correct for es4 too.")
 
 
+def assert_drop_prefixes_are_coherent():
+    """DROP_ENV_PREFIXES must name real services and must not contradict ES_ENV.
+
+    Both are cheap mistakes with silent consequences: a prefix keyed on a service that is not
+    rendered does nothing at all, and a prefix that also matches an ES_ENV entry would delete the
+    es4 intent the entry exists to state (and would confuse assert_no_silent_prod_wins, which
+    compares against the RAW prod env, i.e. before the drop).
+    """
+    for svc, prefixes in DROP_ENV_PREFIXES.items():
+        if svc not in SERVICES:
+            sys.exit(f"DROP_ENV_PREFIXES names {svc!r}, which is not in SERVICES — it would never apply.")
+        for item in ES_ENV.get(svc, []):
+            if item["name"].startswith(tuple(prefixes)):
+                sys.exit(
+                    f"DROP_ENV_PREFIXES/ES_ENV CONTRADICTION in {svc}: {item['name']} is both "
+                    f"dropped and set as es4 intent. Pick one.")
+
+
 def main():
+    assert_drop_prefixes_are_coherent()
     os.makedirs(OUT_DIR, exist_ok=True)
     for svc in SERVICES:
         src = f"k8s/services/{svc}/overlays/production/manifest.yaml"
@@ -319,10 +508,19 @@ def main():
         docs = transform(svc, docs)
         buf = io.StringIO()
         yaml.safe_dump_all(docs, buf, sort_keys=False, default_flow_style=False)
-        with open(f"{OUT_DIR}/{svc}.yaml", "w") as f:
+        out = f"{OUT_DIR}/{svc}.yaml"
+        # Refuse to write through a symlink or onto a non-regular path. open(...,"w") FOLLOWS a
+        # symlink, so a manifest path replaced by one would silently overwrite its target while
+        # this directory still looks clean. Checked here rather than only in
+        # scripts/ci/validate-es4-render.sh because by the time that script's file-set check runs
+        # the render has already happened — and because the renderer is normally run by hand.
+        if os.path.islink(out) or (os.path.exists(out) and not os.path.isfile(out)):
+            sys.exit(f"REFUSING to write {out}: not a regular file (symlink or directory). "
+                     f"Every es4 manifest path must be a plain file.")
+        with open(out, "w") as f:
             f.write(HEADER.format(src=src))
             f.write(buf.getvalue())
-        print(f"rendered {OUT_DIR}/{svc}.yaml")
+        print(f"rendered {out}")
     print(f"done: {len(SERVICES)} services")
 
 

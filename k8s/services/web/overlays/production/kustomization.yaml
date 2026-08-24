@@ -23,3 +23,24 @@ patches:
       - op: add
         path: /spec/progressDeadlineSeconds
         value: 1200
+      # Position-flow Leaderboard store on the INTERNAL surface: APP_POSTGRES_* pointed at the
+      # platform Postgres (no bo-app-postgres here; the nightly publisher writes options_flow
+      # too). MIRRORS the web patch in k8s/overlays/production/kustomization.yaml exactly.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: APP_POSTGRES_JDBC_URL
+          value: jdbc:postgresql://192.168.100.252:5432/options_flow
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: APP_POSTGRES_USER
+          value: options_flow
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: APP_POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: options-edge-runtime-secrets
+              key: POSTGRES_PASSWORD

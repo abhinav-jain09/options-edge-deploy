@@ -1,0 +1,24 @@
+# STANDALONE email service overlay — production.
+#
+# THE IMAGE IS PINNED TO A DIGEST, in git, rather than left as a tag.
+#
+# The base carries `:latest` so the manifest reads sensibly on its own, but a tag can be re-pushed:
+# `latest` today and `latest` after the next build are different images, and the one whose tests were
+# green is not necessarily the one that runs. On 2026-08-16 a tag on the web image resolved to four
+# different digests inside twenty minutes for exactly this reason.
+#
+# This digest is oe-email-service-deploy #10, built from revision 9bc16de with all 10 tests green on
+# the agent — including the ones that assert seeding sends nothing and a failed send is retried
+# rather than marked done. Changing this line means a new build whose tests passed, not a lookup at
+# deploy time.
+# ⚠️ This digest is a linux/amd64 image, verified against the registry manifest. The build agent is
+# Apple Silicon; an image built natively there deploys fine and then CrashLoopBackOffs with
+# "exec /opt/java/openjdk/bin/java: exec format error", which names nothing about architecture.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: 192.168.100.252:5000/oe-email-service
+    newName: 192.168.100.252:5000/oe-email-service
+    digest: sha256:c9eb2f622c96b9687c2ad98fa5f29027facba38e71543010b19187bdf89cb803

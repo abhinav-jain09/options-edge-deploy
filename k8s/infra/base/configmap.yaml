@@ -9,6 +9,17 @@ data:
   KAFKA_APPLICATION_ID_SUFFIX: -prod
   SCHEMA_REGISTRY_URL: http://192.168.100.252:8082
   APP_MARKET_DATA_SOURCE: DATABENTO
+  # HEATMAP RAMP SATURATION — ONE key, TWO readers, deliberately shared.
+  # options-edge-web injects every HEATMAP_* key into window.__OPTIONS_EDGE_ENV__ (liquidity-heatmap.js
+  # frameP99 reads it) and feed-gateway reads the same key for the history projection's rawP99. These
+  # two percentiles MUST be equal: history primes the very ramp scale the live frames then drive, so a
+  # divergence leaves the colours drifting for one decay half-life (~5 min) after every page load.
+  # Setting it HERE is the anti-drift mechanism — the in-code defaults (both 0.95) only apply if this
+  # key is absent, and no unit test in either repo can see the other side.
+  # Value 0.95 calibrated 2026-07-30 on 144,611 prod SPXW 0DTE buckets: per-cell size is bimodal
+  # (p50=17 far-OTM tail vs p75=196+ live ladder), so saturating at p99 left only 1.0% of cells ever
+  # reaching yellow. See HEATMAP-CALIBRATION-LEDGER section 6.
+  HEATMAP_COLOR_SATURATION_PCT: "0.95"
   APP_FEED_GATEWAY_ENABLED: "true"
   APP_FEED_GATEWAY_WS_URL: ws://192.168.100.252:30097/ws/events
   APP_WEB_PORT: "8091"
@@ -33,6 +44,19 @@ data:
   # underlying.vix.price. We only want VIX from IBKR (SPX chain/spot come from Databento).
   # ibkr-feed runs on prod only; dev stays scaled to 0 and gets VIX via the prod->dev bridge.
   IBKR_CHAIN_ENABLED: "false"
+  # Pre-open IBKR GEX path (OVERNIGHT-IBKR-GEX-GATE1-REQUIREMENT.md rev13, Phase 2 DARK):
+  # consume=false means the gex-service allocates NOTHING for this path (off-identity);
+  # publish additionally requires consume (legality matrix R-FLAGS). Stage "shadow" pins the
+  # output topic to options.ibkr.gex.strike.shadow via a boot-refusing allowlist — the live
+  # topic (options.databento.gex.strike) is reached by an explicit stage flip at gate BETA
+  # (live-dark: values on the live topic, UI still dark); gate GAMMA is user visibility only
+  # (R-ROLL). The status topic is SINGLE-partition by contract (control ordering + the service's
+  # generation mint-above probe reads partition 0) — see scripts/kafka/topics.env.
+  IBKR_GEX_CONSUME_ENABLED: "false"
+  IBKR_GEX_PUBLISH_ENABLED: "false"
+  IBKR_GEX_TOPIC_STAGE: "shadow"
+  IBKR_GEX_TOPIC: "options.ibkr.gex.strike.shadow"
+  KAFKA_IBKR_GEX_STATUS_TOPIC: "options.ibkr.gex.status"
   IBKR_VIX_PRICE_ENABLED: "true"
   IBKR_VIX_SYMBOL: VIX
   IBKR_VIX_EXCHANGE: CBOE

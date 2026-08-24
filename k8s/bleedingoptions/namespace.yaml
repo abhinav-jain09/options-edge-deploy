@@ -1,0 +1,21 @@
+# The public tenant's namespace (PGL-030).
+#
+# Everything internet-facing lives here and NOTHING else does. The separation is the point: a
+# compromise of the public identity provider or the public web tier reaches the objects in this
+# namespace and stops, because the NetworkPolicies in networkpolicies.yaml default-deny both
+# directions and open exactly three paths — DNS, Keycloak's own Postgres, and one read-only port on
+# one service in `options-edge`.
+#
+# Named for the PUBLIC domain, bleedingoptions.com (correct spelling). The internal platform keeps
+# the differently-spelled bleadingoptions.com; see docs/domain-migration-bleadingoptions.md and D-1 in
+# the design. The two differ by one letter and grant entirely different trust, which is why
+# scripts/ops/verify-prod-tunnel.sh asserts they resolve to different backends (PGL-036A).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+    # Selector the cross-namespace NetworkPolicy in options-edge matches on, so the stock-gex ingress
+    # rule names this namespace by label rather than by a name string that a copy-paste could get wrong.
+    oe/tenant: bleedingoptions

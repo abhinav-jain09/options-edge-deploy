@@ -2,9 +2,9 @@
 # consumes options.databento.raw and emits options.databento.maxpain. It is INDEPENDENT of the GEX
 # service (parses OI itself; uses only open interest + strikes — no Greeks, no GEX topic).
 #
-# DEV-ONLY (envs: [dev]): referenced from k8s/overlays/dev (NOT k8s/base/kustomization.yaml), so the
-# production/experiment monolith overlays never render it. The dev overlay remaps the prod-registry
-# base ref -> host.docker.internal:5001 via its images: transformer.
+# Referenced from k8s/base/kustomization.yaml, so every monolith env renders it (promoted
+# dev-only -> dev+production by PR #357). The dev overlay remaps the prod-registry base ref
+# -> host.docker.internal:5001 via its images: transformer.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -15,7 +15,11 @@ metadata:
     app.kubernetes.io/component: databento-maxpain-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # PROD-ONLY (USER 2026-08-01: "turn on prod only"). Base stays 0 so dev/experiment keep
+  # rendering the service down (dev-cleanup DISABLED_DEV still lists it); the production
+  # overlay patches replicas -> 1. Re-enable elsewhere = patch that env's overlay +
+  # re-run generate-service-slices.sh. Supersedes the 2026-07-30 all-env hold (PR #652).
+  replicas: 0
   strategy:
     type: Recreate
   selector:

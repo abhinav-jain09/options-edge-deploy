@@ -1,0 +1,29 @@
+# The `fullfunding` tenant SPACE — namespace, budget, priority, network boundary, admission
+# rules and deploy identity. Applied by the tenant's own Jenkins job from main.
+#
+# Contents: the space (namespace, budget, priority, network boundary, admission rules, deploy
+# identity) plus the application's Postgres database.
+#
+# The application SERVICE itself is still to be developed and is not here yet; when it arrives it
+# lands in this namespace and inherits everything above. Bugzilla is NOT part of this namespace —
+# it stays in options-edge.
+#
+# Kafka is deliberately absent: nothing in this namespace uses it today, and it would not fit
+# inside the 2 GiB budget alongside Postgres and the service. Adding it later is a small change.
+#
+# Storage note: PVCs in this namespace must name `local-path`, whose provisioner root is
+# /home/options-edge/data/k3s/storage — i.e. on /home, NOT on the root filesystem. `local-path`
+# does not enforce the declared PVC size (it is a hostPath bind), so the 40Gi in the quota is a
+# declaration cap rather than a physical wall; /home has ~1.2 TiB free. A dedicated
+# preallocated filesystem is the later hardening if a physical wall becomes necessary.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - resourcequota.yaml
+  - limitrange.yaml
+  - priorityclass.yaml
+  - networkpolicy.yaml
+  - validating-policy.yaml
+  - rbac.yaml
+  - postgres.yaml

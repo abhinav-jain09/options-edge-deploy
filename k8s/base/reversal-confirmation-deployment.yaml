@@ -85,6 +85,27 @@ spec:
               value: "3"
             - name: REVERSAL_MIN_BOUNCE_IMBALANCE
               value: "0.05"
+            # Weak-flow calibration (2026-08-02 gate counterfactual, memory/
+            # reversal-gate-counterfactual-analysis): at defaults 2/3/6 the
+            # WEAK_FLOW fade killed 78% of the shadow corpus within ~12s and
+            # its victims win at 0.93 (ABOVE the 0.87 base rate) — rv/accel
+            # gates fail structurally (10.6%/12.9% pass rates), so ">=2 failed
+            # measurable gates" is the normal state of an eval, not weakness.
+            # Defanged as a calibration HYPOTHESIS (not a proven eval-31
+            # fix — the old corpus truncates at median eval 6, so later-stage
+            # behavior is unmeasurable): goal is candidates living long
+            # enough that the sustain check and gates can be calibrated at
+            # all (spec S14 needs >=30 CONFIRMED; rate was ~1 per 12 days).
+            # Provenance: 78% share = real terminal states; 0.93/0.87 win
+            # rates = es_reversal_outcome ground truth (H=180, X=8/Y=4);
+            # 10.6%/12.9% = per-eval gate pass rates from es_reversal_eval.
+            # All measured on the real corpus; none are simulation outputs.
+            - name: REVERSAL_WEAK_FLOW_MIN_FAILED_GATES
+              value: "3"
+            - name: REVERSAL_WEAK_FLOW_PERSISTENCE_EVALS
+              value: "6"
+            - name: REVERSAL_WEAK_FLOW_MIN_AGE_EVALS
+              value: "12"
             - name: REVERSAL_RV_PRIMARY_THRESHOLD
               value: "1.15"
             # secondary must stay BELOW primary (EngineConfig validation:

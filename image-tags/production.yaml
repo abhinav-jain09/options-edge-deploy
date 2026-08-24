@@ -1,4 +1,10 @@
 images:
+  # bleedingoptions tenant — the email sender. Its overlay PINS A DIGEST, so this tag is not
+  # what gets deployed; it is what service-deploy compares the pin's repository against, and it
+  # must therefore exist in the registry (the build pushes it).
+  bleedingoptions-email: 192.168.100.252:5000/oe-email-service:prod
+  # fullfunding tenant — built on .252 (amd64 native); the app is static files only.
+  fullfunding-app: 192.168.100.252:5000/fullfunding-app:v1
   raw-to-display-service: 192.168.100.252:5000/options-edge-raw-to-display:prod
   databento-mission-sandwich-service: 192.168.100.252:5000/options-edge-databento-mission-sandwich:prod
   directional-pressure-service: 192.168.100.252:5000/options-edge-directional-pressure:prod
@@ -12,6 +18,9 @@ images:
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:prod
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:prod
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:prod
+  oi-shadow-service: 192.168.100.252:5000/options-edge-oi-shadow:prod
+  gamma-migration-service: 192.168.100.252:5000/options-edge-gamma-migration:prod
+  corridor-gauge-service: 192.168.100.252:5000/options-edge-corridor-gauge:prod
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:prod
   dealer-ledger-calibration-scorer: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:prod
   dealer-ledger-calibration-accumulator: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:prod
@@ -33,13 +42,22 @@ images:
   hpsf-postgres-writer-service: 192.168.100.252:5000/options-edge-hpsf-postgres-writer:prod
   es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:prod
   close-direction-service: 192.168.100.252:5000/options-edge-close-direction:prod
+  spot-vol-regime-service: 192.168.100.252:5000/options-edge-spot-vol-regime:prod
+  # Required even though prod holds stock-gex at replicas:0: without a production mapping the
+  # per-service fast path fails closed (service-deploy.sh would otherwise pin the dev registry).
+  stock-gex-service: 192.168.100.252:5000/options-edge-stock-gex:prod
+  indicator-service: 192.168.100.252:5000/options-edge-indicator-service:prod
   vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:prod
+  greek-move-authenticity-service: 192.168.100.252:5000/options-edge-greek-move-authenticity:prod
   es-open-direction-postgres-writer: 192.168.100.252:5000/options-edge-es-open-direction-postgres-writer:prod
   web: 192.168.100.252:5000/options-edge-web:prod
   short-premium-agent-service: 192.168.100.252:5000/options-edge-short-premium-agent:prod
   spread-skew-service: 192.168.100.252:5000/options-edge-spread-skew:prod
   es-spx-align-service: 192.168.100.252:5000/options-edge-es-spx-align:prod
   reversal-confirmation-service: 192.168.100.252:5000/options-edge-reversal-confirmation:prod
+  drop-classifier-service: 192.168.100.252:5000/options-edge-drop-classifier:prod
+  context-tape-service: 192.168.100.252:5000/options-edge-context-tape:prod
+  multileg-structure-service: 192.168.100.252:5000/options-edge-multileg-structure:prod
   es-aggressor-flow-service: 192.168.100.252:5000/options-edge-es-aggressor-flow:prod
   reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:prod
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:prod

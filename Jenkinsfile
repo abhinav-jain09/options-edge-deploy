@@ -28,6 +28,7 @@ pipeline {
     string(name: 'VOLUME_PACE_IMAGE', defaultValue: '', description: 'Volume-pace image')
     string(name: 'DIRECTIONAL_PRESSURE_IMAGE', defaultValue: '', description: 'Directional-pressure image')
     string(name: 'DATABENTO_GEX_HISTORY_IMAGE', defaultValue: '', description: 'Databento GEX history image')
+    string(name: 'GAMMA_MIGRATION_IMAGE', defaultValue: '', description: 'Gamma migration image')
     string(name: 'RAW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Raw Postgres writer image')
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pressure Postgres writer image')
     string(name: 'PIN_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pin Postgres writer image (deployed in dev AND prod; the prod image must exist before promotion)')
@@ -45,14 +46,21 @@ pipeline {
     string(name: 'OPTION_TRUTH_ENGINE_IMAGE', defaultValue: '', description: 'Option truth engine service image')
     string(name: 'MARKET_CARRY_IMAGE', defaultValue: '', description: 'SPX market carry service image')
     string(name: 'ES_SPX_ALIGN_IMAGE', defaultValue: '', description: 'ES→SPX alignment service image (GEX + strike-intel)')
+    string(name: 'GREEK_MOVE_AUTHENTICITY_IMAGE', defaultValue: '', description: 'Greeks-only move-authenticity engine image')
     string(name: 'VIX_OPTION_INTELIGENCE_IMAGE', defaultValue: '', description: 'Live 0DTE volatility intelligence image')
     string(name: 'STRIKE_INVASION_IMAGE', defaultValue: '', description: 'Strike invasion service image')
     string(name: 'INVASION_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Strike-invasion postgres writer image')
     string(name: 'SPREAD_SKEW_IMAGE', defaultValue: '', description: 'Spread-skew service image')
     string(name: 'REVERSAL_CONFIRMATION_IMAGE', defaultValue: '', description: 'Reversal-confirmation service image')
+    string(name: 'CORRIDOR_GAUGE_IMAGE', defaultValue: '', description: 'Corridor-gauge service image (shadow mode)')
     string(name: 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Spread-skew postgres writer image')
     string(name: 'ES_OPEN_DIRECTION_IMAGE', defaultValue: '', description: 'ES open-direction service image')
     string(name: 'CLOSE_DIRECTION_IMAGE', defaultValue: '', description: 'SPX close-direction service image')
+    string(name: 'SPOT_VOL_REGIME_IMAGE', defaultValue: '', description: 'SPX spot-vol-regime service image')
+    string(name: 'INDICATOR_SERVICE_IMAGE', defaultValue: '', description: '0DTE indicator service image')
+    string(name: 'DROP_CLASSIFIER_IMAGE', defaultValue: '', description: 'Drop classifier service image')
+    string(name: 'OI_SHADOW_IMAGE', defaultValue: '', description: 'SPXW open-interest shadow experiment image')
+    string(name: 'STOCK_GEX_IMAGE', defaultValue: '', description: 'SPX-500 single-stock GEX service image (builds in the databento-feed repo)')
     string(name: 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'ES open-direction postgres writer image')
     string(name: 'REVERSAL_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Reversal calibration postgres writer image')
     string(name: 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE', defaultValue: '', description: 'Strike-flow Avro adapter image (unified-sr FLOW producer)')
@@ -60,6 +68,8 @@ pipeline {
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
     string(name: 'SHORT_PREMIUM_AGENT_IMAGE', defaultValue: '', description: 'short-premium-agent image (dev+prod)')
     string(name: 'SIGNAL_FOLLOWER_IMAGE', defaultValue: '', description: 'signal-follower image (dev+prod)')
+    string(name: 'CONTEXT_TAPE_IMAGE', defaultValue: '', description: 'context-tape service image (dev+prod)')
+    string(name: 'MULTILEG_STRUCTURE_IMAGE', defaultValue: '', description: 'multileg-structure service image (dev+prod)')
     string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-databento-api-key', description: 'Jenkins secret-text credential containing the Databento API key')
     string(name: 'ANTHROPIC_API_KEY_CREDENTIAL_ID', defaultValue: 'options-edge-anthropic-api-key', description: 'Jenkins secret-text credential containing the Anthropic API key (short-premium-agent SP_BACKEND=sdk)')
     string(name: 'OE_WATCH_READER_PASSWORD_CREDENTIAL_ID', defaultValue: '', description: 'Jenkins secret-text credential holding the oe_watch_reader password (System Status page ledger read). BLANK resolves per environment: oe-watch-reader-password-dev for dev, oe-watch-reader-password for production — each env has its own role on its own Postgres. Missing credential => the key is written EMPTY and the page reports LEDGER UNAVAILABLE.')
@@ -363,6 +373,7 @@ pipeline {
             'OPTION_PRICE_BEHAVIOR_IMAGE': 'option-price-behavior', 'DATABENTO_MISSION_SANDWICH_IMAGE': 'databento-mission-sandwich',
             'VOLUME_PACE_IMAGE': 'volume-pace', 'DIRECTIONAL_PRESSURE_IMAGE': 'directional-pressure',
             'DATABENTO_GEX_HISTORY_IMAGE': 'databento-gex-history', 'RAW_POSTGRES_WRITER_IMAGE': 'raw-postgres-writer',
+            'GAMMA_MIGRATION_IMAGE': 'gamma-migration',
             'PRESSURE_POSTGRES_WRITER_IMAGE': 'pressure-postgres-writer', 'PIN_POSTGRES_WRITER_IMAGE': 'pin-postgres-writer',
             'FEED_GATEWAY_IMAGE': 'feed-gateway', 'HPSF_PROCESSING_IMAGE': 'hpsf-processing',
             'HPSF_POSTGRES_WRITER_IMAGE': 'hpsf-postgres-writer', 'SPX_MISSION_CONTROL_IMAGE': 'spx-mission-control',
@@ -373,10 +384,17 @@ pipeline {
             'OPTION_TRUTH_ENGINE_IMAGE': 'option-truth-engine',
             'MARKET_CARRY_IMAGE': 'market-carry', 'ES_SPX_ALIGN_IMAGE': 'es-spx-align', 'DATABENTO_SR3_FEED_IMAGE': 'databento-sr3-feed',
             'VIX_OPTION_INTELIGENCE_IMAGE': 'vix-option-inteligence',
+            'GREEK_MOVE_AUTHENTICITY_IMAGE': 'greek-move-authenticity',
             'INVASION_POSTGRES_WRITER_IMAGE': 'invasion-postgres-writer', 'SPREAD_SKEW_IMAGE': 'spread-skew', 'REVERSAL_CONFIRMATION_IMAGE': 'reversal-confirmation',
+            'CORRIDOR_GAUGE_IMAGE': 'corridor-gauge',
+            'DROP_CLASSIFIER_IMAGE': 'drop-classifier',
             'SPREAD_SKEW_POSTGRES_WRITER_IMAGE': 'spread-skew-postgres-writer', 'ES_OPEN_DIRECTION_IMAGE': 'es-open-direction',
             'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE': 'es-open-direction-postgres-writer',
             'CLOSE_DIRECTION_IMAGE': 'close-direction',
+            'SPOT_VOL_REGIME_IMAGE': 'spot-vol-regime',
+            'INDICATOR_SERVICE_IMAGE': 'indicator-service',
+            'STOCK_GEX_IMAGE': 'stock-gex',
+            'OI_SHADOW_IMAGE': 'oi-shadow',
             'REVERSAL_POSTGRES_WRITER_IMAGE': 'reversal-postgres-writer',
             'STRIKE_FLOW_AVRO_ADAPTER_IMAGE': 'strike-flow-avro-adapter', 'GEX_DELTA_REDIS_WRITER_IMAGE': 'gex-delta-redis-writer',
             'IBKR_FEED_IMAGE': 'ibkr-feed',
@@ -386,6 +404,10 @@ pipeline {
             'SHORT_PREMIUM_AGENT_IMAGE': 'short-premium-agent',
             // signal-follower: same dev+prod standalone pattern as short-premium-agent.
             'SIGNAL_FOLLOWER_IMAGE': 'signal-follower',
+            // context-tape: same dev+prod standalone pattern as short-premium-agent.
+            'CONTEXT_TAPE_IMAGE': 'context-tape',
+            // multileg-structure: same dev+prod standalone pattern.
+            'MULTILEG_STRUCTURE_IMAGE': 'multileg-structure',
           ].collect { _v, _svc -> "export ${_v}=${params[_v] ?: oeProfile.image(_svc, 'production', 'prod')}" }.join('\n')
           writeFile file: 'image-defaults.env', text: _defaults + '\n'
         }
@@ -769,14 +791,15 @@ void promoteToProduction() {
       // under the Groovy CPS 64KB bytecode limit ("Method too large"). Add new services here.
       'RAW_TO_DISPLAY_IMAGE', 'WEB_IMAGE', 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', 'DATABENTO_GEX_IMAGE',
       'DATABENTO_MAXPAIN_IMAGE', 'OPTION_PRICE_BEHAVIOR_IMAGE', 'DATABENTO_MISSION_SANDWICH_IMAGE',
-      'VOLUME_PACE_IMAGE', 'DIRECTIONAL_PRESSURE_IMAGE', 'DATABENTO_GEX_HISTORY_IMAGE',
+      'VOLUME_PACE_IMAGE', 'DIRECTIONAL_PRESSURE_IMAGE', 'DATABENTO_GEX_HISTORY_IMAGE', 'GAMMA_MIGRATION_IMAGE',
       'RAW_POSTGRES_WRITER_IMAGE', 'PRESSURE_POSTGRES_WRITER_IMAGE', 'PIN_POSTGRES_WRITER_IMAGE',
       'FEED_GATEWAY_IMAGE', 'HPSF_PROCESSING_IMAGE', 'HPSF_POSTGRES_WRITER_IMAGE', 'SPX_MISSION_CONTROL_IMAGE',
       'STRIKE_FLOW_CLASSIFIER_IMAGE', 'DELTA_FLOW_IMAGE', 'DEALER_LEDGER_IMAGE', 'DEALER_LEDGER_CALIBRATION_IMAGE',
-      'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'OPTION_TRUTH_ENGINE_IMAGE', 'MARKET_CARRY_IMAGE', 'ES_SPX_ALIGN_IMAGE', 'DATABENTO_SR3_FEED_IMAGE', 'VIX_OPTION_INTELIGENCE_IMAGE', 'STRIKE_INVASION_IMAGE',
-      'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE',
-      'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'CLOSE_DIRECTION_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
+      'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'OPTION_TRUTH_ENGINE_IMAGE', 'MARKET_CARRY_IMAGE', 'ES_SPX_ALIGN_IMAGE', 'DATABENTO_SR3_FEED_IMAGE', 'VIX_OPTION_INTELIGENCE_IMAGE', 'GREEK_MOVE_AUTHENTICITY_IMAGE', 'STRIKE_INVASION_IMAGE',
+      'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE', 'CORRIDOR_GAUGE_IMAGE',
+      'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'CLOSE_DIRECTION_IMAGE', 'SPOT_VOL_REGIME_IMAGE', 'OI_SHADOW_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
       'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',
+      'CONTEXT_TAPE_IMAGE', 'MULTILEG_STRUCTURE_IMAGE',
     ].collect { _n -> string(name: _n, value: params[_n]) } + [
       string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
       string(name: 'KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID', value: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID),

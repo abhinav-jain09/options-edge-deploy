@@ -1,0 +1,10 @@
+# The PUBLIC Gamma Lab web tier, as its OWN service slice.
+#
+# It lives here rather than in k8s/bleedingoptions/ (the common-infra component) because it is an
+# APPLICATION WORKLOAD, and scripts/deploy/common-infra.sh refuses those by design — infra deploys
+# carry the namespace, the identity provider and shared state, never app pods. That guard is right,
+# and this is the shape it asks for.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gamma-lab-deployment.yaml

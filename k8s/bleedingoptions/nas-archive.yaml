@@ -1,0 +1,60 @@
+# Durable backup to the NAS (PGL-103..PGL-132).
+#
+# WHAT THIS REPLACES. bo-keycloak-backup writes pg_dump output to a hostPath on the SAME k3s node as
+# the data, so losing that node loses the database and every backup of it together. PGL-059's
+# off-node clause has been unmet since the tenant was built.
+#
+# WHAT THIS FILE IS NOW. Only the shared configuration. The WAL shipper itself is a SIDECAR in the
+# bo-app-postgres pod (see app-postgres.yaml), because the spool is a ReadWriteOnce volume that pod
+# already holds — a separate CronJob would have to mount it alongside a running database.
+#
+# STILL MISSING, and it matters: the periodic pg_basebackup. WAL ALONE RESTORES NOTHING; it replays
+# onto a base. Until that exists this archive is an expensive directory of files, and PGL-104 is
+# unmet. It is not written here because a base backup that has never been restored from proves
+# nothing either — PGL-108's drill and PGL-104 belong in the same change.
+#
+# NAS: 192.168.100.100, backups under `database/` (given 2026-08-16). Layout keeps the two clusters
+# in SEPARATE prefixes (PGL-103A) — both generate identical WAL filenames, and a shared flat
+# directory lets one silently overwrite the other's segments, discovered only at restore.
+#
+#   /volume1/database/bleedingoptions/bo-keycloak/{base,wal}/
+#   /volume1/database/bleedingoptions/bo-app/{base,wal}/
+#
+# ⚠️ NOT YET ACTIVE. `nas-backup-credentials` does not exist and no key is trusted on the NAS — SSH
+# from the production node returns "Permission denied (publickey,password)" as of 2026-08-16. The
+# sidecar mounts that Secret as OPTIONAL, so the database starts without it and the shipper simply
+# retries and fails; a missing backup credential must not be an outage. Nothing is archived off-node
+# until PGL-131's account exists and its key is stored via the Jenkins path (PGL-132).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nas-archive-config
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+data:
+  NAS_HOST: "192.168.100.100"
+  NAS_ROOT: "/volume1/database/bleedingoptions"
+  # PGL-131. NOT an administrator, and NOT the account the production node uses. It needs write into
+  # this share and nothing else — a backup target reachable with the production credential is a copy,
+  # not a backup (PGL-127).
+  NAS_USER: "bo-backup"
+  # PGL-122. Independently recoverable generations kept on the NAS.
+  KEEP_GENERATIONS: "3"
+# ⚠️ WHAT IS NOT HERE, DELIBERATELY: the Keycloak database's archive.
+#
+# §2 of the design decides bo-keycloak-postgres is backed up FIRST, and this PR does not do it. Saying
+# so plainly, because a half-built backup that nobody knows is half-built is the failure this whole
+# piece of work exists to prevent.
+#
+# The reason it is separate: bo-keycloak-postgres is RUNNING and serving real users. Turning on
+# archive_mode requires a RESTART, and adding an archive volume to a live StatefulSet means recreating
+# its pod. That is a deliberate maintenance action on the tenant's identity provider, not something to
+# fold into the PR that introduces an unrelated database.
+#
+# An earlier draft of this file had a CronJob looping over BOTH clusters — including a bo-keycloak
+# spool directory that does not exist and never would have. It would have run every minute, found
+# nothing, exited zero, and looked exactly like a working backup.
+#
+# Keycloak's archive is the next change: add the volume and the two settings, restart in a window,
+# then prove a restore (PGL-108) before trusting either.

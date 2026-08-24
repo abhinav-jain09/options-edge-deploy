@@ -18,7 +18,7 @@ spec:
       annotations:
         # Bump to force a pod roll so envFrom picks up changed shared ConfigMap values
         # (k8s does NOT restart pods when a ConfigMap changes). Set for the 17:30 expiry roll.
-        oe/config-nonce: "2026-07-20-expiry-auto"
+        oe/config-nonce: "2026-07-31-heatmap-saturation"
       labels:
         app.kubernetes.io/name: feed-gateway-service
         app.kubernetes.io/part-of: options-edge
@@ -48,6 +48,16 @@ spec:
               value: "true"
             - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
               value: es.futures.aggressor-flow
+            # ES CVD stream (ES-CVD-DESIGN.md Gates 2-3; es-cvd-service on es4, mirrored here as
+            # es.futures.cvd / es.futures.cvd.bars by Jenkinsfile.es-cvd-mirror). Opt-in flag; the
+            # topics are the mirrored es.-prefixed names on dev+prod (es4 itself resolves the
+            # unprefixed defaults through TOPIC_PREFIX).
+            - name: GATEWAY_ES_CVD_ENABLED
+              value: "true"
+            - name: KAFKA_ES_CVD_TOPIC
+              value: es.futures.cvd
+            - name: KAFKA_ES_CVD_BARS_TOPIC
+              value: es.futures.cvd.bars
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS
@@ -73,11 +83,11 @@ spec:
             - name: WS_AUTH_ENABLED
               value: "true"
             - name: WS_AUTH_ISSUER_URI
-              value: "https://auth.fullfunding.nl/realms/optionsedge"
+              value: "https://auth.bleadingoptions.com/realms/optionsedge"
             - name: WS_AUTH_AUDIENCE
               value: "options-edge-web"
             - name: WS_ALLOWED_ORIGINS
-              value: "https://fullfunding.nl"
+              value: "https://bleadingoptions.com"
           envFrom:
             - configMapRef:
                 name: options-edge-config

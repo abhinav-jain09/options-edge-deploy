@@ -1,9 +1,9 @@
-# PROD-ONLY: publish each strike's snapshot at most once per second (dev keeps the 250ms default).
-# An explicit container env overrides the shared configmap's envFrom value, so this ships via the
-# per-service deploy (service-deploy) WITHOUT touching common-infra (the shared feed configmap is
-# consumed by databento-gex too and lives in the infra layer). Cuts the feed's per-strike publish/
-# serialize/Kafka work ~4x to relieve the single-core CPU backpressure that runs prod ~5-6.5 min
-# behind real-time. 1s is ample freshness for GEX.
+# PROD-ONLY: publish each strike's snapshot at most once every 5s (dev matches at 5000ms since
+# 2026-07-29; the code default is 250ms). An explicit container env overrides the shared configmap's envFrom value, so
+# this ships via the per-service deploy (service-deploy) WITHOUT touching common-infra (the shared
+# feed configmap is consumed by databento-gex too and lives in the infra layer). Cuts the feed's
+# per-strike publish/serialize/Kafka work to relieve the single-core CPU backpressure that runs
+# prod minutes behind real-time.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -20,19 +20,41 @@ spec:
             requests:
               cpu: "1"
           env:
+            # 2026-07-29 USER directive: 2000 -> 5000. Prod is CPU-saturated during RTH
+            # (node 90% CPU, loadavg ~36 on 24 threads; feed pegged at ~1.05 cores = its
+            # single-threaded GIL ceiling) and `options.databento.events.raw` runs 5-7 min
+            # behind live, which fail-closes vix-option-inteligence (INPUT_STALE) and lags
+            # the strike-flow classifier. snapshots_due() publishes a dirty strike at most
+            # once per interval, so 5s cuts snapshot Avro-serialize + produce volume ~60%
+            # in the feed AND the same factor of consumed volume across every downstream
+            # snapshot consumer (gex-service, classifier, heatmap, unified-sr).
+            # Trade-off accepted: chain/GEX/UI now refresh every 5s instead of 2s.
+            # NB this does NOT directly throttle events.raw (published per record) — the
+            # events.raw improvement is indirect, via freed host CPU.
             - name: DATABENTO_PUBLISH_INTERVAL_MS
-              value: "2000"
-            # VIX-via-OPRA-parity (feed docs/vix-opra-parity-price/DESIGN.md v11, PR #65;
-            # USER directive 2026-07-15: deploy ENABLED, manual verification via the
-            # option-chain VixPriceCard). The AUTO_VIX_MONTHLY instrument joins the SAME
-            # OPRA session (no new Databento session); underlying.vix.price is published
-            # by the feed's dedicated isolated producer to the prod broker where the
-            # feed-gateway already consumes it (KAFKA_IBKR_VIX_PRICE_TOPIC default).
-            # Rollback = set "" / false here and redeploy.
+              value: "5000"
+            # VIX CUTOVER (VIX-FEED-SEPARATION, USER directive 2026-07-28: direct
+            # cutover, no shadow): the standalone databento-vix-feed now owns
+            # underlying.vix.price. The in-SPX VIX track is OFF — at-most-one
+            # publisher (validate-vix-single-publisher.sh enforces this in CI).
+            # ROLLBACK = scale databento-vix-feed to 0 FIRST, then restore here:
+            # EXTRA_INSTRUMENTS='[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
+            # and DATABENTO_VIX_PRICE_ENABLED="true", then redeploy databento-feed.
             - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
+              # The 1DTE track. Empty here meant prod resolved only the 0DTE slice (396 contracts
+              # against dev's 792), and the OI nowcast buckets by DTE_1/DTE_2/DTE_3_7 -- 0DTE maps
+              # to no bucket at all. Measured on prod 2026-08-10: 388,633 snapshots seen, 388,633
+              # skipped for no band, ZERO nowcast records, while dev with the same manifest
+              # (SPX|20260810, 2780 legs) published 72,859 and applied 29,790 dynamic-OI updates.
+              # Every one of dev's published legs was expiry 20260811 -- i.e. this track alone.
+              #
+              # Strike range MIRRORS the primary 0DTE track exactly (configmap
+              # DATABENTO_MIN_STRIKE/MAX_STRIKE/STRIKE_STEP = 7000/8000/5, shared with dev). The
+              # two tracks must cover the same strikes or the 0DTE and 1DTE surfaces are not
+              # comparable and constant-one-day-vol interpolates across a hole.
+              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
-              value: "true"
+              value: "false"
             # ES->SPX basis engine (ES-SPX-TRANSLATION-ENGINE.md, Codex-approved).
             # ONE engine, no version knob (feed #79): it runs structurally on the
             # instance publishing both legs. Samples stay OFF until the A1
@@ -50,4 +72,27 @@ spec:
             - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
               value: "true"
             - name: ES_SPX_BASIS_SAMPLES_ENABLED
+              value: "true"
+            # DBP-R32 gap fix (2026-07-27): since the flip, prod's underlying.es.trades
+            # arrives UNENRICHED from the es4 bridge (es-feed has no SPX leg, stamps no
+            # spxBasis*), so es-spx-align's basis global store — which read exactly those
+            # enrichment fields — starved and the ES->SPX mapping went dark. The feed's
+            # Kafka-source path (PR #96) computes local_basis on every bridged trade but
+            # its ONLY sink is _publish_es_price, off by default. Enable it: the
+            # underlying.es.price record carries the locally-computed spxBasis* fields
+            # (local_basis wins over the empty producer passthrough), and es-spx-align's
+            # basis topic re-points there (es-spx-align-prod-env-patch.yaml).
+            # ⚠️ DEPLOY ORDER: databento-feed FIRST, es-spx-align second — service-deploy
+            # applies one slice at a time, and align re-pointed before the feed publishes
+            # would read an empty topic (same dark state, no error). REQUIRES a feed image
+            # with the engine-construction gate accepting the Kafka ES source
+            # ((native OR source) AND spx leg) — without it the engine is None on this
+            # shape and es.price carries no basis fields at all.
+            # The prod topic is broker-AUTO-CREATED on first publish (delete cleanup,
+            # 12h retention — NOT compacted like es4's es.underlying.es.price); fine here:
+            # the align store only trusts basis records fresher than ES_BASIS_STALE_MS=30s.
+            # Read UNPREFIXED (config.py: ES_PRICE_ENABLED), like the ES_TRADES_SOURCE_*
+            # keys; config validation requires ES_TRADES_SOURCE_ENABLED=true, which
+            # prod's infra configmap sets.
+            - name: ES_PRICE_ENABLED
               value: "true"

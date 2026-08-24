@@ -1,0 +1,33 @@
+# PROD gate (gamma), raw-to-display disposition — the prerequisite the dev gate deferred.
+#
+# THE PROBLEM this solves. Turning on the D15 fan-out starts delivering the IBKR option chain to
+# the PRODUCTION broker's options.ibkr.raw. Production runs TWO display builders:
+#
+#   raw-to-display-databento-service  src=DATABENTO -> options.databento.display   (the real board)
+#   raw-to-display-service            src=IBKR      -> options.ibkr.display        (legacy path)
+#
+# The second one consumes options.ibkr.raw. Today that topic is inert on production (Δ0 — the
+# 8.9M records in it are residue from the earlier proving run), so the service idles. The moment
+# the chain is fanned in, it would wake up and start producing options.ibkr.display — and the
+# production gateway DOES read options.ibkr.display (verified 2026-08-10 in its own subscription
+# log). That is a real, user-reachable production effect that has nothing to do with pre-open GEX,
+# and it is exactly what the dev-gate review refused to ship blind.
+#
+# THE DISPOSITION. Hold the IBKR display builder at zero. This preserves the status quo exactly:
+# the topic keeps the records it already has, the gateway keeps reading the same static content it
+# reads today, and no new legacy display stream is created by the fan-out.
+#
+# WHAT THIS DOES NOT TOUCH. raw-to-display-databento-service is a DIFFERENT Deployment and is not
+# patched here — options.databento.display (94.8M records, the board production actually renders)
+# is completely unaffected. Confirming that separation was the precondition for this patch: holding
+# the wrong one at zero would have blanked the production board.
+#
+# Rollback = drop this patch (the IBKR display builder returns to 1 and, with the fan-out on, would
+# begin producing the legacy stream again — which is the state this patch exists to prevent).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: raw-to-display-service
+  namespace: options-edge
+spec:
+  replicas: 0

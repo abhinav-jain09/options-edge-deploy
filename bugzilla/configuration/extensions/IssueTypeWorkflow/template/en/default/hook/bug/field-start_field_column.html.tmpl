@@ -1,0 +1,45 @@
+[%# Present Issue Type as what it actually is on the new-bug form: required.
+
+  # The field IS required to file - bug_end_of_create_validators throws
+  # issue_type_required - but that is enforced by this extension, not by
+  # fielddefs.is_mandatory, so core renders it as an ordinary optional field.
+  # Two consequences on create.html.tmpl, both wrong for a required field:
+  #
+  #   * no red star (field-label.html.tmpl:21 adds class="required" only when
+  #     field.is_mandatory, and skins/standard/global.css:626 draws the star
+  #     off that class);
+  #   * the whole row is put in class="expert_fields" (create.html.tmpl:409),
+  #     which TUI_hide_default() collapses behind "Show Advanced Fields" for
+  #     anyone without a TUI cookie - so a first-time reporter cannot even see
+  #     the one field they are required to set.
+  #
+  # Setting fielddefs.is_mandatory = 1 would fix both, and was rejected: core
+  # then validates the field whenever it is SUBMITTED (Bug.pm:2418), and the
+  # edit form posts every rendered field - so every pre-existing bug with no
+  # type would become uneditable until someone classified it. Verified by
+  # experiment, not by reading: with is_mandatory = 1, editing a legacy bug
+  # without posting the type is ALLOWED, posting it as '---' is REFUSED.
+  #
+  # So the presentation is corrected here instead, on the creation form only,
+  # by borrowing core's own `required` class rather than inventing a style.
+  #
+  # Why an inline script rather than CSS: TUI hides the row by adding
+  # bz_tui_hidden on DOM-ready. Removing `expert_fields` from the row while the
+  # parser is still inside it - before DOM-ready fires - means TUI never sees
+  # the row at all, so there is no race and no !important fight. And if
+  # scripting is off, TUI never hides anything either, so nothing is needed.
+%]
+[% IF field.name == 'cf_issue_type' AND NOT bug.id %]
+<script type="text/javascript">
+(function () {
+  var label = document.getElementById('field_label_cf_issue_type');
+  if (!label) return;
+  // Core's class - global.css draws `* ` in red off th.required:before.
+  if (label.className.indexOf('required') === -1) label.className += ' required';
+  var row = label.parentNode;
+  if (row && row.tagName === 'TR') {
+    row.className = row.className.replace(/\bexpert_fields\b/g, '').replace(/\s+/g, ' ').trim();
+  }
+})();
+</script>
+[% END %]

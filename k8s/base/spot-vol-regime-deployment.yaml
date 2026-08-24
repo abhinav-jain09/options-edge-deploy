@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spot-vol-regime-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: spot-vol-regime-service
+    app.kubernetes.io/component: spot-vol-regime-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Single-writer invariant: one canonical regime stream, fenced by replicas=1 + Recreate —
+  # never scale this deployment above 1 (single-key EOS Streams app).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spot-vol-regime-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spot-vol-regime-service
+        app.kubernetes.io/component: spot-vol-regime-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: spot-vol-regime
+          image: 192.168.100.252:5000/options-edge-spot-vol-regime:dev
+          imagePullPolicy: Always
+          # Shared platform config/secret provide KAFKA_BOOTSTRAP_SERVERS (+ the rest of the
+          # platform defaults) exactly like every sibling service.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8133"
+            - name: SPOT_VOL_REGIME_ENABLED
+              value: "true"
+            # --- inputs: the two latest-value price streams ---
+            - name: SPOT_VOL_REGIME_INPUT_SPX_TOPIC
+              value: underlying.spx.price
+            - name: SPOT_VOL_REGIME_INPUT_VIX_TOPIC
+              value: underlying.vix.price
+            # --- outputs ---
+            - name: SPOT_VOL_REGIME_OUTPUT_CURRENT_TOPIC
+              value: options.spx.spot-vol-regime.current
+            - name: SPOT_VOL_REGIME_OUTPUT_EVENTS_TOPIC
+              value: options.spx.spot-vol-regime.events
+            # Tiny two-key state; changelog restore covers restarts (no RocksDB PVC needed).
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx512m"
+          ports:
+            - name: health
+              containerPort: 8133
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          # Provisional sizing (two ring buffers + Streams runtime). CPU limit intentionally
+          # absent, matching every sibling service.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi

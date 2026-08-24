@@ -51,7 +51,7 @@ spec:
   template:
     metadata:
       annotations:
-        oe/config-nonce: 2026-07-26-es-trades-from-es4-dbp-r32
+        oe/config-nonce: 2026-07-29-cascade-tier-order
       labels:
         app.kubernetes.io/name: options-edge-databento-feed
         app.kubernetes.io/part-of: options-edge
@@ -59,11 +59,11 @@ spec:
       containers:
         - env:
             - name: DATABENTO_PUBLISH_INTERVAL_MS
-              value: "2000"
+              value: "5000"
             - name: DATABENTO_EXTRA_INSTRUMENTS
-              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"}]'
+              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
-              value: "true"
+              value: "false"
             - name: ES_SPX_BASIS_CLOSE_PRINCIPALS
               value: abhinav
             - name: ES_SPX_BASIS_ACK_PRINCIPALS
@@ -71,6 +71,8 @@ spec:
             - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
               value: "true"
             - name: ES_SPX_BASIS_SAMPLES_ENABLED
+              value: "true"
+            - name: ES_PRICE_ENABLED
               value: "true"
             - name: DATABENTO_FEED_LIVENESS_STALE_SECONDS
               value: "15"

@@ -1,0 +1,24 @@
+# Approved pre-existing junk-pattern topics on the PRODUCTION broker 192.168.100.252:9092.
+#
+# Read by the Preflight growth gate of EVERY ES mirror job that targets this broker — currently
+# Jenkinsfile.es-indicator-mirror, Jenkinsfile.es-strike-intel-mirror and
+# Jenkinsfile.es-futures-flow-mirror. The list is a property of the BROKER, not of any one mirror,
+# so all of them resolve this same target-only filename (IP-PORT) and share one reviewed set.
+#
+# The mirror jobs treat any topic matching ^es4.| es.es.es | heartbeat | mm2-*.internal on a target
+# broker as MM2 pollution. These four are NOT pollution from any current mirror: they are dead
+# remnants of the old es4 MM2 setup that was stopped long ago, and they predate the MM1 mirrors
+# entirely. Verified present on prod and inert on 2026-08-06, when an absolute (non-delta) pollution
+# check counted them as the indicator mirror's own output and failed every prod install of it
+# (builds #6/#7/#8); the strike-intel and futures-flow mirrors carried the identical check.
+#
+# This file is the ONLY way a pre-existing junk topic gets grandfathered. The job cannot approve
+# anything itself, so junk left behind by a failed build fails the NEXT install too, until either
+# the topic is deleted from the broker or a reviewed commit adds it here.
+#
+# Format: one exact topic name per line. '#' comments and blank lines ignored. No patterns.
+# Nothing here is deleted by any job — removing a line only withdraws approval.
+heartbeats
+mm2-configs.es4.internal
+mm2-offsets.es4.internal
+mm2-status.es4.internal

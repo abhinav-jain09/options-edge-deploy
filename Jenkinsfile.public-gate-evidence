@@ -1,0 +1,180 @@
+// Jenkinsfile.public-gate-evidence — build the public web image and EARN the PGL-072 gate evidence
+// for the exact digest that build produced.
+//
+// WHY THIS JOB EXISTS. verify-public-gate.sh refuses to run the public Gamma Lab above zero replicas
+// without a JSON record naming the deployed digest and reporting PGL-050/051/052 as PASS. Nothing
+// produced that record, so a freshly built image could never be deployed publicly — service-deploy
+// failed at the gate with "there is no gate evidence for the digest it runs" (build #1373). The
+// deploy path existed; the qualification path did not.
+//
+// HOW THE REVISION IS OBTAINED, without this job asserting it. The web build pushes a versioned tag
+// beside the mutable one — `prod-<build>-<sha12>` — so the registry ASSOCIATES a digest with a
+// revision. The producer finds the versioned tag sharing the deployed digest, takes the revision
+// from it, and refuses unless the checkout under test is that revision.
+//
+// That association is NOT proof: the tag is an assertion by whoever pushed it, and this registry
+// authenticates nobody. What it buys is that the revision comes from somewhere other than the
+// person running the job — which is the failure this guards against, an operator attesting the
+// wrong thing. An adversary with registry write access is out of scope here and would not be
+// stopped by any evidence requirement, since they could push straight to :prod.
+//
+// WHAT THIS JOB CANNOT DO. It cannot mark a requirement PASS. scripts/ci/public-gate-evidence.sh
+// runs the tests itself and writes nothing if they fail; there is no parameter here that asserts a
+// result. Scaling the public workload remains a separate, reviewed act — this job only makes the
+// evidence exist so that act can be judged on merit.
+pipeline {
+  // THE SAME AGENT service-deploy runs on. The evidence directory is a filesystem path, so a
+  // producer on a different agent can succeed while the consumer sees nothing. Both labels happen
+  // to resolve to this one Mac today, which is exactly the kind of coincidence that stops being
+  // true quietly — pinning removes the question.
+  agent { label 'hpsf-replay-mac' }
+
+  parameters {
+    string(name: 'SOURCE_REVISION', defaultValue: 'main',
+      description: 'options-edge ref to build and test. A branch name is resolved to a commit and the COMMIT is what the evidence records.')
+    booleanParam(name: 'BUILD_IMAGE', defaultValue: true,
+      description: 'Build+push the production web image first. false attests whatever is already on :prod — the digest is resolved either way, so both paths pin what they attest.')
+  }
+
+  options {
+    timeout(time: 60, unit: 'MINUTES')
+    disableConcurrentBuilds()
+    buildDiscarder(logRotator(numToKeepStr: '50'))
+  }
+
+  environment {
+    IMAGE_REGISTRY = '192.168.100.252:5000'
+    IMAGE_REF      = "192.168.100.252:5000/options-edge-web:prod"
+    APP_REPO       = 'git@github.com:abhinav-jain09/options-edge.git'
+    // THE SAME LOCATION THE DEPLOY PATH READS — taken from the global Jenkins environment variable
+    // that verify-public-gate.sh already consults, never re-derived here. Deriving it from
+    // ${WORKSPACE} was tried and was WRONG: this job's workspace is one level deeper than the
+    // agent's workspace root, so evidence landed in .../workspace/workspace/public-gate-evidence
+    // while the gate looked in .../workspace/public-gate-evidence. The job would have reported
+    // success and the deploy would still have been refused, which is the worst kind of green.
+    // One source of truth, so producer and consumer cannot drift.
+    // No fallback. A hard-coded default reintroduces exactly the producer/consumer divergence this
+    // is meant to remove: if the global is renamed, the right outcome is a loud failure, not
+    // evidence written somewhere the gate will never read.
+    EVIDENCE_DIR   = "${env.PUBLIC_GATE_EVIDENCE_DIR ?: ''}"
+    REMOTE_BUILD_HOST = '192.168.100.252'
+    REMOTE_BUILD_ROOT = '/home/abhinav/ci/remote-builds'
+  }
+
+  stages {
+    stage('Checkout the app at the revision under test') {
+      steps {
+        dir('app') {
+          checkout([$class: 'GitSCM',
+                    branches: [[name: "*/${params.SOURCE_REVISION}"]],
+                    userRemoteConfigs: [[url: env.APP_REPO]]])
+          script {
+            // Resolve to a COMMIT. Evidence that names a branch names something that moves.
+            env.RESOLVED_REVISION = sh(returnStdout: true, script: 'git rev-parse HEAD').trim()
+            echo "revision under test: ${env.RESOLVED_REVISION}"
+          }
+        }
+      }
+    }
+
+    stage('Build the production web image') {
+      when { expression { params.BUILD_IMAGE } }
+      steps {
+        // Same contract the web deploy path uses: native amd64 build on .252, pushed to :prod.
+        build job: 'options-edge-web-deploy',
+              parameters: [
+                string(name: 'PROFILE',           value: 'prod'),
+                string(name: 'BUILD_PLATFORM',    value: 'linux/amd64'),
+                booleanParam(name: 'PUSH_IMAGE',  value: true),
+                booleanParam(name: 'RUN_LOCAL',   value: false),
+                string(name: 'IMAGE',             value: env.IMAGE_REF),
+                string(name: 'REMOTE_BUILD_HOST', value: env.REMOTE_BUILD_HOST),
+                string(name: 'REMOTE_BUILD_ROOT', value: env.REMOTE_BUILD_ROOT),
+                booleanParam(name: 'SKIP_SELENIUM_SMOKE', value: true)
+              ],
+              wait: true, propagate: true
+      }
+    }
+
+    stage('Resolve the digest under test') {
+      steps {
+        script {
+        // Resolve the digest and REQUIRE the producer to see the same one. This runs on BOTH paths:
+        // with BUILD_IMAGE=false there is no build to follow, but the run must still pin what it
+        // attests. (It previously sat inside the build-only stage, so the false path left
+        // EXPECTED_DIGEST unset and died under set -u — a documented mode that could not run.) This does not make the window zero — options-edge-web-deploy does not return the
+        // digest it pushed, and another job could repush :prod between its completion and this
+        // read — but it closes the window to that gap instead of leaving it open across the whole
+        // test run, and any movement after this point is caught rather than silently attested.
+        //
+        // It FAILS CLOSED. An empty capture used to fall through `${EXPECTED_DIGEST:+...}`, which
+        // silently dropped --expect-digest and let the run attest whatever :prod resolved to later
+        // — the opposite of the guard's purpose.
+          env.EXPECTED_DIGEST = sh(returnStdout: true, script: '''
+            set -euo pipefail
+            curl -sS -m 30 -o /dev/null -D - \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+              "http://192.168.100.252:5000/v2/options-edge-web/manifests/prod" \
+              | tr -d '\r' | awk '$1 == "Docker-Content-Digest:" || tolower($1) == "docker-content-digest:" {print $2}' | tail -1
+          ''').trim()
+          if (!(env.EXPECTED_DIGEST ==~ /^sha256:[0-9a-f]{64}$/)) {
+            error("could not resolve the digest under test (got '${env.EXPECTED_DIGEST}'). " +
+                  "Refusing to continue: without it the attestation could name a different image.")
+          }
+          echo "digest under test: ${env.EXPECTED_DIGEST}"
+        }
+      }
+    }
+
+    stage('Earn the evidence') {
+      steps {
+        sh '''
+          set -euo pipefail
+          # If the global variable is ever renamed, stop rather than write evidence somewhere the
+          # gate will never read.
+          case "${EVIDENCE_DIR}" in
+            /*) : ;;
+            "") echo "PUBLIC_GATE_EVIDENCE_DIR is not set on this controller. That global is what
+verify-public-gate.sh reads; without it this job cannot know where the gate looks." >&2; exit 1 ;;
+            *)  echo "EVIDENCE_DIR is not an absolute path: ${EVIDENCE_DIR}" >&2; exit 1 ;;
+          esac
+          bash scripts/ci/public-gate-evidence.sh \
+            --repo "${WORKSPACE}/app" \
+            --image "${IMAGE_REF}" \
+            --ci-build-url "${BUILD_URL}" \
+            --out-dir "${EVIDENCE_DIR}" \
+            --expect-digest "${EXPECTED_DIGEST}"
+        '''
+      }
+    }
+
+    stage('Show what the gate will now see') {
+      steps {
+        sh '''
+          set -euo pipefail
+          echo "evidence directory: ${EVIDENCE_DIR}"
+          ls -la "${EVIDENCE_DIR}"
+          echo
+          echo "The public deploy is still a SEPARATE act:"
+          echo "  service-deploy  SERVICE=bleedingoptions-gamma-lab  ENVIRONMENT=production"
+          echo "It will pass the PGL-072 gate only because this evidence was earned, not asserted."
+        '''
+      }
+    }
+  }
+
+  post {
+    success {
+      // No archiveArtifacts: the evidence deliberately lives OUTSIDE the workspace, in the
+      // directory the gate reads, and an empty artifact pattern FAILS the build outright
+      // ("No artifacts are configured for archiving") — which failed run #2 after it had already
+      // done all its work correctly.
+      echo "Evidence produced for the digest on ${env.IMAGE_REF}. Deploying is a separate act: " +
+           "service-deploy SERVICE=bleedingoptions-gamma-lab ENVIRONMENT=production"
+    }
+    failure {
+      echo 'No evidence was written. If the PGL tests failed, that is the gate working: the public surface must not carry a replica while the bearer-strip is unproven for this build.'
+    }
+  }
+}

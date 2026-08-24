@@ -52,6 +52,8 @@ spec:
               value: es.strike-intelligence-by-strike
             - name: KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC
               value: options.es-strike-intel-spx-aligned
+            - name: ES_CLOCK_SKEW_MS
+              value: "30000"
             - name: KAFKA_ES_TRADES_TOPIC
               value: underlying.es.trades
             - name: ES_ALIGN_TARGET_SYMBOL

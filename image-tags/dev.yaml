@@ -13,6 +13,12 @@ images:
   ibkr-feed-service: 192.168.100.252:5000/options-edge-ibkr-feed:dev
   strike-flow-classifier-service: 192.168.100.252:5000/options-edge-strike-flow-classifier:dev
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:dev
+  oi-shadow-service: host.docker.internal:5001/options-edge-oi-shadow:dev
+  # host.docker.internal:5001 and 192.168.100.252:5000 are the same local registry by two names;
+  # the dev image build pushes to the FORMER, and a deployment whose entry is missing here falls
+  # back to the base manifest's ref (the .252 spelling) and then cannot resolve a digest.
+  gamma-migration-service: host.docker.internal:5001/options-edge-gamma-migration:dev
+  corridor-gauge-service: host.docker.internal:5001/options-edge-corridor-gauge:dev
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:dev
   dealer-ledger-calibration-scorer: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:dev
   dealer-ledger-calibration-accumulator: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:dev
@@ -36,12 +42,21 @@ images:
   hpsf-postgres-writer-service: 192.168.100.252:5000/options-edge-hpsf-postgres-writer:dev
   es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:dev
   close-direction-service: 192.168.100.252:5000/options-edge-close-direction:dev
+  spot-vol-regime-service: 192.168.100.252:5000/options-edge-spot-vol-regime:dev
+  indicator-service: 192.168.100.252:5000/options-edge-indicator-service:dev
+  # stock-gex builds in the options-edge-databento-feed repo and pushes to the local dev
+  # registry (host.docker.internal:5001 — the same registry as .252:5000, by its other name).
+  stock-gex-service: host.docker.internal:5001/options-edge-stock-gex:dev
   vix-option-inteligence-service: 192.168.100.252:5000/options-edge-vix-option-inteligence:dev
+  greek-move-authenticity-service: 192.168.100.252:5000/options-edge-greek-move-authenticity:dev
   es-open-direction-postgres-writer: 192.168.100.252:5000/options-edge-es-open-direction-postgres-writer:dev
   web: host.docker.internal:5001/options-edge-web:dev
   spread-skew-service: 192.168.100.252:5000/options-edge-spread-skew:dev
   es-spx-align-service: 192.168.100.252:5000/options-edge-es-spx-align:dev
   reversal-confirmation-service: 192.168.100.252:5000/options-edge-reversal-confirmation:dev
+  drop-classifier-service: 192.168.100.252:5000/options-edge-drop-classifier:dev
+  context-tape-service: 192.168.100.252:5000/options-edge-context-tape:dev
+  multileg-structure-service: 192.168.100.252:5000/options-edge-multileg-structure:dev
   reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:dev
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:dev
   signal-follower: 192.168.100.252:5000/options-edge-signal-follower:dev

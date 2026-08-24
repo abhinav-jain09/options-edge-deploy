@@ -93,6 +93,10 @@ EOF
 # are harmless — they light up automatically if the service comes back.
 add_service_scrape raw-to-display-service 8080
 add_service_scrape options-edge-databento-feed 8010
+# databento-vix-feed (VIX feed separation PR-2): prod-only standalone VIX feed; the
+# helper skips absent services safely, so this entry can precede the pod (design §5 —
+# the shadow preflight must still PROVE the target is up, not assume it).
+add_service_scrape databento-vix-feed 8013
 add_service_scrape databento-volume-aggregator 8080
 add_service_scrape option-price-behavior-service 8080
 add_service_scrape databento-mission-pressure-service 8098

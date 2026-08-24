@@ -92,6 +92,12 @@ spec:
               value: "3"
             - name: REVERSAL_MIN_BOUNCE_IMBALANCE
               value: "0.05"
+            - name: REVERSAL_WEAK_FLOW_MIN_FAILED_GATES
+              value: "3"
+            - name: REVERSAL_WEAK_FLOW_PERSISTENCE_EVALS
+              value: "6"
+            - name: REVERSAL_WEAK_FLOW_MIN_AGE_EVALS
+              value: "12"
             - name: REVERSAL_RV_PRIMARY_THRESHOLD
               value: "1.15"
             - name: REVERSAL_RV_SECONDARY_THRESHOLD
@@ -110,6 +116,22 @@ spec:
               value: "45"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms256m -Xmx1024m
+            - name: REVERSAL_HUNT_ENABLED
+              value: "true"
+            - name: REVERSAL_HUNT_SPX_BOOTSTRAP
+              value: 192.168.100.252:9092
+            - name: REVERSAL_HUNT_MIN_DECLINE_TICKS
+              value: "28"
+            - name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS
+              value: "31"
+            - name: REVERSAL_HUNT_AUTO_ARM
+              value: "true"
+            - name: REVERSAL_REPLAY_LOOKBACK_SECONDS
+              value: "5460"
+            - name: REVERSAL_RING_CAPACITY_BUCKETS
+              value: "2790"
+            - name: REVERSAL_HUNT_SWING_ENABLED
+              value: "true"
           envFrom:
             - configMapRef:
                 name: options-edge-config

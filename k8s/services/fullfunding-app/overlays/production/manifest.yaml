@@ -1,0 +1,110 @@
+# FullFunding — jaarrekening credit analysis.
+#
+# A purely static app: plain ES modules, no build step, no backend. The PDF is
+# parsed in the browser and never leaves it, so there is nothing to talk to —
+# not even the namespace's Postgres.
+#
+# Everything below that looks like ceremony is required by the namespace:
+#   * priorityClassName        - admission policy (4); the tenant loses to options-edge
+#   * explicit requests/limits - admission policy (5), incl. ephemeral-storage
+#   * emptyDir medium: Memory  - admission policy (6); a disk emptyDir writes to /
+#   * non-root + seccomp + caps- PSA `restricted` on this namespace
+#   * label fullfunding.io/public - what the NetworkPolicy keys on to let traefik in
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fullfunding-app
+  namespace: fullfunding
+  labels:
+    app.kubernetes.io/name: fullfunding-app
+    app.kubernetes.io/part-of: fullfunding
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # the 2 GiB namespace budget has no room for a surge pod
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fullfunding-app
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fullfunding-app
+        app.kubernetes.io/part-of: fullfunding
+        fullfunding.io/public: "web"
+    spec:
+      priorityClassName: fullfunding-low
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: 192.168.100.252:5000/fullfunding-app:v1
+          ports:
+            - name: http
+              containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # nginx needs somewhere to write its temp/cache paths and its pid.
+          # tmpfs, not a disk emptyDir: the latter lands on / (nodefs), which this
+          # tenant may not use.
+          volumeMounts:
+            - { name: tmp,        mountPath: /tmp }
+            - { name: nginx-cache, mountPath: /var/cache/nginx }
+            - { name: nginx-run,  mountPath: /var/run }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 25m,  memory: 48Mi,  ephemeral-storage: 16Mi }
+            limits:   { cpu: 300m, memory: 192Mi, ephemeral-storage: 128Mi }
+      volumes:
+        - { name: tmp,         emptyDir: { medium: Memory, sizeLimit: 32Mi } }
+        - { name: nginx-cache, emptyDir: { medium: Memory, sizeLimit: 32Mi } }
+        - { name: nginx-run,   emptyDir: { medium: Memory, sizeLimit: 8Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fullfunding-app
+  namespace: fullfunding
+  labels:
+    app.kubernetes.io/name: fullfunding-app
+spec:
+  type: ClusterIP           # never LoadBalancer/NodePort — the quota forbids both
+  selector:
+    app.kubernetes.io/name: fullfunding-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+---
+# Public entry. cloudflared sends fullfunding.nl to traefik, which matches on Host.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fullfunding-app
+  namespace: fullfunding
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: fullfunding.nl
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: fullfunding-app
+                port:
+                  number: 80

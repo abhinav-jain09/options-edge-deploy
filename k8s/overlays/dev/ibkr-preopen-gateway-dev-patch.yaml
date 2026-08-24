@@ -1,0 +1,15 @@
+# DEV-ONLY: surface the pre-open window state to the browser (rev13 Phase 3 slice 1).
+# The gateway relays options.ibkr.gex.status as the standalone "ibkr-preopen-status" event;
+# base keeps it false so prod stays dark until dev proves the window.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: feed-gateway-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: feed-gateway
+          env:
+            - { name: GATEWAY_IBKR_PREOPEN_ENABLED, value: "true" }

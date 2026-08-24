@@ -56,10 +56,32 @@ spec:
     spec:
       containers:
         - env:
+            - name: PREOPEN_GEX_ENABLED
+              value: "false"
+            - name: IBKR_GEX_CONSUME_ENABLED
+              value: "true"
+            - name: IBKR_GEX_PUBLISH_ENABLED
+              value: "true"
+            - name: IBKR_GEX_TOPIC_STAGE
+              value: live
+            - name: IBKR_GEX_SPOT_TOPIC
+              value: underlying.spx.index.price
+            - name: IBKR_GEX_TOPIC
+              value: options.databento.gex.strike
             - name: DATABENTO_GEX_FLOW_TOP_N
-              value: "3"
+              value: "40"
+            - name: GEX_SMILE_IV_FALLBACK
+              value: "true"
+            - name: DATABENTO_GEX_DYNAMIC_OI_ENABLED
+              value: "false"
+            - name: OI_ANCHOR_MANIFEST_ENABLED
+              value: "true"
+            - name: GEX_TICK_SPREAD_FLOOR_MODE
+              value: live
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
+            - name: DATABENTO_GEX_FLOW_TOPN_THROTTLE_INTERVAL_MS
+              value: "10000"
             - name: DATABENTO_DATASET
               valueFrom:
                 configMapKeyRef:
@@ -76,6 +98,8 @@ spec:
               value: "60"
             - name: DATABENTO_GEX_OI_FETCH_LIMIT
               value: "200000"
+            - name: DATABENTO_GEX_OI_DEFINITION_FETCH_LIMIT
+              value: "200000"
             - name: HEALTH_PORT
               value: "8100"
             - name: KAFKA_DATABENTO_RAW_TOPIC
@@ -85,6 +109,8 @@ spec:
             - name: KAFKA_GEX_STREAMS_APP_ID
               value: options-databento-gex-streams
             - name: KAFKA_GEX_STREAMS_NUM_THREADS
+              value: "8"
+            - name: KAFKA_GEX_FLOW_STREAMS_NUM_THREADS
               value: "8"
             - name: DATABENTO_GEX_DEALER_SIGN_MODEL
               value: NAIVE_CALL_PLUS_PUT_MINUS
@@ -102,8 +128,6 @@ spec:
               value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms1g -Xmx4g
-            - name: PREOPEN_GEX_ENABLED
-              value: "false"
             - name: PREOPEN_GEX_PUBLISH_ENABLED
               value: "false"
             - name: PREOPEN_GEX_SYMBOL

@@ -1,0 +1,47 @@
+# STANDALONE public Gamma Lab overlay — production.
+#
+# ⚠️ The Deployment ships at replicas: 0 and stays there until PGL-072's evidence exists for the
+# exact image digest (scripts/deploy/verify-public-gate.sh). Raising it is a reviewed change that
+# carries that evidence, not an edit made in passing.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+
+# PGL-072. The image is PINNED TO A DIGEST here, in git, rather than left as a tag for the deploy to
+# resolve later.
+#
+# WHY. The gate refuses a public replica whose image is not digest-pinned, because a tag can be
+# re-pushed and evidence gathered against it proves nothing about what will actually run. That is not
+# theoretical: on 2026-08-16 `:prod` resolved to four different digests inside twenty minutes while
+# options-edge-web-deploy ran four times, so "read the digest, run the tests, write the evidence,
+# deploy" was a race that lost twice.
+#
+# `common-infra-deploy` gates the OVERLAY as written and never remaps, so a tag here fails it outright
+# — which is what blocked bo-app-postgres from deploying at all. `service-deploy` remaps dev→prod and
+# then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
+# no-op. Both paths therefore agree on one immutable image.
+#
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #20 attested
+# sha256:97603097… from main (options-edge#642: a fresh load now OPENS THE FIRST SAVED
+# SYMBOL instead of showing an empty board) and recorded PGL-050/051/052 as PASS against
+# that exact digest. The job resolves the revision from the registry rather than taking it
+# from the operator, and refuses unless the checkout under test matches — so the evidence
+# names an image nobody attested by hand.
+#
+# WHY: measured on the live site before this change, a fresh load NEVER rendered — 68
+# samples over 25 seconds, spot an em dash, board time "never" — because nothing selects a
+# symbol until the reader types one. A reader with four saved symbols got an empty screen
+# on every reload while the watchlist sat there knowing exactly what they cared about.
+#
+# Changing this line means producing evidence for the new digest FIRST — that is the point of it
+# being a reviewed edit rather than a deploy-time lookup.
+#
+# ROLLBACK TARGET: the OUTGOING digest is sha256:a7514eb7… (evidence #19) — the corrected
+# chip legend, but WITHOUT the boot default, so rolling back restores the blank-on-load
+# behaviour this change exists to fix. (sha256:adf419f6…, evidence #18, is older still and
+# additionally mislabels the chips; it is not a rollback candidate.)
+images:
+  - name: 192.168.100.252:5000/options-edge-web
+    newName: 192.168.100.252:5000/options-edge-web
+    digest: sha256:976030974de99eea55edd31972c5d00f77aaccb190dcff7ecb001d8f0c9d88d1

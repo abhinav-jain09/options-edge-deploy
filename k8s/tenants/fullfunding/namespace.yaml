@@ -1,0 +1,21 @@
+# The `fullfunding` tenant namespace — the second application's space on the prod k3s node.
+#
+# One application per namespace: `options-edge` (trading, -> bleadingoptions.com) and
+# `fullfunding` (requirement-intake portal, -> fullfunding.nl once the domain cutover frees it).
+#
+# Pod Security Admission is enforced at `restricted` and every level is PINNED to a version:
+# with `latest`, a k3s upgrade can silently change what is enforced. Bumping the pin is a
+# reviewed change, not a side effect. No other namespace uses PSA today, so this is additive
+# and cannot affect options-edge.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fullfunding
+  labels:
+    tenant: fullfunding
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: v1.35
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: v1.35

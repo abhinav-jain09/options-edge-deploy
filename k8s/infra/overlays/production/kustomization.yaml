@@ -9,6 +9,14 @@ resources:
   # Keycloak on :8089). Moved here from k8s/overlays/production: Keycloak is shared infra
   # (auth for every service), so it belongs to the common-infra layer, not the app deploy.
   - ../../../keycloak
+  # The PUBLIC tenant (bleedingoptions.com): its own Keycloak, its own Postgres, its own namespace and
+  # NetworkPolicies. Production-ONLY, like the internal Keycloak above — there is nothing to expose to
+  # the internet from a dev laptop, and a second Keycloak there would only be a second thing to patch.
+  #
+  # Gate 4a scope: infrastructure only. No public DNS, no tunnel route, and NO public web workload —
+  # PGL-072 forbids one above zero replicas until PGL-050/051/052 pass on the deployed digest. See
+  # docs/bleedingoptions-keycloak.md.
+  - ../../../bleedingoptions
 patches:
   # Prod is a STANDALONE SINGLE-BROKER Kafka node — force RF=1 (moved here from
   # k8s/overlays/production; it patches the shared configmap, which is infra).

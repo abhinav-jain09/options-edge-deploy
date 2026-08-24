@@ -11,6 +11,11 @@ spec:
   # (no OptionPriceBehaviorStreams / launcher / OPB_SERVICE_VARIANT), so the image runs V2 directly. It
   # reads tcbbo/greeks/underlying and writes the option-price-behavior-* topics + the per-strike
   # option-price-behavior-by-strike compatibility aggregate that strike-intelligence consumes.
+  # RE-ENABLED (USER 2026-07-30): strike-intelligence had OPTION_PRICE_BEHAVIOR missing ~100% on
+  # dev + prod (only AVOID signals, no directional roles) because this service was held at 0. Brought
+  # back to replicas 1 + dropped from morning-autostart KEEP_DOWN and dev-cleanup DISABLED_DEV.
+  # Watch: it was disabled after native-memory OOM on the capacity-limited cluster; the dev overlay
+  # already carries -Xmx3g. If it OOM-crash-loops, raise the memory limit before leaving it up.
   replicas: 1
   selector:
     matchLabels:

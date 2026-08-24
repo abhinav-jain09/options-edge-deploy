@@ -64,6 +64,10 @@ spec:
               value: es.open-direction.forecast
             - name: KAFKA_ES_OPEN_DIRECTION_OUTCOME_TOPIC
               value: es.open-direction.outcome
+            - name: ES_OD_CVD_BARS_TOPIC
+              value: es.futures.cvd.bars
+            - name: ES_OD_CVD_SNAPSHOT_TOPIC
+              value: es.futures.cvd
             - name: ES_OD_PG_URL
               valueFrom:
                 configMapKeyRef:

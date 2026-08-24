@@ -159,9 +159,9 @@
             DIRECTIONAL_PRESSURE_IMAGE FEED_GATEWAY_IMAGE HPSF_POSTGRES_WRITER_IMAGE HPSF_PROCESSING_IMAGE \
             IBKR_FEED_IMAGE PIN_POSTGRES_WRITER_IMAGE PRESSURE_POSTGRES_WRITER_IMAGE RAW_POSTGRES_WRITER_IMAGE \
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
-            VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE \
+            VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE GAMMA_MIGRATION_IMAGE \
             DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE OPTION_TRUTH_ENGINE_IMAGE MARKET_CARRY_IMAGE ES_SPX_ALIGN_IMAGE DATABENTO_SR3_FEED_IMAGE VIX_OPTION_INTELIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE \
-            STRIKE_INVASION_IMAGE INVASION_POSTGRES_WRITER_IMAGE SPREAD_SKEW_IMAGE SPREAD_SKEW_POSTGRES_WRITER_IMAGE REVERSAL_CONFIRMATION_IMAGE ES_OPEN_DIRECTION_IMAGE ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE CLOSE_DIRECTION_IMAGE REVERSAL_POSTGRES_WRITER_IMAGE; do
+            STRIKE_INVASION_IMAGE INVASION_POSTGRES_WRITER_IMAGE SPREAD_SKEW_IMAGE SPREAD_SKEW_POSTGRES_WRITER_IMAGE REVERSAL_CONFIRMATION_IMAGE CORRIDOR_GAUGE_IMAGE ES_OPEN_DIRECTION_IMAGE ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE CLOSE_DIRECTION_IMAGE SPOT_VOL_REGIME_IMAGE INDICATOR_SERVICE_IMAGE STOCK_GEX_IMAGE DROP_CLASSIFIER_IMAGE OI_SHADOW_IMAGE REVERSAL_POSTGRES_WRITER_IMAGE GREEK_MOVE_AUTHENTICITY_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
@@ -192,7 +192,7 @@
             done
           fi
           if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
-            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE; do
+            for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE CONTEXT_TAPE_IMAGE MULTILEG_STRUCTURE_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1
@@ -240,16 +240,6 @@
           # web tool that has been dropped (rebuilt as an option-chain UI page instead), so it is no longer in
           # any overlay and `apply -k` will not prune it. Delete it here (idempotent, deployer-SA-scoped).
           kubectl -n options-edge delete deployment/pin-flow-explorer service/pin-flow-explorer --ignore-not-found=true
-          # Reconcile-delete the retired greek-move-authenticity-service. Its sign-voting model was
-          # replaced by the option-truth engine (endpoint repricing), so it is removed from every
-          # overlay in this same commit. `apply -k` never prunes, so without this line the pods would
-          # keep running forever: still consuming from Kafka with a live consumer-group, still
-          # publishing verdicts the UI no longer reads. Delete it here (idempotent, deployer-SA-scoped).
-          kubectl -n options-edge delete deployment/greek-move-authenticity-service service/greek-move-authenticity-service --ignore-not-found=true
-          # replaced by the option-truth engine (endpoint repricing), so it is removed from every
-          # overlay in this same commit. `apply -k` never prunes, so without this line the pods would
-          # keep running forever: still consuming from Kafka with a live consumer-group, still
-          # publishing verdicts the UI no longer reads. Delete it here (idempotent, deployer-SA-scoped).
           # Reconcile-delete the pre-rename es-gex-spx-align-service. It was renamed to es-spx-align-service
           # in this same commit (One Service One Identity). Both byte-copy the ES-GEX book to the SAME
           # options.es-gex-spx-aligned topic, so leaving the old one running would put TWO producers on the
@@ -330,6 +320,10 @@ EOF
           kubectl -n options-edge set image deployment/options-edge-web web="$WEB_IMAGE"
           kubectl -n options-edge set image deployment/raw-to-display-databento-service raw-to-display="$RAW_TO_DISPLAY_IMAGE"
           kubectl -n options-edge set image deployment/options-edge-databento-feed databento-feed="$DATABENTO_FEED_IMAGE"
+          # databento-vix-feed (VIX feed separation): IMAGE REUSE — same image as the
+          # SPX feed, different entrypoint. Renders in BOTH envs since the 2026-07-28
+          # cutover commit (dev overlay added).
+          kubectl -n options-edge set image deployment/databento-vix-feed databento-vix-feed="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
           kubectl -n options-edge set image deployment/option-price-behavior-service option-price-behavior="$OPTION_PRICE_BEHAVIOR_IMAGE"
@@ -338,6 +332,7 @@ EOF
           kubectl -n options-edge set image deployment/directional-pressure-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/directional-pressure-databento-service directional-pressure="$DIRECTIONAL_PRESSURE_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-history-service databento-gex-history="$DATABENTO_GEX_HISTORY_IMAGE"
+          kubectl -n options-edge set image deployment/gamma-migration-service gamma-migration="$GAMMA_MIGRATION_IMAGE"
           kubectl -n options-edge set image deployment/raw-postgres-writer raw-postgres-writer="$RAW_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pin-postgres-writer pin-postgres-writer="$PIN_POSTGRES_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/pressure-postgres-writer pressure-postgres-writer="$PRESSURE_POSTGRES_WRITER_IMAGE"
@@ -355,12 +350,15 @@ EOF
           kubectl -n options-edge set image deployment/es-spx-align-service es-spx-align="$ES_SPX_ALIGN_IMAGE"
           kubectl -n options-edge set image deployment/databento-sr3-feed-service databento-sr3-feed="$DATABENTO_SR3_FEED_IMAGE"
           kubectl -n options-edge set image deployment/vix-option-inteligence-service vix-option-inteligence="$VIX_OPTION_INTELIGENCE_IMAGE"
+          kubectl -n options-edge set image deployment/greek-move-authenticity-service greek-move-authenticity="$GREEK_MOVE_AUTHENTICITY_IMAGE"
           kubectl -n options-edge set image deployment/strike-flow-avro-adapter strike-flow-avro-adapter="$STRIKE_FLOW_AVRO_ADAPTER_IMAGE"
           kubectl -n options-edge set image deployment/gex-delta-redis-writer gex-delta-redis-writer="$GEX_DELTA_REDIS_WRITER_IMAGE"
           kubectl -n options-edge set image deployment/ibkr-feed-service ibkr-feed="$IBKR_FEED_IMAGE"
           kubectl -n options-edge rollout restart deployment/raw-to-display-service
           kubectl -n options-edge rollout restart deployment/raw-to-display-databento-service
           kubectl -n options-edge rollout restart deployment/options-edge-databento-feed
+          # databento-vix-feed: renders in BOTH envs since the 2026-07-28 cutover commit.
+          kubectl -n options-edge rollout restart deployment/databento-vix-feed
           kubectl -n options-edge rollout restart deployment/databento-volume-aggregator
           kubectl -n options-edge rollout restart deployment/databento-mission-sandwich-service
           kubectl -n options-edge rollout restart deployment/databento-gex-service
@@ -389,10 +387,26 @@ EOF
           kubectl -n options-edge rollout restart deployment/gex-delta-redis-writer
           kubectl -n options-edge rollout restart deployment/ibkr-feed-service
           kubectl -n options-edge rollout restart deployment/databento-maxpain-service
+          # context-tape renders in dev+production only (same category/guard as
+          # short-premium-agent below). Restart so ConfigMap/Secret-only changes reach its
+          # envFrom (the apply above does not roll pods on config-only changes).
+          if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
+            kubectl -n options-edge rollout restart deployment/context-tape-service
+            # multileg-structure: same dev+production guard and the same reason — its Kafka
+            # bootstrap arrives via envFrom, which an apply alone does not roll pods for.
+            kubectl -n options-edge rollout restart deployment/multileg-structure-service
+          fi
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/options-edge-web --timeout=1260s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/options-edge-databento-feed --timeout=1260s
+          # databento-vix-feed: production-only (see the set-image note above); at the
+          # committed replicas:0 state `rollout status` returns success immediately.
+          if [ "${ENVIRONMENT:-dev}" = "production" ]; then
+            kubectl -n options-edge rollout status deployment/databento-vix-feed --timeout=1260s
+          else
+            echo "NOTICE: skipping rollout status deployment/databento-vix-feed — ENVIRONMENT='${ENVIRONMENT:-dev}' != production (this deployment renders only in the production overlay)"
+          fi
           kubectl -n options-edge rollout status deployment/databento-volume-aggregator --timeout=1260s
           kubectl -n options-edge rollout status deployment/databento-mission-sandwich-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/databento-gex-service --timeout=1260s
@@ -426,6 +440,12 @@ EOF
           # experiment.
           if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
             kubectl -n options-edge rollout status deployment/short-premium-agent-service --timeout=1260s
+            # context-tape: same dev+production guard. An unready/crashlooping backfill must
+            # fail the all-deploy, not leave it green with the pod NOT READY.
+            kubectl -n options-edge rollout status deployment/context-tape-service --timeout=1260s
+            # multileg-structure: a pod that cannot reach the broker must fail the all-deploy
+            # rather than leave it green with the workload NOT READY.
+            kubectl -n options-edge rollout status deployment/multileg-structure-service --timeout=1260s
           fi
           scripts/deploy/verify-running-images.sh "$JENKINS_WORK_DIR/options-edge-images.env"
           # Identity migration cleanup occurs only after the replacement has rolled out and
