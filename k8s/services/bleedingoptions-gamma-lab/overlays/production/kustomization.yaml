@@ -22,22 +22,26 @@ resources:
 # then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
 # no-op. Both paths therefore agree on one immutable image.
 #
-# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #19 attested
-# sha256:a7514eb7… from revision 05b73117e530 (main with the chip-legend CORRECTION,
-# options-edge#640: ×N counts N separate OI-confirmed position changes — distinct
-# contracts — within the last 5 trading days, not "N of the last 5 days"; the outgoing
-# image's legend was arithmetically impossible next to a ×7 chip) and recorded
-# PGL-050/051/052 as PASS against that exact digest. The job resolves the revision from
-# the registry rather than taking it from the operator, and refuses unless the checkout
-# under test matches — so the evidence names an image nobody attested by hand.
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #20 attested
+# sha256:97603097… from main (options-edge#642: a fresh load now OPENS THE FIRST SAVED
+# SYMBOL instead of showing an empty board) and recorded PGL-050/051/052 as PASS against
+# that exact digest. The job resolves the revision from the registry rather than taking it
+# from the operator, and refuses unless the checkout under test matches — so the evidence
+# names an image nobody attested by hand.
+#
+# WHY: measured on the live site before this change, a fresh load NEVER rendered — 68
+# samples over 25 seconds, spot an em dash, board time "never" — because nothing selects a
+# symbol until the reader types one. A reader with four saved symbols got an empty screen
+# on every reload while the watchlist sat there knowing exactly what they cared about.
 #
 # Changing this line means producing evidence for the new digest FIRST — that is the point of it
 # being a reviewed edit rather than a deploy-time lookup.
 #
-# ROLLBACK TARGET: the OUTGOING digest is sha256:adf419f6… (evidence #18) — same feature
-# set but with the wrong ("N of last 5 days") chip legend. Prefer rolling FORWARD; the
-# outgoing image actively mislabels the chips.
+# ROLLBACK TARGET: the OUTGOING digest is sha256:a7514eb7… (evidence #19) — the corrected
+# chip legend, but WITHOUT the boot default, so rolling back restores the blank-on-load
+# behaviour this change exists to fix. (sha256:adf419f6…, evidence #18, is older still and
+# additionally mislabels the chips; it is not a rollback candidate.)
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:a7514eb7aeb3e2a1ffd1ad3b96fbd37fc787922b7b0366a3af51edd6be0a4417
+    digest: sha256:976030974de99eea55edd31972c5d00f77aaccb190dcff7ecb001d8f0c9d88d1
