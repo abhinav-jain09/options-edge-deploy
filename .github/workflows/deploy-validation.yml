@@ -29,6 +29,11 @@ jobs:
       - name: Install yq
         run: |
           set -euo pipefail
+          # PINNED, and the validators must be exercised against THIS version. A yq-version
+          # difference (4.44 vs 4.53) silently turned validate-preopen-single-publisher into a
+          # permanently red check that could not distinguish a real misconfiguration from the
+          # tool: the `//` alternative operator is evaluated per document, so every non-matching
+          # document in a rendered multi-doc stream produced its own default line.
           curl -fsSLo yq "https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64"
           chmod +x yq
           sudo mv yq /usr/local/bin/yq

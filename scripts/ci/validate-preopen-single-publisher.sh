@@ -46,7 +46,15 @@ FAILED=0
 # one k8s would win with).
 flag_value() {
   local render="$1" name="$2" vals count
-  vals="$(yq -r "select(.kind==\"Deployment\" and .metadata.name==\"$DEPLOY_NAME\") | .spec.template.spec.containers[] | select(.name==\"databento-gex\") | .env[]? | select(.name==\"$name\") | .value // \"<novalue>\"" "$render" 2>/dev/null || true)"
+  # NO `//` HERE. The alternative operator is evaluated PER DOCUMENT, and a rendered overlay is
+  # a multi-document stream: on yq 4.44 (the version CI installs) every document that is not the
+  # gex Deployment produced a "<novalue>" line of its own, so the count was always greater than
+  # one and this gate reported "<dup>" for all three flags in all three environments — a
+  # permanently red check that says nothing about the manifests. yq 4.53 happens not to, which is
+  # why it passed locally and failed in CI. Absent values print as "null" instead and are mapped
+  # to <novalue> in the shell, where the behaviour does not depend on the tool's version.
+  vals="$(yq -r "select(.kind==\"Deployment\" and .metadata.name==\"$DEPLOY_NAME\") | .spec.template.spec.containers[] | select(.name==\"databento-gex\") | .env[]? | select(.name==\"$name\") | .value" "$render" 2>/dev/null || true)"
+  vals="$(printf '%s' "$vals" | sed 's/^null$/<novalue>/')"
   count="$(printf '%s' "$vals" | grep -c . || true)"
   if [ "$count" -eq 0 ]; then echo "<absent>"; return; fi
   if [ "$count" -gt 1 ]; then echo "<dup>"; return; fi

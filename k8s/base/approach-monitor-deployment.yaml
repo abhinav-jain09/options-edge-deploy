@@ -17,11 +17,13 @@ metadata:
     #   2. Operator-approved numeric promotion gates (§12.5). The thresholds compiled into the
     #      image are explicitly labelled provisional and are NOT promotion-approved.
     #
-    # NEITHER product validates. On an honest pipeline (as-of lookup, contract-end horizon, gap
-    # censoring, and feature vectors produced by the live engine) product 2 scores at CHANCE
-    # (holdout AUC 0.500) and product 1 has two holdout sessions. Earlier figures in this file
-    # claimed 0.837 for product 2; that was leakage plus an offline/live divergence, not signal.
-    # The binding constraint is the corpus, not the model.
+    # NEITHER product validates, and neither has a holdout capable of deciding it. On an as-of
+    # pipeline (as-of registration and lookup, contract-end horizon, gap censoring, one canonical
+    # admission order shared by engine and labeller, warm-up as long as the longest feature)
+    # product 2 retains 83 holdout examples over 3 sessions with 4 positives, and product 1 retains
+    # 17 with 5. Earlier annotations in this file claimed 0.837, then 0.500, then 0.934; every one
+    # of those was an artifact of a defect since removed. The binding constraint is the corpus
+    # (44 replayable sessions, 11 with tier-1 spot), not the model.
     options-edge/dark-deployed: "true"
     options-edge/blocked-on: "MIN_ACTIONABLE_LEAD_MS drill; operator-approved promotion gates"
     options-edge/gate-evidence: "APPROACH-MONITOR-GATE2.md, research/out/GATE3-MODEL.md"
@@ -65,30 +67,25 @@ spec:
           env:
             - name: HEALTH_PORT
               value: "8130"
-            # --- inputs ---
-            # Canonical spot is the frame heartbeat, exactly as the invasion engine uses it.
-            # NOTE: this topic has measured hourly 2-3 min publish gaps (APPROACH-MONITOR-GATE2 §4B).
-            # They are censored, never interpolated.
-            - name: APPROACH_INPUT_SPOT_TOPIC
-              value: underlying.spx.price
-            - name: APPROACH_INPUT_REGISTRY_TOPIC
-              value: positions.approach.registry
-            # --- outputs: OWN topics. The strike-invasion topics are untouchable (§7.8.1 item 1) ---
-            - name: APPROACH_OUTPUT_CURRENT_TOPIC
-              value: positions.approach.current
-            - name: APPROACH_OUTPUT_EVENTS_TOPIC
-              value: positions.approach.events
-            - name: APPROACH_OUTPUT_ALERTS_TOPIC
-              value: positions.approach.alerts
-            # --- Kafka Streams ---
-            # Unversioned application id (one service, one identity). Versioning it would fork
-            # the state store and consumer group on every release.
-            - name: APPROACH_STREAMS_APP_ID
-              value: approach-monitor
-            - name: APPROACH_STREAMS_NUM_THREADS
-              value: "1"
-            - name: APPROACH_EOS_ENABLED
-              value: "true"
+            # --- topics and Streams identity are NOT environment knobs ---
+            # They used to be listed here as APPROACH_INPUT_*/OUTPUT_* , APPROACH_STREAMS_APP_ID,
+            # APPROACH_STREAMS_NUM_THREADS and APPROACH_EOS_ENABLED, and the process read NONE of
+            # them: changing the manifest changed nothing while looking like it had. They are gone
+            # rather than wired up, because none of them is safely variable.
+            #
+            #   topics      — contract constants owned by this service (ApproachTopics). The names
+            #                 are identical in every environment; the CLUSTER is what differs.
+            #                 Inputs: underlying.spx.price (measured hourly 2-3 min publish gaps,
+            #                 APPROACH-MONITOR-GATE2 4B — censored, never interpolated) and
+            #                 positions.approach.registry. Outputs are this service's own; the
+            #                 strike-invasion topics are untouchable (design 7.8.1 item 1).
+            #   app id      — unversioned by policy: one service, one identity. Versioning it forks
+            #                 the state store and the consumer group on every release.
+            #   thread count— every source is rekeyed to a constant so market evidence and the
+            #                 operator's positions co-locate on one task. A second thread cannot
+            #                 parallelise one hot key; it can only break the single-writer
+            #                 assumption the state machine is built on.
+            #   EOS         — exactly-once v2 is a correctness requirement here, not a preference.
             - name: APPROACH_STREAMS_AUTO_OFFSET_RESET
               # EARLIEST. The registry is compacted and is the authoritative current-position
               # snapshot: starting at `latest` puts a fresh application id AFTER every existing
