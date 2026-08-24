@@ -62,22 +62,6 @@ spec:
         - env:
             - name: HEALTH_PORT
               value: "8130"
-            - name: APPROACH_INPUT_SPOT_TOPIC
-              value: underlying.spx.price
-            - name: APPROACH_INPUT_REGISTRY_TOPIC
-              value: positions.approach.registry
-            - name: APPROACH_OUTPUT_CURRENT_TOPIC
-              value: positions.approach.current
-            - name: APPROACH_OUTPUT_EVENTS_TOPIC
-              value: positions.approach.events
-            - name: APPROACH_OUTPUT_ALERTS_TOPIC
-              value: positions.approach.alerts
-            - name: APPROACH_STREAMS_APP_ID
-              value: approach-monitor
-            - name: APPROACH_STREAMS_NUM_THREADS
-              value: "1"
-            - name: APPROACH_EOS_ENABLED
-              value: "true"
             - name: APPROACH_STREAMS_AUTO_OFFSET_RESET
               value: earliest
             - name: ENVIRONMENT
