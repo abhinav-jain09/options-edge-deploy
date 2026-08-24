@@ -55,6 +55,13 @@ SHORT_PREMIUM_AGENT_IMAGE
 SIGNAL_FOLLOWER_IMAGE
 EOF
   fi
+  # approach-monitor is DEV-ONLY (services.yaml envs: [dev]); production and experiment delete it,
+  # so requiring its lock entry there would fail on an image that is never rendered.
+  if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+    cat <<'EOF'
+APPROACH_MONITOR_IMAGE
+EOF
+  fi
 }
 
 target_image_vars() {
