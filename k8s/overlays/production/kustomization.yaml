@@ -20,6 +20,14 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  - path: approach-monitor-delete.yaml
+    target:
+      kind: Deployment
+      name: approach-monitor-service
+  - path: approach-monitor-delete.yaml
+    target:
+      kind: Service
+      name: approach-monitor-service
   # Restoring the 4.3M-record SR3 GlobalKTable needs substantial RocksDB/native
   # headroom in addition to the Java heap. The previous 1Gi cgroup with a 768Mi
   # heap was OOM-killed during restore and left the pod-local store corrupted.

@@ -1,0 +1,11 @@
+# Removes approach-monitor from this environment.
+#
+# services.yaml declares envs: [dev]. Without this the base resources land in every monolithic
+# overlay, so applying production or experiment would create a Deployment and a ClusterIP Service
+# for a service that has cleared no gate — replicas: 0 still changes deployed state.
+$patch: delete
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: approach-monitor-service
+  namespace: options-edge

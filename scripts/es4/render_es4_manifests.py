@@ -82,6 +82,12 @@ ES_ENV = {
         # day, found nothing, and held ES GEX NOT_READY (the documented 00:00-06:00 ET OI loss).
         # 18:00-ET rollover = timestamps at/after Globex open belong to the NEXT trade date.
         {"name": "DATABENTO_GEX_OI_SESSION_ROLL_AFTER", "value": "18:00"},
+        # ES overnight prior-session OI carry (es-overnight-oi-carry-gate1.md, PR#543): overnight the current
+        # session has no published OI (rolls at 18:00), so serve the most-recent prior session's settled OI —
+        # labelled CARRIED_PRIOR_SESSION — instead of fail-closed/blank. ES-ONLY, provider guard is hard ES.
+        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_ENABLED", "value": "true"},
+        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_SYMBOLS", "value": "ES"},
+        {"name": "DATABENTO_GEX_OI_OVERNIGHT_CARRY_MAX_CALENDAR_DAYS", "value": "4"},
         # P2: ES contract multiplier is 50 (E-mini), not the SPX 100 the persist SQL used to
         # hardcode; live rows now stamp the snapshot's own multiplier and this covers any path
         # that has no per-record value. Existing same-key rows self-heal on the next upsert.
