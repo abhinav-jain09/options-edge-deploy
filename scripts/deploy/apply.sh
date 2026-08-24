@@ -177,6 +177,20 @@
           # (standalone services that run on prod too), but NOT experiment. Pin it for dev+production so both
           # `DEPLOY_TARGET=all` renders pass the digest gate below; experiment never renders it and this
           # block is skipped there (so pin_ref is never asked to resolve a non-existent experiment image).
+          # approach-monitor renders in dev ONLY, so it is pinned there and nowhere else.
+          if [ "${ENVIRONMENT}" = "dev" ]; then
+            for _img_var in APPROACH_MONITOR_IMAGE; do
+              _pinned="$(pin_ref "${!_img_var}")" || {
+                echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
+                exit 1
+              }
+              printf -v "$_img_var" '%s' "$_pinned"
+              _repo="${_pinned%@*}"; _repo="${_repo%:*}"; _pdigest="${_pinned#*@}"; _pbase="${_repo##*/}"
+              _pname="$_base_registry/$_pbase"
+              _pname="$_pname" _pnewname="$_repo" _pdigest="$_pdigest" \
+                yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
+            done
+          fi
           if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
             for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE CONTEXT_TAPE_IMAGE MULTILEG_STRUCTURE_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {

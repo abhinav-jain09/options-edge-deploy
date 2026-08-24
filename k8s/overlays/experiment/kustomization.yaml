@@ -10,6 +10,14 @@ resources:
   # scripts/ci/validate-services.sh render equivalence.
   - ../../services/web/base
 patches:
+  - path: approach-monitor-delete.yaml
+    target:
+      kind: Deployment
+      name: approach-monitor-service
+  - path: approach-monitor-delete.yaml
+    target:
+      kind: Service
+      name: approach-monitor-service
   # reversal-confirmation is dev+production only (services.yaml envs) — the shared base
   # would otherwise render it ON in experiment with the remote .252 image on an
   # Apple-Silicon local cluster. Keep it OFF here (same pattern as other env-scoped services).

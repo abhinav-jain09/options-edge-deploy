@@ -64,6 +64,15 @@ STOCK_GEX_IMAGE=$registry/options-edge-stock-gex:$image_tag
 OI_SHADOW_IMAGE=$registry/options-edge-oi-shadow:$image_tag
 REVERSAL_POSTGRES_WRITER_IMAGE=$registry/options-edge-reversal-postgres-writer:$image_tag
 EOF
+            # approach-monitor is DEV-ONLY (services.yaml envs: [dev]); the production and
+            # experiment overlays delete it. Emitting its var for dev and never for production is
+            # also what marks it dev-only to validate-image-pinning.sh, which derives that status
+            # from this script's own behaviour rather than from parsing manifests.
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
+APPROACH_MONITOR_IMAGE=$registry/options-edge-approach-monitor:$image_tag
+EOF
+            fi
             # short-premium-agent renders in dev+production (a standalone service that runs on prod too),
             # NOT experiment. Emit its image var for a dev OR production tag-based resolve (mirrors
             # all_image_vars' dev+prod set), never for experiment.
@@ -128,6 +137,12 @@ DROP_CLASSIFIER_IMAGE=$DROP_CLASSIFIER_IMAGE
 OI_SHADOW_IMAGE=$OI_SHADOW_IMAGE
 REVERSAL_POSTGRES_WRITER_IMAGE=$REVERSAL_POSTGRES_WRITER_IMAGE
 EOF
+            # approach-monitor is dev-only; on the promoted path emit it for dev alone.
+            if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
+              cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
+APPROACH_MONITOR_IMAGE=${APPROACH_MONITOR_IMAGE:-$registry/options-edge-approach-monitor:dev}
+EOF
+            fi
             # short-premium-agent renders in dev+production; on the promoted/branch-2 path (prod) its
             # image var is caller-provided (Jenkinsfile image-defaults -> oeProfile.image), so emit it
             # here too. Guarded to production so an experiment promoted resolve (which never renders it)

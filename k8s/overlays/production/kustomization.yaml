@@ -26,6 +26,14 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  - path: approach-monitor-delete.yaml
+    target:
+      kind: Deployment
+      name: approach-monitor-service
+  - path: approach-monitor-delete.yaml
+    target:
+      kind: Service
+      name: approach-monitor-service
   # PROD-ONLY: the position-flow Leaderboard store (LeaderboardStore reads APP_POSTGRES_*,
   # the public tenant's variable names) pointed at the PLATFORM Postgres for the INTERNAL
   # web — the internal surface has no bo-app-postgres and the nightly publisher writes the
