@@ -20,8 +20,8 @@ metadata:
     # NEITHER product validates, and neither has a holdout capable of deciding it. On an as-of
     # pipeline (as-of registration and lookup, contract-end horizon, gap censoring, one canonical
     # admission order shared by engine and labeller, warm-up as long as the longest feature)
-    # product 2 retains 83 holdout examples over 3 sessions with 4 positives, and product 1 retains
-    # 17 with 5. Earlier annotations in this file claimed 0.837, then 0.500, then 0.934; every one
+    # product 2 retains 7 holdout examples over 4 sessions with 4 positives (AUC CI [0.500, 1.000],
+    # chance inside it), and product 1 retains 17 with 5. Earlier annotations in this file claimed 0.837, then 0.500, then 0.934; every one
     # of those was an artifact of a defect since removed. The binding constraint is the corpus
     # (44 replayable sessions, 11 with tier-1 spot), not the model.
     options-edge/dark-deployed: "true"
