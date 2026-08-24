@@ -136,6 +136,13 @@ echo "=== 5) at-most-one VIX publisher (VIX feed separation design §7) ==="
 # assertion; the monolith path gets it via scripts/deploy/validate-platform.sh.
 bash scripts/ci/validate-vix-single-publisher.sh
 
+echo "=== 5b) exactly one pre-open GEX publisher, matching the declaration ==="
+# Same shape as the VIX assertion and for the same reason: two publishers can own the
+# pre-open gamma surface, BOTH selections render cleanly, and picking the wrong one is
+# silent — pre-market GEX just stops appearing (incident 2026-08-24). The declaration in
+# k8s/preopen-publisher.env makes any switch an explicit, reviewed edit.
+bash scripts/ci/validate-preopen-single-publisher.sh
+
 echo "=== 6) durable topics are preserved by the destructive resets ==="
 # A topic declared retention=-1 in topics.env that the pre-market / clean-slate
 # resets would still wipe is the 2026-07-28 basis-cold-start incident class —
