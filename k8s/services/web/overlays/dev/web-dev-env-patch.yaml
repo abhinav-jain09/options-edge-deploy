@@ -76,3 +76,15 @@ spec:
               value: "http://localhost:8090"
             - name: VITE_REPLAY_ORCHESTRATOR_URL
               value: "http://localhost:8095"
+            # Personal trading journal (options-edge-trading-journal). DEV OVERLAY ONLY, and
+            # deliberately absent from the base: that service is deployed at dev alone, so a
+            # base value would put a dead link in the prod nav. WebNav drops the item entirely
+            # when this is unset, which is what every other environment should do.
+            #
+            # localhost because the journal API is a LoadBalancer on the dev machine itself
+            # (this cluster has no ingress); the link opens in the browser, which runs there.
+            # The item is owner-only — hidden unless the token carries journal-owner — and the
+            # journal's own API default-denies regardless, so the nav entry is convenience,
+            # not access control.
+            - name: APP_JOURNAL_URL
+              value: "http://localhost:8097/journal"
