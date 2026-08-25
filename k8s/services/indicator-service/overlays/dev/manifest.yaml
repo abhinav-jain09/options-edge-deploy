@@ -60,8 +60,6 @@ spec:
     spec:
       containers:
         - env:
-            - name: INDICATOR_EPOCH_GENESIS
-              value: "true"
             - name: HEALTH_PORT
               value: "8133"
             - name: INDICATOR_SOURCE_MODE
@@ -72,6 +70,8 @@ spec:
               value: "1"
             - name: INDICATOR_COLD_BOOTSTRAP
               value: "true"
+            - name: INDICATOR_EPOCH_GENESIS
+              value: "false"
             - name: INDICATOR_SESSION_BACKFILL
               value: "true"
             - name: INDICATOR_STATE_DIR
