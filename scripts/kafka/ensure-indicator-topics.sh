@@ -106,6 +106,48 @@ while IFS='|' read -r base parts policy retention; do
   echo "        applied."
 done <<< "$CONTRACT"
 
+# --- STREAMS-INTERNAL topics ---------------------------------------------------
+# The four topics above are the DECLARED ones. Kafka Streams also creates its own
+# changelog and repartition topics, and those killed two environments:
+#
+#   es4  2026-08-11  indicator-state-changelog at 32 partitions -> invalid-partition
+#                    changelog + MissingSourceTopicException, 235 restarts over 20 h
+#   dev  2026-08-12  indicator-service-dev-indicator-state-changelog: expected 4,
+#                    actual 32 -> Streams PENDING_ERROR then ERROR while the pod
+#                    still reported RESTORING. Dead, not idle — and the health
+#                    endpoint did not say so.
+#
+# Streams creates them correctly itself. They come out wrong when the NAME is
+# touched first and the broker auto-creates it with cluster defaults (32 here), or
+# when a topology's partition count changed and the old topic survived. Neither is
+# visible in topics.env, so nothing checked them.
+#
+# FAIL CLOSED, never auto-delete: a changelog IS the durable store, and deleting it
+# is a data-loss decision a human makes deliberately — exactly the stance taken for
+# a declared-topic partition mismatch above.
+: "${INDICATOR_APP_ID:?INDICATOR_APP_ID unset — cannot name the Streams-internal topics}"
+CHANGELOG="${INDICATOR_APP_ID}-indicator-state-changelog"
+EXPECT_PARTS=4   # the repartition topic's partition count: the aggregate reads it
+
+if kt --list 2>/dev/null | grep -qxF "$CHANGELOG"; then
+  cl_parts=$(kt --describe --topic "$CHANGELOG" 2>/dev/null     | awk '{for (i = 1; i < NF; i++) if ($i == "PartitionCount:") { print $(i + 1); exit }}')
+  if [ "${cl_parts:-0}" != "$EXPECT_PARTS" ]; then
+    echo "FAIL: '$CHANGELOG' has PartitionCount=${cl_parts:-unknown}, expected $EXPECT_PARTS."
+    echo "      Streams refuses to run against it: 'Existing internal topic ... has invalid"
+    echo "      partitions'. The service will sit in ERROR while its health endpoint still"
+    echo "      reports RESTORING, so it looks idle rather than dead."
+    echo "      This is NOT auto-repaired: the changelog is the durable store. Delete it"
+    echo "      deliberately (the state rebuilds from the checkpoint and the input), then"
+    echo "      re-run this deploy:"
+    echo "        kafka-topics --bootstrap-server \$KAFKA_BOOTSTRAP_SERVERS --delete --topic $CHANGELOG"
+    fail=1
+  else
+    echo "  OK   $CHANGELOG  partitions=$cl_parts"
+  fi
+else
+  echo "  OK   $CHANGELOG  absent — Streams will create it with the right shape"
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo "=== ensure-indicator-topics: FAILED ==="
   exit 1
