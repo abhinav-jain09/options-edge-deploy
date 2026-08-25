@@ -1,0 +1,7 @@
+# Production and experiment do not run this. Publishing the operator's live positions to a
+# production topic is a deliberate decision, and the consumer's own production gates are open.
+$patch: delete
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: approach-position-publisher
