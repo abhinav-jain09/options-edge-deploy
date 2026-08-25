@@ -568,6 +568,14 @@ patches:
 images:
   - name: 192.168.100.252:5000/options-edge-raw-to-display
     newName: host.docker.internal:5001/options-edge-raw-to-display
+  # Both approach services were missing from this map, so their dev deploys resolved the .252
+  # PRODUCTION registry, where their images have never existed and never will — dev-only services.
+  # The failure is honest but reads like a build problem: "cannot resolve registry digest ... (is
+  # the image built + pushed for dev?)" when the image was pushed, to the other registry.
+  - name: 192.168.100.252:5000/options-edge-approach-monitor
+    newName: host.docker.internal:5001/options-edge-approach-monitor
+  - name: 192.168.100.252:5000/options-edge-approach-position-publisher
+    newName: host.docker.internal:5001/options-edge-approach-position-publisher
   # The dev cluster is docker-desktop on this Mac and pulls from the LOCAL registry; the .252
   # registry is a different machine's and is where production images live. A service missing from
   # this list renders with the .252 ref, and the deploy's digest lookup 404s against a registry
