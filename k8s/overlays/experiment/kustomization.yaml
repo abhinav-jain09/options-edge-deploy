@@ -10,6 +10,10 @@ resources:
   # scripts/ci/validate-services.sh render equivalence.
   - ../../services/web/base
 patches:
+  - path: approach-position-publisher-delete.yaml
+    target:
+      kind: Deployment
+      name: approach-position-publisher
   - path: approach-monitor-delete.yaml
     target:
       kind: Deployment

@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: approach-position-publisher
+  labels:
+    app.kubernetes.io/name: approach-position-publisher
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    options-edge/purpose: >-
+      Publishes the operator's LIVE IBKR short option legs to positions.approach.registry, which
+      approach-monitor consumes. That topic had no producer at all, so the monitor — which passed
+      its Gate 2 implementation review — would have consumed an empty topic and honestly reported
+      POSITION_SOURCE_UNAVAILABLE for ever.
+    options-edge/single-writer: >-
+      EXACTLY ONE REPLICA, with a stable transactional id. Two publishers would both be authorities
+      on the same account and would take turns assigning episode identities; the consumer treats an
+      episode key as an identity carrying a terminal frontier, a severity, a touch and an alert
+      latch. A registry with two authorities is worse than one that is briefly down.
+    options-edge/blocked-on: >-
+      Production. This is dev-only: publishing the operator's live positions to a production topic
+      is a deliberate decision, and the consumer's own production gates (MIN_ACTIONABLE_LEAD_MS,
+      operator-approved thresholds) are still open.
+spec:
+  replicas: 1
+  strategy:
+    # RECREATE, never rolling. A rolling update would briefly run two publishers, and the second
+    # would be fenced by the transactional id — which is the correct outcome but a noisy one.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: approach-position-publisher
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: approach-position-publisher
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      # IB Gateway listens on 127.0.0.1:4001 on ONE node and nowhere else, so this pod has to be
+      # on that node and on its network — exactly as ibkr-feed-service is. On any other node there
+      # is no :4001 listener and the pod cannot start. (The dev overlay drops the selector:
+      # docker-desktop's single node is not labelled control-plane.)
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: approach-position-publisher
+          image: 192.168.100.252:5000/options-edge-approach-position-publisher:dev
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8140"
+            - name: IB_HOST
+              value: "127.0.0.1"
+            - name: IB_PORT
+              value: "4001"
+            # ITS OWN client id. IBKR refuses a duplicate, and taking ibkr-feed's would knock the
+            # priority-1 SPX spot source off the air.
+            - name: IBKR_APPROACH_CLIENT_ID
+              value: "951"
+            - name: TRANSACTIONAL_ID
+              value: approach-position-publisher-1
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=70"
+          ports:
+            - name: health
+              containerPort: 8140
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            # Ready means CONNECTED and holding a complete snapshot. A publisher that is up but has
+            # never completed one has nothing true to say about the account.
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests: { cpu: "50m", memory: "256Mi" }
+            limits: { memory: "512Mi" }
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

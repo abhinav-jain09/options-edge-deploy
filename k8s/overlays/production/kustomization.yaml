@@ -26,6 +26,10 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  - path: approach-position-publisher-delete.yaml
+    target:
+      kind: Deployment
+      name: approach-position-publisher
   - path: approach-monitor-delete.yaml
     target:
       kind: Deployment

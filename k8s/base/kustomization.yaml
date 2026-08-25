@@ -31,6 +31,7 @@ resources:
   - strike-intelligence-service.yaml
   - approach-monitor-deployment.yaml
   - approach-monitor-service.yaml
+  - approach-position-publisher-deployment.yaml
   - strike-invasion-deployment.yaml
   - strike-invasion-service.yaml
   - invasion-postgres-writer-deployment.yaml

@@ -128,6 +128,7 @@ services:
   # promotion gates. dev only: production is not listed on purpose — nothing about this service
   # has cleared a production gate, and adding the env here is the deliberate act that would say it had.
   - { name: approach-monitor,             managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-approach-monitor,             deployments: [approach-monitor-service] }
+  - { name: approach-position-publisher,  managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-approach-position-publisher, deployments: [approach-position-publisher], buildJob: options-edge-approach-position-publisher }
   - { name: strike-invasion,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-invasion,              deployments: [strike-invasion-service] }
   - { name: invasion-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-invasion-postgres-writer,     deployments: [invasion-postgres-writer] }
   - { name: spread-skew,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew,                  deployments: [spread-skew-service] }

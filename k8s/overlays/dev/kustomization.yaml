@@ -354,6 +354,30 @@ patches:
   # host.docker.internal (the Gateway and the dev broker both live on the Mac host).
   - target:
       kind: Deployment
+      name: approach-position-publisher
+    patch: |-
+      # Same gateway story as ibkr-feed: on the dev Mac there is no in-cluster :4001 and no
+      # control-plane label, so the pod reaches IB Gateway through host.docker.internal on the
+      # PAPER listener 4002. The shared configmap's IB_PORT=4001 is the LIVE port and stays for
+      # prod, which this service does not run in.
+      - op: remove
+        path: /spec/template/spec/nodeSelector
+      - op: remove
+        path: /spec/template/spec/hostNetwork
+      - op: remove
+        path: /spec/template/spec/dnsPolicy
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1
+        value:
+          name: IB_HOST
+          value: host.docker.internal
+      - op: replace
+        path: /spec/template/spec/containers/0/env/2
+        value:
+          name: IB_PORT
+          value: "4002"
+  - target:
+      kind: Deployment
       name: ibkr-feed-service
     patch: |-
       - op: replace

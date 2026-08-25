@@ -70,6 +70,7 @@ EOF
   if [ "${ENVIRONMENT:-dev}" = "dev" ]; then
     cat <<'EOF'
 APPROACH_MONITOR_IMAGE
+APPROACH_POSITION_PUBLISHER_IMAGE
 EOF
   fi
 }
