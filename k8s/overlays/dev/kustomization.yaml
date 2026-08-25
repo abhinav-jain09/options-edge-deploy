@@ -354,6 +354,22 @@ patches:
   # host.docker.internal (the Gateway and the dev broker both live on the Mac host).
   - target:
       kind: Deployment
+      name: approach-monitor-service
+    patch: |-
+      # RUNNING IN DEV. The base keeps this at zero because scaling it up was never a deploy-time
+      # default; it is now deliberate, and only here. Production and experiment still delete the
+      # service outright.
+      #
+      # What this does NOT change: external delivery stays off (APPROACH_DELIVERY_ENABLED=false)
+      # and product 1 stays shadow-only. The service will consume the registry the position
+      # publisher now feeds, decide, and write its own topics — it will not send anything to
+      # anybody. MIN_ACTIONABLE_LEAD_MS and the promotion thresholds gate DELIVERY and production,
+      # and both remain open.
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
       name: approach-position-publisher
     patch: |-
       # Same gateway story as ibkr-feed: on the dev Mac there is no in-cluster :4001 and no
