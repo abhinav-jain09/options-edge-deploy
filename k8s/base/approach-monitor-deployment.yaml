@@ -21,7 +21,11 @@ metadata:
     # pipeline (as-of registration and lookup, contract-end horizon, gap censoring, one canonical
     # admission order shared by engine and labeller, warm-up as long as the longest feature)
     # product 2 retains 7 holdout examples over 4 sessions with 4 positives (AUC CI [0.500, 1.000],
-    # chance inside it), and product 1 retains 17 with 5. Earlier annotations in this file claimed 0.837, then 0.500, then 0.934; every one
+    # chance inside it), and product 1 retains 8 with 2. It shrank when ambiguous third-Friday episodes —
+    # the one session where AM- and PM-settled SPX contracts unambiguously coexist — were refused.
+    # Other episodes whose root the corpus cannot state are ASSUMED SPXW and counted: 38 tier-1 and
+    # 186 tier-3. See APPROACH-MONITOR-GATE2.md section 7; adding a root column to the corpus
+    # export is a Gate-3 prerequisite, not a footnote. Earlier annotations in this file claimed 0.837, then 0.500, then 0.934; every one
     # of those was an artifact of a defect since removed. The binding constraint is the corpus
     # (44 replayable sessions, 11 with tier-1 spot), not the model.
     options-edge/dark-deployed: "true"
