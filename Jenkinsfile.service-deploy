@@ -44,6 +44,12 @@ pipeline {
       'option-truth-engine', 'market-carry', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
       'invasion-postgres-writer', 'reversal-confirmation', 'drop-classifier', 'reversal-postgres-writer', 'short-premium-agent', 'es-spx-align', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
       'oi-shadow', 'unified-sr', 'volume-pace', 'signal-follower', 'web', 'ibkr-feed', 'stock-gex', 'context-tape', 'multileg-structure',
+      // approach-monitor and its position publisher. DEV-ONLY — production and experiment
+      // delete both — but they belong in THIS list for the same reason the tenant services do:
+      // the job is a CpsScmFlowDefinition and regenerates its parameters from this file on every
+      // build, so a choice added through the UI survives exactly until the next run and then
+      // vanishes, and the symptom is a bare HTTP 500 that never names the rejected value.
+      'approach-monitor', 'approach-position-publisher',
       // fullfunding tenant. Same job: the target namespace comes from services.yaml,
       // and the deploy refuses if the render disagrees with what is registered there.
       'fullfunding-app',
@@ -198,7 +204,13 @@ PYEOF
             'ibkr-feed'         : 'options-edge-ibkr-feed',
             // stock-gex ships in the options-edge-databento-feed repo (Dockerfile.stockgex), the
             // same shape as the sr3 feed — it has no processing-reactor module.
-            'stock-gex'         : 'options-edge-stock-gex-deploy'
+            'stock-gex'         : 'options-edge-stock-gex-deploy',
+            // Both approach services are standalone repos with their own pipelines, not modules of
+            // the processing reactor — same shape as ibkr-feed. Naming them here means the operator
+            // is told which job builds the image instead of watching a queued downstream build
+            // start and die.
+            'approach-monitor'  : 'options-edge-approach-monitor',
+            'approach-position-publisher': 'options-edge-approach-position-publisher'
           ]
           if (ownJob.containsKey(params.SERVICE)) {
             error("service-deploy: ${params.SERVICE} does not build in the processing reactor. " +
