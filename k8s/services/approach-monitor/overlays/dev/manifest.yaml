@@ -79,7 +79,7 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          image: 192.168.100.252:5000/options-edge-approach-monitor:dev
+          image: host.docker.internal:5001/options-edge-approach-monitor:dev
           imagePullPolicy: Always
           livenessProbe:
             httpGet:
