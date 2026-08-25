@@ -8,7 +8,16 @@ metadata:
     app.kubernetes.io/component: multileg-structure-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  replicas: 1
+  # ⛔ STOPPED 2026-08-20. The §4 falsification run was performed on the full 251-session SPXW corpus and
+  # the gate FAILED: the geometry-anchor ladder scored Brier 0.15485 against the combined wall+volume
+  # baseline's 0.14206 — a relative improvement of -9.00%, with a 95% session-block bootstrap interval of
+  # [-10.86%, -7.07%], entirely below zero. That is the third independent failure of the same premise
+  # (no OPRA multi-leg marker; co-print alignment at or below its null on 8/8 sessions; and now this).
+  #
+  # Per the pre-committed rule in MULTILEG-GEOMETRY-ANCHOR-LADDER-GATE1 §4, the wall rule remains the level
+  # product and nothing here ships. Held at zero rather than deleted so the wiring, the topics and this
+  # note stay visible — reopening needs order-level data, not a redeploy.
+  replicas: 0
   # Recreate, not RollingUpdate: the engine holds one session of windows in memory and its
   # consumer group has ONE member by design. Two pods alive at once would split the partitions
   # and each would evaluate co-prints against half the tape.
