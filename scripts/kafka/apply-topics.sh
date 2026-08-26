@@ -49,6 +49,31 @@ if [[ -z "$TOPIC_SET" ]]; then
     OPTIONS_EDGE_PURE_COMPACT_TOPICS="${OPTIONS_EDGE_PURE_COMPACT_TOPICS:-} ${OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS:-}"
     OPTIONS_EDGE_EXACT_PARTITION_TOPICS="${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-} ${OPTIONS_EDGE_PROD_ONLY_EXACT_PARTITION_TOPICS:-}"
     OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-} ${OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES:-}"
+    # Prod-only SUBTRACTION (archive fidelity, 2026-08-25). The merges above only ever ADD, so a
+    # topic that must stop being compacted on prod without changing dev/es4 has no other lever:
+    # deleting it from OPTIONS_EDGE_COMPACTED_TOPICS would change every environment. This runs
+    # inside the SAME explicit ENVIRONMENT=production branch, so it fails CLOSED just like them.
+    # alter_topic_config() re-applies cleanup.policy to EXISTING topics on every run, so a name
+    # listed here is actively set back to `delete` — the declaration, not a hand-run
+    # `kafka-configs --alter`, is what makes it survive the next bring-up.
+    if [[ -n "${OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS:-}" ]]; then
+      _oe_kept=""
+      _oe_dropped=0
+      for _oe_t in ${OPTIONS_EDGE_COMPACTED_TOPICS:-}; do
+        _oe_drop=0
+        for _oe_u in ${OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS}; do
+          if [[ "$_oe_t" == "$_oe_u" ]]; then _oe_drop=1; break; fi
+        done
+        if [[ "$_oe_drop" -eq 1 ]]; then
+          _oe_dropped=$((_oe_dropped + 1))
+        else
+          _oe_kept="$_oe_kept $_oe_t"
+        fi
+      done
+      OPTIONS_EDGE_COMPACTED_TOPICS="${_oe_kept# }"
+      echo "[apply-topics] ENVIRONMENT=production: compaction DROPPED for $_oe_dropped topic(s) (archive fidelity); still compacted: ${OPTIONS_EDGE_COMPACTED_TOPICS:-<none>}"
+      unset _oe_kept _oe_dropped _oe_drop _oe_t _oe_u
+    fi
   else
     echo "=================================================================================="
     echo "[apply-topics] NOTICE: PROD-ONLY topic sets SKIPPED (fail-closed)."
