@@ -319,6 +319,22 @@ pipeline {
               echo "WARN: oe_watch reader credential '${watchReaderId}' not found; creating options-edge-runtime-secrets with an EMPTY OE_WATCH_READER_PASSWORD. The System Status page reports LEDGER UNAVAILABLE until the credential exists — no other service is affected."
             }
           }
+          // STOCK_GEX_CLOSE_DB_DSN — the closing-board migration switch, at BOTH ends. Bound the
+          // same optional way as its neighbours: absent credential means an empty value, and an
+          // empty value is the OFF position that both the Job and the service check for. So a
+          // deploy without this credential behaves exactly as it did before the migration existed.
+          //
+          // ⚠️ Creating this credential is what performs the switch. Do it with the market closed:
+          // the live board path is unaffected, but the after-hours view is the Gamma Lab's
+          // fallback, and a mistake is worth making when it costs an empty panel.
+          def closeDbId = 'stock-gex-close-db-dsn'
+          try {
+            withCredentials([string(credentialsId: closeDbId, variable: 'STOCK_GEX_CLOSE_DB_DSN')]) { /* probe */ }
+            optionalBindings << string(credentialsId: closeDbId, variable: 'STOCK_GEX_CLOSE_DB_DSN')
+            echo "closing boards: DSN credential present — the database path is ARMED"
+          } catch (ignored) {
+            echo "closing boards: no '${closeDbId}' credential; boards stay on the dt=/gz files (this is the default)"
+          }
           def anthropicId = params.ANTHROPIC_API_KEY_CREDENTIAL_ID?.trim()
           if (anthropicId) {
             try {
