@@ -33,7 +33,7 @@ WAVE1='options-edge-databento-feed feed-gateway-service options-edge-web'
 # BOOT with only 5 of the 18 declared names, so every reboot brought back services the USER
 # had ordered held down — including directional-pressure-databento-service and volume-pace*,
 # which took production down twice. Change BOTH lists or neither.
-KEEP_DOWN='hpsf-stage-a-service|hpsf-stage-b-service|volume-sandwich-service|volume-sandwich-databento-service|volume-pace-service|volume-pace-databento-service|strike-flow-classifier-ibkr|options-edge-integration-test|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|ibkr-feed-service|oi-shadow-service|raw-to-display-service|prod-pgadmin'
+KEEP_DOWN='directional-pressure-databento-service|hpsf-stage-a-service|hpsf-stage-b-service|volume-sandwich-service|volume-sandwich-databento-service|volume-pace-service|volume-pace-databento-service|strike-flow-classifier-ibkr|options-edge-integration-test|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|ibkr-feed-service|oi-shadow-service|raw-to-display-service|prod-pgadmin'
 
 log() { printf '[%s] %s\n' "$(date '+%F %T %Z')" "$*" | tee -a "$LOG"; }
 die() { log "FAIL: $*"; exit 1; }
