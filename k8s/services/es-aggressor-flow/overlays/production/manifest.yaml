@@ -43,7 +43,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: es-aggressor-flow-service
@@ -72,6 +72,10 @@ spec:
               value: "true"
             - name: KAFKA_ES_SLOPE_TOPIC
               value: futures.kyle-style-signed-flow-response-slope
+            - name: ES_SLOPE_SEND_TIMEOUT_MS
+              value: "30000"
+            - name: ES_SLOPE_SHUTDOWN_DRAIN_MS
+              value: "5000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms128m -Xmx768m
           envFrom:

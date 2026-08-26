@@ -8,10 +8,17 @@ metadata:
     app.kubernetes.io/component: es-aggressor-flow-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # Single writer. The slope series carries a deterministic (algorithmVersion, cmeTradeDate,
-  # barOrdinal) identity assigned from in-memory state, so two replicas would both start at
-  # ordinal 0 and publish colliding keys onto a NON-compacted topic. Never scale above 1.
-  replicas: 1
+  # DARK DEPLOY. This manifest IS the enablement -- it sets ES_SLOPE_OUTPUT_ENABLED=true -- and the
+  # operational evidence that should precede activation (multi-hour soak, broker-failover and
+  # crash-window fault injection, a canary) has not been produced. Shipping at zero replicas lets
+  # the manifest, registry entry, image mapping and Jenkins wiring land and be reviewed now, with
+  # activation as a separate one-line change once that evidence exists.
+  #
+  # When it is activated: replicas: 1, and NEVER above 1. That is correctness, not sizing -- the
+  # series identity (algorithmVersion, cmeTradeDate, barOrdinal) is assigned from in-memory state,
+  # so two replicas would both start at ordinal 0 and publish colliding keys onto a topic that is
+  # deliberately NOT compacted.
+  replicas: 0
   strategy:
     type: Recreate
   selector:
@@ -24,11 +31,11 @@ spec:
         app.kubernetes.io/component: es-aggressor-flow-service
         app.kubernetes.io/part-of: options-edge
     spec:
-      # The slope worker's bounded shutdown can legitimately take up to
-      # shutdownDrain + 3 x sendTimeout + 2s (an in-flight send plus a drain send, each able to
-      # spend max.block.ms before its get() begins), and the runtime join and producer closes come
-      # on top. The default 30s grace period would SIGKILL through all of that, defeating the drain
-      # accounting entirely. Sized with margin for the current defaults.
+      # Sized from the two values pinned in env below: 5s drain + 3 x 30s sendTimeout + 2s = 97s
+      # for the slope worker alone (an in-flight send plus a drain send, each able to spend
+      # max.block.ms before its get() begins), with the runtime join and producer closes on top.
+      # The default 30s would SIGKILL through all of it, defeating the drain and its accounting on
+      # every rollout.
       terminationGracePeriodSeconds: 130
       containers:
         - name: es-aggressor-flow
@@ -69,6 +76,13 @@ spec:
               value: "true"
             - name: KAFKA_ES_SLOPE_TOPIC
               value: futures.kyle-style-signed-flow-response-slope
+            # Pinned HERE, not inherited: the terminationGracePeriodSeconds below is sized from
+            # these two. Left to envFrom they could legally reach 600s each, and the grace period
+            # would then be grossly insufficient -- SIGKILL straight through the drain.
+            - name: ES_SLOPE_SEND_TIMEOUT_MS
+              value: "30000"
+            - name: ES_SLOPE_SHUTDOWN_DRAIN_MS
+              value: "5000"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms128m -Xmx768m
           ports:
