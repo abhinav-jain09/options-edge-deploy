@@ -68,21 +68,6 @@ spec:
                   name: options-edge-databento-feed-env
             - name: STOCK_GEX_OI_INDEX
               value: /oi-index/stock-gex-oi-index.json.gz
-            # THE READ SWITCH. Empty (or absent) means the frozen boards are read from the
-            # directory below, exactly as today. Set, and they are read from Postgres instead.
-            # Both stores answer with the same methods and the same error names, so nothing
-            # downstream can tell which one served a request -- which is what makes the switch a
-            # variable rather than a release, and what lets it be taken back out.
-            #
-            # ⚠️ DO NOT SET THIS WHILE THE MARKET IS OPEN. The live board path is untouched by it,
-            # but the after-hours view is what the Gamma Lab falls back to, and a switch is worth
-            # making when a mistake costs an empty panel rather than a trading session.
-            - name: STOCK_GEX_CLOSE_DB_DSN
-              valueFrom:
-                secretKeyRef:
-                  name: options-edge-databento-feed-env
-                  key: STOCK_GEX_CLOSE_DB_DSN
-                  optional: true
             # KEPT, deliberately, after the switch as well. The files remain the fallback until
             # the database path has run for long enough to be trusted, and removing this line is
             # the LAST step of the migration, not part of the switch.
@@ -90,6 +75,23 @@ spec:
               value: /oi-index/close
             - name: HEALTH_PORT
               value: "8022"
+            # ⚠️ THE CONNECTION STRING IS INLINE, PASSWORD AND ALL, BY EXPLICIT DECISION
+            # (USER 2026-08-27, after the alternatives were laid out). It is here rather than in a
+            # Secret because options-edge is guarded by the ValidatingAdmissionPolicy
+            # 'options-edge-jenkins-only-workloads' -- nothing may write a Secret there except the
+            # Jenkins deployer, and the only job that does is the monolithic options-edge-deploy,
+            # whose last eight runs all failed or were aborted.
+            #
+            # WHAT THIS COSTS, recorded so nobody has to rediscover it: a credential in git is
+            # PERMANENT. Deleting the line later does not remove it from history, and this repo is
+            # cloned to every worktree on the build host and to Jenkins. The way to retire this
+            # value is to ROTATE the bo-app-postgres password, not to edit this file.
+            #
+            # PRODUCTION ONLY, deliberately: it is not in k8s/base, because the base is also
+            # rendered for dev and experiment and they would then WRITE INTO THE PRODUCTION
+            # DATABASE -- a far worse outcome than the one this patch exists to solve.
+            - name: STOCK_GEX_CLOSE_DB_DSN
+              value: "postgresql://bleedingoptions:fAE80oxjlQ75edJe5nmfTLoIDJerlkddoFRm@bo-app-postgres-db.bleedingoptions.svc.cluster.local:5432/bleedingoptions"
           image: 192.168.100.252:5000/options-edge-stock-gex:dev
           imagePullPolicy: IfNotPresent
           livenessProbe:
