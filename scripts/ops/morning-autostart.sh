@@ -65,7 +65,10 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   END-OF-DAY 1DTE open interest and the desk trades 0DTE, where no next-day settled
 #   print exists to score it. Also replicas:0 in both overlays. See
 #   docs/oi-nowcast-retirement.md.
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service}"
+# 2026-08-26: directional-pressure-databento-service REMOVED from this hold. It was added
+# "until further notice" on capacity grounds; USER re-enabled it for production. Removing it
+# here is the load-bearing half — a hand-run `kubectl scale` is undone by the next bring-up.
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only
