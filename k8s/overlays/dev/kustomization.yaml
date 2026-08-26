@@ -181,6 +181,7 @@ patches:
   # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
   - path: feed-gateway-dev-env-patch.yaml
   # DEV-ONLY: feed publish interval 5s, same as prod (code default 250ms) — see the patch header.
+  - path: raw-postgres-writer-dev-patch.yaml
   - path: databento-feed-dev-patch.yaml
   - path: databento-vix-feed-dev-patch.yaml
   # DEV-ONLY: Gate-3 research evidence store ON (base is OFF and carries no URL — see the patch).
