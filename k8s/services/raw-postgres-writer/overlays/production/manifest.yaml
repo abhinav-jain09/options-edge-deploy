@@ -63,6 +63,14 @@ spec:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
+          env:
+            # Persist the feed's LIVE-captured settled OI into Postgres. The shared options-edge-config points
+            # this writer at options.ibkr.raw, which does NOT carry the feed's OI, so board() (the pre-open OI
+            # source, source=DATABENTO) had no live OI at 06:30. The feed publishes its live-OI capture to
+            # options.databento.raw (source=DATABENTO); reading THAT here lands the settled OI in
+            # databento_option_raw_snapshot so board() serves it. env overrides envFrom. (2026-08-26)
+            - name: KAFKA_RAW_TOPIC
+              value: options.databento.raw
           image: 192.168.100.252:5000/options-edge-raw-postgres-writer:dev
           imagePullPolicy: IfNotPresent
           livenessProbe:
