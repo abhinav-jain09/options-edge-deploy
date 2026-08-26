@@ -51,7 +51,10 @@ DISABLED_DEV='hpsf-stage-a-service|hpsf-stage-b-service|volume-pace-service|volu
 # settled OI, and the gex service (alive) observes it into the OI baseline the pre-open board reads. Without
 # the feed up there is no pre-market OI publisher; without gex up there is no observer. Both are needed at
 # ~06:30 ET. The Databento OI fetch is plan-covered ($0), so a 24/7 dev pod adds no data cost. (2026-08-20)
-OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web databento-feed databento-gex-service'
+# raw-postgres-writer is kept alive overnight so it is CONSUMING options.databento.raw before 06:30 and
+# persists the feed's live-OI capture into Postgres the moment it publishes — without it up at 06:30, the
+# pre-open board() has no OI and pre-open GEX cannot compute until the ~07:00 historical fetch. (2026-08-26)
+OVERNIGHT_SET='es-open-direction-service es-open-direction-postgres-writer feed-gateway-service options-edge-web databento-feed databento-gex-service raw-postgres-writer'
 # ES overnight-tracking services that SHUT DOWN at ~09:17 ET (before the 09:30 SPX open): the overnight ES
 # session is over, so these scale to 0. feed-gateway-service + options-edge-web STAY UP (they serve the
 # SPX day session). Fired by the ESDOWN calendar slot below.
