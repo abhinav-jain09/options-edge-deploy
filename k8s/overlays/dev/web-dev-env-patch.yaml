@@ -76,3 +76,15 @@ spec:
               value: "http://localhost:8090"
             - name: VITE_REPLAY_ORCHESTRATOR_URL
               value: "http://localhost:8095"
+            # Personal trading journal (options-edge-trading-journal). Kept in step with the
+            # standalone slice k8s/services/web/overlays/dev — the mirror rule requires the two
+            # to render identically, and it caught exactly this when only one was changed.
+            #
+            # DEV ONLY and deliberately absent from the base: that service is deployed at dev
+            # alone, so a base value would put a dead Journal link in the production nav. WebNav
+            # drops the item entirely when this is unset.
+            #
+            # localhost because the journal API is a LoadBalancer on the dev machine itself
+            # (this cluster has no ingress) and the link opens in the browser, which runs there.
+            - name: APP_JOURNAL_URL
+              value: "http://localhost:8097/journal"
