@@ -44,6 +44,9 @@ pipeline {
       'option-truth-engine', 'market-carry', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
       'invasion-postgres-writer', 'reversal-confirmation', 'drop-classifier', 'reversal-postgres-writer', 'short-premium-agent', 'es-spx-align', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
       'oi-shadow', 'unified-sr', 'volume-pace', 'signal-follower', 'web', 'ibkr-feed', 'stock-gex', 'context-tape', 'multileg-structure',
+      // es-aggressor-flow: PRODUCTION only. On prod it publishes just the Kyle-style
+      // signed-flow response slope; the legacy absorption label is disabled there.
+      'es-aggressor-flow',
       // approach-monitor and its position publisher. DEV-ONLY — production and experiment
       // delete both — but they belong in THIS list for the same reason the tenant services do:
       // the job is a CpsScmFlowDefinition and regenerates its parameters from this file on every
