@@ -276,8 +276,18 @@ pipeline {
                 --from-literal=ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
                 --from-literal=OE_WATCH_READER_PASSWORD="${OE_WATCH_READER_PASSWORD:-}" \
                 --dry-run=client -o yaml | kubectl apply $apply_args -f -
+              # STOCK_GEX_CLOSE_DB_DSN turns the closing-board migration on, at both ends: the
+              # close-board Job mirrors each promoted generation into Postgres, and the service
+              # reads from there instead of the dt=/gz directory. Empty is the OFF position, and
+              # both ends check for it -- so this secret carrying an empty value is exactly the
+              # behaviour that shipped before the migration existed.
+              #
+              # ⚠️ Setting this points an options-edge workload at the bleedingoptions tenant's
+              # database. The NetworkPolicy app-postgres-ingress-stock-gex names the two workloads
+              # allowed to do it; without that policy this value alone reaches nothing.
               kubectl -n options-edge create secret generic options-edge-databento-feed-env \
                 --from-literal=DATABENTO_API_KEY="$DATABENTO_API_KEY" \
+                --from-literal=STOCK_GEX_CLOSE_DB_DSN="${STOCK_GEX_CLOSE_DB_DSN:-}" \
                 --dry-run=client -o yaml | kubectl apply $apply_args -f -
             '''
           }

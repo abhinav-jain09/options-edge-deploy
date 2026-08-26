@@ -102,6 +102,27 @@ spec:
             # killed without one.
             - name: WAIT_FOR_VENDOR_S
               value: "__WAIT_FOR_VENDOR_S__"
+            # THE MIRROR, while the boards migrate off the dt=/gz layout. When this is set the
+            # builder copies each promoted generation into Postgres as well; when it is empty the
+            # job behaves exactly as it did before, so this is inert until a value is supplied.
+            #
+            # A mirror failure is logged and swallowed. The files are still the live path -- the
+            # service reads them, the Gamma Lab renders them -- and an unreachable database must
+            # never be the reason a session's boards are lost. That inverts on the day the service
+            # is switched over, not before.
+            #
+            # ⚠️ CROSS-NAMESPACE. This is an options-edge job writing into the bleedingoptions
+            # tenant's database, which is the reverse of the direction dependencies usually run
+            # here. It is a deliberate choice: one database holds the boards, the watchlists and
+            # the mail ledger, so the daily mail is a join instead of three round trips.
+            - name: STOCK_GEX_CLOSE_DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-databento-feed-env
+                  key: STOCK_GEX_CLOSE_DB_DSN
+                  # Absent until the secret carries it, and the builder skips the mirror on an
+                  # empty value -- so adding this key is what turns the mirror on, in one place.
+                  optional: true
           command: ["sh", "-c"]
           args:
             - |
