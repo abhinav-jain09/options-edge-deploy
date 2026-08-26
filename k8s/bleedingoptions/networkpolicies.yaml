@@ -435,3 +435,39 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+---
+# The options-edge close-board Job and stock-gex-service reaching this tenant's database.
+#
+# ⚠️ This is the reverse of the direction dependencies normally run here: an internal workload
+# reaching into the public tenant's store. It is deliberate — one database holds the boards, the
+# watchlists and the mail ledger, so the daily mail is a join rather than three round trips — but
+# it is the widest grant in this namespace and is written narrowly on purpose: two named workloads,
+# one port, and nothing else from that namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-postgres-ingress-stock-gex
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/part-of: bleedingoptions
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: bo-app-postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: options-edge
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                # The BUILDER writes the boards; the SERVICE reads them back. Nothing else in
+                # options-edge has a reason to be in this database, and a namespaceSelector on its
+                # own would have granted every workload there.
+                values: ["stock-gex-close-board", "stock-gex-service"]
+      ports:
+        - protocol: TCP
+          port: 5432

@@ -66,6 +66,24 @@ spec:
                   name: options-edge-databento-feed-env
             - name: STOCK_GEX_OI_INDEX
               value: /oi-index/stock-gex-oi-index.json.gz
+            # THE READ SWITCH. Empty (or absent) means the frozen boards are read from the
+            # directory below, exactly as today. Set, and they are read from Postgres instead.
+            # Both stores answer with the same methods and the same error names, so nothing
+            # downstream can tell which one served a request -- which is what makes the switch a
+            # variable rather than a release, and what lets it be taken back out.
+            #
+            # ⚠️ DO NOT SET THIS WHILE THE MARKET IS OPEN. The live board path is untouched by it,
+            # but the after-hours view is what the Gamma Lab falls back to, and a switch is worth
+            # making when a mistake costs an empty panel rather than a trading session.
+            - name: STOCK_GEX_CLOSE_DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-databento-feed-env
+                  key: STOCK_GEX_CLOSE_DB_DSN
+                  optional: true
+            # KEPT, deliberately, after the switch as well. The files remain the fallback until
+            # the database path has run for long enough to be trusted, and removing this line is
+            # the LAST step of the migration, not part of the switch.
             - name: STOCK_GEX_CLOSE_DIR
               value: /oi-index/close
             - name: HEALTH_PORT
