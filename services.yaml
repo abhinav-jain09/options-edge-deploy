@@ -141,6 +141,9 @@ services:
   - { name: spot-vol-regime,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spot-vol-regime,              deployments: [spot-vol-regime-service] }
   - { name: indicator-service,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-indicator-service,            deployments: [indicator-service] }
   - { name: context-tape,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-context-tape,                 deployments: [context-tape-service] }
+  # es-aggressor-flow: PRODUCTION ONLY (dev has no ES feed). On prod it publishes only the
+  # Kyle-style signed-flow response slope; the legacy absorption label is switched off there.
+  - { name: es-aggressor-flow,            managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-es-aggressor-flow,            deployments: [es-aggressor-flow-service] }
   # multileg-structure: DESCRIPTIVE co-print observation surface (options.opra.tcbbo -> ranked
   # observations + per-window status). It claims no ownership, direction or dealer attribution —
   # OPRA carries no multi-leg marker (measured 2026-08-18) — so it is a screening surface only.

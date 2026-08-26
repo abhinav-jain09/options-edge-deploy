@@ -19,6 +19,11 @@ resources:
   # recorded (the shadow commit flips it); image reuse (options-edge-databento-feed) with
   # a `command` override selecting the vix role — no new images entry needed.
   - ../../services/databento-vix-feed/base
+  # es-aggressor-flow: PROD-ONLY, and prod-only for a reason — dev is SPX-only and has no ES
+  # feed. It runs here with the legacy absorption snapshot DISABLED, publishing only the
+  # Kyle-style signed-flow response slope (a neutral observability measurement, not a signal).
+  # The es4 deployment at k8s/es4/services/ is untouched and keeps the legacy output.
+  - ../../services/es-aggressor-flow/base
 
 # Prod-only: the node already has the images cached, so re-pulling all ~26 at
 # once on every rollout trips the kubelet image-pull QPS limit ("pull QPS

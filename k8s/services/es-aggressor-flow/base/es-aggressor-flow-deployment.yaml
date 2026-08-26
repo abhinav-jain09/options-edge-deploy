@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-aggressor-flow-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-aggressor-flow-service
+    app.kubernetes.io/component: es-aggressor-flow-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Single writer. The slope series carries a deterministic (algorithmVersion, cmeTradeDate,
+  # barOrdinal) identity assigned from in-memory state, so two replicas would both start at
+  # ordinal 0 and publish colliding keys onto a NON-compacted topic. Never scale above 1.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-aggressor-flow-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-aggressor-flow-service
+        app.kubernetes.io/component: es-aggressor-flow-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: es-aggressor-flow
+          image: 192.168.100.252:5000/options-edge-es-aggressor-flow:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8151"
+            # The service's own default bootstrap is es4 (192.168.100.4). On prod it MUST be set
+            # explicitly, or this pod would silently consume the es4 tape from inside the prod
+            # cluster and publish a series built from another cluster's prints.
+            - name: ES_AGGRESSOR_BOOTSTRAP_SERVERS
+              value: 192.168.100.252:9092
+            # TOPIC_PREFIX is "" on prod, so these resolve unprefixed. The prod tape carries a real
+            # GLBX aggressor side on 100% of prints (measured 2026-08-18, n=5,552).
+            - name: KAFKA_ES_TRADES_TOPIC
+              value: underlying.es.trades
+            - name: ES_AGGRESSOR_SYMBOL
+              value: ES.v.0
+            # --- the legacy absorption snapshot is DELIBERATELY OFF here ------------------------
+            # Its BUYERS_ABSORBED / SELLERS_ABSORBED label is a sign test against a hard-coded
+            # ABSOLUTE point ladder (10s -> 1.0 ... session -> 60.0 ES points), never normalised by
+            # volume and never validated on prod. This is the app's first prod deployment, so it
+            # ships WITHOUT that label rather than introducing an unvalidated state to prod.
+            - name: ES_AGGRESSOR_LEGACY_OUTPUT_ENABLED
+              value: "false"
+            # --- the measurement this deployment exists for -----------------------------------
+            # Kyle-style signed-flow response slope. A NEUTRAL OBSERVABILITY MEASUREMENT: see
+            # es-aggressor-flow-service/SIGNED-FLOW-RESPONSE-SLOPE.md. It must never be labelled as
+            # gamma absorption, a market state, support/resistance, a directional signal, or
+            # expected slippage.
+            - name: ES_SLOPE_OUTPUT_ENABLED
+              value: "true"
+            - name: KAFKA_ES_SLOPE_TOPIC
+              value: futures.kyle-style-signed-flow-response-slope
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms128m -Xmx768m
+          ports:
+            - containerPort: 8151
+              name: health
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          # Readiness withdraws (liveness stays green) when the slope output fails, so a broken
+          # measurement is loudly not-ready instead of a silent healthy-but-dead pod.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
