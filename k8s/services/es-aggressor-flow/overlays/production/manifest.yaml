@@ -103,3 +103,4 @@ spec:
             requests:
               cpu: 100m
               memory: 256Mi
+      terminationGracePeriodSeconds: 130

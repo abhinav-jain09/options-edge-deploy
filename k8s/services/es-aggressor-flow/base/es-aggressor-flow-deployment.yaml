@@ -24,6 +24,12 @@ spec:
         app.kubernetes.io/component: es-aggressor-flow-service
         app.kubernetes.io/part-of: options-edge
     spec:
+      # The slope worker's bounded shutdown can legitimately take up to
+      # shutdownDrain + 3 x sendTimeout + 2s (an in-flight send plus a drain send, each able to
+      # spend max.block.ms before its get() begins), and the runtime join and producer closes come
+      # on top. The default 30s grace period would SIGKILL through all of that, defeating the drain
+      # accounting entirely. Sized with margin for the current defaults.
+      terminationGracePeriodSeconds: 130
       containers:
         - name: es-aggressor-flow
           image: 192.168.100.252:5000/options-edge-es-aggressor-flow:dev
