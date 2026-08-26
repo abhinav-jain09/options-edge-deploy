@@ -8,17 +8,16 @@ metadata:
     app.kubernetes.io/component: es-aggressor-flow-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # DARK DEPLOY. This manifest IS the enablement -- it sets ES_SLOPE_OUTPUT_ENABLED=true -- and the
-  # operational evidence that should precede activation (multi-hour soak, broker-failover and
-  # crash-window fault injection, a canary) has not been produced. Shipping at zero replicas lets
-  # the manifest, registry entry, image mapping and Jenkins wiring land and be reviewed now, with
-  # activation as a separate one-line change once that evidence exists.
+  # LIVE. Activated on the owner's decision, ahead of the operational evidence the Gate-2 review
+  # wanted first (multi-hour soak, broker-failover and crash-window fault injection, a canary).
+  # What that costs is recorded honestly in SIGNED-FLOW-RESPONSE-SLOPE.md rather than papered over.
   #
-  # When it is activated: replicas: 1, and NEVER above 1. That is correctness, not sizing -- the
-  # series identity (algorithmVersion, cmeTradeDate, barOrdinal) is assigned from in-memory state,
-  # so two replicas would both start at ordinal 0 and publish colliding keys onto a topic that is
-  # deliberately NOT compacted.
-  replicas: 0
+  # NEVER above 1. That is correctness, not sizing: the series identity
+  # (algorithmVersion, cmeTradeDate, barOrdinal) is assigned from in-memory state, so two replicas
+  # would both start at ordinal 0 and publish colliding keys onto a topic that is deliberately NOT
+  # compacted. Kubernetes does not enforce this -- a manual scale or a later HPA would break it --
+  # so treat `kubectl scale` on this Deployment as a data-corrupting operation.
+  replicas: 1
   strategy:
     type: Recreate
   selector:
