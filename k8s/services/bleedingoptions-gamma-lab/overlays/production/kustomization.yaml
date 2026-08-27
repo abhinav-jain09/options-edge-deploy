@@ -22,35 +22,67 @@ resources:
 # then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
 # no-op. Both paths therefore agree on one immutable image.
 #
-# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #24 attested
-# sha256:5afc846f… from main (options-edge#646) and recorded PGL-050/051/052 as PASS
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #25 attested
+# sha256:0414b000… built from main at 8a522e96 (which contains options-edge#655,
+# 86433216 — the evidence qualifies the ARTEFACT, not one commit inside it) and recorded PGL-050/051/052 as PASS
 # against that exact digest. The job resolves the revision from the registry rather than
 # taking it from the operator, and refuses unless the checkout under test matches — it did
 # refuse twice while this was being prepared, because the image on :prod had been built
 # from an earlier commit, which is exactly the mistake it exists to catch.
 #
-# WHY: reported on the live site — "sometime user see one screen graph and suddenly it
-# changes", and then "there should be a waiting sign until data is showing, no old dated
-# page should be displayed as fallback". Both were the same defect. An empty live board
-# counted as undrawable, so a PREVIOUS SESSION's closing board was substituted on every
-# load — every symbol is empty for its first seconds — and replaced moments later. And a
-# board that was merely FILLING was drawn anyway: net gamma at 509 of 19,412 contracts is a
-# fraction of what it becomes, the regime derived from it can flip sign as the rest
-# arrives, and the spot is put-call parity over the contracts solved so far. The incoming
-# build draws neither, and says what it is waiting for with the counts.
+# WHY: the digest this replaces carried a REGRESSION OF ITS OWN, reported from the live
+# site at 04:55 ET — "why it says board is filling, no data on the screen", and then, of
+# INTC, "board is filling, after sometime graph appears why". With the market SHUT a board
+# still enters `warming`, finds no OPRA quotes, and sits there for the full 120s warm
+# deadline before admitting it. The outgoing build waited that out, so an evening reader got
+# two minutes of "the board is filling…" and then a chart — and that chart was never a board
+# that had filled. It was the CLOSING board, ready from the first second, held back by the
+# page. Measured on the live service: INTC state=degraded,
+# reason=WARM_DEADLINE_EXCEEDED_MARKET_CLOSED, marketOpen=False, quoted=0.
+#
+# The incoming build falls back at once when marketOpen is false. That field is consulted
+# ONLY to shorten the wait, never to extend it: the service documents market_open_now() as a
+# weekday/session CLOCK, not a trading calendar — it reads true through regular hours on
+# exchange holidays — so such a day takes the slow path and waits out the bounded deadline.
+# The field can make the closing board arrive sooner; it can never keep it away.
 #
 # Changing this line means producing evidence for the new digest FIRST — that is the point of it
 # being a reviewed edit rather than a deploy-time lookup.
 #
-# ROLLBACK TARGET: the OUTGOING digest is sha256:976030…  (evidence #20). Rolling back
-# REVERSES ALL FOUR of the incoming fixes, not only the stale-board one — it brings back the
-# previous session's closing board on every load, partial net-gamma/regime/spot readings
-# published while the board is still being priced, a bar ceiling set by the single
-# largest strike (measured on SNDK 2026-08-13: one 38.3M wall left 7 of 90 bars under 1/500
-# of it, invisible), and strike labels capped at a fixed count of eight regardless of canvas
-# width. Judge the rollback against all four. (sha256:a7514eb7…, evidence #19, is older
-# still and additionally lacks the boot default; it is not a rollback candidate.)
+# WHAT ELSE MOVES WITH IT. The image is built from main, so advancing this digest ships
+# everything merged since the outgoing one: 48f8b7a7 (build #1104) -> 8a522e96 (build #1114),
+# 23 commits, 62 files — of which 51 are tests. The runtime source delta is
+# RuntimeProfileConfig, OptionMonitorWebServer, WebNav, and the context-tape, multileg,
+# option-chain, strike-board and gamma-lab assets.
+#
+# Only one of those ASSET SETS reaches this surface, and USER 2026-08-27 confirmed the rule
+# it follows: the Gamma Lab is public and nothing else is. PUBLIC_SURFACE_PATHS is an
+# allowlist — "/",
+# /gamma-lab(.js|.css), /leaderboard*, /env.js, /option-chain-auth.*, /feed-url.js,
+# /favicon.ico, /register — and every other path falls through to denyAll. context-tape,
+# multileg, option-chain and strike-board are not on it and cannot be fetched here at all;
+# their assets ride in the image and are unreachable. The shared runtime pieces
+# (RuntimeProfileConfig, OptionMonitorWebServer, WebNav) DO apply, and each went through its
+# own review on main. PGL-050/051/052 qualify the public security boundary and nothing else,
+# which is why this note exists rather than an implied "it is just the one fix".
+#
+# ROLLBACK TARGET: the OUTGOING digest is sha256:5afc846f… (evidence #24).
+#
+# IT IS DURABLE, and the reason is structural rather than a promise. Every prod build pushes
+# a per-build tag beside the moving :prod one — `prod-<build>-<sha12>`, precisely so a digest
+# can be named after :prod has moved on. This one is prod-1104-48f8b7a7d647, verified to
+# resolve to 5afc846f at the time of this edit. A registry garbage-collect deletes only
+# manifests NO TAG references, so that tag is what protects it; the GC in
+# offhours-clean-slate is in any case gated on RECLAIM_DOCKER and points at the local dev
+# registry container, not at 192.168.100.252:5000, and nothing in this repository deletes
+# prod-* tags. Roll back by digest or by that tag.
+#
+# For the GAMMA LAB it is the same page without the closed-market shortcut: two minutes of
+# "the board is filling…" before the closing board appears, every time the site is opened
+# outside market hours, which is most of the day. It KEEPS the four fixes 5afc846f
+# introduced. Rolling back also reverts the shared runtime pieces above — judge it against
+# those too. (sha256:976030…, evidence #20, is older still; not a rollback candidate.)
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:5afc846f786d91b967581273375a06dceb48fb418385395033ec10fefbf2f984
+    digest: sha256:0414b000be757c5c76713af92b2c4228aede58b1e56d5a595ef664d1ff7dedae
