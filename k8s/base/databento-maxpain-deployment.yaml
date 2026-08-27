@@ -92,4 +92,9 @@ spec:
               memory: 2Gi
       volumes:
         - name: kafka-streams-state
-          emptyDir: {}
+          # 2026-08-27: was emptyDir while databento-maxpain-service-streams-state was already
+          # declared - so the PVC sat Pending forever (local-path binds on first consumer) and the
+          # stores were rebuilt from the changelogs on every restart anyway. Mounting it is the
+          # whole fix; the claim already exists.
+          persistentVolumeClaim:
+            claimName: databento-maxpain-service-streams-state
