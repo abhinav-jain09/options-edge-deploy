@@ -7,7 +7,8 @@
 # one-shot `confluentinc/cp-kafka` container. The only host dependency
 # is Docker — no host-side Kafka CLI install needed.
 #
-# Discovers `.*-(changelog|repartition)$` topics (covers every
+# Discovers every `*-(changelog|repartition)` topic plus an explicit
+# allowlist of managed high-volume business topics (covers every
 # Kafka Streams app-id prefix we use — options-edge-*, options-flow-*, AND
 # options-databento-* such as the maxpain streams app) and trims records
 # older than RETENTION_MS via kafka-delete-records.
@@ -91,15 +92,18 @@ docker run --rm --name "$CONTAINER_NAME" \
       "$(date -u -d "@$((TS_MS/1000))" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo unknown)"
 
     ALL=$(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list)
-    # Match ALL options-* Kafka Streams internal topics. The app-id prefix
-    # varies by service: options-edge-*, options-flow-*, and options-databento-*
-    # (e.g. the maxpain streams app). A narrower options-(edge|flow)- pattern
-    # silently excluded the maxpain changelog/repartition topics.
-    CANDIDATES=$(printf "%s\n" "$ALL" \
-      | grep -E "\-(changelog|repartition)$" || true)
+    # Trim Streams internal topics plus the exact high-volume business topics
+    # intentionally managed by this cleanup.
+    MANAGED_DATA_TOPICS="options.databento.strike-flow.strike.avro
+option-price-behavior-by-strike
+option-price-behavior-by-option"
+    CANDIDATES=$(printf "%s\n" "$ALL" | awk -v managed="$MANAGED_DATA_TOPICS" "
+      BEGIN { n=split(managed,a,/\\n/); for(i=1;i<=n;i++){gsub(/^[[:space:]]+|[[:space:]]+$/,\"\",a[i]); if(a[i]!=\"\") keep[a[i]]=1} }
+      /-(changelog|repartition)\$/ || (\$0 in keep)
+    ")
 
     if [ -z "$CANDIDATES" ]; then
-      echo "[cleanup] FATAL: no candidate topics matched *-(changelog|repartition)" >&2
+      echo "[cleanup] FATAL: no managed cleanup topics were discovered" >&2
       echo "[cleanup] zero-discovery is treated as a fail-closed signal (likely misconfig)" >&2
       exit 1
     fi
