@@ -467,7 +467,12 @@ spec:
                 # The BUILDER writes the boards; the SERVICE reads them back. Nothing else in
                 # options-edge has a reason to be in this database, and a namespaceSelector on its
                 # own would have granted every workload there.
-                values: ["stock-gex-close-board", "stock-gex-service"]
+                #
+                # stock-gex-close-batch is the same builder run as a Spring Batch job. It needs
+                # MORE than the CLI did: as well as the boards it writes its own job repository
+                # and run ledger here, which is the point — a question about a board and a
+                # question about the run that produced it are answered by one connection.
+                values: ["stock-gex-close-board", "stock-gex-close-batch", "stock-gex-service"]
       ports:
         - protocol: TCP
           port: 5432

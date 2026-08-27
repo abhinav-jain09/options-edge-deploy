@@ -1,0 +1,143 @@
+# FREEZE ONE SESSION'S CLOSING GEX BOARD — as a Spring Batch job.
+#
+# This is the same freeze as stock-gex-close-board-job.yaml, run by a batch that splits it
+# into eight recorded steps instead of one opaque command. Both templates exist on purpose
+# while the batch proves itself; the schedule points at one of them, never at both.
+#
+# WHAT THE BATCH ADDS, and why it was worth a second template:
+#
+#   * EVERY PHASE IS ANSWERABLE AFTERWARDS. Spring Batch's own tables record each step and
+#     what it moved, in the SAME database as the boards. Beside them, gex_close_run records
+#     the image digest the run used, the generation id it produced, and how long the vendor
+#     took. Three times in one week a green result was not true — a build that succeeded
+#     without the change in the image, an image that succeeded but was the wrong one of the
+#     two the feed repository produces, and a job that succeeded over a database with no
+#     tables in it. Each of those is a query now.
+#   * THE PUBLISH IS GUARDED BY A COUNT. Boards are stored by the batch, not as a side
+#     effect of the builder that logged its own failures and carried on. If the builder
+#     reports more boards than were stored, the generation is NOT promoted, the job fails,
+#     and the unpromoted generation is left behind as evidence.
+#   * A FAILED NIGHT IS RESUMED, NOT RE-ATTEMPTED. Only session and rebuild identify a run,
+#     so re-running with the same parameters skips the steps that completed and picks up at
+#     the one that failed — including part-way through the vendor pull, chunk by chunk.
+#
+# WHY IT IS STILL A JOB TEMPLATE IN GIT AND NOT A CronJob OBJECT — unchanged, and for the
+# same reason as every other job here: the options-edge-jenkins-only-workloads admission
+# policy (failurePolicy: Fail) permits batch/jobs and batch/cronjobs ONLY to
+# system:serviceaccount:options-edge:jenkins-deployer, so the schedule lives in Jenkins.
+#
+# THE WRAPPER MUST RESOLVE THE SESSION FROM THE MARKET CALENDAR. Unlike the CLI, this job
+# has no --skip-non-session: a batch that decided for itself that a night did not count
+# would be a batch that could report success for a night it never ran. A Mon-Fri timer that
+# fires on an exchange holiday must therefore not create this Job at all.
+#
+# NODE PINNING is required for the same reason as the other jobs: /oi-index is a node-local
+# hostPath, so this must run on the node the service pod runs on.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: stock-gex-close-batch
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: maintenance
+spec:
+  # NO k8s-level retry. The batch retries each vendor chunk itself, and a restart of the
+  # whole pod would begin a NEW job execution rather than resuming the failed one — which is
+  # precisely the distinction this job exists to keep. A re-run is a deliberate act with the
+  # same parameters, not a backoff.
+  backoffLimit: 0
+  activeDeadlineSeconds: 6000
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: stock-gex-close-batch
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: __NODE_NAME__
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000        # MUST match the hostPath dir owner on the node (abhinav)
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: close-batch
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: DATABENTO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-databento-feed-env
+                  key: DATABENTO_API_KEY
+            # ⚠️ INLINE, PASSWORD INCLUDED, by explicit decision (USER 2026-08-27). options-edge
+            # is guarded by the ValidatingAdmissionPolicy 'options-edge-jenkins-only-workloads',
+            # so nothing may write a Secret there except the Jenkins deployer, and the only job
+            # that does is the monolithic options-edge-deploy -- last eight runs all failed or
+            # aborted. A credential in git is PERMANENT: retiring this value means ROTATING the
+            # bo-app-postgres password, not editing this file.
+            - name: STOCK_GEX_CLOSE_DB_DSN
+              value: "postgresql://bleedingoptions:fAE80oxjlQ75edJe5nmfTLoIDJerlkddoFRm@bo-app-postgres-db.bleedingoptions.svc.cluster.local:5432/bleedingoptions"
+            # A SEPARATE staging root from the CLI job's /oi-index/close/.fetch. While both
+            # templates exist, one night could otherwise be fetched by one and built by the
+            # other, and the plan enforcement would read the other's chunks as a foreign
+            # universe and discard them. Separate roots cost a duplicate pull on a night both
+            # run — OPRA historical is not metered — and buy an unambiguous answer to "whose
+            # chunks are these".
+            - name: CLOSE_SNAPSHOT_ROOT
+              value: "/oi-index/close/.batch-fetch"
+            - name: CLOSE_OUT_ROOT
+              value: "/oi-index/close"
+            - name: CLOSE_INDEX_PATH
+              value: "/oi-index/stock-gex-oi-index.json.gz"
+            - name: CLOSE_KEEP_SESSIONS
+              value: "__KEEP_SESSIONS__"
+            - name: CLOSE_AWAIT_VENDOR_SECONDS
+              value: "__WAIT_FOR_VENDOR_S__"
+            # The generation directory is scratch now: the boards are read back out of the
+            # database, and the files exist only long enough for the batch to store them.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Duser.timezone=UTC"
+          # Job parameters, in Spring Batch's own <key>=<value>,<type>,<identifying> form.
+          #
+          # session and rebuild are IDENTIFYING and nothing else is. That is what makes a
+          # failed night restartable: the same session run again is the same job instance,
+          # resumed. A timestamp parameter here would make every attempt a new instance and
+          # silently destroy that, which is why there is not one.
+          #
+          # rebuild is how a deliberate re-freeze of a night that already completed is asked
+          # for — it makes a new instance, and records that this was the second build of that
+          # day rather than the first.
+          args:
+            - "session=__SESSION__,java.lang.String,true"
+            - "rebuild=__REBUILD__,java.lang.Long,true"
+            - "runSource=__RUN_SOURCE__,java.lang.String,false"
+            - "imageDigest=__IMAGE_DIGEST__,java.lang.String,false"
+          volumeMounts:
+            - name: oi-index
+              mountPath: /oi-index      # READ-WRITE: staging and the scratch generation.
+            - name: tmp
+              mountPath: /tmp           # readOnlyRootFilesystem: the JVM and urllib need one
+          resources:
+            requests:
+              cpu: 500m
+              # 1Gi covered the builder alone; the JVM sits beside it for the whole run.
+              memory: 1536Mi
+            limits:
+              memory: 2560Mi
+      volumes:
+        - name: oi-index
+          hostPath:
+            path: /home/options-edge/stock-gex-oi
+            type: DirectoryOrCreate
+        - name: tmp
+          emptyDir: {}

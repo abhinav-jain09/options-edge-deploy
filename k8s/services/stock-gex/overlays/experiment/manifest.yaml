@@ -66,9 +66,6 @@ spec:
                   name: options-edge-databento-feed-env
             - name: STOCK_GEX_OI_INDEX
               value: /oi-index/stock-gex-oi-index.json.gz
-            # KEPT, deliberately, after the switch as well. The files remain the fallback until
-            # the database path has run for long enough to be trusted, and removing this line is
-            # the LAST step of the migration, not part of the switch.
             - name: STOCK_GEX_CLOSE_DIR
               value: /oi-index/close
             - name: HEALTH_PORT
