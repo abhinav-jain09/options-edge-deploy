@@ -139,6 +139,7 @@ services:
   - { name: es-open-direction,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction,            deployments: [es-open-direction-service] }
   - { name: close-direction,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-close-direction,              deployments: [close-direction-service] }
   - { name: spot-vol-regime,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spot-vol-regime,              deployments: [spot-vol-regime-service] }
+  - { name: vol-premium,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-vol-premium,                  deployments: [vol-premium-service] }
   - { name: indicator-service,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-indicator-service,            deployments: [indicator-service] }
   - { name: context-tape,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-context-tape,                 deployments: [context-tape-service] }
   # es-aggressor-flow: PRODUCTION ONLY (dev has no ES feed). On prod it publishes only the

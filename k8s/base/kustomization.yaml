@@ -54,6 +54,8 @@ resources:
   - close-direction-service.yaml
   - spot-vol-regime-deployment.yaml
   - spot-vol-regime-service.yaml
+  - vol-premium-deployment.yaml
+  - vol-premium-service.yaml
   - indicator-service-deployment.yaml
   - indicator-service-service.yaml
   - stock-gex-deployment.yaml
