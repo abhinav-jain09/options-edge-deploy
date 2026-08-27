@@ -22,67 +22,64 @@ resources:
 # then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
 # no-op. Both paths therefore agree on one immutable image.
 #
-# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #25 attested
-# sha256:0414b000… built from main at 8a522e96 (which contains options-edge#655,
-# 86433216 — the evidence qualifies the ARTEFACT, not one commit inside it) and recorded PGL-050/051/052 as PASS
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #26 attested
+# sha256:e210d808… built from main at b47cd4d5 by options-edge-web-deploy #1116 (the
+# evidence qualifies the ARTEFACT, not one commit inside it) and recorded PGL-050/051/052 as PASS
 # against that exact digest. The job resolves the revision from the registry rather than
 # taking it from the operator, and refuses unless the checkout under test matches — it did
 # refuse twice while this was being prepared, because the image on :prod had been built
 # from an earlier commit, which is exactly the mistake it exists to catch.
 #
-# WHY: the digest this replaces carried a REGRESSION OF ITS OWN, reported from the live
-# site at 04:55 ET — "why it says board is filling, no data on the screen", and then, of
-# INTC, "board is filling, after sometime graph appears why". With the market SHUT a board
-# still enters `warming`, finds no OPRA quotes, and sits there for the full 120s warm
-# deadline before admitting it. The outgoing build waited that out, so an evening reader got
-# two minutes of "the board is filling…" and then a chart — and that chart was never a board
-# that had filled. It was the CLOSING board, ready from the first second, held back by the
-# page. Measured on the live service: INTC state=degraded,
-# reason=WARM_DEADLINE_EXCEEDED_MARKET_CLOSED, marketOpen=False, quoted=0.
+# WHY: "why after sometime view get reset". The reader would zoom into a price band and,
+# minutes later, find the chart back at its default window. MEASURED by driving the page
+# through every kind of refresh: an ordinary poll HELD, a new expiry appearing HELD, an
+# expiry vanishing HELD — and a swap to the frozen closing board RESET it, "27 of 200" back
+# to "53 of 200", then RESET again on the way back to live.
 #
-# The incoming build falls back at once when marketOpen is false. That field is consulted
-# ONLY to shorten the wait, never to extend it: the service documents market_open_now() as a
-# weekday/session CLOCK, not a trading calendar — it reads true through regular hours on
-# exchange holidays — so such a day takes the slow path and waits out the bounded deadline.
-# The field can make the closing board arrive sooner; it can never keep it away.
+# The page falls back to the frozen board when a live poll is FALLBACK-ELIGIBLE and a usable
+# frozen board exists — not on every hiccup: a degraded board that still carries strikes is
+# drawn, and an actionable failure is reported rather than replaced. What does reach the
+# fallback is an EMPTY live board, which is what a freshly created one is, so an idle
+# retirement or a restart can produce it. The
+# closing board is a previous session's, its expiry list differs, and the frame's identity is
+# symbol#expiries — so the swap read as a NEW SELECTION and the window was discarded twice.
 #
-# Changing this line means producing evidence for the new digest FIRST — that is the point of it
-# being a reviewed edit rather than a deploy-time lookup.
+# The incoming build carries the window BY STRIKE: {offset, width} name different strikes on a
+# different axis, so on a source swap the first and last strike on screen are looked up in the
+# new axis and the window is rebuilt around them. A reader-driven change — new symbol, new
+# slider position — still gets the default window, because those are new questions.
 #
 # WHAT ELSE MOVES WITH IT. The image is built from main, so advancing this digest ships
-# everything merged since the outgoing one: 48f8b7a7 (build #1104) -> 8a522e96 (build #1114),
-# 23 commits, 62 files — of which 51 are tests. The runtime source delta is
-# RuntimeProfileConfig, OptionMonitorWebServer, WebNav, and the context-tape, multileg,
-# option-chain, strike-board and gamma-lab assets.
+# everything merged since the outgoing one: 8a522e96 (build #1114) -> b47cd4d5 (build #1116),
+# 4 commits. The non-test source delta is gamma-lab.js, option-chain.js, and the tape-zones /
+# zones assets.
 #
-# Only one of those ASSET SETS reaches this surface, and USER 2026-08-27 confirmed the rule
-# it follows: the Gamma Lab is public and nothing else is. PUBLIC_SURFACE_PATHS is an
-# allowlist — "/",
-# /gamma-lab(.js|.css), /leaderboard*, /env.js, /option-chain-auth.*, /feed-url.js,
-# /favicon.ico, /register — and every other path falls through to denyAll. context-tape,
-# multileg, option-chain and strike-board are not on it and cannot be fetched here at all;
-# their assets ride in the image and are unreachable. The shared runtime pieces
-# (RuntimeProfileConfig, OptionMonitorWebServer, WebNav) DO apply, and each went through its
-# own review on main. PGL-050/051/052 qualify the public security boundary and nothing else,
-# which is why this note exists rather than an implied "it is just the one fix".
+# Only one of those ASSET SETS reaches this surface, and USER 2026-08-27 confirmed the rule it
+# follows: the Gamma Lab is public and nothing else is. PUBLIC_SURFACE_PATHS is an allowlist —
+# "/", /gamma-lab(.js|.css), /leaderboard*, /env.js, /option-chain-auth.*, /feed-url.js,
+# /favicon.ico, /register — and every other path falls through to denyAll. option-chain,
+# tape-zones and zones are not on it and cannot be fetched here at all; their assets ride in
+# the image unreachable. PGL-050/051/052 qualify the public security boundary and nothing
+# else, which is why this note exists rather than an implied "it is just the one fix".
 #
-# ROLLBACK TARGET: the OUTGOING digest is sha256:5afc846f… (evidence #24).
+# ROLLBACK TARGET: the OUTGOING digest is sha256:0414b000… (evidence #25).
 #
 # IT IS DURABLE, and the reason is structural rather than a promise. Every prod build pushes
 # a per-build tag beside the moving :prod one — `prod-<build>-<sha12>`, precisely so a digest
-# can be named after :prod has moved on. This one is prod-1104-48f8b7a7d647, verified to
-# resolve to 5afc846f at the time of this edit. A registry garbage-collect deletes only
+# can be named after :prod has moved on. This one is prod-1114-8a522e96a376, verified to
+# resolve to 0414b000 at the time of this edit. A registry garbage-collect deletes only
 # manifests NO TAG references, so that tag is what protects it; the GC in
 # offhours-clean-slate is in any case gated on RECLAIM_DOCKER and points at the local dev
 # registry container, not at 192.168.100.252:5000, and nothing in this repository deletes
 # prod-* tags. Roll back by digest or by that tag.
 #
-# For the GAMMA LAB it is the same page without the closed-market shortcut: two minutes of
-# "the board is filling…" before the closing board appears, every time the site is opened
-# outside market hours, which is most of the day. It KEEPS the four fixes 5afc846f
-# introduced. Rolling back also reverts the shared runtime pieces above — judge it against
-# those too. (sha256:976030…, evidence #20, is older still; not a rollback candidate.)
+# For the GAMMA LAB it is the same page without the strike-anchored window: the reader's zoom
+# is discarded whenever the page swaps to the frozen board and back, so a few minutes of
+# reading is undone by a poll they never saw. It KEEPS everything 0414b000 carried, including
+# the closed-market shortcut. This advancement touches no shared runtime code — the delta is
+# the five assets named above and their tests — so there is nothing else to weigh.
+# (sha256:5afc846f…, evidence #24, is older still; not a rollback candidate.)
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:0414b000be757c5c76713af92b2c4228aede58b1e56d5a595ef664d1ff7dedae
+    digest: sha256:e210d80819baa73aa631a13de9c7be8fbd4ba0bd31e87a93e20b7539f695b4a7
