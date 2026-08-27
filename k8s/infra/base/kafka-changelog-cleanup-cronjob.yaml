@@ -8,7 +8,7 @@
 # aligns the cluster's effective state lookback with the configured 24h
 # changelog retention (see configmap.yaml KAFKA_CHANGELOG_RETENTION_MS).
 #
-# WHAT: discover topics matching `options-*-(changelog|repartition)` (covers
+# WHAT: discover topics matching `options?-*-(changelog|repartition)` (covers
 # every Kafka Streams app-id prefix we use — options-edge-*, options-flow-*,
 # AND options-databento-* such as the maxpain streams app — NOT just edge/flow),
 # skip compact-only policies, then for each topic look up the per-partition
@@ -117,6 +117,11 @@ spec:
                       name: kafka-streams-active-appids
                       key: PURGE_PROFILE
                       optional: false
+                # Optional emergency exclusion. This is an ERE matched against the complete
+                # topic name. Keep the default match-nothing expression unless a topic or
+                # generation must be protected independently of app-id/group discovery.
+                - name: PROTECTED_TOPIC_REGEX
+                  value: '^$'
                 # Discord notification target (optional). Create with:
                 #   kubectl -n options-edge create secret generic options-edge-discord \
                 #     --from-literal=webhook-url='https://discord.com/api/webhooks/...'
@@ -142,17 +147,31 @@ spec:
                   printf '[cleanup] cutoff_ts_ms=%s (utc=%s)\n' "$TS_MS" \
                     "$(date -u -d "@$((TS_MS/1000))" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo unknown)"
 
+                  # Validate the operator-supplied exclusion before any destructive command.
+                  # grep returns 0/1 for a valid ERE and 2 for an invalid one.
+                  set +e
+                  printf '\n' | grep -Eq "${PROTECTED_TOPIC_REGEX:-^$}"
+                  PROTECTED_REGEX_RC=$?
+                  set -e
+                  if [ "$PROTECTED_REGEX_RC" -gt 1 ]; then
+                    echo "[cleanup] FATAL: invalid PROTECTED_TOPIC_REGEX; refusing to continue" >&2
+                    exit 1
+                  fi
+
                   ALL=$(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list)
-                  # Match ALL options-* Kafka Streams internal topics. The app-id
-                  # prefix varies by service: options-edge-*, options-flow-*, and
-                  # options-databento-* (e.g. the maxpain streams app). A narrower
-                  # options-(edge|flow)- pattern silently excluded the maxpain
-                  # changelog/repartition topics, leaving them to grow unbounded.
-                  CANDIDATES=$(printf '%s\n' "$ALL" \
-                    | grep -E '\-(changelog|repartition)$' || true)
+                  # Trim OptionsEdge-owned Streams internal topics plus the exact high-volume
+                  # business topics whose topic-level retention is currently unlimited. Keep
+                  # this explicit allowlist narrow: it controls record trimming, not topic purge.
+                  MANAGED_DATA_TOPICS='options.databento.strike-flow.strike.avro
+                  option-price-behavior-by-strike
+                  option-price-behavior-by-option'
+                  CANDIDATES=$(printf '%s\n' "$ALL" | awk -v managed="$MANAGED_DATA_TOPICS" '
+                    BEGIN { n=split(managed,a,/\n/); for(i=1;i<=n;i++){gsub(/^[[:space:]]+|[[:space:]]+$/,"",a[i]); if(a[i]!="") keep[a[i]]=1} }
+                    /-(changelog|repartition)$/ || ($0 in keep)
+                  ')
 
                   if [ -z "$CANDIDATES" ]; then
-                    echo "[cleanup] FATAL: no candidate topics matched *-(changelog|repartition)" >&2
+                    echo "[cleanup] FATAL: no managed cleanup topics were discovered" >&2
                     echo "[cleanup] zero-discovery is treated as a fail-closed signal (likely misconfig)" >&2
                     exit 1
                   fi
@@ -163,6 +182,10 @@ spec:
 
                   TRIMMED=0; SKIPPED=0; FAILED=0
                   for T in $CANDIDATES; do
+                    if printf '%s\n' "$T" | grep -Eq "${PROTECTED_TOPIC_REGEX:-^$}"; then
+                      echo "[cleanup] PROTECTED $T (explicit exclusion)"
+                      SKIPPED=$((SKIPPED+1)); continue
+                    fi
                     # FAIL-CLOSED on policy lookup: a describe error means we cannot tell whether
                     # this topic is compact-only -> SKIP it rather than risk trimming a compact-only.
                     if ! DESCRIBE=$(kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
@@ -278,7 +301,7 @@ spec:
                   # scaled to 0 off-hours (whose group is Empty and would false-positive). A topic is KEPT iff
                   # it starts with "<active-app-id>-" (trailing hyphen so v2 never matches v2r3). Fail-closed:
                   # an empty/absent active set aborts the purge. PURGE_DRY_RUN=true logs without deleting.
-                  ORPHANS_DELETED=0; ORPHANS_DRYRUN=0; PURGE_FAILED=0
+                  ORPHANS_DELETED=0; ORPHANS_DRYRUN=0; PURGE_FAILED=0; OWNERSHIP_MISMATCH=0; PROTECTED=0
                   if [ "${PURGE_ORPHAN_GENERATIONS:-false}" = "true" ]; then
                     ACTIVE="$(printf '%s' "${ACTIVE_STREAMS_APP_IDS:-}" | tr ',' ' ' | tr -s '[:space:]' '\n' | sed '/^$/d' | sort -u)"
                     if [ -z "$ACTIVE" ]; then
@@ -292,8 +315,8 @@ spec:
                     # For each topic we pick the LONGEST group that prefixes it — that IS the exact app-id
                     # (no hyphen-prefix shadowing: "X" never wins over "X-databento" for X-databento's topics).
                     # KEEP iff that app-id equals an active configured app-id, or "<active>-<PROFILE>" (the
-                    # source-scoped runtime suffix, e.g. -prod). No owning group found => SKIP (never delete a
-                    # topic we cannot attribute). PROFILE comes from the ConfigMap (Jenkins, per ENVIRONMENT).
+                    # source-scoped runtime suffix, e.g. -prod). If an owning group exists but disagrees with
+                    # the allowlist, deletion is refused and the Job fails. PROFILE comes from the ConfigMap.
                     # NOTE: variable is CG_LIST, NOT "GROUPS" — GROUPS is a bash special built-in array (the
                     # current user's group ids), so assigning to it is clobbered and $GROUPS would read a GID.
                     CG_LIST="$(kafka-consumer-groups --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list 2>/dev/null || true)"
@@ -308,6 +331,10 @@ spec:
                     # judged an orphan and deleted. Foreign/unrecognized-prefix topics are simply not candidates.
                     STREAMS_TOPICS="$(printf '%s\n' "$ALL" | grep -E '^(options?-|es-spx-align-service-|es-gex-spx-align-service-|indicator-service-).*-(changelog|repartition)$' || true)"
                     for T in $STREAMS_TOPICS; do
+                      if printf '%s\n' "$T" | grep -Eq "${PROTECTED_TOPIC_REGEX:-^$}"; then
+                        echo "[purge] PROTECTED $T (explicit exclusion)"
+                        PROTECTED=$((PROTECTED+1)); continue
+                      fi
                       G=""
                       for g in $CG_LIST; do
                         case "$T" in "${g}-"*) [ "${#g}" -gt "${#G}" ] && G="$g" ;; esac
@@ -320,6 +347,13 @@ spec:
                         for A in $ACTIVE; do
                           if [ "$G" = "$A" ] || [ "$G" = "${A}-${PURGE_PROFILE:-prod}" ]; then keep=true; break; fi
                         done
+                        # A live/existing owning group is stronger evidence than the generated
+                        # allowlist. If they disagree, NEVER delete: flag the stale configuration
+                        # and fail the Job so Jenkins alerts instead of turning drift into data loss.
+                        if [ "$keep" != "true" ]; then
+                          echo "[purge] REFUSED $T (owner group $G is absent from ACTIVE_STREAMS_APP_IDS)" >&2
+                          OWNERSHIP_MISMATCH=$((OWNERSHIP_MISMATCH+1)); continue
+                        fi
                       else
                         # No owning group — the generation's group already EXPIRED (offsets.retention). This
                         # is the long-lived-orphan case the purge exists for. FALLBACK: keep iff the topic
@@ -344,7 +378,7 @@ spec:
                         fi
                       fi
                     done
-                    echo "[purge] summary: deleted=$ORPHANS_DELETED dryrun_would_delete=$ORPHANS_DRYRUN failed=$PURGE_FAILED (dry_run=${PURGE_DRY_RUN:-true})"
+                    echo "[purge] summary: deleted=$ORPHANS_DELETED dryrun_would_delete=$ORPHANS_DRYRUN protected=$PROTECTED ownership_mismatch=$OWNERSHIP_MISMATCH failed=$PURGE_FAILED (dry_run=${PURGE_DRY_RUN:-true})"
                   else
                     echo "[purge] PURGE_ORPHAN_GENERATIONS!=true — orphan purge disabled this run."
                   fi
@@ -363,4 +397,4 @@ spec:
 
                   # Job exit code: fail if EITHER the trim OR the orphan purge had any failure, so Jenkins
                   # surfaces it (alert + retry) instead of reporting success with orphans left behind.
-                  [ "$FAILED" -eq 0 ] && [ "${PURGE_FAILED:-0}" -eq 0 ]
+                  [ "$FAILED" -eq 0 ] && [ "${PURGE_FAILED:-0}" -eq 0 ] && [ "${OWNERSHIP_MISMATCH:-0}" -eq 0 ]
