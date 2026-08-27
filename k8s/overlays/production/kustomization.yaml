@@ -680,6 +680,30 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
+  # THE CLOSING-BOARD DATABASE SWITCH, production only.
+  #
+  # Adding this env var makes stock-gex-service read frozen boards from Postgres instead of the
+  # dt=/gz directory. Removing the patch puts it back on files, which still exist -- that is the
+  # rollback, and it is why STOCK_GEX_CLOSE_DIR stays.
+  #
+  # ⚠️ The connection string is inline, password included, by explicit decision (USER 2026-08-27).
+  # options-edge is guarded by the ValidatingAdmissionPolicy 'options-edge-jenkins-only-workloads',
+  # so nothing may write a Secret there except the Jenkins deployer, and the only job that does is
+  # the monolithic options-edge-deploy -- last eight runs all failed or aborted. A credential in git
+  # is PERMANENT: retiring this value means ROTATING the bo-app-postgres password, not editing the
+  # file.
+  #
+  # HERE rather than in k8s/base on purpose. The base is rendered for dev and experiment too, and
+  # they would then write into the PRODUCTION database.
+  - target:
+      kind: Deployment
+      name: stock-gex-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STOCK_GEX_CLOSE_DB_DSN
+          value: "postgresql://bleedingoptions:fAE80oxjlQ75edJe5nmfTLoIDJerlkddoFRm@bo-app-postgres-db.bleedingoptions.svc.cluster.local:5432/bleedingoptions"
   # stock-gex is ON in prod (USER 2026-08-11: "deploy everything in dev and prod"), so the
   # replicas:0 hold and its morning-autostart KEEP_DOWN entry were BOTH removed together —
   # replicas:0 without a KEEP_DOWN entry gets scaled back to 1 at 06:15 ET anyway, and a
