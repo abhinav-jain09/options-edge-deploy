@@ -76,15 +76,28 @@ spec:
               value: "http://localhost:8090"
             - name: VITE_REPLAY_ORCHESTRATOR_URL
               value: "http://localhost:8095"
-            # Personal trading journal (options-edge-trading-journal). Kept in step with the
-            # standalone slice k8s/services/web/overlays/dev — the mirror rule requires the two
-            # to render identically, and it caught exactly this when only one was changed.
+            # Personal trading journal (options-edge-trading-journal). The BASE URL of that
+            # service, not a link target: the Journal page itself is served by this web app on
+            # this origin, like every other nav item, and only its DATA is fetched from here with
+            # the token the shared auth module already holds.
+            #
+            # That is the whole point. Pointing the nav item at this port made it a different
+            # ORIGIN, which the shared session cannot reach, so the journal had to run its own
+            # sign-in and the user was asked to log in a second time.
+            # Kept in step with the standalone slice k8s/services/web/overlays/dev — the mirror
+            # rule requires the two to render identically, and it caught exactly this when only
+            # one was changed.
             #
             # DEV ONLY and deliberately absent from the base: that service is deployed at dev
-            # alone, so a base value would put a dead Journal link in the production nav. WebNav
+            # alone, so a base value would put a dead Journal item in the production nav. WebNav
             # drops the item entirely when this is unset.
             #
-            # localhost because the journal API is a LoadBalancer on the dev machine itself
-            # (this cluster has no ingress) and the link opens in the browser, which runs there.
-            - name: APP_JOURNAL_URL
-              value: "http://localhost:8097/journal"
+            # localhost because the journal API is a LoadBalancer on the dev machine itself (this
+            # cluster has no ingress) and the fetch is made BY THE BROWSER, which runs there — a
+            # cluster-internal Service name would not resolve for it.
+            #
+            # The item is owner-only — hidden unless the token carries journal-owner — and the
+            # journal's own API default-denies regardless, so the nav entry is convenience, not
+            # access control.
+            - name: APP_JOURNAL_API
+              value: "http://localhost:8097"
