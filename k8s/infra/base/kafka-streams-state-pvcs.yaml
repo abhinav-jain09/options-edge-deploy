@@ -171,3 +171,22 @@ spec:
       # live 100Gi makes `kubectl apply -k` fail closed ("spec is immutable") and
       # aborts the monolithic deploy. Keep in lockstep with reality.
       storage: 100Gi
+---
+# 2026-08-27: option-price-behavior-service was the last large stateful Streams app still on
+# emptyDir. emptyDir dies with the pod, so every scale-to-0 and every pod replacement destroyed
+# its RocksDB stores and forced a full rebuild from 7.8 GB of changelogs on 4 threads - restoring
+# ~1.24M aggregate records from one partition and ~575k surface records per active partition
+# before it could process anything. That rebuild, not market activity, is what put this pod at
+# 2.2-2.8 cores after every restart and drove the box to load 66-108 on a bring-up.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: option-price-behavior-service-streams-state
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/component: kafka-streams-state
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 100Gi

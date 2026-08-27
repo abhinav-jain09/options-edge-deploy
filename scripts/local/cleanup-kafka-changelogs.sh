@@ -7,7 +7,7 @@
 # one-shot `confluentinc/cp-kafka` container. The only host dependency
 # is Docker — no host-side Kafka CLI install needed.
 #
-# Discovers `^options-.*-(changelog|repartition)$` topics (covers every
+# Discovers `.*-(changelog|repartition)$` topics (covers every
 # Kafka Streams app-id prefix we use — options-edge-*, options-flow-*, AND
 # options-databento-* such as the maxpain streams app) and trims records
 # older than RETENTION_MS via kafka-delete-records.
@@ -96,10 +96,10 @@ docker run --rm --name "$CONTAINER_NAME" \
     # (e.g. the maxpain streams app). A narrower options-(edge|flow)- pattern
     # silently excluded the maxpain changelog/repartition topics.
     CANDIDATES=$(printf "%s\n" "$ALL" \
-      | grep -E "^options-.*-(changelog|repartition)$" || true)
+      | grep -E "\-(changelog|repartition)$" || true)
 
     if [ -z "$CANDIDATES" ]; then
-      echo "[cleanup] FATAL: no candidate topics matched options-*-(changelog|repartition)" >&2
+      echo "[cleanup] FATAL: no candidate topics matched *-(changelog|repartition)" >&2
       echo "[cleanup] zero-discovery is treated as a fail-closed signal (likely misconfig)" >&2
       exit 1
     fi
