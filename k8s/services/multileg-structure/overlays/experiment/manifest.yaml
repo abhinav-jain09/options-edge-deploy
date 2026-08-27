@@ -68,6 +68,10 @@ spec:
               value: options.multileg.observations
             - name: MULTILEG_STATUS_TOPIC
               value: options.multileg.window.status
+            - name: MULTILEG_SPOT_TOPIC
+              value: underlying.spx.price
+            - name: MULTILEG_LEVELS_TOPIC
+              value: options.multileg.sr.levels
             - name: MULTILEG_WINDOW_MS
               value: "50"
             - name: MULTILEG_GRACE_MS

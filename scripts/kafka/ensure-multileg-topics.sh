@@ -23,6 +23,8 @@ set -euo pipefail
 
 OBS_TOPIC="${MULTILEG_OUTPUT_TOPIC:-options.multileg.observations}"
 STATUS_TOPIC="${MULTILEG_STATUS_TOPIC:-options.multileg.window.status}"
+LEVELS_TOPIC="${MULTILEG_LEVELS_TOPIC:-options.multileg.sr.levels}"
+SPOT_TOPIC="${MULTILEG_SPOT_TOPIC:-underlying.spx.price}"
 : "${KAFKA_BOOTSTRAP_SERVERS:?KAFKA_BOOTSTRAP_SERVERS unset — refusing to verify against an unknown cluster}"
 RF="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 # Matches scripts/kafka/topics.env, which declares both at 4 (the standing partition policy).
@@ -127,7 +129,27 @@ ensure_topic() {
   verify_topic "$topic"
 }
 
+# ⛔ The SPOT topic is a REQUIRED INPUT, owned by the feed: the service assigns its partitions at startup
+# and cannot state a level's distance without it. Verified read-only — never created here, because creating
+# another team's topic with our defaults is how a wrong partition count becomes permanent.
+require_spot_topic() {
+  echo "=== ensure-multileg-topics: verifying required input $SPOT_TOPIC exists ==="
+  _list=$(kt --list 2>&1) || {
+    echo "FAIL: cannot list topics on $KAFKA_BOOTSTRAP_SERVERS: $_list"
+    return 1
+  }
+  if ! grep -qxF "$SPOT_TOPIC" <<<"$_list"; then
+    echo "FAIL: '$SPOT_TOPIC' does not exist. The service assigns its partitions at startup and cannot"
+    echo "      measure distance from spot without it — deploying now would ship a pod that cannot state"
+    echo "      a single level. It is owned by the feed; create it there, then re-run this deploy."
+    return 1
+  fi
+  echo "ok: '$SPOT_TOPIC' present"
+}
+
 rc=0
+require_spot_topic || rc=1
 ensure_topic "$OBS_TOPIC" || rc=1
 ensure_topic "$STATUS_TOPIC" || rc=1
+ensure_topic "$LEVELS_TOPIC" || rc=1
 exit "$rc"
