@@ -87,4 +87,4 @@ spec:
             # localhost because the journal API is a LoadBalancer on the dev machine itself
             # (this cluster has no ingress) and the link opens in the browser, which runs there.
             - name: APP_JOURNAL_URL
-              value: "http://localhost:8097/journal"
+              value: "http://localhost:8097/journal/app"

@@ -87,4 +87,4 @@ spec:
             # journal's own API default-denies regardless, so the nav entry is convenience,
             # not access control.
             - name: APP_JOURNAL_URL
-              value: "http://localhost:8097/journal"
+              value: "http://localhost:8097/journal/app"
