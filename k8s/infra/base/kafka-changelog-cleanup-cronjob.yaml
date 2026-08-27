@@ -162,7 +162,8 @@ spec:
                   # Trim OptionsEdge-owned Streams internal topics plus the exact high-volume
                   # business topics whose topic-level retention is currently unlimited. Keep
                   # this explicit allowlist narrow: it controls record trimming, not topic purge.
-                  MANAGED_DATA_TOPICS='options.databento.strike-flow.strike.avro
+                  MANAGED_DATA_TOPICS='rates.sofr.databento-sr3-feed-service.current
+                  options.databento.strike-flow.strike.avro
                   option-price-behavior-by-strike
                   option-price-behavior-by-option'
                   CANDIDATES=$(printf '%s\n' "$ALL" | awk -v managed="$MANAGED_DATA_TOPICS" '

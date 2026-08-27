@@ -94,7 +94,8 @@ docker run --rm --name "$CONTAINER_NAME" \
     ALL=$(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --list)
     # Trim Streams internal topics plus the exact high-volume business topics
     # intentionally managed by this cleanup.
-    MANAGED_DATA_TOPICS="options.databento.strike-flow.strike.avro
+    MANAGED_DATA_TOPICS="rates.sofr.databento-sr3-feed-service.current
+options.databento.strike-flow.strike.avro
 option-price-behavior-by-strike
 option-price-behavior-by-option"
     CANDIDATES=$(printf "%s\n" "$ALL" | awk -v managed="$MANAGED_DATA_TOPICS" "
