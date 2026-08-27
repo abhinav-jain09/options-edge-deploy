@@ -65,6 +65,12 @@
 #                    what the scheduled post-close run must always use. A non-trading day is
 #                    SKIPPED by the CLI, not failed (--skip-non-session).
 #   KEEP_SESSIONS    published sessions to retain, default 10 (~21 MB each)
+#   MAX_CATCH_UP     previously MISSED sessions this run may also freeze SUCCESSFULLY, after
+#                    today's, oldest first. Default 3, hard-capped at 20. 0 disables catch-up.
+#   MAX_CATCH_UP_ATTEMPTS  how many it may TRY. Default 2x. A session that cannot be built must
+#                    not consume the success budget every day and starve newer gaps behind it.
+#   JOB_DEADLINE_S   the Job's activeDeadlineSeconds, default 6000. Rendered into both the
+#                    manifest and the container, which is what stops the two drifting.
 #   WAIT_FOR_VENDOR_S  how long the CLI may wait for the vendor archive to reach the closing
 #                    minute, default 3600, max 4800 (the Job deadline is 6000)
 #   JOB_TIMEOUT_S    client-side wait, default 6300 (> the Job's own 6000s activeDeadlineSeconds)
@@ -79,8 +85,19 @@ ENVIRONMENT="${ENVIRONMENT:-production}"
 NAMESPACE="${NAMESPACE:-options-edge}"
 SESSION="${SESSION:-}"
 KEEP_SESSIONS="${KEEP_SESSIONS:-10}"
+# Previously MISSED sessions this run may also freeze, after today's. Bounded: each costs a
+# vendor pull and a build (~6 min measured) against the Job's 5400s deadline, so a run that
+# tried to close a ten-day backlog at once would be killed halfway and close none of it.
+MAX_CATCH_UP="${MAX_CATCH_UP:-3}"
+# ATTEMPTS, separately. Counting attempts against the success budget lets three permanently
+# unbuildable oldest sessions consume the whole quota every day, so newer gaps are never tried
+# and age out of the retention window unnoticed — the very failure catch-up exists to end.
+MAX_CATCH_UP_ATTEMPTS="${MAX_CATCH_UP_ATTEMPTS:-$(( MAX_CATCH_UP * 2 ))}"
+# The Job's activeDeadlineSeconds, rendered into BOTH the manifest field and the container's
+# budget so the two cannot drift. The catch-up loop stops while a freeze still fits inside it.
+JOB_DEADLINE_S="${JOB_DEADLINE_S:-6000}"
 WAIT_FOR_VENDOR_S="${WAIT_FOR_VENDOR_S:-3600}"
-JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-6300}"
+JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-$(( JOB_DEADLINE_S + 300 ))}"
 KEEP_JOBS="${KEEP_JOBS:-5}"
 DRY_RUN="${DRY_RUN:-false}"
 EXPECTED_API_SERVER="${EXPECTED_API_SERVER:-https://192.168.100.252:6443}"
@@ -145,13 +162,28 @@ case "$DRY_RUN" in true|false) : ;; *) fatal "DRY_RUN must be true or false, got
 case "$JOB_TIMEOUT_S" in ''|*[!0-9]*) fatal "JOB_TIMEOUT_S must be digits, got '$JOB_TIMEOUT_S'" ;; esac
 case "$KEEP_JOBS" in ''|*[!0-9]*) fatal "KEEP_JOBS must be digits, got '$KEEP_JOBS'" ;; esac
 case "$KEEP_SESSIONS" in ''|*[!0-9]*) fatal "KEEP_SESSIONS must be digits, got '$KEEP_SESSIONS'" ;; esac
+case "$MAX_CATCH_UP" in ''|*[!0-9]*) fatal "MAX_CATCH_UP must be digits, got '$MAX_CATCH_UP'" ;; esac
+[ "$MAX_CATCH_UP" -le 20 ] || fatal "MAX_CATCH_UP must be <= 20, got $MAX_CATCH_UP"
+case "$MAX_CATCH_UP_ATTEMPTS" in ''|*[!0-9]*) fatal "MAX_CATCH_UP_ATTEMPTS must be digits, got '$MAX_CATCH_UP_ATTEMPTS'" ;; esac
+[ "$MAX_CATCH_UP_ATTEMPTS" -ge "$MAX_CATCH_UP" ] \
+  || fatal "MAX_CATCH_UP_ATTEMPTS ($MAX_CATCH_UP_ATTEMPTS) is below MAX_CATCH_UP ($MAX_CATCH_UP) —
+       the run could not reach its own success budget"
+case "$JOB_DEADLINE_S" in ''|*[!0-9]*) fatal "JOB_DEADLINE_S must be digits, got '$JOB_DEADLINE_S'" ;; esac
+[ "$JOB_DEADLINE_S" -ge 900 ] || fatal "JOB_DEADLINE_S=$JOB_DEADLINE_S leaves no room for a freeze"
 case "$WAIT_FOR_VENDOR_S" in ''|*[!0-9]*) fatal "WAIT_FOR_VENDOR_S must be digits, got '$WAIT_FOR_VENDOR_S'" ;; esac
 # The Job's own deadline is 6000s; a wait that outlived it would be killed with no message of
 # its own, turning "the vendor was late" into an unexplained timeout.
 [ "$WAIT_FOR_VENDOR_S" -le 4800 ] \
   || fatal "WAIT_FOR_VENDOR_S must be <= 4800 (the Job deadline is 6000s), got $WAIT_FOR_VENDOR_S"
-[ "$JOB_TIMEOUT_S" -ge 6100 ] && [ "$JOB_TIMEOUT_S" -le 14400 ] \
-  || fatal "JOB_TIMEOUT_S must be within 6100..14400 (the Job's own deadline is 6000s), got $JOB_TIMEOUT_S"
+# DERIVED from the Job's deadline, not hard-coded against it. These were two independent
+# numbers, so raising JOB_DEADLINE_S left the client waiting a shorter time than the Job is
+# allowed to run — the wrapper would delete a Job that was still legitimately working.
+[ "$JOB_TIMEOUT_S" -gt "$JOB_DEADLINE_S" ] \
+  || fatal "JOB_TIMEOUT_S ($JOB_TIMEOUT_S) must exceed the Job's own deadline
+       ($JOB_DEADLINE_S) — otherwise this wrapper gives up, and cleans up, while the Job is
+       still inside the time Kubernetes granted it."
+[ "$JOB_TIMEOUT_S" -le 14400 ] \
+  || fatal "JOB_TIMEOUT_S must be <= 14400, got $JOB_TIMEOUT_S"
 [ "$KEEP_JOBS" -ge 1 ] && [ "$KEEP_JOBS" -le 100 ] || fatal "KEEP_JOBS must be within 1..100, got $KEEP_JOBS"
 [ "$KEEP_SESSIONS" -ge 1 ] && [ "$KEEP_SESSIONS" -le 400 ] \
   || fatal "KEEP_SESSIONS must be within 1..400, got $KEEP_SESSIONS"
@@ -301,6 +333,9 @@ sed -e "s|__IMAGE__|${PINNED_IMAGE}|g" \
     -e "s|__NODE_NAME__|${NODE_NAME}|g" \
     -e "s|__KEEP_SESSIONS__|${KEEP_SESSIONS}|g" \
     -e "s|__WAIT_FOR_VENDOR_S__|${WAIT_FOR_VENDOR_S}|g" \
+    -e "s|__MAX_CATCH_UP__|${MAX_CATCH_UP}|g" \
+    -e "s|__MAX_CATCH_UP_ATTEMPTS__|${MAX_CATCH_UP_ATTEMPTS}|g" \
+    -e "s|__JOB_DEADLINE_S__|${JOB_DEADLINE_S}|g" \
     "$TEMPLATE" >"$RENDER"
 grep -q '__[A-Z_]*__' "$RENDER" && fatal "unsubstituted placeholder left in the render"
 _ns="$(yq -r '.metadata.namespace' "$RENDER")"
@@ -367,10 +402,18 @@ echo "===== end log ====="
 # the wrapper would say the day was published and nothing would have been.
 RECEIPT_RE="^STOCK_GEX_CLOSE_BOARD_OK session=${SESSION} oiTradeDate=[0-9]{4}-[0-9]{2}-[0-9]{2} roots=[0-9]+ quotes=[0-9]+$"
 SKIP_RE="^STOCK_GEX_CLOSE_BOARD_SKIP session=${SESSION} reason=[A-Z_]+$"
-ANY_OUTCOME_RE='^STOCK_GEX_CLOSE_BOARD_(OK|SKIP) '
+# SESSION-SCOPED. This used to count EVERY outcome line, which was right when the container
+# froze exactly one day — and became wrong the moment catch-up was added: a run that closed an
+# old gap printed a second receipt and was then reported as a failure for printing it. The
+# property worth keeping is the original one, "exactly one outcome FOR THE SESSION ASKED FOR";
+# outcomes for other days are now expected, and are counted separately below to be reported.
+ANY_OUTCOME_RE="^STOCK_GEX_CLOSE_BOARD_(OK|SKIP) session=${SESSION} "
 RECEIPT="$(grep -E "$RECEIPT_RE" "$LOGS" | tail -1 || true)"
 SKIP="$(grep -E "$SKIP_RE" "$LOGS" | tail -1 || true)"
 OUTCOMES="$(grep -cE "$ANY_OUTCOME_RE" "$LOGS" || true)"
+# Everything the catch-up loop closed, for the summary. Not a guard: these are other days, and
+# the loop already reports each one; this is so the operator sees the backlog shrinking.
+CAUGHT_UP="$(grep -E '^STOCK_GEX_CLOSE_BOARD_OK ' "$LOGS" | grep -vE "session=${SESSION} " | wc -l | tr -d ' ')"
 
 if [ "$state" != "succeeded" ]; then
   # NOT "nothing was published". A container can promote and then exit nonzero, or be killed

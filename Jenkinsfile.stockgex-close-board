@@ -50,6 +50,8 @@ pipeline {
       description: 'Target environment. Production only — see the header.')
     string(name: 'SESSION', defaultValue: '',
       description: 'Operator override, YYYY-MM-DD. EMPTY on scheduled runs so the wrapper uses TODAY in America/New_York — never pin a date on the timer. A backfill of an older session works too, as long as its cbbo-1s window is still available from the vendor.')
+    string(name: 'MAX_CATCH_UP', defaultValue: '3',
+      description: 'Previously MISSED sessions this run may also freeze, after today\'s, oldest first. A freeze that fails is a day that VANISHES — the page falls back to the newest board it has, a complete picture of a DIFFERENT day, so nothing reports the hole. 2026-08-19 sat missing for eight days that way. Bounded because each costs ~6 min against the Job\'s 5400s deadline; 0 disables it.')
     string(name: 'KEEP_SESSIONS', defaultValue: '10',
       description: 'Published sessions to retain on the node (~21 MB each). 1..400.')
     string(name: 'WAIT_FOR_VENDOR_S', defaultValue: '3600',
@@ -83,6 +85,7 @@ pipeline {
     ENVIRONMENT   = "${params.ENVIRONMENT}"
     SESSION       = "${params.SESSION}"
     KEEP_SESSIONS = "${params.KEEP_SESSIONS}"
+    MAX_CATCH_UP  = "${params.MAX_CATCH_UP}"
     WAIT_FOR_VENDOR_S = "${params.WAIT_FOR_VENDOR_S}"
     DRY_RUN       = "${params.DRY_RUN}"
     KEEP_JOBS     = "${params.KEEP_JOBS}"

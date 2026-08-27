@@ -55,7 +55,7 @@ spec:
   # default) before spending a single data request; the pull itself is ONE schema over ~21
   # chunks and the build is CPU work over ~500 roots. The wrapper waits LONGER than this on
   # purpose, so the deadline is enforced by the component that can actually stop the work.
-  activeDeadlineSeconds: 6000
+  activeDeadlineSeconds: __JOB_DEADLINE_S__
   template:
     metadata:
       labels:
@@ -102,22 +102,38 @@ spec:
             # killed without one.
             - name: WAIT_FOR_VENDOR_S
               value: "__WAIT_FOR_VENDOR_S__"
-            # THE MIRROR. Each promoted generation is copied into Postgres as well; a failure
-            # there is logged and swallowed, because the files are still the live path and an
-            # unreachable database must never be the reason a session's boards are lost.
+            # How many PREVIOUSLY MISSED sessions this run may also freeze SUCCESSFULLY, and how
+            # many it may ATTEMPT. Two numbers, because one starves: counting attempts alone lets
+            # three permanently unbuildable oldest sessions consume the whole quota every day, so
+            # newer gaps are never tried and age out of the retention window unnoticed — the very
+            # failure this feature exists to end.
             #
-            # ⚠️ INLINE, PASSWORD INCLUDED, by explicit decision (USER 2026-08-27). options-edge is
-            # guarded by the ValidatingAdmissionPolicy 'options-edge-jenkins-only-workloads', so
-            # nothing may write a Secret there except the Jenkins deployer, and the only job that
-            # does is the monolithic options-edge-deploy -- last eight runs all failed or aborted.
-            # A credential in git is PERMANENT: retiring this value means ROTATING the
-            # bo-app-postgres password, not editing this file.
-            - name: STOCK_GEX_CLOSE_DB_DSN
-              value: "postgresql://bleedingoptions:fAE80oxjlQ75edJe5nmfTLoIDJerlkddoFRm@bo-app-postgres-db.bleedingoptions.svc.cluster.local:5432/bleedingoptions"
+            # Neither is the real bound. That is TIME: the loop stops when there is not enough of
+            # the Job's activeDeadlineSeconds (6000) left for another freeze. Arithmetic on
+            # WAIT_FOR_VENDOR_S cannot do it — the wait is a race that has measured 245s and is
+            # allowed 3600 — so the loop asks the clock instead.
+            - name: MAX_CATCH_UP
+              value: "__MAX_CATCH_UP__"
+            - name: MAX_CATCH_UP_ATTEMPTS
+              value: "__MAX_CATCH_UP_ATTEMPTS__"
+            # The Job's own deadline, so the catch-up loop can leave room rather than be killed
+            # mid-freeze. Kept in step with activeDeadlineSeconds by the wrapper, which renders
+            # both from one value.
+            - name: JOB_DEADLINE_S
+              value: "__JOB_DEADLINE_S__"
           command: ["sh", "-c"]
           args:
             - |
               set -eu
+              # Stamped ONCE, at the top: the catch-up loop below leaves room inside the Job's
+              # activeDeadlineSeconds rather than being killed mid-freeze, and it can only do
+              # that if it knows when the clock started.
+              # The container starts AFTER scheduling and the image pull, so this is later
+              # than the clock activeDeadlineSeconds runs on. The catch-up budget subtracts a
+              # startup allowance as well as its margin: it cannot measure that delay, so it
+              # assumes a generous one rather than overestimating the time it has.
+              JOB_START_S=$(date +%s)
+              JOB_STARTUP_ALLOWANCE_S=180
               test -n "${SESSION}" || { echo "FATAL: SESSION is empty" >&2; exit 1; }
               # The download lands in a per-session scratch directory under close/. The name
               # starts with a dot, so it is not a dt= directory and the service's session scan
@@ -150,6 +166,121 @@ spec:
               # Only on SUCCESS. The chunks are ~350 MB and nothing else reads them once the
               # boards exist, but on a failure they are what makes the re-run cheap — see above.
               rm -rf "${SNAP}"
+
+              # --- CATCH UP ---------------------------------------------------------------
+              # A freeze that fails is a day that VANISHES. This job runs once and never looks
+              # again, so a run lost to a scaled-down service, a mid-flight deploy or a vendor
+              # stall leaves a hole nothing reports: the page falls back to the newest board it
+              # has — a complete, plausible picture of a DIFFERENT day — and the only way anyone
+              # finds out is by noticing that a price is wrong. That is how 2026-08-19 sat
+              # missing for eight days.
+              #
+              # AFTER today's freeze, never before: today's is the one with a deadline, and a
+              # backlog must not be allowed to eat the window it needs.
+              if [ "${MAX_CATCH_UP}" -gt 0 ]; then
+                # THE LISTING MUST SUCCEED OR CATCH-UP DOES NOT RUN. `cmd | sed` hides the
+                # command's exit status — /bin/sh has no pipefail, so sed returns 0 over a
+                # crashed producer, MISSING comes back empty, and catch-up disables itself
+                # silently on every run for as long as the fault lasts. Status first, parse
+                # second, and the marker has to be exactly one well-formed line.
+                CU_LOG="$(mktemp)"
+                MISSING=""
+                if options-edge-stock-gex-close-board \
+                     --session "${SESSION}" \
+                     --index /oi-index/stock-gex-oi-index.json.gz \
+                     --snapshot-dir "${SNAP}" \
+                     --out-root /oi-index/close \
+                     --keep-sessions "${KEEP_SESSIONS}" \
+                     --print-missing >"${CU_LOG}" 2>&1; then
+                  markers="$(grep -c '^STOCK_GEX_CLOSE_BOARD_MISSING=' "${CU_LOG}" || true)"
+                  if [ "${markers}" = "1" ]; then
+                    MISSING="$(sed -n 's/^STOCK_GEX_CLOSE_BOARD_MISSING=//p' "${CU_LOG}")"
+                    # ISO dates and commas only. The values come from our own binary, so this is
+                    # not a security boundary — it is a promise that the loop below iterates over
+                    # dates and nothing else, whatever a future change prints.
+                    # EVERY DATE, not a character whitelist. "-", "2026--08", a trailing
+                    # comma and an empty element all pass a whitelist and then reach the loop
+                    # as a session name. One bad element voids the WHOLE list: a list this
+                    # code cannot read is a list it should not act on.
+                    case "${MISSING}" in
+                      *,,*|,*|*,)
+                        echo "catch-up: malformed list '${MISSING}' — not catching up" >&2
+                        MISSING="" ;;
+                    esac
+                    for d in $(printf '%s' "${MISSING}" | tr ',' ' '); do
+                      case "${d}" in
+                        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+                        *) echo "catch-up: '${d}' is not a session date — not catching up" >&2
+                           MISSING=""; break ;;
+                      esac
+                    done
+                  else
+                    echo "catch-up: expected exactly one marker line, saw ${markers} — not catching up" >&2
+                    tail -5 "${CU_LOG}" >&2 || true
+                  fi
+                else
+                  echo "catch-up: the listing itself FAILED — not catching up this run" >&2
+                  tail -5 "${CU_LOG}" >&2 || true
+                fi
+                rm -f "${CU_LOG}"
+                echo "catch-up: missing sessions in the retention window: ${MISSING:-<none>}"
+
+                # THE REAL BOUND IS TIME. A freeze measures ~6 min; the loop stops while that
+                # still fits inside the Job's deadline, with a margin for the prune and the
+                # receipt. Arithmetic on WAIT_FOR_VENDOR_S cannot do this — the wait is a race
+                # that has measured 245s and is allowed 3600 — so ask the clock.
+                CU_FREEZE_S=420
+                CU_MARGIN_S=300
+                CU_UNTIL=$(( JOB_START_S + JOB_DEADLINE_S - JOB_STARTUP_ALLOWANCE_S - CU_MARGIN_S ))
+                cu_ok=0
+                cu_tried=0
+                for gap in $(printf '%s' "${MISSING}" | tr ',' ' '); do
+                  [ -n "${gap}" ] || continue
+                  if [ "${cu_ok}" -ge "${MAX_CATCH_UP}" ]; then
+                    echo "catch-up: ${cu_ok} frozen this run — the rest are named above"
+                    break
+                  fi
+                  if [ "${cu_tried}" -ge "${MAX_CATCH_UP_ATTEMPTS}" ]; then
+                    echo "catch-up: attempt budget spent (${cu_tried}) — the rest are named above" >&2
+                    break
+                  fi
+                  if [ $(( $(date +%s) + CU_FREEZE_S )) -gt "${CU_UNTIL}" ]; then
+                    echo "catch-up: not enough of the Job's deadline left for another freeze — stopping" >&2
+                    break
+                  fi
+                  cu_tried=$(( cu_tried + 1 ))
+                  GAP_SNAP="${FETCH}/dt=${gap}"
+                  mkdir -p "${GAP_SNAP}"
+                  echo "catch-up: freezing ${gap} (attempt ${cu_tried}, ${cu_ok} done)"
+                  # --wait-for-vendor-s 0: these sessions closed days ago, so the archive already
+                  # reaches them. Waiting is only for TODAY, where it is a race.
+                  #
+                  # A gap that fails does NOT fail the run and does NOT stop the loop. Today's
+                  # freeze already succeeded, and a session that cannot be built — an
+                  # extraordinary closure the calendar does not know, a chain the vendor no
+                  # longer serves — would otherwise consume the quota every single day and
+                  # starve every newer gap behind it until they aged out.
+                  # timeout, so CU_FREEZE_S BOUNDS the freeze instead of estimating it. Without
+                  # it the guard above only HOPED a freeze would fit, and Kubernetes would kill
+                  # the pod mid-build — taking today's receipt down with it.
+                  if timeout "${CU_FREEZE_S}" options-edge-stock-gex-close-board \
+                       --session "${gap}" \
+                       --index /oi-index/stock-gex-oi-index.json.gz \
+                       --snapshot-dir "${GAP_SNAP}" \
+                       --out-root /oi-index/close \
+                       --keep-sessions "${KEEP_SESSIONS}" \
+                       --wait-for-vendor-s 0 \
+                       --skip-non-session \
+                       --fetch; then
+                    cu_ok=$(( cu_ok + 1 ))
+                    echo "catch-up: ${gap} frozen"
+                  else
+                    echo "catch-up: ${gap} FAILED — moving on to the next gap" >&2
+                  fi
+                  rm -rf "${GAP_SNAP}"
+                done
+                echo "catch-up: ${cu_ok} frozen, ${cu_tried} attempted"
+              fi
           volumeMounts:
             - name: oi-index
               mountPath: /oi-index      # READ-WRITE: this job writes under close/.
