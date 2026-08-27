@@ -149,10 +149,10 @@ spec:
                   # options-(edge|flow)- pattern silently excluded the maxpain
                   # changelog/repartition topics, leaving them to grow unbounded.
                   CANDIDATES=$(printf '%s\n' "$ALL" \
-                    | grep -E '^options-.*-(changelog|repartition)$' || true)
+                    | grep -E '\-(changelog|repartition)$' || true)
 
                   if [ -z "$CANDIDATES" ]; then
-                    echo "[cleanup] FATAL: no candidate topics matched options-*-(changelog|repartition)" >&2
+                    echo "[cleanup] FATAL: no candidate topics matched *-(changelog|repartition)" >&2
                     echo "[cleanup] zero-discovery is treated as a fail-closed signal (likely misconfig)" >&2
                     exit 1
                   fi
@@ -306,7 +306,7 @@ spec:
                     # options-databento-*). ACTIVE_STREAMS_APP_IDS is built only from THIS namespace, so a topic
                     # outside this owned prefix (another client/namespace on a shared broker) must NEVER be
                     # judged an orphan and deleted. Foreign/unrecognized-prefix topics are simply not candidates.
-                    STREAMS_TOPICS="$(printf '%s\n' "$ALL" | grep -E '^options?-.*-(changelog|repartition)$' || true)"
+                    STREAMS_TOPICS="$(printf '%s\n' "$ALL" | grep -E '^(options?-|es-spx-align-service-|es-gex-spx-align-service-|indicator-service-).*-(changelog|repartition)$' || true)"
                     for T in $STREAMS_TOPICS; do
                       G=""
                       for g in $CG_LIST; do

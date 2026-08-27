@@ -141,4 +141,8 @@ spec:
               memory: 2Gi
       volumes:
         - name: kafka-streams-state
-          emptyDir: {}
+          # NOT emptyDir: that dies with the pod, so every restart rebuilt the stores from the
+          # changelogs (see kafka-streams-state-pvcs.yaml for the measurement). The PVC is what
+          # makes the local state survive a pod replacement.
+          persistentVolumeClaim:
+            claimName: option-price-behavior-service-streams-state
