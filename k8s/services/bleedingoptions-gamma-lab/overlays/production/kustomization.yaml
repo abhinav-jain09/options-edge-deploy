@@ -22,26 +22,35 @@ resources:
 # then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
 # no-op. Both paths therefore agree on one immutable image.
 #
-# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #20 attested
-# sha256:97603097… from main (options-edge#642: a fresh load now OPENS THE FIRST SAVED
-# SYMBOL instead of showing an empty board) and recorded PGL-050/051/052 as PASS against
-# that exact digest. The job resolves the revision from the registry rather than taking it
-# from the operator, and refuses unless the checkout under test matches — so the evidence
-# names an image nobody attested by hand.
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #24 attested
+# sha256:5afc846f… from main (options-edge#646) and recorded PGL-050/051/052 as PASS
+# against that exact digest. The job resolves the revision from the registry rather than
+# taking it from the operator, and refuses unless the checkout under test matches — it did
+# refuse twice while this was being prepared, because the image on :prod had been built
+# from an earlier commit, which is exactly the mistake it exists to catch.
 #
-# WHY: measured on the live site before this change, a fresh load NEVER rendered — 68
-# samples over 25 seconds, spot an em dash, board time "never" — because nothing selects a
-# symbol until the reader types one. A reader with four saved symbols got an empty screen
-# on every reload while the watchlist sat there knowing exactly what they cared about.
+# WHY: reported on the live site — "sometime user see one screen graph and suddenly it
+# changes", and then "there should be a waiting sign until data is showing, no old dated
+# page should be displayed as fallback". Both were the same defect. An empty live board
+# counted as undrawable, so a PREVIOUS SESSION's closing board was substituted on every
+# load — every symbol is empty for its first seconds — and replaced moments later. And a
+# board that was merely FILLING was drawn anyway: net gamma at 509 of 19,412 contracts is a
+# fraction of what it becomes, the regime derived from it can flip sign as the rest
+# arrives, and the spot is put-call parity over the contracts solved so far. The incoming
+# build draws neither, and says what it is waiting for with the counts.
 #
 # Changing this line means producing evidence for the new digest FIRST — that is the point of it
 # being a reviewed edit rather than a deploy-time lookup.
 #
-# ROLLBACK TARGET: the OUTGOING digest is sha256:a7514eb7… (evidence #19) — the corrected
-# chip legend, but WITHOUT the boot default, so rolling back restores the blank-on-load
-# behaviour this change exists to fix. (sha256:adf419f6…, evidence #18, is older still and
-# additionally mislabels the chips; it is not a rollback candidate.)
+# ROLLBACK TARGET: the OUTGOING digest is sha256:976030…  (evidence #20). Rolling back
+# REVERSES ALL FOUR of the incoming fixes, not only the stale-board one — it brings back the
+# previous session's closing board on every load, partial net-gamma/regime/spot readings
+# published while the board is still being priced, a bar ceiling set by the single
+# largest strike (measured on SNDK 2026-08-13: one 38.3M wall left 7 of 90 bars under 1/500
+# of it, invisible), and strike labels capped at a fixed count of eight regardless of canvas
+# width. Judge the rollback against all four. (sha256:a7514eb7…, evidence #19, is older
+# still and additionally lacks the boot default; it is not a rollback candidate.)
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:976030974de99eea55edd31972c5d00f77aaccb190dcff7ecb001d8f0c9d88d1
+    digest: sha256:5afc846f786d91b967581273375a06dceb48fb418385395033ec10fefbf2f984
