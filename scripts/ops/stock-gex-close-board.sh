@@ -301,14 +301,14 @@ serving_pod() {
         | sort_by(.t) | last
         | if . == null then "" else "\(.pod) \(.node) \(.image)" end' 2>/dev/null || true
 }
-read -r SERVICE_POD NODE_NAME _POD_IMAGE_UNUSED <<EOF
+read -r SERVICE_POD NODE_NAME POD_IMAGE_ID <<EOF
 $(serving_pod)
 EOF
 [ -n "${SERVICE_POD:-}" ] && [ -n "${NODE_NAME:-}" ] \
   || fatal "no READY $DEPLOYMENT pod — cannot determine the node that owns the closing-board
        hostPath, and a rollout in progress would have this job publish onto whichever node the
        scheduler happened to pick. Wait for the rollout to finish, then re-run."
-# The pod is consulted for its NODE and nothing else now.
+# The pod's digest is recorded here and compared against ITSELF at the end of the run.
 #
 # It used to be checked for its image digest too, as a second line after the deployment-level
 # comparison — the SERVING pod rather than the Deployment's intent, so a rollout in progress
@@ -319,7 +319,11 @@ EOF
 #
 # What the pod still decides is which node owns the hostPath, and that is not optional: with
 # the boards on a node-local path, publishing onto the wrong node writes a session no reader
-# can see.
+# can see. Whether that pod was ROLLED mid-run is still checked at the end, and that check is
+# untouched: it is about the node moving under the job, not about shared arithmetic.
+POD_DIGEST="${POD_IMAGE_ID##*@}"
+[ -n "$POD_DIGEST" ] || fatal "pod $SERVICE_POD reports no resolvable image digest for container
+       '$SERVICE_CONTAINER' — refusing to freeze without knowing what is serving"
 
 # --- 3b. refuse to start alongside another close-board Job ---------------------------------
 # Two runs for one session would interleave writes into a single directory: each per-root file
