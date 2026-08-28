@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Freeze one session's closing GEX board — the operator side of
-# k8s/jobs/stock-gex-close-board-job.yaml (read that file's header first: it explains why the
+# k8s/jobs/stock-gex-close-batch-job.yaml (read that file's header first: it explains why the
 # workload is a Job template in git and not a CronJob, and why this job needs neither a staging
 # directory nor a rollout).
 #
@@ -85,12 +85,19 @@ KEEP_JOBS="${KEEP_JOBS:-5}"
 DRY_RUN="${DRY_RUN:-false}"
 EXPECTED_API_SERVER="${EXPECTED_API_SERVER:-https://192.168.100.252:6443}"
 
-TEMPLATE="k8s/jobs/stock-gex-close-board-job.yaml"
+TEMPLATE="k8s/jobs/stock-gex-close-batch-job.yaml"
+# The service is still consulted — but ONLY to find the node that owns the hostPath. Its
+# image is no longer the freeze's image; see the note above the pin below.
 DEPLOYMENT="stock-gex-service"
 SERVICE_CONTAINER="stock-gex"
-IMAGE_KEY="stock-gex-service"
-IMAGE_REPO_SUFFIX="/options-edge-stock-gex"
-JOB_LABEL="app.kubernetes.io/name=stock-gex-close-board"
+IMAGE_KEY="close-batch"
+IMAGE_REPO_SUFFIX="/oe-close-batch"
+JOB_LABEL="app.kubernetes.io/name=stock-gex-close-batch"
+# A deliberate re-freeze of a session that already completed is asked for by raising this:
+# session and rebuild are the only parameters that identify a run, which is what makes a
+# failed night RESUME rather than start again beside itself.
+REBUILD="${REBUILD:-0}"
+RUN_SOURCE="${RUN_SOURCE:-cron}"
 DEPLOYER="system:serviceaccount:options-edge:jenkins-deployer"
 JOB_NAME=""
 JOB_OWNED=false
@@ -215,13 +222,22 @@ case "$PINNED_IMAGE" in
   *) fatal "refusing to run a Job on an unpinned image ref: $PINNED_IMAGE" ;;
 esac
 echo "image: $MUTABLE_IMAGE -> $PINNED_IMAGE"
-echo "deployment image: $RUNNING_IMAGE"
-# Compare DIGESTS, not whole refs: a tag spelling difference is not a build difference.
-[ "${PINNED_IMAGE##*@}" = "${RUNNING_IMAGE##*@}" ] \
-  || fatal "image-tags/${ENVIRONMENT}.yaml resolves to ${PINNED_IMAGE##*@} but $DEPLOYMENT runs
-       ${RUNNING_IMAGE##*@}. The freeze shares its arithmetic with the service's own board code,
-       so building it from a different image would freeze a board the running service would not
-       have drawn. Deploy the service first (service-deploy SERVICE=stock-gex) or roll the tag back."
+echo "service image (for the node, not for the maths): $RUNNING_IMAGE"
+# THE OLD GUARD IS GONE, AND ITS ABSENCE IS THE POINT — do not restore it without reading this.
+#
+# It required the freeze's image to be the SERVICE's image, on the reasoning that the freeze
+# "shares its arithmetic with the service's own board code, so building it from a different
+# image would freeze a board the running service would not have drawn". That was true while
+# the freeze drove the service's own Python. It is not true any more: the batch prices in
+# Java and the live service prices in Python, so the two can no longer be the same build and
+# comparing their digests would only ever fail.
+#
+# What replaces it is weaker and has to be said plainly. The image is still pinned by digest
+# and the digest is recorded in gex_close_run, so "which code drew this board" stays
+# answerable. What is NOT enforced any longer is that the frozen board matches the live one.
+# That was established by comparison instead — 504 boards for 2026-08-26, structure identical,
+# every implied spot bit-identical, worst strike cell $0.034 — and it has to be re-established
+# by comparison whenever EITHER side's pricing changes. No check here can do it for you.
 
 # --- 3. the node that owns the hostPath ----------------------------------------------------
 SELECTOR="$(printf '%s' "$DEPLOY_JSON" | jq -r '.spec.selector.matchLabels | to_entries | map("\(.key)=\(.value)") | join(",")')"
@@ -292,7 +308,7 @@ ACTIVE="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json 2>/dev/null \
 # Job names are immutable; the UTC stamp keeps creation order and 8 random bytes make a
 # same-second collision effectively impossible. Ownership is claimed only AFTER create succeeds,
 # so a losing invocation can never delete the winner's Job.
-JOB_NAME="stock-gex-close-board-$(date -u +%Y%m%d-%H%M%S)-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+JOB_NAME="stock-gex-close-batch-$(date -u +%Y%m%d-%H%M%S)-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 RENDER="$(mktemp)"
 LOGS="$(mktemp)"
 sed -e "s|__IMAGE__|${PINNED_IMAGE}|g" \
@@ -301,6 +317,9 @@ sed -e "s|__IMAGE__|${PINNED_IMAGE}|g" \
     -e "s|__NODE_NAME__|${NODE_NAME}|g" \
     -e "s|__KEEP_SESSIONS__|${KEEP_SESSIONS}|g" \
     -e "s|__WAIT_FOR_VENDOR_S__|${WAIT_FOR_VENDOR_S}|g" \
+    -e "s|__REBUILD__|${REBUILD}|g" \
+    -e "s|__RUN_SOURCE__|${RUN_SOURCE}|g" \
+    -e "s|__IMAGE_DIGEST__|${PINNED_IMAGE##*@}|g" \
     "$TEMPLATE" >"$RENDER"
 grep -q '__[A-Z_]*__' "$RENDER" && fatal "unsubstituted placeholder left in the render"
 _ns="$(yq -r '.metadata.namespace' "$RENDER")"
