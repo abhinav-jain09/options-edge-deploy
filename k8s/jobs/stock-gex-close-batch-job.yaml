@@ -6,6 +6,10 @@
 #
 # WHAT THE BATCH ADDS, and why it was worth a second template:
 #
+#   * NO PYTHON, AND NO FILE HOLDS A BOARD. The decode, the option maths and the payload
+#     are all in the jar; a board is built and stored in one movement, straight into the
+#     open generation. Vendor chunks are still staged on disk because that is what makes a
+#     re-run cheap, but nothing on disk is ever served. Publication is the promoted_at stamp.
 #   * EVERY PHASE IS ANSWERABLE AFTERWARDS. Spring Batch's own tables record each step and
 #     what it moved, in the SAME database as the boards. Beside them, gex_close_run records
 #     the image digest the run used, the generation id it produced, and how long the vendor
@@ -87,24 +91,19 @@ spec:
             # bo-app-postgres password, not editing this file.
             - name: STOCK_GEX_CLOSE_DB_DSN
               value: "postgresql://bleedingoptions:fAE80oxjlQ75edJe5nmfTLoIDJerlkddoFRm@bo-app-postgres-db.bleedingoptions.svc.cluster.local:5432/bleedingoptions"
-            # A SEPARATE staging root from the CLI job's /oi-index/close/.fetch. While both
-            # templates exist, one night could otherwise be fetched by one and built by the
-            # other, and the plan enforcement would read the other's chunks as a foreign
-            # universe and discard them. Separate roots cost a duplicate pull on a night both
-            # run — OPRA historical is not metered — and buy an unambiguous answer to "whose
-            # chunks are these".
+            # A SEPARATE staging root from the CLI job's /oi-index/close/.fetch, and it has
+            # to be: the chunks here are CSV, the CLI's are DBN, and they share a naming
+            # scheme. A run that resumed onto the other kind would read a foreign format
+            # under a familiar name. Separate roots cost a duplicate pull on a night both
+            # run — OPRA historical is not metered.
             - name: CLOSE_SNAPSHOT_ROOT
-              value: "/oi-index/close/.batch-fetch"
-            - name: CLOSE_OUT_ROOT
-              value: "/oi-index/close"
+              value: "/oi-index/close/.batch-fetch-csv"
             - name: CLOSE_INDEX_PATH
               value: "/oi-index/stock-gex-oi-index.json.gz"
             - name: CLOSE_KEEP_SESSIONS
               value: "__KEEP_SESSIONS__"
             - name: CLOSE_AWAIT_VENDOR_SECONDS
               value: "__WAIT_FOR_VENDOR_S__"
-            # The generation directory is scratch now: the boards are read back out of the
-            # database, and the files exist only long enough for the batch to store them.
             - name: JAVA_TOOL_OPTIONS
               value: "-Duser.timezone=UTC"
           # Job parameters, in Spring Batch's own <key>=<value>,<type>,<identifying> form.
@@ -124,16 +123,17 @@ spec:
             - "imageDigest=__IMAGE_DIGEST__,java.lang.String,false"
           volumeMounts:
             - name: oi-index
-              mountPath: /oi-index      # READ-WRITE: staging and the scratch generation.
+              mountPath: /oi-index      # READ-WRITE: vendor staging, and the index is read.
             - name: tmp
               mountPath: /tmp           # readOnlyRootFilesystem: the JVM and urllib need one
           resources:
             requests:
               cpu: 500m
-              # 1Gi covered the builder alone; the JVM sits beside it for the whole run.
-              memory: 1536Mi
+              # One chunk's quotes at a time — roughly 700k records at the widest — plus the
+              # index, which is 574,226 contracts and the largest single thing held.
+              memory: 2Gi
             limits:
-              memory: 2560Mi
+              memory: 3Gi
       volumes:
         - name: oi-index
           hostPath:
