@@ -44,6 +44,7 @@ images:
   close-direction-service: 192.168.100.252:5000/options-edge-close-direction:prod
   es-aggressor-flow-service: 192.168.100.252:5000/options-edge-es-aggressor-flow:prod
   spot-vol-regime-service: 192.168.100.252:5000/options-edge-spot-vol-regime:prod
+  vol-premium-service: 192.168.100.252:5000/options-edge-vol-premium:prod
   # Required even though prod holds stock-gex at replicas:0: without a production mapping the
   # per-service fast path fails closed (service-deploy.sh would otherwise pin the dev registry).
   stock-gex-service: 192.168.100.252:5000/options-edge-stock-gex:prod

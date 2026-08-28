@@ -57,6 +57,7 @@ pipeline {
     string(name: 'ES_OPEN_DIRECTION_IMAGE', defaultValue: '', description: 'ES open-direction service image')
     string(name: 'CLOSE_DIRECTION_IMAGE', defaultValue: '', description: 'SPX close-direction service image')
     string(name: 'SPOT_VOL_REGIME_IMAGE', defaultValue: '', description: 'SPX spot-vol-regime service image')
+    string(name: 'VOL_PREMIUM_IMAGE', defaultValue: '', description: 'SPX vol-premium (IV vs realised) service image')
     string(name: 'INDICATOR_SERVICE_IMAGE', defaultValue: '', description: '0DTE indicator service image')
     string(name: 'DROP_CLASSIFIER_IMAGE', defaultValue: '', description: 'Drop classifier service image')
     string(name: 'OI_SHADOW_IMAGE', defaultValue: '', description: 'SPXW open-interest shadow experiment image')
@@ -418,6 +419,7 @@ pipeline {
             'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE': 'es-open-direction-postgres-writer',
             'CLOSE_DIRECTION_IMAGE': 'close-direction',
             'SPOT_VOL_REGIME_IMAGE': 'spot-vol-regime',
+            'VOL_PREMIUM_IMAGE': 'vol-premium',
             'INDICATOR_SERVICE_IMAGE': 'indicator-service',
             'STOCK_GEX_IMAGE': 'stock-gex',
             'OI_SHADOW_IMAGE': 'oi-shadow',
@@ -823,7 +825,7 @@ void promoteToProduction() {
       'STRIKE_FLOW_CLASSIFIER_IMAGE', 'DELTA_FLOW_IMAGE', 'DEALER_LEDGER_IMAGE', 'DEALER_LEDGER_CALIBRATION_IMAGE',
       'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'OPTION_TRUTH_ENGINE_IMAGE', 'MARKET_CARRY_IMAGE', 'ES_SPX_ALIGN_IMAGE', 'DATABENTO_SR3_FEED_IMAGE', 'VIX_OPTION_INTELIGENCE_IMAGE', 'GREEK_MOVE_AUTHENTICITY_IMAGE', 'STRIKE_INVASION_IMAGE',
       'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE', 'CORRIDOR_GAUGE_IMAGE',
-      'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'CLOSE_DIRECTION_IMAGE', 'SPOT_VOL_REGIME_IMAGE', 'OI_SHADOW_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
+      'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'CLOSE_DIRECTION_IMAGE', 'SPOT_VOL_REGIME_IMAGE', 'VOL_PREMIUM_IMAGE', 'OI_SHADOW_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
       'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',
       'CONTEXT_TAPE_IMAGE', 'MULTILEG_STRUCTURE_IMAGE',
     ].collect { _n -> string(name: _n, value: params[_n]) } + [

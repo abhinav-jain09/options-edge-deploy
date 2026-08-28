@@ -161,7 +161,7 @@
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE GAMMA_MIGRATION_IMAGE \
             DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE OPTION_TRUTH_ENGINE_IMAGE MARKET_CARRY_IMAGE ES_SPX_ALIGN_IMAGE DATABENTO_SR3_FEED_IMAGE VIX_OPTION_INTELIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE \
-            STRIKE_INVASION_IMAGE INVASION_POSTGRES_WRITER_IMAGE SPREAD_SKEW_IMAGE SPREAD_SKEW_POSTGRES_WRITER_IMAGE REVERSAL_CONFIRMATION_IMAGE CORRIDOR_GAUGE_IMAGE ES_OPEN_DIRECTION_IMAGE ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE CLOSE_DIRECTION_IMAGE SPOT_VOL_REGIME_IMAGE INDICATOR_SERVICE_IMAGE STOCK_GEX_IMAGE DROP_CLASSIFIER_IMAGE OI_SHADOW_IMAGE REVERSAL_POSTGRES_WRITER_IMAGE GREEK_MOVE_AUTHENTICITY_IMAGE; do
+            STRIKE_INVASION_IMAGE INVASION_POSTGRES_WRITER_IMAGE SPREAD_SKEW_IMAGE SPREAD_SKEW_POSTGRES_WRITER_IMAGE REVERSAL_CONFIRMATION_IMAGE CORRIDOR_GAUGE_IMAGE ES_OPEN_DIRECTION_IMAGE ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE CLOSE_DIRECTION_IMAGE SPOT_VOL_REGIME_IMAGE VOL_PREMIUM_IMAGE INDICATOR_SERVICE_IMAGE STOCK_GEX_IMAGE DROP_CLASSIFIER_IMAGE OI_SHADOW_IMAGE REVERSAL_POSTGRES_WRITER_IMAGE GREEK_MOVE_AUTHENTICITY_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
@@ -396,7 +396,17 @@ EOF
             # multileg-structure: same dev+production guard and the same reason — its Kafka
             # bootstrap arrives via envFrom, which an apply alone does not roll pods for.
             kubectl -n options-edge rollout restart deployment/multileg-structure-service
+            # vol-premium: same reason again. Its Kafka bootstrap and schema-registry URL arrive
+            # through envFrom on options-edge-config, and the ConfigMap is patched AFTER the
+            # workloads are applied — so an apply alone leaves the pod running on the previous
+            # cluster coordinates while the deploy reports success. The rollout-status wait below
+            # does not fix this: it waits for a rollout that never started.
+            kubectl -n options-edge rollout restart deployment/vol-premium-service
           fi
+          # vol-premium: without this the monolithic deploy reports success while the service is
+          # crash-looping or never becomes ready, and the post-deploy image attestation would have
+          # skipped it too for want of a verifier mapping.
+          kubectl -n options-edge rollout status deployment/vol-premium-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/raw-to-display-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/options-edge-web --timeout=1260s
           kubectl -n options-edge rollout status deployment/raw-to-display-databento-service --timeout=1260s
