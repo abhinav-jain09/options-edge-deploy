@@ -7,15 +7,17 @@
 # green is not necessarily the one that runs. On 2026-08-16 a tag on the web image resolved to four
 # different digests inside twenty minutes for exactly this reason.
 #
-# ROLLED BACK to oe-email-service-deploy #10 (revision 9bc16de).
+# This digest is oe-email-service-deploy #15 (revision bf9ab80), 26/26 tests green, published
+# :prod architecture = amd64.
 #
-# #14 was deployed on 2026-08-28 22:26 CEST and carried DailyWatchlistReconciler, which is
-# @Component + @Scheduled with NO off switch. Sixty seconds after the pod came up it mailed the
-# daily watchlist summary to 17 people for session 2026-08-28. That feature is not live yet, and
-# nothing in the deploy path asked whether it should run — the pin moved for an unrelated fix and
-# the scheduler came with it.
+# It is safe to move forward past #10 again because the reason we rolled back is now gated.
+# DailyWatchlistReconciler is @ConditionalOnProperty("daily.watchlist.enabled") with
+# matchIfMissing=false, and NOTHING in these manifests sets it -- so the scheduler that mailed
+# seventeen people on 2026-08-28 stays silent until a deployment deliberately says otherwise.
+# DailyWatchlistGateTest fails the build if that annotation is removed, flipped or renamed.
 #
-# Do not move this pin forward again until the watchlist sender is gated OFF by default.
+# Also carries the two subject-line fixes: no HTML entity in a plain-text subject, and no date
+# baked into a default subject.
 # ⚠️ This digest is a linux/amd64 image, verified against the registry manifest. The build agent is
 # Apple Silicon; an image built natively there deploys fine and then CrashLoopBackOffs with
 # "exec /opt/java/openjdk/bin/java: exec format error", which names nothing about architecture.
@@ -26,4 +28,4 @@ resources:
 images:
   - name: 192.168.100.252:5000/oe-email-service
     newName: 192.168.100.252:5000/oe-email-service
-    digest: sha256:c9eb2f622c96b9687c2ad98fa5f29027facba38e71543010b19187bdf89cb803
+    digest: sha256:6542da462c90e2ffe08369c582aa0c43a7bcc5a7642e0355a664b9f2a262f211
