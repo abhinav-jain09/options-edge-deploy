@@ -30,10 +30,12 @@
 # policy (failurePolicy: Fail) permits batch/jobs and batch/cronjobs ONLY to
 # system:serviceaccount:options-edge:jenkins-deployer, so the schedule lives in Jenkins.
 #
-# THE WRAPPER MUST RESOLVE THE SESSION FROM THE MARKET CALENDAR. Unlike the CLI, this job
-# has no --skip-non-session: a batch that decided for itself that a night did not count
-# would be a batch that could report success for a night it never ran. A Mon-Fri timer that
-# fires on an exchange holiday must therefore not create this Job at all.
+# THE WRAPPER READS THE CALENDAR, AND THIS JOB REFUSES TO GUESS. Unlike the CLI, it has no
+# --skip-non-session: a batch that decided for itself that a night did not count would be a
+# batch that could report success for a night it never ran. So the wrapper skips exchange
+# holidays without creating a Job, and passes the session's CLOSING TIME in — which is not a
+# constant. The day after Thanksgiving and Christmas Eve close at 13:00, and a job that
+# assumed 16:00 would ask for a minute the market had been shut for three hours.
 #
 # NODE PINNING is required for the same reason as the other jobs: /oi-index is a node-local
 # hostPath, so this must run on the node the service pod runs on.
@@ -118,6 +120,11 @@ spec:
           # day rather than the first.
           args:
             - "session=__SESSION__,java.lang.String,true"
+            # The market's closing time FOR THIS SESSION, resolved from the calendar by the
+            # wrapper. Not identifying — it is derived from the session, not a choice — but
+            # REQUIRED: the job refuses to start without it rather than assuming 16:00, which
+            # would ask for a minute the market spent shut on an early-close day.
+            - "closeTime=__CLOSE_TIME__,java.lang.String,false"
             - "rebuild=__REBUILD__,java.lang.Long,true"
             - "runSource=__RUN_SOURCE__,java.lang.String,false"
             - "imageDigest=__IMAGE_DIGEST__,java.lang.String,false"

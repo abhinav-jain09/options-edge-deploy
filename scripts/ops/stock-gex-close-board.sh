@@ -178,9 +178,38 @@ case "$SESSION" in
   *) fatal "SESSION='$SESSION' is not in YYYY-MM-DD form" ;;
 esac
 # The spelling AND a real calendar date: fromisoformat alone also accepts 20260811 and ISO week
-# dates, and a regex alone accepts 2026-99-99. Whether it is a TRADING day is the CLI's call.
+# dates, and a regex alone accepts 2026-99-99.
 python3 -c "import datetime,sys; datetime.date.fromisoformat(sys.argv[1])" "$SESSION" 2>/dev/null \
   || fatal "SESSION='$SESSION' is not a valid calendar date"
+
+# WHETHER IT IS A TRADING DAY, AND WHEN IT CLOSED, ARE DECIDED HERE.
+#
+# They used to be the CLI's call — it carried --skip-non-session and derived the window from
+# its own calendar. The batch has neither on purpose: a job that decided for itself that a
+# night did not count would be a job that could report success for a night it never ran. So
+# the calendar is read here, once, and the answer is passed in.
+#
+# The CLOSE TIME is not a constant and treating it as one is the expensive mistake. The day
+# after Thanksgiving and Christmas Eve close at 13:00; asking for 15:59-16:00 on one of those
+# returns nothing at all, and the run would spend twenty-one requests discovering that the
+# market had been shut for three hours.
+CAL_OUT="$(PYTHONPATH=scripts/jenkins python3 - "$SESSION" <<'CAL'
+import datetime, sys
+from market_calendar import MarketCalendar
+day = datetime.date.fromisoformat(sys.argv[1])
+cal = MarketCalendar()
+print("trading" if cal.is_trading_day(day) else "closed", cal.close_time(day).strftime("%H:%M"))
+CAL
+)" || fatal "cannot read the market calendar for $SESSION"
+TRADING="${CAL_OUT%% *}"
+CLOSE_TIME="${CAL_OUT##* }"
+if [ "$TRADING" != "trading" ]; then
+  # A Mon-Fri timer must not second-guess the exchange, and a holiday is not an incident.
+  echo "STOCK_GEX_CLOSE_BOARD_SKIP session=$SESSION reason=NOT_A_TRADING_DAY"
+  SUCCESS=true
+  exit 0
+fi
+echo "session $SESSION is a trading day, closing at $CLOSE_TIME America/New_York"
 
 # --- 1. identity AND cluster ---------------------------------------------------------------
 WHOAMI="$(kubectl auth whoami -o jsonpath='{.status.userInfo.username}' 2>/dev/null || echo '')"
@@ -320,6 +349,7 @@ sed -e "s|__IMAGE__|${PINNED_IMAGE}|g" \
     -e "s|__REBUILD__|${REBUILD}|g" \
     -e "s|__RUN_SOURCE__|${RUN_SOURCE}|g" \
     -e "s|__IMAGE_DIGEST__|${PINNED_IMAGE##*@}|g" \
+    -e "s|__CLOSE_TIME__|${CLOSE_TIME}|g" \
     "$TEMPLATE" >"$RENDER"
 grep -q '__[A-Z_]*__' "$RENDER" && fatal "unsubstituted placeholder left in the render"
 _ns="$(yq -r '.metadata.namespace' "$RENDER")"
