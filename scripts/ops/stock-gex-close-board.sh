@@ -301,26 +301,25 @@ serving_pod() {
         | sort_by(.t) | last
         | if . == null then "" else "\(.pod) \(.node) \(.image)" end' 2>/dev/null || true
 }
-read -r SERVICE_POD NODE_NAME POD_IMAGE_ID <<EOF
+read -r SERVICE_POD NODE_NAME _POD_IMAGE_UNUSED <<EOF
 $(serving_pod)
 EOF
 [ -n "${SERVICE_POD:-}" ] && [ -n "${NODE_NAME:-}" ] \
   || fatal "no READY $DEPLOYMENT pod — cannot determine the node that owns the closing-board
        hostPath, and a rollout in progress would have this job publish onto whichever node the
        scheduler happened to pick. Wait for the rollout to finish, then re-run."
-# imageID is the digest the kubelet actually pulled, e.g. registry/repo@sha256:...
-POD_DIGEST="${POD_IMAGE_ID##*@}"
-[ -n "$POD_DIGEST" ] || fatal "pod $SERVICE_POD reports no resolvable image digest for container
-       '$SERVICE_CONTAINER' — refusing to freeze against an unknown build"
-[ "$POD_DIGEST" = "${PINNED_IMAGE##*@}" ] \
-  || fatal "the READY pod $SERVICE_POD is running $POD_DIGEST, but image-tags/${ENVIRONMENT}.yaml
-       resolves to ${PINNED_IMAGE##*@}. The freeze shares its arithmetic with the code that will
-       READ the board, so it must be built from the digest that pod is running. A rollout is
-       probably in flight — wait for it and re-run."
-echo "service pod: $SERVICE_POD on node $NODE_NAME (image $POD_DIGEST)"
-echo "NOTE: published sessions live on $NODE_NAME only. If the service is ever rescheduled to a
-      different node, its history does NOT follow — that node starts with no sessions and this job
-      republishes one per run. Moving the pod means moving /home/options-edge/stock-gex-oi/close."
+# The pod is consulted for its NODE and nothing else now.
+#
+# It used to be checked for its image digest too, as a second line after the deployment-level
+# comparison — the SERVING pod rather than the Deployment's intent, so a rollout in progress
+# could not slip a half-old build past. That check compared the freeze's image against the
+# service's, and the freeze no longer has the service's image: it prices in Java, the service
+# prices in Python. See the note above the pin. Leaving the comparison in place would fail
+# every single night, which is a guard that protects nothing and blocks everything.
+#
+# What the pod still decides is which node owns the hostPath, and that is not optional: with
+# the boards on a node-local path, publishing onto the wrong node writes a session no reader
+# can see.
 
 # --- 3b. refuse to start alongside another close-board Job ---------------------------------
 # Two runs for one session would interleave writes into a single directory: each per-root file
