@@ -54,6 +54,8 @@ pipeline {
       description: 'Published sessions to retain on the node (~21 MB each). 1..400.')
     string(name: 'WAIT_FOR_VENDOR_S', defaultValue: '3600',
       description: 'How long the CLI may wait for Databento\'s archive to reach the closing minute before pulling. The lag is not a constant (measured 20.6 min, then still climbing at 32), so the job asks rather than the schedule guessing. Max 4800 — the Job deadline is 6000.')
+    string(name: 'REBUILD', defaultValue: '0',
+      description: 'A deliberate RE-FREEZE of a session that already completed. Only session and rebuild identify a run, which is what makes a failed night RESUME rather than start again beside itself — so re-running a completed one is refused unless this is raised. Leave at 0 on the timer; raise it to say "yes, build that day again", and the ledger records which build of that day it was.')
     booleanParam(name: 'DRY_RUN', defaultValue: false,
       description: 'true = resolve + digest-pin + server-side validate the Job only; creates nothing and publishes nothing.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
@@ -84,6 +86,7 @@ pipeline {
     SESSION       = "${params.SESSION}"
     KEEP_SESSIONS = "${params.KEEP_SESSIONS}"
     WAIT_FOR_VENDOR_S = "${params.WAIT_FOR_VENDOR_S}"
+    REBUILD       = "${params.REBUILD}"
     DRY_RUN       = "${params.DRY_RUN}"
     KEEP_JOBS     = "${params.KEEP_JOBS}"
   }
