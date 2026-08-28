@@ -7,10 +7,10 @@
 # green is not necessarily the one that runs. On 2026-08-16 a tag on the web image resolved to four
 # different digests inside twenty minutes for exactly this reason.
 #
-# This digest is oe-email-service-deploy #10, built from revision 9bc16de with all 10 tests green on
-# the agent — including the ones that assert seeding sends nothing and a failed send is retried
-# rather than marked done. Changing this line means a new build whose tests passed, not a lookup at
-# deploy time.
+# This digest is oe-email-service-deploy #14, built from revision 46ee290 with all 25 tests green on
+# the agent — including the ones that assert seeding sends nothing, that a failed send is retried
+# rather than marked done, and that the session-invite template carries no hardcoded date. Changing
+# this line means a new build whose tests passed, not a lookup at deploy time.
 # ⚠️ This digest is a linux/amd64 image, verified against the registry manifest. The build agent is
 # Apple Silicon; an image built natively there deploys fine and then CrashLoopBackOffs with
 # "exec /opt/java/openjdk/bin/java: exec format error", which names nothing about architecture.
@@ -21,4 +21,4 @@ resources:
 images:
   - name: 192.168.100.252:5000/oe-email-service
     newName: 192.168.100.252:5000/oe-email-service
-    digest: sha256:c9eb2f622c96b9687c2ad98fa5f29027facba38e71543010b19187bdf89cb803
+    digest: sha256:aafd9366fd1b37ef8d8085529ee35511f409b6c3fe81bebdbfe05cf47b35294e
