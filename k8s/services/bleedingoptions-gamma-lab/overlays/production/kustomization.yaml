@@ -22,8 +22,8 @@ resources:
 # then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
 # no-op. Both paths therefore agree on one immutable image.
 #
-# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #26 attested
-# sha256:e210d808… built from main at b47cd4d5 by options-edge-web-deploy #1116 (the
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #27 attested
+# sha256:2c9052ff… built from main at 2652a204 by options-edge-web-deploy #1151 (the
 # evidence qualifies the ARTEFACT, not one commit inside it) and recorded PGL-050/051/052 as PASS
 # against that exact digest. The job resolves the revision from the registry rather than
 # taking it from the operator, and refuses unless the checkout under test matches — it did
@@ -82,4 +82,4 @@ resources:
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:e210d80819baa73aa631a13de9c7be8fbd4ba0bd31e87a93e20b7539f695b4a7
+    digest: sha256:2c9052ff041a995462da8c3643170b1eb2238db9c01a5e21ccb9281ab9b9f6ce
