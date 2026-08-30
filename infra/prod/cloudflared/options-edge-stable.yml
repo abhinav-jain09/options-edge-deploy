@@ -40,53 +40,24 @@ ingress:
   - hostname: bleadingoptions.com
     path: /ws/events
     service: http://192.168.100.252:30097     # feed-gateway-service NodePort — NOT the 8091 ServiceLB
+  # NIFTY GEX board (public, no auth by design): k8s nifty-gex-service via its PINNED
+  # NodePort 30188 (nodePort is set explicitly in the manifest, so Service recreation
+  # keeps it — unlike the feed-gateway NodePort warned about above).
+  - hostname: bleadingoptions.com
+    path: ^/nifty-gex(/|$)
+    service: http://192.168.100.252:30188
   - hostname: bleadingoptions.com
     service: http://192.168.100.252:8094
   # ⚠️ Hardcoded ClusterIP: it survives pod restarts but NOT a delete+recreate of the Service.
   # If auth.bleadingoptions.com starts 502-ing, re-read it with
   #   kubectl -n options-edge get svc oe-keycloak -o jsonpath='{.spec.clusterIP}'
-  # The /admin + /realms/master 404 blocks MUST precede the hostname catch-all (first match wins).
+  # The Keycloak admin console is served through this same HTTPS hostname. Keeping
+  # it behind Cloudflare avoids the insecure/cross-origin cookies produced by the
+  # former direct-LAN HTTP admin URL.
   - hostname: auth.bleadingoptions.com
-    path: /admin
-    service: http_status:404
-  - hostname: auth.bleadingoptions.com
-    path: /realms/master
-    service: http_status:404
-  - hostname: auth.bleadingoptions.com
-    service: http://10.43.127.26:8080         # Keycloak ClusterIP (host-reachable; traefik :80 is broken)
+    service: http://127.0.0.1:80               # Traefik preserves the public HTTPS forwarding headers
     originRequest:
       httpHostHeader: auth.bleadingoptions.com
-  # ---------------------------------------------------------------------------------------------
-  # PUBLIC GAMMA LAB — bleedingoptions.com (correct spelling; the internal platform keeps the
-  # differently-spelled bleadingoptions.com). NOT ENABLED YET, and deliberately left commented.
-  #
-  # TWO reasons it cannot simply be pasted in:
-  #   1. Both targets are ClusterIPs that DO NOT EXIST yet — the `bleedingoptions` namespace has not
-  #      been applied. cloudflared routes at the IP because traefik :80 is broken on this cluster, so
-  #      the addresses can only be read AFTER the first apply:
-  #        kubectl -n bleedingoptions get svc bo-keycloak              -o jsonpath='{.spec.clusterIP}'
-  #        kubectl -n bleedingoptions get svc bleedingoptions-gamma-lab -o jsonpath='{.spec.clusterIP}'
-  #      Writing a guessed IP here would route public traffic at whatever else holds it.
-  #   2. PGL-072 forbids the public workload above zero replicas until PGL-050/051/052 pass on the
-  #      deployed digest. Publishing the apex route before then advertises a site that is not there.
-  #
-  # The /admin and /realms/master 404 blocks MUST precede the hostname catch-all (first match wins),
-  # exactly as they do for the internal auth host above.
-  #
-  # - hostname: auth.bleedingoptions.com
-  #   path: /admin
-  #   service: http_status:404
-  # - hostname: auth.bleedingoptions.com
-  #   path: /realms/master
-  #   service: http_status:404
-  # - hostname: auth.bleedingoptions.com
-  #   service: http://<bo-keycloak CLUSTERIP>:8080
-  #   originRequest:
-  #     httpHostHeader: auth.bleedingoptions.com
-  # - hostname: bleedingoptions.com
-  #   service: http://<bleedingoptions-gamma-lab CLUSTERIP>:8080
-  # ---------------------------------------------------------------------------------------------
-
   # es4 already routed /ws/events to a NodePort — which is why the ES board kept working
   # through the prod outage and was the control that isolated the bug.
   - hostname: es.bleadingoptions.com
@@ -107,12 +78,30 @@ ingress:
   # https://req.bleadingoptions.com/oauth2callback redirect URI.
   - hostname: req.bleadingoptions.com
     service: http://127.0.0.1:8092
-  # fullfunding.nl is NOT the trading platform any more. Phase 3 retired it from
-  # options-edge (see the note above); the domain now belongs to the FullFunding
-  # jaarrekening app, which is a different application in its own namespace.
-  # Static files only, served by traefik from the fullfunding namespace — so this
-  # goes to traefik on :80 and is matched by Host, not to a NodePort or ClusterIP
-  # that a Service recreation would invalidate.
-  - hostname: fullfunding.nl
-    service: http://127.0.0.1:80
+  # fullfunding.nl was served here until 2026-08-09. It now has its OWN tunnel
+  # (5c86fa1d-8307-43d8-9ccf-aa240b7156e1, config /etc/cloudflared/fullfunding.yml),
+  # because it is a different application: restarting the trading platform tunnel
+  # should not interrupt it, and vice versa. Its DNS points at that tunnel, so this
+  # route was dead weight — a hostname listed here that no request can ever reach
+  # reads as working config and hides which tunnel actually serves the domain.
+  # PUBLIC GAMMA LAB homepage. Users open bleedingoptions.com; auth.bleedingoptions.com is the IdP.
+  - hostname: bleedingoptions.com
+    service: http://10.43.177.28:8080
+    originRequest:
+      httpHostHeader: bleedingoptions.com
+  # The bare root of the IdP redirects to KC_HOSTNAME_ADMIN, which is a LAN address — returning 404
+  # stops that leaking an internal IP to the internet.
+  - hostname: auth.bleedingoptions.com
+    path: ^/$
+    service: http_status:404
+  - hostname: auth.bleedingoptions.com
+    path: /admin
+    service: http_status:404
+  - hostname: auth.bleedingoptions.com
+    path: /realms/master
+    service: http_status:404
+  - hostname: auth.bleedingoptions.com
+    service: http://10.43.152.90:8080
+    originRequest:
+      httpHostHeader: auth.bleedingoptions.com
   - service: http_status:404
