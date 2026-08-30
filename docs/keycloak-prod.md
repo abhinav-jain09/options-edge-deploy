@@ -64,6 +64,13 @@ dashboard rather than `cloudflared tunnel route dns`).
 
 The reviewed tunnel config lives at
 [`infra/prod/cloudflared/options-edge-stable.yml`](../infra/prod/cloudflared/options-edge-stable.yml).
+
+> **For any tunnel change, follow
+> [`infra/prod/cloudflared/README.md`](../infra/prod/cloudflared/README.md) instead of the snippet
+> below.** That is the current procedure: it adds the stale-checkout and live-digest guards, a deploy
+> lock, staged-file digest verification, the full preflight route set, and the rollback rules. The
+> sequence here is kept for the historical Keycloak rollout narrative.
+
 Deploying a change is a fail-safe sequence — stage, validate, back up, install atomically, restart
 the EXACT unit, verify (never edit the live file in place):
 

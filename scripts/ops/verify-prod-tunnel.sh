@@ -72,6 +72,9 @@ fi
 # /tmp to validate a reverted tree) — without it, $0-derived paths resolve against that location.
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)}"
 REPO_COPY="${REPO_COPY:-$REPO_ROOT/infra/prod/cloudflared/options-edge-stable.yml}"
+# NOT overridable: this is the structural retirement gate. An env-supplied path (an empty .py exits
+# 0) would turn a VERIFIED stamp into a fail-open. It is pinned to the tree being verified.
+RETIRED_GUARD="$REPO_ROOT/scripts/ops/assert-no-retired-hostname.py"
 LIVE_PATH="${LIVE_PATH:-/etc/cloudflared/options-edge-stable.yml}"
 PROD_SSH="${PROD_SSH:-}"
 ES4_SSH="${ES4_SSH:-ssh -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=10 -o ServerAliveCountMax=3 abhinav@192.168.100.4}"
@@ -277,61 +280,27 @@ ws_target_for() {  # $1 = hostname; $2 = config text; prints that host's /ws/eve
 
 retired_suffixes() { for h in $ABSENT_TUNNEL_HOSTS; do printf '%s\n' "$h"; done | awk -F. 'NF>2{print $(NF-1)"."$NF} NF==2{print}' | sort -u; }
 scan_config_for_retired() {  # label, config text
-  local label="$1" cfg="$2" sfx report
-  # STRUCTURAL hostname extraction (PyYAML): flow mappings ({hostname: x, path: y}), anchors/aliases
-  # and any indentation style are all covered — a sed/grep scan sees none of those reliably.
-  # ALL classification happens inside Python: a bare "*" hostname passed through an unquoted shell
-  # expansion would glob against the working directory and vanish before grep ever saw it.
-  report="$(printf '%s\n' "$cfg" | RETIRED_SUFFIXES="$(retired_suffixes | tr '\n' ' ')" python3 -c "
-import os, sys, yaml
-try:
-    doc = yaml.safe_load(sys.stdin) or {}
-    rules = doc.get('ingress') or []
-    if not isinstance(rules, list): raise ValueError('ingress is not a list')
-    hosts = sorted({str(r.get('hostname', '')).strip().lower().rstrip('.')
-                    for r in rules if isinstance(r, dict) and str(r.get('hostname', '')).strip()})
-    wild = [h for h in hosts if '*' in h]
-    hits = []
-    for sfx in os.environ.get('RETIRED_SUFFIXES', '').split():
-        sfx = sfx.strip().lower()
-        if not sfx: continue
-        hits += [h for h in hosts if h == sfx or h.endswith('.' + sfx)]
-    if wild: print('WILDCARD ' + '|'.join(wild))
-    elif hits: print('RETIRED ' + '|'.join(sorted(set(hits))))
-    else: print('CLEAN ' + '|'.join(hosts))
-except Exception as e:
-    print('PARSE_FAIL %s' % e)
-" 2>/dev/null)"
-  case "$report" in
-    "CLEAN"*) note "OK   $label declares no wildcard and no retired-domain hostname (structural check; hosts: ${report#CLEAN })" ;;
-    "WILDCARD"*) bad "$label declares WILDCARD hostname(s) — they match the retired domain regardless of spelling: ${report#WILDCARD }" ;;
-    "RETIRED"*) bad "$label still declares retired-domain hostname(s): ${report#RETIRED }" ;;
-    *) bad "$label: could not structurally parse the ingress hostnames ($report)" ;;
-  esac
-  # Hostless rules are legal and match EVERY hostname, so only the terminal http_status:404 may be
-  # hostless. Parse the ingress list STRUCTURALLY (a rule's fields can appear in any order across
-  # multiple lines — a line-oriented scan misses `- path: …` + `service: …` on the next line).
-  local hostless_report
-  hostless_report="$(printf '%s\n' "$cfg" | python3 -c "
-import sys, yaml
-try:
-    doc = yaml.safe_load(sys.stdin) or {}
-    rules = doc.get('ingress') or []
-    if not isinstance(rules, list): raise ValueError('ingress is not a list')
-    offenders = [r for r in rules
-                 if isinstance(r, dict) and not str(r.get('hostname', '')).strip()
-                 and str(r.get('service', '')).strip() != 'http_status:404']
-    if offenders:
-        print('OFFENDERS ' + '; '.join(repr(o) for o in offenders))
-    else:
-        print('CLEAN')
-except Exception as e:
-    print('PARSE_FAIL %s' % e)
-" 2>/dev/null)"
-  case "$hostless_report" in
-    CLEAN) note "OK   $label has no hostless rule other than the terminal 404" ;;
-    OFFENDERS*) bad "$label has HOSTLESS ingress rule(s) that are not http_status:404 — they answer for EVERY hostname incl. the retired domain: ${hostless_report#OFFENDERS }" ;;
-    *) bad "$label: could not structurally parse the ingress list to prove no hostless rule ($hostless_report)" ;;
+  # STRUCTURAL check, delegated to scripts/ops/assert-no-retired-hostname.py so this gate and the
+  # runbook in infra/prod/cloudflared/README.md cannot drift apart. That helper is stricter than the
+  # inline PyYAML block it replaces: it REFUSES to str()-coerce a hostname, so a tagged scalar such
+  # as `hostname: !!binary ZnVsbGZ1bmRpbmcubmw=` — which cloudflared happily routes while `/`,
+  # /ws/events, /admin and an unprobed path all still answer 404 — is a hard failure instead of
+  # rendering as the harmless-looking string "b'fullfunding.nl'". It also rejects duplicate mapping
+  # keys, wildcards, and any hostless rule that is not the terminal http_status:404.
+  # NB: the failure accumulator bad() writes is the global `fail`. Never declare a local by that
+  # name here — bash's dynamic scoping would swallow the fail=1 and leave the gate green.
+  local label="$1" cfg="$2" out grc
+  out="$(printf '%s\n' "$cfg" | python3 "$RETIRED_GUARD" - $(retired_suffixes | tr '\n' ' ') 2>&1)"
+  grc=$?
+  case "$grc" in
+    # exit 0 is not sufficient: an empty or truncated helper also exits 0 with no output. The
+    # CLEAN: marker is the positive proof that the check actually ran and reached a verdict.
+    0) case "$out" in
+         CLEAN:*) note "OK   $label — $out" ;;
+         *) bad "$label: the structural retirement check exited 0 without a CLEAN verdict (got '$out') — treating as unverified" ;;
+       esac ;;
+    1) bad "$label — $out" ;;
+    *) bad "$label: the structural retirement check could not run ($out)" ;;
   esac
 }
 
@@ -509,41 +478,64 @@ selftest() {
       *) echo "  FAIL selftest: $1 (got '$got', wanted prefix '$4')" >&2; rc=1 ;;
     esac
   }
-  PY_TUNNEL_HOSTS="import sys, yaml
-try:
-    doc = yaml.safe_load(sys.stdin) or {}
-    rules = doc.get('ingress') or []
-    if not isinstance(rules, list): raise ValueError('ingress is not a list')
-    hosts = [str(r.get('hostname', '')).strip().lower().rstrip('.')
-             for r in rules if isinstance(r, dict) and str(r.get('hostname', '')).strip()]
-    print('HOSTS ' + ' '.join(sorted(set(hosts))))
-except Exception as e:
-    print('PARSE_FAIL %s' % e)"
-  struct_case "flow-mapping hostname is extracted (sed-invisible)" \
+  # Tunnel-config structure is the SHARED guard's job — exercise it, not a private copy. The old
+  # PY_TUNNEL_HOSTS / PY_HOSTLESS / PY_WILD snippets tested str()-coercing logic that no longer runs
+  # anywhere, and passed while the real scan carried the !!binary hole.
+  guard_case() {  # label, config-text, expected-exit
+    local out grc
+    out="$(printf '%s\n' "$2" | python3 "$RETIRED_GUARD" - fullfunding.nl 2>&1)"; grc=$?
+    if [ "$grc" = "$3" ]; then echo "  OK   selftest: $1"
+    else echo "  FAIL selftest: $1 (guard exit $grc, wanted $3: $out)" >&2; rc=1; fi
+  }
+  guard_case "guard: an unrelated hostname is clean" \
     'ingress:
-  - {hostname: retired.example, path: /x, service: "http://evil:8080"}
-  - service: http_status:404' "$PY_TUNNEL_HOSTS" "HOSTS retired.example"
-  PY_HOSTLESS="import sys, yaml
-try:
-    doc = yaml.safe_load(sys.stdin) or {}
-    rules = doc.get('ingress') or []
-    if not isinstance(rules, list): raise ValueError('ingress is not a list')
-    offenders = [r for r in rules
-                 if isinstance(r, dict) and not str(r.get('hostname', '')).strip()
-                 and str(r.get('service', '')).strip() != 'http_status:404']
-    print('OFFENDERS' if offenders else 'CLEAN')
-except Exception as e:
-    print('PARSE_FAIL %s' % e)"
-  struct_case "multi-line hostless rule is flagged" \
+  - hostname: retired.example
+    service: http://x:1
+  - service: http_status:404' 0
+  guard_case "guard: bare-star wildcard hostname is flagged (matches everything)" \
+    'ingress:
+  - hostname: "*"
+    service: http://evil:8080
+  - service: http_status:404' 1
+  guard_case "guard: TLD wildcard *.nl is flagged (matches the retired apex)" \
+    'ingress:
+  - hostname: "*.nl"
+    service: http://evil:8080
+  - service: http_status:404' 1
+  guard_case "guard: es.fullfunding.nl is flagged on the label boundary" \
+    'ingress:
+  - hostname: es.fullfunding.nl
+    service: http://evil:8080
+  - service: http_status:404' 1
+  guard_case "guard: notfullfunding.nl is NOT flagged (label boundary honoured)" \
+    'ingress:
+  - hostname: notfullfunding.nl
+    service: http://x:1
+  - service: http_status:404' 0
+  guard_case "guard: multi-line hostless rule is flagged" \
     'ingress:
   - path: /unprobed
     service: http://evil:8080
-  - service: http_status:404' "$PY_HOSTLESS" "OFFENDERS"
-  struct_case "terminal 404 alone is clean" \
+  - service: http_status:404' 1
+  guard_case "guard: terminal 404 alone is clean" \
     'ingress:
   - hostname: keep.example
     service: http://x:1
-  - service: http_status:404' "$PY_HOSTLESS" "CLEAN"
+  - service: http_status:404' 0
+  guard_case "guard: !!binary hostname FAILS CLOSED (the 2026-08-09 bypass)" \
+    'ingress:
+  - hostname: !!binary ZnVsbGZ1bmRpbmcubmw=
+    path: /secret
+    service: http://evil:8080
+  - service: http_status:404' 2
+  guard_case "guard: legal <<: merge key is not mistaken for a duplicate" \
+    'ingress:
+  - &d
+    hostname: a.keep.example
+    service: http://x:1
+  - <<: *d
+    hostname: b.keep.example
+  - service: http_status:404' 0
   PY_ING="import sys, yaml
 hosts, hostless = [], 0
 try:
@@ -573,30 +565,6 @@ spec:
   rules:
     - host: auth.keep.example
       http: {paths: []}' "$PY_ING" "DEFAULTBACKEND"
-  PY_WILD="import sys, yaml
-try:
-    doc = yaml.safe_load(sys.stdin) or {}
-    rules = doc.get('ingress') or []
-    hosts = [str(r.get('hostname','')).strip() for r in rules if isinstance(r, dict) and str(r.get('hostname','')).strip()]
-    wild = [h for h in hosts if '*' in h]
-    print('WILDCARD ' + ' '.join(wild) if wild else 'NOWILD')
-except Exception as e:
-    print('PARSE_FAIL %s' % e)"
-  struct_case "bare '*' wildcard hostname is flagged (matches everything)" \
-    'ingress:
-  - hostname: "*"
-    service: http://evil:8080
-  - service: http_status:404' "$PY_WILD" "WILDCARD"
-  struct_case "TLD wildcard '*.nl' is flagged (matches the retired apex)" \
-    'ingress:
-  - hostname: "*.nl"
-    service: http://evil:8080
-  - service: http_status:404' "$PY_WILD" "WILDCARD"
-  struct_case "plain hostnames are not flagged as wildcards" \
-    'ingress:
-  - hostname: keep.example
-    service: http://x:1
-  - service: http_status:404' "$PY_WILD" "NOWILD"
   # END-TO-END: exercise the production scan function itself (a snippet copy would not have caught
   # the shell-glob fail-open that a bare "*" hostname produced).
   e2e_scan() {  # label, config text, expected substring in output
@@ -612,17 +580,17 @@ except Exception as e:
   - hostname: "*"
     path: /secret
     service: http://evil:8080
-  - service: http_status:404' "WILDCARD"
+  - service: http_status:404' "FAIL: fixture — VIOLATION:"
   e2e_scan "e2e: retired hostname is REJECTED by the production scan" \
     'ingress:
   - hostname: es.fullfunding.nl
     service: http://evil:8080
-  - service: http_status:404' "still declares retired-domain"
+  - service: http_status:404' "FAIL: fixture — VIOLATION:"
   e2e_scan "e2e: clean config passes the production scan" \
     'ingress:
   - hostname: bleadingoptions.com
     service: http://x:1
-  - service: http_status:404' "no wildcard and no retired-domain"
+  - service: http_status:404' "OK   fixture — CLEAN:"
   # The resolver's CONTRACT: stdout is exactly the target, nothing else (a diagnostic leaking into
   # stdout made every ES route comparison fail).
   resolver_contract_case() {
@@ -683,6 +651,7 @@ spec:
 [ "$SELFTEST" = "1" ] && { selftest; exit $?; }
 
 [ -f "$REPO_COPY" ] || { echo "FATAL: repo copy not found at $REPO_COPY" >&2; exit 2; }
+[ -s "$RETIRED_GUARD" ] || { echo "FATAL: retirement guard missing or empty at $RETIRED_GUARD" >&2; exit 2; }
 note "phase=$PHASE $([ "$NETWORK_ONLY" = "1" ] && echo '(network-only diagnostic)')$([ "$PRECHECK" = "1" ] && echo '(PRECHECK: redirect section skipped)')"
 
 # --request-timeout bounds every k8s call: ConnectTimeout only bounds the ssh handshake, and an
