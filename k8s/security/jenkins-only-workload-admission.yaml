@@ -48,12 +48,23 @@ spec:
     # deadlock). The carveout is PVC-scoped, so these system principals CANNOT touch Deployments/Secrets/
     # etc.; all human/app (non-system, non-deployer) workload changes remain blocked. (system:node:* is NOT
     # exempted -- kubelets do not mutate the PVC resource for binding.)
+    # The nifty-gex pod renews its own 24h Dhan access token (GET /v2/RenewToken — renewal
+    # EXPIRES the previous token) and must write the fresh one back into its Secret, or the
+    # next pod restart boots with a dead token and the chain cannot self-recover. The carveout
+    # is UPDATE-only on that ONE named Secret in options-edge: the SA cannot create/delete
+    # secrets, touch any other secret, or mutate any other gated resource. RBAC (Role
+    # nifty-gex-dhan-secret-writer) enforces the same bound below the admission layer.
     - expression: >-
         request.userInfo.username == 'system:serviceaccount:options-edge:jenkins-deployer'
         || (request.resource.resource == 'persistentvolumeclaims'
             && (request.userInfo.username == 'system:kube-scheduler'
                 || request.userInfo.username == 'system:kube-controller-manager'
                 || request.userInfo.username.startsWith('system:serviceaccount:kube-system:')))
+        || (request.userInfo.username == 'system:serviceaccount:options-edge:nifty-gex'
+            && request.resource.resource == 'secrets'
+            && request.namespace == 'options-edge'
+            && request.name == 'dhan-credentials'
+            && request.operation == 'UPDATE')
       message: "OptionsEdge Kubernetes workload changes are blocked unless they run through the Jenkins deployer ServiceAccount."
 ---
 apiVersion: admissionregistration.k8s.io/v1
