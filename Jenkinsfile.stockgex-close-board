@@ -77,7 +77,11 @@ pipeline {
     disableConcurrentBuilds()
     // The Job is capped at 100 min (activeDeadlineSeconds, most of it the vendor wait) and the
     // wrapper waits 105, so this leaves room for the image pin and the prune on top.
-    timeout(time: 130, unit: 'MINUTES')
+    // 200, not 130: the chain now retries a failed batch up to CLOSE_ATTEMPTS times with a
+    // CLOSE_RETRY_WAIT_S pause (the vendor's post-close 504s ripen away in ~20-45 min), and the
+    // old budget fit exactly one attempt. Sized for fail-fast attempts; a genuinely hung attempt
+    // still aborts, exactly as before.
+    timeout(time: 200, unit: 'MINUTES')
     buildDiscarder(logRotator(numToKeepStr: '30'))
   }
   environment {

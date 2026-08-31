@@ -81,6 +81,14 @@ SESSION="${SESSION:-}"
 KEEP_SESSIONS="${KEEP_SESSIONS:-10}"
 WAIT_FOR_VENDOR_S="${WAIT_FOR_VENDOR_S:-3600}"
 JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-6300}"
+# The vendor's historical API 504s in the first ~20-45 minutes after the close while its data
+# ripens (measured 2026-08-31: chunk c016 refused four times at 22:35-22:38 CEST and the whole
+# night's board went unpublished until a HUMAN retriggered next morning — the owner's verdict:
+# "we cannot do rerun everyday"). So the chain retries ITSELF: a failed batch attempt is
+# recreated after a pause, and Spring Batch resumes the same JobInstance — every chunk already
+# fetched is reused, so a retry only pays for what actually failed.
+CLOSE_ATTEMPTS="${CLOSE_ATTEMPTS:-3}"
+CLOSE_RETRY_WAIT_S="${CLOSE_RETRY_WAIT_S:-900}"
 KEEP_JOBS="${KEEP_JOBS:-5}"
 DRY_RUN="${DRY_RUN:-false}"
 EXPECTED_API_SERVER="${EXPECTED_API_SERVER:-https://192.168.100.252:6443}"
@@ -366,6 +374,8 @@ if [ "$DRY_RUN" = "true" ]; then
   exit 0
 fi
 
+CLOSE_ATTEMPT=1
+while :; do
 echo "=== creating Job $JOB_NAME (session $SESSION, node $NODE_NAME) ==="
 # OWNERSHIP IS CLAIMED FIRST, not after a successful create. The name carries 8 random bytes and
 # has never been used, so a Job with that name can only be this invocation's — including the case
@@ -424,16 +434,39 @@ RECEIPT="$(grep -E "$RECEIPT_RE" "$LOGS" | tail -1 || true)"
 SKIP="$(grep -E "$SKIP_RE" "$LOGS" | tail -1 || true)"
 OUTCOMES="$(grep -cE "$ANY_OUTCOME_RE" "$LOGS" || true)"
 
-if [ "$state" != "succeeded" ]; then
-  # NOT "nothing was published". A container can promote and then exit nonzero, or be killed
-  # before the Job records success — the promote is atomic and happens before the receipt is
-  # printed. The marker already says UNKNOWN; this message must not contradict it.
-  fatal "$JOB_NAME did not succeed (state=$state). Whether a session was promoted for $SESSION
-       is UNKNOWN: the promote happens inside the container, before its receipt, and this
-       identity cannot read the node. Check what dt=$SESSION points at under
-       /home/options-edge/stock-gex-oi/close on $NODE_NAME. Every OTHER session is untouched —
-       a build only ever writes a new generation and moves one symlink."
+if [ "$state" = "succeeded" ]; then
+  break
 fi
+if [ "$CLOSE_ATTEMPT" -lt "$CLOSE_ATTEMPTS" ]; then
+  # A vendor 504 heals with time, and a resumed batch reuses every chunk already fetched, so a
+  # retry costs only the failed remainder. The pause matters more than the count: attempt 1
+  # started right at the close; by attempt 2 or 3 the vendor's data has ripened.
+  echo "attempt ${CLOSE_ATTEMPT}/${CLOSE_ATTEMPTS} did not succeed (state=$state) — retrying in ${CLOSE_RETRY_WAIT_S}s; the batch RESUMES, chunks already fetched are reused"
+  CLOSE_ATTEMPT=$(( CLOSE_ATTEMPT + 1 ))
+  sleep "$CLOSE_RETRY_WAIT_S"
+  JOB_NAME="stock-gex-close-batch-$(date -u +%Y%m%d-%H%M%S)-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+  sed -e "s|__IMAGE__|${PINNED_IMAGE}|g" \
+      -e "s|__JOB_NAME__|${JOB_NAME}|g" \
+      -e "s|__SESSION__|${SESSION}|g" \
+      -e "s|__NODE_NAME__|${NODE_NAME}|g" \
+      -e "s|__KEEP_SESSIONS__|${KEEP_SESSIONS}|g" \
+      -e "s|__WAIT_FOR_VENDOR_S__|${WAIT_FOR_VENDOR_S}|g" \
+      -e "s|__REBUILD__|${REBUILD}|g" \
+      -e "s|__RUN_SOURCE__|${RUN_SOURCE}|g" \
+      -e "s|__IMAGE_DIGEST__|${PINNED_IMAGE##*@}|g" \
+      -e "s|__CLOSE_TIME__|${CLOSE_TIME}|g" \
+      "$TEMPLATE" >"$RENDER"
+  continue
+fi
+# NOT "nothing was published". A container can promote and then exit nonzero, or be killed
+# before the Job records success — the promote is atomic and happens before the receipt is
+# printed. The marker already says UNKNOWN; this message must not contradict it.
+fatal "$JOB_NAME did not succeed (state=$state) after ${CLOSE_ATTEMPTS} attempts. Whether a
+     session was promoted for $SESSION is UNKNOWN: the promote happens inside the container,
+     before its receipt, and this identity cannot read the node. Check what dt=$SESSION points
+     at under /home/options-edge/stock-gex-oi/close on $NODE_NAME. Every OTHER session is
+     untouched — a build only ever writes a new generation and moves one symlink."
+done
 # EXACTLY ONE outcome line, and it must be the one for the session that was asked for.
 [ "${OUTCOMES:-0}" = "1" ] || fatal "$JOB_NAME printed ${OUTCOMES:-0} outcome lines — expected
        exactly one. Refusing to guess which session, if any, was published."
