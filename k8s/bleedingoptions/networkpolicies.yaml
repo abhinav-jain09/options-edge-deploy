@@ -472,7 +472,13 @@ spec:
                 # MORE than the CLI did: as well as the boards it writes its own job repository
                 # and run ledger here, which is the point — a question about a board and a
                 # question about the run that produced it are answered by one connection.
-                values: ["stock-gex-close-board", "stock-gex-close-batch", "stock-gex-service"]
+                #
+                # stock-gex-flip-track is the nightly INTERNAL tracking snapshot: it reads the
+                # boards the batch just promoted and writes the evening's Near Flip lists into
+                # gex_flip_track, beside them. Its first real run proved this list is enforced —
+                # refused for its full 120s retry window until this line existed.
+                values: ["stock-gex-close-board", "stock-gex-close-batch", "stock-gex-service",
+                         "stock-gex-flip-track"]
       ports:
         - protocol: TCP
           port: 5432
