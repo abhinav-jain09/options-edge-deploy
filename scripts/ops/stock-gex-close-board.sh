@@ -123,6 +123,39 @@ SUCCESS=false
 
 fatal() { echo "FATAL: $*" >&2; exit 1; }
 
+# Capture the evening's Near Flip lists (internal tracking). AFTER a session is known to be
+# published and NEVER fatal to it: a tracking miss is a gap the CLI's self-healing fills on the
+# next run. Called from BOTH publish paths — a fresh freeze and the already-published no-op —
+# because the tracker heals forward and an extra call inserts nothing.
+run_flip_track() {
+  # AFTER promotion, BEFORE pruning, and NEVER fatal to the publication above: the board is
+  # already out; a tracking miss is a gap the CLI's self-healing fills tomorrow, not a reason
+  # to alert the desk that the close failed. The image is the stock-gex service's own (the CLI
+  # ships in the same package), pinned the same way.
+  TRACK_IMAGE_MUTABLE="$(yq -er '.images."stock-gex-service"' "image-tags/${ENVIRONMENT}.yaml" 2>/dev/null || true)"
+  if [ -n "$TRACK_IMAGE_MUTABLE" ] && [ "$TRACK_IMAGE_MUTABLE" != "null" ]; then
+    TRACK_DIGEST="$(skopeo inspect --tls-verify=false "docker://${TRACK_IMAGE_MUTABLE}" --format '{{.Digest}}' 2>/dev/null     || kubectl -n "$NAMESPACE" get deploy stock-gex-service -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*@//' )"
+    TRACK_IMAGE="${TRACK_IMAGE_MUTABLE%%:*}@${TRACK_DIGEST}"
+    case "$TRACK_DIGEST" in
+      sha256:*)
+        TRACK_JOB="stock-gex-flip-track-$(date -u +%Y%m%d-%H%M%S)"
+        sed -e "s|__IMAGE__|${TRACK_IMAGE}|g" -e "s|__JOB_NAME__|${TRACK_JOB}|g"         "k8s/jobs/stock-gex-flip-track-job.yaml" | kubectl -n "$NAMESPACE" create -f -         && echo "flip-track Job created: $TRACK_JOB"         || echo "WARNING: flip-track Job could not be created — self-healing covers it tomorrow"
+        # Bounded wait for the receipt; a slow run is left to finish on its own.
+        if kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$TRACK_JOB" --timeout=180s >/dev/null 2>&1; then
+          kubectl -n "$NAMESPACE" logs "job/$TRACK_JOB" 2>/dev/null | grep "^flip-track" || true
+        else
+          echo "WARNING: flip-track Job not complete after 180s — check job/$TRACK_JOB; tomorrow's run heals any gap"
+        fi
+        ;;
+      *) echo "WARNING: could not resolve a digest for ${TRACK_IMAGE_MUTABLE} — flip-track skipped tonight" ;;
+    esac
+  else
+    echo "WARNING: image-tags/${ENVIRONMENT}.yaml has no stock-gex-service entry — flip-track skipped tonight"
+  fi
+
+}
+
+
 # PUBLICATION STATE, for the Jenkins alert — which cannot read the cluster once the run has
 # failed (this identity has no pods/exec). Three values, and the middle one is the honest answer
 # to a question this script genuinely cannot decide:
@@ -236,6 +269,28 @@ if [ "$TRADING" != "trading" ]; then
   echo "STOCK_GEX_CLOSE_BOARD_SKIP session=$SESSION reason=NOT_A_TRADING_DAY"
   SUCCESS=true
   exit 0
+fi
+
+# --- ALREADY PUBLISHED? ------------------------------------------------------------------
+# The catch-up firing (01:00 ET) and any manual daytime rerun land here on nights the evening
+# chain already published. Re-running the batch then is not a no-op — Spring Batch REFUSES an
+# already-COMPLETED instance with JobInstanceAlreadyCompleteException, which reads as a failure
+# and would paint every healthy morning red. So the question is asked of the STORE, before any
+# Job exists. Fail-open on purpose: if this check cannot run (a DB blip), the normal path
+# proceeds and the batch itself is the arbiter.
+if [ "$REBUILD" = "0" ]; then
+  PUBLISHED_GEN="$(kubectl -n bleedingoptions exec statefulset/bo-app-postgres -- \
+      psql -U bleedingoptions -d bleedingoptions -tAc \
+      "SELECT generation || '|' || board_count FROM gex_close_generation \
+       WHERE session = '${SESSION}'::date AND promoted_at IS NOT NULL \
+       ORDER BY promoted_at DESC, id DESC LIMIT 1" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ -n "$PUBLISHED_GEN" ]; then
+    echo "STOCK_GEX_CLOSE_BOARD_OK session=${SESSION} generation=${PUBLISHED_GEN%%|*} boards=${PUBLISHED_GEN##*|}"
+    echo "OK: $SESSION is already published (generation ${PUBLISHED_GEN%%|*}, ${PUBLISHED_GEN##*|} boards) — nothing to do"
+    run_flip_track
+    SUCCESS=true
+    exit 0
+  fi
 fi
 echo "session $SESSION is a trading day, closing at $CLOSE_TIME America/New_York"
 
@@ -543,31 +598,7 @@ EOF
 echo "OK: closing board published for $SESSION — ${ROOTS:-?} roots"
 SUCCESS=true
 
-# --- 5b. capture the evening's Near Flip lists (internal tracking) -----------------------
-# AFTER promotion, BEFORE pruning, and NEVER fatal to the publication above: the board is
-# already out; a tracking miss is a gap the CLI's self-healing fills tomorrow, not a reason
-# to alert the desk that the close failed. The image is the stock-gex service's own (the CLI
-# ships in the same package), pinned the same way.
-TRACK_IMAGE_MUTABLE="$(yq -er '.images."stock-gex-service"' "image-tags/${ENVIRONMENT}.yaml" 2>/dev/null || true)"
-if [ -n "$TRACK_IMAGE_MUTABLE" ] && [ "$TRACK_IMAGE_MUTABLE" != "null" ]; then
-  TRACK_DIGEST="$(skopeo inspect --tls-verify=false "docker://${TRACK_IMAGE_MUTABLE}" --format '{{.Digest}}' 2>/dev/null     || kubectl -n "$NAMESPACE" get deploy stock-gex-service -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*@//' )"
-  TRACK_IMAGE="${TRACK_IMAGE_MUTABLE%%:*}@${TRACK_DIGEST}"
-  case "$TRACK_DIGEST" in
-    sha256:*)
-      TRACK_JOB="stock-gex-flip-track-$(date -u +%Y%m%d-%H%M%S)"
-      sed -e "s|__IMAGE__|${TRACK_IMAGE}|g" -e "s|__JOB_NAME__|${TRACK_JOB}|g"         "k8s/jobs/stock-gex-flip-track-job.yaml" | kubectl -n "$NAMESPACE" create -f -         && echo "flip-track Job created: $TRACK_JOB"         || echo "WARNING: flip-track Job could not be created — self-healing covers it tomorrow"
-      # Bounded wait for the receipt; a slow run is left to finish on its own.
-      if kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$TRACK_JOB" --timeout=180s >/dev/null 2>&1; then
-        kubectl -n "$NAMESPACE" logs "job/$TRACK_JOB" 2>/dev/null | grep "^flip-track" || true
-      else
-        echo "WARNING: flip-track Job not complete after 180s — check job/$TRACK_JOB; tomorrow's run heals any gap"
-      fi
-      ;;
-    *) echo "WARNING: could not resolve a digest for ${TRACK_IMAGE_MUTABLE} — flip-track skipped tonight" ;;
-  esac
-else
-  echo "WARNING: image-tags/${ENVIRONMENT}.yaml has no stock-gex-service entry — flip-track skipped tonight"
-fi
+run_flip_track
 
 # --- 6. prune old TERMINAL Jobs (best-effort, never blocks) ------------------------------
 # Nothing else prunes them: there is no CronJob history limit here.
