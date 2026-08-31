@@ -176,6 +176,10 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 5
             failureThreshold: 6
+          name: feed-gateway
+          ports:
+            - containerPort: 18091
+              name: http
           readinessProbe:
             httpGet:
               path: /health
