@@ -105,6 +105,16 @@ JOB_LABEL="app.kubernetes.io/name=stock-gex-close-batch"
 # session and rebuild are the only parameters that identify a run, which is what makes a
 # failed night RESUME rather than start again beside itself.
 REBUILD="${REBUILD:-0}"
+# The batch types `rebuild` as a Long, and Spring REFUSES "false" with a conversion error after
+# the pod has already been scheduled — a whole attempt burned on a spelling. Humans (and one
+# assistant, 2026-09-01, at one in the morning) type booleans here, so booleans are accepted
+# and normalised; anything else that is not 0/1 stops NOW, in this log, with the fix named.
+case "$REBUILD" in
+  true|TRUE|True) REBUILD=1 ;;
+  false|FALSE|False) REBUILD=0 ;;
+  0|1) : ;;
+  *) fatal "REBUILD must be 0 or 1 (or true/false), got '$REBUILD' — the batch types it as a Long" ;;
+esac
 RUN_SOURCE="${RUN_SOURCE:-cron}"
 DEPLOYER="system:serviceaccount:options-edge:jenkins-deployer"
 JOB_NAME=""
