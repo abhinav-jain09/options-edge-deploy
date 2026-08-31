@@ -486,6 +486,32 @@ EOF
 echo "OK: closing board published for $SESSION — ${ROOTS:-?} roots"
 SUCCESS=true
 
+# --- 5b. capture the evening's Near Flip lists (internal tracking) -----------------------
+# AFTER promotion, BEFORE pruning, and NEVER fatal to the publication above: the board is
+# already out; a tracking miss is a gap the CLI's self-healing fills tomorrow, not a reason
+# to alert the desk that the close failed. The image is the stock-gex service's own (the CLI
+# ships in the same package), pinned the same way.
+TRACK_IMAGE_MUTABLE="$(yq -er '.images."stock-gex-service"' "image-tags/${ENVIRONMENT}.yaml" 2>/dev/null || true)"
+if [ -n "$TRACK_IMAGE_MUTABLE" ] && [ "$TRACK_IMAGE_MUTABLE" != "null" ]; then
+  TRACK_DIGEST="$(skopeo inspect --tls-verify=false "docker://${TRACK_IMAGE_MUTABLE}" --format '{{.Digest}}' 2>/dev/null     || kubectl -n "$NAMESPACE" get deploy stock-gex-service -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*@//' )"
+  TRACK_IMAGE="${TRACK_IMAGE_MUTABLE%%:*}@${TRACK_DIGEST}"
+  case "$TRACK_DIGEST" in
+    sha256:*)
+      TRACK_JOB="stock-gex-flip-track-$(date -u +%Y%m%d-%H%M%S)"
+      sed -e "s|__IMAGE__|${TRACK_IMAGE}|g" -e "s|__JOB_NAME__|${TRACK_JOB}|g"         "k8s/jobs/stock-gex-flip-track-job.yaml" | kubectl -n "$NAMESPACE" create -f -         && echo "flip-track Job created: $TRACK_JOB"         || echo "WARNING: flip-track Job could not be created — self-healing covers it tomorrow"
+      # Bounded wait for the receipt; a slow run is left to finish on its own.
+      if kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$TRACK_JOB" --timeout=180s >/dev/null 2>&1; then
+        kubectl -n "$NAMESPACE" logs "job/$TRACK_JOB" 2>/dev/null | grep "^flip-track" || true
+      else
+        echo "WARNING: flip-track Job not complete after 180s — check job/$TRACK_JOB; tomorrow's run heals any gap"
+      fi
+      ;;
+    *) echo "WARNING: could not resolve a digest for ${TRACK_IMAGE_MUTABLE} — flip-track skipped tonight" ;;
+  esac
+else
+  echo "WARNING: image-tags/${ENVIRONMENT}.yaml has no stock-gex-service entry — flip-track skipped tonight"
+fi
+
 # --- 6. prune old TERMINAL Jobs (best-effort, never blocks) ------------------------------
 # Nothing else prunes them: there is no CronJob history limit here.
 TERMINAL="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json 2>/dev/null \
