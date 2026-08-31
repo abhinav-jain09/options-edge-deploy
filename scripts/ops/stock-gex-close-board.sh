@@ -135,7 +135,10 @@ run_flip_track() {
   TRACK_IMAGE_MUTABLE="$(yq -er '.images."stock-gex-service"' "image-tags/${ENVIRONMENT}.yaml" 2>/dev/null || true)"
   if [ -n "$TRACK_IMAGE_MUTABLE" ] && [ "$TRACK_IMAGE_MUTABLE" != "null" ]; then
     TRACK_DIGEST="$(skopeo inspect --tls-verify=false "docker://${TRACK_IMAGE_MUTABLE}" --format '{{.Digest}}' 2>/dev/null     || kubectl -n "$NAMESPACE" get deploy stock-gex-service -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*@//' )"
-    TRACK_IMAGE="${TRACK_IMAGE_MUTABLE%%:*}@${TRACK_DIGEST}"
+    # %:*, NOT %%:*: the registry lives at host:port, so the FIRST colon is the port's — %%
+  # stripped the whole repository path and rendered 192.168.100.252@sha256:..., which the
+  # kubelet read as a docker.io library image and could never pull (caught by proof run #31).
+  TRACK_IMAGE="${TRACK_IMAGE_MUTABLE%:*}@${TRACK_DIGEST}"
     case "$TRACK_DIGEST" in
       sha256:*)
         TRACK_JOB="stock-gex-flip-track-$(date -u +%Y%m%d-%H%M%S)"
