@@ -30,7 +30,11 @@ pipeline {
   }
   options {
     disableConcurrentBuilds()
-    timeout(time: 60, unit: 'MINUTES')
+    // 120 min, not 60: the validate stage alone has been measured at 44+ min when the
+    // agent Mac carries the live trading stack during market hours (same reasoning and
+    // figure as Jenkinsfile.web-service) — 60 aborted build #2 mid-validate at the
+    // Indian open. disableConcurrentBuilds still serialises runs.
+    timeout(time: 120, unit: 'MINUTES')
   }
   environment {
     KUBECONFIG  = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
