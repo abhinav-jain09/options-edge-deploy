@@ -1,0 +1,22 @@
+# STANDALONE nifty-gex overlay — production. Used ONLY by Jenkinsfile.nifty-gex-service.
+# The monolithic prod deploy renders this service via k8s/overlays/production.
+#
+# ⚠ MIRROR RULE: every nifty-gex-targeting patch in k8s/overlays/production/kustomization.yaml
+# MUST be replicated here. scripts/ci/validate-services.sh enforces render equivalence.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # Mirror of the monolith's all-Deployments IfNotPresent + progressDeadlineSeconds
+  # patches, scoped to this service.
+  - target:
+      kind: Deployment
+      name: nifty-gex-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200

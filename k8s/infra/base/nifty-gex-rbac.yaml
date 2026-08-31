@@ -1,0 +1,38 @@
+# nifty-gex token-writeback RBAC. The pressure-boards pod self-renews its 24h Dhan
+# access token (renewal EXPIRES the previous one) and must persist the fresh token into
+# the dhan-credentials Secret, or a pod restart boots with a dead token that cannot
+# renew itself. Scoped to exactly that one Secret; the admission-layer twin of this
+# bound is the carveout in k8s/security/jenkins-only-workload-admission.yaml.
+#
+# The dhan-credentials Secret itself is NOT in git (it is the live token + client id);
+# it is created once per cluster by hand and kept fresh by the pod.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nifty-gex
+  namespace: options-edge
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nifty-gex-dhan-secret-writer
+  namespace: options-edge
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["dhan-credentials"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nifty-gex-dhan-secret-writer
+  namespace: options-edge
+subjects:
+  - kind: ServiceAccount
+    name: nifty-gex
+    namespace: options-edge
+roleRef:
+  kind: Role
+  name: nifty-gex-dhan-secret-writer
+  apiGroup: rbac.authorization.k8s.io

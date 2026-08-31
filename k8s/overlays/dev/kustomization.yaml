@@ -24,7 +24,21 @@ resources:
   # simultaneous cutover (2026-07-28). Same base as production; dev patch overrides
   # broker/profile/image.
   - ../../services/databento-vix-feed/base
+  # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ). Dev renders at replicas 0
+  # (patch below) — one Dhan account token, and prod owns it. MIRRORS
+  # k8s/services/nifty-gex/overlays/dev exactly — validate-services enforces it.
+  - ../../services/nifty-gex/base
 patches:
+  # nifty-gex runs at ZERO replicas on dev (mirror of the standalone slice patch): prod
+  # polls Dhan with the SAME account token; a second poller trips the per-account 429
+  # and a second renewer invalidates prod's token.
+  - target:
+      kind: Deployment
+      name: nifty-gex-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # THE SESSION-SCALE SWING PATH ON DEV. MIRRORS the standalone overlay
   # k8s/services/reversal-confirmation/overlays/dev exactly — validate-services
   # enforces the render equality, and it caught this block's absence.
@@ -596,6 +610,9 @@ patches:
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for every env, so they
   # render and deploy in dev too (exclusions removed). Their dev image remaps are in the images: block.
 images:
+  - name: 192.168.100.252:5000/options-edge-nifty-gex
+    newName: host.docker.internal:5001/options-edge-nifty-gex
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-raw-to-display
     newName: host.docker.internal:5001/options-edge-raw-to-display
   # Both approach services were missing from this map, so their dev deploys resolved the .252

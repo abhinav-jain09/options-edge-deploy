@@ -1,0 +1,21 @@
+# NodePort is PINNED to 30188 in every env: the prod cloudflared path routes
+# (/nifty-gex, /banknifty-gex in infra/prod/cloudflared/options-edge-stable.yml)
+# target it by number, so a Service recreation must not reassign it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nifty-gex-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: nifty-gex-service
+    app.kubernetes.io/component: pressure-boards
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: nifty-gex-service
+  ports:
+    - name: http
+      port: 8188
+      targetPort: 8188
+      nodePort: 30188

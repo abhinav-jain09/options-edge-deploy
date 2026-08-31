@@ -24,6 +24,10 @@ resources:
   # Kyle-style signed-flow response slope (a neutral observability measurement, not a signal).
   # The es4 deployment at k8s/es4/services/ is untouched and keeps the legacy output.
   - ../../services/es-aggressor-flow/base
+  # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ), public via cloudflared path
+  # routes to NodePort 30188. STANDALONE overlay k8s/services/nifty-gex/overlays/production
+  # mirrors the prod patches — sync enforced by validate-services render equivalence.
+  - ../../services/nifty-gex/base
 
 # Prod-only: the node already has the images cached, so re-pulling all ~26 at
 # once on every rollout trips the kubelet image-pull QPS limit ("pull QPS
