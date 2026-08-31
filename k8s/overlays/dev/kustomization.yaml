@@ -177,6 +177,50 @@ patches:
                     memory: 5Gi
   - path: streams-processing-guarantee-dev-patch.yaml
   - path: web-dev-env-patch.yaml
+  # GRACEFUL LIVENESS (2026-08-31) — DEV. The gateway was in a restart loop that its own
+  # recovery caused: rebuilding the state cache across hundreds of partitions makes /health
+  # slow to answer, the probe's 1-SECOND DEFAULT timeout expired three times, and the kubelet
+  # SIGTERMed a service that was working. The log line immediately before every kill was
+  # "state cache caught up; replayed cached state to clients".
+  #
+  # startupProbe        boot may take 10 minutes; liveness does not run until it passes, so slow
+  #                     catch-up can never be mistaken for a hang.
+  # timeoutSeconds 5    a slow answer is not a dead process.
+  # failureThreshold 6  ~2 minutes of consecutive failure before a restart, so one GC pause or
+  #                     one busy moment cannot kill it.
+  #
+  # A genuinely wedged process is still restarted; it just has to actually be wedged.
+  #
+  # Patched HERE and in the standalone dev slice, not in base: base also feeds the PRODUCTION
+  # aggregate while the production slice carries its own probes, so changing base would make the
+  # two production renders disagree and break the mirror rule. Production has the same latent
+  # 1-second timeout and is deliberately left alone — that is a separate, deliberate decision.
+  - target:
+      kind: Deployment
+      name: feed-gateway-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/startupProbe
+        value:
+          httpGet: { path: /health, port: http }
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 60
+      - op: replace
+        path: /spec/template/spec/containers/0/livenessProbe
+        value:
+          httpGet: { path: /health, port: http }
+          periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 6
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe
+        value:
+          httpGet: { path: /health, port: http }
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
   # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
   - path: feed-gateway-dev-env-patch.yaml
