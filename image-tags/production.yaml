@@ -65,3 +65,5 @@ images:
   reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:prod
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:prod
   signal-follower: 192.168.100.252:5000/options-edge-signal-follower:prod
+  # nifty-gex Pressure boards — built from the options-edge-nifty-gex repo on .252 (amd64).
+  nifty-gex-service: 192.168.100.252:5000/options-edge-nifty-gex:prod

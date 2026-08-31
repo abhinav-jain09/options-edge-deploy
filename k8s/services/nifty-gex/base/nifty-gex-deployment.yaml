@@ -1,0 +1,65 @@
+# NIFTY/BANKNIFTY Pressure boards — DhanHQ v2 GEX service (source repo:
+# options-edge-nifty-gex). One pod serves EVERY configured board: the Dhan option-chain
+# limit (1 unique request / 3 s) and quote limit (1 / s) are PER ACCOUNT, so boards
+# round-robin one budget and spot arrives in one batched call.
+#
+# ⚠ replicas MUST stay 1 (0 in dev) and strategy MUST stay Recreate: two pollers on one
+# Dhan account trip 429 "user may be blocked", and two renewers of the same 24h token
+# invalidate each other (renewal EXPIRES the previous token). Never scale this up and
+# never run a second copy (local run.sh included) while a pod is up.
+#
+# The pod self-renews the token and PATCHes it back into the dhan-credentials Secret:
+# ServiceAccount nifty-gex + a Role scoped to that one Secret (common infra, k8s/infra),
+# plus the matching carveout in k8s/security/jenkins-only-workload-admission.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nifty-gex-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: nifty-gex-service
+    app.kubernetes.io/component: pressure-boards
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nifty-gex-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nifty-gex-service
+        app.kubernetes.io/component: pressure-boards
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      serviceAccountName: nifty-gex
+      containers:
+        - name: nifty-gex
+          image: 192.168.100.252:5000/options-edge-nifty-gex:dev
+          ports:
+            - containerPort: 8188
+          envFrom:
+            - secretRef:
+                name: dhan-credentials
+          env:
+            - name: DHAN_GEX_BOARDS
+              value: "nifty-gex:NIFTY:13:IDX_I,banknifty-gex:BANKNIFTY:25:IDX_I"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /index
+              port: 8188
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8188
+            initialDelaySeconds: 10
+            periodSeconds: 30

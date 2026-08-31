@@ -61,3 +61,4 @@ images:
   reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:dev
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:dev
   signal-follower: 192.168.100.252:5000/options-edge-signal-follower:dev
+  nifty-gex-service: host.docker.internal:5001/options-edge-nifty-gex:dev

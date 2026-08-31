@@ -18,4 +18,5 @@ resources:
   - databento-feed-configmap.yaml
   - kafka-streams-state-pvcs.yaml
   - kafka-changelog-cleanup-cronjob.yaml
+  - nifty-gex-rbac.yaml
   - offhours-clean-slate-cronjob.yaml

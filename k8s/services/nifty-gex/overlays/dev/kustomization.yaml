@@ -1,0 +1,37 @@
+# STANDALONE nifty-gex overlay — dev. Used ONLY by Jenkinsfile.nifty-gex-service.
+# The monolithic dev deploy renders this service via k8s/overlays/dev.
+#
+# ⚠ MIRROR RULE: every nifty-gex-targeting patch in k8s/overlays/dev/kustomization.yaml
+# MUST be replicated here (and vice versa) — validate-services enforces it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # Dev runs at ZERO replicas ON PURPOSE (mirror of the monolith patch): prod polls Dhan
+  # with the SAME account token, and a second poller trips the per-account 429 ("user may
+  # be blocked") while a second renewer invalidates prod's token. Scale up only with prod
+  # down or a different account in dev's dhan-credentials.
+  - target:
+      kind: Deployment
+      name: nifty-gex-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  # Dev always re-pulls the freshly-built :dev image (mirror of the monolith's
+  # all-Deployments imagePullPolicy patch, scoped to this service).
+  - target:
+      kind: Deployment
+      name: nifty-gex-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Always
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200
+images:
+  - name: 192.168.100.252:5000/options-edge-nifty-gex
+    newName: host.docker.internal:5001/options-edge-nifty-gex
+    newTag: dev
