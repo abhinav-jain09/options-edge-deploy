@@ -47,6 +47,9 @@ ingress:
     path: ^/nifty-gex(/|$)
     service: http://192.168.100.252:30188
   - hostname: bleadingoptions.com
+    path: ^/banknifty-gex(/|$)
+    service: http://192.168.100.252:30188
+  - hostname: bleadingoptions.com
     service: http://192.168.100.252:8094
   # ⚠️ Hardcoded ClusterIP: it survives pod restarts but NOT a delete+recreate of the Service.
   # If auth.bleadingoptions.com starts 502-ing, re-read it with
