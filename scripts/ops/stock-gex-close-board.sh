@@ -188,8 +188,18 @@ command -v jq >/dev/null 2>&1 || fatal "jq is required"
 # runs on a Mac whose timezone is not the market's, and after 20:00 ET local-date arithmetic in
 # any zone east of it names tomorrow. The date is resolved once, here, and passed explicitly.
 if [ -z "$SESSION" ]; then
-  SESSION="$(TZ=America/New_York date +%Y-%m-%d)"
-  echo "SESSION not given — freezing today in America/New_York: $SESSION"
+  # BEFORE NOON IN NEW YORK, "the session to freeze" means YESTERDAY'S: a run at that hour is
+  # the morning CATCH-UP (see the second cron in the Jenkinsfile), healing a night the evening
+  # chain lost — today's close has not happened and cannot be frozen. `date -v` is BSD; the
+  # agents are Macs. A weekend/holiday result exits as NOT_A_TRADING_DAY below, harmlessly.
+  ET_HOUR="$(TZ=America/New_York date +%H)"
+  if [ "$((10#$ET_HOUR))" -lt 12 ]; then
+    SESSION="$(TZ=America/New_York date -v-1d +%Y-%m-%d)"
+    echo "SESSION not given and it is ${ET_HOUR}:xx in New York — catch-up mode, healing yesterday: $SESSION"
+  else
+    SESSION="$(TZ=America/New_York date +%Y-%m-%d)"
+    echo "SESSION not given — freezing today in America/New_York: $SESSION"
+  fi
 fi
 case "$SESSION" in
   [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
@@ -437,7 +447,11 @@ echo "===== end log ====="
 # The grammars are BOUND TO THE REQUESTED SESSION, not merely well-formed. A CLI regression that
 # froze or skipped a different date would otherwise be reported as this session succeeding —
 # the wrapper would say the day was published and nothing would have been.
-RECEIPT_RE="^STOCK_GEX_CLOSE_BOARD_OK session=${SESSION} oiTradeDate=[0-9]{4}-[0-9]{2}-[0-9]{2} roots=[0-9]+ quotes=[0-9]+$"
+# The BATCH's grammar (oe-close-batch JobExit, since 2026-09-01), not the retired CLI's. The
+# old oiTradeDate/roots/quotes line was the CLI's; the batch never printed it, so every night
+# since the switchover was reported FAILED while the boards published fine — the receipt and
+# this regex must move in lockstep or the chain cries wolf nightly.
+RECEIPT_RE="^STOCK_GEX_CLOSE_BOARD_OK session=${SESSION} generation=[^ ]+ boards=[0-9]+$"
 SKIP_RE="^STOCK_GEX_CLOSE_BOARD_SKIP session=${SESSION} reason=[A-Z_]+$"
 ANY_OUTCOME_RE='^STOCK_GEX_CLOSE_BOARD_(OK|SKIP) '
 RECEIPT="$(grep -E "$RECEIPT_RE" "$LOGS" | tail -1 || true)"
@@ -493,7 +507,7 @@ fi
        Refusing to call this a publish: treat it as a failure and re-run."
 # roots=0 cannot occur (the builder refuses below its coverage floor), but a receipt is only
 # useful if it is READ — parse it so a collapse is visible in the build log and the alert.
-ROOTS="$(printf '%s' "$RECEIPT" | sed -n 's/.* roots=\([0-9]*\) .*/\1/p')"
+ROOTS="$(printf '%s' "$RECEIPT" | sed -n 's/.* boards=\([0-9]*\)$/\1/p')"
 # THE STATE AT PUBLICATION TIME, not at start-up. A service-deploy during the ~10-minute build
 # can move the image (the freeze then used arithmetic the running service does not have) or the
 # node (the boards were written where the current pod cannot read them). Both are silent.

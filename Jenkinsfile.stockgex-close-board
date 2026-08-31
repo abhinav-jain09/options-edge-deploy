@@ -67,7 +67,14 @@ pipeline {
     // 16:10 ET, weekdays. The job WAITS for vendor availability (see the header), so this only
     // has to be after the bell and far enough before the 20:30 ET off-hours scale-down that a
     // long wait still finishes.
-    cron('TZ=America/New_York\n10 16 * * 1-5')
+    // TWO firings. 16:10 ET is the evening freeze. 01:00 ET Tue-Sat is the CATCH-UP: the
+    // wrapper sees a before-noon clock and targets YESTERDAY's session, and the batch's
+    // restartable JobInstance makes a night that already published an instant no-op receipt
+    // while a night that failed all its evening retries (vendor down for hours, an agent
+    // outage) is healed before anyone wakes. 2026-08-31 was that night, minus the healing:
+    // the vendor 504'd every evening attempt and the board waited for a HUMAN. Never again —
+    // the owner's words.
+    cron('TZ=America/New_York\n10 16 * * 1-5\n0 1 * * 2-6')
   }
   options {
     // Not for correctness — two runs produce two generations and the later promote simply wins —
