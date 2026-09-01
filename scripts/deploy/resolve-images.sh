@@ -19,6 +19,7 @@ DATABENTO_VOLUME_AGGREGATOR_IMAGE=$registry/options-edge-databento-volume-aggreg
 DATABENTO_FEED_IMAGE=$registry/options-edge-databento-feed:$image_tag
 DATABENTO_SR3_FEED_IMAGE=$registry/options-edge-databento-sr3-feed:$image_tag
 DATABENTO_GEX_IMAGE=$registry/options-edge-databento-gex:$image_tag
+NIFTY_GEX_IMAGE=$registry/options-edge-nifty-gex:$image_tag
 OPTION_PRICE_BEHAVIOR_IMAGE=$registry/options-edge-option-price-behavior:$image_tag
 DATABENTO_MISSION_SANDWICH_IMAGE=$registry/options-edge-databento-mission-sandwich:$image_tag
 VOLUME_PACE_IMAGE=$registry/options-edge-volume-pace:$image_tag
@@ -81,6 +82,7 @@ EOF
             if [ "${ENVIRONMENT:-dev}" = "dev" ] || [ "${ENVIRONMENT:-dev}" = "production" ]; then
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$registry/options-edge-short-premium-agent:$image_tag
+ES_AGGRESSOR_FLOW_IMAGE=$registry/options-edge-es-aggressor-flow:$image_tag
 SIGNAL_FOLLOWER_IMAGE=$registry/options-edge-signal-follower:$image_tag
 CONTEXT_TAPE_IMAGE=$registry/options-edge-context-tape:$image_tag
 MULTILEG_STRUCTURE_IMAGE=$registry/options-edge-multileg-structure:$image_tag
@@ -94,6 +96,7 @@ DATABENTO_VOLUME_AGGREGATOR_IMAGE=$DATABENTO_VOLUME_AGGREGATOR_IMAGE
 DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
 DATABENTO_SR3_FEED_IMAGE=$DATABENTO_SR3_FEED_IMAGE
 DATABENTO_GEX_IMAGE=$DATABENTO_GEX_IMAGE
+NIFTY_GEX_IMAGE=$NIFTY_GEX_IMAGE
 OPTION_PRICE_BEHAVIOR_IMAGE=$OPTION_PRICE_BEHAVIOR_IMAGE
 DATABENTO_MISSION_SANDWICH_IMAGE=$DATABENTO_MISSION_SANDWICH_IMAGE
 VOLUME_PACE_IMAGE=$VOLUME_PACE_IMAGE
@@ -154,6 +157,7 @@ EOF
             if [ "${ENVIRONMENT:-dev}" = "production" ]; then
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$SHORT_PREMIUM_AGENT_IMAGE
+ES_AGGRESSOR_FLOW_IMAGE=$ES_AGGRESSOR_FLOW_IMAGE
 SIGNAL_FOLLOWER_IMAGE=$SIGNAL_FOLLOWER_IMAGE
 CONTEXT_TAPE_IMAGE=$CONTEXT_TAPE_IMAGE
 MULTILEG_STRUCTURE_IMAGE=$MULTILEG_STRUCTURE_IMAGE

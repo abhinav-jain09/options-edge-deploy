@@ -22,6 +22,7 @@ pipeline {
     string(name: 'DATABENTO_FEED_IMAGE', defaultValue: '', description: 'Databento feed image')
     string(name: 'DATABENTO_SR3_FEED_IMAGE', defaultValue: '', description: 'Databento SR3 forward-rate feed image')
     string(name: 'DATABENTO_GEX_IMAGE', defaultValue: '', description: 'Databento per-strike GEX image')
+    string(name: 'NIFTY_GEX_IMAGE', defaultValue: '', description: 'NIFTY/BANKNIFTY Pressure boards image')
     string(name: 'DATABENTO_MAXPAIN_IMAGE', defaultValue: '', description: 'Databento per-(symbol,expiry) max-pain image')
     string(name: 'OPTION_PRICE_BEHAVIOR_IMAGE', defaultValue: '', description: 'Option Price Behavior image')
     string(name: 'DATABENTO_MISSION_SANDWICH_IMAGE', defaultValue: '', description: 'Databento mission sandwich image')
@@ -68,6 +69,7 @@ pipeline {
     string(name: 'GEX_DELTA_REDIS_WRITER_IMAGE', defaultValue: '', description: 'GEX delta Redis writer image')
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
     string(name: 'SHORT_PREMIUM_AGENT_IMAGE', defaultValue: '', description: 'short-premium-agent image (dev+prod)')
+    string(name: 'ES_AGGRESSOR_FLOW_IMAGE', defaultValue: '', description: 'ES aggressor-flow slope image (prod-only)')
     string(name: 'SIGNAL_FOLLOWER_IMAGE', defaultValue: '', description: 'signal-follower image (dev+prod)')
     string(name: 'CONTEXT_TAPE_IMAGE', defaultValue: '', description: 'context-tape service image (dev+prod)')
     string(name: 'MULTILEG_STRUCTURE_IMAGE', defaultValue: '', description: 'multileg-structure service image (dev+prod)')
@@ -397,6 +399,7 @@ pipeline {
             'RAW_TO_DISPLAY_IMAGE': 'raw-to-display', 'WEB_IMAGE': 'web',
             'DATABENTO_VOLUME_AGGREGATOR_IMAGE': 'databento-volume-aggregator', 'DATABENTO_FEED_IMAGE': 'databento-feed',
             'DATABENTO_GEX_IMAGE': 'databento-gex', 'DATABENTO_MAXPAIN_IMAGE': 'databento-maxpain',
+            'NIFTY_GEX_IMAGE': 'nifty-gex',
             'OPTION_PRICE_BEHAVIOR_IMAGE': 'option-price-behavior', 'DATABENTO_MISSION_SANDWICH_IMAGE': 'databento-mission-sandwich',
             'VOLUME_PACE_IMAGE': 'volume-pace', 'DIRECTIONAL_PRESSURE_IMAGE': 'directional-pressure',
             'DATABENTO_GEX_HISTORY_IMAGE': 'databento-gex-history', 'RAW_POSTGRES_WRITER_IMAGE': 'raw-postgres-writer',
@@ -430,6 +433,7 @@ pipeline {
             // image default so resolve-images.sh branch-2 (promoted prod) can pin it. resolve-images
             // itself guards emission to dev+production, so experiment never references it.
             'SHORT_PREMIUM_AGENT_IMAGE': 'short-premium-agent',
+            'ES_AGGRESSOR_FLOW_IMAGE': 'es-aggressor-flow',
             // signal-follower: same dev+prod standalone pattern as short-premium-agent.
             'SIGNAL_FOLLOWER_IMAGE': 'signal-follower',
             // context-tape: same dev+prod standalone pattern as short-premium-agent.
@@ -817,7 +821,7 @@ void promoteToProduction() {
     ] + [
       // Image refs are uniform pass-throughs — build them programmatically so this method stays
       // under the Groovy CPS 64KB bytecode limit ("Method too large"). Add new services here.
-      'RAW_TO_DISPLAY_IMAGE', 'WEB_IMAGE', 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', 'DATABENTO_GEX_IMAGE',
+      'RAW_TO_DISPLAY_IMAGE', 'WEB_IMAGE', 'DATABENTO_VOLUME_AGGREGATOR_IMAGE', 'DATABENTO_GEX_IMAGE', 'NIFTY_GEX_IMAGE',
       'DATABENTO_MAXPAIN_IMAGE', 'OPTION_PRICE_BEHAVIOR_IMAGE', 'DATABENTO_MISSION_SANDWICH_IMAGE',
       'VOLUME_PACE_IMAGE', 'DIRECTIONAL_PRESSURE_IMAGE', 'DATABENTO_GEX_HISTORY_IMAGE', 'GAMMA_MIGRATION_IMAGE',
       'RAW_POSTGRES_WRITER_IMAGE', 'PRESSURE_POSTGRES_WRITER_IMAGE', 'PIN_POSTGRES_WRITER_IMAGE',
@@ -826,7 +830,7 @@ void promoteToProduction() {
       'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'OPTION_TRUTH_ENGINE_IMAGE', 'MARKET_CARRY_IMAGE', 'ES_SPX_ALIGN_IMAGE', 'DATABENTO_SR3_FEED_IMAGE', 'VIX_OPTION_INTELIGENCE_IMAGE', 'GREEK_MOVE_AUTHENTICITY_IMAGE', 'STRIKE_INVASION_IMAGE',
       'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE', 'CORRIDOR_GAUGE_IMAGE',
       'ES_OPEN_DIRECTION_IMAGE', 'ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE', 'CLOSE_DIRECTION_IMAGE', 'SPOT_VOL_REGIME_IMAGE', 'VOL_PREMIUM_IMAGE', 'OI_SHADOW_IMAGE', 'REVERSAL_POSTGRES_WRITER_IMAGE', 'STRIKE_FLOW_AVRO_ADAPTER_IMAGE',
-      'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',
+      'GEX_DELTA_REDIS_WRITER_IMAGE', 'IBKR_FEED_IMAGE', 'SHORT_PREMIUM_AGENT_IMAGE', 'ES_AGGRESSOR_FLOW_IMAGE', 'SIGNAL_FOLLOWER_IMAGE',
       'CONTEXT_TAPE_IMAGE', 'MULTILEG_STRUCTURE_IMAGE',
     ].collect { _n -> string(name: _n, value: params[_n]) } + [
       string(name: 'DATABENTO_API_KEY_CREDENTIAL_ID', value: params.DATABENTO_API_KEY_CREDENTIAL_ID),
