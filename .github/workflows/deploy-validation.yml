@@ -93,6 +93,12 @@ jobs:
       # The es4 topic contract: topics.env is the single source of truth for the es4 broker, and
       # these two modules are what hold it to that. Both were among the uncollectable files above,
       # so neither had ever run here.
+      # The close chain's session arithmetic, and the rule that no shell script may do date
+      # arithmetic at all: `date -v` (BSD) vs `date -d` (GNU) is decided by the agent's PATH, and
+      # that bet cost the 2026-09-01 morning catch-up its entire run.
+      - name: Close-board session resolution + shell date-portability guard
+        run: python3 -m unittest -v tests.test_close_board_session_resolution
+
       - name: es4 topic SSOT + partition contract
         run: python3 -m unittest -v tests.test_es4_topics_ssot tests.test_es4_topic_partition_contract tests.test_remove_retired_workloads
 

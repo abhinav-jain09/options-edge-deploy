@@ -154,9 +154,5 @@ spec:
               name: kafka-streams-state
       volumes:
         - name: kafka-streams-state
-          # Mirrors k8s/base: emptyDir dies with the pod, so every restart rebuilt the
-          # Streams stores from the changelogs. #940 fixed the monolithic overlay and
-          # left the standalone one behind, which the mirror rule blocks — and it
-          # blocks EVERY service's deploy, not just this one.
           persistentVolumeClaim:
             claimName: option-price-behavior-service-streams-state

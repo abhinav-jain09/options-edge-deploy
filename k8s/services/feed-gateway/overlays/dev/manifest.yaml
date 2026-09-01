@@ -148,50 +148,36 @@ spec:
                 name: options-edge-runtime-secrets
           image: host.docker.internal:5001/options-edge-feed-gateway:dev
           imagePullPolicy: Always
-          # GRACEFUL LIVENESS (2026-08-31). The gateway was in a restart loop that its own
-          # recovery caused: rebuilding the state cache across hundreds of partitions makes
-          # /health slow to answer, the probe's 1-SECOND default timeout expired three times,
-          # and the kubelet SIGTERMed a service that was working — the log line immediately
-          # before each kill was "state cache caught up; replayed cached state to clients".
-          #
-          # Three changes, each doing one job:
-          #   startupProbe  - boot may take up to 10 minutes; liveness does not run until it
-          #                   passes, so slow catch-up can never be mistaken for a hang.
-          #   timeoutSeconds - 5s, not the 1s default. A slow answer is not a dead process.
-          #   failureThreshold - liveness needs 6 consecutive failures (~2 min) before a
-          #                   restart, so one GC pause or one busy moment cannot kill it.
-          #
-          # A genuinely wedged process is still restarted; it just has to actually be wedged.
-          startupProbe:
-            httpGet:
-              path: /health
-              port: http
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 60
           livenessProbe:
+            failureThreshold: 6
             httpGet:
               path: /health
               port: http
             periodSeconds: 20
             timeoutSeconds: 5
-            failureThreshold: 6
           name: feed-gateway
           ports:
             - containerPort: 18091
               name: http
           readinessProbe:
+            failureThreshold: 3
             httpGet:
               path: /health
               port: http
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 3
           resources:
             limits:
               memory: 4Gi
             requests:
               cpu: 100m
               memory: 512Mi
+          startupProbe:
+            failureThreshold: 60
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
       dnsPolicy: ClusterFirstWithHostNet
       hostNetwork: true

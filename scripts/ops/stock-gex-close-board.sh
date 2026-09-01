@@ -226,14 +226,21 @@ command -v jq >/dev/null 2>&1 || fatal "jq is required"
 if [ -z "$SESSION" ]; then
   # BEFORE NOON IN NEW YORK, "the session to freeze" means YESTERDAY'S: a run at that hour is
   # the morning CATCH-UP (see the second cron in the Jenkinsfile), healing a night the evening
-  # chain lost — today's close has not happened and cannot be frozen. `date -v` is BSD; the
-  # agents are Macs. A weekend/holiday result exits as NOT_A_TRADING_DAY below, harmlessly.
-  ET_HOUR="$(TZ=America/New_York date +%H)"
+  # chain lost — today's close has not happened and cannot be frozen. A weekend/holiday result
+  # exits as NOT_A_TRADING_DAY below, harmlessly.
+  #
+  # BOTH the hour and the date come from et_session.py, NOT from `date`: this was `date -v-1d`,
+  # the BSD spelling, and the agent's PATH resolves `date` to GNU coreutils, where that flag is
+  # an error. It cost the 2026-09-01 morning catch-up (build #33, dead in one second on
+  # "date: invalid option -- 'v'"). Shell has no portable "yesterday"; python3 does, and the
+  # wrapper already requires it.
+  ET_FIELDS="$(python3 scripts/ops/et_session.py)" \
+    || fatal "could not resolve the New York session date (scripts/ops/et_session.py)"
+  ET_HOUR="${ET_FIELDS%% *}"
+  SESSION="${ET_FIELDS##* }"
   if [ "$((10#$ET_HOUR))" -lt 12 ]; then
-    SESSION="$(TZ=America/New_York date -v-1d +%Y-%m-%d)"
     echo "SESSION not given and it is ${ET_HOUR}:xx in New York — catch-up mode, healing yesterday: $SESSION"
   else
-    SESSION="$(TZ=America/New_York date +%Y-%m-%d)"
     echo "SESSION not given — freezing today in America/New_York: $SESSION"
   fi
 fi

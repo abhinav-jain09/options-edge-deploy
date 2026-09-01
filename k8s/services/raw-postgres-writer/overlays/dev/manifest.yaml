@@ -58,21 +58,14 @@ spec:
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
-        - envFrom:
+        - env:
+            - name: KAFKA_RAW_TOPIC
+              value: options.databento.raw
+          envFrom:
             - configMapRef:
                 name: options-edge-config
             - secretRef:
                 name: options-edge-runtime-secrets
-          env:
-            # DEV: persist the feed's LIVE-captured settled OI into Postgres. The shared options-edge-config
-            # points this writer at options.ibkr.raw, which does NOT carry the feed's OI — so board() (the
-            # pre-open OI source, source=DATABENTO) stayed empty until the ~07:00 historical fetch, and
-            # pre-open GEX had no OI at 06:30. The feed publishes its 06:30 live-OI capture to
-            # options.databento.raw (source=DATABENTO); reading THAT here lands the settled OI in
-            # databento_option_raw_snapshot so board() serves it seconds after 06:30. env overrides envFrom
-            # for the same key. Dev-only; prod overlay unchanged. (2026-08-26)
-            - name: KAFKA_RAW_TOPIC
-              value: options.databento.raw
           image: host.docker.internal:5001/options-edge-raw-postgres-writer:dev
           imagePullPolicy: Always
           livenessProbe:

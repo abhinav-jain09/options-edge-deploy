@@ -276,12 +276,19 @@
               effective_raw_topic="options.databento.raw"
             fi
           fi
+          # python3, not `date`: the "+1 day" spelling here is GNU-only, and whether a Mac agent's
+          # PATH resolves `date` to GNU coreutils or to BSD /bin/date is not something this script
+          # gets to assume — under BSD the loop condition errors, the loop never runs, and a
+          # SATURDAY silently becomes the default expiry. (Same class as the close-board catch-up
+          # failure of 2026-09-01; see scripts/ops/et_session.py.)
           default_weekday_expiry() {
-            value="$(date +%Y%m%d)"
-            while [ "$(date -d "$value" +%u)" -gt 5 ]; do
-              value="$(date -d "$value +1 day" +%Y%m%d)"
-            done
-            printf '%s\n' "$value"
+            python3 - <<'EXPIRY_PY'
+import datetime
+d = datetime.date.today()
+while d.weekday() > 4:          # 5 = Saturday, 6 = Sunday
+    d += datetime.timedelta(days=1)
+print(d.strftime("%Y%m%d"))
+EXPIRY_PY
           }
           # IB_EXPIRY drives the web + gateway option-chain default selection; it MUST match the date the
           # Databento feed actually publishes (RESOLVED_DATABENTO_EXPIRY, the data-aware single source of

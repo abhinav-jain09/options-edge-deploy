@@ -64,12 +64,6 @@ spec:
               value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
-            # Pre-market LIVE OI (ported from dev 2026-09-01, dev PR #927 era): while OPRA is closed,
-            # drain the OI-aware statistics replay and publish the settled OI to options.databento.raw so
-            # pre-open GEX prices with LIVE OI at ~06:30 instead of waiting for the ~07:00+ historical
-            # edge. Without this, prod's only OI source was the gex-service historical fetch, which 422s
-            # until Databento publishes the day's stats — the recurring "no OI baseline / OI_MISSING at
-            # 08:20" mornings on prod. Paired with the raw-postgres-writer KAFKA_RAW_TOPIC repoint.
             - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED
               value: "true"
             - name: ES_SPX_BASIS_CLOSE_PRINCIPALS

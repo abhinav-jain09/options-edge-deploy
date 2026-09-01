@@ -50,14 +50,12 @@ spec:
     spec:
       containers:
         - env:
-            # R11 other-board sidecar: reads ES4's own strike-history (cross-cluster).
-            # Read RAW in code (KafkaSettings.value, not topicValue) — opaque foreign names.
             - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_BOOTSTRAP
-              value: "192.168.100.4:9092"
+              value: 192.168.100.4:9092
             - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_TOPIC
-              value: "es.options.databento.gex.strike.history"
+              value: es.options.databento.gex.strike.history
             - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_SYMBOL
-              value: "ES"
+              value: ES
             - name: KAFKA_GAMMA_MIGRATION_INPUT_TOPIC
               value: options.databento.gex.strike
             - name: KAFKA_GAMMA_MIGRATION_OUTPUT_TOPIC

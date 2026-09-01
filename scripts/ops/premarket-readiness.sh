@@ -215,7 +215,11 @@ fi
 if have curl; then
   REMOTE_DATE=$(curl -sI --max-time 8 https://www.cloudflare.com 2>/dev/null | grep -i '^date:' | head -1 | cut -d' ' -f2-)
   if [ -n "$REMOTE_DATE" ]; then
-    REMOTE_EPOCH=$(date -d "$REMOTE_DATE" +%s 2>/dev/null || echo "")
+    # python3, not `date -d`: that spelling is GNU-only, and the `|| echo ""` below it turned an
+    # unparseable header into a SILENTLY SKIPPED check — on a host whose `date` is BSD the clock
+    # skew that caused the 2026-06-26 stale-freeze incident would never have been reported at all.
+    REMOTE_EPOCH=$(python3 -c 'import sys,email.utils; print(int(email.utils.parsedate_to_datetime(sys.argv[1]).timestamp()))' "$REMOTE_DATE" 2>/dev/null || echo "")
+    [ -n "$REMOTE_EPOCH" ] || warn "could not parse the upstream Date header — clock-skew check SKIPPED, not passed"
     if [ -n "$REMOTE_EPOCH" ]; then
       SKEW=$(( $(date +%s) - REMOTE_EPOCH )); SKEW=${SKEW#-}
       if [ "$SKEW" -le "$CLOCK_SKEW_MAX_S" ]; then ok "clock skew ${SKEW}s (<= ${CLOCK_SKEW_MAX_S}s)"
