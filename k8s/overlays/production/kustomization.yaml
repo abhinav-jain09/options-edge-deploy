@@ -621,6 +621,7 @@ patches:
   # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
   # MUST MIRROR the standalone slice k8s/services/databento-feed/overlays/production (validate-services).
   - path: databento-feed-prod-patch.yaml
+  - path: raw-postgres-writer-prod-env-patch.yaml
   # PROD-ONLY: es-spx-align basis source -> underlying.es.price (DBP-R32 gap fix; the trades
   # topic arrives unenriched from the es4 bridge, the feed's locally-computed basis lands on
   # the ES price topic). DEPLOY ORDER: databento-feed (ES_PRICE_ENABLED patch above) FIRST,
