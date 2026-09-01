@@ -73,6 +73,17 @@ ES_ENV = {
         # NO control-topic entry here on purpose (PR #734): TOPIC_PREFIX=es. (es4-common-env)
         # prefixes the control-topic default at runtime — an explicit value would double-prefix.
     ],
+    "gamma-migration": [
+        # R11 other-board sidecar: each cluster reads the OTHER's own strike-history. The prod
+        # slice points at es4, so es4's inverse values must win explicitly. These are read RAW
+        # in code (KafkaSettings.value, not topicValue) precisely so TOPIC_PREFIX can never
+        # rewrite a foreign cluster's names — the prod topic stays unprefixed on purpose.
+        {"name": "KAFKA_GAMMA_MIGRATION_OTHER_BOARD_BOOTSTRAP",
+         "value": "192.168.100.252:9092", "_override": True},
+        {"name": "KAFKA_GAMMA_MIGRATION_OTHER_BOARD_TOPIC",
+         "value": "options.databento.gex.strike.history", "_override": True},
+        {"name": "KAFKA_GAMMA_MIGRATION_OTHER_BOARD_SYMBOL", "value": "SPX", "_override": True},
+    ],
     "context-tape": [
         # es4 has NO underlying.spx.index.price — its spot stream is underlying.spx.price
         # (prefixed to es.underlying.spx.price by TOPIC_PREFIX at runtime, like every
