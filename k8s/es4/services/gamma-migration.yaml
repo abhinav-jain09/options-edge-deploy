@@ -40,6 +40,12 @@ spec:
     spec:
       containers:
       - env:
+        - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_BOOTSTRAP
+          value: 192.168.100.252:9092
+        - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_TOPIC
+          value: options.databento.gex.strike.history
+        - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_SYMBOL
+          value: SPX
         - name: KAFKA_GAMMA_MIGRATION_INPUT_TOPIC
           value: options.databento.gex.strike
         - name: KAFKA_GAMMA_MIGRATION_OUTPUT_TOPIC
@@ -78,12 +84,6 @@ spec:
           value: '4'
         - name: KAFKA_GAMMA_MIGRATION_NUM_THREADS
           value: '1'
-        - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_BOOTSTRAP
-          value: 192.168.100.252:9092
-        - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_TOPIC
-          value: options.databento.gex.strike.history
-        - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_SYMBOL
-          value: SPX
         envFrom:
         - configMapRef:
             name: es4-base-env
