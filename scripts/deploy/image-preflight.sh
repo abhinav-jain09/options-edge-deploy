@@ -9,6 +9,7 @@
             DATABENTO_FEED_IMAGE=$DATABENTO_FEED_IMAGE
             DATABENTO_SR3_FEED_IMAGE=$DATABENTO_SR3_FEED_IMAGE
             DATABENTO_GEX_IMAGE=$DATABENTO_GEX_IMAGE
+            NIFTY_GEX_IMAGE=$NIFTY_GEX_IMAGE
             OPTION_PRICE_BEHAVIOR_IMAGE=$OPTION_PRICE_BEHAVIOR_IMAGE
             DATABENTO_MISSION_SANDWICH_IMAGE=$DATABENTO_MISSION_SANDWICH_IMAGE
             VOLUME_PACE_IMAGE=$VOLUME_PACE_IMAGE
@@ -88,6 +89,14 @@
             SIGNAL_FOLLOWER_IMAGE=${SIGNAL_FOLLOWER_IMAGE:-}
             CONTEXT_TAPE_IMAGE=${CONTEXT_TAPE_IMAGE:-}
             MULTILEG_STRUCTURE_IMAGE=${MULTILEG_STRUCTURE_IMAGE:-}
+            "
+          fi
+
+          # es-aggressor-flow renders ONLY in production (slope measurement; dev is SPX-only
+          # with no ES feed) — preflight it only for a production all-deploy.
+          if [ "${ENVIRONMENT:-dev}" = "production" ] && [ "${DEPLOY_TARGET:-all}" = "all" ]; then
+            images="$images
+            ES_AGGRESSOR_FLOW_IMAGE=${ES_AGGRESSOR_FLOW_IMAGE:-}
             "
           fi
 

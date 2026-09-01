@@ -161,7 +161,7 @@
             RAW_TO_DISPLAY_IMAGE SPX_MISSION_CONTROL_IMAGE STRIKE_FLOW_CLASSIFIER_IMAGE WEB_IMAGE \
             VOLUME_PACE_IMAGE DATABENTO_GEX_HISTORY_IMAGE GAMMA_MIGRATION_IMAGE \
             DELTA_FLOW_IMAGE DEALER_LEDGER_IMAGE DEALER_LEDGER_CALIBRATION_IMAGE STRIKE_LIQUIDITY_HEATMAP_IMAGE UNIFIED_SR_IMAGE STRIKE_INTELLIGENCE_IMAGE OPTION_TRUTH_ENGINE_IMAGE MARKET_CARRY_IMAGE ES_SPX_ALIGN_IMAGE DATABENTO_SR3_FEED_IMAGE VIX_OPTION_INTELIGENCE_IMAGE STRIKE_FLOW_AVRO_ADAPTER_IMAGE GEX_DELTA_REDIS_WRITER_IMAGE DATABENTO_MAXPAIN_IMAGE \
-            STRIKE_INVASION_IMAGE INVASION_POSTGRES_WRITER_IMAGE SPREAD_SKEW_IMAGE SPREAD_SKEW_POSTGRES_WRITER_IMAGE REVERSAL_CONFIRMATION_IMAGE CORRIDOR_GAUGE_IMAGE ES_OPEN_DIRECTION_IMAGE ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE CLOSE_DIRECTION_IMAGE SPOT_VOL_REGIME_IMAGE VOL_PREMIUM_IMAGE INDICATOR_SERVICE_IMAGE STOCK_GEX_IMAGE DROP_CLASSIFIER_IMAGE OI_SHADOW_IMAGE REVERSAL_POSTGRES_WRITER_IMAGE GREEK_MOVE_AUTHENTICITY_IMAGE; do
+            STRIKE_INVASION_IMAGE INVASION_POSTGRES_WRITER_IMAGE SPREAD_SKEW_IMAGE SPREAD_SKEW_POSTGRES_WRITER_IMAGE REVERSAL_CONFIRMATION_IMAGE CORRIDOR_GAUGE_IMAGE ES_OPEN_DIRECTION_IMAGE ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE CLOSE_DIRECTION_IMAGE SPOT_VOL_REGIME_IMAGE VOL_PREMIUM_IMAGE INDICATOR_SERVICE_IMAGE STOCK_GEX_IMAGE DROP_CLASSIFIER_IMAGE OI_SHADOW_IMAGE REVERSAL_POSTGRES_WRITER_IMAGE GREEK_MOVE_AUTHENTICITY_IMAGE NIFTY_GEX_IMAGE; do
             _pinned="$(pin_ref "${!_img_var}")" || {
               echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
               exit 1
@@ -194,6 +194,23 @@
           fi
           if [ "${ENVIRONMENT}" = "dev" ] || [ "${ENVIRONMENT}" = "production" ]; then
             for _img_var in SHORT_PREMIUM_AGENT_IMAGE SIGNAL_FOLLOWER_IMAGE CONTEXT_TAPE_IMAGE MULTILEG_STRUCTURE_IMAGE; do
+              _pinned="$(pin_ref "${!_img_var}")" || {
+                echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
+                exit 1
+              }
+              printf -v "$_img_var" '%s' "$_pinned"
+              _repo="${_pinned%@*}"; _repo="${_repo%:*}"; _pdigest="${_pinned#*@}"; _pbase="${_repo##*/}"
+              _pname="$_base_registry/$_pbase"
+              _pname="$_pname" _pnewname="$_repo" _pdigest="$_pdigest" \
+                yq -i '.images += [{"name": strenv(_pname), "newName": strenv(_pnewname), "digest": strenv(_pdigest)}]' "$_overlay_kustomization"
+              echo "pinned ${_img_var} -> ${_pinned}"
+            done
+          fi
+          # PROD-ONLY images (render only in k8s/overlays/production; the dev registry never
+          # carries them, so pinning on dev/experiment would fail closed for an image that is
+          # never deployed there). es-aggressor-flow: slope measurement, prod-only by design.
+          if [ "${ENVIRONMENT}" = "production" ]; then
+            for _img_var in ES_AGGRESSOR_FLOW_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1
@@ -327,6 +344,7 @@ EOF
           kubectl -n options-edge set image deployment/databento-vix-feed databento-vix-feed="$DATABENTO_FEED_IMAGE"
           kubectl -n options-edge set image deployment/databento-volume-aggregator databento-volume-aggregator="$DATABENTO_VOLUME_AGGREGATOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-gex-service databento-gex="$DATABENTO_GEX_IMAGE"
+          kubectl -n options-edge set image deployment/nifty-gex-service nifty-gex="$NIFTY_GEX_IMAGE"
           kubectl -n options-edge set image deployment/option-price-behavior-service option-price-behavior="$OPTION_PRICE_BEHAVIOR_IMAGE"
           kubectl -n options-edge set image deployment/databento-mission-sandwich-service databento-mission-sandwich="$DATABENTO_MISSION_SANDWICH_IMAGE"
           kubectl -n options-edge set image deployment/volume-pace-databento-service volume-pace="$VOLUME_PACE_IMAGE"
