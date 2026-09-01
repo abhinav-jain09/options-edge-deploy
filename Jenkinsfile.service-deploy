@@ -47,6 +47,13 @@ pipeline {
       // es-aggressor-flow: PRODUCTION only. On prod it publishes just the Kyle-style
       // signed-flow response slope; the legacy absorption label is disabled there.
       'es-aggressor-flow',
+      // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
+      // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
+      // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
+      // it runs any more. Listed in this file for the reason stated below: the job regenerates its
+      // parameters from here on every build, and a value outside the list is refused with a bare
+      // HTTP 500 that never names it.
+      'stock-gex-close-scheduler',
       // approach-monitor and its position publisher. DEV-ONLY — production and experiment
       // delete both — but they belong in THIS list for the same reason the tenant services do:
       // the job is a CpsScmFlowDefinition and regenerates its parameters from this file on every
