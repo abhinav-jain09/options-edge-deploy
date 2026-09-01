@@ -235,7 +235,7 @@ log "identity guards PASSED"
 # the keep costs about one record per session date. On prod it is an MM1 mirror target with no
 # local producer at all: MM1 commits its offsets on the source cluster, so purging the copy here
 # does not make it re-copy — the /zones page simply stays blank until es4 next publishes a board.
-PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^es\.reversal\.hunt\.(state|alerts)$|^es\.reversal\.hunt\.swing\.candidates$|^options\.spx\.wall-break-rates\.dataset$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring|^(es\.)?options\.spx\.gamma-migration\.crossings$|corridor-gauge-event-log$|^options\.databento\.oi\.anchor-manifest$|^es\.tape-zones\.board$|gamma-migration-scorer-changelog$'
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^es\.reversal\.hunt\.(state|alerts)$|^es\.reversal\.hunt\.swing\.candidates$|^options\.spx\.wall-break-rates\.dataset$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring|^(es\.)?options\.spx\.gamma-migration\.(crossings|wall-touch)$|corridor-gauge-event-log$|^options\.databento\.oi\.anchor-manifest$|^es\.tape-zones\.board$|gamma-migration-scorer-changelog$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
 log "durable keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
 CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)

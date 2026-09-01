@@ -88,6 +88,14 @@ spec:
               value: "4"
             - name: KAFKA_GAMMA_MIGRATION_NUM_THREADS
               value: "1"
+            # R11 other-board sidecar: reads ES4's own strike-history (cross-cluster).
+            # Read RAW in code (KafkaSettings.value, not topicValue) — opaque foreign names.
+            - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_BOOTSTRAP
+              value: "192.168.100.4:9092"
+            - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_TOPIC
+              value: "es.options.databento.gex.strike.history"
+            - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_SYMBOL
+              value: "ES"
           envFrom:
             - configMapRef:
                 name: options-edge-config
