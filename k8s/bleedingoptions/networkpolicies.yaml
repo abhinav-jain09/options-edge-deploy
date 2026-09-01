@@ -477,8 +477,13 @@ spec:
                 # boards the batch just promoted and writes the evening's Near Flip lists into
                 # gex_flip_track, beside them. Its first real run proved this list is enforced —
                 # refused for its full 120s retry window until this line existed.
+                # stock-gex-close-scheduler is the batch holding its OWN schedule (the Jenkins
+                # cron retired 2026-09-01). It reads the same job repository and writes the same
+                # boards and Near Flip rows, because it IS the batch — a long-lived pod instead
+                # of a one-shot Job. Same list, same reason, and it proved the list is enforced
+                # the same way its predecessor did: connection refused until this line existed.
                 values: ["stock-gex-close-board", "stock-gex-close-batch", "stock-gex-service",
-                         "stock-gex-flip-track"]
+                         "stock-gex-flip-track", "stock-gex-close-scheduler"]
       ports:
         - protocol: TCP
           port: 5432
