@@ -55,6 +55,8 @@ spec:
               value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
+            - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED
+              value: "true"
             # ES->SPX basis engine (ES-SPX-TRANSLATION-ENGINE.md, Codex-approved).
             # ONE engine, no version knob (feed #79): it runs structurally on the
             # instance publishing both legs. Samples stay OFF until the A1

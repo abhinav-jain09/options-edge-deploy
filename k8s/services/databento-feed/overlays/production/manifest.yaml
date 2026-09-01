@@ -64,6 +64,11 @@ spec:
               value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
               value: "false"
+            # Pre-market LIVE OI: while OPRA is closed, drain the OI-aware statistics replay and publish the
+            # day's settled OI so pre-open GEX prices with LIVE OI (not the ~07:00 historical fetch). Requires
+            # feed code PRs #147-150. VERIFY the next 06:30 prod cycle after enabling. (2026-08-26)
+            - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED
+              value: "true"
             - name: ES_SPX_BASIS_CLOSE_PRINCIPALS
               value: abhinav
             - name: ES_SPX_BASIS_ACK_PRINCIPALS
