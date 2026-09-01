@@ -1,0 +1,19 @@
+# PROD mirror of the standalone overlay (k8s/services/raw-postgres-writer/overlays/production): persist the
+# feed's 06:30 LIVE-captured settled OI into Postgres. The shared options-edge-config points this writer at
+# options.ibkr.raw, which does NOT carry the feed's live-OI capture — so board() (the pre-open OI source)
+# stayed empty until the ~07:00+ historical fetch and prod pre-open GEX had no OI baseline. The feed
+# publishes the capture to options.databento.raw (DATABENTO_PREMARKET_LIVE_OI_ENABLED in the feed patch);
+# reading THAT here lands the settled OI in databento_option_raw_snapshot seconds after 06:30. env merges
+# by name over envFrom. Ported from dev (2026-08-26 fix) on 2026-09-01.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: raw-postgres-writer
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: raw-postgres-writer
+          env:
+            - { name: KAFKA_RAW_TOPIC, value: options.databento.raw }
