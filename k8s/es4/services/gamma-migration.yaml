@@ -78,6 +78,15 @@ spec:
           value: '4'
         - name: KAFKA_GAMMA_MIGRATION_NUM_THREADS
           value: '1'
+        # R11 other-board sidecar: reads PROD's own strike-history (cross-cluster).
+        # These are read RAW in code (KafkaSettings.value, not topicValue) so TOPIC_PREFIX
+        # can never rewrite the other cluster's names.
+        - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_BOOTSTRAP
+          value: 192.168.100.252:9092
+        - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_TOPIC
+          value: options.databento.gex.strike.history
+        - name: KAFKA_GAMMA_MIGRATION_OTHER_BOARD_SYMBOL
+          value: SPX
         envFrom:
         - configMapRef:
             name: es4-base-env
