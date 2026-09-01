@@ -80,6 +80,18 @@ spec:
             capabilities:
               drop: ["ALL"]
           env:
+            # WHICH JOB. The image carries two Spring Batch jobs since 2026-08-28 (closeBoard and
+            # oiIndex, the latter not scheduled by anything yet — the OI snapshot still runs the
+            # python console script from the stock-gex image). Boot refuses to guess between them:
+            #
+            #   Error creating bean 'jobLauncherApplicationRunner': Job name must be specified
+            #   in case of multiple jobs
+            #
+            # which is how the 2026-09-01 evening freeze died three times in a row, one second
+            # into each attempt, on an image whose mutable :prod tag had moved under it. The Job
+            # names the job it wants; adding a third job cannot silently retarget this one.
+            - name: SPRING_BATCH_JOB_NAME
+              value: "closeBoard"
             - name: DATABENTO_API_KEY
               valueFrom:
                 secretKeyRef:
