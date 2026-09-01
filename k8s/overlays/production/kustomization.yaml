@@ -27,6 +27,11 @@ resources:
   # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ), public via cloudflared path
   # routes to NodePort 30188. STANDALONE overlay k8s/services/nifty-gex/overlays/production
   # mirrors the prod patches — sync enforced by validate-services render equivalence.
+  # stock-gex-close-scheduler: PROD-ONLY, and the reason is the whole point of it — it holds the
+  # CLOSING-BOARD SCHEDULE in the batch itself (USER 2026-09-01: "I don't want anything
+  # Jenkins-based, it should run based on Spring Batch configuration"). Dev has no closing-board
+  # chain and no OI index on its nodes, so this base is referenced here and nowhere else.
+  - ../../services/stock-gex-close-scheduler/base
   - ../../services/nifty-gex/base
 
 # Prod-only: the node already has the images cached, so re-pulling all ~26 at

@@ -67,6 +67,19 @@ services:
   # Its own image and repo, deliberately NOT the web image: that surface has a small startup
   # contract on purpose, and putting an SMTP credential into it would widen exactly the boundary
   # PGL-034A draws. Single replica — see the Deployment header for why that is correctness.
+  # THE CLOSING-BOARD SCHEDULE, owned by the batch itself (USER 2026-09-01: "I don't want
+  # anything Jenkins-based, it should run based on Spring Batch configuration"). A long-lived pod
+  # holding two cron triggers in New York time; the Jenkins job that used to drive this keeps only
+  # its manual entry point. Same image as the one-shot close Job — one batch, one build.
+  - name: stock-gex-close-scheduler
+    managedBy: standalone
+    image: oe-close-batch
+    deployments: [stock-gex-close-scheduler]
+    container: scheduler
+    buildJob: oe-close-batch-build
+    sourceRepo: oe-close-batch
+    envs: [production]
+
   - name: bleedingoptions-email
     managedBy: standalone
     namespace: bleedingoptions

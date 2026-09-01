@@ -1,0 +1,21 @@
+# STANDALONE closing-board scheduler — production. Mirrors what the monolithic production overlay
+# renders for this workload; scripts/ci/validate-services.sh enforces that they stay identical.
+#
+# The image stays the :prod TAG rather than a digest pinned here: this is an internal workload with
+# no public gate, and it must follow the same batch image the one-shot close Job follows, so a
+# scheduled run and a hand-run cannot end up on different builds of the same batch. service-deploy
+# resolves and pins the digest at deploy time and records which one it used.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+patches:
+  # Mirror of the monolith's all-Deployments patches, scoped to this service: imagePullPolicy is
+  # already IfNotPresent in the base, so only the rollout deadline is added here.
+  - target:
+      kind: Deployment
+      name: stock-gex-close-scheduler
+    patch: |-
+      - op: add
+        path: /spec/progressDeadlineSeconds
+        value: 1200
