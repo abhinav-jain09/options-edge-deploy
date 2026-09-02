@@ -127,12 +127,15 @@ spec:
             # best AND simplest, so the flow-adjusted path is retired in production.
             - name: DATABENTO_GEX_DEALER_SIGN_MODEL
               value: NAIVE_CALL_PLUS_PUT_MINUS
-            # Daily OI self-fetch: on the first snapshot per (symbol,expiry,day) the gex-service pulls
-            # the once-daily settled Open Interest from Databento historical statistics into Postgres,
-            # retrying with backoff until it lands (see DatabentoOiBaselineProvider). Set explicitly TRUE
-            # so a stray live env-drift can never silently disable it — without OI, GEX is all-zero.
+            # OI source = Databento LIVE-captured only (USER decision 2026-09-02). The gex-service NO LONGER
+            # self-fetches OI from the Databento HISTORICAL statistics API: that path resolves the SPXW.OPT
+            # parent symbol against TODAY's definition map, which Databento publishes late every morning, so
+            # it 422s pre-open ("symbology-not-yet-published") and GEX fail-closes until mid-morning. Instead
+            # OI comes exclusively from the feed's LIVE statistics capture (stat_type=9), persisted to
+            # databento_option_raw_snapshot and read back by loadChain()/board() — the exact PG-only path ES
+            # already runs in prod. FALSE routes SPX through that same path (no historical, no fallback).
             - name: DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED
-              value: "true"
+              value: "false"
             # Quote-age gate for the IV solve. Default 120s was rejecting ~54% of legs as STALE_QUOTE —
             # incl. good, tight, present NEAR-MONEY quotes whose resting NBBO simply hadn't CHANGED in 2min —
             # so IV/gamma never solved -> dealer-ledger inputQuality DEGRADED -> never armed -> 0 SignalFired
