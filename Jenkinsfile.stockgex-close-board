@@ -63,19 +63,19 @@ pipeline {
     string(name: 'KEEP_JOBS', defaultValue: '5',
       description: 'How many most-recent TERMINAL close-board Jobs to retain (nothing else prunes them). 1..100.')
   }
-  triggers {
-    // 16:10 ET, weekdays. The job WAITS for vendor availability (see the header), so this only
-    // has to be after the bell and far enough before the 20:30 ET off-hours scale-down that a
-    // long wait still finishes.
-    // TWO firings. 16:10 ET is the evening freeze. 01:00 ET Tue-Sat is the CATCH-UP: the
-    // wrapper sees a before-noon clock and targets YESTERDAY's session, and the batch's
-    // restartable JobInstance makes a night that already published an instant no-op receipt
-    // while a night that failed all its evening retries (vendor down for hours, an agent
-    // outage) is healed before anyone wakes. 2026-08-31 was that night, minus the healing:
-    // the vendor 504'd every evening attempt and the board waited for a HUMAN. Never again —
-    // the owner's words.
-    cron('TZ=America/New_York\n10 16 * * 1-5\n0 1 * * 2-6')
-  }
+  // NO TRIGGERS. The schedule lives in the batch itself now — USER 2026-09-02: "I don't want
+  // anything Jenkins-based, it should run based on Spring Batch configuration", and again on the
+  // 3rd. stock-gex-close-scheduler (options-edge namespace) holds the two cron triggers in New
+  // York time, claims each owed session with a lease, and publishes only while it still holds
+  // that claim.
+  //
+  // THIS JOB REMAINS, deliberately, as the MANUAL way in: freezing a named session by hand, a
+  // rebuild, a dry run. Those are operator actions, not a schedule, and taking them away would
+  // leave no way to re-freeze a night without a deploy. It launches with no claim token, which
+  // is exactly how the scheduler recognises a run it must never interfere with.
+  //
+  // What used to be here: cron('TZ=America/New_York\n10 16 * * 1-5\n0 1 * * 2-6') — the evening
+  // freeze and the morning catch-up. Both are now app.closebatch.schedule.CloseBoardScheduler.
   options {
     // Not for correctness — two runs produce two generations and the later promote simply wins —
     // but each spends a full vendor pull and drops the other's fetch scratch, so they are
