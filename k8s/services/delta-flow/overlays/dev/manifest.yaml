@@ -57,7 +57,7 @@ spec:
       containers:
         - env:
             - name: DELTA_FLOW_GREEK_LOOKAHEAD_TOLERANCE_MS
-              value: "3000"
+              value: "30000"
             - name: APP_MARKET_DATA_SOURCE
               value: DATABENTO
             - name: HEALTH_PORT
