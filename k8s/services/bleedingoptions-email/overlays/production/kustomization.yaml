@@ -7,7 +7,15 @@
 # green is not necessarily the one that runs. On 2026-08-16 a tag on the web image resolved to four
 # different digests inside twenty minutes for exactly this reason.
 #
-# This digest is oe-email-service-deploy #15 (revision bf9ab80), 26/26 tests green, published
+# This digest is oe-email-service-deploy #17 (revision 8328177), 26/26 tests green, published
+# — it carries the fix for the waiting list that never shrank: approving somebody added them to
+# gamma-lab-approved and left the pending-approval tag they arrived with, so the owner's list held
+# 44 names of whom 41 were already approved and already mailed. They kept re-approving people who
+# were approved, no mail went out (correctly — those people had been told days earlier), and the
+# only reasonable conclusion from outside was that the mailer was broken.
+#
+# Previous digest, for a rollback: sha256:6acf7a46b3e3432cf0052340065893c3fc0ed6e91de87e1754048bf5265e92d2
+# (oe-email-service-deploy #15, revision bf9ab80). What is below WAS that line:
 # :prod architecture = amd64.
 #
 # It is safe to move forward past #10 again because the reason we rolled back is now gated.
@@ -28,4 +36,4 @@ resources:
 images:
   - name: 192.168.100.252:5000/oe-email-service
     newName: 192.168.100.252:5000/oe-email-service
-    digest: sha256:6542da462c90e2ffe08369c582aa0c43a7bcc5a7642e0355a664b9f2a262f211
+    digest: sha256:6acf7a46b3e3432cf0052340065893c3fc0ed6e91de87e1754048bf5265e92d2
