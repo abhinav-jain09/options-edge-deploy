@@ -8,6 +8,7 @@ build/
 __pycache__/
 *.pyc
 .jenkins-tmp/
+.ansible-rendered/
 .env
 .env.*
 !.env.example
