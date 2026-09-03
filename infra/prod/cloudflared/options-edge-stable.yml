@@ -40,15 +40,14 @@ ingress:
   - hostname: bleadingoptions.com
     path: /ws/events
     service: http://192.168.100.252:30097     # feed-gateway-service NodePort — NOT the 8091 ServiceLB
-  # NIFTY GEX board (public, no auth by design): k8s nifty-gex-service via its PINNED
-  # NodePort 30188 (nodePort is set explicitly in the manifest, so Service recreation
-  # keeps it — unlike the feed-gateway NodePort warned about above).
-  - hostname: bleadingoptions.com
-    path: ^/nifty-gex(/|$)
-    service: http://192.168.100.252:30188
-  - hostname: bleadingoptions.com
-    path: ^/banknifty-gex(/|$)
-    service: http://192.168.100.252:30188
+  # The pressure boards' public path routes (/nifty-gex, /banknifty-gex -> NodePort
+  # 30188) were RETIRED 2026-09-03: the boards moved BEHIND the portal login
+  # (USER-directed reversal of their original public exposure). The pages are now
+  # served by the web app at /nifty-pressure//banknifty-pressure through the
+  # catch-all below, which also 302s the old paths there; the nifty-gex service
+  # stays cluster-internal (data reaches the page via the web app's authenticated
+  # /api/pressure proxy). Re-adding these routes would put the UNAUTHENTICATED
+  # service back on the public internet.
   - hostname: bleadingoptions.com
     service: http://192.168.100.252:8094
   # ⚠️ Hardcoded ClusterIP: it survives pod restarts but NOT a delete+recreate of the Service.
