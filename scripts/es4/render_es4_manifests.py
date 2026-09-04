@@ -120,6 +120,12 @@ ES_ENV = {
         {"name": "SIGNAL_SYMBOL", "value": "ES", "_override": True},
     ],
     "databento-gex": [
+        # es4 keeps the PG-ONLY OI path regardless of what prod carries. The prod slice has
+        # DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED temporarily true (2026-09-04 same-day recovery
+        # after a bogus COALINDIA selection cost today's SPX OI capture); es4 must NOT inherit
+        # that — ES has always run live-captured OI out of Postgres, and the historical statistics
+        # path 422s pre-open. Pinned explicitly so a prod flip can never silently reach es4.
+        {"name": "DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED", "value": "false", "_override": True},
         {"name": "DATABENTO_GEX_RISK_FREE_RATE", "value": "0.04"},
         {"name": "DATABENTO_GEX_DIVIDEND_YIELD", "value": "0.04"},   # q=r -> Black-76 on the future
         # es4 has NO market-carry-service (it is an SPX put-call-parity service; the SERVICES list
