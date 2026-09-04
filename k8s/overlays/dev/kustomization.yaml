@@ -630,6 +630,9 @@ images:
   - name: 192.168.100.252:5000/options-edge-gamma-migration
     newName: host.docker.internal:5001/options-edge-gamma-migration
     newTag: dev
+  - name: 192.168.100.252:5000/options-edge-gamma-leadership
+    newName: host.docker.internal:5001/options-edge-gamma-leadership
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-volume-aggregator
     newName: host.docker.internal:5001/options-edge-databento-volume-aggregator
     newTag: dev
