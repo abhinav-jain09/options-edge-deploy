@@ -22,64 +22,39 @@ resources:
 # then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
 # no-op. Both paths therefore agree on one immutable image.
 #
-# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #34 attested
-# sha256:8b3aa3c2… built from main at c85d503c by options-edge-web-deploy #1183 (the
-# evidence qualifies the ARTEFACT, not one commit inside it) and recorded PGL-050/051/052 as PASS
-# against that exact digest. The job resolves the revision from the registry rather than
-# taking it from the operator, and refuses unless the checkout under test matches — it did
-# refuse twice while this was being prepared, because the image on :prod had been built
-# from an earlier commit, which is exactly the mistake it exists to catch.
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #35 attested
+# sha256:f44f06be… built from main at 845207a6 by options-edge-web-deploy #1203, and recorded
+# PGL-050/051/052 as PASS against that exact digest, with "digest unchanged across the run".
+# BUILD_IMAGE was false on purpose: the image was already on :prod and already serving the
+# internal surface, so the attestation qualifies the artefact that will actually run rather
+# than a fresh build nobody has looked at. Rebuilding to attest is how 2026-08-16 produced
+# four digests in twenty minutes.
 #
-# WHY: "why after sometime view get reset". The reader would zoom into a price band and,
-# minutes later, find the chart back at its default window. MEASURED by driving the page
-# through every kind of refresh: an ordinary poll HELD, a new expiry appearing HELD, an
-# expiry vanishing HELD — and a swap to the frozen closing board RESET it, "27 of 200" back
-# to "53 of 200", then RESET again on the way back to live.
-#
-# The page falls back to the frozen board when a live poll is FALLBACK-ELIGIBLE and a usable
-# frozen board exists — not on every hiccup: a degraded board that still carries strikes is
-# drawn, and an actionable failure is reported rather than replaced. What does reach the
-# fallback is an EMPTY live board, which is what a freshly created one is, so an idle
-# retirement or a restart can produce it. The
-# closing board is a previous session's, its expiry list differs, and the frame's identity is
-# symbol#expiries — so the swap read as a NEW SELECTION and the window was discarded twice.
-#
-# The incoming build carries the window BY STRIKE: {offset, width} name different strikes on a
-# different axis, so on a source swap the first and last strike on screen are looked up in the
-# new axis and the window is rebuilt around them. A reader-driven change — new symbol, new
-# slider position — still gets the default window, because those are new questions.
+# WHY THIS MOVES. The owner asked for the sentence under "At the flip, positive gamma
+# dominant" to come off the Near Flip page (2026-09-04). The internal surface got it with
+# web-service-deploy #703; this surface has its own pinned image, so until this edit the
+# public page kept showing the line the internal one had dropped.
 #
 # WHAT ELSE MOVES WITH IT. The image is built from main, so advancing this digest ships
-# everything merged since the outgoing one: 8a522e96 (build #1114) -> b47cd4d5 (build #1116),
-# 4 commits. The non-test source delta is gamma-lab.js, option-chain.js, and the tape-zones /
-# zones assets.
+# everything merged since the outgoing one: c85d503c (build #1183) -> 845207a6 (build #1203),
+# 28 commits — the delta-flow acceleration publisher, the pressure boards, the hunt voice fix,
+# the strike board's work, and flips.js.
 #
-# Only one of those ASSET SETS reaches this surface, and USER 2026-08-27 confirmed the rule it
-# follows: the Gamma Lab is public and nothing else is. PUBLIC_SURFACE_PATHS is an allowlist —
-# "/", /gamma-lab(.js|.css), /leaderboard*, /env.js, /option-chain-auth.*, /feed-url.js,
-# /favicon.ico, /register — and every other path falls through to denyAll. option-chain,
-# tape-zones and zones are not on it and cannot be fetched here at all; their assets ride in
-# the image unreachable. PGL-050/051/052 qualify the public security boundary and nothing
-# else, which is why this note exists rather than an implied "it is just the one fix".
+# THE PUBLIC BOUNDARY DOES NOT MOVE. PUBLIC_SURFACE_PATHS and PUBLIC_SURFACE_API_PATHS are
+# byte-for-byte identical at c85d503c and 845207a6 — compared explicitly before this edit,
+# because "28 commits" is exactly the circumstance in which a new public path arrives
+# unnoticed. The pressure boards' shells were added to PUBLIC_PATHS, which is the INTERNAL
+# deployment's list; this surface's allowlist never saw them, and everything not on it falls
+# through to denyAll. The rule the owner set on 2026-08-27 — the Gamma Lab is public and
+# nothing else is, with Near Flip since — still holds exactly as it did.
 #
-# ROLLBACK TARGET: the OUTGOING digest is sha256:0414b000… (evidence #25).
+# ROLLBACK TARGET: the OUTGOING digest is sha256:8b3aa3c2… (evidence #34), durable tag
+# prod-1183-c85d503cd90d, verified present in the registry at the time of this edit. The
+# incoming one has prod-1203-845207a619f6 for the same reason: every prod build pushes a
+# per-build tag beside the moving :prod one, and a registry garbage-collect deletes only
+# manifests no tag references. Roll back by digest or by that tag.
 #
-# IT IS DURABLE, and the reason is structural rather than a promise. Every prod build pushes
-# a per-build tag beside the moving :prod one — `prod-<build>-<sha12>`, precisely so a digest
-# can be named after :prod has moved on. This one is prod-1114-8a522e96a376, verified to
-# resolve to 0414b000 at the time of this edit. A registry garbage-collect deletes only
-# manifests NO TAG references, so that tag is what protects it; the GC in
-# offhours-clean-slate is in any case gated on RECLAIM_DOCKER and points at the local dev
-# registry container, not at 192.168.100.252:5000, and nothing in this repository deletes
-# prod-* tags. Roll back by digest or by that tag.
-#
-# For the GAMMA LAB it is the same page without the strike-anchored window: the reader's zoom
-# is discarded whenever the page swaps to the frozen board and back, so a few minutes of
-# reading is undone by a poll they never saw. It KEEPS everything 0414b000 carried, including
-# the closed-market shortcut. This advancement touches no shared runtime code — the delta is
-# the five assets named above and their tests — so there is nothing else to weigh.
-# (sha256:5afc846f…, evidence #24, is older still; not a rollback candidate.)
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:8b3aa3c2d3609e71e658ed50129343695fe47981824f75945b9cf061fbe1c692
+    digest: sha256:f44f06be56b66645b9bb8dc644b01ff90a77116f60cce46eb4daf7c33e73a4db
