@@ -38,7 +38,7 @@ pipeline {
     string(name: 'INTENT_ID', defaultValue: '',
       description: 'Optional idempotency key (0DTE pipeline automation). Empty = normal manual build. With a value: at most ONE build per intent ever reaches the deploy stages — a second submission aborts as NOOP_DUPLICATE (intent-dedup.json artifact names the winner).')
     choice(name: 'SERVICE', choices: [
-      'databento-feed', 'databento-sr3-feed', 'databento-vix-feed', 'databento-gex', 'databento-gex-history', 'gamma-migration', 'corridor-gauge', 'databento-maxpain', 'databento-mission-sandwich',
+      'databento-feed', 'databento-sr3-feed', 'databento-vix-feed', 'databento-gex', 'databento-gex-history', 'gamma-migration', 'gamma-leadership', 'corridor-gauge', 'databento-maxpain', 'databento-mission-sandwich',
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
       'directional-pressure', 'es-open-direction', 'es-open-direction-postgres-writer', 'close-direction', 'spot-vol-regime', 'vol-premium', 'indicator-service', 'vix-option-inteligence', 'greek-move-authenticity', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
       'option-truth-engine', 'market-carry', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
