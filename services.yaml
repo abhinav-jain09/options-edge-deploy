@@ -129,6 +129,7 @@ services:
   - { name: databento-gex,                managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-gex,                deployments: [databento-gex-service] }
   - { name: databento-gex-history,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-gex-history,        deployments: [databento-gex-history-service] }
   - { name: gamma-migration,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-gamma-migration,             deployments: [gamma-migration-service] }
+  - { name: gamma-leadership,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-gamma-leadership,            deployments: [gamma-leadership-service] }
   - { name: nifty-gex,                    managedBy: standalone, envs: [dev, production], image: options-edge-nifty-gex,                    deployments: [nifty-gex-service], container: nifty-gex, sourceRepo: options-edge-nifty-gex }
   - { name: corridor-gauge,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-corridor-gauge,               deployments: [corridor-gauge-service] }
   - { name: databento-mission-sandwich,   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-mission-sandwich,   deployments: [databento-mission-sandwich-service] }

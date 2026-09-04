@@ -20,6 +20,7 @@ images:
   delta-flow-service: 192.168.100.252:5000/options-edge-delta-flow:prod
   oi-shadow-service: 192.168.100.252:5000/options-edge-oi-shadow:prod
   gamma-migration-service: 192.168.100.252:5000/options-edge-gamma-migration:prod
+  gamma-leadership-service: 192.168.100.252:5000/options-edge-gamma-leadership:prod
   corridor-gauge-service: 192.168.100.252:5000/options-edge-corridor-gauge:prod
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:prod
   dealer-ledger-calibration-scorer: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:prod

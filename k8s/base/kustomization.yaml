@@ -109,6 +109,8 @@ resources:
   - gamma-migration-deployment.yaml
   - databento-gex-history-service.yaml
   - gamma-migration-service.yaml
+  - gamma-leadership-deployment.yaml
+  - gamma-leadership-service.yaml
   - option-price-behavior-deployment.yaml
   - option-price-behavior-service.yaml
   - feed-gateway-nightly-restart-cronjob.yaml

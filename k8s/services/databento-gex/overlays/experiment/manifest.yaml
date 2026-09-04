@@ -92,7 +92,6 @@ spec:
               value: "8"
             - name: DATABENTO_GEX_DEALER_SIGN_MODEL
               value: NAIVE_CALL_PLUS_PUT_MINUS
-            # OI = Databento LIVE-captured only (no historical fetch); mirrors base.
             - name: DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED
               value: "false"
             - name: DATABENTO_GEX_MAX_QUOTE_AGE_MS
