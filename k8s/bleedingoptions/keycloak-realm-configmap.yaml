@@ -101,6 +101,10 @@ data:
       "roles": {
         "realm": [
           {
+            "name": "pressure",
+            "description": "Grants the two India pressure boards (/nifty-pressure, /banknifty-pressure). Held only via membership of /pressure-approved — never assigned directly and never a default role, so group membership is the single observable record of who may see them. Deliberately SEPARATE from gamma-lab: board approval does not imply pressure access."
+          },
+          {
             "name": "gamma-lab",
             "description": "APPROVED. Grants access to Gamma Lab market data. Held only via membership of /gamma-lab-approved — never assigned to a user directly, and never a default role, so that group membership is the single observable record of who is approved."
           }
@@ -116,6 +120,20 @@ data:
           "attributes": {
             "oe-note": [
               "Where every self-registration lands. Maps NO roles, so members authenticate but are served no data. This is the operator's review queue: filter members here to see who is waiting."
+            ]
+          }
+        },
+        {
+          "name": "pressure-approved",
+          "path": "/pressure-approved",
+          "realmRoles": [
+            "pressure"
+          ],
+          "clientRoles": {},
+          "subGroups": [],
+          "attributes": {
+            "oe-note": [
+              "Maps the pressure realm role for the India boards. OWNER's rule (2026-09-05): exactly two members — Abhinav Jain and Ankit Sinha; membership changes are the owner's alone."
             ]
           }
         },
