@@ -123,41 +123,12 @@ SUCCESS=false
 
 fatal() { echo "FATAL: $*" >&2; exit 1; }
 
-# Capture the evening's Near Flip lists (internal tracking). AFTER a session is known to be
-# published and NEVER fatal to it: a tracking miss is a gap the CLI's self-healing fills on the
-# next run. Called from BOTH publish paths — a fresh freeze and the already-published no-op —
-# because the tracker heals forward and an extra call inserts nothing.
-run_flip_track() {
-  # AFTER promotion, BEFORE pruning, and NEVER fatal to the publication above: the board is
-  # already out; a tracking miss is a gap the CLI's self-healing fills tomorrow, not a reason
-  # to alert the desk that the close failed. The image is the stock-gex service's own (the CLI
-  # ships in the same package), pinned the same way.
-  TRACK_IMAGE_MUTABLE="$(yq -er '.images."stock-gex-service"' "image-tags/${ENVIRONMENT}.yaml" 2>/dev/null || true)"
-  if [ -n "$TRACK_IMAGE_MUTABLE" ] && [ "$TRACK_IMAGE_MUTABLE" != "null" ]; then
-    TRACK_DIGEST="$(skopeo inspect --tls-verify=false "docker://${TRACK_IMAGE_MUTABLE}" --format '{{.Digest}}' 2>/dev/null     || kubectl -n "$NAMESPACE" get deploy stock-gex-service -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null | sed 's/.*@//' )"
-    # %:*, NOT %%:*: the registry lives at host:port, so the FIRST colon is the port's — %%
-  # stripped the whole repository path and rendered 192.168.100.252@sha256:..., which the
-  # kubelet read as a docker.io library image and could never pull (caught by proof run #31).
-  TRACK_IMAGE="${TRACK_IMAGE_MUTABLE%:*}@${TRACK_DIGEST}"
-    case "$TRACK_DIGEST" in
-      sha256:*)
-        TRACK_JOB="stock-gex-flip-track-$(date -u +%Y%m%d-%H%M%S)"
-        sed -e "s|__IMAGE__|${TRACK_IMAGE}|g" -e "s|__JOB_NAME__|${TRACK_JOB}|g"         "k8s/jobs/stock-gex-flip-track-job.yaml" | kubectl -n "$NAMESPACE" create -f -         && echo "flip-track Job created: $TRACK_JOB"         || echo "WARNING: flip-track Job could not be created — self-healing covers it tomorrow"
-        # Bounded wait for the receipt; a slow run is left to finish on its own.
-        if kubectl -n "$NAMESPACE" wait --for=condition=complete "job/$TRACK_JOB" --timeout=180s >/dev/null 2>&1; then
-          kubectl -n "$NAMESPACE" logs "job/$TRACK_JOB" 2>/dev/null | grep "^flip-track" || true
-        else
-          echo "WARNING: flip-track Job not complete after 180s — check job/$TRACK_JOB; tomorrow's run heals any gap"
-        fi
-        ;;
-      *) echo "WARNING: could not resolve a digest for ${TRACK_IMAGE_MUTABLE} — flip-track skipped tonight" ;;
-    esac
-  else
-    echo "WARNING: image-tags/${ENVIRONMENT}.yaml has no stock-gex-service entry — flip-track skipped tonight"
-  fi
-
-}
-
+# The Near Flip capture used to be launched from here as a one-shot Python Job. It moved into
+# the close batch itself on 2026-09-04 (owner: "why still we have python job when we have spring
+# batch"), where FlipTracker records the evening's lists AND the per-symbol closes the forward
+# view needs -- which the Python snapshot never wrote, so "how did it go" had been empty since
+# the day it was built. Two writers on one table, reading two different universes, was the other
+# reason: from that day the batch asks for every root while the page shows the owner's ~80.
 
 # PUBLICATION STATE, for the Jenkins alert — which cannot read the cluster once the run has
 # failed (this identity has no pods/exec). Three values, and the middle one is the honest answer
@@ -297,7 +268,6 @@ if [ "$REBUILD" = "0" ]; then
   if [ -n "$PUBLISHED_GEN" ]; then
     echo "STOCK_GEX_CLOSE_BOARD_OK session=${SESSION} generation=${PUBLISHED_GEN%%|*} boards=${PUBLISHED_GEN##*|}"
     echo "OK: $SESSION is already published (generation ${PUBLISHED_GEN%%|*}, ${PUBLISHED_GEN##*|} boards) — nothing to do"
-    run_flip_track
     SUCCESS=true
     exit 0
   fi
@@ -608,7 +578,6 @@ EOF
 echo "OK: closing board published for $SESSION — ${ROOTS:-?} roots"
 SUCCESS=true
 
-run_flip_track
 
 # --- 6. prune old TERMINAL Jobs (best-effort, never blocks) ------------------------------
 # Nothing else prunes them: there is no CronJob history limit here.
