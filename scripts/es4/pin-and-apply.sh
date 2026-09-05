@@ -21,10 +21,27 @@ while read -r line; do
   ref=${line#image: }
   name=${ref#${REGISTRY}/}; name=${name%%:*}
   tag=${ref##*:}
-  digest=$(curl -sfI \
-    -H 'Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json' \
-    "http://${REGISTRY}/v2/${name}/manifests/${tag}" \
-    | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}')
+  # TOCTOU-close (Codex H2): if the 'Assert prod images fresh' gate already PROVED this image's
+  # :prod digest against a build receipt, pin that EXACT digest — never a fresh re-resolution a
+  # concurrent build could have moved between the gate and here. Steady-state images the gate
+  # skipped (not in the file) fall through to a normal resolve.
+  # When this pipeline set VERIFIED_DIGESTS_FILE, the freshness gate MUST have produced it. A missing
+  # file means the gate did not run (or failed to write) — fail closed rather than silently fall back
+  # to re-resolving :prod (which is the very TOCTOU this handoff exists to close). A present file that
+  # simply lacks this image = an image the gate steady-state-skipped -> resolve it normally below.
+  digest=""
+  if [ -n "${VERIFIED_DIGESTS_FILE:-}" ]; then
+    [ -f "${VERIFIED_DIGESTS_FILE}" ] \
+      || { echo "FAIL-CLOSED: VERIFIED_DIGESTS_FILE=${VERIFIED_DIGESTS_FILE} is set but missing — the freshness gate did not run." >&2; exit 1; }
+    digest=$(awk -v n="$name" '$1==n{print $2; exit}' "${VERIFIED_DIGESTS_FILE}")
+    [ -n "$digest" ] && echo "using gate-verified digest for ${name}: ${digest}"
+  fi
+  if [ -z "$digest" ]; then
+    digest=$(curl -sfI \
+      -H 'Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json' \
+      "http://${REGISTRY}/v2/${name}/manifests/${tag}" \
+      | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}')
+  fi
   if [ -z "$digest" ]; then
     echo "FAIL-CLOSED: no digest for ${name}:${tag} in ${REGISTRY}" >&2
     exit 1
