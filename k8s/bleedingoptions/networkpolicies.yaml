@@ -196,12 +196,17 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: stock-gex-service
+      ports:
+        - protocol: TCP
+          port: 8021
     # The India pressure boards' upstream (moved to this surface 2026-09-05): the same
     # cross-namespace shape as stock-gex above — one service, one port, nothing wider.
-    - ports:
-        - port: 8188
-          protocol: TCP
-      to:
+    # PLACED AFTER that rule's OWN ports block, not between its `to` and its `ports`:
+    # inserted there, this rule's `to` adopted the stock-gex ports and the entry ended up
+    # with two `ports` keys. kustomize refuses a duplicate key outright, so the whole
+    # production overlay stopped rendering and EVERY service-deploy failed at its first
+    # stage — not just this namespace's.
+    - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: options-edge
@@ -210,7 +215,7 @@ spec:
               app.kubernetes.io/name: nifty-gex-service
       ports:
         - protocol: TCP
-          port: 8021
+          port: 8188
 ---
 # Ingress to the public web tier: its HTTP port only. Same ipBlock caveat as Keycloak's — the tunnel
 # is not a selectable source.
