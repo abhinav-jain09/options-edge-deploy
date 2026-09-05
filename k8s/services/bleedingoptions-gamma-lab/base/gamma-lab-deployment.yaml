@@ -154,6 +154,11 @@ spec:
             # to trust a public IdP would widen the internal trust boundary. The app validates this
             # value at startup and refuses to boot on anything that is not an in-cluster, http,
             # explicit-port, non-gateway Service address. ---
+            # India pressure boards' upstream — FQDN because this pod is NOT in
+            # options-edge (the code default is namespace-relative, right for the
+            # internal web, wrong here; 2026-09-05 'could not be reached').
+            - name: APP_PRESSURE_SERVICE_URL
+              value: http://nifty-gex-service.options-edge.svc.cluster.local:8188
             - name: PUBLIC_BOARD_UPSTREAM_URL
               value: "http://stock-gex-service.options-edge.svc.cluster.local:8021"
 

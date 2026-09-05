@@ -196,6 +196,18 @@ spec:
           podSelector:
             matchLabels:
               app.kubernetes.io/name: stock-gex-service
+    # The India pressure boards' upstream (moved to this surface 2026-09-05): the same
+    # cross-namespace shape as stock-gex above — one service, one port, nothing wider.
+    - ports:
+        - port: 8188
+          protocol: TCP
+      to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: options-edge
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nifty-gex-service
       ports:
         - protocol: TCP
           port: 8021
