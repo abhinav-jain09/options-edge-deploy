@@ -52,13 +52,15 @@ spec:
   template:
     metadata:
       annotations:
-        oe/config-nonce: 2026-07-20-expiry-auto
+        oe/config-nonce: 2026-07-31-heatmap-saturation
       labels:
         app.kubernetes.io/name: feed-gateway-service
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
         - env:
+            - name: GATEWAY_IBKR_PREOPEN_ENABLED
+              value: "true"
             - name: WS_ALLOWED_ORIGINS
               value: http://localhost:8090
             - name: WS_AUTH_ISSUER_URI
@@ -95,6 +97,8 @@ spec:
                   optional: true
             - name: OE_ENV
               value: dev
+            - name: KAFKA_DROP_NOWCAST_TOPIC
+              value: spx.drop.nowcast
             - name: OE_WATCH_ALLOW_PLAINTEXT
               value: "true"
             - name: OE_SYSTEM_STATUS_TOPICS
@@ -113,6 +117,12 @@ spec:
               value: "true"
             - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
               value: es.futures.aggressor-flow
+            - name: GATEWAY_ES_CVD_ENABLED
+              value: "true"
+            - name: KAFKA_ES_CVD_TOPIC
+              value: es.futures.cvd
+            - name: KAFKA_ES_CVD_BARS_TOPIC
+              value: es.futures.cvd.bars
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS
@@ -139,26 +149,35 @@ spec:
           image: host.docker.internal:5001/options-edge-feed-gateway:dev
           imagePullPolicy: Always
           livenessProbe:
+            failureThreshold: 6
             httpGet:
               path: /health
               port: http
-            initialDelaySeconds: 30
-            periodSeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
           name: feed-gateway
           ports:
             - containerPort: 18091
               name: http
           readinessProbe:
+            failureThreshold: 3
             httpGet:
               path: /health
               port: http
-            initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
           resources:
             limits:
               memory: 4Gi
             requests:
               cpu: 100m
               memory: 512Mi
+          startupProbe:
+            failureThreshold: 60
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
       dnsPolicy: ClusterFirstWithHostNet
       hostNetwork: true

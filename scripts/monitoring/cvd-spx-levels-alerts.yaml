@@ -1,0 +1,58 @@
+# U16 (ES-CVD-SPX-LEVELS-DESIGN.md CL-R10, M4/O3/P4/Q3/L4): the DECLARED paging-rule instances.
+# EVERY expression carries the full gating conjunction (gateway flag + ES cash RTH) so `for:`
+# windows reset at RTH boundaries and a disabled gateway can never page. *_total counters are
+# history-only and never alert.
+groups:
+  - name: cvd-spx-levels
+    rules:
+      - alert: CvdSpxLevelsUnavailableWarn
+        expr: >
+          align_cvd_levels_unavailable_active{reason=~"source_stale|source_absent"} == 1
+          and on() gateway_cvd_spx_levels_enabled == 1
+          and on() es_session_rth_active == 1
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "CVD SPX levels unavailable ({{ $labels.reason }}) for 10 in-RTH minutes"
+      - alert: CvdSpxLevelsUnavailableHigh
+        expr: >
+          align_cvd_levels_unavailable_active{reason=~"source_stale|source_absent"} == 1
+          and on() gateway_cvd_spx_levels_enabled == 1
+          and on() es_session_rth_active == 1
+        for: 30m
+        labels: { severity: high }
+        annotations:
+          summary: "CVD SPX levels unavailable ({{ $labels.reason }}) for 30 in-RTH minutes"
+      - alert: CvdLevelsOverflowHigh
+        expr: >
+          cvd_levels_overflow_active == 1
+          and on() gateway_cvd_spx_levels_enabled == 1
+          and on() es_session_rth_active == 1
+        for: 5m
+        labels: { severity: high }
+        annotations:
+          summary: "CVD levels profile OVERFLOW latched (raise CVD_LEVELS_MAX_BUCKETS or investigate tape corruption; resolves at the session roll)"
+      - alert: CvdLevelsPublishFailuresWarn
+        expr: >
+          increase(cvd_levels_publish_failures_total[5m]) > 0
+          and on() gateway_cvd_spx_levels_enabled == 1
+          and on() es_session_rth_active == 1
+        labels: { severity: warning }
+        annotations:
+          summary: "CVD levels producer publish failures in the last 5m (broker health)"
+      - alert: CvdSpxLevelsAlignPublishFailuresWarn
+        expr: >
+          increase(align_cvd_levels_publish_failures_total[5m]) > 0
+          and on() gateway_cvd_spx_levels_enabled == 1
+          and on() es_session_rth_active == 1
+        labels: { severity: warning }
+        annotations:
+          summary: "CVD SPX levels aligner publish failures in the last 5m (broker health)"
+      - alert: CvdSpxLevelsGatewayDropsWarn
+        expr: >
+          increase(gateway_cvd_spx_levels_drops_total[5m]) > 0
+          and on() gateway_cvd_spx_levels_enabled == 1
+          and on() es_session_rth_active == 1
+        labels: { severity: warning }
+        annotations:
+          summary: "Gateway dropped invalid CVD SPX levels records in the last 5m"

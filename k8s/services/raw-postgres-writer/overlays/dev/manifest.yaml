@@ -58,7 +58,10 @@ spec:
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
-        - envFrom:
+        - env:
+            - name: KAFKA_RAW_TOPIC
+              value: options.databento.raw
+          envFrom:
             - configMapRef:
                 name: options-edge-config
             - secretRef:

@@ -175,14 +175,69 @@ fi
 log "identity guards PASSED"
 
 # Candidate topics = everything except Kafka system topics and the explicit
-# CALIBRATION keep-list. es.reversal.final-summary + es.reversal.outcome are
-# compacted, bounded corpora whose entire purpose is cross-day accumulation
-# (the reversal engine's ground-truth dataset, design §14 promotion gate) —
-# same preservation principle as the clean-slate dealer-ledger exemption.
-# Rolling streams (es.reversal.verdicts/strength) stay purgeable by design.
-PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$'
+# DURABLE keep-list. es.reversal.final-summary + es.reversal.outcome are the
+# CALIBRATION topics: compacted, bounded corpora whose entire purpose is
+# cross-day accumulation (the reversal engine's ground-truth dataset, design
+# §14 promotion gate) — same preservation principle as the clean-slate
+# dealer-ledger exemption. The ARMED-HUNT program adds its contract-mandated
+# purge-exempt topics: es.reversal.hunt.state (compacted derived hunt state —
+# an armed hunt must survive the nightly reset), es.reversal.hunt.alerts
+# (7 d one-shot transitions, delete-cleaned but cross-day), and the wall
+# break-rate dataset (compacted, versioned). Rolling streams
+# (es.reversal.verdicts/strength, hunt status/commands) stay purgeable by
+# design.
+#
+# es.reversal.hunt.swing.candidates added 2026-08-19: the SESSION-SCALE swing
+# path's evidence stream, 30-day delete retention by contract
+# (ReversalHuntSwingTopics.SPECS, purgeExempt). It is the corpus the threshold
+# question is answered from — every evaluated candidate, spoken or NOT, with
+# the reason it stayed quiet — so a nightly purge would leave it permanently one
+# session deep, which is the same as not having it and exactly the 30 days'
+# opposite. It is NOT declared retention.ms=-1 and therefore is not
+# reset-preserved in topics.env: 30 days is a real bound and the topic should
+# age out on it. This keep-list is about the RESET, not about time.
+#
+# The restart path reads it: the candidate sequence and the 80-tick chain are
+# session-scoped facts about what was PUBLISHED, and the service recovers them
+# from this topic rather than from a deeper replay. A purge mid-session would
+# therefore renumber the session and forget a call already made — but the
+# pre-market reset runs before the open, when the topic holds no records for
+# the session about to start, so the ordering is safe by construction.
+#
+# spx.basis.state (2026-07-28) is the ES->SPX basis engine's CROSS-DAY durable
+# state by design (retention.ms=-1: STATE_CURRENT restart authority, per-
+# generation STATE history, daily close anchors/acks, A1 certificates —
+# ES-SPX-TRANSLATION-ENGINE.md §3.3/§4). Purging it cold-starts the basis every
+# morning: the feed's boot scan finds no STATE_CURRENT, the engine serves
+# UNAVAILABLE/COLD_START instead of PROJECTED off yesterday's measurement, and
+# the ES-chain "SPX ≈" mapping is dark from open until the day's A1 cert +
+# first fresh measurement (~30-40 min into the session). The topic is tiny
+# (one partition, a few MB/day of state records) — nothing here needs a
+# pre-market wipe. Found 2026-07-28: this purge was why the mapping vanished
+# overnight after the 07-27 restoration.
+# underlying.vix.price added 2026-07-28: declared retention=-1 in topics.env
+# (prod-only overrides, VIX feed separation) — declared-durable topics must never
+# be purged; drift is now unmergeable (scripts/ci/validate-durable-topic-preservation.sh).
+# options.spx.gamma-migration.scoring added 2026-07-31: declared retention=-1 in topics.env. It
+# is the gamma-migration falsification record (GMS-R9), accumulated ACROSS sessions — purging it
+# nightly would leave it permanently one session deep, which is the same as not having it.
+# The gamma-migration SCORER changelog is preserved for the same reason as the scoring topic
+# itself: it holds the open +5/+15/+30 horizons, which are recomputable from nothing. The pattern
+# is deliberately narrow — a broad `gamma-migration.*-changelog` also matched the SESSION
+# changelog, which would have carried yesterday's dwell and ladder into today through a reset
+# whose whole purpose is to start clean.
+# es.tape-zones.board added 2026-08-10: declared retention=-1 + RESET-PRESERVED in topics.env.
+# The arm has to be right for EITHER cluster this script can be pointed at, because the name means
+# something different on each. The default BOOTSTRAP lists endpoints on both .252 and .4, but that
+# is a seed list for ONE logical cluster, not a two-cluster sweep: the run reads a single cluster-id
+# above and dies unless it equals EXPECTED_KAFKA_CLUSTER_ID, so any one invocation purges exactly
+# the cluster it bound to. On .4 the board is the SOURCE, keyed ES|<sessionDate> and compacted, so
+# the keep costs about one record per session date. On prod it is an MM1 mirror target with no
+# local producer at all: MM1 commits its offsets on the source cluster, so purging the copy here
+# does not make it re-copy — the /zones page simply stays blank until es4 next publishes a board.
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^es\.reversal\.hunt\.(state|alerts)$|^es\.reversal\.hunt\.swing\.candidates$|^options\.spx\.wall-break-rates\.dataset$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring|^(es\.)?options\.spx\.gamma-migration\.(crossings|wall-touch|fragility)$|corridor-gauge-event-log$|^options\.databento\.oi\.anchor-manifest$|^es\.tape-zones\.board$|gamma-migration-scorer-changelog$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
-log "calibration keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
+log "durable keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
 CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)
 NTOPICS=$(printf '%s\n' "$CANDIDATES" | grep -c . || true)
 log "topics to purge: $NTOPICS (system topics excluded)"

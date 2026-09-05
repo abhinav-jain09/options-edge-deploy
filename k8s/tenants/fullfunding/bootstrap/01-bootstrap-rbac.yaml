@@ -1,0 +1,66 @@
+# Bootstrap RBAC for the fullfunding tenant deploy.
+#
+# The Jenkins deployer SA lives in options-edge and is scoped to it. Creating a namespace and the
+# cluster-scoped objects that bound it is inherently outside the credential being created, so this
+# grant is applied once, out of band, by a cluster-admin — and is deliberately narrow:
+#
+#  * cluster-scoped rights are pinned to the tenant's OWN object names by resourceNames, so this
+#    cannot touch options-edge's PriorityClasses or the existing jenkins-only admission policy;
+#  * namespaced rights are granted by a RoleBinding INSIDE fullfunding only, never cluster-wide,
+#    so the deployer gains nothing anywhere else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fullfunding-tenant-bootstrap
+rules:
+  # `create` cannot be restricted by resourceNames (the name is not known until the request is
+  # made); every other verb is pinned to the tenant's own namespace.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [create, list]
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [fullfunding]
+    verbs: [get, watch, update, patch]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: [priorityclasses]
+    verbs: [create, list]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: [priorityclasses]
+    resourceNames: [fullfunding-low]
+    verbs: [get, watch, update, patch, delete]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
+    verbs: [create, list]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: [validatingadmissionpolicies, validatingadmissionpolicybindings]
+    resourceNames: [fullfunding-tenant-rules]
+    verbs: [get, watch, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fullfunding-tenant-bootstrap
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fullfunding-tenant-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deployer
+    namespace: options-edge
+---
+# Everything namespaced is granted here, and only here — inside fullfunding.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-deployer-tenant
+  namespace: fullfunding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: admin          # built-in: full rights to namespaced objects, no cluster-scoped reach
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deployer
+    namespace: options-edge

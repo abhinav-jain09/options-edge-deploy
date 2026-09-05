@@ -1,0 +1,59 @@
+# STANDALONE public Gamma Lab overlay — production.
+#
+# ⚠️ The Deployment ships at replicas: 0 and stays there until PGL-072's evidence exists for the
+# exact image digest (scripts/deploy/verify-public-gate.sh). Raising it is a reviewed change that
+# carries that evidence, not an edit made in passing.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+
+# PGL-072. The image is PINNED TO A DIGEST here, in git, rather than left as a tag for the deploy to
+# resolve later.
+#
+# WHY. The gate refuses a public replica whose image is not digest-pinned, because a tag can be
+# re-pushed and evidence gathered against it proves nothing about what will actually run. That is not
+# theoretical: on 2026-08-16 `:prod` resolved to four different digests inside twenty minutes while
+# options-edge-web-deploy ran four times, so "read the digest, run the tests, write the evidence,
+# deploy" was a race that lost twice.
+#
+# `common-infra-deploy` gates the OVERLAY as written and never remaps, so a tag here fails it outright
+# — which is what blocked bo-app-postgres from deploying at all. `service-deploy` remaps dev→prod and
+# then pins; a digest is already pinned, so its remap finds no `:dev` to rewrite and its pin is a
+# no-op. Both paths therefore agree on one immutable image.
+#
+# THIS DIGEST HAS EVIDENCE, EARNED BEFORE THIS EDIT: public-gate-evidence #36 attested
+# sha256:c6f72c47… built from main at 52d9496b by options-edge-web-deploy #1214, recorded
+# PGL-050/051/052 as PASS, and reported "digest unchanged across the run". BUILD_IMAGE was
+# false on purpose: the image was already on :prod and already serving the internal surface,
+# so the attestation qualifies the artefact that will run rather than a fresh build nobody has
+# looked at. Rebuilding to attest is how 2026-08-16 produced four digests in twenty minutes.
+#
+# WHY THIS MOVES. The Near Flip page shows ONLY "At the flip, positive gamma dominant" (owner,
+# 2026-09-05). The other two lists are still computed, still returned by the endpoint and still
+# recorded every evening; they are the internal record the posShare and ladder thresholds get
+# calibrated against. What came off is a promise the page could not keep: "Closest to the flip"
+# RANKED the top twenty rather than filtering, so on 2026-09-03 it ran from BKNG at 0.18% out
+# to TSLA at 5.02% under a heading saying they were all close, and the last row was read as a
+# claim about a stock sitting at its flip.
+#
+# WHAT ELSE MOVES WITH IT: two commits, 77f529ca -> 52d9496b. The public ALLOWLIST DOES NOT
+# CHANGE here — /flip-bridge and the two pressure boards are already public, they arrived with
+# the previous pin, and both were verified answering 200 on the live public site before this
+# edit rather than assumed. PUBLIC_SURFACE_API_PATHS is untouched: board, close-board and
+# close-flips, as before, so no new data route is public.
+#
+# ⚠️ The comment block above this one described sha256:f44f06be… while the digest line held
+# a46ddde5: #977 advanced the pin and left the prose behind, so the file explained an image it
+# was not running. Whoever edits this next: the paragraph and the digest are one change.
+#
+# ROLLBACK TARGET: the OUTGOING digest is sha256:a46ddde5… (the pressure-boards build, #1212),
+# durable tag prod-1212-77f529ca2d4f, verified present in the registry at the time of this
+# edit. The incoming one has prod-1214-52d9496b9d4c. Every prod build pushes a per-build tag
+# beside the moving :prod one, and a registry garbage-collect deletes only manifests no tag
+# references, so both stay reachable by name.
+#
+images:
+  - name: 192.168.100.252:5000/options-edge-web
+    newName: 192.168.100.252:5000/options-edge-web
+    digest: sha256:c6f72c476061db94f9120cb0316c03c547268ba143ea2c44085794a349e2c441

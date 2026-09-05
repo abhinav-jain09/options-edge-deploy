@@ -52,13 +52,15 @@ spec:
   template:
     metadata:
       annotations:
-        oe/config-nonce: 2026-07-20-expiry-auto
+        oe/config-nonce: 2026-07-31-heatmap-saturation
       labels:
         app.kubernetes.io/name: feed-gateway-service
         app.kubernetes.io/part-of: options-edge
     spec:
       containers:
         - env:
+            - name: GATEWAY_IBKR_PREOPEN_ENABLED
+              value: "true"
             - name: OE_WATCH_JDBC_URL
               value: jdbc:postgresql://192.168.100.252:5432/options_flow
             - name: OE_WATCH_DB_USER
@@ -77,6 +79,10 @@ spec:
               value: underlying.spx.price,options.databento.raw,options.databento.gex.strike,options.databento.gex.magnet,options.databento.gex.flow.by-strike,delta-flow-by-strike,strike-liquidity-heatmap-dashboard,market.spx.market-carry-service.current
             - name: OE_SYSTEM_STATUS_LAG_REGISTRY
               value: databento-gex-service:databento-gex-service:options.databento.raw;strike-intelligence-service:strike-intelligence-service:options.databento.gex.strike;delta-flow-service:delta-flow-service:options.opra.tcbbo
+            - name: GATEWAY_ES_CVD_SPX_LEVELS_ENABLED
+              value: "true"
+            - name: KAFKA_ES_CVD_SPX_LEVELS_TOPIC
+              value: options.es-cvd-spx-levels
             - name: APP_WEB_PORT
               value: "18091"
             - name: GATEWAY_ES_GEX_ENABLED
@@ -89,6 +95,12 @@ spec:
               value: "true"
             - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
               value: es.futures.aggressor-flow
+            - name: GATEWAY_ES_CVD_ENABLED
+              value: "true"
+            - name: KAFKA_ES_CVD_TOPIC
+              value: es.futures.cvd
+            - name: KAFKA_ES_CVD_BARS_TOPIC
+              value: es.futures.cvd.bars
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS
@@ -106,11 +118,11 @@ spec:
             - name: WS_AUTH_ENABLED
               value: "true"
             - name: WS_AUTH_ISSUER_URI
-              value: https://auth.fullfunding.nl/realms/optionsedge
+              value: https://auth.bleadingoptions.com/realms/optionsedge
             - name: WS_AUTH_AUDIENCE
               value: options-edge-web
             - name: WS_ALLOWED_ORIGINS
-              value: https://fullfunding.nl
+              value: https://bleadingoptions.com
           envFrom:
             - configMapRef:
                 name: options-edge-config

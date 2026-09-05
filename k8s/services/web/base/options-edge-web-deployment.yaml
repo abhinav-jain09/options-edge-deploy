@@ -2,7 +2,7 @@
 # Replaces the legacy off-cluster Tomcat instance on the host :8090. Auth is MANDATORY in prod: the app
 # fails to start unless VITE_AUTH_ISSUER (non-loopback HTTPS) + AUTH_AUDIENCE are set (RuntimeProfileConfig),
 # and the front-end force-login gate points at the prod Keycloak. Market-chain data reaches the BROWSER via
-# the feed-gateway WS (wss://fullfunding.nl/ws/events); this backend only serves the page + /api and needs
+# the feed-gateway WS (wss://bleadingoptions.com/ws/events); this backend only serves the page + /api and needs
 # Kafka (egress to the host broker) — so no hostNetwork required (it dials Kafka by host IP like the other
 # processor pods; pod->ClusterIP/host egress works on this cluster, only pod->pod-IP does not).
 apiVersion: apps/v1
@@ -38,7 +38,7 @@ spec:
         app.kubernetes.io/part-of: options-edge
     spec:
       # Pin to the control-plane node (192.168.100.252). The oe-failover-56 node (.4) has intermittently
-      # broken pod DNS, which makes the startup OIDC issuer fetch (https://auth.fullfunding.nl) fail with
+      # broken pod DNS, which makes the startup OIDC issuer fetch (https://auth.bleadingoptions.com) fail with
       # UnknownHostException. The control-plane node resolves reliably (same reason Keycloak is pinned here).
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
@@ -57,7 +57,7 @@ spec:
             - name: VITE_AUTH_ENABLED
               value: "true"
             - name: VITE_AUTH_ISSUER
-              value: "https://auth.fullfunding.nl/realms/optionsedge"
+              value: "https://auth.bleadingoptions.com/realms/optionsedge"
             - name: VITE_AUTH_CLIENT_ID
               value: "options-edge-web"
             - name: VITE_AUTH_AUDIENCE
@@ -66,23 +66,36 @@ spec:
               value: "options-edge-web"
             # --- Feed-gateway WS (the browser connects here for chain data) + UI URLs (public edge) ---
             - name: APP_FEED_GATEWAY_WS_URL
-              value: "wss://fullfunding.nl/ws/events"
+              value: "wss://bleadingoptions.com/ws/events"
             - name: VITE_WS_URL
-              value: "wss://fullfunding.nl/ws/events"
+              value: "wss://bleadingoptions.com/ws/events"
             # The browser-facing WS above is the PUBLIC edge (Cloudflare -> traefik). The web POD,
             # however, computes feedGatewayAvailable by probing APP_FEED_GATEWAY_HEALTH_URL — and a
-            # pod must NOT health-check itself by round-tripping out to the public wss://fullfunding.nl
+            # pod must NOT health-check itself by round-tripping out to the public wss://bleadingoptions.com
             # and back (fragile: depends on egress + Cloudflare + DNS just to know the in-cluster
             # gateway is up). The gateway Service is directly pod-reachable, so probe its stable
             # cluster DNS name rather than hairpinning through the node's external address.
             - name: APP_FEED_GATEWAY_HEALTH_URL
               value: "http://feed-gateway-service:8091/health"
+            # ⛔ The /multileg page proxies through this tier to the multileg service's own SSE
+            # endpoint. The app's COMPILED default is http://options-edge-multileg:8080 — a name and
+            # port that exist nowhere: the service is registered as multileg-structure-service on
+            # 8136 (k8s/base/multileg-structure-service.yaml), following the same <name>-service
+            # convention as every sibling. Without this the proxy dials a name DNS cannot resolve and
+            # the page sits on "disconnected — retrying" for ever, which is exactly how it looked
+            # after the service itself was deployed and healthy.
+            - name: MULTILEG_SERVICE_BASE
+              value: "http://multileg-structure-service:8136"
             - name: VITE_API_BASE_URL
-              value: "https://fullfunding.nl"
+              value: "https://bleadingoptions.com"
             - name: VITE_MISSION_CONTROL_URL
-              value: "https://fullfunding.nl"
+              value: "https://bleadingoptions.com"
             - name: VITE_REPLAY_ORCHESTRATOR_URL
-              value: "https://fullfunding.nl"
+              value: "https://bleadingoptions.com"
+            # WebNav's compiled default still points at the OLD es domain; this override is
+            # mandatory from the Phase-2 cutover on (the acceptance gate checks it).
+            - name: APP_ES_OPTIONS_URL
+              value: "https://es.bleadingoptions.com"
             - name: APP_MARKET_DATA_SOURCE
               value: "DATABENTO"
             # Dealer-ledger strike-signal render gate, served to the browser as config.dealerLedgerVisible.

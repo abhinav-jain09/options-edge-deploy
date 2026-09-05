@@ -54,6 +54,8 @@ spec:
           value: options.opra.tcbbo
         - name: DELTA_FLOW_INPUT_GEX_TOPIC
           value: options.databento.gex.strike
+        - name: DELTA_FLOW_GREEK_MAX_AGE_MS
+          value: '30000'
         - name: DELTA_FLOW_STREAMS_APP_ID
           value: options-edge-delta-flow-service
         - name: DELTA_FLOW_STREAMS_COMMIT_INTERVAL_MS
@@ -74,8 +76,6 @@ spec:
           value: 'true'
         - name: DELTA_FLOW_MIN_CONTRACTS
           value: '1'
-        - name: DELTA_FLOW_GREEK_MAX_AGE_MS
-          value: '30000'
         - name: DELTA_FLOW_QUOTE_MAX_AGE_MS
           value: '10000'
         - name: DELTA_FLOW_GREEK_LOOKAHEAD_TOLERANCE_MS

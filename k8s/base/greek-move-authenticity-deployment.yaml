@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: greek-move-authenticity-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: greek-move-authenticity-service
+    app.kubernetes.io/component: greek-move-authenticity-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: greek-move-authenticity-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: greek-move-authenticity-service
+        app.kubernetes.io/component: greek-move-authenticity-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: greek-move-authenticity
+          image: 192.168.100.252:5000/options-edge-greek-move-authenticity:dev
+          imagePullPolicy: Always
+          # Advisory-only greeks-only move-authenticity engine (design
+          # GREEK-MOVE-AUTHENTICITY-ENGINE-DESIGN.md r24). Read-only consumer of existing
+          # compacted/keyed topics; publishes options.spx.greek-move-auth.current/.events.
+          # Symbol-agnostic: on es4 the runtime TOPIC_PREFIX=es. resolves the es.* variants,
+          # so input/output topics are left at their SPX defaults here (§18).
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            # Inert by DEFAULT (design §13 rollout). Every environment overlay flips it on: the dev
+            # and production overlay patches and the es4 renderer all set GREEK_MOVE_AUTH_ENABLED=true.
+            # Production is go-live (advisory-only, CHARM_SIGN pinned by the Gate-1 fixture, #409); the
+            # base default stays false so a brand-new environment starts inert until its overlay enables it.
+            - name: GREEK_MOVE_AUTH_ENABLED
+              value: "false"
+            - name: HEALTH_PORT
+              value: "8130"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx1024m"
+          ports:
+            - name: health
+              containerPort: 8130
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1Gi

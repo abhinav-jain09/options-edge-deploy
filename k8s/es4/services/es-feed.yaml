@@ -188,6 +188,23 @@ spec:
               value: "true"
             - name: ES_PRICE_TOPIC
               value: "es.underlying.es.price"
+            # ---- forwarded ES->SPX basis reference (feed PR #102, DBP-R32 follow-up) -----
+            # This feed owns the native ES subscription but has NO SPX leg, so it cannot
+            # compute the ES->SPX basis its own chain UI renders: the "SPX ≈ X" superscript
+            # reads the spxBasis* enrichment off es.underlying.es.trades, which this feed
+            # publishes. Pre-flip those fields arrived prod-stamped over the bridge; the flip
+            # reversed the direction and left the superscript dark. Follow prod's ENRICHED
+            # underlying.es.price (the one engine's Kafka sink; prod feed ES_PRICE_ENABLED)
+            # over the LAN and stamp the forwarded fields onto each native trade publish.
+            # Fail-honest: reference staleness (30s default, local receive clock) or an
+            # UNAVAILABLE upstream stamps nothing/state-only — the superscript simply hides.
+            # Keys are UNPREFIXED (config.py), like the ES_TRADES_SOURCE_* family.
+            - name: ES_BASIS_REFERENCE_ENABLED
+              value: "true"
+            - name: ES_BASIS_REFERENCE_BOOTSTRAP
+              value: "192.168.100.252:9092"
+            - name: ES_BASIS_REFERENCE_TOPIC
+              value: "underlying.es.price"
             # ---- misc ------------------------------------------------------------
             - name: APP_PROFILE
               value: "prod"

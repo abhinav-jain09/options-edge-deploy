@@ -55,11 +55,27 @@ spec:
             - name: DEALER_LEDGER_STREAMS_APP_ID
               value: options-edge-dealer-ledger-service
             - name: DEALER_LEDGER_STREAMS_COMMIT_INTERVAL_MS
-              value: "1000"
+              # EOS is ON, so every commit is a Kafka transaction. At 1s the hot task pays that
+              # cost 60x a minute while its own recompute backlog is the thing to protect. 3s
+              # keeps end-to-end latency well inside the 1-per-minute cadence every consumer of
+              # dealer-ledger-profile actually samples at.
+              value: "3000"
             - name: DEALER_LEDGER_STREAMS_AUTO_OFFSET_RESET
               value: latest
             - name: DEALER_LEDGER_STREAMS_NUM_THREADS
-              value: "1"
+              # Evidence, from the rendered topology (Topology.describe()):
+              #   sub-topology 0: sources flow-in / greeks-in / snapshot-in / heatmap-in ->
+              #                   rekey-json + rekey-avro (stores: []) -> sink chain-rekey
+              #   sub-topology 1: source chain-in (chain-rekey) -> ledger (all six state stores)
+              #   sub-topology 2: deltaflow-in            sub-topology 3: global store (no tasks)
+              # So the rekey stage is stateless and its tasks are per input partition, while EVERY
+              # ledger state store belongs to the single "ledger" processor. All records for one
+              # symbol|expiry hash to one chain-rekey partition, so the SPX chain remains exactly
+              # one task and extra threads cannot execute it concurrently - Streams never runs one
+              # task on two threads. What 4 threads buy is that the stateless rekey tasks and the
+              # deltaflow task run alongside the ledger task instead of queueing behind it during
+              # open/close bursts. It does not, and cannot, parallelise the chain itself.
+              value: "4"
             - name: DEALER_LEDGER_EOS_ENABLED
               value: "true"
             - name: KAFKA_STREAMS_STATE_DIR
@@ -85,6 +101,51 @@ spec:
             # resting quote isn't thrown away; reduce gradually once firing is confirmed. Both envs (base).
             - name: DEALER_LEDGER_QUOTE_STALE_MS
               value: "600000"
+            # --- DEPENDENCY-SCOPED FIRE-INPUT QUALITY (processing PR #594, b704ba42) — REGISTERED
+            #     DORMANT. The merged verdict was inert: neither knob existed in any manifest, so the
+            #     fix could not be reasoned about, grepped for, or flipped without first rediscovering
+            #     it in the service source. Both live in the BASE so every rendered env states them
+            #     explicitly; the eventual enable is a PRODUCTION-ONLY name-keyed override, NOT a base
+            #     edit (a base flip would silently hand dev and experiment production signal semantics).
+            #
+            # The defect: the G-FIRE emission gate judges the CHAIN-WIDE aggregateQuality, and
+            # greeksQualityFlags is a UNION across strikes (ProfileEngine:292), so ONE weak EDGE strike
+            # vetoes the whole chain while the near-money strikes the decision rests on are healthy.
+            # Measured on prod 2026-08-12: MISSING_IV on 90.9% of profile rows; 12:00-14:59 ET was 100%
+            # INSUFFICIENT. Today only the blunt lever FIRE_GREEKS_MIN_QUALITY=DEGRADED (production
+            # overlay) permits a fire; the chain-veto incoherence itself is untouched.
+            #
+            # ⚠ STAYS false UNTIL THE SHADOW EVIDENCE EXISTS (Codex rollout gate, PR #594 review +
+            # 2026-08-13 design ruling). The gating counters (StateMachine.FIRE_COUNTERFACTUAL,
+            # keys `proposed-blocks-legacy-pass` and `counterfactual-fire|CONTRIBUTOR-DEFECT`) are
+            # gated on DealerLedgerDiag.ENABLED and, as merged, have NO READOUT PATH FROM A RUNNING
+            # POD: they are absent from DealerLedgerStreams.metricsText(), so /metrics on HEALTH_PORT
+            # 8113 does not carry them; they are not logged, not on the state record's decisionTrace,
+            # and not on any topic. Setting DEALER_LEDGER_DIAG_COUNTERS=true today would therefore
+            # count into unreadable process memory that dies with the 20:30 ET off-hours scale-to-zero.
+            # DEALER_LEDGER_DIAG_COUNTERS is DELIBERATELY NOT REGISTERED HERE: enabling collection
+            # before the readout exists buys nothing and would imply evidence that cannot be produced.
+            # Order of operations: (1) this registration; (2) a SERVICE-repo PR exporting the FIRE_*
+            # maps and FIRE_INPUT_INVARIANT_VIOLATIONS through metricsText() with durable scraping;
+            # (3) register DIAG_COUNTERS=true; (4) shadow with the flag still false; (5) flip.
+            - name: DEALER_LEDGER_FIRE_QUALITY_DEPENDENCY_SCOPED
+              value: "false"
+            # Materiality tolerance for an OFF-SPAN positioned leg that the FIRE verdict had to drop,
+            # expressed as a FRACTION of DEALER_LEDGER_UNWIND_ARM_MIN — the only threshold suShortGamma
+            # is ever compared against (G-ARM: |suShortGamma| >= UNWIND_ARM_MIN). Effective dollar
+            # tolerance is FRAC * UNWIND_ARM_MIN, so the SAME 0.01 means different money per env:
+            #   production/experiment/es4  UNWIND_ARM_MIN = code default 1e8  ->  $1,000,000
+            #   dev                        UNWIND_ARM_MIN = 7.5e7 (dev patch) ->  $750,000
+            # Pinned here rather than inherited so the deploy manifest owns the effective value of a
+            # safety-sensitive rollout parameter (Codex 2026-08-13, question (d)) — it happens to equal
+            # the current code default, and scripts/ci/validate-dealer-ledger-fire-quality.sh asserts
+            # the rendered value stays finite and non-negative in every env.
+            # ⚠ DIRECTION: SMALLER is STRICTER. ProfileEngine.offSpanDropIsImmaterial returns FALSE
+            # (BLOCK) when the tolerance is non-finite or <= 0, so 0 is fail-closed-maximal, NOT a
+            # crash-loop — unlike DEALER_LEDGER_REARM_FLOW_USD, which crash-loops the pod below its
+            # derived floor. Consumed ONLY while DEPENDENCY_SCOPED is true; inert while it is false.
+            - name: DEALER_LEDGER_FIRE_OFFSPAN_MATERIALITY_FRAC
+              value: "0.01"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms384m -Xmx1024m"
           ports:
@@ -107,7 +168,19 @@ spec:
               mountPath: /var/lib/options-edge/kafka-streams
           resources:
             requests:
-              cpu: 100m
+              # The ledger stage is a SINGLE Kafka Streams task (every input is rekeyed to
+              # symbol|expiry, so one SPX chain = one partition = one thread) and it carries the
+              # whole session: ~2.6M records measured on 2026-06-18, each triggering a full
+              # per-strike state read + profile recompute. A 100m request means the scheduler
+              # guarantees a tenth of a core for that thread, so under any node contention the
+              # chain falls seconds behind and every downstream consumer sees stale analytics.
+              # Headroom evidence (production .252, measured 2026-07-25): node capacity and
+              # allocatable are both 24 CPU; summing the cpu requests of all 57 workloads at one
+              # replica each gives 10.97 cores, so this raise (0.1 -> 2) leaves ~11 cores of
+              # request headroom and cannot make the pod Pending. Note requests are scheduling
+              # weights, not a reservation of two physical cores; there is deliberately no cpu
+              # limit, so the pod may burst above 2 when the node is idle.
+              cpu: "2"
               memory: 512Mi
             limits:
               memory: 1536Mi

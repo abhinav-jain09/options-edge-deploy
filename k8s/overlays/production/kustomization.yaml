@@ -13,6 +13,26 @@ resources:
   # short-premium-agent runs on prod too (7B on the .252 GPU) — same base as dev, with the
   # prod env patch below overriding model/Ollama-URL/SP_REQUIRE_REAL. Mirrors the web pattern.
   - ../../services/short-premium-agent/base
+  # databento-vix-feed: the STANDALONE VIX OPRA feed (VIX feed separation PR-2, design §5).
+  # PROD-ONLY by design — dev keeps its in-process VIX path, so this base is referenced
+  # here and nowhere else. Committed replicas: 0 until the VFS-R1 session evidence is
+  # recorded (the shadow commit flips it); image reuse (options-edge-databento-feed) with
+  # a `command` override selecting the vix role — no new images entry needed.
+  - ../../services/databento-vix-feed/base
+  # es-aggressor-flow: PROD-ONLY, and prod-only for a reason — dev is SPX-only and has no ES
+  # feed. It runs here with the legacy absorption snapshot DISABLED, publishing only the
+  # Kyle-style signed-flow response slope (a neutral observability measurement, not a signal).
+  # The es4 deployment at k8s/es4/services/ is untouched and keeps the legacy output.
+  - ../../services/es-aggressor-flow/base
+  # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ), public via cloudflared path
+  # routes to NodePort 30188. STANDALONE overlay k8s/services/nifty-gex/overlays/production
+  # mirrors the prod patches — sync enforced by validate-services render equivalence.
+  # stock-gex-close-scheduler: PROD-ONLY, and the reason is the whole point of it — it holds the
+  # CLOSING-BOARD SCHEDULE in the batch itself (USER 2026-09-01: "I don't want anything
+  # Jenkins-based, it should run based on Spring Batch configuration"). Dev has no closing-board
+  # chain and no OI index on its nodes, so this base is referenced here and nowhere else.
+  - ../../services/stock-gex-close-scheduler/base
+  - ../../services/nifty-gex/base
 
 # Prod-only: the node already has the images cached, so re-pulling all ~26 at
 # once on every rollout trips the kubelet image-pull QPS limit ("pull QPS
@@ -20,6 +40,185 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  # PROD-ONLY: gamma-migration R11 other-board sidecar (cross-cluster, points at es4).
+  # MIRRORS k8s/services/gamma-migration/overlays/production — validate-services enforces it.
+  - path: gamma-migration-prod-env-patch.yaml
+    target:
+      kind: Deployment
+      name: gamma-migration-service
+  - path: approach-position-publisher-delete.yaml
+    target:
+      kind: Deployment
+      name: approach-position-publisher
+  - path: approach-monitor-delete.yaml
+    target:
+      kind: Deployment
+      name: approach-monitor-service
+  - path: approach-monitor-delete.yaml
+    target:
+      kind: Service
+      name: approach-monitor-service
+  # PROD-ONLY: the position-flow Leaderboard store (LeaderboardStore reads APP_POSTGRES_*,
+  # the public tenant's variable names) pointed at the PLATFORM Postgres for the INTERNAL
+  # web — the internal surface has no bo-app-postgres and the nightly publisher writes the
+  # board into options_flow as well. MIRRORS k8s/services/web/overlays/production exactly —
+  # validate-services enforces the render equality.
+  - target:
+      kind: Deployment
+      name: options-edge-web
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: APP_POSTGRES_JDBC_URL
+          value: jdbc:postgresql://192.168.100.252:5432/options_flow
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: APP_POSTGRES_USER
+          value: options_flow
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: APP_POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: options-edge-runtime-secrets
+              key: POSTGRES_PASSWORD
+  # PROD-ONLY: the ES GEX strike topic for the databento display service. MIRRORS the standalone
+  # slice k8s/services/raw-to-display/overlays/production, which #714 added it to without the
+  # matching top-level patch — validate-services caught the drift and blocked every deploy.
+  # Inserted at INDEX 4, immediately after KAFKA_DISPLAY_VOLUME_TOPIC, because the mirror check
+  # compares the rendered manifests and an appended entry would still differ by position.
+  - target:
+      kind: Deployment
+      name: raw-to-display-databento-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/4
+        value:
+          name: KAFKA_DATABENTO_GEX_STRIKE_TOPIC
+          value: options.databento.gex.strike
+  # PROD-ONLY: arm the reversal hunt (requirement rev 5). MIRRORS the
+  # standalone overlay k8s/services/reversal-confirmation/overlays/production
+  # exactly — validate-services enforces the render equality.
+  - target:
+      kind: Deployment
+      name: reversal-confirmation-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_ENABLED
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_SPX_BOOTSTRAP
+          value: 192.168.100.252:9092
+      # Hunt geometry. Notification-VOLUME calibration only — see
+      # docs/evidence/reversal-hunt-28t31b/README.md for the pinned source map,
+      # the checksummed inputs, the runnable replay, the observation window and
+      # the rollback triggers. Replaying the 2026-08-10 and 2026-08-11 ES RTH
+      # sessions, the previous 40t/60s yields 1 voice-eligible candidate per
+      # session and 28t/62s yields 4.5. 28t/31b is the shallowest admissible
+      # pair BY DEPTH under HuntConfig.validateAgainst against the passive
+      # 28t/30b engine (29t/30b is the other minimal pair, along duration
+      # instead). The passive engine geometry above is deliberately untouched.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_MIN_DECLINE_TICKS
+          value: "28"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS
+          value: "31"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_AUTO_ARM
+          value: "true"
+      # SESSION-SCALE SWING PATH (Gate-1 REVERSAL-HUNT-SESSION-SCALE-DEPTH).
+      # Measured from the highest counter-swing in a ROLLING 90-MINUTE window
+      # rather than the deployed 62-second one, so the call the deployed rule
+      # cannot make — a decline that paused and resumed — gets made. Every
+      # evaluated candidate is written to es.reversal.hunt.swing.candidates,
+      # SPOKEN OR NOT, with the reason it stayed quiet; that corpus is how the
+      # thresholds get answered rather than argued.
+      #
+      # The two settings below are its PRECONDITIONS, not preferences, and the
+      # service refuses to start without them:
+      #   * a 90-minute window cannot be rebuilt from a 25-minute replay, so a
+      #     restart an hour after the reference formed would go silent exactly
+      #     where the continuous process calls — the failure this whole change
+      #     exists to remove, reintroduced by a restart;
+      #   * the ring must hold that replay (replay/2s + 60 buckets). 2790
+      #     buckets is ~93 minutes of ES and option buckets, well under a
+      #     megabyte; the real cost is a longer BOOT REPLAY, which is the price
+      #     of a session-scale reference and is paid once per start.
+      # Both change what the deployed hunt REPLAYS at boot; neither changes a
+      # rule it applies.
+      #
+      # THIS ROLLOUT TERMINATES ANY ARMED LEG HUNT, ONCE, BY DESIGN.
+      # REVERSAL_RING_CAPACITY_BUCKETS is part of the deployed hunt's config
+      # FINGERPRINT, and a restored hunt whose fingerprint no longer matches is
+      # terminated CONFIG_CHANGED — the mechanism that stops a hunt continuing
+      # under geometry it was not armed for. It is correct and it fires here,
+      # because a 90-minute reference genuinely needs a bigger ring.
+      #
+      # So: APPLY THIS OUTSIDE RTH. Auto-arm is on, so both modes re-arm on
+      # their own at the next open and the only cost is the terminal alert. An
+      # INTRADAY apply would kill live hunts mid-session and put two
+      # CONFIG_CHANGED terminations on the alerts topic — a change to the
+      # deployed stream, which is the one thing this program may not do.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_REPLAY_LOOKBACK_SECONDS
+          value: "5460"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_RING_CAPACITY_BUCKETS
+          value: "2790"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_SWING_ENABLED
+          value: "true"
+  # greek-move-authenticity: ENABLED on PROD (go-live — advisory-only, CHARM_SIGN pinned by the
+  # Gate-1 fixture, options-edge-processing #409). Strategic-merge on env name (namespace required).
+  # MUST MIRROR the standalone slice k8s/services/greek-move-authenticity/overlays/production (validate-services).
+  - target:
+      kind: Deployment
+      name: greek-move-authenticity-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: greek-move-authenticity-service
+        namespace: options-edge
+      spec:
+        template:
+          spec:
+            containers:
+              - name: greek-move-authenticity
+                env:
+                  - name: GREEK_MOVE_AUTH_ENABLED
+                    value: "true"
+                  # Bootstrap the robust-Z baseline from the CURRENT session (the dev default).
+                  # baselineReady() counts prior-session samples, plus current-session samples ONLY
+                  # when this is true. On a freshly-deployed service `prior` is empty, so with the
+                  # prod default (false) n==0 forever and EVERY frame is DATA_DEGRADED /
+                  # MOVE_BASELINE_NOT_READY for the entire first session — observed live on es4 at
+                  # the 2026-07-19 globex open (364 verdicts, all MOVE_BASELINE_NOT_READY).
+                  # Trade-off: an in-session baseline is statistically weaker early on (it self-
+                  # corrects as samples accumulate) — the alternative is a dead first session.
+                  # REVERT = drop this env entry (falls back to prior-session-only baselines).
+                  - name: GREEK_MOVE_AUTH_BOOTSTRAP_IN_SESSION
+                    value: "true"
   # Restoring the 4.3M-record SR3 GlobalKTable needs substantial RocksDB/native
   # headroom in addition to the Java heap. The previous 1Gi cgroup with a 768Mi
   # heap was OOM-killed during restore and left the pod-local store corrupted.
@@ -93,6 +292,43 @@ patches:
                 env:
                   - name: DEALER_LEDGER_ADVISORY_ENABLED
                     value: "true"
+                  # SHADOW-live gates (spec dl-shadow-live r3, Codex-approved 2026-08-08): absorption
+                  # verdict is evidence-only (matched-null OR 0.817 — no signal as a hard gate), greeks
+                  # DEGRADED may fire (live is 100% MISSING_IV), MIN_WAVES=1 (waves never close; 3 is
+                  # unsatisfiable), confidence floor LOW until the OI-seeded morning book lands.
+                  # Fires stay SHADOW-quality; rollback = remove these four (defaults restore HARD/FULL/3/MEDIUM).
+                  - name: DEALER_LEDGER_ABSORPTION_GATE_MODE
+                    value: CONFIDENCE
+                  - name: DEALER_LEDGER_FIRE_GREEKS_MIN_QUALITY
+                    value: DEGRADED
+                  - name: DEALER_LEDGER_ABSORB_MIN_WAVES
+                    value: "1"
+                  - name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE
+                    value: LOW
+                  # SHADOW EVIDENCE for the dependency-scoped FIRE verdict (processing#624). Emits a
+                  # schema-tagged FQS2 entry on the state record's decisionTrace for every
+                  # grace-surviving G-FIRE row, on BOTH gate outcomes — the legacy verdict still
+                  # decides; this only RECORDS what the proposed verdict would have done.
+                  # PRODUCTION ONLY, and deliberately: dev cannot serve as the shadow population
+                  # (UNWIND_ARM_MIN 7.5e7 vs prod 1e8 changes both candidate selection and the
+                  # off-span tolerance, and dev is SPX-only on synthetic spot).
+                  # WHY the trace and not /metrics: prod Prometheus was `systemctl disable --now`
+                  # on 2026-07-23 by USER instruction, so nothing scrapes :8113 and nothing survives
+                  # the 20:30 ET scale-to-zero. `dealer-ledger-state` is delete-only (never compacted)
+                  # and is already in the nightly NAS archive set with a sha256 manifest and a
+                  # completeness floor — the only artifact that survives the night.
+                  # This does NOT enable the new verdict: DEALER_LEDGER_FIRE_QUALITY_DEPENDENCY_SCOPED
+                  # stays false in the base, and the CI guard keeps ALLOW_TRUE_ENVS empty until the
+                  # bar is evidenced (N>=500 legacy-PASS rows over >=5 RTH sessions and >=3 dates,
+                  # legacy-PASS-proposed-FAIL / N <= 1.0% with 95% Wilson upper <= 2.0%,
+                  # CONTRIBUTOR-DEFECT == 0, FIRE_INPUT_INVARIANT_VIOLATIONS == 0).
+                  - name: DEALER_LEDGER_FIRE_SHADOW_EVIDENCE
+                    value: "true"
+                  # Chain-changelog record hit 4,214,084 B > the 4 MiB default at first SHADOW-live
+                  # boot (open wave accumulates all session deltas until wave-lifecycle repair lands)
+                  # — 16 MiB headroom; existing changelog topics live-altered to match (2026-08-08).
+                  - name: KAFKA_DEALER_LEDGER_MAX_RECORD_BYTES
+                    value: "16777216"
                   - name: JAVA_TOOL_OPTIONS
                     value: -Xms1024m -Xmx6144m
                 resources:
@@ -121,8 +357,198 @@ patches:
             containers:
               - name: databento-gex
                 env:
+                  # RAISED 3 -> 40 (2026-08-03, with the smile-IV fallback below): measured on dev,
+                  # strike-intelligence's ONLY GEX input is options.databento.gex.flow.by-strike —
+                  # the topic THIS gate feeds — so top-3 starved every other strike's GEX component
+                  # (dev: 38k gated vs 1.1k forwarded; near-ATM stuck at GEX-missing/NORMAL). The
+                  # original comment's claim that strike-intel input is unchanged by the gate was
+                  # wrong. 40 restored dev near-ATM coverage 70%->15% missing with zero streams lag.
+                  # PROD CPU WATCH: this node runs hot — if gex lag or feed CPU degrades after
+                  # rollout, drop this back to 3 and split strike-intel onto gex.strike instead.
+                  # TEMPORARY (2026-09-04) — RECOVERY ONLY, REVERT BEFORE THE 2026-09-08 OPEN.
+                  # The base sets this false (USER decision 2026-09-02) because the historical
+                  # statistics path 422s PRE-OPEN: it resolves SPXW.OPT against TODAY's definition
+                  # map, which Databento publishes late each morning, so GEX fail-closes until
+                  # mid-morning. That reason is intact and this flag must go back to false.
+                  #
+                  # Why it is on right now: a bogus contract selection (symbol=COALINDIA,
+                  # tradingClass=SPXW) hijacked the SPX feed at 05:56 ET today, straddling the
+                  # pre-market LIVE-OI capture window, so TODAY's 0DTE expiry (20260904) captured
+                  # 0/724 legs of OI. The only SPX ladder that resolved was the NEXT_SESSION one
+                  # (20260908, 180 strikes) — which is why Postgres holds OI for 09-08 only. With
+                  # live-capture-only there is NO fallback and the capture does not re-run
+                  # intraday, so GEX stays fail-closed for the whole session.
+                  #
+                  # Safe window: today is Friday and Monday 09-07 is a holiday, so the next open is
+                  # TUESDAY 09-08 — the pre-open 422 exposure cannot bite before then. The
+                  # historical edge for today is long crossed (~06:30 ET), so the fetch should now
+                  # succeed where it would have failed this morning.
+                  - name: DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED
+                    value: "true"
                   - name: DATABENTO_GEX_FLOW_TOP_N
-                    value: "3"
+                    value: "40"
+                  # EXPERIMENTAL smile-IV fallback (proc 3fe1a2f7, Codex round-3 APPROVE; code
+                  # default OFF, this flag is the only enable). Rebuilds short-dated legs whose IV
+                  # solve failed on the measured BELOW-INTRINSIC branch (100% of 0DTE failures; the
+                  # ITM mark sits at intrinsic while the worthless OTM twin has no usable quote, so
+                  # parity recovery starves and the strike drops — silently removing ~half the
+                  # near-ATM 0DTE ladder). Rebuilt legs are flagged SMILE_IV_FALLBACK, excluded
+                  # from netGexStrict, never anchor-eligible. Dev-validated 2026-08-03 before this
+                  # prod enable. Watch options_edge_databento_gex_smile_fallback_total.
+                  - name: GEX_SMILE_IV_FALLBACK
+                    value: "true"
+                  # DYNAMIC OPEN INTEREST. GEX stops pricing with the print the exchange published
+                  # this morning and prices with oi-shadow's estimate of where open interest lands at
+                  # the close, wherever that estimate is fresh. gex is LINEAR in open interest, so
+                  # this changes every number on the board.
+                  #
+                  # Measured on 25 sessions that post-date the panel the model was chosen on:
+                  # chain-wide error 0.242 -> 0.175, better on 24 of 25, DTE 0-1 improving 35%.
+                  #
+                  # It does NOT improve WHICH strike carries the most open interest -- 92.0% -> 88.0%
+                  # out of sample. The board becomes more accurate about how much gamma sits at a
+                  # strike and slightly LESS accurate about which strike leads. Anything downstream
+                  # reading it as a level-finder is reading it backwards.
+                  #
+                  # The intraday SHAPE is unverifiable. Ground truth arrives once a day, so the close
+                  # estimate is what was validated while the path to it assumes open interest accrues
+                  # with cumulative volume. A number read at 15:55 is near what was measured; one read
+                  # at 11:00 carries that assumption.
+                  #
+                  # Fail-soft by design (processing#555, Codex round-8 APPROVE, 17 overlay tests):
+                  # no estimate, stale, future-dated, a leg the model declined to price, a missing
+                  # symbol, an expiry that will not canonicalise, or a dead oi-shadow all leave the
+                  # settled print in place. That is the implementation's contract and its unit
+                  # evidence — it has not yet been OBSERVED on a running environment.
+                  #
+                  # ROLLBACK: set this to "false" HERE and re-run scripts/deploy/generate-service-slices.sh
+                  # — the generated slice carries its own copy, so editing one without the other
+                  # either drifts or fails validate-services.
+                  #
+                  # Watch ..._dynamic_oi_applied_total climbing during the session; the fallback
+                  # counters say WHY when it does not.
+                  - name: DATABENTO_GEX_DYNAMIC_OI_ENABLED
+                    value: "false"
+                  # PROD capture of the daily settled open-interest print (2026-08-03). Writes ONE
+                  # immutable manifest per session to options.databento.oi.anchor-manifest and to
+                  # calibration.oi_anchor_manifest.
+                  #
+                  # It is no longer read by nothing. oi-shadow-service runs on production at one
+                  # replica and consumes this manifest, and with DATABENTO_GEX_DYNAMIC_OI_ENABLED
+                  # above, GEX consumes what oi-shadow publishes. The chain is
+                  # anchor -> oi-shadow -> GEX, so this capture is now on the path to the live board
+                  # rather than beside it.
+                  #
+                  # The PUBLISHING work is still isolated: its own daemon thread behind a bounded
+                  # queue, and a full queue drops rather than blocks the caller.
+                  #
+                  # Enabled on prod because the capture must not miss sessions. Dev is brought up by
+                  # hand each morning, so any morning it is late past 09:25 ET leaves a permanent
+                  # hole in the series, and the whole point of the record is the day-over-day
+                  # difference. Verified on dev 07-31 and 08-03: 2534 and 2494 legs, both sound,
+                  # both surviving the nightly wipe.
+                  - name: OI_ANCHOR_MANIFEST_ENABLED
+                    value: "true"
+                  # TICK-AWARE SPREAD FLOOR, PROMOTED shadow -> live (2026-08-18). A quote at most
+                  # 4 ticks wide is admitted whatever its mark; the relative maxSpreadPct gate is
+                  # untouched, so genuinely wide quotes on priced legs still refuse. Admitted legs
+                  # carry TICK_SPREAD and are excluded from netGexStrict and from anchor eligibility.
+                  #
+                  # EVIDENCE, stated at its real strength (Codex round-1 correction). Dev ran live
+                  # while prod ran shadow on 2026-08-18 with the market open, chain SPX 20260818:
+                  #   - prod SHADOW_WOULD_ADMIT 607,323 vs dev LIVE_ADMITTED 598,426.
+                  #   - dealer-ledger 0DTE profiles: suShortGamma NUMERIC on 73% of dev vs 25% of
+                  #     prod; MISSING_IV on 75/105 (dev) vs 126/126 (prod).
+                  #   - dev reached ARMED 508 times and emitted the ledger's FIRST fire in ~30 days
+                  #     (12:14:03 ET, CALL, anchor 7700, inputQuality DEGRADED, calibrationQuality
+                  #     INSUFFICIENT_DATA); prod stayed at ARMING all session.
+                  # ⚠️This is CORROBORATIVE, not a proof that shadow predicted live. The two counts
+                  # come from different pods over different input populations — dev prices against a
+                  # SYNTHETIC cascaded ES-basis spot, prod against the live index — and they are raw
+                  # totals, not a record-by-record comparison of the same quotes. Read the ~1.5% gap
+                  # as "the same order of magnitude, same direction", nothing stronger. The decisive
+                  # test would replay ONE captured stream through both modes and diff the per-leg
+                  # admission decisions; that has NOT been done.
+                  #
+                  # BLAST RADIUS. Inclusive per-strike netGex changes, so EVERY consumer of
+                  # options.databento.gex.strike sees different numbers: the UI board and heatmap,
+                  # delta-flow, dealer-ledger, option-price-behavior, option-truth-engine,
+                  # unified-sr, strike-invasion, gex-delta-redis-writer and databento-gex-history.
+                  # The magnet topic and strike-intelligence read the inclusive stage-1 result too,
+                  # so their behaviour can move as well. netGexStrict and anchor eligibility are
+                  # protected by the TICK_SPREAD exclusion in the SERVICE code (proc #638) — this
+                  # repository cannot prove that invariant, it only sets the flag.
+                  #
+                  # ROLLBACK is CONFIGURATION ONLY: set this to "shadow" HERE and re-run
+                  # scripts/deploy/generate-service-slices.sh (the generated slice carries its own
+                  # copy, so editing one without the other either drifts or fails validate-services).
+                  # That stops future live admissions; it does NOT undo what live produced —
+                  # TICK_SPREAD-era values persist in the compacted gex.strike topic until they are
+                  # superseded, in the immutable gex.strike.history archive (so backtest and replay
+                  # datasets will straddle both regimes), in any dealer-ledger signal already fired,
+                  # in every consumer's OWN output topics (delta-flow, option-price-behavior,
+                  # option-truth-engine, strike-invasion, strike-intelligence and the magnet all
+                  # publish derived records that outlive the flag), in gex-delta-redis-writer's
+                  # EXTERNAL Redis keys, and in downstream Kafka Streams state stores. Any
+                  # remediation of those is a separate, explicit exercise. "off" additionally disables the floor's shadow
+                  # accounting and is NOT the ordinary rollback target.
+                  - name: GEX_TICK_SPREAD_FLOOR_MODE
+                    value: live
+  # oi-shadow: ENABLED on PRODUCTION with the SEEDED arm, 2026-08-04. It reads the anchor manifest
+  # and the raw chain and writes one record per strike to options.databento.oi.nowcast.by-strike.
+  # That topic is now CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED above), so what this
+  # service publishes reaches the live gamma surface. It was consumer-free when this was first
+  # enabled; it is not any more, and the isolation argument that justified enabling it no longer
+  # applies -- the justification now rests on the measured accuracy in processing#555.
+  #
+  # It also adds a
+  # continuous consumer of the 32-partition raw topic on the single production broker. Headroom
+  # measured 2026-08-04 before enabling: 24 cores at load 1.29, all java processes together 320%
+  # of 2400%, 14 GB memory available. The service requests 100m CPU and is capped at 1 GiB.
+  #
+  # Seed evidence (processing#553): fitted over 277 sessions on this service's own cell
+  # definitions, measured on 25 sessions that post-date that panel -- chain-wide error
+  # 0.242 -> 0.175, better on 24 of 25, DTE 0-1 improving 35%. It does NOT improve which strike
+  # carries the most open interest (92.0% -> 88.0%): it improves how much, not where.
+  #
+  # Watched on dev first, where enabling it surfaced two defects that were invisible while the
+  # flag was off: the raw topic defaulted to the empty IBKR one, and the manifest source skipped
+  # its own session's anchor on a fresh consumer group. Both are fixed in the base and in
+  # processing#554.
+  # MUST MIRROR the standalone slice k8s/services/oi-shadow/overlays/production (validate-services).
+  - target:
+      kind: Deployment
+      name: oi-shadow-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: oi-shadow-service
+      spec:
+        template:
+          spec:
+            containers:
+              - name: oi-shadow
+                env:
+                  # RETIRED 2026-08-10. Not broken -- measured, and the measurement did not justify
+                  # the surface. What it can validate is END-OF-DAY 1DTE OI against the next
+                  # morning's print: 29% error against frozen OI's 47%, over 178 walk-forward
+                  # sessions. What it cannot validate is anything the desk actually trades on:
+                  # the intraday path is an assumption (OI accrues with volume) and there is no
+                  # intraday OI anywhere to check it against -- OPRA publishes once, 06:30 ET, one
+                  # print per contract, verified. And 0DTE has no next-day print at all, so on the
+                  # expiring chain the model can never be scored.
+                  #
+                  # Archived rather than deleted: the anchor is exact (2534/2534) and the harness,
+                  # coefficients and evidence are all in git. See docs/oi-nowcast-retirement.md.
+                  - name: OI_SHADOW_ENABLED
+                    value: "false"
+                  # Re-enabled 2026-08-10 after the quarantine's cause was removed: the cells the
+                  # service assigns now ARE the cells the panel fitted (signed band, DTE {0,1}/{2,3}
+                  # /{4-7}), and the nine coefficients were refitted on them over the full
+                  # 251-session panel -- 190+ independent sessions per cell.
+                  - name: OI_SHADOW_SEED_COEFFICIENTS_ENABLED
+                    value: "false"
   # PROD-ONLY: §7a conflict bypass needs only 2-of-4 fresh agreement to clear a non-opposed
   # (FAKE_VOLUME/PIN/EXHAUSTION) near-tie; opposed runner-ups still veto regardless (PR #462).
   # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/production (validate-services).
@@ -216,15 +642,29 @@ patches:
   # k8s/services/signal-follower/overlays/production (validate-services: mono==slice).
   - path: signal-follower-prod-env-patch.yaml
   - path: option-price-behavior-prod-patch.yaml
-  # PROD-ONLY: databento-feed 1s snapshot publish interval (explicit container env overrides the
+  # PROD-ONLY: databento-feed 5s snapshot publish interval (explicit container env overrides the
   # shared configmap default; ships via service-deploy). Relieves the single-core CPU backpressure.
   # MUST MIRROR the standalone slice k8s/services/databento-feed/overlays/production (validate-services).
   - path: databento-feed-prod-patch.yaml
+  - path: raw-postgres-writer-prod-env-patch.yaml
+  # PROD-ONLY: es-spx-align basis source -> underlying.es.price (DBP-R32 gap fix; the trades
+  # topic arrives unenriched from the es4 bridge, the feed's locally-computed basis lands on
+  # the ES price topic). DEPLOY ORDER: databento-feed (ES_PRICE_ENABLED patch above) FIRST,
+  # es-spx-align second — see the patch headers. MUST MIRROR the standalone slice
+  # k8s/services/es-spx-align/overlays/production (validate-services: mono==slice).
+  - path: es-spx-align-prod-env-patch.yaml
   # PROD-ONLY: System Status page — the gateway reads the freshness watcher's oe_watch ledger from
   # this same Postgres with the read-only oe_watch_reader role, and reports the link as
   # PLAINTEXT_ACCEPTED because that server has no TLS (visible on the page, not silent).
   # MUST MIRROR the standalone slice k8s/services/feed-gateway/overlays/production (validate-services).
   - path: feed-gateway-prod-env-patch.yaml
+  # Pre-open IBKR GEX production gate (gamma) — OVERNIGHT-IBKR-GEX rev13+D15. These three land
+  # together and must not be split: the gate turns the publisher on, the gateway relays the status
+  # plane that keeps the values honestly labelled, and the hold stops the D15 fan-out from waking
+  # production's legacy IBKR display builder. Rollback = remove all three.
+  - path: ibkr-preopen-gate-prod-patch.yaml
+  - path: ibkr-preopen-gateway-prod-patch.yaml
+  - path: ibkr-raw-to-display-prod-hold-patch.yaml
   # PROD-ONLY: strike-liquidity-heatmap CPU request 100m -> 750m. At 100m the single stream
   # thread stalled >10s under busy-open contention, tripping the EOS transaction timeout and
   # fencing the producer (2026-07-16, twice; processing PR #356 raised the timeout to 60s as
@@ -242,6 +682,23 @@ patches:
   # spx-mission-control is kept OFF (replicas:0) in prod (USER 2026-07-09). MUST MIRROR the standalone
   # slice k8s/services/spx-mission-control/overlays/production (validate-services: mono==slice). Re-enable
   # by removing this patch AND setting the slice back to replicas:1.
+  # oi-shadow-service is HELD DOWN in every environment (USER 2026-08-10: "bring down this service
+  # ... until further notice"). Retired rather than deleted: it validates only END-OF-DAY 1DTE OI
+  # (29% error against frozen OI's 47%) while the desk trades 0DTE, where no next-day settled print
+  # exists to score against, and its intraday path is an assumption that OPRA's once-daily 06:30 OI
+  # publication can never confirm. See docs/oi-nowcast-retirement.md.
+  #
+  # replicas:0 here so EVERY render brings it down; the name is also in morning-autostart.sh
+  # KEEP_DOWN so an environment bring-up does not scale it back. Re-enable = remove this patch AND
+  # that entry, and flip OI_SHADOW_ENABLED / OI_SHADOW_SEED_COEFFICIENTS_ENABLED /
+  # DATABENTO_GEX_DYNAMIC_OI_ENABLED back to "true".
+  - target:
+      kind: Deployment
+      name: oi-shadow-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   - target:
       kind: Deployment
       name: spx-mission-control-service
@@ -259,9 +716,57 @@ patches:
       - op: replace
         path: /spec/replicas
         value: 0
-  # spread-skew-service + spread-skew-postgres-writer: ON in prod (USER 2026-07-12 "deploy dev and
-  # prod both"). Keep-off patches removed; base replicas:1 renders as-is. Standalone slices mirror this
-  # (validate-services: mono==slice).
+  # THE CLOSING-BOARD DATABASE SWITCH, production only.
+  #
+  # Adding this env var makes stock-gex-service read frozen boards from Postgres instead of the
+  # dt=/gz directory. Removing the patch puts it back on files, which still exist -- that is the
+  # rollback, and it is why STOCK_GEX_CLOSE_DIR stays.
+  #
+  # ⚠️ The connection string is inline, password included, by explicit decision (USER 2026-08-27).
+  # options-edge is guarded by the ValidatingAdmissionPolicy 'options-edge-jenkins-only-workloads',
+  # so nothing may write a Secret there except the Jenkins deployer, and the only job that does is
+  # the monolithic options-edge-deploy -- last eight runs all failed or aborted. A credential in git
+  # is PERMANENT: retiring this value means ROTATING the bo-app-postgres password, not editing the
+  # file.
+  #
+  # HERE rather than in k8s/base on purpose. The base is rendered for dev and experiment too, and
+  # they would then write into the PRODUCTION database.
+  - target:
+      kind: Deployment
+      name: stock-gex-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STOCK_GEX_CLOSE_DB_DSN
+          value: "postgresql://bleedingoptions:fAE80oxjlQ75edJe5nmfTLoIDJerlkddoFRm@bo-app-postgres-db.bleedingoptions.svc.cluster.local:5432/bleedingoptions"
+  # stock-gex is ON in prod (USER 2026-08-11: "deploy everything in dev and prod"), so the
+  # replicas:0 hold and its morning-autostart KEEP_DOWN entry were BOTH removed together —
+  # replicas:0 without a KEEP_DOWN entry gets scaled back to 1 at 06:15 ET anyway, and a
+  # KEEP_DOWN entry without the patch would fight the deploy. Base already renders 1.
+  # PRECONDITION, enforced by the readiness probe rather than by this file: the nightly
+  # OI index must exist at /home/options-edge/stock-gex-oi/stock-gex-oi-index.json.gz on
+  # the prod node. Without it the pod starts and stays NOT READY by design (fail-loud), it
+  # does not serve a wrong board.
+  # ⚠️ The 10-name market-open soak that the design named as the PRODUCTION gate (2x ingest
+  # headroom, p99 event->SSE < 2s, zero silent gaps) has NOT been run — enabling prod ahead
+  # of it is a deliberate USER decision, recorded here so it is not mistaken for a passed gate.
+  # databento-maxpain is ON in prod ONLY (USER 2026-08-01: "turn on prod only"; supersedes the
+  # 2026-07-30 all-env hold, PR #652). Base stays replicas:0 so dev/experiment render it down;
+  # this patch flips prod to 1. Also removed from morning-autostart.sh KEEP_DOWN (prod wake-up)
+  # and re-added to premarket-readiness PIPELINE_SERVICES; dev-cleanup DISABLED_DEV still lists
+  # it so dev stays down. Disable again = remove this patch + revert those two script entries.
+  - target:
+      kind: Deployment
+      name: databento-maxpain-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  # spread-skew-service + spread-skew-postgres-writer: RETIRED all envs (USER 2026-07-24 — the
+  # mirrored-pair strike/Mid coloring feature is not wanted). Base replicas:0 renders as-is; the
+  # standalone slices mirror it (validate-services: mono==slice) and both are in morning-autostart
+  # KEEP_DOWN + dev-cleanup DISABLED_DEV so the daily lifecycle never re-ups them.
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for prod, so they render and
   # deploy on production too (experiment-only exclusions removed). Prod image build/pin must produce both
   # images (UNIFIED_SR_IMAGE / STRIKE_FLOW_AVRO_ADAPTER_IMAGE) or the digest-pin guard will fail-closed.

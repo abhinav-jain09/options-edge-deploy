@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: vol-premium-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: vol-premium-service
+    app.kubernetes.io/component: vol-premium-service
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8152"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: vol-premium-service
+  ports:
+    - name: health
+      port: 8152
+      targetPort: health

@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multileg-structure-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: multileg-structure-service
+    app.kubernetes.io/component: multileg-structure-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Back to 1 for the SUPPORT/RESISTANCE surface, which is a different product from the co-print
+  # detector that was stopped here on 2026-08-20 after its §4 gate failed (Brier -9.00% against the
+  # combined wall+volume baseline). This one IS the wall rule, computed by this service from its own two
+  # inputs and split-sample validated on 251 SPXW sessions: resistance (call-ask >=100 lots, 6-15pts above
+  # spot) broke 14.9% vs 39.0% without; support (put-bid >=75 lots, 6-15pts below) broke 19.5% vs 40.9%.
+  replicas: 1
+  # Recreate, not RollingUpdate: the engine holds one session of windows in memory and its
+  # consumer group has ONE member by design. Two pods alive at once would split the partitions
+  # and each would evaluate co-prints against half the tape.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: multileg-structure-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: multileg-structure-service
+        app.kubernetes.io/component: multileg-structure-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      # ⛔ This number is the OUTERMOST bound of one ordering the service validates at boot:
+      #   pollMs + 4 x deliveryTimeoutMs  <  MULTILEG_SHUTDOWN_TIMEOUT_MS  <  terminationGracePeriodSeconds
+      # A clean stop must fit the final publish, the commit and both Kafka client closes inside it, or the
+      # session tail is lost at SIGKILL. Defaults: 0.5s + 4x15s = 60.5s floor, 70s latch, 100s grace.
+      terminationGracePeriodSeconds: 100
+      containers:
+        - name: multileg
+          image: 192.168.100.252:5000/options-edge-multileg-structure:dev
+          imagePullPolicy: Always
+          # Shared platform config/secret provide KAFKA_BOOTSTRAP_SERVERS (+ the rest of the
+          # platform defaults) exactly like every sibling service.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: MULTILEG_HEALTH_PORT
+              value: "8136"
+            - name: MULTILEG_UNDERLYING
+              value: SPX
+            # Input is the same consolidated OPRA trade lane delta-flow reads.
+            - name: MULTILEG_INPUT_TOPIC
+              value: options.opra.tcbbo
+            - name: MULTILEG_OUTPUT_TOPIC
+              value: options.multileg.observations
+            - name: MULTILEG_STATUS_TOPIC
+              value: options.multileg.window.status
+            # Spot is the FEED's own price topic — distance from spot IS the definition of a level, and
+            # both studies were distance-matched. Not another service's output.
+            - name: MULTILEG_SPOT_TOPIC
+              value: underlying.spx.price
+            - name: MULTILEG_LEVELS_TOPIC
+              value: options.multileg.sr.levels
+            # ⚠️ REASONED, not fitted: the Gate-0 measurement (2026-08-18) closed the calibration
+            # programme before an addendum existed, so these are selection POLICY and every record
+            # says so. Changing them changes what is screened, never what is claimed.
+            - name: MULTILEG_WINDOW_MS
+              value: "50"
+            - name: MULTILEG_GRACE_MS
+              value: "2000"
+            - name: MULTILEG_WORK_BUDGET
+              value: "50000"
+            - name: MULTILEG_MIN_EXPOSURE_PRINTS
+              value: "5"
+            - name: MULTILEG_SCORE_MIN
+              value: "3.0"
+            # One session of window aggregates plus the trailing per-contract model; bounded by
+            # MULTILEG_MAX_* and sized well under the container limit.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx768m"
+          ports:
+            - name: http
+              containerPort: 8136
+          # One HTTP surface serves /health, /metrics, /ui, /snapshot and /stream. Liveness and
+          # readiness deliberately share /health: the service is ready as soon as it is consuming —
+          # it has no backfill and no warm-up state to wait for.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 6
+          # CPU limit intentionally absent, matching every sibling service.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi

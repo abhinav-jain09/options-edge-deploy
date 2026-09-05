@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: approach-monitor-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: approach-monitor-service
+    app.kubernetes.io/component: approach-monitor-service
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    # DARK-DEPLOYED ON PURPOSE — replicas 0 below is not a mistake.
+    #
+    # The design (approach-monitor-design.md §7.8.1 item 11, §16 Track B) forbids running this
+    # service until two things the operator owns are settled:
+    #   1. MIN_ACTIONABLE_LEAD_MS — refused, not estimated. Needs an unprimed drill measuring
+    #      delivered-warning -> position-flat. Without it the §2 SLO is undefined.
+    #   2. Operator-approved numeric promotion gates (§12.5). The thresholds compiled into the
+    #      image are explicitly labelled provisional and are NOT promotion-approved.
+    #
+    # NEITHER product validates, and neither has a holdout capable of deciding it. On an as-of
+    # pipeline (as-of registration and lookup, contract-end horizon, gap censoring, one canonical
+    # admission order shared by engine and labeller, warm-up as long as the longest feature)
+    # product 2 retains 7 holdout examples over 4 sessions with 4 positives (AUC CI [0.500, 1.000],
+    # chance inside it), and product 1 retains 8 with 2. It shrank when ambiguous third-Friday episodes —
+    # the one session where AM- and PM-settled SPX contracts unambiguously coexist — were refused.
+    # Other episodes whose root the corpus cannot state are ASSUMED SPXW and counted: 38 tier-1 and
+    # 186 tier-3. See APPROACH-MONITOR-GATE2.md section 7; adding a root column to the corpus
+    # export is a Gate-3 prerequisite, not a footnote. Earlier annotations in this file claimed 0.837, then 0.500, then 0.934; every one
+    # of those was an artifact of a defect since removed. The binding constraint is the corpus
+    # (44 replayable sessions, 11 with tier-1 spot), not the model.
+    options-edge/dark-deployed: "true"
+    options-edge/blocked-on: "MIN_ACTIONABLE_LEAD_MS drill; operator-approved promotion gates"
+    options-edge/gate-evidence: "APPROACH-MONITOR-GATE2.md, research/out/GATE3-MODEL.md"
+spec:
+  # Deliberately 0. Scaling this up is a Track B decision, not a deploy-time default.
+  replicas: 0
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: approach-monitor-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: approach-monitor-service
+        app.kubernetes.io/component: approach-monitor-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      # The service needs no privileges and holds none. A Streams app that can write outside its
+      # state dir or escalate is a larger blast radius than the job requires.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: approach-monitor
+          image: 192.168.100.252:5000/options-edge-approach-monitor:dev
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8130"
+            # --- topics and Streams identity are NOT environment knobs ---
+            # They used to be listed here as APPROACH_INPUT_*/OUTPUT_* , APPROACH_STREAMS_APP_ID,
+            # APPROACH_STREAMS_NUM_THREADS and APPROACH_EOS_ENABLED, and the process read NONE of
+            # them: changing the manifest changed nothing while looking like it had. They are gone
+            # rather than wired up, because none of them is safely variable.
+            #
+            #   topics      — contract constants owned by this service (ApproachTopics). The names
+            #                 are identical in every environment; the CLUSTER is what differs.
+            #                 Inputs: underlying.spx.price (measured hourly 2-3 min publish gaps,
+            #                 APPROACH-MONITOR-GATE2 4B — censored, never interpolated) and
+            #                 positions.approach.registry. Outputs are this service's own; the
+            #                 strike-invasion topics are untouchable (design 7.8.1 item 1).
+            #   app id      — unversioned by policy: one service, one identity. Versioning it forks
+            #                 the state store and the consumer group on every release.
+            #   thread count— every source is rekeyed to a constant so market evidence and the
+            #                 operator's positions co-locate on one task. A second thread cannot
+            #                 parallelise one hot key; it can only break the single-writer
+            #                 assumption the state machine is built on.
+            #   EOS         — exactly-once v2 is a correctness requirement here, not a preference.
+            - name: APPROACH_STREAMS_AUTO_OFFSET_RESET
+              # EARLIEST. The registry is compacted and is the authoritative current-position
+              # snapshot: starting at `latest` puts a fresh application id AFTER every existing
+              # compacted record, so no live position is registered until one happens to be
+              # updated — the service would run believing the operator holds nothing.
+              #
+              # This previously said `latest` and silently defeated the code default. Historical
+              # alerts are fenced by the wall-clock backlog gate in the processor, which is the
+              # right place for it: skipping the authoritative position source is not a fence,
+              # it is blindness.
+              value: earliest
+            - name: ENVIRONMENT
+              value: dev
+            - name: KAFKA_STREAMS_STATE_DIR
+              value: /var/lib/options-edge/kafka-streams
+            # Voice/Discord delivery stays OFF until the gates pass. The service still writes
+            # alert records to its outbox topic so the audit trail exists from day one.
+            - name: APPROACH_DELIVERY_ENABLED
+              value: "false"
+            # Product 1 emits to the audit log only until it has data to validate on.
+            - name: APPROACH_PRODUCT1_SHADOW_ONLY
+              # Both products are effectively shadow: delivery is disabled above. This flag stays
+              # true so that enabling delivery does not silently start product-1 notifications.
+              value: "true"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms512m -Xmx2048m"
+          ports:
+            - name: health
+              containerPort: 8130
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          volumeMounts:
+            - name: kafka-streams-state
+              mountPath: /var/lib/options-edge/kafka-streams
+            # readOnlyRootFilesystem needs an explicit writable /tmp for the JVM.
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 1Gi
+            limits:
+              memory: 4Gi
+      volumes:
+        # emptyDir, matching the sibling Streams services. The stores are changelog-backed, so a
+        # lost local dir costs restore time, not correctness — and per the platform's PVC incident
+        # a Deployment does NOT recreate a deleted PVC, so a volumeClaimTemplate here would be a trap.
+        - name: kafka-streams-state
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

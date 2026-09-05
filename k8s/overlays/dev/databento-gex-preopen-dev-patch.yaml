@@ -1,7 +1,27 @@
-# DEV-ONLY: enable the full pre-open GEX pipeline (PREOPEN-GEX-GATE1-REQUIREMENT.md) so a real
-# capture@18:00 -> compute@08:00 cycle can be verified on dev before production is enabled. BASE keeps both
-# flags "false" (prod dormant), so this patch is the ONLY place the feature is live. env merges by name over
-# base. Both flags are fail-soft: the in-service scheduler never crashes the live GEX pipeline, and Task B
+# Dev gex settings. Created to enable the pre-open GEX pipeline
+# (PREOPEN-GEX-GATE1-REQUIREMENT.md) so a real capture@18:00 -> compute@08:00 cycle could be
+# verified on dev before production.
+#
+# THE PRE-OPEN CLAIM IN THIS HEADER IS NO LONGER TRUE, and reading the file alone will not tell
+# you. ibkr-preopen-gate-dev-patch.yaml is applied AFTER this one and sets PREOPEN_GEX_ENABLED
+# back to "false" to enforce the R-PREOPEN one-publisher invariant. Rendered today:
+#     dev         PREOPEN_GEX_ENABLED=false  PREOPEN_GEX_PUBLISH_ENABLED=true
+#     production  both false
+# So the legacy pre-open publisher is live in NEITHER environment.
+#
+# The file has also accumulated other dev gex settings, and not all are dev-only: TOP_N,
+# GEX_SMILE_IV_FALLBACK and DATABENTO_GEX_DYNAMIC_OI_ENABLED are all set on production too.
+#
+# READ THE RENDERED SLICE, not this file. k8s/services/databento-gex/overlays/<env>/manifest.yaml
+# is what actually runs; every comment here describes the moment it was written. env merges by
+# name over base, and later patches override earlier ones.
+#
+# NOTE: the DEV-ONLY in the title describes the PRE-OPEN pipeline this file was created for. The
+# file has since accumulated other dev gex settings, and not all of them are dev-only -- TOP_N,
+# GEX_SMILE_IV_FALLBACK and DATABENTO_GEX_DYNAMIC_OI_ENABLED are all set on production too. Check
+# the rendered production slice rather than trusting this file's name.
+#
+# Both pre-open flags are fail-soft: the in-service scheduler never crashes the live GEX pipeline, and Task B
 # abstains (never publishes) if the capture snapshot or the prior-close canonical spot is missing.
 #
 # DEPENDENCY: Task B's prior-close spot comes from databento_option_raw_snapshot.canonical_spot, written by
@@ -16,7 +36,60 @@ spec:
     spec:
       containers:
         - name: databento-gex
+          # DEV-ONLY CPU request (2026-07-29). Base reserves 250m for a Streams app configured with
+          # KAFKA_GEX_STREAMS_NUM_THREADS=8, so under load the scheduler gives it almost nothing while
+          # the dev node (docker-desktop, 16 cores / 93 GB) sits idle. Measured symptom: the 0DTE chain's
+          # repartition partition fell ~1.1M records behind and was still GROWING at +6849/min during RTH,
+          # which froze the 0DTE gex.magnet ~90 minutes behind while the 1DTE track stayed current.
+          # NOT changed in base: prod runs the same deployment on a node measured at 90% CPU / loadavg 36
+          # on 24 threads, where a larger reservation would take cores from the SPX feed it is starving on.
+          # This raises the floor only; it does not remove the single-partition ceiling (see PR body).
           env:
+            # DEV-ONLY (2026-08-05): the OI-available gate defaults to 08:00 ET, but OPRA publishes
+            # today's SPXW open-interest statistics well before that — verified directly against
+            # hist.databento.com at 07:35 ET (stat_type 9 records present for 2026-08-05). The
+            # pre-open window opens at 06:15, so an 08:00 gate leaves ~1h45m of the window unable to
+            # price GEX at all, and prod's own retry history shows the first attempts often fail
+            # transiently (2026-08-04: 17 attempts, baseline landing only at 08:35). Moving the gate
+            # to 06:30 on dev lets the eager pre-fetch start as soon as the window does. The
+            # completeness check against the arm manifest still rejects a partial baseline, so an
+            # early fetch cannot latch bad OI.
+            # 06:30 (2026-08-05) broke the anchor manifest outright. This value is not only a
+            # gate on WHEN the fetch runs -- it is also the universeAsOf the anchor attempt carries,
+            # so it becomes the `end` of the instrument-definition query. Asking for definitions
+            # "up to 06:30 ET" returns ZERO records, because OPRA has not published the session's
+            # definitions by then. No error, no 422, no available-edge retry: just an empty
+            # universe, and the manifest refuses to build because completeness cannot be
+            # established without one. Measured on 2026-08-05: two attempts, two missing_universe,
+            # no anchor for the session, and GEX pricing on the frozen print all morning.
+            #
+            # OPRA's definition availability for the session lands around 09:00 ET (13:00Z on
+            # 2026-08-05, where a query bounded at that edge returned 21,632 records). 09:00 is
+            # therefore the earliest value that can actually produce a universe.
+            - { name: DATABENTO_GEX_OI_AVAILABLE_LOCAL_TIME, value: "09:00" }
+            # ONE env: key for this container. There were TWO, and YAML does not merge duplicate
+            # mapping keys -- kustomize kept the first and dropped the second entirely, in silence.
+            # Everything below lived in that second block, so DATABENTO_GEX_DYNAMIC_OI_ENABLED,
+            # DATABENTO_GEX_FLOW_TOP_N, GEX_SMILE_IV_FALLBACK, DATABENTO_GEX_STALE_AFTER_MS and
+            # GEX_FLOW_READINESS_GATE were never in the dev render at all. The file said one thing
+            # and the cluster ran another, with no error anywhere to say so.
+            # TICK-AWARE SPREAD FLOOR — LIVE ON DEV ONLY (2026-08-17). Production keeps the code
+            # default, `shadow`; do NOT mirror this line into the production overlay.
+            #
+            # The floor moves the INCLUSIVE gex aggregates the boards, heatmap, delta-flow and the
+            # dealer ledger all read, so promotion was gated on a session of evidence. Dev is where
+            # that evidence is bought: same code, same feed shape, no consumer whose decisions matter.
+            #
+            # Measured on BOTH environments over the same 14:30 ET window on 2026-08-17: of the
+            # strikes whose PUT carries a real two-sided quote but no IV, 105 are quoted
+            # 0.05 x 0.10 -- ONE TICK -- refused only by the relative 25% gate. Solving those exact
+            # quotes against the same Black-Scholes routine the service uses returns a usable IV for
+            # 107 of 107 (~233-253%, inside the short-dated 1000% ceiling), so admitting them yields
+            # IVs rather than moving the population to IV_SOLVER_FAILED.
+            #
+            # Compare dev's tick_spread_total{outcome="LIVE_ADMITTED"} with prod's
+            # SHADOW_WOULD_ADMIT for the same session before promoting production.
+            - { name: GEX_TICK_SPREAD_FLOOR_MODE, value: live }
             - { name: PREOPEN_GEX_ENABLED, value: "true" }
             - { name: PREOPEN_GEX_PUBLISH_ENABLED, value: "true" }
             # Dev now receives the same market-derived carry as production. Static carry remains an explicit
@@ -35,5 +108,74 @@ spec:
             # + lifecycle (EMERGING/STICKY/FADING) compute ONLY the top-3 |netGex| strikes per chain; the
             # rest are gated before those calculations. Stage-1 per-strike netGex is unchanged. Enabling
             # switches the fade branch to isolated "-topn" stores (one-time fade-state reset, by design).
-            # Prod stays 0 (default, byte-identical) until explicitly enabled after dev verification.
-            - { name: DATABENTO_GEX_FLOW_TOP_N, value: "3" }
+            # RAISED 3 -> 40 (2026-08-03): strike-intelligence's ONLY GEX input is the flow topic this
+            # gate feeds, so top-3 starved every other strike's GEX component (measured: 38k gated vs
+            # 1.1k forwarded; near-ATM strikes stuck at GEX-missing/NORMAL even after the smile-IV
+            # fallback restored their netGex in gex.strike). 40 covers the tradeable near-ATM ladder
+            # while still bounding the 0DTE fade/lifecycle compute the gate was introduced for
+            # (the rollout was dev-first and prod has carried the same 40 since 2026-08-03 -- it is
+            # NOT ungated). Watch gex CPU + the 0DTE repartition lag after this.
+            - { name: DATABENTO_GEX_FLOW_TOP_N, value: "40" }
+            # DEV-FIRST: turn the OI anchor manifest on where it can be watched (OI-SHADOW-EXECUTION-PLAN
+            # step 2). It reconciles the morning settled open-interest response against an independent
+            # instrument-definition universe and publishes ONE immutable manifest per session.
+            #
+            # Publication is NOT on the first sound response: the manifest is immutable and once-only, so
+            # the first one accepted holds the session's only slot all day, and early fetches are routinely
+            # sound and routinely thin while the exchange's publication is still landing. It waits for two
+            # sound observations 120s apart carrying identical content, and falls back to the newest sound
+            # view at 09:25 ET. Attempts before 08:00 ET are not candidates. So expect a manifest during
+            # the 08:00-09:25 ET window, not at 08:00 sharp.
+            #
+            # What to watch: oi_anchor_published_total should reach 1, carried by
+            # ..._published_on_stability_total rather than ..._published_on_fallback_total. A fallback
+            # publication means no two observations ever agreed -- usable, but worth investigating.
+            # ..._incomplete_attempts_total counts unsound responses, which are never published at all.
+            #
+            # Fail-soft: the work runs on its own daemon thread behind a bounded queue, so it cannot make
+            # the live gamma surface wait on it. oi-shadow-service now consumes this manifest, and
+            # GEX consumes what oi-shadow publishes, so the chain is anchor -> oi-shadow -> GEX.
+            - { name: OI_ANCHOR_MANIFEST_ENABLED, value: "true" }
+            # DYNAMIC OPEN INTEREST. GEX stops pricing with the print the exchange
+            # published this morning and starts pricing with oi-shadow's estimate of where open
+            # interest lands at the close, wherever that estimate is fresh. gex is LINEAR in open
+            # interest, so this changes every number on the board.
+            #
+            # Measured on 25 sessions that post-date the panel the model was chosen on: chain-wide
+            # error 0.242 -> 0.175, better on 24 of 25, DTE 0-1 improving 35%. It does NOT improve
+            # WHICH strike carries the most open interest -- 92.0% -> 88.0% -- so nothing should
+            # start reading the board as a better level-finder. It is more accurate about how much
+            # gamma sits at a strike, not about which strike leads.
+            #
+            # The intraday SHAPE is unverifiable: ground truth arrives once a day, so the close
+            # estimate is what was validated while the path to it assumes open interest accrues with
+            # cumulative volume. A number read at 15:55 is near the thing that was measured; one
+            # read at 11:00 carries that assumption.
+            #
+            # ON IN PRODUCTION TOO, enabled in the same change. This is the one switch for the
+            # whole system -- no consumer sees the ESTIMATED quality unless the producer emits it --
+            # so turning it off returns that environment to exactly today's behaviour.
+            #
+            # Watch: ..._dynamic_oi_applied_total should climb during the session, and the fallback
+            # counters say WHY when it does not (no estimate / stale / future / not estimated).
+            # Fail-soft by design (processing#555, 17 overlay tests): any of those, or a dead
+            # oi-shadow, leaves the settled print in place. That is the implementation's contract
+            # and its unit evidence, not something yet OBSERVED running.
+            #
+            # ROLLBACK: set this to "false" here and re-run generate-service-slices.sh — the
+            # generated slice carries its own copy.
+            - { name: DATABENTO_GEX_DYNAMIC_OI_ENABLED, value: "false" }
+            # DEV-FIRST validation of the EXPERIMENTAL smile-IV fallback (proc commit 3fe1a2f7,
+            # Codex round-3 APPROVE): rebuild short-dated legs whose IV solve failed on the measured
+            # BELOW-INTRINSIC branch from the freshest near-ATM solved IV. The measured 0DTE failure
+            # mode drops ~half the near-ATM ladder (100% SD_IV_FAIL_BELOW_INTRINSIC; parity recovery
+            # starved). Rebuilt legs are flagged SMILE_IV_FALLBACK, excluded from netGexStrict, and
+            # never anchor-eligible; default in code is OFF, this flag is the only enable. Prod was
+            # gated on dev showing near-ATM coverage recovery without flip-level artifacts; it did,
+            # and prod has carried this flag since 2026-08-03. Watch
+            # options_edge_databento_gex_smile_fallback_total{event=...} and the near-ATM GEX-missing
+            # share in strike-intelligence.
+            - { name: GEX_SMILE_IV_FALLBACK, value: "true" }
+          resources:
+            requests:
+              cpu: "2"

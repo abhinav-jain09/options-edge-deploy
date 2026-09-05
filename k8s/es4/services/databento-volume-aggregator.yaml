@@ -67,6 +67,8 @@ spec:
           value: '0'
         - name: KAFKA_DATABENTO_VOLUME_AGGREGATOR_PROCESSING_GUARANTEE
           value: exactly_once_v2
+        - name: KAFKA_STREAMS_CLEANUP_ON_START
+          value: 'true'
         - name: JAVA_TOOL_OPTIONS
           value: -Xmx1536m
         envFrom:

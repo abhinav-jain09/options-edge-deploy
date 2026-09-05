@@ -63,6 +63,17 @@ spec:
             - name: KAFKA_ES_STRIKE_INTEL_SPX_ALIGNED_TOPIC
               value: options.es-strike-intel-spx-aligned
             # ── shared ───────────────────────────────────────────────────────────────────────────────────
+            # Future-timestamp admission tolerance (AlignProcessor GEX gate + BasisSnapshot validity). The GEX
+            # bridge records are produced on es4 and mirrored cross-cluster to the SPX broker; the es4 host
+            # clock runs materially AHEAD of the SPX cluster (observed ~5-10s), so every fresh gex.spxbridge
+            # record's eventTimeMs lands in the SPX aligner's future. The 2s default (ES_CLOCK_SKEW_MS) then
+            # rejects EVERY fresh record as "non-future"-gate-failing -> the book never builds and the ES-gamma
+            # overlay stays blank. Widen to 30s (symmetric with the 30s ES_GEX_STALE_MS past-side window) to
+            # absorb the es4 skew + drift margin while keeping a bounded, meaningful future guard. This knob
+            # also feeds BasisSnapshot future-validity, but the basis is SPX-cluster-native (not skewed), so
+            # in the normal path only the es4-sourced gex stream's acceptance is loosened.
+            - name: ES_CLOCK_SKEW_MS
+              value: "30000"
             # Basis-bearing ES index-price (native on the SPX cluster); the single basis truth for both types.
             - name: KAFKA_ES_TRADES_TOPIC
               value: underlying.es.trades

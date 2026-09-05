@@ -1,7 +1,7 @@
 # ES feed-gateway on es4. Same options-edge-feed-gateway binary as prod; env-only divergence.
 # Reads es.* topics from the .4 Kafka/SchemaRegistry via TOPIC_PREFIX (es4-common-env) — the
 # gateway applies TOPIC_PREFIX to every _TOPIC value (GatewaySettings, PR #73). WS handshake is
-# Keycloak-protected against the PRODUCTION realm (auth.fullfunding.nl). Exposed on NodePort 30091
+# Keycloak-protected against the PRODUCTION realm (auth.bleadingoptions.com). Exposed on NodePort 30091
 # so the ES web (NodePort 30080) can open ws://192.168.100.4:30091/ws/events.
 # Deploy ONLY via Jenkinsfile.es4-deploy (digest-pins :prod before apply).
 apiVersion: v1
@@ -96,6 +96,16 @@ spec:
           value: "true"
         - name: KAFKA_ES_AGGRESSOR_FLOW_TOPIC
           value: futures.aggressor-flow
+        # ES CVD stream (Gate 2 of ES-CVD-DESIGN.md): live 1 Hz snapshot + compacted bar-close
+        # records, published by es-cvd-service on this cluster. Opt-in for the same reason as the
+        # aggressor card — the ES-only topics do not exist on the SPX production cluster. Topic
+        # names are unprefixed; the gateway's TOPIC_PREFIX=es. resolves them to es.futures.cvd*.
+        - name: GATEWAY_ES_CVD_ENABLED
+          value: "true"
+        - name: KAFKA_ES_CVD_TOPIC
+          value: futures.cvd
+        - name: KAFKA_ES_CVD_BARS_TOPIC
+          value: futures.cvd.bars
         # es4 serves ES, not SPX: the gateway's active market-data selection symbol is IB_SYMBOL
         # (default SPX). Without this the selection is SPX and the ES option records (underlying=ES)
         # never match -> empty chain even at market open. IB_EXPIRY stays unset = AUTO (0DTE daily roll).
@@ -130,13 +140,13 @@ spec:
         - name: WS_AUTH_ENABLED
           value: "true"
         - name: WS_AUTH_ISSUER_URI
-          value: "https://auth.fullfunding.nl/realms/optionsedge"
+          value: "https://auth.bleadingoptions.com/realms/optionsedge"
         - name: WS_AUTH_AUDIENCE
           value: "options-edge-web"
-        # Browser origin of the ES web UI. Public edge origin first; the LAN NodePort origin is kept
-        # for direct-on-.4 debugging.
+        # Browser origins of the ES web UI. Public edge origin first; the LAN NodePort origin is
+        # kept for direct-on-.4 debugging. (fullfunding.nl retired 2026-08-08.)
         - name: WS_ALLOWED_ORIGINS
-          value: "https://es.fullfunding.nl,http://192.168.100.4:30080"
+          value: "https://es.bleadingoptions.com,http://192.168.100.4:30080"
         # Multi-tenant session auth (Redis-backed) stays OFF — only the Keycloak WS bearer is used.
         - name: GATEWAY_AUTH_ENABLED
           value: "false"

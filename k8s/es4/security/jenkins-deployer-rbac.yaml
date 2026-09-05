@@ -1,0 +1,193 @@
+# es4 deployer identity — MIRRORS k8s/security/jenkins-deployer-rbac.yaml, with two es4-only
+# additions (cluster-scoped PersistentVolume reads; see the ClusterRole below).
+#
+# WHY THIS EXISTS: until 2026-07-26 the es4 Jenkins job authenticated as system:admin
+# (group system:masters) via /Users/abhinav/.kube/es4.kubeconfig — the SAME identity a human gets
+# from `sudo k3s kubectl` on the box. That made "only Jenkins may change es4" unenforceable: an
+# admission policy keys off the username, and both principals were literally the same user.
+# Giving Jenkins its own ServiceAccount is the prerequisite for
+# k8s/es4/security/jenkins-only-workload-admission.yaml to mean anything.
+#
+# Apply with an admin kubeconfig ON the .4 host (this file grants the identity; it cannot be
+# applied BY that identity):
+#   sudo /usr/local/bin/k3s kubectl apply -f k8s/es4/security/jenkins-deployer-rbac.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: options-edge
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins-deployer
+  namespace: options-edge
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: jenkins-deployer-token
+  namespace: options-edge
+  annotations:
+    kubernetes.io/service-account.name: jenkins-deployer
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: jenkins-deployer
+  namespace: options-edge
+rules:
+  - apiGroups: [""]
+    resources:
+      - configmaps
+      - secrets
+      - services
+      # persistentvolumeclaims required for the Kafka-Streams disk-backed state
+      # PVCs (RocksDB persistent stores) the deploy applies — without this,
+      # `apply -k` fails on the first PVC with a forbidden error.
+      - persistentvolumeclaims
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources:
+      - serviceaccounts
+    # Full mgmt needed because services (e.g. hpsf-replay-orchestrator) own a per-service SA
+    # bound to a per-service namespaced Role; without create/update/delete the apply -k aborts
+    # the moment a Deployment that references a new SA + Role + RoleBinding lands.
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
+    # Per-service namespaced RBAC (e.g. hpsf-replay-orchestrator needs to read live deployment
+    # specs / pod status to clone the live HPSF Stage A/B per-run). Cluster-wide perms are not
+    # needed and are not granted here — the new Roles are themselves namespace-scoped.
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources:
+      - pods
+    # `create` + `delete` are required so deploy/orchestrator jobs can
+    # spawn ephemeral in-cluster probe pods (`kubectl run --rm -i
+    # --restart=Never --image=curlimages/curl …`) to talk to ClusterIP
+    # services that the Mac Jenkins agent cannot reach directly (no
+    # cluster DNS, ClusterIP unrouteable). The pattern is the right one
+    # for both dev (Mac agent) and prod (in-cluster agent): kubectl
+    # commands are location-independent, port-forward is a workaround
+    # we explicitly chose NOT to take.
+    #
+    # Namespace-scoped (this is a Role, not a ClusterRole). The
+    # options-edge-jenkins-only-workloads admission policy applies to
+    # deployment/service/CM/SA/PVC/job/cronjob/ingress/networkpolicy —
+    # it does NOT gate pods today, so this widens the deployer SA's
+    # pod surface area on its own (no admission second-line). Workload
+    # SAs still have no pods/* perms, so this does not let workloads
+    # self-mutate; only jenkins-deployer (a per-namespace SA already
+    # used as the cluster's deploy principal) gains the ability.
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources:
+      - pods/log
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources:
+      # `kubectl run --rm -i` defaults to `--attach=true` and streams
+      # the pod's stdout/stderr back via the pods/attach subresource
+      # (NOT pods/exec — that's a separate subresource for running an
+      # additional command in an existing container). Without
+      # pods/attach:create, `kubectl run -i` fails after the pod
+      # successfully starts.
+      - pods/attach
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources:
+      - pods/portforward
+    verbs: ["create"]
+  - apiGroups: ["apps"]
+    resources:
+      - daemonsets
+      - deployments
+      - deployments/scale
+      - statefulsets
+      - statefulsets/scale
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources:
+      - replicasets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - cronjobs
+      - jobs
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - networkpolicies
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Required so the deployer can apply per-service namespaced Role
+  # specs that grant `coordination.k8s.io/leases` to a workload's own
+  # SA (the rewind service holds a singleton Lease for write-fencing,
+  # and its own per-service Role grants get/update/patch/delete on
+  # that named Lease). Without this, the deployer hits k8s RBAC
+  # escalation prevention:
+  #   roles "databento-rewind-lease" is forbidden:
+  #   user "system:serviceaccount:options-edge:jenkins-deployer" is
+  #   attempting to grant RBAC permissions not currently held:
+  #   {APIGroups:["coordination.k8s.io"], Resources:["leases"], ...}
+  # (k8s requires a grantor to hold >= the verbs/resources it grants.)
+  # Scoped narrowly to leases only — no broader coordination perms.
+  - apiGroups: ["coordination.k8s.io"]
+    resources:
+      - leases
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-deployer
+  namespace: options-edge
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deployer
+    namespace: options-edge
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jenkins-deployer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: options-edge-jenkins-deployer-namespace
+rules:
+  - apiGroups: [""]
+    resources:
+      - namespaces
+    resourceNames:
+      - options-edge
+    verbs:
+      - get
+      - patch
+      - update
+  # es4-only, beyond the prod grant: assert-cluster-identity.sh reads the options-edge namespace
+  # UID through THIS kubeconfig before every destructive action, and cleanup-es4.sh resolves each
+  # PVC's backing local path from its PersistentVolume. PVs are cluster-scoped, so a namespaced
+  # Role cannot cover them. READ ONLY — the deployer never creates or deletes a PV.
+  - apiGroups: [""]
+    resources:
+      - persistentvolumes
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: options-edge-jenkins-deployer-namespace
+subjects:
+  - kind: ServiceAccount
+    name: jenkins-deployer
+    namespace: options-edge
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: options-edge-jenkins-deployer-namespace

@@ -22,16 +22,62 @@
 // (apply.sh: `kubectl set image deployment/options-edge-web`), so a green options-edge-web-deploy
 // left the running pod on the old image and looked like a successful deploy. Build there first,
 // then deploy here with BUILD_IMAGES=false.
+// The 'Validate service registry' stage is pure LOCAL rendering (yq + `kubectl kustomize` +
+// bash mock-CLI suites — no cluster access, no kubeconfig) and is the expensive stage: its
+// topic-contract suites fork thousands of processes — 2-6 min on an idle box, 45-107 min on
+// the dev Mac during US market hours (builds #405-#408, #1407). It runs on the .74 builders
+// (strict preference resolved at runtime; fallback = the old agent). Everything that needs
+// the deploy host (kubeconfigs, the intent ledger, cluster reachability) stays pinned there
+// via per-stage agents below — `agent none` here so a fallback resolution can never hold two
+// executors on the same box at once.
+VALIDATE_AGENT_LABEL = oeBuildAgent.labels('build-mac-74', 'hpsf-replay-mac')
+
 pipeline {
-  agent { label 'hpsf-replay-mac' }
+  agent none
   parameters {
+    string(name: 'INTENT_ID', defaultValue: '',
+      description: 'Optional idempotency key (0DTE pipeline automation). Empty = normal manual build. With a value: at most ONE build per intent ever reaches the deploy stages — a second submission aborts as NOOP_DUPLICATE (intent-dedup.json artifact names the winner).')
     choice(name: 'SERVICE', choices: [
-      'databento-feed', 'databento-sr3-feed', 'databento-gex', 'databento-gex-history', 'databento-maxpain', 'databento-mission-sandwich',
+      'databento-feed', 'databento-sr3-feed', 'databento-vix-feed', 'databento-gex', 'databento-gex-history', 'gamma-migration', 'gamma-leadership', 'corridor-gauge', 'databento-maxpain', 'databento-mission-sandwich',
       'databento-volume-aggregator', 'dealer-ledger', 'dealer-ledger-calibration', 'delta-flow',
-      'directional-pressure', 'es-open-direction', 'es-open-direction-postgres-writer', 'close-direction', 'vix-option-inteligence', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
+      'directional-pressure', 'es-open-direction', 'es-open-direction-postgres-writer', 'close-direction', 'spot-vol-regime', 'vol-premium', 'indicator-service', 'vix-option-inteligence', 'greek-move-authenticity', 'feed-gateway', 'gex-delta-redis-writer', 'hpsf-postgres-writer', 'option-price-behavior',
       'option-truth-engine', 'market-carry', 'pin-postgres-writer', 'pressure-postgres-writer', 'raw-postgres-writer', 'raw-to-display',
-      'invasion-postgres-writer', 'reversal-confirmation', 'reversal-postgres-writer', 'short-premium-agent', 'es-spx-align', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
-      'unified-sr', 'volume-pace', 'signal-follower', 'web'
+      'invasion-postgres-writer', 'reversal-confirmation', 'drop-classifier', 'reversal-postgres-writer', 'short-premium-agent', 'es-spx-align', 'spx-mission-control', 'strike-flow-avro-adapter', 'strike-flow-classifier', 'strike-intelligence', 'strike-invasion', 'strike-liquidity-heatmap',
+      'oi-shadow', 'unified-sr', 'volume-pace', 'signal-follower', 'web', 'ibkr-feed', 'stock-gex', 'context-tape', 'multileg-structure',
+      // es-aggressor-flow: PRODUCTION only. On prod it publishes just the Kyle-style
+      // signed-flow response slope; the legacy absorption label is disabled there.
+      'es-aggressor-flow',
+      // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
+      // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
+      // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when
+      // it runs any more. Listed in this file for the reason stated below: the job regenerates its
+      // parameters from here on every build, and a value outside the list is refused with a bare
+      // HTTP 500 that never names it.
+      'stock-gex-close-scheduler',
+      // approach-monitor and its position publisher. DEV-ONLY — production and experiment
+      // delete both — but they belong in THIS list for the same reason the tenant services do:
+      // the job is a CpsScmFlowDefinition and regenerates its parameters from this file on every
+      // build, so a choice added through the UI survives exactly until the next run and then
+      // vanishes, and the symptom is a bare HTTP 500 that never names the rejected value.
+      'approach-monitor', 'approach-position-publisher',
+      // fullfunding tenant. Same job: the target namespace comes from services.yaml,
+      // and the deploy refuses if the render disagrees with what is registered there.
+      'fullfunding-app',
+      // bleedingoptions tenant — the PUBLIC Gamma Lab web tier.
+      //
+      // It BELONGS HERE, in the Jenkinsfile, and not in the job's config.xml. This job is a
+      // CpsScmFlowDefinition: Jenkins regenerates its parameter definitions from THIS file on every
+      // build, so a choice added through the UI or the script console survives exactly until the next
+      // run and then vanishes. That happened twice on 2026-08-16, and the symptom is unhelpful — the
+      // build request fails with a bare HTTP 500 and no message naming the rejected value, because a
+      // parameter outside the declared choices is refused before the pipeline starts.
+      //
+      // The deploy for this service additionally passes through verify-public-gate.sh (PGL-072),
+      // which refuses any replica count above zero without gate evidence for the exact image digest.
+      'bleedingoptions-gamma-lab',
+      // bleedingoptions tenant — the email sender. Same reason it lives here and not in
+      // config.xml: this job regenerates its parameters from this file on every build.
+      'bleedingoptions-email'
     ], description: 'Which service to deploy (dir under k8s/services; spread-skew and its writer are intentionally unavailable under the 2026-07-26 operator hold).')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
@@ -41,6 +87,8 @@ pipeline {
       description: 'true = render + digest-pin + server-side validate only; nothing changes.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
       description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    booleanParam(name: 'FORCE_RESTART', defaultValue: false,
+      description: 'false (DEFAULT). true = also roll the pods even when the manifest is UNCHANGED. Applying an identical manifest is a no-op to Kubernetes — same digest, same pod template, no new pods — so a deploy CANNOT pick up a changed Secret or ConfigMap, because those are injected as environment variables and those are fixed for the life of a container. Needed for credential rotation (docs/bleedingoptions-app-db-rotation.md), which would otherwise report a green rollout while every pod kept using the old value. Leave false for ordinary deploys: they already roll pods by changing the digest, and restarting every run would discard the no-op property that makes re-running a deploy safe.')
   }
   options {
     disableConcurrentBuilds()
@@ -54,16 +102,99 @@ pipeline {
     ENVIRONMENT          = "${params.ENVIRONMENT}"
     SERVICE_PARAM        = "${params.SERVICE}"
     DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
+    FORCE_RESTART        = "${params.FORCE_RESTART}"
   }
   stages {
+    stage('Intent dedup') {
+      // Host-pinned: the durable intent ledger lives on hpsf-replay-mac (~/oe-ops).
+      agent { label 'hpsf-replay-mac' }
+      when {
+        beforeAgent true
+        expression { params.INTENT_ID?.trim() }
+      }
+      steps { script {
+        def rc = sh(returnStatus: true, script: '''
+        set -euo pipefail
+        # Serialized by disableConcurrentBuilds(): at most one build EXECUTES at a time, so this
+        # claim step cannot race another executor. Durable ledger outside the workspace (plan
+        # rev 7): survives workspace wipes; cleanup jobs never touch ~/oe-ops.
+        LEDGER=/Users/abhinav/oe-ops/zerodte-audit/jenkins-intents
+        mkdir -p "$LEDGER"
+        CLAIM="$LEDGER/${INTENT_ID}.json"
+        if [ -f "$CLAIM" ]; then
+          STATE=$(python3 -c "import json;print(json.load(open('$CLAIM')).get('state'))")
+          BN=$(python3 -c "import json;print(json.load(open('$CLAIM')).get('buildNumber'))")
+          if [ "$STATE" = "DEPLOYED" ]; then
+            echo "{\"intentId\":\"$INTENT_ID\",\"winner\":$BN}" > intent-dedup.json
+            echo "NOOP_DUPLICATE: intent already DEPLOYED by build $BN"; exit 42
+          fi
+          # CLAIMED or DEPLOY_STAGE_STARTED by another build: resolve via our own API record.
+          RESULT=$(curl -sf -u "admin:Options#100" "$JENKINS_URL/job/service-deploy/$BN/api/json" | python3 -c "import sys,json;print(json.load(sys.stdin).get('result'))" || echo MISSING)
+          if [ "$RESULT" = "None" ] || [ "$RESULT" = "null" ]; then
+            echo "{\"intentId\":\"$INTENT_ID\",\"winner\":$BN}" > intent-dedup.json
+            echo "NOOP_DUPLICATE: build $BN still running for this intent"; exit 42
+          fi
+          MARKER=$(python3 -c "import json;print(json.load(open('$CLAIM')).get('state'))")
+          if [ "$MARKER" = "DEPLOY_STAGE_STARTED" ] || [ "$RESULT" = "MISSING" ]; then
+            echo "HUMAN REQUIRED: prior build $BN reached the deploy stage (or its record is gone) without a receipt — a half-applied deploy may exist. Mark the claim FAILED after verifying the cluster digest, then resubmit."; exit 1
+          fi
+          if [ "$RESULT" = "SUCCESS" ]; then
+            # Codex round 1: CLAIMED + terminal SUCCESS is INCONSISTENT — success without the
+            # marker means the ledger writes are not being reached, and "provably pre-deploy"
+            # cannot be claimed about a build that succeeded. Never supersede an inconsistency.
+            echo "HUMAN REQUIRED: build $BN is SUCCESS but its claim never left CLAIMED — ledger and reality disagree; verify the cluster digest and repair the claim by hand."; exit 1
+          fi
+          # terminal FAILED/ABORTED, marker absent: provably died pre-deploy -> SUPERSEDE
+          echo "superseding failed pre-deploy claim of build $BN"
+        fi
+        python3 - "$CLAIM" "$BUILD_NUMBER" <<'PYEOF'
+import json,os,sys
+path,bn=sys.argv[1],int(sys.argv[2])
+tmp=path+".tmp"
+prev=json.load(open(path)) if os.path.exists(path) else {}
+rec={"intentId":os.environ["INTENT_ID"],"buildNumber":bn,"state":"CLAIMED",
+     "version":prev.get("version",0)+1,"supersedes":prev.get("buildNumber")}
+with open(tmp,"w") as f: json.dump(rec,f); f.flush(); os.fsync(f.fileno())
+os.rename(tmp,path)
+d=os.open(os.path.dirname(path),os.O_RDONLY); os.fsync(d); os.close(d)
+PYEOF
+        echo "intent $INTENT_ID claimed by build $BUILD_NUMBER"
+      ''')
+        if (rc == 42) {
+          // NOOP_DUPLICATE: the machine-readable truth is intent-dedup.json (+ the durable
+          // ledger, which the deployer reads exclusively); the Jenkins result is NOT_BUILT set
+          // here, then the abort. The deployer never keys off build results for dedup decisions.
+          if (fileExists('intent-dedup.json')) { archiveArtifacts artifacts: 'intent-dedup.json' }
+          currentBuild.result = 'NOT_BUILT'
+          error('NOOP_DUPLICATE — another build owns this intent (see intent-dedup.json)')
+        } else if (rc != 0) {
+          error("intent dedup failed rc=${rc} — human required (half-applied deploy possible)")
+        }
+      } }
+    }
     stage('Validate service registry') {
+      // Own agent = own fresh `checkout scm` of the same build revision. The stage is a
+      // pure gate: it reads only the checkout and produces nothing later stages consume.
+      agent { label VALIDATE_AGENT_LABEL }
       steps {
         sh '''
           set -euo pipefail
           bash scripts/ci/validate-services.sh
+          # Dependency-scoped FIRE-input verdict (processing PR #594): the standalone dealer-ledger
+          # deploy path must refuse a render that enables the flag without shadow evidence, or that
+          # carries a malformed materiality fraction. Unconditional — this job deploys ANY service,
+          # and the guard reads the rendered overlays, not the selected service, so it costs one
+          # kustomize per env and cannot be skipped by picking a different SERVICE parameter.
+          bash scripts/ci/validate-dealer-ledger-fire-quality.sh
         '''
       }
     }
+    // ALL remaining stages share ONE agent and ONE workspace on the deploy host — the
+    // kubeconfigs, the intent ledger and cluster reachability exist only there. Bodies
+    // unchanged, original indentation kept for reviewability.
+    stage('Deploy path') {
+      agent { label 'hpsf-replay-mac' }
+      stages {
     stage('Build image (this service only)') {
       when { expression { params.BUILD_IMAGES && !params.DEPLOY_DRY_RUN } }
       steps {
@@ -74,9 +205,22 @@ pipeline {
           // immediately, and name the job that actually builds the image.
           def ownJob = [
             'databento-feed'    : 'options-edge-databento-feed-deploy',
+            // databento-vix-feed REUSES the databento-feed image (VIX feed separation PR-2:
+            // command override selects the vix role) — build that image's own job first.
+            'databento-vix-feed': 'options-edge-databento-feed-deploy',
             'databento-sr3-feed': 'options-edge-databento-sr3-feed-deploy',
             'feed-gateway'      : 'feed-gateway-deploy',
-            'web'               : 'options-edge-web-deploy'
+            'web'               : 'options-edge-web-deploy',
+            'ibkr-feed'         : 'options-edge-ibkr-feed',
+            // stock-gex ships in the options-edge-databento-feed repo (Dockerfile.stockgex), the
+            // same shape as the sr3 feed — it has no processing-reactor module.
+            'stock-gex'         : 'options-edge-stock-gex-deploy',
+            // Both approach services are standalone repos with their own pipelines, not modules of
+            // the processing reactor — same shape as ibkr-feed. Naming them here means the operator
+            // is told which job builds the image instead of watching a queued downstream build
+            // start and die.
+            'approach-monitor'  : 'options-edge-approach-monitor',
+            'approach-position-publisher': 'options-edge-approach-position-publisher'
           ]
           if (ownJob.containsKey(params.SERVICE)) {
             error("service-deploy: ${params.SERVICE} does not build in the processing reactor. " +
@@ -135,6 +279,92 @@ pipeline {
               exit 1
             }
           fi
+        '''
+      }
+    }
+    stage('Verify OI anchor manifest topic') {
+      // BEFORE the rollout, not after: the point is to stop a producer reaching a topic that does
+      // not exist yet. apply-topics lives in a different job, and two manually sequenced jobs are
+      // not an ordering guarantee -- skip it, run it against the wrong environment, or have it
+      // fail quietly, and the broker auto-creates the topic with cluster defaults that drop each
+      // session's record 24h later while still looking configured.
+      when {
+        expression { params.SERVICE == 'databento-gex' && !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-oi-anchor-topic.sh
+        '''
+      }
+    }
+    stage('Verify indicator topics') {
+      // BEFORE the rollout, same barrier and same reason as the OI anchor stage above. MEASURED
+      // on 2026-08-11: prod's options.indicators.snapshot.current had NO dynamic config at all --
+      // neither the declared compaction nor the declared 7-day retention -- because the broker had
+      // auto-created it and apply-topics lives in a different job. es4's sat at cleanup.policy=
+      // delete for a different reason (a glued topics.env token). snapshot.current is the
+      // CURRENT-state topic the UI and gateway read; without compaction its latest value per key
+      // is dropped once retention elapses and the board blanks while the topic looks healthy.
+      // Reconciles policy/retention, FAILS CLOSED on a partition mismatch (Kafka cannot shrink a
+      // topic and recreating one would destroy the accumulated bar history).
+      when {
+        expression { params.SERVICE == 'indicator-service' }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          export TOPIC_PREFIX
+          export DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN:-false}"
+          # The Streams app id names the internal changelog the barrier checks. It is
+          # NOT derivable from ENVIRONMENT: prod's ENVIRONMENT is "production" but its
+          # app id is indicator-service-prod. The suffix comes from the SAME configmap
+          # value the service itself reads, so the barrier can never check a topic the
+          # service does not use.
+          SUFFIX=$(kubectl -n options-edge get configmap options-edge-config \
+            -o jsonpath='{.data.KAFKA_APPLICATION_ID_SUFFIX}' 2>/dev/null || true)
+          : "${SUFFIX:?KAFKA_APPLICATION_ID_SUFFIX not readable — refusing to guess the app id}"
+          export INDICATOR_APP_ID="indicator-service${SUFFIX}"
+          scripts/kafka/ensure-indicator-topics.sh
+        '''
+      }
+    }
+    stage('Verify multileg output topics') {
+      // BEFORE the rollout, same barrier and same reason as the OI anchor and indicator stages
+      // above: apply-topics lives in a different job, so on a FIRST deploy neither topic exists
+      // and the broker auto-creates them with cluster defaults. The service reads the status
+      // topic's partition count at boot and refuses to run without it, so a missing topic is a
+      // crash-loop; and an auto-created COMPACTED topic would collapse a whole session's window
+      // statuses to their last record, since they deliberately share one key for ordering.
+      when {
+        expression { params.SERVICE == 'multileg-structure' && !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-multileg-topics.sh
+        '''
+      }
+    }
+    stage('Verify gamma-tilt evidence ledger') {
+      // GMT Stage-1 (Codex code-review c1-6): the shadow evidence ledger must exist with the
+      // right shape (1 partition, delete, retention.ms=-1) BEFORE strike-intelligence rolls out.
+      // The service also refuses at boot; this stops the deploy before a crash-looping pod ships.
+      when {
+        expression { params.SERVICE == 'strike-intelligence' && !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-gamma-tilt-ledger.sh
         '''
       }
     }
@@ -302,6 +532,20 @@ pipeline {
     }
     stage('Deploy (service-scoped)') {
       steps {
+        script { if (params.INTENT_ID?.trim()) { sh '''
+          # DEPLOY_STAGE_STARTED — the durable pre-deploy boundary (plan rev 8/9): fsync file,
+          # rename, fsync DIRECTORY, and only then mutate the cluster. If this write cannot be
+          # made durable the build FAILS here, before anything is applied.
+          python3 - "/Users/abhinav/oe-ops/zerodte-audit/jenkins-intents/${INTENT_ID}.json" <<'PYEOF'
+import json,os,sys
+path=sys.argv[1]; rec=json.load(open(path))
+rec["state"]="DEPLOY_STAGE_STARTED"; rec["version"]+=1
+tmp=path+".tmp"
+with open(tmp,"w") as f: json.dump(rec,f); f.flush(); os.fsync(f.fileno())
+os.rename(tmp,path)
+d=os.open(os.path.dirname(path),os.O_RDONLY); os.fsync(d); os.close(d)
+PYEOF
+        ''' } }
         sh '''
           set -euo pipefail
           export SERVICE="${SERVICE_PARAM:?}"
@@ -309,6 +553,18 @@ pipeline {
           bash scripts/deploy/remove-retired-workloads.sh
           WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/service-deploy.sh
         '''
+        script { if (params.INTENT_ID?.trim()) { sh '''
+          # DEPLOYED — terminal claim state, written only after service-deploy.sh returned 0.
+          python3 - "/Users/abhinav/oe-ops/zerodte-audit/jenkins-intents/${INTENT_ID}.json" <<'PYEOF'
+import json,os,sys
+path=sys.argv[1]; rec=json.load(open(path))
+rec["state"]="DEPLOYED"; rec["version"]+=1
+tmp=path+".tmp"
+with open(tmp,"w") as f: json.dump(rec,f); f.flush(); os.fsync(f.fileno())
+os.rename(tmp,path)
+d=os.open(os.path.dirname(path),os.O_RDONLY); os.fsync(d); os.close(d)
+PYEOF
+        ''' } }
       }
     }
     stage('Verify web UI (post-rollout)') {
@@ -337,9 +593,9 @@ pipeline {
         '''
       }
     }
-  }
-  post {
-    always {
+      }
+      post {
+        always {
       // Guaranteed un-pause. The pause above is the only step in this pipeline that can leave a
       // service DOWN if a later step fails: if the prune or the deploy dies after scale-down,
       // nothing else would ever scale it back and the service stays at zero replicas
@@ -350,6 +606,8 @@ pipeline {
         bash scripts/deploy/vix-unpause.sh "$WORKSPACE/.jenkins-tmp/vix-paused-replicas"
       '''
       archiveArtifacts artifacts: '.jenkins-tmp/*-*.yaml', allowEmptyArchive: true
+        }
+      }
     }
   }
 }

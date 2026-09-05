@@ -1,0 +1,109 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-aggressor-flow-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-aggressor-flow-service
+    app.kubernetes.io/component: es-aggressor-flow-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # LIVE. Activated on the owner's decision, ahead of the operational evidence the Gate-2 review
+  # wanted first (multi-hour soak, broker-failover and crash-window fault injection, a canary).
+  # What that costs is recorded honestly in SIGNED-FLOW-RESPONSE-SLOPE.md rather than papered over.
+  #
+  # NEVER above 1. That is correctness, not sizing: the series identity
+  # (algorithmVersion, cmeTradeDate, barOrdinal) is assigned from in-memory state, so two replicas
+  # would both start at ordinal 0 and publish colliding keys onto a topic that is deliberately NOT
+  # compacted. Kubernetes does not enforce this -- a manual scale or a later HPA would break it --
+  # so treat `kubectl scale` on this Deployment as a data-corrupting operation.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-aggressor-flow-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-aggressor-flow-service
+        app.kubernetes.io/component: es-aggressor-flow-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      # Sized from the two values pinned in env below: 5s drain + 3 x 30s sendTimeout + 2s = 97s
+      # for the slope worker alone (an in-flight send plus a drain send, each able to spend
+      # max.block.ms before its get() begins), with the runtime join and producer closes on top.
+      # The default 30s would SIGKILL through all of it, defeating the drain and its accounting on
+      # every rollout.
+      terminationGracePeriodSeconds: 130
+      containers:
+        - name: es-aggressor-flow
+          image: 192.168.100.252:5000/options-edge-es-aggressor-flow:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8151"
+            # The service's own default bootstrap is es4 (192.168.100.4). On prod it MUST be set
+            # explicitly, or this pod would silently consume the es4 tape from inside the prod
+            # cluster and publish a series built from another cluster's prints.
+            - name: ES_AGGRESSOR_BOOTSTRAP_SERVERS
+              value: 192.168.100.252:9092
+            # TOPIC_PREFIX is "" on prod, so these resolve unprefixed. The prod tape carries a real
+            # GLBX aggressor side on 100% of prints (measured 2026-08-18, n=5,552).
+            - name: KAFKA_ES_TRADES_TOPIC
+              value: underlying.es.trades
+            - name: ES_AGGRESSOR_SYMBOL
+              value: ES.v.0
+            # --- the legacy absorption snapshot is DELIBERATELY OFF here ------------------------
+            # Its BUYERS_ABSORBED / SELLERS_ABSORBED label is a sign test against a hard-coded
+            # ABSOLUTE point ladder (10s -> 1.0 ... session -> 60.0 ES points), never normalised by
+            # volume and never validated on prod. This is the app's first prod deployment, so it
+            # ships WITHOUT that label rather than introducing an unvalidated state to prod.
+            - name: ES_AGGRESSOR_LEGACY_OUTPUT_ENABLED
+              value: "false"
+            # --- the measurement this deployment exists for -----------------------------------
+            # Kyle-style signed-flow response slope. A NEUTRAL OBSERVABILITY MEASUREMENT: see
+            # es-aggressor-flow-service/SIGNED-FLOW-RESPONSE-SLOPE.md. It must never be labelled as
+            # gamma absorption, a market state, support/resistance, a directional signal, or
+            # expected slippage.
+            - name: ES_SLOPE_OUTPUT_ENABLED
+              value: "true"
+            - name: KAFKA_ES_SLOPE_TOPIC
+              value: futures.kyle-style-signed-flow-response-slope
+            # Pinned HERE, not inherited: the terminationGracePeriodSeconds below is sized from
+            # these two. Left to envFrom they could legally reach 600s each, and the grace period
+            # would then be grossly insufficient -- SIGKILL straight through the drain.
+            - name: ES_SLOPE_SEND_TIMEOUT_MS
+              value: "30000"
+            - name: ES_SLOPE_SHUTDOWN_DRAIN_MS
+              value: "5000"
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms128m -Xmx768m
+          ports:
+            - containerPort: 8151
+              name: health
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          # Readiness withdraws (liveness stays green) when the slope output fails, so a broken
+          # measurement is loudly not-ready instead of a silent healthy-but-dead pod.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi

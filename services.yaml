@@ -14,6 +14,13 @@
 # image:      the image basename in the env registry (oeProfile prepends the registry).
 # managedBy:  standalone = has its own <svc>-deploy fast path;
 #             monolith   = still deployed by the monolithic options-edge-deploy.
+# namespace:  WHICH APPLICATION the service belongs to. Optional; unset means `options-edge`,
+#             so every pre-existing entry keeps its behaviour and nothing needs back-filling.
+#             Set it to `fullfunding` (or a future tenant) and service-deploy applies there
+#             instead — the build reads this rather than assuming, and refuses if the rendered
+#             manifests disagree with what is registered here.
+#             The namespace itself is created by its own tenant/infra job, never by a service
+#             deploy: see k8s/tenants/<tenant>/bootstrap.
 # Migration COMPLETE for the processing repo (2026-07-02): every processing service is
 # standalone. sliceGenerated entries get their overlays from
 # scripts/deploy/generate-service-slices.sh (the monolith render of just that service —
@@ -35,15 +42,96 @@ services:
     producedTopics: []
     requiredConfigKeys: [KAFKA_BOOTSTRAP_SERVERS, SCHEMA_REGISTRY_URL, POSTGRES_JDBC_URL]
 
+  # --- bleedingoptions tenant (the PUBLIC Gamma Lab) ------------------------------------
+  # The `namespace` field routes this away from options-edge; without it the deploy would default
+  # there and the render/registry guard would refuse it.
+  #
+  # ⚠️ Ships at replicas: 0. scripts/deploy/verify-public-gate.sh runs on this service's apply path
+  # (service-deploy.sh) and refuses a scale-up without PGL-050/051/052 evidence for the exact image
+  # digest. Same image as `web` — one codebase, one image, one PUBLIC_SURFACE switch.
+  - name: bleedingoptions-gamma-lab
+    managedBy: standalone
+    namespace: bleedingoptions
+    image: options-edge-web
+    deployments: [bleedingoptions-gamma-lab]
+    container: web
+    buildJob: options-edge-web-deploy
+    sourceRepo: options-edge
+    envs: [production]
+    dependsOnInfraOnly: true
+    consumedTopics: []       # the public tier reads one REST endpoint; it touches no Kafka at all
+    producedTopics: []
+    requiredConfigKeys: [PUBLIC_SURFACE, PUBLIC_BOARD_UPSTREAM_URL, VITE_AUTH_ISSUER, AUTH_JWK_SET_URI]
+
+  # The tenant's email sender (approval notices today; any outbound mail from here on).
+  # Its own image and repo, deliberately NOT the web image: that surface has a small startup
+  # contract on purpose, and putting an SMTP credential into it would widen exactly the boundary
+  # PGL-034A draws. Single replica — see the Deployment header for why that is correctness.
+  # THE CLOSING-BOARD SCHEDULE, owned by the batch itself (USER 2026-09-01: "I don't want
+  # anything Jenkins-based, it should run based on Spring Batch configuration"). A long-lived pod
+  # holding two cron triggers in New York time; the Jenkins job that used to drive this keeps only
+  # its manual entry point. Same image as the one-shot close Job — one batch, one build.
+  - name: stock-gex-close-scheduler
+    managedBy: standalone
+    image: oe-close-batch
+    deployments: [stock-gex-close-scheduler]
+    container: scheduler
+    buildJob: oe-close-batch-build
+    sourceRepo: oe-close-batch
+    envs: [production]
+
+  - name: bleedingoptions-email
+    managedBy: standalone
+    namespace: bleedingoptions
+    image: oe-email-service
+    deployments: [bleedingoptions-email]
+    container: email
+    buildJob: oe-email-service-deploy
+    sourceRepo: oe-email-service
+    envs: [production]
+    dependsOnInfraOnly: true
+    consumedTopics: []       # it reads Keycloak over HTTP and its own ledger; no Kafka at all
+    producedTopics: []
+    requiredConfigKeys: [SMTP_HOST, SMTP_USERNAME, MAIL_FROM, POSTGRES_JDBC_URL, KEYCLOAK_BASE_URL, KEYCLOAK_CLIENT_ID, APPROVED_GROUP]
+
+  # --- fullfunding tenant --------------------------------------------------------------
+  # The `namespace` field is what routes this away from options-edge. Without it the deploy
+  # would default to options-edge and the render/registry guard would refuse it.
+  - name: fullfunding-app
+    namespace: fullfunding
+    managedBy: standalone
+    image: fullfunding-app
+    deployments: [fullfunding-app]
+    container: web
+    sourceRepo: fullfunding-workspace
+    envs: [production]
+    dependsOnInfraOnly: true
+    consumedTopics: []
+    producedTopics: []
+    requiredConfigKeys: []
   # --- monolith (deployed by options-edge-deploy; migrate in batches) ------------------
   - { name: databento-feed,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-feed,               deployments: [options-edge-databento-feed], buildJob: options-edge-databento-feed-deploy }
   - { name: databento-sr3-feed,           managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-sr3-feed,           deployments: [databento-sr3-feed-service], buildJob: options-edge-databento-sr3-feed-deploy }
-  - { name: ibkr-feed,                    managedBy: monolith, image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service] }
+  # databento-vix-feed: STANDALONE VIX OPRA feed (VIX feed separation PR-2). PROD-ONLY;
+  # IMAGE REUSE — same image as databento-feed (command override selects the vix role),
+  # so it builds in options-edge-databento-feed-deploy and needs no new pinning wiring.
+  - { name: databento-vix-feed,           managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-databento-feed,               deployments: [databento-vix-feed], buildJob: options-edge-databento-feed-deploy }
+  # ibkr-feed: DEV-ONLY since 2026-07-29 (IBKR SPX index priority-1 spot, requirement rev4) —
+  # runs on the dev cluster next to the Mac-hosted IB Gateway and dual-produces the
+  # underlying.spx.index.price hop topic to BOTH brokers. Prod overlay keeps it at 0, so the
+  # standalone slice renders replicas:1 on dev and replicas:0 on production (prod never runs
+  # the pod but the slice stays declared + mirror-validated; a production service-deploy is a
+  # harmless 0-replica apply). Image builds in the options-edge-ibkr-feed job.
+  - { name: ibkr-feed,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-ibkr-feed,                    deployments: [ibkr-feed-service], buildJob: options-edge-ibkr-feed }
   - { name: feed-gateway,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-feed-gateway,                 deployments: [feed-gateway-service], buildJob: feed-gateway-deploy }
   - { name: raw-to-display,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-to-display,               deployments: [raw-to-display-service, raw-to-display-databento-service] }
   - { name: databento-volume-aggregator,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-volume-aggregator,  deployments: [databento-volume-aggregator] }
   - { name: databento-gex,                managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-gex,                deployments: [databento-gex-service] }
   - { name: databento-gex-history,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-gex-history,        deployments: [databento-gex-history-service] }
+  - { name: gamma-migration,             managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-gamma-migration,             deployments: [gamma-migration-service] }
+  - { name: gamma-leadership,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-gamma-leadership,            deployments: [gamma-leadership-service] }
+  - { name: nifty-gex,                    managedBy: standalone, envs: [dev, production], image: options-edge-nifty-gex,                    deployments: [nifty-gex-service], container: nifty-gex, sourceRepo: options-edge-nifty-gex }
+  - { name: corridor-gauge,               managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-corridor-gauge,               deployments: [corridor-gauge-service] }
   - { name: databento-mission-sandwich,   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-databento-mission-sandwich,   deployments: [databento-mission-sandwich-service] }
   - { name: delta-flow,                   managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-delta-flow,                   deployments: [delta-flow-service] }
   - { name: dealer-ledger,                managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-dealer-ledger,                deployments: [dealer-ledger-service] }
@@ -51,15 +139,41 @@ services:
   - { name: strike-intelligence,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-intelligence,          deployments: [strike-intelligence-service] }
   - { name: option-truth-engine,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-option-truth-engine,          deployments: [option-truth-engine-service] }
   - { name: market-carry,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-market-carry,                 deployments: [market-carry-service] }
+  # Dark-deployed (replicas 0) pending the MIN_ACTIONABLE_LEAD_MS drill and operator-approved
+  # promotion gates. dev only: production is not listed on purpose — nothing about this service
+  # has cleared a production gate, and adding the env here is the deliberate act that would say it had.
+  - { name: approach-monitor,             managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-approach-monitor,             deployments: [approach-monitor-service] }
+  - { name: approach-position-publisher,  managedBy: standalone, sliceGenerated: true, envs: [dev],             image: options-edge-approach-position-publisher, deployments: [approach-position-publisher], buildJob: options-edge-approach-position-publisher }
   - { name: strike-invasion,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-strike-invasion,              deployments: [strike-invasion-service] }
   - { name: invasion-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-invasion-postgres-writer,     deployments: [invasion-postgres-writer] }
   - { name: spread-skew,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew,                  deployments: [spread-skew-service] }
   - { name: es-spx-align,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-spx-align,                 deployments: [es-spx-align-service] }
   - { name: reversal-confirmation,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-reversal-confirmation,        deployments: [reversal-confirmation-service] }
+  - { name: drop-classifier,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-drop-classifier,              deployments: [drop-classifier-service] }
   - { name: spread-skew-postgres-writer,  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spread-skew-postgres-writer,  deployments: [spread-skew-postgres-writer] }
   - { name: es-open-direction,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction,            deployments: [es-open-direction-service] }
   - { name: close-direction,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-close-direction,              deployments: [close-direction-service] }
+  - { name: spot-vol-regime,              managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spot-vol-regime,              deployments: [spot-vol-regime-service] }
+  - { name: vol-premium,                  managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-vol-premium,                  deployments: [vol-premium-service] }
+  - { name: indicator-service,            managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-indicator-service,            deployments: [indicator-service] }
+  - { name: context-tape,                 managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-context-tape,                 deployments: [context-tape-service] }
+  # es-aggressor-flow: PRODUCTION ONLY (dev has no ES feed). On prod it publishes only the
+  # Kyle-style signed-flow response slope; the legacy absorption label is switched off there.
+  - { name: es-aggressor-flow,            managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-es-aggressor-flow,            deployments: [es-aggressor-flow-service] }
+  # multileg-structure: DESCRIPTIVE co-print observation surface (options.opra.tcbbo -> ranked
+  # observations + per-window status). It claims no ownership, direction or dealer attribution —
+  # OPRA carries no multi-leg marker (measured 2026-08-18) — so it is a screening surface only.
+  - { name: multileg-structure,           managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-multileg-structure,           deployments: [multileg-structure-service] }
+  # stock-gex: SPX-500 single-stock GEX (Databento equity options; NO Kafka). Its image builds in the
+  # options-edge-databento-feed repo (Dockerfile.stockgex), like databento-sr3-feed — hence buildJob.
+  # DEV-FIRST/on-demand: prod overlay holds it at replicas:0 until the nightly OI-index builder exists.
+  - { name: stock-gex,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-stock-gex,                    deployments: [stock-gex-service], buildJob: options-edge-stock-gex-deploy }
+  # SPXW session-close open-interest shadow experiment. Ships DISABLED (OI_SHADOW_ENABLED=false):
+  # the requirement's observation calendar starts at a NAMED session, so being deployed must not
+  # be the same thing as having started. No consumers by design.
+  - { name: oi-shadow,                    managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-oi-shadow,                    deployments: [oi-shadow-service] }
   - { name: vix-option-inteligence,        managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-vix-option-inteligence,        deployments: [vix-option-inteligence-service] }
+  - { name: greek-move-authenticity,       managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-greek-move-authenticity,       deployments: [greek-move-authenticity-service] }
   - { name: es-open-direction-postgres-writer, managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-es-open-direction-postgres-writer, deployments: [es-open-direction-postgres-writer] }
   - { name: reversal-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-reversal-postgres-writer,     deployments: [reversal-postgres-writer] }
   # Hot-strike paper follower (HOT-STRIKE-PAPER-FOLLOWER-GATE1 §3.1): ONE image, TWO per-market

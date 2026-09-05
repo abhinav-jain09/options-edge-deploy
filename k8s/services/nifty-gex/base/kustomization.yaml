@@ -1,0 +1,12 @@
+# SERVICE SLICE — nifty-gex (standalone-service-deployment design).
+# Owns ONLY this service's workload: Deployment + Service. The dhan-credentials Secret
+# and the nifty-gex ServiceAccount/Role/RoleBinding are common infra (k8s/infra),
+# applied by Jenkinsfile.common-infra (§13.5 blast-radius rule).
+#
+# Included by the monolithic env overlays (k8s/overlays/<env>) AND by ../overlays/<env>
+# for the standalone fast path (Jenkinsfile.nifty-gex-service).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - nifty-gex-deployment.yaml
+  - nifty-gex-service.yaml

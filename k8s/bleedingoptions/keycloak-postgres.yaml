@@ -1,0 +1,164 @@
+# Postgres for the PUBLIC Keycloak (PGL-030). Its own database, its own volume, its own credential —
+# it shares nothing with oe-keycloak-postgres in `options-edge`.
+#
+# That separation is the whole reason a second Keycloak exists rather than a second realm on the
+# first: if the internet-facing identity provider is compromised, what the attacker reaches is this
+# database of public read-only accounts, not the store that backs the realm guarding
+# /api/orders/spread.
+#
+# Shape deliberately mirrors k8s/keycloak/keycloak-postgres.yaml, including the two-Service pattern —
+# this cluster's overlay does not route pod-IP-to-pod-IP traffic, so a headless Service's pod-IP
+# answer is unreachable and Keycloak must connect through a ClusterIP. That was learned the hard way
+# on the internal instance; copying the shape means not learning it twice.
+#
+# DURABILITY: StatefulSet + volumeClaimTemplate, so data is on disk and survives pod restarts. k3s
+# provisions `local-path`, which is NODE-AFFINE: the PVC binds to whichever node first schedules the
+# pod, and losing that node strands the data. A PVC protects against pod loss, not node loss and not
+# deletion — which is why PGL-059 requires a real pg_dump backup with a rehearsed restore before
+# public launch, not merely a volume.
+apiVersion: v1
+kind: Service
+metadata:
+  name: bo-keycloak-postgres
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-keycloak-postgres
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: auth
+spec:
+  clusterIP: None            # headless — governing Service for the StatefulSet (stable pod identity)
+  selector:
+    app.kubernetes.io/name: bo-keycloak-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+# The Service Keycloak actually connects to. See the header: the headless Service hands back a pod IP,
+# which this cluster cannot route; this ClusterIP takes the kube-proxy path that works.
+apiVersion: v1
+kind: Service
+metadata:
+  name: bo-keycloak-postgres-db
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-keycloak-postgres
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: auth
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: bo-keycloak-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bo-keycloak-postgres
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-keycloak-postgres
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: auth
+spec:
+  serviceName: bo-keycloak-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bo-keycloak-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bo-keycloak-postgres
+        app.kubernetes.io/part-of: bleedingoptions
+        app.kubernetes.io/component: auth
+    spec:
+      # Control-plane node, same as its Keycloak. Pods on the oe-failover-56 node cannot reach CoreDNS,
+      # so co-locating keeps DNS and the DB hop intra-node on the healthy node. NOTE: local-path PVs are
+      # node-affine — changing this requires deleting the PVC so a new one provisions on the new node.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      automountServiceAccountToken: false   # PGL-061: nothing here talks to the Kubernetes API
+      securityContext:
+        # postgres:16-alpine is uid/gid 70 — NOT 999, which is the Debian variant's. An earlier
+        # version set fsGroup: 999 while its own comment said 70, so the mounted volume would have
+        # been group-owned by a group the process is not in.
+        # fsGroup: 70 matches alpine's postgres group. NOTE it is not what actually makes this
+        # work on k3s: for local-path/hostPath volumes the kubelet may not apply fsGroup ownership
+        # at all. Startup succeeds because the provisioner creates the mount root writable, so uid
+        # 70 can create the `pgdata` SUBDIRECTORY (PGDATA is deliberately below the mount root, not
+        # at it — initdb refuses a directory containing lost+found).
+        fsGroup: 70
+        # PGL-061. The image declares NO `USER`: it starts as ROOT and drops to postgres via its
+        # entrypoint's gosu. So `runAsNonRoot: true` alone rejected the pod before the entrypoint
+        # ever ran — CreateContainerConfigError, "image will run as root", for 8 hours. Naming the
+        # uid explicitly is what actually makes the intent enforceable: the container now starts AS
+        # postgres, and a future image that tries to run as root still fails to start rather than
+        # silently gaining privilege.
+        runAsUser: 70
+        runAsGroup: 70
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          # Pinned to the tag's current manifest-list digest, matching the internal instance so both
+          # move together on an upgrade.
+          image: postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: keycloak
+            - name: POSTGRES_USER
+              value: keycloak
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bo-keycloak-secrets
+                  key: POSTGRES_PASSWORD
+            # Data dir in a subdirectory of the mount: postgres refuses a non-empty mount root.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U keycloak -d keycloak"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U keycloak -d keycloak"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          # §5.0 sizing. This database holds public accounts and sessions, not market data.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # NOT readOnlyRootFilesystem: postgres writes to /tmp and /var/run during normal operation.
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # k3s default is local-path. Left implicit to match the internal instance: storageClassName is
+        # IMMUTABLE, and hard-coding a class that disagrees with the live PVC is what failed prod
+        # deploys #490/#502.
+        resources:
+          requests:
+            storage: 10Gi

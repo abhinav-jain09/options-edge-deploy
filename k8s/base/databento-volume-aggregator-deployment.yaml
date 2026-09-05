@@ -54,6 +54,16 @@ spec:
               value: "0"
             - name: KAFKA_DATABENTO_VOLUME_AGGREGATOR_PROCESSING_GUARANTEE
               value: exactly_once_v2
+            # exactly_once_v2 makes Streams REFUSE to open a RocksDB state dir that was not cleanly
+            # closed ("State store ... didn't find a valid state, since under EOS it has the risk of
+            # getting uncommitted data in stores"). A hard reboot of .252 leaves exactly that, and
+            # because the state lives on a PVC it SURVIVES the pod restart — so the pod
+            # CrashLoopBackOffs forever until someone wipes the dir by hand (done manually on
+            # 2026-07-22 and again on 2026-07-29). Wiping local state on start makes the service
+            # self-healing: the store rebuilds from its changelog (no data loss, ~50s restore).
+            # Same knob strike-flow-classifier already uses.
+            - name: KAFKA_STREAMS_CLEANUP_ON_START
+              value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: "-Xmx1536m"
           ports:

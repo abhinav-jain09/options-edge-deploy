@@ -17,4 +17,4 @@ spec:
       containers:
         - name: delta-flow
           env:
-            - { name: DELTA_FLOW_GREEK_LOOKAHEAD_TOLERANCE_MS, value: "3000" }
+            - { name: DELTA_FLOW_GREEK_LOOKAHEAD_TOLERANCE_MS, value: "30000" }

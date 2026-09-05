@@ -10,6 +10,29 @@ resources:
   # scripts/ci/validate-services.sh render equivalence.
   - ../../services/web/base
 patches:
+  - path: approach-position-publisher-delete.yaml
+    target:
+      kind: Deployment
+      name: approach-position-publisher
+  - path: approach-monitor-delete.yaml
+    target:
+      kind: Deployment
+      name: approach-monitor-service
+  - path: approach-monitor-delete.yaml
+    target:
+      kind: Service
+      name: approach-monitor-service
+  # vol-premium is dev+production only (services.yaml envs) and the experiment build does not
+  # build options-edge-vol-premium at all — so the shared base would render it ON here against an
+  # unremapped .252 image and sit in ImagePullBackOff, or worse pull a stale one. Same pattern as
+  # reversal-confirmation below.
+  - target:
+      kind: Deployment
+      name: vol-premium-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   # reversal-confirmation is dev+production only (services.yaml envs) — the shared base
   # would otherwise render it ON in experiment with the remote .252 image on an
   # Apple-Silicon local cluster. Keep it OFF here (same pattern as other env-scoped services).
@@ -33,6 +56,35 @@ patches:
   - target:
       kind: Deployment
       name: signal-follower-es
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  # stock-gex is dev+production only (services.yaml envs) — same pattern again. Experiment builds
+  # no :dev image for it, its hostPath OI index does not exist on .2, and a live Databento
+  # subscription there would burn a connection slot for nothing. Keep it OFF.
+  - target:
+      kind: Deployment
+      name: stock-gex-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  # context-tape is dev+production only (services.yaml envs) — same pattern as stock-gex /
+  # signal-follower above: experiment builds no image for it and its image var is only
+  # emitted for dev+production, so keep it OFF here.
+  - target:
+      kind: Deployment
+      name: context-tape-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  # multileg-structure is dev+production only (services.yaml envs) — same pattern as
+  # context-tape above: experiment builds no image for it, so keep it OFF here.
+  - target:
+      kind: Deployment
+      name: multileg-structure-service
     patch: |-
       - op: replace
         path: /spec/replicas
@@ -117,7 +169,7 @@ patches:
         path: /spec/progressDeadlineSeconds
         value: 1200
   # DEV-ONLY spx-mission-control auth: base points at the prod Keycloak
-  # (https://auth.fullfunding.nl/realms/optionsedge) which dev cannot reach.
+  # (https://auth.bleadingoptions.com/realms/optionsedge) which dev cannot reach.
   # Override the issuer + JWKS URIs to the local Mac Keycloak (192.168.100.2:8089)
   # so the mandatory MissionAuthSettings.validate() check is satisfied AND the JWKS
   # is actually fetchable at startup. Audience inherits from base ("options-edge-web").

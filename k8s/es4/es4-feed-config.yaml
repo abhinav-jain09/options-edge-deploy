@@ -6,8 +6,9 @@
 # tuning knob. Two of those defaults caused the Databento slow-consumer complaint:
 #   * DATABENTO_USE_LIVE_REPLAY defaults to TRUE  -> a statistics replay anchored at
 #     06:00 ET on EVERY start (prod SPX sets false via its own configmap);
-#   * DATABENTO_PUBLISH_INTERVAL_MS defaults to 250 -> 8x prod's snapshot work across
-#     ~660 ES contracts.
+#   * DATABENTO_PUBLISH_INTERVAL_MS defaults to 250 -> 8x the snapshot work prod SPX did
+#     at the time (2000 ms; prod SPX moved to 5000 ms on 2026-07-29), across ~660 ES
+#     contracts.
 # On 2026-07-24 that combination produced 8 liveness-SIGKILL cycles, each abandoning a
 # Databento session mid-replay with an unread receive buffer.
 # ⚠️ SCOPE: those defaults explain the ACUTE ES incident. Whether they also contributed to
@@ -58,15 +59,25 @@ data:
   # Library default is 48h — far outside intent and dangerous after a long outage.
   DATABENTO_STATISTICS_REPLAY_MAX_LOOKBACK_HOURS: "12"
   # ---- publish cadence -----------------------------------------------------
-  # USER decision 2026-07-25: ES matches prod SPX at 2000 ms ("ES also make 2 sec and
-  # if it does not work then we increase"). Escalation is a MEASURED ladder
-  # 2000 -> 3000 -> 4000 ms capped at 4000 (design ESM-R23), never a judgement call.
+  # USER decision 2026-07-25: ES was set to 2000 ms, matching prod SPX at that time ("ES
+  # also make 2 sec and if it does not work then we increase"). Escalation is a MEASURED
+  # ladder 2000 -> 3000 -> 4000 ms capped at 4000 (design ESM-R23), never a judgement call.
+  # NB prod SPX moved to 5000 ms on 2026-07-29 (its own CPU saturation); ES stays 2000 ms
+  # and keeps its own ladder — the two are no longer meant to match.
   DATABENTO_PUBLISH_INTERVAL_MS: "2000"
   # ---- schema enablement (drives wire volume; never inherited) -------------
   DATABENTO_ENABLE_CBBO: "true"
   DATABENTO_ENABLE_TCBBO: "true"
   DATABENTO_ENABLE_TRADES: "true"
   DATABENTO_ENABLE_STATISTICS: "true"
+  # ES overnight OI bootstrap (feed PR#112, ESM-Q4): on a weekend/expiry-roll reopen the live
+  # statistics replay cannot reach the last OI publication (Friday, ~60h back vs the 12h window
+  # above), so the feed seeds OI from HISTORICAL statistics for the resolved symbols — fill-only
+  # (never overwrites newer live OI), wall-clock bounded, fail-soft. Measured 2026-08-03: Friday
+  # published 371,834 contracts of real OI for that night expiry that the live replay missed.
+  DATABENTO_OI_HISTORICAL_BOOTSTRAP_ENABLED: "true"
+  DATABENTO_OI_HISTORICAL_BOOTSTRAP_LOOKBACK_DAYS: "4"
+  DATABENTO_OI_HISTORICAL_BOOTSTRAP_TIMEOUT_SECONDS: "45"
   # ---- reconnect shaping ---------------------------------------------------
   # The client's own reconnect_policy defaults to "none"; the feed's internal loop is
   # what reconnects, so these three are the real backoff controls.

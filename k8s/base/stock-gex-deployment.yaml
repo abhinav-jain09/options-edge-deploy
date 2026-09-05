@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stock-gex-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: stock-gex-service
+    app.kubernetes.io/component: stock-gex
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Single-writer: ONE Databento live subscription per environment. replicas=1 + Recreate so a
+  # rollout never runs two subscriptions against the same connection budget (Databento plan
+  # limits: 10 connections/dataset).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: stock-gex-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: stock-gex-service
+        app.kubernetes.io/component: stock-gex
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: stock-gex
+          image: 192.168.100.252:5000/options-edge-stock-gex:dev
+          imagePullPolicy: Always
+          # Console script from the options-edge-databento-feed repo (Dockerfile.stockgex),
+          # the same shape as the sr3 feed's entrypoint.
+          command: ["options-edge-stock-gex-service"]
+          # NO envFrom: this service does not use Kafka, Schema Registry or Postgres, so it must
+          # not inherit options-edge-config. Every knob it reads is set explicitly here
+          # (the DBP-R4 lesson: an unmounted default is a silent default).
+          env:
+            # The ONLY secret. Sourced by key from the feed's existing Secret — never inlined,
+            # never in a tracked file. The Secret is created by the deploy jobs from the Jenkins
+            # credential options-edge-databento-api-key.
+            - name: DATABENTO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-databento-feed-env
+                  key: DATABENTO_API_KEY
+            # Nightly-built open-interest index, produced OUTSIDE this pod. Wired the way this
+            # repo already hands a pod a file another process writes: a hostPath. The path is
+            # /home/options-edge/stock-gex-oi, NOT /var/lib/options-edge — rule.md's Home Dir
+            # Storage rule puts ALL runtime files under /home/options-edge and explicitly
+            # excludes /var. (k8s/replay/dev/databento-timewarp-replay-job.yaml uses
+            # /var/lib/options-edge/historical-data, but that is a dev-only job predating the
+            # rule; it is not a licence to add another. On prod /var/lib/options-edge does not
+            # exist and needs root, while /home/options-edge is already there and writable by
+            # the archive user — so the rule is also the only path that actually works.)
+            # The builder job does not exist yet,
+            # so the mount uses DirectoryOrCreate rather than the precedent's Directory: a
+            # missing directory must leave the pod UNREADY (a readiness probe that reports the
+            # index is stale/absent), not unschedulable with no diagnosis.
+            # CONTRACT: the nightly builder must write exactly this file.
+            - name: STOCK_GEX_OI_INDEX
+              value: /oi-index/stock-gex-oi-index.json.gz
+            # Frozen closing boards, under the SAME mount as the index rather than a second
+            # volume: they are written by the same producer, onto the same node, and a separate
+            # volume would only add a way for the two to end up on different disks.
+            #
+            # Set in the BASE, so every env resolves it the same way, even though only
+            # production has a producer today. It is NOT a boot gate: an env with no close/
+            # directory simply answers 503 CLOSE_BOARD_UNAVAILABLE and the after-hours view is
+            # empty there — whereas a bad OI index must stop the service outright.
+            # KEPT, deliberately, after the switch as well. The files remain the fallback until
+            # the database path has run for long enough to be trusted, and removing this line is
+            # the LAST step of the migration, not part of the switch.
+            - name: STOCK_GEX_CLOSE_DIR
+              value: /oi-index/close
+            - name: HEALTH_PORT
+              value: "8022"
+          volumeMounts:
+            - name: oi-index
+              mountPath: /oi-index
+              readOnly: true
+          ports:
+            - name: api
+              containerPort: 8021
+            - name: health
+              containerPort: 8022
+          # /healthz and /readyz are NOT interchangeable: liveness only asks whether the process
+          # is alive (restarting on /readyz would kill a healthy pod every time the index went
+          # stale or the session closed), while readiness reflects tick progress, session health
+          # and OI-index freshness — exactly what must gate traffic.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30
+          # Small service. CPU limit intentionally absent, matching every sibling service.
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: oi-index
+          hostPath:
+            path: /home/options-edge/stock-gex-oi
+            type: DirectoryOrCreate

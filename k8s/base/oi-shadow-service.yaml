@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: oi-shadow-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: oi-shadow-service
+    app.kubernetes.io/component: oi-shadow-service
+    app.kubernetes.io/part-of: options-edge
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8150"
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: oi-shadow-service
+  ports:
+    - name: health
+      port: 8150
+      targetPort: health

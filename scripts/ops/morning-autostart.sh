@@ -44,11 +44,28 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   4 USER-directed off (also set replicas:0 in the prod overlay): volume-pace-service
 #   (IBKR variant), strike-flow-classifier-ibkr (IBKR out of scope),
 #   options-edge-integration-test (no continuous tests in prod), spx-mission-control-service
-#   (2026-07-09 USER: keep OFF on prod; databento-mission-sandwich-service stays UP),
-#   ibkr-feed-service (2026-07-09 USER: VIX moved to dev, prod no longer needs the IBKR VIX source).
+#   (2026-07-09 USER kept mission-sandwich UP; SUPERSEDED 2026-07-30 — USER: keep it OFF),
+#   ibkr-feed-service REMOVED from KEEP_DOWN 2026-07-29: it is now the priority-1 SPX+VIX
+#   index source for BOTH envs (IBKR-SPX-INDEX-PRIORITY-SPOT-REQUIREMENT §3/§12) — the
+#   single IB client on dev fans out to both clusters, so autostart MUST bring it up.
 #   spread-skew-service + spread-skew-postgres-writer (2026-07-26 USER hold:
 #   disabled in every environment until further notice).
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service ibkr-feed-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer}"
+#   databento-vix-feed (VIX feed separation PR-2): pre-evidence default; the shadow
+#   commit removes this — replicas:1 and a KEEP_DOWN entry are mutually exclusive
+#   (autostart would scale the shadow to 0 at 06:15 mid-session; design §5).
+#   raw-to-display-service ADDED to KEEP_DOWN 2026-08-10 (pre-open IBKR GEX prod gate): it is
+#   the LEGACY IBKR display builder (src=IBKR, consumes options.ibkr.raw -> options.ibkr.display,
+#   which the prod gateway reads). The prod overlay pins it to replicas 0 so the D15 chain fan-out
+#   cannot wake that pipeline, but this script would scale it back to 1 at 06:15 — inside the very
+#   pre-open window the fan-out is live — silently undoing the hold. NOT the Databento display
+#   builder: raw-to-display-databento-service is a SEPARATE deployment and must stay at 1.
+#   databento-maxpain-service REMOVED from KEEP_DOWN 2026-08-01 (USER: "turn on prod
+#   only") — prod overlay patches replicas:1; dev stays down via dev-cleanup DISABLED_DEV.
+#   oi-shadow-service (2026-08-10 USER hold: retired until further notice). It scores only
+#   END-OF-DAY 1DTE open interest and the desk trades 0DTE, where no next-day settled
+#   print exists to score it. Also replicas:0 in both overlays. See
+#   docs/oi-nowcast-retirement.md.
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only
@@ -84,7 +101,7 @@ esac
 # --- MUTUAL EXCLUSION with the off-hours clean-slate wipe -----------------------
 # The off-hours wipe (scripts/ops/offhours-clean-slate.sh) deletes/purges Kafka
 # topics + PVCs + DB while apps are at 0. If a manual/delayed live wipe overlapped
-# this 08:00 run we could scale apps to 1 MID-WIPE (corrupt/half-empty state). Both
+# this 06:15 run we could scale apps to 1 MID-WIPE (corrupt/half-empty state). Both
 # jobs now contend the SAME lock file: whoever holds it wins, the other backs off.
 # We hold it for our whole run (offhours' own `flock -n 9` on this file then exits).
 SHARED_LOCK="${SHARED_LOCK:-/tmp/offhours-clean-slate.lock}"
@@ -132,6 +149,28 @@ if [ "$ENABLED" = "true" ] && [ "$up" -gt 0 ]; then
     [ "$(date +%s)" -ge "$deadline" ] && { log "WARN: ${notready} deployments not Ready after ${ROLLOUT_WAIT}s"; break; }
     sleep 5
   done
+
+  # SELF-HEAL boot-order stragglers (parity with dev-cleanup's start path).
+  # On a box reboot k3s starts the pods while Kafka (systemd) is still coming up, so
+  # Streams/runtime services die at startup with "Timeout expired while fetching topic
+  # metadata" / "Connection refused" / "timeout creating source topic ...". Their MAIN
+  # THREAD dies but the container stays Running, so kubelet never restarts them and they
+  # sit 0/1 FOREVER — an env that looks "up" but silently has no close-direction,
+  # delta-flow, strike-intelligence or heatmap. Bounce whatever is still short of its
+  # desired replicas; by now Kafka is up, so the restart succeeds.
+  healed=0
+  for d in $(kcr get deploy -l "$SELECTOR" -o name 2>/dev/null | sed 's#.*/##'); do
+    skip=0
+    for k in $KEEP_DOWN; do [ "$d" = "$k" ] && skip=1 && break; done
+    [ "$skip" = 1 ] && continue
+    des=$(kcr get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+    rr=$(kcr get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+    if [ "${des:-0}" -gt 0 ] && [ "${rr:-0}" -lt "${des:-0}" ]; then
+      log "boot-order straggler: $d (${rr:-0}/${des}) — restarting"
+      kc rollout restart deploy/"$d" >/dev/null 2>&1 && healed=$((healed+1))
+    fi
+  done
+  [ "$healed" -gt 0 ] && log "self-heal restarted ${healed} straggler(s)" || log "self-heal: no stragglers"
 fi
 
 if [ "$failed" -eq 0 ]; then

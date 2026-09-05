@@ -57,7 +57,7 @@ spec:
         - name: STRIKE_FLOW_ENABLED
           value: 'true'
         - name: STRIKE_FLOW_DELTA_OVERLAY_ENABLED
-          value: 'true'
+          value: 'false'
         - name: KAFKA_STREAMS_CLEANUP_ON_START
           value: 'true'
         - name: STRIKE_FLOW_DELTA_REDIS_HOST
@@ -86,22 +86,26 @@ spec:
           value: options.databento.strike-flow
         - name: KAFKA_SELLER_ACTIVITY_TOPIC
           value: options.databento.seller-activity
+        - name: KAFKA_STRIKE_FLOW_STREAMS_APP_ID
+          value: options-edge-databento-strike-flow-classifier
         - name: KAFKA_STRIKE_FLOW_STREAMS_AUTO_OFFSET_RESET
           value: earliest
         - name: KAFKA_STRIKE_FLOW_STREAMS_NUM_THREADS
           value: '8'
         - name: STRIKE_FLOW_SYMBOL
-          value: SPX
+          value: ES
         - name: STRIKE_FLOW_OUTPUT_INTERVAL_MS
           value: '500'
+        - name: STRIKE_FLOW_STRIKE_FORWARD_INTERVAL_MS
+          value: '3000'
         - name: STRIKE_FLOW_BIAS_RATIO
           value: '1.20'
         - name: STRIKE_FLOW_CONTRACT_MULTIPLIER
-          value: '100.0'
+          value: '50'
         - name: HEALTH_PORT
           value: '8097'
         - name: JAVA_TOOL_OPTIONS
-          value: -Xms2g -Xmx4g
+          value: -Xms1g -Xmx3g
         envFrom:
         - configMapRef:
             name: es4-base-env
@@ -131,7 +135,7 @@ spec:
             memory: 8Gi
           requests:
             cpu: '1'
-            memory: 3Gi
+            memory: 3.5Gi
         volumeMounts:
         - mountPath: /var/lib/options-edge/kafka-streams
           name: kafka-streams-state

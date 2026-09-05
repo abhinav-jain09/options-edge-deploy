@@ -94,6 +94,8 @@ spec:
               value: -Xms512m -Xmx2048m
             - name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
               value: "2"
+            - name: STRIKE_INTEL_GAMMA_MIGRATION_SHADOW
+              value: "true"
             - name: STRIKE_INTEL_ACTION_BIAS_MIN_BAND
               value: LOW
             - name: STRIKE_INTEL_TWO_SIDED_FLOW_MODE

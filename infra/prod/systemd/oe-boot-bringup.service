@@ -1,0 +1,20 @@
+[Unit]
+Description=OptionsEdge staged, Kafka-gated bring-up after boot
+Documentation=file:/usr/local/sbin/oe-boot-bringup.sh
+# k3s must exist before we can scale anything; the script itself waits for Kafka to
+# actually LISTEN and ANSWER, because "kafka.service active" is true while it is still
+# replaying logs — that gap is what killed four services on 2026-08-19.
+After=network-online.target k3s.service kafka.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/oe-boot-bringup.sh
+TimeoutStartSec=2400
+# The stack being half-up is worse than a loud failure, so surface non-zero exits.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

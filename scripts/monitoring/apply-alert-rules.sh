@@ -14,11 +14,14 @@ PROMETHEUS_SERVICE="${PROMETHEUS_SERVICE:-prometheus}"
 PROMETHEUS_URL="${PROMETHEUS_URL:-http://127.0.0.1:9090}"
 # Destination the rule file is installed to (referenced from prometheus.yml rule_files).
 PROMETHEUS_RULES_FILE="${PROMETHEUS_RULES_FILE:-/etc/prometheus/hpsf-alert-rules.yaml}"
+# U16: the CVD SPX levels paging rules install alongside, into the same managed rule_files block.
+PROMETHEUS_CVD_LEVELS_RULES_FILE="${PROMETHEUS_CVD_LEVELS_RULES_FILE:-/etc/prometheus/cvd-spx-levels-alerts.yaml}"
 BEGIN_MARKER="# BEGIN OPTIONS_EDGE_MANAGED_RULE_FILES"
 END_MARKER="# END OPTIONS_EDGE_MANAGED_RULE_FILES"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_RULES_FILE="${SOURCE_RULES_FILE:-$SCRIPT_DIR/hpsf-alert-rules.yaml}"
+SOURCE_CVD_LEVELS_RULES_FILE="${SOURCE_CVD_LEVELS_RULES_FILE:-$SCRIPT_DIR/cvd-spx-levels-alerts.yaml}"
 
 if [[ "$REMOTE_APP_HOME" != "/home/options-edge" ]]; then
   echo "REMOTE_APP_HOME must be /home/options-edge" >&2
@@ -27,6 +30,10 @@ fi
 
 if [[ ! -f "$SOURCE_RULES_FILE" ]]; then
   echo "Source rules file $SOURCE_RULES_FILE not found" >&2
+  exit 1
+fi
+if [[ ! -f "$SOURCE_CVD_LEVELS_RULES_FILE" ]]; then
+  echo "Source rules file $SOURCE_CVD_LEVELS_RULES_FILE not found" >&2
   exit 1
 fi
 
@@ -53,6 +60,7 @@ fi
 
 # Validate the rules BEFORE touching anything on the host.
 promtool check rules "$SOURCE_RULES_FILE"
+promtool check rules "$SOURCE_CVD_LEVELS_RULES_FILE"
 
 tmp_root="${JENKINS_WORK_DIR:-$REMOTE_APP_HOME/tmp}"
 mkdir -p "$tmp_root"
@@ -82,11 +90,12 @@ if grep -qE '^[[:space:]]*rule_files:[[:space:]]*\[' "$base_config"; then
   exit 1
 elif grep -qE '^[[:space:]]*rule_files:[[:space:]]*$' "$base_config"; then
   # Block/standalone `rule_files:` header — append our managed entry right after it.
-  awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" -v path="$PROMETHEUS_RULES_FILE" '
+  awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" -v path="$PROMETHEUS_RULES_FILE" -v cvdpath="$PROMETHEUS_CVD_LEVELS_RULES_FILE" '
     { print }
     $0 ~ /^[[:space:]]*rule_files:[[:space:]]*$/ && !done {
       print begin
       print "  - " path
+      print "  - " cvdpath
       print end
       done = 1
     }
@@ -98,19 +107,22 @@ else
     echo "rule_files:"
     echo "$BEGIN_MARKER"
     echo "  - $PROMETHEUS_RULES_FILE"
+    echo "  - $PROMETHEUS_CVD_LEVELS_RULES_FILE"
     echo "$END_MARKER"
   } >>"$next_config"
 fi
 
 # Guard against silently emitting a config that does NOT reference our rule file (e.g. an unexpected
 # rule_files shape slipped past the checks above). The managed block MUST be present now.
-if ! grep -qF "$BEGIN_MARKER" "$next_config" || ! grep -qF "$PROMETHEUS_RULES_FILE" "$next_config"; then
+if ! grep -qF "$BEGIN_MARKER" "$next_config" || ! grep -qF "$PROMETHEUS_RULES_FILE" "$next_config" \
+   || ! grep -qF "$PROMETHEUS_CVD_LEVELS_RULES_FILE" "$next_config"; then
   echo "Refusing to install: the managed rule_files block was not inserted into the rendered prometheus.yml (unsupported existing rule_files shape)." >&2
   exit 1
 fi
 
 install_rules_and_config() {
   cp "$SOURCE_RULES_FILE" "$PROMETHEUS_RULES_FILE"
+  cp "$SOURCE_CVD_LEVELS_RULES_FILE" "$PROMETHEUS_CVD_LEVELS_RULES_FILE"
   cp "$next_config" "$PROMETHEUS_CONFIG_FILE"
   promtool check config "$PROMETHEUS_CONFIG_FILE"
   systemctl reload "$PROMETHEUS_SERVICE" 2>/dev/null || systemctl restart "$PROMETHEUS_SERVICE"
@@ -120,6 +132,7 @@ if [[ -w "$PROMETHEUS_CONFIG_FILE" && -w "$(dirname "$PROMETHEUS_RULES_FILE")" ]
   install_rules_and_config
 elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
   sudo cp "$SOURCE_RULES_FILE" "$PROMETHEUS_RULES_FILE"
+  sudo cp "$SOURCE_CVD_LEVELS_RULES_FILE" "$PROMETHEUS_CVD_LEVELS_RULES_FILE"
   sudo cp "$next_config" "$PROMETHEUS_CONFIG_FILE"
   sudo promtool check config "$PROMETHEUS_CONFIG_FILE"
   sudo systemctl reload "$PROMETHEUS_SERVICE" 2>/dev/null || sudo systemctl restart "$PROMETHEUS_SERVICE"
@@ -129,6 +142,7 @@ elif [[ -n "${BECOME_PASSWORD:-}" ]]; then
 #!/usr/bin/env bash
 set -euo pipefail
 cp "$SOURCE_RULES_FILE" "$PROMETHEUS_RULES_FILE"
+cp "$SOURCE_CVD_LEVELS_RULES_FILE" "$PROMETHEUS_CVD_LEVELS_RULES_FILE"
 cp "$next_config" "$PROMETHEUS_CONFIG_FILE"
 promtool check config "$PROMETHEUS_CONFIG_FILE"
 systemctl reload "$PROMETHEUS_SERVICE" 2>/dev/null || systemctl restart "$PROMETHEUS_SERVICE"
@@ -144,15 +158,16 @@ fi
 loaded=false
 for _ in $(seq 1 20); do
   if body="$(curl -fsS "$PROMETHEUS_URL/api/v1/rules" 2>/dev/null)" \
-     && printf '%s' "$body" | grep -q 'delta-flow.health'; then
-    echo "Prometheus loaded delta-flow alert rules"
+     && printf '%s' "$body" | grep -q 'delta-flow.health' \
+     && printf '%s' "$body" | grep -q '"cvd-spx-levels"'; then
+    echo "Prometheus loaded delta-flow and cvd-spx-levels alert rules"
     loaded=true
     break
   fi
   sleep 3
 done
 if [[ "$loaded" != "true" ]]; then
-  echo "Prometheus did not report the delta-flow.health rule group after reload" >&2
+  echo "Prometheus did not report both the delta-flow.health and cvd-spx-levels rule groups after reload" >&2
   exit 1
 fi
 

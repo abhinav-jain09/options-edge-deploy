@@ -38,8 +38,12 @@ pipeline {
       'directional-pressure', 'gex-delta-redis-writer', 'option-price-behavior', 'option-truth-engine', 'pin-postgres-writer',
       'pressure-postgres-writer', 'raw-to-display', 'strike-flow-avro-adapter', 'strike-flow-classifier',
       'strike-liquidity-heatmap', 'volume-pace',
-      'strike-intelligence', 'vix-option-inteligence', 'es-aggressor-flow', 'es-feed-gateway', 'es-web',
-      'es-feed'
+      'strike-intelligence', 'vix-option-inteligence', 'greek-move-authenticity', 'gamma-migration', 'indicator-service', 'context-tape', 'tape-zones', 'es-aggressor-flow', 'es-cvd', 'es-feed-gateway', 'es-web',
+      'es-feed',
+      // The held spread-skew stack is deploy-service-only ON PURPOSE: deploy-all excludes it, so the
+      // ONLY sanctioned way to reconcile the ES4_KEEP_DOWN replicas:0 hold onto live pods (or to ever
+      // deliberately re-apply the stack) is an explicit per-service run of each of these two.
+      'spread-skew', 'spread-skew-postgres-writer'
     ], description: 'Service (deploy-service only). NOTE: es-feed is the RELOCATED ES options feed now running on the es4 cluster; it always deploys at replicas 0 — starting it is a separate ACTION=activate-es-feed.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
@@ -51,7 +55,13 @@ pipeline {
   options { disableConcurrentBuilds(); timeout(time: 60, unit: 'MINUTES') }
   environment {
     ES4_HOST       = 'abhinav@192.168.100.4'
-    ES4_KUBECONFIG = '/Users/abhinav/.kube/es4.kubeconfig'
+    // The es4 DEPLOYER identity, not the cluster admin. es4.kubeconfig authenticates as
+    // system:admin (group system:masters) — the same principal a human gets from `sudo k3s kubectl`
+    // on the box — which made "only Jenkins may change es4" impossible to enforce: an admission
+    // policy keys off the username, and the two were the same user. This SA is what
+    // k8s/es4/security/jenkins-only-workload-admission.yaml exempts; everyone else is denied.
+    // RBAC: k8s/es4/security/jenkins-deployer-rbac.yaml.
+    ES4_KUBECONFIG = '/Users/abhinav/.kube/es4-jenkins-deployer.kubeconfig'
     PROD_KUBECONFIG = '/Users/abhinav/.kube/jenkins-deployer-prod.kubeconfig'
     REGISTRY       = '192.168.100.252:5000'
     // PINNED cluster identities: the UID of each cluster's `options-edge` namespace. These
@@ -85,6 +95,14 @@ pipeline {
           set -euo pipefail
           rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
+          # STEADY-state audit: this action runs against a LIVE es4, so every owner has already
+          # applied its own topic contract and the broker supplies the numbers. For the es4 set
+          # topics.env is the EXACT desired shape — a clean-reset rebuilds the world from it, so a
+          # width the file does not record does not survive. A live-vs-declared disagreement is
+          # therefore something to ADJUDICATE (record the deliberate widening, or fix the topic),
+          # and the script prints both remedies rather than assuming which applies. Running
+          # create-topics WITHOUT this audit is exactly how topics.env drifted on 24 topics.
+          ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/verify-topic-partition-contract.sh steady'
         '''
       }
     }
@@ -155,6 +173,12 @@ pipeline {
           bash scripts/es4/assert-cluster-identity.sh "$KUBECONFIG"      es4  "$ES4_NS_UID"
           bash scripts/es4/assert-cluster-identity.sh "$PROD_KUBECONFIG" prod "$PROD_NS_UID"
 
+          # Dependency-scoped FIRE-input verdict (processing PR #594): es4 applies the COMMITTED
+          # k8s/es4/services/*.yaml directly, so no overlay render exists for the other deploy paths'
+          # guard to have caught. Assert here, BEFORE the first apply, and unconditionally — the
+          # deploy-service path can target dealer-ledger, and deploy-all always includes it.
+          bash scripts/ci/validate-dealer-ledger-fire-quality.sh
+
           kubectl apply $DRY -f k8s/es4/es4-base-env.yaml
           kubectl apply $DRY -f k8s/es4/es4-common-env.yaml
           # es-feed's OWN Databento configmap. Applied for every es4 deploy so the feed can
@@ -211,14 +235,6 @@ pipeline {
             # rollout, avoiding duplicate consumers on the isolated ES broker.
             kubectl -n options-edge delete deployment zero-dte-intelligence-service --ignore-not-found
             kubectl -n options-edge delete service zero-dte-intelligence-service --ignore-not-found
-          fi
-          if [ -z "$DRY" ] && [ "$ACTION" = "deploy-all" ]; then
-            # Reconcile-delete the retired greek-move-authenticity-service on es4. Same reason as the
-            # dev/prod path in scripts/deploy/apply.sh: `kubectl apply -f` never prunes, and the es4
-            # service manifest is removed in this same commit, so the pod would otherwise run forever
-            # against the isolated ES broker. deploy-all only — there is no longer a per-SERVICE file.
-            kubectl -n options-edge delete deployment greek-move-authenticity-service --ignore-not-found
-            kubectl -n options-edge delete service greek-move-authenticity-service --ignore-not-found
           fi
           # es-feed is NEVER started by a deploy: the manifest always carries replicas 0 and this
           # path performs no scaling at all — activation is its own ACTION (requirement DBP-R22).

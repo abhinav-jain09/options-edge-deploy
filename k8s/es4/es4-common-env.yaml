@@ -53,3 +53,11 @@ data:
   KAFKA_SCHEMA_REGISTRY_URL: "http://192.168.100.4:8081"
   POSTGRES_JDBC_URL: "jdbc:postgresql://192.168.100.4:5432/options_edge_es"
   APP_MARKET_DATA_SOURCE: "DATABENTO"
+  # HEATMAP RAMP SATURATION — mirrors the SPX cluster's options-edge-config key. ONE value read by
+  # TWO services: es-web injects every HEATMAP_* key into window.__OPTIONS_EDGE_ENV__ for
+  # liquidity-heatmap.js, and es-feed-gateway reads the same key for the history projection's
+  # rawP99. They must be equal or the ribbon's backfilled part renders on a different scale than
+  # its live part for ~5 min after every page load. Calibrated on SPX data (2026-07-30, 144,611
+  # buckets) — ES quoted-size distribution has NOT been measured yet, so this is the SPX value
+  # carried over deliberately, not an ES calibration. See HEATMAP-CALIBRATION-LEDGER section 6.
+  HEATMAP_COLOR_SATURATION_PCT: "0.95"

@@ -1,0 +1,26 @@
+# DEV drop-classifier: the dev cluster is SPX-only (no ES tape), so the
+# service runs in SPX_PRICE mode against the synthetic spot cascade on the
+# local dev broker. The spot guards relax to 1 obs / 1 strike per bucket in
+# SPX_PRICE mode (DropClassifierSettings) — the cascade publishes ~1
+# median-filtered observation per 2 s. Outputs land on the dev broker as
+# spx.drop.*. Gamma context uses the dev gamma-migration topic + registry.
+# env merges by name over the base.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: drop-classifier-service
+  namespace: options-edge
+spec:
+  template:
+    spec:
+      containers:
+        - name: drop-classifier
+          env:
+            - { name: DROP_UNDERLYING_MODE, value: "SPX_PRICE" }
+            - { name: DROP_UNDERLYING_BOOTSTRAP, value: "host.docker.internal:19092" }
+            - { name: DROP_UNDERLYING_TOPIC, value: "underlying.spx.price" }
+            - { name: DROP_FLOW_BOOTSTRAP, value: "host.docker.internal:19092" }
+            - { name: DROP_FLOW_TOPIC, value: "delta-flow-by-trade" }
+            - { name: DROP_OUTPUT_BOOTSTRAP, value: "host.docker.internal:19092" }
+            - { name: DROP_GAMMA_BOOTSTRAP, value: "host.docker.internal:19092" }
+            - { name: DROP_VIX_BOOTSTRAP, value: "" }

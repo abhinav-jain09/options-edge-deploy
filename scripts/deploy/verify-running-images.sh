@@ -25,8 +25,12 @@ IMAGE_MAP = {
     ("options-edge-web", "web"): "WEB_IMAGE",
     ("raw-to-display-databento-service", "raw-to-display"): "RAW_TO_DISPLAY_IMAGE",
     ("options-edge-databento-feed", "databento-feed"): "DATABENTO_FEED_IMAGE",
+    # databento-vix-feed (VIX feed separation PR-2): image reuse — same image var as the
+    # SPX feed. The deployment exists only on production; absent deployments are skipped.
+    ("databento-vix-feed", "databento-vix-feed"): "DATABENTO_FEED_IMAGE",
     ("databento-volume-aggregator", "databento-volume-aggregator"): "DATABENTO_VOLUME_AGGREGATOR_IMAGE",
     ("databento-gex-service", "databento-gex"): "DATABENTO_GEX_IMAGE",
+    ("nifty-gex-service", "nifty-gex"): "NIFTY_GEX_IMAGE",
     ("databento-maxpain-service", "databento-maxpain"): "DATABENTO_MAXPAIN_IMAGE",
     ("option-price-behavior-service", "option-price-behavior"): "OPTION_PRICE_BEHAVIOR_IMAGE",
     ("databento-mission-sandwich-service", "databento-mission-sandwich"): "DATABENTO_MISSION_SANDWICH_IMAGE",
@@ -34,6 +38,8 @@ IMAGE_MAP = {
     ("directional-pressure-service", "directional-pressure"): "DIRECTIONAL_PRESSURE_IMAGE",
     ("directional-pressure-databento-service", "directional-pressure"): "DIRECTIONAL_PRESSURE_IMAGE",
     ("databento-gex-history-service", "databento-gex-history"): "DATABENTO_GEX_HISTORY_IMAGE",
+    ("gamma-migration-service", "gamma-migration"): "GAMMA_MIGRATION_IMAGE",
+    ("corridor-gauge-service", "corridor-gauge"): "CORRIDOR_GAUGE_IMAGE",
     ("raw-postgres-writer", "raw-postgres-writer"): "RAW_POSTGRES_WRITER_IMAGE",
     ("pin-postgres-writer", "pin-postgres-writer"): "PIN_POSTGRES_WRITER_IMAGE",
     ("pressure-postgres-writer", "pressure-postgres-writer"): "PRESSURE_POSTGRES_WRITER_IMAGE",
@@ -62,6 +68,14 @@ IMAGE_MAP = {
     ("es-open-direction-service", "es-open-direction"): "ES_OPEN_DIRECTION_IMAGE",
     ("es-open-direction-postgres-writer", "es-open-direction-postgres-writer"): "ES_OPEN_DIRECTION_POSTGRES_WRITER_IMAGE",
     ("close-direction-service", "close-direction"): "CLOSE_DIRECTION_IMAGE",
+    ("spot-vol-regime-service", "spot-vol-regime"): "SPOT_VOL_REGIME_IMAGE",
+    ("vol-premium-service", "vol-premium"): "VOL_PREMIUM_IMAGE",
+    ("indicator-service", "indicator-service"): "INDICATOR_SERVICE_IMAGE",
+    ("stock-gex-service", "stock-gex"): "STOCK_GEX_IMAGE",
+    ("drop-classifier-service", "drop-classifier"): "DROP_CLASSIFIER_IMAGE",
+    ("context-tape-service", "context-tape"): "CONTEXT_TAPE_IMAGE",
+    ("multileg-structure-service", "multileg"): "MULTILEG_STRUCTURE_IMAGE",
+    ("oi-shadow-service", "oi-shadow"): "OI_SHADOW_IMAGE",
     ("reversal-postgres-writer", "reversal-postgres-writer"): "REVERSAL_POSTGRES_WRITER_IMAGE",
 }
 

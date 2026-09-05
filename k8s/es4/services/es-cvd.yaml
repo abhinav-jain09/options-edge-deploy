@@ -1,0 +1,133 @@
+# ES session-anchored Cumulative Volume Delta. Deploy via Jenkinsfile.es4-deploy.
+# Cross-env wiring (ES-CVD-DESIGN.md 6a): the ES tape and output topics live on the es4 broker;
+# the SPX index feed is es4's OWN es.underlying.spx.price (see ES_CVD_SPX_BOOTSTRAP_SERVERS below).
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: '8141'
+    prometheus.io/scrape: 'true'
+  labels:
+    app.kubernetes.io/name: es-cvd-service
+    app.kubernetes.io/part-of: options-edge
+  name: es-cvd-service
+  namespace: options-edge
+spec:
+  ports:
+  - name: health
+    port: 8141
+    targetPort: health
+  selector:
+    app.kubernetes.io/name: es-cvd-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: es-cvd-service
+    app.kubernetes.io/part-of: options-edge
+  name: es-cvd-service
+  namespace: options-edge
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-cvd-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-cvd-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+      - name: es-cvd
+        image: 192.168.100.252:5000/options-edge-es-cvd:prod
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -Xms128m -Xmx768m
+        - name: HEALTH_PORT
+          value: '8141'
+        - name: ES_CVD_BOOTSTRAP_SERVERS
+          value: 192.168.100.4:9092
+        # SPX index feed: es4's OWN broker and topic, NOT the dev Mac.
+        #
+        # This used to read underlying.spx.index.price from 192.168.100.102:19092 (Docker Desktop
+        # on the dev Mac), which needed a hostAliases entry to resolve that broker's advertised
+        # host.docker.internal listener. On 2026-08-17 that topic was RECREATED on the dev Mac with
+        # 32 partitions, its data landing on partition 8; this pod had assign()-pinned partition 0
+        # at startup, so it polled an empty partition and es_cvd_spx_records_received sat at 0 for
+        # the whole session. lastSpx went null and every SPX-vs-CVD view lost its SPX series, while
+        # the consumer still reported itself UP — a silent break with nothing to alert on.
+        #
+        # es4 publishes its own live index feed on es.underlying.spx.price (source
+        # NATIVE_SPX_INDEX, quality LIVE_INDEX) carrying canonicalSpot + spotEventTimeNs — the
+        # fields ingestSpx PREFERS. Reading it here removes the cross-environment dependency, the
+        # advertised-listener hack, and this entire class of failure.
+        - name: ES_CVD_SPX_BOOTSTRAP_SERVERS
+          value: 192.168.100.4:9092
+        - name: KAFKA_ES_TRADES_TOPIC
+          value: underlying.es.trades
+        # Literal: EsCvdSettings reads this with KafkaSettings.value (no TOPIC_PREFIX), so the
+        # es4 name is spelled out in full rather than relying on prefixing.
+        - name: KAFKA_SPX_INDEX_PRICE_TOPIC
+          value: es.underlying.spx.price
+        - name: KAFKA_ES_CVD_TOPIC
+          value: futures.cvd
+        - name: KAFKA_ES_CVD_BARS_TOPIC
+          value: futures.cvd.bars
+        - name: ES_CVD_GROUP_ID
+          value: es-cvd-service
+        - name: ES_CVD_SYMBOL
+          value: ES.v.0
+        - name: ES_CVD_SPX_SYMBOL
+          value: SPX
+        - name: ES_CVD_SESSION_ZONE
+          value: America/New_York
+        - name: ES_CVD_SESSION_START
+          value: '18:00'
+        - name: ES_CVD_PUBLISH_INTERVAL_MS
+          value: '1000'
+        - name: ES_CVD_REPLAY_LOOKBACK_HOURS
+          value: '24'
+        - name: ES_CVD_GRACE_PERIOD_MS
+          value: '2000'
+        - name: ES_CVD_IDLE_TIMEOUT_MS
+          value: '10000'
+        - name: ES_CVD_MAX_FUTURE_SKEW_MS
+          value: '5000'
+        - name: ES_CVD_STALE_AFTER_MS
+          value: '5000'
+        - name: ES_CVD_SPX_STALE_AFTER_MS
+          value: '30000'
+        envFrom:
+        - configMapRef:
+            name: es4-base-env
+        - configMapRef:
+            name: es4-common-env
+        - secretRef:
+            name: es4-runtime-secrets
+        ports:
+        - containerPort: 8141
+          name: health
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi

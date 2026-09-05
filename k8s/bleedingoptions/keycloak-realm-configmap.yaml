@@ -1,0 +1,223 @@
+# Realm `bleedingoptions` — the public tenant (PGL-031).
+#
+# ⚠️ THIS FILE IS DESIRED STATE, NOT AN APPLY MECHANISM. `--import-realm` creates a realm that does
+# not exist and SKIPS one that does, so editing this changes nothing on a running Keycloak. It defines
+# what a rebuild-from-empty must reproduce. The thing that actually applies changes to a live realm is
+# scripts/ops/bleedingoptions-realm-reconcile.sh (PGL-031A), which is authoritative — it removes
+# drift, it does not merely add.
+#
+# ⚠️ NO SECRETS HERE. The SMTP password is deliberately absent from `smtpServer` below: a ConfigMap is
+# world-readable to anything with namespace read access and this file is in git. The reconciler sets
+# it from the bo-keycloak-secrets Secret over the admin API.
+#
+# The approval model (D-4) in one paragraph, because every setting below serves it: anyone may
+# register; a new account lands in /pending-approval, which maps NO roles, so it authenticates
+# successfully and is served no market data at all. Abhinav approves by moving the user to
+# /gamma-lab-approved, which maps the realm role `gamma-lab` that SecurityConfig requires on both
+# board endpoints. Revocation is removing them from that group, and takes effect within one
+# access-token lifetime (300 s, PGL-026) because each refresh mints a token from current membership.
+#
+# ⚠️ NO `comment_*` KEYS INSIDE THE JSON. Keycloak's importer rejects unknown RealmRepresentation
+# fields outright — `Unrecognized field "comment_events" ... not marked as ignorable` — and the
+# server then FAILS TO START. Five such keys were used here as inline documentation and cost a
+# CrashLoopBackOff; their content now lives in these YAML comments, which never reach the importer.
+#
+# What those comments said, preserved:
+#   * events: auditing is on for user AND admin events with 90-day retention. Without it there is no
+#     record of who registered, who was approved, who was de-approved or who changed the realm — on
+#     the one component where those are the questions an incident asks. adminEventsDetailsEnabled
+#     records the representation of each change, not merely that one happened.
+#   * smtpServer: `from` and `user` DIFFER on purpose. Gmail authenticates as the ACCOUNT;
+#     info@bleedingoptions.com is an ALIAS of info@amskel.nl and the app password belongs to the
+#     account. Authenticating as the alias fails SMTP auth outright and no mail sends at all.
+#   * browserFlow is deliberately NOT set here and the custom flow is NOT defined here. Keycloak only
+#     creates the BUILT-IN flows when the imported realm declares no authenticationFlows of its own,
+#     so shipping a custom flow would produce a realm with no registration flow — on a realm whose
+#     whole purpose is self-registration. The REQUIRED-OTP browser flow (PGL-028) is created and
+#     bound by scripts/ops/bleedingoptions-realm-reconcile.sh, after import has made the built-ins.
+#   * directAccessGrantsEnabled is OFF: a password grant would let a script exchange a username and
+#     password for a token WITHOUT the browser flow, i.e. without the TOTP step, silently defeating
+#     the second factor.
+#   * NO users are defined. Every account arrives by self-registration and is approved by hand. A
+#     seeded test user on an internet-facing realm is a standing credential nobody remembers to
+#     remove.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bo-keycloak-realm
+  namespace: bleedingoptions
+  labels:
+    app.kubernetes.io/name: bo-keycloak
+    app.kubernetes.io/part-of: bleedingoptions
+    app.kubernetes.io/component: auth
+data:
+  bleedingoptions-realm.json: |
+    {
+      "realm": "bleedingoptions",
+      "enabled": true,
+      "displayName": "Bleeding Options",
+      "sslRequired": "external",
+      "registrationAllowed": true,
+      "registrationEmailAsUsername": true,
+      "loginWithEmailAllowed": true,
+      "duplicateEmailsAllowed": false,
+      "resetPasswordAllowed": true,
+      "verifyEmail": true,
+      "rememberMe": false,
+      "bruteForceProtected": true,
+      "permanentLockout": false,
+      "failureFactor": 5,
+      "waitIncrementSeconds": 60,
+      "maxFailureWaitSeconds": 900,
+      "maxDeltaTimeSeconds": 43200,
+      "quickLoginCheckMilliSeconds": 1000,
+      "minimumQuickLoginWaitSeconds": 60,
+      "accessTokenLifespan": 300,
+      "ssoSessionIdleTimeout": 86400,
+      "ssoSessionMaxLifespan": 86400,
+      "offlineSessionIdleTimeout": 86400,
+      "revokeRefreshToken": true,
+      "refreshTokenMaxReuse": 0,
+      "eventsEnabled": true,
+      "eventsExpiration": 7776000,
+      "adminEventsEnabled": true,
+      "adminEventsDetailsEnabled": true,
+      "otpPolicyType": "totp",
+      "otpPolicyAlgorithm": "HmacSHA1",
+      "otpPolicyDigits": 6,
+      "otpPolicyPeriod": 30,
+      "otpPolicyLookAheadWindow": 1,
+      "smtpServer": {
+        "host": "smtp.gmail.com",
+        "port": "587",
+        "starttls": "true",
+        "ssl": "false",
+        "auth": "true",
+        "from": "info@bleedingoptions.com",
+        "fromDisplayName": "Bleeding Options",
+        "replyTo": "info@bleedingoptions.com",
+        "user": "info@amskel.nl"
+      },
+      "roles": {
+        "realm": [
+          {
+            "name": "pressure",
+            "description": "Grants the two India pressure boards (/nifty-pressure, /banknifty-pressure). Held only via membership of /pressure-approved — never assigned directly and never a default role, so group membership is the single observable record of who may see them. Deliberately SEPARATE from gamma-lab: board approval does not imply pressure access."
+          },
+          {
+            "name": "gamma-lab",
+            "description": "APPROVED. Grants access to Gamma Lab market data. Held only via membership of /gamma-lab-approved — never assigned to a user directly, and never a default role, so that group membership is the single observable record of who is approved."
+          }
+        ]
+      },
+      "groups": [
+        {
+          "name": "pending-approval",
+          "path": "/pending-approval",
+          "realmRoles": [],
+          "clientRoles": {},
+          "subGroups": [],
+          "attributes": {
+            "oe-note": [
+              "Where every self-registration lands. Maps NO roles, so members authenticate but are served no data. This is the operator's review queue: filter members here to see who is waiting."
+            ]
+          }
+        },
+        {
+          "name": "pressure-approved",
+          "path": "/pressure-approved",
+          "realmRoles": [
+            "pressure"
+          ],
+          "clientRoles": {},
+          "subGroups": [],
+          "attributes": {
+            "oe-note": [
+              "Maps the pressure realm role for the India boards. OWNER's rule (2026-09-05): exactly two members — Abhinav Jain and Ankit Sinha; membership changes are the owner's alone."
+            ]
+          }
+        },
+        {
+          "name": "gamma-lab-approved",
+          "path": "/gamma-lab-approved",
+          "realmRoles": [
+            "gamma-lab"
+          ],
+          "clientRoles": {},
+          "subGroups": [],
+          "attributes": {
+            "oe-note": [
+              "Approved users. Adding someone here grants the gamma-lab role and therefore the data; removing them revokes it within one access-token lifetime."
+            ]
+          }
+        }
+      ],
+      "defaultGroups": [
+        "/pending-approval"
+      ],
+      "requiredActions": [
+        {
+          "alias": "CONFIGURE_TOTP",
+          "name": "Configure OTP",
+          "providerId": "CONFIGURE_TOTP",
+          "enabled": true,
+          "defaultAction": true,
+          "priority": 10,
+          "config": {}
+        },
+        {
+          "alias": "VERIFY_EMAIL",
+          "name": "Verify Email",
+          "providerId": "VERIFY_EMAIL",
+          "enabled": true,
+          "defaultAction": false,
+          "priority": 50,
+          "config": {}
+        },
+        {
+          "alias": "UPDATE_PASSWORD",
+          "name": "Update Password",
+          "providerId": "UPDATE_PASSWORD",
+          "enabled": true,
+          "defaultAction": false,
+          "priority": 30,
+          "config": {}
+        }
+      ],
+      "clients": [
+        {
+          "clientId": "bleedingoptions-web",
+          "name": "Bleeding Options — Gamma Lab",
+          "protocol": "openid-connect",
+          "enabled": true,
+          "publicClient": true,
+          "standardFlowEnabled": true,
+          "implicitFlowEnabled": false,
+          "serviceAccountsEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "redirectUris": [
+            "https://bleedingoptions.com/*"
+          ],
+          "webOrigins": [
+            "https://bleedingoptions.com"
+          ],
+          "attributes": {
+            "pkce.code.challenge.method": "S256",
+            "post.logout.redirect.uris": "https://bleedingoptions.com/*"
+          },
+          "protocolMappers": [
+            {
+              "name": "audience-bleedingoptions-web",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "consentRequired": false,
+              "config": {
+                "included.custom.audience": "bleedingoptions-web",
+                "id.token.claim": "false",
+                "access.token.claim": "true"
+              }
+            }
+          ]
+        }
+      ]
+    }

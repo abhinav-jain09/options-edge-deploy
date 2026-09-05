@@ -20,7 +20,150 @@ resources:
   # pod template is immutable, so re-applying it inside the monolith aborted the whole
   # deploy whenever the image/config changed; and re-running a historical replay on every
   # deploy risks polluting live topics. Keep replay a separate, deliberate action.
+  # databento-vix-feed: standalone VIX OPRA feed — dev leg of the USER-directed
+  # simultaneous cutover (2026-07-28). Same base as production; dev patch overrides
+  # broker/profile/image.
+  - ../../services/databento-vix-feed/base
+  # nifty-gex: the NIFTY/BANKNIFTY Pressure boards (DhanHQ). Dev renders at replicas 0
+  # (patch below) — one Dhan account token, and prod owns it. MIRRORS
+  # k8s/services/nifty-gex/overlays/dev exactly — validate-services enforces it.
+  - ../../services/nifty-gex/base
 patches:
+  # nifty-gex runs at ZERO replicas on dev (mirror of the standalone slice patch): prod
+  # polls Dhan with the SAME account token; a second poller trips the per-account 429
+  # and a second renewer invalidates prod's token.
+  - target:
+      kind: Deployment
+      name: nifty-gex-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
+  # THE SESSION-SCALE SWING PATH ON DEV. MIRRORS the standalone overlay
+  # k8s/services/reversal-confirmation/overlays/dev exactly — validate-services
+  # enforces the render equality, and it caught this block's absence.
+  #
+  # Only safe because of REVERSAL_HUNT_INSTANCE_ID (processing #700): dev and
+  # production both point REVERSAL_ES_BOOTSTRAP_SERVERS at the SAME es4 broker,
+  # so without an identity this hunt would have shared production's transactional
+  # id — fencing its producer and killing the deployed hunt — put dev's calls on
+  # the real alerts topic in production's voice, and mixed dev candidates into
+  # the corpus the thresholds are to be decided from. "PROD-ONLY" was the
+  # workaround for exactly that. The service now REFUSES to start if any owned
+  # resource is configured outside the namespace.
+  - target:
+      kind: Deployment
+      name: reversal-confirmation-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_INSTANCE_ID
+          value: dev
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_ENABLED
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_AUTO_ARM
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_MIN_DECLINE_TICKS
+          value: "28"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_MIN_DECLINE_BUCKETS
+          value: "31"
+      # Preconditions, not preferences: a 90-minute reference cannot be rebuilt
+      # from a 25-minute replay, and the ring must hold that replay.
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_REPLAY_LOOKBACK_SECONDS
+          value: "5460"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_RING_CAPACITY_BUCKETS
+          value: "2790"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: REVERSAL_HUNT_SWING_ENABLED
+          value: "true"
+  # oi-shadow: ENABLED on DEV, with the SEEDED arm on. The service reads the anchor manifest and
+  # the raw chain and writes one record per strike to options.databento.oi.nowcast.by-strike; that
+  # topic is now CONSUMED BY GEX (DATABENTO_GEX_DYNAMIC_OI_ENABLED), so what this service
+  # publishes reaches the live gamma surface. It was consumer-free when this was first enabled;
+  # that is no longer true and nothing here should be read as if it were.
+  #
+  # The seed is switched on rather than left at its default-off, because the point is to see the
+  # estimator produce numbers against a live chain. Production runs the seeded arm too, enabled the
+  # same day -- the environments are NOT split between arms, so dev is not a control for prod.
+  # Seed evidence: fitted over 277 sessions on this service's own
+  # cell definitions and measured on 25 sessions that post-date that panel — chain-wide error
+  # 0.242 -> 0.175, better on 24 of 25. It does NOT improve which strike leads (92.0% -> 88.0%).
+  # MUST MIRROR the standalone slice k8s/services/oi-shadow/overlays/dev (validate-services).
+  - target:
+      kind: Deployment
+      name: oi-shadow-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: oi-shadow-service
+        namespace: options-edge
+      spec:
+        template:
+          spec:
+            containers:
+              - name: oi-shadow
+                env:
+                  # RETIRED 2026-08-10. Not broken -- measured, and the measurement did not justify
+                  # the surface. What it can validate is END-OF-DAY 1DTE OI against the next
+                  # morning's print: 29% error against frozen OI's 47%, over 178 walk-forward
+                  # sessions. What it cannot validate is anything the desk actually trades on:
+                  # the intraday path is an assumption (OI accrues with volume) and there is no
+                  # intraday OI anywhere to check it against -- OPRA publishes once, 06:30 ET, one
+                  # print per contract, verified. And 0DTE has no next-day print at all, so on the
+                  # expiring chain the model can never be scored.
+                  #
+                  # Archived rather than deleted: the anchor is exact (2534/2534) and the harness,
+                  # coefficients and evidence are all in git. See docs/oi-nowcast-retirement.md.
+                  - name: OI_SHADOW_ENABLED
+                    value: "false"
+                  # Re-enabled 2026-08-10 after the quarantine's cause was removed: the cells the
+                  # service assigns now ARE the cells the panel fitted (signed band, DTE {0,1}/{2,3}
+                  # /{4-7}), and the nine coefficients were refitted on them over the full
+                  # 251-session panel -- 190+ independent sessions per cell.
+                  - name: OI_SHADOW_SEED_COEFFICIENTS_ENABLED
+                    value: "false"
+  # greek-move-authenticity: ENABLED on DEV (the SPX proving ground — advisory-only, in-session
+  # baseline bootstrap). Strategic-merge on env name (namespace required for the dev overlay).
+  # MUST MIRROR the standalone slice k8s/services/greek-move-authenticity/overlays/dev (validate-services).
+  - target:
+      kind: Deployment
+      name: greek-move-authenticity-service
+    patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: greek-move-authenticity-service
+        namespace: options-edge
+      spec:
+        template:
+          spec:
+            containers:
+              - name: greek-move-authenticity
+                env:
+                  - name: GREEK_MOVE_AUTH_ENABLED
+                    value: "true"
   # market-carry restores the SR3 history as a GlobalKTable. Keep the same
   # memory envelope as production: the 1Gi/768Mi profile is OOM-killed by
   # RocksDB/native restore memory before the service can publish carry.
@@ -48,21 +191,85 @@ patches:
                     memory: 5Gi
   - path: streams-processing-guarantee-dev-patch.yaml
   - path: web-dev-env-patch.yaml
+  # GRACEFUL LIVENESS (2026-08-31) — DEV. The gateway was in a restart loop that its own
+  # recovery caused: rebuilding the state cache across hundreds of partitions makes /health
+  # slow to answer, the probe's 1-SECOND DEFAULT timeout expired three times, and the kubelet
+  # SIGTERMed a service that was working. The log line immediately before every kill was
+  # "state cache caught up; replayed cached state to clients".
+  #
+  # startupProbe        boot may take 10 minutes; liveness does not run until it passes, so slow
+  #                     catch-up can never be mistaken for a hang.
+  # timeoutSeconds 5    a slow answer is not a dead process.
+  # failureThreshold 6  ~2 minutes of consecutive failure before a restart, so one GC pause or
+  #                     one busy moment cannot kill it.
+  #
+  # A genuinely wedged process is still restarted; it just has to actually be wedged.
+  #
+  # Patched HERE and in the standalone dev slice, not in base: base also feeds the PRODUCTION
+  # aggregate while the production slice carries its own probes, so changing base would make the
+  # two production renders disagree and break the mirror rule. Production has the same latent
+  # 1-second timeout and is deliberately left alone — that is a separate, deliberate decision.
+  - target:
+      kind: Deployment
+      name: feed-gateway-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/startupProbe
+        value:
+          httpGet: { path: /health, port: http }
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 60
+      - op: replace
+        path: /spec/template/spec/containers/0/livenessProbe
+        value:
+          httpGet: { path: /health, port: http }
+          periodSeconds: 20
+          timeoutSeconds: 5
+          failureThreshold: 6
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe
+        value:
+          httpGet: { path: /health, port: http }
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
   # DEV-ONLY: give the k8s feed-gateway the dev WS auth/origins/replay config the retired host :8093
   # gateway had, so the browser's live WS connects to the Jenkins-owned k8s gateway (:8091).
   - path: feed-gateway-dev-env-patch.yaml
-  # DEV-ONLY: feed publish interval 1s (prod is 2s, code default 250ms) — see the patch header.
+  # DEV-ONLY: feed publish interval 5s, same as prod (code default 250ms) — see the patch header.
+  - path: raw-postgres-writer-dev-patch.yaml
   - path: databento-feed-dev-patch.yaml
+  - path: databento-vix-feed-dev-patch.yaml
   # DEV-ONLY: Gate-3 research evidence store ON (base is OFF and carries no URL — see the patch).
   - path: vix-option-inteligence-dev-patch.yaml
-  # DEV-ONLY: dealer-ledger aggressive candidate V1 (ABSORB_MIN_FRACTION=0.50). Prod untouched.
+  # DEV-ONLY ONE-TIME (2026-08-12): epoch-genesis grant after the dev Kafka wipe (#801) —
+  # mirrors the standalone overlay so both render identically. Revert BOTH once genesis'd.
   - path: dealer-ledger-dev-env-patch.yaml
   # DEV-ONLY: delta-flow greek lookahead tolerance 3000ms (code default 0ms rejects 100% of trades
   # against dev's thin greek surface — see the patch header). Prod untouched.
   - path: delta-flow-dev-env-patch.yaml
-  # DEV-ONLY: enable the full pre-open GEX pipeline (capture + transactional publish) for the overnight
-  # verification cycle. Prod stays dormant (base flags false) until dev proves it. Prod untouched.
+  - path: drop-classifier-dev-env-patch.yaml
+  # Dev gex settings. Created for the pre-open GEX pipeline, but that is NO LONGER what it does:
+  # the ibkr-preopen-gate patch below is applied AFTER it and sets PREOPEN_GEX_ENABLED back to
+  # "false" for the one-publisher invariant, so the legacy pre-open publisher is live in neither
+  # environment (dev: ENABLED=false PUBLISH=true; production: both false).
+  #
+  # "Prod untouched" is also wrong now: TOP_N, GEX_SMILE_IV_FALLBACK and
+  # DATABENTO_GEX_DYNAMIC_OI_ENABLED all accumulated in that file and are set on production too.
+  # Read k8s/services/databento-gex/overlays/<env>/manifest.yaml, not the patch name.
   - path: databento-gex-preopen-dev-patch.yaml
+  # DEV-ONLY gate β/γ: the pre-open IBKR GEX window publishes onto the live topic and the
+  # gateway relays its status stream. Turns the legacy PREOPEN publisher OFF (mutually
+  # exclusive by construction). Prod untouched — base flags stay false.
+  - path: ibkr-preopen-gate-dev-patch.yaml
+  # GAMMA (user-visible) — enabled now that its ONE stated precondition is met: the conforming
+  # UI is deployed on dev (web #439: the option-chain pre-open handler, the IBKR palette, the
+  # two-plane number-visibility rules and truthful provenance), so an IBKR value can no longer
+  # render labelled Databento. R-ROLL order is preserved — beta shipped first and ran on dev —
+  # and dev remains the ONLY environment flipped: prod stays dark on the base flag.
+  - path: ibkr-preopen-gateway-dev-patch.yaml
   # DEV mirror of the standalone overlay: OPB rolling windows disabled on dev (matches #482, which
   # touched only the standalone overlay and drifted the monolithic dev render). Prod already has it.
   - path: option-price-behavior-dev-env-patch.yaml
@@ -79,6 +286,22 @@ patches:
         value:
           name: STRIKE_INTEL_CONFLICT_BYPASS_MIN_AGREEMENT
           value: "2"
+  # GMT Stage-1 SHADOW — DEV-FIRST enable (GAMMA-MIGRATION-TILT-STAGE1-GATE1.md rev 11, Codex
+  # design + code-review APPROVE; proc commit 95641009). Pure shadow: records whether the
+  # gamma-migration regime agreed with each actionable signal (additive fields + the
+  # strike-intel.gamma-tilt.shadow evidence ledger); ZERO effect on emitted decisions (verified
+  # by the OFF/ON decision-projection topology test). Code default is OFF; this flag is the only
+  # enable. Prod/es4 stay off until the shadow record justifies Stage 2.
+  # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/dev (validate-services).
+  - target:
+      kind: Deployment
+      name: strike-intelligence-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: STRIKE_INTEL_GAMMA_MIGRATION_SHADOW
+          value: "true"
   # strike-intelligence action band LOW — dev/prod parity with the production trial (PR #472):
   # LOW-band (conf 0.25-0.50) directional roles emit BUY/SELL LEAN instead of gating to NONE.
   # MUST MIRROR the standalone slice k8s/services/strike-intelligence/overlays/dev (validate-services).
@@ -125,28 +348,161 @@ patches:
   # whose node is labelled node-role.kubernetes.io/control-plane="" (empty, not
   # "true"), so that selector leaves the web pod unschedulable (Pending). Remove
   # the selector for dev — there is only one node to schedule on anyway.
+  # oi-shadow-service is HELD DOWN in every environment (USER 2026-08-10: "bring down this service
+  # ... until further notice"). Retired rather than deleted: it validates only END-OF-DAY 1DTE OI
+  # (29% error against frozen OI's 47%) while the desk trades 0DTE, where no next-day settled print
+  # exists to score against, and its intraday path is an assumption that OPRA's once-daily 06:30 OI
+  # publication can never confirm. See docs/oi-nowcast-retirement.md.
+  #
+  # replicas:0 here so EVERY render brings it down; the name is also in morning-autostart.sh
+  # KEEP_DOWN so an environment bring-up does not scale it back. Re-enable = remove this patch AND
+  # that entry, and flip OI_SHADOW_ENABLED / OI_SHADOW_SEED_COEFFICIENTS_ENABLED /
+  # DATABENTO_GEX_DYNAMIC_OI_ENABLED back to "true".
+  - target:
+      kind: Deployment
+      name: oi-shadow-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 0
   - target:
       kind: Deployment
       name: options-edge-web
     patch: |-
       - op: remove
         path: /spec/template/spec/nodeSelector
-  # ibkr-feed is PROD-ONLY and INTENTIONALLY scaled to 0 on dev — DO NOT bring it up on dev.
-  # It is the live IBKR VIX source and needs the prod IB Gateway (co-located on the prod
-  # control-plane node); dev has no IB feed and instead receives underlying.vix.price via the
-  # prod->dev vix-bridge (scripts/vix-bridge/). The base Deployment stays replicas:1 so PROD
-  # runs it; this dev-overlay patch forces it to 0 for dev only. The nodeSelector removal below
-  # is harmless with 0 replicas but kept so a manual dev scale-up still schedules on the single
-  # docker-desktop node (whose control-plane label is "" not "true"), never Pending.
+  # ibkr-feed is now DEV-ONLY (2026-07-29, IBKR-SPX-INDEX-PRIORITY-SPOT-REQUIREMENT.md rev4):
+  # the IB Gateway lives on the dev Mac, and this ONE instance streams the SPX cash index
+  # (chain OFF, VIX OFF — VIX stays OPRA-parity from the databento feed) and dual-produces
+  # underlying.spx.index.price to BOTH clusters via per-cluster dispatcher threads
+  # (IBKR_SPX_KAFKA_TARGETS). Prod overlay keeps ibkr-feed at 0 — prod consumes the hop topic
+  # the dev-hosted pod produces into the prod broker (established cross-env-into-prod pattern,
+  # like the es4 es-trades bridge). hostNetwork/dnsPolicy are removed on dev: those exist for
+  # the prod control-plane co-location; on docker-desktop a NORMAL pod network is what resolves
+  # host.docker.internal (the Gateway and the dev broker both live on the Mac host).
+  - target:
+      kind: Deployment
+      name: approach-monitor-service
+    patch: |-
+      # RUNNING IN DEV. The base keeps this at zero because scaling it up was never a deploy-time
+      # default; it is now deliberate, and only here. Production and experiment still delete the
+      # service outright.
+      #
+      # What this does NOT change: external delivery stays off (APPROACH_DELIVERY_ENABLED=false)
+      # and product 1 stays shadow-only. The service will consume the registry the position
+      # publisher now feeds, decide, and write its own topics — it will not send anything to
+      # anybody. MIN_ACTIONABLE_LEAD_MS and the promotion thresholds gate DELIVERY and production,
+      # and both remain open.
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: approach-position-publisher
+    patch: |-
+      # Same gateway story as ibkr-feed: on the dev Mac there is no in-cluster :4001 and no
+      # control-plane label, so the pod reaches IB Gateway through host.docker.internal on the
+      # PAPER listener 4002. The shared configmap's IB_PORT=4001 is the LIVE port and stays for
+      # prod, which this service does not run in.
+      - op: remove
+        path: /spec/template/spec/nodeSelector
+      - op: remove
+        path: /spec/template/spec/hostNetwork
+      - op: remove
+        path: /spec/template/spec/dnsPolicy
+      - op: replace
+        path: /spec/template/spec/containers/0/env/1
+        value:
+          name: IB_HOST
+          value: host.docker.internal
+      - op: replace
+        path: /spec/template/spec/containers/0/env/2
+        value:
+          name: IB_PORT
+          value: "4002"
   - target:
       kind: Deployment
       name: ibkr-feed-service
     patch: |-
       - op: replace
         path: /spec/replicas
-        value: 0
+        value: 1
       - op: remove
         path: /spec/template/spec/nodeSelector
+      - op: remove
+        path: /spec/template/spec/hostNetwork
+      - op: remove
+        path: /spec/template/spec/dnsPolicy
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: IB_HOST
+            value: host.docker.internal
+          # IB Gateway on the dev Mac runs the PAPER profile, whose API listener is 4002
+          # (verified 2026-07-29: only *:4002 LISTEN; 4001 closed → the pod crash-looped
+          # "Couldn't connect to TWS"). The shared configmap's IB_PORT=4001 is the LIVE
+          # port and stays for prod; dev overrides it here.
+          - name: IB_PORT
+            value: "4002"
+          - name: IB_USE_DELAYED_DATA
+            value: "false"
+          - name: IBKR_SPX_PRICE_ENABLED
+            value: "true"
+          - name: KAFKA_IBKR_SPX_PRICE_TOPIC
+            value: underlying.spx.index.price
+          - name: IBKR_SPX_KAFKA_TARGETS
+            value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
+          # Pre-open option-chain raw fan-out (OVERNIGHT-IBKR-GEX rev13 R-CHAIN.1): DARK —
+          # read only when IBKR_CHAIN_ENABLED=true. Explicit rather than relying on the
+          # IBKR_SPX_KAFKA_TARGETS fallback so the chain contract is visible here.
+          - name: IBKR_CHAIN_ENABLED
+            value: "true"
+          # SPX options quote pre-market on CBOE's Global Trading Hours session, but the base
+          # config subscribes the chain through SMART, which has no pre-open route for them:
+          # verified 2026-08-05 07:50 ET, when every strike's raw snapshot carried
+          # {"ASK":"-1","BID":"-1"} with "bboExchange":"" while CLOSE and
+          # OPTION_MODEL_UNDERLYING were populated. With no bid/ask the IV solver cannot run,
+          # so the pre-open window published GATED/IV_SOLVER_FAILED for every strike and the
+          # board stayed numberless even after today's OI baseline landed. The underlying is
+          # already pinned to CBOE for SPX (IB_UNDERLYING_EXCHANGE); this makes the option legs
+          # agree with it. DEV ONLY while the window is proven — prod keeps SMART.
+          - name: IB_OPTION_EXCHANGE
+            value: "CBOE"
+          - name: IBKR_CHAIN_KAFKA_TARGETS
+            # label=bootstrap|schemaRegistry — registry IDs are REGISTRY-LOCAL, so each
+            # cluster's producer registers against ITS OWN registry (feed
+            # fix/chain-per-target-registry).
+            #
+            # D15 PROD FAN-OUT, now live. IB Gateway runs only on the dev Mac (port 4002), so
+            # the dev feed is the single chain producer for BOTH clusters — the same hop pattern
+            # the SPX index and VIX already use (IBKR_SPX_KAFKA_TARGETS above).
+            #
+            # This was previously dev-only because prod's raw-to-display-service (src=IBKR)
+            # consumes options.ibkr.raw at 1 replica, so fanning the chain in would have woken
+            # the legacy chain-display pipeline on production. That prerequisite now ships in the
+            # same change: k8s/overlays/production/ibkr-raw-to-display-prod-hold-patch.yaml pins
+            # that Deployment to 0. The Databento display builder is a SEPARATE Deployment
+            # (raw-to-display-databento-service) and is untouched, so the production board is
+            # unaffected. Do not re-enable the fan-out without that hold in place.
+            value: prod=192.168.100.252:9092|http://192.168.100.252:8082,dev=host.docker.internal:19092|http://host.docker.internal:8082
+          # The chain window opens at the PINNED 06:15 (R-OPS/D13) — never the feed's own
+          # 06:00 default. The 06:15 cleanup/autostart schedule is a convenience, not a
+          # safety fence: a manifest applied between 06:00 and 06:15 must not arm early.
+          - name: IB_CHAIN_WINDOW_START
+            value: "06:15"
+          - name: IBKR_VIX_PRICE_ENABLED
+            value: "true"
+          # HOP topic + fan-out targets (requirement §12): raw IBKR VIX ticks go to the
+          # internal hop topic on BOTH clusters; the canonical underlying.vix.price is
+          # owned by the databento-vix-feed role (ibkr-feed fail-louds if pointed at it).
+          - name: KAFKA_IBKR_VIX_PRICE_TOPIC
+            value: underlying.vix.index.price
+          - name: IBKR_VIX_KAFKA_TARGETS
+            value: prod=192.168.100.252:9092,dev=host.docker.internal:19092
+          - name: MARKET_DATA_SELECTION_ENABLED
+            value: "false"
+          - name: POSTGRES_ENABLED
+            value: "false"
   # G2 DEV SOAK (§11, 2026-07-19): signal-follower-spx flags TRUE on dev (LEDGER mode).
   # MUST MIRROR the standalone slice k8s/services/signal-follower/overlays/dev
   # (validate-services: mono==slice).
@@ -236,7 +592,7 @@ patches:
                   requests:
                     memory: 2Gi
   # DEV-ONLY spx-mission-control auth: base points at the prod Keycloak
-  # (https://auth.fullfunding.nl/realms/optionsedge) which dev cannot reach.
+  # (https://auth.bleadingoptions.com/realms/optionsedge) which dev cannot reach.
   # Override the issuer + JWKS URIs to the local Mac Keycloak (192.168.100.102:8089)
   # so the mandatory MissionAuthSettings.validate() check is satisfied AND the JWKS
   # is actually fetchable at startup. Audience inherits from base ("options-edge-web").
@@ -254,8 +610,28 @@ patches:
   # unified-sr + strike-flow-avro-adapter are now promoted to main and built for every env, so they
   # render and deploy in dev too (exclusions removed). Their dev image remaps are in the images: block.
 images:
+  - name: 192.168.100.252:5000/options-edge-nifty-gex
+    newName: host.docker.internal:5001/options-edge-nifty-gex
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-raw-to-display
     newName: host.docker.internal:5001/options-edge-raw-to-display
+  # Both approach services were missing from this map, so their dev deploys resolved the .252
+  # PRODUCTION registry, where their images have never existed and never will — dev-only services.
+  # The failure is honest but reads like a build problem: "cannot resolve registry digest ... (is
+  # the image built + pushed for dev?)" when the image was pushed, to the other registry.
+  - name: 192.168.100.252:5000/options-edge-approach-monitor
+    newName: host.docker.internal:5001/options-edge-approach-monitor
+  - name: 192.168.100.252:5000/options-edge-approach-position-publisher
+    newName: host.docker.internal:5001/options-edge-approach-position-publisher
+  # The dev cluster is docker-desktop on this Mac and pulls from the LOCAL registry; the .252
+  # registry is a different machine's and is where production images live. A service missing from
+  # this list renders with the .252 ref, and the deploy's digest lookup 404s against a registry
+  # that never had the image.
+  - name: 192.168.100.252:5000/options-edge-gamma-migration
+    newName: host.docker.internal:5001/options-edge-gamma-migration
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-gamma-leadership
+    newName: host.docker.internal:5001/options-edge-gamma-leadership
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-databento-volume-aggregator
     newName: host.docker.internal:5001/options-edge-databento-volume-aggregator
@@ -334,6 +710,8 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-vix-option-inteligence
     newName: host.docker.internal:5001/options-edge-vix-option-inteligence
+  - name: 192.168.100.252:5000/options-edge-greek-move-authenticity
+    newName: host.docker.internal:5001/options-edge-greek-move-authenticity
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-strike-invasion
     newName: host.docker.internal:5001/options-edge-strike-invasion
@@ -349,6 +727,11 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-reversal-confirmation
     newName: host.docker.internal:5001/options-edge-reversal-confirmation
+  - name: 192.168.100.252:5000/options-edge-corridor-gauge
+    newName: host.docker.internal:5001/options-edge-corridor-gauge
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-drop-classifier
+    newName: host.docker.internal:5001/options-edge-drop-classifier
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer
     newName: host.docker.internal:5001/options-edge-spread-skew-postgres-writer
@@ -358,6 +741,24 @@ images:
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-close-direction
     newName: host.docker.internal:5001/options-edge-close-direction
+  - name: 192.168.100.252:5000/options-edge-spot-vol-regime
+    newName: host.docker.internal:5001/options-edge-spot-vol-regime
+  - name: 192.168.100.252:5000/options-edge-vol-premium
+    newName: host.docker.internal:5001/options-edge-vol-premium
+  - name: 192.168.100.252:5000/options-edge-indicator-service
+    newName: host.docker.internal:5001/options-edge-indicator-service
+  - name: 192.168.100.252:5000/options-edge-stock-gex
+    newName: host.docker.internal:5001/options-edge-stock-gex
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-context-tape
+    newName: host.docker.internal:5001/options-edge-context-tape
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-multileg-structure
+    newName: host.docker.internal:5001/options-edge-multileg-structure
+    newTag: dev
+  - name: 192.168.100.252:5000/options-edge-oi-shadow
+    newName: host.docker.internal:5001/options-edge-oi-shadow
+    newTag: dev
   - name: 192.168.100.252:5000/options-edge-es-open-direction
     newName: host.docker.internal:5001/options-edge-es-open-direction
     newTag: dev

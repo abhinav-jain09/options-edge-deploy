@@ -21,3 +21,6 @@ scripts/jenkins/.helper-venv/
 
 # local agent worktrees / scratch — never commit
 .claude/
+
+# local git worktrees live inside the checkout; never commit them as gitlinks
+.dwt-*

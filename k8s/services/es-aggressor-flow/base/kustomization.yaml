@@ -1,0 +1,12 @@
+# SERVICE SLICE — es-aggressor-flow on PROD. Owns ONLY this service's workload:
+# Deployment + Service. No PVCs, no shared ConfigMaps/Secrets, no topics.
+#
+# PROD-ONLY: referenced from k8s/overlays/production (NOT k8s/base), so dev and experiment
+# never render it — dev is SPX-only and has no ES feed at all. The es4 cluster keeps its own
+# manifest at k8s/es4/services/es-aggressor-flow.yaml, which is unchanged and still publishes
+# the legacy absorption snapshot; this prod deployment publishes ONLY the slope measurement.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - es-aggressor-flow-deployment.yaml
+  - es-aggressor-flow-service.yaml

@@ -1,0 +1,98 @@
+# THE CLOSING-BOARD SCHEDULE, AS A WORKLOAD — replacing the Jenkins cron that used to drive it.
+#
+# The owner's instruction, 2026-09-01: "I don't want anything Jenkins-based, it should run based
+# on Spring Batch configuration." That is what this is. The batch decides which session it owns,
+# reads the market calendar itself, retries by RESUMING its own job, and skips a night already
+# published — all in-process, on the two cron triggers in app.closebatch.schedule.
+#
+# WHY A DEPLOYMENT AND NOT A CRONJOB. A CronJob would put the schedule back outside the batch, in
+# a place with its own opinion about time zones and its own failure modes, and the pod it starts
+# still cannot decide anything for itself. This pod holds the schedule, so "when do we freeze"
+# and "how do we freeze" are one program, testable in one test run.
+#
+# IT IS THE SAME POD SPEC AS THE JOB, deliberately: same image, same hostPath for the OI index
+# and the vendor staging directory, same node pin (that directory is on ONE node), same secret,
+# same non-root read-only container. The only differences are what they must be — it stays
+# running, and SPRING_PROFILES_ACTIVE=scheduler turns the schedule on and the start-up job runner
+# OFF, so a restart at 03:00 does not freeze a board out of whatever the vendor had at 03:00.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stock-gex-close-scheduler
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: stock-gex-close-scheduler
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # EXACTLY ONE. Two schedulers would each launch the same session; Spring Batch's job repository
+  # would refuse the second, but the right number of pods asking is one.
+  replicas: 1
+  strategy:
+    # Never two at once, not even for a second during a rollout — a deploy at 16:10 must not have
+    # the old pod and the new pod both deciding they own tonight.
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: stock-gex-close-scheduler
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: stock-gex-close-scheduler
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: localhost.localdomain
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scheduler
+          image: 192.168.100.252:5000/oe-close-batch:prod
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "scheduler"
+            - name: DATABENTO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-databento-feed-env
+                  key: DATABENTO_API_KEY
+            - name: STOCK_GEX_CLOSE_DB_DSN
+              value: "postgresql://bleedingoptions:fAE80oxjlQ75edJe5nmfTLoIDJerlkddoFRm@bo-app-postgres-db.bleedingoptions.svc.cluster.local:5432/bleedingoptions"
+            - name: CLOSE_SNAPSHOT_ROOT
+              value: "/oi-index/close/.batch-fetch-csv"
+            - name: CLOSE_INDEX_PATH
+              value: "/oi-index/stock-gex-oi-index.json.gz"
+            - name: CLOSE_KEEP_SESSIONS
+              value: "10"
+            - name: CLOSE_AWAIT_VENDOR_SECONDS
+              value: "3600"
+            # UTC inside the JVM, New York in the schedule. The cron triggers carry their own zone
+            # so the container's clock never gets a vote on when the market closed.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Duser.timezone=UTC"
+          volumeMounts:
+            - name: oi-index
+              mountPath: /oi-index
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m          # idle almost all day; the run itself is bursty, not reserved
+              memory: 2Gi
+            limits:
+              memory: 3Gi
+      volumes:
+        - name: oi-index
+          hostPath:
+            path: /home/options-edge/stock-gex-oi
+            type: DirectoryOrCreate
+        - name: tmp
+          emptyDir: {}

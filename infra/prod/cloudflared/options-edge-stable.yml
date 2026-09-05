@@ -1,0 +1,109 @@
+# Cloudflare tunnel config for the PROD host (192.168.100.252).
+#
+# LIVE PATH: /etc/cloudflared/options-edge-stable.yml  (systemd: options-edge-cloudflared-stable)
+# Nothing deploys this file automatically — it is the reviewed source of truth, and
+# scripts/ops/verify-prod-tunnel.sh compares the live copy against it. Keep them in step by hand
+# after merging a change here; the verifier is what stops the two drifting silently.
+#
+# ⚠️ /ws/events MUST point at the gateway's NodePort (30097), NEVER at the k3s ServiceLB port 8091.
+#
+#   Incident 2026-07-31 (market hours, board dark ~2h): this line read
+#       service: http://192.168.100.252:8091      # feed-gateway-service LoadBalancer
+#   and every WebSocket handshake from the public apex (then fullfunding.nl) died with code 1006.
+#   k3s's ServiceLB (klipper-lb) proxies plain HTTP fine — GET /health returned 200 and an
+#   unauthenticated upgrade returned a clean 401 — but it does not carry the WebSocket upgrade
+#   through, so the connection never reached the gateway: its `clients` counter sat at 0 for
+#   hours while `forwardedEvents` kept climbing.
+#
+#   That combination is what made it so hard to see. Every layer tested healthy in isolation:
+#   Kafka flowing, gateway caught up, JWT valid (same token worked on es4), issuer/audience/
+#   origin/clock/JWKS all correct, same image digest on both clusters. The ONLY difference was
+#   how the tunnel reached the gateway — es4 already used a NodePort (192.168.100.4:30091),
+#   prod used the ServiceLB. Pointing prod at its NodePort restored the board immediately
+#   (clients 0 -> 3, batchesSent 0 -> +171/25s).
+#
+#   If feed-gateway-service is ever recreated, its NodePort can change: check with
+#     kubectl -n options-edge get svc feed-gateway-service -o jsonpath='{.spec.ports[0].nodePort}'
+#   and update this file plus the live copy together.
+tunnel: options-edge-option-chain
+credentials-file: /etc/cloudflared/options-edge-option-chain.json
+metrics: 127.0.0.1:20242
+no-autoupdate: true
+
+ingress:
+  # Order matters: the path rule must precede the catch-all for the same hostname.
+  #
+  # fullfunding.nl / es. / auth. were RETIRED on 2026-08-08 (migration Phase 3, no redirect by
+  # operator decision): that domain is being reused for unrelated applications, so it must NOT
+  # route here at all. Re-adding any of those hostnames would hijack traffic from whatever now
+  # owns the domain. See docs/domain-migration-bleadingoptions.md.
+  - hostname: bleadingoptions.com
+    path: /ws/events
+    service: http://192.168.100.252:30097     # feed-gateway-service NodePort — NOT the 8091 ServiceLB
+  # The pressure boards' public path routes (/nifty-gex, /banknifty-gex -> NodePort
+  # 30188) were RETIRED 2026-09-03: the boards moved BEHIND the portal login
+  # (USER-directed reversal of their original public exposure). The pages are now
+  # served by the web app at /nifty-pressure//banknifty-pressure through the
+  # catch-all below, which also 302s the old paths there; the nifty-gex service
+  # stays cluster-internal (data reaches the page via the web app's authenticated
+  # /api/pressure proxy). Re-adding these routes would put the UNAUTHENTICATED
+  # service back on the public internet.
+  - hostname: bleadingoptions.com
+    service: http://192.168.100.252:8094
+  # ⚠️ Hardcoded ClusterIP: it survives pod restarts but NOT a delete+recreate of the Service.
+  # If auth.bleadingoptions.com starts 502-ing, re-read it with
+  #   kubectl -n options-edge get svc oe-keycloak -o jsonpath='{.spec.clusterIP}'
+  # The Keycloak admin console is served through this same HTTPS hostname. Keeping
+  # it behind Cloudflare avoids the insecure/cross-origin cookies produced by the
+  # former direct-LAN HTTP admin URL.
+  - hostname: auth.bleadingoptions.com
+    service: http://127.0.0.1:80               # Traefik preserves the public HTTPS forwarding headers
+    originRequest:
+      httpHostHeader: auth.bleadingoptions.com
+  # es4 already routed /ws/events to a NodePort — which is why the ES board kept working
+  # through the prod outage and was the control that isolated the bug.
+  - hostname: es.bleadingoptions.com
+    path: /ws/events
+    service: http://192.168.100.4:30091
+  - hostname: es.bleadingoptions.com
+    service: http://192.168.100.4:30080
+  # Bugzilla, served by its own Apache as a host container on :8092 — deliberately NOT moved into
+  # Kubernetes: it is memory-hungry and lives where the memory is, while the hostname it answers on
+  # is just routing. Reaching it needs no NodePort and no ClusterIP, so nothing here breaks when a
+  # Service is recreated.
+  #
+  # This works only because OIDCRedirectURI in /home/options-edge/config/bugzilla-oidc.conf is
+  # PATH-ONLY (/oauth2callback) with OIDCXForwardedHeaders trusting X-Forwarded-Proto/Host. Pinned
+  # to a single hostname, as it was until 2026-08-08, mod_auth_openidc answers every request for
+  # any OTHER host with a 500 — so a hostname added here without that change would look broken
+  # rather than merely misrouted. Keycloak client `bugzilla` carries the matching
+  # https://req.bleadingoptions.com/oauth2callback redirect URI.
+  - hostname: req.bleadingoptions.com
+    service: http://127.0.0.1:8092
+  # fullfunding.nl was served here until 2026-08-09. It now has its OWN tunnel
+  # (5c86fa1d-8307-43d8-9ccf-aa240b7156e1, config /etc/cloudflared/fullfunding.yml),
+  # because it is a different application: restarting the trading platform tunnel
+  # should not interrupt it, and vice versa. Its DNS points at that tunnel, so this
+  # route was dead weight — a hostname listed here that no request can ever reach
+  # reads as working config and hides which tunnel actually serves the domain.
+  # PUBLIC GAMMA LAB homepage. Users open bleedingoptions.com; auth.bleedingoptions.com is the IdP.
+  - hostname: bleedingoptions.com
+    service: http://10.43.177.28:8080
+    originRequest:
+      httpHostHeader: bleedingoptions.com
+  # The bare root of the IdP redirects to KC_HOSTNAME_ADMIN, which is a LAN address — returning 404
+  # stops that leaking an internal IP to the internet.
+  - hostname: auth.bleedingoptions.com
+    path: ^/$
+    service: http_status:404
+  - hostname: auth.bleedingoptions.com
+    path: /admin
+    service: http_status:404
+  - hostname: auth.bleedingoptions.com
+    path: /realms/master
+    service: http_status:404
+  - hostname: auth.bleedingoptions.com
+    service: http://10.43.152.90:8080
+    originRequest:
+      httpHostHeader: auth.bleedingoptions.com
+  - service: http_status:404

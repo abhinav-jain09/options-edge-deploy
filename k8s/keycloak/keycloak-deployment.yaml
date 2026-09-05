@@ -2,12 +2,18 @@
 # Exposure model (hardened per the prod-Keycloak design review):
 #   - Service is ClusterIP publishing ONLY http :8080. The management port :9000 (health/metrics, admin
 #     bootstrap surface) is a containerPort used by the probes IN-CLUSTER and is NEVER published.
-#   - Public reach is via the Cloudflare tunnel -> traefik Ingress (keycloak-ingress.yaml), Host
-#     auth.fullfunding.nl. TLS terminates at Cloudflare's edge; KC runs HTTP behind it and trusts
-#     X-Forwarded-* (KC_PROXY_HEADERS=xforwarded). KC is NOT exposed on a LAN host port (no LoadBalancer),
-#     so a LAN client cannot bypass the edge and spoof X-Forwarded-* headers.
-#   - The admin console (/admin) + master realm are blocked at the Cloudflare edge (see docs/keycloak-prod.md);
-#     admin is performed in-cluster (kubectl port-forward) or behind Cloudflare Access.
+#   - Public reach is via the Cloudflare tunnel DIRECTLY to the oe-keycloak ClusterIP below (traefik
+#     :80 proved broken on this cluster, so the tunnel bypasses the keycloak-ingress.yaml route), for
+#     the public auth hostname auth.bleadingoptions.com (fullfunding.nl retired 2026-08-08 —
+#     docs/domain-migration-bleadingoptions.md). TLS terminates at Cloudflare's edge; KC
+#     runs HTTP behind it and trusts X-Forwarded-* (KC_PROXY_HEADERS=xforwarded).
+#   - KC IS additionally published on the LAN via the oe-keycloak-lan LoadBalancer below (:8089) as
+#     the deliberate admin-console path (KC_HOSTNAME_ADMIN) — the original "no LoadBalancer, LAN
+#     cannot reach it" posture was superseded when the LAN admin Service was added. The public edge
+#     still cannot reach :8089.
+#   - The admin console (/admin) + master realm are blocked at the Cloudflare edge for every public
+#     auth hostname (see docs/keycloak-prod.md); realm/user admin is performed via kcadm.sh in-pod
+#     or the LAN admin console.
 # Realm imported from the oe-keycloak-realm ConfigMap (restricted client, no test user). Import is
 # idempotent: an existing realm is skipped on later boots.
 apiVersion: v1
@@ -21,7 +27,7 @@ metadata:
     app.kubernetes.io/component: auth
 spec:
   type: ClusterIP
-  # Pinned clusterIP: the cloudflared tunnel routes auth.fullfunding.nl -> this IP:8080 (traefik on :80 is
+  # Pinned clusterIP: the cloudflared tunnel routes auth.bleadingoptions.com -> this IP:8080 (traefik on :80 is
   # broken on this cluster), so the IP must be stable across redeploys. This is the IP already assigned.
   clusterIP: 10.43.127.26
   selector:
@@ -99,6 +105,12 @@ spec:
       maxSurge: 1
   template:
     metadata:
+      annotations:
+        # The realm ConfigMap is a plain resource (not a hashed configMapGenerator), so editing it does
+        # NOT by itself roll the pod — and `--import-realm` only runs at container start. Bump this nonce
+        # in the SAME commit as any oe-keycloak-realm change so the rollout actually picks it up.
+        # 2026-08-04: added the `req` realm (requirement-intake portal, docs/req-portal-bugzilla-keycloak-sso.md).
+        oe/config-nonce: "2026-08-09-domain-cutover"
       labels:
         app.kubernetes.io/name: oe-keycloak
         app.kubernetes.io/part-of: options-edge
@@ -139,7 +151,7 @@ spec:
                   key: POSTGRES_PASSWORD
             # --- Hostname / TLS (terminated at the Cloudflare edge; traefik forwards X-Forwarded-*) ---
             - name: KC_HOSTNAME
-              value: "https://auth.fullfunding.nl"
+              value: "https://auth.bleadingoptions.com"
             # Admin console served at the LAN URL (oe-keycloak-lan LoadBalancer on host :8089), so operators
             # on the trusted LAN can use the console by IP despite the strict public hostname. Public /admin
             # stays blocked at the edge.
@@ -154,7 +166,11 @@ spec:
               value: "true"
             - name: KC_METRICS_ENABLED
               value: "true"
-            # --- Initial admin (bootstrap once, then create a real admin and rotate this out) ---
+            # --- Admin credential contract: the bootstrap 'admin' account is DISABLED; the
+            # permanent master-realm admin is 'abhinav', whose password EQUALS this Secret key by
+            # contract (verify-prod-tunnel.sh authenticates with it). NEVER remove the key —
+            # rotation = kcadm set-password for abhinav + patch this Secret, same window
+            # (docs/keycloak-prod.md "Admin login"). ---
             - name: KC_BOOTSTRAP_ADMIN_USERNAME
               value: admin
             - name: KC_BOOTSTRAP_ADMIN_PASSWORD

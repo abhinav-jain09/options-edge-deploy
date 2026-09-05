@@ -42,7 +42,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: raw-to-display-service
@@ -150,6 +150,8 @@ spec:
               value: options.databento.display
             - name: KAFKA_DISPLAY_VOLUME_TOPIC
               value: options.databento.display.volume.current
+            - name: KAFKA_DATABENTO_GEX_STRIKE_TOPIC
+              value: options.databento.gex.strike
             - name: KAFKA_GAMMA_HISTORY_TOPIC
               value: options.databento.display.gamma.history
             - name: KAFKA_DISPLAY_STREAMS_APP_ID

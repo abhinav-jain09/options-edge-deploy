@@ -47,7 +47,9 @@ MANDATORY = [
 ]
 
 # es-feed-specific fixed values. DBP-R1 fixes replay off; DBP-R3 fixes the cadence (USER decision
-# 2026-07-25). Deliberately NOT applied to the SPX feed — dev SPX legitimately publishes at 1000 ms.
+# 2026-07-25). Deliberately NOT applied to the SPX feed, which is tuned per environment and has its
+# own history: prod and dev both moved to 5000 ms on 2026-07-29 (CPU saturation on prod, the 0DTE
+# repartition hot partition on dev), while es-feed keeps 2000 ms and its own ESM-R23 ladder.
 REQUIRED_VALUES = {
     "DATABENTO_USE_LIVE_REPLAY": "false",
     "DATABENTO_PUBLISH_INTERVAL_MS": "2000",

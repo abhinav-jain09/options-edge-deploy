@@ -1,7 +1,7 @@
-# DEV-ONLY: publish each strike's snapshot at most once per second (1000ms) instead of the 250ms
-# code default. Prod uses 2000ms (databento-feed-prod-patch.yaml) to relieve its single-core CPU
-# backpressure that runs ~5-6.5 min behind real-time; dev has more headroom, so 1s gives fresher
-# data while still cutting per-strike publish/serialize/Kafka work ~4x vs the 250ms default. An
+# DEV-ONLY: publish each strike's snapshot at most once every 5s (5000ms) instead of the 250ms
+# code default — the same cadence prod uses (databento-feed-prod-patch.yaml). Dev ran 1000ms until
+# 2026-07-29; the "dev has more headroom" assumption behind that value was wrong once the volume is
+# followed downstream, where it lands on the single 0DTE repartition partition (see the env comment). An
 # explicit container env overrides the shared configmap's envFrom value, so this ships via the
 # per-service deploy (service-deploy) WITHOUT touching common-infra (the shared feed configmap is
 # also consumed by databento-gex and lives in the infra layer).
@@ -15,9 +15,47 @@ spec:
     spec:
       containers:
         - name: databento-feed
+          # DEV-ONLY memory headroom: 2Gi -> 3Gi. This is a MITIGATION, not a diagnosed fix.
+          #
+          # WHAT IS ESTABLISHED: on 2026-08-10 the dev feed was OOMKilled (exit 137) at 09:32:16
+          # ET, ~3 minutes into the RTH open. During the ~2-minute restart it produced ZERO
+          # options.databento.raw records, so no DATABENTO record reached any strike and the board
+          # held "Switching to live data…" — the chip flips per strike on that strike's first live
+          # record, and there were none. After the restart: raw +990/15s, gex.strike +3851/20s.
+          # That proves 2Gi was insufficient at that moment. It does NOT prove what consumed the
+          # memory, nor that 3Gi is sufficient.
+          #
+          # HYPOTHESIS (unproven): the open is this container's peak — the OPRA subscription
+          # resolve (396 contracts) and the first full-chain snapshot burst coincide, on top of
+          # the ES-basis engine and the 1DTE AUTO_NEXT_SESSION track that only dev carries.
+          # A leak or an unbounded buffer would present identically in a single OOM sample.
+          # WHAT WOULD DISTINGUISH THEM: an RSS/working-set series across startup -> open ->
+          # several hours. Bounded post-open memory supports the peak-pressure reading; continued
+          # growth means a leak and this ceiling only buys time. Dev has no metrics-server, so
+          # that series is not captured yet; if this OOMs again at 3Gi, treat it as a leak and
+          # stop raising the limit.
+          #
+          # CAPACITY (measured 2026-08-10): node allocatable 63.2 GiB; sum of ALL running pod
+          # memory limits 9.4 GiB, requests 2.0 GiB. The extra 1 GiB of ceiling is negligible
+          # against that headroom. Requests stay 512Mi, so scheduling pressure and the Burstable
+          # QoS class are unchanged.
+          #
+          # PROD IS UNTOUCHED (base stays 2Gi): prod carries neither the extra 1DTE track nor
+          # this failure, and its limit should be judged on its own evidence, not on dev's.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 3Gi
           env:
+            # 2026-07-29: 1000 -> 5000, matching prod SPX. At 1000ms dev was producing 5x prod's
+            # snapshot volume, and every one of those snapshots becomes a gex.strike record and then a
+            # repartition record on the SINGLE partition that carries the whole 0DTE chain — the one
+            # measured ~1.1M records behind and growing at +6849/min. Dev has no wings-coverage
+            # requirement to trade off, so the cheapest real relief is to stop generating the volume.
             - name: DATABENTO_PUBLISH_INTERVAL_MS
-              value: "1000"
+              value: "5000"
             # DEV-ONLY spot cascade: native SPX index (unwired stub) -> ES-basis (cost-of-carry from
             # the ES front-month) -> synthetic put-call parity fallback (60s ES freshness gate). In
             # practice ES-basis -> synthetic. Reuses the ES trade stream already ingested via base's
@@ -27,14 +65,15 @@ spec:
             # container env beats the shared configmap's envFrom value AND service-deploy rolls the
             # pod, so activation is deterministic (the common-infra configmap path neither restarts
             # the feed nor is currently unblocked). Prod stays SYNTHETIC (deliberate) — untouched.
-            # 2026-07-15: SYNTHETIC is the STANDING dev state (user directive) — do not
-            # re-flip to CASCADED. CASCADED's per-ES-tick snapshot refresh (348 publishes +
-            # blocking flush inside _book_lock, gate only 0.05 spot delta) starved the OPRA
-            # read loop; dev tcbbo fell 30+ min behind and delta-flow rejected everything as
-            # stale. If CASCADED is ever wanted again, land feed PR #69 (refresh throttle)
-            # first.
+            # 2026-07-29 (USER decision, IBKR-SPX-INDEX-PRIORITY-SPOT-REQUIREMENT.md rev4):
+            # CASCADED so the IBKR SPX cash index (tier-1, via the SPX_INDEX_SOURCE_* consumer
+            # in the feed configmap) is the priority-1 spot; absent/stale/DELAYED falls back
+            # automatically and recovers automatically. The 2026-07-15 starvation incident's
+            # prerequisite fix (refresh throttle, feed PR #69) is MERGED and pinned explicitly
+            # via DATABENTO_CASCADE_REFRESH_MIN_INTERVAL_MS in the feed configmap.
+            # Kill switch: set this back to SYNTHETIC.
             - name: DATABENTO_SPOT_SOURCE
-              value: SYNTHETIC
+              value: CASCADED
             # VIX-via-OPRA-parity, MIRRORS the prod enablement (feed
             # docs/vix-opra-parity-price/DESIGN.md v11, PR #65; prod enablement
             # deploy PR #456; USER directive 2026-07-15: enable on dev as well).
@@ -58,6 +97,30 @@ spec:
               # DATABENTO_MIN_STRIKE/MAX_STRIKE/STRIKE_STEP = 7000/8000/5). The two tracks must
               # cover the same strikes or the 0DTE and 1DTE surfaces are not comparable and
               # constant-one-day-vol interpolates across a hole.
-              value: '[{"symbol":"VIX","trading_class":"VIX","min_strike":12,"max_strike":45,"strike_step":0.5,"expiry_mode":"AUTO_VIX_MONTHLY"},{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
+              value: '[{"symbol":"SPX","trading_class":"SPXW","min_strike":7000,"max_strike":8000,"strike_step":5,"expiry_mode":"AUTO_NEXT_SESSION"}]'
             - name: DATABENTO_VIX_PRICE_ENABLED
+              value: "false"
+            # Pre-market LIVE OI: while OPRA is closed, drain the OI-aware statistics replay and publish the
+            # settled OI so pre-open GEX prices with LIVE OI (not the historical batch). DEV first. Forces its
+            # own replay window, so it works even though the dev main loop runs use_live_replay=false.
+            - name: DATABENTO_PREMARKET_LIVE_OI_ENABLED
               value: "true"
+            # ---- ES->SPX basis engine on DEV, mirrored from prod (2026-07-27) --------------
+            # Dev's feed has BOTH engine legs in-process (base DATABENTO_HPSF_ES_TRADES_ENABLED
+            # =true native ES + the SPX leg), so the engine already ran here — but with samples
+            # and A1 evidence UNSET it could never measure and stamped every dev es.trade with
+            # UNAVAILABLE/COLD_START forever, which keeps dev's es-spx-align fail-closed (no
+            # ES->SPX translation on dev). Same certification discipline as prod: samples stay
+            # OFF until the A1:<session_date> PASS cert lands on DEV's spx.basis.state —
+            # committed by the same launchd automation that certifies prod
+            # (~/oe-ops/a1-cert-daily.sh, per-env targets), so this is standing/daily, not a
+            # one-shot. Dev align keeps reading underlying.es.trades (dev enriches the trades
+            # topic directly on the native path — no es.price re-point needed here).
+            - name: ES_SPX_BASIS_A1_EVIDENCE_ENABLED
+              value: "true"
+            - name: ES_SPX_BASIS_SAMPLES_ENABLED
+              value: "true"
+            - name: ES_SPX_BASIS_CLOSE_PRINCIPALS
+              value: "abhinav"
+            - name: ES_SPX_BASIS_ACK_PRINCIPALS
+              value: "abhinav"

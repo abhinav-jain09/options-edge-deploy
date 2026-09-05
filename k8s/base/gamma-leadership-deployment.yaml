@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gamma-leadership-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: gamma-leadership-service
+    app.kubernetes.io/component: gamma-leadership-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # Single-writer invariant: one canonical leadership stream, fenced by replicas=1 + Recreate —
+  # never scale above 1 (per-chain-keyed EOS Streams app with a changelog-backed store).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: gamma-leadership-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: gamma-leadership-service
+        app.kubernetes.io/component: gamma-leadership-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: gamma-leadership
+          image: 192.168.100.252:5000/options-edge-gamma-leadership:dev
+          imagePullPolicy: Always
+          # Shared platform config/secret provide KAFKA_BOOTSTRAP_SERVERS, the schema-registry
+          # URL, KAFKA_STREAMS_STATE_DIR and the rest of the platform defaults — exactly like
+          # every sibling service. The gex input topic (KAFKA_DATABENTO_GEX_TOPIC) is the
+          # platform default (options.databento.gex.strike); only the service-specific outputs
+          # are set here.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8141"
+            - name: GAMMA_LEADERSHIP_ENABLED
+              value: "true"
+            # --- outputs ---
+            - name: GAMMA_LEADERSHIP_LATEST_TOPIC
+              value: options.spx.gamma-leadership.current
+            - name: GAMMA_LEADERSHIP_EVENTS_TOPIC
+              value: options.spx.gamma-leadership.events
+            # Bounded per-chain state (per-strike snapshots + one control blob); changelog
+            # restore covers restarts (no RocksDB PVC needed).
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms128m -Xmx512m"
+          ports:
+            - name: health
+              containerPort: 8141
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          # Provisional sizing (Streams runtime + a small per-strike store). CPU limit
+          # intentionally absent, matching every sibling service.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi

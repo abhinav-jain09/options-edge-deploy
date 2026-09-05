@@ -1,0 +1,182 @@
+@Library('oe') _
+import groovy.json.JsonOutput
+
+// FREEZE THE CLOSING GEX BOARD, THE SAME DAY IT CLOSES.
+//
+// A live stock-gex board is retired 900s after its last subscriber and dies with the process, so
+// the picture someone watched all afternoon is gone the moment the session ends. This job runs
+// scripts/ops/stock-gex-close-board.sh, which creates the Job in
+// k8s/jobs/stock-gex-close-board-job.yaml under the deployer identity (the only principal the
+// options-edge-jenkins-only-workloads admission policy permits to create Jobs). That Job pulls the
+// session's LAST MINUTE of cbbo-1s, prices it against the OI index the service was serving all
+// day, and writes one gzip'd board per root under /oi-index/close/dt=<session>/.
+//
+// NOTHING IS RESTARTED. Unlike the OI index — which the service loads once, in main(), and which
+// therefore needs an annotation, a rollout and a proof — closing boards are read per request, off
+// a directory the service rescans every 60 seconds. A published session is live within a minute.
+//
+// SCHEDULE: 16:10 America/New_York, Mon-Fri — after the bell on the SAME DAY, which is the whole
+// design goal. Piggybacking on the 08:20 index job would have been free, and would have meant
+// today's closing board first appearing TOMORROW MORNING; the point of the feature is the evening
+// of the day itself.
+//   * It needs no new open interest, which is why same-day is possible at all: the board is
+//     priced on the index the service was ALREADY serving (the previous session's), so the 20:00
+//     ET settlement guard that governs the index job does not apply here.
+//   * THE SLOT IS NOT A GUESS ABOUT VENDOR LATENCY, because the job does not need one: the CLI
+//     polls metadata.get_dataset_range (a free query) until the archive covers the closing
+//     minute, and only then spends a data request. Two drafts of this file did guess — close+10,
+//     then close+35 — and the measurements on 2026-08-12 are why neither was defensible:
+//     `available_end` reached 09:20 ET at 09:40:37 (a 20.6 minute lag) and was STILL 09:20 at
+//     09:52 (32 minutes, and climbing). A window past `available_end` returns HTTP 422 with a
+//     544-byte body, which the chunk-size floor correctly reports as an empty response — so
+//     guessing low costs 21 requests and reports a transport failure rather than "too early".
+//     16:10 is simply "soon after the bell"; the WAIT does the work, up to WAIT_FOR_VENDOR_S.
+//   * 16:10 plus a wait of up to 60 minutes still lands hours before the 20:30 ET off-hours
+//     scale-down, so the service pod is up throughout — the wrapper needs a READY pod to learn
+//     which node owns the hostPath, before AND after the build.
+//   * The IANA zone (not a fixed UTC hour) keeps it at 16:10 ET across DST. On an EARLY CLOSE
+//     (13:00 ET) the run is simply three hours late, which costs nothing: the window is resolved
+//     from the market calendar, not from the firing time, and the availability wait returns
+//     immediately when the archive is already past it.
+//   * It runs on exchange holidays too, ON PURPOSE: a Mon-Fri timer must not second-guess the
+//     market calendar. The CLI skips a non-session day itself (--skip-non-session) and the
+//     wrapper reports that as a success, so a holiday is not nine false alarms a year.
+//
+// PRODUCTION ONLY. Dev has no closing-board mount and is scaled to zero nightly.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['production'],
+      description: 'Target environment. Production only — see the header.')
+    string(name: 'SESSION', defaultValue: '',
+      description: 'Operator override, YYYY-MM-DD. EMPTY on scheduled runs so the wrapper uses TODAY in America/New_York — never pin a date on the timer. A backfill of an older session works too, as long as its cbbo-1s window is still available from the vendor.')
+    string(name: 'KEEP_SESSIONS', defaultValue: '10',
+      description: 'Published sessions to retain on the node (~21 MB each). 1..400.')
+    string(name: 'WAIT_FOR_VENDOR_S', defaultValue: '3600',
+      description: 'How long the CLI may wait for Databento\'s archive to reach the closing minute before pulling. The lag is not a constant (measured 20.6 min, then still climbing at 32), so the job asks rather than the schedule guessing. Max 4800 — the Job deadline is 6000.')
+    string(name: 'REBUILD', defaultValue: '0',
+      description: 'A deliberate RE-FREEZE of a session that already completed. Only session and rebuild identify a run, which is what makes a failed night RESUME rather than start again beside itself — so re-running a completed one is refused unless this is raised. Leave at 0 on the timer; raise it to say "yes, build that day again", and the ledger records which build of that day it was.')
+    booleanParam(name: 'DRY_RUN', defaultValue: false,
+      description: 'true = resolve + digest-pin + server-side validate the Job only; creates nothing and publishes nothing.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    string(name: 'KEEP_JOBS', defaultValue: '5',
+      description: 'How many most-recent TERMINAL close-board Jobs to retain (nothing else prunes them). 1..100.')
+  }
+  // NO TRIGGERS. The schedule lives in the batch itself now — USER 2026-09-02: "I don't want
+  // anything Jenkins-based, it should run based on Spring Batch configuration", and again on the
+  // 3rd. stock-gex-close-scheduler (options-edge namespace) holds the two cron triggers in New
+  // York time, claims each owed session with a lease, and publishes only while it still holds
+  // that claim.
+  //
+  // THIS JOB REMAINS, deliberately, as the MANUAL way in: freezing a named session by hand, a
+  // rebuild, a dry run. Those are operator actions, not a schedule, and taking them away would
+  // leave no way to re-freeze a night without a deploy. It launches with no claim token, which
+  // is exactly how the scheduler recognises a run it must never interfere with.
+  //
+  // What used to be here: cron('TZ=America/New_York\n10 16 * * 1-5\n0 1 * * 2-6') — the evening
+  // freeze and the morning catch-up. Both are now app.closebatch.schedule.CloseBoardScheduler.
+  options {
+    // Not for correctness — two runs produce two generations and the later promote simply wins —
+    // but each spends a full vendor pull and drops the other's fetch scratch, so they are
+    // serialised. The wrapper additionally refuses to start beside an active close-board Job,
+    // which covers a manual run this option cannot see.
+    disableConcurrentBuilds()
+    // The Job is capped at 100 min (activeDeadlineSeconds, most of it the vendor wait) and the
+    // wrapper waits 105, so this leaves room for the image pin and the prune on top.
+    // 200, not 130: the chain now retries a failed batch up to CLOSE_ATTEMPTS times with a
+    // CLOSE_RETRY_WAIT_S pause (the vendor's post-close 504s ripen away in ~20-45 min), and the
+    // old budget fit exactly one attempt. Sized for fail-fast attempts; a genuinely hung attempt
+    // still aborts, exactly as before.
+    timeout(time: 200, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '30'))
+  }
+  environment {
+    KUBECONFIG    = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT   = "${params.ENVIRONMENT}"
+    SESSION       = "${params.SESSION}"
+    KEEP_SESSIONS = "${params.KEEP_SESSIONS}"
+    WAIT_FOR_VENDOR_S = "${params.WAIT_FOR_VENDOR_S}"
+    REBUILD       = "${params.REBUILD}"
+    DRY_RUN       = "${params.DRY_RUN}"
+    KEEP_JOBS     = "${params.KEEP_JOBS}"
+  }
+  stages {
+    stage('Freeze closing board') {
+      steps {
+        sh '''
+          set -euo pipefail
+          chmod +x scripts/ops/stock-gex-close-board.sh
+          scripts/ops/stock-gex-close-board.sh
+        '''
+      }
+    }
+  }
+  post {
+    // `unsuccessful`, NOT `failure`: the pipeline timeout and a manual stop both produce ABORTED,
+    // and a session that was never frozen is exactly as gone either way.
+    unsuccessful {
+      script {
+        // WHICH OF THE TWO HAPPENED, rather than the comfortable one. Most failures leave the
+        // previous session exactly as it was — a build publishes a whole new generation and only
+        // the final symlink move makes it visible. But the post-publication checks run AFTER
+        // that move and can only DISCOVER that the session should not be live; the promote
+        // happened inside the container, on a node this identity cannot reach. The wrapper
+        // leaves a marker when a session was promoted, and the alert reads it. Absent marker =
+        // nothing was published. Every step here is best-effort: alerting must never fail on
+        // its own diagnostics.
+        def marker = null
+        try {
+          if (fileExists('close-board-published.txt')) {
+            marker = readFile('close-board-published.txt').trim() ?: null
+          }
+        } catch (err) {
+          echo "publication-state diagnostic unavailable: ${err}"
+        }
+        // THREE answers, and the middle one is the truthful shape of a question the wrapper
+        // cannot decide: the promote happens inside the container and the container can be
+        // killed between that move and the receipt it prints.
+        def state
+        if (marker == null) {
+          state = "Nothing was published: no Job was created, so the previous session is " +
+                  "exactly as it was."
+        } else if (marker.startsWith('PUBLISHED')) {
+          state = "A SESSION WAS PUBLISHED AND IS VISIBLE NOW (${marker}); the run failed AFTER " +
+                  "that, so it may have been built against the wrong image or node. Re-run to " +
+                  "replace it — a re-run publishes a new generation and swaps atomically."
+        } else if (marker.startsWith('NONE')) {
+          state = "Nothing was published (${marker})."
+        } else {
+          state = "PUBLICATION STATE UNKNOWN. A Job was created and no receipt was read, so a " +
+                  "session may or may not have been promoted. ${marker}"
+        }
+        echo "stock-gex closing-board freeze ${currentBuild.currentResult} for session '${env.SESSION ?: 'today ET'}' — ${state}"
+        withCredentials([string(credentialsId: 'offhours-discord-webhook',
+                                variable: 'DISCORD_WEBHOOK_URL')]) {
+          // The same PROD ops webhook the off-hours job and the error-watch use. The pod-log
+          // error-watch cannot see this on its own: a short-lived Job's pod may be gone between
+          // its 5-minute scans, and a Jenkins/plumbing failure never reaches a pod log at all.
+          //
+          // Built with JsonOutput and handed to curl on stdin, so a BUILD_URL containing a quote
+          // or backslash cannot break the JSON and lose the alert.
+          def payload = JsonOutput.toJson([
+            content: ":snowflake: stock-gex closing-board freeze ${currentBuild.currentResult} " +
+                     "(build ${env.BUILD_NUMBER}, session ${env.SESSION ?: 'today ET'}). " +
+                     "${state} The LIVE board is unaffected either way. Re-runnable with SESSION " +
+                     "set while the vendor still serves that window. ${env.BUILD_URL}"
+          ])
+          writeFile file: 'discord-payload.json', text: payload
+          // Bounded: a stalled webhook must not eat the remaining timeout on a build that has
+          // already failed. The exit status stays ignored on purpose.
+          sh '''
+            set +e
+            curl -fsS --connect-timeout 10 --max-time 30 --retry 2 \
+              -H 'Content-Type: application/json' \
+              --data-binary @discord-payload.json "${DISCORD_WEBHOOK_URL}"
+            true
+          '''
+        }
+      }
+    }
+  }
+}

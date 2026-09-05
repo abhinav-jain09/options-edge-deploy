@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: drop-classifier-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: drop-classifier-service
+    app.kubernetes.io/component: drop-classifier-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: drop-classifier-service
+  ports:
+    - name: health
+      port: 8125
+      targetPort: health

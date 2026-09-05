@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: context-tape-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: context-tape-service
+    app.kubernetes.io/component: context-tape-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: context-tape-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: context-tape-service
+        app.kubernetes.io/component: context-tape-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+        - name: context-tape
+          image: 192.168.100.252:5000/options-edge-context-tape:dev
+          imagePullPolicy: Always
+          # Shared platform config/secret provide KAFKA_BOOTSTRAP_SERVERS (+ the rest of the
+          # platform defaults) exactly like every sibling service.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: HEALTH_PORT
+              value: "8135"
+            # --- inputs (env-overridable; es4 overrides the spot source in
+            # scripts/es4/render_es4_manifests.py ES_ENV) ---
+            - name: CONTEXT_TAPE_SPOT_TOPIC
+              value: underlying.spx.index.price
+            - name: CONTEXT_TAPE_GEX_HISTORY_TOPIC
+              value: options.databento.gex.strike.history
+            - name: CONTEXT_TAPE_ES_TRADES_TOPIC
+              value: underlying.es.trades
+            # SPX pre-open window opens at 07:00 ET (USER 2026-08-13, revised from the earlier
+            # midnight PREMARKET open): the tape rolls to the new day at 07:00 and the pre-market
+            # hours draw on it from then, instead of yesterday's completed chart sitting there.
+            # The pre-open γ boundary anchors on the gex-carried spot as the morning's IBKR OI
+            # arrives (options.databento.gex.strike.preopen). rthOpen/rthClose (09:30/16:00) and
+            # every RTH semantic are unchanged; RTH candles still start 09:30 (no pre-market prints).
+            # es4 overrides this to GLOBEX (prior-evening 18:00 ET open) in render_es4_manifests.py.
+            - name: CONTEXT_TAPE_SESSION_MODE
+              value: NYSE_RTH
+            - name: CONTEXT_TAPE_PRE_OPEN_ET
+              value: "07:00"
+            # A 07:00-open day builds ~108 five-minute buckets (07:00–16:00) vs ~84 from 09:00 —
+            # ~186 KB on a 112-strike session, well under NYSE_RTH's 1 MiB mode cap (the service
+            # min()s this env with that cap, so a larger value is silently clamped anyway).
+            - name: CONTEXT_TAPE_MAX_SNAPSHOT_BYTES
+              value: "1048576"
+            # Full session held in memory + a ~2.2M-record backfill pass; heap sized under
+            # the 1Gi container limit.
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx768m"
+          ports:
+            - name: api
+              containerPort: 8134
+            - name: health
+              containerPort: 8135
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            # readiness stays 503 until the session backfill completes (typically <2 min).
+            # failureThreshold 30 only keeps an already-Ready pod from flapping unready on
+            # transient probe failures — it does NOT extend initial-rollout headroom. That
+            # comes from progressDeadlineSeconds (the dev/prod overlays' fleet-wide 1200s
+            # patch, inherited here) and the deploy jobs' rollout-status timeouts.
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 30
+          # CPU limit intentionally absent, matching every sibling service.
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi

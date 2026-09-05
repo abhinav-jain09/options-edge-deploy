@@ -66,6 +66,19 @@ pipeline {
       }
     }
 
+    // Dependency-scoped FIRE-input verdict (processing PR #594): the experiment job applies
+    // k8s/overlays/experiment DIRECTLY, so nothing on this path runs validate-platform.sh or
+    // validate-services.sh. Placed BEFORE 'Secrets' — that stage is this job's FIRST cluster
+    // mutation, and a gate that runs after the cluster has already been written to is not a gate.
+    stage('Validate FIRE-quality knob registration') {
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-dealer-ledger-fire-quality.sh
+        '''
+      }
+    }
+
     // The experiment overlay's pods reference options-edge-runtime-secrets (POSTGRES_PASSWORD,
     // SMOKE_AUTH_PASSWORD) and options-edge-databento-feed-env (DATABENTO_API_KEY). Without these the
     // pods enter CreateContainerConfigError and nothing starts. We materialise them here from

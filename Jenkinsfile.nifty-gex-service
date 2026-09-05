@@ -1,0 +1,101 @@
+@Library('oe') _
+
+// STANDALONE NIFTY-GEX DEPLOY — the per-service fast path for the NIFTY/BANKNIFTY
+// Pressure boards (source repo: options-edge-nifty-gex). Mirrors Jenkinsfile.web-service:
+//
+//   Build (native, on the target arch's machine) → Deploy ONLY this workload
+//   → digest-pin → rollout → health gate → rollback instructions (service-deploy.sh).
+//
+// * prod builds on .252 (amd64 native, docker build over ssh — same contract my
+//   hand-rolled flow used, now under CI); dev builds locally on the Mac (arm64) and
+//   pushes to localhost:5001.
+// * Deploy applies ONLY k8s/services/nifty-gex/overlays/<env>; blast-radius guard in
+//   scripts/deploy/service-deploy.sh refuses any infra kind. The nifty-gex SA/Role and
+//   the dhan-credentials Secret are common infra and must already exist.
+// * Dev deploys at replicas 0 BY DESIGN (single Dhan account token — see the base
+//   manifest's warning); its health gate is skipped (no endpoints at 0 replicas).
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['production', 'dev'],
+      description: 'Target environment — selects k8s/services/nifty-gex/overlays/<env> and the deployer kubeconfig (oeProfile).')
+    booleanParam(name: 'BUILD_IMAGE', defaultValue: true,
+      description: 'Build+push the image first (native on the target machine). false = deploy the image already in the registry.')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
+      description: 'true = render + digest-pin + server-side validate only; nothing changes.')
+    string(name: 'HEALTH_URL', defaultValue: '',
+      description: 'Optional post-rollout endpoint that must answer 200. Empty = per-env default (production http://192.168.100.252:30188/nifty-gex/health, dev skip — replicas 0).')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+  }
+  options {
+    disableConcurrentBuilds()
+    // 120 min, not 60: the validate stage alone has been measured at 44+ min when the
+    // agent Mac carries the live trading stack during market hours (same reasoning and
+    // figure as Jenkinsfile.web-service) — 60 aborted build #2 mid-validate at the
+    // Indian open. disableConcurrentBuilds still serialises runs.
+    timeout(time: 120, unit: 'MINUTES')
+  }
+  environment {
+    KUBECONFIG  = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT = "${params.ENVIRONMENT}"
+    SOURCE_REPO = 'git@github.com:abhinav-jain09/options-edge-nifty-gex.git'
+    PROD_BUILD_HOST = '192.168.100.252'
+    PROD_BUILD_ROOT = '/home/abhinav/ci/remote-builds'
+    IMAGE_REF   = "${params.ENVIRONMENT == 'production' ? '192.168.100.252:5000/options-edge-nifty-gex:prod' : 'localhost:5001/options-edge-nifty-gex:dev'}"
+    HEALTH_URL_DEFAULT   = "${params.ENVIRONMENT == 'production' ? 'http://192.168.100.252:30188/nifty-gex/health' : ''}"
+    HEALTH_URL_PARAM     = "${params.HEALTH_URL ?: ''}"
+    DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
+  }
+  stages {
+    stage('Validate service registry') {
+      steps {
+        sh '''
+          set -euo pipefail
+          bash scripts/ci/validate-services.sh
+        '''
+      }
+    }
+    stage('Build image (native)') {
+      when { expression { params.BUILD_IMAGE && !params.DEPLOY_DRY_RUN } }
+      steps {
+        dir('nifty-gex-src') {
+          git url: env.SOURCE_REPO, branch: 'main'
+        }
+        sh '''
+          set -euo pipefail
+          if [ "$ENVIRONMENT" = "production" ]; then
+            # amd64 native on .252 — rsync the checked-out source, build, push to the prod registry.
+            BUILD_DIR="$PROD_BUILD_ROOT/nifty-gex-$BUILD_NUMBER"
+            ssh -o BatchMode=yes "abhinav@$PROD_BUILD_HOST" "mkdir -p '$BUILD_DIR'"
+            rsync -a --delete --exclude .git nifty-gex-src/ "abhinav@$PROD_BUILD_HOST:$BUILD_DIR/"
+            ssh -o BatchMode=yes "abhinav@$PROD_BUILD_HOST" \
+              "cd '$BUILD_DIR' && docker build -t '$IMAGE_REF' . && docker push '$IMAGE_REF' && rm -rf '$BUILD_DIR'"
+          else
+            # arm64 native on this Mac; localhost:5001 == host.docker.internal:5001 from the cluster.
+            docker build -t "$IMAGE_REF" nifty-gex-src
+            docker push "$IMAGE_REF"
+          fi
+        '''
+      }
+    }
+    stage('Deploy (service-scoped)') {
+      steps {
+        sh '''
+          set -euo pipefail
+          export SERVICE=nifty-gex
+          export DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN_PARAM:-false}"
+          HEALTH_URL="${HEALTH_URL_PARAM:-}"
+          [ -n "$HEALTH_URL" ] || HEALTH_URL="${HEALTH_URL_DEFAULT:-}"
+          export HEALTH_URL
+          WORK_DIR="$WORKSPACE/.jenkins-tmp" bash scripts/deploy/service-deploy.sh
+        '''
+      }
+    }
+  }
+  post {
+    always {
+      archiveArtifacts artifacts: '.jenkins-tmp/nifty-gex-*.yaml', allowEmptyArchive: true
+    }
+  }
+}

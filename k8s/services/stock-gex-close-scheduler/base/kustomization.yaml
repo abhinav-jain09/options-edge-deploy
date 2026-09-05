@@ -1,0 +1,6 @@
+# The closing-board SCHEDULE as a workload — see scheduler-deployment.yaml for why the schedule
+# moved out of Jenkins and into the batch process itself.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - scheduler-deployment.yaml

@@ -60,12 +60,16 @@ spec:
               value: "true"
             - name: JAVA_TOOL_OPTIONS
               value: -Xms1024m -Xmx6144m
+            - name: DEALER_LEDGER_ABSORPTION_GATE_MODE
+              value: CONFIDENCE
+            - name: DEALER_LEDGER_FIRE_GREEKS_MIN_QUALITY
+              value: DEGRADED
             - name: DEALER_LEDGER_ABSORB_MIN_FRACTION
               value: "0.50"
             - name: DEALER_LEDGER_ABSORB_MIN_NOTIONAL
               value: "2000000"
             - name: DEALER_LEDGER_ABSORB_MIN_WAVES
-              value: "2"
+              value: "1"
             - name: DEALER_LEDGER_WAVE_MIN_NOTIONAL
               value: "750000"
             - name: DEALER_LEDGER_WAVE_GAP_MS
@@ -98,8 +102,6 @@ spec:
               value: "8"
             - name: DEALER_LEDGER_UNWIND_SPENT_PCT
               value: "0.80"
-            - name: DEALER_LEDGER_REARM_FLOW_USD
-              value: "3000000"
             - name: DEALER_LEDGER_REARM_MINUTES
               value: "12"
             - name: DEALER_LEDGER_REARM_COOLOFF_MS
@@ -107,7 +109,9 @@ spec:
             - name: DEALER_LEDGER_MIN_LEDGER_NOTIONAL
               value: "7500000"
             - name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE
-              value: MEDIUM
+              value: LOW
+            - name: KAFKA_DEALER_LEDGER_MAX_RECORD_BYTES
+              value: "16777216"
             - name: DEALER_LEDGER_GROSS_NET_MAX
               value: "6.0"
             - name: APP_MARKET_DATA_SOURCE
@@ -131,11 +135,11 @@ spec:
             - name: DEALER_LEDGER_STREAMS_APP_ID
               value: options-edge-dealer-ledger-service
             - name: DEALER_LEDGER_STREAMS_COMMIT_INTERVAL_MS
-              value: "1000"
+              value: "3000"
             - name: DEALER_LEDGER_STREAMS_AUTO_OFFSET_RESET
               value: latest
             - name: DEALER_LEDGER_STREAMS_NUM_THREADS
-              value: "1"
+              value: "4"
             - name: DEALER_LEDGER_EOS_ENABLED
               value: "true"
             - name: KAFKA_STREAMS_STATE_DIR
@@ -148,6 +152,10 @@ spec:
               value: SHADOW
             - name: DEALER_LEDGER_QUOTE_STALE_MS
               value: "600000"
+            - name: DEALER_LEDGER_FIRE_QUALITY_DEPENDENCY_SCOPED
+              value: "false"
+            - name: DEALER_LEDGER_FIRE_OFFSPAN_MATERIALITY_FRAC
+              value: "0.01"
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -175,7 +183,7 @@ spec:
             limits:
               memory: 8Gi
             requests:
-              cpu: 100m
+              cpu: "2"
               memory: 2Gi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams

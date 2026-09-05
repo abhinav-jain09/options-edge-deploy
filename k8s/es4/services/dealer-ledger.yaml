@@ -31,7 +31,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: dealer-ledger-service
@@ -46,6 +46,22 @@ spec:
     spec:
       containers:
       - env:
+        - name: DEALER_LEDGER_ADVISORY_ENABLED
+          value: 'true'
+        - name: DEALER_LEDGER_ABSORPTION_GATE_MODE
+          value: CONFIDENCE
+        - name: DEALER_LEDGER_FIRE_GREEKS_MIN_QUALITY
+          value: DEGRADED
+        - name: DEALER_LEDGER_ABSORB_MIN_WAVES
+          value: '1'
+        - name: DEALER_LEDGER_TRIGGER_MIN_CONFIDENCE
+          value: LOW
+        - name: DEALER_LEDGER_FIRE_SHADOW_EVIDENCE
+          value: 'true'
+        - name: KAFKA_DEALER_LEDGER_MAX_RECORD_BYTES
+          value: '16777216'
+        - name: JAVA_TOOL_OPTIONS
+          value: -Xms1024m -Xmx6144m
         - name: APP_MARKET_DATA_SOURCE
           value: DATABENTO
         - name: HEALTH_PORT
@@ -67,27 +83,27 @@ spec:
         - name: DEALER_LEDGER_STREAMS_APP_ID
           value: options-edge-dealer-ledger-service
         - name: DEALER_LEDGER_STREAMS_COMMIT_INTERVAL_MS
-          value: '1000'
+          value: '3000'
         - name: DEALER_LEDGER_STREAMS_AUTO_OFFSET_RESET
           value: latest
         - name: DEALER_LEDGER_STREAMS_NUM_THREADS
-          value: '1'
+          value: '4'
         - name: DEALER_LEDGER_EOS_ENABLED
           value: 'true'
         - name: KAFKA_STREAMS_STATE_DIR
           value: /var/lib/options-edge/kafka-streams
         - name: DEALER_LEDGER_ENABLED
           value: 'true'
-        - name: DEALER_LEDGER_ADVISORY_ENABLED
-          value: 'true'
         - name: DEALER_LEDGER_UI_VISIBLE
           value: 'true'
         - name: DEALER_LEDGER_CALIBRATION_QUALITY
           value: SHADOW
         - name: DEALER_LEDGER_QUOTE_STALE_MS
-          value: -Xms1024m -Xmx6144m
-        - name: JAVA_TOOL_OPTIONS
-          value: -Xms384m -Xmx1024m
+          value: '600000'
+        - name: DEALER_LEDGER_FIRE_QUALITY_DEPENDENCY_SCOPED
+          value: 'false'
+        - name: DEALER_LEDGER_FIRE_OFFSPAN_MATERIALITY_FRAC
+          value: '0.01'
         envFrom:
         - configMapRef:
             name: es4-base-env
@@ -116,7 +132,7 @@ spec:
           limits:
             memory: 8Gi
           requests:
-            cpu: 100m
+            cpu: '2'
             memory: 2Gi
         volumeMounts:
         - mountPath: /var/lib/options-edge/kafka-streams
