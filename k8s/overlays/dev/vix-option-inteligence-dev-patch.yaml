@@ -27,3 +27,15 @@ spec:
               value: "true"
             - name: ZERODTE_RESEARCH_JDBC_URL
               value: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
+            # Shadow prediction model (REQ rev 7 §6a/§8 step 1) — dev only. Same atomicity rule
+            # as above: the switch and its required companion travel together. The writer
+            # FAIL-FASTS if the shadow flag is on without ZERODTE_RESEARCH_ENVIRONMENT, because
+            # every shadow row must say which environment produced it; setting them in one file
+            # means no future overlay can inherit the flag without the provenance. Prod and es4
+            # carry neither: flag absent = shadow off, and predicted_state stays NOT_EVALUATED
+            # everywhere until promotion — shadow rows are invisible through the live view by
+            # construction (zp_shadow_complete + zerodte_model_prediction_live).
+            - name: ZERODTE_SHADOW_MODEL_ENABLED
+              value: "true"
+            - name: ZERODTE_RESEARCH_ENVIRONMENT
+              value: dev
