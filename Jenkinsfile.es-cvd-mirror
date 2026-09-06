@@ -142,8 +142,8 @@ pipeline {
           #              PR), so the source assert below holds. Safe: the 1 Hz writer keeps the
           #              latest value in the active segment, which time-retention never deletes.
           case "$TOPIC" in
-            es.futures.cvd.bars) PARTS=1; POLICY=compact,delete; RET=-1 ;;
-            es.futures.cvd)      PARTS=1; POLICY=compact,delete; RET=43200000 ;;
+            es.futures.cvd.bars) PARTS=1; POLICY=delete; RET=-1 ;;
+            es.futures.cvd)      PARTS=1; POLICY=delete; RET=43200000 ;;
             es.futures.cvd.levels) PARTS=1; POLICY=compact; RET=-1 ;;   # U16 AA1: pure compact, never expires
             *) echo "FAIL: topic $TOPIC not in the cvd-mirror allow-list"; exit 1 ;;
           esac

@@ -206,7 +206,7 @@ pipeline {
           # target built to the OLD contract is exactly the silent corruption this job must prevent,
           # so a mismatch fails the install instead of being papered over.
           case "$TOPIC" in
-            es.tape-zones.board) PARTS=1; POLICY=compact,delete; RET=-1 ;;
+            es.tape-zones.board) PARTS=1; POLICY=delete; RET=-1 ;;
             *) echo "FAIL: topic $TOPIC not in the tape-zones-mirror allow-list"; exit 1 ;;
           esac
           SP=$(printf '%s\\n' "$SD" | awk -F'PartitionCount:' 'NR==1{split($2,a," "); print a[1]}')
@@ -253,7 +253,7 @@ pipeline {
           # choice list, but re-assert here fail-closed so a job-config drift can never mirror an
           # unknown topic with a guessed shape.
           case "$TOPIC" in
-            es.tape-zones.board) PARTS=1; POLICY=compact,delete; RET=-1 ;;
+            es.tape-zones.board) PARTS=1; POLICY=delete; RET=-1 ;;
             *) echo "FAIL: topic $TOPIC not in the tape-zones-mirror allow-list"; exit 1 ;;
           esac
 

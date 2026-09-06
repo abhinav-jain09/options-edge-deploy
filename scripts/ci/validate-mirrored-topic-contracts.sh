@@ -102,9 +102,33 @@ ES4_EXACT_PARTITION="$(list_of OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS)"
 ES4_RETENTIONS="$(list_of OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES)"
 
 # Fail closed on a parser that has drifted from the file, so no check below can pass vacuously.
+#
+# An empty list has two very different meanings and they must not be conflated:
+#   * the parser no longer matches the file  -> every check below passes vacuously; fail.
+#   * the list is DECLARED and deliberately empty -> a real policy, and refusing it would force a
+#     dummy entry back into a set that is supposed to be empty.
+# es4 and prod take the archive and compact nothing served, so their compaction lists are empty by
+# design; dev still compacts. So emptiness is allowed only when the assignment is actually present
+# in topics.env — a vanished variable still fails, which is the drift this guard was written for.
+declared_in_file() { grep -qE "^$1=\"" "$TOPICS_ENV"; }
+
+may_be_empty_when_declared() {
+  case "$1" in
+    COMPACTED)     declared_in_file OPTIONS_EDGE_COMPACTED_TOPICS ;;
+    ES4_COMPACTED) declared_in_file OPTIONS_EDGE_ES4_COMPACTED_TOPICS ;;
+    *)             return 1 ;;
+  esac
+}
+
 for v in DECLARED COMPACTED RETENTIONS PURE_COMPACT EXACT_PARTITION \
          ES4_DECLARED ES4_COMPACTED ES4_PURE_COMPACT ES4_EXACT_PARTITION ES4_RETENTIONS; do
-  [ -n "${!v}" ] || { echo "FAIL: parsed an EMPTY $v from $TOPICS_ENV — the parser and the file have diverged, and the checks below would pass vacuously" >&2; exit 1; }
+  [ -n "${!v}" ] && continue
+  if may_be_empty_when_declared "$v"; then
+    echo "NOTE: $v is declared and deliberately empty (nothing served is compacted in that set)"
+    continue
+  fi
+  echo "FAIL: parsed an EMPTY $v from $TOPICS_ENV — the parser and the file have diverged, and the checks below would pass vacuously" >&2
+  exit 1
 done
 
 # NO TOPIC MAY BE DECLARED TWICE IN ONE LIST. This is rejected outright rather than resolved,
