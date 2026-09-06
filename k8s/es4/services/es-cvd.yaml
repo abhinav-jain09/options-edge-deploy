@@ -93,6 +93,15 @@ spec:
           value: '1000'
         - name: ES_CVD_REPLAY_LOOKBACK_HOURS
           value: '24'
+        # R29 amendment 22 (options-edge-processing PR #748): the instant, epoch ms, at which
+        # message.timestamp.type=LogAppendTime was verified effective on es.underlying.es.trades
+        # (kafka-configs --alter on es4, 2026-09-06T23:18:50.699Z, single broker). A config change is
+        # not retroactive and the broker keeps no history, so this is the operator's attestation:
+        # only a session that opened at/after it can be attested complete through the retention
+        # window after an in-session restart. 0 = never attested (conservative). If the topic is
+        # ever switched back to CreateTime, set this to 0 in the same change.
+        - name: ES_CVD_APPEND_TIME_SINCE_MS
+          value: '1788736730699'
         - name: ES_CVD_GRACE_PERIOD_MS
           value: '2000'
         - name: ES_CVD_IDLE_TIMEOUT_MS
