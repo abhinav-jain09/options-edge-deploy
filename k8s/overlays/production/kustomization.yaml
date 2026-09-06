@@ -365,26 +365,6 @@ patches:
                   # wrong. 40 restored dev near-ATM coverage 70%->15% missing with zero streams lag.
                   # PROD CPU WATCH: this node runs hot — if gex lag or feed CPU degrades after
                   # rollout, drop this back to 3 and split strike-intel onto gex.strike instead.
-                  # TEMPORARY (2026-09-04) — RECOVERY ONLY, REVERT BEFORE THE 2026-09-08 OPEN.
-                  # The base sets this false (USER decision 2026-09-02) because the historical
-                  # statistics path 422s PRE-OPEN: it resolves SPXW.OPT against TODAY's definition
-                  # map, which Databento publishes late each morning, so GEX fail-closes until
-                  # mid-morning. That reason is intact and this flag must go back to false.
-                  #
-                  # Why it is on right now: a bogus contract selection (symbol=COALINDIA,
-                  # tradingClass=SPXW) hijacked the SPX feed at 05:56 ET today, straddling the
-                  # pre-market LIVE-OI capture window, so TODAY's 0DTE expiry (20260904) captured
-                  # 0/724 legs of OI. The only SPX ladder that resolved was the NEXT_SESSION one
-                  # (20260908, 180 strikes) — which is why Postgres holds OI for 09-08 only. With
-                  # live-capture-only there is NO fallback and the capture does not re-run
-                  # intraday, so GEX stays fail-closed for the whole session.
-                  #
-                  # Safe window: today is Friday and Monday 09-07 is a holiday, so the next open is
-                  # TUESDAY 09-08 — the pre-open 422 exposure cannot bite before then. The
-                  # historical edge for today is long crossed (~06:30 ET), so the fetch should now
-                  # succeed where it would have failed this morning.
-                  - name: DATABENTO_GEX_OI_DIRECT_FETCH_ENABLED
-                    value: "true"
                   - name: DATABENTO_GEX_FLOW_TOP_N
                     value: "40"
                   # EXPERIMENTAL smile-IV fallback (proc 3fe1a2f7, Codex round-3 APPROVE; code
