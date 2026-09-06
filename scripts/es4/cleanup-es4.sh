@@ -77,23 +77,58 @@ fi
 # Kafka Streams fall back to num.partitions=4 for 32-partition apps
 # ("invalid partitions: expected: 32; actual: 4").
 # Compare the keys that decide topic shape and FAIL LOUD rather than wipe against a stale
-# contract. Warn-only (never blocks) for keys the repo copy does not carry.
+# contract. Fail-closed throughout (2026-08-02): a missing reference file, a key the reference does
+# not carry, and a value that does not parse to the expected shape all ABORT. The former warn-only
+# behaviour meant the guard quietly switched itself off on exactly the boxes it was meant to protect.
 REPO_COMPOSE="$ES4_HOME/repo/infra/es4/docker-compose.yml"
-if [ -f "$REPO_COMPOSE" ]; then
-  for key in KAFKA_AUTO_CREATE_TOPICS_ENABLE KAFKA_NUM_PARTITIONS; do
-    live=$(grep -E "^[[:space:]]*$key:" "$INFRA_DIR/docker-compose.yml" | head -1 | sed -E 's/.*:[[:space:]]*//; s/[[:space:]]*#.*//; s/"//g' | tr -d ' ')
-    repo=$(grep -E "^[[:space:]]*$key:" "$REPO_COMPOSE"                 | head -1 | sed -E 's/.*:[[:space:]]*//; s/[[:space:]]*#.*//; s/"//g' | tr -d ' ')
-    [ -n "$repo" ] || continue
-    if [ "$live" != "$repo" ]; then
-      log "  BROKER CONTRACT DRIFT: $key live='$live' repo='$repo'"
-      log "  live=$INFRA_DIR/docker-compose.yml  repo=$REPO_COMPOSE"
-      die "es4 broker contract has drifted from the repo — reconcile before wiping (a clean against a stale contract recreates topics with the wrong shape)"
-    fi
-  done
-  log "broker contract matches the repo (auto-create + num.partitions)"
-else
-  log "  WARNING: $REPO_COMPOSE absent — cannot verify the live broker contract against the repo"
-fi
+# Read "  KEY: value   # trailing comment" from a compose file.
+# The key prefix is stripped by ANCHORING on the key. The previous `s/.*:[[:space:]]*//` was greedy,
+# so it consumed up to the LAST colon on the line — and an inline comment containing a colon
+# ("# fallback ONLY: with auto-create OFF ...") made the parse return the comment prose instead of
+# the value, reporting DRIFT between two files that agreed (2026-08-02). Strip the comment only
+# where it follows whitespace, so a '#' inside a value is preserved.
+contract_value() {  # $1 = key, $2 = compose file
+  grep -E "^[[:space:]]*$1:" "$2" | head -1 \
+    | sed -E "s/^[[:space:]]*$1:[[:space:]]*//; s/[[:space:]]+#.*\$//; s/\"//g" \
+    | tr -d '[:space:]'
+}
+# contract_value() handles the two scalar keys below, NOT arbitrary compose syntax (it does not
+# understand quoted '#', embedded quotes, or the "- KEY=value" sequence form). Assert the shape we
+# expect for each key so a parser that silently returns something else FAILS LOUD here instead of
+# comparing two pieces of garbage — the failure mode this whole guard exists to catch.
+contract_shape_ok() {  # $1 = key, $2 = parsed value
+  case "$1" in
+    KAFKA_AUTO_CREATE_TOPICS_ENABLE) case "$2" in true|false) return 0;; *) return 1;; esac ;;
+    KAFKA_NUM_PARTITIONS)            case "$2" in ''|*[!0-9]*) return 1;; *) return 0;; esac ;;
+    *) return 0 ;;
+  esac
+}
+# Fail CLOSED when the reference is absent. This used to warn and wipe anyway, which left the whole
+# contract guard optional exactly when it was least able to help — a box that never received the
+# reference is precisely the one whose broker shape is unverified. ACTION=clean-reset now rsyncs
+# infra/es4 alongside scripts/, so Jenkins always supplies it; a direct on-box invocation must sync
+# it first.
+[ -f "$REPO_COMPOSE" ] \
+  || die "$REPO_COMPOSE absent — cannot verify the live broker contract; run ACTION=infra-sync (or rsync infra/es4 to \$ES4_HOME/repo/infra/) before wiping"
+for key in KAFKA_AUTO_CREATE_TOPICS_ENABLE KAFKA_NUM_PARTITIONS; do
+  live=$(contract_value "$key" "$INFRA_DIR/docker-compose.yml")
+  repo=$(contract_value "$key" "$REPO_COMPOSE")
+  # Both keys are REQUIRED on both sides. The old `[ -n "$repo" ] || continue` was warn-only for a
+  # repo copy that did not carry a key — but with the reference now rsynced alongside this script
+  # on every clean-reset it always does, and skipping on empty meant `KEY: ""`, a comment-only
+  # value, or any parse returning '' silently disabled the check for that key. These two keys
+  # decide topic shape; an unverifiable one must stop the wipe, not be waved through.
+  contract_shape_ok "$key" "$repo" \
+    || die "cannot read $key from $REPO_COMPOSE (got '$repo') — the broker contract is unverifiable; reconcile the reference copy before wiping"
+  contract_shape_ok "$key" "$live" \
+    || die "cannot parse $key from $INFRA_DIR/docker-compose.yml (got '$live') — refusing to verify the broker contract with an unreliable parse"
+  if [ "$live" != "$repo" ]; then
+    log "  BROKER CONTRACT DRIFT: $key live='$live' repo='$repo'"
+    log "  live=$INFRA_DIR/docker-compose.yml  repo=$REPO_COMPOSE"
+    die "es4 broker contract has drifted from the repo — reconcile before wiping (a clean against a stale contract recreates topics with the wrong shape)"
+  fi
+done
+log "broker contract matches the repo (auto-create + num.partitions)"
 # canonical-path guard for the destructive rm: KAFKA_DATA must be the exact compose bind source,
 # a real directory (not a symlink), and match the compose file — never delete anything else.
 sudo -n test -d "$KAFKA_DATA" && ! sudo -n test -L "$KAFKA_DATA" || die "Kafka data dir $KAFKA_DATA missing or is a symlink"
@@ -112,6 +147,32 @@ if [ "$DRY" != "true" ]; then
   sudo -n test -d /var/log/pods || die "sudo -n cannot access /var/log/pods — service-log cleanup would fail"
   sudo -n test -d /var/log/containers || die "sudo -n cannot access /var/log/containers — service-log cleanup would fail"
   sudo -n test -d /var/lib/rancher/k3s/storage || die "sudo -n cannot access k3s local-path storage — Streams-state cleanup would fail"
+  # This script mutates workloads as the HOST ADMIN (see $KC), but the
+  # options-edge-jenkins-only-workloads ValidatingAdmissionPolicy only admits the jenkins-deployer
+  # ServiceAccount. Armed, every scale/rollout here is denied. That used to surface as a bare
+  # "scale-to-0 failed for <first deployment>" partway in; check it up front instead, while the
+  # fleet is still untouched, and say exactly what to do. Impersonating the SA does NOT work — it
+  # lacks es4 RBAC — so a disarm/re-arm around the run is the supported path.
+  # Capture the status directly — `... 2>/dev/null || echo ''` would turn an API failure into an
+  # empty label and let the destructive run proceed as if the policy were disarmed. A safety-critical
+  # query that cannot answer must abort, not fail open. ($KC version passing does not prove THIS read
+  # succeeded.) Same masking class the namespace-UID check above already guards against.
+  set +e
+  guard_out=$($KC get namespace options-edge -o jsonpath='{.metadata.labels.options-edge/deploy-guard}' 2>&1)
+  guard_rc=$?
+  set -e
+  [ "$guard_rc" -eq 0 ] \
+    || die "cannot read the options-edge/deploy-guard label (rc=$guard_rc: $guard_out) — refusing a destructive run while admission posture is unknown"
+  # Only the value the policy keys off arms it; anything else non-empty is unexpected, so say so
+  # rather than silently treating it as disarmed.
+  if [ "$guard_out" = "jenkins-only" ]; then
+    log "  namespace options-edge carries options-edge/deploy-guard=jenkins-only — admission will deny every scale/rollout this script makes"
+    log "  disarm:  kubectl label ns options-edge options-edge/deploy-guard-"
+    log "  RE-ARM (always, after the run):  kubectl label ns options-edge options-edge/deploy-guard=jenkins-only --overwrite"
+    die "es4 deploy guard is armed — disarm it for the reset, then re-arm; refusing to start a destructive run that cannot restore"
+  elif [ -n "$guard_out" ]; then
+    log "  WARNING: unrecognised options-edge/deploy-guard='$guard_out' (expected 'jenkins-only' or absent) — proceeding, but verify the admission policy"
+  fi
 fi
 
 # single-instance lock via flock: kernel-released when this process exits FOR ANY REASON
@@ -188,6 +249,41 @@ if [ -s "$STATE" ]; then
     log "prior run already restored the app (phase=RESTORED); leftover state cleared, NO wipe"
     exit 0
   fi
+  # A WIPING capture is only meaningful for the run that wrote it. Reconciliation adds Deployments
+  # that appeared since, but it deliberately PRESERVES the original counts for names it already
+  # knows — so an old capture silently restores stale intent. On 2026-08-02 a capture from three
+  # days earlier would have raised option-truth-engine-service (since disabled, desired 0) back to 1
+  # and dropped strike-liquidity-heatmap-service (since enabled, desired 1) to 0. Refuse to resume a
+  # capture older than the window a real interrupted run could span, and make the operator look.
+  STATE_MAX_AGE_HOURS="${ES4_STATE_MAX_AGE_HOURS:-12}"
+  # Bounded, not just numeric: a value beyond bash's integer range makes `[ "$state_age_h" -ge ... ]`
+  # fail with "integer expression expected", and because that test is an `if` condition set -e does
+  # NOT fire — the run would sail past the staleness guard as though the capture were fresh. 8760h
+  # (1 year) is far beyond any real interrupted reset while staying safely in range.
+  case "$STATE_MAX_AGE_HOURS" in ''|*[!0-9]*|0) die "ES4_STATE_MAX_AGE_HOURS must be a positive integer (got '$STATE_MAX_AGE_HOURS')";; esac
+  [ "$STATE_MAX_AGE_HOURS" -le 8760 ] 2>/dev/null \
+    || die "ES4_STATE_MAX_AGE_HOURS must be between 1 and 8760 hours (got '$STATE_MAX_AGE_HOURS') — an out-of-range value would silently disable the stale-capture guard"
+  # Age must be knowable. `stat ... || echo 0` would skip the whole protection whenever stat failed,
+  # which is the opposite of what a destructive resume needs.
+  set +e
+  state_epoch=$(stat -c %Y "$STATE" 2>&1)   # GNU coreutils (CentOS Stream 9)
+  stat_rc=$?
+  set -e
+  case "$state_epoch" in ''|*[!0-9]*) stat_rc=1;; esac
+  [ "$stat_rc" -eq 0 ] \
+    || die "cannot determine the age of $STATE (rc=$stat_rc: $state_epoch) — refusing to resume a capture of unknown age"
+  now_epoch=$(date +%s)
+  [ "$state_epoch" -le "$now_epoch" ] \
+    || die "$STATE is timestamped in the future ($state_epoch > $now_epoch) — clock skew or tampering; inspect before resuming"
+  state_age_h=$(( (now_epoch - state_epoch) / 3600 ))
+  if [ "$state_age_h" -ge "$STATE_MAX_AGE_HOURS" ]; then
+    log "  $STATE is ${state_age_h}h old (phase=$ph); captured counts predate the current fleet"
+    log "  A FRESH capture records CURRENT desired replicas — so FIRST confirm every Deployment sits at its"
+    log "  intended count (an interrupted run may have left some at 0; capturing that would wipe and then"
+    log "  faithfully 'restore' the zeros). Reconcile against the repo manifests, THEN:"
+    log "    mv $STATE $STATE.bak-\$(date +%Y%m%d-%H%M%S)"
+    die "refusing to resume a stale capture (>= ${STATE_MAX_AGE_HOURS}h) — a stale restore reinstates replica counts that are no longer intended"
+  fi
   log "resuming interrupted reset (phase=${ph:-WIPING}) — reconciling captured replicas with current Deployments"
   tail -n +2 "$STATE" | awk 'NF != 2 || ($2 != "<none>" && $2 !~ /^[0-9]+$/) { exit 1 }' \
     || die "invalid captured Deployment replica data — refusing to alter $STATE"
@@ -205,8 +301,16 @@ if [ -s "$STATE" ]; then
     awk -f "$SCRIPT_DIR/reconcile-cleanup-state.awk" "$STATE" <(printf '%s\n' "$CURRENT_DATA") > "$TMP" \
       || die "failed to reconcile current Deployments into $STATE"
     [ "$(wc -l < "$TMP")" -ge 2 ] || die "reconciled state contains no Deployments — refusing to replace $STATE"
-    mv -f "$TMP" "$STATE"
-    log "reconciled WIPING state now covers every current Deployment; original captured counts preserved"
+    # Carry the ORIGINAL capture time across the rewrite. mv stamps the published file with "now", so
+    # without this each failed resume renews the age and a capture could be reconciled forward
+    # indefinitely while never crossing STATE_MAX_AGE_HOURS — the counts stay as stale as ever, but
+    # the staleness guard above would never see it. The age must track the CAPTURE, not the last
+    # touch. Stamp $TMP BEFORE publishing: stamping after the mv would, on a touch failure, leave a
+    # falsely-young $STATE in place that the next run accepts as fresh.
+    touch -d "@$state_epoch" "$TMP" \
+      || die "could not preserve the original capture timestamp on $TMP — refusing to publish a state file whose age understates the capture"
+    mv -f "$TMP" "$STATE" || die "could not publish the reconciled state to $STATE"
+    log "reconciled WIPING state now covers every current Deployment; original captured counts and capture time (${state_age_h}h ago) preserved"
   fi
 else
   log "capturing es4 Deployment replica counts (phase WIPING) -> $STATE"
@@ -217,6 +321,18 @@ else
     { echo WIPING; $KC get deploy -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas --no-headers; } > "$TMP" \
       || die "could not enumerate Deployments — aborting BEFORE any wipe"
     [ "$(wc -l < "$TMP")" -ge 2 ] || die "no Deployments found (unexpected) — aborting before wipe"
+    # A capture is the ONLY record of what to restore, so it must not be taken over a fleet that is
+    # already scaled down. That happens exactly when an operator clears a stale WIPING file left by a
+    # run that died mid-wipe: every Deployment is at 0, the fresh capture records 0 everywhere, and
+    # the next restore "succeeds" by faithfully reinstating zeros. A real es4 fleet always has
+    # running Deployments, so an all-zero capture is never legitimate.
+    if [ "$(tail -n +2 "$TMP" | awk '$2 != "<none>" && $2 + 0 > 0 { c++ } END { print c+0 }')" -eq 0 ]; then
+      log "  every Deployment in the capture is at 0 replicas — this looks like a fleet that is already"
+      log "  scaled down (e.g. a previous reset died mid-wipe), not a healthy pre-reset snapshot."
+      log "  Restore the intended replica counts from the repo manifests FIRST, then rerun."
+      rm -f "$TMP"
+      die "refusing to capture an all-zero replica snapshot — a wipe against it would restore nothing"
+    fi
     mv -f "$TMP" "$STATE"          # atomic publish: phase WIPING committed WITH the captured replicas
   fi
 fi
@@ -371,19 +487,46 @@ else
     got=$($KC get "deploy/$name" -o jsonpath='{.spec.replicas}' 2>/dev/null || echo ERR)
     [ "$got" = "$reps" ] || { echo "restore MISMATCH $name: want $reps got $got" >&2; fail=1; }
   done < <(REPS)
+  # $1 = attempts (x5s). Prints the still-unready Deployment names on stdout; rc 0 when all ready.
+  wait_ready() {
+    local attempts="$1" name reps avail
+    for _ in $(seq 1 "$attempts"); do
+      NOT_READY=""
+      while read -r name reps; do
+        [ "$reps" = "<none>" ] && reps=1
+        if [ "$name" = "es-feed" ]; then reps=0; fi   # must match the restore loop above
+        [ "$reps" -gt 0 ] || continue
+        avail=$($KC get "deploy/$name" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
+        [ "${avail:-0}" -ge "$reps" ] || NOT_READY="$NOT_READY $name"
+      done < <(REPS)
+      [ -z "$NOT_READY" ] && return 0
+      sleep 5
+    done
+    return 1
+  }
   ready=false
-  for _ in $(seq 1 60); do
-    missing=0
-    while read -r name reps; do
-      [ "$reps" = "<none>" ] && reps=1
-      if [ "$name" = "es-feed" ]; then reps=0; fi   # must match the restore loop above
-      [ "$reps" -gt 0 ] || continue
-      avail=$($KC get "deploy/$name" -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
-      [ "${avail:-0}" -ge "$reps" ] || missing=$((missing + 1))
-    done < <(REPS)
-    if [ "$missing" = 0 ]; then ready=true; break; fi
-    sleep 5
-  done
+  if wait_ready 60; then
+    ready=true
+  else
+    # A Kafka-Streams app whose source/internal topics did not exist yet when it started dies in
+    # rebalance (REBALANCING -> PENDING_ERROR -> ERROR) but keeps its health port open: the pod stays
+    # Running with restarts=0 and 0/1 ready FOREVER, so waiting longer can never help. That is the
+    # normal post-wipe boot order — the topics exist by now, the app just needs to start again.
+    # One bounce per run, then a second (shorter) wait; still fails loudly if it does not recover.
+    # Cost of not doing this: the whole reset reports FAILURE with the fleet otherwise fully restored
+    # and a WIPING state file left behind (2026-08-02, build #403, dealer-ledger-calibration-scorer
+    # on "Missing source topics [...-rekey]").
+    log "restore: not ready after 5 min —$NOT_READY; bouncing once (post-wipe Streams boot-order wedge does not self-heal)"
+    for name in $NOT_READY; do
+      $KC rollout restart "deploy/$name" >/dev/null 2>&1 || echo "rollout restart FAILED for $name" >&2
+    done
+    if wait_ready 36; then
+      ready=true
+      log "restore: all Deployments ready after the bounce"
+    else
+      log "  STILL NOT READY after a bounce:$NOT_READY — inspect these before rerunning"
+    fi
+  fi
   [ "$ready" = true ] || fail=1
   [ "$fail" = 0 ] || die "restore incomplete — leaving $STATE for a resume (rerun to finish restore)"
   # Atomically flip the SINGLE state file's phase to RESTORED, THEN unlink it. If killed between the
