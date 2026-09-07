@@ -123,6 +123,75 @@ if [[ "$compacted_fail" -ne 0 ]]; then
 fi
 echo "[verify-topics] compacted contract OK ($(echo $COMPACTED_LIST | wc -w | tr -d ' ') topic(s), TOPIC_SET='${TOPIC_SET:-default}')"
 
+# --- EXACT-PARTITION enforcement, EVERY environment ---
+# The main loop above deliberately ACCEPTS a larger partition count ("expected minimum ...;
+# accepting existing larger partition count"), because for an ordinary topic extra partitions are
+# only extra parallelism. For a topic in OPTIONS_EDGE_EXACT_PARTITION_TOPICS that tolerance is
+# wrong: those topics are read via a fixed assign(TopicPartition(t, 0)) or carry a fixed
+# key->partition mapping, so a widened topic is silently BROKEN, not merely roomier.
+#
+# Until this block existed that list was enforced in exactly one place -- apply-topics.sh, which
+# fail-closes and demands a DESTRUCTIVE delete+recreate -- and verified in none. verify-topics.sh
+# checked the exact contract only for OPTIONS_EDGE_PROD_ONLY_EXACT_PARTITION_TOPICS, and only when
+# ENVIRONMENT=production. So on dev the drift was undetectable by design: the only thing that could
+# notice it was the repair gate refusing to run, i.e. you found out by being blocked.
+#
+# That is not hypothetical. On 2026-08-27 five mirror targets
+# (es.options.indicators.snapshot.current, es.options.indicators.bars, es.futures.cvd,
+# es.futures.cvd.bars, es.tape-zones.board) were all sitting at 32 partitions on the dev broker,
+# auto-created at dev's old num.partitions=32 by their own MM1 producers before apply-topics.sh
+# provisioned them. Nothing reported it until options-edge-deploy #624 fail-closed on the FIRST of
+# the five. A read-only check that names ALL of them, in every environment, turns that into a
+# report instead of a blocker -- and unlike the apply-time gate it is safe to run on a schedule.
+case "${TOPIC_SET:-}" in
+  "")   EXACT_PARTITION_LIST="${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-}" ;;
+  es4)  EXACT_PARTITION_LIST="${OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS:-}" ;;
+esac
+# The declared counts come from the SAME set the main loop verified, resolved by TOPIC_SET so the
+# es4 run never reads the SPX declaration. A topic listed as exact-partition but never declared a
+# count is an error, not a skip -- otherwise the check passes vacuously for the one topic whose
+# contract nobody wrote down.
+case "${TOPIC_SET:-}" in
+  "")   EXACT_DECLARED_TOPICS="$OPTIONS_EDGE_TOPICS ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}" ;;
+  es4)  EXACT_DECLARED_TOPICS="${OPTIONS_EDGE_ES4_TOPICS:-}" ;;
+esac
+
+exact_declared_partitions() {
+  local t="$1" e
+  for e in $EXACT_DECLARED_TOPICS; do
+    if [[ "${e%%:*}" == "$t" ]]; then echo "${e##*:}"; return 0; fi
+  done
+  return 1
+}
+
+exact_partition_fail=0
+for topic in $EXACT_PARTITION_LIST; do
+  if ! expected_exact="$(exact_declared_partitions "$topic")"; then
+    echo "FAIL: $topic is in the exact-partition list but has no declared partition count" >&2
+    exact_partition_fail=1
+    continue
+  fi
+  actual="$(kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$topic" 2>/dev/null \
+    | head -1 | sed -n 's/.*PartitionCount: \([0-9]*\).*/\1/p')"
+  if [[ -z "$actual" ]]; then
+    echo "FAIL: exact-partition topic $topic is ABSENT (expected EXACTLY $expected_exact partitions)" >&2
+    exact_partition_fail=1
+  elif [[ "$actual" != "$expected_exact" ]]; then
+    echo "FAIL: topic $topic has partitions=$actual but requires EXACTLY $expected_exact" >&2
+    echo "      (fixed assign() read or fixed key->partition mapping). Kafka cannot shrink a topic," >&2
+    echo "      so repairing this needs apply-topics.sh with KAFKA_RECREATE_MISMATCHED_TOPICS=true," >&2
+    echo "      which DISCARDS the topic's records. If this is a mirror target, check the broker's" >&2
+    echo "      num.partitions: an auto-created topic lands at that value, not the declared one." >&2
+    exact_partition_fail=1
+  fi
+done
+if [[ "$exact_partition_fail" -ne 0 ]]; then
+  echo "[verify-topics] exact-partition contract FAILED" >&2
+  exit 1
+fi
+echo "[verify-topics] exact-partition contract OK ($(echo $EXACT_PARTITION_LIST | wc -w | tr -d ' ') topic(s), TOPIC_SET='${TOPIC_SET:-default}')"
+
+
 # --- PROD-ONLY contract enforcement (VIX feed separation design §6.6, r2 finding 14) ---
 # Same exact predicate as apply-topics.sh: ENVIRONMENT EXPLICITLY 'production' AND the
 # default (non-es4) topic set. Unset/empty ENVIRONMENT fails CLOSED (checks skipped with
