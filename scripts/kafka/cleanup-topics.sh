@@ -147,6 +147,12 @@ if [[ "${KAFKA_DELETE_UNWANTED_TOPICS:-false}" == "true" ]]; then
       echo "Keeping protected topic: $topic"
     elif grep -qx "$topic" "$declared_file"; then
       echo "Keeping approved topic: $topic"
+    elif is_durable "$topic"; then
+      # A topic can be RESET-PRESERVED and still undeclared: services that create their own outputs at
+      # startup never appear in OPTIONS_EDGE_TOPICS, so the unwanted sweep saw "not approved" and deleted
+      # data that by declaration cannot be rebuilt. Preservation is a claim about the DATA, and it has to
+      # hold on every destructive path, not only the ones that iterate the approved list (A5, 2026-09-07).
+      echo "Keeping RESET-PRESERVED topic: $topic (declared unrebuildable; undeclared in OPTIONS_EDGE_TOPICS)"
     else
       echo "Deleting unwanted topic: $topic"
       previous_topic_id="$(topic_id_from_description "$(describe_topic "$topic")")"
