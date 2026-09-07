@@ -1,13 +1,13 @@
-# DEV-ONLY: Candle Direction subsystem hosted in context-tape-service (design A3, Codex Gate-2) — COMMISSIONING
-# SHADOW. The feature flag defaults OFF in code; only the dev overlay turns it on. It adds three consumers (canonical
+# PRODUCTION: Candle Direction subsystem hosted in context-tape-service (design A3 + A4, Codex Gate-2 r9/r10) — COMMISSIONING
+# SHADOW (owner 2026-09-07: "build also prod"). The feature flag defaults OFF in code; this overlay turns it on. It adds three consumers (canonical
 # spot `underlying.spx.price`, `options.indicators.snapshot.current`, `underlying.es.trades` via the host's ES topic),
 # an idempotent producer on `context-tape.direction.commissioning`, a compacted checkpoint on
 # `context-tape.direction.checkpoint`, and its OWN read-only projection server on :8136
 # (/api/context-tape/direction, /health/direction). The host API/readiness are untouched; direction readiness is
 # never the pod probe. Amendment A4 (owner 2026-09-07): the shadow decision cut and the push/reversal engine publish
 # CURRENT copies for the gateway/UI; every record is actionable=false (COMMISSIONING_SHADOW, CALIBRATION phase).
-# Off-hours dev spot is SYNTHETIC and is rejected by the tier/provenance pairing — commissioning starts on RTH
-# LIVE_INDEX/NATIVE_SPX_INDEX records. Prod overlay untouched. env merges by name over the base.
+# Synthetic spot (if any) is graded in its own commissioning cohort and never calls. Roll back = remove this patch
+# (the flag falls back to OFF). env merges by name over the base.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
