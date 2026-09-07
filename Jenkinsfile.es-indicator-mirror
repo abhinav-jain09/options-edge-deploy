@@ -137,7 +137,7 @@ pipeline {
           # The TOPIC parameter is a choice list, but re-assert here fail-closed so a job-config
           # drift can never mirror an unknown topic with a guessed shape.
           case "$TOPIC" in
-            es.options.indicators.snapshot.current) PARTS=1; POLICY=compact,delete; RET=604800000 ;;
+            es.options.indicators.snapshot.current) PARTS=1; POLICY=delete; RET=604800000 ;;
             es.options.indicators.bars)             PARTS=8; POLICY=delete;         RET=3888000000 ;;
             *) echo "FAIL: topic $TOPIC not in the indicator-mirror allow-list"; exit 1 ;;
           esac

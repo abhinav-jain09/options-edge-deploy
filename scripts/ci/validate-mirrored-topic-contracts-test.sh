@@ -100,13 +100,15 @@ R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTIO
 expect_fail "$R" "cvd levels retention drifted from the frozen arm" "asserts retention.ms=-1"
 
 echo "--- compaction, in both directions ---"
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.options\.indicators\.snapshot\.current es\.futures\.aggressor-flow/ es.futures.aggressor-flow/'
-expect_fail "$R" "compacted FROZEN topic dropped from the list" "reconcile the"
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.futures\.aggressor-flow es\.futures\.cvd/ es.futures.cvd/'
-expect_fail "$R" "compacted COPIED topic dropped from the list" "reconcile the"
+# es4 is the SOURCE and compacts nothing served, so a mirrored topic must not be compacted on the
+# target either. The mutation that matters is now ADDING one, not dropping it.
+R="$(mkfixture)"; append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.options.indicators.snapshot.current"'
+expect_fail "$R" "FROZEN mirrored topic wrongly compacted on the target" "cleanup.policy disagrees across"
+R="$(mkfixture)"; append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.futures.aggressor-flow"'
+expect_fail "$R" "COPIED mirrored topic wrongly compacted on the target" "resolves"
 # Line-scoped: the same topic name now also appears in the exact-partition sets, so an
 # unanchored substitution would mutate two dimensions at once and fail for the wrong reason.
-R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_COMPACTED_TOPICS=/s/ es\.futures\.aggressor-flow es\.futures\.cvd/ es.futures.aggressor-flow es.options.indicators.bars es.futures.cvd/'
+R="$(mkfixture)"; append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.options.indicators.bars"'
 expect_fail "$R" "append-only topic wrongly compacted" "resolves"
 
 echo "--- EXACT cleanup.policy, both clusters (compact != compact,delete) ---"
@@ -117,7 +119,7 @@ R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_T
 edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_TOPICS=/s/$/\nOPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.futures.cvd.levels"/'
 expect_fail "$R" "pure-compact target downgraded to compact,delete" "resolves"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS=/s/es\.futures\.cvd\.levels/es.tape-zones.cells/'
-edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/s/ es\.tape-zones\.board"/ es.tape-zones.board es.futures.cvd.levels"/'
+edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=""$/OPTIONS_EDGE_ES4_COMPACTED_TOPICS="es.futures.cvd.levels"/'
 expect_fail "$R" "pure-compact SOURCE downgraded to compact,delete" "cleanup.policy disagrees across"
 
 echo "--- a frozen PARTS=n is only enforced when the topic is in the exact-partition sets ---"
@@ -131,7 +133,7 @@ R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.strike-intelligence-by-strike:32
 expect_fail "$R" "COPIED topic missing from the es4 set" "no reviewed"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/es\.tape-zones\.board:1 es\.tape-zones\.cells:4/es.tape-zones.board:4 es.tape-zones.cells:4/'
 expect_fail "$R" "source and target disagree on partitions" "must agree"
-R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/s/ es\.tape-zones\.board\([ "]\)/\1/'
+R="$(mkfixture)"; append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.tape-zones.board"'
 expect_fail "$R" "source and target disagree on compaction" "cleanup.policy disagrees across"
 
 echo "--- the SOURCE cluster's retention is a separate declaration and is gated too ---"
@@ -158,14 +160,14 @@ R="$(mkfixture)"
 append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_TOPICS="$OPTIONS_EDGE_TOPICS es.tape-zones.board:32"'
 expect_fail "$R" "correct partitions, wrong value duplicated after" "declares the same topic more than once"
 R="$(mkfixture)"
-append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.futures.aggressor-flow"'
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.strike-intelligence-dashboard es.strike-intelligence-dashboard"'
 expect_fail "$R" "compaction membership declared twice" "declares the same topic more than once"
 R="$(mkfixture)"
 append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES="$OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES es.tape-zones.board=43200000"'
 expect_fail "$R" "es4 retention declared twice" "declares the same topic more than once"
 
 echo "--- the parser itself must fail closed, never silently check less ---"
-R="$(mkfixture)"; edit "$R" Jenkinsfile.es-tape-zones-mirror 's/PARTS=1; POLICY=compact,delete; RET=-1/PARTS="1" ; POLICY="compact,delete" ; RET="-1"/'
+R="$(mkfixture)"; edit "$R" Jenkinsfile.es-tape-zones-mirror 's/PARTS=1; POLICY=delete; RET=-1/PARTS="1" ; POLICY="delete" ; RET="-1"/'
 expect_fail "$R" "frozen arm reformatted out of recognition" "neither a frozen"
 R="$(mkfixture)"; edit "$R" Jenkinsfile.es-futures-flow-mirror "s/choice(name: 'TOPIC',/choice(name: 'MIRROR_TOPIC',/"
 expect_fail "$R" "TOPIC parameter renamed" "no TOPIC choice"
@@ -174,8 +176,12 @@ expect_fail "$R" "TOPIC parameter renamed" "no TOPIC choice"
 # constrain (found by Codex, fourth review pass).
 R="$(mkfixture)"; edit "$R" Jenkinsfile.es-strike-intel-mirror "s/choice(name: 'TOPIC', choices: \['es.strike-intelligence-by-strike'\]/string(name: 'TOPIC', defaultValue: 'es.strike-intelligence-by-strike'/"
 expect_fail "$R" "TOPIC downgraded to a free-text parameter" "free-text string parameter"
-R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=.*$/OPTIONS_EDGE_ES4_COMPACTED_TOPICS=""/'
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_TOPICS="[^"]*"$/OPTIONS_EDGE_ES4_TOPICS=""/'
 expect_fail "$R" "a parsed declaration emptied" "parsed an EMPTY"
+# ES4_COMPACTED is deliberately empty, so emptiness alone must NOT fail there — but a VANISHED
+# declaration still must, or the drift this guard exists for would slip through the exception.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/d'
+expect_fail "$R" "a deliberately-empty declaration REMOVED" "parsed an EMPTY"
 R="$(mkfixture)"; rm -f "$R"/Jenkinsfile.es-*-mirror
 expect_fail "$R" "every mirror job removed" "no Jenkinsfile.es-.*-mirror found"
 R="$(mkfixture)"; rm -f "$R/$TENV_REL"
