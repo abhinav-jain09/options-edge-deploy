@@ -58,6 +58,14 @@ spec:
               value: es.futures.cvd
             - name: KAFKA_ES_CVD_BARS_TOPIC
               value: es.futures.cvd.bars
+            # SPX Auction Desk (es-amt-service on es4, mirrored here as es.futures.auction by
+            # Jenkinsfile.es-auction-mirror): one payload per RTH minute keyed <tradeDate>|<HH:mm>,
+            # seven sessions retained. Opt-in flag; the topic is the mirrored es.-prefixed name on
+            # dev+prod (es4 itself resolves the unprefixed futures.auction through TOPIC_PREFIX).
+            - name: GATEWAY_ES_AUCTION_ENABLED
+              value: "true"
+            - name: KAFKA_ES_AUCTION_TOPIC
+              value: es.futures.auction
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS

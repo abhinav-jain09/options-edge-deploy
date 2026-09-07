@@ -141,6 +141,12 @@ jobs:
       - name: es-cvd-mirror source/target shape assertions
         run: bash scripts/ci/es-cvd-mirror-shape-test.sh
 
+      # Same contract for the auction-desk mirror (es.futures.auction), whose job additionally
+      # RECONCILES a pre-existing target's config before asserting it -- so the suite also proves
+      # a wrong-partition target is refused untouched and an ineffective alter still fails.
+      - name: es-auction-mirror source/target shape assertions
+        run: bash scripts/ci/es-auction-mirror-shape-test.sh
+
       - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
         run: scripts/ci/validate-image-pinning.sh
 

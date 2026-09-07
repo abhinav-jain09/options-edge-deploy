@@ -156,7 +156,8 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
          scripts/kafka/verify-topics-pure-compact-test.sh \
          scripts/kafka/reset-preserved-topics-test.sh \
          scripts/ci/validate-durable-topic-preservation-mutation-test.sh \
-         scripts/ci/es-cvd-mirror-shape-test.sh; do
+         scripts/ci/es-cvd-mirror-shape-test.sh \
+         scripts/ci/es-auction-mirror-shape-test.sh; do
   if [ ! -x "$t" ]; then
     echo "FAIL: $t missing or not executable"
     exit 1
