@@ -446,26 +446,17 @@ S
             echo "DEFERRED: source $TOPIC is EMPTY -- installed WITHOUT the per-install freshness arming; the payload proof is deferred (ALLOW_EMPTY_SOURCE)."
           else
           REFOFF=$((SEND - 1))
-          # IS THE TARGET MISSING HISTORY? A surviving consumer group's committed offset says where THIS
-          # GROUP got to, not what the target actually holds: a target deleted and recreated, truncated, or
-          # once run at a shorter retention has lost records the source still has, and rewinding only to the
-          # newest record would never recopy them -- the desk's previous-date view would stay incomplete
-          # while every assertion passed (code review round 6). So compare the two spans and, when the
-          # target is short, seed from the SOURCE LOG START instead. That is bounded by the source's own
-          # 7-day retention (a few thousand keyed records) and is idempotent on a keyed topic.
+          # SEED FROM THE SOURCE LOG START, ALWAYS, on an install. The target is PLAIN DELETE, so its
+          # offsets say nothing about which minute KEYS it holds: replayed installs append duplicates and
+          # any past compaction leaves holes, so comparing offset spans can call a target complete while
+          # older minutes are missing (code review round 7). The only sound guarantee is to recopy the
+          # source's retained window, which its own 7-day retention bounds to a few thousand keyed records.
+          # Consumers are keyed — the gateway keeps the latest correctionRev per minute and the page merges
+          # by key — so duplicates on the wire and on disk change nothing anyone reads.
           SBEG=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$SRC" --topic "$TOPIC" --time -2 2>/dev/null | awk -F: 'NR==1{print $3}') \
             || { echo "FAIL: cannot read source log start for $TOPIC"; exit 1; }
-          TEND=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null | awk -F: 'NR==1{print $3}')
-          TBEG=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$TGT" --topic "$TOPIC" --time -2 2>/dev/null | awk -F: 'NR==1{print $3}')
           case "${SBEG:-}" in ''|*[!0-9]*) echo "FAIL: source log start is not a number (got '${SBEG:-}')"; exit 1 ;; esac
-          case "${TEND:-}" in ''|*[!0-9]*) TEND=0 ;; esac
-          case "${TBEG:-}" in ''|*[!0-9]*) TBEG=0 ;; esac
-          SRC_SPAN=$((SEND - SBEG)); TGT_SPAN=$((TEND - TBEG))
-          SEED_FROM_START=0
-          if [ "$TGT_SPAN" -lt "$SRC_SPAN" ]; then
-            SEED_FROM_START=1
-            echo "target $TOPIC holds $TGT_SPAN records, source holds $SRC_SPAN -- seeding the group from the source log start $SBEG"
-          fi
+          echo "source $TOPIC retained window: [$SBEG, $SEND)"
           # Stamped with the build, exactly like the pollution baseline: a leftover file from an
           # earlier build must never be able to stand in as this build's arming evidence.
           printf 'build=%s send=%s\\n' "$BUILD_NUMBER" "$SEND" > "$MDIR/source-end-offset.txt"
@@ -528,23 +519,18 @@ S
                 echo "FAIL: committed offset for $GROUP / $TOPIC:0 is not a number (got '$CUR')"; exit 1
                 ;;
               *)
-                # ONLY EVER REWIND. Resetting unconditionally to $REFOFF would move a LAGGING group
-                # FORWARD and permanently skip every source record between its position and the
-                # reference one -- on this minute-keyed topic, whole stretches of a session. A group
-                # already at or behind $REFOFF needs no help: consuming forward from there
-                # necessarily crosses the reference record, which is all the proof requires.
-                if [ "$SEED_FROM_START" = "1" ] && [ "$CUR" -gt "$SBEG" ]; then
+                # Seed to the source LOG START. This never skips anything: it is at or before every record
+                # the source still retains, so a lagging group cannot be moved past records it has not
+                # copied (the old "$REFOFF or nothing" rule left a target that was missing history
+                # unrepaired), and consuming forward from here necessarily crosses the reference record,
+                # which is what the payload proof needs.
+                if [ "$CUR" = "$SBEG" ]; then
+                  echo "group $GROUP is already at the source log start $SBEG; nothing to reset"
+                else
                   "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --group "$GROUP" \
                     --topic "$TOPIC:0" --reset-offsets --to-offset "$SBEG" --execute \
-                    || { echo "FAIL: could not seed group $GROUP from $CUR to the source log start $SBEG -- the target cannot be repaired"; exit 1; }
-                  echo "group $GROUP seeded from $CUR to the source log start $SBEG (target was missing history)"
-                elif [ "$CUR" -gt "$REFOFF" ]; then
-                  "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --group "$GROUP" \
-                    --topic "$TOPIC:0" --reset-offsets --to-offset "$REFOFF" --execute \
-                    || { echo "FAIL: could not rewind group $GROUP from $CUR to $REFOFF -- the install cannot be honestly verified"; exit 1; }
-                  echo "group $GROUP rewound from $CUR to $REFOFF"
-                else
-                  echo "group $GROUP is at $CUR, at or behind the reference offset $REFOFF; left untouched (forward consumption must cross it)"
+                    || { echo "FAIL: could not seed group $GROUP from $CUR to the source log start $SBEG -- the target cannot be made to hold the source's window"; exit 1; }
+                  echo "group $GROUP seeded from $CUR to the source log start $SBEG (the whole retained window is recopied)"
                 fi
                 ;;
             esac
