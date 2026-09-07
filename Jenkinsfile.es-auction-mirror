@@ -115,7 +115,19 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          # ORDER MATTERS. The plist is the ONLY handle `launchctl unload` has, and the unit is KeepAlive:
+          # deleting it before the label is gone would leave a registered unit that respawns the JVM and
+          # that no later teardown or install could unload (code review round 5). So unload, PROVE the
+          # label is gone -- falling back to `launchctl remove`, which works without the file -- and only
+          # then delete the plist.
           launchctl unload "$PLIST" 2>/dev/null || true
+          LABEL_GONE=0
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if ! launchctl list 2>/dev/null | grep -qF "$LABEL"; then LABEL_GONE=1; break; fi
+            launchctl remove "$LABEL" 2>/dev/null || true
+            sleep 1
+          done
+          [ "$LABEL_GONE" = "1" ] || { echo "FAIL: launchd still has $LABEL registered; the plist is LEFT IN PLACE so a retry can still unload it:"; launchctl list 2>/dev/null | grep -F "$LABEL" || true; exit 1; }
           rm -f "$PLIST"
           # unit-specific: kill ONLY this (target, topic) mirror via its own run script, never a sibling.
           # The steady-state process after the exec chain is a `kafka.tools.MirrorMaker` JVM whose command
@@ -127,11 +139,10 @@ pipeline {
           # PROVE it is gone: teardown that silently leaves a mirror running is worse than a loud failure.
           GONE=0
           for i in 1 2 3 4 5 6 7 8 9 10; do
-            if launchctl list 2>/dev/null | grep -qF "$LABEL"; then sleep 1; continue; fi
             if pgrep -f "$MDIR" >/dev/null 2>&1; then sleep 1; continue; fi
             GONE=1; break
           done
-          [ "$GONE" = "1" ] || { echo "FAIL: the unit or its process survived teardown:"; launchctl list 2>/dev/null | grep -F "$LABEL" || true; pgrep -fl "$MDIR" || true; exit 1; }
+          [ "$GONE" = "1" ] || { echo "FAIL: a process for this unit survived teardown:"; pgrep -fl "$MDIR" || true; exit 1; }
           echo "mirror service removed and verified gone (topic + data left intact)"
         '''
       }
