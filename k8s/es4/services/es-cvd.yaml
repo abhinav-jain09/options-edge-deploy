@@ -112,6 +112,21 @@ spec:
           value: '5000'
         - name: ES_CVD_SPX_STALE_AFTER_MS
           value: '30000'
+        # ES Footprint subsystem (options-edge-processing ES-FOOTPRINT-DESIGN.md F-R14/F-R18).
+        # Strict true|false; the service refuses to start on anything else. Flag on, the service
+        # ensures the four compacted single-partition topics below (resolved through the es4
+        # TOPIC_PREFIX like futures.cvd*: es.futures.footprint...) and exports es_footprint_*.
+        # Flag off (or an image without the subsystem) is byte-identical CVD output.
+        - name: ES_FOOTPRINT_ENABLED
+          value: 'true'
+        - name: KAFKA_ES_FOOTPRINT_BARS_TOPIC
+          value: futures.footprint.bars
+        - name: KAFKA_ES_FOOTPRINT_OUTCOMES_TOPIC
+          value: futures.footprint.outcomes
+        - name: KAFKA_ES_FOOTPRINT_TOPIC
+          value: futures.footprint
+        - name: KAFKA_ES_FOOTPRINT_EVIDENCE_TOPIC
+          value: futures.footprint.evidence
         envFrom:
         - configMapRef:
             name: es4-base-env
