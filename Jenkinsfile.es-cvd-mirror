@@ -1,9 +1,15 @@
 // ES-CVD MIRROR — stand up a clean SINGLE-TOPIC .4->target mirror as a managed launchd service.
 //
 // Requirement (0DTE-INDICATOR-SERVICE rev 14 §7.3, compute-once + mirror): es4 is the SOLE ES
-// indicator producer; its two output topics are mirrored VERBATIM (record-copy, identity name,
+// indicator producer; its output topics are mirrored VERBATIM (record-copy, identity name,
 // ES-keyed records only) to dev and prod so all three envs share one uniform ES view. NO local
 // ES fallback on the targets — a broken mirror means ES goes STALE there, never different.
+//
+// The allow-list below is SEVEN topics: three CVD (bars, the live snapshot, the levels attestation)
+// and four ES Footprint (ES-FOOTPRINT-DESIGN.md F-R14: bars, outcomes, and the two live snapshots).
+// Each is a separate run of this job, so the count only ever grows through the frozen contract arms
+// further down — a topic with no arm is refused, and validate-mirrored-topic-contracts.sh reconciles
+// every arm against topics.env on BOTH clusters before this file can merge.
 //
 // WHY MM1 (kafka-mirror-maker), NOT MM2 (connect-mirror-maker): MM2's Heartbeat/Checkpoint
 // connectors replicate .4's runaway `es.es.es...heartbeats` junk (its own broken es4 MM2) and
@@ -16,8 +22,8 @@
 // that an absolute check read as this mirror's pollution, failing every prod install (2026-08-06).
 //
 // Unlike the strike-intel/futures-flow mirrors (one topic family each, target-only slug), this
-// job serves BOTH indicator topics, so the launchd identity includes the TOPIC: one unit per
-// (target, topic) — dev+prod x snapshot+bars = four coexisting units, none overwriting another.
+// job serves EVERY topic in the allow-list, so the launchd identity includes the TOPIC: one unit
+// per (target, topic), all coexisting, none overwriting another.
 //
 // The job runs on the 'local-mac' agent (the dev Mac, which IS the target for dev). It generates
 // the config + installs a KeepAlive launchd unit; NOTHING is hand-edited.
@@ -28,13 +34,14 @@ pipeline {
     string(name: 'SOURCE_PORT',          defaultValue: '9092',          description: 'Source Kafka port.')
     string(name: 'TARGET_SPX_CLUSTER_IP',defaultValue: '127.0.0.1',     description: 'Target env broker IP (dev = 127.0.0.1, prod = 192.168.100.252).')
     string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092, prod = 9092).')
-    choice(name: 'TOPIC', choices: ['es.futures.cvd.bars', 'es.futures.cvd', 'es.futures.cvd.levels'], description: 'CVD topic to mirror (frozen allow-list — the shape contract below is per-topic).')
+    choice(name: 'TOPIC', choices: ['es.futures.cvd.bars', 'es.futures.cvd', 'es.futures.cvd.levels',
+      'es.futures.footprint.bars', 'es.futures.footprint.outcomes', 'es.futures.footprint', 'es.futures.footprint.evidence'], description: 'CVD topic to mirror (frozen allow-list — the shape contract below is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown'], description: 'install = create+run the mirror; teardown = stop+remove it.')
   }
   options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
   environment {
     KBIN  = '/Users/abhinav/development/confluent-7.3.1/bin'
-    // Per-(TARGET,TOPIC) identity: dev/prod each mirror BOTH indicator topics from .4, so every
+    // Per-(TARGET,TOPIC) identity: dev/prod each mirror SEVERAL topics from .4, so every
     // (env, topic) pair must be an independent launchd unit instead of one shared label/dir.
     SLUG  = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT + '-' + params.TOPIC).replaceAll('[^A-Za-z0-9-]', '-')}"
     MDIR  = "/Users/abhinav/oe-ops/es-cvd-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT + '-' + params.TOPIC).replaceAll('[^A-Za-z0-9-]', '-')}"
@@ -43,7 +50,7 @@ pipeline {
     SRC   = "${params.SOURCE_ES_CLUSTER_IP}:${params.SOURCE_PORT}"
     TGT   = "${params.TARGET_SPX_CLUSTER_IP}:${params.TARGET_PORT}"
     // Target-only slug (no topic): the approved-legacy-topics allow-list is a property of the
-    // BROKER, shared by both indicator topics mirrored to it.
+    // BROKER, shared by every topic mirrored to it.
     TSLUG = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
     // Single definition of the MM2-pollution pattern, shared by the Preflight baseline capture and
     // the Verify guard. It MUST be one string: if the two stages ever matched different patterns,
@@ -145,6 +152,15 @@ pipeline {
             es.futures.cvd.bars) PARTS=1; POLICY=delete; RET=-1 ;;
             es.futures.cvd)      PARTS=1; POLICY=delete; RET=43200000 ;;
             es.futures.cvd.levels) PARTS=1; POLICY=compact; RET=-1 ;;   # U16 AA1: pure compact, never expires
+            # ES FOOTPRINT (ES-FOOTPRINT-DESIGN.md F-R14). es-cvd-service creates all four with
+            # ensureServedTopic and es4 sets OPTIONS_EDGE_UNCOMPACTED_SERVED_TOPICS=true, so the
+            # SOURCE shape is delete, never compact. Retention mirrors the CVD split: the two
+            # KEYED history topics never expire (the page backfills them and the archiver reads
+            # them), the two LIVE snapshot topics keep the 12h es.futures.cvd window.
+            es.futures.footprint.bars)     PARTS=1; POLICY=delete; RET=-1 ;;
+            es.futures.footprint.outcomes) PARTS=1; POLICY=delete; RET=-1 ;;
+            es.futures.footprint)          PARTS=1; POLICY=delete; RET=43200000 ;;
+            es.futures.footprint.evidence) PARTS=1; POLICY=delete; RET=43200000 ;;
             *) echo "FAIL: topic $TOPIC not in the cvd-mirror allow-list"; exit 1 ;;
           esac
 

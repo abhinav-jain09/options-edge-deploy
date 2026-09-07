@@ -84,6 +84,13 @@ jobs:
       - name: VIX single-publisher assertion test matrix
         run: python3 -m unittest -v tests.test_vix_single_publisher
 
+      # One Service One Identity Rule: no service identity (Streams application.id / consumer group)
+      # may carry a version suffix. FAIL-CLOSED — a red result here blocks the merge. This exists
+      # because oi-shadow was born as "oi-shadow-v1" eleven days AFTER the platform-wide unversioning
+      # migration and survived five weeks: a point-in-time sweep cannot see what is created after it.
+      - name: Service identities are unversioned (One Service One Identity Rule)
+        run: python3 -m unittest -v tests.test_service_identity_unversioned
+
       # Every tests/test_*.py must be COLLECTABLE by unittest, the only runner this repo has.
       # Three files were written as bare module-level test_ functions (pytest style) and so ran as
       # "0 tests ... OK" — including one carrying a genuinely failing assertion nobody could see.

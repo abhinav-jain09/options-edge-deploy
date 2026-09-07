@@ -86,7 +86,6 @@ Image Preflight
 Pause Runtime For Kafka Cleanup
 Kafka Cleanup
 Kafka Topics
-Reset HPSF Stage B Internal Topics
 Kafka Internal Topics
 Deploy
 Resume Remote Apps

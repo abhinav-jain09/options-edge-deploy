@@ -182,9 +182,31 @@ retention_of() { retention_in "$RETENTIONS" "$1"; }
 # that topic on the target with THIS topic's hardcoded shape, undeclared and therefore invisible
 # both to this check and to cleanup-topics.sh's approved list. Enumerating a set the job does not
 # actually constrain is a coverage claim that is not true, so an unconstrained job is an error.
+# The choices list may WRAP onto further lines. Reading only the PHYSICAL line that carries
+# `choice(name: 'TOPIC',` is how four ES Footprint topics were added to a mirror job and then
+# checked by nothing (found by Codex, fifth review pass): the validator went on reporting the three
+# names that fitted on the first line and called that full coverage, so a partition/policy/retention
+# mismatch on any of the four would have merged past this supposedly fail-closed guard. So the
+# declaration is read from that line THROUGH the line that closes the list with `]`, and a list that
+# is never closed yields the sentinel `<unterminated>` — not a topic name, so the caller refuses the
+# job outright instead of proceeding on a truncated set.
 job_topics() {
-  { sed -nE "s/.*choice\(name: 'TOPIC',.*/&/p" "$1" \
-    | grep -oE "es\.[A-Za-z0-9._-]+" || true; } | sort -u
+  { awk '
+      /choice\(name: .TOPIC.,/ { inside = 1; depth = 0; seen = 0 }
+      inside {
+        buf = buf $0 "\n"
+        # Bracket DEPTH, not "the next line that happens to contain a ]": the ACTION choice() and
+        # the [^A-Za-z0-9-] character classes further down every mirror job all carry a ']', so a
+        # first-]-wins scan would close an unterminated list on an unrelated line and read a
+        # truncated allow-list as a complete one.
+        opens = gsub(/\[/, "[")
+        closes = gsub(/\]/, "]")
+        depth += opens - closes
+        if (opens > 0) { seen = 1 }
+        if (seen && depth <= 0) { inside = 0 }
+      }
+      END { if (inside) print "<unterminated>"; else printf "%s", buf }
+    ' "$1" | grep -oE "es\.[A-Za-z0-9._-]+|<unterminated>" || true; } | sort -u
 }
 job_topic_is_freetext() { grep -qE "string\(name: 'TOPIC'," "$1"; }
 
@@ -224,6 +246,15 @@ for job in "${JOBS[@]}"; do
     continue
   fi
   topics="$(job_topics "$job")"
+  case "$topics" in
+    *"<unterminated>"*)
+      echo "FAIL: $jobname opens a TOPIC choice() list that is never closed with ']' — this validator"
+      echo "      can only read a bounded allow-list, and a truncated read would report coverage over"
+      echo "      topics it never checked. Close the choices list."
+      fail=1
+      continue
+      ;;
+  esac
   if [ -z "$topics" ]; then
     echo "FAIL: $jobname declares no TOPIC choice() parameter this validator can read — it cannot be"
     echo "      checked, and an unchecked mirror is how this failure class started. Update the parser."

@@ -65,7 +65,7 @@ spec:
             - name: OI_SHADOW_SYMBOL
               value: SPX
             - name: OI_SHADOW_APP_ID
-              value: oi-shadow-v1
+              value: oi-shadow
             - name: KAFKA_RAW_TOPIC
               value: options.databento.raw
             - name: KAFKA_OI_ANCHOR_MANIFEST_TOPIC

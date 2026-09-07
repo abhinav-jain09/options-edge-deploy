@@ -176,6 +176,15 @@ expect_fail "$R" "TOPIC parameter renamed" "no TOPIC choice"
 # constrain (found by Codex, fourth review pass).
 R="$(mkfixture)"; edit "$R" Jenkinsfile.es-strike-intel-mirror "s/choice(name: 'TOPIC', choices: \['es.strike-intelligence-by-strike'\]/string(name: 'TOPIC', defaultValue: 'es.strike-intelligence-by-strike'/"
 expect_fail "$R" "TOPIC downgraded to a free-text parameter" "free-text string parameter"
+# A choices list that WRAPS. The es-cvd mirror's allow-list outgrew one line when the four ES
+# Footprint topics were added, and a line-at-a-time parser went on reporting only the three names
+# that still fitted — full coverage over a set it had truncated (found by Codex, fifth review pass).
+# Both halves are asserted: a topic that only exists on the CONTINUATION line must still be checked,
+# and a list left open must fail closed rather than read as far as it can.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES=/s/ es\.futures\.footprint\.outcomes=-1/ es.futures.footprint.outcomes=43200000/'
+expect_fail "$R" "topic on the WRAPPED choices line is checked" "asserts retention.ms=-1"
+R="$(mkfixture)"; edit "$R" Jenkinsfile.es-cvd-mirror "s/'es\.futures\.footprint\.evidence'\], description:/'es.futures.footprint.evidence', description:/"
+expect_fail "$R" "TOPIC choices list left unterminated" "never closed"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_TOPICS="[^"]*"$/OPTIONS_EDGE_ES4_TOPICS=""/'
 expect_fail "$R" "a parsed declaration emptied" "parsed an EMPTY"
 # ES4_COMPACTED is deliberately empty, so emptiness alone must NOT fail there — but a VANISHED
