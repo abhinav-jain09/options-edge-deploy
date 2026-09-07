@@ -106,6 +106,13 @@ spec:
           value: futures.cvd
         - name: KAFKA_ES_CVD_BARS_TOPIC
           value: futures.cvd.bars
+        # SPX Auction Desk (es-amt-service on this cluster): one payload per RTH minute keyed
+        # <tradeDate>|<HH:mm>. Opt-in like the CVD stream. Unprefixed: TOPIC_PREFIX=es. resolves
+        # it to es.futures.auction, the name Jenkinsfile.es-auction-mirror copies to dev and prod.
+        - name: GATEWAY_ES_AUCTION_ENABLED
+          value: "true"
+        - name: KAFKA_ES_AUCTION_TOPIC
+          value: futures.auction
         # es4 serves ES, not SPX: the gateway's active market-data selection symbol is IB_SYMBOL
         # (default SPX). Without this the selection is SPX and the ES option records (underlying=ES)
         # never match -> empty chain even at market open. The 0DTE daily roll comes from es4-base-env's

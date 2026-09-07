@@ -108,6 +108,7 @@ HAND_AUTHORED = {
     "es-web",             # prod web binary, env-only divergence
     "es-aggressor-flow",  # ES-only continuous futures aggressor analysis
     "es-cvd",             # ES-only session-anchored CVD; cross-env SPX wiring, no production slice
+    "es-amt",             # ES-only SPX Auction Desk (futures.auction); same cross-env wiring as es-cvd
 }
 
 # KNOWN STALE — generated files the renderer no longer produces. c12e87c removed

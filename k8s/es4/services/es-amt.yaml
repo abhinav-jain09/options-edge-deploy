@@ -1,0 +1,120 @@
+# ES AMT — the SPX Auction Desk. One auction payload per RTH minute, keyed `<tradeDate>|<HH:mm>`,
+# on futures.auction (es4's TOPIC_PREFIX=es. resolves it to es.futures.auction; the topic is
+# declared 1 partition, plain delete, retention 604800000 (7 calendar days) in
+# scripts/kafka/topics.env — enough for the feed-gateway to rebuild its current + previous trade
+# date after a restart, NOT a count of sessions — and mirrored
+# byte-for-byte to dev + prod by Jenkinsfile.es-auction-mirror). Deploy via Jenkinsfile.es4-deploy.
+# Cross-env wiring follows es-cvd.yaml (ES-CVD-DESIGN.md 6a): the ES tape and the output topic live
+# on the es4 broker; the SPX index feed is es4's OWN (see ES_AMT_SPX_BOOTSTRAP_SERVERS below).
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: '8142'
+    prometheus.io/scrape: 'true'
+  labels:
+    app.kubernetes.io/name: es-amt-service
+    app.kubernetes.io/part-of: options-edge
+  name: es-amt-service
+  namespace: options-edge
+spec:
+  ports:
+  - name: health
+    port: 8142
+    targetPort: health
+  selector:
+    app.kubernetes.io/name: es-amt-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: es-amt-service
+    app.kubernetes.io/part-of: options-edge
+  name: es-amt-service
+  namespace: options-edge
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-amt-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-amt-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      containers:
+      - name: es-amt
+        image: 192.168.100.252:5000/options-edge-es-amt:prod
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: -Xms128m -Xmx768m
+        # 8142: the next free es4 health port after es-cvd (8141) — every other containerPort in
+        # k8s/es4/services is taken (8010, 8080, 8097-8101, 8109-8111, 8113-8114, 8117, 8122-8123,
+        # 8130-8131, 8133-8135, 8140-8141, 18091).
+        - name: HEALTH_PORT
+          value: '8142'
+        - name: ES_AMT_BOOTSTRAP_SERVERS
+          value: 192.168.100.4:9092
+        # SPX index feed: es4's OWN broker, NOT the dev Mac — the same rule es-cvd.yaml records
+        # (the 2026-08-17 cross-environment failure: an assign()-pinned partition on a foreign
+        # broker that was recreated with 32 partitions, silently empty for a whole session).
+        - name: ES_AMT_SPX_BOOTSTRAP_SERVERS
+          value: 192.168.100.4:9092
+        # Unprefixed: es4-common-env's TOPIC_PREFIX=es. resolves this to es.underlying.es.trades.
+        - name: KAFKA_ES_TRADES_TOPIC
+          value: underlying.es.trades
+        # Literal (foreign rule, like es-cvd's KAFKA_SPX_INDEX_PRICE_TOPIC): the service reads this
+        # with KafkaSettings.value (no TOPIC_PREFIX), so the es4 name is spelled out in full rather
+        # than relying on prefixing.
+        - name: KAFKA_SPX_INDEX_PRICE_TOPIC
+          value: es.underlying.spx.price
+        # Unprefixed: TOPIC_PREFIX=es. resolves this to es.futures.auction, the name the mirror
+        # job copies verbatim to dev and prod.
+        - name: KAFKA_ES_AUCTION_TOPIC
+          value: futures.auction
+        - name: ES_AMT_GROUP_ID
+          value: es-amt-service
+        # 34h covers the previous RTH session plus the overnight Globex session from a cold start, so
+        # the engine always has the prior session its references are built from (the seek is additionally
+        # floored at that session's 09:30 ET, EsAmtSession.replayHorizonMs).
+        # The output topic's shape, mirrored from scripts/kafka/topics.env (the SSOT). The service
+        # only uses these when it has to CREATE the topic; apply-topics owns it thereafter, and the
+        # service never compacts it (the mirror job asserts cleanup.policy=delete on the source).
+        - name: ES_AMT_TOPIC_RETENTION_MS
+          value: "604800000"
+        - name: ES_AMT_REPLAY_LOOKBACK_HOURS
+          value: '34'
+        envFrom:
+        - configMapRef:
+            name: es4-base-env
+        - configMapRef:
+            name: es4-common-env
+        - secretRef:
+            name: es4-runtime-secrets
+        ports:
+        - containerPort: 8142
+          name: health
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
