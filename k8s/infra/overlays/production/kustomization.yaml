@@ -25,6 +25,10 @@ patches:
   # spot keys pinned to the dev SYNTHETIC values). Per explicit user request; overrides the
   # "prod must carry real data" rule — see the patch file header.
   - path: configmap-prod-feed-synthetic-spot-patch.yaml
+  # Production is the ARCHIVE: served topics must never be compacted. This flips the
+  # boot-time stamp in processing-common KafkaTopics.ensureServedTopic() to cleanup.policy=delete
+  # for prod only (dev stays compacted, es4 sets the same key in k8s/es4/es4-common-env.yaml).
+  - path: configmap-prod-uncompacted-served-topics-patch.yaml
   # Streams-state PVCs: prod k3s provisions with the 'local-path' storage class (matches
   # the 22 live prod PVCs). storageClassName is immutable — base's former hard-coded
   # 'standard' is exactly what failed every prod deploy with "spec: Forbidden: spec is

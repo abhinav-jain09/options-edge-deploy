@@ -16,6 +16,13 @@ data:
   APP_PROFILE: "prod"
   TOPIC_PREFIX: "es."
   KAFKA_APPLICATION_ID_SUFFIX: "-es4"
+  # es4 IS AN ARCHIVE TOO. Served topics must never be compacted here.
+  # processing-common app.kafka.KafkaTopics.ensureServedTopic() stamps cleanup.policy at every
+  # service boot and defaults to compact (dev's behaviour). Only this key, exactly "true", makes
+  # it stamp delete. Without it ensureTopic()'s incrementalAlterConfigs re-compacts the archive on
+  # the next restart no matter what the deploy scripts wrote — config-side repair alone never held.
+  # Prod sets the same key via k8s/infra/overlays/production/configmap-prod-uncompacted-served-topics-patch.yaml.
+  OPTIONS_EDGE_UNCOMPACTED_SERVED_TOPICS: "true"
   # Fleet liveness market-hours gate (processing-common app.kafka.Liveness/MarketHours): the ES
   # stack trades CME Globex (~23h/day), not NYSE RTH — gate the dead-engine restart window to the
   # Globex session (armed from 5 min before each open through 5 min past each close).
