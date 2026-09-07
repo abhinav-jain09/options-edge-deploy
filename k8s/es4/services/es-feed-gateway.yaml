@@ -184,9 +184,52 @@ spec:
             port: http
           initialDelaySeconds: 30
           periodSeconds: 15
+        # The limit was EQUAL to the heap: limit == Xmx == 1536Mi. That is not a tight budget, it
+        # is an absent one — metaspace, code cache, thread stacks and direct/socket buffers all live
+        # OUTSIDE -Xmx, so the container can be OOM-killed on native growth the heap never sees. No
+        # amount of GC tuning, and no alarm that watches heap occupancy, can see that coming while
+        # Xmx == limit; the only other way out would be to LOWER -Xmx, which buys native headroom by
+        # taking it from the heap. G-R8 (options-edge-feed-gateway/ES-FOOTPRINT-GATEWAY-DESIGN.md)
+        # states the rule as limit - Xmx >= 512 MiB; this manifest violated it outright, and it does
+        # so today with the footprint relay OFF. Fixed here on that ground alone.
+        #
+        # Measured on es-feed-gateway-755c5544d5-6ftk6 (6h53m, CVD on, footprint off), from the
+        # container itself rather than a sampled `kubectl top`:
+        #   cgroup memory.peak  668 426 240 B = 638 MiB
+        #   cgroup memory.current 665 686 016 B = 635 MiB
+        #   /proc/1 VmHWM       664 432 KiB    = 649 MiB   (pid 1 is the only real process)
+        # Only ONE G-R8 quantity is derivable from these: working set = memory.current -
+        # inactive_file <= memory.current, and memory.peak is the high-water of memory.current, so
+        #   W_peak <= 638 MiB   ->   limit - W_peak >= 2560 - 638 = 1922 MiB
+        # H_peak is NOT derivable here. G-R8 defines it as peak jvm_memory_bytes_used{area="heap"},
+        # which counts USED heap bytes; those need not all be resident, so process RSS does not
+        # bound it and VmHWM proves nothing about it. This manifest therefore makes no claim about
+        # Xmx - H_peak. That inequality belongs to the enablement change, which needs the real heap
+        # series anyway.
+        # (VmHWM exceeds memory.peak by ~12 MB, and VmRSS exceeds memory.current by the same amount
+        # on a re-read. The cause was NOT established and no mechanism is claimed for it; it does not
+        # affect the W_peak bound, which comes from the cgroup counters alone.)
+        #   limit - Xmx = 2560 - 1536 = 1024 MiB   (the inequality that was violated)
+        #
+        # NOT sufficient to enable the footprint relay. G-R8's deployment contingency requires
+        # H_peak from jvm_memory_bytes_used{area="heap"} and W_peak from
+        # container_memory_working_set_bytes, over a FULL ES session. This gateway exports no JVM
+        # heap series on :18091, and 2026-09-07 is in GATEWAY_MARKET_HOLIDAYS above — a shortened
+        # holiday session. Enablement is a separate change, after a regular session.
+        #
+        # requests.memory rises with it: 512Mi sits below this pod's observed usage — 635 MiB at the
+        # single point in time above; no claim is made about every moment of its life. While usage is
+        # above the request the kubelet's memory eviction ranking counts the pod as over-request, and
+        # raising the request above the observed baseline improves that ranking. It does NOT change
+        # the QoS class — the
+        # pod stays Burstable (memory request < limit, cpu request with no limit, and the
+        # wait-for-kafka-sr init container declares neither) and remains an eviction candidate. The
+        # es4 node is at 24% of allocatable requests (15 628 MiB of 63.6 GiB), so 256 MiB is
+        # affordable; declared limit overcommit goes from ~107% to ~109%, which this node already
+        # runs at with 35 GiB actually free.
         resources:
           requests:
             cpu: "250m"
-            memory: "512Mi"
+            memory: "768Mi"
           limits:
-            memory: "1536Mi"
+            memory: "2560Mi"
