@@ -15,8 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 # survived five weeks). This guard runs on EVERY change, over EVERY manifest, so the next one is caught
 # at the change that introduces it. It is wired into deploy-validation.yml; a red result blocks merge.
 
-# Env keys whose VALUE is a runtime identity (Streams application.id / consumer group).
-IDENTITY_KEY = re.compile(r"^[A-Z0-9_]*(?:APP_ID|APPLICATION_ID|GROUP_ID|CONSUMER_GROUP)$")
+# Env keys whose VALUE is, or COMPOSES, a runtime identity (Streams application.id / consumer group).
+# The trailing _SUFFIX form matters as much as the id itself: KAFKA_APPLICATION_ID_SUFFIX is appended
+# to EVERY Streams application id in an environment (-prod, -dev, -es4 today), so setting it to "-v2"
+# would version every identity in that environment at runtime while each id literal stayed clean. That
+# is the same shape as the runtime-concatenated "…-r2" that once survived a sweep reporting clean: an
+# identity is what the process ends up with, not what any single manifest line says.
+IDENTITY_KEY = re.compile(
+    r"^[A-Z0-9_]*(?:APP_ID|APPLICATION_ID|GROUP_ID|CONSUMER_GROUP)(?:_SUFFIX|_PREFIX)?$")
 
 # Deliberately the widest net the rulebook prescribes for identities: a "v" or "r" followed by a digit,
 # anywhere, in any case. It catches every form a real migration leaves behind — separator-prefixed
@@ -312,6 +318,29 @@ class ServiceIdentityUnversionedTest(unittest.TestCase):
             {"indirect.yaml", "secret-sourced.yaml"}, {path.name for path, _, _ in result.unresolved},
             "an identity from an unresolvable ConfigMap/Secret reference must fail the guard",
         )
+
+    def test_identity_composing_suffix_is_guarded(self) -> None:
+        # KAFKA_APPLICATION_ID_SUFFIX is appended to every Streams application id in an environment.
+        # Its legitimate values are environment namespaces (-prod/-dev/-es4), but a version there would
+        # version every identity in that environment while each id literal still looked clean.
+        self.assertRegex("KAFKA_APPLICATION_ID_SUFFIX", IDENTITY_KEY,
+                         "the id-composing suffix key must be scanned as an identity input")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "suffix-versioned.yaml").write_text(
+                "apiVersion: v1\nkind: ConfigMap\ndata:\n  KAFKA_APPLICATION_ID_SUFFIX: -v2\n")
+            (root / "suffix-clean.yaml").write_text(
+                "apiVersion: v1\nkind: ConfigMap\ndata:\n  KAFKA_APPLICATION_ID_SUFFIX: -prod\n")
+            flagged = {path.name for path, _, value in scan(root).identities if VERSIONED.search(value)}
+        self.assertEqual({"suffix-versioned.yaml"}, flagged,
+                         "a versioned id suffix must fail the guard; an environment suffix must not")
+
+    def test_real_suffix_values_are_environment_namespaces(self) -> None:
+        # The live values today, asserted so a future edit to any of them is caught by the guard above.
+        suffixes = {value for _, key, value in identities(ROOT / "k8s") if key.endswith("_SUFFIX")}
+        self.assertTrue(suffixes, "the id-composing suffix is declared in this repo and must be seen")
+        for value in suffixes:
+            self.assertNotRegex(value, VERSIONED, f"id suffix {value!r} carries a version")
 
     def test_bulk_envfrom_sources_are_fail_closed(self) -> None:
         # envFrom is how the July 2026 stale-identity incident actually reached a workload: a shared
