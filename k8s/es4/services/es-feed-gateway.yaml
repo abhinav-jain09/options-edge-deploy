@@ -108,7 +108,10 @@ spec:
           value: futures.cvd.bars
         # es4 serves ES, not SPX: the gateway's active market-data selection symbol is IB_SYMBOL
         # (default SPX). Without this the selection is SPX and the ES option records (underlying=ES)
-        # never match -> empty chain even at market open. IB_EXPIRY stays unset = AUTO (0DTE daily roll).
+        # never match -> empty chain even at market open. The 0DTE daily roll comes from es4-base-env's
+        # IB_EXPIRY: "AUTO" — the LITERAL string, not an unset value: GatewaySettings.isAutoExpiry treats
+        # blank as NOT auto (the handshake then fails closed on a blank expiry), so clearing that key
+        # would stop the roll AND break every WS connection. Do not "tidy" it away.
         - name: IB_SYMBOL
           value: "ES"
         # Roll the AUTO 0DTE expiry to the next trade date at 17:30 ET (mirrors the es-feed + SPX).
@@ -116,6 +119,18 @@ spec:
         # next-expiry records until midnight ET, freezing the chain all evening (gateway PR#74).
         - name: IB_EXPIRY_ROLL_AFTER
           value: "17:30"
+        # The gateway resolves its session calendar from its OWN keys, NOT from the HPSF_MARKET_* pair
+        # es4-base-env carries. Without these the calendar was EMPTY: on 2026-09-07 (Labor Day) the
+        # gateway treated the holiday as a session, AUTO-resolved the expiry to 20260907, and rejected
+        # every 20260908 record the ES feed published as belonging to an inactive expiry —
+        # inactiveDroppedEvents into the millions, UI connected to a chain that stayed blank all day.
+        # The gateway now also falls back to HPSF_MARKET_* when these are unset, but keep these
+        # explicit: HPSF is being retired (PR #995) and those keys may not outlive it. Refresh both
+        # pairs together from the annual OPRA/NYSE schedule.
+        - name: GATEWAY_MARKET_HOLIDAYS
+          value: "2026-01-01,2026-01-19,2026-02-16,2026-04-03,2026-05-25,2026-06-19,2026-07-03,2026-09-07,2026-11-26,2026-12-25"
+        - name: GATEWAY_MARKET_EARLY_CLOSES
+          value: "2026-11-27=13:00,2026-12-24=13:00"
         - name: JAVA_TOOL_OPTIONS
           value: "-Xms256m -Xmx1536m"
         # Flow Explorer (/api/pin-flow) default strike band. The gateway's built-in default is a

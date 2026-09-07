@@ -25,6 +25,9 @@ data:
   HPSF_ALGORITHM_VERSION: "HPSF_V2.1"
   HPSF_CONFIG_VERSION: "hpsf-v2.1-dev"
   HPSF_ENABLED: "true"
+  # NB: options-edge-feed-gateway FALLS BACK to these two when GATEWAY_MARKET_* is unset, so they are
+  # NOT dead HPSF config — deleting them as part of the HPSF retirement (PR #995) would silently empty
+  # the gateway's calendar on any deployment that relies on the fallback. See es-feed-gateway.yaml.
   HPSF_MARKET_EARLY_CLOSES: "2026-11-27=13:00:00,2026-12-24=13:00:00"
   HPSF_MARKET_HOLIDAYS: "2026-01-01,2026-01-19,2026-02-16,2026-04-03,2026-05-25,2026-06-19,2026-07-03,2026-09-07,2026-11-26,2026-12-25"
   HPSF_MODE: "LIVE_SIGNAL_ONLY"
