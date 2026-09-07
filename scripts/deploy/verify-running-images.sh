@@ -44,7 +44,6 @@ IMAGE_MAP = {
     ("pin-postgres-writer", "pin-postgres-writer"): "PIN_POSTGRES_WRITER_IMAGE",
     ("pressure-postgres-writer", "pressure-postgres-writer"): "PRESSURE_POSTGRES_WRITER_IMAGE",
     ("feed-gateway-service", "feed-gateway"): "FEED_GATEWAY_IMAGE",
-    ("hpsf-postgres-writer-service", "hpsf-postgres-writer"): "HPSF_POSTGRES_WRITER_IMAGE",
     ("strike-flow-classifier-databento", "strike-flow-classifier"): "STRIKE_FLOW_CLASSIFIER_IMAGE",
     ("delta-flow-service", "delta-flow"): "DELTA_FLOW_IMAGE",
     ("strike-liquidity-heatmap-service", "strike-liquidity-heatmap"): "STRIKE_LIQUIDITY_HEATMAP_IMAGE",

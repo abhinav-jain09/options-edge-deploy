@@ -40,7 +40,6 @@ images:
   option-price-behavior-service: 192.168.100.252:5000/options-edge-option-price-behavior:prod
   volume-pace-databento-service: 192.168.100.252:5000/options-edge-volume-pace:prod
   gex-delta-redis-writer: 192.168.100.252:5000/options-edge-gex-delta-redis-writer:prod
-  hpsf-postgres-writer-service: 192.168.100.252:5000/options-edge-hpsf-postgres-writer:prod
   es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:prod
   close-direction-service: 192.168.100.252:5000/options-edge-close-direction:prod
   es-aggressor-flow-service: 192.168.100.252:5000/options-edge-es-aggressor-flow:prod
