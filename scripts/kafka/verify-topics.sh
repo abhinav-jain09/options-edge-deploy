@@ -99,6 +99,23 @@ case "${TOPIC_SET:-}" in
 esac
 
 compacted_fail=0
+# Prod and es4 take the archive, so nothing served is compacted there — apply-topics.sh subtracts
+# OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS on an EXPLICIT ENVIRONMENT=production run, and the es4
+# set declares its own compaction list empty. Verifying the raw dev list against those clusters
+# fails every topic the deploy just correctly set to `delete` — which is exactly what it did.
+if [ "${ENVIRONMENT:-}" = "production" ] && [ -z "${TOPIC_SET:-}" ]; then
+  _kept=""
+  for _t in $COMPACTED_LIST; do
+    _drop=0
+    for _u in ${OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS:-}; do
+      [ "$_t" = "$_u" ] && _drop=1
+    done
+    [ "$_drop" -eq 0 ] && _kept="$_kept $_t"
+  done
+  COMPACTED_LIST="$_kept"
+  echo "[verify-topics] ENVIRONMENT=production: compaction expectation dropped for the prod-only uncompacted set"
+fi
+
 for topic in $COMPACTED_LIST; do
   if ! kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --describe --topic "$topic" >/dev/null 2>&1; then
     echo "FAIL: compacted topic $topic is ABSENT" >&2
