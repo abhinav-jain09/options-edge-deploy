@@ -335,12 +335,18 @@ class ServiceIdentityUnversionedTest(unittest.TestCase):
         self.assertEqual({"suffix-versioned.yaml"}, flagged,
                          "a versioned id suffix must fail the guard; an environment suffix must not")
 
-    def test_real_suffix_values_are_environment_namespaces(self) -> None:
-        # The live values today, asserted so a future edit to any of them is caught by the guard above.
-        suffixes = {value for _, key, value in identities(ROOT / "k8s") if key.endswith("_SUFFIX")}
-        self.assertTrue(suffixes, "the id-composing suffix is declared in this repo and must be seen")
-        for value in suffixes:
-            self.assertNotRegex(value, VERSIONED, f"id suffix {value!r} carries a version")
+    def test_real_suffix_values_are_pinned_environment_namespaces(self) -> None:
+        # This suffix renames EVERY Streams identity in its environment, so its permitted values are
+        # pinned exactly rather than merely checked for versions. A "not versioned" assertion alone
+        # would pass an empty suffix (which collapses prod and dev onto the SAME identity) or a
+        # renamed one. Changing this set is a deliberate, reviewed act — which is the point.
+        found = {value for _, key, value in identities(ROOT / "k8s") if key.endswith("_SUFFIX")}
+        self.assertEqual(
+            {"-prod", "-dev", "-es4"}, found,
+            "the id-composing suffix values changed. Each one renames every Streams identity in its "
+            "environment: confirm the new value is an environment namespace (never a version, never "
+            "empty — an empty suffix merges environments onto one identity), then update this pin.",
+        )
 
     def test_bulk_envfrom_sources_are_fail_closed(self) -> None:
         # envFrom is how the July 2026 stale-identity incident actually reached a workload: a shared
