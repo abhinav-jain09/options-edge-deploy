@@ -196,7 +196,6 @@ services:
   - { name: raw-postgres-writer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-raw-postgres-writer,          deployments: [raw-postgres-writer] }
   - { name: pin-postgres-writer,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pin-postgres-writer,          deployments: [pin-postgres-writer] }
   - { name: pressure-postgres-writer,     managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-pressure-postgres-writer,     deployments: [pressure-postgres-writer] }
-  - { name: hpsf-postgres-writer,         managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-hpsf-postgres-writer,         deployments: [hpsf-postgres-writer-service] }
   - { name: spx-mission-control,          managedBy: standalone, sliceGenerated: true, envs: [dev, production], image: options-edge-spx-mission-control,          deployments: [spx-mission-control-service] }
   - { name: redis,                        managedBy: monolith, image: redis,                                     deployments: [options-edge-redis] }
 

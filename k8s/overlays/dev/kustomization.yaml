@@ -672,8 +672,6 @@ images:
   - name: 192.168.100.252:5000/options-edge-feed-gateway
     newName: host.docker.internal:5001/options-edge-feed-gateway
     newTag: dev
-  - name: 192.168.100.252:5000/options-edge-hpsf-postgres-writer
-    newName: host.docker.internal:5001/options-edge-hpsf-postgres-writer
     newTag: dev
   - name: 192.168.100.252:5000/options-edge-spx-mission-control
     newName: host.docker.internal:5001/options-edge-spx-mission-control

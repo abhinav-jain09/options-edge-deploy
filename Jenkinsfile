@@ -34,8 +34,6 @@ pipeline {
     string(name: 'PRESSURE_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pressure Postgres writer image')
     string(name: 'PIN_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'Pin Postgres writer image (deployed in dev AND prod; the prod image must exist before promotion)')
     string(name: 'FEED_GATEWAY_IMAGE', defaultValue: '', description: 'Feed gateway image')
-    string(name: 'HPSF_PROCESSING_IMAGE', defaultValue: '', description: 'HPSF Stage A/B processing image')
-    string(name: 'HPSF_POSTGRES_WRITER_IMAGE', defaultValue: '', description: 'HPSF Postgres writer image')
     string(name: 'SPX_MISSION_CONTROL_IMAGE', defaultValue: '', description: 'SPX mission control image')
     string(name: 'STRIKE_FLOW_CLASSIFIER_IMAGE', defaultValue: '', description: 'Strike flow classifier image')
     string(name: 'DELTA_FLOW_IMAGE', defaultValue: '', description: 'Delta flow service image')
@@ -88,7 +86,7 @@ pipeline {
     string(name: 'IB_EXPIRY', defaultValue: '', description: 'Option expiry/date. Empty uses the current weekday on the Jenkins agent.')
     string(name: 'DATABENTO_EXPIRY', defaultValue: '', description: 'Override expiry for Databento Historical feed (YYYYMMDD). Empty -> auto-resolved from Databento metadata + MarketCalendar in the Resolve Databento Expiry stage (fail-closed if Databento is unreachable or the result is not a trading day).')
     string(name: 'IB_MAX_STRIKES', defaultValue: '43', description: 'Max strikes around spot for IBKR feed')
-    booleanParam(name: 'SKIP_KAFKA_TOPICS', defaultValue: false, description: 'Skip all three Kafka topic stages (Kafka Topics, Reset HPSF Stage B Internal Topics, Kafka Internal Topics). Use for a code/image-only redeploy when topic configs and partitions are already correct on the cluster — saves ~5-15 min on a typical run. Defaults off (run the full topic apply/verify path).')
+    booleanParam(name: 'SKIP_KAFKA_TOPICS', defaultValue: false, description: 'Skip both Kafka topic stages (Kafka Topics, Kafka Internal Topics). Use for a code/image-only redeploy when topic configs and partitions are already correct on the cluster — saves ~5-15 min on a typical run. Defaults off (run the full topic apply/verify path).')
     booleanParam(name: 'KAFKA_CLEANUP_TOPICS', defaultValue: false, description: 'Clean Kafka topics before deployment')
     booleanParam(name: 'KAFKA_DELETE_UNWANTED_TOPICS', defaultValue: false, description: 'Delete non-whitelisted topics')
     booleanParam(name: 'ALLOW_PROD_KAFKA_CLEANUP', defaultValue: false, description: 'Allow destructive Kafka cleanup in production')
@@ -98,7 +96,6 @@ pipeline {
     string(name: 'EMERGENCY_REASON', defaultValue: '', description: 'Why are you doing a direct-to-prod emergency deploy? Required and non-empty when EMERGENCY_DIRECT_PROD_DEPLOY=true. Captured in the audit log.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false, description: 'Validate render, image preflight, and server-side Kubernetes apply without mutating runtime resources.')
     choice(name: 'DEPLOY_TARGET', choices: ['all', 'delta-flow-service', 'dealer-ledger-service', 'strike-liquidity-heatmap-service'], description: 'Deployment scope. all reconciles the normal stack; a service-named target applies only that service\'s resources and rolls only that deployment.')
-    booleanParam(name: 'SKIP_HPSF_SMOKE', defaultValue: true, description: 'Skip the HPSF Smoke stage (Stage B runtime check). Temporarily bypassed until the Stage B underlying-state/runtime check is fixed; set false to re-enable.')
   }
   environment {
     ENVIRONMENT = "${params.ENVIRONMENT ?: 'dev'}"
@@ -406,8 +403,7 @@ pipeline {
             'DATABENTO_GEX_HISTORY_IMAGE': 'databento-gex-history', 'RAW_POSTGRES_WRITER_IMAGE': 'raw-postgres-writer',
             'GAMMA_MIGRATION_IMAGE': 'gamma-migration',
             'PRESSURE_POSTGRES_WRITER_IMAGE': 'pressure-postgres-writer', 'PIN_POSTGRES_WRITER_IMAGE': 'pin-postgres-writer',
-            'FEED_GATEWAY_IMAGE': 'feed-gateway', 'HPSF_PROCESSING_IMAGE': 'hpsf-processing',
-            'HPSF_POSTGRES_WRITER_IMAGE': 'hpsf-postgres-writer', 'SPX_MISSION_CONTROL_IMAGE': 'spx-mission-control',
+            'FEED_GATEWAY_IMAGE': 'feed-gateway', 'SPX_MISSION_CONTROL_IMAGE': 'spx-mission-control',
             'STRIKE_FLOW_CLASSIFIER_IMAGE': 'strike-flow-classifier', 'DELTA_FLOW_IMAGE': 'delta-flow',
             'DEALER_LEDGER_IMAGE': 'dealer-ledger', 'DEALER_LEDGER_CALIBRATION_IMAGE': 'dealer-ledger-calibration',
             'STRIKE_LIQUIDITY_HEATMAP_IMAGE': 'strike-liquidity-heatmap', 'UNIFIED_SR_IMAGE': 'unified-sr',
@@ -533,50 +529,6 @@ pipeline {
           # retired zero-dte identity — same script the service-deploy job runs, so the
           # monolith path deploys the identical Kafka contract.
           scripts/kafka/ensure-vix-option-inteligence-topic.sh
-          scripts/kafka/create-hpsf-topics.sh
-          scripts/kafka/verify-hpsf-topics.sh
-        '''
-      }
-    }
-    stage('Reset HPSF Stage B Internal Topics') {
-      when {
-        // DISABLED until further notice (2026-07-02): hpsf-stage-a/b are temporarily
-        // not deployed (replicas pinned to 0 in k8s/base), so resetting stage-b
-        // internal topics on every run is pointless churn. Restore the original
-        // expression below when the services are re-enabled.
-        // expression { return params.DEPLOY_TARGET == 'all' && !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
-        expression { return false }
-      }
-      steps {
-        sh '''
-          set -euo pipefail
-          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
-          if [ -z "${KAFKA_BOOTSTRAP_SERVERS:-}" ]; then
-            : "${OE_KAFKA_BOOTSTRAP:?OE_KAFKA_BOOTSTRAP must be set by the Resolve profile stage (oeProfile single source of truth)}"
-            KAFKA_BOOTSTRAP_SERVERS="$OE_KAFKA_BOOTSTRAP"
-          fi
-          export KAFKA_BOOTSTRAP_SERVERS
-          export TOPIC_PREFIX
-          export HPSF_STAGE_B_STREAMS_APPLICATION_ID="${HPSF_STAGE_B_STREAMS_APPLICATION_ID:-options-edge-hpsf-stage-b}"
-
-          kubectl -n options-edge scale deployment/hpsf-stage-b-service --replicas=0 || true
-          for i in $(seq 1 60); do
-            pod_count="$(kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service --no-headers 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')"
-            if [ "$pod_count" = "0" ]; then
-              echo "hpsf-stage-b-service pods are stopped."
-              break
-            fi
-            echo "Waiting for hpsf-stage-b-service pods to stop; remaining=$pod_count"
-            kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service || true
-            sleep 2
-          done
-          if [ "$pod_count" != "0" ]; then
-            echo "Timed out waiting for hpsf-stage-b-service pods to stop before internal topic reset." >&2
-            kubectl -n options-edge get pods -l app.kubernetes.io/name=hpsf-stage-b-service || true
-            exit 1
-          fi
-
-          scripts/kafka/reset-hpsf-stage-b-internal-topics.sh
         '''
       }
     }
@@ -827,7 +779,7 @@ void promoteToProduction() {
       'DATABENTO_MAXPAIN_IMAGE', 'OPTION_PRICE_BEHAVIOR_IMAGE', 'DATABENTO_MISSION_SANDWICH_IMAGE',
       'VOLUME_PACE_IMAGE', 'DIRECTIONAL_PRESSURE_IMAGE', 'DATABENTO_GEX_HISTORY_IMAGE', 'GAMMA_MIGRATION_IMAGE',
       'RAW_POSTGRES_WRITER_IMAGE', 'PRESSURE_POSTGRES_WRITER_IMAGE', 'PIN_POSTGRES_WRITER_IMAGE',
-      'FEED_GATEWAY_IMAGE', 'HPSF_PROCESSING_IMAGE', 'HPSF_POSTGRES_WRITER_IMAGE', 'SPX_MISSION_CONTROL_IMAGE',
+      'FEED_GATEWAY_IMAGE', 'SPX_MISSION_CONTROL_IMAGE',
       'STRIKE_FLOW_CLASSIFIER_IMAGE', 'DELTA_FLOW_IMAGE', 'DEALER_LEDGER_IMAGE', 'DEALER_LEDGER_CALIBRATION_IMAGE',
       'STRIKE_LIQUIDITY_HEATMAP_IMAGE', 'UNIFIED_SR_IMAGE', 'STRIKE_INTELLIGENCE_IMAGE', 'OPTION_TRUTH_ENGINE_IMAGE', 'MARKET_CARRY_IMAGE', 'ES_SPX_ALIGN_IMAGE', 'DATABENTO_SR3_FEED_IMAGE', 'VIX_OPTION_INTELIGENCE_IMAGE', 'GREEK_MOVE_AUTHENTICITY_IMAGE', 'STRIKE_INVASION_IMAGE',
       'INVASION_POSTGRES_WRITER_IMAGE', 'SPREAD_SKEW_IMAGE', 'SPREAD_SKEW_POSTGRES_WRITER_IMAGE', 'REVERSAL_CONFIRMATION_IMAGE', 'CORRIDOR_GAUGE_IMAGE',
@@ -853,7 +805,6 @@ void promoteToProduction() {
       booleanParam(name: 'SKIP_PRODUCTION_PROMOTION', value: true),
       booleanParam(name: 'DEPLOY_DRY_RUN', value: params.DEPLOY_DRY_RUN),
       string(name: 'DEPLOY_TARGET', value: params.DEPLOY_TARGET),
-      booleanParam(name: 'SKIP_HPSF_SMOKE', value: params.SKIP_HPSF_SMOKE),
       booleanParam(name: 'SKIP_KAFKA_TOPICS', value: params.SKIP_KAFKA_TOPICS)
     ]
 }

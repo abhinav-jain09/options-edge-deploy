@@ -70,19 +70,23 @@ class HpsfTopicScriptTest(unittest.TestCase):
         self.assertIn("options.databento.volume.state.compacted:32", topics_env)
         self.assertIn("options.databento.volume.state.compacted", topics_env.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1])
 
-    def test_jenkins_refreshes_hpsf_topics_after_service_startup(self) -> None:
-        jenkinsfile = (ROOT / "Jenkinsfile").read_text()
-        kafka_topics_stage = jenkinsfile.split("stage('Kafka Topics')", 1)[1]
+    def test_main_deploy_pipeline_no_longer_runs_the_hpsf_topic_scripts(self) -> None:
+        """HPSF is retired from dev and prod (USER, 2026-09-07), so the MAIN deploy must not
+        run these scripts any more. They stay in the repo for the standalone Jenkinsfile.hpsf-*
+        jobs, and the rest of this file still covers them — but wiring them into every dev and
+        production deploy is what let a service nobody runs block production build #642:
 
-        self.assertIn("scripts/kafka/create-hpsf-topics.sh", kafka_topics_stage)
-        self.assertLess(
-            kafka_topics_stage.index("scripts/kafka/apply-topics.sh"),
-            kafka_topics_stage.index("scripts/kafka/create-hpsf-topics.sh"),
-        )
-        self.assertLess(
-            kafka_topics_stage.index("scripts/kafka/create-hpsf-topics.sh"),
-            kafka_topics_stage.index("scripts/kafka/verify-hpsf-topics.sh"),
-        )
+            Topic options.hpsf.market-flow exists with partitions=1; expected at least 32
+            Refusing topic repair in HPSF topic script.
+
+        scripts/kafka/topics.env created those three topics at 1 partition while
+        create-hpsf-topics.sh demanded 32 — two scripts in one pipeline disagreeing about the
+        same topics, with no service on either side of them.
+        """
+        jenkinsfile = (ROOT / "Jenkinsfile").read_text()
+
+        self.assertNotIn("scripts/kafka/create-hpsf-topics.sh", jenkinsfile)
+        self.assertNotIn("scripts/kafka/verify-hpsf-topics.sh", jenkinsfile)
 
     def test_script_rejects_invalid_min_isr(self) -> None:
         env = os.environ.copy()
