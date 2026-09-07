@@ -29,9 +29,21 @@ VERSIONED = re.compile(r"[vVrR][0-9]")
 # deliberate, reviewed exception, never a way to quiet a real violation.
 ALLOWED_IDENTITY_VALUES: frozenset[str] = frozenset()
 
+# envFrom bulk sources whose contents this scan cannot read. A Secret is base64 and may not even live in
+# this repository, so a bulk import of one is an unvettable channel into a workload's environment. Each
+# entry below is a REVIEWED declaration that the source carries credentials only — never a service
+# identity. Adding one is a deliberate decision, not a way to silence the guard; a Secret that did carry
+# an identity would be the violation, because an identity belongs in a manifest where it can be read.
+ALLOWED_BULK_SECRET_SOURCES: frozenset[str] = frozenset({
+    "options-edge-runtime-secrets",
+    "options-edge-databento-feed-env",
+    "es4-runtime-secrets",
+    "dhan-credentials",
+})
 
-def _walk(node: object, path: Path, found: list[tuple[Path, str, str]],
-          indirect: list[tuple[Path, str, str]]) -> None:
+
+def _walk(node: object, path: Path, namespace: str | None, found: list[tuple[Path, str, str]],
+          indirect: list[tuple[Path, str, str, str | None]]) -> None:
     """Collect (file, key, value) identity declarations from a PARSED document.
 
     Parsing rather than line-matching is what makes this form-agnostic: block env entries, inline
@@ -54,31 +66,54 @@ def _walk(node: object, path: Path, found: list[tuple[Path, str, str]],
                 source = node["valueFrom"]
                 ref = source.get("configMapKeyRef") if isinstance(source, dict) else None
                 if isinstance(ref, dict) and isinstance(ref.get("name"), str) and isinstance(ref.get("key"), str):
-                    indirect.append((path, name, f"{ref['name']}/{ref['key']}"))
+                    indirect.append((path, name, f"configMap:{ref['name']}/{ref['key']}", namespace))
                 else:
                     # secretKeyRef (base64, unvettable), fieldRef, or a malformed ref: an identity is
                     # a literal or a repo-local ConfigMap value — never anything else.
-                    indirect.append((path, name, "<unresolvable-source>"))
+                    indirect.append((path, name, "<unresolvable-source>", namespace))
+        # Bulk environment import. This is how the July 2026 stale-identity incident actually happened:
+        # a shared ConfigMap carried an app id that no deployment manifest mentioned. A bulk source must
+        # therefore be readable HERE (a repo-local ConfigMap, whose keys are scanned at its definition)
+        # or explicitly declared identity-free.
+        bulk = node.get("envFrom")
+        if isinstance(bulk, list):
+            for entry in bulk:
+                if not isinstance(entry, dict):
+                    continue
+                config_ref = entry.get("configMapRef")
+                if isinstance(config_ref, dict) and isinstance(config_ref.get("name"), str):
+                    indirect.append((path, "envFrom", f"configMap:{config_ref['name']}/*", namespace))
+                secret_ref = entry.get("secretRef")
+                if isinstance(secret_ref, dict) and isinstance(secret_ref.get("name"), str):
+                    indirect.append((path, "envFrom", f"secret:{secret_ref['name']}", namespace))
         # ConfigMap data / any mapping whose KEY is an identity key.
         for key, value in node.items():
             if isinstance(key, str) and IDENTITY_KEY.match(key) and isinstance(value, (str, int, float)):
                 found.append((path, key, str(value)))
-            _walk(value, path, found, indirect)
+            _walk(value, path, namespace, found, indirect)
     elif isinstance(node, list):
         for item in node:
-            _walk(item, path, found, indirect)
+            _walk(item, path, namespace, found, indirect)
 
 
-def _configmap_index(documents: list[tuple[Path, object]]) -> set[tuple[str, str]]:
-    """(configMapName, dataKey) for every ConfigMap defined in the repository."""
-    index: set[tuple[str, str]] = set()
+def _configmap_index(documents: list[tuple[Path, object]]) -> dict[tuple[str | None, str], set[str]]:
+    """{(namespace, configMapName): dataKeys} for every ConfigMap defined in the repository.
+
+    Namespace matters: a same-named ConfigMap in another namespace (this repo deploys into three) must
+    not "resolve" a reference the target namespace never sees. Base manifests carry no namespace — it
+    is stamped by the kustomize overlay — so those index under None and match any namespace.
+    """
+    index: dict[tuple[str | None, str], set[str]] = {}
     for _, document in documents:
         if not isinstance(document, dict) or document.get("kind") != "ConfigMap":
             continue
-        name = (document.get("metadata") or {}).get("name")
+        metadata = document.get("metadata") or {}
+        name = metadata.get("name")
+        namespace = metadata.get("namespace")
         data = document.get("data")
         if isinstance(name, str) and isinstance(data, dict):
-            index.update((name, key) for key in data if isinstance(key, str))
+            key = (namespace if isinstance(namespace, str) else None, name)
+            index.setdefault(key, set()).update(k for k in data if isinstance(k, str))
     return index
 
 
@@ -98,7 +133,7 @@ def scan(root: Path) -> ScanResult:
     REPORTED rather than skipped: a guard that quietly ignores what it cannot vet approves it.
     """
     result = ScanResult()
-    indirect: list[tuple[Path, str, str]] = []
+    indirect: list[tuple[Path, str, str, str | None]] = []
     documents: list[tuple[Path, object]] = []
     for path in sorted(p for ext in ("*.yaml", "*.yml") for p in root.rglob(ext)):
         try:
@@ -110,14 +145,41 @@ def scan(root: Path) -> ScanResult:
             continue
         for document in parsed:
             documents.append((path, document))
-            _walk(document, path, result.identities, indirect)
+            namespace = None
+            if isinstance(document, dict):
+                metadata = document.get("metadata") or {}
+                if isinstance(metadata.get("namespace"), str):
+                    namespace = metadata["namespace"]
+            _walk(document, path, namespace, result.identities, indirect)
 
     known = _configmap_index(documents)
-    for path, key, reference in indirect:
-        name, _, data_key = reference.partition("/")
-        if (name, data_key) not in known:
-            # The referenced value lives outside this repository (or in a Secret), so its identity can
-            # never be vetted here. Fail closed rather than assume it is clean.
+    for path, key, reference, namespace in indirect:
+        kind, _, target = reference.partition(":")
+        if kind == "secret":
+            # A Secret's contents are unreadable here (base64, possibly not even in this repo). It is
+            # acceptable ONLY as a reviewed declaration that it carries no identity.
+            if target not in ALLOWED_BULK_SECRET_SOURCES:
+                result.unresolved.append((path, key, reference))
+            continue
+        if kind != "configMap":
+            result.unresolved.append((path, key, reference))
+            continue
+        name, _, data_key = target.partition("/")
+        # Namespace matching, both directions, because kustomize stamps namespaces at BUILD time:
+        #   * a namespaced reference is satisfied by that namespace, or by an unnamespaced definition
+        #     (a base ConfigMap the overlay will stamp into the same namespace);
+        #   * an UNNAMESPACED reference (a base manifest) can be stamped into any namespace, so it is
+        #     satisfied by a definition in any — we cannot know which overlay renders it here.
+        # This is deliberately the permissive direction for base manifests and the strict one for
+        # explicitly-namespaced manifests: guessing an overlay's stamp would produce false alarms.
+        if namespace is None:
+            keys = {key for (_, cm_name), cm_keys in known.items() if cm_name == name for key in cm_keys}
+        else:
+            keys = known.get((namespace, name), set()) | known.get((None, name), set())
+        resolved = bool(keys) if data_key == "*" else data_key in keys
+        if not resolved:
+            # The referenced source is not defined in this repository, so whatever identity it injects
+            # can never be vetted here. Fail closed rather than assume it is clean.
             result.unresolved.append((path, key, reference))
     return result
 
@@ -249,6 +311,52 @@ class ServiceIdentityUnversionedTest(unittest.TestCase):
         self.assertEqual(
             {"indirect.yaml", "secret-sourced.yaml"}, {path.name for path, _, _ in result.unresolved},
             "an identity from an unresolvable ConfigMap/Secret reference must fail the guard",
+        )
+
+    def test_bulk_envfrom_sources_are_fail_closed(self) -> None:
+        # envFrom is how the July 2026 stale-identity incident actually reached a workload: a shared
+        # ConfigMap carried an app id that no deployment manifest mentioned. A bulk source must be
+        # readable here, or declared identity-free — never silently trusted.
+        def deployment(body: str) -> str:
+            return ("apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n"
+                    "      containers:\n        - name: svc\n          envFrom:\n" + body)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "foreign-cm.yaml").write_text(
+                deployment("            - configMapRef:\n                name: not-in-this-repo\n"))
+            (root / "unlisted-secret.yaml").write_text(
+                deployment("            - secretRef:\n                name: some-other-secret\n"))
+            (root / "allowed-secret.yaml").write_text(
+                deployment(f"            - secretRef:\n                name: "
+                           f"{sorted(ALLOWED_BULK_SECRET_SOURCES)[0]}\n"))
+            unresolved = {path.name for path, _, _ in scan(root).unresolved}
+
+        self.assertIn("foreign-cm.yaml", unresolved, "a ConfigMap outside this repo cannot be vetted")
+        self.assertIn("unlisted-secret.yaml", unresolved, "an undeclared Secret source cannot be vetted")
+        self.assertNotIn("allowed-secret.yaml", unresolved,
+                         "a reviewed, allow-listed credentials Secret must not trip the guard")
+
+    def test_a_configmap_in_another_namespace_does_not_resolve(self) -> None:
+        # This repo deploys into three namespaces. A same-named ConfigMap elsewhere must not vouch for
+        # a reference the target namespace never sees.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "cm-other-ns.yaml").write_text(
+                "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: shared-config\n"
+                "  namespace: other-namespace\ndata:\n  X_APP_ID: some-service\n"
+            )
+            (root / "dep.yaml").write_text(
+                "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  namespace: options-edge\n"
+                "spec:\n  template:\n    spec:\n      containers:\n        - name: svc\n"
+                "          env:\n            - name: X_APP_ID\n              valueFrom:\n"
+                "                configMapKeyRef:\n                  name: shared-config\n"
+                "                  key: X_APP_ID\n"
+            )
+            unresolved = scan(root).unresolved
+        self.assertEqual(
+            1, len(unresolved),
+            "a ConfigMap in a different namespace must not resolve the reference",
         )
 
     def test_a_resolvable_configmap_reference_is_accepted(self) -> None:
