@@ -20,4 +20,10 @@ spec:
             # to both clusters) — same env-local rule as KAFKA_BOOTSTRAP_SERVERS.
             - name: VIX_INDEX_SOURCE_BOOTSTRAP
               value: host.docker.internal:19092
-          image: host.docker.internal:5001/options-edge-databento-feed:dev
+          # Canonical registry name on purpose: the overlay's images: transformer matches
+          # 192.168.100.252:5000/... and rewrites it to the dev registry, and only then does
+          # the deploy's digest pin apply. Writing host.docker.internal here bypassed BOTH,
+          # leaving the one un-pinned image that aborted every apply (guard: "rendered
+          # Deployment images are not digest-pinned before apply").
+          # databento-vix-feed runs the databento-feed binary in VIX-only mode — same image.
+          image: 192.168.100.252:5000/options-edge-databento-feed:dev
