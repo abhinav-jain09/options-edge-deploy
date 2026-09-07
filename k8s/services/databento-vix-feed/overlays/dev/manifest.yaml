@@ -82,7 +82,7 @@ spec:
           envFrom:
             - secretRef:
                 name: options-edge-databento-feed-env
-          image: 192.168.100.252:5000/options-edge-databento-feed:dev
+          image: host.docker.internal:5001/options-edge-databento-feed:dev
           imagePullPolicy: Always
           livenessProbe:
             failureThreshold: 2
