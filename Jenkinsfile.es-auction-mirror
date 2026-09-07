@@ -117,10 +117,22 @@ pipeline {
           set -euo pipefail
           launchctl unload "$PLIST" 2>/dev/null || true
           rm -f "$PLIST"
-          # unit-specific: kill ONLY this (target, topic) mirror via its own run script, never a sibling
+          # unit-specific: kill ONLY this (target, topic) mirror via its own run script, never a sibling.
+          # The steady-state process after the exec chain is a `kafka.tools.MirrorMaker` JVM whose command
+          # line carries this unit's config dir, so match THAT too -- the two patterns below missed it and
+          # a failed unload could leave the mirror running with its plist deleted (code review round 4).
           pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
           pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
-          echo "mirror service removed (topic + data left intact)"
+          pkill -f "kafka.tools.MirrorMaker.*$MDIR" 2>/dev/null || true
+          # PROVE it is gone: teardown that silently leaves a mirror running is worse than a loud failure.
+          GONE=0
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if launchctl list 2>/dev/null | grep -qF "$LABEL"; then sleep 1; continue; fi
+            if pgrep -f "$MDIR" >/dev/null 2>&1; then sleep 1; continue; fi
+            GONE=1; break
+          done
+          [ "$GONE" = "1" ] || { echo "FAIL: the unit or its process survived teardown:"; launchctl list 2>/dev/null | grep -F "$LABEL" || true; pgrep -fl "$MDIR" || true; exit 1; }
+          echo "mirror service removed and verified gone (topic + data left intact)"
         '''
       }
     }
@@ -604,14 +616,21 @@ PL
           # ALLOW_EMPTY_SOURCE, so there is no record to prove anything against. Skip loudly rather
           # than fail; the mirror is installed and running, and re-running this job with ACTION=install
           # after the next RTH session (with the flag OFF) runs this proof for real.
-          SEND_NOW=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | awk -F: 'NR==1{print $3}')
-          case "${SEND_NOW:-}" in ''|*[!0-9]*) SEND_NOW=0 ;; esac
-          if [ "$SEND_NOW" -eq 0 ]; then
+          # The deferral is decided by THIS BUILD'S arming snapshot, not by a fresh query: treating an
+          # unreadable or malformed offset as "empty" would let a broker or CLI failure skip the proof and
+          # report success (code review round 4). The offset must be a NUMBER either way.
+          ARMED=$(awk -v b="build=$BUILD_NUMBER" 'NR==1 && $1 == b { sub(/^send=/, "", $2); print $2 }' "$MDIR/source-end-offset.txt" 2>/dev/null)
+          case "${ARMED:-}" in ''|*[!0-9]*) echo "FAIL: no arming snapshot from this build (got '${ARMED:-}')"; exit 1 ;; esac
+          SEND_NOW=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | awk -F: 'NR==1{print $3}') \
+            || { echo "FAIL: cannot read source end offset for $TOPIC"; exit 1; }
+          case "${SEND_NOW:-}" in ''|*[!0-9]*) echo "FAIL: source end offset is not a number (got '${SEND_NOW:-}')"; exit 1 ;; esac
+          if [ "$ARMED" -eq 0 ] && [ "$SEND_NOW" -eq 0 ]; then
             [ "${ALLOW_EMPTY_SOURCE:-false}" = "true" ] || { echo "FAIL: source $TOPIC is empty and ALLOW_EMPTY_SOURCE is not set"; exit 1; }
             echo "DEFERRED: source $TOPIC is still empty -- the end-to-end payload proof did NOT run."
             echo "DEFERRED: re-run this job (ACTION=install, ALLOW_EMPTY_SOURCE=false) after the next RTH session."
             exit 0
           fi
+          [ "$ARMED" -gt 0 ] || { echo "FAIL: this build armed against an empty source but the topic now has $SEND_NOW records -- re-run install so the proof can arm properly"; exit 1; }
           # The auction payload is PLAIN JSON, not Avro, so there is no schema-registry id to check.
           # This stage is the equally strict replacement, and it is deliberately a THREE-PART proof,
           # because no one part is sufficient:
