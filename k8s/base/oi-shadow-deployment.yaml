@@ -53,10 +53,10 @@ spec:
             # state stores yet, so nothing is at risk today -- which is exactly why it costs nothing
             # to declare now rather than after the calibration loop adds them.
             #
-            # oi-shadow-v1 is the value the code already defaults to, so this changes no behaviour;
+            # oi-shadow is the value the code already defaults to, so this changes no behaviour;
             # KafkaSettings appends the environment suffix as it does for every other Streams app.
             - name: OI_SHADOW_APP_ID
-              value: oi-shadow-v1
+              value: oi-shadow
             # DECLARED, not defaulted. OiShadowSettings falls back to KafkaSettings.rawTopic(),
             # which is the IBKR topic -- and on dev that topic holds ZERO records while
             # options.databento.raw holds four million. The service came up healthy, joined its
