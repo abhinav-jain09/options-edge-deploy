@@ -76,6 +76,14 @@ spec:
               value: context-tape.direction.commissioning
             - name: CONTEXT_TAPE_DIRECTION_CHECKPOINT_TOPIC
               value: context-tape.direction.checkpoint
+            - name: CONTEXT_TAPE_DIRECTION_CURRENT_TOPIC
+              value: context-tape.direction.current
+            - name: CONTEXT_TAPE_DIRECTION_PUSH_TOPIC
+              value: context-tape.direction.push
+            - name: CONTEXT_TAPE_DIRECTION_ALERT_TOPIC
+              value: context-tape.direction.alert
+            - name: CONTEXT_TAPE_DIRECTION_SCORECARD_TOPIC
+              value: context-tape.direction.scorecard
             - name: CONTEXT_TAPE_DIRECTION_API_PORT
               value: "8136"
             - name: HEALTH_PORT
