@@ -128,6 +128,14 @@ spec:
           value: futures.footprint
         - name: KAFKA_ES_FOOTPRINT_EVIDENCE_TOPIC
           value: futures.footprint.evidence
+        # G-R8 (options-edge-feed-gateway/ES-FOOTPRINT-GATEWAY-DESIGN.md) requires this and the
+        # gateway's GATEWAY_ES_FOOTPRINT_MAX_RECORD_BYTES to be ONE value, set together: the gateway
+        # drops any record above its own ceiling, so a producer allowed to emit larger records would
+        # publish records the relay silently discards. Both defaults are 262144 and agreed only by
+        # coincidence until now. See the matching entry in k8s/es4/services/es-feed-gateway.yaml.
+        # MOVE THEM TOGETHER OR NOT AT ALL.
+        - name: FOOTPRINT_MAX_RECORD_BYTES
+          value: "262144"
         envFrom:
         - configMapRef:
             name: es4-base-env

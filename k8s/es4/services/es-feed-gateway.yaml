@@ -106,6 +106,35 @@ spec:
           value: futures.cvd
         - name: KAFKA_ES_CVD_BARS_TOPIC
           value: futures.cvd.bars
+        # ES Footprint relay (ES-FOOTPRINT-GATEWAY-DESIGN.md G-R1..G-R11). Same opt-in reason as the
+        # CVD block above, and the same unprefixed names — TOPIC_PREFIX=es. resolves them to
+        # es.futures.footprint*. These topics are NATIVE here: es-cvd-service publishes them on this
+        # cluster, so unlike dev and prod there is no mirror in the path.
+        #
+        # G-R8a is fail-closed — a topic whose effective max.message.bytes exceeds the ceiling or
+        # whose compression.type is not producer/uncompressed makes the gateway REFUSE TO START, as
+        # do the three HotSpot layout flags the retained-heap arithmetic depends on. All verified on
+        # es4 before enabling: every one of the four topics reads compression.type=producer and
+        # max.message.bytes=1048588 (equal to the ceiling, and the check rejects only ABOVE it), and
+        # UseCompressedOops / UseCompressedClassPointers / CompactStrings are all true on the
+        # running JVM.
+        - name: GATEWAY_ES_FOOTPRINT_ENABLED
+          value: "true"
+        - name: KAFKA_ES_FOOTPRINT_TOPIC
+          value: futures.footprint
+        - name: KAFKA_ES_FOOTPRINT_EVIDENCE_TOPIC
+          value: futures.footprint.evidence
+        - name: KAFKA_ES_FOOTPRINT_BARS_TOPIC
+          value: futures.footprint.bars
+        - name: KAFKA_ES_FOOTPRINT_OUTCOMES_TOPIC
+          value: futures.footprint.outcomes
+        # G-R8 requires this and the producer's FOOTPRINT_MAX_RECORD_BYTES to be ONE value, set
+        # together. Both defaults are 262144, so they agreed only by coincidence of two independent
+        # defaults — a change to either side alone would have silently broken the bound the whole
+        # retained-heap argument rests on. Pinned explicitly on both sides; see the matching entry in
+        # k8s/es4/services/es-cvd.yaml. MOVE THEM TOGETHER OR NOT AT ALL.
+        - name: GATEWAY_ES_FOOTPRINT_MAX_RECORD_BYTES
+          value: "262144"
         # SPX Auction Desk (es-amt-service on this cluster): one payload per RTH minute keyed
         # <tradeDate>|<HH:mm>. Opt-in like the CVD stream. Unprefixed: TOPIC_PREFIX=es. resolves
         # it to es.futures.auction, the name Jenkinsfile.es-auction-mirror copies to dev and prod.
