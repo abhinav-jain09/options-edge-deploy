@@ -1,6 +1,8 @@
 # ES AMT — the SPX Auction Desk. One auction payload per RTH minute, keyed `<tradeDate>|<HH:mm>`,
 # on futures.auction (es4's TOPIC_PREFIX=es. resolves it to es.futures.auction; the topic is
-# declared 1 partition, compact,delete, 7 sessions in scripts/kafka/topics.env and mirrored
+# declared 1 partition, plain delete, retention 604800000 (7 calendar days) in
+# scripts/kafka/topics.env — enough for the feed-gateway to rebuild its current + previous trade
+# date after a restart, NOT a count of sessions — and mirrored
 # byte-for-byte to dev + prod by Jenkinsfile.es-auction-mirror). Deploy via Jenkinsfile.es4-deploy.
 # Cross-env wiring follows es-cvd.yaml (ES-CVD-DESIGN.md 6a): the ES tape and the output topic live
 # on the es4 broker; the SPX index feed is es4's OWN (see ES_AMT_SPX_BOOTSTRAP_SERVERS below).

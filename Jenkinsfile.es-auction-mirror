@@ -1,8 +1,8 @@
 // ES-AUCTION MIRROR -- stand up a clean SINGLE-TOPIC .4->target mirror as a managed launchd service.
 //
 // WHY: es-amt-service (the SPX Auction Desk) runs ONLY on es4. Its output topic
-// `es.futures.auction` -- one record per RTH minute, keyed `<tradeDate>|<HH:mm>`, seven sessions
-// retained -- therefore exists ONLY on the .4 broker, so the desk is blank on prod and dev. This
+// `es.futures.auction` -- one record per RTH minute, keyed `<tradeDate>|<HH:mm>`, plain delete with
+// seven CALENDAR days of retention -- therefore exists ONLY on the .4 broker, so the desk is blank on prod and dev. This
 // job mirrors it VERBATIM (record-copy, identity name, byte-for-byte key+value) to those two
 // brokers. There is NO local auction producer on the targets -- a broken mirror means the desk goes
 // STALE there, never different from es4.
@@ -246,11 +246,12 @@ pipeline {
           # FROZEN per-topic shape contract (scripts/kafka/topics.env, dev/prod AND es4 blocks -- keep
           # in sync; validate-mirrored-topic-contracts.sh fails CI when they drift):
           #   es.futures.auction : 1 partition, delete, retention.ms=604800000
-          # 1 partition = the desk's per-minute ordering contract; plain delete + 7-day retention =
-          # exactly seven sessions of `<tradeDate>|<HH:mm>` minute records (nothing served is
-          # compacted in any environment; the gateway keeps the latest correctionRev per key). A
-          # target created at a longer or unlimited retention would
-          # silently show a different desk from es4. The TOPIC parameter is a choice list, but
+          # 1 partition = the desk's per-minute ordering contract; plain delete + 7 CALENDAR days of
+          # retention = what the feed-gateway needs to rebuild its current + previous trade date after
+          # a restart across a weekend or holiday (NOT a count of sessions; the page shows one). Nothing
+          # served is compacted in any environment, and the gateway keeps the latest correctionRev per
+          # key. A target created at a longer or unlimited retention would silently show a different
+          # desk from es4. The TOPIC parameter is a choice list, but
           # re-assert here fail-closed so a job-config drift can never mirror an unknown topic with a
           # guessed shape.
           case "$TOPIC" in
@@ -259,11 +260,12 @@ pipeline {
           esac
 
           mkdir -p "$MDIR"
-          # auto.offset.reset=earliest -- DELIBERATE. The desk shows SEVEN sessions, and every one of
-          # them is already on es4 when the mirror is installed: with `latest` the target would hold
-          # only the minutes published after install, i.e. a one-session desk for a week, or a blank
-          # one over a weekend. Seeding from earliest is bounded and cheap -- at most 7 sessions x
-          # ~390 minutes = ~2,730 records, the retention window being what bounds the source.
+          # auto.offset.reset=earliest -- DELIBERATE. Whatever es4 still holds inside the retention
+          # window is what the target must hold too: with `latest` the target would carry only the
+          # minutes published after install, so a mirror installed mid-session would show a truncated
+          # day and one installed over a weekend would show nothing until Monday. Seeding from earliest
+          # is bounded and cheap -- the 7-day window caps the source at a handful of sessions x ~390
+          # minutes, a few thousand records.
           # Re-copying after a group reset is harmless: identical keys, and the gateway keeps one record per key.
           #
           cat > "$MDIR/consumer.properties" <<C
@@ -412,12 +414,20 @@ S
           SEND=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | awk -F: 'NR==1{print $3}') \
             || { echo "FAIL: cannot read source end offset for $TOPIC"; exit 1; }
           case "${SEND:-}" in ''|*[!0-9]*) echo "FAIL: source end offset is not a number (got '${SEND:-}')"; exit 1 ;; esac
-          [ "$SEND" -gt 0 ] || { echo "FAIL: source topic $TOPIC is EMPTY"; exit 1; }
+          if [ "$SEND" -eq 0 ]; then
+            # FRESH ROLLOUT: an empty source has no reference record, so there is nothing to arm
+            # against and nothing for the payload stage to prove. Allowed only under the flag; the
+            # snapshot is still written (send=0) so the payload stage can see the deferral and say so.
+            [ "${ALLOW_EMPTY_SOURCE:-false}" = "true" ] || { echo "FAIL: source topic $TOPIC is EMPTY"; exit 1; }
+            printf 'build=%s send=%s\\n' "$BUILD_NUMBER" "$SEND" > "$MDIR/source-end-offset.txt"
+            echo "DEFERRED: source $TOPIC is EMPTY -- installed WITHOUT the per-install freshness arming; the payload proof is deferred (ALLOW_EMPTY_SOURCE)."
+          else
           REFOFF=$((SEND - 1))
           # Stamped with the build, exactly like the pollution baseline: a leftover file from an
           # earlier build must never be able to stand in as this build's arming evidence.
           printf 'build=%s send=%s\\n' "$BUILD_NUMBER" "$SEND" > "$MDIR/source-end-offset.txt"
           echo "armed against source end offset $SEND (reference record at offset $REFOFF)"
+          fi
 
           # 2. stop this (target, topic) unit and WAIT for the process to be gone. --reset-offsets
           # refuses to touch a group with an active member, and a surviving old process would also
