@@ -48,6 +48,7 @@ pipeline {
     string(name: 'TARGET_PORT',          defaultValue: '19092',         description: 'Target Kafka port (dev = 19092, prod = 9092).')
     choice(name: 'TOPIC', choices: ['es.futures.auction'], description: 'Auction-desk topic to mirror (frozen allow-list - the shape + payload contract below is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown', 'status'], description: 'install = create+run the mirror; teardown = stop+remove it; status = read-only report.')
+    booleanParam(name: 'ALLOW_EMPTY_SOURCE', defaultValue: false, description: 'FRESH ROLLOUT ONLY: install against a source topic that has no records yet (created by apply-topics, es-amt-service idle outside RTH). The end-to-end payload proof is DEFERRED - re-run this job with ACTION=install (idempotent) after the next RTH session, with this OFF, to actually prove the mirror.')
   }
   options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
   environment {
@@ -67,6 +68,7 @@ pipeline {
     // the launchd identity (above) must never re-point the allow-list at a file that does not exist
     // and fail-close every prod install.
     TSLUG = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
+    ALLOW_EMPTY_SOURCE = "${params.ALLOW_EMPTY_SOURCE}"
     // Single definition of the MM2-pollution pattern, shared by the Preflight baseline capture and
     // the Verify guard. It MUST be one string: if the two stages ever matched different patterns,
     // a pre-existing topic could be missing from the baseline and fail the build as "new".
@@ -208,13 +210,24 @@ pipeline {
             || { echo "FAIL: cannot describe source topic $TOPIC on $SRC"; exit 1; }
           printf '%s\\n' "$SD" | grep -q "Topic: $TOPIC" || { echo "FAIL: source topic $TOPIC missing"; exit 1; }
 
-          # SOURCE MUST NOT BE EMPTY. The Verify-payload stage proves the mirror end-to-end by
-          # matching a real source record on the target; against an empty source that proof is
-          # vacuous. Fail here, loudly, rather than install an unverifiable mirror.
+          # SOURCE EMPTINESS. The Verify-payload stage proves the mirror end-to-end by matching a real
+          # source record on the target; against an empty source that proof is vacuous, so an empty
+          # source fails here by default. A FRESH ROLLOUT has no choice, though: apply-topics creates
+          # the topic empty and es-amt-service publishes nothing until the next RTH minute, so
+          # ALLOW_EMPTY_SOURCE lets the operator install outside market hours with the payload proof
+          # DEFERRED -- the job then says so, and the same job must be re-run with the flag off (action
+          # 'verify') once a session has published, which is what actually proves the mirror.
           SEND=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | awk -F: 'NR==1{print $3}') \
             || { echo "FAIL: cannot read source end offset for $TOPIC"; exit 1; }
           case "${SEND:-}" in ''|*[!0-9]*) echo "FAIL: source end offset for $TOPIC is not a number (got '${SEND:-}')"; exit 1 ;; esac
-          [ "$SEND" -gt 0 ] || { echo "FAIL: source topic $TOPIC is EMPTY -- nothing to mirror and nothing to verify against; install after es-amt-service has published its first RTH minute"; exit 1; }
+          if [ "$SEND" -gt 0 ]; then :; elif [ "${ALLOW_EMPTY_SOURCE:-false}" = "true" ]; then
+            echo "WARNING: source topic $TOPIC is EMPTY. Installing with the payload proof DEFERRED (ALLOW_EMPTY_SOURCE)."
+            echo "WARNING: re-run this job with ACTION=verify after the next RTH session to prove the mirror end-to-end."
+          else
+            echo "FAIL: source topic $TOPIC is EMPTY -- nothing to mirror and nothing to verify against."
+            echo "       Either install after es-amt-service has published its first RTH minute, or re-run with ALLOW_EMPTY_SOURCE=true to install now with the payload proof deferred."
+            exit 1;
+          fi; { : }
           echo "source $TOPIC end offset: $SEND"
 
           # MM1 binary present
@@ -568,6 +581,18 @@ PL
       steps {
         sh '''
           set -euo pipefail
+          # DEFERRED PROOF (fresh rollout): the preflight allowed an EMPTY source under
+          # ALLOW_EMPTY_SOURCE, so there is no record to prove anything against. Skip loudly rather
+          # than fail; the mirror is installed and running, and re-running this job with ACTION=install
+          # after the next RTH session (with the flag OFF) runs this proof for real.
+          SEND_NOW=$("$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null | awk -F: 'NR==1{print $3}')
+          case "${SEND_NOW:-}" in ''|*[!0-9]*) SEND_NOW=0 ;; esac
+          if [ "$SEND_NOW" -eq 0 ]; then
+            [ "${ALLOW_EMPTY_SOURCE:-false}" = "true" ] || { echo "FAIL: source $TOPIC is empty and ALLOW_EMPTY_SOURCE is not set"; exit 1; }
+            echo "DEFERRED: source $TOPIC is still empty -- the end-to-end payload proof did NOT run."
+            echo "DEFERRED: re-run this job (ACTION=install, ALLOW_EMPTY_SOURCE=false) after the next RTH session."
+            exit 0
+          fi
           # The auction payload is PLAIN JSON, not Avro, so there is no schema-registry id to check.
           # This stage is the equally strict replacement, and it is deliberately a THREE-PART proof,
           # because no one part is sufficient:

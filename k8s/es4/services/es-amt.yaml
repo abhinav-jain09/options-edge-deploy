@@ -80,6 +80,11 @@ spec:
           value: es-amt-service
         # 34h covers the previous RTH session plus the overnight Globex session from a cold start,
         # so the seven-session desk is never missing its most recent completed day after a restart.
+        # The output topic's shape, mirrored from scripts/kafka/topics.env (the SSOT). The service
+        # only uses these when it has to CREATE the topic; apply-topics owns it thereafter, and the
+        # service never compacts it (the mirror job asserts cleanup.policy=delete on the source).
+        - name: ES_AMT_TOPIC_RETENTION_MS
+          value: "604800000"
         - name: ES_AMT_REPLAY_LOOKBACK_HOURS
           value: '34'
         envFrom:
