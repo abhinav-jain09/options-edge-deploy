@@ -116,6 +116,16 @@ jobs:
       - name: Validate mirrored es4 topic contracts (mirror jobs vs topics.env)
         run: bash scripts/ci/validate-mirrored-topic-contracts.sh
 
+      # topics.env is only the DEPLOY-TIME half of "the archive is never compacted". The other half
+      # is the boot-time stamp: processing-common KafkaTopics.ensureTopic() runs
+      # incrementalAlterConfigs on every service start, so a topic the deploy just set to delete is
+      # re-compacted by the next restart unless OPTIONS_EDGE_UNCOMPACTED_SERVED_TOPICS="true" is in
+      # the environment the services actually read. Compaction kept coming back on prod for exactly
+      # this reason — each repair fixed one writer. This asserts the rendered environment carries
+      # the flag on prod and es4, and that it never leaks into dev (which must stay compacted).
+      - name: Validate archive uncompaction flag reaches prod + es4 and not dev
+        run: bash scripts/ci/validate-archive-uncompaction-env.sh
+
       # "checked 5 mirrored topic(s)" proves only that five names were found. This drives the
       # validator against crafted fixtures — one broken dimension each, plus the mutations that
       # make its own parsing return nothing — so a checker that quietly starts approving

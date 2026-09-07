@@ -1,0 +1,21 @@
+# PRODUCTION IS AN ARCHIVE. NOTHING SERVED MAY BE COMPACTED HERE.
+#
+# processing-common app.kafka.KafkaTopics.ensureServedTopic() decides the cleanup.policy it
+# STAMPS on every served topic at service boot. It defaults to compact (dev's behaviour, which
+# must not change) and only switches to delete when this key is present and exactly "true".
+#
+# This key is the ONLY thing that makes the stamp-side fix real on prod. Without it the deploy
+# scripts can rewrite topics.env all they like: ensureTopic() runs incrementalAlterConfigs on
+# EVERY service restart, so the very next boot re-stamps compact and the archive is shredded
+# again. Config-side repair alone has never held (that is exactly how compaction kept coming
+# back). Both writers must agree, and this file is the boot-time half.
+#
+# Scope is deliberate: production overlay only. Dev keeps compaction (small disk, no archival
+# duty); es4 sets the same key in k8s/es4/es4-common-env.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-config
+  namespace: options-edge
+data:
+  OPTIONS_EDGE_UNCOMPACTED_SERVED_TOPICS: "true"
