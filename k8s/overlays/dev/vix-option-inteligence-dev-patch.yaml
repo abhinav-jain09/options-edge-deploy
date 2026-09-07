@@ -27,3 +27,10 @@ spec:
               value: "true"
             - name: ZERODTE_RESEARCH_JDBC_URL
               value: jdbc:postgresql://host.docker.internal:5432/options_flow_dev
+            # Shadow model (REQ rev 7 §6a): predictions go to the shadow columns only; predicted_state
+            # stays NOT_EVALUATED. ENVIRONMENT is required alongside the flag (fail-fast pair) so a
+            # shadow row can never be written without saying which database it describes.
+            - name: ZERODTE_SHADOW_MODEL_ENABLED
+              value: "true"
+            - name: ZERODTE_RESEARCH_ENVIRONMENT
+              value: dev
