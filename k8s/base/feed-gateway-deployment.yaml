@@ -58,6 +58,21 @@ spec:
               value: es.futures.cvd
             - name: KAFKA_ES_CVD_BARS_TOPIC
               value: es.futures.cvd.bars
+            # ES FOOTPRINT relay (ES-FOOTPRINT-GATEWAY-DESIGN.md; es-cvd-service on es4, mirrored
+            # here as es.futures.footprint* by Jenkinsfile.es-cvd-mirror). Same opt-in shape as the
+            # CVD block above: the flag is on and the topics are the mirrored es.-prefixed names.
+            # An absent topic is not fatal — the gateway consumes without it and the page reports
+            # no data — so an env with no mirror installed simply shows nothing.
+            - name: GATEWAY_ES_FOOTPRINT_ENABLED
+              value: "true"
+            - name: KAFKA_ES_FOOTPRINT_TOPIC
+              value: es.futures.footprint
+            - name: KAFKA_ES_FOOTPRINT_EVIDENCE_TOPIC
+              value: es.futures.footprint.evidence
+            - name: KAFKA_ES_FOOTPRINT_BARS_TOPIC
+              value: es.futures.footprint.bars
+            - name: KAFKA_ES_FOOTPRINT_OUTCOMES_TOPIC
+              value: es.futures.footprint.outcomes
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS

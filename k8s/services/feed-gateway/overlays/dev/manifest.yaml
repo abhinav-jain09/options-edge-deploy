@@ -123,6 +123,16 @@ spec:
               value: es.futures.cvd
             - name: KAFKA_ES_CVD_BARS_TOPIC
               value: es.futures.cvd.bars
+            - name: GATEWAY_ES_FOOTPRINT_ENABLED
+              value: "true"
+            - name: KAFKA_ES_FOOTPRINT_TOPIC
+              value: es.futures.footprint
+            - name: KAFKA_ES_FOOTPRINT_EVIDENCE_TOPIC
+              value: es.futures.footprint.evidence
+            - name: KAFKA_ES_FOOTPRINT_BARS_TOPIC
+              value: es.futures.footprint.bars
+            - name: KAFKA_ES_FOOTPRINT_OUTCOMES_TOPIC
+              value: es.futures.footprint.outcomes
             - name: KAFKA_VIX_OPTION_INTELIGENCE_TOPIC
               value: options.spx.vix-option-inteligence-service.current
             - name: JAVA_TOOL_OPTIONS
