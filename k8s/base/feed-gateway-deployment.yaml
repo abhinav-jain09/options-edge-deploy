@@ -60,7 +60,8 @@ spec:
               value: es.futures.cvd.bars
             # SPX Auction Desk (es-amt-service on es4, mirrored here as es.futures.auction by
             # Jenkinsfile.es-auction-mirror): one payload per RTH minute keyed <tradeDate>|<HH:mm>,
-            # seven sessions retained. Opt-in flag; the topic is the mirrored es.-prefixed name on
+            # retained seven CALENDAR days (what the gateway's current + previous trade date view needs
+            # after a restart, not a session count). Opt-in flag; the topic is the mirrored es.-prefixed name on
             # dev+prod (es4 itself resolves the unprefixed futures.auction through TOPIC_PREFIX).
             - name: GATEWAY_ES_AUCTION_ENABLED
               value: "true"

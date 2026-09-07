@@ -222,7 +222,7 @@ pipeline {
           case "${SEND:-}" in ''|*[!0-9]*) echo "FAIL: source end offset for $TOPIC is not a number (got '${SEND:-}')"; exit 1 ;; esac
           if [ "$SEND" -gt 0 ]; then :; elif [ "${ALLOW_EMPTY_SOURCE:-false}" = "true" ]; then
             echo "WARNING: source topic $TOPIC is EMPTY. Installing with the payload proof DEFERRED (ALLOW_EMPTY_SOURCE)."
-            echo "WARNING: re-run this job with ACTION=verify after the next RTH session to prove the mirror end-to-end."
+            echo "WARNING: re-run this job with ACTION=install (idempotent) after the next RTH session to prove the mirror end-to-end."
           else
             echo "FAIL: source topic $TOPIC is EMPTY -- nothing to mirror and nothing to verify against."
             echo "       Either install after es-amt-service has published its first RTH minute, or re-run with ALLOW_EMPTY_SOURCE=true to install now with the payload proof deferred."
@@ -444,6 +444,14 @@ S
 
           # 3. Make the group start at or before the reference record.
           #
+          # SKIPPED ENTIRELY on a deferred (empty-source) install: there IS no reference record, so
+          # REFOFF is unset and every comparison below would abort under `set -u` — after the unit was
+          # already unloaded, leaving the mirror stopped (code review round 3). MM1 seeds the group
+          # from earliest on its own, which is what an empty source needs.
+          if [ "$SEND" -eq 0 ]; then
+            echo "DEFERRED: source $TOPIC is empty -- no reference record, so the group is left to auto.offset.reset=earliest"
+          else
+          #
           # "Does the group exist?" must be ANSWERED, not guessed: a broker or CLI failure here
           # would otherwise look exactly like "no such group", skip the rewind, and re-open the
           # stale-record false pass this whole stage exists to close. So capture the listing to a
@@ -492,6 +500,7 @@ S
                 fi
                 ;;
             esac
+          fi
           fi
         '''
       }

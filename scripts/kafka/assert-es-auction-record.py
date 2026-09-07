@@ -13,7 +13,7 @@ form `<tradeDate>|<HH:mm>` (a real calendar date, a real minute of day), and a J
 
 The VALUE's field set is deliberately NOT asserted: the desk's payload schema belongs to
 es-amt-service and is versioned there. What this file pins is the KEY contract the topic's shape
-(1 partition, compact,delete, one record per RTH minute) is built on, and the encoding the
+(1 partition, plain delete, one record per RTH minute) is built on, and the encoding the
 byte-for-byte comparison relies on. Any violation exits non-zero.
 
 Usage: KVSEP='<sep>' assert-es-auction-record.py <rendered-record-file> <label>
