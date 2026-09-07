@@ -251,6 +251,9 @@ patches:
   # against dev's thin greek surface — see the patch header). Prod untouched.
   - path: delta-flow-dev-env-patch.yaml
   - path: drop-classifier-dev-env-patch.yaml
+  # DEV-ONLY: Candle Direction commissioning shadow inside context-tape-service (flag OFF in code and in prod) —
+  # see the patch header. Adds the :8136 direction projection port to the Deployment + Service.
+  - path: context-tape-direction-dev-env-patch.yaml
   # Dev gex settings. Created for the pre-open GEX pipeline, but that is NO LONGER what it does:
   # the ibkr-preopen-gate patch below is applied AFTER it and sets PREOPEN_GEX_ENABLED back to
   # "false" for the one-publisher invariant, so the legacy pre-open publisher is live in neither
