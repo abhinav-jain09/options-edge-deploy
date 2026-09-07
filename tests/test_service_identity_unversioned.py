@@ -30,13 +30,18 @@ VERSIONED = re.compile(r"[vVrR][0-9]")
 ALLOWED_IDENTITY_VALUES: frozenset[str] = frozenset()
 
 
-def _walk(node: object, path: Path, found: list[tuple[Path, str, str]]) -> None:
+def _walk(node: object, path: Path, found: list[tuple[Path, str, str]],
+          indirect: list[tuple[Path, str, str]]) -> None:
     """Collect (file, key, value) identity declarations from a PARSED document.
 
     Parsing rather than line-matching is what makes this form-agnostic: block env entries, inline
     flow mappings ({name: X, value: Y}), ConfigMap data, kustomize patches, quoted/multiline scalars
     and any nesting all arrive here as the same Python structures. A hand-rolled line scanner missed
     the inline flow form that this repository already contains.
+
+    An identity that is NOT a literal (valueFrom: configMapKeyRef / secretKeyRef / fieldRef) is
+    recorded in `indirect` instead: it cannot be vetted here, and silently ignoring it is a fail-open
+    hole. The caller resolves repo-local ConfigMap references and FAILS on anything left unresolved.
     """
     if isinstance(node, dict):
         # Container env entry: {name: SOME_APP_ID, value: some-identity}
@@ -46,38 +51,80 @@ def _walk(node: object, path: Path, found: list[tuple[Path, str, str]]) -> None:
             if isinstance(value, (str, int, float)):
                 found.append((path, name, str(value)))
             elif "valueFrom" in node:
-                # Sourced from a ConfigMap/Secret: the VALUE is declared there and is scanned at its
-                # own definition site, so it is not lost — only not duplicated here.
-                pass
+                source = node["valueFrom"]
+                ref = source.get("configMapKeyRef") if isinstance(source, dict) else None
+                if isinstance(ref, dict) and isinstance(ref.get("name"), str) and isinstance(ref.get("key"), str):
+                    indirect.append((path, name, f"{ref['name']}/{ref['key']}"))
+                else:
+                    # secretKeyRef (base64, unvettable), fieldRef, or a malformed ref: an identity is
+                    # a literal or a repo-local ConfigMap value — never anything else.
+                    indirect.append((path, name, "<unresolvable-source>"))
         # ConfigMap data / any mapping whose KEY is an identity key.
         for key, value in node.items():
             if isinstance(key, str) and IDENTITY_KEY.match(key) and isinstance(value, (str, int, float)):
                 found.append((path, key, str(value)))
-            _walk(value, path, found)
+            _walk(value, path, found, indirect)
     elif isinstance(node, list):
         for item in node:
-            _walk(item, path, found)
+            _walk(item, path, found, indirect)
+
+
+def _configmap_index(documents: list[tuple[Path, object]]) -> set[tuple[str, str]]:
+    """(configMapName, dataKey) for every ConfigMap defined in the repository."""
+    index: set[tuple[str, str]] = set()
+    for _, document in documents:
+        if not isinstance(document, dict) or document.get("kind") != "ConfigMap":
+            continue
+        name = (document.get("metadata") or {}).get("name")
+        data = document.get("data")
+        if isinstance(name, str) and isinstance(data, dict):
+            index.update((name, key) for key in data if isinstance(key, str))
+    return index
+
+
+class ScanResult:
+    """What the scan saw, including everything it could NOT vet — never silently dropped."""
+
+    def __init__(self) -> None:
+        self.identities: list[tuple[Path, str, str]] = []
+        self.unparseable: list[tuple[Path, str]] = []
+        self.unresolved: list[tuple[Path, str, str]] = []
+
+
+def scan(root: Path) -> ScanResult:
+    """Scan every YAML manifest under `root` (.yaml AND .yml), FAIL-CLOSED.
+
+    A file that cannot be parsed, or an identity sourced from something this scan cannot read, is
+    REPORTED rather than skipped: a guard that quietly ignores what it cannot vet approves it.
+    """
+    result = ScanResult()
+    indirect: list[tuple[Path, str, str]] = []
+    documents: list[tuple[Path, object]] = []
+    for path in sorted(p for ext in ("*.yaml", "*.yml") for p in root.rglob(ext)):
+        try:
+            parsed = list(yaml.safe_load_all(path.read_text()))
+        except yaml.YAMLError as error:
+            # One malformed document used to abandon the whole file, hiding every valid declaration
+            # after it behind a line-scan that could not see block form. Now it is a hard failure.
+            result.unparseable.append((path, str(error).splitlines()[0]))
+            continue
+        for document in parsed:
+            documents.append((path, document))
+            _walk(document, path, result.identities, indirect)
+
+    known = _configmap_index(documents)
+    for path, key, reference in indirect:
+        name, _, data_key = reference.partition("/")
+        if (name, data_key) not in known:
+            # The referenced value lives outside this repository (or in a Secret), so its identity can
+            # never be vetted here. Fail closed rather than assume it is clean.
+            result.unresolved.append((path, key, reference))
+    return result
 
 
 def identities(root: Path) -> list[tuple[Path, str, str]]:
-    """Every identity declared in every YAML manifest under `root` (.yaml AND .yml)."""
-    found: list[tuple[Path, str, str]] = []
-    for path in sorted(p for ext in ("*.yaml", "*.yml") for p in root.rglob(ext)):
-        text = path.read_text()
-        try:
-            documents = list(yaml.safe_load_all(text))
-        except yaml.YAMLError:
-            # Kustomize/Helm-style templates are not always plain YAML. Never silently skip: a file we
-            # cannot parse is a file we cannot vet, so fall back to a line scan of identity assignments.
-            for line in text.splitlines():
-                match = re.search(r"([A-Z0-9_]*(?:APP_ID|APPLICATION_ID|GROUP_ID|CONSUMER_GROUP))"
-                                  r"\s*[:=]\s*\"?([^\"\s,}#]+)", line)
-                if match and IDENTITY_KEY.match(match.group(1)):
-                    found.append((path, match.group(1), match.group(2)))
-            continue
-        for document in documents:
-            _walk(document, path, found)
-    return found
+    """Literal identity declarations under `root`. Use scan() when the fail-closed lists matter."""
+    return scan(root).identities
 
 
 class ServiceIdentityUnversionedTest(unittest.TestCase):
@@ -148,6 +195,82 @@ class ServiceIdentityUnversionedTest(unittest.TestCase):
             )
             flagged = [v for _, _, v in identities(root) if VERSIONED.search(v)]
         self.assertEqual([], flagged, f"clean identities were flagged: {flagged}")
+
+    def test_every_manifest_is_parseable_and_every_identity_is_literal(self) -> None:
+        # FAIL-CLOSED, both directions. An unparseable file cannot be vetted, and an identity sourced
+        # from outside this repo (or from a base64 Secret) cannot be read — so neither may be silently
+        # skipped: they fail the guard until fixed or deliberately resolved.
+        result = scan(ROOT / "k8s")
+        self.assertEqual(
+            [], [f"{path.relative_to(ROOT)}: {error}" for path, error in result.unparseable],
+            "unparseable manifest(s) — the guard cannot vet these, so it refuses to pass them",
+        )
+        self.assertEqual(
+            [], [f"{path.relative_to(ROOT)} {key} <- {ref}" for path, key, ref in result.unresolved],
+            "identity sourced from an unresolvable reference — declare it as a literal, or point it at "
+            "a ConfigMap defined in this repository so its value can be vetted",
+        )
+
+    def test_fail_closed_paths_are_actually_detected(self) -> None:
+        # The two holes a previous revision of this guard had: a malformed document silently swallowed
+        # the rest of its file, and valueFrom identities were unconditionally ignored.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # A valid versioned identity AFTER a malformed document in the same file: the old
+            # line-scan fallback could not see block form, so this used to disappear entirely.
+            (root / "malformed.yaml").write_text(
+                "apiVersion: v1\nkind: ConfigMap\ndata:\n  A: 1\n"
+                "---\n"
+                "this: is: not: valid: yaml\n"
+                "---\n"
+                "apiVersion: v1\nkind: ConfigMap\ndata:\n  Z_APP_ID: hidden-v9\n"
+            )
+            (root / "indirect.yaml").write_text(
+                "apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n"
+                "      containers:\n        - name: svc\n          env:\n"
+                "            - name: X_APP_ID\n"
+                "              valueFrom:\n"
+                "                configMapKeyRef:\n"
+                "                  name: not-in-this-repo\n                  key: X_APP_ID\n"
+            )
+            (root / "secret-sourced.yaml").write_text(
+                "apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n"
+                "      containers:\n        - name: svc\n          env:\n"
+                "            - name: S_APP_ID\n"
+                "              valueFrom:\n"
+                "                secretKeyRef:\n"
+                "                  name: some-secret\n                  key: S_APP_ID\n"
+            )
+            result = scan(root)
+        self.assertEqual(
+            {"malformed.yaml"}, {path.name for path, _ in result.unparseable},
+            "a malformed document must fail the guard, not silently hide the rest of its file",
+        )
+        self.assertEqual(
+            {"indirect.yaml", "secret-sourced.yaml"}, {path.name for path, _, _ in result.unresolved},
+            "an identity from an unresolvable ConfigMap/Secret reference must fail the guard",
+        )
+
+    def test_a_resolvable_configmap_reference_is_accepted(self) -> None:
+        # The flip side: a reference to a ConfigMap defined HERE is vetted at that definition site, so
+        # it must not be reported unresolved — otherwise the guard would cry wolf on valid manifests.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "cm.yaml").write_text(
+                "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: shared-config\n"
+                "data:\n  X_APP_ID: some-service\n"
+            )
+            (root / "dep.yaml").write_text(
+                "apiVersion: apps/v1\nkind: Deployment\nspec:\n  template:\n    spec:\n"
+                "      containers:\n        - name: svc\n          env:\n"
+                "            - name: X_APP_ID\n"
+                "              valueFrom:\n"
+                "                configMapKeyRef:\n"
+                "                  name: shared-config\n                  key: X_APP_ID\n"
+            )
+            result = scan(root)
+        self.assertEqual([], result.unresolved, "a repo-local ConfigMap reference must resolve")
+        self.assertIn("some-service", {value for _, _, value in result.identities})
 
     def test_the_scan_actually_sees_the_real_manifests(self) -> None:
         # A scan that silently matched nothing would keep the assertions above green forever.
