@@ -27,6 +27,9 @@ metadata:
   namespace: options-edge
 spec:
   ports:
+    - name: direction
+      port: 8136
+      targetPort: direction
     - name: api
       port: 8134
       targetPort: api
@@ -63,6 +66,18 @@ spec:
     spec:
       containers:
         - env:
+            - name: CONTEXT_TAPE_DIRECTION_ENABLED
+              value: "true"
+            - name: CONTEXT_TAPE_DIRECTION_SPOT_TOPIC
+              value: underlying.spx.price
+            - name: CONTEXT_TAPE_DIRECTION_INDICATOR_TOPIC
+              value: options.indicators.snapshot.current
+            - name: CONTEXT_TAPE_DIRECTION_OUTPUT_TOPIC
+              value: context-tape.direction.commissioning
+            - name: CONTEXT_TAPE_DIRECTION_CHECKPOINT_TOPIC
+              value: context-tape.direction.checkpoint
+            - name: CONTEXT_TAPE_DIRECTION_API_PORT
+              value: "8136"
             - name: HEALTH_PORT
               value: "8135"
             - name: CONTEXT_TAPE_SPOT_TOPIC
@@ -94,6 +109,8 @@ spec:
             periodSeconds: 15
           name: context-tape
           ports:
+            - containerPort: 8136
+              name: direction
             - containerPort: 8134
               name: api
             - containerPort: 8135
