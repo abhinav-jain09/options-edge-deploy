@@ -378,10 +378,24 @@ def calendar_identity(cal):
         import inspect, sys as _s
         mod = inspect.getmodule(type(cal))
         src = inspect.getsource(mod).encode("utf-8")
+        # The tzdata VERSION, not the literal string "zoneinfo": a tzdata update moves a session close
+        # and therefore the owed-day and RTH-close judgements, and an input that can change without
+        # changing the manifest identity is an input outside the pin (r10 #6).
         tz = None
         try:
             import zoneinfo
-            tz = getattr(zoneinfo, "TZPATH", None) and "zoneinfo"
+            tz = zoneinfo.ZoneInfo("America/New_York").key
+            try:
+                from importlib.metadata import version as _v
+                tz = "tzdata-" + _v("tzdata")
+            except Exception:
+                # the system zoneinfo: fingerprint the file the close instants are actually read from
+                for base in (getattr(zoneinfo, "TZPATH", ()) or ()):
+                    cand = os.path.join(base, "America", "New_York")
+                    if os.path.isfile(cand):
+                        with open(cand, "rb") as fh:
+                            tz = "tzfile-" + hashlib.sha256(fh.read()).hexdigest()[:16]
+                        break
         except Exception:
             tz = None
         return {"module": hashlib.sha256(src).hexdigest(),
@@ -392,7 +406,7 @@ def calendar_identity(cal):
         return None
 
 
-def build_manifest(read, topic, env, corpus_start=None, cal=None):
+def build_manifest(read, topic, env, corpus_start=None, cal=None, previous=None):
     """A5.6's manifest, which IS the corpus version.
 
     The old version hashed a simplified view of the live archive, which is not a pin: a mutable pointer
@@ -406,10 +420,19 @@ def build_manifest(read, topic, env, corpus_start=None, cal=None):
     generation = read.get("generation")
     if generation is None and read.get("root"):
         generation = topic_generation(read["root"], topic)
+    # A record's generation is the one in force WHEN IT WAS ARCHIVED, not today's. Stamping the current
+    # root generation onto every historical entry relabels old records after a recreation, which is the
+    # one thing the generation exists to prevent (r10 #2). Entries a previous published manifest already
+    # names keep the generation it recorded; only new keys take the current one.
+    carried = {}
+    if previous:
+        for e in previous.get("entries", []):
+            if e.get("generation"):
+                carried[e["key"]] = e["generation"]
     entries = []
     for pkey, (dig, rec, _off) in logical.items():
         part, off = coords.get(pkey, (None, None))
-        entries.append({"topic": topic, "generation": generation,
+        entries.append({"topic": topic, "generation": carried.get(pkey, generation),
                         "partition": -1 if part is None else part,
                         "offset": -1 if off is None else off,
                         "key": pkey, "kind": rec.get("kind"),

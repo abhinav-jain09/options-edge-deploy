@@ -70,6 +70,13 @@ def chain(domain, recs):
     return d.hex()
 
 shutil.rmtree(root, ignore_errors=True)
+# The archiver records the log's TopicId beside the data; without it a manifest has no generation and
+# is not a coordinate, so a realistic fixture has one. Kafka's CLI spelling (base64url), deliberately —
+# the reader is what normalises it to the producer's canonical hex UUID.
+man = os.path.join(os.path.dirname(root.rstrip("/")), "_manifest")
+os.makedirs(man, exist_ok=True)
+with open(os.path.join(man, "context-tape.direction.ledger.identity"), "w") as fh:
+    fh.write("topic_id=PyocBFttTn-KmwwdLj9KWw\nobserved=2026-09-08T00:00:00Z\n")
 rnd = random.Random(7)
 d0 = datetime.date.fromisoformat(tf)
 offset, made = 0, 0
@@ -478,9 +485,6 @@ case "$OUT" in *"COMPLETENESS=FAIL"*) ok "presence is not agreement — a foreig
 echo "24. the manifest carries the generation, the declared start and the calendar it used"
 build 32 20
 targets FROZEN "$SB"
-mkdir -p "$WORK/kafka/prod/_manifest"
-printf 'topic_id=PyocBFttTn-KmwwdLj9KWw\nobserved=2026-09-08T00:00:00Z\n' \
-  > "$WORK/kafka/prod/_manifest/context-tape.direction.ledger.identity"
 publish
 WORKDIR="$WORK" python3 -c "
 import json, glob, os, sys
@@ -590,6 +594,52 @@ got = R.topic_generation(str(root))
 sys.exit(0 if got == '3f2a1c04-5b6d-4e7f-8a9b-0c1d2e3f4a5b' else 1)" \
   && ok "a neighbouring topic's generation cannot be stamped onto this corpus" \
   || bad "topic_generation picked the wrong identity file"
+
+
+echo "29. a corpus that never recorded a generation cannot be pinned"
+build 32 20
+rm -f "$WORK/kafka/prod/_manifest/context-tape.direction.ledger.identity"
+# and no earlier manifest to carry generations forward from: once a published manifest has RECORDED a
+# key's generation that recording stands, so the case being tested is a corpus that never had one
+rm -rf "$WORK/calibration-runs"
+targets FROZEN "$SB"; publish
+OUT="$(evaluate)"
+case "$OUT" in *"COMPLETENESS=FAIL"*) ok "no generation means the coordinate cannot say which log it enumerated";; *) bad "a generation-less manifest was accepted as a pin: $OUT";; esac
+
+echo "30. a published artifact is never rewritten at its own identity"
+build 32 20
+targets FROZEN "$SB"; publish
+FIRST="$(evaluate)"
+id="$(printf '%s' "$FIRST" | sed -n 's/^PushValidationArtifact \([0-9a-f]*\).*/\1/p')"
+f="$(find "$WORK/calibration-runs" -name "${id}*.json" | head -1)"
+before="$(shasum "$f" | cut -d' ' -f1)"
+SECOND="$(evaluate)"
+after="$(shasum "$f" | cut -d' ' -f1)"
+case "$SECOND" in *"already published, left untouched"*) ok "the second run recognises its own artifact";; *) bad "a republish was not recognised: $SECOND";; esac
+[ "$before" = "$after" ] && ok "the file on disk is byte-identical after the second run" || bad "a published verdict was rewritten"
+
+echo "31. the archive verifier catches a data file no manifest line names"
+VDIR="$WORK/varchive/kafka/prod/underlying.spx.price/dt=2026-09-08"
+mkdir -p "$VDIR"
+printf 'named\n'   | gzip > "$VDIR/named.jsonl.gz"
+printf 'residue\n' | gzip > "$VDIR/orphan.jsonl.gz"
+VDIR="$VDIR" python3 -c "
+import json, hashlib, os
+d = os.environ['VDIR']
+p = os.path.join(d, 'named.jsonl.gz')
+ent = {'file': 'named.jsonl.gz', 'records': 1, 'partition': 0, 'offset_from': 0, 'offset_to': 1,
+       'sha256': hashlib.sha256(open(p,'rb').read()).hexdigest(), 'archived_at': '2026-09-08T20:00:00Z'}
+open(os.path.join(d, '_manifest.jsonl'), 'w').write(json.dumps(ent) + '\n')"
+VOUT="$(env ARCHIVE_DIR="$WORK/varchive" ENV=prod FORCE=true VERIFY_CHECKSUMS=none \
+        bash "$SRC/oe-archive-verify.sh" 2026-09-08 2>&1)"
+case "$VOUT" in *"no manifest line names"*) ok "crash residue between rename and manifest append is visible";; *) bad "an unnamed data file was ignored";; esac
+
+echo "32. every script the crontab invokes is in the repo and in UNIT"
+if bash "$SRC/../../ci/validate-archive-unit-completeness.sh" >/dev/null 2>&1; then
+  ok "no unit member is missing or unmanaged"
+else
+  bad "the archive unit is incomplete: $(bash "$SRC/../../ci/validate-archive-unit-completeness.sh" 2>&1 | head -2)"
+fi
 
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi

@@ -125,7 +125,18 @@ for c in calls:
 # corpus/<corpusVersion>/manifest.json and never mutated. A bare hash of the live archive is not a pin:
 # it matches again after a deletion, so a calibration could not be re-run against the inputs it used.
 declared = os.environ.get("CORPUS_START_DATE")
-manifest = R.build_manifest(read, ledger_topic, env, corpus_start=declared, cal=R.load_calendar())
+# The most recently published manifest, so entries it already names keep the generation it recorded
+# rather than being relabelled with today's (r10 #2).
+_prev = None
+try:
+    import glob as _pg
+    _cands = sorted(_pg.glob(os.path.join(out_root, "corpus", "*", "manifest.json")), key=os.path.getmtime)
+    if _cands:
+        _prev = json.load(open(_cands[-1]))
+except Exception:
+    read_errors.append("the previous manifest could not be read — generations cannot be carried forward")
+manifest = R.build_manifest(read, ledger_topic, env, corpus_start=declared,
+                            cal=R.load_calendar(), previous=_prev)
 corpus_version, manifest_path, minted = R.publish_manifest(out_root, manifest)
 _cal = R.load_calendar()
 if _cal is None:
@@ -224,7 +235,12 @@ else:
         # The two must not be able to disagree about COMPLETE — that is the whole reason they share a
         # reader.
         conflicted = sum(conflicts_by_session.values())
-        corpus_ok = bool(owed_here) and all(d in mine for d in owed_here) and conflicted == 0
+        # And a read error too: an unreadable sidecar or archive file made the EVALUATOR say
+        # COMPLETENESS=FAIL while this said corpusComplete=true, on the same corpus, in the same
+        # minute (r10 #3). The two share a reader so that they cannot disagree about COMPLETE; the
+        # inputs to that word must be the same on both sides.
+        corpus_ok = (bool(owed_here) and all(d in mine for d in owed_here)
+                     and conflicted == 0 and not read_errors)
         reports.append({
             "phase": "VALIDATION", "validationClockStarted": True,
             "parameterSetHash": ph, "trackFromPush": tf,

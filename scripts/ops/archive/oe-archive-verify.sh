@@ -164,6 +164,15 @@ for topic in topics:
     if missing:
         r["reasons"].append(f"{len(missing)} manifest file(s) absent on disk: {missing[:3]}")
 
+    # AND the other direction. Checking only that manifest lines have files leaves the crash residue
+    # this job is meant to catch completely invisible: the archiver renames a data file into place and
+    # THEN appends its manifest line, so a run that dies between the two leaves a .jsonl.gz that no
+    # line names — records that are on disk, uncounted, and outside every completeness number here.
+    named = {e.get("file") for e in entries}
+    unnamed = sorted(os.path.basename(f) for f in data_files if os.path.basename(f) not in named)
+    if unnamed:
+        r["reasons"].append(f"{len(unnamed)} data file(s) no manifest line names: {unnamed[:3]}")
+
     # Offset continuity within the date, per partition. Overlaps are expected and harmless (a run
     # that failed before checkpointing re-reads its range next time — duplicates are recoverable).
     # Gaps are not: a gap is records that were never written down.

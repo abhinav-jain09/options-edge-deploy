@@ -153,8 +153,12 @@ if manifest is not None:
     for k in logical:
         if k not in manifest_entries:
             extra.append(k)
+# A manifest whose entries carry no generation is not a coordinate and therefore not a pin: offsets
+# restart after a recreation, so without it the manifest cannot say WHICH log it enumerated (r10 #2).
+ungenerated = 0 if manifest is None else sum(1 for e in manifest.get("entries", []) if not e.get("generation"))
 version_ok = (manifest is not None and bool(published_on)
-              and not missing_from_archive and not moved and not extra)
+              and not missing_from_archive and not moved and not extra
+              and not ungenerated)
 
 # A CONFLICT anywhere in the corpus is a defect of the corpus, and the evaluator never looked at one:
 # it relied on the session walk, which sees a conflict only for a session that has a seal and whose
@@ -457,6 +461,9 @@ if mismatched:
                % (len(mismatched), "; ".join(mismatched[:3])))
 if unmanifested:
     why.append("%d archived record(s) are not named by the pinned manifest" % unmanifested)
+if ungenerated:
+    why.append("%d manifest entr(ies) carry no generation — the coordinate does not say which log they are in"
+               % ungenerated)
 if conflicts_total:
     why.append("%d conflicting record(s) in the corpus (sessions: %s)"
                % (conflicts_total, ", ".join(str(k) for k in sorted(conflicts_by_session)[:4])))
@@ -546,19 +553,27 @@ artifact = {
     "authorizing": False, "actionable": False, "slice": "COMMISSIONING_SHADOW",
     "note": "A4 evidence only. This artifact cannot satisfy A2, cannot set validationStatus, and is not a step on the A2 path.",
 }
-# Identity = SHA-256 over the canonical JSON with artifactId excluded, the same canonical form A1 uses —
-# and with generatedAt excluded too, for the same reason the ledger's semantic digest excludes ts and
-# runId: WHEN the artifact was computed is not part of what it says. Including it would give the same
-# evidence, the same corpus and the same thresholds a different identity on every run, which is the
-# opposite of a content address.
-identity = {k: v for k, v in artifact.items() if k != "generatedAt"}
+# Identity = SHA-256 over the canonical JSON with artifactId AND generatedAt excluded — the same
+# canonical form A1 uses, and the same exclusion the ledger's semantic digest makes for ts, publishedAtMs
+# and runId. WHEN an artifact was computed is not part of what it says, and including it would give the
+# same evidence, corpus and thresholds a different identity on every run, which is the opposite of a
+# content address. A5.8 is amended to say so rather than left saying otherwise (r10 #5).
+identity = {k: v for k, v in artifact.items() if k not in ("artifactId", "generatedAt")}
 artifact["artifactId"] = hashlib.sha256(R.canonical(identity).encode("utf-8")).hexdigest()
 
 d = os.path.join(out_root, phash, str(track_from).replace(":", "").replace("/", ""), "artifacts")
 os.makedirs(d, exist_ok=True)
+path = os.path.join(d, "%s.json" % artifact["artifactId"][:16])
+if os.path.exists(path):
+    # Two runs over the same evidence produce the same artifact, so the file is already there and is
+    # already right. Rewriting it would let a later run silently replace a published verdict at an
+    # identity that is supposed to mean one thing forever (r10 #5).
+    print("PushValidationArtifact %s decision=%s — already published, left untouched"
+          % (artifact["artifactId"][:12], decision))
+    print("written to %s" % path)
+    sys.exit(0 if decision == "ACCEPT" else 3)
 tmp = tempfile.NamedTemporaryFile("w", dir=d, delete=False, suffix=".tmp")
 json.dump(artifact, tmp, indent=1, sort_keys=True); tmp.close()
-path = os.path.join(d, "%s.json" % artifact["artifactId"][:16])
 os.replace(tmp.name, path)                                  # atomic publication
 
 print("PushValidationArtifact %s decision=%s — %s" % (
