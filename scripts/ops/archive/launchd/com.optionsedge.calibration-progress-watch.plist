@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A5.7's watchdog, and the reason it lives HERE and not in the .252 crontab: it must fail
+  independently of the thing it watches. The reporter runs on 192.168.100.252 at 21:00 ET; a box that
+  is down reports nothing AND fails to notice that nothing was reported. This runs on the dev Mac at
+  07:00 ET, checking the PREVIOUS trading day, so the two cannot go quiet together.
+
+  Install (a host action, run deliberately, not by a deploy):
+      cp com.optionsedge.calibration-progress-watch.plist ~/Library/LaunchAgents/
+      launchctl load ~/Library/LaunchAgents/com.optionsedge.calibration-progress-watch.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.optionsedge.calibration-progress-watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/bash</string>
+    <string>/Users/abhinav/oe-ops/calibration-progress-watch.sh</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>ENV</key><string>prod</string>
+    <key>ARCHIVE_DIR</key><string>/Volumes/database/optionsedge</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardOutPath</key><string>/Users/abhinav/oe-ops/calibration-progress-watch.log</string>
+  <key>StandardErrorPath</key><string>/Users/abhinav/oe-ops/calibration-progress-watch.err.log</string>
+  <key>RunAtLoad</key><false/>
+</dict>
+</plist>

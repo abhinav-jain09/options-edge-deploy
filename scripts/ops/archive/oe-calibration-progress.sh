@@ -29,14 +29,23 @@ log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 # The targets are A2's, adopted by A5 as its own. They are not a claim that A4 feeds A2.
 T_SESSIONS="${T_SESSIONS:-30}"; T_COHORT="${T_COHORT:-200}"; T_CLASS="${T_CLASS:-50}"; T_CELL="${T_CELL:-50}"
 
+# A5.8: the REQUIRED cell universe, frozen BEFORE validation and declared here rather than inferred.
+# Taking a minimum over the cells that happen to APPEAR lets a cell with no calls at all satisfy the
+# threshold by being absent — choosing the answer after seeing the data. A cell listed here and never
+# observed counts as ZERO, and the classes are the two directions the instrument can call.
+REQUIRED_CLASSES="${REQUIRED_CLASSES:-1 -1}"
+REQUIRED_CELLS="${REQUIRED_CELLS:-EXHAUSTED|CALL_WALL|POS_GAMMA EXHAUSTED|PUT_WALL|POS_GAMMA EXHAUSTED|CALL_WALL|NEG_GAMMA EXHAUSTED|PUT_WALL|NEG_GAMMA STRONG|CALL_WALL|NEG_GAMMA STRONG|PUT_WALL|NEG_GAMMA EXHAUSTED|NONE|POS_GAMMA EXHAUSTED|NONE|NEG_GAMMA STRONG|NONE|NEG_GAMMA STRONG|NONE|POS_GAMMA}"
+
 [ -d "$ROOT" ] || { log "FATAL: no corpus at $ROOT — the ledger has never been archived for env=$ENV_NAME"; exit 1; }
 command -v python3 >/dev/null || { log "FATAL: python3 missing"; exit 1; }
 
-python3 - "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$T_SESSIONS" "$T_COHORT" "$T_CLASS" "$T_CELL" <<'PY'
+python3 - "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$T_SESSIONS" "$T_COHORT" "$T_CLASS" "$T_CELL" "$REQUIRED_CLASSES" "$REQUIRED_CELLS" <<'PY'
 import gzip, json, os, sys, glob, hashlib, tempfile, re, datetime
 
-root, out_root, today, stamp, env, t_sessions, t_cohort, t_class, t_cell = sys.argv[1:10]
+root, out_root, today, stamp, env, t_sessions, t_cohort, t_class, t_cell, req_classes, req_cells = sys.argv[1:12]
 t_sessions, t_cohort, t_class, t_cell = int(t_sessions), int(t_cohort), int(t_class), int(t_cell)
+REQUIRED_CLASSES = req_classes.split()
+REQUIRED_CELLS = req_cells.split()
 
 # ---- read every archived ledger record, collapsing replays by (key, semantic digest) -------------
 # A5.3: equal key + equal digest is ONE logical record; equal key + a different digest is a CONFLICT
@@ -241,8 +250,10 @@ if not by_cohort:
     })
 else:
     for (ph, tf), b in sorted(by_cohort.items()):
-        min_class = min(b["classes"].values()) if b["classes"] else 0
-        min_cell = min(b["cells"].values()) if b["cells"] else 0
+        # over the REQUIRED universe, not the observed one: a cell that never appeared is zero, not absent
+        min_class = min(b["classes"].get(c, 0) for c in REQUIRED_CLASSES) if REQUIRED_CLASSES else 0
+        min_cell = min(b["cells"].get(c, 0) for c in REQUIRED_CELLS) if REQUIRED_CELLS else 0
+        empty_cells = [c for c in REQUIRED_CELLS if b["cells"].get(c, 0) == 0]
         thresholds = (len(b["sessions"]) >= t_sessions and b["calls"] >= t_cohort
                       and min_class >= t_class and min_cell >= t_cell)
         # scoped to THIS cohort's window: sessions before TRACK_FROM are not its business
@@ -254,7 +265,8 @@ else:
             "sessions": {"have": len(b["sessions"]), "target": t_sessions},
             "cohort": {"have": b["calls"], "target": t_cohort},
             "perClass": {"have": min_class, "target": t_class},
-            "perCell": {"have": min_cell, "target": t_cell},
+            "perCell": {"have": min_cell, "target": t_cell, "requiredCells": len(REQUIRED_CELLS),
+                        "cellsWithNoCalls": empty_cells},
             "thresholdsMet": thresholds, "corpusComplete": corpus_ok,
             "readyForEvaluation": thresholds and corpus_ok,
             "evaluationDecision": "NOT_RUN",
