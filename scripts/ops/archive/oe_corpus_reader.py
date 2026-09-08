@@ -120,16 +120,44 @@ def read_logical(root):
             "generation": topic_generation(root)}
 
 
+def canonical_topic_id(raw):
+    """Kafka's CLI prints a TopicId as Uuid.toString() — base64url of the 16 bytes, no padding — while
+    the producer stamps the seal with the canonical lower-case hex UUID. Two spellings of one
+    generation can never be compared, so a topic recreation could not be tied across producer, archive
+    and manifest (r8 #3). This normalises to the producer's spelling ON READ; the archiver's stored file
+    is deliberately left alone, because it is compared byte-for-byte against the CLI on the next run and
+    rewriting it would fire a spurious reset.
+    """
+    if not raw:
+        return None
+    v = raw.strip()
+    if re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", v):
+        return v.lower()
+    try:
+        import base64
+        b = base64.urlsafe_b64decode(v + "=" * (-len(v) % 4))
+        if len(b) != 16:
+            return v.lower()
+        h = b.hex()
+        return "%s-%s-%s-%s-%s" % (h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
+    except Exception:
+        return v.lower()
+
+
 def topic_generation(root):
     """The Kafka TopicId the archiver recorded, as its canonical lower-case hex UUID. Offsets restart
-    after a recreation, so an ordering without the generation is not a total order (A5.6)."""
+    after a recreation, so an ordering without the generation is not a total order (A5.6).
+
+    The archiver's file is <topic>.identity. Globbing *.id matched nothing, so every manifest carried
+    generation: null and the coordinate was not actually a coordinate (r8 #3).
+    """
     for cand in (os.path.join(os.path.dirname(root.rstrip("/")), "_manifest"),
                  os.path.join(root, "..", "_manifest")):
         try:
-            for f in glob.glob(os.path.join(cand, "*.id")):
+            for f in sorted(glob.glob(os.path.join(cand, "*.identity"))):
                 for line in open(f):
                     if line.startswith("topic_id="):
-                        return line.split("=", 1)[1].strip().lower()
+                        return canonical_topic_id(line.split("=", 1)[1])
         except Exception:
             continue
     return None
@@ -332,7 +360,32 @@ def session_refusal_rate(seal):
     return float(refused) / float(graded)
 
 
-def build_manifest(read, topic, env):
+def calendar_identity(cal):
+    """WHICH calendar the owed-day list came from, as part of the pin (r8 #7). Two runs that disagree
+    about a holiday produce two different owed-day lists and therefore two different verdicts from the
+    same archive — so the calendar is an INPUT, and an input outside the pin is an input nobody can
+    re-run against."""
+    if cal is None:
+        return None
+    try:
+        import inspect, sys as _s
+        mod = inspect.getmodule(type(cal))
+        src = inspect.getsource(mod).encode("utf-8")
+        tz = None
+        try:
+            import zoneinfo
+            tz = getattr(zoneinfo, "TZPATH", None) and "zoneinfo"
+        except Exception:
+            tz = None
+        return {"module": hashlib.sha256(src).hexdigest(),
+                "extraHolidays": sorted(d.isoformat() for d in getattr(cal, "_extra_holidays", set())),
+                "extraEarlyCloses": sorted(d.isoformat() for d in getattr(cal, "_extra_early_closes", set())),
+                "tz": tz, "python": "%d.%d" % _s.version_info[:2]}
+    except Exception:
+        return None
+
+
+def build_manifest(read, topic, env, corpus_start=None, cal=None):
     """A5.6's manifest, which IS the corpus version.
 
     The old version hashed a simplified view of the live archive, which is not a pin: a mutable pointer
@@ -355,7 +408,10 @@ def build_manifest(read, topic, env):
     entries.sort(key=lambda e: (e["topic"] or "", e["generation"] or "", e["partition"], e["offset"], e["key"]))
     hwm = entries[-1] if entries else None
     manifest = {
-        "manifestVersion": 1, "env": env, "topic": topic, "generation": generation,
+        "manifestVersion": 2, "env": env, "topic": topic, "generation": generation,
+        # the preregistered window start and the calendar are INPUTS to every owed-day judgement made
+        # against this version, so they are part of the version (r8 #7)
+        "corpusStartDate": corpus_start, "calendar": calendar_identity(cal),
         "highWaterMark": None if hwm is None else {"generation": hwm["generation"],
                                                    "partition": hwm["partition"], "offset": hwm["offset"]},
         "recordCount": len(entries), "filesRead": read["files"],

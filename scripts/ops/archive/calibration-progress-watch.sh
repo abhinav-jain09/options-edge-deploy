@@ -25,24 +25,28 @@ else
 fi
 
 # The day to check is the PREVIOUS trading day: the reporter runs at 21:00 ET, this runs at 07:00 ET.
+# market_calendar exposes a CLASS. Probing the module for a bare is_trading_day always missed, so this
+# ran on the weekday fallback and picked Labor Day as "the previous trading day" (r8 #5). There is no
+# fallback now: a watchdog that guesses the calendar alerts on the wrong day, which is worse than one
+# that says plainly that it cannot run.
 DAY="${CHECK_DATE:-$(python3 - "$CAL" <<'PY'
-import sys, datetime, importlib.util, os
+import sys, datetime
 sys.path.insert(0, sys.argv[1])
 try:
-    import market_calendar as mc
-except Exception:
-    mc = None
+    from market_calendar import MarketCalendar
+except Exception as e:
+    print("NO_CALENDAR: %s" % e.__class__.__name__, file=sys.stderr)
+    sys.exit(3)
+cal = MarketCalendar()
 d = datetime.date.today()
 for _ in range(10):
     d -= datetime.timedelta(days=1)
-    if mc is None:
-        if d.weekday() < 5:
-            print(d.isoformat()); break
-    elif getattr(mc, "is_trading_day", lambda x: x.weekday() < 5)(d):
-        print(d.isoformat()); break
+    if cal.is_trading_day(d):
+        print(d.isoformat())
+        break
 PY
 )}"
-[ -n "$DAY" ] || { alert "calibration watchdog: could not determine the previous trading day"; exit 1; }
+[ -n "$DAY" ] || { alert "calibration watchdog: could not determine the previous trading day — the market calendar is missing or unreadable at $CAL"; exit 1; }
 
 found=$(find "$OUT_ROOT" -name "dt=$DAY.json" 2>/dev/null | head -1)
 if [ -z "$found" ]; then
@@ -57,7 +61,16 @@ python3 - "$found" "$DAY" "${PREV:-}" <<'PY'
 import json, os, sys
 d = json.load(open(sys.argv[1])); day = sys.argv[2]
 prev_path = sys.argv[3] if len(sys.argv) > 3 else ""
-st = d.get("sessions", {}).get(day, {}).get("archiveStatus", "NOT_IN_CORPUS")
+# The report keys sessions "date|hash|lineage" — a bare date lookup found nothing and called a
+# perfectly healthy session NOT_IN_CORPUS every single day (r8 #6). Match on the date COMPONENT, and
+# take the best status among that date's rows: one lineage landing COMPLETE is the day landing.
+ORDER = ["COMPLETE", "PENDING_SEAL", "DISCONTINUITY", "INCOMPLETE", "CORRUPT", "MISSING"]
+rows = [v for k, v in d.get("sessions", {}).items()
+        if (v.get("sessionDate") or str(k).split("|")[0]) == day]
+st = "NOT_IN_CORPUS"
+if rows:
+    st = sorted((r.get("archiveStatus", "MISSING") for r in rows),
+                key=lambda x: ORDER.index(x) if x in ORDER else len(ORDER))[0]
 line = d.get("cohorts", [{}])[0]
 print("  %s: archiveStatus=%s conflicts=%s" % (day, st, d.get("conflicts")))
 cv = d.get("corpusVersion")
@@ -80,5 +93,10 @@ if st not in ("COMPLETE", "NOT_EXPECTED"):
     sys.exit(2)
 PY
 rc=$?
-[ $rc -eq 0 ] || alert "calibration progress for $DAY is not COMPLETE — that session counts toward nothing"
+if [ $rc -ne 0 ]; then
+  alert "calibration progress for $DAY is not COMPLETE — that session counts toward nothing"
+  # A watchdog that alerts and then exits 0 is invisible to launchd, to a cron mail rule, and to
+  # anything watching THIS job: it reports failure only to whoever happens to read the log (r8 #6).
+  exit 1
+fi
 exit 0

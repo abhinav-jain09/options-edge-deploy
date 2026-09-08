@@ -420,6 +420,104 @@ sys.exit(0 if got == want else 1)" \
   && ok "nextInt reproduces the JVM's own sequence" \
   || bad "the PRNG does not match java.util.SplittableRandom"
 
+
+echo "22. a record appended ABOVE the manifest's high-water mark is not in the corpus"
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, json, os, sys, hashlib
+# a whole extra call+outcomes, at offsets far above anything the manifest saw
+root = sys.argv[1]
+d = sorted(glob.glob(os.path.join(root, "dt=*")))[-1]
+sd = os.path.basename(d).replace("dt=", "")
+lin = "lin-%s" % sd
+rows = []
+cid = "%s-cZZ" % sd
+base = {"parameterSetHash": "a1b2c3d4e5f60718", "sessionLineageId": lin, "sessionDate": sd,
+        "phaseAtCall": "VALIDATION", "trackFromPush": "2026-07-01", "delivery": "LIVE",
+        "semanticStamp": "2026-09-08T18:00:00Z", "ts": 0, "runId": "r1"}
+call = dict(base, kind="call", callId=cid, predictedSign=1, enteredState="EXHAUSTED",
+            regime="POS_GAMMA", node={"roles": ["CALL_WALL"]},
+            refT=int(__import__("datetime").datetime.fromisoformat(sd + "T14:30:00+00:00").timestamp() * 1000))
+rows.append(("%s|%s|%s" % (base["parameterSetHash"], lin, cid), call))
+for h in ("H3", "H5", "H15"):
+    o = dict(base, kind="outcome", callId=cid, horizon=h, resultState="OBSERVED", resultTicks=9,
+             pathState="OBSERVED", maeTicks=1, mfeTicks=9, cellKey="EXHAUSTED|CALL_WALL|POS_GAMMA|%s" % h)
+    rows.append(("%s|%s|%s|%s" % (base["parameterSetHash"], lin, cid, h), o))
+with gzip.open(os.path.join(d, "part-900.jsonl.gz"), "wt") as fh:
+    for i, (k, r) in enumerate(rows):
+        fh.write("Offset:%d %s\t%s\n" % (900000 + i, k, json.dumps(r)))
+PYCASE
+OUT="$(evaluate "$PIN")"
+case "$OUT" in *"COMPLETENESS=FAIL"*) ok "a record above the high-water mark is still not in the pinned corpus";; *) bad "records appended above the mark joined the cohort: $OUT";; esac
+
+echo "23. an outcome that keeps the identity but changes a pinned VALUE is caught"
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, json, os, sys
+f = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")))[6]
+out = []
+for line in gzip.open(f, "rt"):
+    i = line.find("{")
+    rec = json.loads(line[i:])
+    if rec.get("kind") == "outcome":
+        # same (hash, lineage, callId) — another experiment's clock and stamp
+        rec["trackFromPush"] = "2020-01-01"
+        rec["semanticStamp"] = "1999-01-01T00:00:00Z"
+    out.append(line[:i] + json.dumps(rec) + "\n")
+with gzip.open(f, "wt") as fh:
+    fh.write("".join(out))
+PYCASE
+publish
+OUT="$(evaluate)"
+case "$OUT" in *"COMPLETENESS=FAIL"*) ok "presence is not agreement — a foreign clock on a familiar id is caught";; *) bad "a cross-substituted outcome passed: $OUT";; esac
+
+echo "24. the manifest carries the generation, the declared start and the calendar it used"
+build 32 20
+targets FROZEN "$SB"
+mkdir -p "$WORK/kafka/prod/_manifest"
+printf 'topic_id=PyocBFttTn-KmwwdLj9KWw\nobserved=2026-09-08T00:00:00Z\n' \
+  > "$WORK/kafka/prod/_manifest/context-tape.direction.ledger.identity"
+publish
+WORKDIR="$WORK" python3 -c "
+import json, glob, os, sys
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/corpus/*/manifest.json'), key=os.path.getmtime)[-1]
+m = json.load(open(f))
+gen = m.get('generation')
+cal = m.get('calendar') or {}
+ok = (gen == '3f2a1c04-5b6d-4e7f-8a9b-0c1d2e3f4a5b'
+      and m.get('corpusStartDate') == '2026-07-01'
+      and isinstance(cal.get('module'), str) and len(cal.get('module','')) == 64)
+print('       generation=%s corpusStartDate=%s calendar=%s' % (gen, m.get('corpusStartDate'), bool(cal)))
+sys.exit(0 if ok else 1)" \
+  && ok "the coordinate is a coordinate: Kafka's TopicId normalised to the producer's spelling" \
+  || bad "the manifest omits its generation, its declared start or its calendar"
+
+echo "25. the watchdog reads the report's composite session key and exits nonzero on a bad day"
+build 3 20
+targets FROZEN "$SB"; publish
+# The watchdog checks the report FOR a day: it looks up dt=<day>.json and then asks whether that day's
+# session inside it is COMPLETE. So the report has to BE for that day — which is exactly the shape the
+# 07:00 ET run sees, checking the previous trading day against the 21:00 ET report.
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch.log" 2>&1; then
+  grep -q "archiveStatus=COMPLETE" "$WORK/watch.log" \
+    && ok "a healthy session under a composite key reads COMPLETE, not NOT_IN_CORPUS" \
+    || bad "the watchdog passed without recognising the session: $(head -3 "$WORK/watch.log")"
+else
+  bad "the watchdog failed on a healthy day: $(head -4 "$WORK/watch.log")"
+fi
+if CHECK_DATE=2026-01-02 ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" bash "$SRC/calibration-progress-watch.sh" >/dev/null 2>&1; then
+  bad "the watchdog exited 0 on a day it alerted about"
+else
+  ok "an alert exits nonzero, so launchd and cron can see it"
+fi
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
 echo "FAIL — $fails assertion(s)"; exit 1

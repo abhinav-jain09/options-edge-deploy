@@ -148,16 +148,11 @@ if manifest is not None:
                 or (off is not None and str(off) != str(e["offset"])) \
                 or (part is not None and str(part) != str(e["partition"])):
             moved.append(k)
-    hwm = manifest.get("highWaterMark") or {}
+    # ANY record the manifest does not name is extra, at any offset. The old test asked whether it sat
+    # below the high-water mark, which made appending above the mark invisible (r8 #1).
     for k in logical:
         if k not in manifest_entries:
-            part, off = coords.get(k, (None, None))
-            try:
-                mark = int(hwm.get("offset"))
-            except (TypeError, ValueError):
-                mark = None
-            if off is not None and mark is not None and off <= mark:
-                extra.append(k)
+            extra.append(k)
 version_ok = (manifest is not None and bool(published_on)
               and not missing_from_archive and not moved and not extra)
 
@@ -187,6 +182,17 @@ def in_window(rec):
 
 def session_key(rec):
     return "%s|%s|%s" % (rec.get("sessionDate"), rec.get("parameterSetHash"), rec.get("sessionLineageId"))
+
+# THE CORPUS IS THE MANIFEST. Filtering only "extra records at or below the high-water mark" left a
+# gap you could drive a session through: append a favourable day ABOVE the mark, do not republish, and
+# the old pin still verified while the new records joined the cohort (r8 #1). A record the pinned
+# manifest does not name is not in the corpus, wherever it sits.
+def manifested(rec):
+    return R.physical_key(rec) in manifest_entries
+
+calls = [c for c in calls if manifested(c)]
+outcomes = [o for o in outcomes if manifested(o)]
+unmanifested = sum(1 for k in logical if k not in manifest_entries)
 
 cohort = [c for c in calls
           if c.get("parameterSetHash") == phash and c.get("trackFromPush") == track_from
@@ -268,6 +274,21 @@ for k in window_sessions:
 # Bijection, scoped to the window and nothing outside it. Records outside are legitimate and are
 # neither orphans nor members.
 window_outcomes = [o for o in outcomes if call_identity(o) in cohort_ids]
+
+# Presence is not agreement. An outcome that keeps (hash, lineage, callId) but carries another
+# session's phase, clock or semantic stamp is a record from a different experiment wearing this one's
+# identity, and every clause below would have counted it (r8 #2).
+BOUND = ("sessionDate", "phaseAtCall", "trackFromPush", "semanticStamp")
+mismatched = []
+for o in window_outcomes:
+    c = by_call[call_identity(o)]
+    bad = [f for f in BOUND if o.get(f) != c.get(f)]
+    # delivery is copied from the call row by the producer, but a call row evicted before its outcome
+    # finalised legitimately yields UNKNOWN — so it is bound only when the outcome claims a value.
+    if o.get("delivery") not in (None, "", "UNKNOWN") and o.get("delivery") != c.get("delivery"):
+        bad.append("delivery")
+    if bad:
+        mismatched.append("%s|%s:%s" % (o.get("callId"), o.get("horizon"), ",".join(bad)))
 
 # Outcomes carry no refT — the record is (callId, horizon, targetT, ...) — so membership is decided
 # THROUGH the call, never by re-testing the window on a field that does not exist (r6 #3). An outcome
@@ -397,7 +418,8 @@ clause("COHORT_SIZE", "PASS" if size_ok else "FAIL", size_ok, len(cohort),
           min_cell, t_cell, len(REQUIRED_CELLS)))
 
 complete_ok = (version_ok and not not_evaluable and not attrition_unusable
-               and not missing_horizon and not orphans and bool(cohort) and not read_errors)
+               and not missing_horizon and not orphans and bool(cohort) and not read_errors
+               and not mismatched and not unmanifested)
 why = []
 if manifest is None:
     why.append("no published manifest for corpusVersion %s" % pinned_version[:12])
@@ -423,6 +445,11 @@ if missing_horizon:
     why.append("%d call(s) do not have exactly H3/H5/H15" % len(missing_horizon))
 if orphans:
     why.append("%d outcome(s) in the window belong to no cohort call" % len(orphans))
+if mismatched:
+    why.append("%d outcome(s) disagree with their call on a pinned field: %s"
+               % (len(mismatched), "; ".join(mismatched[:3])))
+if unmanifested:
+    why.append("%d archived record(s) are not named by the pinned manifest" % unmanifested)
 if read_errors:
     # An unreadable discontinuity sidecar or progress record used to sit quietly beside an ACCEPT
     # (r6 #6). Something the reader could not read is not something the evaluator may pass over.
@@ -499,6 +526,7 @@ artifact = {
     "corpusStartDate": corpus_start, "owedDaysMissing": missing_days,
     "notEvaluableSessions": not_evaluable, "attritionUnusableSessions": attrition_unusable,
     "callsMissingAHorizon": missing_horizon[:20], "orphanOutcomes": orphans[:20],
+    "outcomesDisagreeingWithTheirCall": mismatched[:20], "recordsNotInManifest": unmanifested,
     "sessionRefusalRates": {k: round(v, 6) for k, v in sorted(refusal_by_session.items())},
     "readErrors": read_errors[:20],
     "clauseResults": clauses,

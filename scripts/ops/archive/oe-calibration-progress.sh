@@ -34,6 +34,24 @@ log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 [ -d "$ROOT" ] || { log "FATAL: no corpus at $ROOT — the ledger has never been archived for env=$ENV_NAME"; exit 1; }
 command -v python3 >/dev/null || { log "FATAL: python3 missing"; exit 1; }
 
+# A5.6: the manifest is built under a SNAPSHOT LOCK that excludes a concurrent archive run, or a
+# version can straddle a half-written date — the reporter is scheduled at 20:30 and the seal archive
+# pass at 20:45, so the two genuinely can meet (r8 #7). This is the archiver's own TOPIC lock, taken on
+# the same key it uses, so the exclusion is real rather than a different lock with a similar name.
+_dir_key="$(printf '%s' "$ARCHIVE_DIR" | cksum | cut -d' ' -f1)"
+SNAPSHOT_LOCK="/tmp/oe-archive-kafka.$ENV_NAME.$LEDGER_TOPIC.$_dir_key.topic.lock"
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$SNAPSHOT_LOCK" || { log "FATAL: cannot open the snapshot lock $SNAPSHOT_LOCK"; exit 1; }
+  # Wait rather than skip: a progress run that quietly does not run is the failure the watchdog exists
+  # to catch, and 300 s comfortably outlasts a ledger archive pass.
+  if ! flock -w 300 9; then
+    log "FATAL: an archive run held $SNAPSHOT_LOCK for 300s — refusing to mint a version that could straddle a half-written date"
+    exit 1
+  fi
+else
+  log "WARNING: no flock on this host — the manifest is being minted WITHOUT the archive snapshot lock"
+fi
+
 # THE reader lives in oe_corpus_reader.py, next to this script and shared with the A5.8 evaluator.
 # Two copies of "is this session COMPLETE" would drift, and nothing would notice which one was wrong.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -72,6 +90,8 @@ REQUIRED_CLASSES = req_classes.split()
 REQUIRED_CELLS = req_cells.split()
 
 read_errors = []
+declared_hash = os.environ.get("DECLARED_HASH") or ""
+declared_track = os.environ.get("DECLARED_TRACK_FROM") or ""
 read = R.read_logical(root)
 sidecar = R.read_sidecar(root, read_errors)
 sessions, seals, calls, outcomes = R.classify_sessions(read, sidecar, today)
@@ -100,7 +120,8 @@ for c in calls:
 # A5.6: the version is a PUBLISHED, IMMUTABLE MANIFEST — published by atomic rename to
 # corpus/<corpusVersion>/manifest.json and never mutated. A bare hash of the live archive is not a pin:
 # it matches again after a deletion, so a calibration could not be re-run against the inputs it used.
-manifest = R.build_manifest(read, ledger_topic, env)
+declared = os.environ.get("CORPUS_START_DATE")
+manifest = R.build_manifest(read, ledger_topic, env, corpus_start=declared, cal=R.load_calendar())
 corpus_version, manifest_path, minted = R.publish_manifest(out_root, manifest)
 _cal = R.load_calendar()
 if _cal is None:
@@ -114,13 +135,21 @@ if _cal is None:
 # weeks redefine the expected window as "whatever survived" — the exact failure the owed-session check
 # exists to catch, and a warning in readErrors was not enough to stop it (r6 #9). The declaration is
 # calibration-targets.env, installed beside this script, and its absence is fatal rather than a default.
-declared = os.environ.get("CORPUS_START_DATE")
 if not declared:
     print("FATAL: corpusStartDate is not declared for env=%s in calibration-targets.env — a start date "
           "inferred from the archive turns a deletion into a narrower window" % env, file=sys.stderr)
     sys.exit(1)
 corpus_start = declared
-have_days = {v["sessionDate"] for v in sessions.values()}
+# Scoped to the DECLARED cohort, exactly as the evaluator scopes it: a zero-call COMPLETE seal under a
+# foreign hash used to satisfy an owed day here too, so a cohort holding one real session reported
+# corpusComplete (r8 #4). A session belongs to a cohort or it belongs to nothing.
+def cohort_days(ph, tf):
+    return {v["sessionDate"] for v in sessions.values()
+            if v["archiveStatus"] == "COMPLETE"
+            and (ph in (None, "", "UNFROZEN") or v.get("parameterSetHash") == ph)
+            and (tf in (None, "", "UNFROZEN") or v.get("trackFromPush") == tf)}
+
+have_days = cohort_days(declared_hash, declared_track)
 for day in R.owed(corpus_start, today, _cal):
     if day not in have_days:
         sessions[day] = {"sessionDate": day, "sessionLineageId": None,
@@ -137,8 +166,6 @@ today_status = today_rows[0]["archiveStatus"] if today_rows else "NOT_EXPECTED"
 # The cohort reported on is the DECLARED one. Reporting whatever cohorts happen to be in the archive
 # means a new parameter set publishes the old one's numbers, and the day the hash changes is exactly
 # the day the report must say so (r7 #8).
-declared_hash = os.environ.get("DECLARED_HASH") or ""
-declared_track = os.environ.get("DECLARED_TRACK_FROM") or ""
 if declared_hash and declared_hash != "UNFROZEN":
     by_cohort = {k: v for k, v in by_cohort.items()
                  if k[0] == declared_hash and (not declared_track or k[1] == declared_track)}
@@ -183,9 +210,12 @@ else:
         empty_cells = [c for c in REQUIRED_CELLS if b["cells"].get(c, 0) == 0]
         thresholds = (len(b["sessions"]) >= t_sessions and b["calls"] >= t_cohort
                       and min_class >= t_class and min_cell >= t_cell)
-        # scoped to THIS cohort's window: sessions before TRACK_FROM are not its business
-        window = [k for k, v in sessions.items() if tf is None or v["sessionDate"] >= str(tf)[:10]]
-        corpus_ok = bool(window) and all(sessions[k]["archiveStatus"] == "COMPLETE" for k in window)
+        # Scoped to THIS cohort in BOTH directions: sessions before TRACK_FROM are not its business, and
+        # neither are sessions belonging to another parameter set (r8 #4). Every owed day in the window
+        # must be present AS THIS COHORT'S, or the corpus is not complete for it.
+        owed_here = [d for d in R.owed(max(corpus_start, str(tf)[:10]) if tf else corpus_start, today, _cal)]
+        mine = cohort_days(ph, tf)
+        corpus_ok = bool(owed_here) and all(d in mine for d in owed_here)
         reports.append({
             "phase": "VALIDATION", "validationClockStarted": True,
             "parameterSetHash": ph, "trackFromPush": tf,
