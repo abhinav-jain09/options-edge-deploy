@@ -52,9 +52,11 @@ if [ -z "$found" ]; then
 fi
 log "progress record present for $DAY: $found"
 PREV="$(find "$OUT_ROOT" -name 'dt=*.json' 2>/dev/null | sort | tail -2 | head -1)"
-python3 - "$found" "$DAY" <<'PY'
-import json, sys
+export PREV
+python3 - "$found" "$DAY" "${PREV:-}" <<'PY'
+import json, os, sys
 d = json.load(open(sys.argv[1])); day = sys.argv[2]
+prev_path = sys.argv[3] if len(sys.argv) > 3 else ""
 st = d.get("sessions", {}).get(day, {}).get("archiveStatus", "NOT_IN_CORPUS")
 line = d.get("cohorts", [{}])[0]
 print("  %s: archiveStatus=%s conflicts=%s" % (day, st, d.get("conflicts")))
@@ -63,6 +65,16 @@ print("  corpusVersion=%s" % (cv or "<absent>"))
 if not cv:
     print("  WARN: the report carries no corpusVersion — it cannot be shown to have read anything")
     sys.exit(2)
+# A report that is byte-identical to the previous day's read the SAME corpus: either nothing was
+# archived, or the reporter re-published a stale read. Both are worth saying out loud.
+if prev_path and os.path.exists(prev_path) and prev_path != sys.argv[1]:
+    try:
+        pv = json.load(open(prev_path)).get("corpusVersion")
+        if pv == cv:
+            print("  WARN: corpusVersion did NOT advance since %s — the corpus gained nothing" % os.path.basename(prev_path))
+            sys.exit(2)
+    except Exception:
+        pass
 if st not in ("COMPLETE", "NOT_EXPECTED"):
     print("  WARN: %s did not land COMPLETE — it counts toward nothing until it does" % day)
     sys.exit(2)

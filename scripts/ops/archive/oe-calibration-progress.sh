@@ -66,7 +66,9 @@ def canonical(o):
 
 # A read error is NOT a quiet day. Swallowing it would let a truncated or unreadable archive report a
 # smaller population as complete — the exact failure this reader exists to catch.
-logical, conflicts, files, read_errors = {}, 0, 0, []
+logical, files = {}, 0
+conflicts_by_session, read_errors_by_session, bad_keys = {}, {}, {}
+read_errors = []                                    # file-level: attributed to the dates in the file
 for f in sorted(glob.glob(os.path.join(root, "dt=*", "*.jsonl.gz"))):
     files += 1
     try:
@@ -77,8 +79,10 @@ for f in sorted(glob.glob(os.path.join(root, "dt=*", "*.jsonl.gz"))):
                     continue
                 try:
                     rec = json.loads(line[i:])
-                except Exception as e:
-                    read_errors.append("%s:%d unparseable" % (os.path.basename(f), lineno))
+                except Exception:
+                    dt = re.search(r"dt=(\d{4}-\d{2}-\d{2})", f)
+                    read_errors_by_session.setdefault(dt.group(1) if dt else "?", []).append(
+                        "%s:%d unparseable" % (os.path.basename(f), lineno))
                     continue
                 if "kind" not in rec:
                     continue
@@ -92,15 +96,28 @@ for f in sorted(glob.glob(os.path.join(root, "dt=*", "*.jsonl.gz"))):
                 else:
                     lid = rec.get("callId") if rec.get("kind") == "call" else "%s|%s" % (rec.get("callId"), rec.get("horizon"))
                     pkey = "%s|%s|%s" % (rec.get("parameterSetHash"), rec.get("sessionLineageId"), lid)
-                m = re.search(r"Offset:(\d+)", line[:i])
+                prefix = line[:i]
+                m = re.search(r"Offset:(\d+)", prefix)
                 off = int(m.group(1)) if m else None
+                # the ACTUAL Kafka key, not one derived from the value: a record written under a
+                # different key than its payload implies is exactly the substitution to catch
+                km = re.search(r"Offset:\d+\s+(\S+)\s*$", prefix) or re.search(r"\s(\S+)\s*$", prefix)
+                actual_key = km.group(1) if km else None
+                sd_of = rec.get("sessionDate")
+                if actual_key is not None and actual_key != pkey:
+                    bad_keys.setdefault(sd_of, []).append(actual_key)
                 prev = logical.get(pkey)
                 if prev is None:
                     logical[pkey] = (dig, rec, off)
                 elif prev[0] != dig:
-                    conflicts += 1                       # same key, different content: the session is poisoned
+                    # same key, different content: this session is poisoned, and only this one
+                    conflicts_by_session[sd_of] = conflicts_by_session.get(sd_of, 0) + 1
+                elif off is not None and (prev[2] is None or off < prev[2]):
+                    logical[pkey] = (dig, rec, off)      # A5.4: keep the LOWEST physical offset
     except Exception as e:
-        read_errors.append("%s unreadable: %s" % (os.path.basename(f), e.__class__.__name__))
+        dt = re.search(r"dt=(\d{4}-\d{2}-\d{2})", f)
+        read_errors_by_session.setdefault(dt.group(1) if dt else "?", []).append(
+            "%s unreadable: %s" % (os.path.basename(f), e.__class__.__name__))
 
 seals, calls, outcomes = {}, [], []
 for pkey, (_d, rec, _off) in logical.items():
@@ -157,11 +174,41 @@ for (sd, ph), seal in seals.items():
         if r.get("kind") == "outcome" and r.get("sessionDate") == sd and r.get("sessionLineageId") == lin:
             horizons.setdefault(r.get("callId"), set()).add(r.get("horizon"))
     bad_horizons = [c for c in call_ids if horizons.get(c, set()) != {"H3", "H5", "H15"}]
-    spans = [d for d in sidecar if d.get("dt") == sd or d.get("topic")]
-    if read_errors:
-        status, why = "CORRUPT", "; ".join(read_errors[:3])
-    elif seal.get("conflicts", 0) or conflicts:
+    # ONLY a discontinuity dated for THIS session poisons it — `or d.get("topic")` matched every entry
+    spans = [d for d in sidecar if d.get("dt") == sd]
+    errs = read_errors_by_session.get(sd, [])
+    offs = sorted(o for o, _k, _d in (mine_c + mine_o) if o is not None)
+    want_first, want_last = seal.get("firstOffset"), seal.get("lastOffset")
+    required = ("parameterSetHash", "sessionLineageId", "sessionDate", "phaseAtCall")
+    missing_fields = []
+    for _dg, r, _o in logical.values():
+        if r.get("sessionDate") != sd or r.get("sessionLineageId") != lin or r.get("kind") == "seal":
+            continue
+        need = required + (("delivery",) if r.get("kind") == "outcome" else ())
+        missing_fields += ["%s:%s" % (r.get("kind"), f) for f in need if r.get(f) in (None, "")]
+    # attrition must satisfy A4.12's shape and arithmetic before any number from it is quoted
+    att_bad = []
+    for row in (seal.get("attrition") or []):
+        graded = row.get("graded")
+        reasons = [v for k, v in row.items() if k not in ("sessionDate", "etHour", "graded")
+                   and isinstance(v, (int, float))]
+        if not isinstance(graded, (int, float)) or graded < 0 or any(v < 0 for v in reasons) \
+                or sum(reasons) > graded:
+            att_bad.append(row.get("etHour"))
+    if errs:
+        status, why = "CORRUPT", "; ".join(errs[:3])
+    elif bad_keys.get(sd):
+        status, why = "CORRUPT", "%d record(s) written under a key their payload does not imply" % len(bad_keys[sd])
+    elif seal.get("conflicts", 0) or conflicts_by_session.get(sd):
         status, why = "CORRUPT", "conflicting records for one key"
+    elif att_bad:
+        status, why = "CORRUPT", "attrition rows violate A4.12 shape/arithmetic at hour(s) %s" % att_bad
+    elif offs and want_first is not None and (offs[0] != want_first or offs[-1] != want_last):
+        status, why = "CORRUPT", "archived offsets [%s,%s] are not the seal's [%s,%s]" % (offs[0], offs[-1], want_first, want_last)
+    elif offs and len(offs) != len(set(offs)):
+        status, why = "CORRUPT", "duplicate offsets in the archive"
+    elif missing_fields:
+        status, why = "INCOMPLETE", "records missing pinned fields: %s" % sorted(set(missing_fields))[:4]
     elif seal.get("discontinuities") or spans:
         status, why = "DISCONTINUITY", ";".join(seal.get("discontinuities") or []) or "archiver recorded a log reset"
     elif orphans:
@@ -178,24 +225,34 @@ for (sd, ph), seal in seals.items():
         status, why = "CORRUPT", "the seal's chains are not reproducible from the archive"
     else:
         status, why = "COMPLETE", ""
-    sessions[sd] = {"parameterSetHash": ph, "archiveStatus": status, "reason": why,
+    sessions["%s|%s|%s" % (sd, ph, lin)] = {"sessionDate": sd, "sessionLineageId": lin,
+                    "parameterSetHash": ph, "archiveStatus": status, "reason": why,
                     "calls": got_calls, "outcomes": got_out,
                     "phase": (["CALIBRATION", "VALIDATION"][0]), "trackFromPush": seal.get("trackFromPush"),
                     "attritionRows": len(seal.get("attrition", []) or [])}
 
 # a day with records but NO seal has not finished; a day with neither is not in the corpus at all
+# A day with records but no seal has not finished. It AGES: unsealed by the following close it is
+# INCOMPLETE, not perpetually "pending" — a status that never changes is a status nobody acts on.
 for c in calls:
-    sd = c.get("sessionDate")
-    if sd not in sessions:
-        sessions[sd] = {"parameterSetHash": c.get("parameterSetHash"), "archiveStatus": "PENDING_SEAL",
-                        "reason": "records archived, no seal yet", "calls": 0, "outcomes": 0,
-                        "phase": "CALIBRATION", "trackFromPush": None, "attritionRows": 0}
+    k = "%s|%s|%s" % (c.get("sessionDate"), c.get("parameterSetHash"), c.get("sessionLineageId"))
+    if k not in sessions:
+        sd = c.get("sessionDate")
+        aged = sd < today
+        sessions[k] = {"sessionDate": sd, "sessionLineageId": c.get("sessionLineageId"),
+                       "parameterSetHash": c.get("parameterSetHash"),
+                       "archiveStatus": "INCOMPLETE" if aged else "PENDING_SEAL",
+                       "reason": "records archived, no seal by the following close" if aged
+                                 else "records archived, seal not yet written",
+                       "calls": 0, "outcomes": 0, "phase": "CALIBRATION",
+                       "trackFromPush": None, "attritionRows": 0}
 
 # ---- the counters, per (hash, trackFrom). Only VALIDATION members count -----------------------
 by_cohort = {}
 for c in calls:
     sd, ph = c.get("sessionDate"), c.get("parameterSetHash")
-    if sessions.get(sd, {}).get("archiveStatus") != "COMPLETE":
+    k = "%s|%s|%s" % (sd, ph, c.get("sessionLineageId"))
+    if sessions.get(k, {}).get("archiveStatus") != "COMPLETE":
         continue                                   # a lost or unfinished day contributes to NOTHING
     if c.get("phaseAtCall") != "VALIDATION":
         continue                                   # the validation clock has not started for it
@@ -216,26 +273,53 @@ corpus_version = hashlib.sha256("\n".join(manifest).encode("utf-8")).hexdigest()
 
 # A5.5: the sessions that were OWED come from the trading calendar, not from what happens to be on
 # disk — otherwise a wipe of the first weeks silently redefines "expected" as "whatever survived".
+# The REAL calendar, not "weekday". Labor Day is a weekday and the market is shut; owing a session on
+# it would report a permanent MISSING that no run can ever satisfy, and an alarm that can never clear
+# is an alarm that gets ignored.
+_cal = None
+for _p in (os.environ.get("CALENDAR_DIR"), "/home/abhinav/oe-ops",
+           os.path.expanduser("~/development/workspace/options-edge-deploy/scripts/jenkins")):
+    if _p and os.path.isdir(_p):
+        sys.path.insert(0, _p)
+try:
+    import market_calendar as _cal
+except Exception:
+    _cal = None
+
 def owed(start, end):
     days, d = [], datetime.date.fromisoformat(start)
     last = datetime.date.fromisoformat(end)
     while d <= last:
-        if d.weekday() < 5:                      # the calendar module refines this on the host
+        if _cal is not None and hasattr(_cal, "is_trading_day"):
+            ok = _cal.is_trading_day(d)
+        else:
+            ok = d.weekday() < 5
+        if ok:
             days.append(d.isoformat())
         d += datetime.timedelta(days=1)
     return days
 
-corpus_start = min(sessions) if sessions else today
+# A5.5: DECLARED, not inferred. min(sessions) lets deletion of the earliest weeks redefine the
+# expected window as "whatever survived", which is the failure the owed-session check exists to catch.
+declared = os.environ.get("CORPUS_START_DATE")
+observed = min((v["sessionDate"] for v in sessions.values()), default=today)
+corpus_start = declared or observed
+if not declared:
+    read_errors.append("corpusStartDate is INFERRED from the archive (%s); declare CORPUS_START_DATE "
+                       "or a deletion of the earliest sessions silently narrows the expected window" % observed)
+have_days = {v["sessionDate"] for v in sessions.values()}
 for day in owed(corpus_start, today):
-    if day not in sessions:
-        sessions[day] = {"parameterSetHash": None, "archiveStatus": "MISSING",
+    if day not in have_days:
+        sessions[day] = {"sessionDate": day, "sessionLineageId": None,
+                         "parameterSetHash": None, "archiveStatus": "MISSING",
                          "reason": "a trading day the corpus owes and does not have",
                          "calls": 0, "outcomes": 0, "phase": None, "trackFromPush": None,
                          "attritionRows": 0}
 
 complete = [s for s in sessions.values() if s["archiveStatus"] == "COMPLETE"]
 calib_calls = sum(s["calls"] for s in complete)
-today_status = sessions.get(today, {}).get("archiveStatus", "NOT_EXPECTED")
+today_rows = [v for v in sessions.values() if v["sessionDate"] == today]
+today_status = today_rows[0]["archiveStatus"] if today_rows else "NOT_EXPECTED"
 
 reports = []
 if not by_cohort:
@@ -257,8 +341,8 @@ else:
         thresholds = (len(b["sessions"]) >= t_sessions and b["calls"] >= t_cohort
                       and min_class >= t_class and min_cell >= t_cell)
         # scoped to THIS cohort's window: sessions before TRACK_FROM are not its business
-        window = [sd for sd, st in sessions.items() if tf is None or sd >= str(tf)[:10]]
-        corpus_ok = bool(window) and all(sessions[sd]["archiveStatus"] == "COMPLETE" for sd in window)
+        window = [k for k, v in sessions.items() if tf is None or v["sessionDate"] >= str(tf)[:10]]
+        corpus_ok = bool(window) and all(sessions[k]["archiveStatus"] == "COMPLETE" for k in window)
         reports.append({
             "phase": "VALIDATION", "validationClockStarted": True,
             "parameterSetHash": ph, "trackFromPush": tf,
@@ -276,9 +360,11 @@ report = {
     "generatedAt": stamp, "env": env, "reportDate": today,
     "archiveStatusToday": today_status,
     "archivedToday": today_status == "COMPLETE",
-    "conflicts": conflicts, "filesRead": files, "readErrors": read_errors[:20],
+    "conflicts": sum(conflicts_by_session.values()), "filesRead": files, "readErrors": read_errors[:20],
     "corpusVersion": corpus_version, "corpusStartDate": corpus_start,
+    "calendar": "market_calendar" if _cal is not None else "WEEKDAY_FALLBACK",
     "sessions": {k: v for k, v in sorted(sessions.items())},
+    "sessionsMissing": sorted(v["sessionDate"] for v in sessions.values() if v["archiveStatus"] == "MISSING"),
     "cohorts": reports,
     "actionable": False, "slice": "COMMISSIONING_SHADOW",
 }
