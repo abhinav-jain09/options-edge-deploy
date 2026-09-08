@@ -1059,6 +1059,30 @@ why_says "owed trading day" \
   "a session sealed under other literals does not fill a day this cohort owes" \
   "it rejected, but not because the owed day was unfilled"
 
+
+echo "51. every archive script decides trading days from the calendar deployed WITH the unit"
+# oe-trading-day.sh prefers market_calendar.py beside it — but a caller that sets CALENDAR_DIR before
+# sourcing silently defeats that, and oe-archive-daily.sh did exactly that with a hardcoded default.
+# The archiver would then decide trading days from one calendar while the pin records another.
+CALPROBE="$WORK/calprobe"; mkdir -p "$CALPROBE"
+cp "$SRC/oe-trading-day.sh" "$SRC/oe-alert.sh" "$CALPROBE/"
+cp "$SRC/../../jenkins/market_calendar.py" "$CALPROBE/" 2>/dev/null || cp "$CAL_DIR/market_calendar.py" "$CALPROBE/"
+cat > "$CALPROBE/probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+set -uo pipefail
+CALENDAR_DIR="${CALENDAR_DIR:-}"; [ -n "$CALENDAR_DIR" ] || unset CALENDAR_DIR
+. "$(dirname "$0")/oe-trading-day.sh"
+printf '%s %s' "$(is_trading_day 2026-09-07)" "$(is_trading_day 2026-09-08)"
+PROBE
+chmod +x "$CALPROBE/probe.sh"
+got="$(bash "$CALPROBE/probe.sh")"
+[ "$got" = "no yes" ] \
+  && ok "the colocated calendar decides: Labor Day no, Tuesday yes" \
+  || bad "the colocated calendar was not used (got: $got)"
+grep -q 'CALENDAR_DIR="${CALENDAR_DIR:-/home' "$SRC/oe-archive-daily.sh" \
+  && bad "oe-archive-daily.sh still hardcodes a calendar directory, defeating the unit's own" \
+  || ok "no archive script overrides the unit's calendar with a hardcoded path"
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
 echo "FAIL — $fails assertion(s)"; exit 1

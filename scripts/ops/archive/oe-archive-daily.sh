@@ -45,7 +45,12 @@ NAS_DIR="${NAS_DIR:-/mnt/nas/optionsedge}"
 STAGING_DIR="${STAGING_DIR:-/home/kafka/archive}"
 ARCHIVER="${ARCHIVER:-$OE_DIR/oe-archive-kafka.sh}"
 VERIFIER="${VERIFIER:-$OE_DIR/oe-archive-verify.sh}"
-CALENDAR_DIR="${CALENDAR_DIR:-/home/abhinav/autostart/jenkins}"
+# NOT defaulted here. oe-trading-day.sh prefers the market_calendar.py Jenkins installs BESIDE the
+# archive unit — the same copy the reporter hashes into the corpus manifest — and setting a default
+# before sourcing it silently defeats that: the wrapper would decide trading days from one calendar
+# while the pin records another. Only an explicit caller override is passed through.
+CALENDAR_DIR="${CALENDAR_DIR:-}"
+[ -n "$CALENDAR_DIR" ] || unset CALENDAR_DIR
 LOG="${LOG:-/home/abhinav/oe-ops/archive-daily.log}"
 LOCK="${LOCK:-/tmp/oe-archive-daily.lock}"
 ENV_NAME="${ENV:-prod}"
