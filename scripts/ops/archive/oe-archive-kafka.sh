@@ -353,6 +353,7 @@ for topic in $TOPICS; do
   # when the new log grows past the old offsets. Comparing it makes the detector exact rather than
   # a heuristic. An absent id (older broker, CLI failure) simply falls back to the offset test.
   idfile="$MAN/$topic.identity"
+  id_write_blocked=0
   topic_id=$("$KAFKA_BIN/kafka-topics.sh" --bootstrap-server "$BOOTSTRAP" --describe \
                --topic "$topic" 2>/dev/null \
              | awk '{for (i=1;i<=NF;i++) if ($i=="TopicId:") {print $(i+1); exit}}')
@@ -452,8 +453,14 @@ for topic in $TOPICS; do
       # checkpoint in place, so the NEXT run compared it against the new log, saw no reset, and
       # resumed past the new log's prefix — losing it permanently and silently. The run still fails,
       # and the discontinuity above is what makes every session it spans NOT_EVALUABLE.
-      printf '%s=%s records=0 span=0 dt=%s archived=%s rebaselined=from-%s\n' \
-        "$part" "$earliest" "$DAY" "$STAMP" "$ckpt_before" >> "$offfile"
+      if ! printf '%s=%s records=0 span=0 dt=%s archived=%s rebaselined=from-%s\n' \
+             "$part" "$earliest" "$DAY" "$STAMP" "$ckpt_before" >> "$offfile"; then
+        # The append IS the recovery. Unchecked, a temporarily unwritable offsets file let the
+        # identity advance anyway, and the next run saw id==id, skipped the reset, and resumed from
+        # the stale offset — losing the new log's prefix permanently. Refuse the identity too.
+        log "  WARN $topic p$part: could not write the rebaseline — identity NOT advanced, the reset stays visible"
+        id_write_blocked=1
+      fi
       failed=$(( failed + 1 ))
       continue
     fi
@@ -491,7 +498,10 @@ for topic in $TOPICS; do
       # stale line would survive and the next run would report a RESET again. That is a false alarm
       # every single day, which is how a real alert stops being read.
       printf '%s=%s records=0 span=0 dt=%s archived=%s rebaselined=from-%s\n' \
-        "$part" "$earliest" "$DAY" "$STAMP" "$ckpt_before" >> "$offfile"
+        "$part" "$earliest" "$DAY" "$STAMP" "$ckpt_before" >> "$offfile" || {
+          log "  WARN $topic p$part: could not write the rebaseline — identity NOT advanced, the reset stays visible"
+          id_write_blocked=1
+        }
     elif [ "$from" -lt "$earliest" ]; then
       log "  GAP $topic p$part: checkpoint $from expired (log now starts at $earliest) — $((earliest-from)) records LOST before this run"
       if is_strict_topic "$topic"; then
@@ -605,8 +615,11 @@ for topic in $TOPICS; do
   # leave the new id stored against partitions that were never re-baselined, and the next run
   # would see id==id, skip the reset, and resume mid-log — silently missing the prefix. Written
   # after, the worst case is repeating a recovery that already happened, i.e. duplicates.
-  if [ -n "$topic_id" ]; then
+  if [ -n "$topic_id" ] && [ "${id_write_blocked:-0}" -eq 0 ]; then
     printf 'topic_id=%s\nobserved=%s\n' "$topic_id" "$STAMP" > "$idfile.tmp" && mv -f "$idfile.tmp" "$idfile"
+  elif [ "${id_write_blocked:-0}" -ne 0 ]; then
+    log "  $topic: identity deliberately NOT advanced — a rebaseline could not be recorded, so the next run must still see the reset"
+    failed=$(( failed + 1 ))
   fi
 
   exec {tfd}>&-
