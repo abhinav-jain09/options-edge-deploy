@@ -121,7 +121,7 @@ pipeline {
             || { echo "the evaluator suite did not report PASS — refusing" >&2; exit 1; }
           ev=$(grep -c "^  ok   " "$WORKSPACE/.evaluator.out")
           echo "evaluator suite reported $ev passing assertions"
-          [ "$ev" -ge 59 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
+          [ "$ev" -ge 60 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # Runs on the AGENT, not in the container: it reads the crontab, the unit scripts and this
           # very file, which the container's scripts/ops/archive mount cannot see. Every script the

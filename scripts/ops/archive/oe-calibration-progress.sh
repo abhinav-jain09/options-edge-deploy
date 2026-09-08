@@ -74,7 +74,8 @@ TARGETS="$SCRIPT_DIR/calibration-targets.env"
 eval "CORPUS_START_DATE=\"\${OE_CAL_CORPUS_START_DATE_${ENV_NAME}:-}\""
 eval "DECLARED_HASH=\"\${OE_CAL_PARAMETER_SET_HASH_${ENV_NAME}:-}\""
 eval "DECLARED_TRACK_FROM=\"\${OE_CAL_TRACK_FROM_PUSH_${ENV_NAME}:-}\""
-export CORPUS_START_DATE DECLARED_HASH DECLARED_TRACK_FROM
+eval "DECLARED_STAMP=\"\${OE_CAL_SEMANTIC_STAMP_${ENV_NAME}:-}\""
+export CORPUS_START_DATE DECLARED_HASH DECLARED_TRACK_FROM DECLARED_STAMP
 T_SESSIONS="${OE_CAL_T_SESSIONS:-30}"; T_COHORT="${OE_CAL_T_COHORT:-200}"
 T_CLASS="${OE_CAL_T_CLASS:-50}";       T_CELL="${OE_CAL_T_CELL:-50}"
 REQUIRED_CLASSES="${OE_CAL_REQUIRED_CLASSES:-}"; REQUIRED_CELLS="${OE_CAL_REQUIRED_CELLS:-}"
@@ -114,6 +115,11 @@ for c in calls:
         continue                                   # a lost or unfinished day contributes to NOTHING
     if c.get("phaseAtCall") != "VALIDATION":
         continue                                   # the validation clock has not started for it
+    # A5.7: the exact SEMANTIC STAMP as well as the hash. The hash deliberately excludes the stamp, so
+    # two parameter sets whose literals differ would otherwise pool into one cohort.
+    declared_stamp = os.environ.get("DECLARED_STAMP") or ""
+    if declared_stamp and c.get("semanticStamp") != declared_stamp:
+        continue
     tf = c.get("trackFromPush")
     k = (ph, tf)
     b = by_cohort.setdefault(k, {"sessions": set(), "calls": 0, "classes": {}, "cells": {}})

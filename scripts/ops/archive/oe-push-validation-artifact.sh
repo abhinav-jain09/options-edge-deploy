@@ -37,7 +37,7 @@ TARGETS="$SCRIPT_DIR/calibration-targets.env"
 [ -f "$TARGETS" ] || { log "FATAL: no preregistration at $TARGETS — an artifact without one is a number chosen after the fact"; exit 1; }
 [ -f "$SCRIPT_DIR/oe_corpus_reader.py" ] || { log "FATAL: oe_corpus_reader.py missing beside $0"; exit 1; }
 
-for v in OE_CAL_TARGETS_FILE PARAMETER_SET_HASH TRACK_FROM_PUSH STOPPING_BOUNDARY_MS CORPUS_START_DATE T_SESSIONS T_COHORT \
+for v in OE_CAL_TARGETS_FILE PARAMETER_SET_HASH SEMANTIC_STAMP TRACK_FROM_PUSH STOPPING_BOUNDARY_MS CORPUS_START_DATE T_SESSIONS T_COHORT \
          T_CLASS T_CELL REQUIRED_CLASSES REQUIRED_CELLS BOOTSTRAP_SEED BOOTSTRAP_B RESULT_LCB_FLOOR \
          HIT_RATE_LCB_FLOOR MEDIAN_MAE_CEIL P90_MAE_CEIL COVERAGE_FLOOR ATTRITION_CEIL THRESHOLDS_STATE; do
   if [ -n "${!v:-}" ]; then
@@ -53,6 +53,7 @@ PARAMETER_SET_HASH="$(env_pick PARAMETER_SET_HASH)"
 TRACK_FROM_PUSH="$(env_pick TRACK_FROM_PUSH)"
 STOPPING_BOUNDARY_MS="$(env_pick STOPPING_BOUNDARY_MS)"
 CORPUS_START_DATE="$(env_pick CORPUS_START_DATE)"
+SEMANTIC_STAMP="$(env_pick SEMANTIC_STAMP)"
 T_SESSIONS="$OE_CAL_T_SESSIONS"; T_COHORT="$OE_CAL_T_COHORT"
 T_CLASS="$OE_CAL_T_CLASS";       T_CELL="$OE_CAL_T_CELL"
 REQUIRED_CLASSES="$OE_CAL_REQUIRED_CLASSES"; REQUIRED_CELLS="$OE_CAL_REQUIRED_CELLS"
@@ -63,7 +64,8 @@ MEDIAN_MAE_CEIL="$OE_CAL_MEDIAN_MAE_CEIL";   P90_MAE_CEIL="$OE_CAL_P90_MAE_CEIL"
 COVERAGE_FLOOR="$OE_CAL_COVERAGE_FLOOR";     ATTRITION_CEIL="$OE_CAL_ATTRITION_CEIL"
 
 for pair in "PARAMETER_SET_HASH:$PARAMETER_SET_HASH" "TRACK_FROM_PUSH:$TRACK_FROM_PUSH" \
-            "STOPPING_BOUNDARY_MS:$STOPPING_BOUNDARY_MS" "CORPUS_START_DATE:$CORPUS_START_DATE"; do
+            "STOPPING_BOUNDARY_MS:$STOPPING_BOUNDARY_MS" "CORPUS_START_DATE:$CORPUS_START_DATE" \
+            "SEMANTIC_STAMP:$SEMANTIC_STAMP"; do
   name="${pair%%:*}"; val="${pair#*:}"
   [ -n "$val" ] || { log "FATAL: $name is not declared for env=$ENV_NAME in $TARGETS"; exit 1; }
   [ "$val" != "UNFROZEN" ] || { log "REFUSING: $name is still UNFROZEN for env=$ENV_NAME. The boundary and the parameter set are frozen together, in one commit, before any of this data is looked at."; exit 2; }
@@ -80,13 +82,14 @@ python3 - "$SCRIPT_DIR" "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$PARA
          "$TRACK_FROM_PUSH" "$STOPPING_BOUNDARY_MS" "$CORPUS_VERSION" "$T_SESSIONS" "$T_COHORT" \
          "$T_CLASS" "$T_CELL" "$REQUIRED_CLASSES" "$REQUIRED_CELLS" "$BOOTSTRAP_SEED" "$BOOTSTRAP_B" \
          "$RESULT_LCB_FLOOR" "$HIT_RATE_LCB_FLOOR" "$MEDIAN_MAE_CEIL" "$P90_MAE_CEIL" \
-         "$COVERAGE_FLOOR" "$ATTRITION_CEIL" "$THRESHOLDS_STATE" "$CORPUS_START_DATE" <<'PY'
+         "$COVERAGE_FLOOR" "$ATTRITION_CEIL" "$THRESHOLDS_STATE" "$CORPUS_START_DATE" \
+         "$SEMANTIC_STAMP" <<'PY'
 import json, os, sys, hashlib, tempfile
 
 (script_dir, root, out_root, today, stamp, env, phash, track_from, stopping, pinned_version,
  t_sessions, t_cohort, t_class, t_cell, req_classes, req_cells, seed, B,
  f_result, f_hit, c_median_mae, c_p90_mae, f_cov, c_attr, thresholds_state,
- corpus_start) = sys.argv[1:27]
+ corpus_start, semantic_stamp) = sys.argv[1:28]
 sys.path.insert(0, script_dir)
 import oe_corpus_reader as R
 
@@ -245,8 +248,12 @@ calls = [c for c in calls if manifested(c)]
 outcomes = [o for o in outcomes if manifested(o)]
 unmanifested = sum(1 for k in logical if k not in manifest_entries)
 
+# A5.7: the exact hash, TRACK_FROM_PUSH **and SEMANTIC STAMP**. The stamp is what changes when the
+# literals change, and the hash deliberately does not carry it — so without this two parameter sets
+# could pool into one cohort with every other check passing.
 cohort = [c for c in calls
           if c.get("parameterSetHash") == phash and c.get("trackFromPush") == track_from
+          and c.get("semanticStamp") == semantic_stamp
           and c.get("phaseAtCall") == "VALIDATION" and in_window(c)]
 
 def call_identity(rec):
@@ -570,6 +577,7 @@ artifact = {
     "eventType": "PUSH_VALIDATION_ARTIFACT", "artifactVersion": 1,
     "env": env, "generatedAt": stamp,
     "parameterSetHash": phash, "trackFromPush": track_from, "stoppingBoundaryMs": stopping,
+    "semanticStamp": semantic_stamp,
     "primaryHorizon": PRIMARY,
     "corpusVersion": pinned_version,
     "estimator": {"unit": "SESSION", "replicates": B, "seed": seed, "quantile": "TYPE_7",

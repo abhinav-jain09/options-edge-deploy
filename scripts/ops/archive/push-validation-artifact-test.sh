@@ -160,6 +160,7 @@ OE_CAL_PARAMETER_SET_HASH_prod=$PH
 OE_CAL_TRACK_FROM_PUSH_prod=$TF
 OE_CAL_STOPPING_BOUNDARY_MS_prod=$2
 OE_CAL_CORPUS_START_DATE_prod=$TF
+OE_CAL_SEMANTIC_STAMP_prod=2026-09-08T18:00:00Z
 OE_CAL_T_SESSIONS=30
 OE_CAL_T_COHORT=200
 OE_CAL_T_CLASS=50
@@ -927,6 +928,29 @@ d = json.load(open(f))
 print([c for c in d['clauseResults'] if c['clause'] == 'COMPLETENESS'][0]['note'])")"
 case "$real_note" in *"corpus defect"*) : ;; *) bad "the real evaluator gave no corpus-defect reason: $real_note";; esac
 case "$mut_note"  in *"corpus defect"*) bad "the reason survives without the call — it comes from somewhere else";; *) ok "the corpus-defect reason exists only while the shared call does";; esac
+
+
+echo "45. a cohort admits only the DECLARED semantic stamp"
+build 32 20
+targets FROZEN "$SB"; publish
+# the literals changed but the hash did not — which is exactly the case the hash cannot catch, because
+# A4.11 deliberately excludes the stamp from it
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, json, os, sys
+for f in glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")):
+    out = []
+    for line in gzip.open(f, "rt"):
+        i = line.find("{")
+        rec = json.loads(line[i:])
+        if rec.get("kind") == "call":
+            rec["semanticStamp"] = "2099-01-01T00:00:00Z"
+        out.append(line[:i] + json.dumps(rec) + "\n")
+    with gzip.open(f, "wt") as fh:
+        fh.write("".join(out))
+PYCASE
+publish
+OUT="$(evaluate)"
+case "$OUT" in *"COHORT_SIZE=FAIL"*) ok "calls under another semantic stamp do not join this cohort";; *) bad "a foreign semantic stamp was pooled into the cohort: $OUT";; esac
 
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
