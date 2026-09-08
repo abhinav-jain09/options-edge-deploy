@@ -250,7 +250,7 @@ pipeline {
             echo "FAIL: source topic $TOPIC is EMPTY -- nothing to mirror and nothing to verify against."
             echo "       Either install after es-amt-service has published its first RTH minute, or re-run with ALLOW_EMPTY_SOURCE=true to install now with the payload proof deferred."
             exit 1;
-          fi; { : }
+          fi
           echo "source $TOPIC end offset: $SEND"
 
           # MM1 binary present

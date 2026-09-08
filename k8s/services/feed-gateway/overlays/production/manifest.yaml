@@ -60,7 +60,7 @@ spec:
       containers:
         - env:
             - name: GATEWAY_IBKR_PREOPEN_ENABLED
-              value: "true"
+              value: "false"
             - name: OE_WATCH_JDBC_URL
               value: jdbc:postgresql://192.168.100.252:5432/options_flow
             - name: OE_WATCH_DB_USER

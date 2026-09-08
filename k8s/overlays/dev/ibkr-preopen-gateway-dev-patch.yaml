@@ -1,6 +1,9 @@
-# DEV-ONLY: surface the pre-open window state to the browser (rev13 Phase 3 slice 1).
-# The gateway relays options.ibkr.gex.status as the standalone "ibkr-preopen-status" event;
-# base keeps it false so prod stays dark until dev proves the window.
+# 2026-09-08: the board needs BOTH halves. GATEWAY_IBKR_PREOPEN_ENABLED=true keeps the
+# slice-1 STATUS plane (path/FRESH/GATED) flowing; the value plane stands down so pre-open
+# numbers ride the ordinary gex-by-strike delivery the UI actually renders. Slice 2 publishes
+# them as "ibkr-preopen-gex", which no web client consumes (zero hits in options-edge-web
+# main), so with the value plane ON the browser reads every row as numberless.
+# Turn ARBITRATION back on once the web grows that consumer (gateway #169).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -13,3 +16,4 @@ spec:
         - name: feed-gateway
           env:
             - { name: GATEWAY_IBKR_PREOPEN_ENABLED, value: "true" }
+            - { name: GATEWAY_IBKR_PREOPEN_GEX_ARBITRATION_ENABLED, value: "false" }
