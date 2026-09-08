@@ -44,10 +44,32 @@ check "outcome/call pinned-field binding"                        $E 'mismatched\
 check "records outside the manifest"                             $E 'unmanifested = sum\(1 for k in logical if k not in manifest_entries\)' 'unmanifested = 0'
 check "conflict detection"                                       $E 'conflicts_total = read\.get\("conflictsTotal", 0\)' 'conflicts_total = 0'
 check "owed-day enumeration"                                     $E 'missing_days\.append\(day\)'                     'None'
+check "stopping boundary is an RTH close"                        $E 'elif not R\.is_rth_close\(stopping, _cal\):'       'elif False:'
 check "seal-vs-manifest generation"                              $E 'relabelled\.append\('                           'None and ('
 check "-1 coordinates refused"                                   $E 'uncoordinated = 0 if manifest is None else sum\([\s\S]*?\)\n' 'uncoordinated = 0\n'
 check "shared corpus_defects call"                               $E 'shared_defects = R\.corpus_defects\([\s\S]*?\)\n' 'shared_defects = []\n'
 check "cell key (per-cell counter)"                              $R 'return "%s\|%s\|%s" % \(call\.get\("enteredState"\), roles, call\.get\("regime"\)\)' 'return "X|X|X"'
 check "chain recomputation"                                      $R 'def chain\(domain, recs\):\n(    """[\s\S]*?"""\n)' 'def chain(domain, recs):\n\1    return None\n'
 check "session status: COMPLETE only when it is"                 $R 'status, why = "COMPLETE", ""'                    'status, why = "COMPLETE", ""  # noqa'
+# --- the round-14 protections -----------------------------------------------------------------------
+check "live coordinate required (absent is a mismatch)"          $E 'if part is None or off is None or int\(part\) < 0 or int\(off\) < 0:
+            moved\.append\(k\)
+        elif' 'if False:
+            moved.append(k)
+        elif'
+check "outcome-only lineages get a session row"                  $R 'for c in list\(calls\) \+ list\(outcomes\):'      'for c in list(calls):'
+check "seal semanticStamp must AGREE with its records"           $R 'stamp_bad = bool\(stamp_split\) and \(len\(stamp_split\) > 1 or stamp_split\[0\] != seal\.get\("semanticStamp"\)\)' 'stamp_bad = False'
+check "cohort admits only the declared semantic stamp"           $E 'and c\.get\("semanticStamp"\) == semantic_stamp
+'  '
+'
+check "attrition shape validation"                               $R 'def attrition_violations\(seal\):
+(    """[\s\S]*?"""
+)' 'def attrition_violations(seal):
+    return []
+'
+check "a session that graded nothing is NOT a zero rate"         $R 'if graded == 0:
+        return None'            'if False:
+        return None'
+check "the reader recomputes the digest from the payload"        $R 'dig = hashlib\.sha256\(canonical\(body\)\.encode\("utf-8"\)\)\.hexdigest\(\)' 'dig = rec.get("semanticDigest") or hashlib.sha256(canonical(body).encode("utf-8")).hexdigest()'
+check "lowest-offset collapse for replays"                       $R 'elif off is not None and \(prev\[2\] is None or off < prev\[2\]\):' 'elif False:'
 echo done
