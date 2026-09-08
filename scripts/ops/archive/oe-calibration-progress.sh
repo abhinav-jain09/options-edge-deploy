@@ -38,8 +38,12 @@ command -v python3 >/dev/null || { log "FATAL: python3 missing"; exit 1; }
 # version can straddle a half-written date — the reporter is scheduled at 20:30 and the seal archive
 # pass at 20:45, so the two genuinely can meet (r8 #7). This is the archiver's own TOPIC lock, taken on
 # the same key it uses, so the exclusion is real rather than a different lock with a similar name.
+# The key must be the archiver's own, character for character, or this "lock" excludes nothing at all
+# and only looks like it does. oe-archive-kafka.sh builds it as
+#   /tmp/oe-archive-kafka.$ENV.$_dir_key.t-<topic with anything outside [A-Za-z0-9._-] as _>.lock
 _dir_key="$(printf '%s' "$ARCHIVE_DIR" | cksum | cut -d' ' -f1)"
-SNAPSHOT_LOCK="/tmp/oe-archive-kafka.$ENV_NAME.$LEDGER_TOPIC.$_dir_key.topic.lock"
+_topic_key="$(printf '%s' "$LEDGER_TOPIC" | tr -c 'A-Za-z0-9._-' '_')"
+SNAPSHOT_LOCK="/tmp/oe-archive-kafka.$ENV_NAME.$_dir_key.t-$_topic_key.lock"
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$SNAPSHOT_LOCK" || { log "FATAL: cannot open the snapshot lock $SNAPSHOT_LOCK"; exit 1; }
   # Wait rather than skip: a progress run that quietly does not run is the failure the watchdog exists

@@ -518,6 +518,38 @@ else
   ok "an alert exits nonzero, so launchd and cron can see it"
 fi
 
+
+echo "26. the manifest is minted under the ARCHIVER'S OWN lock, not a lookalike"
+build 3 20
+targets FROZEN "$SB"
+# the exact key oe-archive-kafka.sh builds for this (env, ARCHIVE_DIR, topic)
+_dk="$(printf '%s' "$WORK" | cksum | cut -d' ' -f1)"
+_tk="$(printf '%s' "context-tape.direction.ledger" | tr -c 'A-Za-z0-9._-' '_')"
+ARCHIVER_LOCK="/tmp/oe-archive-kafka.prod.$_dk.t-$_tk.lock"
+if command -v flock >/dev/null 2>&1; then
+  ( exec 7>"$ARCHIVER_LOCK"; flock 7; sleep 6 ) &
+  holder=$!
+  sleep 1
+  start=$(date +%s)
+  env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CAL_DIR" \
+      bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+  waited=$(( $(date +%s) - start ))
+  wait $holder 2>/dev/null || true
+  [ "$waited" -ge 4 ] \
+    && ok "the reporter waited ${waited}s for the archive lock instead of snapshotting through it" \
+    || bad "the reporter did not wait (${waited}s) — its lock key does not match the archiver's"
+else
+  ok "no flock on this host; the reporter says so out loud rather than pretending it locked"
+fi
+# The key derivation is checkable WITHOUT flock, and it is the half that actually goes wrong: the first
+# version of this used a plausible-looking key of its own and therefore excluded nothing. Both sides are
+# read out of the two scripts and compared.
+ARCH_LINE="$(grep -m1 '^  topic_lock=' "$SRC/oe-archive-kafka.sh")"
+REP_LINE="$(grep -m1 '^SNAPSHOT_LOCK=' "$SRC/oe-calibration-progress.sh")"
+a="$(ENV_NAME=prod _dir_key=K topic=context-tape.direction.ledger bash -c "${ARCH_LINE#  }"'; printf "%s" "$topic_lock"')"
+b="$(ENV_NAME=prod _dir_key=K LEDGER_TOPIC=context-tape.direction.ledger bash -c '_topic_key="$(printf "%s" "$LEDGER_TOPIC" | tr -c "A-Za-z0-9._-" "_")"; '"${REP_LINE}"'; printf "%s" "$SNAPSHOT_LOCK"')"
+[ -n "$a" ] && [ "$a" = "$b" ]   && ok "the reporter's lock path IS the archiver's: $a"   || bad "lock paths differ — archiver=[$a] reporter=[$b]"
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
 echo "FAIL — $fails assertion(s)"; exit 1
