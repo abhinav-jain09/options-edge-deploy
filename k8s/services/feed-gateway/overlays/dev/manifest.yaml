@@ -59,8 +59,11 @@ spec:
     spec:
       containers:
         - env:
+            # 2026-09-08 STOPGAP: slice-2 arbitration rejects the producer's real
+            # sessionId format (IBKR_PREOPEN:20260908 vs the validator's 2026-09-08),
+            # dropping 100% of pre-open GEX. Off = pre-slice-2 path. Re-enable with the fix.
             - name: GATEWAY_IBKR_PREOPEN_ENABLED
-              value: "true"
+              value: "false"
             - name: WS_ALLOWED_ORIGINS
               value: http://localhost:8090
             - name: WS_AUTH_ISSUER_URI

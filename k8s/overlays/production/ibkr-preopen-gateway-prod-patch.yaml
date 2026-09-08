@@ -1,3 +1,10 @@
+# 2026-09-08 STOPGAP — pre-open GEX arbitration (slice 2) drops EVERY pre-open record.
+# The producer writes sessionId "IBKR_PREOPEN:20260908" (BASIC_ISO_DATE); the gateway's
+# validator demands "IBKR_PREOPEN:2026-09-08" (ISO_LOCAL_DATE), so every record fails closed:
+# measured 2026-09-08 06:45 ET, dropped_sessioned dev 23,744 / prod 54,576, candidates 0.
+# Turning the flag off short-circuits interceptSharedGexRecord and restores the pre-slice-2
+# path (values reach the board; the status plane and the 09:35 sweep are the cost).
+# RE-ENABLE once the gateway accepts the producer's real session-id format.
 # PROD gate (gamma), gateway half — mirrors k8s/overlays/dev/ibkr-preopen-gateway-dev-patch.yaml.
 #
 # Lets the gateway relay the pre-open status stream (options.ibkr.gex.status) to the UI, which is
@@ -18,4 +25,4 @@ spec:
       containers:
         - name: feed-gateway
           env:
-            - { name: GATEWAY_IBKR_PREOPEN_ENABLED, value: "true" }
+            - { name: GATEWAY_IBKR_PREOPEN_ENABLED, value: "false" }
