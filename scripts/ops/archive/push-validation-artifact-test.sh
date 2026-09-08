@@ -550,6 +550,47 @@ a="$(ENV_NAME=prod _dir_key=K topic=context-tape.direction.ledger bash -c "${ARC
 b="$(ENV_NAME=prod _dir_key=K LEDGER_TOPIC=context-tape.direction.ledger bash -c '_topic_key="$(printf "%s" "$LEDGER_TOPIC" | tr -c "A-Za-z0-9._-" "_")"; '"${REP_LINE}"'; printf "%s" "$SNAPSHOT_LOCK"')"
 [ -n "$a" ] && [ "$a" = "$b" ]   && ok "the reporter's lock path IS the archiver's: $a"   || bad "lock paths differ — archiver=[$a] reporter=[$b]"
 
+
+echo "27. a conflicting record anywhere in the corpus is the verdict"
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, json, os, sys
+# the SAME key with different content: A5.3's conflict. Written into a session that is otherwise whole.
+f = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")))[8]
+first = None
+for line in gzip.open(f, "rt"):
+    i = line.find("{")
+    rec = json.loads(line[i:])
+    if rec.get("kind") == "call":
+        first = (line[:i], rec)
+        break
+prefix, rec = first
+rec["predictedSign"] = -rec.get("predictedSign", 1)          # same key, different content
+with gzip.open(f.replace(".jsonl.gz", ".dup.jsonl.gz"), "wt") as fh:
+    fh.write(prefix + json.dumps(rec) + "\n")
+PYCASE
+publish
+OUT="$(evaluate)"
+case "$OUT" in *"COMPLETENESS=FAIL"*) ok "two contents under one key means the population is not knowable";; *) bad "a conflict produced an ACCEPT: $OUT";; esac
+
+echo "28. the generation comes from THIS topic's identity file, not whichever sorts first"
+HERE="$HERE" python3 -c "
+import sys, os, tempfile, pathlib
+sys.path.insert(0, os.environ['HERE'])
+import oe_corpus_reader as R
+td = tempfile.mkdtemp()
+root = pathlib.Path(td) / 'kafka/prod/context-tape.direction.ledger'
+root.mkdir(parents=True)
+m = root.parent / '_manifest'; m.mkdir()
+(m / 'aaa.some-other-topic.identity').write_text('topic_id=AAAAAAAAAAAAAAAAAAAAAA\n')
+(m / 'context-tape.direction.ledger.identity').write_text('topic_id=PyocBFttTn-KmwwdLj9KWw\n')
+got = R.topic_generation(str(root))
+sys.exit(0 if got == '3f2a1c04-5b6d-4e7f-8a9b-0c1d2e3f4a5b' else 1)" \
+  && ok "a neighbouring topic's generation cannot be stamped onto this corpus" \
+  || bad "topic_generation picked the wrong identity file"
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
 echo "FAIL — $fails assertion(s)"; exit 1

@@ -219,7 +219,12 @@ else:
         # must be present AS THIS COHORT'S, or the corpus is not complete for it.
         owed_here = [d for d in R.owed(max(corpus_start, str(tf)[:10]) if tf else corpus_start, today, _cal)]
         mine = cohort_days(ph, tf)
-        corpus_ok = bool(owed_here) and all(d in mine for d in owed_here)
+        # A conflict is counted in the record but was not allowed to affect corpusComplete, so the
+        # reporter could call a corpus complete on the same day the evaluator called it NOT_EVALUABLE.
+        # The two must not be able to disagree about COMPLETE — that is the whole reason they share a
+        # reader.
+        conflicted = sum(conflicts_by_session.values())
+        corpus_ok = bool(owed_here) and all(d in mine for d in owed_here) and conflicted == 0
         reports.append({
             "phase": "VALIDATION", "validationClockStarted": True,
             "parameterSetHash": ph, "trackFromPush": tf,

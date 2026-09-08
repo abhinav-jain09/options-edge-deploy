@@ -121,7 +121,7 @@ pipeline {
             || { echo "the evaluator suite did not report PASS — refusing" >&2; exit 1; }
           ev=$(grep -c "^  ok   " "$WORKSPACE/.evaluator.out")
           echo "evaluator suite reported $ev passing assertions"
-          [ "$ev" -ge 36 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
+          [ "$ev" -ge 38 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
         '''
       }
     }

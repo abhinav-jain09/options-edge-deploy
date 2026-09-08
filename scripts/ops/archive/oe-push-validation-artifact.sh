@@ -156,6 +156,13 @@ if manifest is not None:
 version_ok = (manifest is not None and bool(published_on)
               and not missing_from_archive and not moved and not extra)
 
+# A CONFLICT anywhere in the corpus is a defect of the corpus, and the evaluator never looked at one:
+# it relied on the session walk, which sees a conflict only for a session that has a seal and whose
+# conflicting record carries the same sessionDate. A5.3 is not conditional — two different contents
+# under one key means the population is not knowable, whoever wrote them (r9).
+conflicts_by_session = read.get("conflictsBySession", {})
+conflicts_total = read.get("conflictsTotal", 0)
+
 # A read error the SESSION walk cannot see: a file that will not open may be the only evidence a session
 # existed at all, so the flat list joins the evaluator's own (r7 #3).
 read_errors += read.get("readErrors", [])
@@ -419,7 +426,7 @@ clause("COHORT_SIZE", "PASS" if size_ok else "FAIL", size_ok, len(cohort),
 
 complete_ok = (version_ok and not not_evaluable and not attrition_unusable
                and not missing_horizon and not orphans and bool(cohort) and not read_errors
-               and not mismatched and not unmanifested)
+               and not mismatched and not unmanifested and not conflicts_total)
 why = []
 if manifest is None:
     why.append("no published manifest for corpusVersion %s" % pinned_version[:12])
@@ -450,6 +457,9 @@ if mismatched:
                % (len(mismatched), "; ".join(mismatched[:3])))
 if unmanifested:
     why.append("%d archived record(s) are not named by the pinned manifest" % unmanifested)
+if conflicts_total:
+    why.append("%d conflicting record(s) in the corpus (sessions: %s)"
+               % (conflicts_total, ", ".join(str(k) for k in sorted(conflicts_by_session)[:4])))
 if read_errors:
     # An unreadable discontinuity sidecar or progress record used to sit quietly beside an ACCEPT
     # (r6 #6). Something the reader could not read is not something the evaluator may pass over.
@@ -527,6 +537,7 @@ artifact = {
     "notEvaluableSessions": not_evaluable, "attritionUnusableSessions": attrition_unusable,
     "callsMissingAHorizon": missing_horizon[:20], "orphanOutcomes": orphans[:20],
     "outcomesDisagreeingWithTheirCall": mismatched[:20], "recordsNotInManifest": unmanifested,
+    "conflicts": conflicts_total,
     "sessionRefusalRates": {k: round(v, 6) for k, v in sorted(refusal_by_session.items())},
     "readErrors": read_errors[:20],
     "clauseResults": clauses,

@@ -114,9 +114,10 @@ def read_logical(root):
     flat = []
     for sd, errs in sorted(read_errors_by_session.items()):
         flat += ["%s: %s" % (sd, e) for e in errs]
-    return {"logical": logical, "files": files, "conflictsBySession": conflicts_by_session,
+    return {"root": root, "logical": logical, "files": files, "conflictsBySession": conflicts_by_session,
             "readErrorsBySession": read_errors_by_session, "readErrors": flat,
             "badKeys": bad_keys, "coords": coords,
+            "conflictsTotal": sum(conflicts_by_session.values()),
             "generation": topic_generation(root)}
 
 
@@ -144,20 +145,26 @@ def canonical_topic_id(raw):
         return v.lower()
 
 
-def topic_generation(root):
+def topic_generation(root, topic=None):
     """The Kafka TopicId the archiver recorded, as its canonical lower-case hex UUID. Offsets restart
     after a recreation, so an ordering without the generation is not a total order (A5.6).
 
     The archiver's file is <topic>.identity. Globbing *.id matched nothing, so every manifest carried
     generation: null and the coordinate was not actually a coordinate (r8 #3).
     """
+    # THE topic's identity file, by name. Globbing *.identity and taking the first returned whichever
+    # topic sorted earliest — a neighbour's generation stamped onto this corpus's manifest, which is a
+    # coordinate pointing at the wrong log.
+    want = "%s.identity" % (topic or os.path.basename(root.rstrip("/")))
     for cand in (os.path.join(os.path.dirname(root.rstrip("/")), "_manifest"),
                  os.path.join(root, "..", "_manifest")):
+        f = os.path.join(cand, want)
         try:
-            for f in sorted(glob.glob(os.path.join(cand, "*.identity"))):
-                for line in open(f):
-                    if line.startswith("topic_id="):
-                        return canonical_topic_id(line.split("=", 1)[1])
+            if not os.path.isfile(f):
+                continue
+            for line in open(f):
+                if line.startswith("topic_id="):
+                    return canonical_topic_id(line.split("=", 1)[1])
         except Exception:
             continue
     return None
@@ -397,6 +404,8 @@ def build_manifest(read, topic, env, corpus_start=None, cal=None):
     """
     logical, coords = read["logical"], read["coords"]
     generation = read.get("generation")
+    if generation is None and read.get("root"):
+        generation = topic_generation(read["root"], topic)
     entries = []
     for pkey, (dig, rec, _off) in logical.items():
         part, off = coords.get(pkey, (None, None))
