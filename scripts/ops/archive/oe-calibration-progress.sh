@@ -26,15 +26,10 @@ STAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 TODAY="${REPORT_DATE:-$(TZ=America/New_York date '+%Y-%m-%d')}"
 log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 
-# The targets are A2's, adopted by A5 as its own. They are not a claim that A4 feeds A2.
-T_SESSIONS="${T_SESSIONS:-30}"; T_COHORT="${T_COHORT:-200}"; T_CLASS="${T_CLASS:-50}"; T_CELL="${T_CELL:-50}"
-
-# A5.8: the REQUIRED cell universe, frozen BEFORE validation and declared here rather than inferred.
-# Taking a minimum over the cells that happen to APPEAR lets a cell with no calls at all satisfy the
-# threshold by being absent — choosing the answer after seeing the data. A cell listed here and never
-# observed counts as ZERO, and the classes are the two directions the instrument can call.
-REQUIRED_CLASSES="${REQUIRED_CLASSES:-1 -1}"
-REQUIRED_CELLS="${REQUIRED_CELLS:-EXHAUSTED|CALL_WALL|POS_GAMMA EXHAUSTED|PUT_WALL|POS_GAMMA EXHAUSTED|CALL_WALL|NEG_GAMMA EXHAUSTED|PUT_WALL|NEG_GAMMA STRONG|CALL_WALL|NEG_GAMMA STRONG|PUT_WALL|NEG_GAMMA EXHAUSTED|NONE|POS_GAMMA EXHAUSTED|NONE|NEG_GAMMA STRONG|NONE|NEG_GAMMA STRONG|NONE|POS_GAMMA}"
+# The targets, the required cell universe and the corpus start date all come from the ONE declaration
+# below — calibration-targets.env. They used to be defaults in this file, which meant the reporter and
+# the evaluator each carried their own copy of what "done" means and either could be changed without
+# the other noticing.
 
 [ -d "$ROOT" ] || { log "FATAL: no corpus at $ROOT — the ledger has never been archived for env=$ENV_NAME"; exit 1; }
 command -v python3 >/dev/null || { log "FATAL: python3 missing"; exit 1; }
@@ -43,6 +38,22 @@ command -v python3 >/dev/null || { log "FATAL: python3 missing"; exit 1; }
 # Two copies of "is this session COMPLETE" would drift, and nothing would notice which one was wrong.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [ -f "$SCRIPT_DIR/oe_corpus_reader.py" ] || { log "FATAL: oe_corpus_reader.py missing beside $0"; exit 1; }
+
+# A5.7: the targets come from a declaration neither the reporter nor the evaluator can lose, and which
+# is derived neither from oe-topics.env nor from what happens to be in the archive — those are the two
+# things that go quiet together. Without it a dropped ledger topic would report nothing at all instead of
+# reporting a target whose corpus is MISSING.
+TARGETS="${OE_CAL_TARGETS_FILE:-$SCRIPT_DIR/calibration-targets.env}"
+[ -f "$TARGETS" ] || { log "FATAL: no calibration target declaration at $TARGETS"; exit 1; }
+# shellcheck source=/dev/null
+. "$TARGETS"
+eval "CORPUS_START_DATE=\"\${OE_CAL_CORPUS_START_DATE_${ENV_NAME}:-}\""
+export CORPUS_START_DATE
+T_SESSIONS="${OE_CAL_T_SESSIONS:-30}"; T_COHORT="${OE_CAL_T_COHORT:-200}"
+T_CLASS="${OE_CAL_T_CLASS:-50}";       T_CELL="${OE_CAL_T_CELL:-50}"
+REQUIRED_CLASSES="${OE_CAL_REQUIRED_CLASSES:-}"; REQUIRED_CELLS="${OE_CAL_REQUIRED_CELLS:-}"
+[ -n "$REQUIRED_CELLS" ] || { log "FATAL: $TARGETS declares no required cell universe — a per-cell count over an empty universe is not a measurement"; exit 1; }
+[ -n "$CORPUS_START_DATE" ] || { log "FATAL: $TARGETS declares no corpusStartDate for env=$ENV_NAME"; exit 1; }
 
 python3 - "$SCRIPT_DIR" "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$T_SESSIONS" "$T_COHORT" "$T_CLASS" "$T_CELL" "$REQUIRED_CLASSES" "$REQUIRED_CELLS" <<'PY'
 import json, os, sys, hashlib, tempfile
@@ -86,12 +97,16 @@ _cal = R.load_calendar()
 
 # A5.5: DECLARED, not inferred. min(sessions) lets deletion of the earliest weeks redefine the
 # expected window as "whatever survived", which is the failure the owed-session check exists to catch.
+# A5.5/A5.7: DECLARED, never inferred. Falling back to min(sessions) lets a deletion of the earliest
+# weeks redefine the expected window as "whatever survived" — the exact failure the owed-session check
+# exists to catch, and a warning in readErrors was not enough to stop it (r6 #9). The declaration is
+# calibration-targets.env, installed beside this script, and its absence is fatal rather than a default.
 declared = os.environ.get("CORPUS_START_DATE")
-observed = min((v["sessionDate"] for v in sessions.values()), default=today)
-corpus_start = declared or observed
 if not declared:
-    read_errors.append("corpusStartDate is INFERRED from the archive (%s); declare CORPUS_START_DATE "
-                       "or a deletion of the earliest sessions silently narrows the expected window" % observed)
+    print("FATAL: corpusStartDate is not declared for env=%s in calibration-targets.env — a start date "
+          "inferred from the archive turns a deletion into a narrower window" % env, file=sys.stderr)
+    sys.exit(1)
+corpus_start = declared
 have_days = {v["sessionDate"] for v in sessions.values()}
 for day in R.owed(corpus_start, today, _cal):
     if day not in have_days:
@@ -177,3 +192,38 @@ else:
              r["perCell"]["have"], r["perCell"]["target"], r["thresholdsMet"], r["corpusComplete"],
              r["readyForEvaluation"], r["evaluationDecision"], today_status))
 PY
+rc=$?
+[ $rc -eq 0 ] || { log "FATAL: progress report failed (rc=$rc)"; exit $rc; }
+log "calibration progress written under $OUT_ROOT"
+
+# A5.7: the SAME record is published to context-tape.direction.progress, because the panel has no other
+# way to see it — the gateway today knows only push, alert and scorecard. The NAS copy is the durable
+# one and is written first; this is the delivery, and its failure is loud rather than silent, since a
+# reporter that quietly stops publishing looks exactly like a corpus with nothing to say.
+#
+# BOOTSTRAP unset means "NAS only", which is the correct posture off the broker host — but it is SAID
+# rather than assumed, so nobody reads the silence as a successful publish.
+PROGRESS_TOPIC="${PROGRESS_TOPIC:-context-tape.direction.progress}"
+if [ -z "${BOOTSTRAP:-}" ]; then
+  log "no BOOTSTRAP: the progress record is on the NAS only, not published to $PROGRESS_TOPIC"
+  exit 0
+fi
+latest="$(find "$OUT_ROOT" -name "dt=$TODAY.json" -print 2>/dev/null | sort | tail -1)"
+[ -n "$latest" ] || { log "FATAL: no progress record for $TODAY to publish — the reader claimed success and wrote nothing"; exit 1; }
+# the same KAFKA_BIN the archiver uses on this host — one location, not a PATH lookup that differs
+# between an interactive shell and cron
+KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/current/bin}"
+producer="$KAFKA_BIN/kafka-console-producer.sh"
+[ -x "$producer" ] || producer="$(command -v kafka-console-producer.sh || command -v kafka-console-producer || true)"
+[ -n "$producer" ] && [ -x "$producer" ] || { log "FATAL: BOOTSTRAP is set but no kafka-console-producer under $KAFKA_BIN or on PATH — refusing to report success without publishing"; exit 1; }
+# one line, keyed by env so the panel reads the latest record per environment
+if ! python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+sys.stdout.write(sys.argv[2] + '\t' + json.dumps(d, separators=(',', ':'), sort_keys=True) + '\n')" "$latest" "$ENV_NAME" \
+     | "$producer" --bootstrap-server "$BOOTSTRAP" --topic "$PROGRESS_TOPIC" \
+                   --property "parse.key=true" --property "key.separator=	" >/dev/null 2>&1; then
+  log "FATAL: publishing the progress record to $PROGRESS_TOPIC failed"
+  exit 1
+fi
+log "progress record published to $PROGRESS_TOPIC"

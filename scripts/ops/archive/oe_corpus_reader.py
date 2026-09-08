@@ -194,6 +194,16 @@ def classify_sessions(read, sidecar, today):
             need = required + (("delivery",) if r.get("kind") == "outcome" else ())
             missing_fields += ["%s:%s" % (r.get("kind"), f) for f in need if r.get(f) in (None, "")]
         att_bad = attrition_violations(seal)
+        # A5.2 pins these on the seal itself. A seal missing one describes a population whose cohort,
+        # lineage or clock nobody can establish, and the counts below would be counts of an unknown
+        # thing (r6 #6).
+        seal_missing = [f for f in ("parameterSetHash", "sessionLineageId", "sessionDate",
+                                    "trackFromPush", "delivery", "ledgerTopic", "generation",
+                                    "callsDigest", "outcomesDigest")
+                        if seal.get(f) in (None, "")]
+        # An envelope is a coordinate or it is nothing: a nonempty session whose seal carries no offset
+        # bounds cannot be checked against the archive at all, and the old test simply skipped it.
+        envelope_missing = bool(offs) and (want_first is None or want_last is None)
         if errs:
             status, why = "CORRUPT", "; ".join(errs[:3])
         elif bad_keys.get(sd):
@@ -202,6 +212,10 @@ def classify_sessions(read, sidecar, today):
             status, why = "CORRUPT", "conflicting records for one key"
         elif att_bad:
             status, why = "CORRUPT", "attrition rows violate A4.12 shape/arithmetic at hour(s) %s" % att_bad
+        elif seal_missing:
+            status, why = "INCOMPLETE", "the seal is missing pinned field(s): %s" % seal_missing
+        elif envelope_missing:
+            status, why = "INCOMPLETE", "the seal carries no offset envelope for a session that has records"
         elif offs and want_first is not None and (offs[0] != want_first or offs[-1] != want_last):
             status, why = "CORRUPT", "archived offsets [%s,%s] are not the seal's [%s,%s]" % (
                 offs[0], offs[-1], want_first, want_last)

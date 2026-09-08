@@ -52,7 +52,7 @@ pipeline {
     // A5: the calibration reporter ships with the archiver it reads. A crontab entry for a script the
     // deploy does not install is a job that fails every night with "command not found" — and a nightly
     // failure nobody installed is indistinguishable from a nightly failure nobody noticed.
-    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh"
+    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -116,7 +116,7 @@ pipeline {
             || { echo "the evaluator suite did not report PASS — refusing" >&2; exit 1; }
           ev=$(grep -c "^  ok   " "$WORKSPACE/.evaluator.out")
           echo "evaluator suite reported $ev passing assertions"
-          [ "$ev" -ge 13 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
+          [ "$ev" -ge 20 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
         '''
       }
     }

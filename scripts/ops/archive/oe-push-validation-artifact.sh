@@ -21,57 +21,67 @@ STAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 TODAY="${REPORT_DATE:-$(TZ=America/New_York date '+%Y-%m-%d')}"
 log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 
-# Scope: ONE artifact per (env, parameterSetHash, TRACK_FROM_PUSH). Environments are never pooled —
-# dev and prod evidence stay split, exactly as the NAS layout keeps them.
-: "${PARAMETER_SET_HASH:?PARAMETER_SET_HASH is required — an artifact without a cohort identity is meaningless}"
-: "${TRACK_FROM_PUSH:?TRACK_FROM_PUSH is required — it is half the scope of this artifact}"
-: "${STOPPING_BOUNDARY_MS:?STOPPING_BOUNDARY_MS is required and must be PREREGISTERED, frozen with TRACK_FROM_PUSH}"
-: "${CORPUS_VERSION:?CORPUS_VERSION is required — the artifact evaluates ONE pinned corpus, and a run that reads whatever is on disk today is not reproducible}"
+# ---- the preregistration, READ rather than accepted from the caller (r6 #1) ---------------------
+# Every one of these was an environment variable, which meant an evaluator could pick a smaller cell
+# universe, move the stopping boundary, lower a size target or tune a threshold AFTER seeing the data
+# and still get an artifact that looked exactly like a real one. They now come from the repo-managed
+# calibration-targets.env installed beside this script, and an attempt to override one is refused
+# rather than silently honoured.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGETS="${OE_CAL_TARGETS_FILE:-$SCRIPT_DIR/calibration-targets.env}"
+[ -f "$TARGETS" ] || { log "FATAL: no preregistration at $TARGETS — an artifact without one is a number chosen after the fact"; exit 1; }
+[ -f "$SCRIPT_DIR/oe_corpus_reader.py" ] || { log "FATAL: oe_corpus_reader.py missing beside $0"; exit 1; }
 
-# The four size targets, adopted from A2. Not a claim that A4 feeds A2.
-T_SESSIONS="${T_SESSIONS:-30}"; T_COHORT="${T_COHORT:-200}"; T_CLASS="${T_CLASS:-50}"; T_CELL="${T_CELL:-50}"
+for v in PARAMETER_SET_HASH TRACK_FROM_PUSH STOPPING_BOUNDARY_MS CORPUS_START_DATE T_SESSIONS T_COHORT \
+         T_CLASS T_CELL REQUIRED_CLASSES REQUIRED_CELLS BOOTSTRAP_SEED BOOTSTRAP_B RESULT_LCB_FLOOR \
+         HIT_RATE_LCB_FLOOR MEDIAN_MAE_CEIL P90_MAE_CEIL COVERAGE_FLOOR ATTRITION_CEIL THRESHOLDS_STATE; do
+  if [ -n "${!v:-}" ]; then
+    log "FATAL: $v is preregistered in $TARGETS and cannot be supplied by the caller — that is choosing the answer after seeing the data"
+    exit 1
+  fi
+done
 
-# The REQUIRED cell universe, frozen BEFORE validation begins and declared rather than inferred. The
-# artifact enumerates every one of them, zero-count cells included: reporting only the cells that
-# happen to appear would let an evaluator quietly omit the sparse or failing ones, which is choosing
-# the answer after seeing the data.
-REQUIRED_CLASSES="${REQUIRED_CLASSES:-1 -1}"
-REQUIRED_CELLS="${REQUIRED_CELLS:-EXHAUSTED|CALL_WALL|POS_GAMMA EXHAUSTED|PUT_WALL|POS_GAMMA EXHAUSTED|CALL_WALL|NEG_GAMMA EXHAUSTED|PUT_WALL|NEG_GAMMA STRONG|CALL_WALL|NEG_GAMMA STRONG|PUT_WALL|NEG_GAMMA EXHAUSTED|NONE|POS_GAMMA EXHAUSTED|NONE|NEG_GAMMA STRONG|NONE|NEG_GAMMA STRONG|NONE|POS_GAMMA}"
+# shellcheck source=/dev/null
+. "$TARGETS"
+env_pick() { eval "printf '%s' \"\${OE_CAL_${1}_${ENV_NAME}:-}\""; }
+PARAMETER_SET_HASH="$(env_pick PARAMETER_SET_HASH)"
+TRACK_FROM_PUSH="$(env_pick TRACK_FROM_PUSH)"
+STOPPING_BOUNDARY_MS="$(env_pick STOPPING_BOUNDARY_MS)"
+CORPUS_START_DATE="$(env_pick CORPUS_START_DATE)"
+T_SESSIONS="$OE_CAL_T_SESSIONS"; T_COHORT="$OE_CAL_T_COHORT"
+T_CLASS="$OE_CAL_T_CLASS";       T_CELL="$OE_CAL_T_CELL"
+REQUIRED_CLASSES="$OE_CAL_REQUIRED_CLASSES"; REQUIRED_CELLS="$OE_CAL_REQUIRED_CELLS"
+BOOTSTRAP_SEED="$OE_CAL_BOOTSTRAP_SEED";     BOOTSTRAP_B="$OE_CAL_BOOTSTRAP_B"
+THRESHOLDS_STATE="$OE_CAL_THRESHOLDS_STATE"
+RESULT_LCB_FLOOR="$OE_CAL_RESULT_LCB_FLOOR"; HIT_RATE_LCB_FLOOR="$OE_CAL_HIT_RATE_LCB_FLOOR"
+MEDIAN_MAE_CEIL="$OE_CAL_MEDIAN_MAE_CEIL";   P90_MAE_CEIL="$OE_CAL_P90_MAE_CEIL"
+COVERAGE_FLOOR="$OE_CAL_COVERAGE_FLOOR";     ATTRITION_CEIL="$OE_CAL_ATTRITION_CEIL"
 
-# A2's estimator VERBATIM, not a new one: resample whole SESSIONS with replacement to the original
-# session count, B replicates, the statistic pooled over the resampled sessions, type-7 quantiles,
-# frozen seed. Naming an estimator without its resampling unit, replicate count, quantile convention
-# and seed leaves the pass/fail free to move; A2 learned that at its own r9.
-BOOTSTRAP_SEED="${BOOTSTRAP_SEED:-20260906}"
-BOOTSTRAP_B="${BOOTSTRAP_B:-10000}"
+for pair in "PARAMETER_SET_HASH:$PARAMETER_SET_HASH" "TRACK_FROM_PUSH:$TRACK_FROM_PUSH" \
+            "STOPPING_BOUNDARY_MS:$STOPPING_BOUNDARY_MS" "CORPUS_START_DATE:$CORPUS_START_DATE"; do
+  name="${pair%%:*}"; val="${pair#*:}"
+  [ -n "$val" ] || { log "FATAL: $name is not declared for env=$ENV_NAME in $TARGETS"; exit 1; }
+  [ "$val" != "UNFROZEN" ] || { log "REFUSING: $name is still UNFROZEN for env=$ENV_NAME. The boundary and the parameter set are frozen together, in one commit, before any of this data is looked at."; exit 2; }
+done
 
-# The acceptance SHAPE is frozen in the design; the NUMBERS are PROVISIONAL_PENDING_MEASUREMENT and are
-# chosen at the same moment the engine's literals are frozen, exactly as A4.11 does. The defaults here
-# are deliberately impossible to pass, so an unconfigured run REJECTS rather than quietly accepting —
-# a default that accepts is how an unmeasured instrument gets a certificate.
-RESULT_LCB_FLOOR="${RESULT_LCB_FLOOR:-999999}"
-HIT_RATE_LCB_FLOOR="${HIT_RATE_LCB_FLOOR:-1.01}"
-MEDIAN_MAE_CEIL="${MEDIAN_MAE_CEIL:--1}"
-P90_MAE_CEIL="${P90_MAE_CEIL:--1}"
-COVERAGE_FLOOR="${COVERAGE_FLOOR:-1.01}"
-ATTRITION_CEIL="${ATTRITION_CEIL:--1}"
-THRESHOLDS_PROVISIONAL="${THRESHOLDS_PROVISIONAL:-true}"
+# The corpus this artifact claims must be one a PROGRESS RUN ALREADY PUBLISHED (r6 #5). A version
+# recomputed from the archive as it stands today would match again after records or whole days
+# disappeared, so a pin that is merely "what is on disk" pins nothing.
+: "${CORPUS_VERSION:?CORPUS_VERSION is required — name the published corpus this artifact evaluates}"
 
 [ -d "$ROOT" ] || { log "FATAL: no corpus at $ROOT — the ledger has never been archived for env=$ENV_NAME"; exit 1; }
 command -v python3 >/dev/null || { log "FATAL: python3 missing"; exit 1; }
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-[ -f "$SCRIPT_DIR/oe_corpus_reader.py" ] || { log "FATAL: oe_corpus_reader.py missing beside $0"; exit 1; }
-
 python3 - "$SCRIPT_DIR" "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$PARAMETER_SET_HASH" \
          "$TRACK_FROM_PUSH" "$STOPPING_BOUNDARY_MS" "$CORPUS_VERSION" "$T_SESSIONS" "$T_COHORT" \
          "$T_CLASS" "$T_CELL" "$REQUIRED_CLASSES" "$REQUIRED_CELLS" "$BOOTSTRAP_SEED" "$BOOTSTRAP_B" \
          "$RESULT_LCB_FLOOR" "$HIT_RATE_LCB_FLOOR" "$MEDIAN_MAE_CEIL" "$P90_MAE_CEIL" \
-         "$COVERAGE_FLOOR" "$ATTRITION_CEIL" "$THRESHOLDS_PROVISIONAL" <<'PY'
+         "$COVERAGE_FLOOR" "$ATTRITION_CEIL" "$THRESHOLDS_STATE" "$CORPUS_START_DATE" <<'PY'
 import json, os, sys, hashlib, random, tempfile
 
 (script_dir, root, out_root, today, stamp, env, phash, track_from, stopping, pinned_version,
  t_sessions, t_cohort, t_class, t_cell, req_classes, req_cells, seed, B,
- f_result, f_hit, c_median_mae, c_p90_mae, f_cov, c_attr, provisional) = sys.argv[1:26]
+ f_result, f_hit, c_median_mae, c_p90_mae, f_cov, c_attr, thresholds_state,
+ corpus_start) = sys.argv[1:27]
 sys.path.insert(0, script_dir)
 import oe_corpus_reader as R
 
@@ -93,7 +103,25 @@ logical = read["logical"]
 # Without this the artifact is an assertion about a moving target: a rerun a day later would carry the
 # same corpusVersion field and a different population.
 actual_version = R.corpus_version(logical)
-version_ok = (actual_version == pinned_version)
+# A version recomputed from the archive as it stands today matches again after records or whole days
+# have disappeared, so "the hash of what I just read" pins nothing on its own (r6 #5). The pin must ALSO
+# name a version some progress run already PUBLISHED, and the artifact records which run and when.
+published = {}
+try:
+    import glob as _glob
+    for f in _glob.glob(os.path.join(out_root, "*", "*", "progress", "dt=*.json")):
+        try:
+            rec = json.load(open(f))
+        except Exception:
+            read_errors.append("progress record unreadable: %s" % os.path.basename(f))
+            continue
+        v = rec.get("corpusVersion")
+        if v:
+            published.setdefault(v, []).append(rec.get("reportDate"))
+except Exception as e:
+    read_errors.append("could not read published progress records: %s" % e.__class__.__name__)
+published_on = sorted(published.get(pinned_version, []))
+version_ok = (actual_version == pinned_version) and bool(published_on)
 
 clauses = []
 def clause(name, state, passed, value=None, note=""):
@@ -121,8 +149,15 @@ def session_key(rec):
 cohort = [c for c in calls
           if c.get("parameterSetHash") == phash and c.get("trackFromPush") == track_from
           and c.get("phaseAtCall") == "VALIDATION" and in_window(c)]
-cohort_ids = {c.get("callId") for c in cohort}
-by_call = {c.get("callId"): c for c in cohort}
+
+def call_identity(rec):
+    """A callId alone is not an identity. A5 scopes every key by hash and lineage precisely because a
+    callId can repeat across lineages of the same session, and joining outcomes on the bare id admits
+    another lineage's outcomes into this cohort (r6 #3)."""
+    return (rec.get("parameterSetHash"), rec.get("sessionLineageId"), rec.get("callId"))
+
+cohort_ids = {call_identity(c) for c in cohort}
+by_call = {call_identity(c): c for c in cohort}
 
 # ---- COMPLETENESS, which is the verdict here and not a warning ----------------------------------
 # The window's sessions are the ones this artifact is answerable for. A NOT_EVALUABLE session inside it
@@ -131,10 +166,31 @@ by_call = {c.get("callId"): c for c in cohort}
 window_sessions = sorted({session_key(c) for c in cohort})
 not_evaluable = []
 for k in window_sessions:
-    s = sessions.get(k)
-    if s is None or s["archiveStatus"] != "COMPLETE":
-        not_evaluable.append({"session": k, "why": (s or {}).get("archiveStatus", "ABSENT"),
-                              "reason": (s or {}).get("reason", "no session row for a call in the window")})
+    srow = sessions.get(k)
+    if srow is None or srow["archiveStatus"] != "COMPLETE":
+        not_evaluable.append({"session": k, "why": (srow or {}).get("archiveStatus", "ABSENT"),
+                              "reason": (srow or {}).get("reason", "no session row for a call in the window")})
+
+# A day the corpus OWES and does not have is the failure this clause exists to catch, and it cannot be
+# seen by looking at the sessions that survived: those are, by construction, the ones still there.
+# Removing a whole trading day used to leave a smaller cohort that passed COMPLETENESS (r6 #2). The owed
+# days come from the trading calendar between the preregistered start and the stopping boundary.
+_cal = R.load_calendar()
+boundary_date = None
+try:
+    import datetime as _dt
+    boundary_date = _dt.datetime.fromtimestamp(stopping / 1000.0, _dt.timezone.utc).date().isoformat()
+except Exception:
+    read_errors.append("STOPPING_BOUNDARY_MS is not an instant this evaluator can turn into a date")
+have_days = {v["sessionDate"] for v in sessions.values() if v["archiveStatus"] == "COMPLETE"}
+missing_days = []
+if boundary_date:
+    window_start = max(str(corpus_start)[:10], str(track_from)[:10])
+    for day in R.owed(window_start, boundary_date, _cal):
+        if day not in have_days:
+            missing_days.append(day)
+            not_evaluable.append({"session": day, "why": "MISSING",
+                                  "reason": "a trading day inside the preregistered window that the corpus owes and does not have"})
 
 # A session whose attrition cannot be validated is NOT_EVALUABLE too — a number nobody can trust is
 # not a smaller number, it is a different failure.
@@ -157,19 +213,27 @@ for k in window_sessions:
 
 # Bijection, scoped to the window and nothing outside it. Records outside are legitimate and are
 # neither orphans nor members.
-window_outcomes = [o for o in outcomes
-                   if o.get("parameterSetHash") == phash and o.get("callId") in cohort_ids]
-outside = [o for o in outcomes
-           if o.get("parameterSetHash") == phash and o.get("callId") not in cohort_ids
-           and by_call.get(o.get("callId")) is not None]
-horizons = {}
+window_outcomes = [o for o in outcomes if call_identity(o) in cohort_ids]
+
+# Outcomes carry no refT — the record is (callId, horizon, targetT, ...) — so membership is decided
+# THROUGH the call, never by re-testing the window on a field that does not exist (r6 #3). An outcome
+# whose call lies outside the window is legitimately neither a member nor an orphan.
+all_call_ids = {call_identity(c) for c in calls}
+orphans = sorted({"|".join(str(x) for x in call_identity(o)) for o in outcomes
+                  if o.get("parameterSetHash") == phash and o.get("trackFromPush") == track_from
+                  and o.get("phaseAtCall") == "VALIDATION"
+                  and session_key(o) in window_sessions
+                  and call_identity(o) not in all_call_ids})
+
+# Counting DISTINCT horizons hides a duplicate representation of the same horizon, which is exactly the
+# conflict the ledger refuses to chain — so count them and compare both (r6 #3).
+horizons, horizon_rows = {}, {}
 for o in window_outcomes:
-    horizons.setdefault(o.get("callId"), set()).add(o.get("horizon"))
-missing_horizon = sorted(c for c in cohort_ids if horizons.get(c, set()) != set(R.HORIZONS))
-orphans = sorted({o.get("callId") for o in outcomes
-                  if o.get("parameterSetHash") == phash and o.get("callId") not in cohort_ids
-                  and in_window({"refT": o.get("refT")}) and o.get("phaseAtCall") == "VALIDATION"
-                  and o.get("trackFromPush") == track_from and o.get("callId") not in by_call})
+    horizons.setdefault(call_identity(o), set()).add(o.get("horizon"))
+    horizon_rows[call_identity(o)] = horizon_rows.get(call_identity(o), 0) + 1
+missing_horizon = sorted("|".join(str(x) for x in c) for c in cohort_ids
+                         if horizons.get(c, set()) != set(R.HORIZONS)
+                         or horizon_rows.get(c, 0) != len(R.HORIZONS))
 
 # ---- the statistics: A4.9's reducers over the cohort at the primary horizon ----------------------
 prim = [o for o in window_outcomes if o.get("horizon") == PRIMARY]
@@ -189,6 +253,16 @@ def q_type7(xs, p):
     hi = min(lo + 1, len(s) - 1)
     return float(s[lo]) + (h - lo) * (float(s[hi]) - float(s[lo]))
 
+def nearest_rank(xs, pct):
+    """A4.9's reducer, x[ceil(p*n)] on ascending values — the SAMPLE statistic. The replicate quantile
+    below is type-7, which is A2's convention; using one convention for both would silently be a
+    different estimator than either amendment specifies (r6 #4)."""
+    if not xs:
+        return None
+    a = sorted(xs)
+    rank = -(-pct * len(a) // 100)
+    return float(a[max(0, min(len(a) - 1, rank - 1))])
+
 def pooled(sess_ids, picker):
     out = []
     for sid in sess_ids:
@@ -197,19 +271,22 @@ def pooled(sess_ids, picker):
 
 results_by_session, hits_by_session, obs_by_session, mae_by_session = {}, {}, {}, {}
 for o in obs:
-    sid = session_key(by_call[o["callId"]])
+    sid = session_key(by_call[call_identity(o)])
     results_by_session.setdefault(sid, []).append(float(o["resultTicks"]))
     hits_by_session.setdefault(sid, []).append(1.0 if float(o["resultTicks"]) > 0 else 0.0)
 for o in mae:
-    sid = session_key(by_call[o["callId"]])
+    sid = session_key(by_call[call_identity(o)])
     mae_by_session.setdefault(sid, []).append(float(o["maeTicks"]))
 
-def bootstrap(picker, statistic, tail):
+def bootstrap(picker, statistic, tail, ids):
     """Resample WHOLE SESSIONS with replacement to the original session count, B replicates, the
     statistic pooled over the resampled sessions. An LCB95 is the 5th percentile of the replicates and
     a UCB95 the 95th — the tail is named per clause, because naming only "95%" makes an acceptance test
-    optimistic."""
-    ids = sorted(picker.keys())
+    optimistic.
+
+    `ids` is EVERY cohort session, not only the ones that produced a usable observation (r6 #4).
+    Resampling the survivors would quietly condition the estimate on having observed something, which
+    is the same bias the coverage clause exists to measure."""
     if not ids:
         return None
     rnd = random.Random(seed)
@@ -226,10 +303,11 @@ def bootstrap(picker, statistic, tail):
 def mean(xs):
     return (sum(xs) / len(xs)) if xs else None
 
-result_lcb = bootstrap(results_by_session, mean, "lower")
-hit_lcb = bootstrap(hits_by_session, mean, "lower")
-median_mae_ucb = bootstrap(mae_by_session, lambda xs: q_type7(xs, 0.50), "upper")
-p90_mae_ucb = bootstrap(mae_by_session, lambda xs: q_type7(xs, 0.90), "upper")
+cohort_session_ids = sorted({session_key(c) for c in cohort})
+result_lcb = bootstrap(results_by_session, mean, "lower", cohort_session_ids)
+hit_lcb = bootstrap(hits_by_session, mean, "lower", cohort_session_ids)
+median_mae_ucb = bootstrap(mae_by_session, lambda xs: nearest_rank(xs, 50), "upper", cohort_session_ids)
+p90_mae_ucb = bootstrap(mae_by_session, lambda xs: nearest_rank(xs, 90), "upper", cohort_session_ids)
 
 # ---- the clauses, one row each, none omitted ----------------------------------------------------
 cohort_sessions = {session_key(c) for c in cohort}
@@ -252,10 +330,16 @@ clause("COHORT_SIZE", "PASS" if size_ok else "FAIL", size_ok, len(cohort),
           min_cell, t_cell, len(REQUIRED_CELLS)))
 
 complete_ok = (version_ok and not not_evaluable and not attrition_unusable
-               and not missing_horizon and not orphans and bool(cohort))
+               and not missing_horizon and not orphans and bool(cohort) and not read_errors)
 why = []
-if not version_ok:
+if actual_version != pinned_version:
     why.append("corpusVersion read (%s) is not the pinned one (%s)" % (actual_version[:12], pinned_version[:12]))
+elif not published_on:
+    why.append("the pinned corpusVersion was never published by a progress run — a version recomputed "
+               "from today's archive would match again after a deletion")
+if missing_days:
+    why.append("%d owed trading day(s) are absent from the window: %s"
+               % (len(missing_days), ", ".join(missing_days[:5])))
 if not cohort:
     why.append("the window contains no cohort call at all")
 if not_evaluable:
@@ -266,6 +350,10 @@ if missing_horizon:
     why.append("%d call(s) do not have exactly H3/H5/H15" % len(missing_horizon))
 if orphans:
     why.append("%d outcome(s) in the window belong to no cohort call" % len(orphans))
+if read_errors:
+    # An unreadable discontinuity sidecar or progress record used to sit quietly beside an ACCEPT
+    # (r6 #6). Something the reader could not read is not something the evaluator may pass over.
+    why.append("%d read error(s): %s" % (len(read_errors), read_errors[0]))
 clause("COMPLETENESS", "PASS" if complete_ok else "FAIL", complete_ok, len(window_sessions), "; ".join(why))
 
 def bound_clause(name, value, cmp_floor=None, cmp_ceil=None, note=""):
@@ -300,6 +388,13 @@ else:
     clause("ATTRITION_CEILING", "PASS" if ok else "FAIL", ok, worst,
            "raw MAXIMUM session refusal rate (no tail), worst = %s vs ceiling %s" % (worst_id, c_attr))
 
+# While the numbers are PROVISIONAL_PENDING_MEASUREMENT nothing may ACCEPT, however good the data looks
+# (r6 #1). An acceptance measured against thresholds nobody has committed to is not an acceptance, and
+# an artifact that said ACCEPT under provisional numbers would be quoted as if it were one.
+frozen = (thresholds_state == "FROZEN")
+clause("THRESHOLDS_FROZEN", "PASS" if frozen else "FAIL", frozen, None,
+       "acceptance numbers are %s in the preregistration" % thresholds_state)
+
 decision = "ACCEPT" if all(x["passed"] for x in clauses) else "REJECT"
 
 artifact = {
@@ -313,11 +408,13 @@ artifact = {
     "thresholds": {"resultLcbFloor": f_result, "hitRateLcbFloor": f_hit,
                    "medianMaeCeiling": c_median_mae, "p90MaeCeiling": c_p90_mae,
                    "coverageFloor": f_cov, "attritionCeiling": c_attr,
-                   "state": "PROVISIONAL_PENDING_MEASUREMENT" if provisional == "true" else "FROZEN"},
+                   "state": thresholds_state},
     "cohort": {"calls": len(cohort), "sessions": len(cohort_sessions),
                "classCounts": class_counts, "cellCounts": cell_counts,
                "requiredCells": REQUIRED_CELLS, "requiredClasses": REQUIRED_CLASSES,
                "outcomesAtPrimary": len(prim), "observedAtPrimary": len(obs)},
+    "corpusVersionPublishedOn": published_on,
+    "corpusStartDate": corpus_start, "owedDaysMissing": missing_days,
     "notEvaluableSessions": not_evaluable, "attritionUnusableSessions": attrition_unusable,
     "callsMissingAHorizon": missing_horizon[:20], "orphanOutcomes": orphans[:20],
     "sessionRefusalRates": {k: round(v, 6) for k, v in sorted(refusal_by_session.items())},

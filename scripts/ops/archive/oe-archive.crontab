@@ -68,8 +68,11 @@ CRON_TZ=America/New_York
 # actually contain today's seal. It answers one question and writes it where a human can read it:
 # how far is calibration, and did today land at all. A silent reporter and an empty corpus look the
 # same from the outside, so a separate watchdog on a different host asserts this ran.
-30,40,50 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
-0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
+# BOOTSTRAP is set because the record is DELIVERED as well as written: A5.7 publishes the same record to
+# context-tape.direction.progress, which is the panel's only way to see it. With BOOTSTRAP unset the run
+# would write the NAS copy and say so, and a reader could mistake that silence for a successful publish.
+30,40,50 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge BOOTSTRAP=localhost:9092 /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
+0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge BOOTSTRAP=localhost:9092 /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
 #
 # The WATCHDOG is deliberately NOT here. It must run on a different host and a different schedule
 # than the reporter, or it shares the reporter's failure: a box that is down reports nothing and
