@@ -52,7 +52,7 @@ pipeline {
     // A5: the calibration reporter ships with the archiver it reads. A crontab entry for a script the
     // deploy does not install is a job that fails every night with "command not found" — and a nightly
     // failure nobody installed is indistinguishable from a nightly failure nobody noticed.
-    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh"
+    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -105,6 +105,18 @@ pipeline {
           ran=$(grep -c "^PASS" "$WORKSPACE/.suite.out")
           echo "suite reported $ran passing assertions"
           [ "$ran" -ge 50 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+
+          # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
+          # Installing an evaluator whose acceptance predicate is untested would ship the one thing
+          # this amendment exists to prevent: a certificate nobody checked.
+          docker run --rm --entrypoint bash \
+            -v "$WORKSPACE/scripts/ops/archive:/w:ro" -w /w "$TEST_IMAGE" \
+            -c './push-validation-artifact-test.sh' | tee "$WORKSPACE/.evaluator.out"
+          grep -Fq "PASS — the A5.8 evaluator holds on every case" "$WORKSPACE/.evaluator.out" \
+            || { echo "the evaluator suite did not report PASS — refusing" >&2; exit 1; }
+          ev=$(grep -c "^  ok   " "$WORKSPACE/.evaluator.out")
+          echo "evaluator suite reported $ev passing assertions"
+          [ "$ev" -ge 13 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
         '''
       }
     }
@@ -262,7 +274,13 @@ done
 for f in $UNIT; do
   mv -f "$INSTALL_DIR/.incoming.$f" "$INSTALL_DIR/$f"
 done
-chmod +x "$INSTALL_DIR/oe-archive-kafka.sh" "$INSTALL_DIR/test-archive-reset.sh"
+# Every unit member cron or a human invokes BY PATH needs the bit. oe-calibration-progress.sh was in
+# the unit and not in this list, which is a "Permission denied" every weeknight at 20:30 that nothing
+# else would have caught — the crontab readback proves what cron will RUN, not that it can run it.
+# oe_corpus_reader.py is deliberately absent: it is imported, never executed.
+chmod +x "$INSTALL_DIR/oe-archive-kafka.sh" "$INSTALL_DIR/test-archive-reset.sh" \
+         "$INSTALL_DIR/oe-calibration-progress.sh" "$INSTALL_DIR/oe-push-validation-artifact.sh" \
+         "$INSTALL_DIR/push-validation-artifact-test.sh"
 
 # Load the repo-managed crontab and prove the kernel of the deployment: what cron will actually
 # run is byte-for-byte what this commit says. Still inside the transaction — any failure here

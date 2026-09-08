@@ -75,3 +75,12 @@ CRON_TZ=America/New_York
 # than the reporter, or it shares the reporter's failure: a box that is down reports nothing and
 # also fails to notice that nothing was reported. It is installed on the dev Mac (launchd,
 # 07:00 ET) as calibration-progress-watch.sh, checking the PREVIOUS trading day.
+#
+# The A5.8 EVALUATOR is deliberately not here either, and for a different reason than the watchdog.
+# oe-push-validation-artifact.sh is OFFLINE by design: it evaluates ONE pinned corpusVersion against a
+# PREREGISTERED stopping boundary. A nightly run would produce a new artifact every evening over a
+# growing corpus, and the first evening whose numbers happened to clear the floors would be the one
+# anybody quoted — which is choosing the stopping point after seeing the data, the exact thing the
+# preregistration exists to forbid. It is run by hand, once, when the boundary is reached:
+#   PARAMETER_SET_HASH=... TRACK_FROM_PUSH=... STOPPING_BOUNDARY_MS=... CORPUS_VERSION=... \
+#   ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-push-validation-artifact.sh
