@@ -98,6 +98,13 @@ unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_p
 : "${OE_ALL_TOPICS_prod:?oe-topics.env did not define OE_ALL_TOPICS_prod}"
 : "${OE_ES4_TOPICS:?oe-topics.env did not define OE_ES4_TOPICS}"
 
+# A5: topics whose ARCHIVE IS EVIDENCE. For an ordinary topic a quiet day, a compacted short read or
+# a recreated log are all normal and the run continues. For these the same events mean the corpus has
+# a hole, and a hole that is not reported is worse than one that is: the reader would count a smaller
+# population as complete. Every check below that says "strict" is gated on this list and nothing else.
+OE_STRICT_TOPICS="${OE_STRICT_TOPICS:-context-tape.direction.ledger}"
+is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
 DEFAULT_TOPICS_prod="$OE_ALL_TOPICS_prod"
 # One definition, every caller: the es4 set comes from oe-topics.env, REQUIRED above — there is
 # deliberately no fallback (the deploy swaps script and env file as one atomic unit, so a version
@@ -305,7 +312,17 @@ total_records=0; total_files=0; failed=0; contended=""; absent=0; rebaselined=0;
 for topic in $TOPICS; do
   # end offsets: "topic:partition:endOffset". A topic that does not exist yields nothing.
   ends=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" --topic "$topic" 2>/dev/null)
-  [ -n "$ends" ] || { log "  SKIP $topic (absent or unreadable)"; absent=$(( absent + 1 )); continue; }
+  if [ -z "$ends" ]; then
+    if is_strict_topic "$topic"; then
+      # A5: an absent evidence topic is not a quiet day. Either it was never created or something
+      # deleted it, and both mean the corpus is missing a session it can never get back.
+      log "  FAIL $topic: STRICT topic is absent or unreadable — the corpus cannot be completed for $DAY"
+      failed=$(( failed + 1 ))
+    else
+      log "  SKIP $topic (absent or unreadable)"; absent=$(( absent + 1 ))
+    fi
+    continue
+  fi
 
   # Per-topic lock: the only lock whose subject matches what it protects. Held for this topic's
   # whole read-verify-checkpoint cycle, released before the next topic.
@@ -424,6 +441,16 @@ for topic in $TOPICS; do
         reset_why="checkpoint $from is AHEAD of log end $log_end"; reset_tag="offset-ahead"
       fi
     fi
+    if [ -n "$reset_why" ] && is_strict_topic "$topic"; then
+      # A5: rebaselining recovers the NEW log; it is not evidence that the previous session survived.
+      # For a strict topic the discontinuity is recorded and the run FAILS, so the reader marks every
+      # session the damaged offset range spans NOT_EVALUABLE instead of accepting a fresh suffix.
+      log "  FAIL $topic p$part: STRICT topic log RESET ($reset_why) — the pre-reset population is unrecoverable"
+      printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"%s","detected_at":"%s","env":"%s"}\n' \
+        "$topic" "$DAY" "$part" "$reset_why" "$STAMP" "$ENV_NAME" >> "$MAN/$topic.discontinuities.jsonl"
+      failed=$(( failed + 1 ))
+      continue
+    fi
     if [ -z "$from" ]; then
       from="$earliest"
     elif [ -n "$reset_why" ]; then
@@ -461,6 +488,14 @@ for topic in $TOPICS; do
         "$part" "$earliest" "$DAY" "$STAMP" "$ckpt_before" >> "$offfile"
     elif [ "$from" -lt "$earliest" ]; then
       log "  GAP $topic p$part: checkpoint $from expired (log now starts at $earliest) — $((earliest-from)) records LOST before this run"
+      if is_strict_topic "$topic"; then
+        # A5: for evidence, a gap is the VERDICT, not a note. Continuing would archive the surviving
+        # suffix and let it pass the per-date floor, so the corpus would look complete while the
+        # session it claims is missing its beginning.
+        log "  FAIL $topic p$part: STRICT topic lost $((earliest-from)) records — this session is NOT EVALUABLE"
+        failed=$(( failed + 1 ))
+        continue
+      fi
       from="$earliest"
     fi
     count=$(( endoff - from ))
@@ -482,6 +517,7 @@ for topic in $TOPICS; do
          --formatter-property print.timestamp=true \
          --formatter-property print.key=true \
          --formatter-property print.partition=true \
+         $(is_strict_topic "$topic" && echo "--formatter-property print.offset=true") \
          --timeout-ms 60000 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
     consumer_rc=${PIPESTATUS[0]}
 
@@ -492,6 +528,15 @@ for topic in $TOPICS; do
     # is the extreme case — 642,060 offsets, ~2,000 readable records. Judging by count alone would
     # mark every compacted topic as failed forever. Judge by the CONSUMER's exit status instead,
     # and record both numbers so the compaction ratio is visible in the manifest.
+    if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ] && [ "$got" -ne "$count" ]; then
+      # A5: the short read that is NORMAL on a compacted topic is a HOLE on a delete-retained one.
+      # Accepting it would archive fewer records than the offset range claims and still advance the
+      # checkpoint past them.
+      log "  FAIL $topic p$part [$from,$endoff): STRICT topic read $got of $count records — refusing a short read"
+      rm -f "$tmp"
+      failed=$(( failed + 1 ))
+      continue
+    fi
     if [ "$consumer_rc" -eq 0 ] && [ "$got" -gt 0 ]; then
       # Only advance the checkpoint once the file is verified and durably in place. A crash
       # mid-run therefore re-reads the same range next time (duplicates) instead of skipping it —
@@ -508,9 +553,15 @@ for topic in $TOPICS; do
         failed=$(( failed + 1 ))
         continue
       fi
-      printf '%s=%s records=%s span=%s dt=%s archived=%s\n' \
-        "$part" "$endoff" "$got" "$count" "$DAY" "$STAMP" >> "$offfile"
-
+      # ORDER MATTERS: manifest FIRST, checkpoint SECOND (A5).
+      #
+      # The other way round has a window: the checkpoint says "archived through N", the process dies,
+      # and the manifest never gets its line. The next run resumes past N, so the range is skipped
+      # forever, and the verifier — which reads the manifest — cannot see that anything is missing,
+      # because from its point of view that range was never claimed. Writing the manifest first
+      # inverts the failure: a crash leaves a manifest line whose range is re-read next run, which is
+      # a DUPLICATE. Duplicates are recoverable by content; skipped ranges are not.
+      #
       # Completeness record. sha256 is over the gzip stream as committed, so a later bit-rot or a
       # truncated copy is detectable without a broker. Written AFTER the mv so a line in this file
       # always refers to a file that exists.
@@ -522,6 +573,8 @@ for topic in $TOPICS; do
         "$(schema_fragment "$topic" "$out" "$schema_versions")" \
         "${sha:-unknown}" "$bytes" "$(basename "$out")" "$STAMP" "$ARCHIVE_JOB" "$ENV_NAME" "$ARCHIVER_VERSION" \
         >> "$outdir/_manifest.jsonl"
+      printf '%s=%s records=%s span=%s dt=%s archived=%s\n' \
+        "$part" "$endoff" "$got" "$count" "$DAY" "$STAMP" >> "$offfile"
 
       topic_records=$(( topic_records + got )); total_files=$(( total_files + 1 ))
       if [ "$got" -lt "$count" ]; then

@@ -55,3 +55,22 @@ CRON_TZ=America/New_York
 # margin, move THIS entry later — do not shorten the consumer timeout, because an early timeout is
 # indistinguishable from a clean read and would checkpoint over a short read silently.
 0 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify.cron.log 2>&1
+
+# --- A5: the calibration corpus ------------------------------------------------------------------
+# SECOND archive pass, 20:45 ET. The 17:10 run can legitimately precede the session seal: a call
+# drained late (the ES stream lagged) finalises its horizons after the close, and the seal waits for
+# every one of them. Re-reading the archive cannot discover a seal that is still sitting in Kafka —
+# only another archive pass can. Without this the corpus would carry sessions that are permanently
+# PENDING_SEAL, which the reader must treat as incomplete.
+45 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge ARCHIVE_JOB=seal TOPICS=context-tape.direction.ledger JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-seal.cron.log 2>&1
+
+# Calibration progress, 21:00 ET — AFTER the second archive pass, so it reads a corpus that can
+# actually contain today's seal. It answers one question and writes it where a human can read it:
+# how far is calibration, and did today land at all. A silent reporter and an empty corpus look the
+# same from the outside, so a separate watchdog on a different host asserts this ran.
+0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
+#
+# The WATCHDOG is deliberately NOT here. It must run on a different host and a different schedule
+# than the reporter, or it shares the reporter's failure: a box that is down reports nothing and
+# also fails to notice that nothing was reported. It is installed on the dev Mac (launchd,
+# 07:00 ET) as calibration-progress-watch.sh, checking the PREVIOUS trading day.
