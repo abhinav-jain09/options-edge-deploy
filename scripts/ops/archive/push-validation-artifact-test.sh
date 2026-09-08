@@ -204,10 +204,10 @@ print(json.load(open(f[-1]))['corpusVersion'] if f else 'NONE')"
 # the reason out of the artifact. Case 33 was found passing for the wrong reason; this is that check,
 # made reusable so the next case does not have to re-invent it.
 why_says() {   # why_says <substring> <ok message> <fail message>
-  if WORKDIR="$WORK" NEEDLE="$1" python3 -c "
-import json, glob, os, sys
-f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/artifacts/*.json'), key=os.path.getmtime)[-1]
-d = json.load(open(f))
+  if [ -z "$LAST_ARTIFACT" ]; then bad "$3 (the run named no artifact)"; return; fi
+  if ARTIFACT="$LAST_ARTIFACT" NEEDLE="$1" python3 -c "
+import json, os, sys
+d = json.load(open(os.environ['ARTIFACT']))
 note = [c for c in d['clauseResults'] if c['clause'] == 'COMPLETENESS'][0]['note']
 sys.exit(0 if os.environ['NEEDLE'] in note else 1)"; then
     ok "$2"
@@ -216,9 +216,16 @@ sys.exit(0 if os.environ['NEEDLE'] in note else 1)"; then
   fi
 }
 
+# The evaluator NEVER rewrites a published artifact, so "the newest file by mtime" is not the artifact
+# this run produced — it is whichever run last created one. Every evaluate records the path its own run
+# named, and why_says reads THAT.
+LAST_ARTIFACT=""
 evaluate() {   # evaluate [corpusVersion override]
-  env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CAL_DIR" \
-      CORPUS_VERSION="${1:-$(published_version)}" bash "$HERE/oe-push-validation-artifact.sh" 2>&1 | head -1
+  local out
+  out="$(env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CAL_DIR" \
+         CORPUS_VERSION="${1:-$(published_version)}" bash "$HERE/oe-push-validation-artifact.sh" 2>&1)"
+  LAST_ARTIFACT="$(printf '%s\n' "$out" | sed -n 's/^written to //p' | tail -1)"
+  printf '%s\n' "$out" | head -1
 }
 
 echo "1. a complete corpus with frozen, reachable thresholds ACCEPTS"
@@ -1102,11 +1109,15 @@ r = R.read_logical(os.environ['ROOT'])
 print(R.manifest_version(R.build_manifest(r, 'context-tape.direction.ledger', 'prod')))")"
 python3 - "$ROOT" <<'PYCASE'
 import gzip, glob, os, re, sys
-f = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")))[0]
-body = gzip.open(f, "rt").read()
-first = body.splitlines()[0] + "\n"
-with gzip.open(f, "wt") as fh:                     # the same record again, further down the log
-    fh.write(body + re.sub(r"Offset:(\d+)", lambda m: "Offset:%d" % (int(m.group(1)) + 500000), first))
+d = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*")))[0]
+f = os.path.join(d, "part-000.jsonl.gz")
+first = gzip.open(f, "rt").read().splitlines()[0] + "\n"
+# The replay goes in a LATER-SORTED file at a LOWER offset. A replay further down the same file is not
+# a test of the collapse at all: whichever record is seen first is also the lowest, so keeping "the
+# first seen" and keeping "the lowest" are indistinguishable — which is exactly why the mutation
+# survived the first version of this case.
+with gzip.open(os.path.join(d, "part-zzz.jsonl.gz"), "wt") as fh:
+    fh.write(re.sub(r"Offset:(\d+)", lambda m: "Offset:%d" % max(0, int(m.group(1)) - 1), first))
 PYCASE
 AFTER="$(HERE="$HERE" ROOT="$ROOT" python3 -c "
 import os, sys
@@ -1133,6 +1144,75 @@ case "$OUT" in
   "VALIDATION False True") ok "not full, and complete — two different facts, both stated" ;;
   *) bad "completeness was collapsed into the counts: $OUT" ;;
 esac
+
+
+echo "54. a session whose files could not be read is NOT COMPLETE"
+# The mutation audit found this: making the reader's CORRUPT branch return COMPLETE left the suite
+# green. Case 19 covers an unreadable file through the flat readErrors list, so the SESSION-STATUS path
+# for the same failure was bound by nothing — and that path is what decides whether the session's calls
+# enter a counter.
+build 32 20
+targets FROZEN "$SB"; publish
+printf 'this is not gzip' > "$ROOT/dt=2026-07-14/part-998.jsonl.gz"
+STATUS="$(HERE="$HERE" ROOT="$ROOT" python3 -c "
+import os, sys
+sys.path.insert(0, os.environ['HERE'])
+import oe_corpus_reader as R
+read = R.read_logical(os.environ['ROOT'])
+sessions, seals, calls, outcomes = R.classify_sessions(read, R.read_sidecar(os.environ['ROOT'], []), '2026-08-13')
+rows = [v for v in sessions.values() if v['sessionDate'] == '2026-07-14']
+print(rows[0]['archiveStatus'] if rows else 'NO_ROW')")"
+[ "$STATUS" = "CORRUPT" ] \
+  && ok "the session itself is CORRUPT, not merely noted in a list elsewhere" \
+  || bad "a session with an unreadable file was classified $STATUS"
+
+echo "55. an explicit -1 coordinate is refused"
+# Also from the audit. Case 47 strips Partition: entirely, which the digest/offset comparison catches
+# on its own — so the guard that exists for an explicit -1 (a coordinate that IS present and IS
+# meaningless) was redundant for every fixture and bound by nothing.
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, os, re, sys
+for f in glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")):
+    body = gzip.open(f, "rt").read()
+    with gzip.open(f, "wt") as fh:
+        fh.write(re.sub(r"Partition:0", "Partition:-1", body))
+PYCASE
+evaluate "$PIN" >/dev/null
+why_says "changed coordinate or digest" \
+  "-1 is refused as a live coordinate, not compared as if it meant something" \
+  "an explicit -1 coordinate was accepted"
+
+
+echo "56. the reader RECOMPUTES the digest, so a payload cannot verify itself"
+# Third survivor from the audit. A record carries a semanticDigest as a diagnostic; if the reader
+# trusted it, a corrupted payload with its original digest still attached would verify against itself
+# and the seal's chain would agree. Nothing bound that, so the recomputation was correct and untested.
+build 32 20
+targets FROZEN "$SB"
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, json, os, sys
+f = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")))[4]
+out, done = [], False
+for line in gzip.open(f, "rt"):
+    i = line.find("{")
+    rec = json.loads(line[i:])
+    # change what the record SAYS while leaving the digest it carries alone
+    if not done and rec.get("kind") == "outcome":
+        rec["resultTicks"] = (rec.get("resultTicks") or 0) + 1000
+        rec.setdefault("semanticDigest", "0" * 64)
+        done = True
+    out.append(line[:i] + json.dumps(rec) + "\n")
+with gzip.open(f, "wt") as fh:
+    fh.write("".join(out))
+PYCASE
+publish
+evaluate >/dev/null
+why_says "corpus defect" \
+  "an altered payload is caught by recomputation, not excused by the digest it carries" \
+  "a payload verified itself against its own carried digest"
 
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
