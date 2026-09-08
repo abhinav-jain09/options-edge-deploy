@@ -887,6 +887,47 @@ c = json.load(open(f))['cohorts'][0]
 print('%s %s' % (c.get('phase'), c.get('validationClockStarted')))")"
 case "$PH_OUT" in "VALIDATION True") ok "an empty validation cohort says so instead of hiding as CALIBRATION";; *) bad "phase inferred from the data, not the clock: $PH_OUT";; esac
 
+
+echo "44. the shared predicate is load-bearing, not decorative"
+# A call can sit there doing nothing if a duplicate check beside it reaches the same verdict, and no
+# test notices — which is exactly what happened: with corpus_defects() called AND the old per-session
+# checks still standing, deleting the call changed no verdict at all. This removes the call from a COPY
+# and requires the corpus to be accepted, proving the call is the only thing refusing it.
+MUT="$WORK/mutant"; mkdir -p "$MUT"
+cp "$HERE"/*.sh "$HERE"/*.py "$HERE"/calibration-targets.env "$MUT/"
+python3 - "$MUT/oe-push-validation-artifact.sh" <<'PYCASE'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s2 = re.sub(r'shared_defects = R\.corpus_defects\(read, sessions, seals,\n[^\n]*\n[^\n]*\n',
+            'shared_defects = []\n', s)
+sys.exit(0 if s2 != s and open(p, "w").write(s2) is not None else 1)
+PYCASE
+# Earlier cases deliberately corrupt manifests and rewrite published versions in this shared tree, and
+# published_version() takes the newest record — so this case starts from a clean calibration-runs or it
+# would be measuring their damage instead of its own.
+rm -rf "$WORK/calibration-runs"
+build 32 20 ungraded_day
+targets FROZEN "$SB"; publish
+cp "$HERE/calibration-targets.env" "$MUT/calibration-targets.env"
+# Compare the REASONS, not the verdicts: a REJECT can be reached by several routes, so the proof that
+# this call is load-bearing is that the corpus-defect reason exists with it and vanishes without it.
+evaluate >/dev/null
+real_note="$(WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/artifacts/*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(f))
+print([c for c in d['clauseResults'] if c['clause'] == 'COMPLETENESS'][0]['note'])")"
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CAL_DIR" \
+    CORPUS_VERSION="$(published_version)" bash "$MUT/oe-push-validation-artifact.sh" >/dev/null 2>&1
+mut_note="$(WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/artifacts/*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(f))
+print([c for c in d['clauseResults'] if c['clause'] == 'COMPLETENESS'][0]['note'])")"
+case "$real_note" in *"corpus defect"*) : ;; *) bad "the real evaluator gave no corpus-defect reason: $real_note";; esac
+case "$mut_note"  in *"corpus defect"*) bad "the reason survives without the call — it comes from somewhere else";; *) ok "the corpus-defect reason exists only while the shared call does";; esac
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
 echo "FAIL — $fails assertion(s)"; exit 1

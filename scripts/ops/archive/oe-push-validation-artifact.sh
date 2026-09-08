@@ -263,12 +263,10 @@ by_call = {call_identity(c): c for c in cohort}
 # does not make a smaller cohort — it makes one whose population is unknown, and a statistic over an
 # unknown population is worse than no statistic.
 window_sessions = sorted({session_key(c) for c in cohort})
+# The per-session judgement is the SHARED predicate's, made further down. It used to be duplicated here,
+# and a duplicate is not a second opinion — it is a second thing to forget to update. With both present,
+# removing the shared call changed nothing, which is how you find out a call is decorative (r13).
 not_evaluable = []
-for k in window_sessions:
-    srow = sessions.get(k)
-    if srow is None or srow["archiveStatus"] != "COMPLETE":
-        not_evaluable.append({"session": k, "why": (srow or {}).get("archiveStatus", "ABSENT"),
-                              "reason": (srow or {}).get("reason", "no session row for a call in the window")})
 
 # A day the corpus OWES and does not have is the failure this clause exists to catch, and it cannot be
 # seen by looking at the sessions that survived: those are, by construction, the ones still there.
@@ -303,24 +301,18 @@ if boundary_date and _cal is not None:
             not_evaluable.append({"session": day, "why": "MISSING",
                                   "reason": "a trading day inside the preregistered window that the corpus owes and does not have"})
 
-# A session whose attrition cannot be validated is NOT_EVALUABLE too — a number nobody can trust is
-# not a smaller number, it is a different failure.
-refusal_by_session, attrition_unusable = {}, []
+# Only the RATES are computed here, for the ATTRITION_CEILING clause. Whether a session's attrition can
+# be USED at all — no seal, a shape violation, nothing graded — is the shared predicate's judgement, and
+# it was duplicated here in a second copy that could drift from it.
+refusal_by_session = {}
 for k in window_sessions:
-    s = sessions.get(k) or {}
-    seal = seals.get((s.get("sessionDate"), s.get("parameterSetHash")))
-    if seal is None:
-        attrition_unusable.append({"session": k, "why": "no seal"})
-        continue
-    if R.attrition_violations(seal):
-        attrition_unusable.append({"session": k, "why": "attrition rows violate A4.12 shape/arithmetic"})
+    srow = sessions.get(k) or {}
+    seal = seals.get((srow.get("sessionDate"), srow.get("parameterSetHash")))
+    if seal is None or R.attrition_violations(seal):
         continue
     rate = R.session_refusal_rate(seal)
-    if rate is None:
-        # Sum graded == 0: the session graded nothing, so refusal says nothing about it. Never 0%.
-        attrition_unusable.append({"session": k, "why": "no graded ticks — refusal rate is undefined, not zero"})
-        continue
-    refusal_by_session[k] = rate
+    if rate is not None:
+        refusal_by_session[k] = rate
 
 # Bijection, scoped to the window and nothing outside it. Records outside are legitimate and are
 # neither orphans nor members.
@@ -360,6 +352,13 @@ for o in window_outcomes:
 missing_horizon = sorted("|".join(str(x) for x in c) for c in cohort_ids
                          if horizons.get(c, set()) != set(R.HORIZONS)
                          or horizon_rows.get(c, 0) != len(R.HORIZONS))
+
+# THE shared predicate — the same call the reporter makes, over the same reader (r12 #1). It is the ONLY
+# source of the per-session judgements below: a copy standing beside it meant deleting the call changed
+# no verdict at all, which is a call that is decorative rather than load-bearing (r13).
+shared_defects = R.corpus_defects(read, sessions, seals,
+                                  cohort_days={v["sessionDate"] for k, v in sessions.items()
+                                               if k in window_sessions} | set(missing_days))
 
 # ---- the statistics: A4.9's reducers over the cohort at the primary horizon ----------------------
 prim = [o for o in window_outcomes if o.get("horizon") == PRIMARY]
@@ -468,14 +467,7 @@ clause("COHORT_SIZE", "PASS" if size_ok else "FAIL", size_ok, len(cohort),
        % (len(cohort_sessions), t_sessions, len(cohort), t_cohort, min_class, t_class,
           min_cell, t_cell, len(REQUIRED_CELLS)))
 
-# THE shared predicate — the same call the reporter makes, over the same reader (r12 #1). Adding
-# corpus_defects() to the reporter and leaving this expression standing beside it recreated the very
-# split it was written to close: a foreign incomplete lineage on an owed date made the reporter say
-# corpusComplete=False while this said ACCEPT.
-shared_defects = R.corpus_defects(read, sessions, seals,
-                                  cohort_days={v["sessionDate"] for k, v in sessions.items()
-                                               if k in window_sessions} | set(missing_days))
-complete_ok = (version_ok and not not_evaluable and not attrition_unusable
+complete_ok = (version_ok and not not_evaluable
                and not missing_horizon and not orphans and bool(cohort) and not read_errors
                and not mismatched and not unmanifested and not conflicts_total
                and not shared_defects)
@@ -498,8 +490,6 @@ if not cohort:
     why.append("the window contains no cohort call at all")
 if not_evaluable:
     why.append("%d session(s) in the window are NOT_EVALUABLE" % len(not_evaluable))
-if attrition_unusable:
-    why.append("%d session(s) have attrition that cannot be used" % len(attrition_unusable))
 if missing_horizon:
     why.append("%d call(s) do not have exactly H3/H5/H15" % len(missing_horizon))
 if orphans:
@@ -563,7 +553,7 @@ if not refusal_by_session:
 else:
     worst_id = max(refusal_by_session, key=lambda k: refusal_by_session[k])
     worst = refusal_by_session[worst_id]
-    ok = worst <= c_attr and not attrition_unusable
+    ok = worst <= c_attr and not shared_defects
     clause("ATTRITION_CEILING", "PASS" if ok else "FAIL", ok, worst,
            "raw MAXIMUM session refusal rate (no tail), worst = %s vs ceiling %s" % (worst_id, c_attr))
 
@@ -602,7 +592,7 @@ artifact = {
     "manifestRecordCount": None if manifest is None else manifest.get("recordCount"),
     "archiveVsManifest": {"missing": missing_from_archive[:10], "moved": moved[:10], "extra": extra[:10]},
     "corpusStartDate": corpus_start, "owedDaysMissing": missing_days,
-    "notEvaluableSessions": not_evaluable, "attritionUnusableSessions": attrition_unusable,
+    "notEvaluableSessions": not_evaluable, "corpusDefects": shared_defects[:20],
     "callsMissingAHorizon": missing_horizon[:20], "orphanOutcomes": orphans[:20],
     "outcomesDisagreeingWithTheirCall": mismatched[:20], "recordsNotInManifest": unmanifested,
     "conflicts": conflicts_total,
