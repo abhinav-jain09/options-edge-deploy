@@ -33,7 +33,7 @@ T_SESSIONS="${T_SESSIONS:-30}"; T_COHORT="${T_COHORT:-200}"; T_CLASS="${T_CLASS:
 command -v python3 >/dev/null || { log "FATAL: python3 missing"; exit 1; }
 
 python3 - "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$T_SESSIONS" "$T_COHORT" "$T_CLASS" "$T_CELL" <<'PY'
-import gzip, json, os, sys, glob, hashlib, tempfile
+import gzip, json, os, sys, glob, hashlib, tempfile, re, datetime
 
 root, out_root, today, stamp, env, t_sessions, t_cohort, t_class, t_cell = sys.argv[1:10]
 t_sessions, t_cohort, t_class, t_cell = int(t_sessions), int(t_cohort), int(t_class), int(t_cell)
@@ -55,35 +55,47 @@ def canonical(o):
         return json.dumps(o)
     return json.dumps(str(o))
 
-logical, conflicts, files = {}, 0, 0
+# A read error is NOT a quiet day. Swallowing it would let a truncated or unreadable archive report a
+# smaller population as complete — the exact failure this reader exists to catch.
+logical, conflicts, files, read_errors = {}, 0, 0, []
 for f in sorted(glob.glob(os.path.join(root, "dt=*", "*.jsonl.gz"))):
     files += 1
     try:
-        with gzip.open(f, "rt", errors="replace") as fh:
-            for line in fh:
+        with gzip.open(f, "rt") as fh:
+            for lineno, line in enumerate(fh, 1):
                 i = line.find("{")
                 if i < 0:
                     continue
                 try:
                     rec = json.loads(line[i:])
-                except Exception:
+                except Exception as e:
+                    read_errors.append("%s:%d unparseable" % (os.path.basename(f), lineno))
                     continue
                 if "kind" not in rec:
                     continue
+                # The reader RECOMPUTES the digest from the payload. A digest carried in the record is
+                # diagnostic only — a corrupted payload with its own matching digest would verify itself.
                 body = {k: v for k, v in rec.items() if k not in ("ts", "publishedAtMs", "runId", "semanticDigest")}
                 dig = hashlib.sha256(canonical(body).encode("utf-8")).hexdigest()
-                key = (rec.get("parameterSetHash"), rec.get("sessionLineageId"), rec.get("kind"),
-                       rec.get("callId"), rec.get("horizon"), rec.get("sessionDate"))
-                prev = logical.get(key)
+                # the PHYSICAL key, as the producer wrote it — not a tuple the reader invents
+                if rec.get("kind") == "seal":
+                    pkey = "%s|%s|%s" % (rec.get("sessionDate"), rec.get("parameterSetHash"), rec.get("sessionLineageId"))
+                else:
+                    lid = rec.get("callId") if rec.get("kind") == "call" else "%s|%s" % (rec.get("callId"), rec.get("horizon"))
+                    pkey = "%s|%s|%s" % (rec.get("parameterSetHash"), rec.get("sessionLineageId"), lid)
+                m = re.search(r"Offset:(\d+)", line[:i])
+                off = int(m.group(1)) if m else None
+                prev = logical.get(pkey)
                 if prev is None:
-                    logical[key] = (dig, rec)
+                    logical[pkey] = (dig, rec, off)
                 elif prev[0] != dig:
-                    conflicts += 1
-    except Exception:
-        pass
+                    conflicts += 1                       # same key, different content: the session is poisoned
+    except Exception as e:
+        read_errors.append("%s unreadable: %s" % (os.path.basename(f), e.__class__.__name__))
 
 seals, calls, outcomes = {}, [], []
-for (_h, _l, kind, _c, _hz, _sd), (_d, rec) in logical.items():
+for pkey, (_d, rec, _off) in logical.items():
+    kind = rec.get("kind")
     if kind == "seal":
         seals[(rec.get("sessionDate"), rec.get("parameterSetHash"))] = rec
     elif kind == "call":
@@ -92,20 +104,69 @@ for (_h, _l, kind, _c, _hz, _sd), (_d, rec) in logical.items():
         outcomes.append(rec)
 
 # ---- per-session status. Only a COMPLETE session enters any counter (A5.7) ------------------------
+# The archiver's own discontinuity sidecar: a log reset it saw poisons every session it spans.
+sidecar = []
+for f in glob.glob(os.path.join(os.path.dirname(root.rstrip("/")), "_manifest", "*.discontinuities.jsonl")) + \
+         glob.glob(os.path.join(root, "..", "_manifest", "*.discontinuities.jsonl")):
+    try:
+        for line in open(f):
+            sidecar.append(json.loads(line))
+    except Exception:
+        read_errors.append("discontinuity sidecar unreadable")
+
+def chain(domain, recs):
+    """A5.4's chain, recomputed from the archive in lowest-offset order. This is the PROOF: counts
+    alone accept a missing record paired with a substituted one, and a wrong seal would pass."""
+    d = b"\x00" * 32
+    for _off, pkey, dig in sorted(recs, key=lambda r: (r[0] if r[0] is not None else 0, r[1])):
+        k = pkey.encode("utf-8")
+        raw = bytes.fromhex(dig)
+        d = hashlib.sha256(d + bytes([domain]) + len(k).to_bytes(4, "big") + k
+                           + len(raw).to_bytes(4, "big") + raw).digest()
+    return d.hex()
+
 sessions = {}
 for (sd, ph), seal in seals.items():
-    got_calls = sum(1 for c in calls if c.get("sessionDate") == sd and c.get("parameterSetHash") == ph)
-    got_out = sum(1 for o in outcomes if o.get("sessionDate") == sd and o.get("parameterSetHash") == ph)
+    lin = seal.get("sessionLineageId")
+    # LINEAGE-SCOPED: records of another lineage of the same session are not this seal's population
+    mine_c = [(o, k, dg) for k, (dg, r, o) in logical.items()
+              if r.get("kind") == "call" and r.get("sessionDate") == sd
+              and r.get("parameterSetHash") == ph and r.get("sessionLineageId") == lin]
+    mine_o = [(o, k, dg) for k, (dg, r, o) in logical.items()
+              if r.get("kind") == "outcome" and r.get("sessionDate") == sd
+              and r.get("parameterSetHash") == ph and r.get("sessionLineageId") == lin]
+    got_calls, got_out = len(mine_c), len(mine_o)
     want_calls = int(seal.get("logicalCallCount", -1))
     want_out = int(seal.get("logicalOutcomeCount", -1))
-    if seal.get("conflicts", 0) or conflicts:
+    call_ids = {r.get("callId") for _dg, r, _o in logical.values()
+                if r.get("kind") == "call" and r.get("sessionDate") == sd and r.get("sessionLineageId") == lin}
+    orphans = [r.get("callId") for _dg, r, _o in logical.values()
+               if r.get("kind") == "outcome" and r.get("sessionDate") == sd
+               and r.get("sessionLineageId") == lin and r.get("callId") not in call_ids]
+    horizons = {}
+    for _dg, r, _o in logical.values():
+        if r.get("kind") == "outcome" and r.get("sessionDate") == sd and r.get("sessionLineageId") == lin:
+            horizons.setdefault(r.get("callId"), set()).add(r.get("horizon"))
+    bad_horizons = [c for c in call_ids if horizons.get(c, set()) != {"H3", "H5", "H15"}]
+    spans = [d for d in sidecar if d.get("dt") == sd or d.get("topic")]
+    if read_errors:
+        status, why = "CORRUPT", "; ".join(read_errors[:3])
+    elif seal.get("conflicts", 0) or conflicts:
         status, why = "CORRUPT", "conflicting records for one key"
-    elif seal.get("discontinuities"):
-        status, why = "DISCONTINUITY", ";".join(seal.get("discontinuities"))
+    elif seal.get("discontinuities") or spans:
+        status, why = "DISCONTINUITY", ";".join(seal.get("discontinuities") or []) or "archiver recorded a log reset"
+    elif orphans:
+        status, why = "CORRUPT", "%d outcome(s) belong to no call in this lineage" % len(orphans)
+    elif bad_horizons:
+        status, why = "INCOMPLETE", "%d call(s) do not have exactly H3/H5/H15" % len(bad_horizons)
     elif got_calls != want_calls or got_out != want_out:
         status, why = "INCOMPLETE", "archived %d/%d calls, %d/%d outcomes" % (got_calls, want_calls, got_out, want_out)
     elif want_out != 3 * want_calls:
         status, why = "INCOMPLETE", "the seal itself is not 3 horizons per call"
+    elif chain(0x01, mine_c) != seal.get("callsDigest") or chain(0x02, mine_o) != seal.get("outcomesDigest"):
+        # The strongest check, and the only one a substitution cannot pass: the seal's chains must be
+        # REPRODUCIBLE from the archive. Equal counts with a swapped record fail here.
+        status, why = "CORRUPT", "the seal's chains are not reproducible from the archive"
     else:
         status, why = "COMPLETE", ""
     sessions[sd] = {"parameterSetHash": ph, "archiveStatus": status, "reason": why,
@@ -139,6 +200,30 @@ for c in calls:
     cell = "%s|%s|%s" % (c.get("enteredState"), (c.get("node") or {}).get("roles") or "NONE", c.get("regime"))
     b["cells"][cell] = b["cells"].get(cell, 0) + 1
 
+# A5.6: the version is a content address of exactly what was read, so a progress run is reproducible
+# and a watchdog can tell "the corpus advanced" from "nobody ran".
+manifest = sorted("%s|%s|%s" % (k, v[2] if v[2] is not None else -1, v[0]) for k, v in logical.items())
+corpus_version = hashlib.sha256("\n".join(manifest).encode("utf-8")).hexdigest()
+
+# A5.5: the sessions that were OWED come from the trading calendar, not from what happens to be on
+# disk — otherwise a wipe of the first weeks silently redefines "expected" as "whatever survived".
+def owed(start, end):
+    days, d = [], datetime.date.fromisoformat(start)
+    last = datetime.date.fromisoformat(end)
+    while d <= last:
+        if d.weekday() < 5:                      # the calendar module refines this on the host
+            days.append(d.isoformat())
+        d += datetime.timedelta(days=1)
+    return days
+
+corpus_start = min(sessions) if sessions else today
+for day in owed(corpus_start, today):
+    if day not in sessions:
+        sessions[day] = {"parameterSetHash": None, "archiveStatus": "MISSING",
+                         "reason": "a trading day the corpus owes and does not have",
+                         "calls": 0, "outcomes": 0, "phase": None, "trackFromPush": None,
+                         "attritionRows": 0}
+
 complete = [s for s in sessions.values() if s["archiveStatus"] == "COMPLETE"]
 calib_calls = sum(s["calls"] for s in complete)
 today_status = sessions.get(today, {}).get("archiveStatus", "NOT_EXPECTED")
@@ -160,7 +245,9 @@ else:
         min_cell = min(b["cells"].values()) if b["cells"] else 0
         thresholds = (len(b["sessions"]) >= t_sessions and b["calls"] >= t_cohort
                       and min_class >= t_class and min_cell >= t_cell)
-        corpus_ok = all(s["archiveStatus"] == "COMPLETE" for s in sessions.values())
+        # scoped to THIS cohort's window: sessions before TRACK_FROM are not its business
+        window = [sd for sd, st in sessions.items() if tf is None or sd >= str(tf)[:10]]
+        corpus_ok = bool(window) and all(sessions[sd]["archiveStatus"] == "COMPLETE" for sd in window)
         reports.append({
             "phase": "VALIDATION", "validationClockStarted": True,
             "parameterSetHash": ph, "trackFromPush": tf,
@@ -177,7 +264,8 @@ report = {
     "generatedAt": stamp, "env": env, "reportDate": today,
     "archiveStatusToday": today_status,
     "archivedToday": today_status == "COMPLETE",
-    "conflicts": conflicts, "filesRead": files,
+    "conflicts": conflicts, "filesRead": files, "readErrors": read_errors[:20],
+    "corpusVersion": corpus_version, "corpusStartDate": corpus_start,
     "sessions": {k: v for k, v in sorted(sessions.items())},
     "cohorts": reports,
     "actionable": False, "slice": "COMMISSIONING_SHADOW",

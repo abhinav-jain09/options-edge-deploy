@@ -12,7 +12,17 @@ ARCHIVE_DIR="${ARCHIVE_DIR:-/Volumes/database/optionsedge}"
 OUT_ROOT="$ARCHIVE_DIR/calibration-runs/$ENV_NAME"
 CAL="${CALENDAR_DIR:-$HOME/development/workspace/options-edge-deploy/scripts/jenkins}"
 log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
-alert() { log "ALERT: $*"; [ -x "$(dirname "$0")/oe-alert.sh" ] && "$(dirname "$0")/oe-alert.sh" "$*" || true; }
+# oe-alert.sh is SOURCE-ONLY and mode 0644, so testing -x silently disables every alert this
+# watchdog exists to raise. Source it, and say so in the log when it is not there.
+# oe-alert.sh is SOURCE-ONLY and mode 0644 — testing -x on it silently disables every alert this
+# watchdog exists to raise. It defines alert() itself, so source it and let it own the name; if it is
+# not on this host, fall back to a log line and say plainly that the line is the only notice.
+if [ -r "$(dirname "$0")/oe-alert.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$(dirname "$0")/oe-alert.sh"
+else
+  alert() { log "ALERT (no alert helper on this host — this line is the only notice): $*"; }
+fi
 
 # The day to check is the PREVIOUS trading day: the reporter runs at 21:00 ET, this runs at 07:00 ET.
 DAY="${CHECK_DATE:-$(python3 - "$CAL" <<'PY'
@@ -41,12 +51,18 @@ if [ -z "$found" ]; then
   exit 1
 fi
 log "progress record present for $DAY: $found"
+PREV="$(find "$OUT_ROOT" -name 'dt=*.json' 2>/dev/null | sort | tail -2 | head -1)"
 python3 - "$found" "$DAY" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1])); day = sys.argv[2]
 st = d.get("sessions", {}).get(day, {}).get("archiveStatus", "NOT_IN_CORPUS")
 line = d.get("cohorts", [{}])[0]
 print("  %s: archiveStatus=%s conflicts=%s" % (day, st, d.get("conflicts")))
+cv = d.get("corpusVersion")
+print("  corpusVersion=%s" % (cv or "<absent>"))
+if not cv:
+    print("  WARN: the report carries no corpusVersion — it cannot be shown to have read anything")
+    sys.exit(2)
 if st not in ("COMPLETE", "NOT_EXPECTED"):
     print("  WARN: %s did not land COMPLETE — it counts toward nothing until it does" % day)
     sys.exit(2)

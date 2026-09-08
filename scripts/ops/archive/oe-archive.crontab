@@ -62,12 +62,13 @@ CRON_TZ=America/New_York
 # every one of them. Re-reading the archive cannot discover a seal that is still sitting in Kafka —
 # only another archive pass can. Without this the corpus would carry sessions that are permanently
 # PENDING_SEAL, which the reader must treat as incomplete.
-45 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge ARCHIVE_JOB=seal TOPICS=context-tape.direction.ledger JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-seal.cron.log 2>&1
+45 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge ARCHIVE_JOB=seal ON_LOCK_BUSY=fail TOPICS=context-tape.direction.ledger JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-seal.cron.log 2>&1
 
 # Calibration progress, 21:00 ET — AFTER the second archive pass, so it reads a corpus that can
 # actually contain today's seal. It answers one question and writes it where a human can read it:
 # how far is calibration, and did today land at all. A silent reporter and an empty corpus look the
 # same from the outside, so a separate watchdog on a different host asserts this ran.
+30,40,50 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
 0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
 #
 # The WATCHDOG is deliberately NOT here. It must run on a different host and a different schedule

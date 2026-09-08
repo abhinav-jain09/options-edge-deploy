@@ -448,6 +448,12 @@ for topic in $TOPICS; do
       log "  FAIL $topic p$part: STRICT topic log RESET ($reset_why) — the pre-reset population is unrecoverable"
       printf '{"topic":"%s","dt":"%s","partition":%s,"discontinuity":"%s","detected_at":"%s","env":"%s"}\n' \
         "$topic" "$DAY" "$part" "$reset_why" "$STAMP" "$ENV_NAME" >> "$MAN/$topic.discontinuities.jsonl"
+      # REBASELINE ANYWAY, to the new log's earliest. Failing without rebaselining left the stale
+      # checkpoint in place, so the NEXT run compared it against the new log, saw no reset, and
+      # resumed past the new log's prefix — losing it permanently and silently. The run still fails,
+      # and the discontinuity above is what makes every session it spans NOT_EVALUABLE.
+      printf '%s=%s records=0 span=0 dt=%s archived=%s rebaselined=from-%s\n' \
+        "$part" "$earliest" "$DAY" "$STAMP" "$ckpt_before" >> "$offfile"
       failed=$(( failed + 1 ))
       continue
     fi
@@ -572,7 +578,13 @@ for topic in $TOPICS; do
         "$min_ms" "$max_ms" "$(ms_to_iso "$min_ms")" "$(ms_to_iso "$max_ms")" \
         "$(schema_fragment "$topic" "$out" "$schema_versions")" \
         "${sha:-unknown}" "$bytes" "$(basename "$out")" "$STAMP" "$ARCHIVE_JOB" "$ENV_NAME" "$ARCHIVER_VERSION" \
-        >> "$outdir/_manifest.jsonl"
+        >> "$outdir/_manifest.jsonl" || {
+          # The append is the claim; the checkpoint is the promise not to re-read. If the claim could
+          # not be written, the promise must not be made — otherwise the range is skipped forever.
+          log "  WARN $topic p$part [$from,$endoff): manifest append FAILED — checkpoint NOT advanced, will re-read next run"
+          failed=$(( failed + 1 ))
+          continue
+        }
       printf '%s=%s records=%s span=%s dt=%s archived=%s\n' \
         "$part" "$endoff" "$got" "$count" "$DAY" "$STAMP" >> "$offfile"
 
