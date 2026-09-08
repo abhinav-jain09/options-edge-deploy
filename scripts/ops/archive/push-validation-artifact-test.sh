@@ -204,8 +204,9 @@ print(json.load(open(f[-1]))['corpusVersion'] if f else 'NONE')"
 # the reason out of the artifact. Case 33 was found passing for the wrong reason; this is that check,
 # made reusable so the next case does not have to re-invent it.
 why_says() {   # why_says <substring> <ok message> <fail message>
-  if [ -z "$LAST_ARTIFACT" ]; then bad "$3 (the run named no artifact)"; return; fi
-  if ARTIFACT="$LAST_ARTIFACT" NEEDLE="$1" python3 -c "
+  local art; art="$(cat "$ARTIFACT_MARKER" 2>/dev/null)"
+  if [ -z "$art" ] || [ ! -f "$art" ]; then bad "$3 (the run named no artifact)"; return; fi
+  if ARTIFACT="$art" NEEDLE="$1" python3 -c "
 import json, os, sys
 d = json.load(open(os.environ['ARTIFACT']))
 note = [c for c in d['clauseResults'] if c['clause'] == 'COMPLETENESS'][0]['note']
@@ -219,12 +220,17 @@ sys.exit(0 if os.environ['NEEDLE'] in note else 1)"; then
 # The evaluator NEVER rewrites a published artifact, so "the newest file by mtime" is not the artifact
 # this run produced — it is whichever run last created one. Every evaluate records the path its own run
 # named, and why_says reads THAT.
-LAST_ARTIFACT=""
+#
+# It records it in a FILE, not a variable. `OUT="$(evaluate)"` runs in a SUBSHELL, so a variable set
+# inside never reaches the caller — every why_says after such a call was reading the artifact of the
+# last evaluate that happened NOT to be in a substitution, which is a stale one. The bug that hid this
+# is the reason it matters: the case still said COMPLETENESS=FAIL, so nothing looked wrong.
+ARTIFACT_MARKER="$WORK/.last-artifact"
 evaluate() {   # evaluate [corpusVersion override]
   local out
   out="$(env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CAL_DIR" \
          CORPUS_VERSION="${1:-$(published_version)}" bash "$HERE/oe-push-validation-artifact.sh" 2>&1)"
-  LAST_ARTIFACT="$(printf '%s\n' "$out" | sed -n 's/^written to //p' | tail -1)"
+  printf '%s\n' "$out" | sed -n 's/^written to //p' | tail -1 > "$ARTIFACT_MARKER"
   printf '%s\n' "$out" | head -1
 }
 
@@ -272,13 +278,13 @@ case "$OUT" in *"still UNFROZEN"*) ok "no artifact exists before the boundary is
 
 echo "5. a corpusVersion that is not the one on disk fails COMPLETENESS"
 targets FROZEN "$SB"; publish
-OUT="$(evaluate "$(printf '0%.0s' $(seq 64))")"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "an unpinned corpus is not silently evaluated";; *) bad "pin not enforced: $OUT";; esac
+evaluate "$(printf '0%.0s' $(seq 64))" >/dev/null
+why_says "no published manifest" "an unpinned corpus is not silently evaluated" "it rejected, but not because the pin was wrong"
 
 echo "6. a version nobody PUBLISHED fails, even when it matches what is on disk"
 rm -rf "$WORK/calibration-runs"
-OUT="$(evaluate)"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "a self-computed pin is not a pin";; *) bad "unpublished version accepted: $OUT";; esac
+evaluate >/dev/null
+why_says "never published" "a self-computed pin is not a pin" "it rejected, but not because the version was unpublished"
 
 echo "7. REMOVING a whole trading day is caught, even after the pin is recomputed and republished"
 build 32 20
@@ -287,14 +293,15 @@ victim="$(ls -d "$ROOT"/dt=* | sed -n '5p')"
 rm -rf "$victim"
 publish
 OUT="$(evaluate)"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "an owed trading day that is gone is the verdict: $(basename "$victim")";; *) bad "a deleted day produced a smaller accepted cohort: $OUT";; esac
+why_says "owed trading day" "an owed trading day that is gone is the verdict: $(basename "$victim")" \
+  "it rejected, but not because a day was owed and missing"
 case "$OUT" in *"decision=REJECT"*) ok "decision follows COMPLETENESS";; *) bad "expected REJECT: $OUT";; esac
 
 echo "8. ONE unreproducible seal inside the window makes the artifact REJECT, not a smaller cohort"
 build 32 20 broken_chain
 targets FROZEN "$SB"; publish
-OUT="$(evaluate)"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "a NOT_EVALUABLE session is the verdict, not a warning";; *) bad "broken chain tolerated: $OUT";; esac
+evaluate >/dev/null
+why_says "corpus defect" "a NOT_EVALUABLE session is the verdict, not a warning" "it rejected, but not because the session was NOT_EVALUABLE"
 
 echo "9. ONE blind session out of thirty fails ATTRITION_CEILING (a pooled rate would hide it)"
 build 32 20 blind_day
@@ -305,8 +312,8 @@ case "$OUT" in *"ATTRITION_CEILING=FAIL"*) ok "the gate is per session, not pool
 echo "10. a session that graded nothing is NOT_EVALUABLE, never a refusal rate of zero"
 build 32 20 ungraded_day
 targets FROZEN "$SB"; publish
-OUT="$(evaluate)"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "an ungraded session cannot contribute a 0% refusal";; *) bad "ungraded day counted: $OUT";; esac
+evaluate >/dev/null
+why_says "graded nothing" "an ungraded session cannot contribute a 0% refusal" "it rejected, but not because the session graded nothing"
 
 echo "11. the stopping boundary is honoured — an earlier declared boundary yields a smaller cohort"
 build 32 20
@@ -411,8 +418,8 @@ with gzip.open(os.path.join(root, "dt=%s" % sd, "part-000.jsonl.gz"), "wt") as f
     fh.write("Partition:0 Offset:999999 %s\t%s\n" % (key, json.dumps(seal)))
 PYCASE
 publish
-OUT="$(evaluate)"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "another parameter set's seal does not fill this cohort's hole";; *) bad "a foreign seal satisfied an owed day: $OUT";; esac
+evaluate >/dev/null
+why_says "owed trading day" "another parameter set's seal does not fill this cohort's hole" "it rejected, but not because the owed day was unfilled"
 
 echo "18. a declared corpusStartDate BEFORE the archive begins owes those days"
 build 32 20
@@ -427,8 +434,8 @@ build 32 20
 targets FROZEN "$SB"; publish
 PIN="$(published_version)"
 printf 'this is not gzip' > "$ROOT/dt=2026-07-09/part-999.jsonl.gz"
-OUT="$(evaluate "$PIN")"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "a file the reader could not open is part of the verdict";; *) bad "an unreadable file was passed over: $OUT";; esac
+evaluate "$PIN" >/dev/null
+why_says "read error" "a file the reader could not open is part of the verdict" "it rejected, but not because of the read error"
 
 echo "20. a record that MOVED since the manifest was published fails"
 build 32 20
@@ -491,8 +498,8 @@ with gzip.open(os.path.join(d, "part-900.jsonl.gz"), "wt") as fh:
     for i, (k, r) in enumerate(rows):
         fh.write("Partition:0 Offset:%d %s\t%s\n" % (900000 + i, k, json.dumps(r)))
 PYCASE
-OUT="$(evaluate "$PIN")"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "a record above the high-water mark is still not in the pinned corpus";; *) bad "records appended above the mark joined the cohort: $OUT";; esac
+evaluate "$PIN" >/dev/null
+why_says "not named by the pinned manifest" "a record above the high-water mark is still not in the pinned corpus" "it rejected, but not because the record was unmanifested"
 
 echo "23. an outcome that keeps the identity but changes a pinned VALUE is caught"
 build 32 20
@@ -615,8 +622,8 @@ with gzip.open(f.replace(".jsonl.gz", ".dup.jsonl.gz"), "wt") as fh:
     fh.write(prefix + json.dumps(rec) + "\n")
 PYCASE
 publish
-OUT="$(evaluate)"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "two contents under one key means the population is not knowable";; *) bad "a conflict produced an ACCEPT: $OUT";; esac
+evaluate >/dev/null
+why_says "conflicting record" "two contents under one key means the population is not knowable" "it rejected, but not because of the conflict"
 
 echo "28. the generation comes from THIS topic's identity file, not whichever sorts first"
 HERE="$HERE" python3 -c "
@@ -642,8 +649,8 @@ rm -f "$WORK/kafka/prod/_manifest/context-tape.direction.ledger.identity"
 # key's generation that recording stands, so the case being tested is a corpus that never had one
 rm -rf "$WORK/calibration-runs"
 targets FROZEN "$SB"; publish
-OUT="$(evaluate)"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "no generation means the coordinate cannot say which log it enumerated";; *) bad "a generation-less manifest was accepted as a pin: $OUT";; esac
+evaluate >/dev/null
+why_says "no generation" "no generation means the coordinate cannot say which log it enumerated" "it rejected, but not because the generation was absent"
 
 echo "30. a published artifact is never rewritten at its own identity"
 build 32 20
@@ -724,9 +731,10 @@ PIN="$(published_version)"
 CALTMP="$WORK/cal"; mkdir -p "$CALTMP"
 cp "$CAL_DIR/market_calendar.py" "$CALTMP/market_calendar.py"
 printf '\n# a change after publication\n' >> "$CALTMP/market_calendar.py"
-OUT="$(env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CALTMP" \
-       CORPUS_VERSION="$PIN" bash "$HERE/oe-push-validation-artifact.sh" 2>&1 | head -1)"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "recording the calendar means nothing unless it is checked";; *) bad "a corpus was re-judged under a changed calendar: $OUT";; esac
+out="$(env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CALTMP" \
+       CORPUS_VERSION="$PIN" bash "$HERE/oe-push-validation-artifact.sh" 2>&1)"
+printf '%s\n' "$out" | sed -n 's/^written to //p' | tail -1 > "$ARTIFACT_MARKER"
+why_says "calendar has changed" "recording the calendar means nothing unless it is checked" "it rejected, but not because the calendar moved"
 
 echo "35. reporter and evaluator cannot disagree about COMPLETE"
 build 32 20
