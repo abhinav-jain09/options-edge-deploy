@@ -97,21 +97,20 @@ def read_logical(root):
                     sd_of = rec.get("sessionDate")
                     if actual_key is not None and actual_key != pkey:
                         bad_keys.setdefault(sd_of, []).append(actual_key)
-                    # The LOWEST coordinate, exactly as `logical` keeps the lowest offset. Overwriting
-                    # on every physical record meant an equal replay at offsets 10 then 20 gave
-                    # logical=10 and manifest=20 — so a harmless replay changed the corpus version and
-                    # invalidated an existing pin, which is the opposite of what A5.4's collapse is for
-                    # (r17 #1).
-                    prior = coords.get(pkey)
-                    if prior is None or (off is not None and (prior[1] is None or off < prior[1])):
-                        coords[pkey] = (part, off)
+                    # ONE rule for "the lowest", applied in ONE place. It was written twice — once here
+                    # for `coords` and once below for `logical` — and two rules for one property means
+                    # neither can be tested on its own: disabling either left the other holding, so the
+                    # mutation survived and the suite proved nothing about it. coords is now set exactly
+                    # where logical is, from the same decision.
                     prev = logical.get(pkey)
                     if prev is None:
                         logical[pkey] = (dig, rec, off)
+                        coords[pkey] = (part, off)
                     elif prev[0] != dig:
                         conflicts_by_session[sd_of] = conflicts_by_session.get(sd_of, 0) + 1
                     elif off is not None and (prev[2] is None or off < prev[2]):
                         logical[pkey] = (dig, rec, off)      # A5.4: keep the LOWEST physical offset
+                        coords[pkey] = (part, off)
         except Exception as e:
             dt = re.search(r"dt=(\d{4}-\d{2}-\d{2})", f)
             read_errors_by_session.setdefault(dt.group(1) if dt else "?", []).append(

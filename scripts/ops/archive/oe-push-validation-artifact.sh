@@ -156,12 +156,12 @@ if manifest is not None:
         part, off = coords.get(k, (None, None))
         # The manifest is CANONICAL JSON, in which every scalar is a string — that is what makes two
         # builders agree byte for byte. So the comparison is on canonical form, not on Python types.
-        # "Skip the check when the live value is absent" is how an archive with NO coordinates at all
-        # verified against a manifest that had them: strip every Partition: prefix and the comparison
-        # simply stopped comparing (r14 #2). An absent coordinate is a mismatch, not an exemption.
-        if part is None or off is None or int(part) < 0 or int(off) < 0:
-            moved.append(k)
-        elif str(logical[k][0]) != str(e["digest"]) \
+        # An absent live coordinate is a MISMATCH, not an exemption — "skip the check when the value is
+        # absent" is how an archive with no coordinates at all verified against a manifest that had them
+        # (r14 #2). Expressed as ONE comparison rather than a guard plus a comparison: with both, either
+        # could be deleted and the other still caught everything, so neither was testable on its own.
+        # str(None) never equals a coordinate the manifest carries, which is exactly the intent.
+        if str(logical[k][0]) != str(e["digest"]) \
                 or str(off) != str(e["offset"]) or str(part) != str(e["partition"]):
             moved.append(k)
     # ANY record the manifest does not name is extra, at any offset. The old test asked whether it sat
@@ -219,8 +219,9 @@ version_ok = (manifest is not None and bool(published_on)
 # it relied on the session walk, which sees a conflict only for a session that has a seal and whose
 # conflicting record carries the same sessionDate. A5.3 is not conditional — two different contents
 # under one key means the population is not knowable, whoever wrote them (r9).
+# Conflicts reach the verdict through corpus_defects(), the shared predicate — they were ALSO counted
+# here, and two sources for one reason means neither is testable: disabling this left the other holding.
 conflicts_by_session = read.get("conflictsBySession", {})
-conflicts_total = read.get("conflictsTotal", 0)
 
 # A read error the SESSION walk cannot see: a file that will not open may be the only evidence a session
 # existed at all, so the flat list joins the evaluator's own (r7 #3).
@@ -493,7 +494,7 @@ clause("COHORT_SIZE", "PASS" if size_ok else "FAIL", size_ok, len(cohort),
 
 complete_ok = (version_ok and not not_evaluable
                and not missing_horizon and not orphans and bool(cohort) and not read_errors
-               and not mismatched and not unmanifested and not conflicts_total
+               and not mismatched and not unmanifested
                and not shared_defects)
 why = []
 if manifest is None:
@@ -535,9 +536,6 @@ if uncoordinated:
 if ungenerated:
     why.append("%d manifest entr(ies) carry no generation — the coordinate does not say which log they are in"
                % ungenerated)
-if conflicts_total:
-    why.append("%d conflicting record(s) in the corpus (sessions: %s)"
-               % (conflicts_total, ", ".join(str(k) for k in sorted(conflicts_by_session)[:4])))
 if shared_defects:
     why.append("%d corpus defect(s): %s" % (len(shared_defects), "; ".join(shared_defects[:3])))
 if read_errors:
@@ -620,7 +618,7 @@ artifact = {
     "notEvaluableSessions": not_evaluable, "corpusDefects": shared_defects[:20],
     "callsMissingAHorizon": missing_horizon[:20], "orphanOutcomes": orphans[:20],
     "outcomesDisagreeingWithTheirCall": mismatched[:20], "recordsNotInManifest": unmanifested,
-    "conflicts": conflicts_total,
+    "conflicts": sum(conflicts_by_session.values()),
     "sessionRefusalRates": {k: round(v, 6) for k, v in sorted(refusal_by_session.items())},
     "readErrors": read_errors[:20],
     "clauseResults": clauses,

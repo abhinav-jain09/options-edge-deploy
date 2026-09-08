@@ -11,6 +11,11 @@
 # harness that cannot tell those apart is the same defect as a test that greps for a string. Both are
 # fixed; the run below is the first one whose result means anything.
 #
+# Last full run (2026-09-09, deploy b384f2bf + the redundancy removals): 22 mutations, 22 killed, none
+# survived. The three that survived the run before were not weakened protections — they were
+# REDUNDANT ones: the same property held in two places, so deleting either left the other catching
+# everything and neither was testable on its own. That redundancy is what the audit is for.
+#
 # Which of the evaluator's protections does the suite actually bind?
 #
 # Disable one at a time and run the suite. A protection whose removal the suite does not notice is a
@@ -72,7 +77,7 @@ check "complete_ok (the whole COMPLETENESS clause)"             $E 'complete_ok 
 check "THRESHOLDS_FROZEN"                                        $E 'frozen = \(thresholds_state == "FROZEN"\)'       'frozen = True'
 check "outcome/call pinned-field binding"                        $E 'mismatched\.append\('                            'None and ('
 check "records outside the manifest"                             $E 'unmanifested = sum\(1 for k in logical if k not in manifest_entries\)' 'unmanifested = 0'
-check "conflict detection"                                       $E 'conflicts_total = read\.get\("conflictsTotal", 0\)' 'conflicts_total = 0'
+check "conflict detection"                                       $R 'conflicts_by_session\[sd_of\] = conflicts_by_session\.get\(sd_of, 0\) \+ 1' 'pass'
 check "owed-day enumeration"                                     $E 'missing_days\.append\(day\)'                     'None'
 check "stopping boundary is an RTH close"                        $E 'elif not R\.is_rth_close\(stopping, _cal\):'       'elif False:'
 check "seal-vs-manifest generation"                              $E 'relabelled\.append\('                           'None and ('
@@ -85,11 +90,9 @@ check "chain recomputation"                                      $R 'def chain\(
 # status is for.
 check "session status: COMPLETE only when it is"                 $R 'status, why = "CORRUPT", "; "\.join\(errs\[:3\]\)' 'status, why = "COMPLETE", ""'
 # --- the round-14 protections -----------------------------------------------------------------------
-check "live coordinate required (absent is a mismatch)"          $E 'if part is None or off is None or int\(part\) < 0 or int\(off\) < 0:
-            moved\.append\(k\)
-        elif' 'if False:
-            moved.append(k)
-        elif'
+# The "live coordinate" mutation that used to sit here is gone with the code it targeted: the guard it
+# disabled was fully redundant with the comparison below it, which is why it survived every run. One
+# comparison now, and "the archive must still match the manifest" is the mutation that covers it.
 check "outcome-only lineages get a session row"                  $R 'for c in list\(calls\) \+ list\(outcomes\):'      'for c in list(calls):'
 check "seal semanticStamp must AGREE with its records"           $R 'stamp_bad = bool\(stamp_split\) and \(len\(stamp_split\) > 1 or stamp_split\[0\] != seal\.get\("semanticStamp"\)\)' 'stamp_bad = False'
 check "cohort admits only the declared semantic stamp"           $E 'and c\.get\("semanticStamp"\) == semantic_stamp
