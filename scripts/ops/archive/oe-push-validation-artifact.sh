@@ -14,8 +14,14 @@ set -uo pipefail
 
 ENV_NAME="${ENV:-prod}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-/mnt/nas/optionsedge}"
-LEDGER_TOPIC="${LEDGER_TOPIC:-context-tape.direction.ledger}"
-ROOT="$ARCHIVE_DIR/kafka/$ENV_NAME/$LEDGER_TOPIC"
+# Declared, never supplied. A caller who can name the topic can point the whole corpus at one they
+# prepared — the same move every other preregistered value already refuses (r14 #1). The declaration is
+# sourced below; this only records that the name is NOT the caller's to give.
+if [ -n "${LEDGER_TOPIC:-}" ]; then
+  echo "FATAL: LEDGER_TOPIC is declared in calibration-targets.env and cannot be supplied by the caller" >&2
+  exit 1
+fi
+# ROOT is set AFTER the declaration is sourced, because the topic comes from it.
 OUT_ROOT="$ARCHIVE_DIR/calibration-runs/$ENV_NAME"
 STAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 TODAY="${REPORT_DATE:-$(TZ=America/New_York date '+%Y-%m-%d')}"
@@ -37,7 +43,7 @@ TARGETS="$SCRIPT_DIR/calibration-targets.env"
 [ -f "$TARGETS" ] || { log "FATAL: no preregistration at $TARGETS — an artifact without one is a number chosen after the fact"; exit 1; }
 [ -f "$SCRIPT_DIR/oe_corpus_reader.py" ] || { log "FATAL: oe_corpus_reader.py missing beside $0"; exit 1; }
 
-for v in OE_CAL_TARGETS_FILE PARAMETER_SET_HASH SEMANTIC_STAMP TRACK_FROM_PUSH STOPPING_BOUNDARY_MS CORPUS_START_DATE T_SESSIONS T_COHORT \
+for v in OE_CAL_TARGETS_FILE LEDGER_TOPIC PARAMETER_SET_HASH SEMANTIC_STAMP TRACK_FROM_PUSH STOPPING_BOUNDARY_MS CORPUS_START_DATE T_SESSIONS T_COHORT \
          T_CLASS T_CELL REQUIRED_CLASSES REQUIRED_CELLS BOOTSTRAP_SEED BOOTSTRAP_B RESULT_LCB_FLOOR \
          HIT_RATE_LCB_FLOOR MEDIAN_MAE_CEIL P90_MAE_CEIL COVERAGE_FLOOR ATTRITION_CEIL THRESHOLDS_STATE; do
   if [ -n "${!v:-}" ]; then
@@ -49,6 +55,8 @@ done
 # shellcheck source=/dev/null
 . "$TARGETS"
 env_pick() { eval "printf '%s' \"\${OE_CAL_${1}_${ENV_NAME}:-}\""; }
+LEDGER_TOPIC="${OE_CAL_TOPIC:?calibration-targets.env declares no OE_CAL_TOPIC}"
+ROOT="$ARCHIVE_DIR/kafka/$ENV_NAME/$LEDGER_TOPIC"
 PARAMETER_SET_HASH="$(env_pick PARAMETER_SET_HASH)"
 TRACK_FROM_PUSH="$(env_pick TRACK_FROM_PUSH)"
 STOPPING_BOUNDARY_MS="$(env_pick STOPPING_BOUNDARY_MS)"
@@ -148,9 +156,13 @@ if manifest is not None:
         part, off = coords.get(k, (None, None))
         # The manifest is CANONICAL JSON, in which every scalar is a string — that is what makes two
         # builders agree byte for byte. So the comparison is on canonical form, not on Python types.
-        if str(logical[k][0]) != str(e["digest"]) \
-                or (off is not None and str(off) != str(e["offset"])) \
-                or (part is not None and str(part) != str(e["partition"])):
+        # "Skip the check when the live value is absent" is how an archive with NO coordinates at all
+        # verified against a manifest that had them: strip every Partition: prefix and the comparison
+        # simply stopped comparing (r14 #2). An absent coordinate is a mismatch, not an exemption.
+        if part is None or off is None or int(part) < 0 or int(off) < 0:
+            moved.append(k)
+        elif str(logical[k][0]) != str(e["digest"]) \
+                or str(off) != str(e["offset"]) or str(part) != str(e["partition"]):
             moved.append(k)
     # ANY record the manifest does not name is extra, at any offset. The old test asked whether it sat
     # below the high-water mark, which made appending above the mark invisible (r8 #1).

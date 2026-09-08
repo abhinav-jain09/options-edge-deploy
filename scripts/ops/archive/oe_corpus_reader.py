@@ -264,6 +264,14 @@ def classify_sessions(read, sidecar, today):
                 continue
             missing_fields += ["%s:%s" % (r.get("kind"), f) for f in required if r.get(f) in (None, "")]
         att_bad = attrition_violations(seal)
+        # Presence was checked; AGREEMENT was not. A seal carrying a different semantic stamp than the
+        # records it seals describes a population built under other literals, and an internally
+        # consistent manifest over it passed everything (r14 #4).
+        stamp_split = sorted({r.get("semanticStamp") for _dg, r, _o in logical.values()
+                              if r.get("sessionDate") == sd and r.get("parameterSetHash") == ph
+                              and r.get("sessionLineageId") == lin and r.get("kind") != "seal"}
+                             - {None})
+        stamp_bad = bool(stamp_split) and (len(stamp_split) > 1 or stamp_split[0] != seal.get("semanticStamp"))
         # A5.2 pins these on the seal itself. A seal missing one describes a population whose cohort,
         # lineage or clock nobody can establish, and the counts below would be counts of an unknown
         # thing (r6 #6).
@@ -283,6 +291,9 @@ def classify_sessions(read, sidecar, today):
             status, why = "CORRUPT", "conflicting records for one key"
         elif att_bad:
             status, why = "CORRUPT", "attrition rows violate A4.12 shape/arithmetic at hour(s) %s" % att_bad
+        elif stamp_bad:
+            status, why = "CORRUPT", ("the seal's semanticStamp does not match its records: seal=%s records=%s"
+                                      % (seal.get("semanticStamp"), stamp_split))
         elif seal_missing:
             status, why = "INCOMPLETE", "the seal is missing pinned field(s): %s" % seal_missing
         elif envelope_missing:
@@ -317,7 +328,11 @@ def classify_sessions(read, sidecar, today):
 
     # A day with records but no seal has not finished. It AGES: unsealed by the following close it is
     # INCOMPLETE, not perpetually "pending" — a status that never changes is a status nobody acts on.
-    for c in calls:
+    # From OUTCOMES as well as calls. Building unsealed sessions only from calls made an outcome-only
+    # lineage invisible: it had no session row, so no status, so nothing to be NOT_EVALUABLE — and the
+    # orphan check on the other side only looked at lineages that already had one (r14 #3). Records that
+    # exist and belong to nothing are the clearest possible defect; they must not be the quietest.
+    for c in list(calls) + list(outcomes):
         k = "%s|%s|%s" % (c.get("sessionDate"), c.get("parameterSetHash"), c.get("sessionLineageId"))
         if k not in sessions:
             sd = c.get("sessionDate")

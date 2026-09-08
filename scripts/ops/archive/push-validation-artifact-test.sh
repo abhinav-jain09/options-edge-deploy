@@ -431,8 +431,12 @@ lines[0] = lines[0].replace("Offset:", "Offset:1", 1)      # same record, anothe
 with gzip.open(f, "wt") as fh:
     fh.write("\n".join(lines) + "\n")
 PYCASE
-OUT="$(evaluate "$PIN")"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "the archive must still BE the corpus the manifest names";; *) bad "a moved record was accepted: $OUT";; esac
+evaluate "$PIN" >/dev/null
+# The reason, not the verdict: this case broke the seal envelope as well as the coordinate, so removing
+# the `moved` protection left it green on a completely different failure (r14 #5).
+why_says "changed coordinate or digest" \
+  "the archive must still BE the corpus the manifest names" \
+  "it rejected, but not because a record moved"
 
 echo "21. the PRNG is java.util.SplittableRandom, not a lookalike"
 HERE="$HERE" python3 -c "
@@ -499,8 +503,12 @@ with gzip.open(f, "wt") as fh:
     fh.write("".join(out))
 PYCASE
 publish
-OUT="$(evaluate)"
-case "$OUT" in *"COMPLETENESS=FAIL"*) ok "presence is not agreement — a foreign clock on a familiar id is caught";; *) bad "a cross-substituted outcome passed: $OUT";; esac
+evaluate >/dev/null
+# Same lesson: rewriting the outcomes also broke the seal chain, so the `mismatched` protection could be
+# removed with this case still green (r14 #5).
+why_says "disagree with their call on a pinned field" \
+  "presence is not agreement — a foreign clock on a familiar id is caught" \
+  "it rejected, but not because the outcome disagreed with its call"
 
 echo "24. the manifest carries the generation, the declared start and the calendar it used"
 build 32 20
@@ -951,6 +959,80 @@ PYCASE
 publish
 OUT="$(evaluate)"
 case "$OUT" in *"COHORT_SIZE=FAIL"*) ok "calls under another semantic stamp do not join this cohort";; *) bad "a foreign semantic stamp was pooled into the cohort: $OUT";; esac
+
+
+echo "46. the ledger topic is declared, not supplied"
+OUT="$(env ENV=prod ARCHIVE_DIR="$WORK" LEDGER_TOPIC=chosen.after.data CORPUS_VERSION=x \
+       bash "$HERE/oe-push-validation-artifact.sh" 2>&1 | tail -1)"
+case "$OUT" in *"cannot be supplied by the caller"*) ok "a corpus cannot be pointed at a topic the caller prepared";; *) bad "LEDGER_TOPIC override accepted: $OUT";; esac
+OUT="$(env ENV=prod ARCHIVE_DIR="$WORK" LEDGER_TOPIC=chosen.after.data \
+       bash "$HERE/oe-calibration-progress.sh" 2>&1 | tail -1)"
+case "$OUT" in *"cannot be supplied by the caller"*) ok "and the reporter refuses it too";; *) bad "the reporter honoured an override: $OUT";; esac
+
+echo "47. a live record with no coordinate is a mismatch, not an exemption"
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, os, sys
+for f in glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")):
+    body = gzip.open(f, "rt").read().replace("Partition:0 ", "")   # offsets kept, partitions gone
+    with gzip.open(f, "wt") as fh:
+        fh.write(body)
+PYCASE
+evaluate "$PIN" >/dev/null
+why_says "changed coordinate or digest" \
+  "an archive that lost its coordinates does not verify against a manifest that has them" \
+  "it rejected, but not because the live coordinates were missing"
+
+echo "48. an outcome-only lineage cannot hide"
+build 32 20
+targets FROZEN "$SB"
+victim="$(ls -d "$ROOT"/dt=* | sed -n '9p')"; vd="$(basename "$victim" | sed 's/dt=//')"
+VD="$vd" ROOT="$ROOT" python3 - <<'PYCASE'
+import gzip, json, os
+root, sd = os.environ["ROOT"], os.environ["VD"]
+lin = "lin-orphan-%s" % sd
+base = {"parameterSetHash": "a1b2c3d4e5f60718", "sessionLineageId": lin, "sessionDate": sd,
+        "phaseAtCall": "VALIDATION", "trackFromPush": "2026-07-01", "delivery": "LIVE",
+        "semanticStamp": "2026-09-08T18:00:00Z", "ts": 0, "runId": "r1"}
+rows = []
+for h in ("H3", "H5", "H15"):
+    o = dict(base, kind="outcome", callId="%s-ghost" % sd, horizon=h, resultState="OBSERVED",
+             resultTicks=9, pathState="OBSERVED", maeTicks=1, mfeTicks=9,
+             cellKey="EXHAUSTED|CALL_WALL|POS_GAMMA|%s" % h)
+    rows.append(("%s|%s|%s|%s" % (base["parameterSetHash"], lin, o["callId"], h), o))
+with gzip.open(os.path.join(root, "dt=%s" % sd, "part-700.jsonl.gz"), "wt") as fh:
+    for i, (k, r) in enumerate(rows):
+        fh.write("Partition:0 Offset:%d %s\t%s\n" % (700000 + i, k, json.dumps(r)))
+PYCASE
+publish
+evaluate >/dev/null
+why_says "corpus defect" \
+  "outcomes belonging to no call and no seal are a session with a status, not silence" \
+  "an outcome-only lineage passed unnoticed"
+
+echo "49. a seal whose semantic stamp differs from its records is CORRUPT"
+build 32 20
+targets FROZEN "$SB"
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, json, os, sys
+f = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")))[11]
+out = []
+for line in gzip.open(f, "rt"):
+    i = line.find("{")
+    rec = json.loads(line[i:])
+    if rec.get("kind") == "seal":
+        rec["semanticStamp"] = "1999-01-01T00:00:00Z"   # sealed under other literals
+    out.append(line[:i] + json.dumps(rec) + "\n")
+with gzip.open(f, "wt") as fh:
+    fh.write("".join(out))
+PYCASE
+publish
+evaluate >/dev/null
+why_says "corpus defect" \
+  "a seal cannot describe a population built under literals it does not name" \
+  "a seal with a foreign semantic stamp was accepted"
 
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi

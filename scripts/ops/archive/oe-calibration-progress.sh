@@ -19,8 +19,14 @@ set -uo pipefail
 
 ENV_NAME="${ENV:-prod}"
 ARCHIVE_DIR="${ARCHIVE_DIR:-/mnt/nas/optionsedge}"
-LEDGER_TOPIC="${LEDGER_TOPIC:-context-tape.direction.ledger}"
-ROOT="$ARCHIVE_DIR/kafka/$ENV_NAME/$LEDGER_TOPIC"
+# Declared, never supplied. A caller who can name the topic can point the whole corpus at one they
+# prepared — the same move every other preregistered value already refuses (r14 #1). The declaration is
+# sourced below; this only records that the name is NOT the caller's to give.
+if [ -n "${LEDGER_TOPIC:-}" ]; then
+  echo "FATAL: LEDGER_TOPIC is declared in calibration-targets.env and cannot be supplied by the caller" >&2
+  exit 1
+fi
+# ROOT is set AFTER the declaration is sourced, because the topic comes from it.
 OUT_ROOT="$ARCHIVE_DIR/calibration-runs/$ENV_NAME"
 STAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 TODAY="${REPORT_DATE:-$(TZ=America/New_York date '+%Y-%m-%d')}"
@@ -31,8 +37,31 @@ log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 # the evaluator each carried their own copy of what "done" means and either could be changed without
 # the other noticing.
 
-[ -d "$ROOT" ] || { log "FATAL: no corpus at $ROOT — the ledger has never been archived for env=$ENV_NAME"; exit 1; }
 command -v python3 >/dev/null || { log "FATAL: python3 missing"; exit 1; }
+
+# THE reader lives in oe_corpus_reader.py, next to this script and shared with the A5.8 evaluator.
+# Two copies of "is this session COMPLETE" would drift, and nothing would notice which one was wrong.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$SCRIPT_DIR/oe_corpus_reader.py" ] || { log "FATAL: oe_corpus_reader.py missing beside $0"; exit 1; }
+
+# A5.7: the targets come from a declaration neither the reporter nor the evaluator can lose, and which
+# is derived neither from oe-topics.env nor from what happens to be in the archive — those are the two
+# things that go quiet together. Without it a dropped ledger topic would report nothing at all instead of
+# reporting a target whose corpus is MISSING.
+# Beside this script, with no way to point it elsewhere — same reasoning as the evaluator (r7 #1): a
+# reporter that can be handed another declaration can be made to report against another cohort.
+TARGETS="$SCRIPT_DIR/calibration-targets.env"
+[ -f "$TARGETS" ] || { log "FATAL: no calibration target declaration at $TARGETS"; exit 1; }
+# shellcheck source=/dev/null
+. "$TARGETS"
+LEDGER_TOPIC="${OE_CAL_TOPIC:?calibration-targets.env declares no OE_CAL_TOPIC}"
+ROOT="$ARCHIVE_DIR/kafka/$ENV_NAME/$LEDGER_TOPIC"
+[ -d "$ROOT" ] || { log "FATAL: no corpus at $ROOT — the ledger has never been archived for env=$ENV_NAME"; exit 1; }
+eval "CORPUS_START_DATE=\"\${OE_CAL_CORPUS_START_DATE_${ENV_NAME}:-}\""
+eval "DECLARED_HASH=\"\${OE_CAL_PARAMETER_SET_HASH_${ENV_NAME}:-}\""
+eval "DECLARED_TRACK_FROM=\"\${OE_CAL_TRACK_FROM_PUSH_${ENV_NAME}:-}\""
+eval "DECLARED_STAMP=\"\${OE_CAL_SEMANTIC_STAMP_${ENV_NAME}:-}\""
+export CORPUS_START_DATE DECLARED_HASH DECLARED_TRACK_FROM DECLARED_STAMP
 
 # A5.6: the manifest is built under a SNAPSHOT LOCK that excludes a concurrent archive run, or a
 # version can straddle a half-written date — the reporter is scheduled at 20:30 and the seal archive
@@ -56,26 +85,6 @@ else
   log "WARNING: no flock on this host — the manifest is being minted WITHOUT the archive snapshot lock"
 fi
 
-# THE reader lives in oe_corpus_reader.py, next to this script and shared with the A5.8 evaluator.
-# Two copies of "is this session COMPLETE" would drift, and nothing would notice which one was wrong.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-[ -f "$SCRIPT_DIR/oe_corpus_reader.py" ] || { log "FATAL: oe_corpus_reader.py missing beside $0"; exit 1; }
-
-# A5.7: the targets come from a declaration neither the reporter nor the evaluator can lose, and which
-# is derived neither from oe-topics.env nor from what happens to be in the archive — those are the two
-# things that go quiet together. Without it a dropped ledger topic would report nothing at all instead of
-# reporting a target whose corpus is MISSING.
-# Beside this script, with no way to point it elsewhere — same reasoning as the evaluator (r7 #1): a
-# reporter that can be handed another declaration can be made to report against another cohort.
-TARGETS="$SCRIPT_DIR/calibration-targets.env"
-[ -f "$TARGETS" ] || { log "FATAL: no calibration target declaration at $TARGETS"; exit 1; }
-# shellcheck source=/dev/null
-. "$TARGETS"
-eval "CORPUS_START_DATE=\"\${OE_CAL_CORPUS_START_DATE_${ENV_NAME}:-}\""
-eval "DECLARED_HASH=\"\${OE_CAL_PARAMETER_SET_HASH_${ENV_NAME}:-}\""
-eval "DECLARED_TRACK_FROM=\"\${OE_CAL_TRACK_FROM_PUSH_${ENV_NAME}:-}\""
-eval "DECLARED_STAMP=\"\${OE_CAL_SEMANTIC_STAMP_${ENV_NAME}:-}\""
-export CORPUS_START_DATE DECLARED_HASH DECLARED_TRACK_FROM DECLARED_STAMP
 T_SESSIONS="${OE_CAL_T_SESSIONS:-30}"; T_COHORT="${OE_CAL_T_COHORT:-200}"
 T_CLASS="${OE_CAL_T_CLASS:-50}";       T_CELL="${OE_CAL_T_CELL:-50}"
 REQUIRED_CLASSES="${OE_CAL_REQUIRED_CLASSES:-}"; REQUIRED_CELLS="${OE_CAL_REQUIRED_CELLS:-}"
