@@ -123,6 +123,12 @@ jobs:
       - name: Validate mirrored es4 topic contracts (mirror jobs vs topics.env)
         run: bash scripts/ci/validate-mirrored-topic-contracts.sh
 
+      # A Groovy pipeline is not shell-checked by anything. Jenkinsfile.es-auction-mirror shipped with
+      # an unterminated brace group (`fi; { : }`) that Groovy and review both accepted and that failed
+      # at RUNTIME on the job's first install, after the preflight had already talked to both brokers.
+      - name: Validate the es-auction mirror's shell blocks parse
+        run: bash scripts/ci/validate-jenkinsfile-shell-blocks.sh
+
       # topics.env is only the DEPLOY-TIME half of "the archive is never compacted". The other half
       # is the boot-time stamp: processing-common KafkaTopics.ensureTopic() runs
       # incrementalAlterConfigs on every service start, so a topic the deploy just set to delete is
