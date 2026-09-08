@@ -22,7 +22,8 @@ run_against() {   # $1 = gateway manifest, $2 = producer manifest -> exit code; 
 
 # A refusal is only a kill if it is THIS refusal. Asserting the exit code alone lets an unrelated
 # failure — a typo in the guard, a missing file, a parse error — count as every mutation being
-# caught, which is the failure mode a mutation suite exists to rule out.
+# caught, which is the failure mode a mutation suite exists to rule out. The assertion is on the
+# guard's STABLE identifier (E_*), not its prose, so rewording a message cannot break this suite.
 expect() {   # $1 = expected code, $2 = expected message substring ("" when passing), $3 = label, $4.. = manifests
     local want="$1" msg="$2" label="$3"; shift 3
     local got; got=$(run_against "$@")
@@ -46,19 +47,19 @@ expect 0 "footprint contingency OK" "the manifests as committed pass" "$GW" "$PR
 echo "mutations"
 # 1. the two ceilings diverge
 sed 's/^\( *\)value: "262144"/\1value: "524288"/' "$PROD" > "$WORK/prod-bigger.yaml"
-expect 1 "the record ceiling differs" "producer ceiling above the gateway's" "$GW" "$WORK/prod-bigger.yaml"
+expect 1 "[E_CEILING_MISMATCH]" "producer ceiling above the gateway's" "$GW" "$WORK/prod-bigger.yaml"
 
 # 2. the producer stops declaring a ceiling at all
 grep -v 'FOOTPRINT_MAX_RECORD_BYTES' "$PROD" | grep -v '^ *value: "262144"' > "$WORK/prod-none.yaml"
-expect 1 "sets no FOOTPRINT_MAX_RECORD_BYTES" "producer declares no ceiling" "$GW" "$WORK/prod-none.yaml"
+expect 1 "[E_ENV_COUNT]" "producer declares no ceiling" "$GW" "$WORK/prod-none.yaml"
 
 # 3. the limit is lowered back to the heap size (the incident this rule exists for)
 sed 's/^\( *\)memory: "2560Mi"/\1memory: "1536Mi"/' "$GW" > "$WORK/gw-tight.yaml"
-expect 1 "G-R8 native headroom is 0 MiB" "limit equal to -Xmx: no native headroom" "$WORK/gw-tight.yaml" "$PROD"
+expect 1 "[E_HEADROOM]" "limit equal to -Xmx: no native headroom" "$WORK/gw-tight.yaml" "$PROD"
 
 # 4. the heap is raised into the headroom instead
 sed 's/-Xms256m -Xmx1536m/-Xms256m -Xmx2176m/' "$GW" > "$WORK/gw-fat-heap.yaml"
-expect 1 "G-R8 native headroom is 384 MiB" "heap raised to leave under 512 MiB" "$WORK/gw-fat-heap.yaml" "$PROD"
+expect 1 "[E_HEADROOM]" "heap raised to leave under 512 MiB" "$WORK/gw-fat-heap.yaml" "$PROD"
 
 # 5. exactly at the boundary is ACCEPTED — the rule is >=, and a guard that refuses its own
 #    boundary would force every future budget to overshoot it
@@ -84,23 +85,54 @@ expect 0 "footprint relay is disabled" "relay disabled hides a ceiling mismatch 
 awk '$1 == "-" && $2 == "name:" { name = $3 }
      $1 == "value:" && name == "GATEWAY_ES_FOOTPRINT_ENABLED" { sub(/false/, "true") }
      { print }' "$WORK/gw-off-broken.yaml" > "$WORK/gw-on-broken.yaml"
-expect 1 "the record ceiling differs" "and refuses the same manifest once the relay is enabled" "$WORK/gw-on-broken.yaml" "$PROD"
+expect 1 "[E_CEILING_MISMATCH]" "and refuses the same manifest once the relay is enabled" "$WORK/gw-on-broken.yaml" "$PROD"
 
 # ---- the enablement flag itself must be a decision, never a parse failure -------------------
 # Each of these would, before the fix, have EXEMPTED the manifest from every check above.
 awk '$1 == "-" && $2 == "name:" && $3 == "GATEWAY_ES_FOOTPRINT_ENABLED" { skip = 2 }
      skip > 0 { skip--; next } { print }' "$GW" > "$WORK/gw-noflag.yaml"
-expect 1 "declares GATEWAY_ES_FOOTPRINT_ENABLED 0 times" "the flag is missing entirely" "$WORK/gw-noflag.yaml" "$PROD"
+expect 1 "[E_ENV_COUNT]" "the flag is missing entirely" "$WORK/gw-noflag.yaml" "$PROD"
 
 awk '$1 == "-" && $2 == "name:" { name = $3 }
      $1 == "value:" && name == "GATEWAY_ES_FOOTPRINT_ENABLED" { sub(/true/, "TRUE") }
      { print }' "$GW" > "$WORK/gw-badflag.yaml"
-expect 1 "it must be exactly true or false" "the flag is not a canonical boolean" "$WORK/gw-badflag.yaml" "$PROD"
+expect 1 "[E_FLAG_VALUE]" "the flag is not a canonical boolean" "$WORK/gw-badflag.yaml" "$PROD"
 
 # false FIRST, then true: Kubernetes takes the last, the old guard read the first and stood down
 awk '$1 == "-" && $2 == "name:" && $3 == "GATEWAY_ES_FOOTPRINT_ENABLED" {
          print "        - name: GATEWAY_ES_FOOTPRINT_ENABLED"; print "          value: \"false\"" }
      { print }' "$GW" > "$WORK/gw-dupflag.yaml"
-expect 1 "declares GATEWAY_ES_FOOTPRINT_ENABLED 2 times" "the flag is declared twice" "$WORK/gw-dupflag.yaml" "$PROD"
+expect 1 "[E_ENV_COUNT]" "the flag is declared twice" "$WORK/gw-dupflag.yaml" "$PROD"
+
+# ---- the guard must read the GATEWAY's container, not whichever block comes first -------------
+# A sidecar declared BEFORE feed-gateway, with its own small limit and its own env, is the case a
+# text scan cannot tell from the real thing: the file still holds every string the old parser
+# looked for, in the same shapes, just belonging to another container.
+awk '
+    $0 ~ /^ *containers: *$/ && !done {
+        print
+        print "      - name: log-shipper"
+        print "        image: 192.168.100.252:5000/log-shipper:prod"
+        print "        env:"
+        print "        - name: GATEWAY_ES_FOOTPRINT_ENABLED"
+        print "          value: \"false\""
+        print "        - name: GATEWAY_ES_FOOTPRINT_MAX_RECORD_BYTES"
+        print "          value: \"1\""
+        print "        - name: JAVA_TOOL_OPTIONS"
+        print "          value: \"-Xms16m -Xmx32m\""
+        print "        resources:"
+        print "          limits:"
+        print "            memory: \"64Mi\""
+        done = 1
+        next
+    }
+    { print }
+' "$GW" > "$WORK/gw-sidecar.yaml"
+grep -q "log-shipper" "$WORK/gw-sidecar.yaml" || { echo "the sidecar fixture was not built" >&2; exit 1; }
+expect 0 "footprint contingency OK: ceiling 262144" "a sidecar before the gateway does not become the subject" "$WORK/gw-sidecar.yaml" "$PROD"
+
+# and past that sidecar the gateway's OWN violation is still caught
+sed 's/-Xms256m -Xmx1536m/-Xms256m -Xmx2176m/' "$WORK/gw-sidecar.yaml" > "$WORK/gw-sidecar-bad.yaml"
+expect 1 "[E_HEADROOM]" "and the gateway own violation is still caught past the sidecar" "$WORK/gw-sidecar-bad.yaml" "$PROD"
 
 echo "every guard refused its own violation, for its own reason"
