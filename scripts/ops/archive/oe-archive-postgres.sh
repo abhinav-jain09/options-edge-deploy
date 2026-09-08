@@ -81,7 +81,24 @@ for table in $TABLES; do
   # it means this job is not running often enough for the table's retention window.
   minid=$(psql_q "select coalesce(min(id),0) from $table")
   if [ "${minid:-0}" -gt "$((from + 1))" ] && [ "$from" -gt 0 ]; then
+    # This is permanent data loss: retention deleted rows this job had not archived. It used to be
+    # LOGGED and then walked past — the surviving suffix was archived, the checkpoint advanced over the
+    # hole, and the run exited 0. So the only record of the loss was one line in a log nobody reads,
+    # and the very next run could no longer even tell there had been a gap (r11 #4).
+    #
+    # Failing here does not recover the rows; nothing can. It stops the job from erasing the evidence,
+    # and makes the exit status say what happened. Set ACCEPT_GAP=true, deliberately, to archive the
+    # suffix and move on once someone has decided the loss is accepted.
     log "  GAP $table: checkpoint id=$from but the table now starts at id=$minid — $((minid-from-1)) rows expired unarchived"
+    if [ "${ACCEPT_GAP:-false}" != "true" ]; then
+      log "  FAILURE $table: refusing to checkpoint past unarchived rows — this job is not running often enough for the table's retention window. Set ACCEPT_GAP=true to accept the loss and continue."
+      failed=$(( failed + 1 ))
+      printf 'gap_detected=%s checkpoint=%s min_id=%s lost=%s observed=%s\n' \
+        "$DAY" "$from" "$minid" "$((minid-from-1))" "$STAMP" >> "$MAN/$table.gaps"
+      continue
+    fi
+    printf 'gap_accepted=%s checkpoint=%s min_id=%s lost=%s observed=%s\n' \
+      "$DAY" "$from" "$minid" "$((minid-from-1))" "$STAMP" >> "$MAN/$table.gaps"
   fi
 
   rows=$(psql_q "select count(*) from $table where id > $from")

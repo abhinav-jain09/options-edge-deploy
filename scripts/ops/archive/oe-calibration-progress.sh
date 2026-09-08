@@ -99,6 +99,9 @@ declared_track = os.environ.get("DECLARED_TRACK_FROM") or ""
 read = R.read_logical(root)
 sidecar = R.read_sidecar(root, read_errors)
 sessions, seals, calls, outcomes = R.classify_sessions(read, sidecar, today)
+# The reader's per-file errors were never merged here, so an unreadable archived file outside an
+# otherwise complete session left corpusComplete true while the evaluator rejected (r11 #3).
+read_errors += read.get("readErrors", [])
 logical, files = read["logical"], read["files"]
 conflicts_by_session = read["conflictsBySession"]
 
@@ -234,13 +237,12 @@ else:
         # reporter could call a corpus complete on the same day the evaluator called it NOT_EVALUABLE.
         # The two must not be able to disagree about COMPLETE — that is the whole reason they share a
         # reader.
-        conflicted = sum(conflicts_by_session.values())
-        # And a read error too: an unreadable sidecar or archive file made the EVALUATOR say
-        # COMPLETENESS=FAIL while this said corpusComplete=true, on the same corpus, in the same
-        # minute (r10 #3). The two share a reader so that they cannot disagree about COMPLETE; the
-        # inputs to that word must be the same on both sides.
+        # ONE predicate, in the shared reader, for both halves (r11 #3). Every round of review found
+        # another input this side had and the other did not — conflicts, then read errors, then a
+        # session that graded nothing — because there were two predicates over one reader.
+        defects = R.corpus_defects(read, sessions, seals, cohort_days=mine | set(owed_here))
         corpus_ok = (bool(owed_here) and all(d in mine for d in owed_here)
-                     and conflicted == 0 and not read_errors)
+                     and not defects and not read_errors)
         reports.append({
             "phase": "VALIDATION", "validationClockStarted": True,
             "parameterSetHash": ph, "trackFromPush": tf,

@@ -111,6 +111,7 @@ logical = read["logical"]
 # rather than recomputing a hash of the live archive (r7 #6). A hash of what happens to be on disk today
 # matches again after a deletion; a manifest names, for every record, the (topic, generation, partition,
 # offset) coordinate it occupied and the high-water mark it covers.
+_cal_for_check = R.load_calendar()
 manifest = R.load_manifest(out_root, pinned_version)
 manifest_entries = {} if manifest is None else {e["key"]: e for e in manifest.get("entries", [])}
 if manifest is None:
@@ -156,9 +157,32 @@ if manifest is not None:
 # A manifest whose entries carry no generation is not a coordinate and therefore not a pin: offsets
 # restart after a recreation, so without it the manifest cannot say WHICH log it enumerated (r10 #2).
 ungenerated = 0 if manifest is None else sum(1 for e in manifest.get("entries", []) if not e.get("generation"))
+
+# And the generation the manifest claims must be the one the RECORDS claim. Carrying generations
+# forward only for keys a previous manifest named meant every other archived key took the current root
+# generation, so a recreation relabelled historical records and the evaluator, which only checked that
+# the field was non-empty, accepted it (r11 #1). The seal carries its own generation; compare them.
+relabelled = []
+if manifest is not None:
+    for _dg, rec, _o in logical.values():
+        if rec.get("kind") != "seal" or not rec.get("generation"):
+            continue
+        e = manifest_entries.get(R.physical_key(rec))
+        if e and e.get("generation") and str(e["generation"]) != str(R.canonical_topic_id(rec["generation"])):
+            relabelled.append("%s: seal says %s, manifest says %s"
+                              % (rec.get("sessionDate"), rec["generation"], e["generation"]))
+
+# The calendar that produced the owed-day list is an INPUT to the verdict, so the manifest records it —
+# and recording it does nothing unless it is CHECKED. A calendar edited after publication changed every
+# owed-day judgement while the old pin still verified (r11 #2).
+calendar_drift = None
+if manifest is not None and manifest.get("calendar") is not None:
+    now_cal = R.calendar_identity(_cal_for_check)
+    if now_cal != manifest.get("calendar"):
+        calendar_drift = "the calendar has changed since this version was published"
 version_ok = (manifest is not None and bool(published_on)
               and not missing_from_archive and not moved and not extra
-              and not ungenerated)
+              and not ungenerated and not relabelled and calendar_drift is None)
 
 # A CONFLICT anywhere in the corpus is a defect of the corpus, and the evaluator never looked at one:
 # it relied on the session walk, which sees a conflict only for a session that has a seal and whose
@@ -461,6 +485,11 @@ if mismatched:
                % (len(mismatched), "; ".join(mismatched[:3])))
 if unmanifested:
     why.append("%d archived record(s) are not named by the pinned manifest" % unmanifested)
+if relabelled:
+    why.append("%d seal(s) name a different generation than the manifest: %s"
+               % (len(relabelled), relabelled[0]))
+if calendar_drift:
+    why.append(calendar_drift)
 if ungenerated:
     why.append("%d manifest entr(ies) carry no generation — the coordinate does not say which log they are in"
                % ungenerated)
@@ -538,6 +567,8 @@ artifact = {
                "outcomesAtPrimary": len(prim), "observedAtPrimary": len(obs)},
     "corpusVersionPublishedOn": published_on,
     "manifestHighWaterMark": None if manifest is None else manifest.get("highWaterMark"),
+    "manifestCalendar": None if manifest is None else manifest.get("calendar"),
+    "sealsRelabelled": relabelled[:10],
     "manifestRecordCount": None if manifest is None else manifest.get("recordCount"),
     "archiveVsManifest": {"missing": missing_from_archive[:10], "moved": moved[:10], "extra": extra[:10]},
     "corpusStartDate": corpus_start, "owedDaysMissing": missing_days,

@@ -490,6 +490,43 @@ def load_manifest(out_root, version):
     return json.loads(body)
 
 
+def corpus_defects(read, sessions, seals, cohort_days=None):
+    """THE list of reasons a corpus is not complete — computed ONCE, for both callers.
+
+    The reporter and the evaluator each grew their own version of this predicate, and every round of
+    review found another input one had and the other did not: conflicts, then read errors, then a
+    session that graded nothing. They share a reader precisely so they cannot disagree about the word
+    COMPLETE, and two parallel predicates over one reader is the same defect wearing a disguise.
+
+    `cohort_days` narrows the judgement to one cohort's sessions when the caller has one; None means
+    every session the reader saw.
+    """
+    out = []
+    conflicts = sum(read.get("conflictsBySession", {}).values())
+    if conflicts:
+        out.append("%d conflicting record(s) in the corpus" % conflicts)
+    errs = read.get("readErrors", [])
+    if errs:
+        out.append("%d read error(s): %s" % (len(errs), errs[0]))
+    for key, v in sorted(sessions.items()):
+        if cohort_days is not None and v.get("sessionDate") not in cohort_days:
+            continue
+        if v["archiveStatus"] != "COMPLETE":
+            out.append("%s is %s" % (key, v["archiveStatus"]))
+            continue
+        # A session that graded nothing has no usable refusal rate, which makes it NOT_EVALUABLE to
+        # the evaluator. It must not read COMPLETE to the reporter on the same corpus in the same
+        # minute (r11 #3).
+        seal = seals.get((v.get("sessionDate"), v.get("parameterSetHash")))
+        if seal is None:
+            out.append("%s has no seal" % key)
+        elif attrition_violations(seal):
+            out.append("%s has attrition rows that violate A4.12" % key)
+        elif session_refusal_rate(seal) is None:
+            out.append("%s graded nothing — its refusal rate is undefined, not zero" % key)
+    return out
+
+
 def corpus_version(logical):
     """Kept for callers that only want a content address of what they just read. It is NOT the A5.6 pin
     — build_manifest/publish_manifest are."""

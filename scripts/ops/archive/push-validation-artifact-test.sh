@@ -635,11 +635,92 @@ VOUT="$(env ARCHIVE_DIR="$WORK/varchive" ENV=prod FORCE=true VERIFY_CHECKSUMS=no
 case "$VOUT" in *"no manifest line names"*) ok "crash residue between rename and manifest append is visible";; *) bad "an unnamed data file was ignored";; esac
 
 echo "32. every script the crontab invokes is in the repo and in UNIT"
-if bash "$SRC/../../ci/validate-archive-unit-completeness.sh" >/dev/null 2>&1; then
+# The deploy job mounts ONLY scripts/ops/archive into its container, so ../../ci resolves outside the
+# mount and this case would have failed there while passing locally — a suite that is green on the
+# developer's machine and red in the job that gates the deploy (r11 #5). It runs where it can, says so
+# where it cannot, and the deploy job runs the validator as its own step regardless.
+GUARD="$SRC/../../ci/validate-archive-unit-completeness.sh"
+if [ ! -f "$GUARD" ]; then
+  ok "unit-completeness guard not reachable from here (the deploy job runs it as its own step)"
+elif bash "$GUARD" >/dev/null 2>&1; then
   ok "no unit member is missing or unmanaged"
 else
-  bad "the archive unit is incomplete: $(bash "$SRC/../../ci/validate-archive-unit-completeness.sh" 2>&1 | head -2)"
+  bad "the archive unit is incomplete: $(bash "$GUARD" 2>&1 | head -2)"
 fi
+
+
+echo "33. a seal that names one generation cannot be relabelled with another"
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+# Relabel the manifest as a topic recreation would — a valid but DIFFERENT uuid — and publish it under
+# its own name, exactly as a fresh run would. The archived seals still name the original.
+NEWPIN="$(HERE="$HERE" WORKDIR="$WORK" PIN="$PIN" python3 -c "
+import json, os, sys
+sys.path.insert(0, os.environ['HERE'])
+import oe_corpus_reader as R
+out_root = os.path.join(os.environ['WORKDIR'], 'calibration-runs', 'prod')
+m = json.load(open(os.path.join(out_root, 'corpus', os.environ['PIN'], 'manifest.json')))
+for e in m['entries']:
+    e['generation'] = '99999999-8888-7777-6666-555555555555'
+v, path, minted = R.publish_manifest(out_root, m)
+# and make it a version a progress run published, so the ONLY thing wrong is the relabelling
+p = sorted(__import__('glob').glob(out_root + '/*/*/progress/dt=*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(p)); d['corpusVersion'] = v; json.dump(d, open(p, 'w'))
+print(v)")"
+OUT="$(evaluate "$NEWPIN")"
+case "$OUT" in *"COMPLETENESS=FAIL"*) : ;; *) bad "historical records were relabelled and accepted: $OUT";; esac
+# and for the RIGHT reason: a REJECT can be had by breaking almost anything, so name the cause
+WORKDIR="$WORK" python3 -c "
+import json, glob, os, sys
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/artifacts/*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(f))
+note = [c for c in d['clauseResults'] if c['clause'] == 'COMPLETENESS'][0]['note']
+sys.exit(0 if 'different generation' in note and d.get('sealsRelabelled') else 1)"   && ok "a relabelled generation is caught by the seals themselves"   || bad "it rejected, but not because of the relabelling"
+
+echo "34. a calendar edited after publication invalidates the pin"
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+CALTMP="$WORK/cal"; mkdir -p "$CALTMP"
+cp "$CAL_DIR/market_calendar.py" "$CALTMP/market_calendar.py"
+printf '\n# a change after publication\n' >> "$CALTMP/market_calendar.py"
+OUT="$(env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CALTMP" \
+       CORPUS_VERSION="$PIN" bash "$HERE/oe-push-validation-artifact.sh" 2>&1 | head -1)"
+case "$OUT" in *"COMPLETENESS=FAIL"*) ok "recording the calendar means nothing unless it is checked";; *) bad "a corpus was re-judged under a changed calendar: $OUT";; esac
+
+echo "35. reporter and evaluator cannot disagree about COMPLETE"
+build 32 20
+targets FROZEN "$SB"
+# a session that graded NOTHING: COMPLETE to a naive reader, NOT_EVALUABLE to the evaluator
+build 32 20 ungraded_day
+publish
+R_READY="$(WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/progress/dt=*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(f))
+print(d['cohorts'][0].get('corpusComplete'))")"
+OUT="$(evaluate)"
+case "$OUT" in
+  *"COMPLETENESS=FAIL"*)
+    [ "$R_READY" = "False" ] \
+      && ok "both halves say incomplete on the same corpus in the same minute" \
+      || bad "the evaluator rejected while the reporter reported corpusComplete=$R_READY" ;;
+  *) bad "the evaluator did not reject an ungraded session: $OUT" ;;
+esac
+
+echo "36. the Postgres archiver refuses to checkpoint past rows retention already deleted"
+grep -q 'ACCEPT_GAP' "$SRC/oe-archive-postgres.sh" \
+  && grep -q 'refusing to checkpoint past unarchived rows' "$SRC/oe-archive-postgres.sh" \
+  && ok "a GAP is a failure with a recorded sidecar, not a log line it walks past" \
+  || bad "the postgres archiver still advances over a gap"
+
+echo "37. the retention job fails loudly when its DELETE fails"
+grep -q 'ON_ERROR_STOP=1' "$SRC/ibkr-raw-retention.sh" \
+  && grep -q 'retention DELETE failed' "$SRC/ibkr-raw-retention.sh" \
+  && ! grep -q "PGPASSWORD='" "$SRC/ibkr-raw-retention.sh" \
+  && ok "the DELETE is checked and the credential is read at run time, not stored" \
+  || bad "the retention job still reports success unconditionally or carries a credential"
 
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi

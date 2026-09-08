@@ -21,9 +21,23 @@ UNIT_LINE="$(grep -m1 '^    UNIT ' "$JF")"
 # 1. everything the crontab invokes by path
 wanted="$(grep -oE '/home/abhinav/oe-ops/[A-Za-z0-9._-]+\.sh' "$DIR/oe-archive.crontab" | sed 's|.*/||' | sort -u)"
 # 2. everything the unit's own scripts source
-sourced="$(grep -hoE '\$(OE_DIR|SCRIPT_DIR|HERE)?[/"]*[A-Za-z0-9._-]+\.(sh|py)' "$DIR"/*.sh 2>/dev/null \
-           | sed 's|.*/||' | grep -E '^(oe-|calibration|market_)' | sort -u)"
+# The filter used to accept ^oe- and not ^oe_, so oe_corpus_reader.py — the one file BOTH halves import
+# — was silently excluded, and the guard passed with it missing from UNIT. A guard that quietly drops the
+# thing it is guarding is worse than none. .env files are named too: oe-topics.env and
+# calibration-targets.env are read by the unit and must be installed with it.
+sourced="$(grep -hoE '[A-Za-z0-9._-]+\.(sh|py|env)' "$DIR"/*.sh 2>/dev/null \
+           | sed 's|.*/||' | grep -E '^(oe[-_]|calibration|market_|push-validation|test-archive)' | sort -u)"
+# DELIBERATE exclusions, each with the reason it is one. A list like this is only honest if every entry
+# has to earn its place — an unexplained name here is how a real gap gets waved through.
+#
+#   oe-ops.env                    host-only, holds credentials; must never be in the repo
+#   calibration-progress-watch.sh runs on the DEV MAC by design (A5.7: a different host and a different
+#                                 schedule from the reporter), so it is deliberately not installed on
+#                                 .252 — a watchdog sharing its subject's host shares its failures
+EXEMPT="oe-ops.env calibration-progress-watch.sh"
+
 for f in $wanted $sourced; do
+  case " $EXEMPT " in *" $f "*) continue ;; esac
   if [ ! -f "$DIR/$f" ] && [ ! -f "scripts/jenkins/$f" ]; then
     echo "MISSING FROM THE REPO: $f — the crontab or a unit script names it and nothing tracks it" >&2
     fails=$((fails+1))
