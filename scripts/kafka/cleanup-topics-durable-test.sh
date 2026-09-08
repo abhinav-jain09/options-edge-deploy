@@ -167,6 +167,24 @@ assert_status 0 "cleanup itself succeeded"
 # code-only redeploy could leave a pure-compact retention=-1 topic absent with nothing to restore
 # it. A topic that survives a flag combination today must still survive it after a fix whose whole
 # purpose is to stop deleting it.
+# A RESET-PRESERVED topic can be UNDECLARED: a service that creates its own outputs at startup never
+# appears in OPTIONS_EDGE_TOPICS, so the unwanted sweep saw "not approved" and deleted data that by
+# declaration cannot be rebuilt. Preservation is a claim about the DATA; it has to hold on every
+# destructive path, not only the ones that iterate the approved list. The A5 calibration ledger is
+# exactly that shape, and this asserts on EVERY reset-preserved topic rather than a hand-picked one,
+# so the guard cannot rot as the list grows.
+echo "--- delete-unwanted: an UNDECLARED but RESET-PRESERVED topic must survive ---"
+# shellcheck source=/dev/null
+. "$HERE/reset-preserved-topics.sh"
+UNDECLARED_DURABLE="$(printf '%s\n' $RESET_PRESERVED_TOPICS | sort -u | tr '\n' ' ')"
+L="$(LIST_TOPICS="$UNDECLARED_DURABLE $JUNK" DELETE_UNWANTED=true ALLOW_PROD=true \
+     run_cleanup retention production)"
+for t in $UNDECLARED_DURABLE; do
+  assert_delete "reset-preserved '$t' NOT swept as unwanted" "$L" "$t" absent
+done
+assert_delete "and an ordinary undeclared topic IS still swept" "$L" "$JUNK" present
+assert_status 0 "cleanup itself succeeded"
+
 echo "--- prod-only topics are declared, but NOT swept by the destructive modes ---"
 L="$(ALLOW_PROD=true run_cleanup delete-recreate production)"
 for t in $PROD_ONLY; do

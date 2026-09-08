@@ -431,6 +431,14 @@ while read -r t; do
       KEEP_DURABLE=$((KEEP_DURABLE+1))
       log "PRESERVE: $t (indicator warmup — 1h/4h accrue across sessions, unrebuildable)"
       ;;
+    # A5: the Candle Direction calibration LEDGER. Its whole purpose is to accrue across sessions until the
+    # 17:10 archive carries it to the NAS, and the clean is MANUAL — it can run before that archive. A purge here
+    # is not a rebuildable loss: the day's calls and outcomes never reach the corpus, and the seal that would have
+    # said so is destroyed with them. Same criterion as the scorer and indicator changelogs above.
+    context-tape.direction.ledger)
+      KEEP_DURABLE=$((KEEP_DURABLE+1))
+      log "PRESERVE: $t (A5 calibration ledger — accrues until the NAS archive, unrebuildable)"
+      ;;
     *-changelog|*-repartition) STATE_TOPICS="$STATE_TOPICS $t" ;;
     *)                         PURGE_TOPICS="$PURGE_TOPICS $t" ;;
   esac

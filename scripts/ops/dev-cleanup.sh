@@ -490,7 +490,16 @@ for p in json.load(sys.stdin)["items"]:
     echo "4) keeping topics (WIPE_KAFKA=false)"
   else
     echo "4) deleting all non-system topics ..."
+    # RESET-PRESERVED topics survive here too. They hold data that by declaration cannot be rebuilt —
+    # the A5 calibration ledger accrues until the archive carries it to the NAS, and a wipe before that
+    # loses the day with no way to notice. dev and prod must agree on what "preserved" means, or the
+    # two environments stop being comparable, which is the whole reason the evidence is split by env.
+    # shellcheck source=/dev/null
+    . "$DEPLOY_REPO/scripts/kafka/reset-preserved-topics.sh" 2>/dev/null || RESET_PRESERVED_TOPICS=""
+    PRESERVE_RE="$(printf '%s\n' $RESET_PRESERVED_TOPICS | sed 's/[.[\*^$()+?{|]/\\&/g' | paste -sd'|' -)"
+    [ -n "$PRESERVE_RE" ] && echo "   preserving (reset-preserved): $RESET_PRESERVED_TOPICS"
     $KT --bootstrap-server $BS --list 2>/dev/null | grep -vE '^__|^_schemas' \
+      | { [ -n "$PRESERVE_RE" ] && grep -vxE "$PRESERVE_RE" || cat; } \
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
     sleep 8   # let the deletions settle before recreating (avoid create-vs-delete races)
     echo "4d) recreating platform topics (clean + recreate) ..."

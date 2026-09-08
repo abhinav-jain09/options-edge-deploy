@@ -49,7 +49,10 @@ pipeline {
     PROD_HOST   = "${params.PROD_HOST}"
     INSTALL_DIR = "${params.INSTALL_DIR}"
     STAGE_DIR   = "/home/abhinav/oe-ops-staging/build-${BUILD_NUMBER}"
-    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor"
+    // A5: the calibration reporter ships with the archiver it reads. A crontab entry for a script the
+    // deploy does not install is a job that fails every night with "command not found" — and a nightly
+    // failure nobody installed is indistinguishable from a nightly failure nobody noticed.
+    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -83,6 +86,11 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          # market_calendar.py lives ONCE in git, under scripts/jenkins, because the close-chain jobs
+          # own it. The archive unit needs the same file — a second committed copy is how two calendars
+          # end up disagreeing about a holiday — so it is staged next to the archive scripts here, for
+          # the container mount below and for the scp that follows.
+          cp scripts/jenkins/market_calendar.py scripts/ops/archive/market_calendar.py
           # In a container, NOT on the production host: rule.md forbids executing test steps there,
           # and the suite needs flock, which this Mac agent does not provide. The suite is
           # self-contained — a Kafka CLI shim and throwaway directories — so it reaches no broker,
@@ -102,6 +110,24 @@ pipeline {
           ran=$(grep -c "^PASS" "$WORKSPACE/.suite.out")
           echo "suite reported $ran passing assertions"
           [ "$ran" -ge 50 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+
+          # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
+          # Installing an evaluator whose acceptance predicate is untested would ship the one thing
+          # this amendment exists to prevent: a certificate nobody checked.
+          docker run --rm --entrypoint bash \
+            -v "$WORKSPACE/scripts/ops/archive:/w:ro" -w /w "$TEST_IMAGE" \
+            -c './push-validation-artifact-test.sh' | tee "$WORKSPACE/.evaluator.out"
+          grep -Fq "PASS — the A5.8 evaluator holds on every case" "$WORKSPACE/.evaluator.out" \
+            || { echo "the evaluator suite did not report PASS — refusing" >&2; exit 1; }
+          ev=$(grep -c "^  ok   " "$WORKSPACE/.evaluator.out")
+          echo "evaluator suite reported $ev passing assertions"
+          [ "$ev" -ge 77 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
+
+          # Runs on the AGENT, not in the container: it reads the crontab, the unit scripts and this
+          # very file, which the container's scripts/ops/archive mount cannot see. Every script the
+          # crontab invokes, and every helper those scripts source, must be in the repo AND in UNIT —
+          # the check that would have caught oe-archive-verify.sh and oe-trading-day.sh a month ago.
+          bash scripts/ci/validate-archive-unit-completeness.sh
         '''
       }
     }
@@ -259,7 +285,17 @@ done
 for f in $UNIT; do
   mv -f "$INSTALL_DIR/.incoming.$f" "$INSTALL_DIR/$f"
 done
-chmod +x "$INSTALL_DIR/oe-archive-kafka.sh" "$INSTALL_DIR/test-archive-reset.sh"
+# Every unit member cron or a human invokes BY PATH needs the bit. oe-calibration-progress.sh was in
+# the unit and not in this list, which is a "Permission denied" every weeknight at 20:30 that nothing
+# else would have caught — the crontab readback proves what cron will RUN, not that it can run it.
+# oe_corpus_reader.py is deliberately absent: it is imported, never executed.
+chmod +x "$INSTALL_DIR/oe-archive-kafka.sh" "$INSTALL_DIR/test-archive-reset.sh" \
+         "$INSTALL_DIR/oe-calibration-progress.sh" "$INSTALL_DIR/oe-push-validation-artifact.sh" \
+         "$INSTALL_DIR/push-validation-artifact-test.sh" "$INSTALL_DIR/oe-archive-verify.sh" \
+         "$INSTALL_DIR/oe-archive-daily.sh" "$INSTALL_DIR/oe-archive-dev.sh" \
+         "$INSTALL_DIR/ibkr-raw-retention.sh" \
+         "$INSTALL_DIR/oe-archive-postgres.sh"
+# oe-trading-day.sh is SOURCED, not executed — same reasoning as oe_corpus_reader.py and oe-alert.sh.
 
 # Load the repo-managed crontab and prove the kernel of the deployment: what cron will actually
 # run is byte-for-byte what this commit says. Still inside the transaction — any failure here

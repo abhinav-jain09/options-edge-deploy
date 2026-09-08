@@ -24,3 +24,4 @@ scripts/jenkins/.helper-venv/
 
 # local git worktrees live inside the checkout; never commit them as gitlinks
 .dwt-*
+scripts/ops/archive/market_calendar.py

@@ -55,3 +55,40 @@ CRON_TZ=America/New_York
 # margin, move THIS entry later — do not shorten the consumer timeout, because an early timeout is
 # indistinguishable from a clean read and would checkpoint over a short read silently.
 0 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify.cron.log 2>&1
+
+# --- A5: the calibration corpus ------------------------------------------------------------------
+# SECOND archive pass, 20:45 ET. The 17:10 run can legitimately precede the session seal: a call
+# drained late (the ES stream lagged) finalises its horizons after the close, and the seal waits for
+# every one of them. Re-reading the archive cannot discover a seal that is still sitting in Kafka —
+# only another archive pass can. Without this the corpus would carry sessions that are permanently
+# PENDING_SEAL, which the reader must treat as incomplete.
+45 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge ARCHIVE_JOB=seal ON_LOCK_BUSY=fail TOPICS=context-tape.direction.ledger JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-seal.cron.log 2>&1
+
+# Calibration progress, 21:00 ET — AFTER the second archive pass, so it reads a corpus that can
+# actually contain today's seal. It answers one question and writes it where a human can read it:
+# how far is calibration, and did today land at all. A silent reporter and an empty corpus look the
+# same from the outside, so a separate watchdog on a different host asserts this ran.
+# BOOTSTRAP is set because the record is DELIVERED as well as written: A5.7 publishes the same record to
+# context-tape.direction.progress, which is the panel's only way to see it. With BOOTSTRAP unset the run
+# would write the NAS copy and say so, and a reader could mistake that silence for a successful publish.
+30,40,50 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge BOOTSTRAP=localhost:9092 /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
+0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge BOOTSTRAP=localhost:9092 /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
+# DEV, at 21:05 — after the 2-hourly dev archive has had its 20:05 run. calibration-targets.env
+# declares a dev cohort and the gateway relays a dev progress record; without this entry both were
+# describing something nobody ever produced (r12 #4). No BOOTSTRAP: the dev broker is not on this host,
+# so the record is written to the NAS only, and the run says so rather than implying it published.
+5 21 * * 1-5 ENV=dev ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress-dev.cron.log 2>&1
+#
+# The WATCHDOG is deliberately NOT here. It must run on a different host and a different schedule
+# than the reporter, or it shares the reporter's failure: a box that is down reports nothing and
+# also fails to notice that nothing was reported. It is installed on the dev Mac (launchd,
+# 07:00 ET) as calibration-progress-watch.sh, checking the PREVIOUS trading day.
+#
+# The A5.8 EVALUATOR is deliberately not here either, and for a different reason than the watchdog.
+# oe-push-validation-artifact.sh is OFFLINE by design: it evaluates ONE pinned corpusVersion against a
+# PREREGISTERED stopping boundary. A nightly run would produce a new artifact every evening over a
+# growing corpus, and the first evening whose numbers happened to clear the floors would be the one
+# anybody quoted — which is choosing the stopping point after seeing the data, the exact thing the
+# preregistration exists to forbid. It is run by hand, once, when the boundary is reached:
+#   PARAMETER_SET_HASH=... TRACK_FROM_PUSH=... STOPPING_BOUNDARY_MS=... CORPUS_VERSION=... \
+#   ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-push-validation-artifact.sh
