@@ -308,9 +308,14 @@ except Exception:
 # satisfy an owed day, so the population hole moved rather than closed (r7 #2). And the window starts at
 # the DECLARED corpusStartDate — max(corpusStart, trackFrom) let a declared start before the archive's
 # first day quietly shrink to the archive.
+# The SEMANTIC STAMP as well. Filtering the cohort by it while leaving the owed-day satisfaction on
+# hash+trackFromPush moved the hole rather than closing it — a complete session sealed under other
+# literals filled a day this cohort owed, and everything else passed (r16 #1). A session belongs to this
+# cohort or it belongs to nothing.
 have_days = {v["sessionDate"] for v in sessions.values()
              if v["archiveStatus"] == "COMPLETE" and v.get("parameterSetHash") == phash
-             and v.get("trackFromPush") == track_from}
+             and v.get("trackFromPush") == track_from
+             and v.get("semanticStamp") == semantic_stamp}
 missing_days = []
 if boundary_date and _cal is not None:
     window_start = str(corpus_start)[:10]

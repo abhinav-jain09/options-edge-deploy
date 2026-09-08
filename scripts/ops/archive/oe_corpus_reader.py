@@ -324,6 +324,8 @@ def classify_sessions(read, sidecar, today):
             "sessionDate": sd, "sessionLineageId": lin, "parameterSetHash": ph,
             "archiveStatus": status, "reason": why, "calls": got_calls, "outcomes": got_out,
             "phase": "CALIBRATION", "trackFromPush": seal.get("trackFromPush"),
+            # carried so a caller can scope an owed day by the FULL cohort identity, not two thirds of it
+            "semanticStamp": seal.get("semanticStamp"),
             "attritionRows": len(seal.get("attrition", []) or [])}
 
     # A day with records but no seal has not finished. It AGES: unsealed by the following close it is
@@ -343,7 +345,8 @@ def classify_sessions(read, sidecar, today):
                            "reason": "records archived, no seal by the following close" if aged
                                      else "records archived, seal not yet written",
                            "calls": 0, "outcomes": 0, "phase": "CALIBRATION",
-                           "trackFromPush": None, "attritionRows": 0}
+                           "trackFromPush": c.get("trackFromPush"),
+                           "semanticStamp": c.get("semanticStamp"), "attritionRows": 0}
     return sessions, seals, calls, outcomes
 
 

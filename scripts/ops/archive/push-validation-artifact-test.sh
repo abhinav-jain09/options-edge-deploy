@@ -1034,6 +1034,31 @@ why_says "corpus defect" \
   "a seal cannot describe a population built under literals it does not name" \
   "a seal with a foreign semantic stamp was accepted"
 
+
+echo "50. an owed day is satisfied only by a session of THIS cohort's semantic stamp"
+build 32 20
+targets FROZEN "$SB"; publish
+# one session moved coherently to another stamp: its own calls, outcomes and seal all agree, so every
+# per-session check passes — the only thing wrong is that it is not this cohort's session
+victim="$(ls -d "$ROOT"/dt=* | sed -n '6p')"
+python3 - "$victim" <<'PYCASE'
+import gzip, glob, json, os, sys
+for f in glob.glob(os.path.join(sys.argv[1], "*.jsonl.gz")):
+    out = []
+    for line in gzip.open(f, "rt"):
+        i = line.find("{")
+        rec = json.loads(line[i:])
+        rec["semanticStamp"] = "2099-12-31T00:00:00Z"
+        out.append(line[:i] + json.dumps(rec) + "\n")
+    with gzip.open(f, "wt") as fh:
+        fh.write("".join(out))
+PYCASE
+publish
+evaluate >/dev/null
+why_says "owed trading day" \
+  "a session sealed under other literals does not fill a day this cohort owes" \
+  "it rejected, but not because the owed day was unfilled"
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
 echo "FAIL — $fails assertion(s)"; exit 1

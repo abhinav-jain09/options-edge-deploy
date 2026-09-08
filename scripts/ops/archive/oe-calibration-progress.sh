@@ -177,10 +177,14 @@ corpus_start = declared
 # foreign hash used to satisfy an owed day here too, so a cohort holding one real session reported
 # corpusComplete (r8 #4). A session belongs to a cohort or it belongs to nothing.
 def cohort_days(ph, tf):
+    # The SEMANTIC STAMP as well (r16 #1): a session sealed under other literals is not this cohort's,
+    # and letting it satisfy an owed day is the same hole the cohort filter already closes.
+    stamp = os.environ.get("DECLARED_STAMP") or ""
     return {v["sessionDate"] for v in sessions.values()
             if v["archiveStatus"] == "COMPLETE"
             and (ph in (None, "", "UNFROZEN") or v.get("parameterSetHash") == ph)
-            and (tf in (None, "", "UNFROZEN") or v.get("trackFromPush") == tf)}
+            and (tf in (None, "", "UNFROZEN") or v.get("trackFromPush") == tf)
+            and (not stamp or v.get("semanticStamp") == stamp)}
 
 have_days = cohort_days(declared_hash, declared_track)
 for day in R.owed(corpus_start, today, _cal):
