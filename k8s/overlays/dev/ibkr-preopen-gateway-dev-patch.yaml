@@ -1,13 +1,9 @@
-# 2026-09-08 STOPGAP — pre-open GEX arbitration (slice 2) drops EVERY pre-open record.
-# The producer writes sessionId "IBKR_PREOPEN:20260908" (BASIC_ISO_DATE); the gateway's
-# validator demands "IBKR_PREOPEN:2026-09-08" (ISO_LOCAL_DATE), so every record fails closed:
-# measured 2026-09-08 06:45 ET, dropped_sessioned dev 23,744 / prod 54,576, candidates 0.
-# Turning the flag off short-circuits interceptSharedGexRecord and restores the pre-slice-2
-# path (values reach the board; the status plane and the 09:35 sweep are the cost).
-# RE-ENABLE once the gateway accepts the producer's real session-id format.
-# DEV-ONLY: surface the pre-open window state to the browser (rev13 Phase 3 slice 1).
-# The gateway relays options.ibkr.gex.status as the standalone "ibkr-preopen-status" event;
-# base keeps it false so prod stays dark until dev proves the window.
+# 2026-09-08: the board needs BOTH halves. GATEWAY_IBKR_PREOPEN_ENABLED=true keeps the
+# slice-1 STATUS plane (path/FRESH/GATED) flowing; the value plane stands down so pre-open
+# numbers ride the ordinary gex-by-strike delivery the UI actually renders. Slice 2 publishes
+# them as "ibkr-preopen-gex", which no web client consumes (zero hits in options-edge-web
+# main), so with the value plane ON the browser reads every row as numberless.
+# Turn ARBITRATION back on once the web grows that consumer (gateway #169).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,4 +15,5 @@ spec:
       containers:
         - name: feed-gateway
           env:
-            - { name: GATEWAY_IBKR_PREOPEN_ENABLED, value: "false" }
+            - { name: GATEWAY_IBKR_PREOPEN_ENABLED, value: "true" }
+            - { name: GATEWAY_IBKR_PREOPEN_GEX_ARBITRATION_ENABLED, value: "false" }
