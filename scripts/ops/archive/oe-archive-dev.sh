@@ -54,8 +54,34 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" | tee -a "$LOG"; }
 # shellcheck source=/dev/null
 . "$OE_DIR/oe-alert.sh"
 
+# The staleness guard's own sources, needed by the contention branch below as well — ONE definition, so
+# the two cannot disagree about when the last run succeeded.
+RUNS="$NAS_DIR/kafka/dev/_manifest/runs.log"
+BOOTSTRAP_MARK="$NAS_DIR/kafka/dev/_manifest/.first_seen"
+STALE_H="${STALE_H:-8}"
+
 exec 9>"$LOCK"
-flock -n 9 || { log "another dev-archive run holds $LOCK — exiting"; exit 0; }
+if ! flock -n 9; then
+  # Contention used to exit 0 immediately, BEFORE the staleness check below — so a hung archiver could
+  # hold this lock through the whole 24h retention window while every later cron run reported success
+  # and nothing ever noticed the evidence expiring (r12 #6). A busy lock is only benign if the last
+  # run actually succeeded recently; that is exactly what the staleness check knows, so it runs first.
+  # Contention used to exit 0 immediately, BEFORE the staleness guard below — so a hung archiver could
+  # hold this lock through the whole 24h retention window while every later cron run reported success
+  # and nothing noticed the evidence expiring (r12 #6). A busy lock is only benign if a run actually
+  # SUCCEEDED recently, and the runs log is what knows that; it is the same source the guard uses.
+  log "another dev-archive run holds $LOCK"
+  _ok=$(awk '/failed=0/{ts=$1} END{if(ts!="") print ts}' "$RUNS" 2>/dev/null)
+  _ok_epoch=$(date -u -d "$(printf '%s' "${_ok:-}" | sed 's/T/ /; s/Z//')" +%s 2>/dev/null)
+  case "${_ok_epoch:-}" in (*[!0-9]*|"") _ok_epoch=0 ;; esac
+  _age_h=$(( ( $(date -u +%s) - _ok_epoch ) / 3600 ))
+  if [ "$_ok_epoch" -eq 0 ] || [ "$_age_h" -ge "${STALE_H:-8}" ]; then
+    alert "dev archive: the lock has been held while NO run has succeeded for ${_age_h}h — a run is wedged and dev evidence expires at 24h"
+    exit 1
+  fi
+  log "  last success was ${_age_h}h ago — the holder will cover this range, exiting clean"
+  exit 0
+fi
 
 # Fail loud, never silently local: dev evidence staged on this box is evidence that is still one
 # disk failure from gone, and a fallback that looks like success is how months of nothing happen.
@@ -85,8 +111,8 @@ env ARCHIVE_DIR="$NAS_DIR" ENV=dev BOOTSTRAP="$DEV_BOOTSTRAP" TOPICS="$TOPICS" \
 # the retention boundary in silence if absence were treated as "fine". Absent runs.log, absent
 # success line, and unparseable timestamps all alert. (Codex, 2026-08-08: the earlier version
 # failed open on exactly these three.)
-RUNS="$NAS_DIR/kafka/dev/_manifest/runs.log"
-BOOTSTRAP_MARK="$NAS_DIR/kafka/dev/_manifest/.first_seen"
+# (RUNS/BOOTSTRAP_MARK are defined above the lock: the contention branch reads the same runs log the
+# staleness guard does, so the two cannot drift about what "recently succeeded" means.)
 [ -f "$BOOTSTRAP_MARK" ] || date -u +%s > "$BOOTSTRAP_MARK" 2>/dev/null
 
 stale_reason=""
@@ -109,7 +135,7 @@ else
         stale_reason="last-success timestamp '$last_ok_line' is in the FUTURE — clock skew, treating as stale"
       else
         age_h=$(( (now - last_ok_epoch) / 3600 ))
-        [ "$age_h" -ge 8 ] && stale_reason="last SUCCESSFUL dev archive was ${age_h}h ago"
+        [ "$age_h" -ge "$STALE_H" ] && stale_reason="last SUCCESSFUL dev archive was ${age_h}h ago"
       fi
       ;;
   esac

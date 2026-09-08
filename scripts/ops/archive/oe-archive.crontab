@@ -73,6 +73,11 @@ CRON_TZ=America/New_York
 # would write the NAS copy and say so, and a reader could mistake that silence for a successful publish.
 30,40,50 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge BOOTSTRAP=localhost:9092 /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
 0 21 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge BOOTSTRAP=localhost:9092 /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress.cron.log 2>&1
+# DEV, at 21:05 — after the 2-hourly dev archive has had its 20:05 run. calibration-targets.env
+# declares a dev cohort and the gateway relays a dev progress record; without this entry both were
+# describing something nobody ever produced (r12 #4). No BOOTSTRAP: the dev broker is not on this host,
+# so the record is written to the NAS only, and the run says so rather than implying it published.
+5 21 * * 1-5 ENV=dev ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-calibration-progress.sh >> /home/abhinav/oe-ops/calibration-progress-dev.cron.log 2>&1
 #
 # The WATCHDOG is deliberately NOT here. It must run on a different host and a different schedule
 # than the reporter, or it shares the reporter's failure: a box that is down reports nothing and

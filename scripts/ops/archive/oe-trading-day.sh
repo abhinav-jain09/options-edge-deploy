@@ -9,6 +9,14 @@
 # a holiday costs an empty run; skipping a real session costs a session. Note this is the opposite
 # of the verifier's own failure direction, which alerts when unsure — both err toward "do not lose
 # evidence silently".
+# The calendar INSTALLED BESIDE THIS SCRIPT first. Jenkins deploys market_calendar.py with the archive
+# unit, and the reporter hashes that copy into the corpus manifest — so defaulting to another directory
+# let the archiver and verifier decide trading days from a DIFFERENT calendar than the one the pin
+# records (r12 #10). One unit, one calendar; the old path stays as a fallback for hosts that predate it.
+_here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+if [ -z "${CALENDAR_DIR:-}" ] && [ -f "$_here/market_calendar.py" ]; then
+  CALENDAR_DIR="$_here"
+fi
 CALENDAR_DIR="${CALENDAR_DIR:-/home/abhinav/autostart/jenkins}"
 
 # is_trading_day [YYYY-MM-DD]  -> prints "yes" | "no"

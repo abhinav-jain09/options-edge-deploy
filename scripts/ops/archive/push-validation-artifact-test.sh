@@ -134,7 +134,10 @@ while made < n_sessions:
     lines.append((offset, pkey(seal), json.dumps(seal))); offset += 1
     with gzip.open(os.path.join(root, "dt=%s" % sd, "part-000.jsonl.gz"), "wt") as fh:
         for off, k, payload in lines:
-            fh.write("Offset:%d %s\t%s\n" % (off, k, payload))
+            # the archiver's consumer runs with print.partition=true AND print.offset=true, so a real
+            # archive line carries both; a fixture without Partition: was letting a manifest of -1s
+            # verify against a corpus with no coordinates (r12 #3)
+            fh.write("Partition:0 Offset:%d %s\t%s\n" % (off, k, payload))
     d0 += datetime.timedelta(days=1)
 PY
 }
@@ -190,6 +193,22 @@ published_version() {
 import json, glob, os
 f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/progress/dt=*.json'), key=os.path.getmtime)
 print(json.load(open(f[-1]))['corpusVersion'] if f else 'NONE')"
+}
+
+# A REJECT can be had by breaking almost anything, so a case that wants a SPECIFIC protection must read
+# the reason out of the artifact. Case 33 was found passing for the wrong reason; this is that check,
+# made reusable so the next case does not have to re-invent it.
+why_says() {   # why_says <substring> <ok message> <fail message>
+  if WORKDIR="$WORK" NEEDLE="$1" python3 -c "
+import json, glob, os, sys
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/artifacts/*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(f))
+note = [c for c in d['clauseResults'] if c['clause'] == 'COMPLETENESS'][0]['note']
+sys.exit(0 if os.environ['NEEDLE'] in note else 1)"; then
+    ok "$2"
+  else
+    bad "$3"
+  fi
 }
 
 evaluate() {   # evaluate [corpusVersion override]
@@ -377,7 +396,7 @@ seal = {"kind": "seal", "sessionDate": sd, "parameterSetHash": other, "sessionLi
 key = "%s|%s|%s" % (sd, other, lin)
 os.makedirs(os.path.join(root, "dt=%s" % sd), exist_ok=True)
 with gzip.open(os.path.join(root, "dt=%s" % sd, "part-000.jsonl.gz"), "wt") as fh:
-    fh.write("Offset:999999 %s\t%s\n" % (key, json.dumps(seal)))
+    fh.write("Partition:0 Offset:999999 %s\t%s\n" % (key, json.dumps(seal)))
 PYCASE
 publish
 OUT="$(evaluate)"
@@ -454,7 +473,7 @@ for h in ("H3", "H5", "H15"):
     rows.append(("%s|%s|%s|%s" % (base["parameterSetHash"], lin, cid, h), o))
 with gzip.open(os.path.join(d, "part-900.jsonl.gz"), "wt") as fh:
     for i, (k, r) in enumerate(rows):
-        fh.write("Offset:%d %s\t%s\n" % (900000 + i, k, json.dumps(r)))
+        fh.write("Partition:0 Offset:%d %s\t%s\n" % (900000 + i, k, json.dumps(r)))
 PYCASE
 OUT="$(evaluate "$PIN")"
 case "$OUT" in *"COMPLETENESS=FAIL"*) ok "a record above the high-water mark is still not in the pinned corpus";; *) bad "records appended above the mark joined the cohort: $OUT";; esac
@@ -709,18 +728,164 @@ case "$OUT" in
   *) bad "the evaluator did not reject an ungraded session: $OUT" ;;
 esac
 
+# These two used to grep the scripts for the strings their protections contain, which is not a test of
+# anything: dead code greps the same as live code. The gate proved it by inserting `exit 0` above the
+# protections and leaving the searched text in place — both cases still passed. They RUN the scripts
+# now, against a stub psql, and read the exit status and the side effects.
 echo "36. the Postgres archiver refuses to checkpoint past rows retention already deleted"
-grep -q 'ACCEPT_GAP' "$SRC/oe-archive-postgres.sh" \
-  && grep -q 'refusing to checkpoint past unarchived rows' "$SRC/oe-archive-postgres.sh" \
-  && ok "a GAP is a failure with a recorded sidecar, not a log line it walks past" \
-  || bad "the postgres archiver still advances over a gap"
+PGSTUB="$WORK/pgstub"; mkdir -p "$PGSTUB"
+cat > "$PGSTUB/psql" <<'STUB'
+#!/usr/bin/env bash
+# a Postgres whose retention has already deleted everything below id=200 while our checkpoint says 100
+q="${@: -1}"
+case "$q" in
+  *"max(id)"*)   echo 400 ;;
+  *"min(id)"*)   echo 200 ;;
+  *"count(*)"*)  echo 201 ;;
+  *)             echo "" ;;
+esac
+STUB
+chmod +x "$PGSTUB/psql"
+cat > "$PGSTUB/kubectl" <<'STUB'
+#!/usr/bin/env bash
+printf 'cGFzcw=='            # base64 "pass" — the archiver only needs a non-empty secret
+STUB
+chmod +x "$PGSTUB/kubectl"
+PGROOT="$WORK/pgarchive"; mkdir -p "$PGROOT/postgres/prod/_manifest"
+printf 'last_id=100 rows=1 dt=2026-09-08 archived=x
+' > "$PGROOT/postgres/prod/_manifest/signal_fired.state"
+gapout="$(PATH="$PGSTUB:$PATH" env ARCHIVE_DIR="$PGROOT" ENV=prod TABLES=signal_fired           ALLOW_NON_NAS=true bash "$SRC/oe-archive-postgres.sh" 2>&1)"; grc=$?
+gapfile="$PGROOT/postgres/prod/_manifest/signal_fired.gaps"
+after="$(awk '{split($1,a,"="); if (a[1]=="last_id") print a[2]}' "$PGROOT/postgres/prod/_manifest/signal_fired.state" | tail -1)"
+[ "$grc" -ne 0 ] && ok "a GAP makes the run FAIL (rc=$grc), not log-and-continue" || bad "the run exited 0 over a gap: $gapout"
+[ -s "$gapfile" ] && ok "the loss is recorded in a sidecar: $(head -1 "$gapfile")" || bad "no .gaps sidecar was written"
+[ "$after" = "100" ] && ok "the checkpoint did NOT advance past the hole" || bad "the checkpoint moved to $after"
 
 echo "37. the retention job fails loudly when its DELETE fails"
-grep -q 'ON_ERROR_STOP=1' "$SRC/ibkr-raw-retention.sh" \
-  && grep -q 'retention DELETE failed' "$SRC/ibkr-raw-retention.sh" \
-  && ! grep -q "PGPASSWORD='" "$SRC/ibkr-raw-retention.sh" \
-  && ok "the DELETE is checked and the credential is read at run time, not stored" \
-  || bad "the retention job still reports success unconditionally or carries a credential"
+RSTUB="$WORK/rstub"; mkdir -p "$RSTUB"
+cat > "$RSTUB/kubectl" <<'STUB'
+#!/usr/bin/env bash
+printf 'cGFzcw=='
+STUB
+cat > "$RSTUB/psql" <<'STUB'
+#!/usr/bin/env bash
+echo "ERROR:  relation "databento_option_raw_snapshot" does not exist" >&2
+exit 1
+STUB
+chmod +x "$RSTUB/psql" "$RSTUB/kubectl"
+rlog="$WORK/retention.log"
+PATH="$RSTUB:$PATH" env LOG="$rlog" bash "$SRC/ibkr-raw-retention.sh" >/dev/null 2>&1; rrc=$?
+[ "$rrc" -ne 0 ] && ok "a failing DELETE exits nonzero (rc=$rrc) instead of echoing success" || bad "the retention job reported success on a failed DELETE"
+grep -q "retention DELETE failed" "$rlog" && ok "and the log says so" || bad "the log does not name the failure: $(tail -2 "$rlog")"
+# the same run must not have written a credential anywhere
+! grep -rqi "pgpassword=" "$rlog" && ok "no credential reached the log" || bad "a credential was logged"
+
+
+echo "38. the evaluator uses the SAME completeness predicate as the reporter"
+build 32 20
+targets FROZEN "$SB"
+# a foreign lineage, incomplete, on an owed target date — the reporter saw this, the evaluator did not
+victim="$(ls -d "$ROOT"/dt=* | sed -n '7p')"; vd="$(basename "$victim" | sed 's/dt=//')"
+VD="$vd" ROOT="$ROOT" python3 - <<'PYCASE'
+import gzip, json, os
+root, sd = os.environ["ROOT"], os.environ["VD"]
+lin = "lin-foreign-%s" % sd
+rec = {"kind": "call", "callId": "%s-foreign" % sd, "parameterSetHash": "a1b2c3d4e5f60718",
+       "sessionLineageId": lin, "sessionDate": sd, "phaseAtCall": "VALIDATION",
+       "trackFromPush": "2026-07-01", "delivery": "LIVE", "semanticStamp": "2026-09-08T18:00:00Z",
+       "predictedSign": 1, "enteredState": "EXHAUSTED", "regime": "POS_GAMMA",
+       "node": {"roles": ["CALL_WALL"]}, "refT": 0, "ts": 0, "runId": "r1"}
+k = "%s|%s|%s" % (rec["parameterSetHash"], lin, rec["callId"])
+with gzip.open(os.path.join(root, "dt=%s" % sd, "part-800.jsonl.gz"), "wt") as fh:
+    fh.write("Partition:0 Offset:800000 %s\t%s\n" % (k, json.dumps(rec)))
+PYCASE
+publish
+R_OK="$(WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/progress/dt=*.json'), key=os.path.getmtime)[-1]
+print(json.load(open(f))['cohorts'][0].get('corpusComplete'))")"
+OUT="$(evaluate)"
+case "$OUT" in
+  *"COMPLETENESS=FAIL"*) [ "$R_OK" = "False" ] && ok "both halves reject the same corpus" || bad "evaluator rejected, reporter said corpusComplete=$R_OK" ;;
+  *) bad "the evaluator accepted what the reporter called incomplete: $OUT" ;;
+esac
+
+echo "39. a pin is bound to the corpusStartDate it was published under"
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+sed -i'' -e 's/^OE_CAL_CORPUS_START_DATE_prod=.*/OE_CAL_CORPUS_START_DATE_prod=2026-07-06/' "$HERE/calibration-targets.env"
+evaluate "$PIN" >/dev/null
+why_says "published under corpusStartDate" \
+  "the window cannot be re-cut after publication" \
+  "it rejected, but not because the start date moved"
+
+echo "40. an entry with no real (partition, offset) is not a coordinate"
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+WORKDIR="$WORK" PIN="$PIN" HERE="$HERE" python3 -c "
+import json, os, sys
+sys.path.insert(0, os.environ['HERE'])
+import oe_corpus_reader as R
+root = os.path.join(os.environ['WORKDIR'], 'calibration-runs', 'prod')
+m = json.load(open(os.path.join(root, 'corpus', os.environ['PIN'], 'manifest.json')))
+for e in m['entries']:
+    e['partition'] = '-1'
+v, p, minted = R.publish_manifest(root, m)
+import glob
+f = sorted(glob.glob(root + '/*/*/progress/dt=*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(f)); d['corpusVersion'] = v; json.dump(d, open(f, 'w'))
+print(v)" > "$WORK/nopart.txt"
+evaluate "$(cat "$WORK/nopart.txt")" >/dev/null
+why_says "no real (partition, offset)" \
+  "-1 is not a partition" \
+  "it rejected, but not because the coordinates were missing"
+
+echo "41. the dev ledger is in the set the dev archive actually passes"
+grep -q 'DEALER_LEDGER_EVIDENCE=.*context-tape\.direction\.ledger' "$SRC/oe-topics.env" \
+  && grep -q 'TOPICS="\$DEALER_LEDGER_EVIDENCE"' "$SRC/oe-archive-daily.sh" \
+  && grep -q 'ENV=dev.*oe-calibration-progress.sh' "$SRC/oe-archive.crontab" \
+  && ok "dev archives the ledger and has a progress run behind its declaration" \
+  || bad "the dev corpus is still never captured or never reported"
+
+echo "42. the progress record carries hashChangedOn and attrition"
+build 32 20
+targets FROZEN "$SB"; publish
+WORKDIR="$WORK" python3 -c "
+import json, glob, os, sys
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/progress/dt=*.json'), key=os.path.getmtime)[-1]
+d = json.load(open(f))
+att = d.get('attrition') or {}
+one = next(iter(att.values()), {})
+sys.exit(0 if d.get('hashChangedOn') and att and 'refusalRate' in one and 'byEtHour' in one else 1)" \
+  && ok "a cohort that fills while the instrument refuses most ticks is visible" \
+  || bad "the report omits hashChangedOn or attrition"
+
+echo "43. a quiet VALIDATION cohort is not reported as CALIBRATION"
+build 32 20
+targets FROZEN "$SB"
+# frozen clock, complete sessions, but no qualifying calls: phase must follow the DECLARATION
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, json, os, sys
+for f in glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")):
+    out = []
+    for line in gzip.open(f, "rt"):
+        i = line.find("{")
+        rec = json.loads(line[i:])
+        if rec.get("kind") in ("call", "outcome"):
+            rec["phaseAtCall"] = "CALIBRATION"      # nothing qualifies for the VALIDATION cohort
+        out.append(line[:i] + json.dumps(rec) + "\n")
+    with gzip.open(f, "wt") as fh:
+        fh.write("".join(out))
+PYCASE
+publish
+PH_OUT="$(WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/progress/dt=*.json'), key=os.path.getmtime)[-1]
+c = json.load(open(f))['cohorts'][0]
+print('%s %s' % (c.get('phase'), c.get('validationClockStarted')))")"
+case "$PH_OUT" in "VALIDATION True") ok "an empty validation cohort says so instead of hiding as CALIBRATION";; *) bad "phase inferred from the data, not the clock: $PH_OUT";; esac
 
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi

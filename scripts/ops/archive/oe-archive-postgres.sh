@@ -102,7 +102,15 @@ for table in $TABLES; do
   fi
 
   rows=$(psql_q "select count(*) from $table where id > $from")
-  if [ "${rows:-0}" -eq 0 ]; then log "  $table: nothing new"; continue; fi
+  # psql_q swallows stderr and returns an EMPTY string when the query fails, and "${rows:-0}" then made
+  # that indistinguishable from a genuine zero — so a broken connection archived nothing, logged
+  # "nothing new", and exited 0 with the checkpoint sitting behind rows that were really there (r12 #5).
+  # Absent and zero are different facts.
+  if [ -z "$rows" ]; then
+    log "  WARN $table: the row count query returned nothing — treating as a FAILED read, not an empty table"
+    failed=$(( failed + 1 )); continue
+  fi
+  if [ "$rows" -eq 0 ]; then log "  $table: nothing new"; continue; fi
 
   outdir="$ROOT/$table/dt=$DAY"; mkdir -p "$outdir"
   out="$outdir/$table.$from-$to.dt${DAY//-/}.$STAMP.csv.gz"

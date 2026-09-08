@@ -157,6 +157,12 @@ if manifest is not None:
 # A manifest whose entries carry no generation is not a coordinate and therefore not a pin: offsets
 # restart after a recreation, so without it the manifest cannot say WHICH log it enumerated (r10 #2).
 ungenerated = 0 if manifest is None else sum(1 for e in manifest.get("entries", []) if not e.get("generation"))
+# A5.5/A5.6 want a real (generation, partition, offset). The reader wrote -1 when the archive line
+# carried no Partition:/Offset:, and the comparison then SKIPPED the check because the live value was
+# also absent — so a corpus with no coordinates at all verified against a manifest of -1s (r12 #3).
+uncoordinated = 0 if manifest is None else sum(
+    1 for e in manifest.get("entries", [])
+    if str(e.get("partition")) == "-1" or str(e.get("offset")) == "-1")
 
 # And the generation the manifest claims must be the one the RECORDS claim. Carrying generations
 # forward only for keys a previous manifest named meant every other archived key took the current root
@@ -175,6 +181,15 @@ if manifest is not None:
 # The calendar that produced the owed-day list is an INPUT to the verdict, so the manifest records it —
 # and recording it does nothing unless it is CHECKED. A calendar edited after publication changed every
 # owed-day judgement while the old pin still verified (r11 #2).
+# The window start is an INPUT to every owed-day judgement, exactly as the calendar is. A manifest
+# published under one start and evaluated under another silently re-cuts the window: a pin declaring
+# 2026-07-01 with July absent still accepted once the current target said July 6 (r12 #2).
+start_drift = None
+if manifest is not None and manifest.get("corpusStartDate") is not None \
+        and str(manifest.get("corpusStartDate")) != str(corpus_start):
+    start_drift = ("this version was published under corpusStartDate %s and is being evaluated under %s"
+                   % (manifest.get("corpusStartDate"), corpus_start))
+
 calendar_drift = None
 if manifest is not None and manifest.get("calendar") is not None:
     now_cal = R.calendar_identity(_cal_for_check)
@@ -182,7 +197,8 @@ if manifest is not None and manifest.get("calendar") is not None:
         calendar_drift = "the calendar has changed since this version was published"
 version_ok = (manifest is not None and bool(published_on)
               and not missing_from_archive and not moved and not extra
-              and not ungenerated and not relabelled and calendar_drift is None)
+              and not ungenerated and not relabelled and calendar_drift is None
+              and start_drift is None and not uncoordinated)
 
 # A CONFLICT anywhere in the corpus is a defect of the corpus, and the evaluator never looked at one:
 # it relied on the session walk, which sees a conflict only for a session that has a seal and whose
@@ -452,9 +468,17 @@ clause("COHORT_SIZE", "PASS" if size_ok else "FAIL", size_ok, len(cohort),
        % (len(cohort_sessions), t_sessions, len(cohort), t_cohort, min_class, t_class,
           min_cell, t_cell, len(REQUIRED_CELLS)))
 
+# THE shared predicate — the same call the reporter makes, over the same reader (r12 #1). Adding
+# corpus_defects() to the reporter and leaving this expression standing beside it recreated the very
+# split it was written to close: a foreign incomplete lineage on an owed date made the reporter say
+# corpusComplete=False while this said ACCEPT.
+shared_defects = R.corpus_defects(read, sessions, seals,
+                                  cohort_days={v["sessionDate"] for k, v in sessions.items()
+                                               if k in window_sessions} | set(missing_days))
 complete_ok = (version_ok and not not_evaluable and not attrition_unusable
                and not missing_horizon and not orphans and bool(cohort) and not read_errors
-               and not mismatched and not unmanifested and not conflicts_total)
+               and not mismatched and not unmanifested and not conflicts_total
+               and not shared_defects)
 why = []
 if manifest is None:
     why.append("no published manifest for corpusVersion %s" % pinned_version[:12])
@@ -490,12 +514,18 @@ if relabelled:
                % (len(relabelled), relabelled[0]))
 if calendar_drift:
     why.append(calendar_drift)
+if start_drift:
+    why.append(start_drift)
+if uncoordinated:
+    why.append("%d manifest entr(ies) have no real (partition, offset) coordinate" % uncoordinated)
 if ungenerated:
     why.append("%d manifest entr(ies) carry no generation — the coordinate does not say which log they are in"
                % ungenerated)
 if conflicts_total:
     why.append("%d conflicting record(s) in the corpus (sessions: %s)"
                % (conflicts_total, ", ".join(str(k) for k in sorted(conflicts_by_session)[:4])))
+if shared_defects:
+    why.append("%d corpus defect(s): %s" % (len(shared_defects), "; ".join(shared_defects[:3])))
 if read_errors:
     # An unreadable discontinuity sidecar or progress record used to sit quietly beside an ACCEPT
     # (r6 #6). Something the reader could not read is not something the evaluator may pass over.

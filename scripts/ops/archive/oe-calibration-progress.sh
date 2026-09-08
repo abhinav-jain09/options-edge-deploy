@@ -209,12 +209,26 @@ def latest_decision(ph, tf):
             best, decision = at, a.get("decision", "NOT_RUN")
     return decision
 
+# A5.7: WHICH CLOCK IS RUNNING is read from the preregistration, not inferred from whether calls
+# happened to arrive. Inferring it meant a frozen TRACK_FROM_PUSH with 32 complete but QUIET sessions
+# reported phase=CALIBRATION and validationClockStarted=false — hiding a validation cohort that is not
+# filling, which is exactly the thing this report exists to say out loud (r12 #7).
+clock_started = False
+if declared_track and declared_track != "UNFROZEN":
+    try:
+        clock_started = str(declared_track)[:10] <= today
+    except Exception:
+        clock_started = False
+
 reports = []
 if not by_cohort:
     reports.append({
-        "phase": "CALIBRATION",
-        "validationClockStarted": False,
-        "note": "the validation clock has NOT started: TRACK_FROM_PUSH is in the future, so no call counts toward the cohort. Calls are being collected so the literals can be chosen.",
+        "phase": "VALIDATION" if clock_started else "CALIBRATION",
+        "validationClockStarted": clock_started,
+        "parameterSetHash": declared_hash or None, "trackFromPush": declared_track or None,
+        "note": ("the validation clock HAS started (TRACK_FROM_PUSH=%s) and this cohort has NO qualifying "
+                 "calls — it is not filling" % declared_track) if clock_started else
+                "the validation clock has NOT started: TRACK_FROM_PUSH is in the future, so no call counts toward the cohort. Calls are being collected so the literals can be chosen.",
         "callsCollected": calib_calls,
         "sessionsComplete": len(complete),
         "thresholdsMet": False, "corpusComplete": False, "readyForEvaluation": False,
@@ -256,8 +270,31 @@ else:
             "evaluationDecision": latest_decision(ph, tf),
         })
 
+# A5.7 requires both, and their ABSENCE is what would make the counts a lie: hashChangedOn because a
+# semantic change restarts the cohort and the report must say so on the day it happens, and attrition
+# because a cohort that fills while the instrument refuses most ticks is not the cohort anyone thinks
+# it is (r12 #8).
+hash_changed_on = {}
+for c in calls:
+    ph_, sd_ = c.get("parameterSetHash"), c.get("sessionDate")
+    if ph_ and sd_ and (ph_ not in hash_changed_on or sd_ < hash_changed_on[ph_]):
+        hash_changed_on[ph_] = sd_
+
+attrition_report = {}
+for (sd_, ph_), seal in sorted(seals.items()):
+    rows = seal.get("attrition") or []
+    rate = R.session_refusal_rate(seal)
+    attrition_report["%s|%s" % (sd_, ph_)] = {
+        "refusalRate": None if rate is None else round(rate, 6),
+        "gradedTotal": sum(r.get("graded", 0) for r in rows if isinstance(r.get("graded"), (int, float))),
+        "byEtHour": {str(r.get("etHour")): {k: v for k, v in r.items()
+                                            if k not in ("sessionDate", "etHour")} for r in rows},
+        "shapeValid": not R.attrition_violations(seal),
+    }
+
 report = {
     "generatedAt": stamp, "env": env, "reportDate": today,
+    "hashChangedOn": hash_changed_on, "attrition": attrition_report,
     "archiveStatusToday": today_status,
     "archivedToday": today_status == "COMPLETE",
     "conflicts": sum(conflicts_by_session.values()), "filesRead": files, "readErrors": read_errors[:20],
@@ -286,7 +323,12 @@ for r in reports:
 
 # one human line, which is the part anyone actually reads
 r = reports[0]
-if not r["validationClockStarted"]:
+if r["validationClockStarted"] and "sessions" not in r:
+    # the clock is running and NOTHING qualifies — the case the phase fix exists to surface, and the
+    # one the counts-based line cannot print because there are no counts
+    print("VALIDATION %s — the clock has started (TRACK_FROM_PUSH=%s) and this cohort has NO qualifying "
+          "calls. today=%s" % ((r.get("parameterSetHash") or "?")[:12], r.get("trackFromPush"), today_status))
+elif not r["validationClockStarted"]:
     print("CALIBRATION — validation clock NOT started. %d calls over %d complete sessions. today=%s"
           % (r["callsCollected"], r["sessionsComplete"], today_status))
 else:
