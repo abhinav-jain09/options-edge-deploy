@@ -104,5 +104,6 @@ check "a session that graded nothing is NOT a zero rate"         $R 'if graded =
         return None'            'if False:
         return None'
 check "the reader recomputes the digest from the payload"        $R 'dig = hashlib\.sha256\(canonical\(body\)\.encode\("utf-8"\)\)\.hexdigest\(\)' 'dig = rec.get("semanticDigest") or hashlib.sha256(canonical(body).encode("utf-8")).hexdigest()'
+check "COVERAGE is computed, not assumed"                        $E 'coverage = \(float\(len\(obs\)\) / float\(len\(prim\)\)\) if prim else None' 'coverage = 1.0 if prim else None'
 check "lowest-offset collapse for replays"                       $R 'elif off is not None and \(prev\[2\] is None or off < prev\[2\]\):' 'elif False:'
 echo done

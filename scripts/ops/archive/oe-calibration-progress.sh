@@ -197,8 +197,13 @@ for day in R.owed(corpus_start, today, _cal):
 
 complete = [s for s in sessions.values() if s["archiveStatus"] == "COMPLETE"]
 calib_calls = sum(s["calls"] for s in complete)
+# The WORST of today's rows, not whichever one iteration happened to yield first (r18 #1). A date with
+# one COMPLETE lineage and one CORRUPT one is not a date that landed.
+_ORDER = ["MISSING", "CORRUPT", "INCOMPLETE", "DISCONTINUITY", "PENDING_SEAL", "COMPLETE"]
 today_rows = [v for v in sessions.values() if v["sessionDate"] == today]
-today_status = today_rows[0]["archiveStatus"] if today_rows else "NOT_EXPECTED"
+today_status = ("NOT_EXPECTED" if not today_rows else
+                sorted((r.get("archiveStatus", "MISSING") for r in today_rows),
+                       key=lambda x: _ORDER.index(x) if x in _ORDER else -1)[0])
 
 # The cohort reported on is the DECLARED one. Reporting whatever cohorts happen to be in the archive
 # means a new parameter set publishes the old one's numbers, and the day the hash changes is exactly

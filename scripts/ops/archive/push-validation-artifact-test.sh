@@ -1095,39 +1095,63 @@ grep -q 'CALENDAR_DIR="${CALENDAR_DIR:-/home' "$SRC/oe-archive-daily.sh" \
   || ok "no archive script overrides the unit's calendar with a hardcoded path"
 
 
-echo "52. an equal replay does not move a record's coordinate"
+echo "52. the collapse keeps the LOWEST coordinate, whichever record was seen first"
 build 3 20
 targets FROZEN "$SB"
-# Both versions are recomputed the SAME way — the published manifest carries the declared start and the
-# calendar, so comparing it against a bare recompute would compare two different things and prove
-# nothing. A5.4 collapses an equal replay and keeps the LOWEST coordinate, so the version must not move.
-BEFORE="$(HERE="$HERE" ROOT="$ROOT" python3 -c "
+manifest_version_now() {
+  HERE="$HERE" ROOT="$ROOT" python3 -c "
 import os, sys
 sys.path.insert(0, os.environ['HERE'])
 import oe_corpus_reader as R
 r = R.read_logical(os.environ['ROOT'])
-print(R.manifest_version(R.build_manifest(r, 'context-tape.direction.ledger', 'prod')))")"
+print(R.manifest_version(R.build_manifest(r, 'context-tape.direction.ledger', 'prod')))"
+}
+offset_of() {   # offset_of <physical key>
+  HERE="$HERE" ROOT="$ROOT" KEY="$1" python3 -c "
+import os, sys
+sys.path.insert(0, os.environ['HERE'])
+import oe_corpus_reader as R
+r = R.read_logical(os.environ['ROOT'])
+m = R.build_manifest(r, 'context-tape.direction.ledger', 'prod')
+print([e['offset'] for e in m['entries'] if e['key'] == os.environ['KEY']][0])"
+}
+BEFORE="$(manifest_version_now)"
+
+# (a) a replay ABOVE the original changes nothing: the lowest is still the original
 python3 - "$ROOT" <<'PYCASE'
 import gzip, glob, os, re, sys
 d = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*")))[0]
 f = os.path.join(d, "part-000.jsonl.gz")
-first = gzip.open(f, "rt").read().splitlines()[0] + "\n"
-# The replay goes in a LATER-SORTED file at a LOWER offset. A replay further down the same file is not
-# a test of the collapse at all: whichever record is seen first is also the lowest, so keeping "the
-# first seen" and keeping "the lowest" are indistinguishable — which is exactly why the mutation
-# survived the first version of this case.
-with gzip.open(os.path.join(d, "part-zzz.jsonl.gz"), "wt") as fh:
-    fh.write(re.sub(r"Offset:(\d+)", lambda m: "Offset:%d" % max(0, int(m.group(1)) - 1), first))
+lines = gzip.open(f, "rt").read().splitlines()
+mid = lines[len(lines) // 2] + "\n"
+with gzip.open(os.path.join(d, "part-mmm.jsonl.gz"), "wt") as fh:
+    fh.write(re.sub(r"Offset:(\d+)", lambda m: "Offset:%d" % (int(m.group(1)) + 900000), mid))
 PYCASE
-AFTER="$(HERE="$HERE" ROOT="$ROOT" python3 -c "
-import os, sys
-sys.path.insert(0, os.environ['HERE'])
-import oe_corpus_reader as R
-r = R.read_logical(os.environ['ROOT'])
-print(R.manifest_version(R.build_manifest(r, 'context-tape.direction.ledger', 'prod')))")"
-[ "$BEFORE" = "$AFTER" ] \
-  && ok "a harmless replay leaves the corpus version alone" \
-  || bad "an equal replay changed the version — the collapse kept the wrong coordinate"
+[ "$(manifest_version_now)" = "$BEFORE" ] \
+  && ok "a replay further down the log leaves the corpus version alone" \
+  || bad "a replay above the original moved the coordinate"
+
+# (b) a replay BELOW it, in a later-sorted file, must WIN — that is what "lowest" means, and it is the
+# only arrangement where "keep the lowest" and "keep the first seen" differ
+KEYLINE="$(python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, os, re, sys
+d = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*")))[0]
+f = os.path.join(d, "part-000.jsonl.gz")
+lines = gzip.open(f, "rt").read().splitlines()
+mid = lines[len(lines) // 2]
+off = int(re.search(r"Offset:(\d+)", mid).group(1))
+key = re.search(r"Offset:\d+ (\S+)\t", mid).group(1)
+lower = re.sub(r"Offset:\d+", "Offset:%d" % (off - 1), mid) + "\n"
+with gzip.open(os.path.join(d, "part-zzz.jsonl.gz"), "wt") as fh:
+    fh.write(lower)
+print("%s %s" % (key, off - 1))
+PYCASE
+)"
+K="${KEYLINE%% *}"; WANT="${KEYLINE##* }"
+GOT="$(offset_of "$K")"
+[ "$GOT" = "$WANT" ] \
+  && ok "a replay at a lower offset wins: the entry is $GOT, not the one seen first" \
+  || bad "the collapse kept the first record seen ($GOT) instead of the lowest ($WANT)"
 
 echo "53. a quiet corpus can be COMPLETE without being full"
 # Every session sealed and reconciled, and NOTHING qualifying for the cohort. corpusComplete is about
@@ -1193,7 +1217,15 @@ echo "56. the reader RECOMPUTES the digest, so a payload cannot verify itself"
 build 32 20
 targets FROZEN "$SB"
 python3 - "$ROOT" <<'PYCASE'
-import gzip, glob, json, os, sys
+import gzip, glob, hashlib, json, os, sys
+def canon(o):
+    if isinstance(o, dict):
+        return "{" + ",".join('%s:%s' % (json.dumps(k), canon(v)) for k, v in sorted(o.items())) + "}"
+    if isinstance(o, list): return "[" + ",".join(canon(v) for v in o) + "]"
+    if o is None: return "null"
+    if isinstance(o, bool): return "true" if o else "false"
+    if isinstance(o, str): return json.dumps(o)
+    return json.dumps(str(o))
 f = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")))[4]
 out, done = [], False
 for line in gzip.open(f, "rt"):
@@ -1201,8 +1233,12 @@ for line in gzip.open(f, "rt"):
     rec = json.loads(line[i:])
     # change what the record SAYS while leaving the digest it carries alone
     if not done and rec.get("kind") == "outcome":
-        rec["resultTicks"] = (rec.get("resultTicks") or 0) + 1000
-        rec.setdefault("semanticDigest", "0" * 64)
+        # The digest the record carries must be the one its ORIGINAL body hashes to — that is the whole
+        # point. An all-zero digest breaks the chain by itself, so a reader that trusted it would be
+        # caught anyway and the case proved nothing (r18 #5).
+        body = {k: v for k, v in rec.items() if k not in ("ts", "publishedAtMs", "runId", "semanticDigest")}
+        rec["semanticDigest"] = hashlib.sha256(canon(body).encode("utf-8")).hexdigest()
+        rec["resultTicks"] = (rec.get("resultTicks") or 0) + 1000     # ... and now the body disagrees
         done = True
     out.append(line[:i] + json.dumps(rec) + "\n")
 with gzip.open(f, "wt") as fh:
@@ -1213,6 +1249,77 @@ evaluate >/dev/null
 why_says "corpus defect" \
   "an altered payload is caught by recomputation, not excused by the digest it carries" \
   "a payload verified itself against its own carried digest"
+
+
+echo "57. an arbitrary stopping instant is refused"
+# The audit found this unbound: A5.8 requires the boundary to be an RTH close so it can never cut
+# through an A4.12 hour row, and disabling that check left the whole suite green.
+build 32 20
+NOON="$(python3 -c "import datetime;print(int(datetime.datetime.fromisoformat('2026-08-13T16:30:00+00:00').timestamp()*1000))")"
+targets FROZEN "$NOON"; publish
+evaluate >/dev/null
+why_says "not an RTH close instant" \
+  "a boundary that is not an RTH close is refused, so it can never cut through an hour row" \
+  "an arbitrary stopping instant was accepted"
+
+echo "58. COVERAGE is a clause with teeth"
+# Also unbound: forcing coverage to 1.0 left all cases green, so the clause that says "an instrument
+# whose outcomes mostly go UNOBSERVED has not been measured" was decoration.
+build 32 20
+targets FROZEN "$SB"
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, json, os, sys
+# most outcomes UNOBSERVED at the primary horizon: the calls happened, the results did not
+for f in glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")):
+    out = []
+    for line in gzip.open(f, "rt"):
+        i = line.find("{")
+        rec = json.loads(line[i:])
+        if rec.get("kind") == "outcome" and rec.get("horizon") == "H5":
+            rec["resultState"] = "UNOBSERVED"; rec["resultReason"] = "NO_TERMINAL_TICK"
+            rec["resultTicks"] = None
+        out.append(line[:i] + json.dumps(rec) + "\n")
+    with gzip.open(f, "wt") as fh:
+        fh.write("".join(out))
+PYCASE
+publish
+OUT="$(evaluate)"
+case "$OUT" in
+  *"COVERAGE=FAIL"*|*"COVERAGE=NOT_EVALUABLE"*) ok "an instrument whose outcomes go UNOBSERVED has not been measured";; 
+  *) bad "coverage passed on a cohort with no observed results: $OUT";;
+esac
+
+echo "59. a date with one CORRUPT lineage is not a date that landed"
+# The watchdog took the BEST status among a date's rows — my reasoning, and wrong: A5 says a lost day
+# contributes to nothing, so a date with one COMPLETE lineage and one CORRUPT one is a date whose
+# population is not knowable. It reported COMPLETE and exited 0.
+build 3 20
+targets FROZEN "$SB"
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+DAY="$DAY" ROOT="$ROOT" python3 - <<'PYCASE'
+import gzip, json, os
+root, sd = os.environ["ROOT"], os.environ["DAY"]
+# a SECOND lineage for the same date, with records and a seal whose chains do not reproduce
+lin = "lin-broken-%s" % sd
+seal = {"kind": "seal", "sessionDate": sd, "parameterSetHash": "a1b2c3d4e5f60718", "sessionLineageId": lin,
+        "phaseAtCall": "VALIDATION", "trackFromPush": "2026-07-01", "delivery": "SEAL",
+        "ledgerTopic": "context-tape.direction.ledger",
+        "generation": "3f2a1c04-5b6d-4e7f-8a9b-0c1d2e3f4a5b", "semanticStamp": "2026-09-08T18:00:00Z",
+        "logicalCallCount": 1, "logicalOutcomeCount": 3, "callsDigest": "0" * 64, "outcomesDigest": "0" * 64,
+        "firstOffset": 0, "lastOffset": 1, "conflicts": 0,
+        "attrition": [{"sessionDate": sd, "etHour": 10, "graded": 10, "NO_TICKS": 1}], "ts": 0, "runId": "r1"}
+k = "%s|%s|%s" % (sd, seal["parameterSetHash"], lin)
+with gzip.open(os.path.join(root, "dt=%s" % sd, "part-broken.jsonl.gz"), "wt") as fh:
+    fh.write("Partition:0 Offset:950000 %s\t%s\n" % (k, json.dumps(seal)))
+PYCASE
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch2.log" 2>&1; then
+  bad "the watchdog called a date COMPLETE while one of its lineages is CORRUPT"
+else
+  ok "the worst lineage decides the date, not the best"
+fi
 
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi

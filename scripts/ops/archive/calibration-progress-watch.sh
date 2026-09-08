@@ -64,13 +64,17 @@ prev_path = sys.argv[3] if len(sys.argv) > 3 else ""
 # The report keys sessions "date|hash|lineage" — a bare date lookup found nothing and called a
 # perfectly healthy session NOT_IN_CORPUS every single day (r8 #6). Match on the date COMPONENT, and
 # take the best status among that date's rows: one lineage landing COMPLETE is the day landing.
-ORDER = ["COMPLETE", "PENDING_SEAL", "DISCONTINUITY", "INCOMPLETE", "CORRUPT", "MISSING"]
+# The WORST status on the date, not the best. "One lineage landing COMPLETE is the day landing" was my
+# reasoning and it was wrong: A5 says a lost day contributes to NOTHING, and a date with one COMPLETE
+# lineage and one CORRUPT one is a date whose population is not knowable. Taking the best let exactly
+# that report COMPLETE and exit 0 (r18 #1).
+ORDER = ["MISSING", "CORRUPT", "INCOMPLETE", "DISCONTINUITY", "PENDING_SEAL", "COMPLETE"]
 rows = [v for k, v in d.get("sessions", {}).items()
         if (v.get("sessionDate") or str(k).split("|")[0]) == day]
 st = "NOT_IN_CORPUS"
 if rows:
     st = sorted((r.get("archiveStatus", "MISSING") for r in rows),
-                key=lambda x: ORDER.index(x) if x in ORDER else len(ORDER))[0]
+                key=lambda x: ORDER.index(x) if x in ORDER else -1)[0]
 line = d.get("cohorts", [{}])[0]
 print("  %s: archiveStatus=%s conflicts=%s" % (day, st, d.get("conflicts")))
 cv = d.get("corpusVersion")
