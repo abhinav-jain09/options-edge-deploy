@@ -31,6 +31,15 @@ env_value() {
     ' "$1"
 }
 
+# How many ACTIVE entries declare this name. Two entries make the manifest ambiguous, and which
+# one Kubernetes honours is not something this guard should be guessing at.
+env_count() {
+    awk -v want="$2" '
+        $1 == "-" && $2 == "name:" && $3 == want { n++ }
+        END { print n + 0 }
+    ' "$1"
+}
+
 mib() { printf '%s' "$1" | awk '{ if ($0 ~ /Mi$/) { sub(/Mi$/, ""); print $0 } else if ($0 ~ /Gi$/) { sub(/Gi$/, ""); print $0 * 1024 } else { print "" } }'; }
 
 GW=k8s/es4/services/es-feed-gateway.yaml
@@ -38,11 +47,22 @@ PROD=k8s/es4/services/es-cvd.yaml
 [ -f "$GW" ] || fail "$GW is missing"
 [ -f "$PROD" ] || fail "$PROD is missing"
 
+# The exemption must be a DECISION, not a parse failure. Anything other than exactly one entry
+# holding exactly `true` or `false` is refused: a missing, malformed or duplicated flag would
+# otherwise exempt the manifest from every check below, and a pair ordered false-then-true would
+# deploy an ENABLED relay past a guard that read the first value and stood down.
+count=$(env_count "$GW" GATEWAY_ES_FOOTPRINT_ENABLED)
+[ "$count" = "1" ] \
+    || fail "$GW declares GATEWAY_ES_FOOTPRINT_ENABLED $count times; exactly one entry decides whether the relay is on"
 enabled=$(env_value "$GW" GATEWAY_ES_FOOTPRINT_ENABLED)
-if [ "$enabled" != "true" ]; then
-    printf 'footprint relay is not enabled in %s: nothing to check\n' "$GW"
-    exit 0
-fi
+case "$enabled" in
+    true) ;;
+    false)
+        printf 'footprint relay is disabled in %s: nothing to check\n' "$GW"
+        exit 0
+        ;;
+    *) fail "GATEWAY_ES_FOOTPRINT_ENABLED is '$enabled' in $GW; it must be exactly true or false" ;;
+esac
 
 # ---- (1) one ceiling, both sides -------------------------------------------------------------
 gw_bytes=$(env_value "$GW" GATEWAY_ES_FOOTPRINT_MAX_RECORD_BYTES)

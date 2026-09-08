@@ -179,6 +179,14 @@ pipeline {
           # deploy-service path can target dealer-ledger, and deploy-all always includes it.
           bash scripts/ci/validate-dealer-ledger-fire-quality.sh
 
+          # Same reason, same place: es4 applies the COMMITTED k8s/es4/services/*.yaml directly, so
+          # the ES Footprint contingency has no overlay render for another path's guard to catch.
+          # Both facts it checks fail SILENTLY in production — a producer above the gateway's record
+          # ceiling loses records at the relay with nothing logged upstream, and a gateway whose
+          # memory limit equals its -Xmx is OOM-killed on native growth the heap never sees (G-R8).
+          # Unconditional: deploy-service can target either half of the pair, and deploy-all takes both.
+          bash scripts/ci/validate-footprint-gateway-contingency.sh
+
           kubectl apply $DRY -f k8s/es4/es4-base-env.yaml
           kubectl apply $DRY -f k8s/es4/es4-common-env.yaml
           # es-feed's OWN Databento configmap. Applied for every es4 deploy so the feed can
