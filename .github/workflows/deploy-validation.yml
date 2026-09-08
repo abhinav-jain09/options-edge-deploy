@@ -76,6 +76,17 @@ jobs:
       - name: Validate service registry (completeness + mirror + image name)
         run: scripts/ci/validate-services.sh
 
+      # ES Footprint G-R8: the record ceiling is ONE value across two manifests, and the relay's
+      # working set lives outside the heap. Neither fact is visible from either manifest alone,
+      # and both fail SILENTLY in production — a producer above the gateway's ceiling loses records
+      # at the relay with nothing logged upstream, and a container whose limit equals its -Xmx is
+      # OOM-killed on native growth the heap never sees. Checked only where the relay is enabled.
+      - name: ES Footprint deployment contingency (paired ceiling, G-R8 headroom)
+        run: scripts/ci/validate-footprint-gateway-contingency.sh
+
+      - name: ES Footprint contingency guard refuses each of its own violations
+        run: scripts/ci/validate-footprint-gateway-contingency-test.sh
+
       # VIX feed separation §7: validate-services.sh already runs the single-publisher
       # assertion against the REAL render; this additionally exercises the assertion's
       # full predicate matrix (five planned rollout states, both-owners violations,
