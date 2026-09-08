@@ -36,6 +36,10 @@ build() {   # build <sessions> <calls-per-session> [mutation]
 import gzip, json, os, hashlib, random, shutil, datetime
 root, ph, tf = os.environ["ROOT"], os.environ["PH"], os.environ["TF"]
 n_sessions, per, mutate = int(os.environ["SESSIONS"]), int(os.environ["PER"]), os.environ["MUTATE"]
+# "quiet" means the records are CALIBRATION from the start, so the seal's chains are computed over those
+# bodies and the sessions are genuinely whole. Rewriting the phase afterwards only corrupts them, which
+# tests the corruption path and not the quiet one.
+PHASE = "CALIBRATION" if mutate == "quiet" else "VALIDATION"
 HOR = ["H3", "H5", "H15"]
 CELLS = ["EXHAUSTED|CALL_WALL|POS_GAMMA", "EXHAUSTED|PUT_WALL|POS_GAMMA", "EXHAUSTED|CALL_WALL|NEG_GAMMA",
          "EXHAUSTED|PUT_WALL|NEG_GAMMA", "STRONG|CALL_WALL|NEG_GAMMA", "STRONG|PUT_WALL|NEG_GAMMA",
@@ -94,7 +98,7 @@ while made < n_sessions:
         st, roles, regime = cell.split("|")
         cid = "%s-c%02d" % (sd, i)
         c = {"kind": "call", "callId": cid, "parameterSetHash": ph, "sessionLineageId": lin,
-             "sessionDate": sd, "phaseAtCall": "VALIDATION", "trackFromPush": tf, "delivery": "LIVE",
+             "sessionDate": sd, "phaseAtCall": PHASE, "trackFromPush": tf, "delivery": "LIVE",
              "predictedSign": 1 if i % 2 == 0 else -1, "enteredState": st, "regime": regime,
              "node": {"roles": [] if roles == "NONE" else [roles]},
              "semanticStamp": "2026-09-08T18:00:00Z",
@@ -104,7 +108,7 @@ while made < n_sessions:
         for h in HOR:
             res = rnd.choice([3, 5, -2, 7, -1, 4])
             o = {"kind": "outcome", "callId": cid, "horizon": h, "parameterSetHash": ph,
-                 "sessionLineageId": lin, "sessionDate": sd, "phaseAtCall": "VALIDATION",
+                 "sessionLineageId": lin, "sessionDate": sd, "phaseAtCall": PHASE,
                  "trackFromPush": tf, "delivery": "LIVE", "resultState": "OBSERVED",
                  "resultTicks": res, "pathState": "OBSERVED", "maeTicks": abs(res) + 2,
                  "mfeTicks": abs(res) + 5, "cellKey": "%s|%s" % (cell, h),
@@ -121,7 +125,7 @@ while made < n_sessions:
     if mutate == "ungraded_day" and made == 3:
         att = [{"sessionDate": sd, "etHour": 10, "graded": 0}]
     seal = {"kind": "seal", "sessionDate": sd, "parameterSetHash": ph, "sessionLineageId": lin,
-            "phaseAtCall": "VALIDATION", "trackFromPush": tf, "delivery": "SEAL",
+            "phaseAtCall": PHASE, "trackFromPush": tf, "delivery": "SEAL",
             "ledgerTopic": "context-tape.direction.ledger",
             "generation": "3f2a1c04-5b6d-4e7f-8a9b-0c1d2e3f4a5b",
             "semanticStamp": "2026-09-08T18:00:00Z",
@@ -1082,6 +1086,53 @@ got="$(bash "$CALPROBE/probe.sh")"
 grep -q 'CALENDAR_DIR="${CALENDAR_DIR:-/home' "$SRC/oe-archive-daily.sh" \
   && bad "oe-archive-daily.sh still hardcodes a calendar directory, defeating the unit's own" \
   || ok "no archive script overrides the unit's calendar with a hardcoded path"
+
+
+echo "52. an equal replay does not move a record's coordinate"
+build 3 20
+targets FROZEN "$SB"
+# Both versions are recomputed the SAME way — the published manifest carries the declared start and the
+# calendar, so comparing it against a bare recompute would compare two different things and prove
+# nothing. A5.4 collapses an equal replay and keeps the LOWEST coordinate, so the version must not move.
+BEFORE="$(HERE="$HERE" ROOT="$ROOT" python3 -c "
+import os, sys
+sys.path.insert(0, os.environ['HERE'])
+import oe_corpus_reader as R
+r = R.read_logical(os.environ['ROOT'])
+print(R.manifest_version(R.build_manifest(r, 'context-tape.direction.ledger', 'prod')))")"
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, os, re, sys
+f = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")))[0]
+body = gzip.open(f, "rt").read()
+first = body.splitlines()[0] + "\n"
+with gzip.open(f, "wt") as fh:                     # the same record again, further down the log
+    fh.write(body + re.sub(r"Offset:(\d+)", lambda m: "Offset:%d" % (int(m.group(1)) + 500000), first))
+PYCASE
+AFTER="$(HERE="$HERE" ROOT="$ROOT" python3 -c "
+import os, sys
+sys.path.insert(0, os.environ['HERE'])
+import oe_corpus_reader as R
+r = R.read_logical(os.environ['ROOT'])
+print(R.manifest_version(R.build_manifest(r, 'context-tape.direction.ledger', 'prod')))")"
+[ "$BEFORE" = "$AFTER" ] \
+  && ok "a harmless replay leaves the corpus version alone" \
+  || bad "an equal replay changed the version — the collapse kept the wrong coordinate"
+
+echo "53. a quiet corpus can be COMPLETE without being full"
+# Every session sealed and reconciled, and NOTHING qualifying for the cohort. corpusComplete is about
+# the ARCHIVE; the counts are about the cohort. Hardcoding completeness false whenever the cohort was
+# empty answered a different question than the one it was asked (r17 #3).
+build 32 20 quiet
+targets FROZEN "$SB"; publish
+OUT="$(WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/progress/dt=*.json'), key=os.path.getmtime)[-1]
+c = json.load(open(f))['cohorts'][0]
+print('%s %s %s' % (c.get('phase'), c.get('thresholdsMet'), c.get('corpusComplete')))")"
+case "$OUT" in
+  "VALIDATION False True") ok "not full, and complete — two different facts, both stated" ;;
+  *) bad "completeness was collapsed into the counts: $OUT" ;;
+esac
 
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi

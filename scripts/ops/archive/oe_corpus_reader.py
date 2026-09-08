@@ -97,7 +97,14 @@ def read_logical(root):
                     sd_of = rec.get("sessionDate")
                     if actual_key is not None and actual_key != pkey:
                         bad_keys.setdefault(sd_of, []).append(actual_key)
-                    coords[pkey] = (part, off)
+                    # The LOWEST coordinate, exactly as `logical` keeps the lowest offset. Overwriting
+                    # on every physical record meant an equal replay at offsets 10 then 20 gave
+                    # logical=10 and manifest=20 — so a harmless replay changed the corpus version and
+                    # invalidated an existing pin, which is the opposite of what A5.4's collapse is for
+                    # (r17 #1).
+                    prior = coords.get(pkey)
+                    if prior is None or (off is not None and (prior[1] is None or off < prior[1])):
+                        coords[pkey] = (part, off)
                     prev = logical.get(pkey)
                     if prev is None:
                         logical[pkey] = (dig, rec, off)
@@ -464,7 +471,11 @@ def build_manifest(read, topic, env, corpus_start=None, cal=None, previous=None)
         "corpusStartDate": corpus_start, "calendar": calendar_identity(cal),
         "highWaterMark": None if hwm is None else {"generation": hwm["generation"],
                                                    "partition": hwm["partition"], "offset": hwm["offset"]},
-        "recordCount": len(entries), "filesRead": read["files"],
+        # recordCount is the population. filesRead is NOT: how many files the archiver happened to write
+        # is a property of the archive's layout, not of the corpus, and putting it in the identity made a
+        # harmless replay in a new part-file change the version — the very thing the lowest-offset
+        # collapse exists to prevent (r17 #1).
+        "recordCount": len(entries),
         "entries": entries,
     }
     return manifest

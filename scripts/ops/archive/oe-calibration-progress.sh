@@ -239,6 +239,16 @@ if declared_track and declared_track != "UNFROZEN":
     except Exception:
         clock_started = False
 
+# The archive's own completeness, computed the same way a cohort's is — owed days present as this
+# cohort's, and no defect from the shared predicate.
+quiet_owed = R.owed(max(corpus_start, str(declared_track)[:10]) if (declared_track and declared_track != "UNFROZEN")
+                    else corpus_start, today, _cal)
+quiet_mine = cohort_days(declared_hash, declared_track)
+quiet_corpus_complete = (bool(quiet_owed) and all(d in quiet_mine for d in quiet_owed)
+                         and not R.corpus_defects(read, sessions, seals,
+                                                  cohort_days=quiet_mine | set(quiet_owed))
+                         and not read_errors)
+
 reports = []
 if not by_cohort:
     reports.append({
@@ -250,7 +260,12 @@ if not by_cohort:
                 "the validation clock has NOT started: TRACK_FROM_PUSH is in the future, so no call counts toward the cohort. Calls are being collected so the literals can be chosen.",
         "callsCollected": calib_calls,
         "sessionsComplete": len(complete),
-        "thresholdsMet": False, "corpusComplete": False, "readyForEvaluation": False,
+        # corpusComplete is about the ARCHIVE, not about the counts: a quiet corpus with every owed
+        # session sealed and reconciled is complete and simply not full. Hardcoding it false made the
+        # report say the archive was incomplete whenever the cohort was empty, which is a different
+        # claim about a different thing (r17 #3).
+        "thresholdsMet": False,
+        "corpusComplete": quiet_corpus_complete, "readyForEvaluation": False,
         "evaluationDecision": latest_decision(declared_hash, declared_track),
     })
 else:
