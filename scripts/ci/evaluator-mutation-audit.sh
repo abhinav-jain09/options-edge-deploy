@@ -3,7 +3,7 @@
 #
 # NOT wired into the deploy job: it runs the whole suite once per mutation, so it costs minutes rather
 # than seconds. It is a tool for whoever changes the evaluator or its tests, and the result belongs in
-# the PR that changes them. Last full run (2026-09-08, deploy cf2c2227): 13 mutations, 13 killed, none
+# the PR that changes them. Last full run (2026-09-08, deploy f8e41668): 22 mutations, 22 killed, none
 # survived.
 #
 # Which of the evaluator's protections does the suite actually bind?
