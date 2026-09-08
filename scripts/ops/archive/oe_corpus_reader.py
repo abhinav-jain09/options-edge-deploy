@@ -62,7 +62,7 @@ def read_logical(root):
     A read error is NOT a quiet day. Swallowing one would let a truncated archive report a smaller
     population as complete, which is the exact failure this reader exists to catch.
     """
-    logical, files = {}, 0
+    logical, files, coords = {}, 0, {}
     conflicts_by_session, read_errors_by_session, bad_keys = {}, {}, {}
     for f in sorted(glob.glob(os.path.join(root, "dt=*", "*.jsonl.gz"))):
         files += 1
@@ -88,6 +88,8 @@ def read_logical(root):
                     prefix = line[:i]
                     m = re.search(r"Offset:(\d+)", prefix)
                     off = int(m.group(1)) if m else None
+                    pm = re.search(r"Partition:(\d+)", prefix)
+                    part = int(pm.group(1)) if pm else None
                     # the ACTUAL Kafka key, not one derived from the value: a record written under a
                     # different key than its payload implies is exactly the substitution to catch
                     km = re.search(r"Offset:\d+\s+(\S+)\s*$", prefix) or re.search(r"\s(\S+)\s*$", prefix)
@@ -95,6 +97,7 @@ def read_logical(root):
                     sd_of = rec.get("sessionDate")
                     if actual_key is not None and actual_key != pkey:
                         bad_keys.setdefault(sd_of, []).append(actual_key)
+                    coords[pkey] = (part, off)
                     prev = logical.get(pkey)
                     if prev is None:
                         logical[pkey] = (dig, rec, off)
@@ -106,8 +109,30 @@ def read_logical(root):
             dt = re.search(r"dt=(\d{4}-\d{2}-\d{2})", f)
             read_errors_by_session.setdefault(dt.group(1) if dt else "?", []).append(
                 "%s unreadable: %s" % (os.path.basename(f), e.__class__.__name__))
+    # A flat list too: a per-session error is invisible to any caller that only walks SESSIONS, because a
+    # file that will not open may be the only evidence a session existed at all (r7 #3).
+    flat = []
+    for sd, errs in sorted(read_errors_by_session.items()):
+        flat += ["%s: %s" % (sd, e) for e in errs]
     return {"logical": logical, "files": files, "conflictsBySession": conflicts_by_session,
-            "readErrorsBySession": read_errors_by_session, "badKeys": bad_keys}
+            "readErrorsBySession": read_errors_by_session, "readErrors": flat,
+            "badKeys": bad_keys, "coords": coords,
+            "generation": topic_generation(root)}
+
+
+def topic_generation(root):
+    """The Kafka TopicId the archiver recorded, as its canonical lower-case hex UUID. Offsets restart
+    after a recreation, so an ordering without the generation is not a total order (A5.6)."""
+    for cand in (os.path.join(os.path.dirname(root.rstrip("/")), "_manifest"),
+                 os.path.join(root, "..", "_manifest")):
+        try:
+            for f in glob.glob(os.path.join(cand, "*.id")):
+                for line in open(f):
+                    if line.startswith("topic_id="):
+                        return line.split("=", 1)[1].strip().lower()
+        except Exception:
+            continue
+    return None
 
 
 def read_sidecar(root, read_errors):
@@ -171,14 +196,20 @@ def classify_sessions(read, sidecar, today):
         got_calls, got_out = len(mine_c), len(mine_o)
         want_calls = int(seal.get("logicalCallCount", -1))
         want_out = int(seal.get("logicalOutcomeCount", -1))
+        # Every join here is scoped by HASH as well as lineage. Without the hash a call under one
+        # parameter set answers for an outcome under another, and a cross-substituted session reads
+        # COMPLETE (r7 #4).
         call_ids = {r.get("callId") for _dg, r, _o in logical.values()
-                    if r.get("kind") == "call" and r.get("sessionDate") == sd and r.get("sessionLineageId") == lin}
+                    if r.get("kind") == "call" and r.get("sessionDate") == sd
+                    and r.get("parameterSetHash") == ph and r.get("sessionLineageId") == lin}
         orphans = [r.get("callId") for _dg, r, _o in logical.values()
                    if r.get("kind") == "outcome" and r.get("sessionDate") == sd
+                   and r.get("parameterSetHash") == ph
                    and r.get("sessionLineageId") == lin and r.get("callId") not in call_ids]
         horizons = {}
         for _dg, r, _o in logical.values():
-            if r.get("kind") == "outcome" and r.get("sessionDate") == sd and r.get("sessionLineageId") == lin:
+            if r.get("kind") == "outcome" and r.get("sessionDate") == sd \
+                    and r.get("parameterSetHash") == ph and r.get("sessionLineageId") == lin:
                 horizons.setdefault(r.get("callId"), set()).add(r.get("horizon"))
         bad_horizons = [c for c in call_ids if horizons.get(c, set()) != set(HORIZONS)]
         # ONLY a discontinuity dated for THIS session poisons it
@@ -186,19 +217,24 @@ def classify_sessions(read, sidecar, today):
         errs = read_errors_by_session.get(sd, [])
         offs = sorted(o for o, _k, _d in (mine_c + mine_o) if o is not None)
         want_first, want_last = seal.get("firstOffset"), seal.get("lastOffset")
-        required = ("parameterSetHash", "sessionLineageId", "sessionDate", "phaseAtCall")
+        # A5.2 pins these on EVERY record, the seal included. delivery and trackFromPush were checked on
+        # outcomes only, and semanticStamp on nothing at all — a corpus whose records carry no semantic
+        # stamp cannot be told apart from one built under different literals (r7 #4).
+        required = ("parameterSetHash", "sessionLineageId", "sessionDate", "phaseAtCall",
+                    "trackFromPush", "delivery", "semanticStamp")
         missing_fields = []
         for _dg, r, _o in logical.values():
-            if r.get("sessionDate") != sd or r.get("sessionLineageId") != lin or r.get("kind") == "seal":
+            if r.get("sessionDate") != sd or r.get("parameterSetHash") != ph \
+                    or r.get("sessionLineageId") != lin or r.get("kind") == "seal":
                 continue
-            need = required + (("delivery",) if r.get("kind") == "outcome" else ())
-            missing_fields += ["%s:%s" % (r.get("kind"), f) for f in need if r.get(f) in (None, "")]
+            missing_fields += ["%s:%s" % (r.get("kind"), f) for f in required if r.get(f) in (None, "")]
         att_bad = attrition_violations(seal)
         # A5.2 pins these on the seal itself. A seal missing one describes a population whose cohort,
         # lineage or clock nobody can establish, and the counts below would be counts of an unknown
         # thing (r6 #6).
         seal_missing = [f for f in ("parameterSetHash", "sessionLineageId", "sessionDate",
                                     "trackFromPush", "delivery", "ledgerTopic", "generation",
+                                    "phaseAtCall", "semanticStamp",
                                     "callsDigest", "outcomesDigest")
                         if seal.get(f) in (None, "")]
         # An envelope is a coordinate or it is nothing: a nonempty session whose seal carries no offset
@@ -296,34 +332,211 @@ def session_refusal_rate(seal):
     return float(refused) / float(graded)
 
 
+def build_manifest(read, topic, env):
+    """A5.6's manifest, which IS the corpus version.
+
+    The old version hashed a simplified view of the live archive, which is not a pin: a mutable pointer
+    means a calibration cannot be re-run against the inputs it actually used, and recomputing the hash
+    after a deletion produced a new self-consistent value (r7 #6). This is the real thing — a FULL
+    enumeration, ordered by (topic, generation, partition, offset) because offsets restart after a
+    recreation and an ordering without the generation is not a total order, and naming the high-water
+    mark as a whole coordinate rather than a bare offset so membership is unambiguous.
+    """
+    logical, coords = read["logical"], read["coords"]
+    generation = read.get("generation")
+    entries = []
+    for pkey, (dig, rec, _off) in logical.items():
+        part, off = coords.get(pkey, (None, None))
+        entries.append({"topic": topic, "generation": generation,
+                        "partition": -1 if part is None else part,
+                        "offset": -1 if off is None else off,
+                        "key": pkey, "kind": rec.get("kind"),
+                        "sessionDate": rec.get("sessionDate"), "digest": dig})
+    entries.sort(key=lambda e: (e["topic"] or "", e["generation"] or "", e["partition"], e["offset"], e["key"]))
+    hwm = entries[-1] if entries else None
+    manifest = {
+        "manifestVersion": 1, "env": env, "topic": topic, "generation": generation,
+        "highWaterMark": None if hwm is None else {"generation": hwm["generation"],
+                                                   "partition": hwm["partition"], "offset": hwm["offset"]},
+        "recordCount": len(entries), "filesRead": read["files"],
+        "entries": entries,
+    }
+    return manifest
+
+
+def manifest_version(manifest):
+    return hashlib.sha256(canonical(manifest).encode("utf-8")).hexdigest()
+
+
+def publish_manifest(out_root, manifest):
+    """Published by ATOMIC RENAME to corpus/<corpusVersion>/manifest.json and never mutated afterwards.
+    A version that already exists is left exactly as it is — rewriting it is the one thing a pin may
+    never do."""
+    version = manifest_version(manifest)
+    d = os.path.join(out_root, "corpus", version)
+    path = os.path.join(d, "manifest.json")
+    if os.path.exists(path):
+        return version, path, False
+    os.makedirs(d, exist_ok=True)
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile("w", dir=d, delete=False, suffix=".tmp")
+    tmp.write(canonical(manifest))
+    tmp.close()
+    os.replace(tmp.name, path)
+    return version, path, True
+
+
+def load_manifest(out_root, version):
+    """Read a PUBLISHED version. The evaluator reads this rather than recomputing from the live archive,
+    which is the whole point of publishing it."""
+    path = os.path.join(out_root, "corpus", version, "manifest.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as fh:
+            body = fh.read()
+    except Exception:
+        return None
+    if manifest_version(json.loads(body)) != version:
+        return None                 # a manifest that does not hash to its own name is not that version
+    return json.loads(body)
+
+
 def corpus_version(logical):
-    """A5.6: a content address of exactly what was read, so a run is reproducible and a watchdog can
-    tell "the corpus advanced" from "nobody ran"."""
+    """Kept for callers that only want a content address of what they just read. It is NOT the A5.6 pin
+    — build_manifest/publish_manifest are."""
     manifest = sorted("%s|%s|%s" % (k, v[2] if v[2] is not None else -1, v[0]) for k, v in logical.items())
     return hashlib.sha256("\n".join(manifest).encode("utf-8")).hexdigest()
 
 
+# ---------------------------------------------------------------------------------------------------
+# A2's estimator, mechanically. The design does not merely say "bootstrap": it names the PRNG
+# (java.util.SplittableRandom seeded with BOOTSTRAP_SEED), the ordering (sessions ascending by
+# sessionDate), and that ONE common resample matrix is generated once per artifact run and reused across
+# every clause, the generator never reset or advanced in clause-dependent order. Python's random.Random
+# with a per-clause matrix is a different estimator that happens to be a bootstrap (r7 #5).
+# ---------------------------------------------------------------------------------------------------
+_M64 = (1 << 64) - 1
+GOLDEN_GAMMA = 0x9E3779B97F4A7C15
+
+
+def mix64(z):
+    z = (z + GOLDEN_GAMMA) & _M64
+    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _M64
+    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _M64
+    return z ^ (z >> 31)
+
+
+class SplittableRandom:
+    """java.util.SplittableRandom, faithfully: nextSeed() advances by GOLDEN_GAMMA and mix32 is the
+    32-bit finalizer nextInt(bound) actually uses, including its rejection loop."""
+
+    def __init__(self, seed):
+        self.seed = seed & _M64
+
+    def _next_seed(self):
+        self.seed = (self.seed + GOLDEN_GAMMA) & _M64
+        return self.seed
+
+    @staticmethod
+    def _mix32(z):
+        z = ((z ^ (z >> 33)) * 0x62A9D9ED799705F5) & _M64
+        z = ((z ^ (z >> 28)) * 0xCB24D0A5C88C35B3) & _M64
+        v = (z >> 32) & 0xFFFFFFFF
+        return v - (1 << 32) if v >= (1 << 31) else v         # Java int is signed
+
+    def next_int(self, bound):
+        r = self._mix32(self._next_seed())
+        m = bound - 1
+        if (bound & m) == 0:
+            return r & m
+        u = (r & 0xFFFFFFFF) >> 1
+        while True:
+            r = u % bound
+            if u + m - r < (1 << 31):                          # Java's overflow test, made explicit
+                return r
+            u = (self._mix32(self._next_seed()) & 0xFFFFFFFF) >> 1
+
+
+def resample_matrix(session_dates, b, seed):
+    """ONE matrix, once per run, reused by every clause. Sessions ascending by sessionDate so the
+    index->session mapping is stable."""
+    ids = sorted(session_dates)
+    n = len(ids)
+    if n == 0:
+        return ids, []
+    rnd = SplittableRandom(seed)
+    return ids, [[rnd.next_int(n) for _ in range(n)] for _ in range(b)]
+
+
 def load_calendar():
-    """The REAL trading calendar, not "weekday". Labor Day is a weekday and the market is shut; owing
-    a session on it would report a permanent MISSING no run can ever satisfy, and an alarm that can
-    never clear is an alarm that gets ignored."""
-    for p in (os.environ.get("CALENDAR_DIR"), "/home/abhinav/oe-ops",
-              os.path.expanduser("~/development/workspace/options-edge-deploy/scripts/jenkins")):
-        if p and os.path.isdir(p):
-            sys.path.insert(0, p)
+    """The REAL trading calendar, not "weekday". Labor Day is a weekday and the market is shut; owing a
+    session on it reports a permanent MISSING no run can ever satisfy, and an alarm that can never clear
+    is an alarm that gets ignored.
+
+    market_calendar exposes a CLASS. Probing the module for a bare is_trading_day always failed, so this
+    silently ran on the weekday fallback and called 2026-07-03 and 2026-09-07 owed trading days — the
+    fallback was never reached in anger, so nothing looked wrong (r7 #7).
+    """
+    # An explicit CALENDAR_DIR is EXCLUSIVE. Searching on past it would mean an operator who names a
+    # calendar directory can silently get a different calendar than the one they named, and the whole
+    # reason this is fatal-on-absence is that a wrong calendar is worse than no calendar.
+    named = os.environ.get("CALENDAR_DIR")
+    if named:
+        if not os.path.isfile(os.path.join(named, "market_calendar.py")):
+            return None
+        sys.path.insert(0, named)
+    else:
+        for p in ("/home/abhinav/oe-ops",
+                  os.path.dirname(os.path.abspath(__file__)),
+                  os.path.expanduser("~/development/workspace/options-edge-deploy/scripts/jenkins")):
+            if p and os.path.isdir(p):
+                sys.path.insert(0, p)
     try:
-        import market_calendar as cal
+        import market_calendar as mc
+    except Exception:
+        return None
+    try:
+        cal = mc.MarketCalendar()
+        cal.is_trading_day(datetime.date(2026, 9, 7))     # prove the API before trusting it
         return cal
     except Exception:
         return None
 
 
 def owed(start, end, cal):
+    """The trading days in [start, end]. A missing calendar is FATAL to the caller rather than a quiet
+    downgrade to weekdays: a wrong owed-day list is how a holiday becomes a permanent MISSING and a real
+    gap becomes invisible."""
+    if cal is None:
+        raise RuntimeError("no market calendar: refusing to enumerate owed trading days by weekday")
     days, d = [], datetime.date.fromisoformat(start)
     last = datetime.date.fromisoformat(end)
     while d <= last:
-        ok = cal.is_trading_day(d) if (cal is not None and hasattr(cal, "is_trading_day")) else d.weekday() < 5
-        if ok:
+        if cal.is_trading_day(d):
             days.append(d.isoformat())
         d += datetime.timedelta(days=1)
     return days
+
+
+RTH_CLOSE_HOUR, RTH_CLOSE_MINUTE = 16, 0
+EARLY_CLOSE_HOUR, EARLY_CLOSE_MINUTE = 13, 0
+
+
+def is_rth_close(ms, cal):
+    """A5.8 requires the stopping boundary to be an RTH close instant, so it can never cut through an
+    A4.12 hour row and no slicing rule is needed. An arbitrary instant would silently reintroduce one."""
+    if cal is None:
+        return False
+    try:
+        import zoneinfo
+        et = datetime.datetime.fromtimestamp(ms / 1000.0, zoneinfo.ZoneInfo("America/New_York"))
+    except Exception:
+        return False
+    if not cal.is_trading_day(et.date()):
+        return False
+    if et.second or et.microsecond:
+        return False
+    h, m = ((EARLY_CLOSE_HOUR, EARLY_CLOSE_MINUTE) if cal.is_early_close(et.date())
+            else (RTH_CLOSE_HOUR, RTH_CLOSE_MINUTE))
+    return et.hour == h and et.minute == m

@@ -28,11 +28,16 @@ log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 # calibration-targets.env installed beside this script, and an attempt to override one is refused
 # rather than silently honoured.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGETS="${OE_CAL_TARGETS_FILE:-$SCRIPT_DIR/calibration-targets.env}"
+# The declaration is the file INSTALLED BESIDE THIS SCRIPT, and there is deliberately no way to point
+# it somewhere else (r7 #1). An OE_CAL_TARGETS_FILE hatch defeats every refusal below in one move: the
+# caller simply writes their own boundary, cell universe, targets, seed and thresholds into a file of
+# their own. A test that needs a different declaration stages the whole unit into a directory and runs
+# the script from there, which is what the deployed unit is anyway.
+TARGETS="$SCRIPT_DIR/calibration-targets.env"
 [ -f "$TARGETS" ] || { log "FATAL: no preregistration at $TARGETS — an artifact without one is a number chosen after the fact"; exit 1; }
 [ -f "$SCRIPT_DIR/oe_corpus_reader.py" ] || { log "FATAL: oe_corpus_reader.py missing beside $0"; exit 1; }
 
-for v in PARAMETER_SET_HASH TRACK_FROM_PUSH STOPPING_BOUNDARY_MS CORPUS_START_DATE T_SESSIONS T_COHORT \
+for v in OE_CAL_TARGETS_FILE PARAMETER_SET_HASH TRACK_FROM_PUSH STOPPING_BOUNDARY_MS CORPUS_START_DATE T_SESSIONS T_COHORT \
          T_CLASS T_CELL REQUIRED_CLASSES REQUIRED_CELLS BOOTSTRAP_SEED BOOTSTRAP_B RESULT_LCB_FLOOR \
          HIT_RATE_LCB_FLOOR MEDIAN_MAE_CEIL P90_MAE_CEIL COVERAGE_FLOOR ATTRITION_CEIL THRESHOLDS_STATE; do
   if [ -n "${!v:-}" ]; then
@@ -76,7 +81,7 @@ python3 - "$SCRIPT_DIR" "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$PARA
          "$T_CLASS" "$T_CELL" "$REQUIRED_CLASSES" "$REQUIRED_CELLS" "$BOOTSTRAP_SEED" "$BOOTSTRAP_B" \
          "$RESULT_LCB_FLOOR" "$HIT_RATE_LCB_FLOOR" "$MEDIAN_MAE_CEIL" "$P90_MAE_CEIL" \
          "$COVERAGE_FLOOR" "$ATTRITION_CEIL" "$THRESHOLDS_STATE" "$CORPUS_START_DATE" <<'PY'
-import json, os, sys, hashlib, random, tempfile
+import json, os, sys, hashlib, tempfile
 
 (script_dir, root, out_root, today, stamp, env, phash, track_from, stopping, pinned_version,
  t_sessions, t_cohort, t_class, t_cell, req_classes, req_cells, seed, B,
@@ -102,10 +107,15 @@ logical = read["logical"]
 # ---- the corpus this artifact claims to have evaluated must be the corpus it read ----------------
 # Without this the artifact is an assertion about a moving target: a rerun a day later would carry the
 # same corpusVersion field and a different population.
-actual_version = R.corpus_version(logical)
-# A version recomputed from the archive as it stands today matches again after records or whole days
-# have disappeared, so "the hash of what I just read" pins nothing on its own (r6 #5). The pin must ALSO
-# name a version some progress run already PUBLISHED, and the artifact records which run and when.
+# A5.6: the pin is a PUBLISHED, IMMUTABLE MANIFEST at corpus/<version>/manifest.json, and this reads it
+# rather than recomputing a hash of the live archive (r7 #6). A hash of what happens to be on disk today
+# matches again after a deletion; a manifest names, for every record, the (topic, generation, partition,
+# offset) coordinate it occupied and the high-water mark it covers.
+manifest = R.load_manifest(out_root, pinned_version)
+manifest_entries = {} if manifest is None else {e["key"]: e for e in manifest.get("entries", [])}
+if manifest is None:
+    read_errors.append("no published manifest for corpusVersion %s — a version that was never published "
+                       "is not a pin" % pinned_version[:12])
 published = {}
 try:
     import glob as _glob
@@ -121,7 +131,39 @@ try:
 except Exception as e:
     read_errors.append("could not read published progress records: %s" % e.__class__.__name__)
 published_on = sorted(published.get(pinned_version, []))
-version_ok = (actual_version == pinned_version) and bool(published_on)
+
+# The archive must still BE the corpus that manifest describes: every entry present, at the same
+# coordinate, with the same digest, and nothing extra below the high-water mark.
+missing_from_archive, moved, extra = [], [], []
+if manifest is not None:
+    coords = read["coords"]
+    for k, e in manifest_entries.items():
+        if k not in logical:
+            missing_from_archive.append(k)
+            continue
+        part, off = coords.get(k, (None, None))
+        # The manifest is CANONICAL JSON, in which every scalar is a string — that is what makes two
+        # builders agree byte for byte. So the comparison is on canonical form, not on Python types.
+        if str(logical[k][0]) != str(e["digest"]) \
+                or (off is not None and str(off) != str(e["offset"])) \
+                or (part is not None and str(part) != str(e["partition"])):
+            moved.append(k)
+    hwm = manifest.get("highWaterMark") or {}
+    for k in logical:
+        if k not in manifest_entries:
+            part, off = coords.get(k, (None, None))
+            try:
+                mark = int(hwm.get("offset"))
+            except (TypeError, ValueError):
+                mark = None
+            if off is not None and mark is not None and off <= mark:
+                extra.append(k)
+version_ok = (manifest is not None and bool(published_on)
+              and not missing_from_archive and not moved and not extra)
+
+# A read error the SESSION walk cannot see: a file that will not open may be the only evidence a session
+# existed at all, so the flat list joins the evaluator's own (r7 #3).
+read_errors += read.get("readErrors", [])
 
 clauses = []
 def clause(name, state, passed, value=None, note=""):
@@ -176,16 +218,28 @@ for k in window_sessions:
 # Removing a whole trading day used to leave a smaller cohort that passed COMPLETENESS (r6 #2). The owed
 # days come from the trading calendar between the preregistered start and the stopping boundary.
 _cal = R.load_calendar()
+if _cal is None:
+    read_errors.append("no market calendar available — owed trading days cannot be enumerated")
+elif not R.is_rth_close(stopping, _cal):
+    # A5.8 requires it, so the boundary can never cut through an A4.12 hour row and no slicing rule is
+    # needed. An arbitrary instant silently reintroduces one (r7 #1).
+    read_errors.append("STOPPING_BOUNDARY_MS is not an RTH close instant on a trading day")
 boundary_date = None
 try:
     import datetime as _dt
     boundary_date = _dt.datetime.fromtimestamp(stopping / 1000.0, _dt.timezone.utc).date().isoformat()
 except Exception:
     read_errors.append("STOPPING_BOUNDARY_MS is not an instant this evaluator can turn into a date")
-have_days = {v["sessionDate"] for v in sessions.values() if v["archiveStatus"] == "COMPLETE"}
+# Scoped to the TARGET hash and trackFromPush: a zero-call seal under ANOTHER parameter set used to
+# satisfy an owed day, so the population hole moved rather than closed (r7 #2). And the window starts at
+# the DECLARED corpusStartDate — max(corpusStart, trackFrom) let a declared start before the archive's
+# first day quietly shrink to the archive.
+have_days = {v["sessionDate"] for v in sessions.values()
+             if v["archiveStatus"] == "COMPLETE" and v.get("parameterSetHash") == phash
+             and v.get("trackFromPush") == track_from}
 missing_days = []
-if boundary_date:
-    window_start = max(str(corpus_start)[:10], str(track_from)[:10])
+if boundary_date and _cal is not None:
+    window_start = str(corpus_start)[:10]
     for day in R.owed(window_start, boundary_date, _cal):
         if day not in have_days:
             missing_days.append(day)
@@ -271,43 +325,56 @@ def pooled(sess_ids, picker):
 
 results_by_session, hits_by_session, obs_by_session, mae_by_session = {}, {}, {}, {}
 for o in obs:
-    sid = session_key(by_call[call_identity(o)])
+    sid = by_call[call_identity(o)].get("sessionDate")
     results_by_session.setdefault(sid, []).append(float(o["resultTicks"]))
     hits_by_session.setdefault(sid, []).append(1.0 if float(o["resultTicks"]) > 0 else 0.0)
 for o in mae:
-    sid = session_key(by_call[call_identity(o)])
+    sid = by_call[call_identity(o)].get("sessionDate")
     mae_by_session.setdefault(sid, []).append(float(o["maeTicks"]))
 
-def bootstrap(picker, statistic, tail, ids):
-    """Resample WHOLE SESSIONS with replacement to the original session count, B replicates, the
-    statistic pooled over the resampled sessions. An LCB95 is the 5th percentile of the replicates and
-    a UCB95 the 95th — the tail is named per clause, because naming only "95%" makes an acceptance test
-    optimistic.
+# ONE common resample matrix, generated ONCE per artifact run and reused across every clause — the
+# generator is never reset or advanced in clause-dependent order (A2 r10 #4). The PRNG is
+# java.util.SplittableRandom seeded with BOOTSTRAP_SEED, reproduced exactly; the session list is sorted
+# ascending by sessionDate so the index-to-session mapping is stable. A per-clause Python RNG was a
+# different estimator that merely happened to be a bootstrap (r7 #5).
+matrix_ids, MATRIX = R.resample_matrix(sorted({c.get("sessionDate") for c in cohort}), B, seed)
 
-    `ids` is EVERY cohort session, not only the ones that produced a usable observation (r6 #4).
-    Resampling the survivors would quietly condition the estimate on having observed something, which
-    is the same bias the coverage clause exists to measure."""
-    if not ids:
-        return None
-    rnd = random.Random(seed)
-    reps = []
-    for _ in range(B):
-        draw = [ids[rnd.randrange(len(ids))] for _ in range(len(ids))]
-        v = statistic(pooled(draw, picker))
-        if v is not None:
+def bootstrap(picker, statistic, tail):
+    """`picker` is keyed by sessionDate over EVERY cohort session, not only the ones that produced a
+    usable observation: resampling the survivors conditions the estimate on having observed something.
+
+    A replicate whose denominator is ZERO is EXCLUDED AND COUNTED, and if more than 1% of replicates are
+    excluded the clause is NOT_EVALUABLE — silently dropping them while still claiming B replicates
+    reports an interval narrower than the data supports (r7 #5)."""
+    if not matrix_ids:
+        return None, 0, True
+    reps, excluded = [], 0
+    for row in MATRIX:
+        v = statistic(pooled([matrix_ids[i] for i in row], picker))
+        if v is None:
+            excluded += 1
+        else:
             reps.append(v)
     if not reps:
-        return None
-    return q_type7(reps, 0.05 if tail == "lower" else 0.95)
+        return None, excluded, True
+    if excluded > 0.01 * len(MATRIX):
+        return None, excluded, True
+    return q_type7(reps, 0.05 if tail == "lower" else 0.95), excluded, False
 
 def mean(xs):
     return (sum(xs) / len(xs)) if xs else None
 
-cohort_session_ids = sorted({session_key(c) for c in cohort})
-result_lcb = bootstrap(results_by_session, mean, "lower", cohort_session_ids)
-hit_lcb = bootstrap(hits_by_session, mean, "lower", cohort_session_ids)
-median_mae_ucb = bootstrap(mae_by_session, lambda xs: nearest_rank(xs, 50), "upper", cohort_session_ids)
-p90_mae_ucb = bootstrap(mae_by_session, lambda xs: nearest_rank(xs, 90), "upper", cohort_session_ids)
+result_lcb, result_excluded, result_ne = bootstrap(results_by_session, mean, "lower")
+hit_lcb, hit_excluded, hit_ne = bootstrap(hits_by_session, mean, "lower")
+median_mae_ucb, mae_excluded, mae_ne = bootstrap(mae_by_session, lambda xs: nearest_rank(xs, 50), "upper")
+p90_mae_ucb, p90_excluded, p90_ne = bootstrap(mae_by_session, lambda xs: nearest_rank(xs, 90), "upper")
+
+# A clause whose WHOLE-COHORT denominator is zero is NOT_EVALUABLE, which is a REJECT: coverage that
+# cannot be demonstrated is never assumed.
+if not results_by_session:
+    result_ne = True
+if not mae_by_session:
+    mae_ne = p90_ne = True
 
 # ---- the clauses, one row each, none omitted ----------------------------------------------------
 cohort_sessions = {session_key(c) for c in cohort}
@@ -332,9 +399,15 @@ clause("COHORT_SIZE", "PASS" if size_ok else "FAIL", size_ok, len(cohort),
 complete_ok = (version_ok and not not_evaluable and not attrition_unusable
                and not missing_horizon and not orphans and bool(cohort) and not read_errors)
 why = []
-if actual_version != pinned_version:
-    why.append("corpusVersion read (%s) is not the pinned one (%s)" % (actual_version[:12], pinned_version[:12]))
-elif not published_on:
+if manifest is None:
+    why.append("no published manifest for corpusVersion %s" % pinned_version[:12])
+if missing_from_archive:
+    why.append("%d record(s) the manifest names are not in the archive" % len(missing_from_archive))
+if moved:
+    why.append("%d record(s) changed coordinate or digest since the manifest was published" % len(moved))
+if extra:
+    why.append("%d record(s) below the high-water mark are not in the manifest" % len(extra))
+if manifest is not None and not published_on:
     why.append("the pinned corpusVersion was never published by a progress run — a version recomputed "
                "from today's archive would match again after a deletion")
 if missing_days:
@@ -356,19 +429,22 @@ if read_errors:
     why.append("%d read error(s): %s" % (len(read_errors), read_errors[0]))
 clause("COMPLETENESS", "PASS" if complete_ok else "FAIL", complete_ok, len(window_sessions), "; ".join(why))
 
-def bound_clause(name, value, cmp_floor=None, cmp_ceil=None, note=""):
-    if value is None:
+def bound_clause(name, value, cmp_floor=None, cmp_ceil=None, note="", not_evaluable=False):
+    if not_evaluable or value is None:
         clause(name, "NOT_EVALUABLE", False, None, note or "no observation to estimate from")
         return
     ok = (value > cmp_floor) if cmp_floor is not None else (value <= cmp_ceil)
     clause(name, "PASS" if ok else "FAIL", ok, value, note)
 
-bound_clause("RESULT_LCB", result_lcb, cmp_floor=f_result,
-             note="LCB95 (5th pct of %d replicates) of mean result ticks at %s vs floor %s" % (B, PRIMARY, f_result))
-bound_clause("HIT_RATE_LCB", hit_lcb, cmp_floor=f_hit,
-             note="LCB95 of hit rate at %s (hit = resultTicks > 0) vs floor %s" % (PRIMARY, f_hit))
-if median_mae_ucb is None or p90_mae_ucb is None:
-    clause("MAE_CEILING", "NOT_EVALUABLE", False, None, "no OBSERVED path to measure MAE on")
+bound_clause("RESULT_LCB", result_lcb, cmp_floor=f_result, not_evaluable=result_ne,
+             note="LCB95 (5th pct of %d replicates, %d excluded) of mean result ticks at %s vs floor %s"
+                  % (B, result_excluded, PRIMARY, f_result))
+bound_clause("HIT_RATE_LCB", hit_lcb, cmp_floor=f_hit, not_evaluable=hit_ne,
+             note="LCB95 of hit rate at %s (hit = resultTicks > 0, %d replicates excluded) vs floor %s"
+                  % (PRIMARY, hit_excluded, f_hit))
+if mae_ne or p90_ne or median_mae_ucb is None or p90_mae_ucb is None:
+    clause("MAE_CEILING", "NOT_EVALUABLE", False, None,
+           "no OBSERVED path to measure MAE on, or too many replicates excluded (%d/%d)" % (mae_excluded, B))
 else:
     ok = median_mae_ucb <= c_median_mae and p90_mae_ucb <= c_p90_mae
     clause("MAE_CEILING", "PASS" if ok else "FAIL", ok, median_mae_ucb,
@@ -402,8 +478,11 @@ artifact = {
     "env": env, "generatedAt": stamp,
     "parameterSetHash": phash, "trackFromPush": track_from, "stoppingBoundaryMs": stopping,
     "primaryHorizon": PRIMARY,
-    "corpusVersion": pinned_version, "corpusVersionRead": actual_version,
+    "corpusVersion": pinned_version,
     "estimator": {"unit": "SESSION", "replicates": B, "seed": seed, "quantile": "TYPE_7",
+                  "prng": "SplittableRandom", "matrix": "ONE_PER_RUN",
+                  "replicatesExcluded": {"result": result_excluded, "hitRate": hit_excluded,
+                                         "medianMae": mae_excluded, "p90Mae": p90_excluded},
                   "lcb95": "5th percentile of replicates", "ucb95": "95th percentile of replicates"},
     "thresholds": {"resultLcbFloor": f_result, "hitRateLcbFloor": f_hit,
                    "medianMaeCeiling": c_median_mae, "p90MaeCeiling": c_p90_mae,
@@ -414,6 +493,9 @@ artifact = {
                "requiredCells": REQUIRED_CELLS, "requiredClasses": REQUIRED_CLASSES,
                "outcomesAtPrimary": len(prim), "observedAtPrimary": len(obs)},
     "corpusVersionPublishedOn": published_on,
+    "manifestHighWaterMark": None if manifest is None else manifest.get("highWaterMark"),
+    "manifestRecordCount": None if manifest is None else manifest.get("recordCount"),
+    "archiveVsManifest": {"missing": missing_from_archive[:10], "moved": moved[:10], "extra": extra[:10]},
     "corpusStartDate": corpus_start, "owedDaysMissing": missing_days,
     "notEvaluableSessions": not_evaluable, "attritionUnusableSessions": attrition_unusable,
     "callsMissingAHorizon": missing_horizon[:20], "orphanOutcomes": orphans[:20],
@@ -425,8 +507,13 @@ artifact = {
     "authorizing": False, "actionable": False, "slice": "COMMISSIONING_SHADOW",
     "note": "A4 evidence only. This artifact cannot satisfy A2, cannot set validationStatus, and is not a step on the A2 path.",
 }
-# identity = SHA-256 over the canonical JSON with artifactId excluded — the same canonical form A1 uses
-artifact["artifactId"] = hashlib.sha256(R.canonical(artifact).encode("utf-8")).hexdigest()
+# Identity = SHA-256 over the canonical JSON with artifactId excluded, the same canonical form A1 uses —
+# and with generatedAt excluded too, for the same reason the ledger's semantic digest excludes ts and
+# runId: WHEN the artifact was computed is not part of what it says. Including it would give the same
+# evidence, the same corpus and the same thresholds a different identity on every run, which is the
+# opposite of a content address.
+identity = {k: v for k, v in artifact.items() if k != "generatedAt"}
+artifact["artifactId"] = hashlib.sha256(R.canonical(identity).encode("utf-8")).hexdigest()
 
 d = os.path.join(out_root, phash, str(track_from).replace(":", "").replace("/", ""), "artifacts")
 os.makedirs(d, exist_ok=True)

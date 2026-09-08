@@ -43,22 +43,27 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # is derived neither from oe-topics.env nor from what happens to be in the archive — those are the two
 # things that go quiet together. Without it a dropped ledger topic would report nothing at all instead of
 # reporting a target whose corpus is MISSING.
-TARGETS="${OE_CAL_TARGETS_FILE:-$SCRIPT_DIR/calibration-targets.env}"
+# Beside this script, with no way to point it elsewhere — same reasoning as the evaluator (r7 #1): a
+# reporter that can be handed another declaration can be made to report against another cohort.
+TARGETS="$SCRIPT_DIR/calibration-targets.env"
 [ -f "$TARGETS" ] || { log "FATAL: no calibration target declaration at $TARGETS"; exit 1; }
 # shellcheck source=/dev/null
 . "$TARGETS"
 eval "CORPUS_START_DATE=\"\${OE_CAL_CORPUS_START_DATE_${ENV_NAME}:-}\""
-export CORPUS_START_DATE
+eval "DECLARED_HASH=\"\${OE_CAL_PARAMETER_SET_HASH_${ENV_NAME}:-}\""
+eval "DECLARED_TRACK_FROM=\"\${OE_CAL_TRACK_FROM_PUSH_${ENV_NAME}:-}\""
+export CORPUS_START_DATE DECLARED_HASH DECLARED_TRACK_FROM
 T_SESSIONS="${OE_CAL_T_SESSIONS:-30}"; T_COHORT="${OE_CAL_T_COHORT:-200}"
 T_CLASS="${OE_CAL_T_CLASS:-50}";       T_CELL="${OE_CAL_T_CELL:-50}"
 REQUIRED_CLASSES="${OE_CAL_REQUIRED_CLASSES:-}"; REQUIRED_CELLS="${OE_CAL_REQUIRED_CELLS:-}"
 [ -n "$REQUIRED_CELLS" ] || { log "FATAL: $TARGETS declares no required cell universe — a per-cell count over an empty universe is not a measurement"; exit 1; }
 [ -n "$CORPUS_START_DATE" ] || { log "FATAL: $TARGETS declares no corpusStartDate for env=$ENV_NAME"; exit 1; }
 
-python3 - "$SCRIPT_DIR" "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$T_SESSIONS" "$T_COHORT" "$T_CLASS" "$T_CELL" "$REQUIRED_CLASSES" "$REQUIRED_CELLS" <<'PY'
+python3 - "$SCRIPT_DIR" "$ROOT" "$OUT_ROOT" "$TODAY" "$STAMP" "$ENV_NAME" "$T_SESSIONS" "$T_COHORT" "$T_CLASS" "$T_CELL" "$REQUIRED_CLASSES" "$REQUIRED_CELLS" "$LEDGER_TOPIC" <<'PY'
 import json, os, sys, hashlib, tempfile
 
-script_dir, root, out_root, today, stamp, env, t_sessions, t_cohort, t_class, t_cell, req_classes, req_cells = sys.argv[1:13]
+(script_dir, root, out_root, today, stamp, env, t_sessions, t_cohort, t_class, t_cell,
+ req_classes, req_cells, ledger_topic) = sys.argv[1:14]
 sys.path.insert(0, script_dir)
 import oe_corpus_reader as R
 
@@ -92,8 +97,16 @@ for c in calls:
     cell = R.cell_key(c)
     b["cells"][cell] = b["cells"].get(cell, 0) + 1
 
-corpus_version = R.corpus_version(logical)
+# A5.6: the version is a PUBLISHED, IMMUTABLE MANIFEST — published by atomic rename to
+# corpus/<corpusVersion>/manifest.json and never mutated. A bare hash of the live archive is not a pin:
+# it matches again after a deletion, so a calibration could not be re-run against the inputs it used.
+manifest = R.build_manifest(read, ledger_topic, env)
+corpus_version, manifest_path, minted = R.publish_manifest(out_root, manifest)
 _cal = R.load_calendar()
+if _cal is None:
+    print("FATAL: no market calendar — owed trading days cannot be enumerated and a holiday would be "
+          "reported as a permanent MISSING", file=sys.stderr)
+    sys.exit(1)
 
 # A5.5: DECLARED, not inferred. min(sessions) lets deletion of the earliest weeks redefine the
 # expected window as "whatever survived", which is the failure the owed-session check exists to catch.
@@ -121,6 +134,36 @@ calib_calls = sum(s["calls"] for s in complete)
 today_rows = [v for v in sessions.values() if v["sessionDate"] == today]
 today_status = today_rows[0]["archiveStatus"] if today_rows else "NOT_EXPECTED"
 
+# The cohort reported on is the DECLARED one. Reporting whatever cohorts happen to be in the archive
+# means a new parameter set publishes the old one's numbers, and the day the hash changes is exactly
+# the day the report must say so (r7 #8).
+declared_hash = os.environ.get("DECLARED_HASH") or ""
+declared_track = os.environ.get("DECLARED_TRACK_FROM") or ""
+if declared_hash and declared_hash != "UNFROZEN":
+    by_cohort = {k: v for k, v in by_cohort.items()
+                 if k[0] == declared_hash and (not declared_track or k[1] == declared_track)}
+
+# A5.7: evaluationDecision is the ONE of the four facts that is a claim about the instrument being any
+# good, and it comes from a PushValidationArtifact — reading the latest one rather than hardcoding
+# NOT_RUN, which made an artifact's verdict invisible here forever (r7 #8).
+def latest_decision(ph, tf):
+    import glob as _g
+    best, decision = None, "NOT_RUN"
+    key = ph if ph else "*"
+    pat = os.path.join(out_root, key, str(tf or "*").replace(":", "").replace("/", ""), "artifacts", "*.json")
+    for f in _g.glob(pat):
+        try:
+            a = json.load(open(f))
+        except Exception:
+            read_errors.append("artifact unreadable: %s" % os.path.basename(f))
+            continue
+        if a.get("corpusVersion") != corpus_version:
+            continue          # an artifact about ANOTHER corpus says nothing about this one
+        at = a.get("generatedAt") or ""
+        if best is None or at > best:
+            best, decision = at, a.get("decision", "NOT_RUN")
+    return decision
+
 reports = []
 if not by_cohort:
     reports.append({
@@ -130,7 +173,7 @@ if not by_cohort:
         "callsCollected": calib_calls,
         "sessionsComplete": len(complete),
         "thresholdsMet": False, "corpusComplete": False, "readyForEvaluation": False,
-        "evaluationDecision": "NOT_RUN",
+        "evaluationDecision": latest_decision(declared_hash, declared_track),
     })
 else:
     for (ph, tf), b in sorted(by_cohort.items()):
@@ -153,7 +196,7 @@ else:
                         "cellsWithNoCalls": empty_cells},
             "thresholdsMet": thresholds, "corpusComplete": corpus_ok,
             "readyForEvaluation": thresholds and corpus_ok,
-            "evaluationDecision": "NOT_RUN",
+            "evaluationDecision": latest_decision(ph, tf),
         })
 
 report = {
@@ -166,7 +209,12 @@ report = {
     "sessions": {k: v for k, v in sorted(sessions.items())},
     "sessionsMissing": sorted(v["sessionDate"] for v in sessions.values() if v["archiveStatus"] == "MISSING"),
     "cohorts": reports,
+    # All FOUR A4 shadow labels, on the record that is SERVED as well as the one on disk: two of them
+    # were missing, and a consumer that checks only what it is given would have seen an unlabelled
+    # record (r7 #8).
     "actionable": False, "slice": "COMMISSIONING_SHADOW",
+    "evidenceBasis": "NONE_SHADOW", "validationStatus": "FORWARD_UNMEASURED",
+    "manifestPath": manifest_path, "manifestMinted": minted,
 }
 
 for r in reports:

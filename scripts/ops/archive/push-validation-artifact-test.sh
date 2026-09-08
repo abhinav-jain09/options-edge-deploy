@@ -6,14 +6,28 @@
 # something it should not. A test that only checks the happy path would pass on an evaluator that
 # returns ACCEPT unconditionally.
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK="$(mktemp -d)"
+# The scripts under test are STAGED into a directory of their own, declaration and all, and run from
+# there. There is no way to point the evaluator at another declaration — that hatch would defeat every
+# refusal this suite checks — so a case that needs different targets rewrites the staged copy, which is
+# exactly the file the deployed unit reads.
+HERE="$WORK/unit"
+mkdir -p "$HERE"
+cp "$SRC/oe-push-validation-artifact.sh" "$SRC/oe-calibration-progress.sh" \
+   "$SRC/oe_corpus_reader.py" "$SRC/calibration-targets.env" "$HERE/"
+chmod +x "$HERE/oe-push-validation-artifact.sh" "$HERE/oe-calibration-progress.sh"
 trap 'rm -rf "$WORK"' EXIT
 ROOT="$WORK/kafka/prod/context-tape.direction.ledger"
 PH="a1b2c3d4e5f60718"
 TF="2026-07-01"
 SB="$(python3 -c "import datetime;print(int(datetime.datetime.fromisoformat('2026-08-13T20:00:00+00:00').timestamp()*1000))")"
 fails=0
+# the REAL trading calendar, which the reader now requires rather than falling back to weekdays
+CAL_DIR="$(cd "$SRC/../../jenkins" 2>/dev/null && pwd || true)"
+[ -f "$CAL_DIR/market_calendar.py" ] || CAL_DIR="$HOME/development/workspace/options-edge-deploy/scripts/jenkins"
+[ -f "$CAL_DIR/market_calendar.py" ] || { echo "FATAL: no market_calendar.py for the suite to use"; exit 1; }
+export CAL_DIR
 ok()   { printf '  ok   %s\n' "$1"; }
 bad()  { printf '  FAIL %s\n' "$1"; fails=$((fails+1)); }
 
@@ -76,6 +90,7 @@ while made < n_sessions:
              "sessionDate": sd, "phaseAtCall": "VALIDATION", "trackFromPush": tf, "delivery": "LIVE",
              "predictedSign": 1 if i % 2 == 0 else -1, "enteredState": st, "regime": regime,
              "node": {"roles": [] if roles == "NONE" else [roles]},
+             "semanticStamp": "2026-09-08T18:00:00Z",
              "refT": base_t + i * 60000, "ts": base_t, "runId": "r1"}
         k, dg = pkey(c), dig(c)
         lines.append((offset, k, json.dumps(c))); crecs.append((offset, k, dg)); offset += 1
@@ -86,6 +101,7 @@ while made < n_sessions:
                  "trackFromPush": tf, "delivery": "LIVE", "resultState": "OBSERVED",
                  "resultTicks": res, "pathState": "OBSERVED", "maeTicks": abs(res) + 2,
                  "mfeTicks": abs(res) + 5, "cellKey": "%s|%s" % (cell, h),
+                 "semanticStamp": "2026-09-08T18:00:00Z",
                  "refT": base_t + i * 60000, "ts": base_t, "runId": "r1"}
             k, dg = pkey(o), dig(o)
             lines.append((offset, k, json.dumps(o))); orecs.append((offset, k, dg)); offset += 1
@@ -101,6 +117,7 @@ while made < n_sessions:
             "phaseAtCall": "VALIDATION", "trackFromPush": tf, "delivery": "SEAL",
             "ledgerTopic": "context-tape.direction.ledger",
             "generation": "3f2a1c04-5b6d-4e7f-8a9b-0c1d2e3f4a5b",
+            "semanticStamp": "2026-09-08T18:00:00Z",
             "logicalCallCount": len(crecs), "logicalOutcomeCount": len(orecs),
             "callsDigest": chain(0x01, crecs), "outcomesDigest": chain(0x02, orecs),
             "firstOffset": first, "lastOffset": offset - 1, "conflicts": 0,
@@ -127,7 +144,7 @@ print(R.corpus_version(R.read_logical(os.environ['ROOT'])['logical']))"
 # here, so a case that wants a different boundary or a different threshold must DECLARE it — which is
 # itself the property being tested.
 targets() {   # targets <thresholds-state> <boundary-ms> [B]
-  cat > "$WORK/targets.env" <<TEOF
+  cat > "$HERE/calibration-targets.env" <<TEOF
 OE_CAL_TOPIC=context-tape.direction.ledger
 OE_CAL_PARAMETER_SET_HASH_prod=$PH
 OE_CAL_TRACK_FROM_PUSH_prod=$TF
@@ -154,20 +171,41 @@ TEOF
 # The pin must name a version a PROGRESS RUN published, so every case publishes one first — which is
 # also the only way the reporter and the evaluator are shown to be talking about the same corpus.
 publish() {
-  env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 OE_CAL_TARGETS_FILE="$WORK/targets.env" \
-      bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+  env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 \
+      CALENDAR_DIR="$CAL_DIR" bash "$HERE/oe-calibration-progress.sh" > "$WORK/publish.log" 2>&1 \
+      || { echo "  FAIL the progress run did not publish:"; sed -n '1,6p' "$WORK/publish.log"; fails=$((fails+1)); }
+}
+
+# The pinned version is the one the LAST progress run published, read back from its own record — never
+# recomputed here, which is precisely the shortcut the evaluator refuses.
+published_version() {
+  WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/progress/dt=*.json'), key=os.path.getmtime)
+print(json.load(open(f[-1]))['corpusVersion'] if f else 'NONE')"
 }
 
 evaluate() {   # evaluate [corpusVersion override]
-  env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 OE_CAL_TARGETS_FILE="$WORK/targets.env" \
-      CORPUS_VERSION="${1:-$(version_of)}" bash "$HERE/oe-push-validation-artifact.sh" 2>&1 | head -1
+  env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE=2026-08-13 CALENDAR_DIR="$CAL_DIR" \
+      CORPUS_VERSION="${1:-$(published_version)}" bash "$HERE/oe-push-validation-artifact.sh" 2>&1 | head -1
 }
 
 echo "1. a complete corpus with frozen, reachable thresholds ACCEPTS"
 build 32 20
 targets FROZEN "$SB"; publish
 OUT="$(evaluate)"
-case "$OUT" in *"decision=ACCEPT"*) ok "ACCEPT on a complete corpus";; *) bad "expected ACCEPT, got: $OUT";; esac
+case "$OUT" in
+  *"decision=ACCEPT"*) ok "ACCEPT on a complete corpus";;
+  *) bad "expected ACCEPT, got: $OUT"
+     # a failing positive fixture is useless without the reason, and the reason is in the artifact
+     WORKDIR="$WORK" python3 -c "
+import json, glob, os
+f = sorted(glob.glob(os.environ['WORKDIR'] + '/calibration-runs/prod/*/*/artifacts/*.json'), key=os.path.getmtime)
+d = json.load(open(f[-1]))
+print('       why:', [c for c in d['clauseResults'] if c['clause'] == 'COMPLETENESS'][0]['note'][:400])
+print('       archiveVsManifest:', json.dumps(d.get('archiveVsManifest'))[:300])
+print('       readErrors:', d.get('readErrors', [])[:3])";;
+esac
 for c in COHORT_SIZE COMPLETENESS RESULT_LCB HIT_RATE_LCB MAE_CEILING COVERAGE ATTRITION_CEILING THRESHOLDS_FROZEN; do
   case "$OUT" in *"$c=PASS"*) :;; *) bad "$c did not pass on the positive fixture: $OUT";; esac
 done
@@ -181,16 +219,16 @@ case "$OUT" in *"decision=REJECT"*) ok "and the decision follows";; *) bad "expe
 
 echo "3. the caller cannot supply anything that is preregistered"
 targets FROZEN "$SB"
-OUT="$(env ENV=prod ARCHIVE_DIR="$WORK" OE_CAL_TARGETS_FILE="$WORK/targets.env" CORPUS_VERSION=x \
+OUT="$(env ENV=prod ARCHIVE_DIR="$WORK" CORPUS_VERSION=x \
        COVERAGE_FLOOR=0.1 bash "$HERE/oe-push-validation-artifact.sh" 2>&1 | tail -1)"
 case "$OUT" in *"cannot be supplied by the caller"*) ok "a threshold passed in is refused, not honoured";; *) bad "override accepted: $OUT";; esac
-OUT="$(env ENV=prod ARCHIVE_DIR="$WORK" OE_CAL_TARGETS_FILE="$WORK/targets.env" CORPUS_VERSION=x \
+OUT="$(env ENV=prod ARCHIVE_DIR="$WORK" CORPUS_VERSION=x \
        STOPPING_BOUNDARY_MS=1 bash "$HERE/oe-push-validation-artifact.sh" 2>&1 | tail -1)"
 case "$OUT" in *"cannot be supplied by the caller"*) ok "the stopping boundary cannot be moved from outside";; *) bad "boundary override accepted: $OUT";; esac
 
 echo "4. an UNFROZEN boundary refuses to evaluate at all"
 targets FROZEN UNFROZEN
-OUT="$(env ENV=prod ARCHIVE_DIR="$WORK" OE_CAL_TARGETS_FILE="$WORK/targets.env" CORPUS_VERSION=x \
+OUT="$(env ENV=prod ARCHIVE_DIR="$WORK" CORPUS_VERSION=x \
        bash "$HERE/oe-push-validation-artifact.sh" 2>&1 | tail -1)"
 case "$OUT" in *"still UNFROZEN"*) ok "no artifact exists before the boundary is frozen";; *) bad "ran without a boundary: $OUT";; esac
 
@@ -244,7 +282,7 @@ build 32 20
 targets FROZEN "$SB"; publish
 A="$(evaluate | sed -n 's/^PushValidationArtifact \([0-9a-f]*\).*/\1/p')"
 B2="$(evaluate | sed -n 's/^PushValidationArtifact \([0-9a-f]*\).*/\1/p')"
-sed -i'' -e 's/OE_CAL_COVERAGE_FLOOR=0.9/OE_CAL_COVERAGE_FLOOR=0.5/' "$WORK/targets.env"
+sed -i'' -e 's/OE_CAL_COVERAGE_FLOOR=0.9/OE_CAL_COVERAGE_FLOOR=0.5/' "$HERE/calibration-targets.env"
 C="$(evaluate | sed -n 's/^PushValidationArtifact \([0-9a-f]*\).*/\1/p')"
 { [ -n "$A" ] && [ "$A" = "$B2" ]; } && ok "identical inputs reproduce the artifactId ($A)" || bad "artifactId not reproducible: $A vs $B2"
 [ "$A" != "$C" ] && ok "a changed threshold changes the identity" || bad "artifactId ignores the thresholds"
@@ -271,15 +309,116 @@ else
 fi
 
 echo "15. the SHIPPED preregistration is the conservative one"
-grep -q '^OE_CAL_THRESHOLDS_STATE=PROVISIONAL_PENDING_MEASUREMENT' "$HERE/calibration-targets.env" \
+grep -q '^OE_CAL_THRESHOLDS_STATE=PROVISIONAL_PENDING_MEASUREMENT' "$SRC/calibration-targets.env" \
   && ok "the shipped thresholds are PROVISIONAL, so no artifact can ACCEPT yet" \
   || bad "the shipped declaration claims FROZEN thresholds"
-grep -q '^OE_CAL_BOOTSTRAP_B=10000' "$HERE/calibration-targets.env" \
+grep -q '^OE_CAL_BOOTSTRAP_B=10000' "$SRC/calibration-targets.env" \
   && ok "the shipped replicate count is A2's 10000 (the cases above use fewer, on purpose)" \
   || bad "the shipped B is not 10000"
-grep -q '^OE_CAL_STOPPING_BOUNDARY_MS_prod=UNFROZEN' "$HERE/calibration-targets.env" \
+grep -q '^OE_CAL_STOPPING_BOUNDARY_MS_prod=UNFROZEN' "$SRC/calibration-targets.env" \
   && ok "the shipped stopping boundary is UNFROZEN, as it must be before the literals are chosen" \
   || bad "the shipped stopping boundary is already set"
+
+
+echo "16. a market HOLIDAY is not an owed trading day"
+build 32 20
+targets FROZEN "$SB"; publish
+OUT="$(evaluate)"
+case "$OUT" in *"decision=ACCEPT"*) ok "2026-07-03 (Independence Day observed) is not owed";; *) bad "a holiday was owed: $OUT";; esac
+CAL_DIR=/nonexistent-calendar bash -c '
+  env ENV=prod ARCHIVE_DIR="'"$WORK"'" REPORT_DATE=2026-08-13 CALENDAR_DIR=/nonexistent \
+      bash "'"$HERE"'/oe-calibration-progress.sh"' >/dev/null 2>&1 \
+  && bad "the reporter ran without a calendar" \
+  || ok "no calendar is FATAL, never a silent weekday fallback"
+
+echo "17. a zero-call seal under ANOTHER hash does not satisfy an owed day"
+build 32 20
+targets FROZEN "$SB"; publish
+victim="$(ls -d "$ROOT"/dt=* | sed -n '5p')"
+vd="$(basename "$victim" | sed 's/dt=//')"
+rm -rf "$victim"
+VD="$vd" ROOT="$ROOT" python3 - <<'PYCASE'
+import gzip, json, os, hashlib
+root, sd = os.environ["ROOT"], os.environ["VD"]
+def canonical(o):
+    if isinstance(o, dict):
+        return "{" + ",".join('%s:%s' % (json.dumps(k), canonical(v)) for k, v in sorted(o.items())) + "}"
+    if isinstance(o, list): return "[" + ",".join(canonical(v) for v in o) + "]"
+    if o is None: return "null"
+    if isinstance(o, bool): return "true" if o else "false"
+    if isinstance(o, str): return json.dumps(o)
+    return json.dumps(str(o))
+def chain(domain, recs):
+    d = b"\x00" * 32
+    for off, k, dg in sorted(recs, key=lambda r: (r[0], r[1])):
+        kb, raw = k.encode(), bytes.fromhex(dg)
+        d = hashlib.sha256(d + bytes([domain]) + len(kb).to_bytes(4, "big") + kb
+                           + len(raw).to_bytes(4, "big") + raw).digest()
+    return d.hex()
+other = "ffffffffffffffff"
+lin = "lin-other-%s" % sd
+seal = {"kind": "seal", "sessionDate": sd, "parameterSetHash": other, "sessionLineageId": lin,
+        "phaseAtCall": "VALIDATION", "trackFromPush": "2026-07-01", "delivery": "SEAL",
+        "ledgerTopic": "context-tape.direction.ledger",
+        "generation": "3f2a1c04-5b6d-4e7f-8a9b-0c1d2e3f4a5b",
+        "semanticStamp": "2026-09-08T18:00:00Z",
+        "logicalCallCount": 0, "logicalOutcomeCount": 0,
+        "callsDigest": chain(0x01, []), "outcomesDigest": chain(0x02, []),
+        "firstOffset": None, "lastOffset": None, "conflicts": 0,
+        "attrition": [{"sessionDate": sd, "etHour": 10, "graded": 10, "NO_TICKS": 1}],
+        "ts": 0, "runId": "r1"}
+key = "%s|%s|%s" % (sd, other, lin)
+os.makedirs(os.path.join(root, "dt=%s" % sd), exist_ok=True)
+with gzip.open(os.path.join(root, "dt=%s" % sd, "part-000.jsonl.gz"), "wt") as fh:
+    fh.write("Offset:999999 %s\t%s\n" % (key, json.dumps(seal)))
+PYCASE
+publish
+OUT="$(evaluate)"
+case "$OUT" in *"COMPLETENESS=FAIL"*) ok "another parameter set's seal does not fill this cohort's hole";; *) bad "a foreign seal satisfied an owed day: $OUT";; esac
+
+echo "18. a declared corpusStartDate BEFORE the archive begins owes those days"
+build 32 20
+targets FROZEN "$SB"; publish
+sed -i'' -e 's/^OE_CAL_CORPUS_START_DATE_prod=.*/OE_CAL_CORPUS_START_DATE_prod=2026-06-22/' "$HERE/calibration-targets.env"
+publish
+OUT="$(evaluate)"
+case "$OUT" in *"COMPLETENESS=FAIL"*) ok "the window is the DECLARED one, not whatever the archive starts at";; *) bad "a declared earlier start was ignored: $OUT";; esac
+
+echo "19. an unreadable archive file cannot sit beside an ACCEPT"
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+printf 'this is not gzip' > "$ROOT/dt=2026-07-09/part-999.jsonl.gz"
+OUT="$(evaluate "$PIN")"
+case "$OUT" in *"COMPLETENESS=FAIL"*) ok "a file the reader could not open is part of the verdict";; *) bad "an unreadable file was passed over: $OUT";; esac
+
+echo "20. a record that MOVED since the manifest was published fails"
+build 32 20
+targets FROZEN "$SB"; publish
+PIN="$(published_version)"
+python3 - "$ROOT" <<'PYCASE'
+import gzip, glob, sys, os
+f = sorted(glob.glob(os.path.join(sys.argv[1], "dt=*", "*.jsonl.gz")))[3]
+lines = gzip.open(f, "rt").read().splitlines()
+lines[0] = lines[0].replace("Offset:", "Offset:1", 1)      # same record, another coordinate
+with gzip.open(f, "wt") as fh:
+    fh.write("\n".join(lines) + "\n")
+PYCASE
+OUT="$(evaluate "$PIN")"
+case "$OUT" in *"COMPLETENESS=FAIL"*) ok "the archive must still BE the corpus the manifest names";; *) bad "a moved record was accepted: $OUT";; esac
+
+echo "21. the PRNG is java.util.SplittableRandom, not a lookalike"
+HERE="$HERE" python3 -c "
+import sys, os
+sys.path.insert(0, os.environ['HERE'])
+import oe_corpus_reader as R
+r = R.SplittableRandom(20260906)
+got = [r.next_int(32) for _ in range(8)]
+# these are java.util.SplittableRandom(20260906L).nextInt(32) x8, captured from a real JVM
+want = [3, 8, 11, 23, 1, 28, 29, 27]
+sys.exit(0 if got == want else 1)" \
+  && ok "nextInt reproduces the JVM's own sequence" \
+  || bad "the PRNG does not match java.util.SplittableRandom"
 
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
