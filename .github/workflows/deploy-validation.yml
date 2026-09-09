@@ -87,6 +87,14 @@ jobs:
       - name: ES Footprint contingency guard refuses each of its own violations
         run: scripts/ci/validate-footprint-gateway-contingency-test.sh
 
+      # A topic auto-created after a reset comes up on the BROKER's defaults, and those defaults may
+      # happen to match what the declaration asks for — so `kafka-configs --describe` shows no drift
+      # because it shows no topic-level config at all. The agreement is a coincidence that ends the
+      # moment a default moves. This exercises the guard's arms against a fake broker; the live
+      # assertion runs on the deploy paths, which have a real one.
+      - name: Declared retention overrides must be set on the topic, not inherited (guard arms)
+        run: scripts/ci/validate-declared-overrides-are-explicit-test.sh
+
       # VIX feed separation §7: validate-services.sh already runs the single-publisher
       # assertion against the REAL render; this additionally exercises the assertion's
       # full predicate matrix (five planned rollout states, both-owners violations,
