@@ -1425,6 +1425,35 @@ _n=$(grep -c 'cohort_progress_dir' "$SRC/oe-calibration-progress.sh" "$SRC/calib
   && ok "both the reporter and the watchdog call it; neither recomputes the path" \
   || bad "$_n of the two no longer calls cohort_progress_dir — the duplication is back"
 
+echo "64. an UNFROZEN declaration does not turn the cohort check off"
+# r20. The record-vs-declaration check waived hash equality whenever the declared hash was the literal
+# UNFROZEN — which is what ships, so production ran with this check disabled. A record sitting in the
+# right directory but claiming a different cohort must still be refused.
+build 3 20
+targets FROZEN "$SB"; publish
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+_rec="$(find "$WORK/calibration-runs/prod" -name "dt=$DAY.json" | head -1)"
+[ -n "$_rec" ] || bad "case 64 could not produce a progress record"
+# Declare UNFROZEN, leave the record where the reporter put it, and make the record claim another cohort.
+sed -i'' -e 's/^OE_CAL_PARAMETER_SET_HASH_prod=.*/OE_CAL_PARAMETER_SET_HASH_prod=UNFROZEN/' "$HERE/calibration-targets.env"
+_dir="$(dirname "$_rec")"; _newdir="$WORK/calibration-runs/prod/UNFROZEN/$(basename "$(dirname "$_dir")")/progress"
+mkdir -p "$_newdir"; cp "$_rec" "$_newdir/"
+REC="$_newdir/dt=$DAY.json" python3 -c "
+import json,os
+p=os.environ['REC']; d=json.load(open(p))
+d['cohorts'][0]['parameterSetHash']='0123456789abcdef'
+json.dump(d, open(p,'w'))"
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch7.log" 2>&1; then
+  bad "an UNFROZEN declaration accepted a record claiming another cohort"
+else
+  grep -q "but we declare hash=UNFROZEN" "$WORK/watch7.log" \
+    && ok "UNFROZEN is a declaration to check against, not a reason to stop checking" \
+    || bad "it failed for another reason: $(head -4 "$WORK/watch7.log")"
+fi
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
 echo "FAIL — $fails assertion(s)"; exit 1

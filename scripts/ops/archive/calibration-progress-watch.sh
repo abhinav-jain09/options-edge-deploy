@@ -138,7 +138,12 @@ d = json.load(open(sys.argv[1])); day = sys.argv[2]
 _want_h, _want_t = os.environ.get("DECLARED_HASH",""), os.environ.get("DECLARED_TRACK","")
 _coh = (d.get("cohorts") or [{}])[0]
 _got_h, _got_t = _coh.get("parameterSetHash") or "", _coh.get("trackFromPush") or ""
-if (_want_h and _want_h != "UNFROZEN" and _got_h and _got_h != _want_h) or \
+# NO WAIVER FOR "UNFROZEN". This used to skip the hash comparison whenever the declared hash was the
+# literal UNFROZEN — which is what ships today, so the one configuration in production was the one
+# with the check turned off. The reporter always writes the DECLARED hash into cohorts[0], so an
+# honest record under an UNFROZEN declaration carries "UNFROZEN" and equality holds; the only thing
+# the waiver could ever admit was a record that disagrees, which is precisely what this check is for.
+if (_want_h and _got_h and _got_h != _want_h) or \
    (_want_t and _got_t and _got_t != _want_t):
     print("  WARN: this record is for cohort hash=%s trackFromPush=%s, but we declare hash=%s trackFromPush=%s"
           % (_got_h or "<absent>", _got_t or "<absent>", _want_h, _want_t))
