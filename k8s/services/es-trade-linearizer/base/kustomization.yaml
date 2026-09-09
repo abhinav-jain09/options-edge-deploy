@@ -1,0 +1,10 @@
+# SERVICE SLICE — es-trade-linearizer on PROD. Owns ONLY this service's workload:
+# Deployment + Service. No PVCs, no shared ConfigMaps/Secrets, no topics.
+#
+# PROD-ONLY: referenced from k8s/overlays/production (NOT k8s/base), so dev and experiment never
+# render it — dev is SPX-only and has no ES feed at all, and es4 has its own tape.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - es-trade-linearizer-deployment.yaml
+  - es-trade-linearizer-service.yaml

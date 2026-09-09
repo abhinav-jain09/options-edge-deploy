@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es-trade-linearizer-service
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: es-trade-linearizer-service
+    app.kubernetes.io/component: es-trade-linearizer-service
+    app.kubernetes.io/part-of: options-edge
+spec:
+  # SHIPS DARK: ES_LINEARIZER_OUTPUT_ENABLED=false below. The ordering path runs and is fully
+  # measurable, but nothing is published and no offset is committed. Enablement is gated on the
+  # evidence listed in es-trade-linearizer-service/ES-TRADE-LINEARIZER.md (five sessions of
+  # lateness, a 2,600 rec/s capacity benchmark, broker-failover, crash-window and fencing
+  # evidence, and a canary). Turning the flag on without that evidence repeats exactly what the
+  # slope's own Gate-2 recorded being skipped.
+  #
+  # NEVER above 1. That is correctness, not sizing: the linearizer is a single transactional
+  # writer of one totally-ordered tape. Two replicas would both publish onto partition 0 and the
+  # order would no longer be reconstructable. Kafka's transactional.id fences a second writer, so
+  # a second replica does not corrupt the tape -- it crash-loops -- but `kubectl scale` on this
+  # Deployment is still an operation with no valid outcome.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-trade-linearizer-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-trade-linearizer-service
+        app.kubernetes.io/component: es-trade-linearizer-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      # A transaction in flight plus a bounded producer close; well short of the default 30s being
+      # a problem, but pinned so a future timeout change does not silently start SIGKILLing
+      # through an open transaction.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: es-trade-linearizer
+          image: 192.168.100.252:5000/options-edge-es-trade-linearizer:dev
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+            - secretRef:
+                name: options-edge-runtime-secrets
+          env:
+            - name: ES_LINEARIZER_HEALTH_PORT
+              value: "8152"
+            # Set EXPLICITLY, for the same reason es-aggressor-flow sets its own: a default that
+            # resolves elsewhere would silently linearize another cluster's tape.
+            - name: ES_LINEARIZER_BOOTSTRAP_SERVERS
+              value: 192.168.100.252:9092
+            - name: KAFKA_ES_TRADES_TOPIC
+              value: underlying.es.trades
+            - name: KAFKA_ES_TRADES_LINEARIZED_TOPIC
+              value: underlying.es.trades.linearized
+            # DARK. See the header. This is the single line that enables publication.
+            - name: ES_LINEARIZER_OUTPUT_ENABLED
+              value: "false"
+            # One writer, fenced by Kafka. Changing this string while another pod holds it would
+            # defeat the fencing that makes a second writer crash rather than corrupt.
+            - name: ES_LINEARIZER_TRANSACTIONAL_ID
+              value: es-trade-linearizer-0
+            - name: JAVA_TOOL_OPTIONS
+              value: -Xms256m -Xmx1g
+          ports:
+            - name: health
+              containerPort: 8152
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          # Liveness stays green while degraded or stalled ON PURPOSE: crash-looping would destroy
+          # the in-memory reorder buffer on every restart and tell an operator nothing the
+          # readiness probe does not already say.
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              memory: 1536Mi
