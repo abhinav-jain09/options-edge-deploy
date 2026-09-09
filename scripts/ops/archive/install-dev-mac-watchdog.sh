@@ -34,48 +34,85 @@ echo "install: $FILES -> $DEST"
 echo "install: launchd/$PLIST -> $AGENTS"
 if [ "$DRY" = true ]; then echo "(dry run — nothing written)"; exit 0; fi
 
-mkdir -p "$DEST" "$AGENTS"
-for f in $FILES; do cp "$SRC/$f" "$DEST/$f"; done
-chmod +x "$DEST/calibration-progress-watch.sh"
-cp "$SRC/launchd/$PLIST" "$AGENTS/$PLIST"
+# THE PLIST DECLARES THE COMMAND launchd WILL ACTUALLY RUN, and that is the only command worth
+# verifying (r24 #2). The old check ran "$DEST/calibration-progress-watch.sh" with the CALLER's bash,
+# while launchd runs the interpreter and the absolute path written in ProgramArguments — so the
+# installer could pass while the agent's real command was absent or stale, and the test's own healthy
+# case passed for exactly that reason. Read both out of the plist and hold the install to them.
+read -r PLIST_INTERP PLIST_SCRIPT <<EOF
+$(python3 -c "
+import plistlib,sys
+a = plistlib.load(open(sys.argv[1],'rb'))['ProgramArguments']
+print(a[0], a[1])" "$SRC/launchd/$PLIST")
+EOF
+[ -n "${PLIST_INTERP:-}" ] && [ -n "${PLIST_SCRIPT:-}" ] || {
+  echo "FATAL: could not read ProgramArguments from $SRC/launchd/$PLIST" >&2; exit 1; }
+[ -x "$PLIST_INTERP" ] || {
+  echo "FATAL: the plist runs $PLIST_INTERP, which is not executable on this host. launchd would fail silently every morning." >&2; exit 1; }
+if [ "$PLIST_SCRIPT" != "$DEST/calibration-progress-watch.sh" ]; then
+  echo "FATAL: the plist runs $PLIST_SCRIPT but this installer installs to $DEST." >&2
+  echo "       Installing now would register an agent pointing at a copy nobody updates." >&2
+  echo "       Fix the plist, or set OE_OPS_DIR to the directory the plist names." >&2
+  exit 1
+fi
 
-# PROVE IT RUNS. RunAtLoad is false, so loading the agent demonstrates nothing; an install that only
-# copies files is how a watchdog reaches production broken. A non-zero exit here is fine and expected
-# on a day with no progress record — what is NOT fine is the script failing to START.
-#
-# THE FIRST VERSION OF THIS DID NOT PROVE ANYTHING (r21 #1). It rejected only output containing
-# "cannot run", so a Python traceback, a missing command or a syntax error all read as "reached a
-# verdict" and the broken copy was loaded anyway. A verification that accepts almost every failure is
-# the same defect as the watchdog it installs: a check that reads as real and binds nothing. So the
-# run has to END in a state this script can NAME, and anything else is a failure to start.
-echo "verify: running it once"
+# STAGE, VERIFY, THEN REPLACE. The first version copied over the LIVE files and only then ran its
+# checks, so a refusal left a previously-working agent pointing at the rejected copy — the installer
+# broke the very installation it declined to replace (r24 #1). Nothing live is touched until the
+# staged copy has proven it runs, and a failure after that point restores what was there.
+STAGE="$(mktemp -d)"
+BACKUP="$(mktemp -d)"
+cleanup() { rm -rf "$STAGE" "$BACKUP"; }
+trap cleanup EXIT
+for f in $FILES; do cp "$SRC/$f" "$STAGE/$f"; done
+chmod +x "$STAGE/calibration-progress-watch.sh"
+
+# PROVE IT RUNS, using the plist's own interpreter, against the STAGED copy. RunAtLoad is false, so
+# loading the agent demonstrates nothing; an install that only copies files is how a watchdog reaches
+# production broken. A non-zero exit here is fine and expected on a day with no progress record —
+# what is NOT fine is the script failing to START.
+echo "verify: running the staged copy with the plist's interpreter ($PLIST_INTERP)"
 set +e
-out="$(ENV=prod bash "$DEST/calibration-progress-watch.sh" 2>&1)"; rc=$?
+out="$(ENV="${ENV:-prod}" "$PLIST_INTERP" "$STAGE/calibration-progress-watch.sh" 2>&1)"; rc=$?
 set -e
 printf '%s\n' "$out" | sed 's/^/    /'
 
 # A deliberate refusal. Every refusal in the watchdog shares this phrase so one marker covers all of
 # them; validate-dev-mac-watchdog.sh asserts that is still true.
 case "$out" in
-  *"cannot run"*) echo "REFUSING TO LOAD: the watchdog cannot run on this host (see above). Fix that first." >&2; exit 1 ;;
+  *"cannot run"*) echo "REFUSING TO INSTALL: the watchdog cannot run on this host (see above). Nothing was changed. Fix that first." >&2; exit 1 ;;
 esac
 # Did not start, however it failed. These are the shapes a broken copy actually produces.
 for _bad in "Traceback (most recent call last)" "command not found" "syntax error" "unbound variable" "No such file or directory"; do
   case "$out" in
-    *"$_bad"*) echo "REFUSING TO LOAD: the watchdog did not start — '$_bad' in its output. Installing it now would put a silent watchdog on this host." >&2; exit 1 ;;
+    *"$_bad"*) echo "REFUSING TO INSTALL: the watchdog did not start — '$_bad' in its output. Nothing was changed." >&2; exit 1 ;;
   esac
 done
 # Reached one of its OWN terminal states: it either completed the evaluation (archiveStatus=) or
 # raised an alert about the day (ALERT:). Neither appears if it died on the way there.
 case "$out" in
   *"archiveStatus="*|*"ALERT:"*) : ;;
-  *) echo "REFUSING TO LOAD: the watchdog produced no verdict and no alert (exit $rc). It did not run." >&2; exit 1 ;;
+  *) echo "REFUSING TO INSTALL: the watchdog produced no verdict and no alert (exit $rc). It did not run. Nothing was changed." >&2; exit 1 ;;
 esac
 case "$rc" in
   0|1) : ;;
-  *) echo "REFUSING TO LOAD: unexpected exit $rc — the watchdog exits 0 or 1, so this is not one of its own outcomes." >&2; exit 1 ;;
+  *) echo "REFUSING TO INSTALL: unexpected exit $rc — the watchdog exits 0 or 1, so this is not one of its own outcomes. Nothing was changed." >&2; exit 1 ;;
 esac
 echo "verify: it started and reached one of its own outcomes (exit $rc — nonzero is normal when the day did not land)"
+
+# Only now touch the host, and keep what was there in case the load fails.
+mkdir -p "$DEST" "$AGENTS"
+for f in $FILES; do [ -f "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"; done
+[ -f "$AGENTS/$PLIST" ] && cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"
+restore() {
+  echo "restoring the previous installation" >&2
+  for f in $FILES; do [ -f "$BACKUP/$f" ] && cp "$BACKUP/$f" "$DEST/$f"; done
+  [ -f "$BACKUP/$PLIST" ] && cp "$BACKUP/$PLIST" "$AGENTS/$PLIST"
+  launchctl load "$AGENTS/$PLIST" 2>/dev/null || true
+}
+for f in $FILES; do cp "$STAGE/$f" "$DEST/$f"; done
+chmod +x "$DEST/calibration-progress-watch.sh"
+cp "$SRC/launchd/$PLIST" "$AGENTS/$PLIST"
 
 launchctl unload "$AGENTS/$PLIST" 2>/dev/null || true
 launchctl load "$AGENTS/$PLIST"
@@ -89,7 +126,9 @@ launchctl load "$AGENTS/$PLIST"
 _label="$(python3 -c "import plistlib,sys;print(plistlib.load(open(sys.argv[1],'rb'))['Label'])" "$SRC/launchd/$PLIST")"
 _n="$(launchctl list 2>/dev/null | awk -F'\t' -v l="$_label" '$3 == l' | grep -c . || true)"
 if [ "${_n:-0}" -ne 1 ]; then
-  echo "INSTALL FAILED: launchctl reports $_n agents with the label $_label, expected exactly 1. The files are in place but nothing is scheduled." >&2
+  echo "INSTALL FAILED: launchctl reports $_n agents with the label $_label, expected exactly 1." >&2
+  echo "                The new files were written but nothing is scheduled." >&2
+  restore
   exit 1
 fi
 echo "loaded: 1 agent with the label $_label, scheduled 07:00 local"

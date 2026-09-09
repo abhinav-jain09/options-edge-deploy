@@ -27,6 +27,19 @@ EOF
   chmod +x "$TMP/bin/launchctl"; : > "$TMP/calls"
   # A real corpus root and a real calendar, so a HEALTHY run reaches one of the watchdog's own outcomes.
   mkdir -p "$TMP/nas/calibration-runs/prod/UNFROZEN/2099-01-01/progress"
+  # The installer now holds the install to the command the PLIST declares, so the staged plist must
+  # name THIS destination. Before r24 the test overrode OE_OPS_DIR and the plist still pointed at
+  # /Users/abhinav/oe-ops — the healthy case passed while verifying a copy launchd would never run,
+  # which is the defect itself sitting inside its own test.
+  PLIST_PATH="$TMP/archive/launchd/com.optionsedge.calibration-progress-watch.plist"
+  INTERP="${TEST_INTERP:-/bin/bash}"
+  python3 - "$PLIST_PATH" "$INTERP" "$TMP/dest/calibration-progress-watch.sh" <<'PYEOF'
+import plistlib, sys
+p, interp, script = sys.argv[1], sys.argv[2], sys.argv[3]
+d = plistlib.load(open(p, 'rb'))
+d['ProgramArguments'] = [interp, script]
+plistlib.dump(d, open(p, 'wb'))
+PYEOF
 }
 install_run() {
   PATH="$TMP/bin:$PATH" OE_OPS_DIR="$TMP/dest" LAUNCH_AGENTS_DIR="$TMP/agents" \
@@ -78,7 +91,45 @@ stage 1 "com.optionsedge.calibration-progress-watch.backup"; install_run
 [ "$RC" -ne 0 ] && ok "a similarly named agent does not satisfy the check" || bad "a lookalike label passed as the agent"
 grep -q "nothing is scheduled" "$TMP/out" && ok "and it said nothing is scheduled" || bad "the failure did not say the agent is missing: $(tail -2 "$TMP/out")"
 
-echo "7. every refusal in the watchdog uses the phrase the installer blocks on"
+echo "7. a refusal leaves the PREVIOUS installation untouched"
+# r24 #1. The installer used to copy over the live files and only then run its checks, so a refusal
+# left a working agent pointing at the rejected copy — it broke the very installation it declined to
+# replace. Put a known-good file in place, then offer it a broken watchdog.
+stage 1
+mkdir -p "$TMP/dest"
+printf '#!/usr/bin/env bash\necho "I am the previous installation"\n' > "$TMP/dest/calibration-progress-watch.sh"
+cp "$TMP/dest/calibration-progress-watch.sh" "$TMP/previous"
+printf '#!/usr/bin/env bash\necho "Traceback (most recent call last)"; exit 3\n' > "$TMP/archive/calibration-progress-watch.sh"
+install_run
+[ "$RC" -ne 0 ] && ok "the installer refused" || bad "a broken watchdog was installed"
+if cmp -s "$TMP/dest/calibration-progress-watch.sh" "$TMP/previous"; then
+  ok "and the previously installed watchdog is byte-identical to what it was"
+else
+  bad "a refusal overwrote the working installation"
+fi
+
+echo "8. the plist and the destination must agree, or nothing is installed"
+# The plist names an absolute path; installing somewhere else registers an agent pointing at a copy
+# nobody updates.
+stage 1
+python3 - "$TMP/archive/launchd/com.optionsedge.calibration-progress-watch.plist" <<'PYEOF'
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], 'rb'))
+d['ProgramArguments'] = ['/bin/bash', '/somewhere/else/calibration-progress-watch.sh']
+plistlib.dump(d, open(sys.argv[1], 'wb'))
+PYEOF
+install_run
+[ "$RC" -ne 0 ] && ok "a plist pointing elsewhere stops the install" || bad "it installed to a directory the plist does not name"
+loaded && bad "it loaded the agent anyway" || ok "and nothing was scheduled"
+
+echo "9. an interpreter the plist names but the host lacks stops the install"
+# launchd runs THAT binary. If it is missing the agent fails silently every morning, which is the
+# failure this whole watchdog exists to make impossible.
+TEST_INTERP=/nonexistent/bash stage 1
+install_run
+[ "$RC" -ne 0 ] && ok "a missing interpreter is caught before anything is written" || bad "it installed an agent whose interpreter does not exist"
+
+echo "10. every refusal in the watchdog uses the phrase the installer blocks on"
 # One marker covers all refusals only while that is true.
 _ref=$(grep -cE 'alert "calibration watchdog cannot run:' "$HERE/calibration-progress-watch.sh")
 _all=$(grep -cE 'alert "calibration watchdog' "$HERE/calibration-progress-watch.sh")
