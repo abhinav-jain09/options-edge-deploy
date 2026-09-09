@@ -1,0 +1,42 @@
+# PIN THE RENDER TO WHAT PRODUCTION IS ACTUALLY RUNNING.
+#
+# Found 2026-09-09 while applying an unrelated one-key change: the rendered production infra and the
+# LIVE production configmaps disagreed on three values, so ANY common-infra apply — for any reason,
+# by anyone — would silently have changed all three. The manual "Apply to production?" gate is the
+# only thing that had been standing between that diff and the cluster.
+#
+# Read from the RUNNING POD, not from a file (kubectl exec on options-edge-databento-feed):
+#
+#   APP_PROFILE       live: prod                     rendered: dev
+#   DATABENTO_EXPIRY  live: AUTO                     rendered: ""
+#   KAFKA_RAW_TOPIC   live: options.databento.raw    rendered: options.ibkr.raw
+#
+# This patch makes the render REPRODUCE those three, so a deploy that means to change one key
+# changes one key. It deliberately does NOT decide whether production SHOULD be running them —
+# that is a separate, considered change, and two of them are load-bearing in opposite directions:
+#
+#   * APP_PROFILE=prod keeps the feed's synthetic-spot guard ARMED. The sibling
+#     configmap-prod-feed-synthetic-spot-patch.yaml sets `dev` on purpose (2026-07-06) to DISARM it.
+#     The cluster and that patch have been contradicting each other ever since; the cluster won,
+#     because nobody has applied the render. Whoever settles it should read that patch's header
+#     first — it documents the trade deliberately.
+#   * DATABENTO_EXPIRY=AUTO is what the running feed resolves its expiry from. The base's "" is a
+#     different resolution path.
+#
+# Ordered AFTER the synthetic-spot patch in kustomization.yaml so this one wins on APP_PROFILE.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-databento-feed-config
+  namespace: options-edge
+data:
+  APP_PROFILE: prod
+  DATABENTO_EXPIRY: AUTO
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-config
+  namespace: options-edge
+data:
+  KAFKA_RAW_TOPIC: options.databento.raw
