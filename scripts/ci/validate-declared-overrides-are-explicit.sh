@@ -45,11 +45,16 @@ command -v kafka-configs >/dev/null 2>&1 || { echo "SKIP: kafka-configs is not o
 # its own message, and each one made the guard print "not reachable" and pass. Match the failure
 # against what an unreachable broker actually says (plus timeout's own 124) and fail on anything
 # else, so an environment the guard cannot interrogate is reported rather than waved through.
+#
+# The list has to cover the ways a broker is genuinely out of reach, not just the ones seen in
+# testing: a routing failure surfaces as NoRouteToHostException / "No route to host" and nothing
+# else in this list matches it, which would fail a deploy for a network problem the guard is
+# supposed to step aside for.
 probe_rc=0
 probe=$(timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --list 2>&1) || probe_rc=$?
 if [ "$probe_rc" -ne 0 ]; then
     if [ "$probe_rc" -eq 124 ] || printf '%s' "$probe" | grep -qE \
-        'Connection to node|Connection refused|Timed out waiting|TimeoutException|Failed to update metadata|UnknownHost|No resolvable bootstrap|could not be established|Network is unreachable|Connection reset'; then
+        'Connection to node|Connection refused|Timed out waiting|TimeoutException|Failed to update metadata|UnknownHost|No resolvable bootstrap|could not be established|Network is unreachable|Connection reset|No route to host|NoRouteToHost|Host is down|SocketTimeout'; then
         printf 'SKIP: %s is not reachable from here (%s)\n' "$BOOTSTRAP" "$(printf '%s' "$probe" | head -1)"
         exit 0
     fi

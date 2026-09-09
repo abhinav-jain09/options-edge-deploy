@@ -93,6 +93,23 @@ got=$(run "$WORK/ok")
 grep -q "SKIP:" "$WORK/out" || { printf 'an unreachable broker must say it skipped\n' >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
 printf '  killed: %s\n' "an unreachable broker skips rather than reporting inheritance"
 
+# Each way a broker is genuinely out of reach must still take the skip. A routing failure is the
+# one that was missing: it matched nothing in the allowlist and so failed a deploy for a network
+# problem the guard exists to step aside for.
+for msg in "java.net.NoRouteToHostException: No route to host" \
+           "java.net.ConnectException: Connection refused" \
+           "java.net.UnknownHostException: kafka.invalid" \
+           "org.apache.kafka.common.errors.TimeoutException: Timed out waiting for a node assignment."; do
+    printf '#!/usr/bin/env bash\necho "%s" >&2\nexit 1\n' "$msg" > "$WORK/bin/kafka-topics"
+    chmod +x "$WORK/bin/kafka-topics"
+    got=$(run "$WORK/ok")
+    [ "$got" = "0" ] || { printf 'an unreachable broker must SKIP: %s (exited %s)\n' "$msg" "$got" >&2
+                          sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+    grep -q "SKIP:" "$WORK/out" || { printf 'and must say it skipped: %s\n' "$msg" >&2
+                                     sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+done
+printf '  killed: %s\n' "every shape of an out-of-reach broker takes the skip, routing failures included"
+
 # ...but a failure that is NOT a connection failure must FAIL. Treating every non-zero exit as
 # unreachability is the widest fail-open there is: a missing Describe ACL, a broken shim, or a CLI
 # that is not the CLI would each make the guard announce "not reachable" and pass.
