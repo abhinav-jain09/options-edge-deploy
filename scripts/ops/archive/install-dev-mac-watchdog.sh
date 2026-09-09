@@ -82,9 +82,14 @@ launchctl load "$AGENTS/$PLIST"
 # COUNTING IS NOT CHECKING (r21 #2). This printed the count and never required it, so
 # "loaded: 0 agent(s)" finished successfully and left nothing scheduled — the exact outcome the
 # installer exists to prevent.
-_n="$(launchctl list 2>/dev/null | grep -c com.optionsedge.calibration-progress-watch || true)"
+# EXACTLY THIS LABEL, not anything containing it. An unanchored substring count let a similarly named
+# agent — com.optionsedge.calibration-progress-watch.backup, say — satisfy "exactly one" while the
+# label this plist actually declares was absent (r23 #2). launchctl list is PID<TAB>status<TAB>label,
+# so compare the label column.
+_label="$(python3 -c "import plistlib,sys;print(plistlib.load(open(sys.argv[1],'rb'))['Label'])" "$SRC/launchd/$PLIST")"
+_n="$(launchctl list 2>/dev/null | awk -F'\t' -v l="$_label" '$3 == l' | grep -c . || true)"
 if [ "${_n:-0}" -ne 1 ]; then
-  echo "INSTALL FAILED: launchctl reports $_n agents named com.optionsedge.calibration-progress-watch, expected exactly 1. The files are in place but nothing is scheduled." >&2
+  echo "INSTALL FAILED: launchctl reports $_n agents with the label $_label, expected exactly 1. The files are in place but nothing is scheduled." >&2
   exit 1
 fi
-echo "loaded: 1 agent named com.optionsedge.calibration-progress-watch, scheduled 07:00 local"
+echo "loaded: 1 agent with the label $_label, scheduled 07:00 local"

@@ -12,7 +12,7 @@ bad() { printf '  FAIL %s\n' "$1"; fails=$((fails+1)); }
 
 # A stub launchctl that records what it was asked to do and answers `list` from a knob, so "the agent
 # did not register" is reachable without touching this machine's real LaunchAgents.
-stage() { # stage <registered-count>
+stage() { # stage <registered-count> [label-to-report]
   TMP="$(mktemp -d)"
   cp -R "$HERE" "$TMP/archive"
   mkdir -p "$TMP/bin" "$TMP/dest" "$TMP/agents"
@@ -20,7 +20,7 @@ stage() { # stage <registered-count>
 #!/usr/bin/env bash
 echo "launchctl \$*" >> "$TMP/calls"
 if [ "\${1:-}" = "list" ]; then
-  i=0; while [ "\$i" -lt "$1" ]; do echo "-	0	com.optionsedge.calibration-progress-watch"; i=\$((i+1)); done
+  i=0; while [ "\$i" -lt "$1" ]; do printf -- "-\t0\t%s\n" "${2:-com.optionsedge.calibration-progress-watch}"; i=\$((i+1)); done
 fi
 exit 0
 EOF
@@ -70,7 +70,15 @@ stage 0; install_run
 [ "$RC" -ne 0 ] && ok "launchctl reporting zero agents fails the install" || bad "the installer exited 0 with nothing scheduled"
 grep -q "nothing is scheduled" "$TMP/out" && ok "and it said so plainly" || bad "the failure did not say the agent is missing: $(tail -2 "$TMP/out")"
 
-echo "6. every refusal in the watchdog uses the phrase the installer blocks on"
+echo "6. a LOOKALIKE agent label does not count as the agent"
+# r23 #2. The count was an unanchored substring match, so an agent named
+# com.optionsedge.calibration-progress-watch.backup satisfied "exactly one" while the label this
+# plist declares was absent — an install that registers nothing, reported as success.
+stage 1 "com.optionsedge.calibration-progress-watch.backup"; install_run
+[ "$RC" -ne 0 ] && ok "a similarly named agent does not satisfy the check" || bad "a lookalike label passed as the agent"
+grep -q "nothing is scheduled" "$TMP/out" && ok "and it said nothing is scheduled" || bad "the failure did not say the agent is missing: $(tail -2 "$TMP/out")"
+
+echo "7. every refusal in the watchdog uses the phrase the installer blocks on"
 # One marker covers all refusals only while that is true.
 _ref=$(grep -cE 'alert "calibration watchdog cannot run:' "$HERE/calibration-progress-watch.sh")
 _all=$(grep -cE 'alert "calibration watchdog' "$HERE/calibration-progress-watch.sh")

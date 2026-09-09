@@ -61,7 +61,18 @@ fi
 # 4. PATH must be explicit: a launchd job inherits almost nothing, and python3/find go missing silently.
 grep -qE '<key>PATH</key>' "$PLIST" || note "$PLIST sets no PATH — launchd jobs inherit almost none, and this one needs python3"
 
-# 5. THE INSTALLER'S OWN VERIFICATION MUST BE ABLE TO FAIL.
+# 5. THE PLIST MUST NOT CARRY ITS OWN INSTALL INSTRUCTIONS.
+# It used to list the files to copy by hand, and that list went stale the moment the watchdog gained
+# another file to read: it named the script and oe-alert.sh but not calibration-targets.env or
+# oe_corpus_reader.py, so following it installed a watchdog that refuses on its first wake-up
+# (r23 #1). Any hand-copy recipe here is a second, unmaintained copy of the installer's FILES list.
+if grep -qE '^\s*cp .*\.(sh|env|py)' "$PLIST"; then
+  note "$PLIST contains hand-copy instructions. That file list is a second copy of $INST's FILES and goes stale silently — point operators at the installer instead"
+fi
+grep -q 'install-dev-mac-watchdog.sh' "$PLIST" \
+  || note "$PLIST does not name the installer, so an operator has nothing to run"
+
+# 6. THE INSTALLER'S OWN VERIFICATION MUST BE ABLE TO FAIL.
 # Its first version accepted almost every broken watchdog and never required the agent to register,
 # so the "proof that it runs" proved nothing. Asserting that by grepping the installer for phrases
 # would be the same class of mistake, so run its executable test instead: it drives the real installer
