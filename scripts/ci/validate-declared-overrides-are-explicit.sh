@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Every topic this repository declares a RETENTION OVERRIDE for must carry that override on the
-# topic itself, not inherit it from a broker default.
+# Every topic in the retention-override declaration that applies to THIS environment must carry that
+# override on the topic itself, not inherit it from a broker default.
+#
+# Scope: OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES, plus OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES
+# when ENVIRONMENT=production — the same merge apply-topics.sh performs, so the guard asks for what
+# that script would have written and nothing else. It does NOT cover the es4 declaration set, which
+# is applied by a different path; that remains unchecked here.
 #
 # The distinction is not academic. apply-topics.sh writes retention.ms EXPLICITLY for every declared
 # topic on every run (alter_topic_config, called unconditionally), so a topic with no override of its
@@ -33,6 +38,12 @@ fi
 # The declaration is the source of truth for WHICH topics must be explicit.
 # shellcheck disable=SC1091
 . scripts/kafka/topics.env
+
+# The prod-only overrides are merged by apply-topics.sh under ENVIRONMENT=production. Mirror that
+# exactly: asking dev for a prod-only override would be a finding the deploy never intended.
+if [ "${ENVIRONMENT:-}" = "production" ]; then
+    OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="${OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES:-} ${OPTIONS_EDGE_PROD_ONLY_TOPIC_RETENTION_OVERRIDES:-}"
+fi
 
 declared() {
     printf '%s\n' $OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES | tr ' ' '\n' | sed -n 's/^\([^=]*\)=.*/\1/p'
