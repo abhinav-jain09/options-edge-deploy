@@ -1,4 +1,7 @@
 // ES-STRIKE-INTEL MIRROR — stand up a clean SINGLE-TOPIC .4->target mirror as a managed launchd service.
+// MIRROR-DIRECTION: es4->default
+// (the source is .4, the target is the dev/prod broker; validate-mirrored-topic-contracts.sh
+//  reads this to decide which cluster's declarations govern each end)
 //
 // Parameterized per the requirement's 2-input contract (es-gex-fleet-and-alignment-guard-gate1):
 //   SOURCE_ES_CLUSTER_IP  = the ES source-of-truth broker (.4)

@@ -1,4 +1,7 @@
 // ES-TAPE-ZONES MIRROR -- stand up a clean SINGLE-TOPIC .4->target mirror as a managed launchd service.
+// MIRROR-DIRECTION: es4->default
+// (the source is .4, the target is the dev/prod broker; validate-mirrored-topic-contracts.sh
+//  reads this to decide which cluster's declarations govern each end)
 //
 // WHY: tape-zones-service runs ONLY on es4 (see tape-zones Gate-1 rev10). Its board topic
 // `es.tape-zones.board` therefore exists ONLY on the .4 broker, so the /zones page and the
