@@ -163,13 +163,31 @@ fi
 # at three and passes while it deletes data. Run the executable test instead -- it drives the real
 # script with mocked kafka CLIs and asserts on the calls it actually makes, so an unguarded path
 # fails however it is written.
+# A FIXED scratch name here meant two concurrent runs of this validator wrote each other's
+# diagnostics — which is how a reviewer saw a baseline "failure" that no run actually produced.
+_scratch="$(mktemp -d)"; trap 'rm -rf "$_scratch"' EXIT
 CLEANUP_TEST="scripts/kafka/cleanup-topics-durable-test.sh"
 if [ ! -x "$CLEANUP_TEST" ]; then
   echo "FAIL: $CLEANUP_TEST missing or not executable — the durability guarantee has no test"
   fail=1
-elif ! bash "$CLEANUP_TEST" > /tmp/cleanup-durable-test.out 2>&1; then
+elif ! bash "$CLEANUP_TEST" > "$_scratch/cleanup.out" 2>&1; then
   echo "FAIL: $CLEANUP_TEST — cleanup-topics.sh does not preserve durable topics:"
-  sed 's/^/      /' /tmp/cleanup-durable-test.out
+  sed 's/^/      /' "$_scratch/cleanup.out"
+  fail=1
+fi
+
+# The provisioning path is the OTHER way a durable topic dies, and it is the one that opened when the
+# A5 ledger was declared: apply-topics.sh contains a delete+recreate repair, and declaring a topic is
+# what puts it inside that machinery. Reading the branch and concluding "1 == 1 cannot fire" is a
+# belief; this drives the real script with mocked kafka CLIs and asserts on the calls it makes.
+# Removing the ledger from NEVER_RECREATE makes it delete the corpus topic, which is the point.
+LEDGER_TEST="scripts/kafka/apply-topics-ledger-safety-test.sh"
+if [ ! -x "$LEDGER_TEST" ]; then
+  echo "FAIL: $LEDGER_TEST missing or not executable — nothing proves apply-topics cannot destroy the corpus"
+  fail=1
+elif ! bash "$LEDGER_TEST" > "$_scratch/ledger.out" 2>&1; then
+  echo "FAIL: $LEDGER_TEST — apply-topics.sh can reach the calibration ledger destructively:"
+  sed 's/^/      /' "$_scratch/ledger.out"
   fail=1
 fi
 
