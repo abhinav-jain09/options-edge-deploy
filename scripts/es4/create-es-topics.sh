@@ -37,6 +37,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHIM_DIR="$SCRIPT_DIR/kafka-cli-shim"
 [ -d "$SHIM_DIR" ] || { echo "missing $SHIM_DIR — cannot reach the es4 Kafka CLI" >&2; exit 1; }
 [ -r "$SCRIPT_DIR/../kafka/apply-topics.sh" ] || { echo "missing scripts/kafka/apply-topics.sh (rsync scripts/ , not just scripts/es4)" >&2; exit 1; }
+OVERRIDES_GUARD="$SCRIPT_DIR/../ci/validate-declared-overrides-are-explicit.sh"
+[ -r "$OVERRIDES_GUARD" ] || { echo "missing scripts/ci/validate-declared-overrides-are-explicit.sh (rsync scripts/ , not just scripts/es4)" >&2; exit 1; }
 
 PATH="$SHIM_DIR:$PATH" \
 KAFKA_BOOTSTRAP_SERVERS="${BROKER:-localhost:9092}" \
@@ -44,6 +46,20 @@ KAFKA_TOPIC_REPLICATION_FACTOR="${ES4_REPLICATION_FACTOR:-1}" \
 KAFKA_TOPIC_RETENTION_MS="${RETENTION_MS:-43200000}" \
 TOPIC_SET=es4 \
   bash "$SCRIPT_DIR/../kafka/apply-topics.sh"
+
+# ---- the reconciliation actually took ----
+# apply-topics.sh calls alter_topic_config UNCONDITIONALLY for every declared topic, so once this
+# script has run, every topic in the es4 declaration must carry its retention override ON THE TOPIC.
+# A topic sitting on the broker's default is a topic this stage did not reach: auto-created by a
+# still-running producer, or created before it was declared. The agreement then looks fine — with no
+# topic-level config, `--describe` shows no drift because it shows nothing — and it ends silently the
+# moment a broker default moves.
+#
+# Run HERE and not only in CI, because es4 is the one environment CI cannot check: its declaration
+# (OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES) and its broker are reachable only through the shims
+# on this box, so the es4 arm of the guard is otherwise never exercised against a real broker. Same
+# shim PATH, same in-container listener, same TOPIC_SET the reconciliation above used.
+PATH="$SHIM_DIR:$PATH" TOPIC_SET=es4 bash "$OVERRIDES_GUARD" "$BROKER"
 
 # ---- zero-orphan prune of the retired identity (One Service One Identity Rule) ----
 # This call had NO `source` for the library that defines it: under `set -euo pipefail` that is a
