@@ -143,8 +143,12 @@ _got_h, _got_t = _coh.get("parameterSetHash") or "", _coh.get("trackFromPush") o
 # with the check turned off. The reporter always writes the DECLARED hash into cohorts[0], so an
 # honest record under an UNFROZEN declaration carries "UNFROZEN" and equality holds; the only thing
 # the waiver could ever admit was a record that disagrees, which is precisely what this check is for.
-if (_want_h and _got_h and _got_h != _want_h) or \
-   (_want_t and _got_t and _got_t != _want_t):
+# ABSENCE IS A MISMATCH, NOT A PASS. The predicate also read "_got_h and ..." — so a record that
+# carried NO cohort identity at all satisfied it. The check exists to catch a hand-made or
+# half-migrated record sitting in the right directory, and a hand-made record is exactly the kind that
+# omits a field rather than getting it wrong. If the declaration names a hash, the record has to carry
+# the same one; nothing is not the same one (r20).
+if (_want_h and _got_h != _want_h) or (_want_t and _got_t != _want_t):
     print("  WARN: this record is for cohort hash=%s trackFromPush=%s, but we declare hash=%s trackFromPush=%s"
           % (_got_h or "<absent>", _got_t or "<absent>", _want_h, _want_t))
     sys.exit(2)

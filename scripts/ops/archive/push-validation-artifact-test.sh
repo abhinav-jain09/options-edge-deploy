@@ -1453,6 +1453,19 @@ else
     && ok "UNFROZEN is a declaration to check against, not a reason to stop checking" \
     || bad "it failed for another reason: $(head -4 "$WORK/watch7.log")"
 fi
+# And a record carrying NO cohort identity is a mismatch, not a pass: a hand-made record is exactly
+# the kind that omits the field rather than getting it wrong (r20).
+REC="$_newdir/dt=$DAY.json" python3 -c "
+import json,os
+p=os.environ['REC']; d=json.load(open(p))
+d['cohorts'][0].pop('parameterSetHash', None)
+json.dump(d, open(p,'w'))"
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch8.log" 2>&1; then
+  bad "a record with no cohort identity at all was accepted"
+else
+  ok "a record that names no cohort does not thereby match every cohort"
+fi
 
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
