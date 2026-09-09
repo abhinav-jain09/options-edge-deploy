@@ -59,6 +59,18 @@ command -v kafka-configs >/dev/null 2>&1 || { echo "SKIP: kafka-configs is not o
 probe_rc=0
 probe=$(timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --list 2>&1) || probe_rc=$?
 if [ "$probe_rc" -ne 0 ]; then
+    # Refusal comes FIRST, over the whole output. A real Kafka failure is many lines: an SSL or SASL
+    # rejection prints its own cause and then, as the client keeps retrying, a metadata timeout. If
+    # the connectivity allowlist is consulted first, that trailing timeout decides — and an
+    # authentication failure, with the broker right there, reads as an unreachable broker and waves
+    # through unverified retention state. Anything naming authentication, authorization or TLS is
+    # something this guard could not interrogate, whatever else the output also says.
+    if printf '%s' "$probe" | grep -qE \
+        'Authentication|Authoriz|authoriz|SaslAuthentication|SSLException|SSLHandshake|CertificateException|Not authorized|AclAuthorizer|security\.protocol|sasl\.'; then
+        printf 'CANNOT READ: kafka-topics --list failed on %s and the failure names authentication, authorization or TLS, not connectivity (exit %s: %s)\n' \
+            "$BOOTSTRAP" "$probe_rc" "$(printf '%s' "$probe" | head -1)" >&2
+        exit 1
+    fi
     if [ "$probe_rc" -eq 124 ] || printf '%s' "$probe" | grep -qE \
         'Connection to node|Connection refused|Connection timed out|Timed out waiting|TimeoutException|Failed to update metadata|UnknownHost|No resolvable bootstrap|could not be established|Network is unreachable|No route to host|NoRouteToHost|Host is down|SocketTimeout'; then
         printf 'SKIP: %s is not reachable from here (%s)\n' "$BOOTSTRAP" "$(printf '%s' "$probe" | head -1)"

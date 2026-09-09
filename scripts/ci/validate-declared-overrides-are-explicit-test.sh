@@ -117,10 +117,19 @@ printf '  killed: %s\n' "every shape of an out-of-reach broker takes the skip, r
 # "Connection reset by peer" is the trap: it reads like unreachability and is not. Kafka reports it
 # when the broker is right there and rejects the SSL or SASL handshake — a configuration problem
 # this guard must report, because skipping it waves through unverified retention state.
+# The multi-line forms are the ones that matter: a real client prints its cause and THEN, as it
+# keeps retrying, a metadata timeout. If the connectivity allowlist is consulted first, that
+# trailing timeout decides and an authentication failure reads as an unreachable broker.
 for msg in "TopicAuthorizationException: Not authorized to access topics: [Topic authorization failed.]" \
            "javax.net.ssl.SSLException: Connection reset by peer" \
-           "SaslAuthenticationException: Authentication failed: Invalid username or password"; do
-    printf '#!/usr/bin/env bash\necho "%s" >&2\nexit 1\n' "$msg" > "$WORK/bin/kafka-topics"
+           "SaslAuthenticationException: Authentication failed: Invalid username or password" \
+           "javax.net.ssl.SSLHandshakeException: General SSLEngine problem
+[2026-09-09 12:00:01,003] WARN Connection to node -1 (kafka/10.0.0.4:9093) terminated during authentication.
+org.apache.kafka.common.errors.TimeoutException: Timed out waiting for a node assignment." \
+           "SaslAuthenticationException: Authentication failed
+[2026-09-09 12:00:02,113] WARN Bootstrap broker kafka:9093 disconnected
+java.net.ConnectException: Connection timed out"; do
+    printf '#!/usr/bin/env bash\ncat >&2 <<EOM\n%s\nEOM\nexit 1\n' "$msg" > "$WORK/bin/kafka-topics"
     chmod +x "$WORK/bin/kafka-topics"
     got=$(run "$WORK/ok")
     [ "$got" = "1" ] || { printf 'a non-connection probe failure must FAIL, not skip: %s (exited %s)\n' "$msg" "$got" >&2
