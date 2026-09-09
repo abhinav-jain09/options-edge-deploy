@@ -1,0 +1,43 @@
+# Approved pre-existing junk-pattern topics on the es4 broker 192.168.100.4:9092.
+#
+# Read by the Preflight growth gate of every MM1 mirror job that TARGETS this broker — currently
+# only Jenkinsfile.opra-definition-enumeration-mirror, which is the first mirror to run prod -> es4
+# rather than es4 -> dev/prod. The list is a property of the BROKER, not of any one mirror, so any
+# later job targeting .4 resolves this same target-only filename (IP-PORT) and shares one reviewed
+# set.
+#
+# WHY THIS FILE HAS TO EXIST. The growth gate treats any topic matching
+# ^es4.| es.es.es | heartbeat | mm2-*.internal on a TARGET broker as MM2 pollution and refuses to
+# install while unapproved matches are present. Enumerated on the live broker on 2026-09-09, .4
+# carries six of them, in TWO different categories — which is exactly why this is a reviewed
+# per-broker approval and not a pattern exemption:
+#
+#   es.heartbeats               DECLARED AND LIVE. A first-class produced topic of this cluster,
+#                               present in OPTIONS_EDGE_ES4_TOPICS. It has nothing to do with MM2 and
+#                               only matches because the pattern says `heartbeat`. Without this line
+#                               the very first prod -> es4 install would fail on a topic the cluster
+#                               is SUPPOSED to have.
+#   heartbeats                  DEAD. The un-prefixed remnant of .4's own stopped MM2 setup — the
+#                               same setup whose runaway `es.es.es...heartbeats` output is the reason
+#                               every mirror here is MM1 and not MM2.
+#   mm2-configs.es.internal     DEAD. MM2's own internal topics, from that same stopped setup.
+#   mm2-offsets.es.internal     DEAD.
+#   mm2-offset-syncs.es.internal DEAD.
+#   mm2-status.es.internal      DEAD.
+#
+# Note the asymmetry with the prod list beside this one: there, all four approved entries are dead
+# MM2 remnants. Here, one entry is a LIVE declared topic and five are remnants. Same gate, different
+# reasons, so the approval names each one and says which it is.
+#
+# APPROVING IS NOT ENDORSING. The five dead entries should be deleted from .4 when someone is next
+# doing cleanup there; removing a line here only withdraws approval and makes the next install fail
+# until the topic is actually gone. Nothing in any job deletes them.
+#
+# Format: one exact topic name per line. '#' comments and blank lines ignored. No patterns.
+
+es.heartbeats
+heartbeats
+mm2-configs.es.internal
+mm2-offset-syncs.es.internal
+mm2-offsets.es.internal
+mm2-status.es.internal

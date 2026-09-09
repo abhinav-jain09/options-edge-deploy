@@ -29,6 +29,32 @@ def _topics(name):
     return {e.rsplit(":", 1)[0] for e in _var(name)}
 
 
+def _mirrored_into_es4(root=None):
+    """Topics that arrive on .4 through an MM1 mirror rather than being produced there.
+
+    A mirror is a byte-for-byte record copy under the IDENTITY name, so a topic produced on prod
+    keeps its prod name on .4 — no `es.` prefix, because that prefix marks what es4 PRODUCES. Such a
+    topic still has to be DECLARED in the es4 set (es4's cleanup deletes what is undeclared, and the
+    mirror would then re-create it through broker auto-create at .4's default shape).
+
+    The set is DERIVED from the jobs, never hand-listed: a name is exempt only while some
+    `Jenkinsfile.*-mirror` states `MIRROR-DIRECTION: <something>->es4` and names it in its frozen
+    TOPIC choice() allow-list. That is what keeps the exemption from becoming a hole — the ~52
+    unrelated `options.*` topics the scoping rule exists to keep off .4 have no such job, and adding
+    one is a reviewed Jenkinsfile change that validate-mirrored-topic-contracts.sh then checks the
+    shape of at both ends.
+    """
+    names = set()
+    for job in sorted((root or REPO).glob("Jenkinsfile.*-mirror")):
+        text = job.read_text()
+        if not re.search(r"^// MIRROR-DIRECTION: *\w+->es4\s*$", text, re.M):
+            continue
+        block = re.search(r"choice\(name: 'TOPIC', choices: \[(.*?)\]", text, re.S)
+        if block:
+            names |= set(re.findall(r"'([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9._-]+)'", block.group(1)))
+    return names
+
+
 class Es4TopicSsotTest(unittest.TestCase):
     def test_var_parser_sees_the_appended_declarations(self):
         """Guards the helper above: OPTIONS_EDGE_ES4_TOPICS is assigned twice, and a parser that
@@ -93,11 +119,63 @@ class Es4TopicSsotTest(unittest.TestCase):
             "that list, so it would be applied to the es4 broker too")
 
     def test_es4_set_is_scoped_to_es_topics_only(self):
-        """Applying the SPX set to the es4 broker would create ~52 unrelated options.* topics."""
+        """Applying the SPX set to the es4 broker would create ~52 unrelated options.* topics.
+
+        The one legitimate exception is a topic MIRRORED INTO .4: it is produced elsewhere and copied
+        record-for-record under its identity name, so it has no `es.` prefix and never will. It is
+        exempt only while a mirror job that targets es4 actually names it — see `_mirrored_into_es4`.
+        """
         es4 = _topics("OPTIONS_EDGE_ES4_TOPICS")
         self.assertTrue(es4, "ES4 set missing")
+        mirrored = _mirrored_into_es4()
         for t in sorted(es4):
+            if t in mirrored:
+                continue
             self.assertTrue(t.startswith("es."), f"non-es topic in the es4 set: {t}")
+
+    def test_the_mirror_exemption_is_derived_from_the_JOBS(self):
+        """A hand-written exemption list would let any name be smuggled into the es4 set.
+
+        Round 2 caught the first cut of this asserting only the CONTENT — it passed just as happily
+        with `_mirrored_into_es4` replaced by a hard-coded set, so it tested the answer rather than
+        the derivation it is named for. It now drives the helper over a COPY of the jobs with the
+        topic renamed: a hard-coded implementation returns the old name and fails.
+        """
+        import shutil
+        import tempfile
+
+        mirrored = _mirrored_into_es4()
+        self.assertIn("options.databento.opra.definition.enumeration", mirrored,
+                      "the prod->es4 mirror's topic is not being read from its job")
+        self.assertNotIn("es.futures.auction", mirrored,
+                         "an es4->dev/prod mirror's topic must NOT be read as mirrored INTO es4")
+        for name in mirrored:
+            self.assertNotIn(":", name, f"a partition count leaked into the exemption: {name}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for job in REPO.glob("Jenkinsfile.*-mirror"):
+                text = job.read_text().replace("options.databento.opra.definition.enumeration",
+                                               "options.databento.renamed.for.this.test")
+                (root / job.name).write_text(text)
+            derived = _mirrored_into_es4(root)
+            self.assertIn("options.databento.renamed.for.this.test", derived,
+                          "the exemption does not follow the job — it is not derived from it")
+            self.assertNotIn("options.databento.opra.definition.enumeration", derived,
+                             "the exemption returned a name no job declares; it is hard-coded, not derived")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(_mirrored_into_es4(Path(tmp)), set(),
+                             "with no mirror jobs at all the exemption must be EMPTY, so the scoping "
+                             "rule falls back to refusing every non-es. topic")
+
+    def test_every_mirrored_topic_is_actually_DECLARED_on_es4(self):
+        """The other direction of the same rule: a mirror that targets .4 whose topic is NOT in the
+        es4 set is the deletion exposure — cleanup removes it and the mirror re-creates it through
+        broker auto-create at .4's default shape."""
+        es4 = _topics("OPTIONS_EDGE_ES4_TOPICS")
+        for t in sorted(_mirrored_into_es4()):
+            self.assertIn(t, es4, f"{t} is mirrored INTO es4 but not declared in OPTIONS_EDGE_ES4_TOPICS")
 
     def test_gateway_blocking_topics_are_declared_even_with_no_producer(self):
         """These eight were once asserted ABSENT, as "orphans whose producing service does not run

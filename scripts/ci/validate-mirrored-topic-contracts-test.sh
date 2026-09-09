@@ -30,7 +30,7 @@ mkfixture() { # -> prints a fresh root
   local root="$WORK/fx.$RANDOM.$$"
   mkdir -p "$root/scripts/kafka"
   cp "$REPO/$TENV_REL" "$root/$TENV_REL"
-  cp "$REPO"/Jenkinsfile.es-*-mirror "$root/"
+  cp "$REPO"/Jenkinsfile.*-mirror "$root/"
   printf '%s\n' "$root"
 }
 
@@ -191,8 +191,30 @@ expect_fail "$R" "a parsed declaration emptied" "parsed an EMPTY"
 # declaration still must, or the drift this guard exists for would slip through the exception.
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/d'
 expect_fail "$R" "a deliberately-empty declaration REMOVED" "parsed an EMPTY"
-R="$(mkfixture)"; rm -f "$R"/Jenkinsfile.es-*-mirror
-expect_fail "$R" "every mirror job removed" "no Jenkinsfile.es-.*-mirror found"
+R="$(mkfixture)"; rm -f "$R"/Jenkinsfile.*-mirror
+expect_fail "$R" "every mirror job removed" "no Jenkinsfile[.][*]-mirror found"
+
+echo "--- DIRECTION is declared, never assumed ---"
+# Until 2026-09-09 every mirror ran es4 -> dev/prod and this script assumed it in four places. A job
+# that runs the other way (prod -> es4, for the definition enumeration the auction desk consumes)
+# matched no glob, exported no readable topic and was checked by NOTHING.
+R="$(mkfixture)"; edit "$R" "Jenkinsfile.es-auction-mirror" '/^\/\/ MIRROR-DIRECTION:/d'
+expect_fail "$R" "a job that states no direction" "does not state exactly one direction"
+R="$(mkfixture)"; edit "$R" "Jenkinsfile.es-auction-mirror" \
+  's|^// MIRROR-DIRECTION: es4->default$|// MIRROR-DIRECTION: es4->es4|'
+expect_fail "$R" "a job that mirrors a cluster onto itself" "onto itself"
+# The direction must SELECT the checked set, not merely be printed. This PAIR is what proves it: the
+# SAME mutation — dropping the auction topic from the es4 declaration — must be tolerated when es4 is
+# the SOURCE (the cross-check simply has nothing to compare against) and REFUSED when es4 is the
+# TARGET (an undeclared mirror target is the deletion exposure this whole file exists for). A
+# validator that ignored the marker would give the same answer to both.
+AUCTION_ES4_DECL='/^OPTIONS_EDGE_ES4_TOPICS="\$OPTIONS_EDGE_ES4_TOPICS es\.futures\.auction:1"$/d'
+R="$(mkfixture)"; edit "$R" "$TENV_REL" "$AUCTION_ES4_DECL"
+expect_pass "$R" "es4 as SOURCE: its declaration is a cross-check, not the target"
+R="$(mkfixture)"; edit "$R" "$TENV_REL" "$AUCTION_ES4_DECL"
+edit "$R" "Jenkinsfile.es-auction-mirror" \
+  's|^// MIRROR-DIRECTION: es4->default$|// MIRROR-DIRECTION: default->es4|'
+expect_fail "$R" "es4 as TARGET: the same gap is the deletion exposure" "OPTIONS_EDGE_ES4_TOPICS in"
 R="$(mkfixture)"; rm -f "$R/$TENV_REL"
 expect_fail "$R" "topics.env unreadable" "cannot read"
 

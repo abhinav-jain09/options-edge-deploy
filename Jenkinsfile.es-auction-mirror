@@ -1,4 +1,7 @@
 // ES-AUCTION MIRROR -- stand up a clean SINGLE-TOPIC .4->target mirror as a managed launchd service.
+// MIRROR-DIRECTION: es4->default
+// (the source is .4, the target is the dev/prod broker; validate-mirrored-topic-contracts.sh
+//  reads this to decide which cluster's declarations govern each end)
 //
 // WHY: es-amt-service (the SPX Auction Desk) runs ONLY on es4. Its output topic
 // `es.futures.auction` -- one record per RTH minute, keyed `<tradeDate>|<HH:mm>`, plain delete with
