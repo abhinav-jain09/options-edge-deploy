@@ -210,7 +210,7 @@
           # carries them, so pinning on dev/experiment would fail closed for an image that is
           # never deployed there). es-aggressor-flow: slope measurement, prod-only by design.
           if [ "${ENVIRONMENT}" = "production" ]; then
-            for _img_var in ES_AGGRESSOR_FLOW_IMAGE; do
+            for _img_var in ES_AGGRESSOR_FLOW_IMAGE ES_TRADE_LINEARIZER_IMAGE; do
               _pinned="$(pin_ref "${!_img_var}")" || {
                 echo "FATAL: cannot resolve registry digest for ${_img_var}=${!_img_var}; aborting before any kubectl mutation." >&2
                 exit 1

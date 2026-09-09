@@ -82,6 +82,7 @@ EOF
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$registry/options-edge-short-premium-agent:$image_tag
 ES_AGGRESSOR_FLOW_IMAGE=$registry/options-edge-es-aggressor-flow:$image_tag
+ES_TRADE_LINEARIZER_IMAGE=$registry/options-edge-es-trade-linearizer:$image_tag
 SIGNAL_FOLLOWER_IMAGE=$registry/options-edge-signal-follower:$image_tag
 CONTEXT_TAPE_IMAGE=$registry/options-edge-context-tape:$image_tag
 MULTILEG_STRUCTURE_IMAGE=$registry/options-edge-multileg-structure:$image_tag
@@ -156,6 +157,7 @@ EOF
               cat >>"$JENKINS_WORK_DIR/options-edge-images.env" <<EOF
 SHORT_PREMIUM_AGENT_IMAGE=$SHORT_PREMIUM_AGENT_IMAGE
 ES_AGGRESSOR_FLOW_IMAGE=$ES_AGGRESSOR_FLOW_IMAGE
+ES_TRADE_LINEARIZER_IMAGE=$ES_TRADE_LINEARIZER_IMAGE
 SIGNAL_FOLLOWER_IMAGE=$SIGNAL_FOLLOWER_IMAGE
 CONTEXT_TAPE_IMAGE=$CONTEXT_TAPE_IMAGE
 MULTILEG_STRUCTURE_IMAGE=$MULTILEG_STRUCTURE_IMAGE
