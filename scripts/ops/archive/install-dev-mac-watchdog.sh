@@ -62,8 +62,8 @@ fi
 # staged copy has proven it runs, and a failure after that point restores what was there.
 STAGE="$(mktemp -d)"
 BACKUP="$(mktemp -d)"
-cleanup() { rm -rf "$STAGE" "$BACKUP"; }
-trap cleanup EXIT
+# (the EXIT trap is installed below, once a rollback is possible — see restore())
+trap 'rm -rf "$STAGE" "$BACKUP"' EXIT
 for f in $FILES; do cp "$SRC/$f" "$STAGE/$f"; done
 chmod +x "$STAGE/calibration-progress-watch.sh"
 
@@ -71,9 +71,24 @@ chmod +x "$STAGE/calibration-progress-watch.sh"
 # loading the agent demonstrates nothing; an install that only copies files is how a watchdog reaches
 # production broken. A non-zero exit here is fine and expected on a day with no progress record —
 # what is NOT fine is the script failing to START.
-echo "verify: running the staged copy with the plist's interpreter ($PLIST_INTERP)"
+# THE PLIST'S ENVIRONMENT, NOT THE OPERATOR'S (r25 #3). Verification used to inherit the caller's
+# PATH and pass only ENV, so a plist whose PATH lacks python3 verified perfectly from a terminal and
+# failed every single morning under launchd — the exact silent failure this watchdog exists to make
+# impossible. launchd starts a user agent with almost nothing plus EnvironmentVariables, so reproduce
+# that: env -i, HOME and USER (which launchd does set), and every key the plist declares.
+_plist_env() {
+  python3 -c "
+import plistlib, sys, shlex
+d = plistlib.load(open(sys.argv[1],'rb')).get('EnvironmentVariables', {})
+print(' '.join('%s=%s' % (k, shlex.quote(str(v))) for k, v in d.items()))" "$SRC/launchd/$PLIST"
+}
+PLIST_ENV="$(_plist_env)"
+echo "verify: running the staged copy as launchd would ($PLIST_INTERP, with the plist's environment)"
 set +e
-out="$(ENV="${ENV:-prod}" "$PLIST_INTERP" "$STAGE/calibration-progress-watch.sh" 2>&1)"; rc=$?
+out="$(eval env -i HOME=\"\$HOME\" USER=\"\${USER:-}\" $PLIST_ENV \
+        ENV=\"\${ENV:-prod}\" ${CHECK_DATE:+CHECK_DATE=\"$CHECK_DATE\"} \
+        ${ARCHIVE_DIR:+ARCHIVE_DIR=\"$ARCHIVE_DIR\"} ${ARCHIVE_ROOT_CANDIDATES:+ARCHIVE_ROOT_CANDIDATES=\"$ARCHIVE_ROOT_CANDIDATES\"} \
+        \"$PLIST_INTERP\" \"$STAGE/calibration-progress-watch.sh\" 2>&1)"; rc=$?
 set -e
 printf '%s\n' "$out" | sed 's/^/    /'
 
@@ -100,16 +115,54 @@ case "$rc" in
 esac
 echo "verify: it started and reached one of its own outcomes (exit $rc — nonzero is normal when the day did not land)"
 
-# Only now touch the host, and keep what was there in case the load fails.
-mkdir -p "$DEST" "$AGENTS"
-for f in $FILES; do [ -f "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"; done
-[ -f "$AGENTS/$PLIST" ] && cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"
+# Only now touch the host. Everything from here is REVERSIBLE, and the revert has to survive the ways
+# this script can stop — not just the ways it chooses to stop.
+#
+# r25 #1: the EXIT trap used to delete STAGE and BACKUP and nothing else, so any `set -e` failure
+# during the live copies, the chmod, the plist install or `launchctl load` exited WITHOUT restoring —
+# leaving a partial or outright rejected installation live. The trap now performs the rollback.
+# r25 #2: and the rollback was not state-preserving. Files and a plist that did NOT exist before were
+# never removed, so a failed FIRST install left the rejected copy behind; and it reloaded without
+# unloading the rejected agent, so launchd kept the configuration it had just been given.
+REPLACING=false
+RESTORED=false
+BACKED_UP=""          # the names that existed BEFORE, so absence is restorable too
+PLIST_EXISTED=false
+
 restore() {
-  echo "restoring the previous installation" >&2
-  for f in $FILES; do [ -f "$BACKUP/$f" ] && cp "$BACKUP/$f" "$DEST/$f"; done
-  [ -f "$BACKUP/$PLIST" ] && cp "$BACKUP/$PLIST" "$AGENTS/$PLIST"
-  launchctl load "$AGENTS/$PLIST" 2>/dev/null || true
+  [ "$REPLACING" = true ] || return 0
+  [ "$RESTORED" = false ] || return 0
+  RESTORED=true
+  echo "rolling back to the previous installation" >&2
+  # Unload FIRST: launchd is holding the rejected configuration, and loading over it changes nothing.
+  launchctl unload "$AGENTS/$PLIST" 2>/dev/null || true
+  for f in $FILES; do
+    case " $BACKED_UP " in
+      *" $f "*) cp "$BACKUP/$f" "$DEST/$f" ;;
+      *)        rm -f "$DEST/$f" ;;          # it did not exist before; leaving it is not "restored"
+    esac
+  done
+  if [ "$PLIST_EXISTED" = true ]; then
+    cp "$BACKUP/$PLIST" "$AGENTS/$PLIST"
+    launchctl load "$AGENTS/$PLIST" 2>/dev/null || true
+  else
+    rm -f "$AGENTS/$PLIST"                    # there was no agent before; there must be none after
+  fi
 }
+cleanup() {
+  local rc=$?
+  [ "$rc" -eq 0 ] || restore
+  rm -rf "$STAGE" "$BACKUP"
+}
+trap cleanup EXIT
+
+mkdir -p "$DEST" "$AGENTS"
+for f in $FILES; do
+  if [ -f "$DEST/$f" ]; then cp "$DEST/$f" "$BACKUP/$f"; BACKED_UP="$BACKED_UP $f"; fi
+done
+if [ -f "$AGENTS/$PLIST" ]; then cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"; PLIST_EXISTED=true; fi
+
+REPLACING=true
 for f in $FILES; do cp "$STAGE/$f" "$DEST/$f"; done
 chmod +x "$DEST/calibration-progress-watch.sh"
 cp "$SRC/launchd/$PLIST" "$AGENTS/$PLIST"

@@ -22,6 +22,8 @@ echo "launchctl \$*" >> "$TMP/calls"
 if [ "\${1:-}" = "list" ]; then
   i=0; while [ "\$i" -lt "$1" ]; do printf -- "-\t0\t%s\n" "${2:-com.optionsedge.calibration-progress-watch}"; i=\$((i+1)); done
 fi
+# A load that FAILS is not hypothetical: a malformed plist, a label already loaded, a locked session.
+if [ "\${1:-}" = "load" ] && [ -n "\${LOAD_FAILS:-}" ]; then echo "Load failed" >&2; exit 1; fi
 exit 0
 EOF
   chmod +x "$TMP/bin/launchctl"; : > "$TMP/calls"
@@ -43,6 +45,7 @@ PYEOF
 }
 install_run() {
   PATH="$TMP/bin:$PATH" OE_OPS_DIR="$TMP/dest" LAUNCH_AGENTS_DIR="$TMP/agents" \
+    LOAD_FAILS="${LOAD_FAILS:-}" \
     ENV=prod CHECK_DATE=2026-07-02 ARCHIVE_DIR="$TMP/nas" \
     bash "$TMP/archive/install-dev-mac-watchdog.sh" > "$TMP/out" 2>&1
   RC=$?
@@ -129,7 +132,55 @@ TEST_INTERP=/nonexistent/bash stage 1
 install_run
 [ "$RC" -ne 0 ] && ok "a missing interpreter is caught before anything is written" || bad "it installed an agent whose interpreter does not exist"
 
-echo "10. every refusal in the watchdog uses the phrase the installer blocks on"
+echo "11. a failure DURING replacement rolls back, and unloads the rejected agent first"
+# r25 #1/#2. The EXIT trap used to delete scratch directories and nothing else, so a set -e failure
+# in the live phase exited without restoring; and the rollback reloaded without unloading, leaving
+# launchd holding the configuration it had just been handed.
+stage 1
+mkdir -p "$TMP/dest" "$TMP/agents"
+printf '#!/usr/bin/env bash\necho "I am the previous installation"\n' > "$TMP/dest/calibration-progress-watch.sh"
+cp "$TMP/dest/calibration-progress-watch.sh" "$TMP/previous"
+cp "$TMP/archive/launchd/com.optionsedge.calibration-progress-watch.plist" "$TMP/agents/"
+cp "$TMP/agents/com.optionsedge.calibration-progress-watch.plist" "$TMP/previous.plist"
+LOAD_FAILS=1 install_run
+[ "$RC" -ne 0 ] && ok "a failed load fails the install" || bad "a failed load was reported as success"
+cmp -s "$TMP/dest/calibration-progress-watch.sh" "$TMP/previous" \
+  && ok "the previous watchdog is back, byte-identical" || bad "the rollback did not restore the previous file"
+cmp -s "$TMP/agents/com.optionsedge.calibration-progress-watch.plist" "$TMP/previous.plist" \
+  && ok "and so is the previous plist" || bad "the rollback did not restore the previous plist"
+# The unload must come BEFORE the restoring load, or launchd keeps the rejected configuration.
+awk '/launchctl unload/{u=NR} /launchctl load/{l=NR} END{exit !(u && l && u < l)}' "$TMP/calls" \
+  && ok "it unloaded the rejected agent before reloading the previous one" \
+  || bad "it reloaded without unloading first: $(tr '\n' '; ' < "$TMP/calls")"
+
+echo "12. a FIRST install that fails leaves nothing behind"
+# Absence is a state too. Restoring "what was there" when nothing was there means REMOVING what this
+# run wrote — otherwise a failed first install leaves the rejected copy and its plist on the host.
+stage 0
+rm -rf "$TMP/dest" "$TMP/agents"; mkdir -p "$TMP/dest" "$TMP/agents"
+install_run
+[ "$RC" -ne 0 ] && ok "the install failed as set up" || bad "it succeeded with zero agents registered"
+if [ -z "$(ls -A "$TMP/dest" 2>/dev/null)" ] && [ -z "$(ls -A "$TMP/agents" 2>/dev/null)" ]; then
+  ok "the destination and the agents directory are empty again"
+else
+  bad "a failed first install left files behind: $(ls "$TMP/dest" "$TMP/agents" 2>/dev/null | tr '\n' ' ')"
+fi
+
+echo "13. a plist PATH that cannot run the watchdog is caught BEFORE installing"
+# r25 #3. Verification used to inherit the operator's PATH, so a plist whose PATH lacks python3
+# verified perfectly from a terminal and failed every morning under launchd.
+stage 1
+python3 - "$TMP/archive/launchd/com.optionsedge.calibration-progress-watch.plist" <<'PYEOF'
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], 'rb'))
+d['EnvironmentVariables']['PATH'] = '/nonexistent'
+plistlib.dump(d, open(sys.argv[1], 'wb'))
+PYEOF
+install_run
+[ "$RC" -ne 0 ] && ok "a PATH launchd would use but nothing can run is refused" || bad "it installed an agent that could never run under launchd"
+loaded && bad "it loaded the agent anyway" || ok "and nothing was scheduled"
+
+echo "14. every refusal in the watchdog uses the phrase the installer blocks on"
 # One marker covers all refusals only while that is true.
 _ref=$(grep -cE 'alert "calibration watchdog cannot run:' "$HERE/calibration-progress-watch.sh")
 _all=$(grep -cE 'alert "calibration watchdog' "$HERE/calibration-progress-watch.sh")
