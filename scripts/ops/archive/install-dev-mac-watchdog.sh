@@ -34,11 +34,46 @@ echo "install: $FILES -> $DEST"
 echo "install: launchd/$PLIST -> $AGENTS"
 if [ "$DRY" = true ]; then echo "(dry run — nothing written)"; exit 0; fi
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# WHY THERE IS NO AUTOMATIC ROLLBACK ANY MORE.
+#
+# This installer has now been wrong in fourteen distinct ways across four review rounds, and every
+# single defect was in code written to fix the previous one. The last five — a RESTORED flag set
+# before the restore succeeded, a restore that aborts halfway under set -e, no host-wide lock, a
+# dangling symlink classified as absent, and a verification that let the caller override the
+# environment it claimed to reproduce — were ALL edge cases of one idea: undo the change
+# automatically if anything goes wrong.
+#
+# A transactional file-and-daemon swap with rollback is a distributed-systems problem written in
+# bash, and its edges are unbounded: every round found another. So the idea is gone. What replaces it
+# is an ordering that has almost no edges:
+#
+#   1. Verify BEFORE touching the host, in the environment launchd will actually provide.
+#   2. Refuse anything ambiguous — a destination that is not a plain file, a plist that does not
+#      parse, an interpreter that is not executable, another installer already running.
+#   3. Write, load, and check registration.
+#   4. If step 3 fails, say EXACTLY what is on the host and where the previous copies are, and stop.
+#      A person with a two-line instruction recovers correctly; an automatic rollback with fourteen
+#      edge cases does not.
+#
+# The backup is kept in a DURABLE directory that is printed, not a temp dir a trap deletes.
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+# ONE INSTALLER AT A TIME (r26 #2). Two concurrent runs could back up different intermediate states
+# and leave a mixture that never existed. mkdir is atomic on every filesystem that matters.
+LOCK="${OE_WATCHDOG_INSTALL_LOCK:-${TMPDIR:-/tmp}/oe-install-dev-mac-watchdog.lock}"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "REFUSING: another installer holds $LOCK. If you are sure none is running, remove that directory." >&2
+  exit 1
+fi
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+
 # THE PLIST DECLARES THE COMMAND launchd WILL ACTUALLY RUN, and that is the only command worth
-# verifying (r24 #2). The old check ran "$DEST/calibration-progress-watch.sh" with the CALLER's bash,
-# while launchd runs the interpreter and the absolute path written in ProgramArguments — so the
-# installer could pass while the agent's real command was absent or stale, and the test's own healthy
-# case passed for exactly that reason. Read both out of the plist and hold the install to them.
+# verifying (r24 #2). The old check ran the destination script with the CALLER's bash, while launchd
+# runs the interpreter and the absolute path written in ProgramArguments — so the installer could
+# pass while the agent's real command was absent or stale.
+plutil -lint "$SRC/launchd/$PLIST" >/dev/null 2>&1 || {
+  echo "FATAL: $SRC/launchd/$PLIST does not parse. launchd would reject it silently." >&2; exit 1; }
 read -r PLIST_INTERP PLIST_SCRIPT <<EOF
 $(python3 -c "
 import plistlib,sys
@@ -52,59 +87,62 @@ EOF
 if [ "$PLIST_SCRIPT" != "$DEST/calibration-progress-watch.sh" ]; then
   echo "FATAL: the plist runs $PLIST_SCRIPT but this installer installs to $DEST." >&2
   echo "       Installing now would register an agent pointing at a copy nobody updates." >&2
-  echo "       Fix the plist, or set OE_OPS_DIR to the directory the plist names." >&2
   exit 1
 fi
 
-# STAGE, VERIFY, THEN REPLACE. The first version copied over the LIVE files and only then ran its
-# checks, so a refusal left a previously-working agent pointing at the rejected copy — the installer
-# broke the very installation it declined to replace (r24 #1). Nothing live is touched until the
-# staged copy has proven it runs, and a failure after that point restores what was there.
+# EVERY DESTINATION PATH MUST BE A PLAIN FILE OR ABSENT (r26 #3). `[ -f ]` calls a dangling symlink
+# absent, `cp` then writes THROUGH it to wherever it points, and no notion of "the previous state"
+# survives that. Anything else here is ambiguous, and ambiguity is what this script must not resolve
+# by guessing.
+for f in $FILES; do
+  if [ -e "$DEST/$f" ] || [ -L "$DEST/$f" ]; then
+    [ -f "$DEST/$f" ] && [ ! -L "$DEST/$f" ] || {
+      echo "REFUSING: $DEST/$f exists and is not a plain file (symlink, directory, or dangling link)." >&2
+      echo "          Remove or resolve it first — writing through it would put the watchdog somewhere else." >&2
+      exit 1; }
+  fi
+done
+if [ -e "$AGENTS/$PLIST" ] || [ -L "$AGENTS/$PLIST" ]; then
+  [ -f "$AGENTS/$PLIST" ] && [ ! -L "$AGENTS/$PLIST" ] || {
+    echo "REFUSING: $AGENTS/$PLIST exists and is not a plain file." >&2; exit 1; }
+fi
+
 STAGE="$(mktemp -d)"
-BACKUP="$(mktemp -d)"
-# (the EXIT trap is installed below, once a rollback is possible — see restore())
-trap 'rm -rf "$STAGE" "$BACKUP"' EXIT
 for f in $FILES; do cp "$SRC/$f" "$STAGE/$f"; done
 chmod +x "$STAGE/calibration-progress-watch.sh"
 
-# PROVE IT RUNS, using the plist's own interpreter, against the STAGED copy. RunAtLoad is false, so
-# loading the agent demonstrates nothing; an install that only copies files is how a watchdog reaches
-# production broken. A non-zero exit here is fine and expected on a day with no progress record —
-# what is NOT fine is the script failing to START.
-# THE PLIST'S ENVIRONMENT, NOT THE OPERATOR'S (r25 #3). Verification used to inherit the caller's
-# PATH and pass only ENV, so a plist whose PATH lacks python3 verified perfectly from a terminal and
-# failed every single morning under launchd — the exact silent failure this watchdog exists to make
-# impossible. launchd starts a user agent with almost nothing plus EnvironmentVariables, so reproduce
-# that: env -i, HOME and USER (which launchd does set), and every key the plist declares.
-_plist_env() {
-  python3 -c "
-import plistlib, sys, shlex
+# VERIFY IN launchd'S ENVIRONMENT, AND ONLY launchd'S (r25 #3, r26 #4). It used to inherit the
+# operator's PATH, and then — worse — it injected the caller's ENV/CHECK_DATE/ARCHIVE_DIR after the
+# plist's own keys, so an operator could verify a different environment, root or date than the agent
+# will ever receive, and even override the plist's ENV. launchd starts a user agent with almost
+# nothing plus EnvironmentVariables. Nothing from this shell reaches the verification.
+# NUL-delimited, read into an ARRAY, and placed BEFORE the command. A first version piped these into
+# `xargs -0 env -i ... interp script`, and xargs appends its input to the END of the command line — so
+# every plist variable became an ARGUMENT to the watchdog instead of part of its environment, and the
+# verification ran with no PATH and no ARCHIVE_DIR at all. It then resolved the operator's REAL NAS
+# and today's date, and passed. The test caught it; the log line naming the resolved root is what made
+# it visible, which is the whole reason that line exists.
+_plist_env_pairs=()
+while IFS= read -r -d '' _kv; do _plist_env_pairs+=("$_kv"); done < <(python3 -c "
+import plistlib, sys
 d = plistlib.load(open(sys.argv[1],'rb')).get('EnvironmentVariables', {})
-print(' '.join('%s=%s' % (k, shlex.quote(str(v))) for k, v in d.items()))" "$SRC/launchd/$PLIST"
-}
-PLIST_ENV="$(_plist_env)"
-echo "verify: running the staged copy as launchd would ($PLIST_INTERP, with the plist's environment)"
+for k, v in d.items():
+    sys.stdout.write('%s=%s\0' % (k, v))" "$SRC/launchd/$PLIST")
+echo "verify: running the staged copy as launchd would ($PLIST_INTERP, with only the plist's environment)"
 set +e
-out="$(eval env -i HOME=\"\$HOME\" USER=\"\${USER:-}\" $PLIST_ENV \
-        ENV=\"\${ENV:-prod}\" ${CHECK_DATE:+CHECK_DATE=\"$CHECK_DATE\"} \
-        ${ARCHIVE_DIR:+ARCHIVE_DIR=\"$ARCHIVE_DIR\"} ${ARCHIVE_ROOT_CANDIDATES:+ARCHIVE_ROOT_CANDIDATES=\"$ARCHIVE_ROOT_CANDIDATES\"} \
-        \"$PLIST_INTERP\" \"$STAGE/calibration-progress-watch.sh\" 2>&1)"; rc=$?
+out="$(env -i HOME="$HOME" USER="${USER:-}" "${_plist_env_pairs[@]}" \
+        "$PLIST_INTERP" "$STAGE/calibration-progress-watch.sh" 2>&1)"; rc=$?
 set -e
 printf '%s\n' "$out" | sed 's/^/    /'
 
-# A deliberate refusal. Every refusal in the watchdog shares this phrase so one marker covers all of
-# them; validate-dev-mac-watchdog.sh asserts that is still true.
 case "$out" in
-  *"cannot run"*) echo "REFUSING TO INSTALL: the watchdog cannot run on this host (see above). Nothing was changed. Fix that first." >&2; exit 1 ;;
+  *"cannot run"*) echo "REFUSING TO INSTALL: the watchdog cannot run on this host (see above). Nothing was changed." >&2; exit 1 ;;
 esac
-# Did not start, however it failed. These are the shapes a broken copy actually produces.
 for _bad in "Traceback (most recent call last)" "command not found" "syntax error" "unbound variable" "No such file or directory"; do
   case "$out" in
     *"$_bad"*) echo "REFUSING TO INSTALL: the watchdog did not start — '$_bad' in its output. Nothing was changed." >&2; exit 1 ;;
   esac
 done
-# Reached one of its OWN terminal states: it either completed the evaluation (archiveStatus=) or
-# raised an alert about the day (ALERT:). Neither appears if it died on the way there.
 case "$out" in
   *"archiveStatus="*|*"ALERT:"*) : ;;
   *) echo "REFUSING TO INSTALL: the watchdog produced no verdict and no alert (exit $rc). It did not run. Nothing was changed." >&2; exit 1 ;;
@@ -115,73 +153,41 @@ case "$rc" in
 esac
 echo "verify: it started and reached one of its own outcomes (exit $rc — nonzero is normal when the day did not land)"
 
-# Only now touch the host. Everything from here is REVERSIBLE, and the revert has to survive the ways
-# this script can stop — not just the ways it chooses to stop.
-#
-# r25 #1: the EXIT trap used to delete STAGE and BACKUP and nothing else, so any `set -e` failure
-# during the live copies, the chmod, the plist install or `launchctl load` exited WITHOUT restoring —
-# leaving a partial or outright rejected installation live. The trap now performs the rollback.
-# r25 #2: and the rollback was not state-preserving. Files and a plist that did NOT exist before were
-# never removed, so a failed FIRST install left the rejected copy behind; and it reloaded without
-# unloading the rejected agent, so launchd kept the configuration it had just been given.
-REPLACING=false
-RESTORED=false
-BACKED_UP=""          # the names that existed BEFORE, so absence is restorable too
-PLIST_EXISTED=false
+# Only now touch the host. The previous copies go somewhere DURABLE and printed — a temp directory a
+# trap deletes is not a backup, it is the appearance of one.
+BACKUP="${OE_WATCHDOG_BACKUP_DIR:-$DEST/.watchdog-backup-$(date -u '+%Y%m%dT%H%M%SZ')}"
+mkdir -p "$DEST" "$AGENTS" "$BACKUP"
+for f in $FILES; do [ -f "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"; done
+[ -f "$AGENTS/$PLIST" ] && cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"
+echo "backup: previous copies (if any) are in $BACKUP"
 
-restore() {
-  [ "$REPLACING" = true ] || return 0
-  [ "$RESTORED" = false ] || return 0
-  RESTORED=true
-  echo "rolling back to the previous installation" >&2
-  # Unload FIRST: launchd is holding the rejected configuration, and loading over it changes nothing.
-  launchctl unload "$AGENTS/$PLIST" 2>/dev/null || true
-  for f in $FILES; do
-    case " $BACKED_UP " in
-      *" $f "*) cp "$BACKUP/$f" "$DEST/$f" ;;
-      *)        rm -f "$DEST/$f" ;;          # it did not exist before; leaving it is not "restored"
-    esac
-  done
-  if [ "$PLIST_EXISTED" = true ]; then
-    cp "$BACKUP/$PLIST" "$AGENTS/$PLIST"
-    launchctl load "$AGENTS/$PLIST" 2>/dev/null || true
-  else
-    rm -f "$AGENTS/$PLIST"                    # there was no agent before; there must be none after
-  fi
-}
-cleanup() {
-  local rc=$?
-  [ "$rc" -eq 0 ] || restore
-  rm -rf "$STAGE" "$BACKUP"
-}
-trap cleanup EXIT
-
-mkdir -p "$DEST" "$AGENTS"
-for f in $FILES; do
-  if [ -f "$DEST/$f" ]; then cp "$DEST/$f" "$BACKUP/$f"; BACKED_UP="$BACKED_UP $f"; fi
-done
-if [ -f "$AGENTS/$PLIST" ]; then cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"; PLIST_EXISTED=true; fi
-
-REPLACING=true
+_label="$(python3 -c "import plistlib,sys;print(plistlib.load(open(sys.argv[1],'rb'))['Label'])" "$SRC/launchd/$PLIST")"
+launchctl unload "$AGENTS/$PLIST" 2>/dev/null || true
 for f in $FILES; do cp "$STAGE/$f" "$DEST/$f"; done
 chmod +x "$DEST/calibration-progress-watch.sh"
 cp "$SRC/launchd/$PLIST" "$AGENTS/$PLIST"
+rm -rf "$STAGE"
 
-launchctl unload "$AGENTS/$PLIST" 2>/dev/null || true
-launchctl load "$AGENTS/$PLIST"
-# COUNTING IS NOT CHECKING (r21 #2). This printed the count and never required it, so
-# "loaded: 0 agent(s)" finished successfully and left nothing scheduled — the exact outcome the
-# installer exists to prevent.
-# EXACTLY THIS LABEL, not anything containing it. An unanchored substring count let a similarly named
-# agent — com.optionsedge.calibration-progress-watch.backup, say — satisfy "exactly one" while the
-# label this plist actually declares was absent (r23 #2). launchctl list is PID<TAB>status<TAB>label,
-# so compare the label column.
-_label="$(python3 -c "import plistlib,sys;print(plistlib.load(open(sys.argv[1],'rb'))['Label'])" "$SRC/launchd/$PLIST")"
+# COUNTING IS NOT CHECKING (r21 #2), AND THIS LABEL, NOT ANYTHING CONTAINING IT (r23 #2).
+# launchctl list is PID<TAB>status<TAB>label.
+say_state() {
+  echo "  the host now has: the NEW files in $DEST and the NEW plist in $AGENTS" >&2
+  echo "  the previous copies are in $BACKUP" >&2
+  echo "  to put back exactly what was there:" >&2
+  echo "      launchctl unload $AGENTS/$PLIST 2>/dev/null; cp $BACKUP/* $DEST/ 2>/dev/null" >&2
+  echo "      cp $BACKUP/$PLIST $AGENTS/ 2>/dev/null && launchctl load $AGENTS/$PLIST" >&2
+  echo "  (this script does NOT do that for you on purpose: an automatic rollback here was wrong in" >&2
+  echo "   five different ways across two review rounds, and a half-finished one is worse than none.)" >&2
+}
+if ! launchctl load "$AGENTS/$PLIST"; then
+  echo "INSTALL FAILED: launchctl could not load $AGENTS/$PLIST." >&2
+  say_state
+  exit 1
+fi
 _n="$(launchctl list 2>/dev/null | awk -F'\t' -v l="$_label" '$3 == l' | grep -c . || true)"
 if [ "${_n:-0}" -ne 1 ]; then
-  echo "INSTALL FAILED: launchctl reports $_n agents with the label $_label, expected exactly 1." >&2
-  echo "                The new files were written but nothing is scheduled." >&2
-  restore
+  echo "INSTALL FAILED: launchctl reports ${_n:-0} agents with the label $_label, expected exactly 1." >&2
+  say_state
   exit 1
 fi
 echo "loaded: 1 agent with the label $_label, scheduled 07:00 local"
