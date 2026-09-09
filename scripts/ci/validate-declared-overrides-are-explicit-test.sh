@@ -128,7 +128,13 @@ for msg in "TopicAuthorizationException: Not authorized to access topics: [Topic
 org.apache.kafka.common.errors.TimeoutException: Timed out waiting for a node assignment." \
            "SaslAuthenticationException: Authentication failed
 [2026-09-09 12:00:02,113] WARN Bootstrap broker kafka:9093 disconnected
-java.net.ConnectException: Connection timed out"; do
+java.net.ConnectException: Connection timed out" \
+           "javax.net.ssl.SSLProtocolException: Unexpected handshake message" \
+           "javax.net.ssl.SSLPeerUnverifiedException: peer not authenticated" \
+           "sun.security.provider.certpath.SunCertPathBuilderException: unable to find valid certification path
+org.apache.kafka.common.errors.TimeoutException: Timed out waiting for a node assignment." \
+           "[2026-09-09 12:00:03,001] WARN Connection to node -1 (kafka/10.0.0.4:9093) terminated during authentication. This may happen due to any of the following reasons: (1) Authentication failed due to invalid credentials with brokers older than 1.0.0, (2) Firewall blocking Kafka TLS traffic (eg it may only allow HTTPS traffic), (3) Transient network issue.
+org.apache.kafka.common.errors.TimeoutException: Timed out waiting for a node assignment."; do
     printf '#!/usr/bin/env bash\ncat >&2 <<EOM\n%s\nEOM\nexit 1\n' "$msg" > "$WORK/bin/kafka-topics"
     chmod +x "$WORK/bin/kafka-topics"
     got=$(run "$WORK/ok")
@@ -140,6 +146,11 @@ java.net.ConnectException: Connection timed out"; do
                                      sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
 done
 printf '  killed: %s\n' "a probe failure that is not a connection failure is reported, not skipped"
+# The last of those is Kafka's stock "terminated during authentication" text, which names invalid
+# credentials, a firewall, and a transient network issue as alternative causes of the SAME message.
+# It is refused DELIBERATELY. A guard that exists to stop unverified retention state from shipping
+# cannot resolve that ambiguity in favour of skipping: a wrong refusal stops a deploy loudly and a
+# human re-runs it; a wrong skip ships topics on broker defaults and says nothing.
 cat > "$WORK/bin/kafka-topics" <<'ALIVE'
 #!/usr/bin/env bash
 topic=""

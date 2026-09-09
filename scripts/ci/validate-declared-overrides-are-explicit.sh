@@ -59,6 +59,15 @@ command -v kafka-configs >/dev/null 2>&1 || { echo "SKIP: kafka-configs is not o
 probe_rc=0
 probe=$(timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --list 2>&1) || probe_rc=$?
 if [ "$probe_rc" -ne 0 ]; then
+    # Kafka's stock "terminated during authentication" diagnostic is AMBIGUOUS by the broker's own
+    # admission: it lists invalid credentials, a firewall blocking TLS traffic, and a transient
+    # network failure as alternative causes of the same message. It therefore lands here, in the
+    # refusal, and that is deliberate rather than an oversight. A guard whose whole purpose is to
+    # stop unverified retention state from shipping cannot resolve an ambiguity in favour of
+    # skipping: a wrong refusal stops a deploy loudly and a human re-runs it, while a wrong skip
+    # ships topics sitting on broker defaults and says nothing — which is how dev lost
+    # es.futures.cvd.bars on 2026-08-07. Ambiguity is something the guard could not interrogate.
+    #
     # Refusal comes FIRST, over the whole output. A real Kafka failure is many lines: an SSL or SASL
     # rejection prints its own cause and then, as the client keeps retrying, a metadata timeout. If
     # the connectivity allowlist is consulted first, that trailing timeout decides — and an
@@ -66,7 +75,7 @@ if [ "$probe_rc" -ne 0 ]; then
     # through unverified retention state. Anything naming authentication, authorization or TLS is
     # something this guard could not interrogate, whatever else the output also says.
     if printf '%s' "$probe" | grep -qE \
-        'Authentication|Authoriz|authoriz|SaslAuthentication|SSLException|SSLHandshake|CertificateException|Not authorized|AclAuthorizer|security\.protocol|sasl\.'; then
+        'Authentication|Authoriz|authoriz|Sasl|sasl\.|SSL|TLS|Certificate|CertPath|PKIX|KeyStore|TrustStore|Not authorized|AclAuthorizer|security\.protocol'; then
         printf 'CANNOT READ: kafka-topics --list failed on %s and the failure names authentication, authorization or TLS, not connectivity (exit %s: %s)\n' \
             "$BOOTSTRAP" "$probe_rc" "$(printf '%s' "$probe" | head -1)" >&2
         exit 1
