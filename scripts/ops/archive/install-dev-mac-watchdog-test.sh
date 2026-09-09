@@ -52,7 +52,7 @@ PYEOF
 }
 install_run() {
   PATH="$TMP/bin:$PATH" OE_OPS_DIR="$TMP/dest" LAUNCH_AGENTS_DIR="$TMP/agents" \
-    LOAD_FAILS="${LOAD_FAILS:-}" OE_WATCHDOG_INSTALL_LOCK="${OE_WATCHDOG_INSTALL_LOCK:-}" \
+    LOAD_FAILS="${LOAD_FAILS:-}" OE_WATCHDOG_INSTALL_LOCK="${OE_WATCHDOG_INSTALL_LOCK:-}" OE_WATCHDOG_BACKUP_DIR="${OE_WATCHDOG_BACKUP_DIR:-}" \
     bash "$TMP/archive/install-dev-mac-watchdog.sh" > "$TMP/out" 2>&1
   RC=$?
 }
@@ -114,6 +114,7 @@ install_run
 RESTORE="$(grep -oE '[^ ]*/restore\.sh' "$TMP/out" | head -1)"
 [ -x "$RESTORE" ] && ok "it handed over an executable recovery script" || bad "no runnable recovery script was produced: $(tail -3 "$TMP/out")"
 PATH="$TMP/bin:$PATH" bash "$RESTORE" >/dev/null 2>&1
+[ "$?" -eq 0 ] && ok "the recovery script reported success" || bad "recovery exited non-zero and the case used to ignore that"
 if cmp -s "$TMP/dest/calibration-progress-watch.sh" "$TMP/before/calibration-progress-watch.sh" \
    && cmp -s "$TMP/dest/oe-alert.sh" "$TMP/before/oe-alert.sh" \
    && cmp -s "$TMP/agents/com.optionsedge.calibration-progress-watch.plist" "$TMP/before.plist"; then
@@ -223,7 +224,61 @@ install_run
 [ "$RC" -ne 0 ] && ok "a plist with no Label is refused" || bad "it installed an agent with no label"
 dest_empty && ok "and the host was never touched" || bad "it created directories or backups before failing"
 
-echo "16. every refusal in the watchdog uses the phrase the installer blocks on"
+echo "16. a STALE backup refuses to restore, instead of silently undoing a later install"
+# Found by probing, not by review. With two backup directories present, the OLDER restore.sh removed
+# the watchdog entirely and printed "restored" — an operator who picks the wrong directory uninstalls
+# the thing and is told it worked.
+stage 1
+install_run
+[ "$RC" -eq 0 ] || bad "case 16 could not complete the first install: $(tail -2 "$TMP/out")"
+OLD_BACKUP="$(ls -d "$TMP/dest"/.watchdog-backup-* 2>/dev/null | head -1)"
+sleep 1
+install_run
+[ "$RC" -eq 0 ] || bad "case 16 could not complete the second install"
+[ "$(ls -d "$TMP/dest"/.watchdog-backup-* 2>/dev/null | wc -l | tr -d ' ')" -eq 2 ] \
+  && ok "two installs leave two dated backups" || bad "the second install did not make its own backup"
+PATH="$TMP/bin:$PATH" bash "$OLD_BACKUP/restore.sh" > "$TMP/stale" 2>&1; _sr=$?
+[ "$_sr" -eq 3 ] && ok "the older backup refuses to restore (exit 3, its own code)" || bad "a stale backup did not refuse cleanly (exit $_sr)"
+grep -q "MIXED state" "$TMP/stale" && bad "a refusal that touched nothing claimed a mixed state" || ok "and a refusal does not claim the host is mixed"
+grep -q "NEWER backup exists" "$TMP/stale" && ok "and it said a newer one exists" || bad "the refusal did not explain why"
+if [ -f "$TMP/dest/calibration-progress-watch.sh" ] && [ -f "$TMP/agents/com.optionsedge.calibration-progress-watch.plist" ]; then
+  ok "the installed watchdog is still there"
+else
+  bad "the stale restore removed the installed watchdog anyway"
+fi
+# FORCE is the deliberate escape hatch, and it must actually work.
+PATH="$TMP/bin:$PATH" FORCE=1 bash "$OLD_BACKUP/restore.sh" >/dev/null 2>&1
+[ ! -f "$TMP/agents/com.optionsedge.calibration-progress-watch.plist" ] \
+  && ok "FORCE=1 still performs the restore it refused" || bad "FORCE=1 did not override the refusal"
+
+echo "17. recovery that cannot finish says so, instead of reporting success"
+# r28 #1. The generated script omitted set -e, so a failed cp/rm/load fell through to the success
+# message and exited 0 — recovery claiming it restored the previous installation while leaving a mixed
+# one. And the old case discarded the exit status, so the failure mode was unbound twice over.
+stage 0
+printf '#!/usr/bin/env bash\necho "previous"\n' > "$TMP/dest/calibration-progress-watch.sh"
+install_run
+RESTORE="$(grep -oE '[^ ]*/restore\.sh' "$TMP/out" | head -1)"
+[ -x "$RESTORE" ] || bad "case 17 got no recovery script"
+# Remove a file the script must copy back: the cp now fails partway through.
+BDIR="$(dirname "$RESTORE")"; rm -f "$BDIR/calibration-progress-watch.sh"
+PATH="$TMP/bin:$PATH" bash "$RESTORE" > "$TMP/rfail" 2>&1; _rf=$?
+[ "$_rf" -ne 0 ] && ok "a recovery that cannot complete exits non-zero" || bad "a broken recovery reported success"
+grep -q "MIXED state" "$TMP/rfail" && ok "and it says the host is in a mixed state" || bad "it did not warn that the host is mixed"
+grep -q "restored the previous installation" "$TMP/rfail" \
+  && bad "it printed the success line anyway" || ok "and it never printed the success line"
+
+echo "18. a backup directory that already exists is REFUSED, not written into"
+# r28 #2. The default had one-second resolution and the caller could hand back a path already in use;
+# mkdir -p plus overwriting copies then replaced an earlier backup AND its restore.sh — destroying the
+# only record of the state that install replaced.
+stage 1
+mkdir -p "$TMP/reused-backup"; printf 'precious\n' > "$TMP/reused-backup/marker"
+OE_WATCHDOG_BACKUP_DIR="$TMP/reused-backup" install_run
+[ "$RC" -ne 0 ] && ok "an existing backup directory stops the install" || bad "it wrote into an existing backup directory"
+[ -f "$TMP/reused-backup/marker" ] && ok "and the earlier backup's contents are untouched" || bad "it overwrote the earlier backup"
+
+echo "19. every refusal in the watchdog uses the phrase the installer blocks on"
 _ref=$(grep -cE 'alert "calibration watchdog cannot run:' "$HERE/calibration-progress-watch.sh")
 _all=$(grep -cE 'alert "calibration watchdog' "$HERE/calibration-progress-watch.sh")
 [ "$_ref" -eq "$_all" ] && [ "$_ref" -gt 0 ] \

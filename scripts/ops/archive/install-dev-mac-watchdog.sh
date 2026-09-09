@@ -179,8 +179,19 @@ echo "verify: it started and reached one of its own outcomes (exit $rc — nonze
 
 # Only now touch the host. The previous copies go somewhere DURABLE and printed — a temp directory a
 # trap deletes is not a backup, it is the appearance of one.
-BACKUP="${OE_WATCHDOG_BACKUP_DIR:-$DEST/.watchdog-backup-$(date -u '+%Y%m%dT%H%M%SZ')}"
-mkdir -p "$DEST" "$AGENTS" "$BACKUP"
+# A BACKUP DIRECTORY MUST BE NEW (r28 #2). The default had one-second resolution and the caller could
+# hand back a path already in use, and `mkdir -p` plus overwriting copies then REPLACED an earlier
+# backup and its restore.sh — destroying the only record of the state that install had replaced. The
+# pid makes the default unique within a second, and `mkdir` (no -p) refuses an existing directory
+# instead of writing into it.
+BACKUP="${OE_WATCHDOG_BACKUP_DIR:-$DEST/.watchdog-backup-$(date -u '+%Y%m%dT%H%M%SZ')-$$}"
+mkdir -p "$DEST" "$AGENTS"
+if ! mkdir "$BACKUP" 2>/dev/null; then
+  echo "REFUSING: the backup directory $BACKUP already exists." >&2
+  echo "          Writing into it would overwrite the record of an earlier install's previous state," >&2
+  echo "          including its restore.sh. Choose another OE_WATCHDOG_BACKUP_DIR, or move that one aside." >&2
+  exit 1
+fi
 for f in $FILES; do [ -f "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"; done
 [ -f "$AGENTS/$PLIST" ] && cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"
 
@@ -193,7 +204,26 @@ for f in $FILES; do [ -f "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"; done
 {
   echo '#!/usr/bin/env bash'
   echo '# Restores the state that existed before the install this directory belongs to.'
-  echo 'set -uo pipefail'
+  # FAIL-CLOSED (r28 #1). Without set -e a failed cp, rm or load fell through to the success message
+  # and exited 0 — a recovery that reports it restored the previous installation while leaving a mixed
+  # one. That is the third time in this branch that something written to report failure could not.
+  echo 'set -euo pipefail'
+  # Exit 3 is the stale-backup REFUSAL, which touched nothing — claiming a mixed state for it would be
+  # a wrong message, and a wrong message is a defect like any other.
+  printf 'trap %s EXIT\n' "$(printf '%q' 'rc=$?; case "$rc" in 0|3) : ;; *) echo "RECOVERY FAILED at exit $rc — the host is in a MIXED state; read this script and finish by hand" >&2 ;; esac')"
+  # A STALE BACKUP UNDOES MORE THAN ITS OWN INSTALL. Found by probing rather than by review: with two
+  # backup directories present, running the OLDER one's restore.sh removed the watchdog entirely and
+  # reported "restored" — an operator picking the wrong directory silently uninstalls the thing, and
+  # is told it worked. Each script now refuses when a newer backup exists, because "restore" has to
+  # mean the state this run replaced, not some earlier one.
+  printf '_self=%s\n' "$(printf '%q' "$BACKUP")"
+  printf '_newer="$(ls -d %s/.watchdog-backup-* 2>/dev/null | sort | awk -v s="$_self" \047$0 > s\047 | head -1)"\n' "$(printf '%q' "$DEST")"
+  echo 'if [ -n "${_newer:-}" ] && [ -z "${FORCE:-}" ]; then'
+  echo '  echo "REFUSING: a NEWER backup exists ($_newer)." >&2'
+  echo '  echo "          Restoring this one would also undo the install that made the newer backup," >&2'
+  echo '  echo "          and it would report success while doing it. Restore the newest one, or set FORCE=1." >&2'
+  echo '  exit 3'
+  echo 'fi'
   printf 'launchctl unload %s 2>/dev/null || true
 ' "$(printf '%q' "$AGENTS/$PLIST")"
   for f in $FILES; do
