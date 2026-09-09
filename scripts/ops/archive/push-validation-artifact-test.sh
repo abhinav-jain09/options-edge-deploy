@@ -1334,6 +1334,49 @@ else
   ok "the worst lineage decides the date, not the best"
 fi
 
+echo "60. an unreachable archive root is a DIFFERENT alert from a reporter that did not run"
+# BZ 360. The watchdog's whole purpose is telling those two apart, and until now an absent root
+# produced the reporter's sentence. Every other case in this file passes ARCHIVE_DIR explicitly, so
+# neither the default nor the absent-root path was ever executed by a test.
+build 3 20
+targets FROZEN "$SB"; publish
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+# (a) no root anywhere: the alert must name the MOUNT and must NOT accuse the reporter.
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_ROOT_CANDIDATES="$WORK/no-such-a $WORK/no-such-b" \
+   CALENDAR_DIR="$CAL_DIR" bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch3.log" 2>&1; then
+  bad "the watchdog exited 0 with no archive root at all"
+else
+  if grep -q "MOUNT problem here" "$WORK/watch3.log" \
+     && ! grep -q "progress MISSING" "$WORK/watch3.log"; then
+    ok "an unmounted NAS blames the mount, and says nothing about the reporter"
+  else
+    bad "an absent archive root did not produce its own alert: $(head -3 "$WORK/watch3.log")"
+  fi
+fi
+# (b) the root IS there and the reporter did not write: the alert must now say so WITHOUT hedging.
+if CHECK_DATE=2026-01-02 ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch4.log" 2>&1; then
+  bad "the watchdog exited 0 on a day with no progress record"
+else
+  grep -q "IS reachable" "$WORK/watch4.log" \
+    && ok "a reachable root turns the hedge into a diagnosis: this is the reporter" \
+    || bad "the MISSING alert still cannot say the root was reachable: $(head -3 "$WORK/watch4.log")"
+fi
+
+echo "61. the watchdog RESOLVES its archive root instead of guessing one path"
+# The old default was /Volumes/database/optionsedge, which does not exist on the Mac this agent is
+# scheduled on. Resolution must find a real root among the candidates with no ARCHIVE_DIR set at all.
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_ROOT_CANDIDATES="$WORK/no-such-a $WORK" \
+   CALENDAR_DIR="$CAL_DIR" bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch5.log" 2>&1; then
+  grep -q "archive root $WORK" "$WORK/watch5.log" \
+    && ok "with no ARCHIVE_DIR, it finds the root that exists and names the one it used" \
+    || bad "it passed without saying which root it read: $(head -3 "$WORK/watch5.log")"
+else
+  bad "resolution did not reach the real root: $(head -4 "$WORK/watch5.log")"
+fi
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
 echo "FAIL — $fails assertion(s)"; exit 1

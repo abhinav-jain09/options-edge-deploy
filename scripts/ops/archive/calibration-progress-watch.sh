@@ -8,8 +8,24 @@
 # is the only thing that tells them apart.
 set -uo pipefail
 ENV_NAME="${ENV:-prod}"
-ARCHIVE_DIR="${ARCHIVE_DIR:-/Volumes/database/optionsedge}"
-OUT_ROOT="$ARCHIVE_DIR/calibration-runs/$ENV_NAME"
+# The archive root is RESOLVED, not guessed. The old default was /Volumes/database/optionsedge, which
+# is not where the NAS is mounted on the dev Mac this watchdog is scheduled on (it is
+# //192.168.100.100/database on $HOME/nas-db), so installing the launchd agent would have produced a
+# MISSING alert every trading day forever. A watchdog that cries wolf daily is read by nobody, which
+# is the same outcome as never installing it (BZ 360 #1).
+#
+# An explicit ARCHIVE_DIR still wins outright, which is what every test passes and what the .252
+# crontab would pass; the candidates below are only consulted when the caller said nothing.
+ARCHIVE_ROOT_CANDIDATES="${ARCHIVE_ROOT_CANDIDATES:-$HOME/nas-db/optionsedge /Volumes/database/optionsedge /mnt/nas/optionsedge}"
+if [ -n "${ARCHIVE_DIR:-}" ]; then
+  ARCHIVE_ROOT_SOURCE="ARCHIVE_DIR was set explicitly"
+else
+  for _c in $ARCHIVE_ROOT_CANDIDATES; do
+    [ -d "$_c" ] || continue
+    ARCHIVE_DIR="$_c"; ARCHIVE_ROOT_SOURCE="resolved from ARCHIVE_ROOT_CANDIDATES"; break
+  done
+fi
+OUT_ROOT="${ARCHIVE_DIR:-}/calibration-runs/$ENV_NAME"
 CAL="${CALENDAR_DIR:-$HOME/development/workspace/options-edge-deploy/scripts/jenkins}"
 log() { printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 # oe-alert.sh is SOURCE-ONLY and mode 0644, so testing -x silently disables every alert this
@@ -48,10 +64,25 @@ PY
 )}"
 [ -n "$DAY" ] || { alert "calibration watchdog: could not determine the previous trading day — the market calendar is missing or unreadable at $CAL"; exit 1; }
 
+# TWO FAILURES, TWO ALERTS. This watchdog exists to tell a silent reporter apart from a healthy empty
+# corpus; it cannot do that while an unreachable archive root produces the same sentence as a dead
+# reporter. One is a mount to fix HERE, the other is a job to fix on .252, and reading the alert must
+# be enough to know which (BZ 360 #2). So the root is checked first, and says so in its own words.
+if [ -z "${ARCHIVE_DIR:-}" ] || [ ! -d "$ARCHIVE_DIR" ]; then
+  alert "calibration watchdog cannot run: no archive root on this host (tried: $ARCHIVE_ROOT_CANDIDATES). This is a MOUNT problem here, NOT evidence about the reporter on .252 — it says nothing about whether $DAY was archived."
+  exit 1
+fi
+log "archive root $ARCHIVE_DIR (${ARCHIVE_ROOT_SOURCE:-resolved})"
+if [ ! -d "$OUT_ROOT" ]; then
+  alert "calibration watchdog cannot run: the archive root $ARCHIVE_DIR is mounted but has no calibration-runs/$ENV_NAME. Either the env name is wrong here, or the reporter has never once written for env=$ENV_NAME — check .252 before treating this as a mount problem."
+  exit 1
+fi
+
 found=$(find "$OUT_ROOT" -name "dt=$DAY.json" 2>/dev/null | head -1)
 if [ -z "$found" ]; then
   # This is the failure the watchdog exists for: not "the corpus is empty" but "nobody reported".
-  alert "calibration progress MISSING for $DAY (env=$ENV_NAME) — the reporter did not run, or the NAS is unreachable. An empty corpus and a dead reporter look the same without this check."
+  # The archive root is known-present by here, so this sentence no longer has to hedge about the NAS.
+  alert "calibration progress MISSING for $DAY (env=$ENV_NAME) — the archive root $ARCHIVE_DIR IS reachable and holds calibration-runs/$ENV_NAME, so this is the reporter on .252 not running. An empty corpus and a dead reporter look the same without this check."
   exit 1
 fi
 log "progress record present for $DAY: $found"
