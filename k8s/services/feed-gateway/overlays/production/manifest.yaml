@@ -59,7 +59,15 @@ spec:
     spec:
       containers:
         - env:
+            # 2026-09-09: matches dev (deploy #1008, proven on dev this morning:
+            # "GEX PARTIAL 177/178 PRE-OPEN+DBN", 0 stale markers, path ARMED).
+            # STATUS plane ON...
             - name: GATEWAY_IBKR_PREOPEN_ENABLED
+              value: "true"
+            # ...VALUE plane OFF: slice 2 publishes the numbers as "ibkr-preopen-gex", which no web
+            # client consumes, so they ride the ordinary gex-by-strike delivery the UI renders.
+            # Turn this back on only once the web grows that consumer (gateway #169).
+            - name: GATEWAY_IBKR_PREOPEN_GEX_ARBITRATION_ENABLED
               value: "false"
             - name: OE_WATCH_JDBC_URL
               value: jdbc:postgresql://192.168.100.252:5432/options_flow
