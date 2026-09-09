@@ -74,10 +74,14 @@ BARE_PATH=""
 while IFS= read -r d; do
     [ -n "$d" ] || continue
     [ "$d" = "$WORK/bin" ] && continue
-    [ -x "$d/kafka-topics" ] || [ -x "$d/kafka-configs" ] && continue
+    [ -x "$d/kafka-topics" ] || [ -x "$d/kafka-configs" ] || [ -x "$d/timeout" ] && continue
     BARE_PATH="${BARE_PATH:+$BARE_PATH:}$d"
 done <<< "$(printf '%s' "$PATH" | tr ':' '\n')"
-for missing in kafka-topics kafka-configs; do
+# `timeout` is in the loop because it is in the guard's requirement: every broker call is wrapped in
+# it, so its absence changes what the probe means. Claiming a case covers a dependency and then
+# iterating over only two of the three is the same kind of gap as not checking at all.
+printf '#!/usr/bin/env bash\nshift; exec "$@"\n' > "$WORK/bin/timeout"; chmod +x "$WORK/bin/timeout"
+for missing in kafka-topics kafka-configs timeout; do
     mv "$WORK/bin/$missing" "$WORK/$missing.hidden"
     rc=0
     out=$(PATH="$WORK/bin:$BARE_PATH" FIXTURE="$WORK/ok" EXISTS="$WORK/exists" bash "$GUARD" fake:9092 2>&1) || rc=$?
