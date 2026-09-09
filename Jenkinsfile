@@ -532,6 +532,23 @@ pipeline {
         '''
       }
     }
+    // Runs AFTER the reconcile, and OUTSIDE its SKIP_KAFKA_TOPICS gate, on purpose. A topic with no
+    // override of its own is a topic apply-topics.sh has not reached, and SKIP_KAFKA_TOPICS is one of
+    // the two ways that happens — so putting this assertion inside the stage it polices would skip it
+    // in exactly the case it exists to catch. That case is not hypothetical: dev and prod both carry
+    // inverted retention on topics the declaration has covered for weeks.
+    stage('Declared retention overrides are set on the topics') {
+      when { expression { return !params.DEPLOY_DRY_RUN } }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          export ENVIRONMENT
+          scripts/ci/validate-declared-overrides-are-explicit.sh "$KAFKA_BOOTSTRAP_SERVERS"
+        '''
+      }
+    }
     stage('Kafka Internal Topics') {
       when {
         expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }

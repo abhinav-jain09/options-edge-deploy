@@ -62,15 +62,27 @@ declared() {
     printf '%s\n' $OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES | tr ' ' '\n' | sed -n 's/^\([^=]*\)=.*/\1/p'
 }
 
+# Topic names contain dots, and a name interpolated into a regex makes `.` match any character —
+# so `es.futures.cvd` would also match `esXfuturesXcvd`. Split on the FIRST `=` with the shell's
+# own string operators instead of a pattern, so the name is compared literally.
 want_of() {
-    printf '%s\n' $OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES | tr ' ' '\n' | sed -n "s/^$1=//p" | head -1 || true
+    local entry
+    for entry in $OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES; do
+        if [ "${entry%%=*}" = "$1" ]; then printf '%s' "${entry#*=}"; return 0; fi
+    done
+    return 0
 }
 
 only=("$@")
 failed=0
 checked=0
 for topic in $(declared); do
-    if [ ${#only[@]} -gt 0 ] && ! printf '%s\n' "${only[@]}" | grep -qx "$topic"; then continue; fi
+    if [ ${#only[@]} -gt 0 ]; then
+        # literal comparison, for the same reason want_of does not use a pattern
+        wanted=0
+        for t in "${only[@]}"; do [ "$t" = "$topic" ] && wanted=1; done
+        [ "$wanted" = "1" ] || continue
+    fi
     # a topic that does not exist here is not this guard's business: another guard owns creation
     timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$topic" >/dev/null 2>&1 || continue
     checked=$((checked + 1))
@@ -78,9 +90,20 @@ for topic in $(declared); do
     # `|| true`: a topic with NO override is precisely the case this guard exists to report, and
     # grep exits 1 when it matches nothing — under `set -e` that killed the script before it could
     # print the finding, so the check failed silently with no message at all.
-    have=$(timeout 30 kafka-configs --bootstrap-server "$BOOTSTRAP" --entity-type topics \
-              --entity-name "$topic" --describe 2>/dev/null \
-           | grep -oE 'retention\.ms=-?[0-9]+ sensitive' | head -1 | sed 's/ sensitive//;s/retention\.ms=//' || true)
+    # Read ONLY the authoritative topic-level entry. `--describe` prints a `synonyms={...}` list on
+    # the same line that repeats broker-level values, and `head -1` over every match made output
+    # order decide the answer — able to invent drift or hide it. Take the value before `sensitive=`,
+    # which is the topic's own, and refuse the topic outright if more than one such line appears.
+    describe=$(timeout 30 kafka-configs --bootstrap-server "$BOOTSTRAP" --entity-type topics \
+                  --entity-name "$topic" --describe 2>/dev/null || true)
+    matches=$(printf '%s\n' "$describe" | grep -cE '^[[:space:]]*retention\.ms=-?[0-9]+ sensitive=' || true)
+    if [ "${matches:-0}" -gt 1 ]; then
+        printf 'AMBIGUOUS: %s reports %s topic-level retention.ms lines; this guard will not guess\n' "$topic" "$matches" >&2
+        failed=1
+        continue
+    fi
+    have=$(printf '%s\n' "$describe" \
+           | sed -n 's/^[[:space:]]*retention\.ms=\(-\{0,1\}[0-9]\{1,\}\) sensitive=.*/\1/p' | head -1 || true)
     if [ -z "$have" ]; then
         printf 'DECLARED BUT NOT SET: %s has no topic-level retention.ms; it is inheriting the broker default (declaration says %s)\n' "$topic" "$want" >&2
         failed=1

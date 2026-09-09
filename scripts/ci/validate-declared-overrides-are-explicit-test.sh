@@ -21,7 +21,14 @@ topic=""
 while [ $# -gt 0 ]; do case "$1" in --entity-name) topic=$2; shift 2;; *) shift;; esac; done
 line=$(grep -E "^${topic}=" "$FIXTURE" 2>/dev/null | head -1 | sed "s/^${topic}=//")
 echo "Dynamic configs for topic $topic are:"
-[ -n "$line" ] && echo "  retention.ms=$line sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=$line}"
+if [ -n "$line" ]; then
+  # the real kafka-configs prints the synonyms list on the same line, repeating broker values that
+  # differ from the topic's own — the parser must take the topic's, not whichever comes first
+  echo "  retention.ms=$line sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=$line, DYNAMIC_DEFAULT_BROKER_CONFIG:log.retention.ms=999, STATIC_BROKER_CONFIG:log.retention.ms=888}"
+else
+  # a topic with no override still reports the broker's own value as a synonym line
+  echo "  min.insync.replicas=1 sensitive=false synonyms={DEFAULT_CONFIG:min.insync.replicas=1}"
+fi
 exit 0
 FAKE
 chmod +x "$WORK/bin/"*
