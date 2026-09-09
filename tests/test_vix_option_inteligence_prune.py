@@ -165,13 +165,20 @@ exit 0
 # shim, forever. Dropping it is also what the real thing does in spirit: inside the container the
 # CLI is the CLI, not a proxy back out.
 SUDO_STUB = """#!/usr/bin/env bash
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -n|docker|exec|-*) shift ;;   # sudo's -n, the docker verb, and `exec`'s own flags (-i)
-    *) break ;;
-  esac
-done
-shift                             # the container name
+# The prefix is ASSERTED, not skipped over. Consuming `-n`, `docker`, `exec` and any leading option
+# independently would let a BROKEN shim through: `sudo -n exec -i es4-kafka kafka-topics ...` has no
+# `docker` in it and cannot work on the es4 host, yet it would still reach the fake CLI and the
+# suite would go green. This stub stands where the real boundary is, so it holds the shim to the
+# exact call the es4 box requires.
+expected_container="${ES4_KAFKA_CONTAINER:-es4-kafka}"
+die() { echo "sudo stub: the shim did not invoke $* — got: $ORIGINAL" >&2; exit 97; }
+ORIGINAL="$*"
+[ "$1" = "-n" ]     || die "sudo -n (non-interactive)"; shift
+[ "$1" = "docker" ] || die "docker"; shift
+[ "$1" = "exec" ]   || die "docker exec"; shift
+[ "$1" = "-i" ]     || die "docker exec -i"; shift
+[ "$1" = "$expected_container" ] || die "the container $expected_container"; shift
+[ $# -gt 0 ] || die "a command inside the container"
 kept=
 while IFS= read -r -d: dir; do
   case "$dir" in *kafka-cli-shim*) continue ;; esac
