@@ -41,17 +41,50 @@ cp "$SRC/launchd/$PLIST" "$AGENTS/$PLIST"
 
 # PROVE IT RUNS. RunAtLoad is false, so loading the agent demonstrates nothing; an install that only
 # copies files is how a watchdog reaches production broken. A non-zero exit here is fine and expected
-# on a day with no progress record — what is NOT fine is the script failing to start at all.
+# on a day with no progress record — what is NOT fine is the script failing to START.
+#
+# THE FIRST VERSION OF THIS DID NOT PROVE ANYTHING (r21 #1). It rejected only output containing
+# "cannot run", so a Python traceback, a missing command or a syntax error all read as "reached a
+# verdict" and the broken copy was loaded anyway. A verification that accepts almost every failure is
+# the same defect as the watchdog it installs: a check that reads as real and binds nothing. So the
+# run has to END in a state this script can NAME, and anything else is a failure to start.
 echo "verify: running it once"
 set +e
 out="$(ENV=prod bash "$DEST/calibration-progress-watch.sh" 2>&1)"; rc=$?
 set -e
 printf '%s\n' "$out" | sed 's/^/    /'
+
+# A deliberate refusal. Every refusal in the watchdog shares this phrase so one marker covers all of
+# them; validate-dev-mac-watchdog.sh asserts that is still true.
 case "$out" in
   *"cannot run"*) echo "REFUSING TO LOAD: the watchdog cannot run on this host (see above). Fix that first." >&2; exit 1 ;;
 esac
-echo "verify: it started and reached a verdict (exit $rc — nonzero is normal when the day did not land)"
+# Did not start, however it failed. These are the shapes a broken copy actually produces.
+for _bad in "Traceback (most recent call last)" "command not found" "syntax error" "unbound variable" "No such file or directory"; do
+  case "$out" in
+    *"$_bad"*) echo "REFUSING TO LOAD: the watchdog did not start — '$_bad' in its output. Installing it now would put a silent watchdog on this host." >&2; exit 1 ;;
+  esac
+done
+# Reached one of its OWN terminal states: it either completed the evaluation (archiveStatus=) or
+# raised an alert about the day (ALERT:). Neither appears if it died on the way there.
+case "$out" in
+  *"archiveStatus="*|*"ALERT:"*) : ;;
+  *) echo "REFUSING TO LOAD: the watchdog produced no verdict and no alert (exit $rc). It did not run." >&2; exit 1 ;;
+esac
+case "$rc" in
+  0|1) : ;;
+  *) echo "REFUSING TO LOAD: unexpected exit $rc — the watchdog exits 0 or 1, so this is not one of its own outcomes." >&2; exit 1 ;;
+esac
+echo "verify: it started and reached one of its own outcomes (exit $rc — nonzero is normal when the day did not land)"
 
 launchctl unload "$AGENTS/$PLIST" 2>/dev/null || true
 launchctl load "$AGENTS/$PLIST"
-echo "loaded: $(launchctl list | grep -c com.optionsedge.calibration-progress-watch) agent(s) named com.optionsedge.calibration-progress-watch"
+# COUNTING IS NOT CHECKING (r21 #2). This printed the count and never required it, so
+# "loaded: 0 agent(s)" finished successfully and left nothing scheduled — the exact outcome the
+# installer exists to prevent.
+_n="$(launchctl list 2>/dev/null | grep -c com.optionsedge.calibration-progress-watch || true)"
+if [ "${_n:-0}" -ne 1 ]; then
+  echo "INSTALL FAILED: launchctl reports $_n agents named com.optionsedge.calibration-progress-watch, expected exactly 1. The files are in place but nothing is scheduled." >&2
+  exit 1
+fi
+echo "loaded: 1 agent named com.optionsedge.calibration-progress-watch, scheduled 07:00 local"

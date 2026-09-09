@@ -40,7 +40,8 @@ sourced="$(grep -hoE '[A-Za-z0-9._-]+\.(sh|py|env)' "$DIR"/*.sh 2>/dev/null \
 #                                 install path, plist and sourced files are asserted by
 #                                 scripts/ci/validate-dev-mac-watchdog.sh, and the deploy job runs it.
 #   install-dev-mac-watchdog.sh   the installer for the above, and equally a dev-Mac host action
-EXEMPT="oe-ops.env calibration-progress-watch.sh install-dev-mac-watchdog.sh"
+#   install-dev-mac-watchdog-test.sh  its test; runs in CI, never on .252
+EXEMPT="oe-ops.env calibration-progress-watch.sh install-dev-mac-watchdog.sh install-dev-mac-watchdog-test.sh"
 
 # An exemption that no other guard picks up is a hole with a comment on it. Assert the successor
 # exists, here, where the excuse is made.

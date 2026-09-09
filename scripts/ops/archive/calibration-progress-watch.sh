@@ -62,7 +62,7 @@ for _ in range(10):
         break
 PY
 )}"
-[ -n "$DAY" ] || { alert "calibration watchdog: could not determine the previous trading day — the market calendar is missing or unreadable at $CAL"; exit 1; }
+[ -n "$DAY" ] || { alert "calibration watchdog cannot run: could not determine the previous trading day — the market calendar is missing or unreadable at $CAL"; exit 1; }
 
 # TWO FAILURES, TWO ALERTS. This watchdog exists to tell a silent reporter apart from a healthy empty
 # corpus; it cannot do that while an unreachable archive root produces the same sentence as a dead

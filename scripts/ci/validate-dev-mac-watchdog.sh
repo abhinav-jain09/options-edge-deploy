@@ -61,6 +61,23 @@ fi
 # 4. PATH must be explicit: a launchd job inherits almost nothing, and python3/find go missing silently.
 grep -qE '<key>PATH</key>' "$PLIST" || note "$PLIST sets no PATH — launchd jobs inherit almost none, and this one needs python3"
 
+# 5. THE INSTALLER'S OWN VERIFICATION MUST BE ABLE TO FAIL.
+# Its first version accepted almost every broken watchdog and never required the agent to register,
+# so the "proof that it runs" proved nothing. Asserting that by grepping the installer for phrases
+# would be the same class of mistake, so run its executable test instead: it drives the real installer
+# against a copied tree with a stubbed launchctl and breaks one thing at a time.
+INST_TEST="$D/install-dev-mac-watchdog-test.sh"
+if [ ! -x "$INST_TEST" ]; then
+  note "$INST_TEST is missing or not executable — nothing proves the installer can refuse a broken watchdog"
+else
+  _out="$(mktemp)"
+  if ! bash "$INST_TEST" > "$_out" 2>&1; then
+    note "$INST_TEST — the installer accepts a watchdog that cannot run:"
+    sed 's/^/      /' "$_out" >&2
+  fi
+  rm -f "$_out"
+fi
+
 if [ "$fails" -ne 0 ]; then echo "=== validate-dev-mac-watchdog: $fails problem(s) ===" >&2; exit 1; fi
-echo "checked the dev-Mac watchdog: install path, plist target, resolved archive root, explicit PATH"
+echo "checked the dev-Mac watchdog: install path, plist target, resolved archive root, explicit PATH, and an installer that refuses a broken watchdog"
 echo "=== validate-dev-mac-watchdog: OK ==="
