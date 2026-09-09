@@ -1437,8 +1437,16 @@ env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
 _rec="$(find "$WORK/calibration-runs/prod" -name "dt=$DAY.json" | head -1)"
 [ -n "$_rec" ] || bad "case 64 could not produce a progress record"
 # Declare UNFROZEN, leave the record where the reporter put it, and make the record claim another cohort.
+# The SHIPPING declaration: hash UNFROZEN and a track date still in the future. (A past track date
+# with an unfrozen hash is the half-frozen state case 65 refuses outright, so it cannot be used here.)
+# Two separate calls: BSD sed with -i'' and a continued -e list silently edited nothing here, which
+# left the FROZEN declaration in place and made this case pass against the wrong record.
 sed -i'' -e 's/^OE_CAL_PARAMETER_SET_HASH_prod=.*/OE_CAL_PARAMETER_SET_HASH_prod=UNFROZEN/' "$HERE/calibration-targets.env"
-_dir="$(dirname "$_rec")"; _newdir="$WORK/calibration-runs/prod/UNFROZEN/$(basename "$(dirname "$_dir")")/progress"
+sed -i'' -e 's/^OE_CAL_TRACK_FROM_PUSH_prod=.*/OE_CAL_TRACK_FROM_PUSH_prod=2099-01-01/' "$HERE/calibration-targets.env"
+grep -q '^OE_CAL_PARAMETER_SET_HASH_prod=UNFROZEN' "$HERE/calibration-targets.env" \
+  && grep -q '^OE_CAL_TRACK_FROM_PUSH_prod=2099-01-01' "$HERE/calibration-targets.env" \
+  || bad "case 64 could not rewrite the declaration — it would have judged the wrong record"
+_newdir="$WORK/calibration-runs/prod/UNFROZEN/2099-01-01/progress"
 mkdir -p "$_newdir"; cp "$_rec" "$_newdir/"
 REC="$_newdir/dt=$DAY.json" python3 -c "
 import json,os
@@ -1465,6 +1473,28 @@ if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
   bad "a record with no cohort identity at all was accepted"
 else
   ok "a record that names no cohort does not thereby match every cohort"
+fi
+
+echo "65. a HALF-frozen declaration is refused, not guessed at"
+# Found by probing, not by review. When the hash is UNFROZEN the reporter deliberately does NOT filter
+# to a declared cohort, so once calls qualify it writes under each DISCOVERED hash — while the
+# watchdog computes the cohort path from the declaration and looks under "UNFROZEN". With both
+# literals UNFROZEN (what ships) nothing qualifies and the two agree; the disagreement needs a hash
+# still UNFROZEN while TRACK_FROM_PUSH has already passed, which the design forbids because the
+# literals are frozen together in one commit. Depending on that being obeyed is the same trap as
+# holding one property in two places, so the watchdog refuses the combination outright.
+build 3 20
+targets FROZEN "$SB"
+sed -i'' -e 's/^OE_CAL_PARAMETER_SET_HASH_prod=.*/OE_CAL_PARAMETER_SET_HASH_prod=UNFROZEN/' "$HERE/calibration-targets.env"
+sed -i'' -e 's/^OE_CAL_TRACK_FROM_PUSH_prod=.*/OE_CAL_TRACK_FROM_PUSH_prod=2026-07-01/' "$HERE/calibration-targets.env"
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch9.log" 2>&1; then
+  bad "a half-frozen declaration was accepted, so the cohort path was a guess"
+else
+  grep -q "half-frozen" "$WORK/watch9.log" \
+    && ok "an UNFROZEN hash with a track date already past is refused by name" \
+    || bad "it failed for another reason: $(head -4 "$WORK/watch9.log")"
 fi
 
 echo

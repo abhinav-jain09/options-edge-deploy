@@ -98,6 +98,19 @@ eval "DECLARED_TRACK=\"\${OE_CAL_TRACK_FROM_PUSH_${ENV_NAME}:-}\""
 # and both the reporter and this watchdog ask it. They used to each compute the path, and their
 # fallbacks disagreed (the reporter used "unfrozen" for an absent trackFromPush, this used the empty
 # string). Both environments declare 2099-01-01 today, so they agreed by luck rather than by design.
+# A HALF-FROZEN DECLARATION HAS NO KNOWABLE COHORT PATH. While the hash is UNFROZEN the reporter does
+# not filter to a declared cohort, so once calls qualify it writes under each DISCOVERED hash — and
+# this script would be looking under "UNFROZEN". With both literals unfrozen (what ships) nothing
+# qualifies and the two agree, so the disagreement needs a hash still UNFROZEN while TRACK_FROM_PUSH
+# has already passed. The design forbids that: the literals are frozen together, in one commit,
+# before anyone looks at the data. Depending on the design being obeyed is how a property held in two
+# places goes wrong, so refuse it here and say which half is missing.
+if [ "${DECLARED_HASH:-}" = "UNFROZEN" ] && [ -n "${DECLARED_TRACK:-}" ] \
+   && [ "${DECLARED_TRACK:0:10}" != "UNFROZEN" ] \
+   && [ "${DECLARED_TRACK:0:10}" \< "$(TZ=America/New_York date '+%Y-%m-%d')" ]; then
+  alert "calibration watchdog cannot run: the declaration is half-frozen — OE_CAL_PARAMETER_SET_HASH_${ENV_NAME} is still UNFROZEN while OE_CAL_TRACK_FROM_PUSH_${ENV_NAME}=${DECLARED_TRACK} has already passed. The reporter writes under each cohort it DISCOVERS in that state, so there is no cohort path to check. Freeze the hash with the rest of the literals, in one commit."
+  exit 1
+fi
 if [ ! -f "$(dirname "$0")/oe_corpus_reader.py" ]; then
   alert "calibration watchdog cannot run: oe_corpus_reader.py is not beside $0, so the cohort path would have to be recomputed here — which is exactly the duplication that let the reporter and this watchdog disagree."
   exit 1
