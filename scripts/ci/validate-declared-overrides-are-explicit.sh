@@ -49,12 +49,18 @@ command -v kafka-configs >/dev/null 2>&1 || { echo "SKIP: kafka-configs is not o
 # The list has to cover the ways a broker is genuinely out of reach, not just the ones seen in
 # testing: a routing failure surfaces as NoRouteToHostException / "No route to host" and nothing
 # else in this list matches it, which would fail a deploy for a network problem the guard is
-# supposed to step aside for.
+# supposed to step aside for. `Connection timed out` is a separate form from `Timed out waiting`
+# and from TimeoutException: it is what a firewall drop looks like.
+#
+# It is a list of CONNECTION failures, not of failures that mention a connection. "Connection reset
+# by peer" is the one that reads like unreachability and is not: Kafka reports it when the broker is
+# right there and rejects the SSL or SASL handshake, which is a configuration problem this guard
+# must report rather than skip.
 probe_rc=0
 probe=$(timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --list 2>&1) || probe_rc=$?
 if [ "$probe_rc" -ne 0 ]; then
     if [ "$probe_rc" -eq 124 ] || printf '%s' "$probe" | grep -qE \
-        'Connection to node|Connection refused|Timed out waiting|TimeoutException|Failed to update metadata|UnknownHost|No resolvable bootstrap|could not be established|Network is unreachable|Connection reset|No route to host|NoRouteToHost|Host is down|SocketTimeout'; then
+        'Connection to node|Connection refused|Connection timed out|Timed out waiting|TimeoutException|Failed to update metadata|UnknownHost|No resolvable bootstrap|could not be established|Network is unreachable|No route to host|NoRouteToHost|Host is down|SocketTimeout'; then
         printf 'SKIP: %s is not reachable from here (%s)\n' "$BOOTSTRAP" "$(printf '%s' "$probe" | head -1)"
         exit 0
     fi

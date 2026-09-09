@@ -98,6 +98,7 @@ printf '  killed: %s\n' "an unreachable broker skips rather than reporting inher
 # problem the guard exists to step aside for.
 for msg in "java.net.NoRouteToHostException: No route to host" \
            "java.net.ConnectException: Connection refused" \
+           "java.net.ConnectException: Connection timed out" \
            "java.net.UnknownHostException: kafka.invalid" \
            "org.apache.kafka.common.errors.TimeoutException: Timed out waiting for a node assignment."; do
     printf '#!/usr/bin/env bash\necho "%s" >&2\nexit 1\n' "$msg" > "$WORK/bin/kafka-topics"
@@ -113,16 +114,22 @@ printf '  killed: %s\n' "every shape of an out-of-reach broker takes the skip, r
 # ...but a failure that is NOT a connection failure must FAIL. Treating every non-zero exit as
 # unreachability is the widest fail-open there is: a missing Describe ACL, a broken shim, or a CLI
 # that is not the CLI would each make the guard announce "not reachable" and pass.
-cat > "$WORK/bin/kafka-topics" <<'DENIED'
-#!/usr/bin/env bash
-echo "TopicAuthorizationException: Not authorized to access topics: [Topic authorization failed.]" >&2
-exit 1
-DENIED
-chmod +x "$WORK/bin/kafka-topics"
-got=$(run "$WORK/ok")
-[ "$got" = "1" ] || { printf 'a non-connection probe failure must FAIL, not skip (exited %s)\n' "$got" >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
-grep -q "CANNOT READ" "$WORK/out" || { printf 'and must say it could not read: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
-grep -q "SKIP:" "$WORK/out" && { printf 'and must NOT call an authorization failure unreachability: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
+# "Connection reset by peer" is the trap: it reads like unreachability and is not. Kafka reports it
+# when the broker is right there and rejects the SSL or SASL handshake — a configuration problem
+# this guard must report, because skipping it waves through unverified retention state.
+for msg in "TopicAuthorizationException: Not authorized to access topics: [Topic authorization failed.]" \
+           "javax.net.ssl.SSLException: Connection reset by peer" \
+           "SaslAuthenticationException: Authentication failed: Invalid username or password"; do
+    printf '#!/usr/bin/env bash\necho "%s" >&2\nexit 1\n' "$msg" > "$WORK/bin/kafka-topics"
+    chmod +x "$WORK/bin/kafka-topics"
+    got=$(run "$WORK/ok")
+    [ "$got" = "1" ] || { printf 'a non-connection probe failure must FAIL, not skip: %s (exited %s)\n' "$msg" "$got" >&2
+                          sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+    grep -q "CANNOT READ" "$WORK/out" || { printf 'and must say it could not read: %s\n' "$msg" >&2
+                                           sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+    grep -q "SKIP:" "$WORK/out" && { printf 'and must not call it unreachability: %s\n' "$msg" >&2
+                                     sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+done
 printf '  killed: %s\n' "a probe failure that is not a connection failure is reported, not skipped"
 cat > "$WORK/bin/kafka-topics" <<'ALIVE'
 #!/usr/bin/env bash
