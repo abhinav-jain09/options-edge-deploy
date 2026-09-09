@@ -90,6 +90,14 @@ spec:
           value: "604800000"
         - name: ES_AMT_REPLAY_LOOKBACK_HOURS
           value: '34'
+        # The options tape. Until this is on, §8.7 has no strike list and no expiry, so C2 gate (4) is
+        # closed in every minute of every session — 95% of 2026-09-09's minutes stood aside for exactly
+        # that reason, with every other field present. The topic is the prod feed's enumeration mirrored
+        # here under its IDENTITY name (no `es.` prefix: that prefix marks what es4 PRODUCES, and this
+        # is produced on prod). The desk adopts a record only after recomputing its counts and content
+        # hash, and drops the adoption on a retraction or when it goes stale.
+        - name: ES_AMT_DEFINITION_ENUMERATION_ENABLED
+          value: 'true'
         envFrom:
         - configMapRef:
             name: es4-base-env
