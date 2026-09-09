@@ -351,9 +351,9 @@ report = {
 }
 
 for r in reports:
-    key = r.get("parameterSetHash", "calibration")
-    tf = (r.get("trackFromPush") or "unfrozen").replace(":", "").replace("/", "")
-    d = os.path.join(out_root, key, tf, "progress")
+    # ONE definition, shared with the watchdog (R.cohort_progress_dir). Computing it here and
+    # recomputing it there is how their fallbacks came to disagree while both looked right.
+    d = R.cohort_progress_dir(out_root, r.get("parameterSetHash"), r.get("trackFromPush"))
     os.makedirs(d, exist_ok=True)
     tmp = tempfile.NamedTemporaryFile("w", dir=d, delete=False, suffix=".tmp")
     json.dump(report, tmp, indent=1, sort_keys=True)

@@ -1407,6 +1407,24 @@ else
     || bad "it failed for some other reason: $(head -4 "$WORK/watch6.log")"
 fi
 
+echo "63. the reporter and the watchdog cannot disagree about WHERE a cohort lives"
+# They each computed <out_root>/<hash>/<trackFromPush>/progress and their fallbacks differed: the
+# reporter used "unfrozen" for an absent trackFromPush, the watchdog used the empty string. Both envs
+# declare 2099-01-01 today, so they agreed by luck. One function decides now, and this asserts that
+# the path the reporter WRITES is the path the watchdog READS, for a declaration with neither field.
+_d1="$(HERE="$HERE" python3 -c "
+import os,sys; sys.path.insert(0, os.environ['HERE'])
+import oe_corpus_reader as R
+print(R.cohort_progress_dir('/root', None, None))")"
+[ "$_d1" = "/root/calibration/unfrozen/progress" ] \
+  && ok "an undeclared cohort resolves to one agreed directory, not to two different guesses" \
+  || bad "the shared cohort path changed shape: $_d1"
+# And it must be the SAME function both sides call — not a copy that happens to match today.
+_n=$(grep -c 'cohort_progress_dir' "$SRC/oe-calibration-progress.sh" "$SRC/calibration-progress-watch.sh" | grep -c ':0$')
+[ "$_n" -eq 0 ] \
+  && ok "both the reporter and the watchdog call it; neither recomputes the path" \
+  || bad "$_n of the two no longer calls cohort_progress_dir — the duplication is back"
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
 echo "FAIL — $fails assertion(s)"; exit 1

@@ -94,10 +94,20 @@ fi
 . "$TARGETS"
 eval "DECLARED_HASH=\"\${OE_CAL_PARAMETER_SET_HASH_${ENV_NAME}:-}\""
 eval "DECLARED_TRACK=\"\${OE_CAL_TRACK_FROM_PUSH_${ENV_NAME}:-}\""
-# The reporter writes to <out_root>/<hash or "calibration">/<trackFromPush, punctuation stripped>/progress/.
-COHORT_KEY="${DECLARED_HASH:-calibration}"
-COHORT_TF="$(printf '%s' "${DECLARED_TRACK:-}" | tr -d ':/')"
-COHORT_DIR="$OUT_ROOT/$COHORT_KEY/$COHORT_TF/progress"
+# WHERE the cohort's records live is decided in ONE place — oe_corpus_reader.cohort_progress_dir —
+# and both the reporter and this watchdog ask it. They used to each compute the path, and their
+# fallbacks disagreed (the reporter used "unfrozen" for an absent trackFromPush, this used the empty
+# string). Both environments declare 2099-01-01 today, so they agreed by luck rather than by design.
+if [ ! -f "$(dirname "$0")/oe_corpus_reader.py" ]; then
+  alert "calibration watchdog cannot run: oe_corpus_reader.py is not beside $0, so the cohort path would have to be recomputed here — which is exactly the duplication that let the reporter and this watchdog disagree."
+  exit 1
+fi
+COHORT_DIR="$(SD="$(dirname "$0")" OR="$OUT_ROOT" H="${DECLARED_HASH:-}" T="${DECLARED_TRACK:-}" python3 -c '
+import os, sys
+sys.path.insert(0, os.environ["SD"])
+import oe_corpus_reader as R
+print(R.cohort_progress_dir(os.environ["OR"], os.environ["H"] or None, os.environ["T"] or None))')"
+[ -n "$COHORT_DIR" ] || { alert "calibration watchdog cannot run: could not resolve the cohort directory from the declaration"; exit 1; }
 found=""
 [ -f "$COHORT_DIR/dt=$DAY.json" ] && found="$COHORT_DIR/dt=$DAY.json"
 if [ -z "$found" ]; then
@@ -105,7 +115,7 @@ if [ -z "$found" ]; then
   # second is not a quiet reporter — it is a declaration that moved and a watchdog pointed at history.
   foreign="$(find "$OUT_ROOT" -name "dt=$DAY.json" 2>/dev/null | head -1)"
   if [ -n "$foreign" ]; then
-    alert "calibration progress for $DAY exists ONLY for a cohort we do not declare (found $foreign; the declared cohort is $COHORT_KEY/$COHORT_TF). The reporter ran, but not for the cohort calibration-targets.env names — nothing under the current declaration counts."
+    alert "calibration progress for $DAY exists ONLY for a cohort we do not declare (found $foreign; the declared cohort is hash=${DECLARED_HASH:-<none>} trackFromPush=${DECLARED_TRACK:-<none>}, whose records belong under $COHORT_DIR). The reporter ran, but not for the cohort calibration-targets.env names — nothing under the current declaration counts."
     exit 1
   fi
 fi

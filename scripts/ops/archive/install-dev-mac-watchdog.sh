@@ -23,7 +23,7 @@ DRY=false; [ "${1:-}" = "--dry-run" ] && DRY=true
 # downgrades every alert to a log line) and it SOURCES calibration-targets.env (so a missing copy makes
 # it refuse to run rather than watch whichever cohort is on disk). Both are part of the install or the
 # install is a lie. validate-dev-mac-watchdog.sh asserts this list against the script itself.
-FILES="calibration-progress-watch.sh oe-alert.sh calibration-targets.env"
+FILES="calibration-progress-watch.sh oe-alert.sh calibration-targets.env oe_corpus_reader.py"
 
 for f in $FILES; do
   [ -f "$SRC/$f" ] || { echo "FATAL: $f is not in the repo beside this installer" >&2; exit 1; }
