@@ -9,6 +9,30 @@ data:
   DATABENTO_SYMBOL: SPX
   DATABENTO_TRADING_CLASS: SPXW
   DATABENTO_EXPIRY: ""
+  # The SPX Auction Desk's ONLY proof of what is LISTED for today's SPXW PM expiry. The feed already
+  # resolves the whole contract set and then flattens the OPRA root away; this publishes it as one
+  # atomic record per completed resolve on options.databento.opra.definition.enumeration, keyed
+  # SPX|SPXW|<YYYYMMDD>, which options-edge-deploy mirrors prod -> es4 for es-amt-service to read.
+  # Default OFF in code; turned on HERE, and only here, so the switch is reviewable in one place.
+  # Settings.validate() refuses this flag anywhere but the OPRA.PILLAR / SPX / SPXW feed, because the
+  # record is published under a FIXED key and another feed's rejection would retract the real one.
+  # It costs one extra parent query per resolve, which is why it is not on by default.
+  #
+  # SHARED BY THREE ENVIRONMENTS, not two — dev, production AND experiment, which patches this same
+  # configmap and runs its own feed. I first wrote "dev and prod" here and that was wrong; review
+  # caught it. All three render OPRA.PILLAR / SPX / SPXW, so none is refused by that validation — and
+  # that mattered enough to verify against the live configmaps rather than assume, because a feed the
+  # validation refuses does not degrade, it declines to START.
+  #
+  # So all three pay the extra parent query per resolve and all three publish. Only the PRODUCTION
+  # record is mirrored to es4 and read by the desk; dev and experiment publishing the same record is
+  # what makes their own desks testable without a second switch to forget.
+  #
+  # THE FLAG ALONE DOES NOT TAKE EFFECT. `envFrom` is captured at pod creation, so applying this
+  # configmap changes nothing until the feed pod is restarted — in BOTH directions. Turning it back
+  # to "false" does not stop publication either; that needs the same restart. The rollout procedure
+  # is therefore: apply, then roll the feed, then verify a record on the topic (or its absence).
+  DATABENTO_DEFINITION_ENUMERATION_ENABLED: "true"
   # Align the SPX 0DTE roll to the ES roll (17:30 ET) instead of midnight, so the SPX chain
   # flips to the next expiry when es4 does and the mapped ES gamma shows immediately (not until 00:00 ET).
   DATABENTO_EXPIRY_ROLL_AFTER: "17:30"
