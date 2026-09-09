@@ -51,5 +51,29 @@ expect 0 "every declared retention override is set on the topic itself" "both ov
 echo "mutations"
 expect 1 "DECLARED BUT NOT SET: es.futures.footprint.bars" "one topic inheriting the broker default" "$WORK/missing"
 expect 1 "DRIFT: es.futures.footprint.bars has retention.ms=43200000" "one topic set to the wrong value" "$WORK/drift"
-expect 1 "DECLARED BUT NOT SET" "every topic inheriting the default" "$WORK/none"
+# name BOTH topics, so "every topic inheriting" cannot pass on one of them
+got=$(run "$WORK/none")
+[ "$got" = "1" ] || { printf 'MUTATION SURVIVED: every topic inheriting the default (exited %s)\n' "$got" >&2; exit 1; }
+for t in es.futures.footprint.bars es.futures.footprint.outcomes; do
+    grep -qF "DECLARED BUT NOT SET: $t" "$WORK/out" \
+        || { printf 'WRONG REASON: every topic inheriting the default — %s was not reported\n' "$t" >&2
+             sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+done
+printf '  killed: %s\n' "every topic inheriting the default (both named)"
+
+# a CLI failure must not read as inheritance: the guard skips, it does not report a finding
+cat > "$WORK/bin/kafka-topics" <<'DEAD'
+#!/usr/bin/env bash
+exit 1
+DEAD
+chmod +x "$WORK/bin/kafka-topics"
+got=$(run "$WORK/ok")
+[ "$got" = "0" ] || { printf 'an unreachable broker must SKIP, not fail (exited %s)\n' "$got" >&2; exit 1; }
+grep -q "SKIP:" "$WORK/out" || { printf 'an unreachable broker must say it skipped\n' >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+printf '  killed: %s\n' "an unreachable broker skips rather than reporting inheritance"
+cat > "$WORK/bin/kafka-topics" <<'ALIVE'
+#!/usr/bin/env bash
+exit 0
+ALIVE
+chmod +x "$WORK/bin/kafka-topics"
 echo "every arm refused its own violation, for its own reason"

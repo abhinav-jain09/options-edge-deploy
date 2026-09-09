@@ -2,12 +2,17 @@
 # Every topic this repository declares a RETENTION OVERRIDE for must carry that override on the
 # topic itself, not inherit it from a broker default.
 #
-# The distinction is not academic. A topic that was auto-created — by a still-running producer after
-# a reset, which is exactly how dev lost es.futures.cvd.bars on 2026-08-07 — comes up on the broker's
-# defaults. Those defaults may HAPPEN to match what the declaration asks for, and then nothing looks
-# wrong: `kafka-configs --describe` shows no drift because it shows no topic-level config at all.
-# The agreement is a coincidence, and it ends the moment a broker default moves or a new broker
-# joins, silently, on a history topic that is supposed to keep everything.
+# The distinction is not academic. apply-topics.sh writes retention.ms EXPLICITLY for every declared
+# topic on every run (alter_topic_config, called unconditionally), so a topic with no override of its
+# own is a topic that stage has not reached: it was auto-created by a still-running producer — which
+# is how dev lost es.futures.cvd.bars on 2026-08-07 — or the Kafka Topics stage was skipped
+# (SKIP_KAFKA_TOPICS) on every deploy since the topic was declared.
+#
+# Such a topic sits on the broker's defaults. Those defaults may HAPPEN to match what the declaration
+# asks for, and then nothing looks wrong: `kafka-configs --describe` shows no drift because it shows
+# no topic-level config at all. The agreement is not configuration — it is the absence of it — and it
+# ends the moment a broker default moves or a new broker joins, silently, on a history topic that is
+# supposed to keep everything.
 #
 # Checked live against a broker, so it is a state assertion rather than a file comparison. Skips
 # cleanly when the broker is unreachable: this runs in CI, and a network failure must not read as a
