@@ -65,33 +65,32 @@ printf 'es.futures.footprint.bars=43200000\nes.futures.footprint.outcomes=-1\n' 
 printf ''                                                                > "$WORK/none"
 
 # A missing CLI must FAIL, not skip: a deploy that shipped without this assertion running must not
-# read as one that ran it. Checked before the baseline, because a PATH without the tools is the state
-# every other case here is built on top of.
-# Hiding the stub is not enough on a laptop that has a REAL kafka-topics installed: `command -v`
-# would find that one and the case would test nothing. Strip every directory holding one first.
-# `command -v -a` is not in bash 3.2, which is what macOS ships, so walk PATH itself.
-BARE_PATH=""
-while IFS= read -r d; do
-    [ -n "$d" ] || continue
-    [ "$d" = "$WORK/bin" ] && continue
-    [ -x "$d/kafka-topics" ] || [ -x "$d/kafka-configs" ] || [ -x "$d/timeout" ] && continue
-    BARE_PATH="${BARE_PATH:+$BARE_PATH:}$d"
-done <<< "$(printf '%s' "$PATH" | tr ':' '\n')"
-# `timeout` is in the loop because it is in the guard's requirement: every broker call is wrapped in
-# it, so its absence changes what the probe means. Claiming a case covers a dependency and then
-# iterating over only two of the three is the same kind of gap as not checking at all.
-printf '#!/usr/bin/env bash\nshift; exec "$@"\n' > "$WORK/bin/timeout"; chmod +x "$WORK/bin/timeout"
+# read as one that ran it. All three the guard requires are covered, `timeout` included — every
+# broker call is wrapped in it, so its absence changes what the probe means.
+#
+# The tools are hidden by building a PATH that holds ONLY what the guard needs, and leaving one out.
+# Stripping directories from the real PATH instead removed /usr/bin — which on a Linux runner holds
+# `timeout` AND `bash`, so the guard died with "bash: command not found" and the case proved nothing.
+BASH_BIN=$(command -v bash)
+mkdir -p "$WORK/sandbox"
+for tool in bash env dirname grep sed head tr cut cat ls printf timeout; do
+    real=$(command -v "$tool" 2>/dev/null) || continue
+    ln -sf "$real" "$WORK/sandbox/$tool"
+done
 for missing in kafka-topics kafka-configs timeout; do
-    mv "$WORK/bin/$missing" "$WORK/$missing.hidden"
+    rm -rf "$WORK/only"; mkdir -p "$WORK/only"
+    for f in "$WORK/sandbox"/* "$WORK/bin"/*; do
+        [ "$(basename "$f")" = "$missing" ] && continue
+        ln -sf "$f" "$WORK/only/$(basename "$f")"
+    done
     rc=0
-    out=$(PATH="$WORK/bin:$BARE_PATH" FIXTURE="$WORK/ok" EXISTS="$WORK/exists" bash "$GUARD" fake:9092 2>&1) || rc=$?
-    mv "$WORK/$missing.hidden" "$WORK/bin/$missing"
+    out=$(PATH="$WORK/only" FIXTURE="$WORK/ok" EXISTS="$WORK/exists" "$BASH_BIN" "$GUARD" fake:9092 2>&1) || rc=$?
     [ "$rc" = "1" ] || { printf 'a missing %s must FAIL the guard (exited %s)\n' "$missing" "$rc" >&2
                          printf '%s\n' "$out" | sed 's/^/    | /' >&2; exit 1; }
     printf '%s' "$out" | grep -qF "CANNOT READ: $missing is not on PATH" \
         || { printf 'and must name it: %s\n' "$out" >&2; exit 1; }
 done
-printf '  killed: %s\n' "a missing Kafka CLI fails the guard instead of skipping"
+printf '  killed: %s\n' "a missing Kafka CLI or timeout fails the guard instead of skipping"
 
 echo "baseline"
 expect 0 "every declared retention override is set on the topic itself" "both overrides set as declared" "$WORK/ok"
