@@ -52,7 +52,7 @@ PYEOF
 }
 install_run() {
   PATH="$TMP/bin:$PATH" OE_OPS_DIR="$TMP/dest" LAUNCH_AGENTS_DIR="$TMP/agents" \
-    OE_WATCHDOG_INSTALL_LOCK="${LOCK_OVERRIDE:-$TMP/lock}" LOAD_FAILS="${LOAD_FAILS:-}" \
+    LOAD_FAILS="${LOAD_FAILS:-}" OE_WATCHDOG_INSTALL_LOCK="${OE_WATCHDOG_INSTALL_LOCK:-}" \
     bash "$TMP/archive/install-dev-mac-watchdog.sh" > "$TMP/out" 2>&1
   RC=$?
 }
@@ -98,12 +98,45 @@ install_run
 cmp -s "$TMP/dest/calibration-progress-watch.sh" "$TMP/previous" \
   && ok "the previous watchdog is untouched" || bad "a refusal overwrote the working installation"
 
-echo "6. the agent failing to register is an INSTALL FAILURE that says where the old copies are"
-stage 0; install_run
+echo "6. a failed install hands over a recovery script that actually restores the previous state"
+# r27 #1. This case used to check only that recovery TEXT was printed, and the text was WRONG: it
+# never removed files that had no predecessor, left a new plist where there had been none, and copied
+# the backed-up plist into the ops directory. Checking that advice exists is not checking that it
+# works, so this now RUNS it and compares the host to what it was.
+# (a) recovery after a failed install ON TOP OF an existing one restores that one byte-for-byte.
+stage 0
+printf '#!/usr/bin/env bash\necho "I am the previous installation"\n' > "$TMP/dest/calibration-progress-watch.sh"
+printf 'previous-alert\n' > "$TMP/dest/oe-alert.sh"
+cp "$TMP/archive/launchd/com.optionsedge.calibration-progress-watch.plist" "$TMP/agents/"
+mkdir -p "$TMP/before"; cp -R "$TMP/dest/." "$TMP/before/"; cp "$TMP/agents/com.optionsedge.calibration-progress-watch.plist" "$TMP/before.plist"
+install_run
 [ "$RC" -ne 0 ] && ok "zero registered agents fails the install" || bad "it exited 0 with nothing scheduled"
-grep -q "the previous copies are in" "$TMP/out" && ok "and it printed the backup location" || bad "it did not say where the previous copies went"
-grep -q "does NOT do that for you on purpose" "$TMP/out" \
-  && ok "and said plainly that it will not roll back for you" || bad "it did not say rollback is manual"
+RESTORE="$(grep -oE '[^ ]*/restore\.sh' "$TMP/out" | head -1)"
+[ -x "$RESTORE" ] && ok "it handed over an executable recovery script" || bad "no runnable recovery script was produced: $(tail -3 "$TMP/out")"
+PATH="$TMP/bin:$PATH" bash "$RESTORE" >/dev/null 2>&1
+if cmp -s "$TMP/dest/calibration-progress-watch.sh" "$TMP/before/calibration-progress-watch.sh" \
+   && cmp -s "$TMP/dest/oe-alert.sh" "$TMP/before/oe-alert.sh" \
+   && cmp -s "$TMP/agents/com.optionsedge.calibration-progress-watch.plist" "$TMP/before.plist"; then
+  ok "running it restored the previous files and plist byte-for-byte"
+else
+  bad "the recovery script did not restore the previous state"
+fi
+[ ! -f "$TMP/dest/com.optionsedge.calibration-progress-watch.plist" ] \
+  && ok "and it did not drop the plist into the ops directory" \
+  || bad "recovery copied the plist into $TMP/dest"
+
+# (b) recovery after a failed FIRST install restores ABSENCE — the case the printed advice never had.
+stage 0
+rm -rf "$TMP/dest" "$TMP/agents"; mkdir -p "$TMP/dest" "$TMP/agents"
+install_run
+RESTORE="$(grep -oE '[^ ]*/restore\.sh' "$TMP/out" | head -1)"
+PATH="$TMP/bin:$PATH" bash "$RESTORE" >/dev/null 2>&1
+if [ -z "$(ls -A "$TMP/agents" 2>/dev/null)" ] \
+   && ! ls "$TMP/dest" 2>/dev/null | grep -qv '^\.watchdog-backup'; then
+  ok "there was no watchdog before, and there is none after recovery"
+else
+  bad "recovery left files behind on a host that had none: $(ls -A "$TMP/dest" "$TMP/agents" 2>/dev/null | tr '\n' ' ')"
+fi
 
 echo "7. a LOOKALIKE agent label does not count as the agent"
 stage 1 "com.optionsedge.calibration-progress-watch.backup"; install_run
@@ -147,11 +180,24 @@ install_run
 echo "13. two installers cannot run at once"
 # r26 #2. Concurrent runs could back up different intermediate states and leave a mixture that never
 # existed. The lock is a directory because mkdir is atomic.
+# The lock path is DERIVED from the destination, not passed in — an env-selectable lock is not a
+# lock, because two installers simply pick two paths (r27 #2). So this computes the same path the
+# installer will, holds it, and requires the second run to refuse.
 stage 1
-mkdir -p "$TMP/held-lock"
-LOCK_OVERRIDE="$TMP/held-lock" install_run
+HELD="${TMPDIR:-/tmp}/oe-install-dev-mac-watchdog.$(printf '%s' "$TMP/dest" | cksum | cut -d' ' -f1).lock"
+rm -rf "$HELD"; mkdir -p "$HELD"; printf 'someone-else\n' > "$HELD/owner"
+install_run
 [ "$RC" -ne 0 ] && ok "a held lock stops the second installer" || bad "two installers ran concurrently"
 grep -q "another installer holds" "$TMP/out" && ok "and it said why" || bad "the refusal did not name the lock"
+[ -d "$HELD" ] && [ "$(cat "$HELD/owner" 2>/dev/null)" = "someone-else" ] \
+  && ok "and it did not release a lock it does not own" || bad "the refusing run removed someone else's lock"
+# The lock must not be selectable from outside: an installer that can be handed a different path is
+# not locked at all, because a second run simply picks another one.
+OE_WATCHDOG_INSTALL_LOCK="$TMP/somewhere-else.lock" install_run
+[ "$RC" -ne 0 ] \
+  && ok "and it cannot be pointed at a different lock to get past the held one" \
+  || bad "OE_WATCHDOG_INSTALL_LOCK let a second installer run while the real lock was held"
+rm -rf "$HELD"
 
 echo "14. the caller cannot change the environment the verification runs in"
 # r26 #4. The installer used to inject the caller's ENV/ARCHIVE_DIR/CHECK_DATE AFTER the plist's own
@@ -163,7 +209,21 @@ ENV=dev ARCHIVE_DIR=/nonexistent-caller-root CHECK_DATE=1999-01-01 install_run
 [ "$RC" -eq 0 ] && ok "the install succeeded using the plist's environment" || bad "caller variables reached the verification (exit $RC): $(tail -3 "$TMP/out")"
 grep -q "nonexistent-caller-root" "$TMP/out" && bad "the caller's ARCHIVE_DIR reached the watchdog" || ok "the caller's archive root never appeared"
 
-echo "15. every refusal in the watchdog uses the phrase the installer blocks on"
+echo "15. a plist that parses but is not a usable launchd job is refused BEFORE anything is created"
+# r27 #3. plutil -lint checks XML, not the launchd schema, and the Label used to be read only after
+# the backups were taken — so a parseable plist with no Label touched the host and then aborted.
+stage 1
+python3 - "$TMP/archive/launchd/com.optionsedge.calibration-progress-watch.plist" <<'PYEOF'
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1], 'rb'))
+del d['Label']
+plistlib.dump(d, open(sys.argv[1], 'wb'))
+PYEOF
+install_run
+[ "$RC" -ne 0 ] && ok "a plist with no Label is refused" || bad "it installed an agent with no label"
+dest_empty && ok "and the host was never touched" || bad "it created directories or backups before failing"
+
+echo "16. every refusal in the watchdog uses the phrase the installer blocks on"
 _ref=$(grep -cE 'alert "calibration watchdog cannot run:' "$HERE/calibration-progress-watch.sh")
 _all=$(grep -cE 'alert "calibration watchdog' "$HERE/calibration-progress-watch.sh")
 [ "$_ref" -eq "$_all" ] && [ "$_ref" -gt 0 ] \

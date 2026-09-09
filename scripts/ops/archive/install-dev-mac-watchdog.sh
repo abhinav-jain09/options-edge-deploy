@@ -61,19 +61,43 @@ if [ "$DRY" = true ]; then echo "(dry run — nothing written)"; exit 0; fi
 
 # ONE INSTALLER AT A TIME (r26 #2). Two concurrent runs could back up different intermediate states
 # and leave a mixture that never existed. mkdir is atomic on every filesystem that matters.
-LOCK="${OE_WATCHDOG_INSTALL_LOCK:-${TMPDIR:-/tmp}/oe-install-dev-mac-watchdog.lock}"
+# The lock path is DERIVED FROM THE DESTINATION, not chosen by the caller (r27 #2). An env-selectable
+# lock is not a lock: two installers pick two paths and run at once. Deriving it means two runs
+# targeting the same $DEST always collide, and runs targeting different destinations never do.
+LOCK="${TMPDIR:-/tmp}/oe-install-dev-mac-watchdog.$(printf '%s' "$DEST" | cksum | cut -d' ' -f1).lock"
 if ! mkdir "$LOCK" 2>/dev/null; then
-  echo "REFUSING: another installer holds $LOCK. If you are sure none is running, remove that directory." >&2
+  echo "REFUSING: another installer holds $LOCK for $DEST." >&2
+  echo "          If you are sure none is running, remove that directory." >&2
   exit 1
 fi
-trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+# Release it only if it is still OURS. An unconditional rmdir removes a REPLACEMENT lock that another
+# installer created after someone deleted ours by hand, which is worse than never locking.
+LOCK_TOKEN="$$-$(date -u '+%s')"
+printf '%s\n' "$LOCK_TOKEN" > "$LOCK/owner"
+trap '[ "$(cat "$LOCK/owner" 2>/dev/null)" = "$LOCK_TOKEN" ] && rm -rf "$LOCK" || true' EXIT
 
 # THE PLIST DECLARES THE COMMAND launchd WILL ACTUALLY RUN, and that is the only command worth
 # verifying (r24 #2). The old check ran the destination script with the CALLER's bash, while launchd
 # runs the interpreter and the absolute path written in ProgramArguments — so the installer could
 # pass while the agent's real command was absent or stale.
+# plutil -lint checks XML, not the launchd schema (r27 #3). Every key this installer depends on is
+# read HERE, before a single directory is created — the Label used to be read after the backups were
+# taken, so a parseable plist with a missing Label touched the host and then aborted under set -e,
+# which is the opposite of the verify-before-touching contract this rewrite exists to keep.
 plutil -lint "$SRC/launchd/$PLIST" >/dev/null 2>&1 || {
   echo "FATAL: $SRC/launchd/$PLIST does not parse. launchd would reject it silently." >&2; exit 1; }
+_label="$(python3 -c "
+import plistlib, sys
+d = plistlib.load(open(sys.argv[1],'rb'))
+lab = d.get('Label')
+if not isinstance(lab, str) or not lab.strip():
+    sys.exit(1)
+a = d.get('ProgramArguments')
+if not isinstance(a, list) or len(a) < 2 or not all(isinstance(x, str) and x for x in a[:2]):
+    sys.exit(2)
+print(lab)" "$SRC/launchd/$PLIST")" || {
+  echo "FATAL: $SRC/launchd/$PLIST parses but is not a usable launchd job: it needs a non-empty Label and at least two string ProgramArguments." >&2
+  exit 1; }
 read -r PLIST_INTERP PLIST_SCRIPT <<EOF
 $(python3 -c "
 import plistlib,sys
@@ -159,9 +183,43 @@ BACKUP="${OE_WATCHDOG_BACKUP_DIR:-$DEST/.watchdog-backup-$(date -u '+%Y%m%dT%H%M
 mkdir -p "$DEST" "$AGENTS" "$BACKUP"
 for f in $FILES; do [ -f "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"; done
 [ -f "$AGENTS/$PLIST" ] && cp "$AGENTS/$PLIST" "$BACKUP/$PLIST"
-echo "backup: previous copies (if any) are in $BACKUP"
 
-_label="$(python3 -c "import plistlib,sys;print(plistlib.load(open(sys.argv[1],'rb'))['Label'])" "$SRC/launchd/$PLIST")"
+# RECOVERY IS A SCRIPT, NOT A PARAGRAPH (r27 #1). It used to be printed advice, and the advice was
+# WRONG: it never removed files that had no predecessor, left a new plist where there had been none,
+# and its `cp "$BACKUP"/*` copied the backed-up plist into the ops directory. My own test checked only
+# that the TEXT existed and never ran it — the same "reads as a check, binds nothing" shape, sitting
+# in the thing I wrote to replace the rollback. Generated here, while the pre-install state is still
+# known, so recovery restores exactly what was there INCLUDING absence. The test executes it.
+{
+  echo '#!/usr/bin/env bash'
+  echo '# Restores the state that existed before the install this directory belongs to.'
+  echo 'set -uo pipefail'
+  printf 'launchctl unload %s 2>/dev/null || true
+' "$(printf '%q' "$AGENTS/$PLIST")"
+  for f in $FILES; do
+    if [ -f "$BACKUP/$f" ]; then
+      printf 'cp %s %s
+' "$(printf '%q' "$BACKUP/$f")" "$(printf '%q' "$DEST/$f")"
+    else
+      printf 'rm -f %s
+' "$(printf '%q' "$DEST/$f")"
+    fi
+  done
+  if [ -f "$BACKUP/$PLIST" ]; then
+    printf 'cp %s %s
+' "$(printf '%q' "$BACKUP/$PLIST")" "$(printf '%q' "$AGENTS/$PLIST")"
+    printf 'launchctl load %s
+' "$(printf '%q' "$AGENTS/$PLIST")"
+    echo 'echo "restored the previous installation"'
+  else
+    printf 'rm -f %s
+' "$(printf '%q' "$AGENTS/$PLIST")"
+    echo 'echo "restored: there was no watchdog installed before, and there is none now"'
+  fi
+} > "$BACKUP/restore.sh"
+chmod +x "$BACKUP/restore.sh"
+echo "backup: previous state is in $BACKUP (run $BACKUP/restore.sh to put it back exactly)"
+
 launchctl unload "$AGENTS/$PLIST" 2>/dev/null || true
 for f in $FILES; do cp "$STAGE/$f" "$DEST/$f"; done
 chmod +x "$DEST/calibration-progress-watch.sh"
@@ -173,11 +231,11 @@ rm -rf "$STAGE"
 say_state() {
   echo "  the host now has: the NEW files in $DEST and the NEW plist in $AGENTS" >&2
   echo "  the previous copies are in $BACKUP" >&2
-  echo "  to put back exactly what was there:" >&2
-  echo "      launchctl unload $AGENTS/$PLIST 2>/dev/null; cp $BACKUP/* $DEST/ 2>/dev/null" >&2
-  echo "      cp $BACKUP/$PLIST $AGENTS/ 2>/dev/null && launchctl load $AGENTS/$PLIST" >&2
-  echo "  (this script does NOT do that for you on purpose: an automatic rollback here was wrong in" >&2
-  echo "   five different ways across two review rounds, and a half-finished one is worse than none.)" >&2
+  echo "  to put back exactly what was there, run:" >&2
+  echo "      $BACKUP/restore.sh" >&2
+  echo "  (that script was generated from the state this run found, so it restores absence too. This" >&2
+  echo "   installer does NOT run it for you on purpose: an automatic rollback here was wrong in five" >&2
+  echo "   different ways across two review rounds, and a half-finished one is worse than none.)" >&2
 }
 if ! launchctl load "$AGENTS/$PLIST"; then
   echo "INSTALL FAILED: launchctl could not load $AGENTS/$PLIST." >&2
