@@ -14,9 +14,16 @@ WORK="$(mktemp -d)"
 # exactly the file the deployed unit reads.
 HERE="$WORK/unit"
 mkdir -p "$HERE"
+# The watchdog is staged here too, and every case runs THAT copy. It reads calibration-targets.env
+# from beside itself — the same refusal the reporter and the evaluator make — so running it from the
+# repo directory would have judged the tests' cohort against the SHIPPED declaration. It also SOURCES
+# oe-alert.sh from beside itself; without that copy every alert degrades to the script's own fallback
+# and the delivery path under test is not the deployed one.
 cp "$SRC/oe-push-validation-artifact.sh" "$SRC/oe-calibration-progress.sh" \
-   "$SRC/oe_corpus_reader.py" "$SRC/calibration-targets.env" "$HERE/"
-chmod +x "$HERE/oe-push-validation-artifact.sh" "$HERE/oe-calibration-progress.sh"
+   "$SRC/oe_corpus_reader.py" "$SRC/calibration-targets.env" \
+   "$SRC/calibration-progress-watch.sh" "$SRC/oe-alert.sh" "$HERE/"
+chmod +x "$HERE/oe-push-validation-artifact.sh" "$HERE/oe-calibration-progress.sh" \
+         "$HERE/calibration-progress-watch.sh"
 trap 'rm -rf "$WORK"' EXIT
 ROOT="$WORK/kafka/prod/context-tape.direction.ledger"
 PH="a1b2c3d4e5f60718"
@@ -560,14 +567,14 @@ targets FROZEN "$SB"; publish
 DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
 env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
     bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
-if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch.log" 2>&1; then
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch.log" 2>&1; then
   grep -q "archiveStatus=COMPLETE" "$WORK/watch.log" \
     && ok "a healthy session under a composite key reads COMPLETE, not NOT_IN_CORPUS" \
     || bad "the watchdog passed without recognising the session: $(head -3 "$WORK/watch.log")"
 else
   bad "the watchdog failed on a healthy day: $(head -4 "$WORK/watch.log")"
 fi
-if CHECK_DATE=2026-01-02 ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" bash "$SRC/calibration-progress-watch.sh" >/dev/null 2>&1; then
+if CHECK_DATE=2026-01-02 ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" bash "$HERE/calibration-progress-watch.sh" >/dev/null 2>&1; then
   bad "the watchdog exited 0 on a day it alerted about"
 else
   ok "an alert exits nonzero, so launchd and cron can see it"
@@ -1328,7 +1335,7 @@ PYCASE
 env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
     bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
 if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
-   bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch2.log" 2>&1; then
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch2.log" 2>&1; then
   bad "the watchdog called a date COMPLETE while one of its lineages is CORRUPT"
 else
   ok "the worst lineage decides the date, not the best"
@@ -1345,7 +1352,7 @@ env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
     bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
 # (a) no root anywhere: the alert must name the MOUNT and must NOT accuse the reporter.
 if CHECK_DATE="$DAY" ENV=prod ARCHIVE_ROOT_CANDIDATES="$WORK/no-such-a $WORK/no-such-b" \
-   CALENDAR_DIR="$CAL_DIR" bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch3.log" 2>&1; then
+   CALENDAR_DIR="$CAL_DIR" bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch3.log" 2>&1; then
   bad "the watchdog exited 0 with no archive root at all"
 else
   if grep -q "MOUNT problem here" "$WORK/watch3.log" \
@@ -1357,7 +1364,7 @@ else
 fi
 # (b) the root IS there and the reporter did not write: the alert must now say so WITHOUT hedging.
 if CHECK_DATE=2026-01-02 ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
-   bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch4.log" 2>&1; then
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch4.log" 2>&1; then
   bad "the watchdog exited 0 on a day with no progress record"
 else
   grep -q "IS reachable" "$WORK/watch4.log" \
@@ -1369,12 +1376,35 @@ echo "61. the watchdog RESOLVES its archive root instead of guessing one path"
 # The old default was /Volumes/database/optionsedge, which does not exist on the Mac this agent is
 # scheduled on. Resolution must find a real root among the candidates with no ARCHIVE_DIR set at all.
 if CHECK_DATE="$DAY" ENV=prod ARCHIVE_ROOT_CANDIDATES="$WORK/no-such-a $WORK" \
-   CALENDAR_DIR="$CAL_DIR" bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch5.log" 2>&1; then
+   CALENDAR_DIR="$CAL_DIR" bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch5.log" 2>&1; then
   grep -q "archive root $WORK" "$WORK/watch5.log" \
     && ok "with no ARCHIVE_DIR, it finds the root that exists and names the one it used" \
     || bad "it passed without saying which root it read: $(head -3 "$WORK/watch5.log")"
 else
   bad "resolution did not reach the real root: $(head -4 "$WORK/watch5.log")"
+fi
+
+echo "62. a healthy record for a cohort we no longer declare is NOT this cohort's record"
+# r19 #1. The watchdog used to take the first dt=<day>.json anywhere under the env, so a previous
+# parameter hash or a previous TRACK_FROM_PUSH satisfied it while the DECLARED cohort had nothing —
+# the exact failure it exists to catch, passing because it read the wrong corpus.
+build 3 20
+targets FROZEN "$SB"; publish
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+_live="$(find "$WORK/calibration-runs/prod" -name "dt=$DAY.json" | head -1)"
+[ -n "$_live" ] || bad "case 62 could not produce a progress record to move"
+# Move the whole cohort aside under a DIFFERENT parameter hash: the file is healthy, the cohort is not ours.
+_cohort="$(dirname "$(dirname "$_live")")"
+mv "$_cohort" "$(dirname "$_cohort")/deadbeefdeadbeef"
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch6.log" 2>&1; then
+  bad "the watchdog passed on a record belonging to a cohort we do not declare"
+else
+  grep -q "cohort we do not declare" "$WORK/watch6.log" \
+    && ok "a foreign cohort's healthy record is named as foreign, not accepted as ours" \
+    || bad "it failed for some other reason: $(head -4 "$WORK/watch6.log")"
 fi
 
 echo

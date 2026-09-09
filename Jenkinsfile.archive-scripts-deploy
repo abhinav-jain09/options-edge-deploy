@@ -121,13 +121,20 @@ pipeline {
             || { echo "the evaluator suite did not report PASS — refusing" >&2; exit 1; }
           ev=$(grep -c "^  ok   " "$WORKSPACE/.evaluator.out")
           echo "evaluator suite reported $ev passing assertions"
-          [ "$ev" -ge 77 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
+          [ "$ev" -ge 81 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # Runs on the AGENT, not in the container: it reads the crontab, the unit scripts and this
           # very file, which the container's scripts/ops/archive mount cannot see. Every script the
           # crontab invokes, and every helper those scripts source, must be in the repo AND in UNIT —
           # the check that would have caught oe-archive-verify.sh and oe-trading-day.sh a month ago.
           bash scripts/ci/validate-archive-unit-completeness.sh
+
+          # A5.7's watchdog is exempted from the check above because it belongs on the DEV MAC. That
+          # exemption is only honest if something else binds it: this asserts its install path, that
+          # the plist runs the script this repo ships from where the installer puts it, that nothing
+          # the script sources is left behind, and that the plist no longer pins an archive root
+          # (BZ 360) — the defect that would have made the agent alert MISSING every single day.
+          bash scripts/ci/validate-dev-mac-watchdog.sh
         '''
       }
     }

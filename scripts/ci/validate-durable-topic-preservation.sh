@@ -92,6 +92,38 @@ for topic in $REBUILDABLE; do
   fi
 done
 
+# A DECLARATION THAT NOTHING APPLIES IS NOT A DECLARATION.
+# apply-topics.sh reaches alter_topic_config() exclusively from `for entry in $OPTIONS_EDGE_TOPICS`
+# (scripts/kafka/apply-topics.sh:295 -> 372). So "<topic>=-1" for a topic that appears in no *_TOPICS
+# list is inert: the topic's retention is whatever the creating service happened to stamp, and the
+# line in this file only makes it look governed. That is how context-tape.direction.ledger — the A5
+# calibration corpus in transit — carried retention.ms=-1 here while nothing on the deploy path ever
+# applied it (BZ 360). The same reasoning binds the partition contract: an undeclared topic cannot be
+# in OPTIONS_EDGE_EXACT_PARTITION_TOPICS in any way that runs.
+#
+# Digits matter in this pattern: [A-Z_]* silently skips every OPTIONS_EDGE_ES4_* list, which made a
+# first draft of this check report five false positives. [A-Z0-9_]*.
+DECLARED=$( { sed -nE 's/^[A-Z0-9_]*TOPICS[A-Z0-9_]*="(.*)"$/\1/p' "$TOPICS_ENV" \
+  | tr ' ' '\n' | grep -E '^[^:[:space:]]+:[0-9]+$' || true; } | sed 's/:[0-9]*$//' | sort -u)
+
+# Pre-existing, and deliberately NOT fixed here: both are live with cleanup.policy=compact and are
+# classified in NEITHER the compacted nor the uncompacted lists, so declaring them would make
+# apply-topics restamp them 'delete' — changing someone else's topic while claiming to fix a
+# retention line. Classify their compaction first, then declare them and delete this exemption.
+UNDECLARED_EXEMPT="es.drop.final-summary es.drop.outcome"   # BZ 361
+for topic in $PRESERVED; do
+  in_list "$topic" "$DECLARED" && continue
+  in_list "$topic" "$(printf '%s\n' $UNDECLARED_EXEMPT)" && {
+    echo "note: '$topic' is durable but undeclared — known, exempt, tracked as BZ 361"
+    continue
+  }
+  echo "FAIL: '$topic' is declared RESET-PRESERVED with a retention override, but appears in no"
+  echo "      *_TOPICS declaration. apply-topics.sh only ever configures topics it iterates, so the"
+  echo "      override is INERT — the topic keeps whatever its creator stamped. Declare it as"
+  echo "      '<topic>:<partitions>' (use its LIVE partition count) so the deploy path applies it."
+  fail=1
+done
+
 # NOT an early exit. An empty PRESERVED list used to short-circuit to OK while every preserve arm
 # stayed wired in the reset scripts, so deleting the declarations passed the gate.
 DURABLE="$PRESERVED"

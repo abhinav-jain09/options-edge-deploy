@@ -78,7 +78,37 @@ if [ ! -d "$OUT_ROOT" ]; then
   exit 1
 fi
 
-found=$(find "$OUT_ROOT" -name "dt=$DAY.json" 2>/dev/null | head -1)
+# THE COHORT IS DECLARED, NOT DISCOVERED (r19 #1). This used to take the first dt=<day>.json anywhere
+# under the env, so a healthy record belonging to an OLD cohort — a previous parameter hash, or a
+# previous TRACK_FROM_PUSH — satisfied the watchdog while the cohort we actually declare had nothing.
+# That is the exact failure this watchdog exists to catch, passing because it looked at the wrong
+# corpus. The declaration lives beside this script, with no way to point it elsewhere, for the same
+# reason the reporter and the evaluator refuse a caller-supplied one: a watchdog that can be handed
+# another declaration can be made to watch another cohort.
+TARGETS="$(dirname "$0")/calibration-targets.env"
+if [ ! -f "$TARGETS" ]; then
+  alert "calibration watchdog cannot run: no calibration-targets.env beside $0. It would otherwise fall back to whichever cohort happens to be on disk, which is how a stale cohort passes for a live one."
+  exit 1
+fi
+# shellcheck source=/dev/null
+. "$TARGETS"
+eval "DECLARED_HASH=\"\${OE_CAL_PARAMETER_SET_HASH_${ENV_NAME}:-}\""
+eval "DECLARED_TRACK=\"\${OE_CAL_TRACK_FROM_PUSH_${ENV_NAME}:-}\""
+# The reporter writes to <out_root>/<hash or "calibration">/<trackFromPush, punctuation stripped>/progress/.
+COHORT_KEY="${DECLARED_HASH:-calibration}"
+COHORT_TF="$(printf '%s' "${DECLARED_TRACK:-}" | tr -d ':/')"
+COHORT_DIR="$OUT_ROOT/$COHORT_KEY/$COHORT_TF/progress"
+found=""
+[ -f "$COHORT_DIR/dt=$DAY.json" ] && found="$COHORT_DIR/dt=$DAY.json"
+if [ -z "$found" ]; then
+  # Distinguish "nobody reported" from "somebody reported, for a cohort we no longer declare". The
+  # second is not a quiet reporter — it is a declaration that moved and a watchdog pointed at history.
+  foreign="$(find "$OUT_ROOT" -name "dt=$DAY.json" 2>/dev/null | head -1)"
+  if [ -n "$foreign" ]; then
+    alert "calibration progress for $DAY exists ONLY for a cohort we do not declare (found $foreign; the declared cohort is $COHORT_KEY/$COHORT_TF). The reporter ran, but not for the cohort calibration-targets.env names — nothing under the current declaration counts."
+    exit 1
+  fi
+fi
 if [ -z "$found" ]; then
   # This is the failure the watchdog exists for: not "the corpus is empty" but "nobody reported".
   # The archive root is known-present by here, so this sentence no longer has to hedge about the NAS.
@@ -86,11 +116,23 @@ if [ -z "$found" ]; then
   exit 1
 fi
 log "progress record present for $DAY: $found"
-PREV="$(find "$OUT_ROOT" -name 'dt=*.json' 2>/dev/null | sort | tail -2 | head -1)"
+PREV="$(find "$COHORT_DIR" -name 'dt=*.json' 2>/dev/null | sort | tail -2 | head -1)"
 export PREV
-python3 - "$found" "$DAY" "${PREV:-}" <<'PY'
+DECLARED_HASH="$DECLARED_HASH" DECLARED_TRACK="$DECLARED_TRACK" \
+  python3 - "$found" "$DAY" "${PREV:-}" <<'PY'
 import json, os, sys
 d = json.load(open(sys.argv[1])); day = sys.argv[2]
+# Defence in depth for r19 #1: the PATH says which cohort this record claims to be, and the record
+# says it too. A hand-made or half-migrated directory can satisfy one without the other, so require
+# both to agree with the declaration before believing anything else in the file.
+_want_h, _want_t = os.environ.get("DECLARED_HASH",""), os.environ.get("DECLARED_TRACK","")
+_coh = (d.get("cohorts") or [{}])[0]
+_got_h, _got_t = _coh.get("parameterSetHash") or "", _coh.get("trackFromPush") or ""
+if (_want_h and _want_h != "UNFROZEN" and _got_h and _got_h != _want_h) or \
+   (_want_t and _got_t and _got_t != _want_t):
+    print("  WARN: this record is for cohort hash=%s trackFromPush=%s, but we declare hash=%s trackFromPush=%s"
+          % (_got_h or "<absent>", _got_t or "<absent>", _want_h, _want_t))
+    sys.exit(2)
 prev_path = sys.argv[3] if len(sys.argv) > 3 else ""
 # The report keys sessions "date|hash|lineage" — a bare date lookup found nothing and called a
 # perfectly healthy session NOT_IN_CORPUS every single day (r8 #6). Match on the date COMPONENT, and
