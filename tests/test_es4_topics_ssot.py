@@ -29,7 +29,7 @@ def _topics(name):
     return {e.rsplit(":", 1)[0] for e in _var(name)}
 
 
-def _mirrored_into_es4():
+def _mirrored_into_es4(root=None):
     """Topics that arrive on .4 through an MM1 mirror rather than being produced there.
 
     A mirror is a byte-for-byte record copy under the IDENTITY name, so a topic produced on prod
@@ -45,7 +45,7 @@ def _mirrored_into_es4():
     shape of at both ends.
     """
     names = set()
-    for job in sorted(REPO.glob("Jenkinsfile.*-mirror")):
+    for job in sorted((root or REPO).glob("Jenkinsfile.*-mirror")):
         text = job.read_text()
         if not re.search(r"^// MIRROR-DIRECTION: *\w+->es4\s*$", text, re.M):
             continue
@@ -134,9 +134,16 @@ class Es4TopicSsotTest(unittest.TestCase):
             self.assertTrue(t.startswith("es."), f"non-es topic in the es4 set: {t}")
 
     def test_the_mirror_exemption_is_derived_from_the_JOBS(self):
-        """A hand-written exemption list would let any name be smuggled into the es4 set. This one is
-        read from the mirror jobs, so it is empty unless a job that targets es4 exists and names the
-        topic — and it must not accidentally admit the es4->dev/prod jobs' topics."""
+        """A hand-written exemption list would let any name be smuggled into the es4 set.
+
+        Round 2 caught the first cut of this asserting only the CONTENT — it passed just as happily
+        with `_mirrored_into_es4` replaced by a hard-coded set, so it tested the answer rather than
+        the derivation it is named for. It now drives the helper over a COPY of the jobs with the
+        topic renamed: a hard-coded implementation returns the old name and fails.
+        """
+        import shutil
+        import tempfile
+
         mirrored = _mirrored_into_es4()
         self.assertIn("options.databento.opra.definition.enumeration", mirrored,
                       "the prod->es4 mirror's topic is not being read from its job")
@@ -144,6 +151,23 @@ class Es4TopicSsotTest(unittest.TestCase):
                          "an es4->dev/prod mirror's topic must NOT be read as mirrored INTO es4")
         for name in mirrored:
             self.assertNotIn(":", name, f"a partition count leaked into the exemption: {name}")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for job in REPO.glob("Jenkinsfile.*-mirror"):
+                text = job.read_text().replace("options.databento.opra.definition.enumeration",
+                                               "options.databento.renamed.for.this.test")
+                (root / job.name).write_text(text)
+            derived = _mirrored_into_es4(root)
+            self.assertIn("options.databento.renamed.for.this.test", derived,
+                          "the exemption does not follow the job — it is not derived from it")
+            self.assertNotIn("options.databento.opra.definition.enumeration", derived,
+                             "the exemption returned a name no job declares; it is hard-coded, not derived")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(_mirrored_into_es4(Path(tmp)), set(),
+                             "with no mirror jobs at all the exemption must be EMPTY, so the scoping "
+                             "rule falls back to refusing every non-es. topic")
 
     def test_every_mirrored_topic_is_actually_DECLARED_on_es4(self):
         """The other direction of the same rule: a mirror that targets .4 whose topic is NOT in the
