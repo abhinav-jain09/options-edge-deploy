@@ -83,8 +83,17 @@ for topic in $(declared); do
         for t in "${only[@]}"; do [ "$t" = "$topic" ] && wanted=1; done
         [ "$wanted" = "1" ] || continue
     fi
-    # a topic that does not exist here is not this guard's business: another guard owns creation
-    timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --describe --topic "$topic" >/dev/null 2>&1 || continue
+    # A topic that does not exist here is not this guard's business — another guard owns creation.
+    # But `--describe` also fails on a timeout or a missing Describe ACL, and treating that as
+    # "absent" would skip a real retention failure and then report that nothing existed. Ask the
+    # broker to LIST instead: an empty list for a name that the cluster has is unambiguous, while a
+    # CLI failure is reported and fails the guard.
+    listing=$(timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --list --topic "$topic" 2>&1) || {
+        printf 'CANNOT READ: %s — kafka-topics --list failed (%s)\n' "$topic" "$(printf '%s' "$listing" | head -1)" >&2
+        failed=1
+        continue
+    }
+    printf '%s\n' "$listing" | grep -qx "$topic" || continue   # genuinely absent here
     checked=$((checked + 1))
     want=$(want_of "$topic")
     # `|| true`: a topic with NO override is precisely the case this guard exists to report, and
@@ -95,7 +104,11 @@ for topic in $(declared); do
     # order decide the answer — able to invent drift or hide it. Take the value before `sensitive=`,
     # which is the topic's own, and refuse the topic outright if more than one such line appears.
     describe=$(timeout 30 kafka-configs --bootstrap-server "$BOOTSTRAP" --entity-type topics \
-                  --entity-name "$topic" --describe 2>/dev/null || true)
+                  --entity-name "$topic" --describe 2>&1) || {
+        printf 'CANNOT READ: %s — kafka-configs --describe failed (%s)\n' "$topic" "$(printf '%s' "$describe" | head -1)" >&2
+        failed=1
+        continue
+    }
     matches=$(printf '%s\n' "$describe" | grep -cE '^[[:space:]]*retention\.ms=-?[0-9]+ sensitive=' || true)
     if [ "${matches:-0}" -gt 1 ]; then
         printf 'AMBIGUOUS: %s reports %s topic-level retention.ms lines; this guard will not guess\n' "$topic" "$matches" >&2

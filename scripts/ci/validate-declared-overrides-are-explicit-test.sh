@@ -11,8 +11,18 @@ mkdir -p "$WORK/bin"
 
 # A fake broker: kafka-topics --list/--describe always succeed; kafka-configs prints whatever the
 # fixture file says for the topic, so a topic with no override prints no retention line at all.
+# `--list --topic NAME` prints the name when the cluster has it and nothing when it does not; the
+# guard now uses that to tell "absent" from "could not read", so the fake has to behave the same way.
 cat > "$WORK/bin/kafka-topics" <<'FAKE'
 #!/usr/bin/env bash
+topic=""
+listing=0
+while [ $# -gt 0 ]; do
+  case "$1" in --topic) topic=$2; shift 2;; --list) listing=1; shift;; *) shift;; esac
+done
+if [ "$listing" = "1" ] && [ -n "$topic" ]; then
+  grep -qx "$topic" "${EXISTS:-/dev/null}" && echo "$topic"
+fi
 exit 0
 FAKE
 cat > "$WORK/bin/kafka-configs" <<'FAKE'
@@ -34,7 +44,8 @@ FAKE
 chmod +x "$WORK/bin/"*
 export PATH="$WORK/bin:$PATH"
 
-run() { FIXTURE=$1 bash "$GUARD" fake:9092 es.futures.footprint.bars es.futures.footprint.outcomes > "$WORK/out" 2>&1 && echo 0 || echo $?; }
+printf 'es.futures.footprint.bars\nes.futures.footprint.outcomes\n' > "$WORK/exists"
+run() { FIXTURE=$1 EXISTS="${EXISTS_OVERRIDE:-$WORK/exists}" bash "$GUARD" fake:9092 es.futures.footprint.bars es.futures.footprint.outcomes > "$WORK/out" 2>&1 && echo 0 || echo $?; }
 expect() {  # $1 = code, $2 = message substring ("" when passing), $3 = label, $4 = fixture
     got=$(run "$4")
     if [ "$got" != "$1" ]; then
@@ -80,6 +91,14 @@ grep -q "SKIP:" "$WORK/out" || { printf 'an unreachable broker must say it skipp
 printf '  killed: %s\n' "an unreachable broker skips rather than reporting inheritance"
 cat > "$WORK/bin/kafka-topics" <<'ALIVE'
 #!/usr/bin/env bash
+topic=""
+listing=0
+while [ $# -gt 0 ]; do
+  case "$1" in --topic) topic=$2; shift 2;; --list) listing=1; shift;; *) shift;; esac
+done
+if [ "$listing" = "1" ] && [ -n "$topic" ]; then
+  grep -qx "$topic" "${EXISTS:-/dev/null}" && echo "$topic"
+fi
 exit 0
 ALIVE
 chmod +x "$WORK/bin/kafka-topics"
@@ -93,21 +112,59 @@ chmod +x "$WORK/bin/kafka-topics"
 # `|| rc=$?` — under `set -e` the assignment alone aborts the script on the very exit code it is
 # trying to capture, which is how the previous version of this case never ran at all.
 rc=0
-out=$(FIXTURE="$WORK/ok" TOPIC_SET=bogus bash "$GUARD" fake:9092 2>&1) || rc=$?
+out=$(FIXTURE="$WORK/ok" EXISTS="$WORK/exists" TOPIC_SET=bogus bash "$GUARD" fake:9092 2>&1) || rc=$?
 [ "$rc" = "2" ] || { printf 'an unknown TOPIC_SET must be refused even when the broker is down (exited %s)\n' "$rc" >&2; exit 1; }
 printf '%s' "$out" | grep -q "Unknown TOPIC_SET" || { printf 'and must say so: %s\n' "$out" >&2; exit 1; }
 printf '  killed: %s\n' "an unknown TOPIC_SET is refused before reachability"
 cat > "$WORK/bin/kafka-topics" <<'ALIVE'
 #!/usr/bin/env bash
+topic=""
+listing=0
+while [ $# -gt 0 ]; do
+  case "$1" in --topic) topic=$2; shift 2;; --list) listing=1; shift;; *) shift;; esac
+done
+if [ "$listing" = "1" ] && [ -n "$topic" ]; then
+  grep -qx "$topic" "${EXISTS:-/dev/null}" && echo "$topic"
+fi
 exit 0
 ALIVE
 chmod +x "$WORK/bin/kafka-topics"
 
 # The guard must not silently check NOTHING because a helper went missing: the baseline output
 # names how many topics it checked, and zero would be a skip, not a pass.
-FIXTURE="$WORK/ok" bash "$GUARD" fake:9092 es.futures.footprint.bars es.futures.footprint.outcomes > "$WORK/out" 2>&1
+FIXTURE="$WORK/ok" EXISTS="$WORK/exists" bash "$GUARD" fake:9092 es.futures.footprint.bars es.futures.footprint.outcomes > "$WORK/out" 2>&1
 grep -qE '\(2 checked' "$WORK/out" \
     || { printf 'the guard must report how many topics it actually checked: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
 printf '  killed: %s\n' "the guard reports what it checked, so checking nothing cannot read as passing"
+
+# A per-topic CLI failure is NOT absence. Treating it as absence skipped a real retention failure
+# and then reported that nothing existed — a permission or timeout problem reading as a pass.
+cat > "$WORK/bin/kafka-configs" <<'BROKEN'
+#!/usr/bin/env bash
+echo "TimeoutException: describeConfigs" >&2
+exit 1
+BROKEN
+chmod +x "$WORK/bin/kafka-configs"
+got=$(run "$WORK/ok")
+[ "$got" = "1" ] || { printf 'a failing describe must FAIL the guard, not skip (exited %s)\n' "$got" >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+grep -q "CANNOT READ" "$WORK/out" || { printf 'and must say it could not read: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
+printf '  killed: %s\n' "a failing describe is reported, not read as absence"
+
+# a topic the cluster genuinely does not have is skipped, quietly
+cat > "$WORK/bin/kafka-configs" <<'FAKE2'
+#!/usr/bin/env bash
+topic=""
+while [ $# -gt 0 ]; do case "$1" in --entity-name) topic=$2; shift 2;; *) shift;; esac; done
+line=$(grep -E "^${topic}=" "$FIXTURE" 2>/dev/null | head -1 | sed "s/^${topic}=//")
+echo "Dynamic configs for topic $topic are:"
+[ -n "$line" ] && echo "  retention.ms=$line sensitive=false synonyms={DYNAMIC_TOPIC_CONFIG:retention.ms=$line}"
+exit 0
+FAKE2
+chmod +x "$WORK/bin/kafka-configs"
+: > "$WORK/none-exist"
+got=$(EXISTS_OVERRIDE="$WORK/none-exist" run "$WORK/ok")
+[ "$got" = "0" ] || { printf 'a genuinely absent topic must be skipped (exited %s)\n' "$got" >&2; exit 1; }
+grep -q "SKIP:" "$WORK/out" || { printf 'and must say it skipped: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
+printf '  killed: %s\n' "a genuinely absent topic is skipped, and says so"
 
 echo "every arm refused its own violation, for its own reason"
