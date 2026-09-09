@@ -47,6 +47,8 @@ pipeline {
       // es-aggressor-flow: PRODUCTION only. On prod it publishes just the Kyle-style
       // signed-flow response slope; the legacy absorption label is disabled there.
       'es-aggressor-flow',
+      // es-trade-linearizer: PRODUCTION only, and ships dark.
+      'es-trade-linearizer',
       // stock-gex-close-scheduler: PRODUCTION only — the closing-board SCHEDULE, which now lives
       // inside the batch itself (USER 2026-09-01: "I don't want anything Jenkins-based, it should
       // run based on Spring Batch configuration"). This job DEPLOYS it; nothing here decides when

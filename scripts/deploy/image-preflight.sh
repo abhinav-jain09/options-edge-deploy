@@ -96,6 +96,7 @@
           if [ "${ENVIRONMENT:-dev}" = "production" ] && [ "${DEPLOY_TARGET:-all}" = "all" ]; then
             images="$images
             ES_AGGRESSOR_FLOW_IMAGE=${ES_AGGRESSOR_FLOW_IMAGE:-}
+            ES_TRADE_LINEARIZER_IMAGE=${ES_TRADE_LINEARIZER_IMAGE:-}
             "
           fi
 

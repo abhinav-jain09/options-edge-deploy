@@ -43,6 +43,7 @@ images:
   es-open-direction-service: 192.168.100.252:5000/options-edge-es-open-direction:prod
   close-direction-service: 192.168.100.252:5000/options-edge-close-direction:prod
   es-aggressor-flow-service: 192.168.100.252:5000/options-edge-es-aggressor-flow:prod
+  es-trade-linearizer-service: 192.168.100.252:5000/options-edge-es-trade-linearizer:prod
   spot-vol-regime-service: 192.168.100.252:5000/options-edge-spot-vol-regime:prod
   vol-premium-service: 192.168.100.252:5000/options-edge-vol-premium:prod
   # Required even though prod holds stock-gex at replicas:0: without a production mapping the
@@ -62,6 +63,7 @@ images:
   context-tape-service: 192.168.100.252:5000/options-edge-context-tape:prod
   multileg-structure-service: 192.168.100.252:5000/options-edge-multileg-structure:prod
   es-aggressor-flow-service: 192.168.100.252:5000/options-edge-es-aggressor-flow:prod
+  es-trade-linearizer-service: 192.168.100.252:5000/options-edge-es-trade-linearizer:prod
   reversal-postgres-writer: 192.168.100.252:5000/options-edge-reversal-postgres-writer:prod
   spread-skew-postgres-writer: 192.168.100.252:5000/options-edge-spread-skew-postgres-writer:prod
   signal-follower: 192.168.100.252:5000/options-edge-signal-follower:prod
