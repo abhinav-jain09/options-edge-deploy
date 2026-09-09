@@ -24,7 +24,12 @@ TF="2026-07-01"
 SB="$(python3 -c "import datetime;print(int(datetime.datetime.fromisoformat('2026-08-13T20:00:00+00:00').timestamp()*1000))")"
 fails=0
 # the REAL trading calendar, which the reader now requires rather than falling back to weekdays
-CAL_DIR="$(cd "$SRC/../../jenkins" 2>/dev/null && pwd || true)"
+# BESIDE the unit first. That is where the deploy job stages market_calendar.py before running this in
+# a container mounting only scripts/ops/archive — and where the installed unit has it on the host. The
+# repo-relative and home-relative paths below exist for a developer running this from a checkout; in the
+# job neither is reachable, so the suite refused to run at all and the whole deploy failed there.
+CAL_DIR="$SRC"
+[ -f "$CAL_DIR/market_calendar.py" ] || CAL_DIR="$(cd "$SRC/../../jenkins" 2>/dev/null && pwd || true)"
 [ -f "$CAL_DIR/market_calendar.py" ] || CAL_DIR="$HOME/development/workspace/options-edge-deploy/scripts/jenkins"
 [ -f "$CAL_DIR/market_calendar.py" ] || { echo "FATAL: no market_calendar.py for the suite to use"; exit 1; }
 export CAL_DIR
