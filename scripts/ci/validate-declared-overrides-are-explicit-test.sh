@@ -76,4 +76,31 @@ cat > "$WORK/bin/kafka-topics" <<'ALIVE'
 exit 0
 ALIVE
 chmod +x "$WORK/bin/kafka-topics"
+# The guard must REFUSE a caller error before it decides anything about reachability: a typo in
+# TOPIC_SET became a silent pass the moment the broker happened to be down.
+cat > "$WORK/bin/kafka-topics" <<'DEAD'
+#!/usr/bin/env bash
+exit 1
+DEAD
+chmod +x "$WORK/bin/kafka-topics"
+# `|| rc=$?` — under `set -e` the assignment alone aborts the script on the very exit code it is
+# trying to capture, which is how the previous version of this case never ran at all.
+rc=0
+out=$(FIXTURE="$WORK/ok" TOPIC_SET=bogus bash "$GUARD" fake:9092 2>&1) || rc=$?
+[ "$rc" = "2" ] || { printf 'an unknown TOPIC_SET must be refused even when the broker is down (exited %s)\n' "$rc" >&2; exit 1; }
+printf '%s' "$out" | grep -q "Unknown TOPIC_SET" || { printf 'and must say so: %s\n' "$out" >&2; exit 1; }
+printf '  killed: %s\n' "an unknown TOPIC_SET is refused before reachability"
+cat > "$WORK/bin/kafka-topics" <<'ALIVE'
+#!/usr/bin/env bash
+exit 0
+ALIVE
+chmod +x "$WORK/bin/kafka-topics"
+
+# The guard must not silently check NOTHING because a helper went missing: the baseline output
+# names how many topics it checked, and zero would be a skip, not a pass.
+FIXTURE="$WORK/ok" bash "$GUARD" fake:9092 es.futures.footprint.bars es.futures.footprint.outcomes > "$WORK/out" 2>&1
+grep -qE '\(2 checked' "$WORK/out" \
+    || { printf 'the guard must report how many topics it actually checked: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
+printf '  killed: %s\n' "the guard reports what it checked, so checking nothing cannot read as passing"
+
 echo "every arm refused its own violation, for its own reason"
