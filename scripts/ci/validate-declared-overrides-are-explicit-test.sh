@@ -79,9 +79,12 @@ for t in es.futures.footprint.bars es.futures.footprint.outcomes; do
 done
 printf '  killed: %s\n' "every topic inheriting the default (both named)"
 
-# a CLI failure must not read as inheritance: the guard skips, it does not report a finding
+# A CONNECTION failure must not read as inheritance: the guard skips, it does not report a finding.
+# The fake speaks the way an unreachable broker actually speaks, because that message is now what
+# licenses the skip.
 cat > "$WORK/bin/kafka-topics" <<'DEAD'
 #!/usr/bin/env bash
+echo "Connection to node -1 (fake/1.2.3.4:9092) could not be established." >&2
 exit 1
 DEAD
 chmod +x "$WORK/bin/kafka-topics"
@@ -89,6 +92,21 @@ got=$(run "$WORK/ok")
 [ "$got" = "0" ] || { printf 'an unreachable broker must SKIP, not fail (exited %s)\n' "$got" >&2; exit 1; }
 grep -q "SKIP:" "$WORK/out" || { printf 'an unreachable broker must say it skipped\n' >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
 printf '  killed: %s\n' "an unreachable broker skips rather than reporting inheritance"
+
+# ...but a failure that is NOT a connection failure must FAIL. Treating every non-zero exit as
+# unreachability is the widest fail-open there is: a missing Describe ACL, a broken shim, or a CLI
+# that is not the CLI would each make the guard announce "not reachable" and pass.
+cat > "$WORK/bin/kafka-topics" <<'DENIED'
+#!/usr/bin/env bash
+echo "TopicAuthorizationException: Not authorized to access topics: [Topic authorization failed.]" >&2
+exit 1
+DENIED
+chmod +x "$WORK/bin/kafka-topics"
+got=$(run "$WORK/ok")
+[ "$got" = "1" ] || { printf 'a non-connection probe failure must FAIL, not skip (exited %s)\n' "$got" >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+grep -q "CANNOT READ" "$WORK/out" || { printf 'and must say it could not read: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
+grep -q "SKIP:" "$WORK/out" && { printf 'and must NOT call an authorization failure unreachability: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
+printf '  killed: %s\n' "a probe failure that is not a connection failure is reported, not skipped"
 cat > "$WORK/bin/kafka-topics" <<'ALIVE'
 #!/usr/bin/env bash
 topic=""
@@ -166,5 +184,35 @@ got=$(EXISTS_OVERRIDE="$WORK/none-exist" run "$WORK/ok")
 [ "$got" = "0" ] || { printf 'a genuinely absent topic must be skipped (exited %s)\n' "$got" >&2; exit 1; }
 grep -q "SKIP:" "$WORK/out" || { printf 'and must say it skipped: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
 printf '  killed: %s\n' "a genuinely absent topic is skipped, and says so"
+
+# A per-topic `--list` failure is not absence either, and — the reason the ordering matters — when
+# EVERY per-topic list fails, `checked` never leaves 0. The end-of-run skip used to be tested before
+# `failed`, so the guard printed CANNOT READ for every topic and then exited 0 announcing that none
+# of the declared topics existed on the broker. The reachability probe still succeeds here; only the
+# per-topic calls fail, which is exactly what a topic-scoped Describe ACL looks like.
+cat > "$WORK/bin/kafka-topics" <<'PARTLY'
+#!/usr/bin/env bash
+topic=""
+listing=0
+while [ $# -gt 0 ]; do
+  case "$1" in --topic) topic=$2; shift 2;; --list) listing=1; shift;; *) shift;; esac
+done
+if [ "$listing" = "1" ] && [ -n "$topic" ]; then
+  echo "TopicAuthorizationException: Not authorized to describe topic $topic" >&2
+  exit 1
+fi
+exit 0
+PARTLY
+chmod +x "$WORK/bin/kafka-topics"
+got=$(run "$WORK/ok")
+[ "$got" = "1" ] || { printf 'a failing per-topic list must FAIL the guard, not pass as "none exist" (exited %s)\n' "$got" >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+for t in es.futures.footprint.bars es.futures.footprint.outcomes; do
+    grep -qF "CANNOT READ: $t" "$WORK/out" \
+        || { printf 'and must name each topic it could not read — %s was not reported\n' "$t" >&2
+             sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+done
+grep -q "none of the declared topics exist" "$WORK/out" \
+    && { printf 'and must not then claim the broker has none of them: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
+printf '  killed: %s\n' "every per-topic list failing fails the guard instead of passing as absence"
 
 echo "every arm refused its own violation, for its own reason"

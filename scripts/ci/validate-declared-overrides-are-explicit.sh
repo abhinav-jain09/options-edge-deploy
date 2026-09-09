@@ -38,9 +38,24 @@ case "${TOPIC_SET:-}" in
 esac
 
 command -v kafka-configs >/dev/null 2>&1 || { echo "SKIP: kafka-configs is not on PATH"; exit 0; }
-if ! timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --list >/dev/null 2>&1; then
-    echo "SKIP: $BOOTSTRAP is not reachable from here"
-    exit 0
+
+# Only a CONNECTION failure licenses the skip. The first version treated every non-zero exit as
+# unreachability, which is the widest possible fail-open: a missing Describe ACL, a bad JAAS config,
+# a shim that cannot reach its container, a CLI that is not the CLI — each one exits non-zero with
+# its own message, and each one made the guard print "not reachable" and pass. Match the failure
+# against what an unreachable broker actually says (plus timeout's own 124) and fail on anything
+# else, so an environment the guard cannot interrogate is reported rather than waved through.
+probe_rc=0
+probe=$(timeout 30 kafka-topics --bootstrap-server "$BOOTSTRAP" --list 2>&1) || probe_rc=$?
+if [ "$probe_rc" -ne 0 ]; then
+    if [ "$probe_rc" -eq 124 ] || printf '%s' "$probe" | grep -qE \
+        'Connection to node|Connection refused|Timed out waiting|TimeoutException|Failed to update metadata|UnknownHost|No resolvable bootstrap|could not be established|Network is unreachable|Connection reset'; then
+        printf 'SKIP: %s is not reachable from here (%s)\n' "$BOOTSTRAP" "$(printf '%s' "$probe" | head -1)"
+        exit 0
+    fi
+    printf 'CANNOT READ: kafka-topics --list failed on %s and the failure is not a connection failure (exit %s: %s)\n' \
+        "$BOOTSTRAP" "$probe_rc" "$(printf '%s' "$probe" | head -1)" >&2
+    exit 1
 fi
 
 # The declaration is the source of truth for WHICH topics must be explicit.
@@ -126,6 +141,10 @@ for topic in $(declared); do
     fi
 done
 
-[ "$checked" -gt 0 ] || { echo "SKIP: none of the declared topics exist on $BOOTSTRAP"; exit 0; }
+# Findings come FIRST. The skip used to be tested before `failed`, so a run in which every per-topic
+# `--list` failed — checked stays 0, failed is 1, and each failure was already printed as CANNOT
+# READ — exited 0 announcing that none of the declared topics existed. A guard that has just said it
+# could not read the broker must not then report the broker as empty and pass.
 [ "$failed" -eq 0 ] || exit 1
+[ "$checked" -gt 0 ] || { echo "SKIP: none of the declared topics exist on $BOOTSTRAP"; exit 0; }
 printf 'every declared retention override is set on the topic itself (%s checked on %s)\n' "$checked" "$BOOTSTRAP"

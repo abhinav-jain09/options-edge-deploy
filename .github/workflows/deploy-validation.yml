@@ -95,6 +95,14 @@ jobs:
       - name: Declared retention overrides must be set on the topic, not inherited (guard arms)
         run: scripts/ci/validate-declared-overrides-are-explicit-test.sh
 
+      # es4 is the one environment CI cannot reach: its declaration and its broker exist only behind
+      # the shims on that box, so the guard's es4 arm is otherwise never run against any broker at
+      # all. This EXECUTES scripts/es4/create-es-topics.sh end to end against a fake es4 Kafka and
+      # checks that the guard runs there, reads the es4 declaration, and fails the reconciliation
+      # when a declared topic is left sitting on the broker default.
+      - name: The es4 reconciliation proves itself (create-es-topics end to end)
+        run: scripts/ci/validate-es4-reconciliation-guard-test.sh
+
       # VIX feed separation §7: validate-services.sh already runs the single-publisher
       # assertion against the REAL render; this additionally exercises the assertion's
       # full predicate matrix (five planned rollout states, both-owners violations,
