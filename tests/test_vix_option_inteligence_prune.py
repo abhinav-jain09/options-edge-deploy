@@ -33,6 +33,23 @@ KAFKA_TOPICS_STUB = """#!/usr/bin/env bash
 # shape each topic was CREATED with. A stub that answered a fixed partition count made
 # scripts/kafka/apply-topics.sh see an EXACT-partition mismatch on every es4 topic declared at
 # fewer partitions and exit 1 long before the prune under test ran.
+STUB_NAME=kafka-topics
+# The bootstrap address is ASSERTED, not ignored. Entering the right container proves nothing about
+# whether the command inside it can reach the broker: es4's CLI must be pointed at the IN-CONTAINER
+# listener, and a script that passed a host-side address would have looked fine here.
+# STUB_EXPECTED_BOOTSTRAP is set by the test to what the plain caller must use, and re-set by the
+# sudo stub to what the es4 shim path must use once execution is inside the container.
+assert_bootstrap() {
+  local want="${STUB_EXPECTED_BOOTSTRAP:?the test must say which bootstrap address to expect}"
+  local got= prev=
+  for a in "$@"; do
+    [ "$prev" = "--bootstrap-server" ] && got="$a"
+    prev="$a"
+  done
+  [ -n "$got" ] || { echo "$STUB_NAME: no --bootstrap-server in: $*" >&2; exit 96; }
+  [ "$got" = "$want" ] || { echo "$STUB_NAME: --bootstrap-server $got, expected $want" >&2; exit 96; }
+}
+assert_bootstrap "$@"
 S="$STUB_STATE"
 cmd=; topic=; parts=; prev=
 for a in "$@"; do
@@ -83,6 +100,23 @@ exit 0
 """
 
 KAFKA_CONSUMER_GROUPS_STUB = """#!/usr/bin/env bash
+STUB_NAME=kafka-consumer-groups
+# The bootstrap address is ASSERTED, not ignored. Entering the right container proves nothing about
+# whether the command inside it can reach the broker: es4's CLI must be pointed at the IN-CONTAINER
+# listener, and a script that passed a host-side address would have looked fine here.
+# STUB_EXPECTED_BOOTSTRAP is set by the test to what the plain caller must use, and re-set by the
+# sudo stub to what the es4 shim path must use once execution is inside the container.
+assert_bootstrap() {
+  local want="${STUB_EXPECTED_BOOTSTRAP:?the test must say which bootstrap address to expect}"
+  local got= prev=
+  for a in "$@"; do
+    [ "$prev" = "--bootstrap-server" ] && got="$a"
+    prev="$a"
+  done
+  [ -n "$got" ] || { echo "$STUB_NAME: no --bootstrap-server in: $*" >&2; exit 96; }
+  [ "$got" = "$want" ] || { echo "$STUB_NAME: --bootstrap-server $got, expected $want" >&2; exit 96; }
+}
+assert_bootstrap "$@"
 S="$STUB_STATE"
 cmd=; group=; prev=
 for a in "$@"; do
@@ -112,6 +146,23 @@ KAFKA_CONFIGS_STUB = """#!/usr/bin/env bash
 # reconciliation actually set. A stub that always printed the same line could not tell a topic left
 # on the broker default from one the reconciliation reached, which is the whole distinction that
 # guard exists to draw.
+STUB_NAME=kafka-configs
+# The bootstrap address is ASSERTED, not ignored. Entering the right container proves nothing about
+# whether the command inside it can reach the broker: es4's CLI must be pointed at the IN-CONTAINER
+# listener, and a script that passed a host-side address would have looked fine here.
+# STUB_EXPECTED_BOOTSTRAP is set by the test to what the plain caller must use, and re-set by the
+# sudo stub to what the es4 shim path must use once execution is inside the container.
+assert_bootstrap() {
+  local want="${STUB_EXPECTED_BOOTSTRAP:?the test must say which bootstrap address to expect}"
+  local got= prev=
+  for a in "$@"; do
+    [ "$prev" = "--bootstrap-server" ] && got="$a"
+    prev="$a"
+  done
+  [ -n "$got" ] || { echo "$STUB_NAME: no --bootstrap-server in: $*" >&2; exit 96; }
+  [ "$got" = "$want" ] || { echo "$STUB_NAME: --bootstrap-server $got, expected $want" >&2; exit 96; }
+}
+assert_bootstrap "$@"
 S="$STUB_STATE"; C="$S/configs.txt"
 cmd=; topic=; add=; prev=
 for a in "$@"; do
@@ -179,6 +230,9 @@ ORIGINAL="$*"
 [ "$1" = "-i" ]     || die "docker exec -i"; shift
 [ "$1" = "$expected_container" ] || die "the container $expected_container"; shift
 [ $# -gt 0 ] || die "a command inside the container"
+# Inside the container the CLI must use the IN-CONTAINER listener, not whatever the host would use.
+STUB_EXPECTED_BOOTSTRAP="${STUB_ES4_BOOTSTRAP:-localhost:29092}"
+export STUB_EXPECTED_BOOTSTRAP
 kept=
 while IFS= read -r -d: dir; do
   case "$dir" in *kafka-cli-shim*) continue ;; esac
@@ -223,6 +277,10 @@ class PruneScriptTest(unittest.TestCase):
             "PATH": f"{self.bin}:{env['PATH']}",
             "STUB_STATE": str(self.state),
             "KAFKA_BOOTSTRAP_SERVERS": "stub:9092",
+            # What a stub must see when the caller is the plain script. The es4 path goes through
+            # the shims, and the sudo stub re-points this to the in-container listener once
+            # execution is inside the container — so both halves of the boundary are asserted.
+            "STUB_EXPECTED_BOOTSTRAP": "stub:9092",
             "KAFKA_TOPIC_DELETE_WAIT_SECONDS": "2",
         })
         env.update(extra_env or {})
