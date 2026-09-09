@@ -278,7 +278,25 @@ OE_WATCHDOG_BACKUP_DIR="$TMP/reused-backup" install_run
 [ "$RC" -ne 0 ] && ok "an existing backup directory stops the install" || bad "it wrote into an existing backup directory"
 [ -f "$TMP/reused-backup/marker" ] && ok "and the earlier backup's contents are untouched" || bad "it overwrote the earlier backup"
 
-echo "19. every refusal in the watchdog uses the phrase the installer blocks on"
+echo "19. the recovery script a person is handed is READABLE"
+# Found by reading the EMITTED file rather than the generator. printf %q escaped every space and quote
+# in the trap body, so the generated line was valid shell and unreadable. This artifact exists so
+# someone can read it before running it on their own machine; a correct line nobody can read fails at
+# the only job it has. Tested as a property of the OUTPUT, not of the code that writes it.
+stage 1; install_run
+[ "$RC" -eq 0 ] || bad "case 19 could not complete an install"
+R="$(ls -d "$TMP/dest"/.watchdog-backup-*/restore.sh 2>/dev/null | head -1)"
+[ -n "$R" ] || bad "case 19 found no generated restore.sh"
+grep -qF 'case "$rc" in 0|3)' "$R" \
+  && ok "the trap line is emitted verbatim, not backslash-escaped" \
+  || bad "the trap line is not readable as written: $(grep -m1 '^trap' "$R" | cut -c1-70)"
+grep -m1 '^trap' "$R" | grep -q '\\' \
+  && bad "the emitted trap still contains backslash escapes" \
+  || ok "and it carries no escape noise at all"
+# It must still BE a valid script, not merely a readable one.
+bash -n "$R" && ok "and the emitted script parses" || bad "the emitted script does not parse"
+
+echo "20. every refusal in the watchdog uses the phrase the installer blocks on"
 _ref=$(grep -cE 'alert "calibration watchdog cannot run:' "$HERE/calibration-progress-watch.sh")
 _all=$(grep -cE 'alert "calibration watchdog' "$HERE/calibration-progress-watch.sh")
 [ "$_ref" -eq "$_all" ] && [ "$_ref" -gt 0 ] \

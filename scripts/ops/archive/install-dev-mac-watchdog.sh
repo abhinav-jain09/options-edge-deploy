@@ -208,9 +208,15 @@ for f in $FILES; do [ -f "$DEST/$f" ] && cp "$DEST/$f" "$BACKUP/$f"; done
   # and exited 0 — a recovery that reports it restored the previous installation while leaving a mixed
   # one. That is the third time in this branch that something written to report failure could not.
   echo 'set -euo pipefail'
+  # Emitted VERBATIM, not through printf %q. %q escaped every space and quote in the trap body, so the
+  # generated line read `trap rc=\$\?\;\ case\ \"\$rc\"\ ...` — valid shell, and unreadable. This
+  # script exists so a person can read it before running it on their own machine; a correct line nobody
+  # can read fails at the only job it has. Found by reading the EMITTED file rather than the generator.
   # Exit 3 is the stale-backup REFUSAL, which touched nothing — claiming a mixed state for it would be
   # a wrong message, and a wrong message is a defect like any other.
-  printf 'trap %s EXIT\n' "$(printf '%q' 'rc=$?; case "$rc" in 0|3) : ;; *) echo "RECOVERY FAILED at exit $rc — the host is in a MIXED state; read this script and finish by hand" >&2 ;; esac')"
+  cat <<'RSTRAP'
+trap 'rc=$?; case "$rc" in 0|3) : ;; *) echo "RECOVERY FAILED at exit $rc - the host is in a MIXED state; read this script and finish by hand" >&2 ;; esac' EXIT
+RSTRAP
   # A STALE BACKUP UNDOES MORE THAN ITS OWN INSTALL. Found by probing rather than by review: with two
   # backup directories present, running the OLDER one's restore.sh removed the watchdog entirely and
   # reported "restored" — an operator picking the wrong directory silently uninstalls the thing, and
