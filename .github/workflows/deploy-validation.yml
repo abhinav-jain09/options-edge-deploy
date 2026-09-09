@@ -136,6 +136,16 @@ jobs:
       - name: es4 topic SSOT + partition contract
         run: python3 -m unittest -v tests.test_es4_topics_ssot tests.test_es4_topic_partition_contract tests.test_remove_retired_workloads
 
+      # The es4 arm of the same contract, EXECUTED: tests.test_vix_option_inteligence_prune runs the
+      # real scripts/es4/create-es-topics.sh — its CLI shims and the shared applier all the way down
+      # — against a fake es4 broker. That is the only place the es4 path is exercised at all: CI
+      # cannot reach es4, and the topic modules above only read topics.env. Neither module ran here,
+      # and both of the prune module's end-to-end cases were RED on main: the shims run `sudo -n
+      # docker exec`, nothing stubbed `sudo`, and the real one asked for a password. A test nothing
+      # runs is a test that goes red and stays red.
+      - name: vix-option-inteligence prune + deploy contract (executes create-es-topics.sh)
+        run: python3 -m unittest -v tests.test_vix_option_inteligence_prune tests.test_vix_option_inteligence_deploy
+
       - name: Validate dev GEX availability safeguards
         run: bash scripts/ci/validate-gex-dev-safety.sh
 
