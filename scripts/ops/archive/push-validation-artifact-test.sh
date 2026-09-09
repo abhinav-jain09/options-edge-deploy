@@ -14,9 +14,16 @@ WORK="$(mktemp -d)"
 # exactly the file the deployed unit reads.
 HERE="$WORK/unit"
 mkdir -p "$HERE"
+# The watchdog is staged here too, and every case runs THAT copy. It reads calibration-targets.env
+# from beside itself — the same refusal the reporter and the evaluator make — so running it from the
+# repo directory would have judged the tests' cohort against the SHIPPED declaration. It also SOURCES
+# oe-alert.sh from beside itself; without that copy every alert degrades to the script's own fallback
+# and the delivery path under test is not the deployed one.
 cp "$SRC/oe-push-validation-artifact.sh" "$SRC/oe-calibration-progress.sh" \
-   "$SRC/oe_corpus_reader.py" "$SRC/calibration-targets.env" "$HERE/"
-chmod +x "$HERE/oe-push-validation-artifact.sh" "$HERE/oe-calibration-progress.sh"
+   "$SRC/oe_corpus_reader.py" "$SRC/calibration-targets.env" \
+   "$SRC/calibration-progress-watch.sh" "$SRC/oe-alert.sh" "$HERE/"
+chmod +x "$HERE/oe-push-validation-artifact.sh" "$HERE/oe-calibration-progress.sh" \
+         "$HERE/calibration-progress-watch.sh"
 trap 'rm -rf "$WORK"' EXIT
 ROOT="$WORK/kafka/prod/context-tape.direction.ledger"
 PH="a1b2c3d4e5f60718"
@@ -560,14 +567,14 @@ targets FROZEN "$SB"; publish
 DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
 env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
     bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
-if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch.log" 2>&1; then
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch.log" 2>&1; then
   grep -q "archiveStatus=COMPLETE" "$WORK/watch.log" \
     && ok "a healthy session under a composite key reads COMPLETE, not NOT_IN_CORPUS" \
     || bad "the watchdog passed without recognising the session: $(head -3 "$WORK/watch.log")"
 else
   bad "the watchdog failed on a healthy day: $(head -4 "$WORK/watch.log")"
 fi
-if CHECK_DATE=2026-01-02 ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" bash "$SRC/calibration-progress-watch.sh" >/dev/null 2>&1; then
+if CHECK_DATE=2026-01-02 ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" bash "$HERE/calibration-progress-watch.sh" >/dev/null 2>&1; then
   bad "the watchdog exited 0 on a day it alerted about"
 else
   ok "an alert exits nonzero, so launchd and cron can see it"
@@ -1328,10 +1335,166 @@ PYCASE
 env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
     bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
 if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
-   bash "$SRC/calibration-progress-watch.sh" >"$WORK/watch2.log" 2>&1; then
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch2.log" 2>&1; then
   bad "the watchdog called a date COMPLETE while one of its lineages is CORRUPT"
 else
   ok "the worst lineage decides the date, not the best"
+fi
+
+echo "60. an unreachable archive root is a DIFFERENT alert from a reporter that did not run"
+# BZ 360. The watchdog's whole purpose is telling those two apart, and until now an absent root
+# produced the reporter's sentence. Every other case in this file passes ARCHIVE_DIR explicitly, so
+# neither the default nor the absent-root path was ever executed by a test.
+build 3 20
+targets FROZEN "$SB"; publish
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+# (a) no root anywhere: the alert must name the MOUNT and must NOT accuse the reporter.
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_ROOT_CANDIDATES="$WORK/no-such-a $WORK/no-such-b" \
+   CALENDAR_DIR="$CAL_DIR" bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch3.log" 2>&1; then
+  bad "the watchdog exited 0 with no archive root at all"
+else
+  if grep -q "MOUNT problem here" "$WORK/watch3.log" \
+     && ! grep -q "progress MISSING" "$WORK/watch3.log"; then
+    ok "an unmounted NAS blames the mount, and says nothing about the reporter"
+  else
+    bad "an absent archive root did not produce its own alert: $(head -3 "$WORK/watch3.log")"
+  fi
+fi
+# (b) the root IS there and the reporter did not write: the alert must now say so WITHOUT hedging.
+if CHECK_DATE=2026-01-02 ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch4.log" 2>&1; then
+  bad "the watchdog exited 0 on a day with no progress record"
+else
+  grep -q "IS reachable" "$WORK/watch4.log" \
+    && ok "a reachable root turns the hedge into a diagnosis: this is the reporter" \
+    || bad "the MISSING alert still cannot say the root was reachable: $(head -3 "$WORK/watch4.log")"
+fi
+
+echo "61. the watchdog RESOLVES its archive root instead of guessing one path"
+# The old default was /Volumes/database/optionsedge, which does not exist on the Mac this agent is
+# scheduled on. Resolution must find a real root among the candidates with no ARCHIVE_DIR set at all.
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_ROOT_CANDIDATES="$WORK/no-such-a $WORK" \
+   CALENDAR_DIR="$CAL_DIR" bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch5.log" 2>&1; then
+  grep -q "archive root $WORK" "$WORK/watch5.log" \
+    && ok "with no ARCHIVE_DIR, it finds the root that exists and names the one it used" \
+    || bad "it passed without saying which root it read: $(head -3 "$WORK/watch5.log")"
+else
+  bad "resolution did not reach the real root: $(head -4 "$WORK/watch5.log")"
+fi
+
+echo "62. a healthy record for a cohort we no longer declare is NOT this cohort's record"
+# r19 #1. The watchdog used to take the first dt=<day>.json anywhere under the env, so a previous
+# parameter hash or a previous TRACK_FROM_PUSH satisfied it while the DECLARED cohort had nothing —
+# the exact failure it exists to catch, passing because it read the wrong corpus.
+build 3 20
+targets FROZEN "$SB"; publish
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+_live="$(find "$WORK/calibration-runs/prod" -name "dt=$DAY.json" | head -1)"
+[ -n "$_live" ] || bad "case 62 could not produce a progress record to move"
+# Move the whole cohort aside under a DIFFERENT parameter hash: the file is healthy, the cohort is not ours.
+_cohort="$(dirname "$(dirname "$_live")")"
+mv "$_cohort" "$(dirname "$_cohort")/deadbeefdeadbeef"
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch6.log" 2>&1; then
+  bad "the watchdog passed on a record belonging to a cohort we do not declare"
+else
+  grep -q "cohort we do not declare" "$WORK/watch6.log" \
+    && ok "a foreign cohort's healthy record is named as foreign, not accepted as ours" \
+    || bad "it failed for some other reason: $(head -4 "$WORK/watch6.log")"
+fi
+
+echo "63. the reporter and the watchdog cannot disagree about WHERE a cohort lives"
+# They each computed <out_root>/<hash>/<trackFromPush>/progress and their fallbacks differed: the
+# reporter used "unfrozen" for an absent trackFromPush, the watchdog used the empty string. Both envs
+# declare 2099-01-01 today, so they agreed by luck. One function decides now, and this asserts that
+# the path the reporter WRITES is the path the watchdog READS, for a declaration with neither field.
+_d1="$(HERE="$HERE" python3 -c "
+import os,sys; sys.path.insert(0, os.environ['HERE'])
+import oe_corpus_reader as R
+print(R.cohort_progress_dir('/root', None, None))")"
+[ "$_d1" = "/root/calibration/unfrozen/progress" ] \
+  && ok "an undeclared cohort resolves to one agreed directory, not to two different guesses" \
+  || bad "the shared cohort path changed shape: $_d1"
+# And it must be the SAME function both sides call — not a copy that happens to match today.
+_n=$(grep -c 'cohort_progress_dir' "$SRC/oe-calibration-progress.sh" "$SRC/calibration-progress-watch.sh" | grep -c ':0$')
+[ "$_n" -eq 0 ] \
+  && ok "both the reporter and the watchdog call it; neither recomputes the path" \
+  || bad "$_n of the two no longer calls cohort_progress_dir — the duplication is back"
+
+echo "64. an UNFROZEN declaration does not turn the cohort check off"
+# r20. The record-vs-declaration check waived hash equality whenever the declared hash was the literal
+# UNFROZEN — which is what ships, so production ran with this check disabled. A record sitting in the
+# right directory but claiming a different cohort must still be refused.
+build 3 20
+targets FROZEN "$SB"; publish
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+_rec="$(find "$WORK/calibration-runs/prod" -name "dt=$DAY.json" | head -1)"
+[ -n "$_rec" ] || bad "case 64 could not produce a progress record"
+# Declare UNFROZEN, leave the record where the reporter put it, and make the record claim another cohort.
+# The SHIPPING declaration: hash UNFROZEN and a track date still in the future. (A past track date
+# with an unfrozen hash is the half-frozen state case 65 refuses outright, so it cannot be used here.)
+# Two separate calls: BSD sed with -i'' and a continued -e list silently edited nothing here, which
+# left the FROZEN declaration in place and made this case pass against the wrong record.
+sed -i'' -e 's/^OE_CAL_PARAMETER_SET_HASH_prod=.*/OE_CAL_PARAMETER_SET_HASH_prod=UNFROZEN/' "$HERE/calibration-targets.env"
+sed -i'' -e 's/^OE_CAL_TRACK_FROM_PUSH_prod=.*/OE_CAL_TRACK_FROM_PUSH_prod=2099-01-01/' "$HERE/calibration-targets.env"
+grep -q '^OE_CAL_PARAMETER_SET_HASH_prod=UNFROZEN' "$HERE/calibration-targets.env" \
+  && grep -q '^OE_CAL_TRACK_FROM_PUSH_prod=2099-01-01' "$HERE/calibration-targets.env" \
+  || bad "case 64 could not rewrite the declaration — it would have judged the wrong record"
+_newdir="$WORK/calibration-runs/prod/UNFROZEN/2099-01-01/progress"
+mkdir -p "$_newdir"; cp "$_rec" "$_newdir/"
+REC="$_newdir/dt=$DAY.json" python3 -c "
+import json,os
+p=os.environ['REC']; d=json.load(open(p))
+d['cohorts'][0]['parameterSetHash']='0123456789abcdef'
+json.dump(d, open(p,'w'))"
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch7.log" 2>&1; then
+  bad "an UNFROZEN declaration accepted a record claiming another cohort"
+else
+  grep -q "but we declare hash=UNFROZEN" "$WORK/watch7.log" \
+    && ok "UNFROZEN is a declaration to check against, not a reason to stop checking" \
+    || bad "it failed for another reason: $(head -4 "$WORK/watch7.log")"
+fi
+# And a record carrying NO cohort identity is a mismatch, not a pass: a hand-made record is exactly
+# the kind that omits the field rather than getting it wrong (r20).
+REC="$_newdir/dt=$DAY.json" python3 -c "
+import json,os
+p=os.environ['REC']; d=json.load(open(p))
+d['cohorts'][0].pop('parameterSetHash', None)
+json.dump(d, open(p,'w'))"
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch8.log" 2>&1; then
+  bad "a record with no cohort identity at all was accepted"
+else
+  ok "a record that names no cohort does not thereby match every cohort"
+fi
+
+echo "65. a HALF-frozen declaration is refused, not guessed at"
+# Found by probing, not by review. When the hash is UNFROZEN the reporter deliberately does NOT filter
+# to a declared cohort, so once calls qualify it writes under each DISCOVERED hash — while the
+# watchdog computes the cohort path from the declaration and looks under "UNFROZEN". With both
+# literals UNFROZEN (what ships) nothing qualifies and the two agree; the disagreement needs a hash
+# still UNFROZEN while TRACK_FROM_PUSH has already passed, which the design forbids because the
+# literals are frozen together in one commit. Depending on that being obeyed is the same trap as
+# holding one property in two places, so the watchdog refuses the combination outright.
+build 3 20
+targets FROZEN "$SB"
+sed -i'' -e 's/^OE_CAL_PARAMETER_SET_HASH_prod=.*/OE_CAL_PARAMETER_SET_HASH_prod=UNFROZEN/' "$HERE/calibration-targets.env"
+sed -i'' -e 's/^OE_CAL_TRACK_FROM_PUSH_prod=.*/OE_CAL_TRACK_FROM_PUSH_prod=2026-07-01/' "$HERE/calibration-targets.env"
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch9.log" 2>&1; then
+  bad "a half-frozen declaration was accepted, so the cohort path was a guess"
+else
+  grep -q "half-frozen" "$WORK/watch9.log" \
+    && ok "an UNFROZEN hash with a track date already past is refused by name" \
+    || bad "it failed for another reason: $(head -4 "$WORK/watch9.log")"
 fi
 
 echo

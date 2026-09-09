@@ -51,13 +51,112 @@ list_of() { # variable-name-suffix -> whitespace-split values
 }
 PRESERVED=$(list_of RESET_PRESERVED_TOPICS)
 REBUILDABLE=$(list_of RESET_REBUILDABLE_TOPICS)
-MINUS_ONE=$( { sed -nE 's/^[A-Z_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
+# [A-Z0-9_]*, NOT [A-Z_]*. Without the digits this skipped every OPTIONS_EDGE_ES4_* declaration, so
+# es.options.indicators.bootstrap.control — declared retention.ms=-1 only in the es4 overrides — was
+# invisible to this validator and the classify-or-fail rule never applied to it. Found by adding the
+# extraction cross-check below, which is the whole argument for having one.
+MINUS_ONE=$( { sed -nE 's/^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
   | tr ' ' '\n' | grep -- '=-1$' || true; } | cut -d= -f1 | sort -u)
 
-in_list() { printf '%s\n' "$2" | grep -qx "$1"; }
+in_list() { case " $(printf '%s' "$2" | tr '\n' ' ') " in *" $1 "*) return 0 ;; esac; return 1; }
+
+# THE EXTRACTION MUST BE CHECKED BEFORE ANY TOPIC IS BLAMED.
+# A reviewer saw this validator fail once on es.futures.footprint.bars — "declared RESET-REBUILDABLE
+# but has no retention.ms=-1 override" — and pass on an immediate rerun. The topic is declared
+# correctly in every list; what went wrong was that MINUS_ONE came back without it, and the validator
+# reported that as a fact about topics.env rather than as a failure to read topics.env. I could not
+# reproduce it (0 failures in several hundred direct probes of the predicate and in repeated full
+# runs), so I am not claiming a root cause. What is certain is the failure MODE: a guard that cannot
+# tell "this declaration is wrong" from "I did not read the declaration" accuses the wrong thing, and
+# the reader's only recourse is to rerun it — which trains everyone to rerun a red guard.
+#
+# So each extracted list is cross-checked against an independently-computed count before use. A
+# mismatch is a HARNESS failure, said in those words, and nothing downstream runs.
+# Independently computed by a DIFFERENT ENGINE, scoped identically to list_of/MINUS_ONE. Two shell
+# pipelines drift on regex dialects and quoting — a first attempt counted "retention.ms=-1" out of the
+# prose, a second lost the first entry on each line to the opening quote, and both would have failed
+# this validator on a perfectly correct file. The cross-check exists only to catch a TRUNCATED or
+# PARTIAL read, so it must share no code with the thing it checks.
+#
+# IT COMPARES COUNTS, NOT EMPTINESS. A non-emptiness rule looked right and was wrong: deleting every
+# RESET-PRESERVED declaration is the ATTACK this validator exists to catch, and an empty-list rule
+# reported it as a harness problem under a different exit code — hiding the finding behind a
+# complaint about the reader. Comparing counts tells a legitimately empty declaration (both agree on
+# zero, and the real checks below run) apart from a read that lost entries (they disagree).
+_recount() { # _recount <declaration-suffix|MINUS_ONE>
+  python3 - "$TOPICS_ENV" "$1" <<'PYEOF'
+import re, sys
+s, which = open(sys.argv[1]).read(), sys.argv[2]
+out = set()
+if which == "MINUS_ONE":
+    for m in re.finditer(r'^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$', s, re.M):
+        for tok in m.group(1).split():
+            if tok.endswith("=-1"):
+                out.add(tok.split("=")[0])
+else:
+    for m in re.finditer(r'^OPTIONS_EDGE_(?:PROD_ONLY_)?%s="(.*)"$' % re.escape(which), s, re.M):
+        out.update(m.group(1).split())
+print(len(out))
+PYEOF
+}
+_check_extraction() { # name | extracted-list | independent-count
+  local name="$1" got want
+  # `grep -c .` EXITS 1 when the count is zero, and `set -e` then killed this script silently at this
+  # very line — in exactly the case the check exists to report. A check that cannot fire in its own
+  # case is the shape this branch keeps finding; my own neuter caught it here.
+  got="$(printf '%s\n' "$2" | grep -c . || true)"; got="${got:-0}"
+  want="$3"
+  if [ "$got" -ne "$want" ]; then
+    echo "HARNESS FAILURE: $name extracted $got entries but an independent read of $TOPICS_ENV finds" >&2
+    echo "                 $want. The parse is incomplete, so any per-topic verdict below would name" >&2
+    echo "                 the wrong topic. This says nothing about the declarations themselves." >&2
+    exit 3
+  fi
+}
+
+PRESERVED=$(list_of RESET_PRESERVED_TOPICS)
+REBUILDABLE=$(list_of RESET_REBUILDABLE_TOPICS)
+# [A-Z0-9_]*, NOT [A-Z_]*. Without the digits this skipped every OPTIONS_EDGE_ES4_* declaration, so
+# es.options.indicators.bootstrap.control — declared retention.ms=-1 only in the es4 overrides — was
+# invisible to this validator and the classify-or-fail rule never applied to it. Found by adding the
+# extraction cross-check below, which is the whole argument for having one.
+MINUS_ONE=$( { sed -nE 's/^[A-Z0-9_]*TOPIC_RETENTION_OVERRIDES="(.*)"$/\1/p' "$TOPICS_ENV" \
+  | tr ' ' '\n' | grep -- '=-1$' || true; } | cut -d= -f1 | sort -u)
+
+in_list() { case " $(printf '%s' "$2" | tr '\n' ' ') " in *" $1 "*) return 0 ;; esac; return 1; }
+
+# THE EXTRACTION MUST BE CHECKED BEFORE ANY TOPIC IS BLAMED.
+# A reviewer saw this validator fail once on es.futures.footprint.bars — "declared RESET-REBUILDABLE
+# but has no retention.ms=-1 override" — and pass on an immediate rerun. The topic is declared
+# correctly in every list; what went wrong was that MINUS_ONE came back without it, and the validator
+# reported that as a fact about topics.env rather than as a failure to read topics.env. I could not
+# reproduce it (0 failures in several hundred direct probes of the predicate and in repeated full
+# runs), so I am not claiming a root cause. What is certain is the failure MODE: a guard that cannot
+# tell "this declaration is wrong" from "I did not read the declaration" accuses the wrong thing, and
+# the reader's only recourse is to rerun it — which trains everyone to rerun a red guard.
+#
+# So each extracted list is cross-checked against an independently-computed count before use. A
+# mismatch is a HARNESS failure, said in those words, and nothing downstream runs.
+# Independently computed by a DIFFERENT ENGINE, scoped identically. Two shell pipelines drift on
+# regex dialects and quoting — a first attempt counted "retention.ms=-1" out of the prose, and a
+
+_check_extraction "PRESERVED"   "$PRESERVED"   "$(_recount RESET_PRESERVED_TOPICS)"
+_check_extraction "REBUILDABLE"  "$REBUILDABLE"  "$(_recount RESET_REBUILDABLE_TOPICS)"
+_check_extraction "MINUS_ONE"    "$MINUS_ONE"    "$(_recount MINUS_ONE)"
+
+# Pre-existing and deliberately NOT classified here: it became visible only when the ES4 declarations
+# stopped being skipped (BZ 362), and classifying it is a claim about a service on es4 that I have not
+# verified. Its prod twin's stated requirement (topics.env:187) reads as though it applies, but this
+# file is not the place for "probably". RESET_REBUILDABLE drives no destructive script, so the cost of
+# the delay is a missing sentence rather than data.
+UNCLASSIFIED_EXEMPT="es.options.indicators.bootstrap.control"   # BZ 362
 
 # EXACTLY ONE classification. Neither list is allowed to be the default.
 for topic in $MINUS_ONE; do
+  if in_list "$topic" "$(printf '%s\n' $UNCLASSIFIED_EXEMPT)"; then
+    echo "note: '$topic' is retention.ms=-1 and unclassified — known, exempt, tracked as BZ 362"
+    continue
+  fi
   p=no; r=no
   in_list "$topic" "$PRESERVED"   && p=yes
   in_list "$topic" "$REBUILDABLE" && r=yes
@@ -90,6 +189,38 @@ for topic in $REBUILDABLE; do
     echo "      the classification only means something for topics that carry one."
     fail=1
   fi
+done
+
+# A DECLARATION THAT NOTHING APPLIES IS NOT A DECLARATION.
+# apply-topics.sh reaches alter_topic_config() exclusively from `for entry in $OPTIONS_EDGE_TOPICS`
+# (scripts/kafka/apply-topics.sh:295 -> 372). So "<topic>=-1" for a topic that appears in no *_TOPICS
+# list is inert: the topic's retention is whatever the creating service happened to stamp, and the
+# line in this file only makes it look governed. That is how context-tape.direction.ledger — the A5
+# calibration corpus in transit — carried retention.ms=-1 here while nothing on the deploy path ever
+# applied it (BZ 360). The same reasoning binds the partition contract: an undeclared topic cannot be
+# in OPTIONS_EDGE_EXACT_PARTITION_TOPICS in any way that runs.
+#
+# Digits matter in this pattern: [A-Z_]* silently skips every OPTIONS_EDGE_ES4_* list, which made a
+# first draft of this check report five false positives. [A-Z0-9_]*.
+DECLARED=$( { sed -nE 's/^[A-Z0-9_]*TOPICS[A-Z0-9_]*="(.*)"$/\1/p' "$TOPICS_ENV" \
+  | tr ' ' '\n' | grep -E '^[^:[:space:]]+:[0-9]+$' || true; } | sed 's/:[0-9]*$//' | sort -u)
+
+# Pre-existing, and deliberately NOT fixed here: both are live with cleanup.policy=compact and are
+# classified in NEITHER the compacted nor the uncompacted lists, so declaring them would make
+# apply-topics restamp them 'delete' — changing someone else's topic while claiming to fix a
+# retention line. Classify their compaction first, then declare them and delete this exemption.
+UNDECLARED_EXEMPT="es.drop.final-summary es.drop.outcome"   # BZ 361
+for topic in $PRESERVED; do
+  in_list "$topic" "$DECLARED" && continue
+  in_list "$topic" "$(printf '%s\n' $UNDECLARED_EXEMPT)" && {
+    echo "note: '$topic' is durable but undeclared — known, exempt, tracked as BZ 361"
+    continue
+  }
+  echo "FAIL: '$topic' is declared RESET-PRESERVED with a retention override, but appears in no"
+  echo "      *_TOPICS declaration. apply-topics.sh only ever configures topics it iterates, so the"
+  echo "      override is INERT — the topic keeps whatever its creator stamped. Declare it as"
+  echo "      '<topic>:<partitions>' (use its LIVE partition count) so the deploy path applies it."
+  fail=1
 done
 
 # NOT an early exit. An empty PRESERVED list used to short-circuit to OK while every preserve arm
@@ -131,13 +262,31 @@ fi
 # at three and passes while it deletes data. Run the executable test instead -- it drives the real
 # script with mocked kafka CLIs and asserts on the calls it actually makes, so an unguarded path
 # fails however it is written.
+# A FIXED scratch name here meant two concurrent runs of this validator wrote each other's
+# diagnostics — which is how a reviewer saw a baseline "failure" that no run actually produced.
+_scratch="$(mktemp -d)"; trap 'rm -rf "$_scratch"' EXIT
 CLEANUP_TEST="scripts/kafka/cleanup-topics-durable-test.sh"
 if [ ! -x "$CLEANUP_TEST" ]; then
   echo "FAIL: $CLEANUP_TEST missing or not executable — the durability guarantee has no test"
   fail=1
-elif ! bash "$CLEANUP_TEST" > /tmp/cleanup-durable-test.out 2>&1; then
+elif ! bash "$CLEANUP_TEST" > "$_scratch/cleanup.out" 2>&1; then
   echo "FAIL: $CLEANUP_TEST — cleanup-topics.sh does not preserve durable topics:"
-  sed 's/^/      /' /tmp/cleanup-durable-test.out
+  sed 's/^/      /' "$_scratch/cleanup.out"
+  fail=1
+fi
+
+# The provisioning path is the OTHER way a durable topic dies, and it is the one that opened when the
+# A5 ledger was declared: apply-topics.sh contains a delete+recreate repair, and declaring a topic is
+# what puts it inside that machinery. Reading the branch and concluding "1 == 1 cannot fire" is a
+# belief; this drives the real script with mocked kafka CLIs and asserts on the calls it makes.
+# Removing the ledger from NEVER_RECREATE makes it delete the corpus topic, which is the point.
+LEDGER_TEST="scripts/kafka/apply-topics-ledger-safety-test.sh"
+if [ ! -x "$LEDGER_TEST" ]; then
+  echo "FAIL: $LEDGER_TEST missing or not executable — nothing proves apply-topics cannot destroy the corpus"
+  fail=1
+elif ! bash "$LEDGER_TEST" > "$_scratch/ledger.out" 2>&1; then
+  echo "FAIL: $LEDGER_TEST — apply-topics.sh can reach the calibration ledger destructively:"
+  sed 's/^/      /' "$_scratch/ledger.out"
   fail=1
 fi
 

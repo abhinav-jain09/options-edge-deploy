@@ -693,3 +693,18 @@ def is_rth_close(ms, cal):
     h, m = ((EARLY_CLOSE_HOUR, EARLY_CLOSE_MINUTE) if cal.is_early_close(et.date())
             else (RTH_CLOSE_HOUR, RTH_CLOSE_MINUTE))
     return et.hour == h and et.minute == m
+
+
+def cohort_progress_dir(out_root, parameter_set_hash, track_from_push):
+    """The ONE place that says where a cohort's progress records live.
+
+    The reporter wrote this path and the watchdog recomputed it, and their FALLBACKS disagreed: the
+    reporter used "unfrozen" for an absent trackFromPush, the watchdog used the empty string, and the
+    reporter's key fallback could not fire at all because the field is present-and-None rather than
+    absent (os.path.join would raise). Today both environments declare 2099-01-01, so the two agreed
+    by luck. A property held in two places is testable in neither -- the same root cause as every
+    other "a fix relocated rather than removed" finding in this program. One function, both callers.
+    """
+    key = parameter_set_hash or "calibration"
+    tf = (track_from_push or "unfrozen").replace(":", "").replace("/", "")
+    return os.path.join(out_root, key, tf, "progress")

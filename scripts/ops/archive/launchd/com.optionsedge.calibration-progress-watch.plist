@@ -5,9 +5,21 @@
   is down reports nothing AND fails to notice that nothing was reported. This runs on the dev Mac at
   07:00 ET, checking the PREVIOUS trading day, so the two cannot go quiet together.
 
-  Install (a host action, run deliberately, not by a deploy):
-      cp com.optionsedge.calibration-progress-watch.plist ~/Library/LaunchAgents/
-      launchctl load ~/Library/LaunchAgents/com.optionsedge.calibration-progress-watch.plist
+  Install: run scripts/ops/archive/install-dev-mac-watchdog.sh. Do NOT copy files by hand.
+
+  These instructions used to list the copies to make, and they went stale the moment the watchdog
+  gained another file to read: they named the script and oe-alert.sh but not calibration-targets.env
+  or oe_corpus_reader.py, so following them installed a watchdog that refuses to run on its first
+  wake-up (r23 #1). The installer owns that list, installs every file the script reads from beside
+  itself, RUNS it once to prove it starts — RunAtLoad is false, so loading the agent proves nothing —
+  and fails unless exactly one agent registers.
+
+      bash scripts/ops/archive/install-dev-mac-watchdog.sh
+
+  Pass the dry-run flag first to see what it would write without writing it. (A literal double dash
+  cannot appear inside an XML comment, which is why the flag is spelled out rather than shown.)
+
+  scripts/ci/validate-dev-mac-watchdog.sh checks that this file and that installer still agree.
 -->
 <plist version="1.0">
 <dict>
@@ -21,7 +33,14 @@
   <dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     <key>ENV</key><string>prod</string>
-    <key>ARCHIVE_DIR</key><string>/Volumes/database/optionsedge</string>
+    <!--
+      ARCHIVE_DIR is deliberately NOT set here. It used to say /Volumes/database/optionsedge, which is
+      not where the NAS is mounted on this Mac (//192.168.100.100/database is on $HOME/nas-db), so this
+      agent would have alerted MISSING every trading day forever and been ignored within a week
+      (BZ 360). The script resolves the root from ARCHIVE_ROOT_CANDIDATES instead, and if it finds
+      none it says "this is a MOUNT problem here" rather than blaming the reporter on .252.
+      Set it here only to override that on a host where the candidates are wrong.
+    -->
   </dict>
   <key>StartCalendarInterval</key>
   <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>

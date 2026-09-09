@@ -28,6 +28,10 @@ fail=0
 reset_copy() {
   cp "$SRC/scripts/kafka/topics.env" "$TOPICS"
   cp "$SRC/scripts/ops/offhours-clean-slate.sh" "$CLEANSLATE"
+  # The VALIDATOR too. Every mutation until now edited only the declarations, so this was never
+  # noticed — but a mutation that edits the validator would otherwise leak into every case after it,
+  # and those cases would report on a script nobody wrote.
+  cp "$SRC/scripts/ci/validate-durable-topic-preservation.sh" "$VALIDATOR"
 }
 
 expect() { # description | want-status | expected-substring
@@ -63,6 +67,26 @@ expect "preserved without retention=-1" 1 "has no retention.ms=-1 override"
 
 sed -i.bak 's/^OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS="/OPTIONS_EDGE_RESET_REBUILDABLE_TOPICS="never.declared.anywhere /' "$TOPICS"
 expect "rebuildable entry without retention=-1" 1 "no retention.ms=-1 override"
+
+# BZ 362: the -1 extraction used [A-Z_]* and so skipped every OPTIONS_EDGE_ES4_* declaration. The
+# guard reported OK while not looking at part of what it guards, and the only way to see that from
+# outside was the count cross-check. Narrow it back and the cross-check must catch it.
+# ONLY the shell extraction. A first attempt rewrote every occurrence, including the one inside the
+# python cross-check — so both narrowed together, agreed with each other, and the mutation SURVIVED
+# while looking like it had been applied. A mutation that changes both sides of a comparison tests
+# nothing.
+sed -i.bak '/MINUS_ONE=\$( { sed -nE/s/\^\[A-Z0-9_\]\*TOPIC_RETENTION_OVERRIDES/^[A-Z_]*TOPIC_RETENTION_OVERRIDES/' "$VALIDATOR"
+grep -q "sed -nE 's/\^\[A-Z_\]\*TOPIC_RETENTION_OVERRIDES" "$VALIDATOR" \
+  || { echo "  FAIL ES4 mutation did not apply — the case below would pass vacuously"; fail=1; }
+expect "ES4 retention declarations skipped" 3 "independent read"
+
+# And the cross-check must compare COUNTS, not emptiness. An emptiness rule turned the mutation above
+# ("ALL preserved declarations deleted") into a harness complaint under a different exit code, hiding
+# a real finding behind a complaint about the reader.
+sed -i.bak 's/if \[ "\$got" -ne "\$want" \]; then/if [ "$got" -eq 0 ] || [ "$got" -ne "$want" ]; then/' "$VALIDATOR"
+sed -i.bak 's/^OPTIONS_EDGE_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
+sed -i.bak 's/^OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=.*/OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS=""/' "$TOPICS"
+expect "emptiness instead of counts hides a real finding" 3 "independent read"
 
 # The bypasses Codex actually performed: delete the LIVE call but leave the function and its
 # comment block; and delete the fail-closed exit while leaving its diagnostic text. Both kept CI

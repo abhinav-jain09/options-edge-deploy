@@ -33,8 +33,21 @@ sourced="$(grep -hoE '[A-Za-z0-9._-]+\.(sh|py|env)' "$DIR"/*.sh 2>/dev/null \
 #   oe-ops.env                    host-only, holds credentials; must never be in the repo
 #   calibration-progress-watch.sh runs on the DEV MAC by design (A5.7: a different host and a different
 #                                 schedule from the reporter), so it is deliberately not installed on
-#                                 .252 — a watchdog sharing its subject's host shares its failures
-EXEMPT="oe-ops.env calibration-progress-watch.sh"
+#                                 .252 — a watchdog sharing its subject's host shares its failures.
+#                                 An exemption here is now an OBLIGATION elsewhere: this name was
+#                                 excused by a true reason and then checked by nothing, which is how
+#                                 the watchdog reached "in git and installed nowhere" (r19 #2). Its
+#                                 install path, plist and sourced files are asserted by
+#                                 scripts/ci/validate-dev-mac-watchdog.sh, and the deploy job runs it.
+#   install-dev-mac-watchdog.sh   the installer for the above, and equally a dev-Mac host action
+#   install-dev-mac-watchdog-test.sh  its test; runs in CI, never on .252
+EXEMPT="oe-ops.env calibration-progress-watch.sh install-dev-mac-watchdog.sh install-dev-mac-watchdog-test.sh"
+
+# An exemption that no other guard picks up is a hole with a comment on it. Assert the successor
+# exists, here, where the excuse is made.
+for _guard in scripts/ci/validate-dev-mac-watchdog.sh; do
+  [ -f "$_guard" ] || { echo "MISSING GUARD: $_guard — calibration-progress-watch.sh is exempted here on the promise that $_guard checks it" >&2; exit 1; }
+done
 
 for f in $wanted $sourced; do
   case " $EXEMPT " in *" $f "*) continue ;; esac

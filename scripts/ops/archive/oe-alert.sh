@@ -18,8 +18,12 @@
 #               is the caller's to act on; a broken webhook must not also suppress the caller's own
 #               non-zero exit.
 #
-# The log lines are part of the contract too — test-alert-delivery.sh matches them with grep -F.
+# The log lines are part of the contract too — they are matched with grep -F by callers' tests.
 # Do not reword "(alert delivered to Discord, HTTP N)" or "ALERT DELIVERY FAILED — curl rc=N http=N;".
+# NOTE: this header used to name test-alert-delivery.sh as the thing that asserts the contract. No
+# such file has ever existed in this repository (`git log --all -- **/test-alert-delivery.sh` is
+# empty), so the sentence claiming the contract was asserted was itself unasserted. Cases 60-61 of
+# push-validation-artifact-test.sh now bind the no-webhook path through a real caller.
 
 # Callers define their own log() that tees to their own logfile. Use it when present so alert
 # output lands in the same file as the condition it describes; fall back to stdout when not.
@@ -49,6 +53,12 @@ oe_load_webhook() {
 }
 
 alert() {
+  # THE MESSAGE IS LOGGED FIRST, ALWAYS. Every delivery note below says "the condition below still
+  # stands" or "log only", and none of them ever logged the condition: on a host with no webhook an
+  # alert became a content-free line saying an unnamed something was not delivered. Found while
+  # installing the A5.7 watchdog, whose alerts would all have arrived that way (BZ 360 #3). The
+  # delivery notes keep their exact wording — they are matched with grep -F elsewhere.
+  _oe_alert_log "ALERT: $1"
   oe_load_webhook
   if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
     _oe_alert_log "  (no DISCORD_WEBHOOK_URL in /etc/oe-ops.env — alert NOT delivered, log only)"
