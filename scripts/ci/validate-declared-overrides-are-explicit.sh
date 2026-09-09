@@ -37,7 +37,16 @@ case "${TOPIC_SET:-}" in
     *) echo "Unknown TOPIC_SET '${TOPIC_SET}' (expected empty for dev/prod, or 'es4')" >&2; exit 2 ;;
 esac
 
-command -v kafka-configs >/dev/null 2>&1 || { echo "SKIP: kafka-configs is not on PATH"; exit 0; }
+# A missing CLI is not an unreachable broker. This exited 0 with a SKIP, which meant that anywhere
+# the Kafka tools were not on PATH — a changed confluent install path, a shim directory that did not
+# make it onto an agent — the deploy shipped without this assertion running and said only that it
+# had skipped. Tool absence is the caller's problem to fix, and the guard's job is to say so.
+for cli in kafka-topics kafka-configs timeout; do
+    command -v "$cli" >/dev/null 2>&1 || {
+        echo "CANNOT READ: $cli is not on PATH, so the declared retention overrides were not checked" >&2
+        exit 1
+    }
+done
 
 # Only a CONNECTION failure licenses the skip. The first version treated every non-zero exit as
 # unreachability, which is the widest possible fail-open: a missing Describe ACL, a bad JAAS config,

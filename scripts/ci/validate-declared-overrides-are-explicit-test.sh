@@ -64,6 +64,31 @@ printf 'es.futures.footprint.outcomes=-1\n'                              > "$WOR
 printf 'es.futures.footprint.bars=43200000\nes.futures.footprint.outcomes=-1\n' > "$WORK/drift"
 printf ''                                                                > "$WORK/none"
 
+# A missing CLI must FAIL, not skip: a deploy that shipped without this assertion running must not
+# read as one that ran it. Checked before the baseline, because a PATH without the tools is the state
+# every other case here is built on top of.
+# Hiding the stub is not enough on a laptop that has a REAL kafka-topics installed: `command -v`
+# would find that one and the case would test nothing. Strip every directory holding one first.
+# `command -v -a` is not in bash 3.2, which is what macOS ships, so walk PATH itself.
+BARE_PATH=""
+while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ "$d" = "$WORK/bin" ] && continue
+    [ -x "$d/kafka-topics" ] || [ -x "$d/kafka-configs" ] && continue
+    BARE_PATH="${BARE_PATH:+$BARE_PATH:}$d"
+done <<< "$(printf '%s' "$PATH" | tr ':' '\n')"
+for missing in kafka-topics kafka-configs; do
+    mv "$WORK/bin/$missing" "$WORK/$missing.hidden"
+    rc=0
+    out=$(PATH="$WORK/bin:$BARE_PATH" FIXTURE="$WORK/ok" EXISTS="$WORK/exists" bash "$GUARD" fake:9092 2>&1) || rc=$?
+    mv "$WORK/$missing.hidden" "$WORK/bin/$missing"
+    [ "$rc" = "1" ] || { printf 'a missing %s must FAIL the guard (exited %s)\n' "$missing" "$rc" >&2
+                         printf '%s\n' "$out" | sed 's/^/    | /' >&2; exit 1; }
+    printf '%s' "$out" | grep -qF "CANNOT READ: $missing is not on PATH" \
+        || { printf 'and must name it: %s\n' "$out" >&2; exit 1; }
+done
+printf '  killed: %s\n' "a missing Kafka CLI fails the guard instead of skipping"
+
 echo "baseline"
 expect 0 "every declared retention override is set on the topic itself" "both overrides set as declared" "$WORK/ok"
 echo "mutations"
