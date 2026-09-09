@@ -18,12 +18,20 @@ data:
   # record is published under a FIXED key and another feed's rejection would retract the real one.
   # It costs one extra parent query per resolve, which is why it is not on by default.
   #
-  # This configmap is SHARED by dev and prod, so this turns it on in BOTH — checked before setting it:
-  # dev and prod both run OPRA.PILLAR / SPX / SPXW, so neither is refused by that validation (a feed it
-  # does refuse does not degrade, it declines to START, which is why this was verified against the live
-  # configmaps rather than assumed). Dev therefore also pays the extra parent query per resolve. That is
-  # deliberate: only the prod record is mirrored to es4 and read by the desk, but dev publishing the same
-  # record is what makes the dev desk testable without a second switch to forget.
+  # SHARED BY THREE ENVIRONMENTS, not two — dev, production AND experiment, which patches this same
+  # configmap and runs its own feed. I first wrote "dev and prod" here and that was wrong; review
+  # caught it. All three render OPRA.PILLAR / SPX / SPXW, so none is refused by that validation — and
+  # that mattered enough to verify against the live configmaps rather than assume, because a feed the
+  # validation refuses does not degrade, it declines to START.
+  #
+  # So all three pay the extra parent query per resolve and all three publish. Only the PRODUCTION
+  # record is mirrored to es4 and read by the desk; dev and experiment publishing the same record is
+  # what makes their own desks testable without a second switch to forget.
+  #
+  # THE FLAG ALONE DOES NOT TAKE EFFECT. `envFrom` is captured at pod creation, so applying this
+  # configmap changes nothing until the feed pod is restarted — in BOTH directions. Turning it back
+  # to "false" does not stop publication either; that needs the same restart. The rollout procedure
+  # is therefore: apply, then roll the feed, then verify a record on the topic (or its absence).
   DATABENTO_DEFINITION_ENUMERATION_ENABLED: "true"
   # Align the SPX 0DTE roll to the ES roll (17:30 ET) instead of midnight, so the SPX chain
   # flips to the next expiry when es4 does and the mapped ES gamma shows immediately (not until 00:00 ET).
