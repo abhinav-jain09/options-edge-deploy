@@ -108,9 +108,10 @@ for t in es.futures.footprint.bars es.futures.footprint.outcomes; do
 done
 printf '  killed: %s\n' "every topic inheriting the default (both named)"
 
-# A CONNECTION failure must not read as inheritance: the guard skips, it does not report a finding.
-# The fake speaks the way an unreachable broker actually speaks, because that message is now what
-# licenses the skip.
+# An unreachable broker FAILS on a deploy path, and skips only when the caller says explicitly that
+# this is not a deploy. Every caller of this guard is a deploy — the dev/prod Jenkinsfile stage and
+# scripts/es4/create-es-topics.sh — and on that path being unable to reach the broker is being
+# unable to check anything, not a reason to proceed.
 cat > "$WORK/bin/kafka-topics" <<'DEAD'
 #!/usr/bin/env bash
 echo "Connection to node -1 (fake/1.2.3.4:9092) could not be established." >&2
@@ -118,9 +119,15 @@ exit 1
 DEAD
 chmod +x "$WORK/bin/kafka-topics"
 got=$(run "$WORK/ok")
-[ "$got" = "0" ] || { printf 'an unreachable broker must SKIP, not fail (exited %s)\n' "$got" >&2; exit 1; }
-grep -q "SKIP:" "$WORK/out" || { printf 'an unreachable broker must say it skipped\n' >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
-printf '  killed: %s\n' "an unreachable broker skips rather than reporting inheritance"
+[ "$got" = "1" ] || { printf 'an unreachable broker must FAIL a deploy (exited %s)\n' "$got" >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+grep -q "CANNOT READ" "$WORK/out" || { printf 'and must say it could not read\n' >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+grep -q "DECLARED BUT NOT SET" "$WORK/out" && { printf 'and must NOT report inheritance it never observed\n' >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+printf '  killed: %s\n' "an unreachable broker fails the deploy rather than reporting inheritance"
+
+got=$(ALLOW_UNREACHABLE_BROKER=true run "$WORK/ok")
+[ "$got" = "0" ] || { printf 'ALLOW_UNREACHABLE_BROKER=true must restore the skip (exited %s)\n' "$got" >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+grep -q "SKIP:" "$WORK/out" || { printf 'and must say it skipped\n' >&2; sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+printf '  killed: %s\n' "the skip exists only for a caller that says it is not a deploy"
 
 # Each way a broker is genuinely out of reach must still take the skip. A routing failure is the
 # one that was missing: it matched nothing in the allowlist and so failed a deploy for a network
@@ -132,13 +139,13 @@ for msg in "java.net.NoRouteToHostException: No route to host" \
            "org.apache.kafka.common.errors.TimeoutException: Timed out waiting for a node assignment."; do
     printf '#!/usr/bin/env bash\necho "%s" >&2\nexit 1\n' "$msg" > "$WORK/bin/kafka-topics"
     chmod +x "$WORK/bin/kafka-topics"
-    got=$(run "$WORK/ok")
-    [ "$got" = "0" ] || { printf 'an unreachable broker must SKIP: %s (exited %s)\n' "$msg" "$got" >&2
+    got=$(ALLOW_UNREACHABLE_BROKER=true run "$WORK/ok")
+    [ "$got" = "0" ] || { printf 'an unreachable broker must be RECOGNISED as unreachable: %s (exited %s)\n' "$msg" "$got" >&2
                           sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
-    grep -q "SKIP:" "$WORK/out" || { printf 'and must say it skipped: %s\n' "$msg" >&2
+    grep -q "SKIP:" "$WORK/out" || { printf 'and must say so: %s\n' "$msg" >&2
                                      sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
 done
-printf '  killed: %s\n' "every shape of an out-of-reach broker takes the skip, routing failures included"
+printf '  killed: %s\n' "every shape of an out-of-reach broker is recognised, routing failures included"
 
 # ...but a failure that is NOT a connection failure must FAIL. Treating every non-zero exit as
 # unreachability is the widest fail-open there is: a missing Describe ACL, a broken shim, or a CLI
@@ -166,8 +173,8 @@ org.apache.kafka.common.errors.TimeoutException: Timed out waiting for a node as
 org.apache.kafka.common.errors.TimeoutException: Timed out waiting for a node assignment."; do
     printf '#!/usr/bin/env bash\ncat >&2 <<EOM\n%s\nEOM\nexit 1\n' "$msg" > "$WORK/bin/kafka-topics"
     chmod +x "$WORK/bin/kafka-topics"
-    got=$(run "$WORK/ok")
-    [ "$got" = "1" ] || { printf 'a non-connection probe failure must FAIL, not skip: %s (exited %s)\n' "$msg" "$got" >&2
+    got=$(ALLOW_UNREACHABLE_BROKER=true run "$WORK/ok")
+    [ "$got" = "1" ] || { printf 'a non-connection probe failure must FAIL even with the opt-in: %s (exited %s)\n' "$msg" "$got" >&2
                           sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
     grep -q "CANNOT READ" "$WORK/out" || { printf 'and must say it could not read: %s\n' "$msg" >&2
                                            sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
@@ -241,7 +248,9 @@ got=$(run "$WORK/ok")
 grep -q "CANNOT READ" "$WORK/out" || { printf 'and must say it could not read: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
 printf '  killed: %s\n' "a failing describe is reported, not read as absence"
 
-# a topic the cluster genuinely does not have is skipped, quietly
+# A declared topic that apply-topics.sh WOULD have created here and is not on the broker is the
+# SKIP_KAFKA_TOPICS case: the stage did not run, and a producer will auto-create it on the broker
+# default. It fails; it is not "another guard's business".
 cat > "$WORK/bin/kafka-configs" <<'FAKE2'
 #!/usr/bin/env bash
 topic=""
@@ -254,9 +263,41 @@ FAKE2
 chmod +x "$WORK/bin/kafka-configs"
 : > "$WORK/none-exist"
 got=$(EXISTS_OVERRIDE="$WORK/none-exist" run "$WORK/ok")
-[ "$got" = "0" ] || { printf 'a genuinely absent topic must be skipped (exited %s)\n' "$got" >&2; exit 1; }
-grep -q "SKIP:" "$WORK/out" || { printf 'and must say it skipped: %s\n' "$(cat "$WORK/out")" >&2; exit 1; }
-printf '  killed: %s\n' "a genuinely absent topic is skipped, and says so"
+[ "$got" = "1" ] || { printf 'an absent topic that this environment creates must FAIL (exited %s)\n' "$got" >&2
+                      sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+for t in es.futures.footprint.bars es.futures.footprint.outcomes; do
+    grep -qF "DECLARED BUT ABSENT: $t" "$WORK/out" \
+        || { printf 'and must name it — %s was not reported\n' "$t" >&2
+             sed 's/^/    | /' "$WORK/out" >&2; exit 1; }
+done
+printf '  killed: %s\n' "a declared topic this environment creates, absent, fails instead of skipping"
+
+# ...but an override on a topic NOTHING here creates may legitimately be absent: eight dev/prod
+# override entries name topics that are mirrored in or created by another path, and failing on those
+# would break every dev and prod deploy. The name is read from the declaration itself, so this case
+# cannot drift into testing a topic that is in fact created here.
+ORPHAN=$(python3 - <<'ORPHAN_PY'
+import re
+env = open('scripts/kafka/topics.env').read()
+def var(n):
+    out = []
+    for m in re.finditer(rf'^{n}="([^"]*)"$', env, re.M):
+        out += m.group(1).split()
+    return [v for v in out if not v.startswith('$')]
+over = {e.split('=')[0] for e in var('OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES')}
+made = {e.rsplit(':', 1)[0] for e in var('OPTIONS_EDGE_TOPICS')}
+print(sorted(over - made)[0] if over - made else '')
+ORPHAN_PY
+)
+[ -n "$ORPHAN" ] || { echo "no override names a topic this environment does not create — case cannot run" >&2; exit 1; }
+: > "$WORK/none-exist"
+rc=0
+out=$(FIXTURE="$WORK/ok" EXISTS="$WORK/none-exist" bash "$GUARD" fake:9092 "$ORPHAN" 2>&1) || rc=$?
+[ "$rc" = "0" ] || { printf 'an override on a topic nothing here creates must skip when absent: %s (exited %s)\n' "$ORPHAN" "$rc" >&2
+                     printf '%s\n' "$out" | sed 's/^/    | /' >&2; exit 1; }
+printf '%s' "$out" | grep -q "DECLARED BUT ABSENT" \
+    && { printf 'and must not report it: %s\n' "$out" >&2; exit 1; }
+printf '  killed: %s\n' "an override on a topic this environment does not create is not a finding when absent"
 
 # A per-topic `--list` failure is not absence either, and — the reason the ordering matters — when
 # EVERY per-topic list fails, `checked` never leaves 0. The end-of-run skip used to be tested before

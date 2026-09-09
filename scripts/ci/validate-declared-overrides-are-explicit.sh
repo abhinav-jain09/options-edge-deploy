@@ -91,8 +91,18 @@ if [ "$probe_rc" -ne 0 ]; then
     fi
     if [ "$probe_rc" -eq 124 ] || printf '%s' "$probe" | grep -qE \
         'Connection to node|Connection refused|Connection timed out|Timed out waiting|TimeoutException|Failed to update metadata|UnknownHost|No resolvable bootstrap|could not be established|Network is unreachable|No route to host|NoRouteToHost|Host is down|SocketTimeout'; then
-        printf 'SKIP: %s is not reachable from here (%s)\n' "$BOOTSTRAP" "$(printf '%s' "$probe" | head -1)"
-        exit 0
+        # Every caller of this guard is a DEPLOY: the dev/prod Jenkinsfile stage and
+        # scripts/es4/create-es-topics.sh. On that path an unreachable broker is not a reason to
+        # proceed — it is the guard being unable to check anything at all, and the deploy then ships
+        # whatever retention state is really there. The skip is now an explicit opt-in for running
+        # this by hand somewhere without a broker; no deploy path sets it, so no deploy takes it.
+        if [ "${ALLOW_UNREACHABLE_BROKER:-}" = "true" ]; then
+            printf 'SKIP: %s is not reachable from here (%s)\n' "$BOOTSTRAP" "$(printf '%s' "$probe" | head -1)"
+            exit 0
+        fi
+        printf 'CANNOT READ: %s is not reachable, so the declared retention overrides were not checked (%s). Set ALLOW_UNREACHABLE_BROKER=true only where this is NOT a deploy.\n' \
+            "$BOOTSTRAP" "$(printf '%s' "$probe" | head -1)" >&2
+        exit 1
     fi
     printf 'CANNOT READ: kafka-topics --list failed on %s and the failure is not a connection failure (exit %s: %s)\n' \
         "$BOOTSTRAP" "$probe_rc" "$(printf '%s' "$probe" | head -1)" >&2
@@ -116,6 +126,28 @@ fi
 # dev/prod broker for the es4 list, would be a finding the deploy never intended.
 declared() {
     printf '%s\n' $OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES | tr ' ' '\n' | sed -n 's/^\([^=]*\)=.*/\1/p'
+}
+
+# ...and the topic list apply-topics.sh would CREATE for this same scope. The two are not the same
+# set: on dev and prod, eight override entries name topics that are not in the creation list at all
+# (they are mirrored in, or created by another path), and those may legitimately be absent here.
+# For a topic that IS in the creation list, absence is a finding rather than a skip — apply-topics
+# creates every topic it declares, so a missing one means that stage did not run, which is exactly
+# the SKIP_KAFKA_TOPICS case this guard exists to catch. Treating it as "not this guard's business"
+# let a deploy proceed to the point where a producer auto-creates the topic on broker defaults.
+if [ "${TOPIC_SET:-}" = "es4" ]; then
+    CREATED="${OPTIONS_EDGE_ES4_TOPICS:-}"
+elif [ "${ENVIRONMENT:-}" = "production" ]; then
+    CREATED="${OPTIONS_EDGE_TOPICS:-} ${OPTIONS_EDGE_PROD_ONLY_TOPICS:-}"
+else
+    CREATED="${OPTIONS_EDGE_TOPICS:-}"
+fi
+would_be_created() {
+    local entry
+    for entry in $CREATED; do
+        [ "${entry%%:*}" = "$1" ] && return 0
+    done
+    return 1
 }
 
 # Topic names contain dots, and a name interpolated into a regex makes `.` match any character —
@@ -149,7 +181,14 @@ for topic in $(declared); do
         failed=1
         continue
     }
-    printf '%s\n' "$listing" | grep -qx "$topic" || continue   # genuinely absent here
+    if ! printf '%s\n' "$listing" | grep -qx "$topic"; then
+        if would_be_created "$topic"; then
+            printf 'DECLARED BUT ABSENT: %s does not exist on %s, and apply-topics.sh declares it here — that stage did not run, and a producer will auto-create it on the broker default (declaration says %s)\n' \
+                "$topic" "$BOOTSTRAP" "$(want_of "$topic")" >&2
+            failed=1
+        fi
+        continue    # absent and not created here: another path owns it
+    fi
     checked=$((checked + 1))
     want=$(want_of "$topic")
     # `|| true`: a topic with NO override is precisely the case this guard exists to report, and
