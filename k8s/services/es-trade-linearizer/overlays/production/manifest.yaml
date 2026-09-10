@@ -65,6 +65,12 @@ spec:
               value: underlying.es.trades.linearized
             - name: ES_LINEARIZER_OUTPUT_ENABLED
               value: "false"
+            - name: ES_LINEARIZER_LATE_POLICY
+              value: APPEND
+            - name: ES_LINEARIZER_GRACE_MS
+              value: "5000"
+            - name: ES_LINEARIZER_FRESH_START_LOOKBACK_HOURS
+              value: "24"
             - name: ES_LINEARIZER_TRANSACTIONAL_ID
               value: es-trade-linearizer-0
             - name: JAVA_TOOL_OPTIONS
