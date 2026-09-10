@@ -55,8 +55,14 @@ spec:
               value: 192.168.100.252:9092
             # TOPIC_PREFIX is "" on prod, so these resolve unprefixed. The prod tape carries a real
             # GLBX aggressor side on 100% of prints (measured 2026-08-18, n=5,552).
+            # The slope refuses a multi-partition source (DEGRADED_SLOPE:SOURCE_TOPOLOGY_MULTI_PARTITION_32
+            # since underlying.es.trades went to 32 partitions): its fixed-volume bars depend on the
+            # order prints are folded in. It reads es-trade-linearizer's one-partition tape, which
+            # republishes underlying.es.trades byte-for-byte in a durable total order. The dedup key's
+            # partition becomes a constant there, and that collapses nothing: on the NAS archive
+            # dt=2026-09-09 no dedup tuple appears on two source partitions (0 of 878,078 prints).
             - name: KAFKA_ES_TRADES_TOPIC
-              value: underlying.es.trades
+              value: underlying.es.trades.linearized
             - name: ES_AGGRESSOR_SYMBOL
               value: ES.v.0
             # --- the legacy absorption snapshot is DELIBERATELY OFF here ------------------------

@@ -63,7 +63,7 @@ spec:
             - name: ES_AGGRESSOR_BOOTSTRAP_SERVERS
               value: 192.168.100.252:9092
             - name: KAFKA_ES_TRADES_TOPIC
-              value: underlying.es.trades
+              value: underlying.es.trades.linearized
             - name: ES_AGGRESSOR_SYMBOL
               value: ES.v.0
             - name: ES_AGGRESSOR_LEGACY_OUTPUT_ENABLED

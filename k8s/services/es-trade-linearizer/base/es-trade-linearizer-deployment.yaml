@@ -8,12 +8,15 @@ metadata:
     app.kubernetes.io/component: es-trade-linearizer-service
     app.kubernetes.io/part-of: options-edge
 spec:
-  # SHIPS DARK: ES_LINEARIZER_OUTPUT_ENABLED=false below. The ordering path runs and is fully
-  # measurable, but nothing is published and no offset is committed. Enablement is gated on the
-  # evidence listed in es-trade-linearizer-service/ES-TRADE-LINEARIZER.md (five sessions of
-  # lateness, a 2,600 rec/s capacity benchmark, broker-failover, crash-window and fencing
-  # evidence, and a canary). Turning the flag on without that evidence repeats exactly what the
-  # slope's own Gate-2 recorded being skipped.
+  # PUBLISHES: ES_LINEARIZER_OUTPUT_ENABLED=true below, under ES_LINEARIZER_LATE_POLICY=APPEND.
+  # The gate listed in es-trade-linearizer-service/ES-TRADE-LINEARIZER.md, and what met it:
+  #   lateness  NAS archive dt=2026-09-09 (878,078 prints, 2026-09-06 22:00Z..09-10 09:40Z) through
+  #             the real engine — HALT@2s dies after 122,275 prints; APPEND@5s appends 242 (0.028%),
+  #             publishes every print exactly once, p50 publish delay 5.3 s. Not five sessions.
+  #   capacity  ~280k prints/s single-threaded offline, including gunzip and JSON parse.
+  #   canary    this exact configuration ran dark on prod before this flag changed.
+  #   NOT RUN   broker-failover, crash-window and fencing drills.
+  # Turning publication off again is this one flag; the tape and its consumer offsets stay valid.
   #
   # NEVER above 1. That is correctness, not sizing: the linearizer is a single transactional
   # writer of one totally-ordered tape. Two replicas would both publish onto partition 0 and the
@@ -57,9 +60,9 @@ spec:
               value: underlying.es.trades
             - name: KAFKA_ES_TRADES_LINEARIZED_TOPIC
               value: underlying.es.trades.linearized
-            # DARK. See the header. This is the single line that enables publication.
+            # PUBLISHING. See the header. This is the single line that turns publication off again.
             - name: ES_LINEARIZER_OUTPUT_ENABLED
-              value: "false"
+              value: "true"
             # A print that arrives after the order around it was decided is PUBLISHED WHERE IT
             # ARRIVED (and counted), not a session-ending halt. Measured on the NAS archive
             # dt=2026-09-09 (878,078 prints, 09-06 22:00Z..09-10 09:40Z) through the real engine:
