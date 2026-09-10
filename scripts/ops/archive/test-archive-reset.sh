@@ -97,7 +97,9 @@ avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
 [ "$avail" -gt "$maxm" ] && avail="$maxm"
 i=0
 while [ "$i" -lt "$avail" ]; do
-  echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
+  # print.offset=true is now unconditional (THE PROVED BOUNDARY): the offset is the record's own,
+  # counted from the requested start, exactly as the real console consumer prints it.
+  echo -e "CreateTime:1786000000000\tPartition:$part\tOffset:$(( off + i ))\tk$i\t{\"schemaVersion\":1}"
   i=$(( i + 1 ))
 done
 SH
@@ -345,7 +347,9 @@ avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
 [ "$avail" -gt "$maxm" ] && avail="$maxm"
 i=0
 while [ "$i" -lt "$avail" ]; do
-  echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
+  # print.offset=true is now unconditional (THE PROVED BOUNDARY): the offset is the record's own,
+  # counted from the requested start, exactly as the real console consumer prints it.
+  echo -e "CreateTime:1786000000000\tPartition:$part\tOffset:$(( off + i ))\tk$i\t{\"schemaVersion\":1}"
   i=$(( i + 1 ))
 done
 SH
@@ -398,13 +402,15 @@ es4_entry=$(grep '^1 17 \* \* 1-5 .*ENV=es4' "$crontab_file")
 hasnt "the es4 entry carries NO TOPICS override (the policy file is the one definition)" \
       "TOPICS=" "$es4_entry"
 
-# ================= 12. TRANSACTIONAL topics checkpoint only what they PROVED they captured ======
-# (deploy Codex round 2, finding 1 — es.futures.footprint.strike, es.futures.cvd.levels, OPB outputs.)
-# kafka-get-offsets reports the HIGH-WATER MARK; a read_committed reader stops at the last STABLE
-# offset, commit/abort markers occupy offsets that never surface as records, and aborted records
-# are withheld. Checkpointing the high-water mark would skip whatever commits after the capture.
-# The shim below models exactly that: the fixture's `visible <part> <ranges>` line lists the
-# offsets a read_committed reader can see NOW; the high-water mark stays in the partition line.
+# ================= 12. EVERY topic checkpoints only the boundary it PROVED it captured ==========
+# (deploy Codex round 2 finding 1, round 3 findings 1 and 2.) kafka-get-offsets reports the
+# HIGH-WATER MARK; a read_committed reader stops at the last STABLE offset, commit/abort markers
+# occupy offsets that never surface as records, and aborted records are withheld. Checkpointing the
+# high-water mark would skip whatever commits after the capture — so the checkpoint is the greatest
+# offset actually captured plus one, for EVERY topic, with no inventory to keep complete (round 3
+# found dealer-ledger, corridor-gauge, unified-sr and es.futures.auction missing from the round-2
+# list). The shim below models the broker exactly: the fixture's `visible <part> <ranges>` line is
+# what a read_committed reader can see NOW; the high-water mark stays in the partition line.
 A="$T/tx"; mkdir -p "$A/kafka/prod/_manifest"
 TXENV="$T/topics-tx.env"; { cat "$OE/oe-topics.env"; echo 'OE_TRANSACTIONAL_TOPICS_prod="oe.test.reset"'; } > "$TXENV"
 cat > "$BIN/kafka-console-consumer.sh" <<'SH'
@@ -474,7 +480,32 @@ fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 1212" "1 0 0" "visible 0 0-4,5-119
 OUT=$(run OE_TOPICS_ENV="$TXENV"); RC=$?
 want "  marker-only range: checkpoint NOT advanced"   1210 "$(ck 0)"
 has  "  and it is reported, not assumed complete"  "checkpoint NOT advanced" "$OUT"
-# (f) the NON-transactional path is untouched: same shim shape, topic not declared transactional
+want "  and the RUN says it failed rather than claiming completion" 1 "$([ "$RC" -ne 0 ]; echo $((1-$?)))"
+# (f) records COMMITTED DURING the capture (round 3, finding 2): the reader's --max-messages budget is
+# reachable past this run's boundary, so it returns offsets beyond it. The valid prefix in front of them
+# must survive — discarding it let an active producer stall the archive run after run.
+A="$T/tx2"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 6" "1 0 0" "visible 0 0-4,6-6"
+OUT=$(run OE_TOPICS_ENV="$TXENV"); RC=$?
+want "tx: a write during the capture does not discard the capture (rc)" 0 "$RC"
+want "  the five in-range records are archived"          5 "$(runs records)"
+want "  the checkpoint is the proved in-range boundary"  5 "$(ck 0)"
+has  "  and the late record is named, not silently kept" "arrived after this run's boundary" "$OUT"
+want "  manifest offset_to is the same boundary"         5 "$(mfield 0 offset_to)"
+# ...and the next run reads exactly what was deferred, so nothing is skipped and nothing is duplicated
+fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 7" "1 0 0" "visible 0 0-4,6-6"
+OUT=$(run OE_TOPICS_ENV="$TXENV")
+want "  the next run captures exactly the deferred record" 1 "$(runs records)"
+want "  and reaches the high-water mark"                 7 "$(ck 0)"
+# (g) UNTIL_TS with records already present beyond the cutoff: the same rule, on the historical path
+A="$T/tx3"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 800 200" "1 0 0" "visible 0 0-98,200-300"
+OUT=$(run UNTIL_TS=1786000000000 OE_TOPICS_ENV="$TXENV"); RC=$?
+want "tx: bounded mode keeps its in-range prefix (rc)"   0 "$RC"
+want "  the 99 records below the cutoff are archived"   99 "$(runs records)"
+want "  and the checkpoint stops at their boundary"     99 "$(ck 0)"
+hasnt "  bounded mode is still not a reset"          "RESET" "$OUT"
+# (h) an UNDECLARED topic gets the SAME safe rule (round 3, finding 1): no inventory to keep complete
 B2="$A"; A="$T/tx-plain"; mkdir -p "$A/kafka/prod/_manifest"
 cat > "$BIN/kafka-console-consumer.sh" <<'SH'
 #!/usr/bin/env bash
@@ -492,14 +523,51 @@ avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
 [ "$avail" -gt "$maxm" ] && avail="$maxm"
 i=0
 while [ "$i" -lt "$avail" ]; do
-  echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
+  # print.offset=true is now unconditional (THE PROVED BOUNDARY): the offset is the record's own,
+  # counted from the requested start, exactly as the real console consumer prints it.
+  echo -e "CreateTime:1786000000000\tPartition:$part\tOffset:$(( off + i ))\tk$i\t{\"schemaVersion\":1}"
   i=$(( i + 1 ))
 done
 SH
 chmod +x "$BIN/kafka-console-consumer.sh"
 fixture "topicid PLPLPLPLPLPLPLPLPLPLPL" "0 0 6" "1 0 0"
 OUT=$(run); RC=$?
-want "plain topic: checkpoint is still the log end"      6 "$(ck 0)"
+want "plain topic: a complete read still reaches the log end" 6 "$(ck 0)"
+A="$B2"
+# an UNDECLARED topic whose reader stops below the high-water mark — the round-3 loss case, with no
+# declaration anywhere: the checkpoint must NOT jump to 1200.
+A="$T/tx4"; mkdir -p "$A/kafka/prod/_manifest"
+cat > "$BIN/kafka-console-consumer.sh" <<'SH'
+#!/usr/bin/env bash
+part=""; off=0; maxm=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --partition) part="$2"; shift 2 ;;
+    --offset) off="$2"; shift 2 ;;
+    --max-messages) maxm="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+ranges=$(awk -v p="$part" '$1=="visible" && $2==p {print $3}' "$OE_FIXTURE")
+n=0
+for r in ${ranges//,/ }; do
+  lo=${r%-*}; hi=${r#*-}
+  o=$lo
+  while [ "$o" -le "$hi" ]; do
+    if [ "$o" -ge "$off" ] && [ "$n" -lt "$maxm" ]; then
+      echo -e "CreateTime:1786000000000\tPartition:$part\tOffset:$o\tk$o\t{\"schemaVersion\":1}"
+      n=$(( n + 1 ))
+    fi
+    o=$(( o + 1 ))
+  done
+done
+exit 0
+SH
+chmod +x "$BIN/kafka-console-consumer.sh"
+fixture "topicid UDUDUDUDUDUDUDUDUDUDUD" "0 0 1200" "1 0 0" "visible 0 0-1099"
+OUT=$(run)      # no OE_TOPICS_ENV override: nothing declares this topic transactional
+want "an UNDECLARED topic still stops at its proved boundary" 1100 "$(ck 0)"
+want "  and archived exactly what it read"            1100 "$(runs records)"
 A="$B2"
 # the policy file declares the strike log and cvd.levels transactional on es4 — the only place the
 # archiver learns it; a topic missing here is checkpointed at its high-water mark.

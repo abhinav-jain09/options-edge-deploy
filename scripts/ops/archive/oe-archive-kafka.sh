@@ -104,16 +104,54 @@ unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_p
 # population as complete. Every check below that says "strict" is gated on this list and nothing else.
 OE_STRICT_TOPICS="${OE_STRICT_TOPICS:-context-tape.direction.ledger}"
 is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
-# TRANSACTIONAL topics (deploy Codex round 2, finding 1): written inside Kafka transactions, so the
-# high-water mark the offsets tool reports can sit ABOVE the last stable offset while a transaction is
-# open, and commit/abort markers occupy offsets that never surface as records. For these the checkpoint
-# is the highest offset actually CAPTURED plus one — never the high-water mark — so a record that commits
-# after this capture is read next time instead of being skipped forever; a range that yields no record
-# does not advance at all. Declared per environment in oe-topics.env (OE_TRANSACTIONAL_TOPICS_<env>).
+# THE PROVED BOUNDARY (deploy Codex rounds 2 and 3, finding 1). The offsets tool reports the
+# HIGH-WATER MARK. A read_committed reader stops at the last STABLE offset, commit/abort markers
+# occupy offsets that never surface as records, and aborted records are withheld — so on a topic
+# written inside Kafka transactions the high-water mark is NOT a boundary any capture reached, and
+# checkpointing it skips whatever commits afterwards, permanently.
+#
+# Round 2 solved that for a DECLARED list of transactional topics. Round 3 showed why a list is the
+# wrong mechanism: the inventory has to name every EOS writer in every environment forever, and the
+# ones it misses keep the unsafe rule silently (dealer-ledger, corridor-gauge, unified-sr, es-amt's
+# auction, and more were missing). So the safe rule is now the DEFAULT for every topic and there is
+# no list to keep complete: every capture prints its offsets and checkpoints the greatest offset it
+# actually captured, plus one.
+#
+# This is safe for the topics that are NOT transactional, and costs them nothing:
+#   * a delete-retained topic with no markers returns every offset in the range, so the proved
+#     boundary IS the high-water mark and nothing changes;
+#   * a COMPACTED topic returns fewer records than its offset span — the proved boundary then sits
+#     at its last live record and the next run resumes there, re-reading only offsets whose records
+#     compaction already removed. No duplicate record, no gap.
+# A capture that placed no record at all does not advance the checkpoint and says so.
+#
+# OE_TRANSACTIONAL_TOPICS_<env> (oe-topics.env) is now only an ANNOTATION: it exempts a declared
+# transactional topic from the strict short-read check, whose "got == count" arithmetic markers and
+# withheld records make meaningless. It no longer gates the checkpoint rule, so a writer nobody
+# declared is safe by default.
 OE_TRANSACTIONAL_TOPICS="$(eval "printf '%s' \"\${OE_TRANSACTIONAL_TOPICS_${ENV_NAME}:-}\"")"
 is_transactional_topic() { case " $OE_TRANSACTIONAL_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
-scan_max_offset() {   # $1=path -> the greatest "Offset:N" field in the file, or -1 when none
-  LC_ALL=C zcat "$1" 2>/dev/null | LC_ALL=C awk 'BEGIN { FS="\t"; mx=-1 } { for (i = 1; i <= NF; i++) if (substr($i,1,7) == "Offset:") { o = substr($i,8) + 0; if (o > mx) mx = o } } END { print mx }'
+# "maxInRange kept afterBoundary unplaceable" for a capture bounded by the END offset it started from.
+# A record at or past that boundary arrived DURING the capture (an active producer, or a --max-messages
+# budget that markers made reachable): it is not part of the range this run claims, so it is dropped
+# from the file rather than being allowed to discard the valid prefix in front of it (round 3, #2).
+scan_offsets() {   # $1=path $2=endExclusive
+  LC_ALL=C zcat "$1" 2>/dev/null | LC_ALL=C awk -v end="$2" '
+    BEGIN { FS="\t"; mx=-1; k=0; d=0; u=0 }
+    { off = -1
+      for (i = 1; i <= NF; i++) if (substr($i,1,7) == "Offset:") { off = substr($i,8) + 0; break }
+      if (off < 0) { u++; next }
+      if (off >= end) { d++; next }
+      if (off > mx) mx = off
+      k++ }
+    END { printf "%d %d %d %d\n", mx, k, d, u }'
+}
+trim_offsets() {   # $1=path $2=endExclusive -> keep only placeable, in-range records
+  LC_ALL=C zcat "$1" 2>/dev/null | LC_ALL=C awk -v end="$2" '
+    BEGIN { FS="\t" }
+    { off = -1
+      for (i = 1; i <= NF; i++) if (substr($i,1,7) == "Offset:") { off = substr($i,8) + 0; break }
+      if (off >= 0 && off < end) print }' | gzip -6 > "$1.inrange" && mv "$1.inrange" "$1"
 }
 
 DEFAULT_TOPICS_prod="$OE_ALL_TOPICS_prod"
@@ -551,25 +589,32 @@ for topic in $TOPICS; do
          --formatter-property print.timestamp=true \
          --formatter-property print.key=true \
          --formatter-property print.partition=true \
-         $( (is_strict_topic "$topic" || is_transactional_topic "$topic") && echo "--formatter-property print.offset=true") \
+         --formatter-property print.offset=true \
          --timeout-ms 60000 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
     consumer_rc=${PIPESTATUS[0]}
 
+    # The capture is bounded by the end offset this run started from. Anything at or past it arrived
+    # DURING the read and belongs to the NEXT run's range: drop those records, keep the prefix in
+    # front of them, and never let their presence discard a valid capture (round 3, #2).
+    read -r maxoff kept after_boundary unplaceable <<< "$(scan_offsets "$tmp" "$endoff")"
+    maxoff="${maxoff:--1}"; kept="${kept:-0}"; after_boundary="${after_boundary:-0}"; unplaceable="${unplaceable:-0}"
+    if [ "$after_boundary" -gt 0 ] || [ "$unplaceable" -gt 0 ]; then
+      log "  NOTE $topic p$part: $after_boundary record(s) arrived after this run's boundary $endoff and $unplaceable unplaceable line(s) dropped — the in-range prefix is kept and checkpointed"
+      trim_offsets "$tmp" "$endoff"
+    fi
+
     read -r got min_ms max_ms schema_versions <<< "$(scan_archive_file "$tmp")"
     got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
-    # The offset this capture may checkpoint. Ordinary topics: the end offset captured at start.
-    # Transactional topics: the highest offset actually captured, plus one — the only boundary this
-    # reader can PROVE it reached; a capture with no record leaves the checkpoint where it was.
-    # The span the manifest claims is [from, ckpt_to) — for a transactional topic that is the
-    # boundary the capture PROVED, not the high-water mark it started from.
+    # The offset this capture may checkpoint: the greatest offset it actually PLACED, plus one —
+    # never the high-water mark it started from (see THE PROVED BOUNDARY above). The span the
+    # manifest claims is [from, ckpt_to), the range this file really covers.
     ckpt_to="$endoff"; span="$count"
-    if is_transactional_topic "$topic" && [ "$got" -gt 0 ]; then
-      maxoff="$(scan_max_offset "$tmp")"
-      if [ "${maxoff:--1}" -ge "$from" ] && [ "$maxoff" -lt "$endoff" ]; then
+    if [ "$got" -gt 0 ]; then
+      if [ "$maxoff" -ge "$from" ]; then
         ckpt_to=$(( maxoff + 1 )); span=$(( ckpt_to - from ))
-        [ "$ckpt_to" -lt "$endoff" ] && log "  NOTE $topic p$part: stable boundary $ckpt_to is short of the high-water mark $endoff — $((endoff-ckpt_to)) offset(s) deferred to the next capture (markers, an aborted or an unresolved transaction)"
+        [ "$ckpt_to" -lt "$endoff" ] && log "  NOTE $topic p$part: proved boundary $ckpt_to is short of the high-water mark $endoff — $((endoff-ckpt_to)) offset(s) deferred to the next capture (markers, compaction, an aborted or an unresolved transaction)"
       else
-        log "  WARN $topic p$part: transactional topic captured $got record(s) but no Offset: field inside [$from,$endoff) could be read — checkpoint NOT advanced"
+        log "  WARN $topic p$part: captured $got record(s) but no Offset: field inside [$from,$endoff) could be read — checkpoint NOT advanced"
         got=0
       fi
     fi
