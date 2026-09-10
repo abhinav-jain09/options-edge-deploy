@@ -1403,7 +1403,7 @@ PL
           [ -s "$C" ] || { echo "FAIL: $C missing -- the install stage did not record a start time, so the observation window cannot be bounded"; exit 1; }
           grep -q "^build=$BUILD_NUMBER " "$C" \
             || { echo "FAIL: $C is not from this build (got: $(cat "$C")) -- a stale start time would make the window look already satisfied and skip the wait"; exit 1; }
-          CREATED=$(sed 's/.*created=\([0-9]*\).*/\1/' "$C")
+          CREATED=$(sed 's/.*created=\\([0-9]*\\).*/\\1/' "$C")
           case "$CREATED" in ''|*[!0-9]*) echo "FAIL: recorded start time is not an epoch (got '$CREATED')"; exit 1 ;; esac
           NOWS=$(date -u +%s)
           ELAPSED=$((NOWS - CREATED))
@@ -1419,8 +1419,8 @@ PL
             [ -f "$F" ] || { echo "FAIL: $F missing -- the liveness stage did not run"; exit 1; }
             grep -q "^build=$BUILD_NUMBER " "$F" \
               || { echo "FAIL: $F is not from this build (got: $(cat "$F"))"; exit 1; }
-            WAS_START=$(sed 's/.*started=\([^ ]*\).*/\1/' "$F")
-            WAS_RC=$(sed 's/.*restarts=\([^ ]*\).*/\1/' "$F")
+            WAS_START=$(sed 's/.*started=\\([^ ]*\\).*/\\1/' "$F")
+            WAS_RC=$(sed 's/.*restarts=\\([^ ]*\\).*/\\1/' "$F")
             insp() { es4 "docker inspect -f '$1' $CONTAINER" 2>/dev/null; }
             NOW_RUN=$(insp '{{.State.Running}}') || { echo "FAIL: container $CONTAINER is gone after the proof"; exit 1; }
             NOW_START=$(insp '{{.State.StartedAt}}'); NOW_RC=$(insp '{{.RestartCount}}')
@@ -1434,7 +1434,7 @@ PL
             [ -f "$F" ] || { echo "FAIL: $F missing -- the liveness stage did not run"; exit 1; }
             grep -q "^build=$BUILD_NUMBER " "$F" \
               || { echo "FAIL: $F is not from this build (got: $(cat "$F"))"; exit 1; }
-            WAS_PID=$(sed 's/.*pid=\([^ ]*\).*/\1/' "$F")
+            WAS_PID=$(sed 's/.*pid=\\([^ ]*\\).*/\\1/' "$F")
             NOW_PID=$(launchctl list | awk -v L="$LABEL" -F'\\t' '$3 == L {print $1; found=1} END{ exit found?0:1 }') \
               || { echo "FAIL: launchd unit $LABEL is no longer loaded after the proof"; exit 1; }
             [ "$NOW_PID" = "$WAS_PID" ] \
