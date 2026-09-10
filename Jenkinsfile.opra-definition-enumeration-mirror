@@ -725,6 +725,11 @@ PL
           # retry only covers the produce/commit ordering window. A timeout is a FAIL, never a
           # pass-with-a-warning.
           TOUT="$MDIR/verify-target-records.txt"
+          # Declared BEFORE the loop that writes it: the hash match below captures the target's own
+          # copy of the record here, and `set -u` would abort on an unset name rather than quietly
+          # redirecting into nothing.
+          TREF="$MDIR/verify-target-record.txt"
+          rm -f "$TREF"
           TFOUND=0
           for attempt in $(seq 1 6); do
             # A broker read error here must not abort the retry loop -- it is exactly the transient
@@ -760,7 +765,19 @@ PL
                 REF_SHA=$(shasum -a 256 < "$REF" | awk '{print $1}')
                 while IFS= read -r target_line; do
                   LINE_SHA=$(printf '%s\n' "$target_line" | shasum -a 256 | awk '{print $1}')
-                  if [ "$LINE_SHA" = "$REF_SHA" ]; then TFOUND=1; break; fi
+                  if [ "$LINE_SHA" = "$REF_SHA" ]; then
+                    TFOUND=1
+                    # KEEP THE MATCHED LINE HERE. The structural re-assertion below needs the TARGET's
+                    # own copy of the record, and the obvious way to get it -- grep it back out of
+                    # $TOUT -- is the SAME `grep -F -x -f` on a 71 KB pattern line that this stage
+                    # exists to stop using. It would die with "grep: out of memory" AFTER the hash
+                    # comparison had already succeeded, and under `set -euo pipefail` the install then
+                    # fails without ever reaching the assertion or printing PAYLOAD VERIFIED -- a
+                    # correct mirror reported as a failed install. This is also the exact byte
+                    # sequence that was hashed, so it is precisely what matched.
+                    printf '%s\n' "$target_line" > "$TREF"
+                    break
+                  fi
                 done < "$TOUT"
                 [ "$TFOUND" = "1" ] && break
               fi
@@ -777,9 +794,7 @@ PL
 
           # (c) Re-assert the structural contract against the TARGET copy. Line equality already
           # implies it, but this is what the desk actually reads, so it is what gets proved.
-          TREF="$MDIR/verify-target-record.txt"
-          grep -xFf "$REF" "$TOUT" | tail -1 > "$TREF"
-          [ -s "$TREF" ] || { echo "FAIL: matched record vanished from $TOUT"; exit 1; }
+          [ -s "$TREF" ] || { echo "FAIL: the matched record was not captured into $TREF"; exit 1; }
           KVSEP="$KVSEP" python3 "$WORKSPACE/scripts/kafka/assert-opra-definition-enumeration-record.py" "$TREF" "mirrored target"
           echo "PAYLOAD VERIFIED on $TGT/$TOPIC: MM1 group caught up with a live member, and the"
           echo "source's newest enumeration record is present with an identical key and value."
