@@ -128,6 +128,10 @@ spec:
           value: futures.footprint.bars
         - name: KAFKA_ES_FOOTPRINT_OUTCOMES_TOPIC
           value: futures.footprint.outcomes
+        # ES-FOOTPRINT-STRIKE-INTERACTION.md R3: the fifth footprint stream, NATIVE here (es-footprint-strike
+        # publishes futures.footprint.strike on this broker; TOPIC_PREFIX resolves it to es.futures.footprint.strike).
+        - name: KAFKA_ES_FOOTPRINT_STRIKE_TOPIC
+          value: futures.footprint.strike
         # G-R8 requires this and the producer's FOOTPRINT_MAX_RECORD_BYTES to be ONE value, set
         # together. Both defaults are 262144, so they agreed only by coincidence of two independent
         # defaults — a change to either side alone would have silently broken the bound the whole

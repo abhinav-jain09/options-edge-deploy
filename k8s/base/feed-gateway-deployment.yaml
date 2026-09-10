@@ -73,6 +73,11 @@ spec:
               value: es.futures.footprint.bars
             - name: KAFKA_ES_FOOTPRINT_OUTCOMES_TOPIC
               value: es.futures.footprint.outcomes
+            # ES-FOOTPRINT-STRIKE-INTERACTION.md R3: the fifth footprint stream (es-footprint-strike on es4,
+            # mirrored here by Jenkinsfile.es-cvd-mirror), relayed as cvd-hello `footprintStrike` +
+            # es-footprint-strike + /api/footprint/strike/{latest,history}. Same flag as the four above.
+            - name: KAFKA_ES_FOOTPRINT_STRIKE_TOPIC
+              value: es.futures.footprint.strike
             # SPX Auction Desk (es-amt-service on es4, mirrored here as es.futures.auction by
             # Jenkinsfile.es-auction-mirror): one payload per RTH minute keyed <tradeDate>|<HH:mm>,
             # retained seven CALENDAR days (what the gateway's current + previous trade date view needs

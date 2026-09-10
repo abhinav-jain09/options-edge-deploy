@@ -113,6 +113,8 @@ spec:
               value: es.futures.footprint.bars
             - name: KAFKA_ES_FOOTPRINT_OUTCOMES_TOPIC
               value: es.futures.footprint.outcomes
+            - name: KAFKA_ES_FOOTPRINT_STRIKE_TOPIC
+              value: es.futures.footprint.strike
             - name: GATEWAY_ES_AUCTION_ENABLED
               value: "true"
             - name: KAFKA_ES_AUCTION_TOPIC
