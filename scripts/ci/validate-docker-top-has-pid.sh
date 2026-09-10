@@ -19,10 +19,15 @@ for path in sorted(files):
     for no, line in enumerate(open(path, errors="replace"), 1):
         if line.lstrip().startswith(("#", "//")):
             continue                               # prose about docker top is not a call to it
-        for m in re.finditer(r"docker\s+top\s+\S+\s+-o\s+([^\s'\"|;&)]+)", line):
-            cols = m.group(1).split(",")
-            if "pid" not in cols:
-                print(f"  FAIL {path}:{no}: docker top -o {m.group(1)} has no pid column — docker refuses it")
+        # `docker top` and `docker container top`; the column list may be quoted. A column list held in a
+        # variable cannot be checked here, so it must be written literally.
+        for m in re.finditer(r"docker\s+(?:container\s+)?top\s+\S+\s+(?:-o|--o)\s*=?\s*(['\"]?)([^\s'\"|;&)]+)\1", line):
+            spec = m.group(2)
+            if "$" in spec:
+                print(f"  FAIL {path}:{no}: docker top -o {spec} — write the column list literally, including pid")
+                bad += 1
+            elif "pid" not in spec.split(","):
+                print(f"  FAIL {path}:{no}: docker top -o {spec} has no pid column — docker refuses it")
                 bad += 1
 print(f"checked {len(files)} file(s)")
 sys.exit(1 if bad else 0)

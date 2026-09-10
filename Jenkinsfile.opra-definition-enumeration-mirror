@@ -981,7 +981,10 @@ PL
             # output back to container processes by its PID column and answers "Couldn't find PID
             # field in ps output" without one -- which, with stderr discarded, failed this check on a
             # healthy mirror (build #5, 2026-09-10). The diagnostic keeps stderr so that cannot hide again.
-            es4 "docker top $CONTAINER -o pid,args" | grep -qF "kafka.tools.MirrorMaker" \
+            # A java process whose main class ARGUMENT is kafka.tools.MirrorMaker -- not the text
+            # anywhere on a command line, which an entrypoint comment or a wrapper could also carry.
+            es4 "docker top $CONTAINER -o pid,args" \
+              | awk '$2 ~ "(^|/)java$" { for (i = 3; i <= NF; i++) if ($i == "kafka.tools.MirrorMaker") found = 1 } END { exit found ? 0 : 1 }' \
               || { echo "FAIL: container $CONTAINER is up but is not running a MirrorMaker JVM:"; es4 "docker top $CONTAINER -o pid,args 2>&1" || true; exit 1; }
 
             # No sibling may be producing into the same partition. Written as an `if`, not
