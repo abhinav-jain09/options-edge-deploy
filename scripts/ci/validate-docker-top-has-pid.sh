@@ -21,7 +21,7 @@ for path in sorted(files):
             continue                               # prose about docker top is not a call to it
         # `docker top` and `docker container top`; the column list may be quoted. A column list held in a
         # variable cannot be checked here, so it must be written literally.
-        for m in re.finditer(r"docker\s+(?:container\s+)?top\s+\S+\s+(?:-o|--o)\s*=?\s*(['\"]?)([^\s'\"|;&)]+)\1", line):
+        for m in re.finditer(r"docker\s+(?:container\s+)?top\s+\S+\s+(?:-o|--format)\s*=?\s*(['\"]?)([^\s'\"|;&)]+)\1", line):
             spec = m.group(2)
             if "$" in spec:
                 print(f"  FAIL {path}:{no}: docker top -o {spec} — write the column list literally, including pid")
