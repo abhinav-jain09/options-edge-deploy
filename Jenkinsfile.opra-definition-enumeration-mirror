@@ -725,6 +725,11 @@ PL
           # retry only covers the produce/commit ordering window. A timeout is a FAIL, never a
           # pass-with-a-warning.
           TOUT="$MDIR/verify-target-records.txt"
+          # Declared BEFORE the loop that writes it: the hash match below captures the target's own
+          # copy of the record here, and `set -u` would abort on an unset name rather than quietly
+          # redirecting into nothing.
+          TREF="$MDIR/verify-target-record.txt"
+          rm -f "$TREF"
           TFOUND=0
           for attempt in $(seq 1 6); do
             # A broker read error here must not abort the retry loop -- it is exactly the transient
@@ -750,7 +755,33 @@ PL
               "$KBIN/kafka-console-consumer" --bootstrap-server "$TGT" --topic "$TOPIC" \
                 --partition 0 --offset "$START" --max-messages "$CNT" --timeout-ms 10000 \
                 --property print.key=true --property key.separator="$KVSEP" > "$TOUT" 2>"$TOUT.err" || true
-              if [ -s "$TOUT" ] && grep -qxFf "$REF" "$TOUT"; then TFOUND=1; break; fi
+              # COMPARE BY HASH, not by `grep -qxFf`. The auction record this job was copied from is
+              # one minute of a profile; an enumeration record is 484 contracts — 71 KB on ONE line —
+              # and `grep -F -x -f` with a pattern line that size dies with "grep: out of memory"
+              # (observed on install #1, while the mirror itself had copied the record perfectly).
+              # A digest comparison is O(bytes) and says exactly the same thing: the target holds a
+              # line byte-identical to the source's.
+              if [ -s "$TOUT" ]; then
+                # COMPARE IN BYTES, in python, and NOT with a shell read-loop. Three reasons, all of
+                # them defects found in review of the shell version:
+                #   * `read` silently DISCARDS NUL bytes, so a target record with a NUL inserted
+                #     normalises to the source line, compares equal, and is written back out WITHOUT
+                #     the NUL -- a corrupted record reported as byte-identical.
+                #   * Hashing $REF as-is while hashing each candidate with an appended newline means
+                #     a reference that lacks its final LF can never match, and a HEALTHY mirror fails
+                #     its install after six retries.
+                #   * The consumer's output is newline-DELIMITED, which is not record-delimited. The
+                #     helper therefore refuses to compare unless the dump splits into exactly the
+                #     number of records the consumer says it processed -- proving the boundary rather
+                #     than assuming it.
+                # It also writes the matched record to $TREF itself, which is what keeps the OOM
+                # `grep -F -x -f` from being needed a second time for the assertion below.
+                PROCESSED=$(awk '/Processed a total of [0-9]+ messages/{n=$5} END{print n+0}' "$TOUT.err" 2>/dev/null || echo -1)
+                if python3 "$WORKSPACE/scripts/kafka/find-mirrored-record.py" "$REF" "$TOUT" "$PROCESSED" "$TREF"; then
+                  TFOUND=1
+                  break
+                fi
+              fi
             fi
             echo "attempt $attempt: target end offset=$TEND, reference record not mirrored yet; waiting 5s"
             sleep 5
@@ -764,9 +795,7 @@ PL
 
           # (c) Re-assert the structural contract against the TARGET copy. Line equality already
           # implies it, but this is what the desk actually reads, so it is what gets proved.
-          TREF="$MDIR/verify-target-record.txt"
-          grep -xFf "$REF" "$TOUT" | tail -1 > "$TREF"
-          [ -s "$TREF" ] || { echo "FAIL: matched record vanished from $TOUT"; exit 1; }
+          [ -s "$TREF" ] || { echo "FAIL: the matched record was not captured into $TREF"; exit 1; }
           KVSEP="$KVSEP" python3 "$WORKSPACE/scripts/kafka/assert-opra-definition-enumeration-record.py" "$TREF" "mirrored target"
           echo "PAYLOAD VERIFIED on $TGT/$TOPIC: MM1 group caught up with a live member, and the"
           echo "source's newest enumeration record is present with an identical key and value."
