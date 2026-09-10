@@ -15,7 +15,8 @@ python3 - <<'PY'
 import glob, re, sys
 
 # Helpers whose absence is a runtime failure. Extend when a new one is added.
-HELPERS = ["es4", "es4_remove_and_prove", "mac_unit_remove_and_prove", "pid_of_label", "eff", "insp"]
+HELPERS = ["es4", "es4_absent_and_prove", "mac_unit_absent_and_prove", "target_is_remote",
+           "pid_of_label", "eff", "insp"]
 
 bad = 0
 checked = 0
