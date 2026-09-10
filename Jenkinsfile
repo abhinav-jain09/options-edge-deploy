@@ -69,7 +69,7 @@ pipeline {
     string(name: 'IBKR_FEED_IMAGE', defaultValue: '', description: 'IBKR feed image')
     string(name: 'SHORT_PREMIUM_AGENT_IMAGE', defaultValue: '', description: 'short-premium-agent image (dev+prod)')
     string(name: 'ES_AGGRESSOR_FLOW_IMAGE', defaultValue: '', description: 'ES aggressor-flow slope image (prod-only)')
-    string(name: 'ES_TRADE_LINEARIZER_IMAGE', defaultValue: '', description: 'ES trade linearizer image (prod-only, ships dark)')
+    string(name: 'ES_TRADE_LINEARIZER_IMAGE', defaultValue: '', description: 'ES trade linearizer image (prod-only)')
     string(name: 'SIGNAL_FOLLOWER_IMAGE', defaultValue: '', description: 'signal-follower image (dev+prod)')
     string(name: 'CONTEXT_TAPE_IMAGE', defaultValue: '', description: 'context-tape service image (dev+prod)')
     string(name: 'MULTILEG_STRUCTURE_IMAGE', defaultValue: '', description: 'multileg-structure service image (dev+prod)')

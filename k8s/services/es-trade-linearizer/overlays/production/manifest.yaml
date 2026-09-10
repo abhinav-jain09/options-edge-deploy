@@ -64,7 +64,7 @@ spec:
             - name: KAFKA_ES_TRADES_LINEARIZED_TOPIC
               value: underlying.es.trades.linearized
             - name: ES_LINEARIZER_OUTPUT_ENABLED
-              value: "false"
+              value: "true"
             - name: ES_LINEARIZER_LATE_POLICY
               value: APPEND
             - name: ES_LINEARIZER_GRACE_MS

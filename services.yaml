@@ -162,7 +162,7 @@ services:
   - { name: es-aggressor-flow,            managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-es-aggressor-flow,            deployments: [es-aggressor-flow-service] }
   # es-trade-linearizer: PRODUCTION ONLY, same reason (dev has no ES feed). It republishes
   # underlying.es.trades in one durable total order onto a single-partition tape so the slope
-  # above can run at all. SHIPS DARK — ES_LINEARIZER_OUTPUT_ENABLED=false in the manifest.
+  # above can run at all. PUBLISHES under the APPEND late policy — ES_LINEARIZER_OUTPUT_ENABLED=true in the manifest.
   - { name: es-trade-linearizer,          managedBy: standalone, sliceGenerated: true, envs: [production],      image: options-edge-es-trade-linearizer,          deployments: [es-trade-linearizer-service] }
   # multileg-structure: DESCRIPTIVE co-print observation surface (options.opra.tcbbo -> ranked
   # observations + per-window status). It claims no ownership, direction or dealer attribution —
