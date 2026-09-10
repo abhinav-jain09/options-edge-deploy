@@ -35,8 +35,39 @@
 // UNAVAILABLE RETRACTION. One partition is what keeps a retraction from overtaking the record it
 // retracts, which is why PARTS=1 is EXACT on both clusters rather than a floor.
 //
-// The job runs on the 'local-mac' agent. It generates the config + installs a KeepAlive launchd unit;
-// NOTHING is hand-edited.
+// WHERE THE MIRROR RUNS -- the RUNNER parameter, and why the default moved.
+//
+// The job always runs on the 'local-mac' agent (that is where Jenkins is). Where the MIRROR PROCESS
+// lives is a separate question, and for this topic it is load-bearing.
+//
+// Every sibling mirror runs as a KeepAlive LaunchAgent in ~/Library/LaunchAgents on that same Mac.
+// A LaunchAgent loads at USER LOGIN, and the Mac has FileVault ON: after a power cycle it sits at
+// the unlock screen and NOTHING runs until a human types the password. The auction desk runs on es4
+// and reads es4's copy of this topic, so a Mac that is off means the desk's copy ages past
+// ES_AMT_DEFINITION_ENUMERATION_MAX_AGE_MS within the hour and gate (4) shuts -- a third machine,
+// which nobody thinks of as part of the system, holding the desk up.
+//
+// THE DEFAULT DELIBERATELY STAYS local-mac-launchd, which is what is running today. Merging this
+// must not move a live production data path: the switch-over is a decision, taken by selecting
+// es4-docker on a run, not something that happens because code landed on main. The default is the
+// WORSE option on purpose, and it is the honest one until the owner chooses otherwise.
+//
+// RUNNER=es4-docker puts the same MM1 command on es4 itself, as a container with
+// `--restart unless-stopped`, beside the broker it feeds. es4's docker.service is enabled at boot
+// and its `es4-kafka` image already ships /usr/bin/kafka-mirror-maker, so the chain becomes
+// prod broker (systemd enabled) -> mirror container (docker enabled + unless-stopped) -> es4 broker
+// -> desk pod (k3s enabled), with no link that waits for a person. Both of those facts are ASSERTED
+// at install, not assumed: a container that would not come back after a reboot is not a fix.
+//
+// RUNNER=local-mac-launchd is the old behaviour. It is also the ONLY valid runner for a dev target
+// (127.0.0.1): there is no remote host to install onto, and Preflight refuses es4-docker there.
+//
+// Installing on es4 TEARS DOWN the Mac unit for the same (target, topic) first and proves it gone.
+// Two mirrors writing one partition is not merely wasteful -- it defeats the very ordering guarantee
+// the single partition exists to provide, because a re-copy from the source's log start can put a
+// stale COMPLETE after a fresh one.
+//
+// It generates the config + installs the unit; NOTHING is hand-edited.
 pipeline {
   agent { label 'local-mac' }
   parameters {
@@ -46,6 +77,7 @@ pipeline {
     string(name: 'TARGET_PORT',          defaultValue: '9092',          description: 'Target Kafka port (es4 = 9092).')
     choice(name: 'TOPIC', choices: ['options.databento.opra.definition.enumeration'], description: 'Definition-enumeration topic to mirror (frozen allow-list - the shape + payload contract below is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown', 'status'], description: 'install = create+run the mirror; teardown = stop+remove it; status = read-only report.')
+    choice(name: 'RUNNER', choices: ['local-mac-launchd', 'es4-docker'], description: 'WHERE the mirror process runs. local-mac-launchd (DEFAULT, and what is running today) = a KeepAlive LaunchAgent on the Jenkins Mac, which does not start until someone unlocks FileVault. es4-docker = a container on the TARGET host with --restart unless-stopped, so it returns after a power cycle with no human; see the header for why that matters and pick it deliberately.')
     booleanParam(name: 'ALLOW_EMPTY_SOURCE', defaultValue: false, description: 'FRESH ROLLOUT ONLY: install against a source topic that has no records yet (created by apply-topics, and the SPX feed publishes nothing until DATABENTO_DEFINITION_ENUMERATION_ENABLED is turned on and its next resolve completes). The end-to-end payload proof is DEFERRED - re-run this job with ACTION=install (idempotent) once a resolve has published, with this OFF, to actually prove the mirror.')
   }
   options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
@@ -67,6 +99,12 @@ pipeline {
     // and fail-close every prod install.
     TSLUG = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
     ALLOW_EMPTY_SOURCE = "${params.ALLOW_EMPTY_SOURCE}"
+    RUNNER = "${params.RUNNER}"
+    // es4-docker runtime identity. Same SLUG as the launchd label, so a container and a LaunchAgent
+    // for one (target, topic) can never be mistaken for different units.
+    ES4_HOST  = "abhinav@${params.TARGET_SPX_CLUSTER_IP}"
+    CONTAINER = "opra-definition-enumeration-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT + '-' + params.TOPIC).replaceAll('[^A-Za-z0-9-]', '-')}"
+    RDIR      = "/home/es4/mirrors/opra-definition-enumeration-mirror-${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT + '-' + params.TOPIC).replaceAll('[^A-Za-z0-9-]', '-')}"
     // Single definition of the MM2-pollution pattern, shared by the Preflight baseline capture and
     // the Verify guard. It MUST be one string: if the two stages ever matched different patterns,
     // a pre-existing topic could be missing from the baseline and fail the build as "new".
@@ -87,14 +125,22 @@ pipeline {
           set -euo pipefail
           # READ-ONLY report. Creates nothing, changes nothing, and never fails the build on a
           # missing unit -- "not installed" is a legitimate status answer, not an error.
+          echo "RUNNER=$RUNNER"
           echo "LABEL=$LABEL"
           echo "PLIST=$PLIST"
           echo "MDIR=$MDIR"
+          # BOTH runners are reported, always, whichever one is selected. The failure this guards is a
+          # (target, topic) left running on the OTHER substrate: two mirrors on one partition can put a
+          # stale COMPLETE after a fresh one, and a status that only looked at the selected runner would
+          # show a clean single mirror while the second one was still producing.
           if [ -f "$PLIST" ]; then echo "plist: present"; else echo "plist: ABSENT (not installed)"; fi
           # exact label-field match: $LABEL contains dots, which an unanchored grep would treat as
           # wildcards, and the PID/status columns are the part worth reading anyway.
           ROW=$(launchctl list | awk -v L="$LABEL" -F'\\t' '$3 == L {print "pid=" $1 " last-status=" $2}') || ROW=""
-          echo "launchd: ${ROW:-NOT loaded}"
+          echo "launchd (mac): ${ROW:-NOT loaded}"
+          echo "container (es4): $(ssh -o BatchMode=yes -o ConnectTimeout=8 "$ES4_HOST" \
+            "docker inspect -f 'running={{.State.Running}} pid={{.State.Pid}} restarts={{.RestartCount}} policy={{.HostConfig.RestartPolicy.Name}} started={{.State.StartedAt}}' $CONTAINER" 2>/dev/null \
+            || echo 'ABSENT (not installed, or the host is unreachable)')"
           echo "consumer group on source: opra-definition-enumeration-mirror-${TARGET_SPX_CLUSTER_IP}-${TARGET_PORT}-${TOPIC}"
           "$KBIN/kafka-consumer-groups" --bootstrap-server "$SRC" --describe \
             --group "opra-definition-enumeration-mirror-${TARGET_SPX_CLUSTER_IP}-${TARGET_PORT}-${TOPIC}" 2>/dev/null || true
@@ -103,7 +149,9 @@ pipeline {
           "$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$TGT" --topic "$TOPIC" 2>/dev/null || true
           echo "--- source $SRC topic $TOPIC ---"
           "$KBIN/kafka-run-class" kafka.tools.GetOffsetShell --bootstrap-server "$SRC" --topic "$TOPIC" 2>/dev/null || true
-          if [ -f "$MDIR/mirror.err.log" ]; then echo "--- last 20 lines of mirror.err.log ---"; tail -20 "$MDIR/mirror.err.log"; fi
+          if [ -f "$MDIR/mirror.err.log" ]; then echo "--- last 20 lines of mirror.err.log (mac) ---"; tail -20 "$MDIR/mirror.err.log"; fi
+          echo "--- last 20 lines of container log (es4) ---"
+          ssh -o BatchMode=yes -o ConnectTimeout=8 "$ES4_HOST" "docker logs --tail 20 $CONTAINER 2>&1" 2>/dev/null || echo "(no container log)"
         '''
       }
     }
@@ -113,6 +161,70 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
+          # ---- runtime helpers. Defined per-stanza because each `sh` step is its own shell;
+          # scripts/ci/validate-mirror-shell-helpers.sh enforces that.
+          es4() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$ES4_HOST" "$@"; }
+          # Is there a container substrate at all? A loopback target is the dev Kafka on THIS Mac --
+          # there is no remote host to install a container onto, and RUNNER=es4-docker is refused for
+          # it in Preflight. Anywhere else, the substrate exists and its state must be PROVABLE:
+          # an unreachable host is a FAILURE, never "probably not installed", because that reading is
+          # exactly how a second producer survives a teardown.
+          target_is_remote() {
+            case "$TARGET_SPX_CLUSTER_IP" in 127.0.0.1|localhost|::1) return 1 ;; *) return 0 ;; esac
+          }
+          # Remove the container and PROVE it is gone. Called UNCONDITIONALLY by teardown and by the
+          # arming stage, whichever RUNNER is selected: review found that switching TO
+          # local-mac-launchd left an es4 container running, and the arming stage can legitimately
+          # perform no offset reset (group already at the log start, or an empty source under
+          # ALLOW_EMPTY_SOURCE), so nothing downstream would have noticed the second producer.
+          es4_absent_and_prove() {
+            if ! target_is_remote; then
+              echo "no container substrate for loopback target $TARGET_SPX_CLUSTER_IP -- nothing to remove"
+              return 0
+            fi
+            es4 "docker rm -f $CONTAINER >/dev/null 2>&1; true" \
+              || { echo "FAIL: cannot reach $ES4_HOST to prove container $CONTAINER is gone; refusing to leave a possible second producer"; return 1; }
+            local i left
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              left=$(es4 "docker ps -a --filter name=^${CONTAINER}\$ --format '{{.Names}}'") \
+                || { echo "FAIL: cannot read container state on $ES4_HOST"; return 1; }
+              [ -z "$left" ] && return 0
+              sleep 1
+            done
+            echo "FAIL: container $CONTAINER survived removal on $ES4_HOST:"
+            es4 "docker ps -a --filter name=^${CONTAINER}\$" || true
+            return 1
+          }
+          # The mirror image of the above: remove the MAC LaunchAgent for this same (target, topic)
+          # and prove it gone.
+          mac_unit_absent_and_prove() {
+            launchctl unload "$PLIST" 2>/dev/null || true
+            local i gone=0
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if ! launchctl list 2>/dev/null | grep -qF "$LABEL"; then gone=1; break; fi
+              launchctl remove "$LABEL" 2>/dev/null || true
+              sleep 1
+            done
+            [ "$gone" = "1" ] || { echo "FAIL: the mac LaunchAgent $LABEL is still registered; refusing to run a SECOND mirror for $TOPIC"; return 1; }
+            rm -f "$PLIST"
+            pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
+            pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
+            pkill -f "kafka.tools.MirrorMaker.*$MDIR" 2>/dev/null || true
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              pgrep -f "$MDIR" >/dev/null 2>&1 || return 0
+              sleep 1
+            done
+            echo "FAIL: a mac process for $MDIR survived; refusing to run a SECOND mirror for $TOPIC"
+            pgrep -fl "$MDIR" || true
+            return 1
+          }
+          # BOTH substrates, UNCONDITIONALLY. A teardown that removed only the SELECTED runner left
+          # the other still producing into a one-partition topic -- found in review, and the reason
+          # this is no longer conditional on RUNNER at all.
+          es4_absent_and_prove
+          mac_unit_absent_and_prove
+          echo "mirror verified gone from BOTH substrates (topic + data left intact)"
+          exit 0
           # ORDER MATTERS. The plist is the ONLY handle `launchctl unload` has, and the unit is KeepAlive:
           # deleting it before the label is gone would leave a registered unit that respawns the JVM and
           # that no later teardown or install could unload (code review round 5). So unload, PROVE the
@@ -151,7 +263,17 @@ pipeline {
       steps {
         sh '''
           set -euo pipefail
-          echo "SOURCE=$SRC  TARGET=$TGT  TOPIC=$TOPIC"
+          echo "SOURCE=$SRC  TARGET=$TGT  TOPIC=$TOPIC  RUNNER=$RUNNER"
+          # RUNNER validation, fail-closed and BEFORE anything is generated. es4-docker installs a
+          # container ON the target host over ssh; a loopback target is the dev Kafka on this same
+          # Mac, where there is no remote host to install onto and `ssh abhinav@127.0.0.1` would
+          # either fail or -- worse -- succeed and put a container on the Jenkins agent itself.
+          case "$TARGET_SPX_CLUSTER_IP" in
+            127.0.0.1|localhost|::1)
+              [ "$RUNNER" = "local-mac-launchd" ] \
+                || { echo "FAIL: RUNNER=$RUNNER is not valid for the loopback target $TARGET_SPX_CLUSTER_IP; use local-mac-launchd"; exit 1; }
+              ;;
+          esac
 
           # INPUT VALIDATION. The four endpoint parameters are free-form strings that end up inside
           # generated .properties files and a launchd plist, so constrain them before they are used:
@@ -310,6 +432,30 @@ log4j.appender.stdout.layout.ConversionPattern=%d{ISO8601} %-5p %c{1} - %m%n
 L
           # escape dots for the MM1 whitelist regex (exact single topic)
           RE=$(printf '%s' "$TOPIC" | sed 's/\\./\\\\./g')
+          # The es4-docker install runs its command through ssh, and passing this regex as a nested
+          # quoted argument through `ssh "docker run ... --whitelist ..."` was a BLOCKER in review:
+          # the `'\''` idiom only closes-and-reopens a SINGLE-quoted string, so inside the
+          # double-quoted ssh argument it produced a literal backslash and an unterminated quote, and
+          # every remote install died before MirrorMaker started. Rather than get the quoting right,
+          # remove the nesting: write the command to a FILE, exactly as the launchd path does, and let
+          # the container execute the file. Nothing but simple paths then crosses the ssh boundary.
+          #
+          # Written HERE, in the shell where $RE is defined, so there is one definition of the
+          # whitelist and it is the one every proof in this job was generated against.
+          cat > "$MDIR/run-mirror-container.sh" <<S
+#!/usr/bin/env bash
+set -euo pipefail
+exec kafka-mirror-maker \\
+  --consumer.config /mirror/consumer.properties \\
+  --producer.config /mirror/producer.properties \\
+  --offset.commit.interval.ms 5000 \\
+  --whitelist '$RE' --num.streams 1
+S
+          chmod +x "$MDIR/run-mirror-container.sh"
+          # Prove the generated command carries the ONE topic, before anything ships it. An empty or
+          # missing whitelist would mirror EVERY source topic into the desk's cluster.
+          grep -qF -- "--whitelist '$RE'" "$MDIR/run-mirror-container.sh" \
+            || { echo "FAIL: the generated container command does not carry the whitelist"; exit 1; }
           # --offset.commit.interval.ms is a MIRRORMAKER CLI option, NOT a consumer property
           # (kafka-mirror-maker --help; default 60000). It must be passed here or the committed
           # offset -- which the payload stage uses as the per-install proof that THIS process
@@ -417,6 +563,63 @@ S
       steps {
         sh '''
           set -euo pipefail
+          # ---- runtime helpers. Defined per-stanza because each `sh` step is its own shell;
+          # scripts/ci/validate-mirror-shell-helpers.sh enforces that.
+          es4() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$ES4_HOST" "$@"; }
+          # Is there a container substrate at all? A loopback target is the dev Kafka on THIS Mac --
+          # there is no remote host to install a container onto, and RUNNER=es4-docker is refused for
+          # it in Preflight. Anywhere else, the substrate exists and its state must be PROVABLE:
+          # an unreachable host is a FAILURE, never "probably not installed", because that reading is
+          # exactly how a second producer survives a teardown.
+          target_is_remote() {
+            case "$TARGET_SPX_CLUSTER_IP" in 127.0.0.1|localhost|::1) return 1 ;; *) return 0 ;; esac
+          }
+          # Remove the container and PROVE it is gone. Called UNCONDITIONALLY by teardown and by the
+          # arming stage, whichever RUNNER is selected: review found that switching TO
+          # local-mac-launchd left an es4 container running, and the arming stage can legitimately
+          # perform no offset reset (group already at the log start, or an empty source under
+          # ALLOW_EMPTY_SOURCE), so nothing downstream would have noticed the second producer.
+          es4_absent_and_prove() {
+            if ! target_is_remote; then
+              echo "no container substrate for loopback target $TARGET_SPX_CLUSTER_IP -- nothing to remove"
+              return 0
+            fi
+            es4 "docker rm -f $CONTAINER >/dev/null 2>&1; true" \
+              || { echo "FAIL: cannot reach $ES4_HOST to prove container $CONTAINER is gone; refusing to leave a possible second producer"; return 1; }
+            local i left
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              left=$(es4 "docker ps -a --filter name=^${CONTAINER}\$ --format '{{.Names}}'") \
+                || { echo "FAIL: cannot read container state on $ES4_HOST"; return 1; }
+              [ -z "$left" ] && return 0
+              sleep 1
+            done
+            echo "FAIL: container $CONTAINER survived removal on $ES4_HOST:"
+            es4 "docker ps -a --filter name=^${CONTAINER}\$" || true
+            return 1
+          }
+          # The mirror image of the above: remove the MAC LaunchAgent for this same (target, topic)
+          # and prove it gone.
+          mac_unit_absent_and_prove() {
+            launchctl unload "$PLIST" 2>/dev/null || true
+            local i gone=0
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if ! launchctl list 2>/dev/null | grep -qF "$LABEL"; then gone=1; break; fi
+              launchctl remove "$LABEL" 2>/dev/null || true
+              sleep 1
+            done
+            [ "$gone" = "1" ] || { echo "FAIL: the mac LaunchAgent $LABEL is still registered; refusing to run a SECOND mirror for $TOPIC"; return 1; }
+            rm -f "$PLIST"
+            pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
+            pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
+            pkill -f "kafka.tools.MirrorMaker.*$MDIR" 2>/dev/null || true
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              pgrep -f "$MDIR" >/dev/null 2>&1 || return 0
+              sleep 1
+            done
+            echo "FAIL: a mac process for $MDIR survived; refusing to run a SECOND mirror for $TOPIC"
+            pgrep -fl "$MDIR" || true
+            return 1
+          }
           # WHY THIS STAGE EXISTS. The MM1 consumer group and the target topic both OUTLIVE an
           # install, and the target is compacted, so a re-install of a BROKEN mirror could otherwise
           # be verified entirely by artefacts of an earlier, working install: the reference record
@@ -464,6 +667,12 @@ S
           # 2. stop this (target, topic) unit and WAIT for the process to be gone. --reset-offsets
           # refuses to touch a group with an active member, and a surviving old process would also
           # keep committing offsets underneath the verification.
+          #
+          # BOTH substrates, whichever runner is selected. Stopping only the selected one would leave
+          # the other holding the consumer group's membership, so --reset-offsets below would refuse
+          # and the arming would silently not happen -- and the payload proof would then be satisfied
+          # by the OTHER mirror's work rather than this install's.
+          es4_absent_and_prove
           launchctl unload "$PLIST" 2>/dev/null || true
           pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
           pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
@@ -538,11 +747,121 @@ S
       }
     }
 
-    stage('Install launchd service') {
+    stage('Install the mirror service') {
       when { expression { params.ACTION == 'install' } }
       steps {
         sh '''
           set -euo pipefail
+          # ---- runtime helpers. Defined per-stanza because each `sh` step is its own shell;
+          # scripts/ci/validate-mirror-shell-helpers.sh enforces that.
+          es4() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$ES4_HOST" "$@"; }
+          # Is there a container substrate at all? A loopback target is the dev Kafka on THIS Mac --
+          # there is no remote host to install a container onto, and RUNNER=es4-docker is refused for
+          # it in Preflight. Anywhere else, the substrate exists and its state must be PROVABLE:
+          # an unreachable host is a FAILURE, never "probably not installed", because that reading is
+          # exactly how a second producer survives a teardown.
+          target_is_remote() {
+            case "$TARGET_SPX_CLUSTER_IP" in 127.0.0.1|localhost|::1) return 1 ;; *) return 0 ;; esac
+          }
+          # Remove the container and PROVE it is gone. Called UNCONDITIONALLY by teardown and by the
+          # arming stage, whichever RUNNER is selected: review found that switching TO
+          # local-mac-launchd left an es4 container running, and the arming stage can legitimately
+          # perform no offset reset (group already at the log start, or an empty source under
+          # ALLOW_EMPTY_SOURCE), so nothing downstream would have noticed the second producer.
+          es4_absent_and_prove() {
+            if ! target_is_remote; then
+              echo "no container substrate for loopback target $TARGET_SPX_CLUSTER_IP -- nothing to remove"
+              return 0
+            fi
+            es4 "docker rm -f $CONTAINER >/dev/null 2>&1; true" \
+              || { echo "FAIL: cannot reach $ES4_HOST to prove container $CONTAINER is gone; refusing to leave a possible second producer"; return 1; }
+            local i left
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              left=$(es4 "docker ps -a --filter name=^${CONTAINER}\$ --format '{{.Names}}'") \
+                || { echo "FAIL: cannot read container state on $ES4_HOST"; return 1; }
+              [ -z "$left" ] && return 0
+              sleep 1
+            done
+            echo "FAIL: container $CONTAINER survived removal on $ES4_HOST:"
+            es4 "docker ps -a --filter name=^${CONTAINER}\$" || true
+            return 1
+          }
+          # The mirror image of the above: remove the MAC LaunchAgent for this same (target, topic)
+          # and prove it gone.
+          mac_unit_absent_and_prove() {
+            launchctl unload "$PLIST" 2>/dev/null || true
+            local i gone=0
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if ! launchctl list 2>/dev/null | grep -qF "$LABEL"; then gone=1; break; fi
+              launchctl remove "$LABEL" 2>/dev/null || true
+              sleep 1
+            done
+            [ "$gone" = "1" ] || { echo "FAIL: the mac LaunchAgent $LABEL is still registered; refusing to run a SECOND mirror for $TOPIC"; return 1; }
+            rm -f "$PLIST"
+            pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
+            pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
+            pkill -f "kafka.tools.MirrorMaker.*$MDIR" 2>/dev/null || true
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              pgrep -f "$MDIR" >/dev/null 2>&1 || return 0
+              sleep 1
+            done
+            echo "FAIL: a mac process for $MDIR survived; refusing to run a SECOND mirror for $TOPIC"
+            pgrep -fl "$MDIR" || true
+            return 1
+          }
+          if [ "$RUNNER" = "es4-docker" ]; then
+            # A SECOND mirror for this (target, topic) must be impossible, not merely unlikely.
+            mac_unit_absent_and_prove
+
+            # The image comes from the BROKER CONTAINER ALREADY RUNNING on the target, read live --
+            # never a literal here. A pinned tag in this file would drift the day es4-kafka is
+            # upgraded, and the mirror would then be a different Kafka client version from the broker
+            # it feeds, silently.
+            IMAGE=$(es4 "docker inspect -f '{{.Config.Image}}' es4-kafka") \
+              || { echo "FAIL: cannot read the es4-kafka image on $ES4_HOST -- is the broker container running?"; exit 1; }
+            [ -n "$IMAGE" ] || { echo "FAIL: es4-kafka reported an empty image name"; exit 1; }
+            echo "mirror image (from the running es4-kafka): $IMAGE"
+
+            # The COMMAND was generated as a file by the generate stage, in the shell where the
+            # whitelist regex is defined. Nothing but simple paths crosses the ssh boundary, which is
+            # what removes the nested-quoting failure entirely rather than trying to escape it.
+            RUNSH="$MDIR/run-mirror-container.sh"
+            [ -s "$RUNSH" ] || { echo "FAIL: $RUNSH missing or empty -- the generate stage did not run"; exit 1; }
+            grep -q -- "--whitelist '" "$RUNSH" \
+              || { echo "FAIL: $RUNSH carries no whitelist; that would mirror every source topic"; exit 1; }
+            echo "container command:"; sed 's/^/    /' "$RUNSH"
+            es4 "docker image inspect '$IMAGE' >/dev/null 2>&1 && test -x /dev/null; docker run --rm --entrypoint test '$IMAGE' -x /usr/bin/kafka-mirror-maker" \
+              || { echo "FAIL: $IMAGE does not ship an executable /usr/bin/kafka-mirror-maker"; exit 1; }
+
+            # THE RESTART-PROOF PRECONDITION, asserted rather than assumed. A container with
+            # --restart unless-stopped on a docker that is not enabled at boot comes back only when a
+            # human starts docker, which is the same failure this runner exists to remove.
+            es4 "systemctl is-enabled docker" | grep -qx enabled \
+              || { echo "FAIL: docker.service is not enabled at boot on $ES4_HOST; a container there would NOT return after a power cycle"; exit 1; }
+
+            es4 "install -d '$RDIR'" || { echo "FAIL: cannot create $RDIR on $ES4_HOST"; exit 1; }
+            # The generated config is what the Preflight/shape stages already validated on this agent;
+            # ship exactly those bytes rather than regenerating them remotely.
+            scp -o BatchMode=yes -q "$MDIR/consumer.properties" "$MDIR/producer.properties" "$MDIR/log4j.properties" "$RUNSH" "$ES4_HOST:$RDIR/" \
+              || { echo "FAIL: cannot copy the generated config to $ES4_HOST:$RDIR"; exit 1; }
+
+            # --network host: the mirror must reach BOTH clusters, and on the target host that is the
+            # only configuration where the source IP and the target's own advertised listener both
+            # resolve the same way they do for every proof this job runs.
+            # The config is mounted READ-ONLY: the container has no business rewriting what was validated.
+            es4 "docker run -d --name $CONTAINER --restart unless-stopped --network host \
+                   -v $RDIR:/mirror:ro \
+                   -e KAFKA_LOG4J_OPTS=-Dlog4j.configuration=file:/mirror/log4j.properties \
+                   $IMAGE bash /mirror/run-mirror-container.sh" \
+              || { echo "FAIL: docker run failed on $ES4_HOST"; exit 1; }
+            # One clock, the agent's, for the minimum-observation floor the final stage enforces.
+            # BUILD-STAMPED like every other cross-stage artefact here, and for the same reason: a
+            # leftover file from an earlier build would make the elapsed time look enormous and skip
+            # the wait entirely, which is precisely the check being skipped rather than a stale number.
+            printf 'build=%s created=%s\n' "$BUILD_NUMBER" "$(date -u +%s)" > "$MDIR/unit-started-at.txt"
+            echo "container $CONTAINER started on $ES4_HOST from $IMAGE"
+            exit 0
+          fi
           cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -556,6 +875,7 @@ S
 PL
           launchctl unload "$PLIST" 2>/dev/null || true
           launchctl load "$PLIST"
+          printf 'build=%s created=%s\n' "$BUILD_NUMBER" "$(date -u +%s)" > "$MDIR/unit-started-at.txt"
           echo "launchd unit $LABEL loaded"
         '''
       }
@@ -566,7 +886,119 @@ PL
       steps {
         sh '''
           set -euo pipefail
+          # ---- runtime helpers. Defined per-stanza because each `sh` step is its own shell;
+          # scripts/ci/validate-mirror-shell-helpers.sh enforces that.
+          es4() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$ES4_HOST" "$@"; }
+          # Is there a container substrate at all? A loopback target is the dev Kafka on THIS Mac --
+          # there is no remote host to install a container onto, and RUNNER=es4-docker is refused for
+          # it in Preflight. Anywhere else, the substrate exists and its state must be PROVABLE:
+          # an unreachable host is a FAILURE, never "probably not installed", because that reading is
+          # exactly how a second producer survives a teardown.
+          target_is_remote() {
+            case "$TARGET_SPX_CLUSTER_IP" in 127.0.0.1|localhost|::1) return 1 ;; *) return 0 ;; esac
+          }
+          # Remove the container and PROVE it is gone. Called UNCONDITIONALLY by teardown and by the
+          # arming stage, whichever RUNNER is selected: review found that switching TO
+          # local-mac-launchd left an es4 container running, and the arming stage can legitimately
+          # perform no offset reset (group already at the log start, or an empty source under
+          # ALLOW_EMPTY_SOURCE), so nothing downstream would have noticed the second producer.
+          es4_absent_and_prove() {
+            if ! target_is_remote; then
+              echo "no container substrate for loopback target $TARGET_SPX_CLUSTER_IP -- nothing to remove"
+              return 0
+            fi
+            es4 "docker rm -f $CONTAINER >/dev/null 2>&1; true" \
+              || { echo "FAIL: cannot reach $ES4_HOST to prove container $CONTAINER is gone; refusing to leave a possible second producer"; return 1; }
+            local i left
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              left=$(es4 "docker ps -a --filter name=^${CONTAINER}\$ --format '{{.Names}}'") \
+                || { echo "FAIL: cannot read container state on $ES4_HOST"; return 1; }
+              [ -z "$left" ] && return 0
+              sleep 1
+            done
+            echo "FAIL: container $CONTAINER survived removal on $ES4_HOST:"
+            es4 "docker ps -a --filter name=^${CONTAINER}\$" || true
+            return 1
+          }
+          # The mirror image of the above: remove the MAC LaunchAgent for this same (target, topic)
+          # and prove it gone.
+          mac_unit_absent_and_prove() {
+            launchctl unload "$PLIST" 2>/dev/null || true
+            local i gone=0
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if ! launchctl list 2>/dev/null | grep -qF "$LABEL"; then gone=1; break; fi
+              launchctl remove "$LABEL" 2>/dev/null || true
+              sleep 1
+            done
+            [ "$gone" = "1" ] || { echo "FAIL: the mac LaunchAgent $LABEL is still registered; refusing to run a SECOND mirror for $TOPIC"; return 1; }
+            rm -f "$PLIST"
+            pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
+            pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
+            pkill -f "kafka.tools.MirrorMaker.*$MDIR" 2>/dev/null || true
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              pgrep -f "$MDIR" >/dev/null 2>&1 || return 0
+              sleep 1
+            done
+            echo "FAIL: a mac process for $MDIR survived; refusing to run a SECOND mirror for $TOPIC"
+            pgrep -fl "$MDIR" || true
+            return 1
+          }
           sleep 8
+          if [ "$RUNNER" = "es4-docker" ]; then
+            # LIVENESS, not existence -- the same standard the launchd branch below holds itself to.
+            # `docker ps` showing the name proves only that a container object exists; one that dies
+            # on every start still appears, and with --restart unless-stopped it will keep appearing
+            # forever. So demand Running=true, capture StartedAt and RestartCount, and re-read them
+            # after a delay: a crash-restart loop changes both, and that is the only thing that
+            # distinguishes a healthy mirror from a container docker is patiently resurrecting.
+            insp() { es4 "docker inspect -f '$1' $CONTAINER" 2>/dev/null; }
+            RUN1=$(insp '{{.State.Running}}') || { echo "FAIL: container $CONTAINER does not exist on $ES4_HOST"; exit 1; }
+            [ "$RUN1" = "true" ] || { echo "FAIL: container $CONTAINER is not running (Running=$RUN1); last log:"; es4 "docker logs --tail 40 $CONTAINER 2>&1" || true; exit 1; }
+            START1=$(insp '{{.State.StartedAt}}'); RC1=$(insp '{{.RestartCount}}'); PID1=$(insp '{{.State.Pid}}')
+            case "${PID1:-}" in ''|0|*[!0-9]*) echo "FAIL: container $CONTAINER reports no usable PID (got '${PID1:-}')"; exit 1 ;; esac
+            # It was created seconds ago by this stage. A RestartCount above zero already means it
+            # died at least once, and the stable-window check below cannot see a crash whose period is
+            # longer than the window -- so refuse on the count itself, which needs no window at all.
+            [ "$RC1" = "0" ] || { echo "FAIL: container $CONTAINER has already restarted $RC1 time(s) since it was created; last log:"; es4 "docker logs --tail 40 $CONTAINER 2>&1" || true; exit 1; }
+
+            # THE restart-proof property itself. Without this policy the container is gone after a
+            # reboot and the desk stands aside within the hour -- which is the whole reason this
+            # runner exists, so it is asserted, not assumed.
+            POLICY=$(insp '{{.HostConfig.RestartPolicy.Name}}')
+            [ "$POLICY" = "unless-stopped" ] || { echo "FAIL: restart policy is '$POLICY', not 'unless-stopped'; this mirror would NOT return after a power cycle"; exit 1; }
+            es4 "systemctl is-enabled docker" | grep -qx enabled \
+              || { echo "FAIL: docker.service is no longer enabled at boot on $ES4_HOST"; exit 1; }
+
+            sleep 12
+            RUN2=$(insp '{{.State.Running}}'); START2=$(insp '{{.State.StartedAt}}'); RC2=$(insp '{{.RestartCount}}')
+            [ "$RUN2" = "true" ] || { echo "FAIL: container $CONTAINER stopped while verifying (Running=$RUN2); last log:"; es4 "docker logs --tail 40 $CONTAINER 2>&1" || true; exit 1; }
+            [ "$START1" = "$START2" ] && [ "$RC1" = "$RC2" ] \
+              || { echo "FAIL: container $CONTAINER restarted between checks (startedAt $START1 -> $START2, restarts $RC1 -> $RC2) -- the mirror is crash-looping; last log:"; es4 "docker logs --tail 40 $CONTAINER 2>&1" || true; exit 1; }
+
+            # And it must be the real thing. `docker top` reports the process table inside the
+            # container, so a container that started but whose entrypoint is not a MirrorMaker JVM
+            # cannot pass by merely staying up.
+            es4 "docker top $CONTAINER -o args 2>/dev/null" | grep -qF "kafka.tools.MirrorMaker" \
+              || { echo "FAIL: container $CONTAINER is up but is not running a MirrorMaker JVM:"; es4 "docker top $CONTAINER -o args 2>/dev/null" || true; exit 1; }
+
+            # No sibling may be producing into the same partition. Written as an `if`, not
+            # `grep && { exit 1; } || true`: under `set -e` that AND-OR list swallows its own exit
+            # status, so the guard would report a failure and then let the stage continue.
+            if launchctl list 2>/dev/null | grep -qF "$LABEL"; then
+              echo "FAIL: the mac LaunchAgent $LABEL is ALSO registered -- two mirrors on a one-partition topic"
+              exit 1
+            fi
+
+            # Persist this reading. The 12-second window below cannot see a crash whose PERIOD is
+            # longer than it -- a container that reliably dies every 30 seconds passes both reads with
+            # RestartCount=0 and an unchanged StartedAt (found in review). The payload proof that
+            # follows takes tens of seconds and makes the mirror do real work, so the SAME reading is
+            # compared again after it, which turns the observation window from 12 seconds into the
+            # whole install. Stamped with the build, like every other cross-stage artefact here: a
+            # leftover file must never stand in as this build's evidence.
+            printf 'build=%s started=%s restarts=%s pid=%s\n' "$BUILD_NUMBER" "$START1" "$RC1" "$PID1" > "$MDIR/container-liveness.txt"
+            echo "container $CONTAINER alive and stable on $ES4_HOST: pid $PID1, restarts $RC1, policy $POLICY (kafka.tools.MirrorMaker)"
+          else
           # LIVENESS, not registration. `launchctl list | grep "$LABEL"` proves only that the job is
           # LOADED: a KeepAlive unit whose program crashes on every start still appears there, with
           # '-' in the PID column and its last exit status beside it. So parse the EXACT label row
@@ -590,7 +1022,16 @@ PL
           # By now (20s after load) the exec chain has reached the JVM, so demand the real thing.
           ps -p "$PID2" -o command= | grep -qF "kafka.tools.MirrorMaker" \
             || { echo "FAIL: PID $PID2 for $LABEL is not a MirrorMaker JVM: $(ps -p "$PID2" -o command= | head -c 200)"; exit 1; }
+          # Symmetric to the es4 branch above: no sibling may be producing into the same partition.
+          if target_is_remote; then
+            RUNNING=$(es4 "docker ps --filter name=^${CONTAINER}\$ --format '{{.Names}}'") \
+              || { echo "FAIL: cannot read container state on $ES4_HOST to rule out a second mirror"; exit 1; }
+            [ -z "$RUNNING" ] \
+              || { echo "FAIL: container $CONTAINER is ALSO running on $ES4_HOST -- two mirrors on a one-partition topic"; exit 1; }
+          fi
+          printf 'build=%s pid=%s\n' "$BUILD_NUMBER" "$PID1" > "$MDIR/launchd-liveness.txt"
           echo "launchd unit $LABEL alive and stable: PID $PID1 (kafka.tools.MirrorMaker)"
+          fi
           # pollution guard: MM1 must NOT ADD es4.* / es.es.es / heartbeat / mm2 topics to the target.
           # Judged as a DELTA against the pre-install baseline captured in Preflight: topics that were
           # already there (prod's dead-MM2 leftovers) are grandfathered, anything new fails the build.
@@ -632,6 +1073,63 @@ PL
       steps {
         sh '''
           set -euo pipefail
+          # ---- runtime helpers. Defined per-stanza because each `sh` step is its own shell;
+          # scripts/ci/validate-mirror-shell-helpers.sh enforces that.
+          es4() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$ES4_HOST" "$@"; }
+          # Is there a container substrate at all? A loopback target is the dev Kafka on THIS Mac --
+          # there is no remote host to install a container onto, and RUNNER=es4-docker is refused for
+          # it in Preflight. Anywhere else, the substrate exists and its state must be PROVABLE:
+          # an unreachable host is a FAILURE, never "probably not installed", because that reading is
+          # exactly how a second producer survives a teardown.
+          target_is_remote() {
+            case "$TARGET_SPX_CLUSTER_IP" in 127.0.0.1|localhost|::1) return 1 ;; *) return 0 ;; esac
+          }
+          # Remove the container and PROVE it is gone. Called UNCONDITIONALLY by teardown and by the
+          # arming stage, whichever RUNNER is selected: review found that switching TO
+          # local-mac-launchd left an es4 container running, and the arming stage can legitimately
+          # perform no offset reset (group already at the log start, or an empty source under
+          # ALLOW_EMPTY_SOURCE), so nothing downstream would have noticed the second producer.
+          es4_absent_and_prove() {
+            if ! target_is_remote; then
+              echo "no container substrate for loopback target $TARGET_SPX_CLUSTER_IP -- nothing to remove"
+              return 0
+            fi
+            es4 "docker rm -f $CONTAINER >/dev/null 2>&1; true" \
+              || { echo "FAIL: cannot reach $ES4_HOST to prove container $CONTAINER is gone; refusing to leave a possible second producer"; return 1; }
+            local i left
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              left=$(es4 "docker ps -a --filter name=^${CONTAINER}\$ --format '{{.Names}}'") \
+                || { echo "FAIL: cannot read container state on $ES4_HOST"; return 1; }
+              [ -z "$left" ] && return 0
+              sleep 1
+            done
+            echo "FAIL: container $CONTAINER survived removal on $ES4_HOST:"
+            es4 "docker ps -a --filter name=^${CONTAINER}\$" || true
+            return 1
+          }
+          # The mirror image of the above: remove the MAC LaunchAgent for this same (target, topic)
+          # and prove it gone.
+          mac_unit_absent_and_prove() {
+            launchctl unload "$PLIST" 2>/dev/null || true
+            local i gone=0
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if ! launchctl list 2>/dev/null | grep -qF "$LABEL"; then gone=1; break; fi
+              launchctl remove "$LABEL" 2>/dev/null || true
+              sleep 1
+            done
+            [ "$gone" = "1" ] || { echo "FAIL: the mac LaunchAgent $LABEL is still registered; refusing to run a SECOND mirror for $TOPIC"; return 1; }
+            rm -f "$PLIST"
+            pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
+            pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
+            pkill -f "kafka.tools.MirrorMaker.*$MDIR" 2>/dev/null || true
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              pgrep -f "$MDIR" >/dev/null 2>&1 || return 0
+              sleep 1
+            done
+            echo "FAIL: a mac process for $MDIR survived; refusing to run a SECOND mirror for $TOPIC"
+            pgrep -fl "$MDIR" || true
+            return 1
+          }
           # DEFERRED PROOF (fresh rollout): the preflight allowed an EMPTY source under
           # ALLOW_EMPTY_SOURCE, so there is no record to prove anything against. Skip loudly rather
           # than fail; the mirror is installed and running, and re-running this job with ACTION=install
@@ -714,7 +1212,12 @@ PL
             echo "FAIL: the MM1 consumer group $GROUP never reached source offset $SEND with a live member -- this unit is NOT consuming"
             echo "--- last kafka-consumer-groups --describe output ---"; cat "$GDESC" 2>/dev/null || true
             echo "--- stderr ---"; cat "$GDESC.err" 2>/dev/null || true
-            echo "--- mirror.err.log (tail) ---"; tail -30 "$MDIR/mirror.err.log" 2>/dev/null || true
+            echo "--- mirror log (tail) ---"
+            if [ "$RUNNER" = "es4-docker" ]; then
+              es4 "docker logs --tail 30 $CONTAINER 2>&1" 2>/dev/null || true
+            else
+              tail -30 "$MDIR/mirror.err.log" 2>/dev/null || true
+            fi
             exit 1
           fi
           echo "MM1 group $GROUP has a live member and has committed past source offset $SEND:"
@@ -789,7 +1292,12 @@ PL
           if [ "$TFOUND" != "1" ]; then
             echo "FAIL: the source reference record never appeared on $TGT/$TOPIC even though the MM1 group committed past it"
             echo "--- target consumer stderr ---"; tail -30 "$TOUT.err" 2>/dev/null || true
-            echo "--- mirror.err.log (tail) ---"; tail -30 "$MDIR/mirror.err.log" 2>/dev/null || true
+            echo "--- mirror log (tail) ---"
+            if [ "$RUNNER" = "es4-docker" ]; then
+              es4 "docker logs --tail 30 $CONTAINER 2>&1" 2>/dev/null || true
+            else
+              tail -30 "$MDIR/mirror.err.log" 2>/dev/null || true
+            fi
             exit 1
           fi
 
@@ -799,6 +1307,140 @@ PL
           KVSEP="$KVSEP" python3 "$WORKSPACE/scripts/kafka/assert-opra-definition-enumeration-record.py" "$TREF" "mirrored target"
           echo "PAYLOAD VERIFIED on $TGT/$TOPIC: MM1 group caught up with a live member, and the"
           echo "source's newest enumeration record is present with an identical key and value."
+        '''
+      }
+    }
+
+    stage('Verify STILL alive after the proof') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          # ---- runtime helpers. Defined per-stanza because each `sh` step is its own shell;
+          # scripts/ci/validate-mirror-shell-helpers.sh enforces that.
+          es4() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$ES4_HOST" "$@"; }
+          # Is there a container substrate at all? A loopback target is the dev Kafka on THIS Mac --
+          # there is no remote host to install a container onto, and RUNNER=es4-docker is refused for
+          # it in Preflight. Anywhere else, the substrate exists and its state must be PROVABLE:
+          # an unreachable host is a FAILURE, never "probably not installed", because that reading is
+          # exactly how a second producer survives a teardown.
+          target_is_remote() {
+            case "$TARGET_SPX_CLUSTER_IP" in 127.0.0.1|localhost|::1) return 1 ;; *) return 0 ;; esac
+          }
+          # Remove the container and PROVE it is gone. Called UNCONDITIONALLY by teardown and by the
+          # arming stage, whichever RUNNER is selected: review found that switching TO
+          # local-mac-launchd left an es4 container running, and the arming stage can legitimately
+          # perform no offset reset (group already at the log start, or an empty source under
+          # ALLOW_EMPTY_SOURCE), so nothing downstream would have noticed the second producer.
+          es4_absent_and_prove() {
+            if ! target_is_remote; then
+              echo "no container substrate for loopback target $TARGET_SPX_CLUSTER_IP -- nothing to remove"
+              return 0
+            fi
+            es4 "docker rm -f $CONTAINER >/dev/null 2>&1; true" \
+              || { echo "FAIL: cannot reach $ES4_HOST to prove container $CONTAINER is gone; refusing to leave a possible second producer"; return 1; }
+            local i left
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              left=$(es4 "docker ps -a --filter name=^${CONTAINER}\$ --format '{{.Names}}'") \
+                || { echo "FAIL: cannot read container state on $ES4_HOST"; return 1; }
+              [ -z "$left" ] && return 0
+              sleep 1
+            done
+            echo "FAIL: container $CONTAINER survived removal on $ES4_HOST:"
+            es4 "docker ps -a --filter name=^${CONTAINER}\$" || true
+            return 1
+          }
+          # The mirror image of the above: remove the MAC LaunchAgent for this same (target, topic)
+          # and prove it gone.
+          mac_unit_absent_and_prove() {
+            launchctl unload "$PLIST" 2>/dev/null || true
+            local i gone=0
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if ! launchctl list 2>/dev/null | grep -qF "$LABEL"; then gone=1; break; fi
+              launchctl remove "$LABEL" 2>/dev/null || true
+              sleep 1
+            done
+            [ "$gone" = "1" ] || { echo "FAIL: the mac LaunchAgent $LABEL is still registered; refusing to run a SECOND mirror for $TOPIC"; return 1; }
+            rm -f "$PLIST"
+            pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
+            pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
+            pkill -f "kafka.tools.MirrorMaker.*$MDIR" 2>/dev/null || true
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              pgrep -f "$MDIR" >/dev/null 2>&1 || return 0
+              sleep 1
+            done
+            echo "FAIL: a mac process for $MDIR survived; refusing to run a SECOND mirror for $TOPIC"
+            pgrep -fl "$MDIR" || true
+            return 1
+          }
+          # WHY A SECOND LIVENESS CHECK, AFTER the payload proof.
+          #
+          # The liveness stage compares two readings twelve seconds apart, and review found the hole:
+          # a mirror that reliably dies every THIRTY seconds passes both of them with RestartCount=0
+          # and an unchanged StartedAt, and if the payload proof then finishes before its first exit
+          # the install goes green on a container that is about to enter a restart/backoff loop --
+          # leaving es4's enumeration to go stale with nothing having failed.
+          #
+          # Re-comparing the persisted reading AFTER the proof widens the observation window, and
+          # because the comparison is on RestartCount and StartedAt a single death anywhere inside
+          # that window is caught regardless of when it fell.
+          #
+          # But the window must be GUARANTEED, not inherited from how long the proof happened to
+          # take -- review's second pass was right about that. Under ALLOW_EMPTY_SOURCE the payload
+          # stage exits immediately, and even a real proof can match on its first attempt with no
+          # minimum delay, so the total could still be under the thirty seconds of the scenario this
+          # is meant to catch. So the floor is enforced here, on the agent's own clock, from the
+          # moment the unit was started.
+          #
+          # WHAT THIS DOES AND DOES NOT PROVE. A crash whose PERIOD exceeds the floor is invisible to
+          # any window, so no floor "solves" this -- it BOUNDS it. Sixty seconds covers the
+          # thirty-second scenario twice over and costs at most a minute on an install, which happens
+          # rarely. A container whose first death comes after that is a monitoring problem, not an
+          # install-time one, and claiming otherwise would be the more dangerous error because it is
+          # the claim someone would rely on instead of monitoring.
+          MIN_OBSERVE_S=60
+          C="$MDIR/unit-started-at.txt"
+          [ -s "$C" ] || { echo "FAIL: $C missing -- the install stage did not record a start time, so the observation window cannot be bounded"; exit 1; }
+          grep -q "^build=$BUILD_NUMBER " "$C" \
+            || { echo "FAIL: $C is not from this build (got: $(cat "$C")) -- a stale start time would make the window look already satisfied and skip the wait"; exit 1; }
+          CREATED=$(sed 's/.*created=\([0-9]*\).*/\1/' "$C")
+          case "$CREATED" in ''|*[!0-9]*) echo "FAIL: recorded start time is not an epoch (got '$CREATED')"; exit 1 ;; esac
+          NOWS=$(date -u +%s)
+          ELAPSED=$((NOWS - CREATED))
+          if [ "$ELAPSED" -lt "$MIN_OBSERVE_S" ]; then
+            WAIT=$((MIN_OBSERVE_S - ELAPSED))
+            echo "observed for ${ELAPSED}s; waiting a further ${WAIT}s so the window is at least ${MIN_OBSERVE_S}s"
+            sleep "$WAIT"
+            ELAPSED=$(( $(date -u +%s) - CREATED ))
+          fi
+          echo "observation window: ${ELAPSED}s (floor ${MIN_OBSERVE_S}s)"
+          if [ "$RUNNER" = "es4-docker" ]; then
+            F="$MDIR/container-liveness.txt"
+            [ -f "$F" ] || { echo "FAIL: $F missing -- the liveness stage did not run"; exit 1; }
+            grep -q "^build=$BUILD_NUMBER " "$F" \
+              || { echo "FAIL: $F is not from this build (got: $(cat "$F"))"; exit 1; }
+            WAS_START=$(sed 's/.*started=\([^ ]*\).*/\1/' "$F")
+            WAS_RC=$(sed 's/.*restarts=\([^ ]*\).*/\1/' "$F")
+            insp() { es4 "docker inspect -f '$1' $CONTAINER" 2>/dev/null; }
+            NOW_RUN=$(insp '{{.State.Running}}') || { echo "FAIL: container $CONTAINER is gone after the proof"; exit 1; }
+            NOW_START=$(insp '{{.State.StartedAt}}'); NOW_RC=$(insp '{{.RestartCount}}')
+            [ "$NOW_RUN" = "true" ] \
+              || { echo "FAIL: container $CONTAINER is not running after the proof (Running=$NOW_RUN); last log:"; es4 "docker logs --tail 40 $CONTAINER 2>&1" || true; exit 1; }
+            [ "$NOW_START" = "$WAS_START" ] && [ "$NOW_RC" = "$WAS_RC" ] \
+              || { echo "FAIL: container $CONTAINER restarted during the payload proof (startedAt $WAS_START -> $NOW_START, restarts $WAS_RC -> $NOW_RC) -- it is crash-looping on a period the short window could not see; last log:"; es4 "docker logs --tail 40 $CONTAINER 2>&1" || true; exit 1; }
+            echo "STILL ALIVE after ${ELAPSED}s: $CONTAINER, restarts $NOW_RC, started $NOW_START"
+          else
+            F="$MDIR/launchd-liveness.txt"
+            [ -f "$F" ] || { echo "FAIL: $F missing -- the liveness stage did not run"; exit 1; }
+            grep -q "^build=$BUILD_NUMBER " "$F" \
+              || { echo "FAIL: $F is not from this build (got: $(cat "$F"))"; exit 1; }
+            WAS_PID=$(sed 's/.*pid=\([^ ]*\).*/\1/' "$F")
+            NOW_PID=$(launchctl list | awk -v L="$LABEL" -F'\\t' '$3 == L {print $1; found=1} END{ exit found?0:1 }') \
+              || { echo "FAIL: launchd unit $LABEL is no longer loaded after the proof"; exit 1; }
+            [ "$NOW_PID" = "$WAS_PID" ] \
+              || { echo "FAIL: $LABEL restarted during the payload proof (PID $WAS_PID -> $NOW_PID) -- it is crash-looping on a period the short window could not see"; exit 1; }
+            echo "STILL ALIVE after ${ELAPSED}s: $LABEL, PID $NOW_PID"
+          fi
         '''
       }
     }
