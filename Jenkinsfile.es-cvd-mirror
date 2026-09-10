@@ -152,6 +152,9 @@ pipeline {
           #              the declared 12 h BEFORE any mirror install (operational ordering in the
           #              PR), so the source assert below holds. Safe: the 1 Hz writer keeps the
           #              latest value in the active segment, which time-retention never deletes.
+          # BYTES = the frozen retention.bytes contract where one is declared (topics.env
+          # OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES); empty = the broker default, unasserted.
+          BYTES=""
           case "$TOPIC" in
             es.futures.cvd.bars) PARTS=1; POLICY=delete; RET=-1 ;;
             es.futures.cvd)      PARTS=1; POLICY=delete; RET=43200000 ;;
@@ -169,7 +172,7 @@ pipeline {
             # es-footprint-strike service publishes on es4 with ensureArchivableTopic — delete, retention -1,
             # one partition — and folds on restart (R6). The dev/prod copies feed the feed-gateway's fifth
             # footprint stream (R3); a finite retention would cut the cross-session history R18 relies on.
-            es.futures.footprint.strike)   PARTS=1; POLICY=delete; RET=-1 ;;
+            es.futures.footprint.strike)   PARTS=1; POLICY=delete; RET=-1; BYTES=-1 ;;
             *) echo "FAIL: topic $TOPIC not in the cvd-mirror allow-list"; exit 1 ;;
           esac
 
@@ -243,7 +246,9 @@ S
             # delete.retention.ms before retention.ms (install #1), and a comma in the terminator
             # class then truncated the VALUE "compact,delete" to "compact" (install #2) — in
             # kafka-configs' space-delimited output, commas belong to values, never to delimiters.
-            [ -n "$out" ] || { echo "FAIL: cannot read $3 for $2 on $1"; return 1; }
+            # the diagnostic goes to STDERR: every caller is `X=$(eff ...) || exit 1`, and a
+            # stdout message would be captured into X and never seen (shape-test pins this).
+            [ -n "$out" ] || { echo "FAIL: cannot read $3 for $2 on $1" >&2; return 1; }
             printf '%s' "$out"
           }
           # SOURCE shape assert against the SAME frozen arm — the shape contract must hold at both
@@ -255,12 +260,18 @@ S
           [ "$SPOL" = "$POLICY" ] || { echo "FAIL: source $TOPIC cleanup.policy=$SPOL, frozen contract says $POLICY"; exit 1; }
           SRET=$(eff "$SRC" "$TOPIC" retention.ms) || exit 1
           [ "$SRET" = "$RET" ] || { echo "FAIL: source $TOPIC retention.ms=$SRET, frozen contract says $RET"; exit 1; }
+          # retention.BYTES where the contract declares one (deploy Codex round 2): retention.ms=-1 does
+          # not stop byte-based deletion, and a finite inherited cap on either end deletes the history.
+          if [ -n "$BYTES" ]; then
+            SBYTES=$(eff "$SRC" "$TOPIC" retention.bytes) || exit 1
+            [ "$SBYTES" = "$BYTES" ] || { echo "FAIL: source $TOPIC retention.bytes=$SBYTES, frozen contract says $BYTES"; exit 1; }
+          fi
 
           # pre-create target topic to the FROZEN contract (idempotent; §7.3 forbids ever
           # recreating/truncating an existing target)...
           "$KBIN/kafka-topics" --bootstrap-server "$TGT" --create --if-not-exists --topic "$TOPIC" \
             --partitions "$PARTS" --replication-factor 1 \
-            --config cleanup.policy="$POLICY" --config retention.ms="$RET" 2>&1 | tail -1
+            --config cleanup.policy="$POLICY" --config retention.ms="$RET" ${BYTES:+--config retention.bytes="$BYTES"} 2>&1 | tail -1
           # ...and because --if-not-exists silently keeps an EXISTING malformed topic, assert the
           # target's ACTUAL shape now. A partition-count mismatch would silently re-shard the
           # key->partition mapping mid-stream; a policy mismatch would truncate the live view.
@@ -280,6 +291,10 @@ S
           # a cvd.bars sitting at a finite default would silently delete overnight history.
           TRET=$(eff "$TGT" "$TOPIC" retention.ms) || exit 1
           [ "$TRET" = "$RET" ] || { echo "FAIL: target $TOPIC retention.ms=$TRET, frozen contract says $RET"; exit 1; }
+          if [ -n "$BYTES" ]; then
+            TBYTES=$(eff "$TGT" "$TOPIC" retention.bytes) || exit 1
+            [ "$TBYTES" = "$BYTES" ] || { echo "FAIL: target $TOPIC retention.bytes=$TBYTES, frozen contract says $BYTES"; exit 1; }
+          fi
           echo "config generated; target $TOPIC verified: $PARTS partition(s), $POLICY"
           # >>> END SHAPE ASSERTIONS <<<
         '''

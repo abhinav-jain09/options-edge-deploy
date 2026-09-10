@@ -398,6 +398,115 @@ es4_entry=$(grep '^1 17 \* \* 1-5 .*ENV=es4' "$crontab_file")
 hasnt "the es4 entry carries NO TOPICS override (the policy file is the one definition)" \
       "TOPICS=" "$es4_entry"
 
+# ================= 12. TRANSACTIONAL topics checkpoint only what they PROVED they captured ======
+# (deploy Codex round 2, finding 1 — es.futures.footprint.strike, es.futures.cvd.levels, OPB outputs.)
+# kafka-get-offsets reports the HIGH-WATER MARK; a read_committed reader stops at the last STABLE
+# offset, commit/abort markers occupy offsets that never surface as records, and aborted records
+# are withheld. Checkpointing the high-water mark would skip whatever commits after the capture.
+# The shim below models exactly that: the fixture's `visible <part> <ranges>` line lists the
+# offsets a read_committed reader can see NOW; the high-water mark stays in the partition line.
+A="$T/tx"; mkdir -p "$A/kafka/prod/_manifest"
+TXENV="$T/topics-tx.env"; { cat "$OE/oe-topics.env"; echo 'OE_TRANSACTIONAL_TOPICS_prod="oe.test.reset"'; } > "$TXENV"
+cat > "$BIN/kafka-console-consumer.sh" <<'SH'
+#!/usr/bin/env bash
+part=""; off=0; maxm=0; committed=false; print_offset=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --partition) part="$2"; shift 2 ;;
+    --offset) off="$2"; shift 2 ;;
+    --max-messages) maxm="$2"; shift 2 ;;
+    --consumer-property) [ "$2" = "isolation.level=read_committed" ] && committed=true; shift 2 ;;
+    --formatter-property) [ "$2" = "print.offset=true" ] && print_offset=true; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ "$committed" = true ] || { echo "SHIM: reader is not read_committed" >&2; exit 9; }
+[ "$print_offset" = true ] || { echo "SHIM: no print.offset on a transactional topic" >&2; exit 9; }
+ranges=$(awk -v p="$part" '$1=="visible" && $2==p {print $3}' "$OE_FIXTURE")
+n=0
+for r in ${ranges//,/ }; do
+  lo=${r%-*}; hi=${r#*-}
+  o=$lo
+  while [ "$o" -le "$hi" ]; do
+    if [ "$o" -ge "$off" ] && [ "$n" -lt "$maxm" ]; then
+      echo -e "CreateTime:1786000000000\tPartition:$part\tOffset:$o\tk$o\t{\"schemaVersion\":1}"
+      n=$(( n + 1 ))
+    fi
+    o=$(( o + 1 ))
+  done
+done
+exit 0
+SH
+chmod +x "$BIN/kafka-console-consumer.sh"
+mline() { cat "$A"/kafka/prod/"$TOPIC"/dt=*/_manifest.jsonl 2>/dev/null | grep -F "\"partition\":$1," | tail -1; }
+mfield() { printf '%s' "$(mline "$1")" | python3 -c "import json,sys; d=json.loads(sys.stdin.read() or '{}'); print(d.get('$2',''))"; }
+# (a) committed records 0..4, a commit marker at 5, high-water mark 6
+fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 6" "1 0 0" "visible 0 0-4"
+OUT=$(run OE_TOPICS_ENV="$TXENV"); RC=$?
+want "tx: committed records archive cleanly (rc)"        0 "$RC"
+want "  five records captured"                           5 "$(runs records)"
+want "  checkpoint = last captured offset + 1, NOT the hwm" 5 "$(ck 0)"
+has  "  the deferred marker is said out loud"  "deferred to the next capture" "$OUT"
+want "  manifest offset_to is the proved boundary"       5 "$(mfield 0 offset_to)"
+want "  manifest offset_span is [from, boundary)"        5 "$(mfield 0 offset_span)"
+# (b) an UNRESOLVED transaction: hwm 1200, stable through 1099 — the reader times out below the hwm
+fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 1200" "1 0 0" "visible 0 0-4,5-1099"
+OUT=$(run OE_TOPICS_ENV="$TXENV"); RC=$?
+want "tx: unresolved transaction — run still succeeds (rc)" 0 "$RC"
+want "  captured exactly the stable records"          1095 "$(runs records)"
+want "  checkpoint stops at the stable boundary"      1100 "$(ck 0)"
+has  "  and says 100 offsets are deferred"  "100 offset(s) deferred" "$OUT"
+# (c) delayed finalize: those 100 commit after the capture — the NEXT run reads them, nothing skipped
+fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 1200" "1 0 0" "visible 0 0-4,5-1199"
+OUT=$(run OE_TOPICS_ENV="$TXENV"); RC=$?
+want "tx: late commits are captured by the next run (rc)" 0 "$RC"
+want "  exactly the 100 late records"                  100 "$(runs records)"
+want "  checkpoint reaches the hwm once it is proved"  1200 "$(ck 0)"
+hasnt "  nothing deferred any more"  "deferred to the next capture" "$OUT"
+# (d) ABORTED records: 1200..1204 aborted (withheld), 1205..1209 committed, marker at 1210, hwm 1211
+fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 1211" "1 0 0" "visible 0 0-4,5-1199,1205-1209"
+OUT=$(run OE_TOPICS_ENV="$TXENV"); RC=$?
+want "tx: aborted records are never archived (rc)"      0 "$RC"
+want "  only the five committed records"                 5 "$(runs records)"
+want "  the checkpoint clears the aborted offsets (proved by a later committed one)" 1210 "$(ck 0)"
+# (e) a MARKER-ONLY remainder: hwm advances by a marker alone — nothing captured, checkpoint stays
+fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 1212" "1 0 0" "visible 0 0-4,5-1199,1205-1209"
+OUT=$(run OE_TOPICS_ENV="$TXENV"); RC=$?
+want "  marker-only range: checkpoint NOT advanced"   1210 "$(ck 0)"
+has  "  and it is reported, not assumed complete"  "checkpoint NOT advanced" "$OUT"
+# (f) the NON-transactional path is untouched: same shim shape, topic not declared transactional
+B2="$A"; A="$T/tx-plain"; mkdir -p "$A/kafka/prod/_manifest"
+cat > "$BIN/kafka-console-consumer.sh" <<'SH'
+#!/usr/bin/env bash
+part=""; off=0; maxm=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --partition) part="$2"; shift 2 ;;
+    --offset) off="$2"; shift 2 ;;
+    --max-messages) maxm="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+end=$(awk -v p="$part" '$1==p{print $3}' "$OE_FIXTURE")
+avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
+[ "$avail" -gt "$maxm" ] && avail="$maxm"
+i=0
+while [ "$i" -lt "$avail" ]; do
+  echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
+  i=$(( i + 1 ))
+done
+SH
+chmod +x "$BIN/kafka-console-consumer.sh"
+fixture "topicid PLPLPLPLPLPLPLPLPLPLPL" "0 0 6" "1 0 0"
+OUT=$(run); RC=$?
+want "plain topic: checkpoint is still the log end"      6 "$(ck 0)"
+A="$B2"
+# the policy file declares the strike log and cvd.levels transactional on es4 — the only place the
+# archiver learns it; a topic missing here is checkpointed at its high-water mark.
+es4_tx=$(. "$OE/oe-topics.env"; printf '%s' "${OE_TRANSACTIONAL_TOPICS_es4:-}")
+has  "oe-topics.env declares the strike log transactional on es4" "es.futures.footprint.strike" " $es4_tx "
+has  "  and es.futures.cvd.levels"                          "es.futures.cvd.levels" " $es4_tx "
+
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }
 echo "test-archive-reset: $FAILED FAILURE(S)"; exit 1

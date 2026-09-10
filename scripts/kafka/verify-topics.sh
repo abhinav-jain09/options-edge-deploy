@@ -103,6 +103,37 @@ compacted_fail=0
 # OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS on an EXPLICIT ENVIRONMENT=production run, and the es4
 # set declares its own compaction list empty. Verifying the raw dev list against those clusters
 # fails every topic the deploy just correctly set to `delete` — which is exactly what it did.
+# --- retention.BYTES contract (deploy Codex round 2, finding 2) --------------------------------
+# Declared per topic in topics.env; apply-topics.sh writes it at create and reconcile. Verified for
+# the ACTIVE set, whatever the environment: a finite byte cap on a log declared unbounded deletes the
+# history retention.ms=-1 promised, and nothing else on the deploy path reads retention.bytes.
+case "${TOPIC_SET:-}" in
+  "")   BYTES_LIST="${OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES:-}" ;;
+  es4)  BYTES_LIST="${OPTIONS_EDGE_ES4_TOPIC_RETENTION_BYTES_OVERRIDES:-}" ;;
+  *)    BYTES_LIST="" ;;
+esac
+bytes_fail=0
+for entry in $BYTES_LIST; do
+  topic="${entry%%=*}"
+  expected_bytes="${entry#*=}"
+  actual_bytes="$(kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" --entity-type topics \
+      --entity-name "$topic" --describe 2>/dev/null | grep -oE '(^|[ ])retention\.bytes=[^ ]*' | head -1 | sed 's/^ *//' | cut -d= -f2 || true)"
+  # `|| true`: under set -e/pipefail a NO-MATCH grep would exit the verifier silently, before the
+  # refusal below could say what it refused (pinned by verify-topics-pure-compact-test.sh).
+  if [ -z "$actual_bytes" ]; then
+    echo "FAIL: topic $topic retention.bytes could not be read (expected '$expected_bytes') — refusing to assume it" >&2
+    bytes_fail=1
+  elif [ "$actual_bytes" != "$expected_bytes" ]; then
+    echo "FAIL: topic $topic retention.bytes='$actual_bytes' but the declaration says '$expected_bytes'" >&2
+    bytes_fail=1
+  fi
+done
+if [ "$bytes_fail" -ne 0 ]; then
+  echo "[verify-topics] retention.bytes contract FAILED" >&2
+  exit 1
+fi
+echo "[verify-topics] retention.bytes contract OK ($(echo $BYTES_LIST | wc -w | tr -d ' ') topic(s), TOPIC_SET='${TOPIC_SET:-default}')"
+
 if [ "${ENVIRONMENT:-}" = "production" ] && [ -z "${TOPIC_SET:-}" ]; then
   _kept=""
   for _t in $COMPACTED_LIST; do

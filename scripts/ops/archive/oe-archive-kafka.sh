@@ -104,6 +104,17 @@ unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_p
 # population as complete. Every check below that says "strict" is gated on this list and nothing else.
 OE_STRICT_TOPICS="${OE_STRICT_TOPICS:-context-tape.direction.ledger}"
 is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# TRANSACTIONAL topics (deploy Codex round 2, finding 1): written inside Kafka transactions, so the
+# high-water mark the offsets tool reports can sit ABOVE the last stable offset while a transaction is
+# open, and commit/abort markers occupy offsets that never surface as records. For these the checkpoint
+# is the highest offset actually CAPTURED plus one — never the high-water mark — so a record that commits
+# after this capture is read next time instead of being skipped forever; a range that yields no record
+# does not advance at all. Declared per environment in oe-topics.env (OE_TRANSACTIONAL_TOPICS_<env>).
+OE_TRANSACTIONAL_TOPICS="$(eval "printf '%s' \"\${OE_TRANSACTIONAL_TOPICS_${ENV_NAME}:-}\"")"
+is_transactional_topic() { case " $OE_TRANSACTIONAL_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+scan_max_offset() {   # $1=path -> the greatest "Offset:N" field in the file, or -1 when none
+  LC_ALL=C zcat "$1" 2>/dev/null | LC_ALL=C awk 'BEGIN { FS="\t"; mx=-1 } { for (i = 1; i <= NF; i++) if (substr($i,1,7) == "Offset:") { o = substr($i,8) + 0; if (o > mx) mx = o } } END { print mx }'
+}
 
 DEFAULT_TOPICS_prod="$OE_ALL_TOPICS_prod"
 # One definition, every caller: the es4 set comes from oe-topics.env, REQUIRED above — there is
@@ -540,18 +551,34 @@ for topic in $TOPICS; do
          --formatter-property print.timestamp=true \
          --formatter-property print.key=true \
          --formatter-property print.partition=true \
-         $(is_strict_topic "$topic" && echo "--formatter-property print.offset=true") \
+         $( (is_strict_topic "$topic" || is_transactional_topic "$topic") && echo "--formatter-property print.offset=true") \
          --timeout-ms 60000 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
     consumer_rc=${PIPESTATUS[0]}
 
     read -r got min_ms max_ms schema_versions <<< "$(scan_archive_file "$tmp")"
     got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
+    # The offset this capture may checkpoint. Ordinary topics: the end offset captured at start.
+    # Transactional topics: the highest offset actually captured, plus one — the only boundary this
+    # reader can PROVE it reached; a capture with no record leaves the checkpoint where it was.
+    # The span the manifest claims is [from, ckpt_to) — for a transactional topic that is the
+    # boundary the capture PROVED, not the high-water mark it started from.
+    ckpt_to="$endoff"; span="$count"
+    if is_transactional_topic "$topic" && [ "$got" -gt 0 ]; then
+      maxoff="$(scan_max_offset "$tmp")"
+      if [ "${maxoff:--1}" -ge "$from" ] && [ "$maxoff" -lt "$endoff" ]; then
+        ckpt_to=$(( maxoff + 1 )); span=$(( ckpt_to - from ))
+        [ "$ckpt_to" -lt "$endoff" ] && log "  NOTE $topic p$part: stable boundary $ckpt_to is short of the high-water mark $endoff — $((endoff-ckpt_to)) offset(s) deferred to the next capture (markers, an aborted or an unresolved transaction)"
+      else
+        log "  WARN $topic p$part: transactional topic captured $got record(s) but no Offset: field inside [$from,$endoff) could be read — checkpoint NOT advanced"
+        got=0
+      fi
+    fi
     # got < count is NORMAL on a COMPACTED topic: offsets advance but compaction removes all but
     # the newest record per key, so the readable count is far below (end-from). underlying.spx.price
     # is the extreme case — 642,060 offsets, ~2,000 readable records. Judging by count alone would
     # mark every compacted topic as failed forever. Judge by the CONSUMER's exit status instead,
     # and record both numbers so the compaction ratio is visible in the manifest.
-    if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ] && [ "$got" -ne "$count" ]; then
+    if is_strict_topic "$topic" && ! is_transactional_topic "$topic" && [ "$consumer_rc" -eq 0 ] && [ "$got" -ne "$count" ]; then
       # A5: the short read that is NORMAL on a compacted topic is a HOLE on a delete-retained one.
       # Accepting it would archive fewer records than the offset range claims and still advance the
       # checkpoint past them.
@@ -591,7 +618,7 @@ for topic in $TOPICS; do
       sha=$(sha256sum "$out" 2>/dev/null | cut -d' ' -f1)
       bytes=$(stat -c%s "$out" 2>/dev/null || echo 0)
       printf '{"topic":"%s","dt":"%s","partition":%s,"offset_from":%s,"offset_to":%s,"records":%s,"offset_span":%s,"min_event_time_ms":%s,"max_event_time_ms":%s,"min_event_time":"%s","max_event_time":"%s",%s,"sha256":"%s","bytes":%s,"file":"%s","archived_at":"%s","job":"%s","env":"%s","archiver_version":"%s"}\n' \
-        "$topic" "$DAY" "$part" "$from" "$endoff" "$got" "$count" \
+        "$topic" "$DAY" "$part" "$from" "$ckpt_to" "$got" "$span" \
         "$min_ms" "$max_ms" "$(ms_to_iso "$min_ms")" "$(ms_to_iso "$max_ms")" \
         "$(schema_fragment "$topic" "$out" "$schema_versions")" \
         "${sha:-unknown}" "$bytes" "$(basename "$out")" "$STAMP" "$ARCHIVE_JOB" "$ENV_NAME" "$ARCHIVER_VERSION" \
@@ -603,7 +630,7 @@ for topic in $TOPICS; do
           continue
         }
       printf '%s=%s records=%s span=%s dt=%s archived=%s\n' \
-        "$part" "$endoff" "$got" "$count" "$DAY" "$STAMP" >> "$offfile"
+        "$part" "$ckpt_to" "$got" "$span" "$DAY" "$STAMP" >> "$offfile"
 
       topic_records=$(( topic_records + got )); total_files=$(( total_files + 1 ))
       if [ "$got" -lt "$count" ]; then

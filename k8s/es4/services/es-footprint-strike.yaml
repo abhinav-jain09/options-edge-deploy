@@ -59,10 +59,12 @@ spec:
       - name: es-footprint-strike
         image: 192.168.100.252:5000/options-edge-es-footprint-strike:prod
         env:
-        # The R6 fold holds every identity's latest record (bytes + parsed) until it completes. A session's
-        # log is bounded by the ladder (1,001 strikes) x episodes per strike x ~3 KB per record with a 64-entry
-        # series — tens of MB at most for the one session es4 retains between nightly cleans; the es-cvd
-        # sizing (768 MiB heap) is the precedent and leaves an order of magnitude of headroom.
+        # The R6 fold keeps the parsed snapshot of an identity only while it is OPEN and one 32-byte digest per
+        # log record (plus its identity key) for the collision rule, so recovery heap scales with the open
+        # episodes plus the record COUNT of the retained log, not with every closed episode's series. es4
+        # retains one session between nightly cleans; the es-cvd sizing (768 MiB heap, 1 GiB limit) is the
+        # precedent. PROVISIONAL: measure a full-session recovery and one after a missed clean (see the
+        # ES-FOOTPRINT-STRIKE-DEPLOY-CODEX-ROUND2.md record) before treating this as capacity.
         - name: JAVA_TOOL_OPTIONS
           value: -Xms128m -Xmx768m
         - name: FOOTPRINT_STRIKE_HEALTH_PORT

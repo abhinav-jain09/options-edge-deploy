@@ -191,8 +191,8 @@ The validator coverage has these limits:
 
 Shell syntax checks and `git diff --check` passed. No files or external deployments were changed.
 
-**Institutional:** Not met—reset semantics and committed-history fidelity are incorrect.  
-**Military:** Not met—abort/reset/archive failure paths are insufficiently protected despite correct fencing and restart wiring.  
+**Institutional:** Not met—reset semantics and committed-history fidelity are incorrect.
+**Military:** Not met—abort/reset/archive failure paths are insufficiently protected despite correct fencing and restart wiring.
 **NASA:** Not established—full-history recovery capacity, startup margin, and transactional archive completion lack adequate evidence.
 
 VERDICT: REQUEST_CHANGES
