@@ -978,6 +978,14 @@ PL
               exit 1
             fi
 
+            # Persist this reading. The 12-second window below cannot see a crash whose PERIOD is
+            # longer than it -- a container that reliably dies every 30 seconds passes both reads with
+            # RestartCount=0 and an unchanged StartedAt (found in review). The payload proof that
+            # follows takes tens of seconds and makes the mirror do real work, so the SAME reading is
+            # compared again after it, which turns the observation window from 12 seconds into the
+            # whole install. Stamped with the build, like every other cross-stage artefact here: a
+            # leftover file must never stand in as this build's evidence.
+            printf 'build=%s started=%s restarts=%s pid=%s\n' "$BUILD_NUMBER" "$START1" "$RC1" "$PID1" > "$MDIR/container-liveness.txt"
             echo "container $CONTAINER alive and stable on $ES4_HOST: pid $PID1, restarts $RC1, policy $POLICY (kafka.tools.MirrorMaker)"
           else
           # LIVENESS, not registration. `launchctl list | grep "$LABEL"` proves only that the job is
@@ -1010,6 +1018,7 @@ PL
             [ -z "$RUNNING" ] \
               || { echo "FAIL: container $CONTAINER is ALSO running on $ES4_HOST -- two mirrors on a one-partition topic"; exit 1; }
           fi
+          printf 'build=%s pid=%s\n' "$BUILD_NUMBER" "$PID1" > "$MDIR/launchd-liveness.txt"
           echo "launchd unit $LABEL alive and stable: PID $PID1 (kafka.tools.MirrorMaker)"
           fi
           # pollution guard: MM1 must NOT ADD es4.* / es.es.es / heartbeat / mm2 topics to the target.
@@ -1287,6 +1296,116 @@ PL
           KVSEP="$KVSEP" python3 "$WORKSPACE/scripts/kafka/assert-opra-definition-enumeration-record.py" "$TREF" "mirrored target"
           echo "PAYLOAD VERIFIED on $TGT/$TOPIC: MM1 group caught up with a live member, and the"
           echo "source's newest enumeration record is present with an identical key and value."
+        '''
+      }
+    }
+
+    stage('Verify STILL alive after the proof') {
+      when { expression { params.ACTION == 'install' } }
+      steps {
+        sh '''
+          set -euo pipefail
+          # ---- runtime helpers. Defined per-stanza because each `sh` step is its own shell;
+          # scripts/ci/validate-mirror-shell-helpers.sh enforces that.
+          es4() { ssh -o BatchMode=yes -o ConnectTimeout=10 "$ES4_HOST" "$@"; }
+          # Is there a container substrate at all? A loopback target is the dev Kafka on THIS Mac --
+          # there is no remote host to install a container onto, and RUNNER=es4-docker is refused for
+          # it in Preflight. Anywhere else, the substrate exists and its state must be PROVABLE:
+          # an unreachable host is a FAILURE, never "probably not installed", because that reading is
+          # exactly how a second producer survives a teardown.
+          target_is_remote() {
+            case "$TARGET_SPX_CLUSTER_IP" in 127.0.0.1|localhost|::1) return 1 ;; *) return 0 ;; esac
+          }
+          # Remove the container and PROVE it is gone. Called UNCONDITIONALLY by teardown and by the
+          # arming stage, whichever RUNNER is selected: review found that switching TO
+          # local-mac-launchd left an es4 container running, and the arming stage can legitimately
+          # perform no offset reset (group already at the log start, or an empty source under
+          # ALLOW_EMPTY_SOURCE), so nothing downstream would have noticed the second producer.
+          es4_absent_and_prove() {
+            if ! target_is_remote; then
+              echo "no container substrate for loopback target $TARGET_SPX_CLUSTER_IP -- nothing to remove"
+              return 0
+            fi
+            es4 "docker rm -f $CONTAINER >/dev/null 2>&1; true" \
+              || { echo "FAIL: cannot reach $ES4_HOST to prove container $CONTAINER is gone; refusing to leave a possible second producer"; return 1; }
+            local i left
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              left=$(es4 "docker ps -a --filter name=^${CONTAINER}\$ --format '{{.Names}}'") \
+                || { echo "FAIL: cannot read container state on $ES4_HOST"; return 1; }
+              [ -z "$left" ] && return 0
+              sleep 1
+            done
+            echo "FAIL: container $CONTAINER survived removal on $ES4_HOST:"
+            es4 "docker ps -a --filter name=^${CONTAINER}\$" || true
+            return 1
+          }
+          # The mirror image of the above: remove the MAC LaunchAgent for this same (target, topic)
+          # and prove it gone.
+          mac_unit_absent_and_prove() {
+            launchctl unload "$PLIST" 2>/dev/null || true
+            local i gone=0
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              if ! launchctl list 2>/dev/null | grep -qF "$LABEL"; then gone=1; break; fi
+              launchctl remove "$LABEL" 2>/dev/null || true
+              sleep 1
+            done
+            [ "$gone" = "1" ] || { echo "FAIL: the mac LaunchAgent $LABEL is still registered; refusing to run a SECOND mirror for $TOPIC"; return 1; }
+            rm -f "$PLIST"
+            pkill -f "$MDIR/run-mirror.sh" 2>/dev/null || true
+            pkill -f "kafka-mirror-maker.*$MDIR" 2>/dev/null || true
+            pkill -f "kafka.tools.MirrorMaker.*$MDIR" 2>/dev/null || true
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              pgrep -f "$MDIR" >/dev/null 2>&1 || return 0
+              sleep 1
+            done
+            echo "FAIL: a mac process for $MDIR survived; refusing to run a SECOND mirror for $TOPIC"
+            pgrep -fl "$MDIR" || true
+            return 1
+          }
+          # WHY A SECOND LIVENESS CHECK, AFTER the payload proof.
+          #
+          # The liveness stage compares two readings twelve seconds apart, and review found the hole:
+          # a mirror that reliably dies every THIRTY seconds passes both of them with RestartCount=0
+          # and an unchanged StartedAt, and if the payload proof then finishes before its first exit
+          # the install goes green on a container that is about to enter a restart/backoff loop --
+          # leaving es4's enumeration to go stale with nothing having failed.
+          #
+          # The payload proof takes tens of seconds (a group catch-up wait, up to six read attempts
+          # with five-second sleeps, and a byte comparison over a 71 KB record) and it makes the
+          # mirror do real work. Re-comparing the SAME persisted reading after it turns the
+          # observation window from twelve seconds into the whole install, and because the comparison
+          # is on RestartCount and StartedAt, a single death anywhere inside that window is caught
+          # regardless of when it happened.
+          #
+          # It does NOT claim to catch a container whose first death comes after the install ends --
+          # nothing at install time can, and pretending otherwise would be the more dangerous error.
+          if [ "$RUNNER" = "es4-docker" ]; then
+            F="$MDIR/container-liveness.txt"
+            [ -f "$F" ] || { echo "FAIL: $F missing -- the liveness stage did not run"; exit 1; }
+            grep -q "^build=$BUILD_NUMBER " "$F" \
+              || { echo "FAIL: $F is not from this build (got: $(cat "$F"))"; exit 1; }
+            WAS_START=$(sed 's/.*started=\([^ ]*\).*/\1/' "$F")
+            WAS_RC=$(sed 's/.*restarts=\([^ ]*\).*/\1/' "$F")
+            insp() { es4 "docker inspect -f '$1' $CONTAINER" 2>/dev/null; }
+            NOW_RUN=$(insp '{{.State.Running}}') || { echo "FAIL: container $CONTAINER is gone after the proof"; exit 1; }
+            NOW_START=$(insp '{{.State.StartedAt}}'); NOW_RC=$(insp '{{.RestartCount}}')
+            [ "$NOW_RUN" = "true" ] \
+              || { echo "FAIL: container $CONTAINER is not running after the proof (Running=$NOW_RUN); last log:"; es4 "docker logs --tail 40 $CONTAINER 2>&1" || true; exit 1; }
+            [ "$NOW_START" = "$WAS_START" ] && [ "$NOW_RC" = "$WAS_RC" ] \
+              || { echo "FAIL: container $CONTAINER restarted during the payload proof (startedAt $WAS_START -> $NOW_START, restarts $WAS_RC -> $NOW_RC) -- it is crash-looping on a period the short window could not see; last log:"; es4 "docker logs --tail 40 $CONTAINER 2>&1" || true; exit 1; }
+            echo "STILL ALIVE after the proof: $CONTAINER, restarts $NOW_RC, started $NOW_START"
+          else
+            F="$MDIR/launchd-liveness.txt"
+            [ -f "$F" ] || { echo "FAIL: $F missing -- the liveness stage did not run"; exit 1; }
+            grep -q "^build=$BUILD_NUMBER " "$F" \
+              || { echo "FAIL: $F is not from this build (got: $(cat "$F"))"; exit 1; }
+            WAS_PID=$(sed 's/.*pid=\([^ ]*\).*/\1/' "$F")
+            NOW_PID=$(launchctl list | awk -v L="$LABEL" -F'\\t' '$3 == L {print $1; found=1} END{ exit found?0:1 }') \
+              || { echo "FAIL: launchd unit $LABEL is no longer loaded after the proof"; exit 1; }
+            [ "$NOW_PID" = "$WAS_PID" ] \
+              || { echo "FAIL: $LABEL restarted during the payload proof (PID $WAS_PID -> $NOW_PID) -- it is crash-looping on a period the short window could not see"; exit 1; }
+            echo "STILL ALIVE after the proof: $LABEL, PID $NOW_PID"
+          fi
         '''
       }
     }
