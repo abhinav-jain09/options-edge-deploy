@@ -22,6 +22,12 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 fail=0
 
+# The generated consumer.properties must read COMMITTED records only: the strike log and cvd.levels
+# are transactional, and an aborted revision copied by the mirror is indistinguishable from a real one
+# on the target (deploy Codex round 1, finding 1). Pinned here because the shape assertions below
+# never see the consumer config.
+grep -qE '^isolation\.level=read_committed$' "$JOB" \
+  || { echo "FAIL: $JOB must generate consumer.properties with isolation.level=read_committed" >&2; exit 1; }
 body="$(awk '/BEGIN SHAPE ASSERTIONS/{f=1;next} /END SHAPE ASSERTIONS/{f=0} f' "$JOB")"
 [ -n "$body" ] || { echo "FAIL: shape-assertion markers not found in $JOB — the extraction and the job have diverged" >&2; exit 1; }
 # Sanity: the extracted text must actually contain the assertions this file claims to test.
@@ -129,6 +135,23 @@ TGT_BROKER=127.0.0.1:19092
 MOCK_TOPIC=es.futures.cvd.bars PARTS=1 POLICY=compact,delete RET=-1
 SRC_PARTS=1 SRC_POLICY=compact,delete SRC_RET=-1 TGT_PARTS=1 TGT_POLICY=compact,delete TGT_RET=-1
 check "bars: dev target still allowed (not production-only)" 0
+TGT_BROKER=192.168.100.252:9092
+
+# ── the strike-interaction log (ES-FOOTPRINT-STRIKE-INTERACTION.md R13): delete, -1, one partition ──
+MOCK_TOPIC=es.futures.footprint.strike PARTS=1 POLICY=delete RET=-1
+SRC_PARTS=1 SRC_POLICY=delete SRC_RET=-1 TGT_PARTS=1 TGT_POLICY=delete TGT_RET=-1
+check "strike: matching delete/-1 target passes" 0
+TGT_POLICY=compact,delete
+check "strike: a compacted target FAILS (revisions must all survive)" 1 "target es.futures.footprint.strike cleanup.policy=compact,delete"
+TGT_POLICY=delete TGT_RET=604800000
+check "strike: a finite target retention FAILS (history crosses sessions)" 1 "target es.futures.footprint.strike retention.ms=604800000"
+TGT_RET=-1 TGT_PARTS=4
+check "strike: a 4-partition target FAILS (one totally-ordered log)" 1 "PartitionCount"
+TGT_PARTS=1 SRC_POLICY=compact
+check "strike: a compacted SOURCE FAILS" 1 "source es.futures.footprint.strike cleanup.policy=compact"
+SRC_POLICY=delete
+TGT_BROKER=127.0.0.1:19092
+check "strike: dev target allowed (not production-only)" 0
 TGT_BROKER=192.168.100.252:9092
 
 # ── the compact,delete siblings must still pass, and must not accept pure compact ───────────────

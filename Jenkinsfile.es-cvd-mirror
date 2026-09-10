@@ -181,6 +181,12 @@ group.id=es-cvd-mirror-${TARGET_SPX_CLUSTER_IP}-${TOPIC}
 # — for cvd.bars the whole point is that dev/prod can backfill overnight bars; `latest` would skip
 # everything already on es4. Re-installs are unaffected: the group's committed offsets win.
 auto.offset.reset=earliest
+# read_committed, for every topic this job mirrors (deploy Codex round 1, finding 1): the strike log
+# (ES-FOOTPRINT-STRIKE-INTERACTION.md R6) and es.futures.cvd.levels are written inside Kafka
+# TRANSACTIONS. The consumer default is read_uncommitted, which returns ABORTED records too; MM1 would
+# republish them non-transactionally on the target, where the gateway's own read_committed can no
+# longer tell them apart. On a non-transactional topic the setting changes nothing.
+isolation.level=read_committed
 key.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
 value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
 C

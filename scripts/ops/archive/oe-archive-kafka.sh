@@ -528,7 +528,14 @@ for topic in $TOPICS; do
     # NOTE: `consumer | gzip` reports GZIP's exit status, so a consumer that emitted zero records
     # still "succeeds". That is how the first version silently archived empty files and advanced
     # its checkpoints. Verify by COUNTING what actually landed, then commit.
+    # read_committed (deploy Codex round 1, finding 3): es.futures.footprint.strike is written inside
+    # Kafka transactions (ES-FOOTPRINT-STRIKE-INTERACTION.md R6), so the default read_uncommitted would
+    # archive ABORTED revisions as if they were the log. Transaction markers also occupy offsets that
+    # never surface as records, so on such a topic (end - from) overstates the readable count and the
+    # read completes on the idle timeout below, exactly as it does for a compacted topic. Harmless on
+    # every non-transactional topic.
     timeout 900 "$KAFKA_BIN/kafka-console-consumer.sh" --bootstrap-server "$BOOTSTRAP" \
+         --consumer-property isolation.level=read_committed \
          --topic "$topic" --partition "$part" --offset "$from" --max-messages "$count" \
          --formatter-property print.timestamp=true \
          --formatter-property print.key=true \

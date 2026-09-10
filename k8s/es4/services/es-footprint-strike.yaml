@@ -59,8 +59,12 @@ spec:
       - name: es-footprint-strike
         image: 192.168.100.252:5000/options-edge-es-footprint-strike:prod
         env:
+        # The R6 fold holds every identity's latest record (bytes + parsed) until it completes. A session's
+        # log is bounded by the ladder (1,001 strikes) x episodes per strike x ~3 KB per record with a 64-entry
+        # series — tens of MB at most for the one session es4 retains between nightly cleans; the es-cvd
+        # sizing (768 MiB heap) is the precedent and leaves an order of magnitude of headroom.
         - name: JAVA_TOOL_OPTIONS
-          value: -Xms128m -Xmx512m
+          value: -Xms128m -Xmx768m
         - name: FOOTPRINT_STRIKE_HEALTH_PORT
           value: '8153'
         # Set EXPLICITLY, like es-cvd's ES_CVD_BOOTSTRAP_SERVERS: a default that resolved elsewhere would
@@ -92,6 +96,11 @@ spec:
           value: '900000'
         - name: FOOTPRINT_STRIKE_UNIVERSE_STEP_CENTS
           value: '500'
+        # The own-log fold must finish inside pin-and-apply's 600 s rollout wait, or a slow fold is reported
+        # as a failed deploy while the pod is in fact still recovering: half the wait, so a fold that is
+        # genuinely stuck fails closed (exit 70, restart) with the deploy still able to observe the outcome.
+        - name: FOOTPRINT_STRIKE_FOLD_TIMEOUT_MS
+          value: '300000'
         envFrom:
         - configMapRef:
             name: es4-base-env
@@ -121,4 +130,4 @@ spec:
             cpu: 100m
             memory: 256Mi
           limits:
-            memory: 768Mi
+            memory: 1Gi
