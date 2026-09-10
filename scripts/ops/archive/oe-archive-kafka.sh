@@ -131,27 +131,33 @@ is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) retur
 # declared is safe by default.
 OE_TRANSACTIONAL_TOPICS="$(eval "printf '%s' \"\${OE_TRANSACTIONAL_TOPICS_${ENV_NAME}:-}\"")"
 is_transactional_topic() { case " $OE_TRANSACTIONAL_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
-# "maxInRange kept afterBoundary unplaceable" for a capture bounded by the END offset it started from.
-# A record at or past that boundary arrived DURING the capture (an active producer, or a --max-messages
-# budget that markers made reachable): it is not part of the range this run claims, so it is dropped
-# from the file rather than being allowed to discard the valid prefix in front of it (round 3, #2).
+# The greatest offset a capture PROVED it reached, read from the LEADING metadata of each line and
+# CLAMPED to the run's own boundary. Two properties make this safe on every topic, including the Avro
+# and otherwise binary ones whose values can contain newlines and the literal text "Offset:":
+#   * nothing is ever deleted from the capture. An earlier revision of this trimmed post-boundary
+#     lines and would have removed payload bytes from a multi-line Avro value (round 4, #1). A record
+#     that arrived past the boundary stays in the file and is read again next run — a DUPLICATE, which
+#     this archiver has always preferred to a gap.
+#   * the result is clamped to the end offset captured at start, so a payload line that happens to
+#     look like metadata can only ever make the checkpoint MORE conservative, never advance it past
+#     what the run bounded. A continuation line that does not start with the metadata prefix is
+#     ignored for offsets and kept in the file.
+# Prints "maxOffset lines"; maxOffset is -1 when no line carried metadata. Exit status is the
+# DECOMPRESSION status: a truncated or unreadable gzip must not read as an empty capture.
 scan_offsets() {   # $1=path $2=endExclusive
-  LC_ALL=C zcat "$1" 2>/dev/null | LC_ALL=C awk -v end="$2" '
-    BEGIN { FS="\t"; mx=-1; k=0; d=0; u=0 }
-    { off = -1
-      for (i = 1; i <= NF; i++) if (substr($i,1,7) == "Offset:") { off = substr($i,8) + 0; break }
-      if (off < 0) { u++; next }
-      if (off >= end) { d++; next }
-      if (off > mx) mx = off
-      k++ }
-    END { printf "%d %d %d %d\n", mx, k, d, u }'
-}
-trim_offsets() {   # $1=path $2=endExclusive -> keep only placeable, in-range records
-  LC_ALL=C zcat "$1" 2>/dev/null | LC_ALL=C awk -v end="$2" '
-    BEGIN { FS="\t" }
-    { off = -1
-      for (i = 1; i <= NF; i++) if (substr($i,1,7) == "Offset:") { off = substr($i,8) + 0; break }
-      if (off >= 0 && off < end) print }' | gzip -6 > "$1.inrange" && mv "$1.inrange" "$1"
+  local out rc
+  out=$(LC_ALL=C zcat "$1" 2>/dev/null | LC_ALL=C awk -v end="$2" '
+    BEGIN { mx = -1; n = 0 }
+    { n++
+      if (match($0, /^CreateTime:[0-9]+\tPartition:[0-9]+\tOffset:[0-9]+\t/)) {
+        split($0, f, "\t")
+        o = substr(f[3], 8) + 0
+        if (o < end && o > mx) mx = o
+      } }
+    END { printf "%d %d", mx, n }'; rc=("${PIPESTATUS[@]}"); [ "${rc[0]}" -eq 0 ] || exit 9)
+  rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s' "$out"
 }
 
 DEFAULT_TOPICS_prod="$OE_ALL_TOPICS_prod"
@@ -322,7 +328,13 @@ with gzip.open(sys.argv[1], 'rb') as f:
 parts = line.split(b'\t')
 if len(parts) < 4:
     raise SystemExit
-val = parts[3]
+# The layout gained an Offset: field when the proved boundary became the rule for every topic, so the
+# value is no longer always the fourth field (round 4, #4). Locate it by the metadata that precedes
+# it rather than by a fixed index, and keep reading legacy archives written before the change.
+head = 3 if parts[2].startswith(b'Offset:') else 2
+if len(parts) <= head + 1:
+    raise SystemExit
+val = parts[head + 1]
 if not val.startswith(b'\x00') or len(val) < 5:
     raise SystemExit
 raw = val[1:5]
@@ -593,28 +605,36 @@ for topic in $TOPICS; do
          --timeout-ms 60000 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
     consumer_rc=${PIPESTATUS[0]}
 
-    # The capture is bounded by the end offset this run started from. Anything at or past it arrived
-    # DURING the read and belongs to the NEXT run's range: drop those records, keep the prefix in
-    # front of them, and never let their presence discard a valid capture (round 3, #2).
-    read -r maxoff kept after_boundary unplaceable <<< "$(scan_offsets "$tmp" "$endoff")"
-    maxoff="${maxoff:--1}"; kept="${kept:-0}"; after_boundary="${after_boundary:-0}"; unplaceable="${unplaceable:-0}"
-    if [ "$after_boundary" -gt 0 ] || [ "$unplaceable" -gt 0 ]; then
-      log "  NOTE $topic p$part: $after_boundary record(s) arrived after this run's boundary $endoff and $unplaceable unplaceable line(s) dropped — the in-range prefix is kept and checkpointed"
-      trim_offsets "$tmp" "$endoff"
+    # The boundary this capture PROVED it reached. The scan's own status is checked: a truncated or
+    # unreadable gzip must fail the capture, not read as an empty one (round 4, #2).
+    scan_out="$(scan_offsets "$tmp" "$endoff")"; scan_rc=$?
+    if [ "$scan_rc" -ne 0 ]; then
+      log "  WARN $topic p$part [$from,$endoff): the capture could not be read back (status $scan_rc) — checkpoint NOT advanced, will retry next run"
+      rm -f "$tmp"; failed=$(( failed + 1 )); continue
+    fi
+    read -r maxoff lines <<< "$scan_out"
+    maxoff="${maxoff:--1}"; lines="${lines:-0}"
+    # A reader the outer bound STOPPED can have been cut mid-record, and the pipeline's `grep`
+    # completes that line before gzip sees it, so a truncated record is indistinguishable inside the
+    # file. Do not credit the last record of such a capture: it is re-read next run, as a duplicate.
+    if [ "$consumer_rc" -eq 124 ] && [ "$maxoff" -ge 0 ]; then
+      log "  NOTE $topic p$part: the reader was stopped by its outer bound — its last record may have been cut off and is not credited"
+      maxoff=$(( maxoff - 1 ))
     fi
 
     read -r got min_ms max_ms schema_versions <<< "$(scan_archive_file "$tmp")"
     got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
     # The offset this capture may checkpoint: the greatest offset it actually PLACED, plus one —
     # never the high-water mark it started from (see THE PROVED BOUNDARY above). The span the
-    # manifest claims is [from, ckpt_to), the range this file really covers.
+    # manifest claims is [from, ckpt_to), the range this file is credited with; a record that
+    # arrived past it stays in the file and is read again next run, as a duplicate.
     ckpt_to="$endoff"; span="$count"
     if [ "$got" -gt 0 ]; then
       if [ "$maxoff" -ge "$from" ]; then
         ckpt_to=$(( maxoff + 1 )); span=$(( ckpt_to - from ))
-        [ "$ckpt_to" -lt "$endoff" ] && log "  NOTE $topic p$part: proved boundary $ckpt_to is short of the high-water mark $endoff — $((endoff-ckpt_to)) offset(s) deferred to the next capture (markers, compaction, an aborted or an unresolved transaction)"
+        [ "$ckpt_to" -lt "$endoff" ] && log "  NOTE $topic p$part: proved boundary $ckpt_to is short of the high-water mark $endoff — $((endoff-ckpt_to)) offset(s) deferred to the next capture (markers, compaction, an aborted or an unresolved transaction, or records that arrived during the capture)"
       else
-        log "  WARN $topic p$part: captured $got record(s) but no Offset: field inside [$from,$endoff) could be read — checkpoint NOT advanced"
+        log "  WARN $topic p$part: captured $got record(s) but no leading Offset: metadata inside [$from,$endoff) could be read — checkpoint NOT advanced"
         got=0
       fi
     fi
@@ -631,6 +651,14 @@ for topic in $TOPICS; do
       rm -f "$tmp"
       failed=$(( failed + 1 ))
       continue
+    fi
+    # An outer-timeout kill (124) on a topic that is still being written is not a failed read: the
+    # records it did place are real, and the checkpoint only credits the boundary they prove. Before
+    # this, an active sparse topic (compaction plus a live producer, so neither the record budget nor
+    # the idle timeout is ever reached) discarded a valid capture every single run (round 4, #3).
+    if [ "$consumer_rc" -eq 124 ] && [ "$got" -gt 0 ] && [ "$maxoff" -ge "$from" ]; then
+      log "  NOTE $topic p$part: the reader was stopped by the ${OE_ARCHIVE_READ_TIMEOUT:-900}s bound with $got record(s) placed — crediting the proved boundary $ckpt_to and deferring the rest"
+      consumer_rc=0
     fi
     if [ "$consumer_rc" -eq 0 ] && [ "$got" -gt 0 ]; then
       # Only advance the checkpoint once the file is verified and durably in place. A crash

@@ -488,22 +488,22 @@ A="$T/tx2"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 6" "1 0 0" "visible 0 0-4,6-6"
 OUT=$(run OE_TOPICS_ENV="$TXENV"); RC=$?
 want "tx: a write during the capture does not discard the capture (rc)" 0 "$RC"
-want "  the five in-range records are archived"          5 "$(runs records)"
-want "  the checkpoint is the proved in-range boundary"  5 "$(ck 0)"
-has  "  and the late record is named, not silently kept" "arrived after this run's boundary" "$OUT"
-want "  manifest offset_to is the same boundary"         5 "$(mfield 0 offset_to)"
+want "  every captured record is archived, none deleted"  6 "$(runs records)"
+want "  the checkpoint is the proved IN-RANGE boundary"   5 "$(ck 0)"
+has  "  and the deferral is said out loud"  "deferred to the next capture" "$OUT"
+want "  manifest offset_to is that boundary"              5 "$(mfield 0 offset_to)"
 # ...and the next run reads exactly what was deferred, so nothing is skipped and nothing is duplicated
 fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 7" "1 0 0" "visible 0 0-4,6-6"
 OUT=$(run OE_TOPICS_ENV="$TXENV")
-want "  the next run captures exactly the deferred record" 1 "$(runs records)"
+want "  the next run re-reads the deferred record (a DUPLICATE, never a gap)" 1 "$(runs records)"
 want "  and reaches the high-water mark"                 7 "$(ck 0)"
 # (g) UNTIL_TS with records already present beyond the cutoff: the same rule, on the historical path
 A="$T/tx3"; mkdir -p "$A/kafka/prod/_manifest"
 fixture "topicid TXTXTXTXTXTXTXTXTXTXTX" "0 0 800 200" "1 0 0" "visible 0 0-98,200-300"
 OUT=$(run UNTIL_TS=1786000000000 OE_TOPICS_ENV="$TXENV"); RC=$?
-want "tx: bounded mode keeps its in-range prefix (rc)"   0 "$RC"
-want "  the 99 records below the cutoff are archived"   99 "$(runs records)"
-want "  and the checkpoint stops at their boundary"     99 "$(ck 0)"
+want "tx: bounded mode credits only its in-range prefix (rc)" 0 "$RC"
+want "  every captured record is archived"             200 "$(runs records)"
+want "  and the checkpoint stops at the in-range boundary" 99 "$(ck 0)"
 hasnt "  bounded mode is still not a reset"          "RESET" "$OUT"
 # (h) an UNDECLARED topic gets the SAME safe rule (round 3, finding 1): no inventory to keep complete
 B2="$A"; A="$T/tx-plain"; mkdir -p "$A/kafka/prod/_manifest"
@@ -574,6 +574,113 @@ A="$B2"
 es4_tx=$(. "$OE/oe-topics.env"; printf '%s' "${OE_TRANSACTIONAL_TOPICS_es4:-}")
 has  "oe-topics.env declares the strike log transactional on es4" "es.futures.footprint.strike" " $es4_tx "
 has  "  and es.futures.cvd.levels"                          "es.futures.cvd.levels" " $es4_tx "
+
+# ================= 13. the offset probe is BYTE-SAFE and can only be conservative ================
+# (deploy Codex round 4, findings 1-4.) print.offset is unconditional, so the capture of an Avro or
+# otherwise binary topic can contain embedded newlines, tabs and the literal text "Offset:". Nothing
+# may be deleted from the capture, and a payload that LOOKS like metadata may never advance the
+# checkpoint past the boundary this run bounded.
+A="$T/bin"; mkdir -p "$A/kafka/prod/_manifest"
+cat > "$BIN/kafka-console-consumer.sh" <<'SHIM'
+#!/usr/bin/env bash
+part=""; off=0; maxm=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --partition) part="$2"; shift 2 ;;
+    --offset) off="$2"; shift 2 ;;
+    --max-messages) maxm="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+# three records: an Avro-shaped value with an embedded newline AND a tab, one whose payload carries a
+# literal "Offset:" far past the boundary, and one ordinary record.
+[ "$off" -le 0 ] && [ "$maxm" -ge 1 ] && printf 'CreateTime:1786000000000\tPartition:%s\tOffset:0\tk0\t\x00\x00\x00\x00\x2aHELLO\nSECOND\tLINE {"schemaVersion":1}\n' "$part"
+[ "$off" -le 1 ] && [ "$maxm" -ge 2 ] && printf 'CreateTime:1786000000000\tPartition:%s\tOffset:1\tk1\t{"note":"CreateTime:1\tPartition:0\tOffset:999999\tnot a record","schemaVersion":1}\n' "$part"
+[ "$off" -le 2 ] && [ "$maxm" -ge 3 ] && printf 'CreateTime:1786000000000\tPartition:%s\tOffset:2\tk2\t{"schemaVersion":1}\n' "$part"
+exit 0
+SHIM
+chmod +x "$BIN/kafka-console-consumer.sh"
+fixture "topicid BNBNBNBNBNBNBNBNBNBNBN" "0 0 3" "1 0 0"
+OUT=$(run); RC=$?
+want "binary: the run succeeds (rc)"                      0 "$RC"
+want "  the checkpoint is the last real offset + 1"       3 "$(ck 0)"
+archived=$(ls "$A"/kafka/prod/"$TOPIC"/dt=*/*.jsonl.gz 2>/dev/null | tail -1)
+want "  an archive file was published" 0 "$([ -n "$archived" ]; echo $?)"
+want "  the embedded-newline payload is preserved byte for byte" 1 "$(zcat "$archived" 2>/dev/null | grep -c 'SECOND')"
+want "  a payload that LOOKS like metadata never moved the checkpoint" 3 "$(ck 0)"
+
+# a capture whose lines carry no metadata at all cannot prove any boundary
+A="$T/nometa"; mkdir -p "$A/kafka/prod/_manifest"
+cat > "$BIN/kafka-console-consumer.sh" <<'SHIM'
+#!/usr/bin/env bash
+printf 'no metadata on this line at all\n'
+exit 0
+SHIM
+chmod +x "$BIN/kafka-console-consumer.sh"
+fixture "topicid CRCRCRCRCRCRCRCRCRCRCR" "0 0 5" "1 0 0"
+OUT=$(run)
+want "a capture with no leading metadata does not advance the checkpoint" "" "$(ck 0)"
+has  "  and says so"  "no leading Offset: metadata" "$OUT"
+
+# a reader stopped by the OUTER timeout still credits the boundary it proved (round 4, #3): before
+# this an active sparse topic discarded a valid capture every single run
+A="$T/killed"; mkdir -p "$A/kafka/prod/_manifest"
+cat > "$BIN/kafka-console-consumer.sh" <<'SHIM'
+#!/usr/bin/env bash
+part=""; off=0
+while [ $# -gt 0 ]; do case "$1" in --partition) part="$2"; shift 2 ;; --offset) off="$2"; shift 2 ;; *) shift ;; esac; done
+i=0
+while [ "$i" -lt 4 ]; do
+  echo -e "CreateTime:1786000000000\tPartition:$part\tOffset:$(( off + i ))\tk$i\t{\"schemaVersion\":1}"
+  i=$(( i + 1 ))
+done
+exit 124                       # what `timeout` reports when it stops a still-running reader
+SHIM
+chmod +x "$BIN/kafka-console-consumer.sh"
+fixture "topicid KLKLKLKLKLKLKLKLKLKLKL" "0 0 900" "1 0 0"
+OUT=$(run)
+want "a reader stopped by the outer bound credits what it PROVED, less its last record" 3 "$(ck 0)"
+want "  and archives everything it placed"                4 "$(runs records)"
+has  "  saying the rest is deferred"  "deferred to the next capture" "$OUT"
+
+# a partial LAST line (a reader killed mid-record) is not credited
+A="$T/partial"; mkdir -p "$A/kafka/prod/_manifest"
+cat > "$BIN/kafka-console-consumer.sh" <<'SHIM'
+#!/usr/bin/env bash
+part=""; off=0
+while [ $# -gt 0 ]; do case "$1" in --partition) part="$2"; shift 2 ;; --offset) off="$2"; shift 2 ;; *) shift ;; esac; done
+printf 'CreateTime:1786000000000\tPartition:%s\tOffset:0\tk0\t{"schemaVersion":1}\n' "$part"
+printf 'CreateTime:1786000000000\tPartition:%s\tOffset:1\tk1\t{"schemaVer' "$part"
+exit 124
+SHIM
+chmod +x "$BIN/kafka-console-consumer.sh"
+fixture "topicid PTPTPTPTPTPTPTPTPTPTPT" "0 0 900" "1 0 0"
+OUT=$(run)
+want "a partial last record is not credited"              1 "$(ck 0)"
+has  "  and the reason is named"  "may have been cut off" "$OUT"
+
+# schema discovery must find the value by its metadata, in BOTH layouts (round 4, #4)
+schema_probe() {   # $1=path -> the Confluent schema id the archiver's own extractor would read
+  python3 - "$1" <<'SCHEMAPY'
+import gzip, sys
+with gzip.open(sys.argv[1], 'rb') as f:
+    line = f.readline()
+parts = line.split(b'\t')
+if len(parts) < 4:
+    print('short'); raise SystemExit
+head = 3 if parts[2].startswith(b'Offset:') else 2
+if len(parts) <= head + 1:
+    print('short'); raise SystemExit
+val = parts[head + 1]
+print(int.from_bytes(val[1:5], 'big') if val.startswith(b'\x00') and len(val) >= 5 else 'none')
+SCHEMAPY
+}
+want "the archived Avro value is located by its metadata, not a fixed column" 42 "$(schema_probe "$archived")"
+legacy="$T/legacy.jsonl.gz"
+printf 'CreateTime:1786000000000\t0\tk0\t\x00\x00\x00\x00\x2aHELLO\n' | gzip > "$legacy"
+want "  and a legacy archive still resolves to the same schema id" 42 "$(schema_probe "$legacy")"
+# the extractor in the archiver itself must be the SAME logic — a copy that drifts proves nothing
+want "  and the archiver's own extractor uses that rule" 1 "$(grep -c "head = 3 if parts\[2\].startswith(b'Offset:') else 2" "$OE/oe-archive-kafka.sh")"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }
