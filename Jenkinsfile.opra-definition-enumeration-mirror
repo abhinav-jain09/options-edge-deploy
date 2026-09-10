@@ -849,6 +849,8 @@ S
                    -e KAFKA_LOG4J_OPTS=-Dlog4j.configuration=file:/mirror/log4j.properties \
                    $IMAGE bash /mirror/run-mirror-container.sh" \
               || { echo "FAIL: docker run failed on $ES4_HOST"; exit 1; }
+            # One clock, the agent's, for the minimum-observation floor the final stage enforces.
+            date -u +%s > "$MDIR/container-created-at.txt"
             echo "container $CONTAINER started on $ES4_HOST from $IMAGE"
             exit 0
           fi
@@ -865,6 +867,7 @@ S
 PL
           launchctl unload "$PLIST" 2>/dev/null || true
           launchctl load "$PLIST"
+          date -u +%s > "$MDIR/container-created-at.txt"
           echo "launchd unit $LABEL loaded"
         '''
       }
@@ -1370,15 +1373,37 @@ PL
           # the install goes green on a container that is about to enter a restart/backoff loop --
           # leaving es4's enumeration to go stale with nothing having failed.
           #
-          # The payload proof takes tens of seconds (a group catch-up wait, up to six read attempts
-          # with five-second sleeps, and a byte comparison over a 71 KB record) and it makes the
-          # mirror do real work. Re-comparing the SAME persisted reading after it turns the
-          # observation window from twelve seconds into the whole install, and because the comparison
-          # is on RestartCount and StartedAt, a single death anywhere inside that window is caught
-          # regardless of when it happened.
+          # Re-comparing the persisted reading AFTER the proof widens the observation window, and
+          # because the comparison is on RestartCount and StartedAt a single death anywhere inside
+          # that window is caught regardless of when it fell.
           #
-          # It does NOT claim to catch a container whose first death comes after the install ends --
-          # nothing at install time can, and pretending otherwise would be the more dangerous error.
+          # But the window must be GUARANTEED, not inherited from how long the proof happened to
+          # take -- review's second pass was right about that. Under ALLOW_EMPTY_SOURCE the payload
+          # stage exits immediately, and even a real proof can match on its first attempt with no
+          # minimum delay, so the total could still be under the thirty seconds of the scenario this
+          # is meant to catch. So the floor is enforced here, on the agent's own clock, from the
+          # moment the unit was started.
+          #
+          # WHAT THIS DOES AND DOES NOT PROVE. A crash whose PERIOD exceeds the floor is invisible to
+          # any window, so no floor "solves" this -- it BOUNDS it. Sixty seconds covers the
+          # thirty-second scenario twice over and costs at most a minute on an install, which happens
+          # rarely. A container whose first death comes after that is a monitoring problem, not an
+          # install-time one, and claiming otherwise would be the more dangerous error because it is
+          # the claim someone would rely on instead of monitoring.
+          MIN_OBSERVE_S=60
+          C="$MDIR/container-created-at.txt"
+          [ -s "$C" ] || { echo "FAIL: $C missing -- the install stage did not record a start time, so the observation window cannot be bounded"; exit 1; }
+          CREATED=$(cat "$C")
+          case "$CREATED" in ''|*[!0-9]*) echo "FAIL: recorded start time is not an epoch (got '$CREATED')"; exit 1 ;; esac
+          NOWS=$(date -u +%s)
+          ELAPSED=$((NOWS - CREATED))
+          if [ "$ELAPSED" -lt "$MIN_OBSERVE_S" ]; then
+            WAIT=$((MIN_OBSERVE_S - ELAPSED))
+            echo "observed for ${ELAPSED}s; waiting a further ${WAIT}s so the window is at least ${MIN_OBSERVE_S}s"
+            sleep "$WAIT"
+            ELAPSED=$(( $(date -u +%s) - CREATED ))
+          fi
+          echo "observation window: ${ELAPSED}s (floor ${MIN_OBSERVE_S}s)"
           if [ "$RUNNER" = "es4-docker" ]; then
             F="$MDIR/container-liveness.txt"
             [ -f "$F" ] || { echo "FAIL: $F missing -- the liveness stage did not run"; exit 1; }
@@ -1393,7 +1418,7 @@ PL
               || { echo "FAIL: container $CONTAINER is not running after the proof (Running=$NOW_RUN); last log:"; es4 "docker logs --tail 40 $CONTAINER 2>&1" || true; exit 1; }
             [ "$NOW_START" = "$WAS_START" ] && [ "$NOW_RC" = "$WAS_RC" ] \
               || { echo "FAIL: container $CONTAINER restarted during the payload proof (startedAt $WAS_START -> $NOW_START, restarts $WAS_RC -> $NOW_RC) -- it is crash-looping on a period the short window could not see; last log:"; es4 "docker logs --tail 40 $CONTAINER 2>&1" || true; exit 1; }
-            echo "STILL ALIVE after the proof: $CONTAINER, restarts $NOW_RC, started $NOW_START"
+            echo "STILL ALIVE after ${ELAPSED}s: $CONTAINER, restarts $NOW_RC, started $NOW_START"
           else
             F="$MDIR/launchd-liveness.txt"
             [ -f "$F" ] || { echo "FAIL: $F missing -- the liveness stage did not run"; exit 1; }
@@ -1404,7 +1429,7 @@ PL
               || { echo "FAIL: launchd unit $LABEL is no longer loaded after the proof"; exit 1; }
             [ "$NOW_PID" = "$WAS_PID" ] \
               || { echo "FAIL: $LABEL restarted during the payload proof (PID $WAS_PID -> $NOW_PID) -- it is crash-looping on a period the short window could not see"; exit 1; }
-            echo "STILL ALIVE after the proof: $LABEL, PID $NOW_PID"
+            echo "STILL ALIVE after ${ELAPSED}s: $LABEL, PID $NOW_PID"
           fi
         '''
       }
