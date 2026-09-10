@@ -142,6 +142,13 @@ jobs:
       - name: OPRA tape declared at its real shape (dev/prod)
         run: python3 -m unittest -v tests.test_opra_tcbbo_declared
 
+      # One hop further: Streams sources written by ANOTHER service (strike-flow, strike.avro,
+      # strike-sr.current, strike-intelligence-by-strike). Runs the real apply-topics.sh for prod and
+      # dev plus dev-cleanup's topic_desired, and holds each declaration to the live shape its owner
+      # stamps, so the declaration pre-creates the right partition count without changing any config.
+      - name: Cross-service Streams sources declared at their live shape
+        run: python3 -m unittest -v tests.test_cross_service_streams_sources_declared
+
       # The es4 arm of the same contract, EXECUTED: tests.test_vix_option_inteligence_prune runs the
       # real scripts/es4/create-es-topics.sh — its CLI shims and the shared applier all the way down
       # — against a fake es4 broker. That is the only place the es4 path is exercised at all: CI
