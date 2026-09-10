@@ -14,7 +14,11 @@ if not files:
         files += [os.path.join(root, n)[2:] for n in names if n.startswith("Jenkinsfile") or n.endswith(".sh")]
 bad = 0
 for path in sorted(files):
+    if path.endswith("validate-docker-top-has-pid.sh"):
+        continue                                   # its own explanation quotes the refused form
     for no, line in enumerate(open(path, errors="replace"), 1):
+        if line.lstrip().startswith(("#", "//")):
+            continue                               # prose about docker top is not a call to it
         for m in re.finditer(r"docker\s+top\s+\S+\s+-o\s+([^\s'\"|;&)]+)", line):
             cols = m.group(1).split(",")
             if "pid" not in cols:
