@@ -188,6 +188,11 @@ jobs:
       - name: Validate Jenkinsfile Groovy escapes
         run: bash scripts/ci/validate-jenkinsfile-groovy-escapes.sh
 
+      # `docker top C -o args` is refused by docker (no PID column); with stderr dropped the check reads
+      # false on a healthy container. It failed the enumeration mirror's es4 install on a live MirrorMaker.
+      - name: Validate docker top keeps the pid column
+        run: bash scripts/ci/validate-docker-top-has-pid.sh
+
       # topics.env is only the DEPLOY-TIME half of "the archive is never compacted". The other half
       # is the boot-time stamp: processing-common KafkaTopics.ensureTopic() runs
       # incrementalAlterConfigs on every service start, so a topic the deploy just set to delete is

@@ -977,9 +977,12 @@ PL
 
             # And it must be the real thing. `docker top` reports the process table inside the
             # container, so a container that started but whose entrypoint is not a MirrorMaker JVM
-            # cannot pass by merely staying up.
-            es4 "docker top $CONTAINER -o args 2>/dev/null" | grep -qF "kafka.tools.MirrorMaker" \
-              || { echo "FAIL: container $CONTAINER is up but is not running a MirrorMaker JVM:"; es4 "docker top $CONTAINER -o args 2>/dev/null" || true; exit 1; }
+            # cannot pass by merely staying up. `-o pid,args`, never `-o args`: docker maps the ps
+            # output back to container processes by its PID column and answers "Couldn't find PID
+            # field in ps output" without one -- which, with stderr discarded, failed this check on a
+            # healthy mirror (build #5, 2026-09-10). The diagnostic keeps stderr so that cannot hide again.
+            es4 "docker top $CONTAINER -o pid,args" | grep -qF "kafka.tools.MirrorMaker" \
+              || { echo "FAIL: container $CONTAINER is up but is not running a MirrorMaker JVM:"; es4 "docker top $CONTAINER -o pid,args 2>&1" || true; exit 1; }
 
             # No sibling may be producing into the same partition. Written as an `if`, not
             # `grep && { exit 1; } || true`: under `set -e` that AND-OR list swallows its own exit
