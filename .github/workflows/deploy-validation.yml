@@ -209,6 +209,15 @@ jobs:
       - name: Validate archive uncompaction flag reaches prod + es4 and not dev
         run: bash scripts/ci/validate-archive-uncompaction-env.sh
 
+      # Uncompacted is only half of "the archive survives". The other half is RETENTION: the daily
+      # capture is checkpoint-based and runs on a WEEKDAY cron (10 17 * * 1-5 ET), so a missed
+      # FRIDAY run is not retried until MONDAY — 72 hours. Any nightly-archived topic whose
+      # declared retention is shorter than that loses whole sessions with no error at capture time;
+      # the archiver only reports the hole afterwards. oe-topics.env records this exact loss
+      # happening before (delta-flow-by-strike, option-price-behavior-by-strike).
+      - name: Validate nightly-archived topics outlive a missed archive run
+        run: bash scripts/ci/validate-archived-topic-retention.sh
+
       # "checked 5 mirrored topic(s)" proves only that five names were found. This drives the
       # validator against crafted fixtures — one broken dimension each, plus the mutations that
       # make its own parsing return nothing — so a checker that quietly starts approving
