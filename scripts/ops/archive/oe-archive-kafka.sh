@@ -104,44 +104,39 @@ unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_p
 # population as complete. Every check below that says "strict" is gated on this list and nothing else.
 OE_STRICT_TOPICS="${OE_STRICT_TOPICS:-context-tape.direction.ledger}"
 is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
-# THE PROVED BOUNDARY (deploy Codex rounds 2 and 3, finding 1). The offsets tool reports the
-# HIGH-WATER MARK. A read_committed reader stops at the last STABLE offset, commit/abort markers
-# occupy offsets that never surface as records, and aborted records are withheld — so on a topic
-# written inside Kafka transactions the high-water mark is NOT a boundary any capture reached, and
-# checkpointing it skips whatever commits afterwards, permanently.
+# THE PROVED BOUNDARY (deploy Codex rounds 2-5). The offsets tool reports the HIGH-WATER MARK. A
+# read_committed reader stops at the last STABLE offset, commit/abort markers occupy offsets that never
+# surface as records, and aborted records are withheld — so on a topic written inside Kafka transactions
+# the high-water mark is NOT a boundary any capture reached, and checkpointing it skips whatever commits
+# afterwards, permanently. For those topics the capture prints its offsets and the checkpoint advances
+# only to the greatest offset it actually placed, plus one.
 #
-# Round 2 solved that for a DECLARED list of transactional topics. Round 3 showed why a list is the
-# wrong mechanism: the inventory has to name every EOS writer in every environment forever, and the
-# ones it misses keep the unsafe rule silently (dealer-ledger, corridor-gauge, unified-sr, es-amt's
-# auction, and more were missing). So the safe rule is now the DEFAULT for every topic and there is
-# no list to keep complete: every capture prints its offsets and checkpoints the greatest offset it
-# actually captured, plus one.
+# WHY THIS IS NOT APPLIED TO EVERY TOPIC. Round 3 asked for exactly that, and round 4 and round 5 showed
+# what it costs: `kafka-console-consumer` writes raw value bytes, so on a topic whose values can contain
+# a newline (Avro, anything binary) a physical line is NOT a Kafka record. Deriving a boundary from that
+# text means a payload can forge one — round 5 produced a continuation line carrying an in-range
+# `Offset:` that advanced the checkpoint past unread records — and the layout change also broke Avro
+# schema discovery and starved `LogAppendTime` topics. No amount of anchoring fixes it: the offsets and
+# the payload share one unframed stream. A binary-safe capture needs a reader Kafka's console consumer
+# cannot express, and that is recorded as the follow-up it is.
 #
-# This is safe for the topics that are NOT transactional, and costs them nothing:
-#   * a delete-retained topic with no markers returns every offset in the range, so the proved
-#     boundary IS the high-water mark and nothing changes;
-#   * a COMPACTED topic returns fewer records than its offset span — the proved boundary then sits
-#     at its last live record and the next run resumes there, re-reading only offsets whose records
-#     compaction already removed. No duplicate record, no gap.
-# A capture that placed no record at all does not advance the checkpoint and says so.
+# So the rule is applied where it is SOUND: topics declared in OE_TRANSACTIONAL_TOPICS_<env>, whose
+# values are JSON. A JSON document cannot contain a raw newline (RFC 8259 escapes every control
+# character), so one line IS one record there, and the anchor cannot be forged from inside a value.
+# Every other topic keeps the behaviour it has always had, byte for byte — no format change, no new
+# failure mode.
 #
-# OE_TRANSACTIONAL_TOPICS_<env> (oe-topics.env) is now only an ANNOTATION: it exempts a declared
-# transactional topic from the strict short-read check, whose "got == count" arithmetic markers and
-# withheld records make meaningless. It no longer gates the checkpoint rule, so a writer nobody
-# declared is safe by default.
+# The completeness of that list is not left to hope: scripts/ci/validate-archive-transactional-inventory.sh
+# fails the build when a topic in the list is missing from its environment's archive set, and carries the
+# EOS writers this repository knows about so a new one cannot be added silently.
 OE_TRANSACTIONAL_TOPICS="$(eval "printf '%s' \"\${OE_TRANSACTIONAL_TOPICS_${ENV_NAME}:-}\"")"
 is_transactional_topic() { case " $OE_TRANSACTIONAL_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
-# The greatest offset a capture PROVED it reached, read from the LEADING metadata of each line and
-# CLAMPED to the run's own boundary. Two properties make this safe on every topic, including the Avro
-# and otherwise binary ones whose values can contain newlines and the literal text "Offset:":
-#   * nothing is ever deleted from the capture. An earlier revision of this trimmed post-boundary
-#     lines and would have removed payload bytes from a multi-line Avro value (round 4, #1). A record
-#     that arrived past the boundary stays in the file and is read again next run — a DUPLICATE, which
-#     this archiver has always preferred to a gap.
-#   * the result is clamped to the end offset captured at start, so a payload line that happens to
-#     look like metadata can only ever make the checkpoint MORE conservative, never advance it past
-#     what the run bounded. A continuation line that does not start with the metadata prefix is
-#     ignored for offsets and kept in the file.
+# The greatest offset a capture PROVED it reached, for a DECLARED transactional (JSON) topic: read from
+# each line's leading metadata and clamped to the run's own boundary. Nothing is ever deleted from the
+# capture — a record that arrived past the boundary stays in the file and is read again next run, as a
+# duplicate, which this archiver has always preferred to a gap. Both Kafka timestamp types are accepted:
+# `LogAppendTime` topics exist in these inventories and an anchor that knew only `CreateTime` would have
+# starved them (round 5, #2).
 # Prints "maxOffset lines"; maxOffset is -1 when no line carried metadata. Exit status is the
 # DECOMPRESSION status: a truncated or unreadable gzip must not read as an empty capture.
 scan_offsets() {   # $1=path $2=endExclusive
@@ -149,7 +144,7 @@ scan_offsets() {   # $1=path $2=endExclusive
   out=$(LC_ALL=C zcat "$1" 2>/dev/null | LC_ALL=C awk -v end="$2" '
     BEGIN { mx = -1; n = 0 }
     { n++
-      if (match($0, /^CreateTime:[0-9]+\tPartition:[0-9]+\tOffset:[0-9]+\t/)) {
+      if (match($0, /^(CreateTime|LogAppendTime|NoTimestampType):-?[0-9]+\tPartition:[0-9]+\tOffset:[0-9]+\t/)) {
         split($0, f, "\t")
         o = substr(f[3], 8) + 0
         if (o < end && o > mx) mx = o
@@ -601,25 +596,30 @@ for topic in $TOPICS; do
          --formatter-property print.timestamp=true \
          --formatter-property print.key=true \
          --formatter-property print.partition=true \
-         --formatter-property print.offset=true \
+         $( (is_strict_topic "$topic" || is_transactional_topic "$topic") && echo "--formatter-property print.offset=true") \
          --timeout-ms 60000 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
     consumer_rc=${PIPESTATUS[0]}
 
-    # The boundary this capture PROVED it reached. The scan's own status is checked: a truncated or
-    # unreadable gzip must fail the capture, not read as an empty one (round 4, #2).
-    scan_out="$(scan_offsets "$tmp" "$endoff")"; scan_rc=$?
-    if [ "$scan_rc" -ne 0 ]; then
-      log "  WARN $topic p$part [$from,$endoff): the capture could not be read back (status $scan_rc) — checkpoint NOT advanced, will retry next run"
-      rm -f "$tmp"; failed=$(( failed + 1 )); continue
-    fi
-    read -r maxoff lines <<< "$scan_out"
-    maxoff="${maxoff:--1}"; lines="${lines:-0}"
-    # A reader the outer bound STOPPED can have been cut mid-record, and the pipeline's `grep`
-    # completes that line before gzip sees it, so a truncated record is indistinguishable inside the
-    # file. Do not credit the last record of such a capture: it is re-read next run, as a duplicate.
-    if [ "$consumer_rc" -eq 124 ] && [ "$maxoff" -ge 0 ]; then
-      log "  NOTE $topic p$part: the reader was stopped by its outer bound — its last record may have been cut off and is not credited"
-      maxoff=$(( maxoff - 1 ))
+    # The boundary this capture PROVED it reached — only where the offsets were asked for, i.e. a
+    # declared transactional (JSON) topic or the STRICT one. The scan's own status is checked: a
+    # truncated or unreadable gzip must fail the capture, not read as an empty one (round 4, #2).
+    maxoff=-1; offset_aware=0
+    if is_transactional_topic "$topic"; then
+      offset_aware=1
+      scan_out="$(scan_offsets "$tmp" "$endoff")"; scan_rc=$?
+      if [ "$scan_rc" -ne 0 ]; then
+        log "  WARN $topic p$part [$from,$endoff): the capture could not be read back (status $scan_rc) — checkpoint NOT advanced, will retry next run"
+        rm -f "$tmp"; failed=$(( failed + 1 )); continue
+      fi
+      read -r maxoff lines <<< "$scan_out"
+      maxoff="${maxoff:--1}"; lines="${lines:-0}"
+      # A reader the outer bound STOPPED can have been cut mid-record, and the pipeline's `grep`
+      # completes that line before gzip sees it, so a truncated record is indistinguishable inside the
+      # file. Do not credit the last record of such a capture: it is re-read next run, as a duplicate.
+      if [ "$consumer_rc" -eq 124 ] && [ "$maxoff" -ge 0 ]; then
+        log "  NOTE $topic p$part: the reader was stopped by its outer bound — its last record may have been cut off and is not credited"
+        maxoff=$(( maxoff - 1 ))
+      fi
     fi
 
     read -r got min_ms max_ms schema_versions <<< "$(scan_archive_file "$tmp")"
@@ -629,7 +629,7 @@ for topic in $TOPICS; do
     # manifest claims is [from, ckpt_to), the range this file is credited with; a record that
     # arrived past it stays in the file and is read again next run, as a duplicate.
     ckpt_to="$endoff"; span="$count"
-    if [ "$got" -gt 0 ]; then
+    if [ "$offset_aware" -eq 1 ] && [ "$got" -gt 0 ]; then
       if [ "$maxoff" -ge "$from" ]; then
         ckpt_to=$(( maxoff + 1 )); span=$(( ckpt_to - from ))
         [ "$ckpt_to" -lt "$endoff" ] && log "  NOTE $topic p$part: proved boundary $ckpt_to is short of the high-water mark $endoff — $((endoff-ckpt_to)) offset(s) deferred to the next capture (markers, compaction, an aborted or an unresolved transaction, or records that arrived during the capture)"
@@ -656,7 +656,7 @@ for topic in $TOPICS; do
     # records it did place are real, and the checkpoint only credits the boundary they prove. Before
     # this, an active sparse topic (compaction plus a live producer, so neither the record budget nor
     # the idle timeout is ever reached) discarded a valid capture every single run (round 4, #3).
-    if [ "$consumer_rc" -eq 124 ] && [ "$got" -gt 0 ] && [ "$maxoff" -ge "$from" ]; then
+    if [ "$consumer_rc" -eq 124 ] && [ "$offset_aware" -eq 1 ] && ! is_strict_topic "$topic" && [ "$got" -gt 0 ] && [ "$maxoff" -ge "$from" ]; then
       log "  NOTE $topic p$part: the reader was stopped by the ${OE_ARCHIVE_READ_TIMEOUT:-900}s bound with $got record(s) placed — crediting the proved boundary $ckpt_to and deferring the rest"
       consumer_rc=0
     fi

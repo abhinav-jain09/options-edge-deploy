@@ -128,6 +128,10 @@ pipeline {
           # crontab invokes, and every helper those scripts source, must be in the repo AND in UNIT —
           # the check that would have caught oe-archive-verify.sh and oe-trading-day.sh a month ago.
           bash scripts/ci/validate-archive-unit-completeness.sh
+          # The transactional declarations decide which topics get the PROVED-boundary checkpoint and
+          # which keep the high-water mark; an omission there is a silent gap on a topic written inside
+          # Kafka transactions (deploy Codex rounds 3-5).
+          bash scripts/ci/validate-archive-transactional-inventory.sh
 
           # A5.7's watchdog is exempted from the check above because it belongs on the DEV MAC. That
           # exemption is only honest if something else binds it: this asserts its install path, that
