@@ -166,6 +166,15 @@ jobs:
       - name: Validate the es-auction mirror's shell blocks parse
         run: bash scripts/ci/validate-jenkinsfile-shell-blocks.sh
 
+      # The enumeration mirror's payload proof compares a 71 KB single-line record. `grep -F -x -f`
+      # died on it with "out of memory" while the mirror itself had copied the record perfectly, and
+      # the shell read-loop that replaced it could not prove byte identity either: `read` discards
+      # NUL bytes, a reference lacking its final LF could never match, and newline-delimited output
+      # is not record-delimited. The comparison now happens in bytes, in python. This drives that
+      # helper against each of those cases — a proof nobody exercises is not a proof.
+      - name: Validate the mirrored-record byte comparison
+        run: bash scripts/ci/find-mirrored-record-test.sh
+
       # topics.env is only the DEPLOY-TIME half of "the archive is never compacted". The other half
       # is the boot-time stamp: processing-common KafkaTopics.ensureTopic() runs
       # incrementalAlterConfigs on every service start, so a topic the deploy just set to delete is

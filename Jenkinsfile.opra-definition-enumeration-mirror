@@ -762,24 +762,25 @@ PL
               # A digest comparison is O(bytes) and says exactly the same thing: the target holds a
               # line byte-identical to the source's.
               if [ -s "$TOUT" ]; then
-                REF_SHA=$(shasum -a 256 < "$REF" | awk '{print $1}')
-                while IFS= read -r target_line; do
-                  LINE_SHA=$(printf '%s\n' "$target_line" | shasum -a 256 | awk '{print $1}')
-                  if [ "$LINE_SHA" = "$REF_SHA" ]; then
-                    TFOUND=1
-                    # KEEP THE MATCHED LINE HERE. The structural re-assertion below needs the TARGET's
-                    # own copy of the record, and the obvious way to get it -- grep it back out of
-                    # $TOUT -- is the SAME `grep -F -x -f` on a 71 KB pattern line that this stage
-                    # exists to stop using. It would die with "grep: out of memory" AFTER the hash
-                    # comparison had already succeeded, and under `set -euo pipefail` the install then
-                    # fails without ever reaching the assertion or printing PAYLOAD VERIFIED -- a
-                    # correct mirror reported as a failed install. This is also the exact byte
-                    # sequence that was hashed, so it is precisely what matched.
-                    printf '%s\n' "$target_line" > "$TREF"
-                    break
-                  fi
-                done < "$TOUT"
-                [ "$TFOUND" = "1" ] && break
+                # COMPARE IN BYTES, in python, and NOT with a shell read-loop. Three reasons, all of
+                # them defects found in review of the shell version:
+                #   * `read` silently DISCARDS NUL bytes, so a target record with a NUL inserted
+                #     normalises to the source line, compares equal, and is written back out WITHOUT
+                #     the NUL -- a corrupted record reported as byte-identical.
+                #   * Hashing $REF as-is while hashing each candidate with an appended newline means
+                #     a reference that lacks its final LF can never match, and a HEALTHY mirror fails
+                #     its install after six retries.
+                #   * The consumer's output is newline-DELIMITED, which is not record-delimited. The
+                #     helper therefore refuses to compare unless the dump splits into exactly the
+                #     number of records the consumer says it processed -- proving the boundary rather
+                #     than assuming it.
+                # It also writes the matched record to $TREF itself, which is what keeps the OOM
+                # `grep -F -x -f` from being needed a second time for the assertion below.
+                PROCESSED=$(awk '/Processed a total of [0-9]+ messages/{n=$5} END{print n+0}' "$TOUT.err" 2>/dev/null || echo -1)
+                if python3 "$WORKSPACE/scripts/kafka/find-mirrored-record.py" "$REF" "$TOUT" "$PROCESSED" "$TREF"; then
+                  TFOUND=1
+                  break
+                fi
               fi
             fi
             echo "attempt $attempt: target end offset=$TEND, reference record not mirrored yet; waiting 5s"
