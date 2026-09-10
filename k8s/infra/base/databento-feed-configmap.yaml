@@ -33,6 +33,19 @@ data:
   # to "false" does not stop publication either; that needs the same restart. The rollout procedure
   # is therefore: apply, then roll the feed, then verify a record on the topic (or its absence).
   DATABENTO_DEFINITION_ENUMERATION_ENABLED: "true"
+  # RE-RESOLVE DURING THE SESSION. Without this the feed publishes exactly ONE enumeration per expiry
+  # — the off-hours ladder resolves once per expiry key and the streaming loop resolves once on entry
+  # — so a desk that comes up at 11:00 (a pod restart, or the whole es4 box rebooting) reads a record
+  # written before the open, correctly ages it past ES_AMT_DEFINITION_ENUMERATION_MAX_AGE_MS, and
+  # stands aside for the rest of the day. A durable record is not the same as the state coming back.
+  #
+  # 900s against the desk's 3600s max-age: three renewals fit inside the bound, so two consecutive
+  # failed refreshes still leave the desk trading. Shortening this costs one extra parent query per
+  # interval and buys nothing the bound does not already give.
+  #
+  # 0 disables it. Like the flag above, `envFrom` is captured at pod creation — this takes effect on
+  # the next feed roll and not before, in BOTH directions.
+  DATABENTO_DEFINITION_ENUMERATION_RENEWAL_SECONDS: "900"
   # Align the SPX 0DTE roll to the ES roll (17:30 ET) instead of midnight, so the SPX chain
   # flips to the next expiry when es4 does and the mapped ES gamma shows immediately (not until 00:00 ET).
   DATABENTO_EXPIRY_ROLL_AFTER: "17:30"
