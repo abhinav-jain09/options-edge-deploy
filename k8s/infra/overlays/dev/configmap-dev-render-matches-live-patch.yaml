@@ -1,0 +1,39 @@
+# PIN THE RENDER TO WHAT DEV IS ACTUALLY RUNNING.
+#
+# The same class of drift that configmap-prod-render-matches-live-patch.yaml documents for
+# production, found the same way: a one-key change (the definition-enumeration renewal) was being
+# applied to dev, and the DRY RUN showed it would have taken two other keys with it.
+#
+# Read from the LIVE dev configmaps, not from a file:
+#
+#   DATABENTO_EXPIRY  live: AUTO                     rendered: ""                  (base:11)
+#   KAFKA_RAW_TOPIC   live: options.databento.raw    rendered: options.ibkr.raw    (base:163)
+#
+# Both live values are the right ones for dev and the declarations are the stale half:
+#
+#   * DATABENTO_EXPIRY=AUTO is the path the running dev feed resolves its expiry from. The base's
+#     "" is a different resolution path, and an empty expiry is what the definition-enumeration
+#     producer refuses as NO_TARGET_EXPIRY.
+#   * KAFKA_RAW_TOPIC=options.databento.raw is what dev's feed publishes and dev's consumers read.
+#     `options.ibkr.raw` in the base predates dev being SPX-only on Databento; repointing dev at it
+#     would leave every raw consumer reading an empty topic.
+#
+# Like its production sibling, this patch makes the render REPRODUCE the live values so that a
+# deploy which means to change one key changes one key. It deliberately does NOT decide whether the
+# BASE should be corrected instead — that would move production too, and production is pinned by its
+# own patch for reasons that file documents. Settling the base is a separate, considered change.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-databento-feed-config
+  namespace: options-edge
+data:
+  DATABENTO_EXPIRY: AUTO
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: options-edge-config
+  namespace: options-edge
+data:
+  KAFKA_RAW_TOPIC: options.databento.raw

@@ -9,6 +9,11 @@ patches:
   # Dev-local values for the shared ConfigMaps (moved here from k8s/overlays/dev so the
   # standalone common-infra deploy renders the correct env configmap on its own).
   - path: configmap-dev-local-patch.yaml
+  # LAST among the configmap patches on purpose: it pins the render to what dev is RUNNING
+  # (DATABENTO_EXPIRY, KAFKA_RAW_TOPIC), so an apply that means to change one key changes one key
+  # instead of silently reverting two. See that file's header — it does not decide whether the BASE
+  # is the half that should change, because that would move production too.
+  - path: configmap-dev-render-matches-live-patch.yaml
   # Streams-state PVCs: dev docker-desktop provisions with the 'standard' storage class
   # (matches the 22 live dev PVCs). storageClassName is immutable — this MUST equal the
   # live class or kubectl apply is rejected with "spec: Forbidden: spec is immutable".
