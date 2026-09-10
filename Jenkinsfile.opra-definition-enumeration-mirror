@@ -850,7 +850,10 @@ S
                    $IMAGE bash /mirror/run-mirror-container.sh" \
               || { echo "FAIL: docker run failed on $ES4_HOST"; exit 1; }
             # One clock, the agent's, for the minimum-observation floor the final stage enforces.
-            date -u +%s > "$MDIR/container-created-at.txt"
+            # BUILD-STAMPED like every other cross-stage artefact here, and for the same reason: a
+            # leftover file from an earlier build would make the elapsed time look enormous and skip
+            # the wait entirely, which is precisely the check being skipped rather than a stale number.
+            printf 'build=%s created=%s\n' "$BUILD_NUMBER" "$(date -u +%s)" > "$MDIR/unit-started-at.txt"
             echo "container $CONTAINER started on $ES4_HOST from $IMAGE"
             exit 0
           fi
@@ -867,7 +870,7 @@ S
 PL
           launchctl unload "$PLIST" 2>/dev/null || true
           launchctl load "$PLIST"
-          date -u +%s > "$MDIR/container-created-at.txt"
+          printf 'build=%s created=%s\n' "$BUILD_NUMBER" "$(date -u +%s)" > "$MDIR/unit-started-at.txt"
           echo "launchd unit $LABEL loaded"
         '''
       }
@@ -1391,9 +1394,11 @@ PL
           # install-time one, and claiming otherwise would be the more dangerous error because it is
           # the claim someone would rely on instead of monitoring.
           MIN_OBSERVE_S=60
-          C="$MDIR/container-created-at.txt"
+          C="$MDIR/unit-started-at.txt"
           [ -s "$C" ] || { echo "FAIL: $C missing -- the install stage did not record a start time, so the observation window cannot be bounded"; exit 1; }
-          CREATED=$(cat "$C")
+          grep -q "^build=$BUILD_NUMBER " "$C" \
+            || { echo "FAIL: $C is not from this build (got: $(cat "$C")) -- a stale start time would make the window look already satisfied and skip the wait"; exit 1; }
+          CREATED=$(sed 's/.*created=\([0-9]*\).*/\1/' "$C")
           case "$CREATED" in ''|*[!0-9]*) echo "FAIL: recorded start time is not an epoch (got '$CREATED')"; exit 1 ;; esac
           NOWS=$(date -u +%s)
           ELAPSED=$((NOWS - CREATED))
