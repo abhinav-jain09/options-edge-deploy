@@ -42,6 +42,14 @@ resources:
 # cached image (no pull, no throttle). Dev keeps Always so it always picks up a
 # freshly-built :dev image.
 patches:
+  - path: unified-sr-state-recovery-patch.yaml
+    target:
+      kind: Deployment
+      name: unified-sr-service
+  - path: option-price-behavior-stateful-rollout-patch.yaml
+    target:
+      kind: Deployment
+      name: option-price-behavior-service
   # PROD-ONLY: gamma-migration R11 other-board sidecar (cross-cluster, points at es4).
   # MIRRORS k8s/services/gamma-migration/overlays/production — validate-services enforces it.
   - path: gamma-migration-prod-env-patch.yaml

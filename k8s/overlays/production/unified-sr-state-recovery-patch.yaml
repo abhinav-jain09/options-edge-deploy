@@ -1,0 +1,14 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unified-sr-service
+spec:
+  template:
+    spec:
+      containers:
+        - name: unified-sr
+          env:
+            # Rebuilt after the 2026-09-10 host OOM. Preserve the prior local
+            # state in the PVC root; subsequent deploys must use the restored copy.
+            - name: KAFKA_STREAMS_STATE_DIR
+              value: /var/lib/options-edge/kafka-streams/recovery-20260910
