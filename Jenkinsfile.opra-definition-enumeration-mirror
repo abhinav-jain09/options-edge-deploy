@@ -750,7 +750,20 @@ PL
               "$KBIN/kafka-console-consumer" --bootstrap-server "$TGT" --topic "$TOPIC" \
                 --partition 0 --offset "$START" --max-messages "$CNT" --timeout-ms 10000 \
                 --property print.key=true --property key.separator="$KVSEP" > "$TOUT" 2>"$TOUT.err" || true
-              if [ -s "$TOUT" ] && grep -qxFf "$REF" "$TOUT"; then TFOUND=1; break; fi
+              # COMPARE BY HASH, not by `grep -qxFf`. The auction record this job was copied from is
+              # one minute of a profile; an enumeration record is 484 contracts — 71 KB on ONE line —
+              # and `grep -F -x -f` with a pattern line that size dies with "grep: out of memory"
+              # (observed on install #1, while the mirror itself had copied the record perfectly).
+              # A digest comparison is O(bytes) and says exactly the same thing: the target holds a
+              # line byte-identical to the source's.
+              if [ -s "$TOUT" ]; then
+                REF_SHA=$(shasum -a 256 < "$REF" | awk '{print $1}')
+                while IFS= read -r target_line; do
+                  LINE_SHA=$(printf '%s\n' "$target_line" | shasum -a 256 | awk '{print $1}')
+                  if [ "$LINE_SHA" = "$REF_SHA" ]; then TFOUND=1; break; fi
+                done < "$TOUT"
+                [ "$TFOUND" = "1" ] && break
+              fi
             fi
             echo "attempt $attempt: target end offset=$TEND, reference record not mirrored yet; waiting 5s"
             sleep 5
