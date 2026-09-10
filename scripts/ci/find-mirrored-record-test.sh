@@ -62,9 +62,20 @@ check "an empty dump FAILS" 1 "$TMP/ref" "$TMP/empty" 0
 printf 'a\nb\n' > "$TMP/ref-2line"
 check "a multi-line reference FAILS" 1 "$TMP/ref-2line" "$TMP/dump" 1
 
-# 8. CRLF on either side must not be mistaken for a difference
+# 8. A CRLF dump needs no special case: the reference comes out of the same consumer through the same
+# redirect, so it carries the CR too and matches on its own merits.
 printf '%s\r\n' "$REC" > "$TMP/ref-crlf"
 printf '%s\r\n' "$REC" > "$TMP/dump-crlf"
-check "CRLF line endings on both sides match" 0 "$TMP/ref-crlf" "$TMP/dump-crlf" 1
+check "a CRLF dump matches a CRLF reference" 0 "$TMP/ref-crlf" "$TMP/dump-crlf" 1
+
+# 9. ...and a CR on ONE side only is a REAL difference. Stripping it looked like line-ending
+# tolerance and was a false positive: a record corrupted from `...}` to `...}\r` would pass, and the
+# sanitised copy written out for the structural assertion would hide the corruption entirely.
+printf '%s\n' "$REC" > "$TMP/ref"
+printf '%s\r\n' "$REC" > "$TMP/dump-cr"
+check "a stray CR on the TARGET side only is REFUSED" 1 "$TMP/ref" "$TMP/dump-cr" 1
+printf '%s\r\n' "$REC" > "$TMP/ref-crlf2"
+printf '%s\n' "$REC" > "$TMP/dump-lf"
+check "a stray CR on the SOURCE side only is REFUSED" 1 "$TMP/ref-crlf2" "$TMP/dump-lf" 1
 
 if [ "$FAILED" = "0" ]; then echo "=== find-mirrored-record-test: OK ==="; else echo "=== find-mirrored-record-test: FAILED ==="; exit 1; fi

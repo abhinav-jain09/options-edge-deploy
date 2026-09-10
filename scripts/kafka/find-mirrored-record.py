@@ -29,9 +29,18 @@ import sys
 
 
 def one_line(raw: bytes) -> bytes:
-    """The reference file's single record, without the trailing newline the shell gave it."""
-    if raw.endswith(b"\r\n"):
-        return raw[:-2]
+    """The reference file's single record, without the ONE trailing LF the shell's redirect gave it.
+
+    Deliberately no CR handling, on either side. Stripping a trailing CR from target lines looked
+    like tolerance for line-ending differences and was actually a false positive: a target record
+    corrupted from `...}` to `...}\r` would then match an LF-terminated source, and the sanitised
+    copy written out for the structural assertion would hide the corruption completely. Review
+    caught it, and caught that the "CRLF on both sides" test was blessing exactly that behaviour.
+
+    A genuinely CRLF dump needs no special case: the reference comes out of the SAME consumer
+    through the SAME redirect, so it carries the CR too, and the comparison succeeds on its own. A CR
+    on one side only is a real difference and is now reported as one.
+    """
     if raw.endswith(b"\n"):
         return raw[:-1]
     return raw
@@ -61,10 +70,11 @@ def main(argv: list[str]) -> int:
         print(f"FAIL: target dump {dump_path} is empty", file=sys.stderr)
         return 1
 
+    # Split on LF ONLY, and do not touch the pieces. Whatever bytes a target record carries are the
+    # bytes it is compared on.
     lines = dump.split(b"\n")
     if lines and lines[-1] == b"":
         lines.pop()
-    lines = [line[:-1] if line.endswith(b"\r") else line for line in lines]
 
     try:
         expected = int(expected_raw)
