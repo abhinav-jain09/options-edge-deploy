@@ -175,6 +175,13 @@ jobs:
       - name: Validate the mirrored-record byte comparison
         run: bash scripts/ci/find-mirrored-record-test.sh
 
+      # A shell FUNCTION used in a `sh` block that does not DEFINE it is a runtime failure nothing
+      # else catches: `bash -n` parses `es4 "..."` happily as a command, and review sees a helper
+      # that plainly exists — twelve lines away, in a different stage's shell. Each `sh` step is its
+      # own process. Introduced with the es4-docker mirror runner, which added three such helpers.
+      - name: Validate mirror shell helpers are defined where they are used
+        run: bash scripts/ci/validate-mirror-shell-helpers.sh
+
       # topics.env is only the DEPLOY-TIME half of "the archive is never compacted". The other half
       # is the boot-time stamp: processing-common KafkaTopics.ensureTopic() runs
       # incrementalAlterConfigs on every service start, so a topic the deploy just set to delete is
