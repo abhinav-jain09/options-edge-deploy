@@ -28,6 +28,7 @@ run() { # policy-for-basis-state -> exit status of verify-topics; output in $OUT
   # One "topic=value" knob per clause of the prod-only contract, so a negative case can break
   # exactly one of them at the mocked broker and leave the rest satisfied.
   local part_ov="${PART_OVERRIDE:-}" pol_ov="${POL_OVERRIDE:-}" ret_ov="${RET_OVERRIDE:-}"
+  local bytes_ov="${BYTES_OVERRIDE:-}"
   # Report each topic's DECLARED partition count. A flat "1" fails verify-topics' own
   # at-least-declared check on every 4- and 32-partition topic, which would mask the contract
   # this test is actually about.
@@ -55,7 +56,12 @@ case " $PURE_COMPACT_NAMES " in *" \$name "*) pol=compact;; esac
 case "$pol_ov" in "\$name="*) pol="${pol_ov#*=}";; esac
 ret=\$(printf '%s' "$RETENTIONS" | tr ' ' '\\n' | awk -F= -v n="\$name" '\$1 == n {print \$2; exit}')
 case "$ret_ov" in "\$name="*) ret="${ret_ov#*=}";; esac
-echo "Dynamic configs for topic \$name are: cleanup.policy=\$pol sensitive=false, retention.ms=\${ret:--1} sensitive=false"
+# retention.bytes rides AFTER retention.ms, as the real tool prints it; BYTES_OVERRIDE=name=value
+# overrides one topic, BYTES_OVERRIDE=name= (empty) OMITS the field so the reader's refusal is tested.
+bytes=-1
+case "$bytes_ov" in "\$name="*) bytes="${bytes_ov#*=}";; esac
+if [ -n "\$bytes" ]; then bytes_field=", retention.bytes=\$bytes sensitive=false"; else bytes_field=""; fi
+echo "Dynamic configs for topic \$name are: cleanup.policy=\$pol sensitive=false, retention.ms=\${ret:--1} sensitive=false\$bytes_field"
 exit 0
 EOF
   chmod +x "$tmp/kafka-topics" "$tmp/kafka-configs"
@@ -121,5 +127,18 @@ WANT_ENV=production RET_OVERRIDE="underlying.vix.price.shadow=-1" \
 WANT_ENV=production PART_OVERRIDE="underlying.vix.price=2" \
   check "prod-only EXACT partition count is enforced" 1 compact \
   "underlying.vix.price has partitions=2 but requires EXACTLY 1"
+
+# retention.BYTES (deploy Codex round 2, finding 2): declared per topic in topics.env, verified for
+# the active set; a finite cap or an unreadable value fails, on the default set and on es4.
+check "retention.bytes contract passes when the broker says -1" 0 compact "retention.bytes contract OK"
+BYTES_OVERRIDE="es.futures.footprint.strike=1073741824" \
+  check "a FINITE retention.bytes on the strike log fails" 1 compact \
+  "es.futures.footprint.strike retention.bytes='1073741824' but the declaration says '-1'"
+BYTES_OVERRIDE="es.futures.footprint.strike=" \
+  check "an UNREADABLE retention.bytes fails (never assumed)" 1 compact \
+  "es.futures.footprint.strike retention.bytes could not be read"
+SET=es4 BYTES_OVERRIDE="es.futures.footprint.strike=1073741824" \
+  check "es4 verifies its OWN retention.bytes list" 1 delete \
+  "es.futures.footprint.strike retention.bytes='1073741824'"
 
 [ $fail -eq 0 ] && echo "=== verify-topics-pure-compact-test: OK ===" || { echo "=== verify-topics-pure-compact-test: FAILED ==="; exit 1; }

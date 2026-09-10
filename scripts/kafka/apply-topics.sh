@@ -26,6 +26,7 @@ case "$TOPIC_SET" in
     OPTIONS_EDGE_PURE_COMPACT_TOPICS="${OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS:-}"
     OPTIONS_EDGE_EXACT_PARTITION_TOPICS="${OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS:-}"
     OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES="${OPTIONS_EDGE_ES4_TOPIC_RETENTION_OVERRIDES:-}"
+    OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES="${OPTIONS_EDGE_ES4_TOPIC_RETENTION_BYTES_OVERRIDES:-}"
     ;;
   *)
     echo "Unknown TOPIC_SET '$TOPIC_SET' (expected empty for dev/prod, or 'es4')" >&2
@@ -192,6 +193,11 @@ create_topic() {
   if [[ -n "$delete_retention" ]]; then
     extra_configs+=(--config "delete.retention.ms=$delete_retention")
   fi
+  local retention_bytes
+  retention_bytes="$(topic_retention_bytes "$topic")"
+  if [[ -n "$retention_bytes" ]]; then
+    extra_configs+=(--config "retention.bytes=$retention_bytes")
+  fi
   kafka-topics --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
     --create \
     --topic "$topic" \
@@ -250,6 +256,19 @@ topic_delete_retention_ms() {
   echo ""
 }
 
+# Per-topic retention.BYTES override, e.g. "es.futures.footprint.strike=-1". Empty for unlisted topics
+# (broker default): retention.ms=-1 alone does not stop byte-based deletion (deploy Codex round 2).
+topic_retention_bytes() {
+  local topic="$1" entry
+  for entry in ${OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES:-}; do
+    if [[ "${entry%%=*}" == "$topic" ]]; then
+      echo "${entry#*=}"
+      return
+    fi
+  done
+  echo ""
+}
+
 # Per-topic retention override (ms), e.g. "spx.basis.state=-1". Unlisted topics use $RETENTION_MS.
 topic_retention_ms() {
   local topic="$1" entry
@@ -282,7 +301,8 @@ alter_topic_config() {
     if kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
       --entity-type topics --entity-name "$topic" --alter \
       --add-config "retention.ms=$(topic_retention_ms "$topic"),cleanup.policy=$(kafka_config_value "$cleanup_policy"),min.insync.replicas=$MIN_ISR$( \
-        dr="$(topic_delete_retention_ms "$topic")"; [[ -n "$dr" ]] && echo ",delete.retention.ms=$dr")"; then
+        dr="$(topic_delete_retention_ms "$topic")"; [[ -n "$dr" ]] && echo ",delete.retention.ms=$dr")$( \
+        rb="$(topic_retention_bytes "$topic")"; [[ -n "$rb" ]] && echo ",retention.bytes=$rb")"; then
       return 0
     fi
     sleep 1

@@ -22,6 +22,12 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 fail=0
 
+# The generated consumer.properties must read COMMITTED records only: the strike log and cvd.levels
+# are transactional, and an aborted revision copied by the mirror is indistinguishable from a real one
+# on the target (deploy Codex round 1, finding 1). Pinned here because the shape assertions below
+# never see the consumer config.
+grep -qE '^isolation\.level=read_committed$' "$JOB" \
+  || { echo "FAIL: $JOB must generate consumer.properties with isolation.level=read_committed" >&2; exit 1; }
 body="$(awk '/BEGIN SHAPE ASSERTIONS/{f=1;next} /END SHAPE ASSERTIONS/{f=0} f' "$JOB")"
 [ -n "$body" ] || { echo "FAIL: shape-assertion markers not found in $JOB — the extraction and the job have diverged" >&2; exit 1; }
 # Sanity: the extracted text must actually contain the assertions this file claims to test.
@@ -49,10 +55,12 @@ cat > "$WORK/bin/kafka-configs" <<'EOF'
 #!/usr/bin/env bash
 broker=""; prev=""
 for a in "$@"; do [ "$prev" = "--bootstrap-server" ] && broker="$a"; prev="$a"; done
-if [ "$broker" = "${SRC_BROKER:-SRC}" ]; then pol="$SRC_POLICY"; ret="$SRC_RET"; else pol="$TGT_POLICY"; ret="$TGT_RET"; fi
+if [ "$broker" = "${SRC_BROKER:-SRC}" ]; then pol="$SRC_POLICY"; ret="$SRC_RET"; bytes="${SRC_BYTES-"-1"}"; else pol="$TGT_POLICY"; ret="$TGT_RET"; bytes="${TGT_BYTES-"-1"}"; fi
 # Real kafka-configs emits delete.retention.ms BEFORE retention.ms — the ordering that broke the
-# reader once already, reproduced here so the boundary anchoring stays under test.
-echo "Dynamic configs for topic $MOCK_TOPIC are: delete.retention.ms=86400000 sensitive=false, cleanup.policy=$pol sensitive=false, retention.ms=$ret sensitive=false"
+# reader once already, reproduced here so the boundary anchoring stays under test. retention.bytes
+# sits AFTER retention.ms, so a reader that substring-matches "retention.ms" against it is caught too.
+if [ -n "$bytes" ]; then bytes_field=", retention.bytes=$bytes sensitive=false"; else bytes_field=""; fi
+echo "Dynamic configs for topic $MOCK_TOPIC are: delete.retention.ms=86400000 sensitive=false, cleanup.policy=$pol sensitive=false, retention.ms=$ret sensitive=false$bytes_field"
 exit 0
 EOF
 chmod +x "$WORK/bin/kafka-topics" "$WORK/bin/kafka-configs"
@@ -61,7 +69,8 @@ run() { # -> exit status; output in $OUT
   OUT="$WORK/out.txt"
   set +e
   env PATH="$WORK/bin:$PATH" KBIN="$WORK/bin" SRC="${SRC_BROKER:-SRC}" TGT="${TGT_BROKER:-192.168.100.252:9092}" \
-      TOPIC="$MOCK_TOPIC" PARTS="$PARTS" POLICY="$POLICY" RET="$RET" \
+      TOPIC="$MOCK_TOPIC" PARTS="$PARTS" POLICY="$POLICY" RET="$RET" BYTES="${BYTES:-}" \
+      ${SRC_BYTES+SRC_BYTES="$SRC_BYTES"} ${TGT_BYTES+TGT_BYTES="$TGT_BYTES"} \
       MOCK_TOPIC="$MOCK_TOPIC" SRC_BROKER="${SRC_BROKER:-SRC}" \
       SRC_PARTS="$SRC_PARTS" SRC_POLICY="$SRC_POLICY" SRC_RET="$SRC_RET" \
       TGT_PARTS="$TGT_PARTS" TGT_POLICY="$TGT_POLICY" TGT_RET="$TGT_RET" \
@@ -130,6 +139,31 @@ MOCK_TOPIC=es.futures.cvd.bars PARTS=1 POLICY=compact,delete RET=-1
 SRC_PARTS=1 SRC_POLICY=compact,delete SRC_RET=-1 TGT_PARTS=1 TGT_POLICY=compact,delete TGT_RET=-1
 check "bars: dev target still allowed (not production-only)" 0
 TGT_BROKER=192.168.100.252:9092
+
+# ── the strike-interaction log (ES-FOOTPRINT-STRIKE-INTERACTION.md R13): delete, -1, one partition ──
+MOCK_TOPIC=es.futures.footprint.strike PARTS=1 POLICY=delete RET=-1 BYTES=-1
+SRC_PARTS=1 SRC_POLICY=delete SRC_RET=-1 TGT_PARTS=1 TGT_POLICY=delete TGT_RET=-1
+check "strike: matching delete/-1/-1 target passes" 0
+TGT_BYTES=1024
+check "strike: a finite target retention.bytes FAILS (a byte cap deletes what -1 ms promised)" 1 "target es.futures.footprint.strike retention.bytes=1024"
+TGT_BYTES=-1 SRC_BYTES=1024
+check "strike: a finite SOURCE retention.bytes FAILS" 1 "source es.futures.footprint.strike retention.bytes=1024"
+SRC_BYTES=-1 TGT_BYTES=""
+check "strike: an UNREADABLE target retention.bytes FAILS (never assumed)" 1 "cannot read retention.bytes"
+unset SRC_BYTES TGT_BYTES
+TGT_POLICY=compact,delete
+check "strike: a compacted target FAILS (revisions must all survive)" 1 "target es.futures.footprint.strike cleanup.policy=compact,delete"
+TGT_POLICY=delete TGT_RET=604800000
+check "strike: a finite target retention FAILS (history crosses sessions)" 1 "target es.futures.footprint.strike retention.ms=604800000"
+TGT_RET=-1 TGT_PARTS=4
+check "strike: a 4-partition target FAILS (one totally-ordered log)" 1 "PartitionCount"
+TGT_PARTS=1 SRC_POLICY=compact
+check "strike: a compacted SOURCE FAILS" 1 "source es.futures.footprint.strike cleanup.policy=compact"
+SRC_POLICY=delete
+TGT_BROKER=127.0.0.1:19092
+check "strike: dev target allowed (not production-only)" 0
+TGT_BROKER=192.168.100.252:9092
+BYTES=""; unset SRC_BYTES TGT_BYTES
 
 # ── the compact,delete siblings must still pass, and must not accept pure compact ───────────────
 MOCK_TOPIC=es.futures.cvd.bars PARTS=1 POLICY=compact,delete RET=-1

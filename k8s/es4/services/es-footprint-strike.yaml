@@ -1,0 +1,135 @@
+# ES footprint STRIKE INTERACTION (options-edge-processing ES-FOOTPRINT-STRIKE-INTERACTION.md).
+# HAND-AUTHORED es4-ONLY manifest (declared in scripts/ci/validate-es4-render.sh HAND_AUTHORED, like
+# es-cvd): the producer it consumes, es-cvd-service's es.futures.footprint.bars, lives only on this
+# broker, so there is no dev/prod deployment and no production slice to render from.
+# Deploy via Jenkinsfile.es4-deploy (SERVICE=es-footprint-strike; digest-pins the :prod tag).
+#
+# What it does: consumes es.futures.footprint.bars (R4) and publishes es.futures.footprint.strike (R13),
+# the append-only log of strike-interaction episode REVISIONS, one bar per Kafka transaction with the
+# input offset (R6). On start it folds its OWN log back into state before consuming anything.
+#
+# NEVER above 1 replica: a single transactional writer of one totally-ordered log. Kafka fences a second
+# writer on the transactional.id below, so a second pod crash-loops rather than corrupts — but scaling
+# this Deployment has no valid outcome.
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: '8153'
+    prometheus.io/scrape: 'true'
+  labels:
+    app.kubernetes.io/name: es-footprint-strike-service
+    app.kubernetes.io/part-of: options-edge
+  name: es-footprint-strike-service
+  namespace: options-edge
+spec:
+  ports:
+  - name: health
+    port: 8153
+    targetPort: health
+  selector:
+    app.kubernetes.io/name: es-footprint-strike-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: es-footprint-strike-service
+    app.kubernetes.io/part-of: options-edge
+  name: es-footprint-strike-service
+  namespace: options-edge
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: es-footprint-strike-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: es-footprint-strike-service
+        app.kubernetes.io/part-of: options-edge
+    spec:
+      # a transaction in flight plus a bounded producer close
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: es-footprint-strike
+        image: 192.168.100.252:5000/options-edge-es-footprint-strike:prod
+        env:
+        # The R6 fold keeps the parsed snapshot of an identity only while it is OPEN and one 32-byte digest per
+        # log record (plus its identity key) for the collision rule, so recovery heap scales with the open
+        # episodes plus the record COUNT of the retained log, not with every closed episode's series. es4
+        # retains one session between nightly cleans; the es-cvd sizing (768 MiB heap, 1 GiB limit) is the
+        # precedent. PROVISIONAL: measure a full-session recovery and one after a missed clean (see the
+        # ES-FOOTPRINT-STRIKE-DEPLOY-CODEX-ROUND2.md record) before treating this as capacity.
+        - name: JAVA_TOOL_OPTIONS
+          value: -Xms128m -Xmx768m
+        - name: FOOTPRINT_STRIKE_HEALTH_PORT
+          value: '8153'
+        # Set EXPLICITLY, like es-cvd's ES_CVD_BOOTSTRAP_SERVERS: a default that resolved elsewhere would
+        # silently fold another cluster's bars.
+        - name: FOOTPRINT_STRIKE_BOOTSTRAP_SERVERS
+          value: 192.168.100.4:9092
+        # Both go through KafkaSettings.topicValue: es4-common-env's TOPIC_PREFIX=es. lands them as
+        # es.futures.footprint.bars (the producer's own name, see es-cvd.yaml) and es.futures.footprint.strike.
+        - name: KAFKA_ES_FOOTPRINT_BARS_TOPIC
+          value: futures.footprint.bars
+        - name: KAFKA_ES_FOOTPRINT_STRIKE_TOPIC
+          value: futures.footprint.strike
+        - name: FOOTPRINT_STRIKE_GROUP_ID
+          value: options-edge-es-footprint-strike
+        # One writer, fenced by Kafka. Changing this while another pod holds it defeats the fencing.
+        - name: FOOTPRINT_STRIKE_TRANSACTIONAL_ID
+          value: es-footprint-strike-0
+        # R7 / §8: BAND_CENTS = 2.5 SPX points, the initial hypothesis; published on every record.
+        - name: FOOTPRINT_STRIKE_BAND_CENTS
+          value: '250'
+        # R12: the per-episode series bound; beyond it the OLDEST entries are dropped and the record says so.
+        - name: FOOTPRINT_STRIKE_MAX_SERIES_ENTRIES
+          value: '64'
+        # R20: the configured ladder universe — SPX 4000..9000 in 5-point strikes, integer cents. Every strike
+        # in it keeps its own episode state for the whole session; nothing moves with spot.
+        - name: FOOTPRINT_STRIKE_UNIVERSE_MIN_CENTS
+          value: '400000'
+        - name: FOOTPRINT_STRIKE_UNIVERSE_MAX_CENTS
+          value: '900000'
+        - name: FOOTPRINT_STRIKE_UNIVERSE_STEP_CENTS
+          value: '500'
+        # The own-log fold must finish inside pin-and-apply's 600 s rollout wait, or a slow fold is reported
+        # as a failed deploy while the pod is in fact still recovering: half the wait, so a fold that is
+        # genuinely stuck fails closed (exit 70, restart) with the deploy still able to observe the outcome.
+        - name: FOOTPRINT_STRIKE_FOLD_TIMEOUT_MS
+          value: '300000'
+        envFrom:
+        - configMapRef:
+            name: es4-base-env
+        - configMapRef:
+            name: es4-common-env
+        - secretRef:
+            name: es4-runtime-secrets
+        ports:
+        - containerPort: 8153
+          name: health
+        # liveness 503s once the subsystem has failed closed (an indeterminate commit, a fenced writer, a
+        # topic contract violation) and the process exits 70: the restart IS the recovery path (R6 fold).
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: health
+          initialDelaySeconds: 20
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
