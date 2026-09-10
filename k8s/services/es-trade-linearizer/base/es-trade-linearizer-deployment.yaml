@@ -60,6 +60,26 @@ spec:
             # DARK. See the header. This is the single line that enables publication.
             - name: ES_LINEARIZER_OUTPUT_ENABLED
               value: "false"
+            # A print that arrives after the order around it was decided is PUBLISHED WHERE IT
+            # ARRIVED (and counted), not a session-ending halt. Measured on the NAS archive
+            # dt=2026-09-09 (878,078 prints, 09-06 22:00Z..09-10 09:40Z) through the real engine:
+            # HALT@2s stops the tape after 122,275 prints (a 174 s producer catch-up, 09-08 10:48Z),
+            # and the first prod dark run halted on a print 187 ms under a 2 s watermark.
+            #   APPEND grace   appended   publish delay p50 / p99
+            #   2000 ms        247        2.2 s / 10.3 s
+            #   5000 ms        242        5.3 s / 13.6 s
+            #   15000 ms       203        15.3 s / 24.1 s
+            # 5 s absorbs consumer-side jitter; beyond it the appended prints are catch-up bursts
+            # no grace short of minutes covers, bought with ten more seconds on every print.
+            - name: ES_LINEARIZER_LATE_POLICY
+              value: APPEND
+            - name: ES_LINEARIZER_GRACE_MS
+              value: "5000"
+            # A genuinely fresh tape starts a day back, so it covers the start of the session it is
+            # switched on in: the slope refuses to publish a session it did not see from its first
+            # print. Never consulted on a resume. The source tape keeps retention.ms=-1.
+            - name: ES_LINEARIZER_FRESH_START_LOOKBACK_HOURS
+              value: "24"
             # One writer, fenced by Kafka. Changing this string while another pod holds it would
             # defeat the fencing that makes a second writer crash rather than corrupt.
             - name: ES_LINEARIZER_TRANSACTIONAL_ID
