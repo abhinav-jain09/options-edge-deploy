@@ -47,6 +47,11 @@
 // ES_AMT_DEFINITION_ENUMERATION_MAX_AGE_MS within the hour and gate (4) shuts -- a third machine,
 // which nobody thinks of as part of the system, holding the desk up.
 //
+// THE DEFAULT DELIBERATELY STAYS local-mac-launchd, which is what is running today. Merging this
+// must not move a live production data path: the switch-over is a decision, taken by selecting
+// es4-docker on a run, not something that happens because code landed on main. The default is the
+// WORSE option on purpose, and it is the honest one until the owner chooses otherwise.
+//
 // RUNNER=es4-docker puts the same MM1 command on es4 itself, as a container with
 // `--restart unless-stopped`, beside the broker it feeds. es4's docker.service is enabled at boot
 // and its `es4-kafka` image already ships /usr/bin/kafka-mirror-maker, so the chain becomes
@@ -54,8 +59,8 @@
 // -> desk pod (k3s enabled), with no link that waits for a person. Both of those facts are ASSERTED
 // at install, not assumed: a container that would not come back after a reboot is not a fix.
 //
-// RUNNER=local-mac-launchd is the old behaviour, kept for a dev target (127.0.0.1) where there is no
-// remote host to install onto.
+// RUNNER=local-mac-launchd is the old behaviour. It is also the ONLY valid runner for a dev target
+// (127.0.0.1): there is no remote host to install onto, and Preflight refuses es4-docker there.
 //
 // Installing on es4 TEARS DOWN the Mac unit for the same (target, topic) first and proves it gone.
 // Two mirrors writing one partition is not merely wasteful -- it defeats the very ordering guarantee
@@ -72,7 +77,7 @@ pipeline {
     string(name: 'TARGET_PORT',          defaultValue: '9092',          description: 'Target Kafka port (es4 = 9092).')
     choice(name: 'TOPIC', choices: ['options.databento.opra.definition.enumeration'], description: 'Definition-enumeration topic to mirror (frozen allow-list - the shape + payload contract below is per-topic).')
     choice(name: 'ACTION', choices: ['install', 'teardown', 'status'], description: 'install = create+run the mirror; teardown = stop+remove it; status = read-only report.')
-    choice(name: 'RUNNER', choices: ['es4-docker', 'local-mac-launchd'], description: 'WHERE the mirror process runs. es4-docker = a container on the TARGET host with --restart unless-stopped, so it returns after a power cycle with no human (see the header). local-mac-launchd = a KeepAlive LaunchAgent on the Jenkins Mac, which does not start until someone unlocks FileVault; use it only for a dev target with no remote host.')
+    choice(name: 'RUNNER', choices: ['local-mac-launchd', 'es4-docker'], description: 'WHERE the mirror process runs. local-mac-launchd (DEFAULT, and what is running today) = a KeepAlive LaunchAgent on the Jenkins Mac, which does not start until someone unlocks FileVault. es4-docker = a container on the TARGET host with --restart unless-stopped, so it returns after a power cycle with no human; see the header for why that matters and pick it deliberately.')
     booleanParam(name: 'ALLOW_EMPTY_SOURCE', defaultValue: false, description: 'FRESH ROLLOUT ONLY: install against a source topic that has no records yet (created by apply-topics, and the SPX feed publishes nothing until DATABENTO_DEFINITION_ENUMERATION_ENABLED is turned on and its next resolve completes). The end-to-end payload proof is DEFERRED - re-run this job with ACTION=install (idempotent) once a resolve has published, with this OFF, to actually prove the mirror.')
   }
   options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
