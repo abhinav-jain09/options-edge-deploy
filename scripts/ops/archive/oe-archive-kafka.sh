@@ -104,6 +104,10 @@ unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_p
 # population as complete. Every check below that says "strict" is gated on this list and nothing else.
 OE_STRICT_TOPICS="${OE_STRICT_TOPICS:-context-tape.direction.ledger}"
 is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# Topics read COMMITTED-ONLY. See the consumer invocation below for why this is a list and not the
+# default: an omission here is today's behaviour, never a new gap. Declared in oe-topics.env.
+OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike}"
+is_committed_read_topic() { case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 DEFAULT_TOPICS_prod="$OE_ALL_TOPICS_prod"
 # One definition, every caller: the es4 set comes from oe-topics.env, REQUIRED above — there is
@@ -528,14 +532,24 @@ for topic in $TOPICS; do
     # NOTE: `consumer | gzip` reports GZIP's exit status, so a consumer that emitted zero records
     # still "succeeds". That is how the first version silently archived empty files and advanced
     # its checkpoints. Verify by COUNTING what actually landed, then commit.
-    # read_committed (deploy Codex round 1, finding 3): es.futures.footprint.strike is written inside
-    # Kafka transactions (ES-FOOTPRINT-STRIKE-INTERACTION.md R6), so the default read_uncommitted would
-    # archive ABORTED revisions as if they were the log. Transaction markers also occupy offsets that
-    # never surface as records, so on such a topic (end - from) overstates the readable count and the
-    # read completes on the idle timeout below, exactly as it does for a compacted topic. Harmless on
-    # every non-transactional topic.
+    # read_committed, for the DECLARED topics only (deploy Codex round 1 finding 3, round 7 finding 1).
+    # es.futures.footprint.strike is written inside Kafka transactions
+    # (ES-FOOTPRINT-STRIKE-INTERACTION.md R6), so the default read_uncommitted would archive ABORTED
+    # revisions as if they were the log — the round-1 finding this answers.
+    #
+    # It is NOT applied to every topic, because it is not free: a read_committed reader stops below the
+    # end offset while a transaction is unresolved, and this archiver checkpoints the end offset it
+    # captured at the start. Turning it on globally would therefore have added a skip risk to every
+    # topic in every inventory at once (round 7). Scoped, the exposure is the declared topic's alone,
+    # and an omission from the list is simply today's behaviour rather than a new gap.
+    #
+    # For the strike log that residual exposure is bounded by the topic's own contract: retention is
+    # -1 and cleanup.policy=delete (R13), so the SOURCE keeps every record for ever and a range the
+    # archive skipped can be re-archived from it by rewinding the checkpoint. That is not true of a
+    # topic whose retention expires, which is the other reason this is not switched on globally.
+    # The framed reader that would remove the exposure entirely is the follow-up oe-topics.env names.
     timeout 900 "$KAFKA_BIN/kafka-console-consumer.sh" --bootstrap-server "$BOOTSTRAP" \
-         --consumer-property isolation.level=read_committed \
+         $(is_committed_read_topic "$topic" && echo "--consumer-property isolation.level=read_committed") \
          --topic "$topic" --partition "$part" --offset "$from" --max-messages "$count" \
          --formatter-property print.timestamp=true \
          --formatter-property print.key=true \
