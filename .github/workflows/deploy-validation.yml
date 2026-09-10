@@ -136,6 +136,12 @@ jobs:
       - name: es4 topic SSOT + partition contract
         run: python3 -m unittest -v tests.test_es4_topics_ssot tests.test_es4_topic_partition_contract tests.test_remove_retired_workloads
 
+      # The dev/prod arm of the same wedge: options.opra.tcbbo was undeclared, so after a wipe broker
+      # auto-create (num.partitions=1) shaped it and strike-flow-classifier's repartition topics were
+      # created at 1 against a 32-partition source (dev, 2026-09-10: 0 records for ~8h, READY).
+      - name: OPRA tape declared at its real shape (dev/prod)
+        run: python3 -m unittest -v tests.test_opra_tcbbo_declared
+
       # The es4 arm of the same contract, EXECUTED: tests.test_vix_option_inteligence_prune runs the
       # real scripts/es4/create-es-topics.sh — its CLI shims and the shared applier all the way down
       # — against a fake es4 broker. That is the only place the es4 path is exercised at all: CI
