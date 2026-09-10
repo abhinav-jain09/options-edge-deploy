@@ -29,7 +29,7 @@ LOAD_WAIT_SECONDS="${LOAD_WAIT_SECONDS:-600}"
 # before these are, so they go first and alone.
 WAVE1='options-edge-databento-feed feed-gateway-service options-edge-web'
 # Held down by explicit USER decision — never started here.
-KEEP_DOWN='ibkr-feed-service|option-truth-engine-service|spread-skew-service|spread-skew-postgres-writer|prod-pgadmin'
+KEEP_DOWN='databento-mission-sandwich-service|dealer-ledger-calibration-accumulator|dealer-ledger-calibration-scorer|dealer-ledger-service|directional-pressure-databento-service|directional-pressure-service|hpsf-stage-a-service|hpsf-stage-b-service|ibkr-feed-service|option-truth-engine-service|options-edge-integration-test|prod-pgadmin|short-premium-agent-service|spread-skew-postgres-writer|spread-skew-service|spx-mission-control-service|strike-flow-classifier-ibkr|vix-option-inteligence-service|volume-pace-databento-service|volume-pace-service|volume-sandwich-databento-service|volume-sandwich-service'
 
 log() { printf '[%s] %s\n' "$(date '+%F %T %Z')" "$*" | tee -a "$LOG"; }
 die() { log "FAIL: $*"; exit 1; }
