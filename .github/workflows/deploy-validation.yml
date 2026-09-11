@@ -246,6 +246,18 @@ jobs:
       - name: es-auction-mirror source/target shape assertions
         run: bash scripts/ci/es-auction-mirror-shape-test.sh
 
+      # es.futures.footprint.strike is exact-partition and reset-preserved in BOTH topic sets; a
+      # partition drift plus the global KAFKA_RECREATE_MISMATCHED_TOPICS=true must stop apply-topics
+      # before any delete/create (NEVER_RECREATE), for dev, production and TOPIC_SET=es4 — and a mutant
+      # without the declaration must delete it, so the test is shown to be sensitive to it.
+      - name: apply-topics never recreates the strike episode log
+        run: bash scripts/kafka/apply-topics-strike-safety-test.sh
+
+      # es4's clean-reset deletes the whole Kafka data dir; it must refuse while the strike archive
+      # marker is short of the log end (fail closed on unreadable state, explicit opt-out only).
+      - name: es4 clean-reset strike archive interlock
+        run: bash scripts/es4/strike-archive-interlock-test.sh
+
       - name: Validate image-pinning completeness (every rendered image wired into resolve-images + apply)
         run: scripts/ci/validate-image-pinning.sh
 

@@ -47,6 +47,8 @@ pipeline {
     ], description: 'Service (deploy-service only). NOTE: es-feed is the RELOCATED ES options feed now running on the es4 cluster; it always deploys at replicas 0 — starting it is a separate ACTION=activate-es-feed.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + kubectl apply --dry-run=server only.')
+    booleanParam(name: 'ACCEPT_UNARCHIVED_STRIKE_LOSS', defaultValue: false,
+      description: 'clean-reset only. The wipe REFUSES while es.futures.footprint.strike holds records the nightly archive has not recorded as captured (scripts/es4/strike-archive-interlock.sh). Tick ONLY to wipe anyway and permanently lose those records; the wipe logs exactly what it discarded. The normal remedy is to run the es4 archive first.')
     choice(name: 'ES_FEED_LOCATION', choices: ['none', 'es4'],
       description: 'DECLARED location of the single live es-feed. es4 is the ONLY option: the prod-cluster es-feed was retired 2026-07-25 (DBP-R33) so two copies cannot exist at all, rather than being prevented by convention. none = es-feed must be DOWN. Rollback to prod is deliberately not a one-click path any more - it requires a full revert of the retirement commits (both prod manifests, the deploy stage, the digest check, the prod activation branch and the cross-cluster fencing), not just restoring one file.')
     booleanParam(name: 'ES_FEED_ACK_OI_AND_CAPACITY', defaultValue: false,
@@ -150,14 +152,20 @@ pipeline {
           #     and left an unset/arbitrary value unsafe. Not restoring it at all has neither hazard.
           #     After a reset, start the feed deliberately with ACTION=activate-es-feed.
 
+          # (c) The on-box wipe refuses while es.futures.footprint.strike holds records the nightly archive
+          #     has not recorded as captured (scripts/es4/strike-archive-interlock.sh). Only the explicit
+          #     ACCEPT_UNARCHIVED_STRIKE_LOSS parameter turns that off, and the wipe then logs the loss.
+          STRIKE_INTERLOCK=on
+          if [ "${ACCEPT_UNARCHIVED_STRIKE_LOSS:-false}" = "true" ]; then STRIKE_INTERLOCK=off; fi
+
           if [ "${DEPLOY_DRY_RUN}" = "true" ]; then
             echo "DRY: would run the on-box wipe (no prod es-feed to fence — retired per DBP-R33)"
-            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+            ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=true ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID ES4_STRIKE_ARCHIVE_INTERLOCK=$STRIKE_INTERLOCK bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
             exit 0
           fi
 
           echo "=== running on-box atomic wipe ==="
-          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
+          ssh -o BatchMode=yes "$ES4_HOST" "DEPLOY_DRY_RUN=false ES4_FEED_FENCED=1 ES4_EXPECTED_NS_UID=$ES4_NS_UID ES4_STRIKE_ARCHIVE_INTERLOCK=$STRIKE_INTERLOCK bash /home/es4/repo/scripts/es4/cleanup-es4.sh"
         '''
       }
     }

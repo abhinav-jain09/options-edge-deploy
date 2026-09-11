@@ -55,6 +55,13 @@ CRON_TZ=America/New_York
 # margin, move THIS entry later — do not shorten the consumer timeout, because an early timeout is
 # indistinguishable from a clean read and would checkpoint over a short read silently.
 0 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify.cron.log 2>&1
+# es4 completeness, 20:05 ET — its own entry for the reason given above: it reads what is on the NAS,
+# not what the 17:01 es4 job said about itself. Until 2026-09-11 nothing verified es4 at all: the
+# floors in oe-topics.env (the strike presence floor among them) were declared and never checked,
+# because the verifier requires OE_ALL_TOPICS_es4 and it did not exist (deploy Codex final review,
+# finding 3). The verifier delivers its own alert on MISSING / PARTIAL / CORRUPT or on being unable to
+# run, exactly as the prod entry does. Five minutes after prod so the two runs never interleave.
+5 20 * * 1-5 ENV=es4 ARCHIVE_DIR=/mnt/nas/optionsedge LOG=/home/abhinav/oe-ops/archive-verify-es4.log /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify-es4.cron.log 2>&1
 
 # --- A5: the calibration corpus ------------------------------------------------------------------
 # SECOND archive pass, 20:45 ET. The 17:10 run can legitimately precede the session seal: a call

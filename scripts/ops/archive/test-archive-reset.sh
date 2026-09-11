@@ -11,7 +11,9 @@
 # TopicId, a partition that is EMPTY after the reset, and time-bounded mode. None of those can be
 # arranged on a live broker without writing to it, and a suite that waits for whatever a real topic
 # happens to contain can pass while guarding nothing. The shim below stands in for the three Kafka
-# CLIs the archiver calls, so every partition count, offset, id and record count is exact.
+# CLIs the archiver calls, so every partition count, offset, id and record count is exact. Section 12
+# adds a stand-in for StrikeArchiveReader.java (the committed-read capture) through the archiver's
+# STRIKE_READER seam; the Java program itself is exercised against a real broker, not here.
 set -uo pipefail
 OE="$(cd "$(dirname "$0")" && pwd)"
 ARCH="$OE/oe-archive-kafka.sh"
@@ -397,6 +399,356 @@ want "exactly one scheduled es4 archiver entry" 1 "$es4_line"
 es4_entry=$(grep '^1 17 \* \* 1-5 .*ENV=es4' "$crontab_file")
 hasnt "the es4 entry carries NO TOPICS override (the policy file is the one definition)" \
       "TOPICS=" "$es4_entry"
+
+# ================= 12. COMMITTED-READ capture: es.futures.footprint.strike ======================
+# deploy Codex final review, findings 1 and 6. The strike log is transactional. Read committed-only, the
+# console consumer can stop below an unresolved transaction and still exit 0, and the archiver then
+# checkpointed the high-water mark it queried first — "endoff=1200, got=1099 -> ACCEPT checkpoint=1200",
+# skipping every record that committed afterwards. OE_COMMITTED_READ_TOPICS now routes it to
+# StrikeArchiveReader.java, which takes its boundary from Kafka metadata. The Java program itself is run
+# against a REAL broker outside this suite (the PR record); here a shim with the reader's exact contract
+# stands in for it — boundary = the first offset of an OPEN transaction (the LSO) or the log end, capped by
+# --max-end; committed records below it are written; every other kind (aborted, open, marker) is not — so
+# every case is about what the ARCHIVER does with a reader's answer.
+for tool in zcat stat; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "FATAL: '$tool' is required by sections 12-14"; exit 1; }
+done
+STRIKE=es.futures.footprint.strike
+SDAY=2026-09-09
+CALLS="$OE_FIXTURE.calls"; MARKS="$OE_FIXTURE.marks"
+cat > "$BIN/strike-reader" <<'SH'
+#!/usr/bin/env bash
+# StrikeArchiveReader.java stand-in. Log: "$OE_FIXTURE.strike", one line per offset: <offset> <C|A|O|M> [key value]
+# C committed record, A aborted record, O record of a transaction still OPEN, M commit/abort marker.
+topic=""; part=""; from=""; maxend=""; out=""; sum=""; mgroup=""; moff=""
+while [ $# -gt 1 ]; do
+  case "$1" in
+    --topic) topic="$2" ;; --partition) part="$2" ;; --from) from="$2" ;; --max-end) maxend="$2" ;;
+    --out) out="$2" ;; --summary) sum="$2" ;; --mark-group) mgroup="$2" ;; --mark-offset) moff="$2" ;;
+  esac
+  shift 2
+done
+echo "reader $topic p$part from=${from:-} max_end=${maxend:-} mark=${moff:-} group=${mgroup:-}" >> "$OE_FIXTURE.calls"
+if [ -n "$mgroup" ]; then
+  if [ "${STRIKE_SHIM_MARK:-ok}" = fail ]; then
+    echo "STRIKE_ARCHIVE_READER status=FAILED topic=$topic partition=$part reason=broker_down" > "$sum"; exit 2
+  fi
+  echo "$moff" >> "$OE_FIXTURE.marks"
+  echo "STRIKE_ARCHIVE_READER status=COMPLETE topic=$topic partition=$part from=-1 lso=-1 boundary=$moff position=$moff records=0 escaped=0 elapsed_ms=1" > "$sum"
+  exit 0
+fi
+end=$(awk 'NF { e = $1 + 1 } END { print e + 0 }' "$OE_FIXTURE.strike")
+lso=$(awk '$2 == "O" { print $1; exit }' "$OE_FIXTURE.strike"); lso="${lso:-$end}"
+boundary="$lso"
+[ -n "$maxend" ] && [ "$maxend" -lt "$boundary" ] && boundary="$maxend"
+awk -v f="$from" -v b="$boundary" -v p="$part" \
+  '$2 == "C" && $1 >= f && $1 < b { printf "CreateTime:1786000000000\tPartition:%s\tOffset:%s\t%s\t%s\n", p, $1, $3, $4 }' \
+  "$OE_FIXTURE.strike" > "$out"
+n=$(wc -l < "$out" | tr -d ' ')
+status=COMPLETE; pos="$boundary"; rc=0; rec="$n"
+[ "$boundary" -lt "$from" ] && pos="$from"
+case "${STRIKE_SHIM_MODE:-}" in
+  timeout)    status=TIMEOUT; pos=$(( from + 1 )); rc=3 ;;
+  lie-short)  pos=$(( boundary - 1 )) ;;                 # says COMPLETE, exits 0, did NOT reach the boundary
+  lie-count)  rec=$(( n + 1 )) ;;                        # says it wrote one record more than the file holds
+  no-summary) exit 0 ;;                                  # exits 0 and states nothing
+esac
+echo "STRIKE_ARCHIVE_READER status=$status topic=$topic partition=$part from=$from lso=$lso boundary=$boundary position=$pos records=$rec escaped=0 elapsed_ms=1" > "$sum"
+exit "$rc"
+SH
+# The console consumer again, now also RECORDING each call, so a case can prove which path read a topic.
+cat > "$BIN/kafka-console-consumer.sh" <<'SH'
+#!/usr/bin/env bash
+part=""; off=0; maxm=0; topic=""; props=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --partition) part="$2"; shift 2 ;;
+    --offset) off="$2"; shift 2 ;;
+    --max-messages) maxm="$2"; shift 2 ;;
+    --topic) topic="$2"; shift 2 ;;
+    --consumer-property) props="$props $2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+echo "console $topic p$part props=[${props# }]" >> "$OE_FIXTURE.calls"
+end=$(awk -v p="$part" '$1==p{print $3}' "$OE_FIXTURE")
+avail=$(( end - off )); [ "$avail" -lt 0 ] && avail=0
+[ "$avail" -gt "$maxm" ] && avail="$maxm"
+i=0
+while [ "$i" -lt "$avail" ]; do
+  echo -e "CreateTime:1786000000000\t$part\tk$i\t{\"schemaVersion\":1}"
+  i=$(( i + 1 ))
+done
+SH
+chmod +x "$BIN/strike-reader" "$BIN/kafka-console-consumer.sh"
+
+strike_log() { # lines of the strike partition's log; the broker fixture's end offset follows from it
+  printf '%s\n' "$@" > "$OE_FIXTURE.strike"
+  local hwm; hwm=$(awk 'NF { e = $1 + 1 } END { print e + 0 }' "$OE_FIXTURE.strike")
+  fixture "topicid SSSSSSSSSSSSSSSSSSSSSS" "0 0 $hwm${UNTIL_OFF:+ $UNTIL_OFF}"
+}
+srun() { # $@ = extra env assignments
+  env ARCHIVE_DIR="$A" ENV=es4 ARCHIVE_JOB=test-strike BOOTSTRAP=shim:9092 KAFKA_BIN="$BIN" \
+      TOPICS="$STRIKE" SESSION_DATE="$SDAY" ALLOW_NON_NAS=true STRIKE_READER="$BIN/strike-reader" \
+      "$@" "$ARCH" 2>&1
+}
+fresh() { A="$T/$1"; mkdir -p "$A"; : > "$CALLS"; : > "$MARKS"; }
+SDIR() { echo "$A/kafka/es4/$STRIKE/dt=$SDAY"; }
+sck() { awk '{split($1,a,"="); if (a[1]=="0") print a[2]}' "$A/kafka/es4/_manifest/$STRIKE.offsets" 2>/dev/null | tail -1; }
+sruns() { awk -v k="$1" '{for(i=1;i<=NF;i++){split($i,x,"="); if (x[1]==k) v=x[2]}} END{print v}' "$A/kafka/es4/_manifest/runs.log" 2>/dev/null; }
+mlast() { # <field> of the LAST manifest line
+  python3 -c 'import json,sys
+lines=[l for l in open(sys.argv[1]) if l.strip()]
+print(json.loads(lines[-1]).get(sys.argv[2], "<absent>") if lines else "<no-manifest>")' "$(SDIR)/_manifest.jsonl" "$1" 2>/dev/null || echo "<no-manifest>"; }
+mlines() { grep -c . "$(SDIR)/_manifest.jsonl" 2>/dev/null || echo 0; }
+soffsets() { # every Offset archived for the date, in order, across files
+  local f; for f in "$(SDIR)"/*.jsonl.gz; do [ -f "$f" ] && zcat "$f"; done 2>/dev/null \
+    | awk -F'\t' '{ sub("Offset:", "", $3); print $3 }' | sort -n | tr '\n' ' ' | sed 's/ $//'; }
+sfiles() { ls "$(SDIR)"/*.jsonl.gz 2>/dev/null | wc -l | tr -d ' '; }
+lastmark() { tail -1 "$MARKS" 2>/dev/null; }
+contiguous() { # the verifier's own continuity rule over this date's manifest ranges
+  python3 -c 'import json,sys
+r=sorted((int(e["offset_from"]),int(e["offset_to"])) for e in map(json.loads,filter(str.strip,open(sys.argv[1]))))
+g=[f"{a[1]}->{b[0]}" for a,b in zip(r,r[1:]) if b[0]>a[1]]
+print("gaps:"+",".join(g) if g else "contiguous")' "$(SDIR)/_manifest.jsonl" 2>/dev/null; }
+
+# ---- 12a. committed + aborted, nothing open: the whole log, aborted revisions excluded -------------
+fresh s1
+strike_log '0 C k0 {"n":0}' '1 C k1 {"n":1}' '2 M' '3 A a3 {"aborted":3}' '4 A a4 {"aborted":4}' '5 M' '6 C k6 {"n":6}' '7 M'
+OUT=$(srun); RC=$?
+want "12a committed+aborted: run succeeds (rc)"            0 "$RC"
+want "  checkpoint = the stable boundary (= log end)"      8 "$(sck)"
+want "  exactly the committed offsets are archived"   "0 1 6" "$(soffsets)"
+want "  manifest records = committed records"              3 "$(mlast records)"
+want "  manifest offset_to = the boundary"                 8 "$(mlast offset_to)"
+want "  manifest names the capture"   read_committed_stable_boundary "$(mlast capture)"
+want "  no aborted revision in the archive"                0 "$(for f in "$(SDIR)"/*.jsonl.gz; do zcat "$f"; done | grep -c aborted)"
+want "  the strike log never reached the console consumer" 0 "$(grep -c "^console $STRIKE" "$CALLS")"
+want "  the committed reader read it, from 0"              1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
+want "  archive marker recorded at the checkpoint"         8 "$(lastmark)"
+has  "  and the run says so" "MARK $STRIKE p0: archived-through 8" "$OUT"
+
+# ---- 12b. UNRESOLVED transaction, then it commits: the retry captures every withheld record ------------
+# The reviewer's reproduction: a transaction open at offset 3 while later offsets exist. The high-water
+# mark is 7; the old rule checkpointed it and skipped 3, 4 and 5 for ever.
+fresh s2
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 O k3 v3' '4 O k4 v4' '5 C k5 v5' '6 M'
+OUT=$(srun); RC=$?
+want "12b open transaction: run succeeds (rc)"             0 "$RC"
+want "  checkpoint = the LSO, NOT the high-water mark 7"   3 "$(sck)"
+want "  manifest offset_to = the LSO"                      3 "$(mlast offset_to)"
+want "  only records below the LSO"                  "0 1" "$(soffsets)"
+want "  marker = the LSO"                                  3 "$(lastmark)"
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 C k3 v3' '4 C k4 v4' '5 C k5 v5' '6 M' '7 M'
+OUT=$(srun); RC=$?
+want "  the retry succeeds (rc)"                           0 "$RC"
+want "  the retry started at the LSO"                      1 "$(grep -c "^reader $STRIKE p0 from=3 " "$CALLS")"
+want "  checkpoint = the new boundary"                     8 "$(sck)"
+want "  EVERY committed record, each exactly once" "0 1 3 4 5" "$(soffsets)"
+want "  manifest ranges are contiguous"           contiguous "$(contiguous)"
+
+# ---- 12c. marker/aborted-only range: completes with ZERO records and still advances ---------------
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 C k3 v3' '4 C k4 v4' '5 C k5 v5' '6 M' '7 M' '8 A a8 x' '9 M'
+OUT=$(srun); RC=$?
+want "12c marker-only range: run succeeds (rc)"            0 "$RC"
+want "  checkpoint advances over markers + aborted"       10 "$(sck)"
+want "  its manifest line says 0 records"                  0 "$(mlast records)"
+want "  over offsets [8,10)"                           "8 10" "$(mlast offset_from) $(mlast offset_to)"
+want "  an (empty) file backs that line"                   3 "$(sfiles)"
+want "  the date's ranges stay contiguous"        contiguous "$(contiguous)"
+want "  nothing new archived"                    "0 1 3 4 5" "$(soffsets)"
+hasnt "  and it is not a failure"  "failed=1" "$OUT"
+
+# ---- 12d. DELAYED FINALIZE: the open transaction sits AT the checkpoint --------------------------
+# The session's finalize is still open when the capture runs: the stable boundary equals the checkpoint.
+# Nothing is captured, nothing is skipped, the run is not a failure, and the later run captures it.
+fresh s4
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+srun >/dev/null
+want "12d session captured before the finalize"           3 "$(sck)"
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 O fin3 v' '4 O fin4 v'
+OUT=$(srun); RC=$?
+want "  finalize still OPEN: run succeeds (rc)"            0 "$RC"
+has  "  and says an open transaction holds the range" "an open transaction holds the range" "$OUT"
+want "  checkpoint unchanged"                              3 "$(sck)"
+want "  no manifest line for an empty stable range"        1 "$(mlines)"
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 C fin3 v' '4 C fin4 v' '5 M'
+OUT=$(srun); RC=$?
+want "  finalize COMMITTED: the next run captures it (rc)" 0 "$RC"
+want "  checkpoint past the finalize"                      6 "$(sck)"
+want "  the finalize records are archived"         "0 1 3 4" "$(soffsets)"
+
+# ---- 12e. UNTIL_TS with abundant later records: contents bounded by the cutoff (finding 6) ---------
+fresh s5
+UNTIL_OFF=4 strike_log '0 C a v' '1 C b v' '2 C c v' '3 C d v' '4 C e v' '5 C f v' '6 C g v' '7 C h v' '8 C i v' '9 C j v'
+OUT=$(srun UNTIL_TS=1786000000000); RC=$?
+want "12e bounded: run succeeds (rc)"                      0 "$RC"
+want "  the reader was capped at the time-bounded offset"  1 "$(grep -c "^reader $STRIKE p0 from=0 max_end=4 " "$CALLS")"
+want "  only records before the cutoff are archived" "0 1 2 3" "$(soffsets)"
+want "  manifest records count ONLY in-range records"      4 "$(mlast records)"
+want "  manifest offset_to = the cutoff"                   4 "$(mlast offset_to)"
+want "  checkpoint = the cutoff"                           4 "$(sck)"
+hasnt "  and bounded mode is not a reset"  "RESET" "$OUT"
+
+# ---- 12f. the reader TIMES OUT: a failed capture, checkpoint unchanged, nothing published -----------
+fresh s6
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+OUT=$(srun STRIKE_SHIM_MODE=timeout); RC=$?
+want "12f reader timeout: the run FAILS (rc)"              1 "$RC"
+has  "  and says the capture failed" "committed-read capture FAILED" "$OUT"
+has  "  naming the reader's status" "status=TIMEOUT" "$OUT"
+want "  no checkpoint written"                            "" "$(sck)"
+want "  no file published"                                 0 "$(sfiles)"
+want "  no manifest line"                                  0 "$(mlines)"
+want "  no archive marker"                                "" "$(lastmark)"
+want "  runs.log records the failure"                      1 "$(sruns failed)"
+OUT=$(srun); RC=$?
+want "  the next healthy run captures everything"      "0 1" "$(soffsets)"
+want "  and checkpoints the boundary"                      3 "$(sck)"
+
+# ---- 12g-i. a reader whose claim does not hold up is refused, whatever its exit status ------------
+for mode in lie-short lie-count no-summary; do
+  fresh "s7-$mode"
+  strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+  OUT=$(srun STRIKE_SHIM_MODE=$mode); RC=$?
+  want "12g reader '$mode' (exit 0): the run FAILS (rc)"   1 "$RC"
+  want "  checkpoint unchanged"                           "" "$(sck)"
+  want "  nothing published"                               0 "$(sfiles)"
+done
+
+# ---- 12j-m. processing failures on the committed path leave the checkpoint alone (finding 5) --------
+REAL_GZIP=$(command -v gzip); REAL_ZCAT=$(command -v zcat); REAL_AWK=$(command -v awk); REAL_MV=$(command -v mv)
+FAULT="$T/fault"; mkdir -p "$FAULT"
+fault_bin() { # <name> <body> — a PATH shim that replaces one tool for one run
+  rm -rf "$FAULT/$1"; mkdir -p "$FAULT/$1"; printf '#!/usr/bin/env bash\n%s\n' "$2" > "$FAULT/$1/$1"; chmod +x "$FAULT/$1/$1"
+}
+# compressor: the archiver's `gzip -6` writes a partial stream and dies; decompression elsewhere is real
+fault_bin gzip "if [ \"\${1:-}\" = -6 ]; then head -c 20 >/dev/null; printf 'partial'; exit 1; fi; exec $REAL_GZIP \"\$@\""
+# decompressor: the statistics pass decompresses everything, then fails
+fault_bin zcat "$REAL_ZCAT \"\$@\"; exit 7"
+# scanner: the statistics awk prints its numbers, then fails ("scan_archive_file prints statistics, then returns 7")
+fault_bin awk "for a in \"\$@\"; do case \"\$a\" in *schemaVersion*) $REAL_AWK \"\$@\"; exit 7 ;; esac; done; exec $REAL_AWK \"\$@\""
+# publication: renaming a data file into place fails (a full or stale NAS)
+fault_bin mv "for a in \"\$@\"; do last=\"\$a\"; done; case \"\$last\" in *.jsonl.gz) echo 'mv: No space left on device' >&2; exit 1 ;; esac; exec $REAL_MV \"\$@\""
+for tool in gzip zcat awk mv; do
+  fresh "s8-$tool"
+  strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+  OUT=$(srun PATH="$FAULT/$tool:$PATH"); RC=$?
+  want "12j committed path, $tool failure: the run FAILS (rc)" 1 "$RC"
+  want "  checkpoint unchanged"                              "" "$(sck)"
+  want "  no data file published"                             0 "$(sfiles)"
+  want "  no archive marker"                                 "" "$(lastmark)"
+done
+
+# ---- 12n. the archive marker: es4 only by default, healed on an idle rerun, never fatal -------------
+fresh s9
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+srun >/dev/null
+: > "$MARKS"
+OUT=$(srun); RC=$?
+want "12n idle rerun (nothing new): run succeeds (rc)"     0 "$RC"
+want "  re-records the marker at the durable checkpoint"   3 "$(lastmark)"
+fresh s10
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+OUT=$(srun STRIKE_SHIM_MARK=fail); RC=$?
+want "  a marker write that fails does not fail the archive (rc)" 0 "$RC"
+want "  the capture and checkpoint stand"                  3 "$(sck)"
+has  "  and the run warns that the wipe will stay refused" "cleanup-es4.sh will refuse to wipe" "$OUT"
+fresh s11
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+env ARCHIVE_DIR="$A" ENV=prod ARCHIVE_JOB=test-strike BOOTSTRAP=shim:9092 KAFKA_BIN="$BIN" TOPICS="$STRIKE" \
+    SESSION_DATE="$SDAY" ALLOW_NON_NAS=true STRIKE_READER="$BIN/strike-reader" "$ARCH" >/dev/null 2>&1
+want "  ENV=prod writes NO marker to its broker"           0 "$(grep -c 'mark=[0-9]' "$CALLS")"
+want "  but still reads it committed-only, through the reader" 1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
+want "  and checkpoints the stable boundary"               3 "$(awk '{split($1,a,"="); if (a[1]=="0") print a[2]}' "$A/kafka/prod/_manifest/$STRIKE.offsets" | tail -1)"
+
+# ---- 12o. every OTHER topic keeps the console consumer, its arguments and its manifest line ---------
+fresh s12
+fixture "topicid OOOOOOOOOOOOOOOOOOOOOO" "0 0 40" "1 0 40"
+env ARCHIVE_DIR="$A" ENV=prod ARCHIVE_JOB=test-reset BOOTSTRAP=shim:9092 KAFKA_BIN="$BIN" TOPICS="$TOPIC" \
+    ALLOW_NON_NAS=true STRIKE_READER="$BIN/strike-reader" "$ARCH" >/dev/null 2>&1
+want "12o a non-declared topic never reaches the committed reader" 0 "$(grep -c '^reader ' "$CALLS")"
+want "  it is read by the console consumer, per partition" 2 "$(grep -c "^console $TOPIC " "$CALLS")"
+want "  with NO consumer property (read_uncommitted as before)" 2 "$(grep -c "^console $TOPIC p[01] props=\[\]$" "$CALLS")"
+last_plain=$(tail -1 "$A/kafka/prod/$TOPIC"/dt=*/_manifest.jsonl 2>/dev/null)
+hasnt "  its manifest line carries no committed-read fields" '"capture"' "$last_plain"
+has  "  and ends exactly as it always did" "\"archiver_version\":\"2026-08-13.1\"}" "$last_plain"
+
+# ================= 13. processing failures on the CONSOLE path (finding 5, inherited code) ==========
+# Each stage's failure used to be invisible: the pipeline kept only the consumer's status, and
+# `read <<< "$(scan_archive_file ...)"` hid the statistics helper's. Each must now leave the checkpoint.
+grep_real=$(command -v grep)
+fault_bin grep "for a in \"\$@\"; do case \"\$a\" in *'Processed a total'*) cat >/dev/null; exit 2 ;; esac; done; exec $grep_real \"\$@\""
+for tool in grep gzip zcat awk mv; do
+  A="$T/c-$tool"; mkdir -p "$A/kafka/prod/_manifest"
+  fixture "topicid PPPPPPPPPPPPPPPPPPPPPP" "0 0 40" "1 0 40"
+  OUT=$(run PATH="$FAULT/$tool:$PATH"); RC=$?
+  want "13 console path, $tool failure: the run FAILS (rc)"  1 "$RC"
+  want "  p0 checkpoint unchanged"                           "" "$(ck 0)"
+  want "  no data file published" 0 "$(ls "$A/kafka/prod/$TOPIC"/dt=*/*.jsonl.gz 2>/dev/null | wc -l | tr -d ' ')"
+done
+A="$T/c-ok"; mkdir -p "$A/kafka/prod/_manifest"
+OUT=$(run); RC=$?
+want "13 and with every tool healthy the same run archives (rc)" 0 "$RC"
+want "  p0 checkpoint"                                      40 "$(ck 0)"
+sha_line=$(tail -1 "$A/kafka/prod/$TOPIC"/dt=*/_manifest.jsonl)
+f_named=$(printf '%s' "$sha_line" | python3 -c 'import json,sys; e=json.loads(sys.stdin.read()); print(e["file"], e["sha256"])')
+want "  the manifest checksum is the published file's" "$(set -- $f_named; echo "$2")" \
+     "$(set -- $f_named; sha256sum "$(dirname "$(ls "$A/kafka/prod/$TOPIC"/dt=*/_manifest.jsonl)")/$1" | cut -d' ' -f1)"
+
+# ================= 14. es4 completeness verification (finding 3) ================================
+# oe-archive-verify.sh requires OE_ALL_TOPICS_<env>; es4 had none, so its floors — the strike presence
+# floor among them — were declared and never checked, and ENV=es4 failed as "no policy". This builds an
+# es4 archive tree from the REAL inventory and floors and runs the REAL verifier on it.
+VD="$T/vnas"; VDATE=2026-09-09
+( . "$OE/oe-topics.env"; printf '%s' "${OE_ALL_TOPICS_es4:-}" > "$T/v.topics"; printf '%s' "$OE_ARCHIVE_MIN_RECORDS" > "$T/v.floors" )
+want "oe-topics.env defines the es4 policy as the es4 set" "$(. "$OE/oe-topics.env"; printf '%s' "$OE_ES4_TOPICS")" "$(cat "$T/v.topics")"
+vbuild() { # $1 = strike records, or "absent"
+  rm -rf "$VD"; mkdir -p "$VD/kafka/es4"
+  python3 - "$VD/kafka/es4" "$VDATE" "$1" "$T/v.topics" "$T/v.floors" <<'PY'
+import gzip, json, os, sys
+root, date, strike, topics_f, floors_f = sys.argv[1:6]
+floors = {}
+for pair in open(floors_f).read().split():          # the verifier's own parse
+    if ":" in pair:
+        t, _, v = pair.partition(":")
+        try: floors[t] = int(v)
+        except ValueError: pass
+for t in open(topics_f).read().split():
+    if t == "es.futures.footprint.strike":
+        if strike == "absent": continue
+        n = int(strike)
+    else:
+        n = max(floors.get(t, 1), 1)
+    d = os.path.join(root, t, "dt=" + date); os.makedirs(d)
+    name = f"{t}.p0.0-{n}.dt{date.replace('-', '')}.20260909T210100Z.jsonl.gz"
+    with gzip.open(os.path.join(d, name), "wb"): pass
+    with open(os.path.join(d, "_manifest.jsonl"), "w") as m:
+        m.write(json.dumps({"topic": t, "dt": date, "partition": 0, "offset_from": 0, "offset_to": n,
+                            "records": n, "file": name, "sha256": "", "archived_at": "20260909T210100Z"}) + "\n")
+PY
+}
+vrun() { env ARCHIVE_DIR="$VD" ENV=es4 FORCE=true VERIFY_CHECKSUMS=none LOG="$T/verify-es4.log" \
+             bash "$OE/oe-archive-verify.sh" "$VDATE" 2>&1; }
+: > "$T/alerts.txt"
+vbuild absent; OUT=$(vrun); RC=$?
+want "14 es4, strike folder ABSENT: verifier fails (rc)"   1 "$RC"
+hasnt "  it is not refused for a missing policy" "defines no OE_ALL_TOPICS_es4" "$OUT"
+has  "  and names the missing strike date" "es.futures.footprint.strike:MISSING" "$OUT"
+has  "  and delivers the alert for env=es4" "env=es4 dt=$VDATE" "$(cat "$T/alerts.txt" 2>/dev/null)"
+has  "  naming the strike topic"            "es.futures.footprint.strike:MISSING" "$(cat "$T/alerts.txt" 2>/dev/null)"
+vbuild 499; OUT=$(vrun); RC=$?
+want "  strike at 499 records: verifier fails (rc)"         1 "$RC"
+has  "  as PARTIAL" "es.futures.footprint.strike:PARTIAL" "$OUT"
+has  "  below the 500 presence floor" "499 records is below the floor of 500" "$OUT"
+vbuild 500; OUT=$(vrun); RC=$?
+want "  strike at 500 records: presence satisfied (rc)"     0 "$RC"
+has  "  the es4 date is COMPLETE by the floors" "VERDICT COMPLETE" "$OUT"
+# 500 satisfies the PRESENCE check only: the floor counts records, it does not prove the committed
+# capture reached any boundary — that is the reader's COMPLETE and the manifest's stable_boundary.
+verify_line=$(grep -c '^5 20 \* \* 1-5 ENV=es4 ARCHIVE_DIR=/mnt/nas/optionsedge .*/oe-archive-verify\.sh' "$OE/oe-archive.crontab")
+want "the crontab schedules exactly one es4 verification"  1 "$verify_line"
+has  "  and it keeps its own log" "LOG=/home/abhinav/oe-ops/archive-verify-es4.log" "$(grep 'ENV=es4 .*oe-archive-verify' "$OE/oe-archive.crontab")"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }

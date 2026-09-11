@@ -122,6 +122,27 @@ if [ "$DRY" != "true" ]; then
   flock -n 9 || die "another cleanup holds the lock ($LOCKDIR) — refusing concurrent reset"
 fi
 
+# ------------------------------------------------------------ strike archive interlock (preflight)
+# es.futures.footprint.strike is retention -1 and RESET-PRESERVED on every broker except this one: the
+# wipe below deletes the WHOLE Kafka data dir, so a strike record the nightly archive has not captured
+# is gone for good — its retention settings protect it from retention, not from this. The interlock
+# (strike-archive-interlock.sh) refuses the wipe until the archive's own marker — a committed offset of
+# group oe-archive-committed-boundary on this broker, written by oe-archive-kafka.sh after each durable
+# capture — has reached the log end (deploy Codex final review, finding 2). It runs TWICE: here, before
+# anything is touched, so an unarchived log refuses without taking es4 down; and again just before the
+# wipe, after quiescing, when the log can no longer grow and the comparison is exact. A RESUMED reset
+# skips this early check (on that path Kafka may already be down) and relies on the second.
+# Opt-out, explicit only: ES4_STRIKE_ARCHIVE_INTERLOCK=off (Jenkins ACCEPT_UNARCHIVED_STRIKE_LOSS).
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/strike-archive-interlock.sh" \
+  || die "cannot load $SCRIPT_DIR/strike-archive-interlock.sh (rsync scripts/ , not a single file)"
+command -v kafka-get-offsets >/dev/null 2>&1 || PATH="$SCRIPT_DIR/kafka-cli-shim:$PATH"
+if [ ! -s "$STATE" ]; then
+  log "strike archive interlock (preflight — nothing has been touched yet)"
+  strike_archive_interlock "preflight" \
+    || die "unarchived es.futures.footprint.strike records on es4 — refusing BEFORE any mutation (see above)"
+fi
+
 # ------------------------------------------------------------ 1. capture / resume replica state
 # If a prior run was interrupted, $STATE already holds the ORIGINAL replica counts. Never replace
 # those counts with current values: a re-capture could read scaled-to-0 Deployments and restore 0.
@@ -250,6 +271,13 @@ if [ "$DRY" != "true" ]; then
 fi
 
 # ------------------------------------------------------- 3. offline coordinated wipe (kafka down)
+# The strike archive interlock, AUTHORITATIVE pass: every producer is proven down, so the log end is
+# final. Refusing here leaves the app scaled to 0 with $STATE = WIPING — archive, then rerun and the
+# reset resumes (the resume re-runs this check). If Kafka itself is already down (a resume after a crash
+# past `compose down`), the log end is unreadable and this refuses too: unknown is not archived.
+log "strike archive interlock (producers quiesced — the log can no longer grow)"
+strike_archive_interlock "before the wipe" \
+  || die "unarchived es.futures.footprint.strike records on es4 — the app is DOWN and $STATE holds its replica counts: run the es4 archive, then rerun to resume (see above)"
 log "docker compose down (Kafka and all local infra stopped; Docker container logs removed)"
 run "(cd '$INFRA_DIR' && docker compose down)"
 log "wiping Kafka data volume CONTENTS ($KAFKA_DATA/* — all topics + _schemas), Kafka offline"
