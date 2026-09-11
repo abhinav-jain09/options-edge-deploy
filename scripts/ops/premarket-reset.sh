@@ -230,6 +230,12 @@ log "identity guards PASSED"
 # es.futures.footprint.strike added 2026-09-10 (ES-FOOTPRINT-STRIKE-INTERACTION.md R6/R13): the strike
 # service folds its own log and MM1 resumes committed source offsets, so a purged copy is never re-copied
 # and a purged source is never re-derived — RESET-PRESERVED on either cluster this script is pointed at.
+# options.spx.vol-premium.{ivrv,events,warnings,baseline,calendar} added 2026-09-11 (vol-premium Gate-1, design §7):
+# declared retention=-1 + RESET-PRESERVED in topics.env. The IV/RV series is kept forever (§40.1), .events holds the
+# SESSION_FINALISED chain the engine rebuilds its level from at boot (§8.8), .warnings is the §40.15
+# forward-evaluation evidence, and .baseline/.calendar are the version ledgers the engine binds by version and content
+# hash; nothing re-derives any of them. .current and .dlq are still purged: the next frame restores one, the other is
+# diagnostics. None of these names exists on .4, so the arm is inert there.
 # The arm has to be right for EITHER cluster this script can be pointed at, because the name means
 # something different on each. The default BOOTSTRAP lists endpoints on both .252 and .4, but that
 # is a seed list for ONE logical cluster, not a two-cluster sweep: the run reads a single cluster-id
@@ -238,7 +244,7 @@ log "identity guards PASSED"
 # the keep costs about one record per session date. On prod it is an MM1 mirror target with no
 # local producer at all: MM1 commits its offsets on the source cluster, so purging the copy here
 # does not make it re-copy — the /zones page simply stays blank until es4 next publishes a board.
-PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^es\.reversal\.hunt\.(state|alerts)$|^es\.reversal\.hunt\.swing\.candidates$|^options\.spx\.wall-break-rates\.dataset$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring|^(es\.)?options\.spx\.gamma-migration\.(crossings|wall-touch|fragility)$|corridor-gauge-event-log$|^options\.databento\.oi\.anchor-manifest$|^es\.tape-zones\.board$|gamma-migration-scorer-changelog$|^context-tape\.direction\.ledger$|^es\.futures\.footprint\.strike$'
+PRESERVE_TOPICS_REGEX='^es\.reversal\.(final-summary|outcome)$|^es\.reversal\.hunt\.(state|alerts)$|^es\.reversal\.hunt\.swing\.candidates$|^options\.spx\.wall-break-rates\.dataset$|^(es|spx)\.drop\.(final-summary|outcome)$|^spx\.basis\.state$|^underlying\.vix\.price$|^options\.spx\.gamma-migration\.scoring|^(es\.)?options\.spx\.gamma-migration\.(crossings|wall-touch|fragility)$|corridor-gauge-event-log$|^options\.databento\.oi\.anchor-manifest$|^es\.tape-zones\.board$|gamma-migration-scorer-changelog$|^context-tape\.direction\.ledger$|^es\.futures\.footprint\.strike$|^options\.spx\.vol-premium\.(ivrv|events|warnings|baseline|calendar)$'
 N_PRESERVED=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -cE "$PRESERVE_TOPICS_REGEX" || true)
 log "durable keep-list: preserving $N_PRESERVED topic(s) matching $PRESERVE_TOPICS_REGEX"
 CANDIDATES=$(grep -vE '^(__|_schemas$)' /tmp/pmr-all-topics.txt | grep -vE "$PRESERVE_TOPICS_REGEX" || true)
