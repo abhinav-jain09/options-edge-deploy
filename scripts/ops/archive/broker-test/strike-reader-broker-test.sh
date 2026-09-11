@@ -9,8 +9,9 @@
 # round-trips through a consumer group. Sections 10-12 then run scripts/es4/strike-archive-interlock.sh — the
 # es4 wipe interlock — against this broker through every Kafka CLI given (KAFKA_HOME plus EXTRA_KAFKA_HOMES),
 # and with FIXTURE_OUT set record each CLI's raw answers (healthy, absent topic, absent group, a timestamp past
-# every record, unreachable broker) as the fixtures the unit suites replay (cli-fixtures/<version>/). It needs
-# a broker, so it is NOT part of the Jenkins suite.
+# every record, unreachable broker) as the fixtures the unit suites replay (cli-fixtures/<version>/). Section 13
+# runs the archiver's own committed-read discovery functions (oe-archive-kafka.sh, re-review round 3) through the
+# same CLIs: healthy, absent, unreachable. It needs a broker, so it is NOT part of the Jenkins suite.
 #
 # It CREATES two uniquely named topics (1 and 3 partitions) and two uniquely named consumer groups, writes only
 # to them, reads one uniquely named topic that must NOT exist (and checks it was not created), and deletes the
@@ -199,9 +200,10 @@ for H in $KAFKA_HOME ${EXTRA_KAFKA_HOMES:-}; do
   cap "$F" ends-absent "$H/bin/kafka-get-offsets.sh" --bootstrap-server "$B" --topic "$ABSENT"
   cap "$F" until-nomatch "$H/bin/kafka-get-offsets.sh" --bootstrap-server "$B" --topic "$T" --time "$FUTURE_MS"
   cap "$F" until-match-3p "$H/bin/kafka-get-offsets.sh" --bootstrap-server "$B" --topic "$P3" --time 0
+  cap "$F" earliest-3p "$H/bin/kafka-get-offsets.sh" --bootstrap-server "$B" --topic "$P3" --time earliest
   cap "$F" groups-3p   "$H/bin/kafka-consumer-groups.sh" --bootstrap-server "$B" --describe --group "$G3"
   cap "$F" groups-absent "$H/bin/kafka-consumer-groups.sh" --bootstrap-server "$B" --describe --group "$NOGROUP"
-  for c in list describe-1p describe-3p ends-1p ends-3p until-nomatch; do
+  for c in list describe-1p describe-3p ends-1p ends-3p until-nomatch earliest-3p; do
     chk "$ver: healthy $c exits 0" 0 "$(cat "$F/$c.rc")"
     chk "$ver: healthy $c writes NOTHING to stderr (the interlock treats stderr diagnostics as a failed read)" 0 "$(wc -c < "$F/$c.err" | tr -d ' ')"
   done
@@ -261,6 +263,50 @@ for H in $KAFKA_HOME ${EXTRA_KAFKA_HOMES:-}; do
     echo "   fixtures written: $FIXTURE_OUT/$ver ($(ls "$FIXTURE_OUT/$ver" | wc -l | tr -d ' ') files)"
   fi
 done
+# ---------------------------------------------------------------------------------------------------------
+# 13. THE ARCHIVER'S COMMITTED-READ DISCOVERY AGAINST THE REAL KAFKA CLI (deploy re-review round 3, P1 and P2).
+# oe-archive-kafka.sh now takes a committed-read topic's presence, partition count, TopicId, log ends and log
+# starts only from answers that pass kafka_answer_why (the interlock's rules) and cover every partition. Its unit
+# suite replays recorded answers; this runs the archiver's OWN functions — extracted verbatim from the file, not
+# re-typed — through each real CLI, so a healthy real answer is proven to pass (a validator that refused it would
+# fail every strike run in production), and an absent topic and an unreachable broker are told apart. Reads only.
+ARCHIVER="$HERE/../oe-archive-kafka.sh"
+DISCLIB="$W/discovery.lib.sh"
+{ grep -E "^KAFKA_CLI_DIAG='" "$ARCHIVER"
+  awk '/^(kafka_answer_why|kafka_seq|read_topic_description|committed_discovery)\(\) \{/ { on = 1; if ($0 ~ /\}$/) { print; on = 0; next } }
+       on { print } on && /^}/ { on = 0 }' "$ARCHIVER"; } > "$DISCLIB"
+chk "the archiver's discovery functions and diagnostic list, extracted from the file" 5 \
+    "$(grep -cE "^(KAFKA_CLI_DIAG='|(kafka_answer_why|kafka_seq|read_topic_description|committed_discovery)\(\) \{)" "$DISCLIB")"
+disc() { # <kafka home> <bootstrap> <topic> <out file> — the REAL committed_discovery through that home's CLI
+  env KAFKA_BIN="$1/bin" BOOTSTRAP="$2" bash -c '. "$0"; committed_discovery "$1"
+    printf "STATE=%s\nID=%s\nENDS=%s\nEARLIEST=%s\nWHY=%s\n" "$DISC_STATE" "$DISC_ID" "$(echo $DISC_ENDS)" "$(echo $DISC_EARLIEST)" "$DISC_WHY"' \
+    "$DISCLIB" "$3" > "$4" 2>&1
+}
+dv() { sed -n "s/^$1=//p" "$2"; }
+tid() { "$K/kafka-topics.sh" --bootstrap-server "$B" --describe --topic "$1" 2>/dev/null | grep -o 'TopicId: [A-Za-z0-9_-]*' | head -1 | cut -d' ' -f2; }
+T_ID=$(tid "$T"); P3_ID=$(tid "$P3")
+T_END=$("$K/kafka-get-offsets.sh" --bootstrap-server "$B" --topic "$T" 2>/dev/null)
+T_START=$("$K/kafka-get-offsets.sh" --bootstrap-server "$B" --topic "$T" --time earliest 2>/dev/null)
+for H in $KAFKA_HOME ${EXTRA_KAFKA_HOMES:-}; do
+  ver=$(ls "$H/libs" | sed -n 's/^kafka-clients-\(.*\)\.jar$/\1/p' | head -1)
+  echo "== 13. the archiver's committed-read discovery through the Kafka $ver CLI"
+  disc "$H" "$B" "$P3" "$W/d.out"
+  chk "$ver: the healthy 3-partition topic -> present" present "$(dv STATE "$W/d.out")"
+  chk "$ver:   with its real TopicId" "$P3_ID" "$(dv ID "$W/d.out")"
+  chk "$ver:   every partition's log end" "$(echo $P3ENDS)" "$(dv ENDS "$W/d.out")"
+  chk "$ver:   every partition's log start" "$P3:0:0 $P3:1:0 $P3:2:0" "$(dv EARLIEST "$W/d.out")"
+  disc "$H" "$B" "$T" "$W/d.out"
+  chk "$ver: the 1-partition log (records deleted below 7 in section 7) -> present, id, end, start" \
+      "present $T_ID $(echo $T_END) $(echo $T_START)" \
+      "$(dv STATE "$W/d.out") $(dv ID "$W/d.out") $(dv ENDS "$W/d.out") $(dv EARLIEST "$W/d.out")"
+  chk "$ver:   (its log start really is 7)" "$T:0:7" "$(echo $T_START)"
+  disc "$H" "$B" "$ABSENT" "$W/d.out"
+  chk "$ver: a topic that does not exist -> CONFIRMED absent (SKIP)" absent "$(dv STATE "$W/d.out")"
+  disc "$H" 127.0.0.1:1 "$T" "$W/d.out"
+  chk "$ver: an unreachable broker -> unreadable (a FAILED topic, never SKIP)" unreadable "$(dv STATE "$W/d.out")"
+  chk "$ver:   because the topic list cannot be read" 1 "$(grep -c "WHY=the broker's topic list cannot be read (kafka-topics --list: exit 1" "$W/d.out")"
+done
+
 chk "the absent topic was NOT created by any of the reads" 0 "$("$K/kafka-topics.sh" --bootstrap-server "$B" --list 2>/dev/null | grep -cx "$ABSENT")"
 
 echo "RESULT: fails=$fails"

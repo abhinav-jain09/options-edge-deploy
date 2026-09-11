@@ -290,6 +290,17 @@ for q in "topics --bootstrap-server localhost:29092 --list" "topics --bootstrap-
 done
 arch_group=$(sed -n 's/^OE_ARCHIVE_MARK_GROUP="\${OE_ARCHIVE_MARK_GROUP:-\(.*\)}"$/\1/p' "$ROOT/scripts/ops/archive/oe-archive-kafka.sh")
 [ "$arch_group" = "$G" ] && ok "  the archiver writes the SAME group ($arch_group)" || bad "  archiver group '$arch_group' != interlock group '$G' — the marker would never be found"
+# Re-review round 3: the archiver's committed-read discovery judges a Kafka CLI answer by the SAME rules as this
+# interlock — the same diagnostic list and the same function body (kafka_answer_why there, _sai_why here).
+arch_diag=$(sed -n "s/^KAFKA_CLI_DIAG='\(.*\)'$/\1/p" "$ROOT/scripts/ops/archive/oe-archive-kafka.sh")
+sai_diag=$(sed -n "s/^_SAI_DIAG='\(.*\)'$/\1/p" "$HERE/strike-archive-interlock.sh")
+[ -n "$arch_diag" ] && [ "$arch_diag" = "$sai_diag" ] && ok "  the archiver's CLI diagnostic list is the interlock's" \
+  || bad "  diagnostic lists differ: archiver '$arch_diag', interlock '$sai_diag'"
+fn_body() { awk -v h="$2() {" 'index($0, h) == 1 { on = 1; next } on && /^}/ { exit } on { print }' "$1"; }
+arch_why=$(fn_body "$ROOT/scripts/ops/archive/oe-archive-kafka.sh" kafka_answer_why | sed 's/KAFKA_CLI_DIAG/DIAG/g')
+sai_why=$(fn_body "$HERE/strike-archive-interlock.sh" _sai_why | sed 's/_SAI_DIAG/DIAG/g')
+[ -n "$arch_why" ] && [ "$arch_why" = "$sai_why" ] && ok "  the archiver's kafka_answer_why has _sai_why's body ($(printf '%s\n' "$sai_why" | wc -l | tr -d ' ') lines)" \
+  || bad "  kafka_answer_why and _sai_why differ — one would accept an answer the other refuses"
 
 echo "8. strike_archive_broker_readable — the resume brings up Kafka, and only Kafka (finding 4)"
 ready() { # <expected rc> [env...]

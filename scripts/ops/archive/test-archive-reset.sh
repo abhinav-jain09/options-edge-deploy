@@ -33,7 +33,10 @@ done
 # record look the same on stdout — nothing — and only the recorded exit status and stderr tell them apart.
 export OE_CLI="$OE/broker-test/cli-fixtures/4.3.0"
 export OE_SKIP="$OE/broker-test/cli-fixtures/constructed/skip-diagnostic.err"
-for f in "$OE_CLI/unreach-ends.err" "$OE_CLI/unreach-ends.rc" "$OE_CLI/until-nomatch.rc" "$OE_SKIP"; do
+for f in "$OE_CLI/unreach-ends.err" "$OE_CLI/unreach-ends.rc" "$OE_CLI/until-nomatch.rc" "$OE_SKIP" \
+         "$OE_CLI/unreach-list.out" "$OE_CLI/unreach-list.rc" "$OE_CLI/unreach-describe.out" "$OE_CLI/unreach-describe.rc" \
+         "$OE_CLI/describe-absent.out" "$OE_CLI/describe-absent.rc" "$OE_CLI/describe-1p.out" "$OE_CLI/list.out" \
+         "$OE_CLI/ends-absent.err" "$OE_CLI/ends-absent.rc"; do
   [ -f "$f" ] || { echo "FATAL: recorded CLI answer $f missing — refusing to run section 12q against invented output"; exit 1; }
 done
 
@@ -74,6 +77,16 @@ while [ $# -gt 0 ]; do
     *) shift ;;
   esac
 done
+echo "get-offsets ${time_arg:-latest} $topic" >> "$OE_FIXTURE.offsets-calls"
+replay() { cat "$OE_CLI/$1.out"; cat "$OE_CLI/$1.err" >&2; exit "$(cat "$OE_CLI/$1.rc")"; }
+# Section 16 (re-review round 3): OE_BROKER=down replays the RECORDED unreachable answer to every query;
+# OE_ENDS_QUERY / OE_EARLIEST_QUERY = fail (recorded unreachable) | skip (GetOffsetShell's per-partition
+# "Skip getting offsets", exit 0) | missing (the partition silently absent, exit 0), for partition OE_SKIP_PART.
+[ "${OE_BROKER:-up}" = down ] && replay unreach-ends
+case "$time_arg" in ""|latest) q="${OE_ENDS_QUERY:-ok}" ;; earliest) q="${OE_EARLIEST_QUERY:-ok}" ;; *) q=ok ;; esac
+[ "$q" = fail ] && replay unreach-ends
+# A topic the broker does not have: the RECORDED answer (exit 1, "Could not match any topic-partitions").
+grep -qE '^[0-9]+ ' "$OE_FIXTURE" || replay ends-absent
 case "$time_arg:${OE_TIME_QUERY:-ok}" in
   earliest:*|:*|latest:*|*:ok|*:skip) : ;;
   # the RECORDED answer of kafka-get-offsets 4.3.0 against an unreachable broker: nothing on stdout, exit 1
@@ -82,6 +95,12 @@ esac
 while read -r a b c d; do
   [ "$a" = "topicid" ] && continue
   [ -n "$a" ] || continue
+  if [ "$a" = "${OE_SKIP_PART:-0}" ]; then
+    case "$q" in
+      skip) sed "s/@TOPIC3@-1/$topic-$a/" "$OE_SKIP" >&2; continue ;;
+      missing) continue ;;
+    esac
+  fi
   case "$time_arg" in
     earliest) echo "$topic:$a:$b" ;;
     ""|latest) echo "$topic:$a:$c" ;;
@@ -448,6 +467,10 @@ while [ $# -gt 1 ]; do
   shift 2
 done
 echo "reader $topic p$part from=${from:-} max_end=${maxend:-} mark=${moff:-} group=${mgroup:-}" >> "$OE_FIXTURE.calls"
+# Section 16h: the topic is DELETED and RE-CREATED while this capture runs (a new TopicId from now on).
+if [ -z "$mgroup" ] && [ -n "${STRIKE_SHIM_RECREATE:-}" ]; then
+  sed "s/^topicid .*/topicid $STRIKE_SHIM_RECREATE/" "$OE_FIXTURE" > "$OE_FIXTURE.new" && mv "$OE_FIXTURE.new" "$OE_FIXTURE"
+fi
 if [ -n "$mgroup" ]; then
   if [ "${STRIKE_SHIM_MARK:-ok}" = fail ]; then
     echo "STRIKE_ARCHIVE_READER status=FAILED topic=$topic partition=$part reason=broker_down" > "$sum"; exit 2
@@ -499,12 +522,49 @@ while [ "$i" -lt "$avail" ]; do
   i=$(( i + 1 ))
 done
 SH
-chmod +x "$BIN/strike-reader" "$BIN/kafka-console-consumer.sh"
+# kafka-topics in the RECORDED 4.3.0 shapes (cli-fixtures/4.3.0: list, describe-1p, describe-absent, unreach-*), now
+# that the committed-read discovery asks it for the topic list and a full description (re-review round 3). The topic
+# exists iff the fixture has a "topicid" line, with one partition per fixture partition line. OE_BROKER=down replays
+# the recorded unreachable answers; OE_DESCRIBE = fail (recorded unreachable) | noid (a description without a
+# TopicId) | zero (the all-zero id) breaks only --describe. The console path reads only "TopicId:" from it, as before.
+cat > "$BIN/kafka-topics.sh" <<'SH'
+#!/usr/bin/env bash
+topic=""; op=""
+while [ $# -gt 0 ]; do
+  case "$1" in --topic) topic="$2"; shift 2 ;; --list) op=list; shift ;; --describe) op=describe; shift ;; *) shift ;; esac
+done
+echo "topics $op $topic" >> "$OE_FIXTURE.topics-calls"
+replay() { sed "s/@ABSENT@/$topic/" "$OE_CLI/$1.out"; sed "s/@ABSENT@/$topic/" "$OE_CLI/$1.err" >&2; exit "$(cat "$OE_CLI/$1.rc")"; }
+id=$(awk '$1=="topicid"{print $2}' "$OE_FIXTURE")
+if [ "${OE_BROKER:-up}" = down ]; then [ "$op" = list ] && replay unreach-list; replay unreach-describe; fi
+if [ "$op" = list ]; then
+  echo __consumer_offsets
+  [ -n "$id" ] && printf '%s\n' es.futures.footprint.strike oe.test.reset
+  exit 0
+fi
+[ "${OE_DESCRIBE:-ok}" = fail ] && replay unreach-describe
+[ -n "$id" ] || replay describe-absent
+[ "${OE_DESCRIBE:-ok}" = zero ] && id=AAAAAAAAAAAAAAAAAAAAAA
+parts=$(awk '$1 ~ /^[0-9]+$/ { print $1 }' "$OE_FIXTURE")
+n=$(printf '%s\n' "$parts" | grep -c .)
+if [ "${OE_DESCRIBE:-ok}" = noid ]; then
+  printf 'Topic: %s\tPartitionCount: %s\tReplicationFactor: 1\tConfigs: retention.ms=-1\n' "$topic" "$n"
+else
+  printf 'Topic: %s\tTopicId: %s\tPartitionCount: %s\tReplicationFactor: 1\tConfigs: retention.ms=-1\n' "$topic" "$id" "$n"
+fi
+for p in $parts; do printf '\tTopic: %s\tPartition: %s\tLeader: 1\tReplicas: 1\tIsr: 1\tElr: \tLastKnownElr: \n' "$topic" "$p"; done
+exit 0
+SH
+chmod +x "$BIN/strike-reader" "$BIN/kafka-console-consumer.sh" "$BIN/kafka-topics.sh"
+# The stand-in's healthy description must have the recorded shape the archiver parses: same fields, same TABs.
+want "the kafka-topics stand-in describes a topic in the recorded 4.3.0 shape" \
+     "$(sed -e 's/@TOPIC1@/T/g' -e 's/TopicId: [^	]*/TopicId: X/' -e 's/Configs: .*/Configs:/' "$OE_CLI/describe-1p.out")" \
+     "$(printf 'topicid IIIIIIIIIIIIIIIIIIIIII\n0 0 1\n' > "$OE_FIXTURE"; "$BIN/kafka-topics.sh" --describe --topic T | sed -e 's/TopicId: [^	]*/TopicId: X/' -e 's/Configs: .*/Configs:/')"
 
 strike_log() { # lines of the strike partition's log; the broker fixture's end offset follows from it
   printf '%s\n' "$@" > "$OE_FIXTURE.strike"
   local hwm; hwm=$(awk 'NF { e = $1 + 1 } END { print e + 0 }' "$OE_FIXTURE.strike")
-  fixture "topicid SSSSSSSSSSSSSSSSSSSSSS" "0 0 $hwm${UNTIL_OFF:+ $UNTIL_OFF}"
+  fixture "topicid ${STRIKE_ID:-SSSSSSSSSSSSSSSSSSSSSS}" "0 0 $hwm${UNTIL_OFF:+ $UNTIL_OFF}"
 }
 srun() { # $@ = extra env assignments
   env ARCHIVE_DIR="$A" ENV=es4 ARCHIVE_JOB=test-strike BOOTSTRAP=shim:9092 KAFKA_BIN="$BIN" \
@@ -881,6 +941,197 @@ want "  every fixed-time entry (daily 17:10, es4 17:01, verify 20:00 and 20:05, 
 es4v_at=$(grep -n '^5 20 \* \* 1-5 ENV=es4 ' "$crontab_file" | cut -d: -f1)
 want "  the new es4 verification entry in particular" yes "$([ -n "$es4v_at" ] && [ "$es4v_at" -gt "$tz_at" ] && echo yes || echo no)"
 has  "  the header names the host's cron, which is what makes CRON_TZ work" "cronie" "$(head -n "$tz_at" "$crontab_file")"
+
+# ================= 16. re-review round 3: source IDENTITY (P1) and VALIDATED discovery (P2) ===============
+# P1: an offset names a position in ONE log. The reviewer ran round 2's checkpoint-selection and idle branches: a
+# successful archive checkpoints 7, clean-reset re-creates the topic, the new log reaches 7, the TopicId query fails
+# — and the idle path marked the NEW log through 7 without capturing it, exit 0, so cleanup-es4.sh would wipe
+# records no archive holds. P2: an unreadable initial offset answer (an unreachable broker; "Skip getting offsets"
+# at exit 0) became SKIP or a silently missing partition, failed=0, and never reached the UNTIL_TS validation.
+# Every broker answer below is RECORDED (cli-fixtures/4.3.0) or the constructed Skip line (constructed/ORIGIN).
+OLD7=('0 C k0 v0' '1 C k1 v1' '2 M' '3 C k3 v3' '4 C k4 v4' '5 C k5 v5' '6 M')
+NEW7=('0 C n0 w0' '1 C n1 w1' '2 C n2 w2' '3 M' '4 C n4 w4' '5 C n5 w5' '6 M')   # the re-created log, grown back to 7
+SID=SSSSSSSSSSSSSSSSSSSSSS; TID=TTTTTTTTTTTTTTTTTTTTTT
+OFFS() { cat "$A/kafka/es4/_manifest/$STRIKE.offsets" 2>/dev/null; }
+IDF() { cat "$A/kafka/es4/_manifest/$STRIKE.identity" 2>/dev/null | head -1; }
+nreaders() { local n; n=$(grep -c "^reader $STRIKE p[0-9]* from=[0-9]" "$CALLS" 2>/dev/null); echo "${n:-0}"; }
+nmarks() { local n; n=$(grep -c . "$MARKS" 2>/dev/null); echo "${n:-0}"; }
+order() { awk '/^reader .* from=[0-9]/ { print "reader" } /mark=[0-9]/ { print "mark" }' "$CALLS" | tr '\n' ' ' | sed 's/ $//'; }
+skeys() { local f; for f in "$(SDIR)"/*.jsonl.gz; do [ -f "$f" ] && zcat "$f"; done 2>/dev/null | awk -F'\t' '{ print $4 }' | sort | tr '\n' ' ' | sed 's/ $//'; }
+R2LINE='0=7 records=5 span=7 dt=2026-09-08 archived=20260908T210100Z capture=read_committed_stable_boundary'   # round 2's stamp: no source
+
+# ---- 16a. the reviewer's case: checkpoint 7, topic re-created and back at 7, the TopicId query FAILS -----------------
+fresh r1
+strike_log "${OLD7[@]}"
+OUT=$(srun); RC=$?
+want "16a setup: an archive run (rc)"                                        0 "$RC"
+want "  checkpoints 7"                                                       7 "$(sck)"
+has  "  the stamp names the log it was taken on" " capture=read_committed_stable_boundary topic_id=$SID" "$(OFFS | tail -1)"
+want "  and so does the manifest line"                                    "$SID" "$(mlast source_topic_id)"
+STRIKE_ID=$TID strike_log "${NEW7[@]}"
+CK_BEFORE=$(OFFS); ID_BEFORE=$(IDF); : > "$MARKS"; : > "$CALLS"
+OUT=$(srun OE_DESCRIBE=fail); RC=$?
+want "16a re-created log at 7, TopicId query fails (recorded unreachable answer): the run FAILS (rc)" 1 "$RC"
+has  "  saying the identity cannot be established" "FAIL $STRIKE: its partitions and TopicId cannot be established" "$OUT"
+has  "  in the broker's recorded words" "Timed out waiting for a node assignment" "$OUT"
+want "  NO archive marker"                                                   0 "$(nmarks)"
+want "  the reader never ran"                                                0 "$(grep -c '^reader ' "$CALLS")"
+want "  the checkpoint is byte-for-byte unchanged"               "$CK_BEFORE" "$(OFFS)"
+want "  the identity file is unchanged"                          "$ID_BEFORE" "$(IDF)"
+want "  runs.log failed=1"                                                   1 "$(sruns failed)"
+want "  absent=0: not a quiet day"                                           0 "$(sruns absent)"
+for mode in noid zero; do
+  : > "$MARKS"; : > "$CALLS"
+  OUT=$(srun OE_DESCRIBE=$mode); RC=$?
+  want "16a the description carries $([ "$mode" = noid ] && echo 'NO TopicId' || echo 'the all-zero TopicId'): the run FAILS (rc)" 1 "$RC"
+  want "  NO archive marker, the reader never ran" "0 0" "$(nmarks) $(grep -c '^reader ' "$CALLS")"
+  want "  checkpoint unchanged"                                  "$CK_BEFORE" "$(OFFS)"
+done
+# The reproduction exactly as reported: round 2's own stamped line (no identity) on the re-created log.
+fresh r1b
+STRIKE_ID=$TID strike_log "${NEW7[@]}"
+mkdir -p "$A/kafka/es4/_manifest"
+printf '%s\n' "$R2LINE" > "$A/kafka/es4/_manifest/$STRIKE.offsets"
+printf 'topic_id=%s\nobserved=20260908T210100Z\n' "$SID" > "$A/kafka/es4/_manifest/$STRIKE.identity"
+OUT=$(srun OE_DESCRIBE=fail); RC=$?
+want "16a round 2's stamped 7 on the re-created log, TopicId query fails: refused (rc)" 1 "$RC"
+want "  NO marker at 7 (round 2 wrote one), the reader never ran" "0 0" "$(nmarks) $(grep -c '^reader ' "$CALLS")"
+want "  checkpoint unchanged"                                      "$R2LINE" "$(OFFS)"
+
+# ---- 16b. the same, but a DIFFERENT TopicId is read successfully: a new log, recaptured from its start ------------
+fresh r2
+strike_log "${OLD7[@]}"; srun >/dev/null
+STRIKE_ID=$TID strike_log "${NEW7[@]}"
+: > "$MARKS"; : > "$CALLS"; reset_alerts
+OUT=$(srun); RC=$?
+want "16b re-created log at 7, different TopicId read: run succeeds (rc)"   0 "$RC"
+has  "  the reset is seen"                                   "RESET $STRIKE p0" "$OUT"
+want "  the new log is recaptured from its start"                           1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
+has  "  every record of the new log is archived" "n0 n1 n2 n4 n5" "$(skeys)"
+has  "  checkpoint 7, stamped with the NEW TopicId"       "0=7 " "$(OFFS | tail -1)"
+has  "  (the new id)"                                       "topic_id=$TID" "$(OFFS | tail -1)"
+want "  the marker comes after the capture, once"                "reader mark" "$(order)"
+want "  at 7"                                                               7 "$(lastmark)"
+want "  rebaselined=1, and alerted"                                     "1 1" "$(sruns rebaselined) $(alerts)"
+# With NO identity file, only the checkpoint's own TopicId can tell (the round-2 archiver resumed at 7 and marked).
+fresh r3
+strike_log "${OLD7[@]}"; srun >/dev/null
+rm -f "$A/kafka/es4/_manifest/$STRIKE.identity"
+STRIKE_ID=$TID strike_log "${NEW7[@]}"
+: > "$MARKS"; : > "$CALLS"; reset_alerts
+OUT=$(srun); RC=$?
+want "16b the same with NO identity file: run succeeds (rc)"                0 "$RC"
+has  "  the checkpoint's own TopicId catches it" "checkpoint 7 was taken on TopicId $SID, the log is now $TID" "$OUT"
+has  "  and the alert names that detector"         "detected by: checkpoint-topic-id" "$OUT"
+want "  recaptured from the new log's start"                                1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
+has  "  every record of the new log is archived" "n0 n1 n2 n4 n5" "$(skeys)"
+want "  the marker comes after the capture, once"                "reader mark" "$(order)"
+has  "  the new stamp names the new log"                    "topic_id=$TID" "$(OFFS | tail -1)"
+: > "$MARKS"; : > "$CALLS"
+OUT=$(srun); RC=$?
+want "16b the next run on the SAME log trusts its checkpoint: no recapture"  0 "$(nreaders)"
+want "  and re-records the marker (stamped, same TopicId, at the log end)"   7 "$(lastmark)"
+
+# ---- 16c. a ROUND-2 stamped line (no identity) with the TopicId readable: treated as unstamped, recaptured ---------
+fresh r4
+strike_log "${OLD7[@]}"
+mkdir -p "$A/kafka/es4/_manifest"
+printf '%s\n' "$R2LINE" > "$A/kafka/es4/_manifest/$STRIKE.offsets"
+OUT=$(srun); RC=$?
+want "16c round 2's stamped 7, TopicId readable: run succeeds (rc)"         0 "$RC"
+has  "  it is LEGACY" "LEGACY $STRIKE p0: checkpoint 7 is stamped but names no source log" "$OUT"
+want "  recaptured from the log start, not resumed at 7"                    1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
+want "  the marker only after that capture"                      "reader mark" "$(order)"
+has  "  and the new checkpoint names its log"               "topic_id=$SID" "$(OFFS | tail -1)"
+
+# ---- 16d. a stamped checkpoint on the SAME log whose end reads BELOW it: a failed reading, not a quiet one -------
+fresh r5
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 C k3 v3' '4 M'
+mkdir -p "$A/kafka/es4/_manifest"
+printf '0=9 records=4 span=9 dt=2026-09-08 archived=20260908T210100Z capture=read_committed_stable_boundary topic_id=%s\n' "$SID" \
+  > "$A/kafka/es4/_manifest/$STRIKE.offsets"
+CK_BEFORE=$(OFFS)
+OUT=$(srun); RC=$?
+want "16d stamped 9 on the same TopicId, log end reads 5: the run FAILS (rc)" 1 "$RC"
+has  "  as a failed reading"                              "FAILED offset read" "$OUT"
+want "  checkpoint unchanged, no reader, no marker"  "$CK_BEFORE 0 0" "$(OFFS) $(grep -c '^reader ' "$CALLS") $(nmarks)"
+
+# ---- 16e. P2: the RECORDED unreachable-broker answer on initial discovery ---------------------------------------
+fresh r6
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'; srun >/dev/null
+CK_BEFORE=$(OFFS); : > "$MARKS"; : > "$CALLS"
+OUT=$(srun OE_BROKER=down); RC=$?
+want "16e unreachable broker on initial discovery: the run FAILS (rc)"      1 "$RC"
+want "  runs.log failed=1"                                                   1 "$(sruns failed)"
+want "  absent=0: an unreachable broker is not an absent topic"              0 "$(sruns absent)"
+has  "  saying the topic list cannot be read" "FAIL $STRIKE: the broker's topic list cannot be read (kafka-topics --list: exit 1: Error while executing topic command : Timed out waiting for a node assignment" "$OUT"
+want "  no reader, no marker, checkpoint unchanged" "0 0 $CK_BEFORE" "$(grep -c '^reader ' "$CALLS") $(nmarks) $(OFFS)"
+OUT=$(srun OE_BROKER=down UNTIL_TS=1786000000000); RC=$?
+want "16e the same in a backfill (UNTIL_TS): still a failure, the cutoff validation is not bypassed (rc)" 1 "$RC"
+want "  failed=1"                                                            1 "$(sruns failed)"
+OUT=$(srun OE_ENDS_QUERY=fail); RC=$?
+want "16e list and description read, then the log-end query unreachable: the run FAILS (rc)" 1 "$RC"
+has  "  naming the query"   "its latest offsets cannot be read (kafka-get-offsets: exit 1" "$OUT"
+OUT=$(srun OE_EARLIEST_QUERY=fail); RC=$?
+want "16e the log-START query unreachable: the run FAILS (rc)"              1 "$RC"
+has  "  naming the query"                "its earliest offsets cannot be read" "$OUT"
+want "  after all of them: no reader, no marker, checkpoint unchanged" "0 0 $CK_BEFORE" "$(grep -c '^reader ' "$CALLS") $(nmarks) $(OFFS)"
+
+# ---- 16f. P2: a "Skip getting offsets" partial answer (exit 0), and a partition silently missing -------------------
+fresh r7
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+fixture "topicid $SID" "0 0 3" "1 0 3"      # the committed-read topic with TWO partitions
+OUT=$(srun OE_ENDS_QUERY=skip OE_SKIP_PART=1); RC=$?
+want "16f 'Skip getting offsets' for p1 at exit 0, p0 answered: the run FAILS (rc)" 1 "$RC"
+has  "  naming GetOffsetShell's diagnostic" "exit 0 but it reported: Skip getting offsets for topic-partition $STRIKE-1" "$OUT"
+want "  not even p0 is read"                                                 0 "$(grep -c '^reader ' "$CALLS")"
+want "  failed=1, no checkpoint"                                         "1 " "$(sruns failed) $(sck)"
+OUT=$(srun OE_ENDS_QUERY=missing OE_SKIP_PART=1); RC=$?
+want "16f p1 silently MISSING (exit 0, no diagnostic): the run FAILS (rc)"  1 "$RC"
+has  "  caught by the partition count" "offsets came back for partitions [0] of the 2 the topic has" "$OUT"
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'   # one partition again
+OUT=$(srun OE_ENDS_QUERY=skip); RC=$?
+want "16f the ONLY partition skipped (stdout empty, exit 0): FAILS, not SKIP (rc)" 1 "$RC"
+want "  absent=0, failed=1"                                              "0 1" "$(sruns absent) $(sruns failed)"
+OUT=$(srun OE_EARLIEST_QUERY=skip); RC=$?
+want "16f a Skip in the log-START answer: the run FAILS (rc)"               1 "$RC"
+want "  after all of them: nothing read, nothing archived, no marker" "0 0 0" "$(grep -c '^reader ' "$CALLS") $(sfiles) $(nmarks)"
+
+# ---- 16g. confirmed absence is still SKIP ------------------------------------------------------------------------
+fresh r8
+: > "$OE_FIXTURE"; : > "$OE_FIXTURE.offsets-calls"
+OUT=$(srun); RC=$?
+want "16g topic CONFIRMED absent (a topic list read successfully, without it): run succeeds (rc)" 0 "$RC"
+has  "  as SKIP"                                             "SKIP $STRIKE (absent" "$OUT"
+want "  absent=1, failed=0"                                              "1 0" "$(sruns absent) $(sruns failed)"
+want "  the reader never ran"                                                0 "$(grep -c '^reader ' "$CALLS")"
+want "  kafka-get-offsets never asked (recorded answer: exit 1 'Could not match')" 0 "$(grep -c . "$OE_FIXTURE.offsets-calls")"
+
+# ---- 16h. the topic is re-created WHILE the capture runs: the marker is not written for a log it did not match ---
+fresh r9
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+OUT=$(srun STRIKE_SHIM_RECREATE=$TID); RC=$?
+want "16h re-created during the capture: the capture itself stands (rc)"   0 "$RC"
+want "  NO archive marker"                                                   0 "$(nmarks)"
+has  "  and it says why" "NOT recording archived-through 3 on the source broker — its identity could not be re-confirmed as TopicId $SID" "$OUT"
+: > "$MARKS"; : > "$CALLS"
+OUT=$(srun); RC=$?
+has  "16h the next run sees a different log"                 "RESET $STRIKE p0" "$OUT"
+want "  recaptures it from its start"                                        1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
+want "  and only then marks it"                                  "reader mark" "$(order)"
+
+# ---- 16i. CONSOLE-consumer topics: discovery deliberately UNCHANGED (the round-3 record says why) ---------------
+A="$T/r10"; mkdir -p "$A/kafka/prod/_manifest"; : > "$OE_FIXTURE.topics-calls"
+fixture "topicid WWWWWWWWWWWWWWWWWWWWWW" "0 0 40" "1 0 40"
+OUT=$(run OE_BROKER=down); RC=$?
+want "16i UNCHANGED: a console topic against an unreachable broker is still SKIP (rc)" 0 "$RC"
+want "  absent=1, failed=0, as before this round"                        "1 0" "$(runs absent) $(runs failed)"
+OUT=$(run); RC=$?
+want "16i with the broker up it archives as before (rc)"                    0 "$RC"
+want "  p0 checkpoint"                                                      40 "$(ck 0)"
+want "  its checkpoint line carries no stamp and no identity" 2 \
+     "$(grep -cE '^[01]=40 records=40 span=40 dt=[0-9-]+ archived=[0-9]{8}T[0-9]{6}Z$' "$A/kafka/prod/_manifest/$TOPIC.offsets")"
+want "  and its discovery never asked for a topic list"                      0 "$(grep -c '^topics list' "$OE_FIXTURE.topics-calls")"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }
