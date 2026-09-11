@@ -27,6 +27,14 @@
 #
 # Every run is independent and writes only inside its own directory, so the runs execute in parallel (one per CPU).
 set -uo pipefail
+# The scripts this test drives need bash >= 4.4: apply-topics.sh uses mapfile (4.0) and expands a possibly-empty array
+# under set -u (only safe from 4.4); cleanup-topics.sh uses declare -A (4.0). Under an older bash the scripts THEMSELVES
+# fail (macOS /bin/bash 3.2 is refused at apply-topics.sh:201), so a result there would describe the shell, not the
+# declarations. Refuse loudly instead: exit 2, never a pass.
+if [ "${BASH_VERSINFO[0]}" -lt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 4 ]; }; then
+  echo "=== apply-topics-vol-premium-safety: REFUSED — needs bash >= 4.4 (the scripts under test do), this is $BASH_VERSION ===" >&2
+  exit 2
+fi
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 P="options.spx.vol-premium"
 DURABLE="$P.ivrv $P.events $P.warnings $P.baseline $P.calendar"
@@ -370,20 +378,37 @@ mut_unit() {
   after="$(resolved "$m" "$var" | sed 's/=.*//' | grep -cxF "$t")"
   [ "$before" = 1 ] && [ "$after" = 0 ] \
     || { bad "mutant [$t out of $var]: resolved membership before=$before after=$after, want 1 then 0"; return; }
-  local fn="$1"; shift
-  out="$("$fn" "$m" "$@" 2>&1)"
+  judge_nested "mutant [$t out of $var]" "$t" "$m" "$@"
+}
+
+# judge_nested <label> <topic> <copy dir> <function> <args...>: runs the nested assertion unit against the mutated copy
+# and says whether it CAUGHT the mutation. Caught means BOTH:
+#   - the nested unit ran to completion: its real exit status, written out-of-band, is 0, so its FAIL lines are
+#     assertions and not an abort;
+#   - at least one FAIL names the topic.
+# A nested unit that printed the expected FAIL and then aborted proves nothing about its remaining assertions (Codex
+# deploy round 3).
+judge_nested() {
+  local label="$1" t="$2" m="$3" fn="$4" out n rcf nrc; shift 4
+  rcf="$(mktemp "$WORK/nested-rc.XXXXXX")"
+  out="$( ( "$fn" "$m" "$@" ) 2>&1; echo "$?" > "$rcf" )"
+  nrc="$(cat "$rcf")"
   n="$(printf '%s\n' "$out" | grep '^  FAIL' | grep -cF "$t" || true)"
-  if [ "$n" -gt 0 ]; then
-    ok "mutant [$t out of $var]: $n assertion(s) on $t FAIL, e.g. $(printf '%s\n' "$out" | grep '^  FAIL' | grep -F "$t" | head -1 | sed 's/^  FAIL //')"
+  if [ "$nrc" != 0 ]; then
+    bad "$label: the nested unit '$fn' ABORTED (status $nrc), so its FAIL lines do not show the mutation was caught"
+  elif [ "$n" -gt 0 ]; then
+    ok "$label: $n assertion(s) on $t FAIL, e.g. $(printf '%s\n' "$out" | grep '^  FAIL' | grep -F "$t" | head -1 | sed 's/^  FAIL //')"
   else
-    bad "mutant [$t out of $var] SURVIVED: '$fn $*' passed on the mutated copy"
+    bad "$label SURVIVED: '$fn $*' passed on the mutated copy"
   fi
 }
 
 # --- running and collecting a unit ------------------------------------------------------------------------
-# run_unit <file> <title> <function> <args...>: the unit's exit status is its LAST line, written only when the unit ran
-# to completion. A unit that exits early or is killed never writes it; one that returns non-zero writes its status.
-run_unit() { local f="$1"; shift; { echo "$1"; "${@:2}"; echo "__unit_rc=$?"; } > "$f" 2>&1; }
+# run_unit <file> <title> <function> <args...>: runs the unit in a SUBSHELL and records that subshell's real exit status in
+# <file>.rc, a file the unit's output cannot reach. Codex deploy round 3 showed that a status line inside the unit's own
+# output could be impersonated. `exit N` in a unit gives N, a killed unit gives its signal status, and a killed runner
+# leaves no .rc at all.
+run_unit() { local f="$1"; shift; ( echo "$1"; "${@:2}" ) > "$f" 2>&1; echo "$?" > "$f.rc"; }
 
 # collect <files...>: prints every unit and sets PROBLEMS. A unit passes only if it ran to COMPLETION with status 0, made
 # at least one assertion, and has no FAIL line (Codex deploy round 2: a worker that printed one ok and then exited must
@@ -391,8 +416,8 @@ run_unit() { local f="$1"; shift; { echo "$1"; "${@:2}"; echo "__unit_rc=$?"; } 
 collect() {
   local f rc; PROBLEMS=0
   for f in "$@"; do
-    grep -v '^__unit_rc=' "$f"
-    rc="$(tail -n 1 "$f" | sed -n 's/^__unit_rc=//p')"
+    cat "$f"
+    rc="$(cat "$f.rc" 2>/dev/null || true)"
     if [ -z "$rc" ]; then bad "the unit above exited before completing: no completion status"; PROBLEMS=$((PROBLEMS+1))
     elif [ "$rc" != 0 ]; then bad "the unit above returned status $rc"; PROBLEMS=$((PROBLEMS+1)); fi
     grep -qE '^  (ok|FAIL) ' "$f" || { bad "the unit above produced no assertion at all"; PROBLEMS=$((PROBLEMS+1)); }
@@ -405,14 +430,26 @@ collect() {
 unit_dies_after_ok()   { ok "an assertion that passes"; exit 99; }
 unit_returns_nonzero() { ok "an assertion that passes"; return 3; }
 unit_asserts_nothing() { :; }
+unit_impersonates_completion() { ok "an assertion that passes"; echo "__unit_rc=0"; exit 99; ok "UNREACHED"; }
+nested_fails_then_aborts()   { printf '  FAIL %s expected failure\n' "$P.ivrv"; exit 99; }
+nested_unset_abort()         { printf '  FAIL %s expected failure\n' "$P.ivrv"; : "$NO_SUCH_VARIABLE_FOR_THE_SELFCHECK"; ok "UNREACHED"; }
+nested_fails_and_completes() { printf '  FAIL %s expected failure\n' "$P.ivrv"; }
 unit_collector_selfcheck() {
   local d="$WORK/collector-selfcheck" fn n; mkdir -p "$d"
-  for fn in unit_dies_after_ok unit_returns_nonzero unit_asserts_nothing; do
+  for fn in unit_dies_after_ok unit_returns_nonzero unit_asserts_nothing unit_impersonates_completion; do
     run_unit "$d/$fn" "synthetic $fn" "$fn" &
     wait $!
     n="$( collect "$d/$fn" >/dev/null; echo "$PROBLEMS" )"
     if [ "$n" -ge 1 ]; then ok "collector refuses $fn ($n problem(s))"; else bad "collector ACCEPTED $fn"; fi
   done
+  local j
+  for fn in nested_fails_then_aborts nested_unset_abort; do
+    j="$(judge_nested "synthetic $fn" "$P.ivrv" "$d" "$fn")"
+    case "$j" in "  FAIL "*) ok "judge_nested refuses $fn" ;; *) bad "judge_nested ACCEPTED $fn: $j" ;; esac
+  done
+  j="$(judge_nested "synthetic control" "$P.ivrv" "$d" nested_fails_and_completes)"
+  case "$j" in "  ok   "*) ok "judge_nested accepts a completed nested unit that reports the topic's FAIL" ;;
+    *) bad "judge_nested refused the control: $j" ;; esac
   run_unit "$d/good" "synthetic good unit" ok "an assertion that passes" &
   wait $!
   n="$( collect "$d/good" >/dev/null; echo "$PROBLEMS" )"
@@ -423,7 +460,7 @@ unit_collector_selfcheck() {
 UNITS=()
 launch() { # <title> <section> <args...>
   local f; f="$WORK/unit.$(printf '%03d' "${#UNITS[@]}")"; UNITS+=("$f")
-  while [ "$(jobs -rp | wc -l)" -ge "$MAXJ" ]; do wait -n; done
+  while [ "$(jobs -rp | wc -l)" -ge "$MAXJ" ]; do sleep 0.1; done   # a poll, no bash-version-specific wait flag
   run_unit "$f" "$@" &
 }
 
