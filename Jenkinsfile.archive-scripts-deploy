@@ -112,10 +112,11 @@ pipeline {
             || { echo "the suite did not report ALL PASS — refusing" >&2; exit 1; }
           ran=$(grep -c "^PASS" "$WORKSPACE/.suite.out")
           echo "suite reported $ran passing assertions"
-          # 191 = every assertion the committed suite makes (sections 1-14; 12-14 pin the committed-read
-          # strike capture, its processing-failure paths and the es4 verifier). A lower count means a section
-          # stopped early or was skipped, which "ALL PASS" alone cannot show. Raise it with the suite.
-          [ "$ran" -ge 191 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+          # 247 = every assertion the committed suite makes (sections 1-15; 12-14 pin the committed-read
+          # strike capture, its processing-failure paths and the es4 verifier; 12p/12q/15 the re-review round-2
+          # fixes: unstamped checkpoints, the validated UNTIL_TS lookup, the CRON_TZ placement). A lower count
+          # means a section stopped early or was skipped, which "ALL PASS" alone cannot show. Raise it with the suite.
+          [ "$ran" -ge 247 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
           # Installing an evaluator whose acceptance predicate is untested would ship the one thing

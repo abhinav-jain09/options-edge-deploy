@@ -131,7 +131,8 @@ fi
 # capture — has reached the log end (deploy Codex final review, finding 2). It runs TWICE: here, before
 # anything is touched, so an unarchived log refuses without taking es4 down; and again just before the
 # wipe, after quiescing, when the log can no longer grow and the comparison is exact. A RESUMED reset
-# skips this early check (on that path Kafka may already be down) and relies on the second.
+# skips this early check (on that path Kafka may already be down) and relies on the second, which first
+# brings Kafka — and only Kafka — back up if it is down (step 3; deploy re-review round 2, finding 4).
 # Opt-out, explicit only: ES4_STRIKE_ARCHIVE_INTERLOCK=off (Jenkins ACCEPT_UNARCHIVED_STRIKE_LOSS).
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/strike-archive-interlock.sh" \
@@ -273,11 +274,22 @@ fi
 # ------------------------------------------------------- 3. offline coordinated wipe (kafka down)
 # The strike archive interlock, AUTHORITATIVE pass: every producer is proven down, so the log end is
 # final. Refusing here leaves the app scaled to 0 with $STATE = WIPING — archive, then rerun and the
-# reset resumes (the resume re-runs this check). If Kafka itself is already down (a resume after a crash
-# past `compose down`), the log end is unreadable and this refuses too: unknown is not archived.
+# reset resumes (the resume re-runs this check).
+# RESUMING PAST `compose down` (deploy re-review round 2, finding 4): a reset interrupted after Kafka was
+# stopped resumes with Kafka DOWN and the phase still WIPING. The check below must then READ the log, not
+# refuse on an unreachable broker on every retry — and the remedy it prints (run the archive, which reads
+# the same broker) needs a running broker too. So the broker is made readable first: if es4-kafka is not
+# healthy, ONLY the kafka service is started (strike_archive_broker_readable, strike-archive-interlock.sh),
+# with every producer proven at 0 just above and mm2 never started. If Kafka cannot be brought up, the
+# interlock reads an unreachable broker and refuses (fail closed); only the explicit opt-out proceeds, and
+# it records the loss. On a fresh run Kafka is already healthy and this does nothing.
+if [ "$DRY" != "true" ]; then
+  strike_archive_broker_readable "$INFRA_DIR" \
+    || echo "  WARNING: Kafka is NOT readable — the interlock below will refuse unless ES4_STRIKE_ARCHIVE_INTERLOCK=off" >&2
+fi
 log "strike archive interlock (producers quiesced — the log can no longer grow)"
 strike_archive_interlock "before the wipe" \
-  || die "unarchived es.futures.footprint.strike records on es4 — the app is DOWN and $STATE holds its replica counts: run the es4 archive, then rerun to resume (see above)"
+  || die "unarchived es.futures.footprint.strike records on es4 — the app is DOWN and $STATE holds its replica counts; Kafka is up so the archive can read it: run the es4 archive, then rerun to resume (see above)"
 log "docker compose down (Kafka and all local infra stopped; Docker container logs removed)"
 run "(cd '$INFRA_DIR' && docker compose down)"
 log "wiping Kafka data volume CONTENTS ($KAFKA_DATA/* — all topics + _schemas), Kafka offline"

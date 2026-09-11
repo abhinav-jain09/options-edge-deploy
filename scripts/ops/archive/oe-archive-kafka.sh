@@ -109,6 +109,27 @@ is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) retur
 # is captured exactly as before, byte for byte; an omission here is today's behaviour, never a new gap.
 OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike}"
 is_committed_read_topic() { case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# THE CHECKPOINT STAMP (deploy re-review round 2, finding 2). Every checkpoint line the committed-read
+# capture writes ends with this token, and for a committed-read topic ONLY a stamped line is proof of
+# archival. An unstamped one was written by something else — in practice the console-consumer archiver
+# this reader replaced, which could stop below an open transaction and still checkpoint the high-water
+# mark (final review, finding 1: "endoff=1200, got=1099 -> ACCEPT checkpoint=1200"). Resuming from such a
+# line would carry that skip forward for ever, and marking it on the source broker would let
+# cleanup-es4.sh wipe records no archive holds. So an unstamped line is treated as NO checkpoint: the
+# partition is recaptured from the log start (LEGACY below). The recapture duplicates whatever that
+# archiver did capture; a duplicate is recoverable and a skipped range is not. Console-consumer topics
+# never carry or need the stamp; their checkpoint lines are unchanged byte for byte.
+COMMITTED_CKPT_STAMP="capture=read_committed_stable_boundary"
+ckpt_is_stamped() { case " $1 " in *" $COMMITTED_CKPT_STAMP "*) return 0 ;; *) return 1 ;; esac; }
+# The one unstamped line that may still be resumed from: a re-baseline the archiver wrote after a reset,
+# which points at the NEW log's start — and only while it is still at or below the retained start, so that
+# resuming there cannot skip a record. Anything else unstamped is LEGACY. $1=line $2=its offset $3=earliest
+ckpt_is_log_start() { case " $1 " in *" rebaselined=from-"*) [ "$2" -le "$3" ] 2>/dev/null ;; *) return 1 ;; esac; }
+# What a Kafka CLI prints on stderr when a read did not (fully) succeed — GetOffsetShell's per-partition
+# "Skip getting offsets ... due to error" at exit 0, "Error occurred: ...", the AdminClient's retry WARNs,
+# exception names. The same list scripts/es4/strike-archive-interlock.sh refuses on; the real answers are
+# recorded in broker-test/cli-fixtures/.
+KAFKA_CLI_DIAG='skip|error|exception|fail|timed out|timeout|could not|unable|not available|refused'
 
 # The committed-only reader. A single-file Java program run by the JDK's source launcher against the
 # Kafka client jars the broker CLI already ships ($KAFKA_BIN/../libs), so it needs no build step and
@@ -441,8 +462,41 @@ for topic in $TOPICS; do
   earliest_all=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" \
                    --topic "$topic" --time earliest 2>/dev/null)
   until_all=""
-  [ -n "$UNTIL_TS" ] && until_all=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" \
-                                      --topic "$topic" --time "$UNTIL_TS" 2>/dev/null)
+  if [ -n "$UNTIL_TS" ]; then
+    # THE CUTOFF MUST BE READ, NOT ASSUMED (deploy re-review round 2, finding 5). Below, a partition with
+    # no line in this answer is read to the LOG END, because GetOffsetShell drops a partition that has no
+    # record at or after the timestamp (it prints nothing for it, at exit 0 — recorded in
+    # broker-test/cli-fixtures/<version>/until-nomatch.*). But a FAILED lookup also prints no line: an
+    # unreachable broker exits 1 with nothing on stdout, and a per-partition error is "Skip getting
+    # offsets ..." on stderr at exit 0. Reading that silence as "no record that new" dropped the cutoff:
+    # checkpoint 0, cutoff 40, log end 100 archived all 100 records under the historical dt= and moved the
+    # checkpoint to 100, so the later sessions' runs skipped them. So the answer is used only if the
+    # command exited 0, reported nothing on stderr and printed nothing but "topic:partition:offset" lines;
+    # anything else fails this topic for this run, with its checkpoint untouched.
+    until_err=$(mktemp "${TMPDIR:-/tmp}/oe-archive-until.XXXXXX" 2>/dev/null)
+    until_why=""
+    if [ -z "$until_err" ]; then
+      until_why="could not create a scratch file for the lookup's stderr"
+    else
+      until_all=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" \
+                    --topic "$topic" --time "$UNTIL_TS" 2>"$until_err")
+      until_rc=$?
+      [ "$until_rc" -eq 0 ] || until_why="exit $until_rc"
+      until_diag=$(grep -m1 -iE "$KAFKA_CLI_DIAG" "$until_err" 2>/dev/null | cut -c1-240)
+      [ -z "$until_diag" ] || until_why="${until_why:+$until_why, }stderr: $until_diag"
+      until_bad=$(printf '%s\n' "$until_all" | grep -vE '^[^:]+:[0-9]+:[0-9]+$' | grep -m1 . | cut -c1-240)
+      [ -z "$until_bad" ] || until_why="${until_why:+$until_why, }unexpected output: $until_bad"
+      rm -f "$until_err"
+    fi
+    if [ -n "$until_why" ]; then
+      log "  FAIL $topic: the UNTIL_TS=$UNTIL_TS offset lookup did not succeed ($until_why) — the historical cutoff" \
+          "is unknown, and reading to the log end would file later sessions under dt=$DAY. Nothing archived for" \
+          "this topic; its checkpoint is unchanged."
+      failed=$(( failed + 1 ))
+      exec {tfd}>&-
+      continue
+    fi
+  fi
 
   while IFS=: read -r _t part endoff; do
     [ -n "${part:-}" ] && [ -n "${endoff:-}" ] || continue
@@ -459,7 +513,8 @@ for topic in $TOPICS; do
     # the log end, so one past session can be reconstructed into its own dt= folder.
     # An EMPTY answer means no record in this partition is that new — every retained record belongs
     # to the range, so the log end is the correct bound. Treating empty as 0 would silently archive
-    # nothing and then checkpoint backwards, which is worse than not running at all.
+    # nothing and then checkpoint backwards, which is worse than not running at all. (An empty answer
+    # means that ONLY because the lookup itself was validated above; a failed one never reaches here.)
     if [ -n "$UNTIL_TS" ]; then
       until_off=$(printf '%s\n' "$until_all" \
                   | awk -F: -v p="$part" 'NF>=3 && $2==p && $3 != "" {print $3}' | tail -1)
@@ -470,6 +525,8 @@ for topic in $TOPICS; do
     # Manifest line: "<part>=<endOffset> records=<n> span=<n>". Split on whitespace first so the
     # trailing fields cannot leak into the offset, then take the value after '='.
     from=$(awk -v p="$part" '{split($1,a,"="); if (a[1]==p) print a[2]}' "$offfile" | tail -1)
+    # The same last line, whole: a committed-read topic's checkpoint counts only if it is stamped.
+    from_line=$(awk -v p="$part" '{split($1,a,"="); if (a[1]==p) print}' "$offfile" | tail -1)
     # Retention may already have deleted the head of the log, so offset 0 often does NOT exist:
     # underlying.spx.index.price starts at 11462, not 0. Always clamp to the real log-start
     # offset — asking for an expired offset makes the consumer return NOTHING, which the old
@@ -478,6 +535,9 @@ for topic in $TOPICS; do
     earliest="${earliest:-0}"
     ckpt_before="${from:-none}"
     reset_why=""; reset_tag=""
+    # from_proven: `from` is a checkpoint the committed reader itself wrote (stamped), not a log start,
+    # a re-baseline or an inherited line. Only such a checkpoint may be re-recorded as the archive marker.
+    legacy_from=""; from_proven=false
     if [ -n "$from" ]; then
       # Two independent detectors, checked BEFORE the expired-checkpoint branch because a
       # re-created log can leave the old checkpoint on either side of the new log's start.
@@ -564,6 +624,19 @@ for topic in $TOPICS; do
           log "  WARN $topic p$part: could not write the rebaseline — identity NOT advanced, the reset stays visible"
           id_write_blocked=1
         }
+    elif is_committed_read_topic "$topic" && ! ckpt_is_stamped "$from_line" \
+         && ! ckpt_is_log_start "$from_line" "$from" "$earliest"; then
+      # LEGACY (re-review round 2, finding 2): a checkpoint the committed reader did not write. It may be a
+      # high-water mark taken past an open transaction whose records the old reader never saw, so it is
+      # proof of nothing — resume from it and those records are skipped for ever; mark it on the source
+      # and cleanup-es4.sh wipes them. Treat it as ABSENT: recapture from the log start. (A re-baseline
+      # line at or below the log start is not legacy: that is exactly where this would begin anyway.)
+      log "  LEGACY $topic p$part: checkpoint $from was not written by the committed-read capture (no" \
+          "'$COMMITTED_CKPT_STAMP') — an older archiver could checkpoint past a transaction it never read, so" \
+          "it proves nothing. Recapturing from the log start $earliest: records it did archive are archived" \
+          "AGAIN (a duplicate), none is skipped."
+      legacy_from="$from"
+      from="$earliest"
     elif [ "$from" -lt "$earliest" ]; then
       log "  GAP $topic p$part: checkpoint $from expired (log now starts at $earliest) — $((earliest-from)) records LOST before this run"
       if is_strict_topic "$topic"; then
@@ -575,15 +648,22 @@ for topic in $TOPICS; do
         continue
       fi
       from="$earliest"
+    else
+      ckpt_is_stamped "$from_line" && from_proven=true
     fi
     count=$(( endoff - from ))
     if [ "$count" -le 0 ]; then
-      # Nothing below the log end that the checkpoint has not covered. For a committed-read topic the
+      # Nothing below the bound that the checkpoint has not covered. For a committed-read topic the
       # archive marker is re-recorded at the durable checkpoint anyway: a marker lost with a wiped
       # consumer group, or one whose write failed on an earlier run, would otherwise leave
       # cleanup-es4.sh refusing for ever on a log with nothing left to archive — and an interlock that
       # can never be satisfied is an interlock someone switches off.
-      if [ "$count" -eq 0 ] && is_committed_read_topic "$topic"; then
+      # But ONLY when this run can vouch for it (re-review round 2, finding 2): the checkpoint must be one
+      # the committed reader wrote (from_proven — never an inherited, re-baselined or log-start value), and
+      # it must already reach the REAL log end, not just a time bound. An idle run endorses nothing it did
+      # not itself capture.
+      if [ "$count" -eq 0 ] && is_committed_read_topic "$topic" && [ "$from_proven" = true ] \
+         && [ "$from" -eq "$log_end" ]; then
         mark_committed_boundary "$topic" "$part" "$from"
       fi
       continue
@@ -650,10 +730,11 @@ for topic in $TOPICS; do
       if [ "$r_boundary" -le "$from" ]; then
         # The stable boundary has not moved past the checkpoint: a transaction that is still open
         # starts at or below it. Nothing is captured and nothing is skipped — the next run reads those
-        # records once they resolve. Not a failure of this run.
+        # records once they resolve. Not a failure of this run. No archive marker either: records of the
+        # open transaction sit above `from`, so the checkpoint does not reach the log end, and a marker
+        # that cannot cover the log end can only endorse something (re-review round 2, finding 2).
         log "  NOTE $topic p$part: no committed record beyond checkpoint $from yet (stable boundary $r_boundary, log end $log_end) — an open transaction holds the range; the next run captures it once it resolves"
         rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog"
-        [ "$r_boundary" -eq "$from" ] && mark_committed_boundary "$topic" "$part" "$from"
         continue
       fi
       gzip -6 < "$plain" > "$tmp"
@@ -679,6 +760,8 @@ for topic in $TOPICS; do
       cap_to="$r_boundary"
       count=$(( cap_to - from ))
       manifest_extra=$(printf ',"capture":"read_committed_stable_boundary","stable_boundary":%s,"escaped_records":%s' "$r_boundary" "$r_escaped")
+      # A recapture over a LEGACY checkpoint says so: the range overlaps whatever the older archiver filed.
+      [ -z "$legacy_from" ] || manifest_extra="$manifest_extra$(printf ',"recaptured_over_unproven_checkpoint":%s' "$legacy_from")"
     else
       # ---- CONSOLE-CONSUMER CAPTURE — every topic not in OE_COMMITTED_READ_TOPICS -----------------
       cap_to="$endoff"
@@ -794,8 +877,12 @@ for topic in $TOPICS; do
         failed=$(( failed + 1 ))
         continue
       }
-    if ! printf '%s=%s records=%s span=%s dt=%s archived=%s\n' \
-           "$part" "$cap_to" "$got" "$count" "$DAY" "$STAMP" >> "$offfile"; then
+    # A committed-read checkpoint is STAMPED (COMMITTED_CKPT_STAMP above); every other topic's line is
+    # exactly what it always was.
+    ckpt_stamp=""
+    is_committed_read_topic "$topic" && ckpt_stamp=" $COMMITTED_CKPT_STAMP"
+    if ! printf '%s=%s records=%s span=%s dt=%s archived=%s%s\n' \
+           "$part" "$cap_to" "$got" "$count" "$DAY" "$STAMP" "$ckpt_stamp" >> "$offfile"; then
       # The file and its claim stand; without the checkpoint the next run re-reads this range, which
       # is a duplicate, never a gap. It is still a failed run: the promise not to re-read was not made.
       log "  WARN $topic p$part [$from,$cap_to): checkpoint append FAILED — the next run re-reads this range (a duplicate, not a gap)"

@@ -28,6 +28,14 @@ TOPIC=oe.test.reset
 for tool in curl flock python3 gzip sha256sum timeout awk; do
   command -v "$tool" >/dev/null 2>&1 || { echo "FATAL: '$tool' is required — refusing to run a suite that would pass vacuously without it"; exit 1; }
 done
+# REAL Kafka CLI answers, recorded against a real broker by broker-test/strike-reader-broker-test.sh. The shim
+# below replays them for the time-bounded lookup (section 12q): a failed lookup and a lookup that found no
+# record look the same on stdout — nothing — and only the recorded exit status and stderr tell them apart.
+export OE_CLI="$OE/broker-test/cli-fixtures/4.3.0"
+export OE_SKIP="$OE/broker-test/cli-fixtures/constructed/skip-diagnostic.err"
+for f in "$OE_CLI/unreach-ends.err" "$OE_CLI/unreach-ends.rc" "$OE_CLI/until-nomatch.rc" "$OE_SKIP"; do
+  [ -f "$f" ] || { echo "FATAL: recorded CLI answer $f missing — refusing to run section 12q against invented output"; exit 1; }
+done
 
 T=$(mktemp -d)
 BIN="$T/bin"; mkdir -p "$BIN"
@@ -66,15 +74,26 @@ while [ $# -gt 0 ]; do
     *) shift ;;
   esac
 done
+case "$time_arg:${OE_TIME_QUERY:-ok}" in
+  earliest:*|:*|latest:*|*:ok|*:skip) : ;;
+  # the RECORDED answer of kafka-get-offsets 4.3.0 against an unreachable broker: nothing on stdout, exit 1
+  *:fail) cat "$OE_CLI/unreach-ends.err" >&2; exit "$(cat "$OE_CLI/unreach-ends.rc")" ;;
+esac
 while read -r a b c d; do
   [ "$a" = "topicid" ] && continue
   [ -n "$a" ] || continue
   case "$time_arg" in
     earliest) echo "$topic:$a:$b" ;;
     ""|latest) echo "$topic:$a:$c" ;;
-    *) [ -n "${d:-}" ] && echo "$topic:$a:$d" ;;   # empty answer = no record that new
+    *) # GetOffsetShell's per-partition failure: p0 omitted, "Skip getting offsets ..." on stderr, exit 0
+       if [ "${OE_TIME_QUERY:-ok}" = skip ] && [ "$a" = 0 ]; then sed "s/@TOPIC3@-1/$topic-0/" "$OE_SKIP" >&2; continue; fi
+       [ -n "${d:-}" ] && echo "$topic:$a:$d" ;;   # no line, exit 0 = no record that new (recorded: until-nomatch)
   esac
 done < "$OE_FIXTURE"
+# Exit 0 explicitly, as the real CLI does (recorded: until-nomatch.rc). Without this line the shim's status is
+# its last test's, i.e. 1 whenever the last partition has no record after the cutoff — an answer the real CLI
+# never gives, which the archiver (rightly) refuses since it validates the lookup's status.
+exit 0
 SH
 cat > "$BIN/kafka-topics.sh" <<'SH'
 #!/usr/bin/env bash
@@ -527,6 +546,8 @@ want "  the strike log never reached the console consumer" 0 "$(grep -c "^consol
 want "  the committed reader read it, from 0"              1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
 want "  archive marker recorded at the checkpoint"         8 "$(lastmark)"
 has  "  and the run says so" "MARK $STRIKE p0: archived-through 8" "$OUT"
+has  "  the checkpoint line is STAMPED as the committed reader's" "0=8 records=3 span=8 dt=$SDAY archived=" "$(tail -1 "$A/kafka/es4/_manifest/$STRIKE.offsets")"
+has  "  (stamp token)" " capture=read_committed_stable_boundary" "$(tail -1 "$A/kafka/es4/_manifest/$STRIKE.offsets")"
 
 # ---- 12b. UNRESOLVED transaction, then it commits: the retry captures every withheld record ------------
 # The reviewer's reproduction: a transaction open at offset 3 while later offsets exist. The high-water
@@ -567,10 +588,12 @@ strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
 srun >/dev/null
 want "12d session captured before the finalize"           3 "$(sck)"
 strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 O fin3 v' '4 O fin4 v'
+: > "$MARKS"
 OUT=$(srun); RC=$?
 want "  finalize still OPEN: run succeeds (rc)"            0 "$RC"
 has  "  and says an open transaction holds the range" "an open transaction holds the range" "$OUT"
 want "  checkpoint unchanged"                              3 "$(sck)"
+want "  NO archive marker: checkpoint 3 does not reach the log end 5" "" "$(lastmark)"
 want "  no manifest line for an empty stable range"        1 "$(mlines)"
 strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 C fin3 v' '4 C fin4 v' '5 M'
 OUT=$(srun); RC=$?
@@ -673,6 +696,99 @@ want "  with NO consumer property (read_uncommitted as before)" 2 "$(grep -c "^c
 last_plain=$(tail -1 "$A/kafka/prod/$TOPIC"/dt=*/_manifest.jsonl 2>/dev/null)
 hasnt "  its manifest line carries no committed-read fields" '"capture"' "$last_plain"
 has  "  and ends exactly as it always did" "\"archiver_version\":\"2026-08-13.1\"}" "$last_plain"
+want "  its checkpoint lines are unchanged: '<p>=40 records=40 span=40 dt=<d> archived=<stamp>', no stamp" 2 \
+     "$(grep -cE '^[01]=40 records=40 span=40 dt=[0-9-]+ archived=[0-9]{8}T[0-9]{6}Z$' "$A/kafka/prod/_manifest/$TOPIC.offsets")"
+
+# ---- 12p. an UNSTAMPED strike checkpoint proves nothing (re-review round 2, finding 2) -------------------------
+# The reviewer's case: an OLDER archiver read committed-only, stopped below a transaction open at 3, and still
+# checkpointed the high-water mark 7. That transaction has since committed. Resuming at 7 skips 3, 4 and 5 for
+# ever — and the round-1 idle rule then marked 7 on the source, so cleanup-es4.sh would have wiped them. No such
+# line exists in production (the strike topic was never archived before this reader), but nothing may trust one.
+fresh s14
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 C k3 v3' '4 C k4 v4' '5 C k5 v5' '6 M'
+mkdir -p "$A/kafka/es4/_manifest"
+printf '0=7 records=2 span=7 dt=2026-09-08 archived=20260908T210100Z\n' > "$A/kafka/es4/_manifest/$STRIKE.offsets"
+OUT=$(srun); RC=$?
+want "12p legacy checkpoint AT the log end: run succeeds (rc)"   0 "$RC"
+has  "  and calls it LEGACY" "LEGACY $STRIKE p0: checkpoint 7 was not written by the committed-read capture" "$OUT"
+want "  it did NOT sit idle on it: the reader recaptured from the log start" 1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
+want "  the withheld records 3, 4 and 5 are archived now"  "0 1 3 4 5" "$(soffsets)"
+want "  the new checkpoint is the boundary"                      7 "$(sck)"
+has  "  and it is stamped" " capture=read_committed_stable_boundary" "$(tail -1 "$A/kafka/es4/_manifest/$STRIKE.offsets")"
+want "  the manifest records what it recaptured over"            7 "$(mlast recaptured_over_unproven_checkpoint)"
+want "  the marker was written once, only AFTER the capture" "reader mark" \
+     "$(awk '/^reader .* from=[0-9]/ { print "reader" } /mark=[0-9]/ { print "mark" }' "$CALLS" | tr '\n' ' ' | sed 's/ $//')"
+want "  at the captured boundary"                                7 "$(lastmark)"
+: > "$MARKS"; : > "$CALLS"
+OUT=$(srun); RC=$?
+want "  the next run trusts its OWN stamped checkpoint: no recapture" 0 "$(grep -c "^reader $STRIKE p0 from=[0-9]" "$CALLS")"
+hasnt "  and says nothing about LEGACY" "LEGACY" "$OUT"
+want "  that idle run re-records the marker (stamped, and it reaches the log end)" 7 "$(lastmark)"
+fresh s15
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 C k3 v3' '4 C k4 v4' '5 C k5 v5' '6 M'
+mkdir -p "$A/kafka/es4/_manifest"
+printf '0=4 records=2 span=4 dt=2026-09-08 archived=20260908T210100Z\n' > "$A/kafka/es4/_manifest/$STRIKE.offsets"
+OUT=$(srun); RC=$?
+want "12p legacy checkpoint BELOW the log end: recaptured from 0, not resumed at 4" 1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
+want "  every committed record archived"                 "0 1 3 4 5" "$(soffsets)"
+fresh s16
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+mkdir -p "$A/kafka/es4/_manifest"
+printf '0=0 records=0 span=0 dt=2026-09-08 archived=20260908T210100Z rebaselined=from-500\n' > "$A/kafka/es4/_manifest/$STRIKE.offsets"
+OUT=$(srun); RC=$?
+hasnt "12p a re-baseline line (the new log's start) is not LEGACY" "LEGACY" "$OUT"
+want "  it is resumed from"                                       1 "$(grep -c "^reader $STRIKE p0 from=0 " "$CALLS")"
+fresh s16b
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+mkdir -p "$A/kafka/es4/_manifest"
+printf '0=2 records=0 span=0 dt=2026-09-08 archived=20260908T210100Z rebaselined=repair-1\n' > "$A/kafka/es4/_manifest/$STRIKE.offsets"
+OUT=$(srun); RC=$?
+has  "12p a re-baseline-looking line ABOVE the log start (hand-written) IS legacy" "LEGACY $STRIKE p0: checkpoint 2" "$OUT"
+want "  so nothing below it is skipped: recaptured from 0"       "0 1" "$(soffsets)"
+fresh s17
+UNTIL_OFF=4 strike_log '0 C a v' '1 C b v' '2 C c v' '3 C d v' '4 C e v' '5 C f v' '6 C g v' '7 C h v' '8 C i v' '9 C j v'
+srun UNTIL_TS=1786000000000 >/dev/null
+want "12p a bounded capture checkpoints the cutoff (stamped)"    4 "$(sck)"
+: > "$MARKS"
+OUT=$(srun UNTIL_TS=1786000000000); RC=$?
+want "  the bounded idle rerun succeeds (rc)"                     0 "$RC"
+want "  but records NO marker: checkpoint 4 does not reach the log end 10" "" "$(lastmark)"
+
+# ---- 12q. a FAILED UNTIL_TS lookup fails the run (re-review round 2, finding 5) -----------------------------
+# Below, a partition with no line in the time-bounded answer is read to the LOG END: that is what "no record at
+# or after the cutoff" looks like. A failed lookup looks the same on stdout. The recorded answers:
+want "the recorded 4.3.0 answer to a timestamp after every record: exit 0" 0 "$(cat "$OE_CLI/until-nomatch.rc")"
+want "  with NO line for the partition"                  0 "$(grep -c . "$OE_CLI/until-nomatch.out")"
+want "  and nothing on stderr"                           0 "$(wc -c < "$OE_CLI/until-nomatch.err" | tr -d ' ')"
+want "the recorded answer of an unreachable broker: exit 1" 1 "$(cat "$OE_CLI/unreach-ends.rc")"
+want "  ALSO with no line on stdout — the same silence, so only status and stderr can decide" 0 "$(grep -c . "$OE_CLI/unreach-ends.out")"
+for mode in fail skip; do
+  fresh "s18-$mode"
+  UNTIL_OFF=4 strike_log '0 C a v' '1 C b v' '2 C c v' '3 C d v' '4 C e v' '5 C f v' '6 C g v' '7 C h v' '8 C i v' '9 C j v'
+  OUT=$(srun UNTIL_TS=1786000000000 OE_TIME_QUERY=$mode); RC=$?
+  want "12q strike, UNTIL_TS lookup answers '$mode': the run FAILS (rc)" 1 "$RC"
+  has  "  saying the cutoff is unknown" "UNTIL_TS=1786000000000 offset lookup did not succeed" "$OUT"
+  want "  the reader never ran"                           0 "$(grep -c '^reader ' "$CALLS")"
+  want "  checkpoint unchanged"                          "" "$(sck)"
+  want "  nothing published"                              0 "$(sfiles)"
+  want "  runs.log records the failure"                   1 "$(sruns failed)"
+done
+has  "  (the skip case names GetOffsetShell's own diagnostic)" "stderr: Skip getting offsets for topic-partition $STRIKE-0" "$OUT"
+# The reviewer's numbers, on the console path: checkpoint 0, intended cutoff 40, log end 100.
+A="$T/u1"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid UUUUUUUUUUUUUUUUUUUUUU" "0 0 100 40" "1 0 100 40"
+OUT=$(run UNTIL_TS=1786000000000 OE_TIME_QUERY=fail); RC=$?
+want "12q console path, checkpoint 0 / cutoff 40 / log end 100, lookup fails: the run FAILS (rc)" 1 "$RC"
+want "  p0 checkpoint NOT moved to 100"                  "" "$(ck 0)"
+want "  no file published" 0 "$(ls "$A/kafka/prod/$TOPIC"/dt=*/*.jsonl.gz 2>/dev/null | wc -l | tr -d ' ')"
+OUT=$(run UNTIL_TS=1786000000000); RC=$?
+want "  the same run with a working lookup succeeds (rc)" 0 "$RC"
+want "  and stops at the cutoff"                         40 "$(ck 0)"
+A="$T/u2"; mkdir -p "$A/kafka/prod/_manifest"
+fixture "topicid VVVVVVVVVVVVVVVVVVVVVV" "0 0 100" "1 0 100"
+OUT=$(run UNTIL_TS=1786000000000); RC=$?
+want "12q a SUCCESSFUL lookup with no record after the cutoff (exit 0, no line): run succeeds (rc)" 0 "$RC"
+want "  and reads to the log end"                       100 "$(ck 0)"
 
 # ================= 13. processing failures on the CONSOLE path (finding 5, inherited code) ==========
 # Each stage's failure used to be invisible: the pipeline kept only the consumer's status, and
@@ -749,6 +865,22 @@ has  "  the es4 date is COMPLETE by the floors" "VERDICT COMPLETE" "$OUT"
 verify_line=$(grep -c '^5 20 \* \* 1-5 ENV=es4 ARCHIVE_DIR=/mnt/nas/optionsedge .*/oe-archive-verify\.sh' "$OE/oe-archive.crontab")
 want "the crontab schedules exactly one es4 verification"  1 "$verify_line"
 has  "  and it keeps its own log" "LOG=/home/abhinav/oe-ops/archive-verify-es4.log" "$(grep 'ENV=es4 .*oe-archive-verify' "$OE/oe-archive.crontab")"
+
+# ================= 15. the schedule is New York time (re-review round 2, finding 6) =====================
+# The finding assumed Debian's cron, which has no per-entry CRON_TZ. The host is CentOS Stream 9 with cronie
+# (checked 2026-09-11), which honours it for every entry BELOW the line. What can break is placement: an entry
+# above CRON_TZ runs at the host's Madrid time. So: one CRON_TZ, New York, and every fixed-time entry below it.
+tz_n=$(grep -c '^CRON_TZ=' "$crontab_file")
+tz_at=$(grep -n '^CRON_TZ=' "$crontab_file" | head -1 | cut -d: -f1)
+want "15 exactly one CRON_TZ line"                          1 "$tz_n"
+want "  and it is America/New_York" "America/New_York" "$(grep '^CRON_TZ=' "$crontab_file" | head -1 | cut -d= -f2)"
+above=$(awk -v tz="$tz_at" 'NR < tz && $1 ~ /^[0-9,]+$/ && $2 ~ /^[0-9,]+$/' "$crontab_file")
+want "  no fixed-time entry sits ABOVE it (it would run at Madrid time)" "" "$above"
+n_below=$(awk -v tz="$tz_at" 'NR > tz && $1 ~ /^[0-9,]+$/ && $2 ~ /^[0-9,]+$/' "$crontab_file" | grep -c .)
+want "  every fixed-time entry (daily 17:10, es4 17:01, verify 20:00 and 20:05, seal, progress x4) is below it" 8 "$n_below"
+es4v_at=$(grep -n '^5 20 \* \* 1-5 ENV=es4 ' "$crontab_file" | cut -d: -f1)
+want "  the new es4 verification entry in particular" yes "$([ -n "$es4v_at" ] && [ "$es4v_at" -gt "$tz_at" ] && echo yes || echo no)"
+has  "  the header names the host's cron, which is what makes CRON_TZ work" "cronie" "$(head -n "$tz_at" "$crontab_file")"
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }

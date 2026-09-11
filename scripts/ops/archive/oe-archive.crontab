@@ -9,6 +9,11 @@
 # New York keeps this at 17:10 ET (market close + 1h10m) across BOTH daylight-saving switches.
 # Converting to local time and hardcoding it would drift an hour, twice a year, in opposite
 # directions. The script itself skips market holidays via market_calendar.py.
+# CRON_TZ works here because this host's cron is cronie (CentOS Stream 9, cronie-1.5.7-8.el9, checked
+# 2026-09-11), which schedules every entry below this line in New York time. Not every cron does: a
+# cron without CRON_TZ support would run all of them at Madrid time, six hours early. Install this file
+# only on a cronie host, or convert the schedule first. test-archive-reset.sh §15 asserts that every ET
+# entry sits below this line.
 CRON_TZ=America/New_York
 10 17 * * 1-5 /home/abhinav/oe-ops/oe-archive-daily.sh >> /home/abhinav/oe-ops/archive-daily.cron.log 2>&1
 # Spot ticks must be archived FAR more often than once a day. underlying.spx.price is

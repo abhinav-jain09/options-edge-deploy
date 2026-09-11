@@ -1,0 +1,2 @@
+Topic: @TOPIC1@	TopicId: o7rwSey8StqIYif6i-zIgQ	PartitionCount: 1	ReplicationFactor: 1	Configs: min.insync.replicas=1,segment.bytes=1073741824,retention.ms=-1,message.timestamp.type=LogAppendTime
+	Topic: @TOPIC1@	Partition: 0	Leader: 1	Replicas: 1	Isr: 1	Elr: 	LastKnownElr: 

@@ -1,0 +1,2 @@
+
+Error: Executing consumer group command failed due to org.apache.kafka.common.errors.TimeoutException: Timed out waiting for a node assignment. Call: describeConsumerGroups(api=FIND_COORDINATOR)

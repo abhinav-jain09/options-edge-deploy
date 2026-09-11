@@ -1,0 +1,1 @@
+Skip getting offsets for topic-partition @TOPIC3@-1 due to error: org.apache.kafka.common.errors.LeaderNotAvailableException: There is no leader for this topic-partition as we are in the middle of a leadership election.
