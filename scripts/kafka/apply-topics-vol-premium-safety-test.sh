@@ -380,12 +380,51 @@ mut_unit() {
   fi
 }
 
+# --- running and collecting a unit ------------------------------------------------------------------------
+# run_unit <file> <title> <function> <args...>: the unit's exit status is its LAST line, written only when the unit ran
+# to completion. A unit that exits early or is killed never writes it; one that returns non-zero writes its status.
+run_unit() { local f="$1"; shift; { echo "$1"; "${@:2}"; echo "__unit_rc=$?"; } > "$f" 2>&1; }
+
+# collect <files...>: prints every unit and sets PROBLEMS. A unit passes only if it ran to COMPLETION with status 0, made
+# at least one assertion, and has no FAIL line (Codex deploy round 2: a worker that printed one ok and then exited must
+# not read as green).
+collect() {
+  local f rc; PROBLEMS=0
+  for f in "$@"; do
+    grep -v '^__unit_rc=' "$f"
+    rc="$(tail -n 1 "$f" | sed -n 's/^__unit_rc=//p')"
+    if [ -z "$rc" ]; then bad "the unit above exited before completing: no completion status"; PROBLEMS=$((PROBLEMS+1))
+    elif [ "$rc" != 0 ]; then bad "the unit above returned status $rc"; PROBLEMS=$((PROBLEMS+1)); fi
+    grep -qE '^  (ok|FAIL) ' "$f" || { bad "the unit above produced no assertion at all"; PROBLEMS=$((PROBLEMS+1)); }
+    PROBLEMS=$((PROBLEMS + $(grep -c '^  FAIL' "$f" || true)))
+  done
+}
+
+# 7. Collector self-check: the collector must refuse a unit that dies AFTER a passing assertion, one that returns
+# non-zero and one that asserts nothing, and accept one that completes with status 0.
+unit_dies_after_ok()   { ok "an assertion that passes"; exit 99; }
+unit_returns_nonzero() { ok "an assertion that passes"; return 3; }
+unit_asserts_nothing() { :; }
+unit_collector_selfcheck() {
+  local d="$WORK/collector-selfcheck" fn n; mkdir -p "$d"
+  for fn in unit_dies_after_ok unit_returns_nonzero unit_asserts_nothing; do
+    run_unit "$d/$fn" "synthetic $fn" "$fn" &
+    wait $!
+    n="$( collect "$d/$fn" >/dev/null; echo "$PROBLEMS" )"
+    if [ "$n" -ge 1 ]; then ok "collector refuses $fn ($n problem(s))"; else bad "collector ACCEPTED $fn"; fi
+  done
+  run_unit "$d/good" "synthetic good unit" ok "an assertion that passes" &
+  wait $!
+  n="$( collect "$d/good" >/dev/null; echo "$PROBLEMS" )"
+  if [ "$n" -eq 0 ]; then ok "collector accepts a unit that completed with status 0"; else bad "collector refused a good unit ($n)"; fi
+}
+
 # --- schedule: every unit in the background, output collected in launch order ------------------------------
 UNITS=()
 launch() { # <title> <section> <args...>
   local f; f="$WORK/unit.$(printf '%03d' "${#UNITS[@]}")"; UNITS+=("$f")
   while [ "$(jobs -rp | wc -l)" -ge "$MAXJ" ]; do wait -n; done
-  { echo "$1"; "${@:2}"; } > "$f" 2>&1 &
+  run_unit "$f" "$@" &
 }
 
 for env in dev production; do
@@ -417,15 +456,11 @@ launch "6. self-check: $P.current removed from OPTIONS_EDGE_COMPACTED_TOPICS" \
   mut_unit OPTIONS_EDGE_COMPACTED_TOPICS name "$P.current" unit_create dev
 launch "6. self-check: $P.current removed from OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS" \
   mut_unit OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS name "$P.current" unit_create production
+launch "7. collector self-check: a unit that dies after an ok, returns non-zero, or asserts nothing is refused" \
+  unit_collector_selfcheck
 wait
 
-fails=0
-for f in "${UNITS[@]}"; do
-  cat "$f"
-  # A unit that died before asserting anything (a missing function, a crashed subshell) must not read as a pass.
-  grep -qE '^  (ok|FAIL) ' "$f" || { bad "the unit above produced no assertion at all"; fails=$((fails+1)); }
-  fails=$((fails + $(grep -c '^  FAIL' "$f" || true)))
-done
+collect "${UNITS[@]}"
 echo
-if [ "$fails" -eq 0 ]; then echo "=== apply-topics-vol-premium-safety: OK ==="; exit 0; fi
-echo "=== apply-topics-vol-premium-safety: $fails problem(s) ===" >&2; exit 1
+if [ "$PROBLEMS" -eq 0 ]; then echo "=== apply-topics-vol-premium-safety: OK ==="; exit 0; fi
+echo "=== apply-topics-vol-premium-safety: $PROBLEMS problem(s) ===" >&2; exit 1

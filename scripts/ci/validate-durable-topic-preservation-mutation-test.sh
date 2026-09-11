@@ -20,9 +20,11 @@ REPO="$work/repo"
 mkdir -p "$REPO/scripts"
 cp -R "$SRC/scripts/ci" "$SRC/scripts/kafka" "$SRC/scripts/ops" "$REPO/scripts/"
 # The validator runs apply-topics-vol-premium-safety-test.sh (about 45 mocked apply-topics runs plus its own mutation
-# self-checks) on EVERY expect() below. No case here touches a vol-premium declaration, so in THIS COPY only it is a
-# stub: the real test still runs, once, wherever the real validator runs (validate-services.sh section 6), instead of
-# eleven more times inside every service-deploy validate stage.
+# self-checks) on EVERY expect() below. In THIS COPY only it is a stub. Two cases here DO clear the preserved
+# declarations, and with them the five vol-premium memberships. But every case asserts a STRUCTURAL finding the
+# validator reports on its own (classification, extraction, reset-script coverage), and what the vol-premium suite would
+# say about those mutated copies is not what they test. The real test still runs, once, wherever the real validator runs
+# (validate-services.sh section 6), instead of eleven more times inside every service-deploy validate stage.
 printf '#!/usr/bin/env bash\necho "=== apply-topics-vol-premium-safety: stubbed inside the mutation harness ==="\n' \
   > "$REPO/scripts/kafka/apply-topics-vol-premium-safety-test.sh"
 
