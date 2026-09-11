@@ -1,0 +1,7 @@
+[2026-09-11 03:58:37,350] ERROR java.lang.IllegalArgumentException: Topic '@ABSENT@' does not exist as expected
+	at org.apache.kafka.tools.TopicCommand.ensureTopicExists(TopicCommand.java:207)
+	at org.apache.kafka.tools.TopicCommand$TopicService.describeTopic(TopicCommand.java:547)
+	at org.apache.kafka.tools.TopicCommand.execute(TopicCommand.java:111)
+	at org.apache.kafka.tools.TopicCommand.mainNoExit(TopicCommand.java:90)
+	at org.apache.kafka.tools.TopicCommand.main(TopicCommand.java:85)
+ (org.apache.kafka.tools.TopicCommand)

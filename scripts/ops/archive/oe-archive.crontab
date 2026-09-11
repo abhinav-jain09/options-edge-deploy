@@ -9,6 +9,11 @@
 # New York keeps this at 17:10 ET (market close + 1h10m) across BOTH daylight-saving switches.
 # Converting to local time and hardcoding it would drift an hour, twice a year, in opposite
 # directions. The script itself skips market holidays via market_calendar.py.
+# CRON_TZ works here because this host's cron is cronie (CentOS Stream 9, cronie-1.5.7-8.el9, checked
+# 2026-09-11), which schedules every entry below this line in New York time. Not every cron does: a
+# cron without CRON_TZ support would run all of them at Madrid time, six hours early. Install this file
+# only on a cronie host, or convert the schedule first. test-archive-reset.sh §15 asserts that every ET
+# entry sits below this line.
 CRON_TZ=America/New_York
 10 17 * * 1-5 /home/abhinav/oe-ops/oe-archive-daily.sh >> /home/abhinav/oe-ops/archive-daily.cron.log 2>&1
 # Spot ticks must be archived FAR more often than once a day. underlying.spx.price is
@@ -55,6 +60,13 @@ CRON_TZ=America/New_York
 # margin, move THIS entry later — do not shorten the consumer timeout, because an early timeout is
 # indistinguishable from a clean read and would checkpoint over a short read silently.
 0 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify.cron.log 2>&1
+# es4 completeness, 20:05 ET — its own entry for the reason given above: it reads what is on the NAS,
+# not what the 17:01 es4 job said about itself. Until 2026-09-11 nothing verified es4 at all: the
+# floors in oe-topics.env (the strike presence floor among them) were declared and never checked,
+# because the verifier requires OE_ALL_TOPICS_es4 and it did not exist (deploy Codex final review,
+# finding 3). The verifier delivers its own alert on MISSING / PARTIAL / CORRUPT or on being unable to
+# run, exactly as the prod entry does. Five minutes after prod so the two runs never interleave.
+5 20 * * 1-5 ENV=es4 ARCHIVE_DIR=/mnt/nas/optionsedge LOG=/home/abhinav/oe-ops/archive-verify-es4.log /home/abhinav/oe-ops/oe-archive-verify.sh >> /home/abhinav/oe-ops/archive-verify-es4.cron.log 2>&1
 
 # --- A5: the calibration corpus ------------------------------------------------------------------
 # SECOND archive pass, 20:45 ET. The 17:10 run can legitimately precede the session seal: a call

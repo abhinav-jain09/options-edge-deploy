@@ -1,0 +1,2 @@
+
+Error: Executing consumer group command failed due to org.apache.kafka.common.errors.GroupIdNotFoundException: Group @NOGROUP@ not found.

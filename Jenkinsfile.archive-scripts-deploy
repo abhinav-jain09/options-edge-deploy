@@ -52,7 +52,10 @@ pipeline {
     // A5: the calibration reporter ships with the archiver it reads. A crontab entry for a script the
     // deploy does not install is a job that fails every night with "command not found" — and a nightly
     // failure nobody installed is indistinguishable from a nightly failure nobody noticed.
-    UNIT        = "oe-archive-kafka.sh oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh"
+    // StrikeArchiveReader.java is run by oe-archive-kafka.sh through the JDK source launcher (no build
+    // step) for OE_COMMITTED_READ_TOPICS; it is data to the unit exactly like oe-topics.env, so it ships
+    // and swaps with the archiver or not at all.
+    UNIT        = "oe-archive-kafka.sh StrikeArchiveReader.java oe-alert.sh oe-topics.env test-archive-reset.sh oe-archive.crontab oe-archive.crontab.predecessor oe-calibration-progress.sh oe_corpus_reader.py oe-push-validation-artifact.sh push-validation-artifact-test.sh calibration-targets.env market_calendar.py oe-archive-verify.sh oe-trading-day.sh oe-archive-daily.sh oe-archive-dev.sh ibkr-raw-retention.sh oe-archive-postgres.sh"
     // Both of these are read by the shell in sh ''' blocks, which Groovy does NOT
     // interpolate — without them here the scripts would see an unset variable under `set -u`.
     TEST_IMAGE       = "${params.TEST_IMAGE}"
@@ -109,7 +112,12 @@ pipeline {
             || { echo "the suite did not report ALL PASS — refusing" >&2; exit 1; }
           ran=$(grep -c "^PASS" "$WORKSPACE/.suite.out")
           echo "suite reported $ran passing assertions"
-          [ "$ran" -ge 50 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+          # 335 = every assertion the committed suite makes (sections 1-16; 12-14 pin the committed-read
+          # strike capture, its processing-failure paths and the es4 verifier; 12p/12q/15 the re-review round-2
+          # fixes: unstamped checkpoints, the validated UNTIL_TS lookup, the CRON_TZ placement; 16 the round-3
+          # fixes: the source TopicId in the strike checkpoint, and validated initial offset discovery). A lower count
+          # means a section stopped early or was skipped, which "ALL PASS" alone cannot show. Raise it with the suite.
+          [ "$ran" -ge 335 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
           # Installing an evaluator whose acceptance predicate is untested would ship the one thing

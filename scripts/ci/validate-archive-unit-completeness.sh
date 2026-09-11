@@ -27,6 +27,13 @@ wanted="$(grep -oE '/home/abhinav/oe-ops/[A-Za-z0-9._-]+\.sh' "$DIR/oe-archive.c
 # calibration-targets.env are read by the unit and must be installed with it.
 sourced="$(grep -hoE '[A-Za-z0-9._-]+\.(sh|py|env)' "$DIR"/*.sh 2>/dev/null \
            | sed 's|.*/||' | grep -E '^(oe[-_]|calibration|market_|push-validation|test-archive)' | sort -u)"
+# 3. every Java source the unit runs through the JDK source launcher (StrikeArchiveReader.java, run by
+#    oe-archive-kafka.sh for OE_COMMITTED_READ_TOPICS) — named by a unit script, or simply living in the
+#    unit's directory. There is no build step to notice a missing one: the archiver would find no file on
+#    the host and fail every committed-read capture, every night.
+java_named="$(grep -hoE '[A-Za-z0-9_]+\.java' "$DIR"/*.sh 2>/dev/null | sort -u)"
+java_present="$(cd "$DIR" && ls -1 ./*.java 2>/dev/null | sed 's|^\./||' | sort -u)"
+sourced="$(printf '%s\n' $sourced $java_named $java_present | awk 'NF' | sort -u)"
 # DELIBERATE exclusions, each with the reason it is one. A list like this is only honest if every entry
 # has to earn its place — an unexplained name here is how a real gap gets waved through.
 #

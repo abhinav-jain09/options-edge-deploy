@@ -1,0 +1,6 @@
+constructed/skip-diagnostic.err is NOT captured output. A single-broker test cluster cannot make one
+partition's ListOffsets fail while the others succeed, so this line is built from the source: GetOffsetShell.fetchOffsets
+prints "Skip getting offsets for topic-partition " + partition + " due to error: " + e.getMessage() to stderr,
+omits that partition and still exits 0 (identical in Kafka 3.7.1, 3.9.0 and 4.3.0). e is the ExecutionException,
+whose message is its cause's toString(). Every other file under cli-fixtures/<version>/ is a real CLI answer
+written by strike-reader-broker-test.sh (FIXTURE_OUT).

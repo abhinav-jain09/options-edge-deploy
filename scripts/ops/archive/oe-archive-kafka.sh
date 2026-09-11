@@ -104,10 +104,168 @@ unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod OE_ALL_TOPICS_p
 # population as complete. Every check below that says "strict" is gated on this list and nothing else.
 OE_STRICT_TOPICS="${OE_STRICT_TOPICS:-context-tape.direction.ledger}"
 is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
-# Topics read COMMITTED-ONLY. See the consumer invocation below for why this is a list and not the
-# default: an omission here is today's behaviour, never a new gap. Declared in oe-topics.env.
+# Topics read COMMITTED-ONLY, through StrikeArchiveReader.java instead of kafka-console-consumer.
+# See the capture block below for why this is a list and not the default: every topic NOT named here
+# is captured exactly as before, byte for byte; an omission here is today's behaviour, never a new gap.
 OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike}"
 is_committed_read_topic() { case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# THE CHECKPOINT STAMP (deploy re-review round 2, finding 2). Every checkpoint line the committed-read
+# capture writes ends with this token, and for a committed-read topic ONLY a stamped line is proof of
+# archival. An unstamped one was written by something else — in practice the console-consumer archiver
+# this reader replaced, which could stop below an open transaction and still checkpoint the high-water
+# mark (final review, finding 1: "endoff=1200, got=1099 -> ACCEPT checkpoint=1200"). Resuming from such a
+# line would carry that skip forward for ever, and marking it on the source broker would let
+# cleanup-es4.sh wipe records no archive holds. So an unstamped line is treated as NO checkpoint: the
+# partition is recaptured from the log start (LEGACY below). The recapture duplicates whatever that
+# archiver did capture; a duplicate is recoverable and a skipped range is not. Console-consumer topics
+# never carry or need the stamp; their checkpoint lines are unchanged byte for byte.
+COMMITTED_CKPT_STAMP="capture=read_committed_stable_boundary"
+ckpt_is_stamped() { case " $1 " in *" $COMMITTED_CKPT_STAMP "*) return 0 ;; *) return 1 ;; esac; }
+# THE SOURCE IDENTITY IN THE STAMP (deploy re-review round 3, finding P1). An offset names a position in ONE log.
+# es4's clean-reset re-creates the topic, the new log grows back past the old checkpoint, and "0=7 ... stamped"
+# then describes records that no longer exist — while the new log's 0..6 were never read. So every stamped line
+# also carries the TopicId of the log it was taken on (" topic_id=<id>"), and it is PROOF only on a log whose
+# TopicId this run read successfully AND found equal. A different id is a new log: recaptured from its start.
+# A stamped line without an id (written by the round-2 archiver, before this rule) proves nothing and is
+# recaptured like an unstamped one. An id this run cannot read fails the topic: nothing is resumed, nothing is
+# marked. No cluster id is stamped: es4's KRaft CLUSTER_ID is fixed in infra/es4/docker-compose.yml and survives
+# the wipe, so it cannot tell the two logs apart; the TopicId, minted at every creation, can.
+ckpt_topic_id() { printf '%s\n' "$1" | tr ' ' '\n' | awk -F= '$1 == "topic_id" { sub(/^topic_id=/, ""); print; exit }'; }
+ckpt_is_proven() { # $1=line $2=the TopicId this run read: stamped, and taken on THIS log
+  [ -n "$2" ] && ckpt_is_stamped "$1" && [ "$(ckpt_topic_id "$1")" = "$2" ]
+}
+# The one unstamped line that may still be resumed from: a re-baseline the archiver wrote after a reset,
+# which points at the NEW log's start — and only while it is still at or below the retained start, so that
+# resuming there cannot skip a record. Anything else unstamped is LEGACY. $1=line $2=its offset $3=earliest
+ckpt_is_log_start() { case " $1 " in *" rebaselined=from-"*) [ "$2" -le "$3" ] 2>/dev/null ;; *) return 1 ;; esac; }
+# What a Kafka CLI prints on stderr when a read did not (fully) succeed — GetOffsetShell's per-partition
+# "Skip getting offsets ... due to error" at exit 0, "Error occurred: ...", the AdminClient's retry WARNs,
+# exception names. The same list scripts/es4/strike-archive-interlock.sh refuses on; the real answers are
+# recorded in broker-test/cli-fixtures/.
+KAFKA_CLI_DIAG='skip|error|exception|fail|timed out|timeout|could not|unable|not available|refused'
+
+# kafka_answer_why <rc> <file-prefix> <stdout-shape-regex or ''> -> why the answer in <prefix>.out / <prefix>.err
+# cannot be used, or nothing. The SAME rules as _sai_why in scripts/es4/strike-archive-interlock.sh, whose body this
+# is (strike-archive-interlock-test.sh §7 compares the two): a non-zero exit, a diagnostic on stderr, an "Error"
+# line on stdout, or a stdout line outside the expected shape. Silence is never read as an answer.
+kafka_answer_why() {
+  local rc="$1" f="$2" shape="$3" diag bad
+  diag=$(grep -m1 -iE "$KAFKA_CLI_DIAG" "$f.err" 2>/dev/null | cut -c1-240)
+  if [ "$rc" -ne 0 ]; then
+    bad=$(grep -m1 -iE 'error' "$f.out" 2>/dev/null | cut -c1-240)
+    printf 'exit %s: %s' "$rc" "${bad:-${diag:-$(tail -1 "$f.err" 2>/dev/null | cut -c1-240)}}"
+    return
+  fi
+  if [ -n "$diag" ]; then printf 'exit 0 but it reported: %s' "$diag"; return; fi
+  bad=$(grep -m1 -E '^Error' "$f.out" 2>/dev/null | cut -c1-240)
+  if [ -n "$bad" ]; then printf 'exit 0 but it printed: %s' "$bad"; return; fi
+  if [ -n "$shape" ]; then
+    bad=$(grep -v -E "$shape" "$f.out" 2>/dev/null | grep -m1 . | cut -c1-240)
+    [ -z "$bad" ] || printf 'unexpected output line: %s' "$bad"
+  fi
+}
+kafka_seq() { local i=0; while [ "$i" -lt "$1" ]; do printf '%s ' "$i"; i=$((i + 1)); done; }
+
+# read_topic_description <topic> <scratch dir> -> 0 with DESC_N (PartitionCount) and DESC_ID (TopicId), or 1 with
+# DESC_WHY. The partition lines must be exactly 0..N-1, as in the interlock, and the TopicId must be a real one:
+# 22 base64url characters and not the all-zero id a broker reports for a log that has none.
+read_topic_description() {
+  local topic="$1" d="$2" rc parts
+  DESC_N=""; DESC_ID=""; DESC_WHY=""
+  "$KAFKA_BIN/kafka-topics.sh" --bootstrap-server "$BOOTSTRAP" --describe --topic "$topic" > "$d/desc.out" 2> "$d/desc.err"
+  rc=$?
+  DESC_WHY=$(kafka_answer_why "$rc" "$d/desc" '')
+  [ -z "$DESC_WHY" ] || return 1
+  # "Topic: T<TAB>TopicId: X<TAB>PartitionCount: N<TAB>..." then "<TAB>Topic: T<TAB>Partition: p<TAB>..." (recorded in
+  # broker-test/cli-fixtures/<version>/describe-*.out). --topic is a regex in the CLI: other topics' lines are ignored.
+  DESC_N=$(awk -F'\t' -v t="Topic: $topic" '$1 == t { for (i = 2; i <= NF; i++) if ($i ~ /^PartitionCount: [0-9]+$/) { sub(/^PartitionCount: /, "", $i); print $i } }' "$d/desc.out")
+  DESC_ID=$(awk -F'\t' -v t="Topic: $topic" '$1 == t { for (i = 2; i <= NF; i++) if ($i ~ /^TopicId: /) { sub(/^TopicId: /, "", $i); print $i } }' "$d/desc.out")
+  parts=$(awk -F'\t' -v t="Topic: $topic" '$1 == "" && $2 == t && $3 ~ /^Partition: [0-9]+$/ { sub(/^Partition: /, "", $3); print $3 }' "$d/desc.out" | sort -n | tr '\n' ' ')
+  case "$DESC_N" in
+    ''|*[!0-9]*|0) DESC_WHY="no single PartitionCount for $topic in its description"; return 1 ;;
+  esac
+  [ "$parts" = "$(kafka_seq "$DESC_N")" ] || { DESC_WHY="PartitionCount $DESC_N, but partition lines [${parts% }]"; return 1; }
+  case "$DESC_ID" in
+    ''|*[!A-Za-z0-9_-]*) DESC_WHY="no single TopicId for $topic in its description (got '$(printf '%s' "$DESC_ID" | tr '\n' ' ')')"; return 1 ;;
+    AAAAAAAAAAAAAAAAAAAAAA) DESC_WHY="the broker reports the all-zero TopicId — a log without an identity"; return 1 ;;
+  esac
+  [ "${#DESC_ID}" -eq 22 ] || { DESC_WHY="'$DESC_ID' is not a TopicId (22 base64url characters)"; return 1; }
+}
+
+# INITIAL DISCOVERY FOR A COMMITTED-READ TOPIC (deploy re-review round 3, finding P2). The console path below takes
+# an empty `kafka-get-offsets` answer as "absent", with stderr discarded and the status ignored — so an unreachable
+# broker (exit 1, nothing on stdout: recorded in broker-test/cli-fixtures/) or GetOffsetShell's per-partition
+# "Skip getting offsets ... due to error" at exit 0 became SKIP or a silently missing partition, the run reported
+# failed=0, and the UNTIL_TS validation further down was never reached. For a committed-read topic nothing is
+# concluded from silence, by the interlock's rules: (1) presence from a topic list that was READ (absent from it =
+# confirmed absent, still SKIP); (2) partition count and TopicId from --describe; (3) log ends and (4) log starts
+# from kafka-get-offsets, each exit 0, no diagnostic, only "topic:p:offset" lines and exactly partitions 0..N-1.
+# Sets DISC_STATE present|absent|unreadable, DISC_WHY, DISC_ID, DISC_ENDS, DISC_EARLIEST ("topic:p:offset" lines).
+committed_discovery() {
+  local topic="$1" d rc why got q
+  DISC_STATE=unreadable; DISC_WHY=""; DISC_ID=""; DISC_ENDS=""; DISC_EARLIEST=""
+  d=$(mktemp -d "${TMPDIR:-/tmp}/oe-archive-disc.XXXXXX" 2>/dev/null) || d=""
+  [ -n "$d" ] || { DISC_WHY="could not create a scratch directory for the broker's answers"; return 0; }
+  "$KAFKA_BIN/kafka-topics.sh" --bootstrap-server "$BOOTSTRAP" --list > "$d/list.out" 2> "$d/list.err"
+  rc=$?
+  why=$(kafka_answer_why "$rc" "$d/list" '^[A-Za-z0-9._-]+$')
+  if [ -n "$why" ]; then
+    DISC_WHY="the broker's topic list cannot be read (kafka-topics --list: $why)"; rm -rf "$d"; return 0
+  fi
+  if ! grep -Fxq -- "$topic" "$d/list.out"; then DISC_STATE=absent; rm -rf "$d"; return 0; fi
+  if ! read_topic_description "$topic" "$d"; then
+    DISC_WHY="its partitions and TopicId cannot be established (kafka-topics --describe: $DESC_WHY)"; rm -rf "$d"; return 0
+  fi
+  DISC_ID="$DESC_ID"
+  for q in latest earliest; do
+    if [ "$q" = latest ]; then
+      "$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" --topic "$topic" > "$d/$q.out" 2> "$d/$q.err"
+    else
+      "$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" --topic "$topic" --time earliest > "$d/$q.out" 2> "$d/$q.err"
+    fi
+    rc=$?
+    why=$(kafka_answer_why "$rc" "$d/$q" '^[^:]+:[0-9]+:[0-9]+$')
+    if [ -z "$why" ]; then
+      got=$(awk -F: -v t="$topic" '$1 == t { print $2 }' "$d/$q.out" | sort -n | tr '\n' ' ')
+      [ "$got" = "$(kafka_seq "$DESC_N")" ] \
+        || why="offsets came back for partitions [${got% }] of the $DESC_N the topic has — a partition that is not read is not archived"
+    fi
+    if [ -n "$why" ]; then
+      DISC_WHY="its $q offsets cannot be read (kafka-get-offsets: $why)"; rm -rf "$d"; return 0
+    fi
+  done
+  DISC_ENDS=$(awk -F: -v t="$topic" '$1 == t' "$d/latest.out")
+  DISC_EARLIEST=$(awk -F: -v t="$topic" '$1 == t' "$d/earliest.out")
+  DISC_STATE=present
+  rm -rf "$d"
+}
+
+# The committed-only reader. A single-file Java program run by the JDK's source launcher against the
+# Kafka client jars the broker CLI already ships ($KAFKA_BIN/../libs), so it needs no build step and
+# travels in the archive deploy UNIT beside this script. It takes its boundary from Kafka METADATA
+# (the read_committed end offset, i.e. the last stable offset), writes only records below it, and
+# reports completion only when its position reached it — see the header of StrikeArchiveReader.java.
+# STRIKE_READER is the test seam: an executable taking the same arguments (test-archive-reset.sh).
+STRIKE_READER="${STRIKE_READER:-}"
+STRIKE_READER_SRC="${STRIKE_READER_SRC:-$(cd "$(dirname "$0")" && pwd)/StrikeArchiveReader.java}"
+STRIKE_READER_DEADLINE_S="${STRIKE_READER_DEADLINE_S:-900}"
+case "$STRIKE_READER_DEADLINE_S" in ''|*[!0-9]*|0) echo "FATAL: STRIKE_READER_DEADLINE_S must be a positive integer, got '$STRIKE_READER_DEADLINE_S'" >&2; exit 2 ;; esac
+# $1 = the OUTER wall-clock limit in seconds; the rest are the reader's own arguments. The limit is
+# applied in here because `timeout` runs programs, not shell functions (a `timeout N run_strike_reader`
+# call site fails with 127 on every run — the suite caught exactly that).
+run_strike_reader() {
+  local limit="$1"; shift
+  if [ -n "$STRIKE_READER" ]; then timeout "$limit" "$STRIKE_READER" "$@"; return; fi
+  timeout "$limit" "${JAVA_HOME:+$JAVA_HOME/bin/}java" -Xmx256m -cp "$KAFKA_BIN/../libs/*" "$STRIKE_READER_SRC" "$@"
+}
+# THE ARCHIVE MARKER. After a committed-read capture is durably published and its checkpoint written,
+# the same boundary is committed as the offset of this consumer group ON THE SOURCE broker. It is the
+# only archive state a host without the NAS can read: scripts/es4/cleanup-es4.sh compares it against
+# the log end before it wipes es4's Kafka data dir, and refuses while any record is unarchived. Only
+# es4's source is wiped wholesale, so only ENV=es4 writes it unless told otherwise; the group name is
+# a contract with cleanup-es4.sh (ES4_STRIKE_ARCHIVE_GROUP there) — change both or neither.
+OE_ARCHIVE_MARK_GROUP="${OE_ARCHIVE_MARK_GROUP:-oe-archive-committed-boundary}"
+OE_ARCHIVE_MARK_SOURCE="${OE_ARCHIVE_MARK_SOURCE:-$([ "$ENV_NAME" = es4 ] && echo true || echo false)}"
 
 DEFAULT_TOPICS_prod="$OE_ALL_TOPICS_prod"
 # One definition, every caller: the es4 set comes from oe-topics.env, REQUIRED above — there is
@@ -312,10 +470,75 @@ schema_fragment() {   # $1=topic $2=path $3=schema_versions_csv -> JSON fragment
   fi
 }
 
+# The reader's one-line summary, field by field ("k=v" words). Empty when absent — every caller
+# validates what it gets, because a summary it cannot read is a capture it must not trust.
+summary_field() {   # $1=summary line $2=key
+  printf '%s\n' "$1" | tr ' ' '\n' | awk -F= -v k="$2" '$1==k { sub(/^[^=]*=/, ""); print; exit }'
+}
+
+# Record "archived through <offset>" on the SOURCE broker (see OE_ARCHIVE_MARK_GROUP above). Called
+# only once the checkpoint that says the same thing is durably written. A failure here is LOGGED, not
+# counted as a failed archive: the capture is safe on the NAS either way, and the only consequence is
+# that cleanup-es4.sh keeps refusing to wipe until a later run records the marker — the safe direction.
+mark_committed_boundary() {   # $1=topic $2=partition $3=offset $4=the TopicId this run matched
+  [ "$OE_ARCHIVE_MARK_SOURCE" = "true" ] || return 0
+  local msum="$MAN/.$1.p$2.$STAMP.mark.summary" mlog="$MAN/.$1.p$2.$STAMP.mark.log" mrc mline md
+  # The marker certifies a LOG (re-review round 3, finding P1), so it is written only for the log whose TopicId
+  # this run matched — and that id is read AGAIN here, just before the write, so a topic re-created while this
+  # run was reading it is never certified. Unconfirmed = not written, logged like a failed marker write.
+  DESC_WHY=""; DESC_ID=""
+  md=$(mktemp -d "${TMPDIR:-/tmp}/oe-archive-mark.XXXXXX" 2>/dev/null) || md=""
+  if [ -z "$4" ] || [ -z "$md" ] || ! read_topic_description "$1" "$md" || [ "$DESC_ID" != "$4" ]; then
+    log "  WARN $1 p$2: NOT recording archived-through $3 on the source broker — its identity could not be" \
+        "re-confirmed as TopicId ${4:-<none>} (${DESC_WHY:-the broker now reports ${DESC_ID:-nothing}}). The archive" \
+        "itself is intact; cleanup-es4.sh will refuse to wipe until a later run records it"
+    [ -z "$md" ] || rm -rf "$md"
+    return 1
+  fi
+  rm -rf "$md"
+  run_strike_reader 180 --bootstrap "$BOOTSTRAP" --topic "$1" --partition "$2" \
+      --mark-group "$OE_ARCHIVE_MARK_GROUP" --mark-offset "$3" \
+      --mark-metadata "dt=$DAY,archived=$STAMP,job=$ARCHIVE_JOB" --deadline-ms 60000 \
+      --summary "$msum" > "$mlog" 2>&1
+  mrc=$?
+  mline=$(head -1 "$msum" 2>/dev/null)
+  rm -f "$msum" "$msum.tmp" "$mlog"
+  if [ "$mrc" -eq 0 ] && [ "$(summary_field "$mline" status)" = COMPLETE ] \
+     && [ "$(summary_field "$mline" position)" = "$3" ]; then
+    log "  MARK $1 p$2: archived-through $3 recorded on the source broker (group $OE_ARCHIVE_MARK_GROUP)"
+    return 0
+  fi
+  log "  WARN $1 p$2: could not record archived-through $3 on the source broker (rc=$mrc: ${mline:-no summary}) —" \
+      "the archive itself is intact; cleanup-es4.sh will refuse to wipe until a later run records it"
+  return 1
+}
+
 total_records=0; total_files=0; failed=0; contended=""; absent=0; rebaselined=0; reset_topics=""; reset_detectors=""
 for topic in $TOPICS; do
-  # end offsets: "topic:partition:endOffset". A topic that does not exist yields nothing.
+  if is_committed_read_topic "$topic"; then
+    # Validated discovery (committed_discovery above). Unreadable or incomplete = a FAILED topic for this run:
+    # nothing read, no marker, checkpoint untouched — never the SKIP an empty answer gets on the console path.
+    committed_discovery "$topic"
+    case "$DISC_STATE" in
+      absent)
+        if is_strict_topic "$topic"; then
+          log "  FAIL $topic: STRICT topic is absent (not in the broker's topic list) — the corpus cannot be completed for $DAY"
+          failed=$(( failed + 1 ))
+        else
+          log "  SKIP $topic (absent: not in the broker's topic list, which was read successfully)"; absent=$(( absent + 1 ))
+        fi
+        continue ;;
+      present) ends="$DISC_ENDS" ;;
+      *)
+        log "  FAIL $topic: $DISC_WHY — nothing archived for this topic, no archive marker written, its checkpoint is unchanged"
+        failed=$(( failed + 1 ))
+        continue ;;
+    esac
+  else
+  # CONSOLE-CONSUMER TOPICS: unchanged (re-review round 3 records why). end offsets: "topic:partition:endOffset".
+  # A topic that does not exist yields nothing.
   ends=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" --topic "$topic" 2>/dev/null)
+  fi
   if [ -z "$ends" ]; then
     if is_strict_topic "$topic"; then
       # A5: an absent evidence topic is not a quiet day. Either it was never created or something
@@ -358,9 +581,15 @@ for topic in $TOPICS; do
   # a heuristic. An absent id (older broker, CLI failure) simply falls back to the offset test.
   idfile="$MAN/$topic.identity"
   id_write_blocked=0
+  if is_committed_read_topic "$topic"; then
+    # Read and VALIDATED by committed_discovery: a committed-read topic never gets here without its TopicId, so
+    # for it the "absent id falls back to the offset test" sentence above does not apply — it fails instead.
+    topic_id="$DISC_ID"
+  else
   topic_id=$("$KAFKA_BIN/kafka-topics.sh" --bootstrap-server "$BOOTSTRAP" --describe \
                --topic "$topic" 2>/dev/null \
              | awk '{for (i=1;i<=NF;i++) if ($i=="TopicId:") {print $(i+1); exit}}')
+  fi
   # One value per line, and split on '=' AND whitespace: a single `-F=` on a "k=v k2=v2" line
   # yields "v k2" as field 2, which compares unequal to itself on the very next run and fires a
   # reset every single time. The suite catches exactly that.
@@ -380,11 +609,48 @@ for topic in $TOPICS; do
   # topic — about eight minutes across the nightly set once delta-flow and OPB joined it. A nightly
   # job that overruns is not merely slow: it is a job that is still holding its lock when the next
   # scheduled thing wants to run, which is the family of problem this whole change set is about.
+  if is_committed_read_topic "$topic"; then
+    earliest_all="$DISC_EARLIEST"      # validated, every partition (committed_discovery)
+  else
   earliest_all=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" \
                    --topic "$topic" --time earliest 2>/dev/null)
+  fi
   until_all=""
-  [ -n "$UNTIL_TS" ] && until_all=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" \
-                                      --topic "$topic" --time "$UNTIL_TS" 2>/dev/null)
+  if [ -n "$UNTIL_TS" ]; then
+    # THE CUTOFF MUST BE READ, NOT ASSUMED (deploy re-review round 2, finding 5). Below, a partition with
+    # no line in this answer is read to the LOG END, because GetOffsetShell drops a partition that has no
+    # record at or after the timestamp (it prints nothing for it, at exit 0 — recorded in
+    # broker-test/cli-fixtures/<version>/until-nomatch.*). But a FAILED lookup also prints no line: an
+    # unreachable broker exits 1 with nothing on stdout, and a per-partition error is "Skip getting
+    # offsets ..." on stderr at exit 0. Reading that silence as "no record that new" dropped the cutoff:
+    # checkpoint 0, cutoff 40, log end 100 archived all 100 records under the historical dt= and moved the
+    # checkpoint to 100, so the later sessions' runs skipped them. So the answer is used only if the
+    # command exited 0, reported nothing on stderr and printed nothing but "topic:partition:offset" lines;
+    # anything else fails this topic for this run, with its checkpoint untouched.
+    until_err=$(mktemp "${TMPDIR:-/tmp}/oe-archive-until.XXXXXX" 2>/dev/null)
+    until_why=""
+    if [ -z "$until_err" ]; then
+      until_why="could not create a scratch file for the lookup's stderr"
+    else
+      until_all=$("$KAFKA_BIN/kafka-get-offsets.sh" --bootstrap-server "$BOOTSTRAP" \
+                    --topic "$topic" --time "$UNTIL_TS" 2>"$until_err")
+      until_rc=$?
+      [ "$until_rc" -eq 0 ] || until_why="exit $until_rc"
+      until_diag=$(grep -m1 -iE "$KAFKA_CLI_DIAG" "$until_err" 2>/dev/null | cut -c1-240)
+      [ -z "$until_diag" ] || until_why="${until_why:+$until_why, }stderr: $until_diag"
+      until_bad=$(printf '%s\n' "$until_all" | grep -vE '^[^:]+:[0-9]+:[0-9]+$' | grep -m1 . | cut -c1-240)
+      [ -z "$until_bad" ] || until_why="${until_why:+$until_why, }unexpected output: $until_bad"
+      rm -f "$until_err"
+    fi
+    if [ -n "$until_why" ]; then
+      log "  FAIL $topic: the UNTIL_TS=$UNTIL_TS offset lookup did not succeed ($until_why) — the historical cutoff" \
+          "is unknown, and reading to the log end would file later sessions under dt=$DAY. Nothing archived for" \
+          "this topic; its checkpoint is unchanged."
+      failed=$(( failed + 1 ))
+      exec {tfd}>&-
+      continue
+    fi
+  fi
 
   while IFS=: read -r _t part endoff; do
     [ -n "${part:-}" ] && [ -n "${endoff:-}" ] || continue
@@ -401,7 +667,8 @@ for topic in $TOPICS; do
     # the log end, so one past session can be reconstructed into its own dt= folder.
     # An EMPTY answer means no record in this partition is that new — every retained record belongs
     # to the range, so the log end is the correct bound. Treating empty as 0 would silently archive
-    # nothing and then checkpoint backwards, which is worse than not running at all.
+    # nothing and then checkpoint backwards, which is worse than not running at all. (An empty answer
+    # means that ONLY because the lookup itself was validated above; a failed one never reaches here.)
     if [ -n "$UNTIL_TS" ]; then
       until_off=$(printf '%s\n' "$until_all" \
                   | awk -F: -v p="$part" 'NF>=3 && $2==p && $3 != "" {print $3}' | tail -1)
@@ -412,6 +679,8 @@ for topic in $TOPICS; do
     # Manifest line: "<part>=<endOffset> records=<n> span=<n>". Split on whitespace first so the
     # trailing fields cannot leak into the offset, then take the value after '='.
     from=$(awk -v p="$part" '{split($1,a,"="); if (a[1]==p) print a[2]}' "$offfile" | tail -1)
+    # The same last line, whole: a committed-read topic's checkpoint counts only if it is stamped.
+    from_line=$(awk -v p="$part" '{split($1,a,"="); if (a[1]==p) print}' "$offfile" | tail -1)
     # Retention may already have deleted the head of the log, so offset 0 often does NOT exist:
     # underlying.spx.index.price starts at 11462, not 0. Always clamp to the real log-start
     # offset — asking for an expired offset makes the consumer return NOTHING, which the old
@@ -420,11 +689,23 @@ for topic in $TOPICS; do
     earliest="${earliest:-0}"
     ckpt_before="${from:-none}"
     reset_why=""; reset_tag=""
+    # from_proven: `from` is a checkpoint the committed reader itself wrote (stamped), not a log start,
+    # a re-baseline or an inherited line. Only such a checkpoint may be re-recorded as the archive marker.
+    legacy_from=""; from_proven=false
+    # The TopicId a committed-read checkpoint was taken on (empty for every console-consumer topic, and for an
+    # unstamped or pre-round-3 line) — see ckpt_is_proven.
+    ckpt_id=""
+    if is_committed_read_topic "$topic" && ckpt_is_stamped "$from_line"; then ckpt_id=$(ckpt_topic_id "$from_line"); fi
     if [ -n "$from" ]; then
       # Two independent detectors, checked BEFORE the expired-checkpoint branch because a
       # re-created log can leave the old checkpoint on either side of the new log's start.
       if [ "$topic_recreated" = true ]; then
         reset_why="TopicId changed"; reset_tag="topic-id"
+      elif [ -n "$ckpt_id" ] && [ "$ckpt_id" != "$topic_id" ]; then
+        # Committed read (round 3, P1): the checkpoint itself names the log it was taken on, so a re-created
+        # topic is caught even when the identity file cannot tell (missing, or never written) — and even when
+        # the new log has grown back past the old offset, where the offset test below sees nothing.
+        reset_why="checkpoint $from was taken on TopicId $ckpt_id, the log is now $topic_id"; reset_tag="checkpoint-topic-id"
       elif [ "$from" -gt "$log_end" ]; then
         # ⚠️ The offset test is a HEURISTIC and the TopicId is the authority — so when the id is
         # readable and UNCHANGED, a checkpoint above the reported end cannot be a re-creation. It
@@ -435,12 +716,18 @@ for topic in $TOPICS; do
         # kafka-get-offsets response. The archiver re-baselined and the day's session was lost;
         # across twelve archived days only two came out with a full session, and the corpus was
         # unusable for any backtest.
-        if [ -n "$topic_id" ] && [ -n "$prev_id" ] && [ "$topic_id" = "$prev_id" ]; then
+        if { [ -n "$topic_id" ] && [ -n "$prev_id" ] && [ "$topic_id" = "$prev_id" ]; } \
+           || { [ -n "$ckpt_id" ] && [ "$ckpt_id" = "$topic_id" ]; }; then
           log "  SKIP $topic p$part: checkpoint $from is above the reported end $log_end, but the" \
               "TopicId is UNCHANGED ($topic_id) — treating this as a FAILED offset read, not a" \
               "re-created log. Nothing archived and the checkpoint is left alone; the next run" \
               "resumes from it."
           skipped_bad_end=$((skipped_bad_end + 1))
+          if is_committed_read_topic "$topic"; then
+            # A committed-read topic's unreadable end is a failed run, not a quiet one (round 3, P2).
+            log "  FAIL $topic p$part: an end offset below its own checkpoint on the same log cannot be a true reading"
+            failed=$(( failed + 1 ))
+          fi
           continue
         fi
         reset_why="checkpoint $from is AHEAD of log end $log_end"; reset_tag="offset-ahead"
@@ -506,6 +793,28 @@ for topic in $TOPICS; do
           log "  WARN $topic p$part: could not write the rebaseline — identity NOT advanced, the reset stays visible"
           id_write_blocked=1
         }
+    elif is_committed_read_topic "$topic" && ! ckpt_is_proven "$from_line" "$topic_id" \
+         && ! ckpt_is_log_start "$from_line" "$from" "$earliest"; then
+      # LEGACY (re-review round 2, finding 2): a checkpoint the committed reader did not write. It may be a
+      # high-water mark taken past an open transaction whose records the old reader never saw, so it is
+      # proof of nothing — resume from it and those records are skipped for ever; mark it on the source
+      # and cleanup-es4.sh wipes them. Treat it as ABSENT: recapture from the log start. (A re-baseline
+      # line at or below the log start is not legacy: that is exactly where this would begin anyway.)
+      # Round 3: a stamped line that names no source log (the round-2 format) is LEGACY too — it cannot say
+      # which log its offset belongs to. (A stamped line naming ANOTHER log was already a reset above.)
+      if ckpt_is_stamped "$from_line"; then
+        log "  LEGACY $topic p$part: checkpoint $from is stamped but names no source log (no 'topic_id=';" \
+            "written before the round-3 identity rule), so it cannot be tied to the log now at TopicId $topic_id." \
+            "Recapturing from the log start $earliest: records it did archive are archived AGAIN (a duplicate)," \
+            "none is skipped."
+      else
+      log "  LEGACY $topic p$part: checkpoint $from was not written by the committed-read capture (no" \
+          "'$COMMITTED_CKPT_STAMP') — an older archiver could checkpoint past a transaction it never read, so" \
+          "it proves nothing. Recapturing from the log start $earliest: records it did archive are archived" \
+          "AGAIN (a duplicate), none is skipped."
+      fi
+      legacy_from="$from"
+      from="$earliest"
     elif [ "$from" -lt "$earliest" ]; then
       log "  GAP $topic p$part: checkpoint $from expired (log now starts at $earliest) — $((earliest-from)) records LOST before this run"
       if is_strict_topic "$topic"; then
@@ -517,116 +826,261 @@ for topic in $TOPICS; do
         continue
       fi
       from="$earliest"
+    else
+      # Proven = stamped by the committed reader AND taken on the log whose TopicId this run read (round 3).
+      is_committed_read_topic "$topic" && ckpt_is_proven "$from_line" "$topic_id" && from_proven=true
     fi
     count=$(( endoff - from ))
-    [ "$count" -gt 0 ] || continue
+    if [ "$count" -le 0 ]; then
+      # Nothing below the bound that the checkpoint has not covered. For a committed-read topic the
+      # archive marker is re-recorded at the durable checkpoint anyway: a marker lost with a wiped
+      # consumer group, or one whose write failed on an earlier run, would otherwise leave
+      # cleanup-es4.sh refusing for ever on a log with nothing left to archive — and an interlock that
+      # can never be satisfied is an interlock someone switches off.
+      # But ONLY when this run can vouch for it (re-review round 2, finding 2): the checkpoint must be one
+      # the committed reader wrote (from_proven — never an inherited, re-baselined or log-start value), and
+      # it must already reach the REAL log end, not just a time bound. An idle run endorses nothing it did
+      # not itself capture.
+      # And (round 3) from_proven now includes the identity: the checkpoint was taken on THIS log.
+      if [ "$count" -eq 0 ] && is_committed_read_topic "$topic" && [ "$from_proven" = true ] \
+         && [ "$from" -eq "$log_end" ]; then
+        mark_committed_boundary "$topic" "$part" "$from" "$topic_id"
+      fi
+      continue
+    fi
 
     outdir="$ROOT/$topic/dt=$DAY"; mkdir -p "$outdir"
     # <topic>.p<partition>.<from>-<to>.dt<sessionDate>.<archivedAtUTC>.jsonl.gz
     # The session day is repeated INSIDE the name on purpose: copied to a NAS, attached to a
     # ticket, or dropped into a training bucket, the file still states which trading day it
-    # belongs to without its parent folder.
-    out="$outdir/$topic.p$part.$from-$endoff.dt${DAY//-/}.$STAMP.jsonl.gz"
-    tmp="$out.partial"
-
-    # NOTE: `consumer | gzip` reports GZIP's exit status, so a consumer that emitted zero records
-    # still "succeeds". That is how the first version silently archived empty files and advanced
-    # its checkpoints. Verify by COUNTING what actually landed, then commit.
-    # read_committed, for the DECLARED topics only (deploy Codex round 1 finding 3, round 7 finding 1).
-    # es.futures.footprint.strike is written inside Kafka transactions
-    # (ES-FOOTPRINT-STRIKE-INTERACTION.md R6), so the default read_uncommitted would archive ABORTED
-    # revisions as if they were the log — the round-1 finding this answers.
-    #
-    # It is NOT applied to every topic, because it is not free: a read_committed reader stops below the
-    # end offset while a transaction is unresolved, and this archiver checkpoints the end offset it
-    # captured at the start. Turning it on globally would therefore have added a skip risk to every
-    # topic in every inventory at once (round 7). Scoped, the exposure is the declared topic's alone,
-    # and an omission from the list is simply today's behaviour rather than a new gap.
-    #
-    # For the strike log that residual exposure is bounded by the topic's own contract: retention is
-    # -1 and cleanup.policy=delete (R13), so the SOURCE keeps every record for ever and a range the
-    # archive skipped can be re-archived from it by rewinding the checkpoint. That is not true of a
-    # topic whose retention expires, which is the other reason this is not switched on globally.
-    # The framed reader that would remove the exposure entirely is the follow-up oe-topics.env names.
-    timeout 900 "$KAFKA_BIN/kafka-console-consumer.sh" --bootstrap-server "$BOOTSTRAP" \
-         $(is_committed_read_topic "$topic" && echo "--consumer-property isolation.level=read_committed") \
-         --topic "$topic" --partition "$part" --offset "$from" --max-messages "$count" \
-         --formatter-property print.timestamp=true \
-         --formatter-property print.key=true \
-         --formatter-property print.partition=true \
-         $(is_strict_topic "$topic" && echo "--formatter-property print.offset=true") \
-         --timeout-ms 60000 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
-    consumer_rc=${PIPESTATUS[0]}
-
-    read -r got min_ms max_ms schema_versions <<< "$(scan_archive_file "$tmp")"
-    got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
-    # got < count is NORMAL on a COMPACTED topic: offsets advance but compaction removes all but
-    # the newest record per key, so the readable count is far below (end-from). underlying.spx.price
-    # is the extreme case — 642,060 offsets, ~2,000 readable records. Judging by count alone would
-    # mark every compacted topic as failed forever. Judge by the CONSUMER's exit status instead,
-    # and record both numbers so the compaction ratio is visible in the manifest.
-    if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ] && [ "$got" -ne "$count" ]; then
-      # A5: the short read that is NORMAL on a compacted topic is a HOLE on a delete-retained one.
-      # Accepting it would archive fewer records than the offset range claims and still advance the
-      # checkpoint past them.
-      log "  FAIL $topic p$part [$from,$endoff): STRICT topic read $got of $count records — refusing a short read"
-      rm -f "$tmp"
-      failed=$(( failed + 1 ))
-      continue
-    fi
-    if [ "$consumer_rc" -eq 0 ] && [ "$got" -gt 0 ]; then
-      # Only advance the checkpoint once the file is verified and durably in place. A crash
-      # mid-run therefore re-reads the same range next time (duplicates) instead of skipping it —
-      # duplicates are recoverable, gaps are not.
+    # belongs to without its parent folder. <to> is cap_to, the end of the range THIS capture proved
+    # (below): the queried end for a console-consumer topic, the stable boundary for a committed one.
+    manifest_extra=""
+    if is_committed_read_topic "$topic"; then
+      # ---- COMMITTED-READ CAPTURE (deploy Codex final review, finding 1) ----------------------------
+      # es.futures.footprint.strike is written inside Kafka transactions (ES-FOOTPRINT-STRIKE-INTERACTION.md
+      # R6). Read with read_committed so an ABORTED revision is never archived (round 1) — and, because
+      # a committed-only reader stops below an unresolved transaction, the checkpoint must be the
+      # boundary the read PROVABLY reached, never the high-water mark queried above (round 7 and the
+      # final review: endoff=1200, a transaction open at 1100, ACCEPT checkpoint=1200 skipped every
+      # record that committed afterwards). StrikeArchiveReader.java takes that boundary from Kafka
+      # metadata — the read_committed end offset (the last stable offset), capped at the time-bounded
+      # offset in UNTIL_TS mode — writes only records below it, and says COMPLETE only when its
+      # position reached it. Nothing here parses an offset out of record text.
       #
-      # The mv MUST be gated. This script runs without `set -e`, so an unchecked `mv` that failed —
-      # a full NAS, a stale mount, a permissions change — would fall straight through to the
-      # checkpoint write below, and the next run would resume past a range whose file does not
-      # exist. That is the same silent gap this whole change set exists to close, arrived at from
-      # the other direction.
-      if ! mv "$tmp" "$out"; then
-        rm -f "$tmp"
-        log "  WARN $topic p$part [$from,$endoff): could not publish $out — checkpoint NOT advanced, will retry next run"
+      # This path is taken ONLY for OE_COMMITTED_READ_TOPICS. Every other topic is captured by the
+      # console-consumer branch below exactly as before: same arguments, same bytes, same checkpoint.
+      stem="$outdir/.$topic.p$part.$from.$STAMP"
+      plain="$stem.records"; sumf="$stem.summary"; rlog="$stem.reader.log"
+      tmp="$stem.jsonl.gz.partial"
+      bound_args=""
+      [ -n "$UNTIL_TS" ] && bound_args="--max-end $endoff"
+      # The outer timeout only backs up the reader's own deadline (a JVM that never starts); the
+      # reader's deadline is what makes an unfinished capture a FAILURE rather than a short success.
+      run_strike_reader $(( STRIKE_READER_DEADLINE_S + 120 )) --bootstrap "$BOOTSTRAP" \
+          --topic "$topic" --partition "$part" --from "$from" $bound_args \
+          --deadline-ms $(( STRIKE_READER_DEADLINE_S * 1000 )) --out "$plain" --summary "$sumf" \
+          > "$rlog" 2>&1
+      reader_rc=$?
+      sline=$(head -1 "$sumf" 2>/dev/null)
+      r_status=$(summary_field "$sline" status);     r_boundary=$(summary_field "$sline" boundary)
+      r_position=$(summary_field "$sline" position); r_records=$(summary_field "$sline" records)
+      r_escaped=$(summary_field "$sline" escaped)
+      why=""
+      [ "$reader_rc" -eq 0 ] || why="reader rc=$reader_rc"
+      [ "$r_status" = COMPLETE ] || why="$why status=${r_status:-none}"
+      for v in "$r_boundary" "$r_position" "$r_records" "$r_escaped"; do
+        case "$v" in ''|*[!0-9]*) why="$why unreadable-summary"; break ;; esac
+      done
+      if [ -z "$why" ]; then
+        # Belt and braces over the reader's own exit status: its claim is re-checked, not trusted.
+        [ "$r_position" -ge "$r_boundary" ] || why="position $r_position is below boundary $r_boundary"
+        if [ -n "$UNTIL_TS" ] && [ "$r_boundary" -gt "$endoff" ]; then
+          why="$why boundary $r_boundary is past the time bound $endoff"
+        fi
+      fi
+      if [ -n "$why" ]; then
+        log "  WARN $topic p$part [$from,?): committed-read capture FAILED ($why) — checkpoint NOT advanced, will retry next run"
+        log "       reader summary: ${sline:-<none>}"
+        log "       reader output:  $(tail -1 "$rlog" 2>/dev/null)"
+        rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog" "$tmp"
         failed=$(( failed + 1 ))
         continue
       fi
-      # ORDER MATTERS: manifest FIRST, checkpoint SECOND (A5).
-      #
-      # The other way round has a window: the checkpoint says "archived through N", the process dies,
-      # and the manifest never gets its line. The next run resumes past N, so the range is skipped
-      # forever, and the verifier — which reads the manifest — cannot see that anything is missing,
-      # because from its point of view that range was never claimed. Writing the manifest first
-      # inverts the failure: a crash leaves a manifest line whose range is re-read next run, which is
-      # a DUPLICATE. Duplicates are recoverable by content; skipped ranges are not.
-      #
-      # Completeness record. sha256 is over the gzip stream as committed, so a later bit-rot or a
-      # truncated copy is detectable without a broker. Written AFTER the mv so a line in this file
-      # always refers to a file that exists.
-      sha=$(sha256sum "$out" 2>/dev/null | cut -d' ' -f1)
-      bytes=$(stat -c%s "$out" 2>/dev/null || echo 0)
-      printf '{"topic":"%s","dt":"%s","partition":%s,"offset_from":%s,"offset_to":%s,"records":%s,"offset_span":%s,"min_event_time_ms":%s,"max_event_time_ms":%s,"min_event_time":"%s","max_event_time":"%s",%s,"sha256":"%s","bytes":%s,"file":"%s","archived_at":"%s","job":"%s","env":"%s","archiver_version":"%s"}\n' \
-        "$topic" "$DAY" "$part" "$from" "$endoff" "$got" "$count" \
-        "$min_ms" "$max_ms" "$(ms_to_iso "$min_ms")" "$(ms_to_iso "$max_ms")" \
-        "$(schema_fragment "$topic" "$out" "$schema_versions")" \
-        "${sha:-unknown}" "$bytes" "$(basename "$out")" "$STAMP" "$ARCHIVE_JOB" "$ENV_NAME" "$ARCHIVER_VERSION" \
-        >> "$outdir/_manifest.jsonl" || {
-          # The append is the claim; the checkpoint is the promise not to re-read. If the claim could
-          # not be written, the promise must not be made — otherwise the range is skipped forever.
-          log "  WARN $topic p$part [$from,$endoff): manifest append FAILED — checkpoint NOT advanced, will re-read next run"
-          failed=$(( failed + 1 ))
-          continue
-        }
-      printf '%s=%s records=%s span=%s dt=%s archived=%s\n' \
-        "$part" "$endoff" "$got" "$count" "$DAY" "$STAMP" >> "$offfile"
-
-      topic_records=$(( topic_records + got )); total_files=$(( total_files + 1 ))
-      if [ "$got" -lt "$count" ]; then
-        log "  NOTE $topic p$part: $got readable of $count offsets (compacted topic — history is NOT recoverable from it)"
+      if [ "$r_boundary" -le "$from" ]; then
+        # The stable boundary has not moved past the checkpoint: a transaction that is still open
+        # starts at or below it. Nothing is captured and nothing is skipped — the next run reads those
+        # records once they resolve. Not a failure of this run. No archive marker either: records of the
+        # open transaction sit above `from`, so the checkpoint does not reach the log end, and a marker
+        # that cannot cover the log end can only endorse something (re-review round 2, finding 2).
+        log "  NOTE $topic p$part: no committed record beyond checkpoint $from yet (stable boundary $r_boundary, log end $log_end) — an open transaction holds the range; the next run captures it once it resolves"
+        rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog"
+        continue
       fi
+      gzip -6 < "$plain" > "$tmp"
+      gzip_rc=$?
+      scan_out=$(scan_archive_file "$tmp")
+      scan_rc=$?
+      read -r got min_ms max_ms schema_versions <<< "$scan_out"
+      got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
+      why=""
+      [ "$gzip_rc" -eq 0 ] || why="gzip rc=$gzip_rc"
+      [ "$scan_rc" -eq 0 ] || why="$why scan rc=$scan_rc"
+      [ "$got" = "$r_records" ] || why="$why the file holds $got records but the reader wrote $r_records"
+      rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog"
+      if [ -n "$why" ]; then
+        log "  WARN $topic p$part [$from,$r_boundary): processing FAILED ($why) — checkpoint NOT advanced, will retry next run"
+        rm -f "$tmp"
+        failed=$(( failed + 1 ))
+        continue
+      fi
+      # A completed range may hold ZERO application records (only commit/abort markers and aborted
+      # revisions): it is published — an empty file and its manifest line keep the per-date offset
+      # ranges contiguous for the verifier — and the checkpoint advances over it.
+      cap_to="$r_boundary"
+      count=$(( cap_to - from ))
+      manifest_extra=$(printf ',"capture":"read_committed_stable_boundary","stable_boundary":%s,"escaped_records":%s,"source_topic_id":"%s"' "$r_boundary" "$r_escaped" "$topic_id")
+      # A recapture over a LEGACY checkpoint says so: the range overlaps whatever the older archiver filed.
+      [ -z "$legacy_from" ] || manifest_extra="$manifest_extra$(printf ',"recaptured_over_unproven_checkpoint":%s' "$legacy_from")"
     else
+      # ---- CONSOLE-CONSUMER CAPTURE — every topic not in OE_COMMITTED_READ_TOPICS -----------------
+      cap_to="$endoff"
+      tmp="$outdir/$topic.p$part.$from-$endoff.dt${DAY//-/}.$STAMP.jsonl.gz.partial"
+      # NOTE: `consumer | gzip` reports GZIP's exit status, so a consumer that emitted zero records
+      # still "succeeds". That is how the first version silently archived empty files and advanced
+      # its checkpoints. Verify by COUNTING what actually landed, then commit.
+      timeout 900 "$KAFKA_BIN/kafka-console-consumer.sh" --bootstrap-server "$BOOTSTRAP" \
+           --topic "$topic" --partition "$part" --offset "$from" --max-messages "$count" \
+           --formatter-property print.timestamp=true \
+           --formatter-property print.key=true \
+           --formatter-property print.partition=true \
+           $(is_strict_topic "$topic" && echo "--formatter-property print.offset=true") \
+           --timeout-ms 60000 2>/dev/null | grep -av '^Processed a total of' | gzip -6 > "$tmp"
+      # EVERY stage's status, saved at once (final review, finding 5). Keeping only the consumer's let a
+      # compressor that died mid-stream, or a failed filter, publish whatever bytes had landed. The
+      # filter's 1 means "selected no line", i.e. an empty capture, which the count check refuses anyway.
+      pipe_rc=("${PIPESTATUS[@]}")
+      consumer_rc=${pipe_rc[0]}; filter_rc=${pipe_rc[1]:-255}; gzip_rc=${pipe_rc[2]:-255}
+      # The statistics helper's own status, taken BEFORE its output is parsed: `read <<< "$(helper)"`
+      # returned read's status and let a failed decompression (a truncated or corrupt gzip) or a failed
+      # awk pass as a verified count.
+      scan_out=$(scan_archive_file "$tmp")
+      scan_rc=$?
+      read -r got min_ms max_ms schema_versions <<< "$scan_out"
+      got="${got:-0}"; min_ms="${min_ms:-0}"; max_ms="${max_ms:-0}"; schema_versions="${schema_versions:--}"
+      why=""
+      [ "$filter_rc" -le 1 ] || why="filter rc=$filter_rc"
+      [ "$gzip_rc" -eq 0 ] || why="$why gzip rc=$gzip_rc"
+      [ "$scan_rc" -eq 0 ] || why="$why scan rc=$scan_rc"
+      if [ -n "$why" ]; then
+        log "  WARN $topic p$part [$from,$endoff): processing FAILED ($why) — checkpoint NOT advanced, will retry next run"
+        rm -f "$tmp"
+        failed=$(( failed + 1 ))
+        continue
+      fi
+      # got < count is NORMAL on a COMPACTED topic: offsets advance but compaction removes all but
+      # the newest record per key, so the readable count is far below (end-from). underlying.spx.price
+      # is the extreme case — 642,060 offsets, ~2,000 readable records. Judging by count alone would
+      # mark every compacted topic as failed forever. Judge by the CONSUMER's exit status instead,
+      # and record both numbers so the compaction ratio is visible in the manifest.
+      if is_strict_topic "$topic" && [ "$consumer_rc" -eq 0 ] && [ "$got" -ne "$count" ]; then
+        # A5: the short read that is NORMAL on a compacted topic is a HOLE on a delete-retained one.
+        # Accepting it would archive fewer records than the offset range claims and still advance the
+        # checkpoint past them.
+        log "  FAIL $topic p$part [$from,$endoff): STRICT topic read $got of $count records — refusing a short read"
+        rm -f "$tmp"
+        failed=$(( failed + 1 ))
+        continue
+      fi
+      if [ "$consumer_rc" -ne 0 ] || [ "$got" -le 0 ]; then
+        rm -f "$tmp"
+        log "  WARN $topic p$part [$from,$endoff): consumer rc=$consumer_rc, got $got — checkpoint NOT advanced, will retry next run"
+        failed=$(( failed + 1 ))
+        continue
+      fi
+    fi
+    out="$outdir/$topic.p$part.$from-$cap_to.dt${DAY//-/}.$STAMP.jsonl.gz"
+
+    # Only advance the checkpoint once the file is verified and durably in place. A crash
+    # mid-run therefore re-reads the same range next time (duplicates) instead of skipping it —
+    # duplicates are recoverable, gaps are not.
+    #
+    # Checksum and size are taken over the verified bytes BEFORE they are published (finding 5): the
+    # rename does not change them, and a checksum that could not be computed is a failed capture,
+    # not a manifest line reading "unknown".
+    sha=$(sha256sum "$tmp" 2>/dev/null | cut -d' ' -f1)
+    bytes=$(stat -c%s "$tmp" 2>/dev/null || echo 0)
+    case "$sha" in
+      [0-9a-f]*) [ "${#sha}" -eq 64 ] || sha="" ;;
+      *) sha="" ;;
+    esac
+    if [ -z "$sha" ]; then
       rm -f "$tmp"
-      log "  WARN $topic p$part [$from,$endoff): consumer rc=$consumer_rc, got $got — checkpoint NOT advanced, will retry next run"
+      log "  WARN $topic p$part [$from,$cap_to): could not checksum the capture — checkpoint NOT advanced, will retry next run"
       failed=$(( failed + 1 ))
+      continue
+    fi
+    # The mv MUST be gated. This script runs without `set -e`, so an unchecked `mv` that failed —
+    # a full NAS, a stale mount, a permissions change — would fall straight through to the
+    # checkpoint write below, and the next run would resume past a range whose file does not
+    # exist. That is the same silent gap this whole change set exists to close, arrived at from
+    # the other direction.
+    if ! mv "$tmp" "$out"; then
+      rm -f "$tmp"
+      log "  WARN $topic p$part [$from,$cap_to): could not publish $out — checkpoint NOT advanced, will retry next run"
+      failed=$(( failed + 1 ))
+      continue
+    fi
+    # ORDER MATTERS: manifest FIRST, checkpoint SECOND (A5).
+    #
+    # The other way round has a window: the checkpoint says "archived through N", the process dies,
+    # and the manifest never gets its line. The next run resumes past N, so the range is skipped
+    # forever, and the verifier — which reads the manifest — cannot see that anything is missing,
+    # because from its point of view that range was never claimed. Writing the manifest first
+    # inverts the failure: a crash leaves a manifest line whose range is re-read next run, which is
+    # a DUPLICATE. Duplicates are recoverable by content; skipped ranges are not.
+    #
+    # Completeness record. sha256 is over the gzip stream as committed, so a later bit-rot or a
+    # truncated copy is detectable without a broker. Written AFTER the mv so a line in this file
+    # always refers to a file that exists. manifest_extra is empty for every console-consumer topic,
+    # so their lines are unchanged; a committed-read line also states its capture and boundary.
+    printf '{"topic":"%s","dt":"%s","partition":%s,"offset_from":%s,"offset_to":%s,"records":%s,"offset_span":%s,"min_event_time_ms":%s,"max_event_time_ms":%s,"min_event_time":"%s","max_event_time":"%s",%s,"sha256":"%s","bytes":%s,"file":"%s","archived_at":"%s","job":"%s","env":"%s","archiver_version":"%s"%s}\n' \
+      "$topic" "$DAY" "$part" "$from" "$cap_to" "$got" "$count" \
+      "$min_ms" "$max_ms" "$(ms_to_iso "$min_ms")" "$(ms_to_iso "$max_ms")" \
+      "$(schema_fragment "$topic" "$out" "$schema_versions")" \
+      "$sha" "$bytes" "$(basename "$out")" "$STAMP" "$ARCHIVE_JOB" "$ENV_NAME" "$ARCHIVER_VERSION" \
+      "$manifest_extra" \
+      >> "$outdir/_manifest.jsonl" || {
+        # The append is the claim; the checkpoint is the promise not to re-read. If the claim could
+        # not be written, the promise must not be made — otherwise the range is skipped forever.
+        log "  WARN $topic p$part [$from,$cap_to): manifest append FAILED — checkpoint NOT advanced, will re-read next run"
+        failed=$(( failed + 1 ))
+        continue
+      }
+    # A committed-read checkpoint is STAMPED (COMMITTED_CKPT_STAMP above) with the TopicId of the log it was
+    # taken on (round 3); every other topic's line is exactly what it always was.
+    ckpt_stamp=""
+    is_committed_read_topic "$topic" && ckpt_stamp=" $COMMITTED_CKPT_STAMP topic_id=$topic_id"
+    if ! printf '%s=%s records=%s span=%s dt=%s archived=%s%s\n' \
+           "$part" "$cap_to" "$got" "$count" "$DAY" "$STAMP" "$ckpt_stamp" >> "$offfile"; then
+      # The file and its claim stand; without the checkpoint the next run re-reads this range, which
+      # is a duplicate, never a gap. It is still a failed run: the promise not to re-read was not made.
+      log "  WARN $topic p$part [$from,$cap_to): checkpoint append FAILED — the next run re-reads this range (a duplicate, not a gap)"
+      failed=$(( failed + 1 ))
+      continue
+    fi
+
+    topic_records=$(( topic_records + got )); total_files=$(( total_files + 1 ))
+    if is_committed_read_topic "$topic"; then
+      if [ "$got" -lt "$count" ]; then
+        log "  NOTE $topic p$part: $got committed records over $count offsets up to the stable boundary $cap_to (the rest are transaction markers and aborted records)"
+      fi
+      if [ "$r_escaped" -gt 0 ]; then
+        log "  NOTE $topic p$part: $r_escaped record(s) carried a raw TAB/CR/LF, written escaped as \\t \\r \\n (escaped_records in the manifest)"
+      fi
+      mark_committed_boundary "$topic" "$part" "$cap_to" "$topic_id"
+    elif [ "$got" -lt "$count" ]; then
+      log "  NOTE $topic p$part: $got readable of $count offsets (compacted topic — history is NOT recoverable from it)"
     fi
   done <<< "$ends"
 
