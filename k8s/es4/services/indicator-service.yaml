@@ -68,6 +68,10 @@ spec:
           value: /home/options-edge/indicator-service/state
         - name: JAVA_TOOL_OPTIONS
           value: -Xms256m -Xmx1536m
+        - name: INDICATOR_ES_HEARTBEAT_LIVENESS
+          value: 'true'
+        - name: INDICATOR_HEARTBEAT_SOURCE_STREAM
+          value: ES.v.0
         envFrom:
         - configMapRef:
             name: es4-base-env

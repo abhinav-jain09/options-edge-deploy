@@ -154,6 +154,17 @@ spec:
             # every other topic on this Deployment is spelled out for the same reason.
             - name: KAFKA_HPSF_ES_TRADES_TOPIC
               value: "es.underlying.es.trades"
+            # ---- ES feed-truth heartbeat (indicator §6.6 amendment ES_FEED_TRUTH_HB_V1) ----------
+            # One FeedHeartbeat a second on <trades-topic>.heartbeat: settled trade counters, the last
+            # upstream observation and an incarnation id — the only evidence that a quiet overnight
+            # tape is quiet rather than dead (a >20 s quiet tape otherwise latches the indicator STALE
+            # and FEED_GAP-damages the next bars). The feed refuses to boot unless this topic equals
+            # the trades topic + ".heartbeat"; spelled out because this Deployment spells out every
+            # topic. Takes effect only at the next es-feed deploy + ACTION=activate-es-feed.
+            - name: DATABENTO_ES_TRADES_HEARTBEAT_ENABLED
+              value: "true"
+            - name: KAFKA_ES_TRADES_HEARTBEAT_TOPIC
+              value: "es.underlying.es.trades.heartbeat"
             # ---- SPX publishers OFF: this is an ES options feed. Leaving the SPX price
             #      publisher on defaults HPSF_SPX_SPOT_SOURCE to STATIC_DEV, which config.py
             #      validate() forbids under APP_PROFILE=prod (feed refuses boot). The ES
