@@ -74,8 +74,9 @@ ES_ENV = {
         # ".heartbeat", i.e. es.underlying.es.trades.heartbeat) may sustain ingest liveness, so a
         # quiet overnight tape stops latching STALE and FEED_GAP-damaging the bars that follow —
         # the reason es4's 1h/4h chains never reached READY. ES-only (the service refuses it in
-        # SPX mode, so prod can never share this value). Inert until es-feed publishes; a missing
-        # topic turns it off at startup, never down. _override: es4 must win whatever prod says.
+        # SPX mode, so prod can never share this value). Runs plain §6.6 until es-feed publishes.
+        # The topic is MANDATORY: if it is missing the indicator REFUSES TO START (fail-closed,
+        # Gate-2 r1 M3) — run ACTION=create-topics before deploying. _override: es4 must win.
         {"name": "INDICATOR_ES_HEARTBEAT_LIVENESS", "value": "true", "_override": True},
         # The one stream a heartbeat may vouch for: es-feed's DATABENTO_HPSF_ES_SYMBOL (default).
         {"name": "INDICATOR_HEARTBEAT_SOURCE_STREAM", "value": "ES.v.0", "_override": True},
