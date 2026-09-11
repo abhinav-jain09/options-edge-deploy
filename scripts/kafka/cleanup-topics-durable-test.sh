@@ -197,6 +197,44 @@ for t in $PROD_ONLY; do
 done
 assert_status 0 "cleanup itself succeeded"
 
+# EVERY reset-preserved topic, in BOTH destructive modes, in BOTH environments. The sections above pin one durable
+# topic per mode (plus vix), and only the unwanted sweep was asserted for each preserved topic, so a topic appended to
+# OPTIONS_EDGE_RESET_PRESERVED_TOPICS (the five vol-premium ledgers, 2026-09-11) had no test showing that
+# delete-recreate or the retention shrink spares it. DERIVED by EXECUTING reset-preserved-topics.sh under each
+# ENVIRONMENT — the parser cleanup-topics.sh itself sources — so the list grows with the declaration and carries the
+# production-only entries exactly where cleanup-topics.sh does.
+echo "--- delete-recreate and retention shrink spare EVERY reset-preserved topic, dev and production ---"
+APPROVED="$( . "$HERE/topics.env"; for e in $OPTIONS_EDGE_TOPICS; do printf '%s\n' "${e%%:*}"; done )"
+for env_name in dev production; do
+  PRESERVED_ENV="$(env -u RPT_TOPICS_ENV ENVIRONMENT="$env_name" bash "$HERE/reset-preserved-topics.sh")" || PRESERVED_ENV=""
+  if [ -z "$PRESERVED_ENV" ]; then
+    echo "  FAIL $env_name: reset-preserved-topics.sh resolved nothing — every assertion below would pass vacuously"; fail=1
+    continue
+  fi
+  # These two modes iterate only the APPROVED list (OPTIONS_EDGE_TOPICS). A preserved topic outside it is never
+  # reached, so its "not deleted" holds trivially; the count says how many the is_durable guard actually spares.
+  reached=0
+  for t in $PRESERVED_ENV; do
+    if printf '%s\n' "$APPROVED" | grep -qxF "$t"; then reached=$((reached + 1)); fi
+  done
+  echo "  ($env_name: $(printf '%s\n' $PRESERVED_ENV | wc -l | tr -d ' ') reset-preserved topic(s), $reached of them in the approved list these modes iterate)"
+  if [ "$reached" -eq 0 ]; then
+    echo "  FAIL $env_name: no reset-preserved topic is approved — the guard below is never exercised"; fail=1
+  fi
+  L="$(ALLOW_PROD=true run_cleanup delete-recreate "$env_name")"
+  for t in $PRESERVED_ENV; do
+    assert_delete "$env_name delete-recreate spares reset-preserved '$t'" "$L" "$t" absent
+  done
+  assert_delete "$env_name delete-recreate still deletes an ordinary approved topic" "$L" "$SWEPT" present
+  assert_status 0 "cleanup itself succeeded"
+  L="$(ALLOW_PROD=true run_cleanup retention "$env_name")"
+  for t in $PRESERVED_ENV; do
+    assert "$env_name retention shrink spares reset-preserved '$t'" "$L" "--entity-name $t --alter" absent
+  done
+  assert "$env_name retention shrink still shrinks an ordinary approved topic" "$L" "--entity-name $SWEPT --alter" present
+  assert_status 0 "cleanup itself succeeded"
+done
+
 echo "--- TOPIC_SET is refused, not silently applied to the wrong cluster ---"
 L="$(TOPIC_SET=es4 ALLOW_PROD=true run_cleanup retention dev)"
 assert_status 1 "refuses TOPIC_SET=es4"
