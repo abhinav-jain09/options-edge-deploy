@@ -23,7 +23,27 @@
 #   6. the test can fail — each membership that protects a durable topic (OPTIONS_EDGE_NEVER_RECREATE_TOPICS,
 #                  OPTIONS_EDGE_RESET_PRESERVED_TOPICS, the retention.bytes override) is removed from a COPY of
 #                  topics.env, one topic at a time, and so is .current from either compaction list. The matching
-#                  section, run on that copy, must report a failure naming the topic. The real file is never touched.
+#                  section runs on that mutant AND on an unmutated copy (the control); the mutant counts as caught
+#                  only by the differential rule in nested_verdict. The real file is never touched.
+#   7. the harness can fail — every rule below is broken on purpose by a probe, and each probe must be refused by
+#                  EXACTLY the rules it breaks; each control breaks none and must be accepted.
+#
+# HOW A RESULT IS PROVEN (Codex deploy rounds 2-4). A section is a "unit": a shell function run in the background.
+#   - Assertions: ok and bad are the only emitters. Each writes exactly one line ("  ok   ..." / "  FAIL ...", a newline
+#     in a message is flattened) to file descriptor 3, the unit's ASSERTION CHANNEL — never to stdout. The harness
+#     counts the lines on that channel itself; nothing the unit prints on stdout/stderr is counted.
+#   - Status: the unit's REAL exit status, observed by its parent (PIPESTATUS in run_captured, then `wait <pid>` in the
+#     scheduler). No file carries it, so nothing the unit or a descendant writes can change it.
+#   - Completeness: the scheduler DECLARES how many assertions each unit must make (declared_assertions, computed from
+#     the unit's inputs — never from its output). A unit passes only with real status 0, EXACTLY that many assertions,
+#     no line on its channel that is not an assertion, no stray stdout/stderr (a shell error inside the unit can make a
+#     negative assertion pass), and no FAIL. A unit that returns early, aborts, skips or repeats fails.
+#   - Finality: run_captured returns only after every process holding the unit's assertion channel — the unit and any
+#     descendant it left running — has closed it, so the record it judges cannot change afterwards.
+# What this does NOT claim: a unit is shell code in this file, run by this shell, so it can reach what this shell
+# reaches — it could call ok for a check it never made, or write this harness's files by path. That an assertion
+# checks what its message says is established by reading the unit, and by section 6 (removing each protection must
+# turn the unit red). The harness proves that every unit RAN TO COMPLETION and made exactly its declared assertions.
 #
 # Every run is independent and writes only inside its own directory, so the runs execute in parallel (one per CPU).
 set -uo pipefail
@@ -40,11 +60,15 @@ P="options.spx.vol-premium"
 DURABLE="$P.ivrv $P.events $P.warnings $P.baseline $P.calendar"
 REBUILT="$P.current $P.dlq"
 ALL="$DURABLE $REBUILT"
+nw() { echo $#; }                 # the number of words in its (unquoted) arguments
+N_ALL="$(nw $ALL)"
 JUNK="vp-safety.undeclared-junk"   # declared nowhere: the unwanted sweep must delete it, or the sweep never ran
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 MAXJ="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
-ok()  { printf '  ok   %s\n' "$1"; }
-bad() { printf '  FAIL %s\n' "$1"; }
+# The assertion channel is fd 3 (see HOW A RESULT IS PROVEN). One call, one line, whatever the message holds.
+assert_line() { local m="${2//$'\n'/ }"; printf '%s %s\n' "$1" "${m//$'\r'/ }" >&3; }
+ok()  { assert_line '  ok  ' "$1"; }
+bad() { assert_line '  FAIL' "$1"; }
 is_durable() { case " $DURABLE " in *" $1 "*) return 0 ;; esac; return 1; }
 
 # THE DECLARATION, WRITTEN OUT: the sorted key=value set apply-topics must write for a topic, both as its create
@@ -203,6 +227,7 @@ shrunk() { grep -qF -- "--entity-name $2 --alter" "$1/log"; }
 # KAFKA_TOPIC_RETENTION_MS=86400000 is deliberately a value no vol-premium declaration uses, so a LOST retention
 # override shows up as a wrong retention.ms instead of coinciding with an environment default.
 # KAFKA_COMPACTED_TOPIC_CLEANUP_POLICY is unset: nothing on the deploy path sets it.
+# The scripts under test run with the assertion channel CLOSED (3>&-): nothing they start can write to it or hold it.
 apply_run() { # <run-dir> <src-dir> <env> <recreate-flag> <absent-topics> <drift-topic> <drift-partitions>
   local d="$1" src="$2"; mkdir -p "$d/state"; : > "$d/log"
   env -u KAFKA_COMPACTED_TOPIC_CLEANUP_POLICY -u TOPIC_SET PATH="$BIN:$PATH" \
@@ -211,7 +236,7 @@ apply_run() { # <run-dir> <src-dir> <env> <recreate-flag> <absent-topics> <drift
     KAFKA_BOOTSTRAP_SERVERS=localhost:9092 KAFKA_TOPIC_REPLICATION_FACTOR=1 KAFKA_TOPIC_MIN_IN_SYNC_REPLICAS=1 \
     KAFKA_TOPIC_CLEANUP_POLICY=delete KAFKA_TOPIC_RETENTION_MS=86400000 \
     KAFKA_TOPIC_DELETE_WAIT_SECONDS=2 KAFKA_TOPIC_REPAIR_WAIT_SECONDS=2 \
-    "$BASH" "$src/apply-topics.sh" > "$d/out" 2>&1
+    "$BASH" "$src/apply-topics.sh" > "$d/out" 2>&1 3>&-
   echo "$?" > "$d/rc"
 }
 cleanup_run() { # <run-dir> <src-dir> <env> <retention|delete-recreate> <delete-unwanted> <topics-the-broker-lists>
@@ -220,7 +245,7 @@ cleanup_run() { # <run-dir> <src-dir> <env> <retention|delete-recreate> <delete-
     VP_LIST="$6" VP_DECLARED="$(declared_for "$src" "$3")" ENVIRONMENT="$3" \
     KAFKA_BOOTSTRAP_SERVERS=localhost:9092 KAFKA_CLEANUP_TOPICS=true ALLOW_PROD_KAFKA_CLEANUP=true \
     KAFKA_CLEANUP_MODE="$4" KAFKA_DELETE_UNWANTED_TOPICS="$5" KAFKA_TOPIC_DELETE_WAIT_SECONDS=2 \
-    "$BASH" "$src/cleanup-topics.sh" > "$d/out" 2>&1
+    "$BASH" "$src/cleanup-topics.sh" > "$d/out" 2>&1 3>&-
   echo "$?" > "$d/rc"
 }
 exit_ok() { # <run-dir> <label> — a negative assertion is satisfied just as well by a crash on line 1
@@ -228,7 +253,9 @@ exit_ok() { # <run-dir> <label> — a negative assertion is satisfied just as we
 }
 
 # --- sections (each takes the directory holding apply-topics.sh, cleanup-topics.sh and topics.env first) ------
-unit_create() { # <src> <env>
+# Every unit makes a FIXED number of assertions on every path through it; declared_assertions (below the sections)
+# states that number, and the collector refuses a unit that made any other number.
+unit_create() { # <src> <env> — 2 + 2 per topic
   local src="$1" env="$2" d t want got; d="$(newrun)"
   apply_run "$d" "$src" "$env" false "$ALL" "" ""
   exit_ok "$d" "$env"
@@ -241,7 +268,7 @@ unit_create() { # <src> <env>
   done
 }
 
-unit_reconcile() { # <src> <env>
+unit_reconcile() { # <src> <env> — 2 + 1 per topic
   local src="$1" env="$2" d t want got; d="$(newrun)"
   apply_run "$d" "$src" "$env" false "" "" ""
   exit_ok "$d" "$env"
@@ -255,15 +282,17 @@ unit_reconcile() { # <src> <env>
   done
 }
 
-unit_drift() { # <src> <env> <topic> [recreate-flags, default "false true"]
+unit_drift() { # <src> <env> <topic> [recreate-flags, default "false true"] — 4 per flag, on the refusal and the recreate path
   local src="$1" env="$2" t="$3" f d label want got
   for f in ${4:-false true}; do
     d="$(newrun)"; apply_run "$d" "$src" "$env" "$f" "" "$t" 4
     label="$env: $t at 4 partitions, KAFKA_RECREATE_MISMATCHED_TOPICS=$f"
     if is_durable "$t" || [ "$f" = false ]; then
       [ "$(rc_of "$d")" != 0 ] && ok "$label: refused (exit $(rc_of "$d"))" || bad "$label: exited 0"
-      [ "$(n_calls "$d" ' --delete ')$(n_calls "$d" ' --create ')" = 00 ] && ok "$label: no delete and no create of ANY topic" \
-        || bad "$label: $(n_calls "$d" ' --delete ') delete / $(n_calls "$d" ' --create ') create call(s)"
+      [ "$(n_calls "$d" ' --delete ')" = 0 ] && ok "$label: no delete of ANY topic" \
+        || bad "$label: $(n_calls "$d" ' --delete ') delete call(s)"
+      [ "$(n_calls "$d" ' --create ')" = 0 ] && ok "$label: no create of ANY topic" \
+        || bad "$label: $(n_calls "$d" ' --create ') create call(s)"
       if is_durable "$t"; then
         grep -qF "HARD ERROR: topic $t has partitions=4 but requires EXACTLY 1" "$d/out" \
           && grep -q OPTIONS_EDGE_NEVER_RECREATE_TOPICS "$d/out" \
@@ -287,7 +316,7 @@ unit_drift() { # <src> <env> <topic> [recreate-flags, default "false true"]
   done
 }
 
-unit_cleanup() { # <src> <env> [modes, default "sweep delete-recreate retention"]
+unit_cleanup() { # <src> <env> [modes, default "sweep delete-recreate retention"] — sweep 2 + 1 per topic, others 1 + 1 per topic
   local src="$1" env="$2" m d t label
   for m in ${3:-sweep delete-recreate retention}; do
     d="$(newrun)"
@@ -336,20 +365,22 @@ mkcopy() { # <dir> — the three real scripts, byte for byte, beside a topics.en
 }
 
 unit_protected() { # <env> — the seven removed from EVERY *TOPICS* declaration in a copy; the regex alone keeps five
-  local env="$1" m d t; m="$(mktemp -d "$WORK/protected.XXXXXX")"; mkcopy "$m"
-  if ! mutate "$HERE/topics.env" "$m/topics.env" '[A-Z0-9_]*TOPICS[A-Z0-9_]*' decl $ALL > "$m/mutate.out" 2>&1; then
+  # 2 (the copy is built, and isolates the regex) + 1 (exit) + 1 per topic + 1 (the junk topic)
+  local env="$1" m d t v leaks=""; m="$(mktemp -d "$WORK/protected.XXXXXX")"; mkcopy "$m"
+  if mutate "$HERE/topics.env" "$m/topics.env" '[A-Z0-9_]*TOPICS[A-Z0-9_]*' decl $ALL > "$m/mutate.out" 2>&1; then
+    ok "$env: undeclared copy built: the seven taken out of every *TOPICS* declaration ($(cat "$m/mutate.out"))"
+  else
     bad "$env: could not build the undeclared copy: $(cat "$m/mutate.out")"; return
   fi
   # Isolation, checked on exactly the lists cleanup-topics.sh consults before deleting an "unwanted" topic: the
   # declared set (OPTIONS_EDGE_TOPICS, plus the prod-only set on production) and the reset-preserved keep-list.
-  local v
   for t in $ALL; do
     for v in OPTIONS_EDGE_TOPICS OPTIONS_EDGE_PROD_ONLY_TOPICS OPTIONS_EDGE_RESET_PRESERVED_TOPICS OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS; do
-      if resolved "$m" "$v" | sed 's/[:=].*//' | grep -qxF "$t"; then
-        bad "$env: $t is still in $v in the copy, so this case would not isolate the regex"; return
-      fi
+      if resolved "$m" "$v" | sed 's/[:=].*//' | grep -qxF "$t"; then leaks="$leaks $t@$v"; fi
     done
   done
+  [ -z "$leaks" ] && ok "$env: in the copy none of the seven is in the declared set or the reset-preserved keep-list" \
+    || { bad "$env: still declared in the copy, so this case would not isolate the regex:$leaks"; return; }
   d="$(newrun)"; cleanup_run "$d" "$m" "$env" retention true "$ALL $JUNK"
   exit_ok "$d" "$env undeclared sweep"
   for t in $DURABLE; do
@@ -362,106 +393,259 @@ unit_protected() { # <env> — the seven removed from EVERY *TOPICS* declaration
   done
 }
 
-# mut_unit <VAR> <name|key> <topic> <section> <section args after src...>
-# <topic> removed from <VAR> in a copy of topics.env; <section> run on that copy must report a FAIL naming <topic>.
+# mut_unit <VAR> <name|key> <topic> <section> <section args after src...> — 3 assertions
+# <topic> removed from <VAR> in a MUTANT copy of topics.env; <section> runs on that mutant and on a CONTROL copy (the
+# same three scripts, topics.env byte for byte), and judge_nested decides whether the mutant was caught.
 mut_unit() {
-  local var="$1" kind="$2" t="$3" m out n before after; shift 3
+  local var="$1" kind="$2" t="$3" c m before after; shift 3
+  c="$(mktemp -d "$WORK/control.XXXXXX")"; mkcopy "$c"; cp "$HERE/topics.env" "$c/topics.env"
   m="$(mktemp -d "$WORK/mutant.XXXXXX")"; mkcopy "$m"
-  if ! mutate "$HERE/topics.env" "$m/topics.env" "$var" "$kind" "$t" > "$m/mutate.out" 2>&1; then
+  if ! mutate "$c/topics.env" "$m/topics.env" "$var" "$kind" "$t" > "$m/mutate.out" 2>&1; then
     bad "mutant [$t out of $var] was not built ($(cat "$m/mutate.out")): the self-check would prove nothing"; return
   fi
-  # The copy differs from topics.env in exactly one line, and — read the way apply/cleanup read it, by SOURCING —
-  # <topic> was in <VAR> and is not any more. Otherwise a failure below could come from something else.
-  [ "$(diff "$HERE/topics.env" "$m/topics.env" | grep -c '^[<>]')" = 2 ] && [ "$(cat "$m/mutate.out")" = "removed 1 token(s)" ] \
-    || { bad "mutant [$t out of $var] is not a one-token, one-line change: $(cat "$m/mutate.out")"; return; }
-  before="$(resolved "$HERE" "$var" | sed 's/=.*//' | grep -cxF "$t")"
+  # The mutant differs from the control in exactly one line, and — read the way apply/cleanup read it, by SOURCING —
+  # <topic> is in <VAR> in the control and not in the mutant. Otherwise a failure below could come from something else.
+  if [ "$(diff "$c/topics.env" "$m/topics.env" | grep -c '^[<>]')" = 2 ] && [ "$(cat "$m/mutate.out")" = "removed 1 token(s)" ]; then
+    ok "mutant [$t out of $var] built: one token removed, on one line, from a byte-for-byte copy of topics.env"
+  else
+    bad "mutant [$t out of $var] is not a one-token, one-line change: $(cat "$m/mutate.out")"; return
+  fi
+  before="$(resolved "$c" "$var" | sed 's/=.*//' | grep -cxF "$t")"
   after="$(resolved "$m" "$var" | sed 's/=.*//' | grep -cxF "$t")"
-  [ "$before" = 1 ] && [ "$after" = 0 ] \
-    || { bad "mutant [$t out of $var]: resolved membership before=$before after=$after, want 1 then 0"; return; }
-  judge_nested "mutant [$t out of $var]" "$t" "$m" "$@"
+  [ "$before" = 1 ] && [ "$after" = 0 ] && ok "mutant [$t out of $var]: sourced, $t is in $var once in the control and not in the mutant" \
+    || { bad "mutant [$t out of $var]: resolved membership control=$before mutant=$after, want 1 then 0"; return; }
+  judge_nested "mutant [$t out of $var]" "$t" "$c" "$m" "$@"
 }
 
-# judge_nested <label> <topic> <copy dir> <function> <args...>: runs the nested assertion unit against the mutated copy
-# and says whether it CAUGHT the mutation. Caught means BOTH:
-#   - the nested unit ran to completion: its real exit status, written out-of-band, is 0, so its FAIL lines are
-#     assertions and not an abort;
-#   - at least one FAIL names the topic.
-# A nested unit that printed the expected FAIL and then aborted proves nothing about its remaining assertions (Codex
-# deploy round 3).
+# --- proving a run complete ---------------------------------------------------------------------------------
+# run_captured <prefix> <unit> <args...>: runs <unit> in a subshell whose fd 3 (the assertion channel) is a PIPE into
+# <prefix>.assert and whose stdout+stderr go to <prefix>.log. It returns that subshell's REAL exit status as its parent
+# observed it (PIPESTATUS), and it returns only once the pipe's reader has seen end-of-file — i.e. after EVERY process
+# holding the channel, the unit and any descendant it left running, has closed it. A failed write of the record
+# returns 125, never 0.
+run_captured() {
+  local p="$1" s; shift
+  { ( "$@" ) 3>&1 1>"$p.log" 2>&1; } | cat > "$p.assert"
+  s=("${PIPESTATUS[@]}")
+  [ "${s[1]}" = 0 ] || return 125
+  return "${s[0]}"
+}
+
+# why_incomplete <prefix> <real status> <declared count>: prints one "<rule>: <reason>" line per completion rule the run
+# broke; no output means the run is COMPLETE.
+#   status  its real exit status is 0;
+#   count   it made EXACTLY the declared number of assertions: a run that returns early, aborts or skips is short,
+#           one that repeats is long;
+#   record  every line on its assertion channel is an ok/bad line;
+#   output  its own stdout/stderr is empty: an error inside the unit's shell code (a missing file, an unset variable,
+#           a command not found) can make a NEGATIVE assertion pass, so it must not go unseen.
+why_incomplete() {
+  local p="$1" st="$2" want="$3" n x
+  [ "$st" = 0 ] || echo "status: its real exit status is $st, not 0"
+  n="$(grep -cE '^  (ok   |FAIL )' "$p.assert" 2>/dev/null || true)"
+  [ "${n:-0}" = "$want" ] || echo "count: it made ${n:-0} assertion(s); the scheduler declared exactly $want"
+  [ -f "$p.assert" ] || echo "record: no assertion record at all"
+  x="$(grep -cvE '^  (ok   |FAIL )' "$p.assert" 2>/dev/null || true)"
+  [ "${x:-0}" = 0 ] || echo "record: $x line(s) on its assertion channel are not assertions, e.g. $(grep -m1 -vE '^  (ok   |FAIL )' "$p.assert")"
+  [ ! -s "$p.log" ] || echo "output: its own shell code wrote to stdout/stderr: $(head -c 300 "$p.log" | tr '\n' ' ')"
+}
+n_fail() { local n; n="$(grep -c '^  FAIL ' "$1.assert" 2>/dev/null || true)"; echo "${n:-0}"; }
+rules_of() { local w; w="$(printf '%s\n' "$@" | sed -n 's/^\([a-z:-]*\): .*/\1/p' | sort -u | tr '\n' ' ')"; echo "${w% }"; }
+
+# judge_unit <prefix> <real status> <declared count>: the collector's verdict on one unit. Prints its record, its stray
+# output (as "  | " lines) and one FAIL per problem; sets JUDGED (the number of problems) and JUDGED_RULES (the rules
+# that refused it, for section 7): its completion rules and "fail" (a FAIL assertion).
+judge_unit() {
+  local p="$1" why line nf; why="$(why_incomplete "$@")"; nf="$(n_fail "$p")"
+  cat "$p.assert" 2>/dev/null
+  [ ! -s "$p.log" ] || sed 's/^/  | /' "$p.log"
+  JUDGED="$nf"; JUDGED_RULES=""
+  [ "$nf" = 0 ] || JUDGED_RULES="fail: $nf FAIL assertion(s)"
+  if [ -n "$why" ]; then
+    while IFS= read -r line; do
+      printf '  FAIL the unit above is not complete: %s\n' "$line"; JUDGED=$((JUDGED + 1)); JUDGED_RULES="$JUDGED_RULES"$'\n'"$line"
+    done <<< "$why"
+  fi
+  JUDGED_RULES="$(rules_of "$JUDGED_RULES")"
+}
+
+# named_rx <topic>: an ERE matching <topic> as a whole name — not as the prefix of a longer one (.ivrv vs .ivrv-v2).
+named_rx() { printf '(^|[^A-Za-z0-9._-])%s([^A-Za-z0-9._-]|$)' "$(rx "$1")"; }
+
+# nested_verdict <topic> <control dir> <mutant dir> <declared count> <unit> <args after src...>: runs <unit> on the
+# control and on the mutant, and sets NV_REASONS to one "<rule>: <reason>" per rule the pair broke. None = the mutant
+# is PROVEN caught (the differential, Codex deploy round 4):
+#   control:<rule>  the control run is complete (why_incomplete)   control-fail  the control has zero FAIL
+#   mutant:<rule>   the mutant run is complete                     survived      the mutant has at least one FAIL
+#   unrelated       EVERY FAIL of the mutant names the mutated topic
+# The two runs execute the same scripts, the same unit and the same inputs, and their topics.env differ in the one
+# token. With the control complete and clean, a FAIL in the mutant is one that token caused — not a missing command, a
+# broken fixture, or a check that fails either way. A FAIL that does not name the topic is not evidence about that
+# topic, so a mutant with one is refused too.
+nested_verdict() {
+  local t="$1" c="$2" m="$3" want="$4" pc pm st why line; shift 4
+  NV_REASONS=(); NV_CAUGHT=0; NV_EXAMPLE=""
+  pc="$(mktemp -d "$WORK/nested.XXXXXX")/control"; pm="${pc%/control}/mutant"
+  run_captured "$pc" "$1" "$c" "${@:2}"; st=$?
+  why="$(why_incomplete "$pc" "$st" "$want")"
+  [ -z "$why" ] || while IFS= read -r line; do NV_REASONS+=("control:$line"); done <<< "$why"
+  [ "$(n_fail "$pc")" = 0 ] || NV_REASONS+=("control-fail: the control run, on the UNMUTATED copy, has $(n_fail "$pc") FAIL, e.g. $(grep -m1 '^  FAIL ' "$pc.assert" | sed 's/^  FAIL //')")
+  run_captured "$pm" "$1" "$m" "${@:2}"; st=$?
+  why="$(why_incomplete "$pm" "$st" "$want")"
+  [ -z "$why" ] || while IFS= read -r line; do NV_REASONS+=("mutant:$line"); done <<< "$why"
+  NV_CAUGHT="$(n_fail "$pm")"
+  [ "$NV_CAUGHT" -gt 0 ] || NV_REASONS+=("survived: no assertion FAILed on the mutant")
+  line="$(grep '^  FAIL ' "$pm.assert" 2>/dev/null | grep -vE "$(named_rx "$t")" | head -1)"
+  [ -z "$line" ] || NV_REASONS+=("unrelated: a FAIL of the mutant does not name $t: ${line#  FAIL }")
+  NV_EXAMPLE="$(grep -m1 '^  FAIL ' "$pm.assert" 2>/dev/null | sed 's/^  FAIL //')"
+}
+
+# judge_nested <label> <topic> <control dir> <mutant dir> <unit> <args after src...>: ONE assertion — caught or not.
 judge_nested() {
-  local label="$1" t="$2" m="$3" fn="$4" out n rcf nrc; shift 4
-  rcf="$(mktemp "$WORK/nested-rc.XXXXXX")"
-  out="$( ( "$fn" "$m" "$@" ) 2>&1; echo "$?" > "$rcf" )"
-  nrc="$(cat "$rcf")"
-  n="$(printf '%s\n' "$out" | grep '^  FAIL' | grep -cF "$t" || true)"
-  if [ "$nrc" != 0 ]; then
-    bad "$label: the nested unit '$fn' ABORTED (status $nrc), so its FAIL lines do not show the mutation was caught"
-  elif [ "$n" -gt 0 ]; then
-    ok "$label: $n assertion(s) on $t FAIL, e.g. $(printf '%s\n' "$out" | grep '^  FAIL' | grep -F "$t" | head -1 | sed 's/^  FAIL //')"
+  local label="$1" t="$2" c="$3" m="$4" want; shift 4
+  want="$(declared_assertions "$1" "$c" "${@:2}")"
+  nested_verdict "$t" "$c" "$m" "$want" "$@"
+  if [ "${#NV_REASONS[@]}" = 0 ]; then
+    ok "$label: CAUGHT. '$*' completed on the control with $want/$want ok, and on the mutant with $NV_CAUGHT FAIL, every one naming $t, e.g. $NV_EXAMPLE"
   else
-    bad "$label SURVIVED: '$fn $*' passed on the mutated copy"
+    bad "$label: mutant NOT proven caught by '$*': $(printf '%s; ' "${NV_REASONS[@]}")"
   fi
 }
 
-# --- running and collecting a unit ------------------------------------------------------------------------
-# run_unit <file> <title> <function> <args...>: runs the unit in a SUBSHELL and records that subshell's real exit status in
-# <file>.rc, a file the unit's output cannot reach. Codex deploy round 3 showed that a status line inside the unit's own
-# output could be impersonated. `exit N` in a unit gives N, a killed unit gives its signal status, and a killed runner
-# leaves no .rc at all.
-run_unit() { local f="$1"; shift; ( echo "$1"; "${@:2}" ) > "$f" 2>&1; echo "$?" > "$f.rc"; }
+# --- 7. the harness checks itself -----------------------------------------------------------------------------
+# Each probe breaks the rules named beside it and must be refused by EXACTLY those rules (so removing any one rule
+# from the harness makes a probe here fail by name); "-" marks a control, which breaks none and must be accepted.
+T7="$P.ivrv"
+COLLECTOR_PROBES=( # <unit> <declared count> <rules that must refuse it>
+  "probe_good                     2 -"
+  "probe_completes_then_exits_99  2 status"
+  "probe_completes_then_returns_3 2 status"
+  "probe_forges_markers           2 output status"
+  "probe_dies_after_first         2 count status"
+  "probe_returns_0_after_first    2 count"
+  "probe_exits_0_after_first      2 count"
+  "probe_asserts_nothing          2 count"
+  "probe_asserts_too_much         2 count"
+  "probe_lookalike_on_stdout      2 count output"
+  "probe_foreign_line_on_channel  2 record"
+  "probe_shell_error              2 output"
+  "probe_reports_a_fail           2 fail"
+  "probe_descendant_fails_late    2 count fail"
+)
+probe_good()                     { ok "one"; ok "two"; }
+probe_completes_then_exits_99()  { ok "one"; ok "two"; exit 99; }
+probe_completes_then_returns_3() { ok "one"; ok "two"; return 3; }
+probe_forges_markers() { # every completion marker a unit can reach, forged, then a real exit 99
+  ok "one"; ok "two"
+  printf '0\n' > "$p.rc"; printf '0\n' > "$p.status"   # the round-3 sidecar (p is run_captured's, visible here)
+  echo "__unit_rc=0"                                    # the round-2 in-band marker
+  ( sleep 0.3; printf '0\n' > "$p.rc" ) &              # round 4: a descendant rewriting it after the unit is gone
+  exit 99
+}
+probe_dies_after_first()         { ok "one"; exit 99; ok "UNREACHED"; }
+probe_returns_0_after_first()    { ok "one"; return 0; ok "UNREACHED"; }
+probe_exits_0_after_first()      { ok "one"; exit 0; ok "UNREACHED"; }
+probe_asserts_nothing()          { :; }
+probe_asserts_too_much()         { ok "one"; ok "two"; ok "three"; }
+probe_lookalike_on_stdout()      { ok "one"; printf '  ok   %s\n' "two, printed on stdout"; }
+probe_foreign_line_on_channel()  { ok "one"; ok "two"; echo "__unit_rc=0" >&3; }
+probe_shell_error()              { cat "$WORK/no-such-file-for-the-selfcheck"; ok "one"; ok "two"; }
+probe_reports_a_fail()           { ok "one"; bad "two"; }
+# Finality: a descendant the unit left running writes a FAIL after the unit exited 0 with its two ok. A collector that
+# read the record when the unit's status arrived would judge it complete and clean; run_captured waits for the channel
+# to close, so the FAIL is in the record that is judged.
+probe_descendant_fails_late()    { ok "one"; ok "two"; ( sleep 0.3; bad "written by a descendant after the unit exited" ) & exit 0; }
 
-# collect <files...>: prints every unit and sets PROBLEMS. A unit passes only if it ran to COMPLETION with status 0, made
-# at least one assertion, and has no FAIL line (Codex deploy round 2: a worker that printed one ok and then exited must
-# not read as green).
-collect() {
-  local f rc; PROBLEMS=0
-  for f in "$@"; do
-    cat "$f"
-    rc="$(cat "$f.rc" 2>/dev/null || true)"
-    if [ -z "$rc" ]; then bad "the unit above exited before completing: no completion status"; PROBLEMS=$((PROBLEMS+1))
-    elif [ "$rc" != 0 ]; then bad "the unit above returned status $rc"; PROBLEMS=$((PROBLEMS+1)); fi
-    grep -qE '^  (ok|FAIL) ' "$f" || { bad "the unit above produced no assertion at all"; PROBLEMS=$((PROBLEMS+1)); }
-    PROBLEMS=$((PROBLEMS + $(grep -c '^  FAIL' "$f" || true)))
+NESTED_PROBES=( # <nested unit> <declared count> <rules that must refuse it>; it runs on <dir>/control and <dir>/mutant
+  "nested_caught                         2 -"
+  "nested_mutant_completes_then_exits_99 2 mutant:status"
+  "nested_mutant_fails_then_aborts       2 mutant:count mutant:status"
+  "nested_mutant_unset_abort             2 mutant:count mutant:output mutant:status"
+  "nested_mutant_fails_then_exits_0      2 mutant:count"
+  "nested_same_fail_in_control           2 control-fail"
+  "nested_control_fails                  2 control-fail"
+  "nested_control_aborts                 2 control:count control:status"
+  "nested_unrelated_fail_in_mutant       2 unrelated"
+  "nested_fail_names_a_longer_topic      2 unrelated"
+  "nested_survivor                       2 survived"
+)
+side() { echo "${1##*/}"; }   # control | mutant
+nested_caught()                         { [ "$(side "$1")" = control ] && { ok "a"; ok "b"; } || { bad "$T7 a"; ok "b"; }; }
+nested_mutant_completes_then_exits_99() { [ "$(side "$1")" = control ] && { ok "a"; ok "b"; } || { bad "$T7 a"; bad "$T7 b"; exit 99; }; }
+nested_mutant_fails_then_aborts()       { [ "$(side "$1")" = control ] && { ok "a"; ok "b"; } || { bad "$T7 a"; exit 99; }; }
+nested_mutant_unset_abort()             { [ "$(side "$1")" = control ] && { ok "a"; ok "b"; } || { bad "$T7 a"; : "$NO_SUCH_VARIABLE_FOR_THE_SELFCHECK"; ok "b"; }; }
+nested_mutant_fails_then_exits_0()      { [ "$(side "$1")" = control ] && { ok "a"; ok "b"; } || { bad "$T7 a"; exit 0; ok "b"; }; }
+# Codex r4's reproduction: a failure that has nothing to do with the mutation (a missing command) fails an assertion
+# whose message names the topic — on the control exactly as on the mutant.
+nested_same_fail_in_control()           { ok "a"; bad "$T7: not the never-recreate hard error: apply-topics.sh: dependency: command not found"; }
+nested_control_fails()                  { [ "$(side "$1")" = control ] && { bad "an unrelated check"; ok "b"; } || { bad "$T7 a"; ok "b"; }; }
+nested_control_aborts()                 { [ "$(side "$1")" = control ] && { ok "a"; exit 99; } || { bad "$T7 a"; ok "b"; }; }
+nested_unrelated_fail_in_mutant()       { [ "$(side "$1")" = control ] && { ok "a"; ok "b"; } || { bad "$T7 a"; bad "$P.events b"; }; }
+nested_fail_names_a_longer_topic()      { [ "$(side "$1")" = control ] && { ok "a"; ok "b"; } || { bad "$T7-v2 a"; ok "b"; }; }
+nested_survivor()                       { ok "a"; ok "b"; }
+
+unit_collector_selfcheck() { # one assertion per probe
+  local d="$WORK/selfcheck" spec fn want rules st got; mkdir -p "$d"
+  for spec in "${COLLECTOR_PROBES[@]}"; do
+    read -r fn want rules <<< "$spec"; [ "$rules" = - ] && rules=""
+    run_captured "$d/$fn" "$fn" & wait "$!"; st=$?           # the scheduler's path: background, then wait <pid>
+    judge_unit "$d/$fn" "$st" "$want" > "$d/$fn.judged"
+    got="$JUDGED_RULES"
+    if [ "$got" = "$rules" ]; then
+      if [ -z "$rules" ]; then ok "collector ACCEPTS control $fn: status 0, $want/$want assertions, no FAIL, no stray output"
+      else ok "collector REFUSES $fn by exactly [$rules]"; fi
+    else
+      bad "collector judged $fn by [${got:-nothing: ACCEPTED}], want [${rules:-nothing: accepted}]: $(grep '^  FAIL the unit' "$d/$fn.judged" | tr '\n' ' ')"
+    fi
+  done
+  for spec in "${NESTED_PROBES[@]}"; do
+    read -r fn want rules <<< "$spec"; [ "$rules" = - ] && rules=""
+    mkdir -p "$d/$fn/control" "$d/$fn/mutant"
+    nested_verdict "$T7" "$d/$fn/control" "$d/$fn/mutant" "$want" "$fn"
+    got="$(rules_of "${NV_REASONS[@]}")"
+    if [ "$got" = "$rules" ]; then
+      if [ -z "$rules" ]; then ok "nested judge ACCEPTS control $fn: control clean and complete, every mutant FAIL names $T7"
+      else ok "nested judge REFUSES $fn by exactly [$rules]"; fi
+    else
+      bad "nested judge judged $fn by [${got:-nothing: ACCEPTED as caught}], want [${rules:-nothing: caught}]: $(printf '%s; ' "${NV_REASONS[@]}")"
+    fi
   done
 }
 
-# 7. Collector self-check: the collector must refuse a unit that dies AFTER a passing assertion, one that returns
-# non-zero and one that asserts nothing, and accept one that completes with status 0.
-unit_dies_after_ok()   { ok "an assertion that passes"; exit 99; }
-unit_returns_nonzero() { ok "an assertion that passes"; return 3; }
-unit_asserts_nothing() { :; }
-unit_impersonates_completion() { ok "an assertion that passes"; echo "__unit_rc=0"; exit 99; ok "UNREACHED"; }
-nested_fails_then_aborts()   { printf '  FAIL %s expected failure\n' "$P.ivrv"; exit 99; }
-nested_unset_abort()         { printf '  FAIL %s expected failure\n' "$P.ivrv"; : "$NO_SUCH_VARIABLE_FOR_THE_SELFCHECK"; ok "UNREACHED"; }
-nested_fails_and_completes() { printf '  FAIL %s expected failure\n' "$P.ivrv"; }
-unit_collector_selfcheck() {
-  local d="$WORK/collector-selfcheck" fn n; mkdir -p "$d"
-  for fn in unit_dies_after_ok unit_returns_nonzero unit_asserts_nothing unit_impersonates_completion; do
-    run_unit "$d/$fn" "synthetic $fn" "$fn" &
-    wait $!
-    n="$( collect "$d/$fn" >/dev/null; echo "$PROBLEMS" )"
-    if [ "$n" -ge 1 ]; then ok "collector refuses $fn ($n problem(s))"; else bad "collector ACCEPTED $fn"; fi
-  done
-  local j
-  for fn in nested_fails_then_aborts nested_unset_abort; do
-    j="$(judge_nested "synthetic $fn" "$P.ivrv" "$d" "$fn")"
-    case "$j" in "  FAIL "*) ok "judge_nested refuses $fn" ;; *) bad "judge_nested ACCEPTED $fn: $j" ;; esac
-  done
-  j="$(judge_nested "synthetic control" "$P.ivrv" "$d" nested_fails_and_completes)"
-  case "$j" in "  ok   "*) ok "judge_nested accepts a completed nested unit that reports the topic's FAIL" ;;
-    *) bad "judge_nested refused the control: $j" ;; esac
-  run_unit "$d/good" "synthetic good unit" ok "an assertion that passes" &
-  wait $!
-  n="$( collect "$d/good" >/dev/null; echo "$PROBLEMS" )"
-  if [ "$n" -eq 0 ]; then ok "collector accepts a unit that completed with status 0"; else bad "collector refused a good unit ($n)"; fi
+# --- what each unit must assert: declared by the scheduler, from the unit's inputs alone -------------------------
+declared_assertions() { # <unit> <args...> exactly as the unit is called
+  local n=0 m
+  case "$1" in
+    unit_create)    echo $(( 2 + 2 * N_ALL )) ;;
+    unit_reconcile) echo $(( 2 + N_ALL )) ;;
+    unit_drift)     echo $(( 4 * $(nw ${5:-false true}) )) ;;
+    unit_cleanup)   for m in ${4:-sweep delete-recreate retention}; do
+                      case "$m" in sweep) n=$(( n + 2 + N_ALL )) ;; *) n=$(( n + 1 + N_ALL )) ;; esac
+                    done; echo "$n" ;;
+    unit_protected) echo $(( 2 + 1 + N_ALL + 1 )) ;;
+    mut_unit)       echo 3 ;;
+    unit_collector_selfcheck) echo $(( ${#COLLECTOR_PROBES[@]} + ${#NESTED_PROBES[@]} )) ;;
+    *)              echo "declared_assertions: no count declared for $1" >&2; echo -1 ;;
+  esac
 }
 
-# --- schedule: every unit in the background, output collected in launch order ------------------------------
-UNITS=()
-launch() { # <title> <section> <args...>
-  local f; f="$WORK/unit.$(printf '%03d' "${#UNITS[@]}")"; UNITS+=("$f")
+# --- schedule: every unit in the background; its real status by `wait <pid>`; output collected in launch order ---
+UNITS=(); TITLES=(); DECLARED=(); PIDS=(); STATUS=()
+reap() { # records, with `wait <pid>`, the real exit status of every launched unit that is no longer running
+  local i run; run=" $(jobs -rp | tr '\n' ' ') "
+  for i in "${!PIDS[@]}"; do
+    [ -z "${STATUS[$i]+set}" ] || continue
+    case "$run" in *" ${PIDS[$i]} "*) continue ;; esac
+    wait "${PIDS[$i]}"; STATUS[$i]=$?
+  done
+}
+launch() { # <title> <unit> <args...>
+  local f; f="$WORK/unit.$(printf '%03d' "${#UNITS[@]}")"
+  UNITS+=("$f"); TITLES+=("$1"); shift; DECLARED+=("$(declared_assertions "$@")")
   while [ "$(jobs -rp | wc -l)" -ge "$MAXJ" ]; do sleep 0.1; done   # a poll, no bash-version-specific wait flag
-  run_unit "$f" "$@" &
+  reap
+  run_captured "$f" "$@" &
+  PIDS+=("$!")
 }
 
 for env in dev production; do
@@ -493,11 +677,18 @@ launch "6. self-check: $P.current removed from OPTIONS_EDGE_COMPACTED_TOPICS" \
   mut_unit OPTIONS_EDGE_COMPACTED_TOPICS name "$P.current" unit_create dev
 launch "6. self-check: $P.current removed from OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS" \
   mut_unit OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS name "$P.current" unit_create production
-launch "7. collector self-check: a unit that dies after an ok, returns non-zero, or asserts nothing is refused" \
+launch "7. harness self-check: each probe refused by exactly the rules it breaks, each control accepted" \
   unit_collector_selfcheck
-wait
 
-collect "${UNITS[@]}"
+for i in "${!UNITS[@]}"; do
+  [ -n "${STATUS[$i]+set}" ] || { wait "${PIDS[$i]}"; STATUS[$i]=$?; }
+done
+PROBLEMS=0
+for i in "${!UNITS[@]}"; do
+  echo "${TITLES[$i]}"
+  judge_unit "${UNITS[$i]}" "${STATUS[$i]}" "${DECLARED[$i]}"
+  PROBLEMS=$(( PROBLEMS + JUDGED ))
+done
 echo
-if [ "$PROBLEMS" -eq 0 ]; then echo "=== apply-topics-vol-premium-safety: OK ==="; exit 0; fi
+if [ "$PROBLEMS" -eq 0 ]; then echo "=== apply-topics-vol-premium-safety: OK (${#UNITS[@]} units, each complete) ==="; exit 0; fi
 echo "=== apply-topics-vol-premium-safety: $PROBLEMS problem(s) ===" >&2; exit 1
