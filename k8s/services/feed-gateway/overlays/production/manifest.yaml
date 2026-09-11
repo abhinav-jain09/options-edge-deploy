@@ -141,6 +141,8 @@ spec:
               value: options-edge-web
             - name: WS_ALLOWED_ORIGINS
               value: https://bleadingoptions.com
+            - name: GATEWAY_VOL_PREMIUM_LOG_DIR
+              value: /var/lib/vol-premium-log
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -169,6 +171,14 @@ spec:
               memory: 4Gi
             requests:
               cpu: 100m
+              ephemeral-storage: 4Gi
               memory: 512Mi
+          volumeMounts:
+            - mountPath: /var/lib/vol-premium-log
+              name: vol-premium-log
       dnsPolicy: ClusterFirstWithHostNet
       hostNetwork: true
+      volumes:
+        - emptyDir:
+            sizeLimit: 4Gi
+          name: vol-premium-log
