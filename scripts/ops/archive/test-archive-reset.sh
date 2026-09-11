@@ -13,7 +13,8 @@
 # happens to contain can pass while guarding nothing. The shim below stands in for the three Kafka
 # CLIs the archiver calls, so every partition count, offset, id and record count is exact. Section 12
 # adds a stand-in for StrikeArchiveReader.java (the committed-read capture) through the archiver's
-# STRIKE_READER seam; the Java program itself is exercised against a real broker, not here.
+# STRIKE_READER seam; the Java program itself is exercised against a real broker, not here. Section 17
+# routes the vol-premium ledgers (Kafka Streams exactly-once) through the same seam, in the four-field layout.
 set -uo pipefail
 OE="$(cd "$(dirname "$0")" && pwd)"
 ARCH="$OE/oe-archive-kafka.sh"
@@ -458,15 +459,16 @@ cat > "$BIN/strike-reader" <<'SH'
 #!/usr/bin/env bash
 # StrikeArchiveReader.java stand-in. Log: "$OE_FIXTURE.strike", one line per offset: <offset> <C|A|O|M> [key value]
 # C committed record, A aborted record, O record of a transaction still OPEN, M commit/abort marker.
-topic=""; part=""; from=""; maxend=""; out=""; sum=""; mgroup=""; moff=""
+topic=""; part=""; from=""; maxend=""; out=""; sum=""; mgroup=""; moff=""; dl=""
 while [ $# -gt 1 ]; do
   case "$1" in
     --topic) topic="$2" ;; --partition) part="$2" ;; --from) from="$2" ;; --max-end) maxend="$2" ;;
     --out) out="$2" ;; --summary) sum="$2" ;; --mark-group) mgroup="$2" ;; --mark-offset) moff="$2" ;;
+    --deadline-ms) dl="$2" ;;
   esac
   shift 2
 done
-echo "reader $topic p$part from=${from:-} max_end=${maxend:-} mark=${moff:-} group=${mgroup:-}" >> "$OE_FIXTURE.calls"
+echo "reader $topic p$part from=${from:-} max_end=${maxend:-} mark=${moff:-} group=${mgroup:-} deadline_ms=${dl:-}" >> "$OE_FIXTURE.calls"
 # Section 16h: the topic is DELETED and RE-CREATED while this capture runs (a new TopicId from now on).
 if [ -z "$mgroup" ] && [ -n "${STRIKE_SHIM_RECREATE:-}" ]; then
   sed "s/^topicid .*/topicid $STRIKE_SHIM_RECREATE/" "$OE_FIXTURE" > "$OE_FIXTURE.new" && mv "$OE_FIXTURE.new" "$OE_FIXTURE"
@@ -487,15 +489,21 @@ awk -v f="$from" -v b="$boundary" -v p="$part" \
   '$2 == "C" && $1 >= f && $1 < b { printf "CreateTime:1786000000000\tPartition:%s\tOffset:%s\t%s\t%s\n", p, $1, $3, $4 }' \
   "$OE_FIXTURE.strike" > "$out"
 n=$(wc -l < "$out" | tr -d ' ')
-status=COMPLETE; pos="$boundary"; rc=0; rec="$n"
+status=COMPLETE; pos="$boundary"; rc=0; rec="$n"; esc=0
 [ "$boundary" -lt "$from" ] && pos="$from"
 case "${STRIKE_SHIM_MODE:-}" in
   timeout)    status=TIMEOUT; pos=$(( from + 1 )); rc=3 ;;
   lie-short)  pos=$(( boundary - 1 )) ;;                 # says COMPLETE, exits 0, did NOT reach the boundary
   lie-count)  rec=$(( n + 1 )) ;;                        # says it wrote one record more than the file holds
   no-summary) exit 0 ;;                                  # exits 0 and states nothing
+  # Section 17: a reader whose FILE does not hold what its summary names — each exits 0, COMPLETE, counts consistent.
+  escaped)    esc=1 ;;                                   # it had to escape a TAB/CR/LF in one record
+  stray)      printf 'CreateTime:1786000000000\tPartition:%s\tOffset:%s\tstray\t{"stray":1}\n' "$part" "$boundary" >> "$out"
+              rec=$(( n + 1 )) ;;                        # a record AT the exclusive boundary, i.e. outside the range
+  unordered)  awk '{ l[NR] = $0 } END { for (i = NR; i >= 1; i--) print l[i] }' "$out" > "$out.rev" && cat "$out.rev" > "$out"
+              rm -f "$out.rev" ;;                        # the right records, in descending offset order
 esac
-echo "STRIKE_ARCHIVE_READER status=$status topic=$topic partition=$part from=$from lso=$lso boundary=$boundary position=$pos records=$rec escaped=0 elapsed_ms=1" > "$sum"
+echo "STRIKE_ARCHIVE_READER status=$status topic=$topic partition=$part from=$from lso=$lso boundary=$boundary position=$pos records=$rec escaped=$esc elapsed_ms=1" > "$sum"
 exit "$rc"
 SH
 # The console consumer again, now also RECORDING each call, so a case can prove which path read a topic.
@@ -509,6 +517,7 @@ while [ $# -gt 0 ]; do
     --max-messages) maxm="$2"; shift 2 ;;
     --topic) topic="$2"; shift 2 ;;
     --consumer-property) props="$props $2"; shift 2 ;;
+    --isolation-level) props="$props isolation-level=$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -539,7 +548,9 @@ id=$(awk '$1=="topicid"{print $2}' "$OE_FIXTURE")
 if [ "${OE_BROKER:-up}" = down ]; then [ "$op" = list ] && replay unreach-list; replay unreach-describe; fi
 if [ "$op" = list ]; then
   echo __consumer_offsets
-  [ -n "$id" ] && printf '%s\n' es.futures.footprint.strike oe.test.reset
+  [ -n "$id" ] && printf '%s\n' es.futures.footprint.strike oe.test.reset options.spx.vol-premium.ivrv \
+    options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current \
+    options.spx.vol-premium.dlq options.spx.vol-premium.baseline options.spx.vol-premium.calendar
   exit 0
 fi
 [ "${OE_DESCRIBE:-ok}" = fail ] && replay unreach-describe
@@ -1132,6 +1143,231 @@ want "  p0 checkpoint"                                                      40 "
 want "  its checkpoint line carries no stamp and no identity" 2 \
      "$(grep -cE '^[01]=40 records=40 span=40 dt=[0-9-]+ archived=[0-9]{8}T[0-9]{6}Z$' "$A/kafka/prod/_manifest/$TOPIC.offsets")"
 want "  and its discovery never asked for a topic list"                      0 "$(grep -c '^topics list' "$OE_FIXTURE.topics-calls")"
+
+# ================= 17. the VOL-PREMIUM ledgers: committed-only, in the four-field layout ====================
+# vol-premium-service runs Kafka Streams exactly_once_v2 (it refuses to boot otherwise), so options.spx.vol-premium.ivrv
+# and its sibling sinks are written inside transactions. Read by the console consumer (read_uncommitted, its default),
+# the records of an ABORTED transaction are archived, and the calibrator (IvRvArchiveLoader) and the activation gate
+# (GateArchiveLoader) take them as observations (17z reproduces it). OE_COMMITTED_READ_TOPICS now routes every
+# vol-premium ledger to the committed reader. Their reader — options-edge-processing's ArchiveReader — parses the
+# console layout "<ts>\tPartition:<p>\t<key>\t<value>", so the archiver proves the reader's range and drops its Offset
+# column. vpread.py models that reader: its file-name grammar and numeric ledger order, its record split, and
+# IvRvArchiveLoader's RECORDS_EXCEED_RANGE and JSON checks. The shim reader is the one section 12 uses; the real
+# program's read_committed behaviour (markers walked, aborted records withheld, an open transaction bounding the read)
+# is proven against a real broker by broker-test/strike-reader-broker-test.sh section 1, not here.
+VP=options.spx.vol-premium.ivrv
+VDAY=2026-09-09; VDAY2=2026-09-10
+cat > "$T/vpread.py" <<'PY'
+import gzip, json, os, re, sys
+# options-edge-processing vol-premium-service calibration/ArchiveReader: LEDGER_NAME :68-69, LEDGER_ORDER :64-65, the
+# record start :244-264 and the three-TAB field split :278-296; calibration/IvRvArchiveLoader: RECORDS_EXCEED_RANGE :228,
+# parse() :311. (Named without their file suffix: validate-archive-unit-completeness.sh reads a named source file here
+# as one the unit must ship.)
+topic, d, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+NAME = re.compile(r"p(\d{1,9})\.(\d{1,18})-(\d{1,18})\.dt(\d{8})\.(\d{8}T\d{6}Z)\.jsonl\.gz")
+START = re.compile(rb"CreateTime:\d+\tPartition:\d+\t")
+files = []
+for n in os.listdir(d):
+    if not n.endswith(".jsonl.gz"):
+        continue
+    m = NAME.fullmatch(n[len(topic) + 1:]) if n.startswith(topic + ".") else None
+    if not m or m.group(4) != os.path.basename(d)[3:].replace("-", "") or int(m.group(3)) <= int(m.group(2)):
+        print("not the archiver's name for this topic and day: " + n); sys.exit(0)
+    files.append((int(m.group(1)), int(m.group(2)), int(m.group(3)), n))
+files.sort()
+keys, total = [], 0
+for p, f, t, n in files:
+    data = gzip.open(os.path.join(d, n)).read()
+    lines = data[:-1].split(b"\n") if data.endswith(b"\n") else (data.split(b"\n") if data else [])
+    if len(lines) > t - f:
+        print("%s: %d records exceed its %d offsets" % (n, len(lines), t - f)); sys.exit(0)
+    for i, l in enumerate(lines):
+        parts = l.split(b"\t", 3)
+        if not START.match(l) or len(parts) < 4 or int(parts[1][10:]) != p:
+            print("%s: record %d is not <CreateTime>\\tPartition:%d\\t<key>\\t<payload>: %r" % (n, i, p, l[:80])); sys.exit(0)
+        try:
+            json.loads(parts[3].decode("utf-8"))
+        except Exception:
+            print("%s: record %d payload is not a JSON document: %r" % (n, i, parts[3][:80])); sys.exit(0)
+        keys.append(parts[2].decode("utf-8"))
+    total += len(lines)
+print(" ".join(keys) if mode == "keys" else " ".join("%d-%d" % (f, t) for _, f, t, _ in files) if mode == "ranges"
+      else "ok %d" % total)
+PY
+vrun() { # $1 = session date; the rest = extra env assignments. ENV=prod: vol-premium runs on dev and production only.
+  local day="$1"; shift
+  env ARCHIVE_DIR="$A" ENV=prod ARCHIVE_JOB=test-vp BOOTSTRAP=shim:9092 KAFKA_BIN="$BIN" TOPICS="${VTOPICS:-$VP}" \
+      SESSION_DATE="$day" ALLOW_NON_NAS=true STRIKE_READER="$BIN/strike-reader" "$@" "$ARCH" 2>&1
+}
+VDIR() { echo "$A/kafka/prod/$VP/dt=${1:-$VDAY}"; }
+vread() { python3 "$T/vpread.py" "$VP" "$(VDIR "${2:-$VDAY}")" "$1" 2>&1; }
+vz() { local f; for f in "$(VDIR "${1:-$VDAY}")"/*.jsonl.gz; do [ -f "$f" ] && zcat "$f"; done 2>/dev/null; }
+vck() { awk '{split($1,a,"="); if (a[1]=="0") print a[2]}' "$A/kafka/prod/_manifest/$VP.offsets" 2>/dev/null | tail -1; }
+vm() { # <field> of the LAST manifest line of date $2 (default VDAY)
+  python3 -c 'import json,sys
+lines=[l for l in open(sys.argv[1]) if l.strip()]
+print(json.loads(lines[-1]).get(sys.argv[2], "<absent>") if lines else "<no-manifest>")' "$(VDIR "${2:-$VDAY}")/_manifest.jsonl" "$1" 2>/dev/null || echo "<no-manifest>"; }
+vchain() { # every manifest range of the given dates, in order, and the verifier's continuity verdict across them
+  local d m=""; for d in "$@"; do m="$m $(VDIR "$d")/_manifest.jsonl"; done
+  python3 -c 'import json,sys
+r=sorted((int(e["offset_from"]),int(e["offset_to"])) for p in sys.argv[1:] for e in map(json.loads,filter(str.strip,open(p))))
+bad=[f"{a[1]}->{b[0]}" for a,b in zip(r,r[1:]) if b[0]!=a[1]]
+print(" ".join(f"{a}-{b}" for a,b in r), "broken:"+",".join(bad) if bad else "contiguous")' $m 2>/dev/null; }
+vfiles() { ls "$(VDIR "${1:-$VDAY}")"/*.jsonl.gz 2>/dev/null | wc -l | tr -d ' '; }
+K1='SPX|2026-09-09|1'; K2='SPX|2026-09-09|2'; K3='SPX|2026-09-09|3'; K4='SPX|2026-09-09|4'
+ABORTED_LOG=("0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+             "3 A $K3 {\"frameSeq\":3,\"v\":\"ABORTED\"}" "4 A $K4 {\"frameSeq\":4,\"v\":\"ABORTED\"}" '5 M'
+             "6 C $K3 {\"frameSeq\":3,\"v\":\"c\"}" '7 M')
+
+# ---- 17z. THE DEFECT, on main's routing: the console consumer archives the ABORTED frames --------------------------
+# A console-consumer stand-in over the same transactional log, with the real tool's semantics: read_uncommitted (its
+# default) returns every DATA record — committed, aborted and still-open alike; control markers are never returned;
+# --max-messages counts records; then it idles out and exits 0.
+BIN2="$T/bin2"; rm -rf "$BIN2"; cp -R "$BIN" "$BIN2"
+cat > "$BIN2/kafka-console-consumer.sh" <<'SH'
+#!/usr/bin/env bash
+part=""; off=0; maxm=0; iso=read_uncommitted
+while [ $# -gt 0 ]; do
+  case "$1" in --partition) part="$2"; shift 2 ;; --offset) off="$2"; shift 2 ;; --max-messages) maxm="$2"; shift 2 ;;
+    --isolation-level) iso="$2"; shift 2 ;; *) shift ;; esac
+done
+awk -v f="$off" -v m="$maxm" -v p="$part" -v iso="$iso" '
+  iso == "read_committed" && $2 == "O" { exit }
+  $1 >= f && ($2 == "C" || (iso != "read_committed" && ($2 == "A" || $2 == "O"))) {
+    if (n >= m) exit
+    printf "CreateTime:1786000000000\tPartition:%s\t%s\t%s\n", p, $3, $4; n++ }' "$OE_FIXTURE.strike"
+SH
+chmod +x "$BIN2/kafka-console-consumer.sh"
+fresh v0
+strike_log "${ABORTED_LOG[@]}"
+OUT=$(env ARCHIVE_DIR="$A" ENV=prod ARCHIVE_JOB=test-vp BOOTSTRAP=shim:9092 KAFKA_BIN="$BIN2" TOPICS="$VP" \
+      SESSION_DATE="$VDAY" ALLOW_NON_NAS=true OE_COMMITTED_READ_TOPICS=es.futures.footprint.strike "$ARCH" 2>&1); RC=$?
+want "17z main's routing (console consumer, read_uncommitted): the run 'succeeds' (rc)" 0 "$RC"
+want "  and archives BOTH aborted frames as if the engine had published them" 2 "$(vz | grep -c ABORTED)"
+want "  so frameSeq 3 appears twice: the aborted revision and the committed one" 2 "$(vz | grep -c '"frameSeq":3,')"
+
+# ---- 17a. an ABORTED batch: never archived; the committed records in the four-field layout ---------------------------
+fresh v1
+strike_log "${ABORTED_LOG[@]}"
+OUT=$(vrun "$VDAY"); RC=$?
+want "17a ivrv with an ABORTED batch: the run succeeds (rc)"          0 "$RC"
+want "  read by the committed reader, from the log start"              1 "$(grep -c "^reader $VP p0 from=0 " "$CALLS")"
+want "  never by the console consumer"                                 0 "$(grep -c "^console $VP " "$CALLS")"
+want "  NO aborted record is archived"                                 0 "$(vz | grep -c ABORTED)"
+want "  exactly the committed records, in offset order"     "$K1 $K2 $K3" "$(vread keys)"
+want "  in the console consumer's four-field layout, byte for byte" \
+     "$(printf 'CreateTime:1786000000000\tPartition:0\t%s\t{"frameSeq":1,"v":"c"}\nCreateTime:1786000000000\tPartition:0\t%s\t{"frameSeq":2,"v":"c"}\nCreateTime:1786000000000\tPartition:0\t%s\t{"frameSeq":3,"v":"c"}' "$K1" "$K2" "$K3")" \
+     "$(vz)"
+want "  no Offset column"                                              0 "$(vz | grep -c 'Offset:')"
+want "  every record reads as ArchiveReader + IvRvArchiveLoader read it" "ok 3" "$(vread check)"
+want "  one file, named for [0,8): markers included, fewer records than offsets" "0-8" "$(vread ranges)"
+want "  manifest: 3 records over 8 offsets"                         "3 8" "$(vm records) $(vm offset_span)"
+want "  manifest offset_to = stable boundary = queried end"       "8 8 8" "$(vm offset_to) $(vm stable_boundary) $(vm queried_end)"
+want "  manifest names the capture and the layout" "read_committed_stable_boundary timestamp,partition,key,value" \
+     "$(vm capture) $(vm record_layout)"
+want "  checkpoint 8, stamped with the source TopicId" 1 \
+     "$(grep -c "^0=8 records=3 span=8 dt=$VDAY archived=[0-9TZ]* capture=read_committed_stable_boundary topic_id=SSSSSSSSSSSSSSSSSSSSSS$" "$A/kafka/prod/_manifest/$VP.offsets")"
+want "  no archive marker on prod"                                     0 "$(grep -c 'mark=[0-9]' "$CALLS")"
+hasnt "  and no withheld-range note: nothing was open" "held by a transaction unresolved" "$OUT"
+
+# ---- 17b. CONTROL MARKERS: a range of markers and aborted records only still completes, and the range is right ------
+strike_log "${ABORTED_LOG[@]}" "8 A SPX|2026-09-09|9 {\"frameSeq\":9,\"v\":\"ABORTED\"}" '9 M' '10 M'
+OUT=$(vrun "$VDAY"); RC=$?
+want "17b a markers/aborted-only range: the run succeeds (rc)"       0 "$RC"
+want "  completion reaches the boundary: checkpoint 11"               11 "$(vck)"
+want "  published as a ZERO-record file for [8,11)"             "0-8 8-11" "$(vread ranges)"
+want "  its manifest line: 0 records over 3 offsets"                "0 3" "$(vm records) $(vm offset_span)"
+want "  ArchiveReader reads the empty file as zero records"       "ok 3" "$(vread check)"
+want "  the date's ranges chain"                "0-8 8-11 contiguous" "$(vchain "$VDAY")"
+hasnt "  and it is not a failure" "failed=1" "$OUT"
+
+# ---- 17c. an OPEN transaction at archive time: bounded, withheld, NOT claimed, and captured once it resolves ---------
+fresh v3
+OPEN_LOG=("0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+          "3 O $K3 {\"frameSeq\":3,\"v\":\"open\"}" "4 O $K4 {\"frameSeq\":4,\"v\":\"open\"}")
+strike_log "${OPEN_LOG[@]}"
+OUT=$(vrun "$VDAY"); RC=$?
+want "17c OPEN transaction at archive time: the run succeeds (rc)"   0 "$RC"
+want "  the read is deadline-bounded (STRIKE_READER_DEADLINE_S), not an idle wait" 1 \
+     "$(grep -c "^reader $VP p0 from=0 .* deadline_ms=900000$" "$CALLS")"
+want "  checkpoint = the stable boundary 3, NOT the high-water mark 5"  3 "$(vck)"
+want "  the file claims [0,3) only"                                "0-3" "$(vread ranges)"
+want "  only the committed records below it"                    "$K1 $K2" "$(vread keys)"
+want "  nothing of the open transaction"                               0 "$(vz | grep -c '"open"')"
+want "  the manifest says the capture stopped short of the queried end" "3 5" "$(vm stable_boundary) $(vm queried_end)"
+has  "  and the run names the withheld offsets" "offsets [3,5) are held by a transaction unresolved at capture time" "$OUT"
+want "  not a failure"                                                 0 "$(runs failed)"
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 C $K3 {\"frameSeq\":3,\"v\":\"c\"}" "4 C $K4 {\"frameSeq\":4,\"v\":\"c\"}" '5 M'
+OUT=$(vrun "$VDAY2"); RC=$?
+want "  it COMMITS: the next run succeeds (rc)"                        0 "$RC"
+want "  starting at the boundary"                                      1 "$(grep -c "^reader $VP p0 from=3 " "$CALLS")"
+want "  capturing the withheld records, under ITS date"         "$K3 $K4" "$(vread keys "$VDAY2")"
+want "  the two dates chain with no gap and no overlap" "0-3 3-6 contiguous" "$(vchain "$VDAY" "$VDAY2")"
+want "  checkpoint past the transaction"                               6 "$(vck)"
+fresh v3b
+strike_log "${OPEN_LOG[@]}"
+vrun "$VDAY" >/dev/null
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 A $K3 {\"frameSeq\":3,\"v\":\"open\"}" "4 A $K4 {\"frameSeq\":4,\"v\":\"open\"}" '5 M'
+OUT=$(vrun "$VDAY2"); RC=$?
+want "  it ABORTS instead: the next run succeeds (rc)"                 0 "$RC"
+want "  and archives none of it: its [3,6) file holds zero records" "3-6 ok 0" "$(vread ranges "$VDAY2") $(vread check "$VDAY2")"
+want "  no record of the aborted transaction anywhere" 0 "$( { vz "$VDAY"; vz "$VDAY2"; } | grep -c '"open"')"
+
+# ---- 17d. a NON-transactional topic: unchanged — console consumer, read_uncommitted, the same bytes and lines ------
+fresh v4
+fixture "topicid OOOOOOOOOOOOOOOOOOOOOO" "0 0 40" "1 0 40"
+OUT=$(run STRIKE_READER="$BIN/strike-reader"); RC=$?
+want "17d a non-transactional topic: the run succeeds (rc)"          0 "$RC"
+want "  read by the console consumer, both partitions, with no isolation level and no property" 2 \
+     "$(grep -c "^console $TOPIC p[01] props=\[\]$" "$CALLS")"
+want "  never by the committed reader"                                 0 "$(grep -c '^reader ' "$CALLS")"
+last_plain=$(tail -1 "$A/kafka/prod/$TOPIC"/dt=*/_manifest.jsonl 2>/dev/null)
+hasnt "  its manifest line has no committed-read field" '"capture"' "$last_plain"
+hasnt "  (nor the new ones)" '"queried_end"' "$last_plain"
+has  "  and ends exactly as it always did" "\"archiver_version\":\"2026-08-13.1\"}" "$last_plain"
+want "  its checkpoint lines are unchanged, no stamp" 2 \
+     "$(grep -cE '^[01]=40 records=40 span=40 dt=[0-9-]+ archived=[0-9]{8}T[0-9]{6}Z$' "$A/kafka/prod/_manifest/$TOPIC.offsets")"
+want "  its file holds exactly what the console consumer printed" \
+     "$("$BIN/kafka-console-consumer.sh" --topic "$TOPIC" --partition 0 --offset 0 --max-messages 40)" \
+     "$(zcat "$A/kafka/prod/$TOPIC"/dt=*/"$TOPIC".p0.0-40.*.jsonl.gz)"
+
+# ---- 17e. the layout proof refuses a reader whose file is not the range it names -----------------------------------
+for mode in escaped stray unordered; do
+  fresh "v5-$mode"
+  strike_log "0 C $K1 {\"frameSeq\":1}" "1 C $K2 {\"frameSeq\":2}" '2 M'
+  OUT=$(vrun "$VDAY" STRIKE_SHIM_MODE=$mode); RC=$?
+  case "$mode" in
+    escaped)   why="the reader escaped a TAB/CR/LF in 1 record(s)" ;;
+    stray)     why="line 3 is offset 3, outside the captured range [0,3)" ;;
+    unordered) why="line 2 is offset 0, not after the previous line (1)" ;;
+  esac
+  want "17e reader '$mode' (exit 0, COMPLETE) on a four-field topic: the run FAILS (rc)" 1 "$RC"
+  has  "  refused, saying why" "committed-read capture REFUSED ($why" "$OUT"
+  want "  checkpoint unchanged"                                       "" "$(vck)"
+  want "  nothing published, no manifest line"                     "0 0" "$(vfiles) $(cat "$(VDIR)/_manifest.jsonl" 2>/dev/null | grep -c .)"
+  OUT=$(vrun "$VDAY"); RC=$?
+  want "  the next healthy run captures the range"                 "0-3" "$(vread ranges)"
+done
+fresh v6
+strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
+OUT=$(srun STRIKE_SHIM_MODE=escaped); RC=$?
+want "17e the STRIKE log (five-field layout) with an escaped record: accepted as before (rc)" 0 "$RC"
+has  "  and noted as before" "record(s) carried a raw TAB/CR/LF, written escaped" "$OUT"
+want "  its file keeps the Offset column"                              2 "$(zcat "$(SDIR)"/*.jsonl.gz | grep -c $'\tOffset:')"
+want "  its manifest names the five-field layout" "timestamp,partition,offset,key,value" "$(mlast record_layout)"
+
+# ---- 17f. EVERY vol-premium ledger is committed-only by default --------------------------------------------------------
+for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings \
+          options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline \
+          options.spx.vol-premium.calendar; do
+  fresh "v7-$vt"
+  strike_log '0 C k {"a":1}' '1 M'
+  VTOPICS="$vt" vrun "$VDAY" >/dev/null
+  want "17f $vt: read by the committed reader, never by the console consumer" "1 0" \
+       "$(grep -c "^reader $vt p0 from=0 " "$CALLS") $(grep -c "^console $vt " "$CALLS")"
+done
 
 echo
 [ "$FAILED" -eq 0 ] && { echo "test-archive-reset: ALL PASS"; exit 0; }

@@ -107,8 +107,39 @@ is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) retur
 # Topics read COMMITTED-ONLY, through StrikeArchiveReader.java instead of kafka-console-consumer.
 # See the capture block below for why this is a list and not the default: every topic NOT named here
 # is captured exactly as before, byte for byte; an omission here is today's behaviour, never a new gap.
-OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike}"
+#
+# THE VOL-PREMIUM LEDGERS (2026-09-11, vol-premium engine review). vol-premium-service is a Kafka Streams
+# application that REFUSES to run without exactly_once_v2 (VolPremiumStreams EXACTLY_ONCE_REQUIRED), so every
+# sink it has — .ivrv, .events, .current, .warnings, .dlq — is written inside transactions, and the .baseline /
+# .calendar version ledgers are written by a transactional producer (calibration/LedgerPublisher). A transaction
+# the engine ABORTS (a task migration, a fenced producer, a crash mid-commit) leaves its records in the log, and
+# kafka-console-consumer reads read_uncommitted by default, so the console path would archive them — and the
+# calibrator (IvRvArchiveLoader, over .ivrv) and the activation gate (GateArchiveLoader, over .events) would take
+# them as observations the engine never published. Switching the console consumer to --isolation-level
+# read_committed is NOT a fix: it counts RECORDS (--max-messages = end - from) while commit/abort markers and
+# aborted records occupy OFFSETS, so it never reaches its count, and it cannot report where it stopped. It then
+# ends on the idle timeout at exit 0, and the archiver checkpoints the high-water mark past an open transaction
+# (a permanent gap: the capture block's "endoff=1200, got=1099" case), or refuses a markers-only range for ever
+# (got=0), or, with a live producer, reads committed records BEYOND the end its file name claims. Only the
+# committed reader bounds a capture by the consumer's POSITION against the last stable offset, so these topics
+# are routed to it. None of them is archived by any job today (oe-topics.env): this makes their capture
+# committed-only from the first run that archives them, with no legacy checkpoint to recapture over.
+OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS="options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline options.spx.vol-premium.calendar"
+OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike $OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS}"
 is_committed_read_topic() { case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# THE RECORD LAYOUT OF A COMMITTED-READ FILE. The reader writes "<ts>\tPartition:<p>\tOffset:<o>\t<key>\t<value>".
+# The strike log keeps that five-field layout (its readers were written for it). Every OTHER committed-read topic is
+# filed in the layout the console consumer writes for every non-strict topic — "<ts>\tPartition:<p>\t<key>\t<value>",
+# no Offset column — because that is the layout its readers parse: options-edge-processing's ArchiveReader takes the
+# third TAB-separated field as the KEY and everything after the third TAB as the payload, so an Offset column would
+# make every vol-premium record's payload "<key>\t<json>", unreadable. The archiver does NOT trust the reader's
+# layout blindly: before dropping the column it proves every line is exactly five fields with an Offset strictly
+# increasing inside [from, boundary) — i.e. that the file holds the named range in offset order, which is the
+# precedence IvRvArchiveLoader reads from (file first offset, record index) — and it refuses any capture in which
+# the reader had to escape a TAB/CR/LF (escaped>0): the four-field layout claims the source bytes, and an escaped
+# record is not them.
+OE_COMMITTED_READ_OFFSET_LAYOUT_TOPICS="${OE_COMMITTED_READ_OFFSET_LAYOUT_TOPICS:-es.futures.footprint.strike}"
+is_offset_layout_topic() { case " $OE_COMMITTED_READ_OFFSET_LAYOUT_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # THE CHECKPOINT STAMP (deploy re-review round 2, finding 2). Every checkpoint line the committed-read
 # capture writes ends with this token, and for a committed-read topic ONLY a stamped line is proof of
 # archival. An unstamped one was written by something else — in practice the console-consumer archiver
@@ -917,7 +948,40 @@ for topic in $TOPICS; do
         rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog"
         continue
       fi
-      gzip -6 < "$plain" > "$tmp"
+      record_layout="timestamp,partition,offset,key,value"
+      plain_src="$plain"
+      if ! is_offset_layout_topic "$topic"; then
+        # FOUR-FIELD LAYOUT (see OE_COMMITTED_READ_OFFSET_LAYOUT_TOPICS). Prove the range, then drop the Offset
+        # column. Offsets are compared as decimal STRINGS (length, then C-locale order), never as awk numbers, so a
+        # large offset cannot lose precision in a double; the reader prints them without leading zeros.
+        record_layout="timestamp,partition,key,value"
+        why=""
+        [ "$r_escaped" -eq 0 ] || why="the reader escaped a TAB/CR/LF in $r_escaped record(s); the four-field layout carries the source bytes, so an altered record is refused"
+        if [ -z "$why" ]; then
+          why=$(LC_ALL=C awk -F'\t' -v from="$from" -v b="$r_boundary" -v p="Partition:$part" -v out="$plain.4f" '
+            function lt(x, y) { return length(x) < length(y) || (length(x) == length(y) && x < y) }
+            bad != "" { next }
+            {
+              if (NF != 5 || $2 != p || $3 !~ /^Offset:[0-9]+$/) { bad = "line " NR " is not <ts>\\t" p "\\tOffset:<o>\\t<key>\\t<value>"; next }
+              o = substr($3, 8)
+              if (lt(o, from) || !lt(o, b)) { bad = "line " NR " is offset " o ", outside the captured range [" from "," b ")"; next }
+              if (NR > 1 && !lt(prev, o)) { bad = "line " NR " is offset " o ", not after the previous line (" prev ")"; next }
+              prev = o
+              printf "%s\t%s\t%s\t%s\n", $1, $2, $4, $5 > out
+            }
+            END { if (bad != "") print bad; else if (NR == 0) printf "" > out }' "$plain" 2>&1)
+          [ $? -eq 0 ] || why="${why:-the layout check could not run}"
+        fi
+        if [ -n "$why" ]; then
+          log "  WARN $topic p$part [$from,$r_boundary): committed-read capture REFUSED ($why) — checkpoint NOT advanced, will retry next run"
+          rm -f "$plain" "$plain.4f" "$sumf" "$sumf.tmp" "$rlog"
+          failed=$(( failed + 1 ))
+          continue
+        fi
+        # Compressed straight from the checked copy: no rename, so no unchecked step can put the five-field bytes back.
+        plain_src="$plain.4f"
+      fi
+      gzip -6 < "$plain_src" > "$tmp"
       gzip_rc=$?
       scan_out=$(scan_archive_file "$tmp")
       scan_rc=$?
@@ -927,7 +991,7 @@ for topic in $TOPICS; do
       [ "$gzip_rc" -eq 0 ] || why="gzip rc=$gzip_rc"
       [ "$scan_rc" -eq 0 ] || why="$why scan rc=$scan_rc"
       [ "$got" = "$r_records" ] || why="$why the file holds $got records but the reader wrote $r_records"
-      rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog"
+      rm -f "$plain" "$plain.4f" "$sumf" "$sumf.tmp" "$rlog"
       if [ -n "$why" ]; then
         log "  WARN $topic p$part [$from,$r_boundary): processing FAILED ($why) — checkpoint NOT advanced, will retry next run"
         rm -f "$tmp"
@@ -939,7 +1003,17 @@ for topic in $TOPICS; do
       # ranges contiguous for the verifier — and the checkpoint advances over it.
       cap_to="$r_boundary"
       count=$(( cap_to - from ))
-      manifest_extra=$(printf ',"capture":"read_committed_stable_boundary","stable_boundary":%s,"escaped_records":%s,"source_topic_id":"%s"' "$r_boundary" "$r_escaped" "$topic_id")
+      # queried_end is the end this run MEANT to reach: the high-water mark read above, or the UNTIL_TS offset. A
+      # stable boundary below it means offsets [boundary, queried_end) belonged to a transaction that had not
+      # resolved when the reader asked. They are NOT in this file and NOT skipped: the checkpoint stops at the
+      # boundary and the next run captures them (filed under ITS dt=). So this date's capture is complete only to
+      # the boundary, and the manifest line says how far short of the queried end that was.
+      manifest_extra=$(printf ',"capture":"read_committed_stable_boundary","stable_boundary":%s,"queried_end":%s,"record_layout":"%s","escaped_records":%s,"source_topic_id":"%s"' "$r_boundary" "$endoff" "$record_layout" "$r_escaped" "$topic_id")
+      if [ "$r_boundary" -lt "$endoff" ]; then
+        log "  NOTE $topic p$part: capture ends at the stable boundary $r_boundary, below the queried end $endoff —" \
+            "offsets [$r_boundary,$endoff) are held by a transaction unresolved at capture time; they are not in" \
+            "dt=$DAY's file, and the next run captures them once it resolves (never skipped)"
+      fi
       # A recapture over a LEGACY checkpoint says so: the range overlaps whatever the older archiver filed.
       [ -z "$legacy_from" ] || manifest_extra="$manifest_extra$(printf ',"recaptured_over_unproven_checkpoint":%s' "$legacy_from")"
     else
