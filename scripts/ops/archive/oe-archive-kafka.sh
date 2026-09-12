@@ -950,8 +950,25 @@ for topic in $TOPICS; do
         # records once they resolve. Not a failure of this run. No archive marker either: records of the
         # open transaction sit above `from`, so the checkpoint does not reach the log end, and a marker
         # that cannot cover the log end can only endorse something (re-review round 2, finding 2).
-        log "  NOTE $topic p$part: no committed record beyond checkpoint $from yet (stable boundary $r_boundary, log end $log_end) — an open transaction holds the range; the next run captures it once it resolves"
+        #
+        # But the ATTEMPT is RECORDED (deploy #1041 review round 2, MAJOR 3). This run QUERIED up to $endoff, and
+        # a session loader decides completeness from what the runs of a date meant to reach: with no line, an
+        # earlier capture of this date that reached $from with queried_end=$from is the date's whole obligation,
+        # and the session is admitted while [$from,$endoff) is still inside an unresolved transaction. So the
+        # manifest gets a line with NO file — an empty range at the checkpoint, the queried end, the source log —
+        # marked "attempt":"no_progress"; the loaders (CommittedLedgerArchive) take its queried_end as the
+        # obligation it is, and the verifier reports it as a withheld range, not as a missing file. The checkpoint
+        # is NOT advanced: the next run re-queries from $from, exactly as before.
+        log "  NOTE $topic p$part: no committed record beyond checkpoint $from yet (stable boundary $r_boundary, log end $log_end) — an open transaction holds the range; the next run captures it once it resolves. The attempt (queried end $endoff) is recorded in dt=$DAY's manifest so a session loader refuses the session until a capture reaches $endoff"
         rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog"
+        if ! printf '{"topic":"%s","dt":"%s","partition":%s,"offset_from":%s,"offset_to":%s,"records":0,"offset_span":0,"capture":"read_committed_stable_boundary","stable_boundary":%s,"queried_end":%s,"source_topic_id":"%s","attempt":"no_progress","archived_at":"%s","job":"%s","env":"%s","archiver_version":"%s"}\n' \
+               "$topic" "$DAY" "$part" "$from" "$from" "$from" "$endoff" "$topic_id" "$STAMP" "$ARCHIVE_JOB" "$ENV_NAME" "$ARCHIVER_VERSION" \
+               >> "$outdir/_manifest.jsonl"; then
+          # Unrecorded, the obligation is invisible to every loader: that is the defect this line closes, so an
+          # append that failed is a failed capture, retried next run like any other.
+          log "  WARN $topic p$part: could not record the attempt (queried end $endoff) in dt=$DAY's manifest — a session loader cannot learn this run's obligation; counted as a failed capture"
+          failed=$(( failed + 1 ))
+        fi
         continue
       fi
       record_layout="timestamp,partition,offset,key,value"

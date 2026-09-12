@@ -146,6 +146,11 @@ for topic in topics:
     if bad_json:
         r["reasons"].append(f"{bad_json} unparseable manifest line(s)")
 
+    # A committed-read run that could capture NOTHING (the stable boundary still at its checkpoint) records the
+    # ATTEMPT — "attempt":"no_progress", the end it queried, and NO file (deploy #1041 review round 2, MAJOR 3).
+    # It is an obligation for the session loaders, not a file this verifier can find or checksum.
+    attempts = [e for e in entries if e.get("attempt") is not None]
+    entries  = [e for e in entries if e.get("attempt") is None]
     r["files"]   = len(entries)
     r["records"] = sum(int(e.get("records", 0)) for e in entries)
     r["partitions"] = sorted({int(e["partition"]) for e in entries if "partition" in e})
@@ -197,12 +202,17 @@ for topic in topics:
     # the session is read: the vol-premium loaders (CommittedLedgerArchive) read a session from its dt= AND the
     # following storage dates and refuse the session until a committed capture reaches this queried_end.
     withheld = []
-    for e in entries:
+    for e in entries + attempts:
         if e.get("capture") != "read_committed_stable_boundary":
             continue
         b, q = e.get("stable_boundary"), e.get("queried_end")
         if isinstance(b, int) and isinstance(q, int) and b < q:
-            withheld.append(f"p{int(e.get('partition', 0))} [{b},{q}) in {e.get('file', '?')}")
+            if e.get("attempt") is not None:
+                withheld.append(f"p{int(e.get('partition', 0))} [{b},{q}) — the run at {e.get('archived_at', '?')} "
+                                f"queried {q} and found no committed record past its checkpoint {b} (attempt "
+                                f"{e.get('attempt')}, no file published)")
+            else:
+                withheld.append(f"p{int(e.get('partition', 0))} [{b},{q}) in {e.get('file', '?')}")
     if withheld:
         r["withheld_by_open_transaction"] = withheld
 

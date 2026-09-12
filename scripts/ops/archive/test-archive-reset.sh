@@ -665,7 +665,13 @@ want "  finalize still OPEN: run succeeds (rc)"            0 "$RC"
 has  "  and says an open transaction holds the range" "an open transaction holds the range" "$OUT"
 want "  checkpoint unchanged"                              3 "$(sck)"
 want "  NO archive marker: checkpoint 3 does not reach the log end 5" "" "$(lastmark)"
-want "  no manifest line for an empty stable range"        1 "$(mlines)"
+# Deploy #1041 review round 2, MAJOR 3: the attempt IS recorded — a manifest line with no file, the empty range at
+# the checkpoint and the end this run queried — so a session loader learns that [3,5) is still owed.
+want "  the ATTEMPT is recorded: a second manifest line, no file, at the checkpoint, the queried end" \
+     "2 no_progress <absent> 3 3 3 5" \
+     "$(mlines) $(mlast attempt) $(mlast file) $(mlast offset_from) $(mlast offset_to) $(mlast stable_boundary) $(mlast queried_end)"
+want "  naming the source log, with zero records" "SSSSSSSSSSSSSSSSSSSSSS 0" "$(mlast source_topic_id) $(mlast records)"
+want "  and no data file was published for it"                1 "$(sfiles)"
 strike_log '0 C k0 v0' '1 C k1 v1' '2 M' '3 C fin3 v' '4 C fin4 v' '5 M'
 OUT=$(srun); RC=$?
 want "  finalize COMMITTED: the next run captures it (rc)" 0 "$RC"
@@ -1158,7 +1164,9 @@ want "  and its discovery never asked for a topic list"                      0 "
 # admit on. vpread.py models the loader side (options-edge-processing vol-premium-service calibration/ArchiveReader
 # and calibration/CommittedLedgerArchive): the file-name grammar, the manifest admission, the offset-layout record
 # parse, the range and ordering checks, reconciliation of duplicate/conflicting offsets, coverage and the
-# queried_end completeness rule across storage dates. The shim reader is the one section 12 uses; the real
+# queried_end completeness rule across storage dates — and, since deploy #1041 review round 2 / engine r15, the
+# manifest INVENTORY rule (a listed file the disk has lost, an excluded capture's queried end, a no-progress ATTEMPT
+# line) and the SOURCE IDENTITY rule (17i-17k). The shim reader is the one section 12 uses; the real
 # program's read_committed behaviour (markers walked, aborted records withheld, an open transaction bounding the read)
 # is proven against a real broker by broker-test/strike-reader-broker-test.sh section 1, not here.
 VP=options.spx.vol-premium.ivrv
@@ -1171,7 +1179,12 @@ import gzip, json, os, re, sys
 # checks; reconciliation by real offset — identical duplicate vs SAME_OFFSET_CONFLICT; COVERAGE_GAP; and the
 # queried_end rule, SESSION_INCOMPLETE, across storage dates). (Named without their file suffix:
 # validate-archive-unit-completeness.sh reads a named source file here as one the unit must ship.)
-#   usage: vpread.py <topic> <topic dir> <keys|ranges|check|excluded> <dt> [dt ...]
+#   usage: vpread.py <topic> <topic dir> <keys|ranges|check|excluded|identity> <dt> [dt ...]
+# Round 2 (deploy #1041 review r2 / engine r15): coverage is proved against the MANIFEST INVENTORY, not the files
+# on disk — every line declaring a capture (a file, present or not; a no-progress ATTEMPT with no file) carries
+# the end its run queried; a listed file the disk has lost inside the needed range is MISSING_CAPTURE_FILE; an
+# excluded capture keeps its queried end; and every capture names its SOURCE LOG (source_topic_id) — two logs in
+# one window are SOURCE_IDENTITY_MISMATCH, a capture naming none is excluded NO_SOURCE_IDENTITY.
 topic, root, mode, dates = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 NAME = re.compile(r"p(\d{1,9})\.(\d{1,18})-(\d{1,18})\.dt(\d{8})\.(\d{8}T\d{6}Z)\.jsonl\.gz")
 LINE = re.compile(rb"^(?:CreateTime|LogAppendTime):\d+\tPartition:(\d+)\tOffset:(\d+)\t")
@@ -1180,12 +1193,24 @@ CAPTURE, LAYOUT = "read_committed_stable_boundary", "timestamp,partition,offset,
 def die(why):
     print(why); sys.exit(0)
 
-admitted, excluded, unproven = [], {}, []
+def coords(n, dt):
+    m = NAME.fullmatch(n[len(topic) + 1:]) if n.startswith(topic + ".") else None
+    if not m or m.group(4) != dt.replace("-", "") or int(m.group(3)) <= int(m.group(2)):
+        die("not the archiver's name for this topic and storage date: " + n)
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+def obligation(e, to, n):
+    q = e.get("queried_end", to)
+    if not isinstance(q, int) or isinstance(q, bool) or q < 0:
+        die("%s: its manifest line's queried_end %r is not an offset" % (n, q))
+    return q
+
+admitted, excluded, unproven, declared = [], {}, [], []
 for dt in dates:
     d = os.path.join(root, "dt=" + dt)
     if not os.path.isdir(d):
         continue
-    manifest = {}
+    manifest, attempts = {}, []
     mf = os.path.join(d, "_manifest.jsonl")
     if os.path.isfile(mf):
         for line in open(mf):
@@ -1196,20 +1221,32 @@ for dt in dates:
                     continue
                 if "file" in e:
                     manifest[e["file"]] = e
-    for n in sorted(os.listdir(d)):
-        if not n.endswith(".jsonl.gz"):
-            continue
-        m = NAME.fullmatch(n[len(topic) + 1:]) if n.startswith(topic + ".") else None
-        if not m or m.group(4) != dt.replace("-", "") or int(m.group(3)) <= int(m.group(2)):
-            die("not the archiver's name for this topic and storage date: " + n)
-        part, f, t = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                elif "attempt" in e:
+                    attempts.append(e)
+    present = {n for n in os.listdir(d) if n.endswith(".jsonl.gz")}
+    # The inventory: every declared capture, on disk or not.
+    for n, e in manifest.items():
+        part, f, t = coords(n, dt)
+        declared.append({"dt": dt, "n": n, "f": f, "t": t, "q": obligation(e, t, n),
+                         "id": e.get("source_topic_id") or None, "present": n in present})
+    for a in attempts:
+        n = "attempt at %s" % a.get("archived_at", "?")
+        f = a.get("offset_from")
+        if a.get("attempt") != "no_progress" or a.get("capture") != CAPTURE or a.get("partition") != 0 \
+           or not isinstance(f, int) or f < 0 or a.get("offset_to") != f or a.get("stable_boundary") != f:
+            die("dt=%s: %s is not a no-progress attempt of this topic at its checkpoint: %r" % (dt, n, a))
+        declared.append({"dt": dt, "n": n, "f": f, "t": f, "q": obligation(a, f, n),
+                         "id": a.get("source_topic_id") or None, "present": True})
+    for n in sorted(present):
+        part, f, t = coords(n, dt)
         if part != 0:
             die("%s: partition %d — the ledger this rule reads is partition 0" % (n, part))
         e = manifest.get(n)
         why = ("NO_MANIFEST_LINE" if e is None else
                "NOT_COMMITTED_READ" if e.get("capture") != CAPTURE else
                "NO_RECORD_OFFSETS" if (e.get("record_layout") != LAYOUT or e.get("offsets_verified") is not True) else
-               "ESCAPED_RECORDS" if e.get("escaped_records") != 0 else None)
+               "ESCAPED_RECORDS" if e.get("escaped_records") != 0 else
+               "NO_SOURCE_IDENTITY" if not e.get("source_topic_id") else None)
         if why:
             excluded[why] = excluded.get(why, 0) + 1
             unproven.append((f, t, n))
@@ -1221,8 +1258,8 @@ for dt in dates:
         records, prev = [], None
         for i, l in enumerate(lines):
             h = LINE.match(l)
-            parts = l.split(b"\t", 4)
-            if not h or len(parts) != 5:
+            parts = l.split(b"\t")
+            if not h or len(parts) != 5 or b"\r" in l:
                 die("%s: record %d is not <ts>\\tPartition:<p>\\tOffset:<o>\\t<key>\\t<value>: %r" % (n, i, l[:80]))
             if int(h.group(1)) != 0:
                 die("%s: record %d is of partition %s" % (n, i, h.group(1).decode()))
@@ -1242,6 +1279,24 @@ for dt in dates:
         admitted.append({"n": n, "dt": dt, "from": f, "to": t, "q": e.get("queried_end"), "records": records})
 
 admitted.sort(key=lambda c: (c["from"], c["to"], c["dt"], c["n"]))
+# The session's obligation: the end the EARLIEST declaring date's runs meant to reach, admitted or not.
+need = need_from = first = None
+if declared:
+    first = min(c["dt"] for c in declared)
+    need = max(c["q"] for c in declared if c["dt"] == first)
+    need_from = min(c["f"] for c in declared if c["dt"] == first)
+# One source log across the window.
+logs = {}
+for c in declared:
+    if c["id"]:
+        logs.setdefault(c["id"], c["n"])
+if len(logs) > 1:
+    die("SOURCE_IDENTITY_MISMATCH: " + " and ".join("%s from log %s" % (n, i) for i, n in logs.items())
+        + " — the topic was re-created between them; offsets on one log say nothing about the other")
+# Every capture the manifest claims inside the needed range must be on disk.
+for c in declared:
+    if not c["present"] and c["t"] > c["f"] and c["f"] < need and c["t"] > need_from:
+        die("MISSING_CAPTURE_FILE: %s [%d,%d) is named by dt=%s's manifest but is not on disk" % (c["n"], c["f"], c["t"], c["dt"]))
 by_offset, duplicates = {}, 0
 for c in admitted:
     for o, k, v in c["records"]:
@@ -1268,17 +1323,17 @@ for c in admitted:
 for f, t, n in unproven:
     if reach is None or f < start or t > reach:
         die("UNCOVERED_EXCLUDED_FILE: %s [%d,%d) is not proven and no capture covers it" % (n, f, t))
-if admitted:
-    first = min(c["dt"] for c in admitted)
-    need = max(c["q"] for c in admitted if c["dt"] == first)
-    if reach < need:
-        die("SESSION_INCOMPLETE: dt=%s queried up to %s, committed captures reach only %d" % (first, need, reach))
+if need is not None and (reach is None or reach < need):
+    die("SESSION_INCOMPLETE: dt=%s queried up to %s, committed captures reach only %s"
+        % (first, need, reach if reach is not None else "nothing"))
 if mode == "keys":
     print(" ".join(by_offset[o][0] for o in sorted(by_offset)))
 elif mode == "ranges":
     print(" ".join("%d-%d" % (c["from"], c["to"]) for c in admitted))
 elif mode == "excluded":
     print(" ".join("%s=%d" % (k, v) for k, v in sorted(excluded.items())) or "none")
+elif mode == "identity":
+    print(" ".join(sorted(logs)) or "none")
 else:
     print("ok %d duplicates=%d" % (len(by_offset), duplicates))
 PY
@@ -1512,8 +1567,11 @@ with gzip.open(os.path.join(d, name), "wb") as out:
 if mode != "legacy":
     line = {"topic": topic, "dt": dt, "partition": 0, "offset_from": int(f), "offset_to": int(t),
             "records": len(recs), "capture": "read_committed_stable_boundary", "stable_boundary": int(t),
-            "queried_end": int(t), "record_layout": "timestamp,partition,offset,key,value",
-            "offsets_verified": mode != "stripped", "escaped_records": 0, "file": name}
+            "queried_end": int(os.environ.get("VFAKE_QEND", t)), "record_layout": "timestamp,partition,offset,key,value",
+            "offsets_verified": mode != "stripped", "escaped_records": 0,
+            "source_topic_id": os.environ.get("VFAKE_ID", "SSSSSSSSSSSSSSSSSSSSSS"), "file": name}
+    if not line["source_topic_id"]:
+        del line["source_topic_id"]
     if mode == "stripped":
         line["record_layout"] = "timestamp,partition,key,value"
     with open(os.path.join(d, "_manifest.jsonl"), "a") as m:
@@ -1541,6 +1599,110 @@ vfake "$CONF" "$VDAY" ok 0 6 "0:$K1:{\"frameSeq\":1,\"v\":\"OTHER\"}" "1:$K2:{\"
 has  "  two captures with DIFFERENT records at one offset refuse the session" \
      "SAME_OFFSET_CONFLICT" "$(vread keys)"
 has  "  naming the offset"                                    "at offset 0" "$(vread keys)"
+
+# ---- 17i. SOURCE IDENTITY (deploy #1041 r2 / engine r15 MAJOR): every capture names the log it was read from, and a ----
+# loader never combines two logs. An offset is a coordinate on ONE log: a topic deleted and re-created is a new log
+# under the old name, its offsets restart, and a capture of the new log can neither discharge what the old log
+# withheld nor take precedence over the old log's records. The manifest's source_topic_id is Kafka's TopicId, the
+# one the validated discovery (section 16) read for THIS capture. What it proves: two captures naming one id are
+# coordinates on one log. What it does not prove: what that log held below its earliest retained offset — which is
+# why coverage is still proved separately, above.
+fresh v9
+strike_log "${OPEN_LOG[@]}"
+OUT=$(vrun "$VDAY"); RC=$?
+want "17i a vol-premium capture names its source log in the manifest (rc, id)" "0 $SID" "$RC $(vm source_topic_id)"
+STRIKE_ID=$TID strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"new\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"new\"}" '2 M' \
+                          "3 C $K3 {\"frameSeq\":3,\"v\":\"new\"}" "4 C $K4 {\"frameSeq\":4,\"v\":\"new\"}" '5 M'
+OUT=$(vrun "$VDAY2"); RC=$?
+want "  the topic DELETED and RE-CREATED, the new log grown to 6: the next run succeeds (rc)" 0 "$RC"
+has  "  seeing the reset"                                          "RESET $VP p0" "$OUT"
+want "  and capturing the new log from ITS start, under its date"           "0-6" "$(vnames "$VDAY2")"
+want "  naming the NEW log"                                                 "$TID" "$(vm source_topic_id "$VDAY2")"
+has  "  the SESSION read across both dates is REFUSED: two logs" "SOURCE_IDENTITY_MISMATCH" "$(vsession keys "$VDAY" "$VDAY2")"
+has  "  naming the old log"                                        "from log $SID" "$(vsession keys "$VDAY" "$VDAY2")"
+has  "  and the new"                                               "from log $TID" "$(vsession keys "$VDAY" "$VDAY2")"
+want "  the old log's withheld [3,5) is NOT discharged by the new log's offsets: dt=$VDAY alone is still incomplete" \
+     "SESSION_INCOMPLETE: dt=$VDAY queried up to 5, committed captures reach only 3" "$(vread keys)"
+want "  the new log's own date reads whole on its own"          "$K1 $K2 $K3 $K4" "$(vread keys "$VDAY2")"
+# A committed capture that names NO source log is not admitted: excluded and counted; uncovered, it refuses.
+fresh v9b
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+want "  the loader model reads ONE log across a complete window"          "$SID" "$(vread identity)"
+NOID="$VP.p0.0-3.dt20260909.20260909T230000Z.jsonl.gz"
+VFAKE_ID= vfake "$NOID" "$VDAY" ok 0 3 "0:$K1:{\"frameSeq\":1,\"v\":\"unnamed\"}"
+want "  a committed capture naming NO source log is EXCLUDED and counted" "NO_SOURCE_IDENTITY=1" "$(vread excluded)"
+want "  its records never read: the named capture alone answers"        "$K1 $K2" "$(vread keys)"
+rm -f "$(VDIR)/$NOID"
+grep -v -e "$NOID" "$(VDIR)/_manifest.jsonl" > "$(VDIR)/_manifest.tmp" && mv "$(VDIR)/_manifest.tmp" "$(VDIR)/_manifest.jsonl"
+NOID2="$VP.p0.3-5.dt20260909.20260909T233000Z.jsonl.gz"
+VFAKE_ID= vfake "$NOID2" "$VDAY" ok 3 5 "3:$K3:{\"frameSeq\":3,\"v\":\"unnamed\"}"
+has  "  and one that no named capture covers refuses the session"   "UNCOVERED_EXCLUDED_FILE: $NOID2" "$(vread keys)"
+
+# ---- 17j. ZERO PROGRESS (deploy #1041 r2 MAJOR 3): a run whose stable boundary sits AT its checkpoint records what ----
+# it QUERIED. The reviewer's case: an earlier capture of the date reached 3 and queried 3, so the date's recorded
+# obligation was 3. A later run on the date queries 9 while an open transaction holds the LSO at 3: before this round
+# it left NOTHING behind, and a session loader admitted the date's earlier observations with [3,9) unresolved.
+fresh v10
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+OUT=$(vrun "$VDAY"); RC=$?
+want "17j an earlier run on the date captured [0,3) and queried 3 (rc, ranges, queried_end)" "0 0-3 3" "$RC $(vread ranges) $(vm queried_end)"
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 O $K3 {\"frameSeq\":3,\"v\":\"open\"}" "4 O $K4 {\"frameSeq\":4,\"v\":\"open\"}" '5 O x y' '6 O x y' '7 O x y' '8 O x y'
+OUT=$(vrun "$VDAY"); RC=$?
+want "  a later run: an open transaction AT the checkpoint, queried end 9 — the run succeeds (rc)" 0 "$RC"
+has  "  and says the attempt is recorded" "The attempt (queried end 9) is recorded in dt=$VDAY's manifest" "$OUT"
+want "  checkpoint unchanged, no new file"                              "3 1" "$(vck) $(vfiles)"
+want "  the manifest RECORDS the attempt: no file, an empty range at the checkpoint, the end it queried, zero records" \
+     "no_progress <absent> 3 3 3 9 0" \
+     "$(vm attempt) $(vm file) $(vm offset_from) $(vm offset_to) $(vm stable_boundary) $(vm queried_end) $(vm records)"
+want "  naming the source log"                                         "$SID" "$(vm source_topic_id)"
+want "  a session loader REFUSES the date until a capture reaches 9" \
+     "SESSION_INCOMPLETE: dt=$VDAY queried up to 9, committed captures reach only 3" "$(vread keys)"
+want "  not a failure"                                                     0 "$(runs failed)"
+VVD="$T/vnas-vp2"; rm -rf "$VVD"; mkdir -p "$VVD/kafka/prod"
+cp -R "$A/kafka/prod/$VP" "$VVD/kafka/prod/$VP"
+OUT_V=$(env ARCHIVE_DIR="$VVD" ENV=prod FORCE=true VERIFY_CHECKSUMS=none LOG="$T/verify-vp2.log" \
+            OE_TOPICS_ENV="$T/vp.topics.env" bash "$OE/oe-archive-verify.sh" "$VDAY" 2>&1); RC_V=$?
+want "  the verifier: the date is COMPLETE for what it claims — an attempt is not a missing file (rc)" 0 "$RC_V"
+has  "  and names the withheld range as the attempt's" "open transaction withheld p0 [3,9) — the run at" "$OUT_V"
+has  "  (no file published)"                                    "no file published" "$OUT_V"
+want "  counting the one file, not the attempt" 1 "$(printf '%s' "$OUT_V" | grep -o 'files=[0-9]*' | head -1 | cut -d= -f2)"
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 C $K3 {\"frameSeq\":3,\"v\":\"c\"}" "4 C $K4 {\"frameSeq\":4,\"v\":\"c\"}" '5 M' '6 A x y' '7 A x y' '8 M'
+OUT=$(vrun "$VDAY2"); RC=$?
+want "  it resolves: the next run captures [3,9) under ITS date (rc, names)" "0 3-9" "$RC $(vnames "$VDAY2")"
+want "  and the SESSION is whole across both dates: the attempt's 9 is reached" "$K1 $K2 $K3 $K4" "$(vsession keys "$VDAY" "$VDAY2")"
+want "  the manifest chain reads through the attempt's empty range" "0-3 3-3 3-9 contiguous" "$(vchain "$VDAY" "$VDAY2")"
+
+# ---- 17k. the MANIFEST is the inventory (deploy #1041 r2 / engine r15 MAJOR): a listed file the disk has lost, an -----
+# excluded capture's queried end, a negative one. Coverage was proved over the files ON DISK, so a manifest-listed
+# capture that went missing took its obligation with it and the session loaded short on the stale prefix; and an
+# excluded capture lost its queried_end with its records.
+fresh v11
+strike_log "${OPEN_LOG[@]}"
+vrun "$VDAY" >/dev/null
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 C $K3 {\"frameSeq\":3,\"v\":\"c\"}" "4 C $K4 {\"frameSeq\":4,\"v\":\"c\"}" '5 M'
+vrun "$VDAY" >/dev/null
+want "17k two captures on the date, contiguous: the session is whole" "0-3 3-6 $K1 $K2 $K3 $K4" "$(vread ranges) $(vread keys)"
+TAIL=$(basename "$(ls "$(VDIR)"/*.p0.3-6.*.jsonl.gz)")
+rm -f "$(VDIR)/$TAIL"
+want "  the second file LOST from disk, its manifest line kept: REFUSED, never read with the stale prefix" \
+     "MISSING_CAPTURE_FILE: $TAIL [3,6) is named by dt=$VDAY's manifest but is not on disk" "$(vread keys)"
+fresh v12
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+STRIP2="$VP.p0.0-3.dt20260909.20260909T230000Z.jsonl.gz"
+VFAKE_QEND=10 vfake "$STRIP2" "$VDAY" stripped 0 3 "0:$K1:{\"frameSeq\":1,\"v\":\"stripped\"}"
+want "  an EXCLUDED capture (offsets stripped) whose run queried 10: its records are not read, its obligation STANDS" \
+     "SESSION_INCOMPLETE: dt=$VDAY queried up to 10, committed captures reach only 3" "$(vread keys)"
+rm -f "$(VDIR)/$STRIP2"
+grep -v -e "$STRIP2" "$(VDIR)/_manifest.jsonl" > "$(VDIR)/_manifest.tmp" && mv "$(VDIR)/_manifest.tmp" "$(VDIR)/_manifest.jsonl"
+NEG="$VP.p0.3-5.dt20260909.20260909T233000Z.jsonl.gz"
+VFAKE_QEND=-1 vfake "$NEG" "$VDAY" ok 3 5 "3:$K3:{\"frameSeq\":3,\"v\":\"c\"}"
+has  "  a NEGATIVE queried_end is not an offset: refused, the endpoint check cannot be switched off" \
+     "queried_end -1 is not an offset" "$(vread keys)"
 
 # ---- 17f. EVERY vol-premium ledger is committed-only by default --------------------------------------------------------
 for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings \
