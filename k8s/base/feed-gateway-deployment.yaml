@@ -154,8 +154,10 @@ spec:
             requests:
               cpu: 100m
               memory: 512Mi
-              # The vol-premium log's disk (the emptyDir below), declared so the scheduler places the pod
-              # only where the node can hold it. No ephemeral-storage LIMIT, matching every options-edge
+              # The vol-premium log's disk (the emptyDir below), declared so the scheduler counts its capacity
+              # against the node's allocatable storage. That is accounting, not a reservation: other workloads'
+              # undeclared disk use can still leave less free, so check the node filesystem's actual headroom
+              # before rollout (runbook step 2). No ephemeral-storage LIMIT, matching every options-edge
               # workload: a pod-level limit would also count /tmp (SellerActivityDiskStore) and the
               # container log, and evict the gateway for growth this change does not bound. The emptyDir's
               # own sizeLimit bounds the log.
