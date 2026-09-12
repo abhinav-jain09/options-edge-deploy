@@ -583,8 +583,11 @@ nested_verdict() {
   [ -z "$why" ] || while IFS= read -r line; do NV_REASONS+=("mutant:$line"); done <<< "$why"
   NV_CAUGHT="$(n_fail "$pm")"
   [ "$NV_CAUGHT" -gt 0 ] || NV_REASONS+=("survived: no assertion FAILed on the mutant")
-  line="$(fail_messages "$pm" | grep -vE "$(named_rx "$t")" | head -1)"
-  [ -z "$line" ] || NV_REASONS+=("unrelated: a FAIL of the mutant does not name $t: $line")
+  # COUNTED, not "is the first offending line non-empty": an empty FAIL message is a line grep -v selects, and command
+  # substitution would strip it to nothing and skip the refusal. The count sees it; the example is quoted so an empty
+  # one is visible as "".
+  x="$(fail_messages "$pm" | grep -cvE "$(named_rx "$t")" || true)"
+  [ "${x:-0}" = 0 ] || NV_REASONS+=("unrelated: $x FAIL(s) of the mutant do not name $t, e.g. \"$(fail_messages "$pm" | grep -vE "$(named_rx "$t")" | head -1)\"")
   if NV_EFFECT="$(effect_shown "$pm.runs" "$t" "$eff")"; then :
   else NV_REASONS+=("effect: no script run on the mutant shows [$eff] on $t in its broker calls${NV_EFFECT:+ ($NV_EFFECT)}, so the mutation was never shown to act"); fi
   NV_EXAMPLE="$(fail_messages "$pm" | head -1)"
@@ -693,6 +696,8 @@ NESTED_PROBES=( # <nested unit> <declared inventory, comma-separated> <rules tha
   "nested_mutant_exec_failure_after_effect  a,b mutant:exec"
   "nested_control_exec_failure              a,b control:exec"
   "nested_effect_already_in_control         a,b control-effect"
+  "nested_mutant_empty_fail_only            a,b unrelated"
+  "nested_mutant_empty_fail_then_unrelated  a,b unrelated"
 )
 side() { echo "${1##*/}"; }   # control | mutant
 fake_refused()   { fake_run 1 "HARD ERROR: topic $T7 has partitions=4 but requires EXACTLY 1 (OPTIONS_EDGE_NEVER_RECREATE_TOPICS)"; }
@@ -741,6 +746,11 @@ nested_effect_already_in_control() {
   fake_recreated
   if [ "$(side "$1")" = control ]; then ok a "a"; ok b "b"; else bad a "$T7 a"; ok b "b"; fi
 }
+# Codex r6: a FAIL with an EMPTY message names no topic, but the first-offending-line test lost it to command
+# substitution and accepted the mutant. Both shapes: the empty FAIL alone, and an empty FAIL ahead of a non-empty
+# unrelated one (which the old "head -1" never reached). Refused by [unrelated] and nothing else.
+nested_mutant_empty_fail_only()          { fake_side "$1"; [ "$(side "$1")" = control ] && { ok a "a"; ok b "b"; } || { bad a ""; ok b "b"; }; }
+nested_mutant_empty_fail_then_unrelated() { fake_side "$1"; [ "$(side "$1")" = control ] && { ok a "a"; ok b "b"; } || { bad a ""; bad b "$P.events b"; }; }
 
 unit_collector_selfcheck() { # one assertion per probe: probe:<fn>, then nested:<fn>
   local d="$WORK/selfcheck" spec fn inv rules st got; mkdir -p "$d"
