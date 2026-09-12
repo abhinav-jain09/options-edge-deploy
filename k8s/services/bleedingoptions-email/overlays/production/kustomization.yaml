@@ -7,7 +7,8 @@
 # green is not necessarily the one that runs. On 2026-08-16 a tag on the web image resolved to four
 # different digests inside twenty minutes for exactly this reason.
 #
-# ⚠️ SUPERSEDED by the block below. Kept because the rollback target points at it.
+# ⚠️ The #18 block further down is SUPERSEDED by this one. It is kept because the rollback target
+# still points at that image.
 #
 # THIS DIGEST is oe-email-service-deploy #21, 27/27 tests green, linux/amd64 verified against the
 # registry manifest before this edit.
