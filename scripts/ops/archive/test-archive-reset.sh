@@ -1184,7 +1184,13 @@ import gzip, json, os, re, sys
 # on disk — every line declaring a capture (a file, present or not; a no-progress ATTEMPT with no file) carries
 # the end its run queried; a listed file the disk has lost inside the needed range is MISSING_CAPTURE_FILE; an
 # excluded capture keeps its queried end; and every capture names its SOURCE LOG (source_topic_id) — two logs in
-# one window are SOURCE_IDENTITY_MISMATCH, a capture naming none is excluded NO_SOURCE_IDENTITY.
+# one window are SOURCE_IDENTITY_MISMATCH.
+# Round 3 (deploy #1041 review r3 / engine r16): identity is part of the obligation — a declared line that names
+# NO source log refuses the WINDOW (NO_SOURCE_IDENTITY), because an obligation on an unknown log can be discharged
+# by no capture, named or not (a named log's offsets are coordinates on THAT log); the declared LOWER bound is
+# owed too — the admitted captures must begin at or before the lowest offset any line of the window declares, or
+# the prefix is COVERAGE_GAP (an attempt at checkpoint 3 querying 10, then a capture [10,12): [3,10) is in no
+# capture); and a line naming BOTH a file and an attempt is malformed (MANIFEST_MISMATCH), never an attempt.
 topic, root, mode, dates = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 NAME = re.compile(r"p(\d{1,9})\.(\d{1,18})-(\d{1,18})\.dt(\d{8})\.(\d{8}T\d{6}Z)\.jsonl\.gz")
 LINE = re.compile(rb"^(?:CreateTime|LogAppendTime):\d+\tPartition:(\d+)\tOffset:(\d+)\t")
@@ -1219,16 +1225,26 @@ for dt in dates:
                     e = json.loads(line)
                 except ValueError:
                     continue
-                if "file" in e:
+                if e.get("file") is not None and e.get("attempt") is not None:
+                    die("MANIFEST_MISMATCH: dt=%s/_manifest.jsonl names both a file (%s) and an attempt (%s) on one "
+                        "line: the archiver writes no such line, and it is neither" % (dt, e["file"], e["attempt"]))
+                if e.get("file") is not None:
                     manifest[e["file"]] = e
-                elif "attempt" in e:
+                elif e.get("attempt") is not None:
                     attempts.append(e)
     present = {n for n in os.listdir(d) if n.endswith(".jsonl.gz")}
-    # The inventory: every declared capture, on disk or not.
+    # The inventory: every declared capture, on disk or not — and every declaration names its log, or the window
+    # is refused: an obligation on an unknown log cannot be discharged by a capture of a known one.
+    def identity(e, n):
+        i = e.get("source_topic_id")
+        if not i:
+            die("NO_SOURCE_IDENTITY: dt=%s/_manifest.jsonl declares %s without source_topic_id: its obligation is "
+                "on a log no capture can be placed on, so nothing in the window can discharge it" % (dt, n))
+        return i
     for n, e in manifest.items():
         part, f, t = coords(n, dt)
         declared.append({"dt": dt, "n": n, "f": f, "t": t, "q": obligation(e, t, n),
-                         "id": e.get("source_topic_id") or None, "present": n in present})
+                         "id": identity(e, n), "present": n in present})
     for a in attempts:
         n = "attempt at %s" % a.get("archived_at", "?")
         f = a.get("offset_from")
@@ -1236,7 +1252,7 @@ for dt in dates:
            or not isinstance(f, int) or f < 0 or a.get("offset_to") != f or a.get("stable_boundary") != f:
             die("dt=%s: %s is not a no-progress attempt of this topic at its checkpoint: %r" % (dt, n, a))
         declared.append({"dt": dt, "n": n, "f": f, "t": f, "q": obligation(a, f, n),
-                         "id": a.get("source_topic_id") or None, "present": True})
+                         "id": identity(a, n), "present": True})
     for n in sorted(present):
         part, f, t = coords(n, dt)
         if part != 0:
@@ -1245,8 +1261,7 @@ for dt in dates:
         why = ("NO_MANIFEST_LINE" if e is None else
                "NOT_COMMITTED_READ" if e.get("capture") != CAPTURE else
                "NO_RECORD_OFFSETS" if (e.get("record_layout") != LAYOUT or e.get("offsets_verified") is not True) else
-               "ESCAPED_RECORDS" if e.get("escaped_records") != 0 else
-               "NO_SOURCE_IDENTITY" if not e.get("source_topic_id") else None)
+               "ESCAPED_RECORDS" if e.get("escaped_records") != 0 else None)
         if why:
             excluded[why] = excluded.get(why, 0) + 1
             unproven.append((f, t, n))
@@ -1279,17 +1294,17 @@ for dt in dates:
         admitted.append({"n": n, "dt": dt, "from": f, "to": t, "q": e.get("queried_end"), "records": records})
 
 admitted.sort(key=lambda c: (c["from"], c["to"], c["dt"], c["n"]))
-# The session's obligation: the end the EARLIEST declaring date's runs meant to reach, admitted or not.
+# The session's obligation: the end the EARLIEST declaring date's runs meant to reach, admitted or not — and the
+# lowest offset ANY line of the window declares, which the admitted captures must begin at or before.
 need = need_from = first = None
 if declared:
     first = min(c["dt"] for c in declared)
     need = max(c["q"] for c in declared if c["dt"] == first)
-    need_from = min(c["f"] for c in declared if c["dt"] == first)
-# One source log across the window.
+    need_from = min(c["f"] for c in declared)
+# One source log across the window (every declaration names one, or the window was refused above).
 logs = {}
 for c in declared:
-    if c["id"]:
-        logs.setdefault(c["id"], c["n"])
+    logs.setdefault(c["id"], c["n"])
 if len(logs) > 1:
     die("SOURCE_IDENTITY_MISMATCH: " + " and ".join("%s from log %s" % (n, i) for i, n in logs.items())
         + " — the topic was re-created between them; offsets on one log say nothing about the other")
@@ -1323,6 +1338,11 @@ for c in admitted:
 for f, t, n in unproven:
     if reach is None or f < start or t > reach:
         die("UNCOVERED_EXCLUDED_FILE: %s [%d,%d) is not proven and no capture covers it" % (n, f, t))
+# The declared PREFIX is owed too: the window's declarations begin at need_from, and the first admitted capture
+# must begin there or below — else [need_from, start) is in no capture, and no later capture will ever hold it.
+if need is not None and need_from < need and reach is not None and start > need_from:
+    die("COVERAGE_GAP: offsets [%d,%d) are in no committed capture — the window's declarations begin at %d "
+        "but the first admitted capture begins at %d" % (need_from, start, need_from, start))
 if need is not None and (reach is None or reach < need):
     die("SESSION_INCOMPLETE: dt=%s queried up to %s, committed captures reach only %s"
         % (first, need, reach if reach is not None else "nothing"))
@@ -1624,20 +1644,59 @@ has  "  and the new"                                               "from log $TI
 want "  the old log's withheld [3,5) is NOT discharged by the new log's offsets: dt=$VDAY alone is still incomplete" \
      "SESSION_INCOMPLETE: dt=$VDAY queried up to 5, committed captures reach only 3" "$(vread keys)"
 want "  the new log's own date reads whole on its own"          "$K1 $K2 $K3 $K4" "$(vread keys "$VDAY2")"
-# A committed capture that names NO source log is not admitted: excluded and counted; uncovered, it refuses.
+# A declaration that names NO source log REFUSES the window (deploy #1041 r3 / engine r16 MAJOR 1). Round 2 excluded
+# such a capture and let a named capture's offsets cover its range and discharge its queried end — but a named
+# capture's offsets are coordinates on ITS log, and prove nothing about a log nobody can name: the unnamed capture
+# may be the previous incarnation's, its withheld range lost with it. Identity is part of the obligation.
+vattempt() { # <dt> <checkpoint> <queried_end>: a no-progress ATTEMPT line, naming $VFAKE_ID (unset = $SID; empty = none)
+  python3 - "$(VDIR "$1")" "$VP" "$1" "$2" "$3" <<'PY'
+import json, os, sys
+d, topic, dt, ck, q = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5])
+os.makedirs(d, exist_ok=True)
+line = {"topic": topic, "dt": dt, "partition": 0, "offset_from": ck, "offset_to": ck, "records": 0, "offset_span": 0,
+        "capture": "read_committed_stable_boundary", "stable_boundary": ck, "queried_end": q,
+        "source_topic_id": os.environ.get("VFAKE_ID", "SSSSSSSSSSSSSSSSSSSSSS"), "attempt": "no_progress",
+        "archived_at": "20260909T221500Z"}
+if not line["source_topic_id"]:
+    del line["source_topic_id"]
+with open(os.path.join(d, "_manifest.jsonl"), "a") as m:
+    m.write(json.dumps(line) + "\n")
+PY
+}
 fresh v9b
 strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
 vrun "$VDAY" >/dev/null
 want "  the loader model reads ONE log across a complete window"          "$SID" "$(vread identity)"
 NOID="$VP.p0.0-3.dt20260909.20260909T230000Z.jsonl.gz"
 VFAKE_ID= vfake "$NOID" "$VDAY" ok 0 3 "0:$K1:{\"frameSeq\":1,\"v\":\"unnamed\"}"
-want "  a committed capture naming NO source log is EXCLUDED and counted" "NO_SOURCE_IDENTITY=1" "$(vread excluded)"
-want "  its records never read: the named capture alone answers"        "$K1 $K2" "$(vread keys)"
-rm -f "$(VDIR)/$NOID"
-grep -v -e "$NOID" "$(VDIR)/_manifest.jsonl" > "$(VDIR)/_manifest.tmp" && mv "$(VDIR)/_manifest.tmp" "$(VDIR)/_manifest.jsonl"
-NOID2="$VP.p0.3-5.dt20260909.20260909T233000Z.jsonl.gz"
-VFAKE_ID= vfake "$NOID2" "$VDAY" ok 3 5 "3:$K3:{\"frameSeq\":3,\"v\":\"unnamed\"}"
-has  "  and one that no named capture covers refuses the session"   "UNCOVERED_EXCLUDED_FILE: $NOID2" "$(vread keys)"
+has  "  a committed capture naming NO source log REFUSES the window (r3): its obligation is on a log nobody can name" \
+     "NO_SOURCE_IDENTITY: dt=$VDAY/_manifest.jsonl declares $NOID without source_topic_id" "$(vread keys)"
+has  "  saying why"                              "nothing in the window can discharge it" "$(vread keys)"
+# Codex r3 UNNAMED_LOG_SATISFIED_BY_NAMED_LOG: dt=D's UNNAMED [0,3) queried 9; dt=D+1 names log $TID's [0,10). Round 2
+# excluded the first, took B's [0,10) as covering [0,9), and admitted the session on B's record alone.
+fresh v9c
+NOIDB="$VP.p0.0-10.dt20260910.20260910T220000Z.jsonl.gz"
+VFAKE_QEND=9 VFAKE_ID= vfake "$NOID" "$VDAY" ok 0 3 "0:$K1:{\"frameSeq\":1,\"v\":\"unnamed\"}"
+VFAKE_ID=$TID vfake "$NOIDB" "$VDAY2" ok 0 10 "4:$K2:{\"frameSeq\":2,\"v\":\"B\"}"
+has  "  Codex r3: an UNNAMED dt=$VDAY capture querying 9, then log $TID's [0,10) on dt=$VDAY2 — REFUSED, B's offsets cover nothing of it" \
+     "NO_SOURCE_IDENTITY: dt=$VDAY/_manifest.jsonl declares $NOID" "$(vsession keys "$VDAY" "$VDAY2")"
+# Codex r3 UNNAMED_ATTEMPT_SATISFIED_BY_NAMED_LOG: an UNNAMED attempt at 3 querying 9, then a NAMED [3,9). Round 2
+# had no exclusion to count and admitted it.
+fresh v9d
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+VFAKE_ID= vattempt "$VDAY" 3 9
+vfake "$VP.p0.3-9.dt20260910.20260910T220000Z.jsonl.gz" "$VDAY2" ok 3 9 "3:$K3:{\"frameSeq\":3,\"v\":\"c\"}"
+has  "  Codex r3: an UNNAMED attempt at 3 querying 9, then a NAMED [3,9) — REFUSED, the attempt's log is unknown" \
+     "NO_SOURCE_IDENTITY: dt=$VDAY/_manifest.jsonl declares attempt at 20260909T221500Z without source_topic_id" \
+     "$(vsession keys "$VDAY" "$VDAY2")"
+# The control: the SAME attempt naming its log, then [3,9) on that log: whole.
+fresh v9e
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+vattempt "$VDAY" 3 9
+vfake "$VP.p0.3-9.dt20260910.20260910T220000Z.jsonl.gz" "$VDAY2" ok 3 9 "3:$K3:{\"frameSeq\":3,\"v\":\"c\"}"
+want "  the control: the same attempt NAMING its log, then [3,9) on that log — whole" "$K1 $K2 $K3" "$(vsession keys "$VDAY" "$VDAY2")"
 
 # ---- 17j. ZERO PROGRESS (deploy #1041 r2 MAJOR 3): a run whose stable boundary sits AT its checkpoint records what ----
 # it QUERIED. The reviewer's case: an earlier capture of the date reached 3 and queried 3, so the date's recorded
@@ -1703,6 +1762,100 @@ NEG="$VP.p0.3-5.dt20260909.20260909T233000Z.jsonl.gz"
 VFAKE_QEND=-1 vfake "$NEG" "$VDAY" ok 3 5 "3:$K3:{\"frameSeq\":3,\"v\":\"c\"}"
 has  "  a NEGATIVE queried_end is not an offset: refused, the endpoint check cannot be switched off" \
      "queried_end -1 is not an offset" "$(vread keys)"
+
+# ---- 17l. the ATTEMPT's PREFIX is owed (deploy #1041 r3 MAJOR 2 / engine r16 MAJOR): a no-progress line declares -----
+# where its run began (the checkpoint) as well as the end it queried, and round 2 enforced only the end: coverage
+# started at whichever admitted capture came first. Codex's ATTEMPT_PREFIX_LOST, reached through the archiver's own
+# retention-gap branch: the attempt at checkpoint 3 queried 9; retention then expired [3,6); the next run found the
+# log starting at 6, said "3 records LOST", captured [6,9) — and the session loaded on [6,9) as if whole. The
+# checkpoint 3 is the PREVIOUS date's capture, so dt=D holds only the attempt, exactly the reviewer's shape.
+VDAY0=2026-09-08
+fresh v13
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY0" >/dev/null
+want "17l the previous date captured [0,3): checkpoint 3"                    "0-3 3" "$(vnames "$VDAY0") $(vck)"
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 O $K3 {\"frameSeq\":3,\"v\":\"open\"}" "4 O $K4 {\"frameSeq\":4,\"v\":\"open\"}" '5 O x y' '6 O x y' '7 O x y' '8 O x y'
+OUT=$(vrun "$VDAY"); RC=$?
+want "  dt=$VDAY: an attempt at checkpoint 3 querying 9 is its ONLY line (rc, attempt, checkpoint, files)" "0 no_progress 3 0" \
+     "$RC $(vm attempt) $(vck) $(vfiles)"
+strike_log "6 C $K3 {\"frameSeq\":3,\"v\":\"c\"}" "7 C $K4 {\"frameSeq\":4,\"v\":\"c\"}" '8 M'
+fixture "topicid $SID" "0 6 9"              # retention expired [3,6): the log now starts at 6
+OUT=$(vrun "$VDAY2"); RC=$?
+want "  the next run: checkpoint 3 expired, the log starts at 6 — the archiver's retention-gap branch (rc)" 0 "$RC"
+has  "  which says what was lost" "GAP $VP p0: checkpoint 3 expired (log now starts at 6) — 3 records LOST before this run" "$OUT"
+want "  and captures [6,9) under its date"                                "6-9" "$(vnames "$VDAY2")"
+has  "  the SESSION read across both dates is REFUSED: [3,6) is in no capture, and no later capture will ever hold it" \
+     "COVERAGE_GAP: offsets [3,6) are in no committed capture" "$(vsession keys "$VDAY" "$VDAY2")"
+has  "  naming the declared beginning and the first capture" \
+     "the window's declarations begin at 3 but the first admitted capture begins at 6" "$(vsession keys "$VDAY" "$VDAY2")"
+want "  dt=$VDAY alone is still SESSION_INCOMPLETE, as before: nothing is captured there yet" 1 \
+     "$(vread keys | grep -c "^SESSION_INCOMPLETE: dt=$VDAY queried up to 9, committed captures reach only nothing")"
+# Codex's second shape, in the loader model: the attempt at 3 queried 10 and the next capture is [10,12) — reach 12
+# satisfies the end, and the WHOLE required interval [3,10) is unproved. And the first shape at the log start.
+fresh v13b
+vattempt "$VDAY" 3 10
+vfake "$VP.p0.10-12.dt20260910.20260910T220000Z.jsonl.gz" "$VDAY2" ok 10 12 "10:$K4:{\"frameSeq\":4,\"v\":\"c\"}"
+has  "  dt=$VDAY holds ONLY an attempt at 3 querying 10, then [10,12): the end is reached and the session is still REFUSED" \
+     "COVERAGE_GAP: offsets [3,10) are in no committed capture — the window's declarations begin at 3 but the first admitted capture begins at 10" \
+     "$(vsession keys "$VDAY" "$VDAY2")"
+fresh v13c
+vattempt "$VDAY" 0 10
+vfake "$VP.p0.3-10.dt20260910.20260910T220000Z.jsonl.gz" "$VDAY2" ok 3 10 "3:$K3:{\"frameSeq\":3,\"v\":\"c\"}"
+has  "  an attempt at 0 querying 10, then [3,10): [0,3) is owed and REFUSED" \
+     "COVERAGE_GAP: offsets [0,3) are in no committed capture" "$(vsession keys "$VDAY" "$VDAY2")"
+fresh v13d
+vattempt "$VDAY" 3 10
+vfake "$VP.p0.3-10.dt20260910.20260910T220000Z.jsonl.gz" "$VDAY2" ok 3 10 "3:$K3:{\"frameSeq\":3,\"v\":\"c\"}"
+want "  the control: the attempt at 3 querying 10, then [3,10) — whole"    "$K3" "$(vsession keys "$VDAY" "$VDAY2")"
+
+# ---- 17m. a manifest line naming BOTH a file and an attempt (deploy #1041 r3 MINOR): the archiver writes no such ----
+# line. The verifier took ANY non-null "attempt" as an attempt line — out of the file-presence and checksum checks —
+# so "attempt":"no_progress" pasted onto a missing file's line turned CORRUPT (rc 1) into OK (rc 0). The line is
+# malformed: the verifier reports it and still looks for the file; the loader model refuses it (MANIFEST_MISMATCH).
+vpaste_attempt() { # <dt> <file>: add "attempt":"no_progress" to the manifest line naming <file>
+  python3 - "$(VDIR "$1")/_manifest.jsonl" "$2" <<'PY'
+import json, sys
+p, name = sys.argv[1], sys.argv[2]
+out = []
+for l in open(p):
+    if l.strip():
+        e = json.loads(l)
+        if e.get("file") == name:
+            e["attempt"] = "no_progress"
+        out.append(json.dumps(e) + "\n")
+open(p, "w").writelines(out)
+PY
+}
+fresh v14
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+BOTH="$VP.p0.3-6.dt20260909.20260909T230000Z.jsonl.gz"
+vfake "$BOTH" "$VDAY" ok 3 6 "3:$K3:{\"frameSeq\":3,\"v\":\"c\"}"
+want "17m two captures on the date, whole"                          "0-3 3-6 $K1 $K2 $K3" "$(vread ranges) $(vread keys)"
+vverify() { # the verifier over a copy of the VP topic dir; prints "rc=<rc>" then the output
+  local vvd="$T/vnas-vp-$1"; rm -rf "$vvd"; mkdir -p "$vvd/kafka/prod"; cp -R "$A/kafka/prod/$VP" "$vvd/kafka/prod/$VP"
+  local out rc
+  out=$(env ARCHIVE_DIR="$vvd" ENV=prod FORCE=true VERIFY_CHECKSUMS=none LOG="$T/verify-vp-$1.log" \
+            OE_TOPICS_ENV="$T/vp.topics.env" bash "$OE/oe-archive-verify.sh" "$VDAY" 2>&1); rc=$?
+  printf 'rc=%s\n%s' "$rc" "$out"
+}
+OUT_V=$(vverify 14a)
+want "  the verifier, both files present: COMPLETE (rc), two files"  "rc=0 2" "$(printf '%s' "$OUT_V" | head -1) $(printf '%s' "$OUT_V" | grep -o 'files=[0-9]*' | head -1 | cut -d= -f2)"
+vpaste_attempt "$VDAY" "$BOTH"
+OUT_V=$(vverify 14b)
+want "  \"attempt\":\"no_progress\" pasted onto the second file's line, file PRESENT: the date is not OK (rc)" "rc=1" "$(printf '%s' "$OUT_V" | head -1)"
+has  "  the line is reported as malformed"  "1 manifest line(s) name both a file and an attempt (malformed; checked as file lines): ['$BOTH']" "$OUT_V"
+has  "  as PARTIAL, not CORRUPT: the file it names is there"           "PARTIAL  $VP" "$OUT_V"
+want "  and it is still COUNTED as a file, never as an attempt"           2 "$(printf '%s' "$OUT_V" | grep -o 'files=[0-9]*' | head -1 | cut -d= -f2)"
+has  "  the loader model REFUSES the line: it is neither a file line nor an attempt" \
+     "MANIFEST_MISMATCH: dt=$VDAY/_manifest.jsonl names both a file ($BOTH) and an attempt (no_progress) on one line" "$(vread keys)"
+rm -f "$(VDIR)/$BOTH"
+OUT_V=$(vverify 14c)
+want "  the file REMOVED, its contradictory line kept — Codex's case: CORRUPT (rc 1), not OK" "rc=1" "$(printf '%s' "$OUT_V" | head -1)"
+has  "  the missing file is still seen"      "1 manifest file(s) absent on disk: ['$BOTH']" "$OUT_V"
+has  "  as CORRUPT"                                                   "CORRUPT  $VP" "$OUT_V"
+has  "  and the loader model still refuses the line, before it could miss the file" "MANIFEST_MISMATCH: dt=$VDAY/_manifest.jsonl names both a file" "$(vread keys)"
 
 # ---- 17f. EVERY vol-premium ledger is committed-only by default --------------------------------------------------------
 for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings \

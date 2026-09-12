@@ -120,9 +120,11 @@ pipeline {
           # and the session that must wait for it, the layout proof, a non-transactional topic unchanged, the crash
           # re-read reconciled by offset, the files a loader must not take on trust, and — review round 2 — the source
           # log every capture names, the no-progress ATTEMPT line, and the manifest as the coverage inventory: a listed
-          # file the disk lost, an excluded capture's queried end, a negative one). A lower count
+          # file the disk lost, an excluded capture's queried end, a negative one; review round 3 — 17i/17l/17m: a
+          # declaration naming no log refuses the window, an attempt's declared prefix is owed, and a line naming both a
+          # file and an attempt is malformed to the verifier and the loader). A lower count
           # means a section stopped early or was skipped, which "ALL PASS" alone cannot show. Raise it with the suite.
-          [ "$ran" -ge 469 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+          [ "$ran" -ge 493 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
           # Installing an evaluator whose acceptance predicate is untested would ship the one thing

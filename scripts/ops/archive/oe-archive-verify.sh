@@ -149,8 +149,17 @@ for topic in topics:
     # A committed-read run that could capture NOTHING (the stable boundary still at its checkpoint) records the
     # ATTEMPT — "attempt":"no_progress", the end it queried, and NO file (deploy #1041 review round 2, MAJOR 3).
     # It is an obligation for the session loaders, not a file this verifier can find or checksum.
-    attempts = [e for e in entries if e.get("attempt") is not None]
-    entries  = [e for e in entries if e.get("attempt") is None]
+    # A line naming BOTH a file and an attempt is neither (deploy #1041 review round 3, MINOR): the archiver never
+    # writes one, and treating it as an attempt would take a file the manifest claims out of the presence and
+    # checksum checks — "attempt":"no_progress" pasted onto a missing file's line turned CORRUPT into OK. It is
+    # reported as malformed AND kept among the file lines, so the file it names is still looked for; the loaders
+    # (CommittedLedgerArchive, vpread.py) refuse such a line outright (MANIFEST_MISMATCH).
+    contradictory = [e for e in entries if e.get("attempt") is not None and e.get("file") is not None]
+    if contradictory:
+        r["reasons"].append(f"{len(contradictory)} manifest line(s) name both a file and an attempt (malformed; "
+                            f"checked as file lines): {[e.get('file') for e in contradictory][:3]}")
+    attempts = [e for e in entries if e.get("attempt") is not None and e.get("file") is None]
+    entries  = [e for e in entries if e.get("attempt") is None or e.get("file") is not None]
     r["files"]   = len(entries)
     r["records"] = sum(int(e.get("records", 0)) for e in entries)
     r["partitions"] = sorted({int(e["partition"]) for e in entries if "partition" in e})
@@ -207,7 +216,7 @@ for topic in topics:
             continue
         b, q = e.get("stable_boundary"), e.get("queried_end")
         if isinstance(b, int) and isinstance(q, int) and b < q:
-            if e.get("attempt") is not None:
+            if e.get("attempt") is not None and e.get("file") is None:
                 withheld.append(f"p{int(e.get('partition', 0))} [{b},{q}) — the run at {e.get('archived_at', '?')} "
                                 f"queried {q} and found no committed record past its checkpoint {b} (attempt "
                                 f"{e.get('attempt')}, no file published)")
