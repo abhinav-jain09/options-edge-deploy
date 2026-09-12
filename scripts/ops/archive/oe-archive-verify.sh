@@ -190,6 +190,22 @@ for topic in topics:
         r["reasons"].append(f"offset discontinuity ({len(gaps)}): {gaps[:3]}")
     r["offset_gaps"] = len(gaps)
 
+    # A committed-read capture that stopped BELOW the end its run queried is WHOLE for the range it names:
+    # offsets [stable_boundary, queried_end) were inside a transaction that had not resolved, the checkpoint
+    # stopped there, and the next run archives them under ITS OWN dt=. So this is reported, never counted as
+    # PARTIAL — the date is not missing anything it ever claimed. Completeness for a SESSION is decided where
+    # the session is read: the vol-premium loaders (CommittedLedgerArchive) read a session from its dt= AND the
+    # following storage dates and refuse the session until a committed capture reaches this queried_end.
+    withheld = []
+    for e in entries:
+        if e.get("capture") != "read_committed_stable_boundary":
+            continue
+        b, q = e.get("stable_boundary"), e.get("queried_end")
+        if isinstance(b, int) and isinstance(q, int) and b < q:
+            withheld.append(f"p{int(e.get('partition', 0))} [{b},{q}) in {e.get('file', '?')}")
+    if withheld:
+        r["withheld_by_open_transaction"] = withheld
+
     # Checksums. 'sample' verifies the newest file per topic — enough to catch a truncated or
     # bit-rotted copy without re-reading a quarter-terabyte archive every evening.
     checked = 0
@@ -241,6 +257,9 @@ for r in sorted(results, key=lambda x: (order.get(x["status"], 9), x["topic"])):
     print(f"  {r['status']:<8} {r['topic']:<45} {detail}")
     for why in r["reasons"]:
         print(f"           ^ {why}")
+    for held in r.get("withheld_by_open_transaction", []):
+        print(f"           ~ open transaction withheld {held} — the next run archives it under its own dt=; "
+              "a session that needs it is refused until then, never loaded short")
 
 bad = [r for r in results if r["status"] in ("MISSING", "PARTIAL", "CORRUPT")]
 print("SUMMARY " + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))

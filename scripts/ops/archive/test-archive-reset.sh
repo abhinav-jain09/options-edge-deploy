@@ -1144,55 +1144,143 @@ want "  its checkpoint line carries no stamp and no identity" 2 \
      "$(grep -cE '^[01]=40 records=40 span=40 dt=[0-9-]+ archived=[0-9]{8}T[0-9]{6}Z$' "$A/kafka/prod/_manifest/$TOPIC.offsets")"
 want "  and its discovery never asked for a topic list"                      0 "$(grep -c '^topics list' "$OE_FIXTURE.topics-calls")"
 
-# ================= 17. the VOL-PREMIUM ledgers: committed-only, in the four-field layout ====================
+# ============ 17. the VOL-PREMIUM ledgers: committed-only, with their real offsets preserved ================
 # vol-premium-service runs Kafka Streams exactly_once_v2 (it refuses to boot otherwise), so options.spx.vol-premium.ivrv
 # and its sibling sinks are written inside transactions. Read by the console consumer (read_uncommitted, its default),
 # the records of an ABORTED transaction are archived, and the calibrator (IvRvArchiveLoader) and the activation gate
 # (GateArchiveLoader) take them as observations (17z reproduces it). OE_COMMITTED_READ_TOPICS now routes every
-# vol-premium ledger to the committed reader. Their reader — options-edge-processing's ArchiveReader — parses the
-# console layout "<ts>\tPartition:<p>\t<key>\t<value>", so the archiver proves the reader's range and drops its Offset
-# column. vpread.py models that reader: its file-name grammar and numeric ledger order, its record split, and
-# IvRvArchiveLoader's RECORDS_EXCEED_RANGE and JSON checks. The shim reader is the one section 12 uses; the real
+# vol-premium ledger to the committed reader, and every such file KEEPS the reader's Offset column (deploy #1041
+# review, engine #44): the per-record offset is the only coordinate that can reconcile the overlapping captures an
+# ordinary crash re-read leaves behind (publish, die before checkpointing, retry against an ADVANCED stable
+# boundary) and the only one that can place a record archived under a LATER dt= against its session's earlier
+# records. The archiver proves the column before publishing — five fields, this partition, inside [from, boundary),
+# strictly increasing — and says so in the manifest ("offsets_verified":true), which is the provenance the loaders
+# admit on. vpread.py models the loader side (options-edge-processing vol-premium-service calibration/ArchiveReader
+# and calibration/CommittedLedgerArchive): the file-name grammar, the manifest admission, the offset-layout record
+# parse, the range and ordering checks, reconciliation of duplicate/conflicting offsets, coverage and the
+# queried_end completeness rule across storage dates. The shim reader is the one section 12 uses; the real
 # program's read_committed behaviour (markers walked, aborted records withheld, an open transaction bounding the read)
 # is proven against a real broker by broker-test/strike-reader-broker-test.sh section 1, not here.
 VP=options.spx.vol-premium.ivrv
 VDAY=2026-09-09; VDAY2=2026-09-10
 cat > "$T/vpread.py" <<'PY'
 import gzip, json, os, re, sys
-# options-edge-processing vol-premium-service calibration/ArchiveReader: LEDGER_NAME :68-69, LEDGER_ORDER :64-65, the
-# record start :244-264 and the three-TAB field split :278-296; calibration/IvRvArchiveLoader: RECORDS_EXCEED_RANGE :228,
-# parse() :311. (Named without their file suffix: validate-archive-unit-completeness.sh reads a named source file here
-# as one the unit must ship.)
-topic, d, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+# The LOADER side, modelled: options-edge-processing vol-premium-service calibration/ArchiveReader (the file-name
+# grammar LEDGER_NAME, and readOffsetLayoutFile's five-field record parse) and calibration/CommittedLedgerArchive
+# (manifest admission: capture, record_layout, offsets_verified, escaped_records; the per-record range and ordering
+# checks; reconciliation by real offset — identical duplicate vs SAME_OFFSET_CONFLICT; COVERAGE_GAP; and the
+# queried_end rule, SESSION_INCOMPLETE, across storage dates). (Named without their file suffix:
+# validate-archive-unit-completeness.sh reads a named source file here as one the unit must ship.)
+#   usage: vpread.py <topic> <topic dir> <keys|ranges|check|excluded> <dt> [dt ...]
+topic, root, mode, dates = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 NAME = re.compile(r"p(\d{1,9})\.(\d{1,18})-(\d{1,18})\.dt(\d{8})\.(\d{8}T\d{6}Z)\.jsonl\.gz")
-START = re.compile(rb"CreateTime:\d+\tPartition:\d+\t")
-files = []
-for n in os.listdir(d):
-    if not n.endswith(".jsonl.gz"):
+LINE = re.compile(rb"^(?:CreateTime|LogAppendTime):\d+\tPartition:(\d+)\tOffset:(\d+)\t")
+CAPTURE, LAYOUT = "read_committed_stable_boundary", "timestamp,partition,offset,key,value"
+
+def die(why):
+    print(why); sys.exit(0)
+
+admitted, excluded, unproven = [], {}, []
+for dt in dates:
+    d = os.path.join(root, "dt=" + dt)
+    if not os.path.isdir(d):
         continue
-    m = NAME.fullmatch(n[len(topic) + 1:]) if n.startswith(topic + ".") else None
-    if not m or m.group(4) != os.path.basename(d)[3:].replace("-", "") or int(m.group(3)) <= int(m.group(2)):
-        print("not the archiver's name for this topic and day: " + n); sys.exit(0)
-    files.append((int(m.group(1)), int(m.group(2)), int(m.group(3)), n))
-files.sort()
-keys, total = [], 0
-for p, f, t, n in files:
-    data = gzip.open(os.path.join(d, n)).read()
-    lines = data[:-1].split(b"\n") if data.endswith(b"\n") else (data.split(b"\n") if data else [])
-    if len(lines) > t - f:
-        print("%s: %d records exceed its %d offsets" % (n, len(lines), t - f)); sys.exit(0)
-    for i, l in enumerate(lines):
-        parts = l.split(b"\t", 3)
-        if not START.match(l) or len(parts) < 4 or int(parts[1][10:]) != p:
-            print("%s: record %d is not <CreateTime>\\tPartition:%d\\t<key>\\t<payload>: %r" % (n, i, p, l[:80])); sys.exit(0)
-        try:
-            json.loads(parts[3].decode("utf-8"))
-        except Exception:
-            print("%s: record %d payload is not a JSON document: %r" % (n, i, parts[3][:80])); sys.exit(0)
-        keys.append(parts[2].decode("utf-8"))
-    total += len(lines)
-print(" ".join(keys) if mode == "keys" else " ".join("%d-%d" % (f, t) for _, f, t, _ in files) if mode == "ranges"
-      else "ok %d" % total)
+    manifest = {}
+    mf = os.path.join(d, "_manifest.jsonl")
+    if os.path.isfile(mf):
+        for line in open(mf):
+            if line.strip():
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if "file" in e:
+                    manifest[e["file"]] = e
+    for n in sorted(os.listdir(d)):
+        if not n.endswith(".jsonl.gz"):
+            continue
+        m = NAME.fullmatch(n[len(topic) + 1:]) if n.startswith(topic + ".") else None
+        if not m or m.group(4) != dt.replace("-", "") or int(m.group(3)) <= int(m.group(2)):
+            die("not the archiver's name for this topic and storage date: " + n)
+        part, f, t = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if part != 0:
+            die("%s: partition %d — the ledger this rule reads is partition 0" % (n, part))
+        e = manifest.get(n)
+        why = ("NO_MANIFEST_LINE" if e is None else
+               "NOT_COMMITTED_READ" if e.get("capture") != CAPTURE else
+               "NO_RECORD_OFFSETS" if (e.get("record_layout") != LAYOUT or e.get("offsets_verified") is not True) else
+               "ESCAPED_RECORDS" if e.get("escaped_records") != 0 else None)
+        if why:
+            excluded[why] = excluded.get(why, 0) + 1
+            unproven.append((f, t, n))
+            continue
+        if (e.get("offset_from"), e.get("offset_to"), e.get("stable_boundary"), e.get("partition")) != (f, t, t, 0):
+            die("%s: its manifest line does not describe the file it names" % n)
+        data = gzip.open(os.path.join(d, n)).read()
+        lines = data[:-1].split(b"\n") if data.endswith(b"\n") else (data.split(b"\n") if data else [])
+        records, prev = [], None
+        for i, l in enumerate(lines):
+            h = LINE.match(l)
+            parts = l.split(b"\t", 4)
+            if not h or len(parts) != 5:
+                die("%s: record %d is not <ts>\\tPartition:<p>\\tOffset:<o>\\t<key>\\t<value>: %r" % (n, i, l[:80]))
+            if int(h.group(1)) != 0:
+                die("%s: record %d is of partition %s" % (n, i, h.group(1).decode()))
+            o = int(h.group(2))
+            if o < f or o >= t:
+                die("%s: record %d is offset %d, outside its range [%d,%d)" % (n, i, o, f, t))
+            if prev is not None and o <= prev:
+                die("%s: record %d is offset %d, not after %d" % (n, i, o, prev))
+            prev = o
+            try:
+                json.loads(parts[4].decode("utf-8"))
+            except Exception:
+                die("%s: record %d payload is not a JSON document: %r" % (n, i, parts[4][:80]))
+            records.append((o, parts[3].decode("utf-8"), parts[4]))
+        if e.get("records") != len(records):
+            die("%s: holds %d records, its manifest line claims %s" % (n, len(records), e.get("records")))
+        admitted.append({"n": n, "dt": dt, "from": f, "to": t, "q": e.get("queried_end"), "records": records})
+
+admitted.sort(key=lambda c: (c["from"], c["to"], c["dt"], c["n"]))
+by_offset, duplicates = {}, 0
+for c in admitted:
+    for o, k, v in c["records"]:
+        if o not in by_offset:
+            by_offset[o] = (k, v, c["n"])
+        elif by_offset[o][:2] == (k, v):
+            duplicates += 1
+        else:
+            die("SAME_OFFSET_CONFLICT: %s and %s hold different records at offset %d" % (by_offset[o][2], c["n"], o))
+for a in range(len(admitted)):
+    for b in range(a + 1, len(admitted)):
+        x, y = admitted[a], admitted[b]
+        lo, hi = max(x["from"], y["from"]), min(x["to"], y["to"])
+        if lo < hi and ([o for o, _, _ in x["records"] if lo <= o < hi]
+                        != [o for o, _, _ in y["records"] if lo <= o < hi]):
+            die("OVERLAP_PRESENCE_CONFLICT: %s and %s disagree on [%d,%d)" % (x["n"], y["n"], lo, hi))
+start, reach = None, None
+for c in admitted:
+    if reach is None:
+        start = c["from"]
+    elif c["from"] > reach:
+        die("COVERAGE_GAP: offsets [%d,%d) are in no committed capture" % (reach, c["from"]))
+    reach = max(reach or 0, c["to"])
+for f, t, n in unproven:
+    if reach is None or f < start or t > reach:
+        die("UNCOVERED_EXCLUDED_FILE: %s [%d,%d) is not proven and no capture covers it" % (n, f, t))
+if admitted:
+    first = min(c["dt"] for c in admitted)
+    need = max(c["q"] for c in admitted if c["dt"] == first)
+    if reach < need:
+        die("SESSION_INCOMPLETE: dt=%s queried up to %s, committed captures reach only %d" % (first, need, reach))
+if mode == "keys":
+    print(" ".join(by_offset[o][0] for o in sorted(by_offset)))
+elif mode == "ranges":
+    print(" ".join("%d-%d" % (c["from"], c["to"]) for c in admitted))
+elif mode == "excluded":
+    print(" ".join("%s=%d" % (k, v) for k, v in sorted(excluded.items())) or "none")
+else:
+    print("ok %d duplicates=%d" % (len(by_offset), duplicates))
 PY
 vrun() { # $1 = session date; the rest = extra env assignments. ENV=prod: vol-premium runs on dev and production only.
   local day="$1"; shift
@@ -1200,7 +1288,9 @@ vrun() { # $1 = session date; the rest = extra env assignments. ENV=prod: vol-pr
       SESSION_DATE="$day" ALLOW_NON_NAS=true STRIKE_READER="$BIN/strike-reader" "$@" "$ARCH" 2>&1
 }
 VDIR() { echo "$A/kafka/prod/$VP/dt=${1:-$VDAY}"; }
-vread() { python3 "$T/vpread.py" "$VP" "$(VDIR "${2:-$VDAY}")" "$1" 2>&1; }
+# The loader model over ONE storage date (its own), and over a SESSION's window of storage dates.
+vread() { python3 "$T/vpread.py" "$VP" "$A/kafka/prod/$VP" "$1" "${2:-$VDAY}" 2>&1; }
+vsession() { local mode="$1"; shift; python3 "$T/vpread.py" "$VP" "$A/kafka/prod/$VP" "$mode" "$@" 2>&1; }
 vz() { local f; for f in "$(VDIR "${1:-$VDAY}")"/*.jsonl.gz; do [ -f "$f" ] && zcat "$f"; done 2>/dev/null; }
 vck() { awk '{split($1,a,"="); if (a[1]=="0") print a[2]}' "$A/kafka/prod/_manifest/$VP.offsets" 2>/dev/null | tail -1; }
 vm() { # <field> of the LAST manifest line of date $2 (default VDAY)
@@ -1214,6 +1304,10 @@ r=sorted((int(e["offset_from"]),int(e["offset_to"])) for p in sys.argv[1:] for e
 bad=[f"{a[1]}->{b[0]}" for a,b in zip(r,r[1:]) if b[0]!=a[1]]
 print(" ".join(f"{a}-{b}" for a,b in r), "broken:"+",".join(bad) if bad else "contiguous")' $m 2>/dev/null; }
 vfiles() { ls "$(VDIR "${1:-$VDAY}")"/*.jsonl.gz 2>/dev/null | wc -l | tr -d ' '; }
+# The ranges a date's file NAMES claim, and the keys its files hold, read without the loader model.
+vnames() { ls "$(VDIR "${1:-$VDAY}")"/*.jsonl.gz 2>/dev/null | sed -E 's/.*\.p0\.([0-9]+-[0-9]+)\..*/\1/' \
+             | tr '\n' ' ' | sed 's/ *$//'; }
+vkeys() { vz "${1:-$VDAY}" | awk -F'\t' '{printf "%s%s", (NR>1?" ":""), $4}'; }
 K1='SPX|2026-09-09|1'; K2='SPX|2026-09-09|2'; K3='SPX|2026-09-09|3'; K4='SPX|2026-09-09|4'
 ABORTED_LOG=("0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
              "3 A $K3 {\"frameSeq\":3,\"v\":\"ABORTED\"}" "4 A $K4 {\"frameSeq\":4,\"v\":\"ABORTED\"}" '5 M'
@@ -1246,7 +1340,7 @@ want "17z main's routing (console consumer, read_uncommitted): the run 'succeeds
 want "  and archives BOTH aborted frames as if the engine had published them" 2 "$(vz | grep -c ABORTED)"
 want "  so frameSeq 3 appears twice: the aborted revision and the committed one" 2 "$(vz | grep -c '"frameSeq":3,')"
 
-# ---- 17a. an ABORTED batch: never archived; the committed records in the four-field layout ---------------------------
+# ---- 17a. an ABORTED batch: never archived; the committed records WITH THEIR OFFSETS --------------------------------
 fresh v1
 strike_log "${ABORTED_LOG[@]}"
 OUT=$(vrun "$VDAY"); RC=$?
@@ -1255,16 +1349,17 @@ want "  read by the committed reader, from the log start"              1 "$(grep
 want "  never by the console consumer"                                 0 "$(grep -c "^console $VP " "$CALLS")"
 want "  NO aborted record is archived"                                 0 "$(vz | grep -c ABORTED)"
 want "  exactly the committed records, in offset order"     "$K1 $K2 $K3" "$(vread keys)"
-want "  in the console consumer's four-field layout, byte for byte" \
-     "$(printf 'CreateTime:1786000000000\tPartition:0\t%s\t{"frameSeq":1,"v":"c"}\nCreateTime:1786000000000\tPartition:0\t%s\t{"frameSeq":2,"v":"c"}\nCreateTime:1786000000000\tPartition:0\t%s\t{"frameSeq":3,"v":"c"}' "$K1" "$K2" "$K3")" \
+want "  each record keeps its REAL Kafka offset — 0, 1 and 6, the aborted ones' offsets never reused" \
+     "$(printf 'CreateTime:1786000000000\tPartition:0\tOffset:0\t%s\t{"frameSeq":1,"v":"c"}\nCreateTime:1786000000000\tPartition:0\tOffset:1\t%s\t{"frameSeq":2,"v":"c"}\nCreateTime:1786000000000\tPartition:0\tOffset:6\t%s\t{"frameSeq":3,"v":"c"}' "$K1" "$K2" "$K3")" \
      "$(vz)"
-want "  no Offset column"                                              0 "$(vz | grep -c 'Offset:')"
-want "  every record reads as ArchiveReader + IvRvArchiveLoader read it" "ok 3" "$(vread check)"
+want "  the Offset column is on every record"                          3 "$(vz | grep -c $'\tOffset:')"
+want "  every record reads as ArchiveReader + CommittedLedgerArchive read it" "ok 3 duplicates=0" "$(vread check)"
 want "  one file, named for [0,8): markers included, fewer records than offsets" "0-8" "$(vread ranges)"
 want "  manifest: 3 records over 8 offsets"                         "3 8" "$(vm records) $(vm offset_span)"
 want "  manifest offset_to = stable boundary = queried end"       "8 8 8" "$(vm offset_to) $(vm stable_boundary) $(vm queried_end)"
-want "  manifest names the capture and the layout" "read_committed_stable_boundary timestamp,partition,key,value" \
-     "$(vm capture) $(vm record_layout)"
+want "  manifest names the capture, the layout and the proof" \
+     "read_committed_stable_boundary timestamp,partition,offset,key,value True" \
+     "$(vm capture) $(vm record_layout) $(vm offsets_verified)"
 want "  checkpoint 8, stamped with the source TopicId" 1 \
      "$(grep -c "^0=8 records=3 span=8 dt=$VDAY archived=[0-9TZ]* capture=read_committed_stable_boundary topic_id=SSSSSSSSSSSSSSSSSSSSSS$" "$A/kafka/prod/_manifest/$VP.offsets")"
 want "  no archive marker on prod"                                     0 "$(grep -c 'mark=[0-9]' "$CALLS")"
@@ -1277,7 +1372,7 @@ want "17b a markers/aborted-only range: the run succeeds (rc)"       0 "$RC"
 want "  completion reaches the boundary: checkpoint 11"               11 "$(vck)"
 want "  published as a ZERO-record file for [8,11)"             "0-8 8-11" "$(vread ranges)"
 want "  its manifest line: 0 records over 3 offsets"                "0 3" "$(vm records) $(vm offset_span)"
-want "  ArchiveReader reads the empty file as zero records"       "ok 3" "$(vread check)"
+want "  the loader reads the empty file as zero records"  "ok 3 duplicates=0" "$(vread check)"
 want "  the date's ranges chain"                "0-8 8-11 contiguous" "$(vchain "$VDAY")"
 hasnt "  and it is not a failure" "failed=1" "$OUT"
 
@@ -1291,20 +1386,42 @@ want "17c OPEN transaction at archive time: the run succeeds (rc)"   0 "$RC"
 want "  the read is deadline-bounded (STRIKE_READER_DEADLINE_S), not an idle wait" 1 \
      "$(grep -c "^reader $VP p0 from=0 .* deadline_ms=900000$" "$CALLS")"
 want "  checkpoint = the stable boundary 3, NOT the high-water mark 5"  3 "$(vck)"
-want "  the file claims [0,3) only"                                "0-3" "$(vread ranges)"
-want "  only the committed records below it"                    "$K1 $K2" "$(vread keys)"
+want "  the file claims [0,3) only"                                "0-3" "$(vnames)"
+want "  only the committed records below it"                    "$K1 $K2" "$(vkeys)"
 want "  nothing of the open transaction"                               0 "$(vz | grep -c '"open"')"
 want "  the manifest says the capture stopped short of the queried end" "3 5" "$(vm stable_boundary) $(vm queried_end)"
 has  "  and the run names the withheld offsets" "offsets [3,5) are held by a transaction unresolved at capture time" "$OUT"
+has  "  and says where a session loader will find them" "refuses the session until a capture reaches 5" "$OUT"
 want "  not a failure"                                                 0 "$(runs failed)"
+# THE SESSION, meanwhile, is NOT loadable: offsets [3,5) are this session's and are archived nowhere yet, so a
+# loader reading dt=2026-09-09 refuses it rather than calibrating on a session it knows is short (deploy #1041 MAJOR 2).
+has  "  a session loader REFUSES this date until they are captured" \
+     "SESSION_INCOMPLETE: dt=$VDAY queried up to 5, committed captures reach only 3" "$(vread keys)"
+# The verifier says the same thing about the DATE without calling it a fault: the date holds everything it claimed.
+VVD="$T/vnas-vp"; rm -rf "$VVD"; mkdir -p "$VVD/kafka/prod"
+cp -R "$A/kafka/prod/$VP" "$VVD/kafka/prod/$VP"
+printf 'OE_ALL_TOPICS_prod="%s"\nOE_ARCHIVE_MIN_RECORDS=""\n' "$VP" > "$T/vp.topics.env"
+OUT_V=$(env ARCHIVE_DIR="$VVD" ENV=prod FORCE=true VERIFY_CHECKSUMS=none LOG="$T/verify-vp.log" \
+            OE_TOPICS_ENV="$T/vp.topics.env" bash "$OE/oe-archive-verify.sh" "$VDAY" 2>&1); RC_V=$?
+want "  the date itself verifies COMPLETE: it holds every offset it claimed (rc)" 0 "$RC_V"
+has  "  and the verifier names the withheld range" "open transaction withheld p0 [3,5)" "$OUT_V"
+has  "  saying a session that needs it is refused, not loaded short" "never loaded short" "$OUT_V"
 strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
            "3 C $K3 {\"frameSeq\":3,\"v\":\"c\"}" "4 C $K4 {\"frameSeq\":4,\"v\":\"c\"}" '5 M'
 OUT=$(vrun "$VDAY2"); RC=$?
 want "  it COMMITS: the next run succeeds (rc)"                        0 "$RC"
 want "  starting at the boundary"                                      1 "$(grep -c "^reader $VP p0 from=3 " "$CALLS")"
-want "  capturing the withheld records, under ITS date"         "$K3 $K4" "$(vread keys "$VDAY2")"
+want "  capturing the withheld records, under ITS date"         "$K3 $K4" "$(vkeys "$VDAY2")"
 want "  the two dates chain with no gap and no overlap" "0-3 3-6 contiguous" "$(vchain "$VDAY" "$VDAY2")"
 want "  checkpoint past the transaction"                               6 "$(vck)"
+# THE WHOLE POINT (deploy #1041 MAJOR 2): the records of session 2026-09-09 that landed under dt=2026-09-10 are
+# still that session's. A loader reading the session's window of storage dates finds all four, in offset order,
+# and the session is complete — the queried end 5 of its own date's capture is now covered.
+want "  the SESSION, read across its storage dates, holds every record — the delayed ones included" \
+     "$K1 $K2 $K3 $K4" "$(vsession keys "$VDAY" "$VDAY2")"
+want "  its captures chain and are all proven"       "0-3 3-6" "$(vsession ranges "$VDAY" "$VDAY2")"
+want "  four committed records, no duplicate"  "ok 4 duplicates=0" "$(vsession check "$VDAY" "$VDAY2")"
+want "  nothing excluded"                               "none" "$(vsession excluded "$VDAY" "$VDAY2")"
 fresh v3b
 strike_log "${OPEN_LOG[@]}"
 vrun "$VDAY" >/dev/null
@@ -1312,8 +1429,11 @@ strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\"
            "3 A $K3 {\"frameSeq\":3,\"v\":\"open\"}" "4 A $K4 {\"frameSeq\":4,\"v\":\"open\"}" '5 M'
 OUT=$(vrun "$VDAY2"); RC=$?
 want "  it ABORTS instead: the next run succeeds (rc)"                 0 "$RC"
-want "  and archives none of it: its [3,6) file holds zero records" "3-6 ok 0" "$(vread ranges "$VDAY2") $(vread check "$VDAY2")"
+want "  and archives none of it: its [3,6) file holds zero records" "3-6 ok 0 duplicates=0" \
+     "$(vnames "$VDAY2") $(vread check "$VDAY2")"
 want "  no record of the aborted transaction anywhere" 0 "$( { vz "$VDAY"; vz "$VDAY2"; } | grep -c '"open"')"
+want "  and the session, read across both dates, is complete on its two committed records" \
+     "$K1 $K2" "$(vsession keys "$VDAY" "$VDAY2")"
 
 # ---- 17d. a NON-transactional topic: unchanged — console consumer, read_uncommitted, the same bytes and lines ------
 fresh v4
@@ -1343,7 +1463,7 @@ for mode in escaped stray unordered; do
     stray)     why="line 3 is offset 3, outside the captured range [0,3)" ;;
     unordered) why="line 2 is offset 0, not after the previous line (1)" ;;
   esac
-  want "17e reader '$mode' (exit 0, COMPLETE) on a four-field topic: the run FAILS (rc)" 1 "$RC"
+  want "17e reader '$mode' (exit 0, COMPLETE) on a PROVEN-layout topic: the run FAILS (rc)" 1 "$RC"
   has  "  refused, saying why" "committed-read capture REFUSED ($why" "$OUT"
   want "  checkpoint unchanged"                                       "" "$(vck)"
   want "  nothing published, no manifest line"                     "0 0" "$(vfiles) $(cat "$(VDIR)/_manifest.jsonl" 2>/dev/null | grep -c .)"
@@ -1353,10 +1473,74 @@ done
 fresh v6
 strike_log '0 C k0 v0' '1 C k1 v1' '2 M'
 OUT=$(srun STRIKE_SHIM_MODE=escaped); RC=$?
-want "17e the STRIKE log (five-field layout) with an escaped record: accepted as before (rc)" 0 "$RC"
+want "17e the STRIKE log (filed AS WRITTEN) with an escaped record: accepted as before (rc)" 0 "$RC"
 has  "  and noted as before" "record(s) carried a raw TAB/CR/LF, written escaped" "$OUT"
 want "  its file keeps the Offset column"                              2 "$(zcat "$(SDIR)"/*.jsonl.gz | grep -c $'\tOffset:')"
-want "  its manifest names the five-field layout" "timestamp,partition,offset,key,value" "$(mlast record_layout)"
+want "  its manifest names the layout, and does NOT claim the offsets were proven" \
+     "timestamp,partition,offset,key,value False" "$(mlast record_layout) $(mlast offsets_verified)"
+
+# ---- 17g. the CRASH RE-READ (deploy #1041 MAJOR 1): publish, die before checkpointing, retry past an ADVANCED -------
+# stable boundary. The two captures OVERLAP, which is exactly what the offsets are for: a loader keys records by
+# their real offset, reads the repeated ones once, and places the records the first capture never saw.
+fresh v8
+strike_log "${OPEN_LOG[@]}"
+vrun "$VDAY" > /dev/null
+want "17g the first capture published [0,3)"                       "0-3" "$(vnames)"
+rm -f "$A/kafka/prod/_manifest/$VP.offsets"     # the CRASH: the file and its manifest line are there, the checkpoint is not
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 C $K3 {\"frameSeq\":3,\"v\":\"c\"}" "4 C $K4 {\"frameSeq\":4,\"v\":\"c\"}" '5 M'
+OUT=$(vrun "$VDAY"); RC=$?
+want "  the retry re-reads from 0 and succeeds (rc)"                   0 "$RC"
+want "  against the ADVANCED boundary: two overlapping captures on the date" "0-3 0-6" "$(vnames)"
+want "  the loader reconciles them by offset: every committed record once" \
+     "$K1 $K2 $K3 $K4" "$(vread keys)"
+want "  the repeated offsets are counted as duplicates, not as records" "ok 4 duplicates=2" "$(vread check)"
+want "  nothing excluded"                                         "none" "$(vread excluded)"
+
+# ---- 17h. files a loader must NOT take on trust: no manifest line, a stripped layout, a conflicting record ---------
+vfake() { # <name> <dt> <mode: legacy|stripped|conflict> <from> <to> <offset:key:value>...
+  local name="$1" dt="$2" fmode="$3" f="$4" t="$5"; shift 5
+  python3 - "$(VDIR "$dt")" "$name" "$fmode" "$f" "$t" "$VP" "$dt" "$@" <<'PY'
+import gzip, json, os, sys
+d, name, mode, f, t, topic, dt = sys.argv[1:8]
+os.makedirs(d, exist_ok=True)
+recs = [r.split(":", 2) for r in sys.argv[8:]]
+with gzip.open(os.path.join(d, name), "wb") as out:
+    for o, k, v in recs:
+        head = "CreateTime:1786000000000\tPartition:0\t" + ("" if mode == "legacy" else "Offset:%s\t" % o)
+        out.write((head + k + "\t" + v + "\n").encode())
+if mode != "legacy":
+    line = {"topic": topic, "dt": dt, "partition": 0, "offset_from": int(f), "offset_to": int(t),
+            "records": len(recs), "capture": "read_committed_stable_boundary", "stable_boundary": int(t),
+            "queried_end": int(t), "record_layout": "timestamp,partition,offset,key,value",
+            "offsets_verified": mode != "stripped", "escaped_records": 0, "file": name}
+    if mode == "stripped":
+        line["record_layout"] = "timestamp,partition,key,value"
+    with open(os.path.join(d, "_manifest.jsonl"), "a") as m:
+        m.write(json.dumps(line) + "\n")
+PY
+}
+LEG="$VP.p0.0-3.dt20260909.20260909T220000Z.jsonl.gz"
+vfake "$LEG" "$VDAY" legacy 0 3 "0:$K1:{\"frameSeq\":1,\"v\":\"legacy\"}" "1:$K2:{\"frameSeq\":2,\"v\":\"legacy\"}"
+want "17h a legacy file with no manifest line is EXCLUDED and counted" "NO_MANIFEST_LINE=1" "$(vread excluded)"
+want "  and its records are not read: the committed captures alone answer" "$K1 $K2 $K3 $K4" "$(vread keys)"
+want "  nothing of it in the observations"                             0 "$(vread keys | grep -c legacy)"
+rm -f "$(VDIR)/$LEG"
+STRIP="$VP.p0.0-3.dt20260909.20260909T230000Z.jsonl.gz"
+vfake "$STRIP" "$VDAY" stripped 0 3 "0:$K1:{\"frameSeq\":1,\"v\":\"stripped\"}"
+want "  a committed capture whose offsets were STRIPPED is excluded too" "NO_RECORD_OFFSETS=1" "$(vread excluded)"
+rm -f "$(VDIR)/$STRIP"
+grep -v -e "$STRIP" "$(VDIR)/_manifest.jsonl" > "$(VDIR)/_manifest.tmp" && mv "$(VDIR)/_manifest.tmp" "$(VDIR)/_manifest.jsonl"
+UNCOV="$VP.p0.6-9.dt20260909.20260909T233000Z.jsonl.gz"
+vfake "$UNCOV" "$VDAY" legacy 6 9 "6:$K1:{\"frameSeq\":7,\"v\":\"legacy\"}"
+has  "  an excluded file NO capture covers refuses the session" "UNCOVERED_EXCLUDED_FILE: $UNCOV" "$(vread keys)"
+rm -f "$(VDIR)/$UNCOV"
+CONF="$VP.p0.0-6.dt20260909.20260909T234500Z.jsonl.gz"
+vfake "$CONF" "$VDAY" ok 0 6 "0:$K1:{\"frameSeq\":1,\"v\":\"OTHER\"}" "1:$K2:{\"frameSeq\":2,\"v\":\"c\"}" \
+      "3:$K3:{\"frameSeq\":3,\"v\":\"c\"}" "4:$K4:{\"frameSeq\":4,\"v\":\"c\"}"
+has  "  two captures with DIFFERENT records at one offset refuse the session" \
+     "SAME_OFFSET_CONFLICT" "$(vread keys)"
+has  "  naming the offset"                                    "at offset 0" "$(vread keys)"
 
 # ---- 17f. EVERY vol-premium ledger is committed-only by default --------------------------------------------------------
 for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings \
