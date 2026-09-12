@@ -117,6 +117,16 @@ spec:
               value: "options-edge-web"
             - name: WS_ALLOWED_ORIGINS
               value: "https://bleadingoptions.com"
+            # --- vol-premium session log (feed-gateway VolPremiumSessionStore / VolPremiumSessionLog, PR #185).
+            # The gateway keeps each vol-premium series' session as an append-only log on local disk (a cache:
+            # rebuilt from Kafka on every start, never read across a restart). Unset, it falls back to
+            # java.io.tmpdir = /tmp in the container's writable layer, where nothing sizes or bounds it.
+            # Naming a directory also makes it DEDICATED: at start the gateway deletes the vol-premium-log-*
+            # directories an earlier process left there (an emptyDir outlives a container restart).
+            # The volume, its sizeLimit and the ephemeral-storage request below are sized from the store's
+            # DISK_REQUIRED_BYTES; change them together.
+            - name: GATEWAY_VOL_PREMIUM_LOG_DIR
+              value: /var/lib/vol-premium-log
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -137,9 +147,37 @@ spec:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
+          volumeMounts:
+            - name: vol-premium-log
+              mountPath: /var/lib/vol-premium-log
           resources:
             requests:
               cpu: 100m
               memory: 512Mi
+              # The vol-premium log's disk (the emptyDir below), declared so the scheduler counts its capacity
+              # against the node's allocatable storage. That is accounting, not a reservation: other workloads'
+              # undeclared disk use can still leave less free, so check the node filesystem's actual headroom
+              # before rollout (runbook step 2). No ephemeral-storage LIMIT, matching every options-edge
+              # workload: a pod-level limit would also count /tmp (SellerActivityDiskStore) and the
+              # container log, and evict the gateway for growth this change does not bound. The emptyDir's
+              # own sizeLimit bounds the log.
+              ephemeral-storage: 4Gi
             limits:
               memory: 4Gi
+      volumes:
+        # The vol-premium session log (GATEWAY_VOL_PREMIUM_LOG_DIR above). Disk-backed emptyDir: node-local,
+        # per pod, wiped when the pod goes (the log is a cache), and NOT medium: Memory — tmpfs pages would be
+        # charged to the memory limit unreclaimably. On disk its page cache is charged too, but reclaimable.
+        #
+        # Size: the store's DISK_REQUIRED_BYTES = (MAX_SYMBOLS + 1) x SERIES_DISK_BUDGET_BYTES
+        #       + MAX_SYMBOLS x IvRvReading.MAX_RECORD_BYTES
+        #       = 3 x 1,342,177,280 (1,280 MiB) + 2 x 65,536 (64 KiB) = 4,026,662,912 bytes (3,840.1 MiB):
+        # each of two series' files up to its budget + one record, plus one rewrite in progress (at most the
+        # live bytes). The store refuses a record past a series' budget (counted and logged, nothing evicted)
+        # and rewrites a file before an append would take it past that budget.
+        # 4Gi = 4,294,967,296 bytes leaves 268,304,384 (255.9 MiB, 6.25%) for filesystem block rounding and
+        # directory entries. Past the sizeLimit the kubelet EVICTS the pod, so it must never be below the
+        # store's figure.
+        - name: vol-premium-log
+          emptyDir:
+            sizeLimit: 4Gi
