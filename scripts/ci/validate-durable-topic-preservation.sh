@@ -290,6 +290,20 @@ elif ! bash "$LEDGER_TEST" > "$_scratch/ledger.out" 2>&1; then
   fail=1
 fi
 
+# The seven vol-premium Gate-1 topics: five are kept forever (RESET-PRESERVED, NEVER-RECREATE, retention.bytes=-1),
+# two are rebuildable. This drives the real apply-topics.sh and cleanup-topics.sh over creation, config reconcile,
+# partition drift (recreation off and on) and all three cleanup modes, for dev and production, and proves itself
+# sensitive to every membership that protects them by mutating a COPY of topics.env.
+VOL_PREMIUM_TEST="scripts/kafka/apply-topics-vol-premium-safety-test.sh"
+if [ ! -x "$VOL_PREMIUM_TEST" ]; then
+  echo "FAIL: $VOL_PREMIUM_TEST missing or not executable — nothing proves the vol-premium ledgers survive the deploy path"
+  fail=1
+elif ! bash "$VOL_PREMIUM_TEST" > "$_scratch/vol-premium.out" 2>&1; then
+  echo "FAIL: $VOL_PREMIUM_TEST — apply-topics.sh or cleanup-topics.sh does not honour the vol-premium declarations:"
+  grep -E '^  FAIL|^===' "$_scratch/vol-premium.out" | sed 's/^/      /'
+  fail=1
+fi
+
 # The REVERSE direction. An explicit list has one weakness the old retention=-1 rule did not: it
 # cannot notice a topic somebody FORGOT to declare. So require the converse -- every topic that the
 # reset scripts already go out of their way to preserve must be declared here. Someone who adds a

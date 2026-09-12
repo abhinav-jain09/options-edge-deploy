@@ -253,6 +253,14 @@ jobs:
       - name: apply-topics never recreates the strike episode log
         run: bash scripts/kafka/apply-topics-strike-safety-test.sh
 
+      # The seven vol-premium Gate-1 topics (rollout step 3): five kept forever (RESET-PRESERVED, NEVER-RECREATE,
+      # retention.bytes=-1), two rebuildable. Drives the real apply-topics.sh and cleanup-topics.sh over creation,
+      # config reconcile, partition drift and every cleanup mode, for dev and production, and shows that a copy of
+      # topics.env missing any one protecting membership fails. validate-services.sh also runs it (through
+      # validate-durable-topic-preservation.sh); this step gives a failure its own name.
+      - name: apply-topics / cleanup-topics keep the vol-premium ledgers
+        run: bash scripts/kafka/apply-topics-vol-premium-safety-test.sh
+
       # es4's clean-reset deletes the whole Kafka data dir; it must refuse while the strike archive
       # marker is short of the log end (fail closed on unreadable state, explicit opt-out only).
       - name: es4 clean-reset strike archive interlock
