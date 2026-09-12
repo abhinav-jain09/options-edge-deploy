@@ -319,6 +319,17 @@ eval "TOPICS=\"\${TOPICS:-\$DEFAULT_TOPICS_${ENV_NAME}}\""
 if [ "${PRINT_TOPICS:-}" = "true" ]; then printf '%s\n' "$TOPICS"; exit 0; fi
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
+# A manifest may be appended to only when its last byte is a newline (or it is empty/absent). Every line this
+# script writes ends in "\n" in one printf, so a last byte that is not "\n" is the signature of a run that died
+# mid-write; appending onto it would concatenate two declarations on one physical line, which every reader
+# (CommittedLedgerArchive, vpread.py, oe-archive-verify.sh) refuses as unreadable — and, before engine r20, read as
+# its FIRST object, losing the second (deploy #1041 review round 5 / engine r20). The rule that never produces a
+# concatenation: do not append, report the run failed, leave the checkpoint (a re-read, never a gap), and let an
+# operator repair the file — a leading newline written by this script would hide the signature it must not hide.
+manifest_appendable() {   # $1 = the manifest path; 0 = safe to append, 1 = ends mid-line
+  [ -s "$1" ] || return 0
+  [ "$(tail -c 1 "$1" | wc -l | tr -d ' ')" = 1 ]
+}
 die() { echo "FATAL: $*" >&2; exit 1; }
 
 # The ONE alert implementation (oe-alert.sh: "One definition, every caller"). Sourced AFTER log()
@@ -961,6 +972,11 @@ for topic in $TOPICS; do
         # is NOT advanced: the next run re-queries from $from, exactly as before.
         log "  NOTE $topic p$part: no committed record beyond checkpoint $from yet (stable boundary $r_boundary, log end $log_end) — an open transaction holds the range; the next run captures it once it resolves. The attempt (queried end $endoff) is recorded in dt=$DAY's manifest so a session loader refuses the session until a capture reaches $endoff"
         rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog"
+        if ! manifest_appendable "$outdir/_manifest.jsonl"; then
+          log "  WARN $topic p$part: dt=$DAY's manifest does not end with a newline — a run died mid-write; the attempt (queried end $endoff) is NOT recorded onto that line (it would concatenate two declarations); counted as a failed capture until an operator repairs the manifest"
+          failed=$(( failed + 1 ))
+          continue
+        fi
         if ! printf '{"topic":"%s","dt":"%s","partition":%s,"offset_from":%s,"offset_to":%s,"records":0,"offset_span":0,"capture":"read_committed_stable_boundary","stable_boundary":%s,"queried_end":%s,"source_topic_id":"%s","attempt":"no_progress","archived_at":"%s","job":"%s","env":"%s","archiver_version":"%s"}\n' \
                "$topic" "$DAY" "$part" "$from" "$from" "$from" "$endoff" "$topic_id" "$STAMP" "$ARCHIVE_JOB" "$ENV_NAME" "$ARCHIVER_VERSION" \
                >> "$outdir/_manifest.jsonl"; then
@@ -1136,6 +1152,14 @@ for topic in $TOPICS; do
     # checkpoint write below, and the next run would resume past a range whose file does not
     # exist. That is the same silent gap this whole change set exists to close, arrived at from
     # the other direction.
+    # Before the file is published: a manifest that ends mid-line cannot take this file's line, and a file
+    # published without its line is crash residue every loader refuses. So nothing is published.
+    if ! manifest_appendable "$outdir/_manifest.jsonl"; then
+      rm -f "$tmp"
+      log "  WARN $topic p$part [$from,$cap_to): dt=$DAY's manifest does not end with a newline — a run died mid-write; NOT publishing (the line would concatenate onto the partial one), checkpoint NOT advanced; an operator repairs the manifest and the range is re-read next run"
+      failed=$(( failed + 1 ))
+      continue
+    fi
     if ! mv "$tmp" "$out"; then
       rm -f "$tmp"
       log "  WARN $topic p$part [$from,$cap_to): could not publish $out — checkpoint NOT advanced, will retry next run"

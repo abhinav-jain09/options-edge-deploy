@@ -140,18 +140,23 @@ for topic in topics:
     # line in one printf, so a partial line is a run that died mid-append — a no-progress attempt whose queried
     # end nobody can read, or a file claim nobody can check. What it declared is unknown; the loaders refuse the
     # window (MANIFEST_UNPARSEABLE), and this date must not be reported OK or merely PARTIAL over it.
+    # EXACTLY ONE object per line, whole (engine r20): a valid object followed by garbage or by a second object — a
+    # run's append concatenated onto a last line that lost its newline — is as unreadable as a partial line, and
+    # reading its first object would lose the second declaration. A BOM is not JSON; CRLF is a line ending.
     entries, bad_json = [], []
-    with open(man, "r") as f:
+    with open(man, "r", encoding="utf-8") as f:
         for i, line in enumerate(f, 1):
             line = line.strip()
             if not line: continue
-            try: e = json.loads(line)
+            try:
+                e, end = json.JSONDecoder().raw_decode(line)
+                if line[end:].strip(): e = None
             except json.JSONDecodeError: e = None
             if isinstance(e, dict): entries.append(e)
             else: bad_json.append(i)
     if bad_json:
-        r["reasons"].append(f"{len(bad_json)} unparseable manifest line(s) (not a JSON object; a run that died "
-                            f"mid-append?) at line(s) {bad_json[:3]}")
+        r["reasons"].append(f"{len(bad_json)} unparseable manifest line(s) (not exactly one JSON object; a run that "
+                            f"died mid-append, or an append onto a line that lost its newline?) at line(s) {bad_json[:3]}")
 
     # A committed-read run that could capture NOTHING (the stable boundary still at its checkpoint) records the
     # ATTEMPT — "attempt":"no_progress", the end it queried, and NO file (deploy #1041 review round 2, MAJOR 3).

@@ -1251,15 +1251,22 @@ for dt in dates:
     if os.path.isfile(mf):
         for i, line in enumerate(open(mf), 1):
             if line.strip():
+                # EXACTLY ONE object, whole: raw_decode reads the first value, and anything but whitespace after it
+                # (garbage, a second object — an append onto a last line that lost its newline) refuses; a BOM
+                # before it is not JSON; a CR before the LF is a line ending (round 5 / engine r20).
                 try:
-                    e = json.loads(line)
+                    e, end = json.JSONDecoder().raw_decode(line)
+                    if line[end:].strip():
+                        e = None
                 except ValueError:
                     e = None
                 if not isinstance(e, dict):
-                    # Nonblank and not a JSON object: a run that died mid-append, or a hand edit. What it declared
-                    # is unknown, and an unknown declaration may be an obligation — never skipped (round 5).
-                    die("MANIFEST_UNPARSEABLE: dt=%s/_manifest.jsonl line %d is not a JSON object: %r — a run that died "
-                        "mid-append, or a hand edit; what it declared cannot be read" % (dt, i, line.rstrip("\n")[:80]))
+                    # Nonblank and not exactly one JSON object: a run that died mid-append, an append onto a line
+                    # that lost its newline, or a hand edit. What it declared is unknown, and an unknown declaration
+                    # may be an obligation — never skipped, never read as its first object.
+                    die("MANIFEST_UNPARSEABLE: dt=%s/_manifest.jsonl line %d is not exactly one JSON object: %r — a run "
+                        "that died mid-append, an append onto a line that lost its newline, or a hand edit; what it "
+                        "declared cannot be read" % (dt, i, line.rstrip("\r\n")[:80]))
                 if e.get("file") is not None and e.get("attempt") is not None:
                     die("MANIFEST_MISMATCH: dt=%s/_manifest.jsonl names both a file (%s) and an attempt (%s) on one "
                         "line: the archiver writes no such line, and it is neither" % (dt, e["file"], e["attempt"]))
@@ -2009,13 +2016,13 @@ for l in open(sys.argv[1]):
     except ValueError: pass
 print(n)' "$(VDIR)/_manifest.jsonl")"
 has  "  the loader model REFUSES the window: a nonblank line that is not a JSON object, named by date and line" \
-     "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 2 is not a JSON object" "$(vread keys)"
+     "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 2 is not exactly one JSON object" "$(vread keys)"
 has  "  saying why"                                        "a run that died mid-append" "$(vread keys)"
 want "  round 4's answer — the session admitted at 3 — is never given" 0 "$(vread keys | grep -c "^SPX|")"
 OUT_V=$(vverify 16a)
 want "  the verifier: the date is CORRUPT (rc 1), never OK or PARTIAL over a line it cannot read" "rc=1" "$(printf '%s' "$OUT_V" | head -1)"
 has  "  as CORRUPT"                                                   "CORRUPT  $VP" "$OUT_V"
-has  "  naming the line"  "1 unparseable manifest line(s) (not a JSON object; a run that died mid-append?) at line(s) [2]" "$OUT_V"
+has  "  naming the line"  "1 unparseable manifest line(s) (not exactly one JSON object; a run that died mid-append, or an append onto a line that lost its newline?) at line(s) [2]" "$OUT_V"
 # blank lines are nothing, to the model and the verifier alike
 fresh v16b
 strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
@@ -2078,6 +2085,71 @@ want "  the control: escaped_records 1, an integer — an EXCLUSION as before, a
      "$(vread keys | grep -c "^UNCOVERED_EXCLUDED_FILE: $CAP")"
 vedit "$VDAY" escaped_records 0
 want "  restored: whole"                                              "$K1 $K2" "$(vread keys)"
+
+# ---- 17q. a manifest line is EXACTLY ONE object, whole (engine r20 MAJOR): a complete last line written without ----
+# its newline (a run that died between the JSON's last byte and the "\n"), then the next run's append CONCATENATED
+# onto it — two objects on one physical line. Every reader took the FIRST object and lost the second declaration:
+# the attempt vanished and the session was admitted at 3. Now the archiver REFUSES to append to a manifest whose
+# last byte is not "\n" (the crash signature), the model and the verifier refuse a line that is not exactly one
+# object, and — decided the same way in all three — CRLF is a line ending, a UTF-8 BOM is not JSON.
+vbytes() { wc -c < "$(VDIR "${1:-$VDAY}")/_manifest.jsonl" | tr -d ' '; }
+fresh v18
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+want "17q a capture [0,3) querying 3: one line, ending in a newline (lines, last byte is LF)" "1 1" \
+     "$(grep -c . "$(VDIR)/_manifest.jsonl") $(tail -c 1 "$(VDIR)/_manifest.jsonl" | wc -l | tr -d ' ')"
+python3 -c 'import sys; p=sys.argv[1]; d=open(p,"rb").read(); assert d.endswith(b"\n"); open(p,"wb").write(d[:-1])' "$(VDIR)/_manifest.jsonl"
+B0=$(vbytes)
+want "  the newline LOST (the run died between the JSON's last byte and the LF): the line alone still reads whole" "$K1 $K2" "$(vread keys)"
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 O $K3 {\"frameSeq\":3,\"v\":\"open\"}" "4 O $K4 {\"frameSeq\":4,\"v\":\"open\"}" '5 O x y' '6 O x y' '7 O x y' '8 O x y'
+OUT=$(vrun "$VDAY"); RC=$?
+want "  the next run (an attempt querying 9) REFUSES to append onto the partial line: a failed run (rc, failed)" "1 1" "$RC $(runs failed)"
+has  "  saying why" "manifest does not end with a newline — a run died mid-write; the attempt (queried end 9) is NOT recorded" "$OUT"
+want "  the manifest is untouched: no concatenation (bytes unchanged), checkpoint unchanged" "$B0 3" "$(vbytes) $(vck)"
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 C $K3 {\"frameSeq\":3,\"v\":\"c\"}" "4 C $K4 {\"frameSeq\":4,\"v\":\"c\"}" '5 M'
+OUT=$(vrun "$VDAY"); RC=$?
+want "  a run that COULD capture [3,6) refuses to PUBLISH too: nothing published, no residue (rc, files, bytes)" "1 1 $B0" "$RC $(vfiles) $(vbytes)"
+has  "  saying why"                       "NOT publishing (the line would concatenate onto the partial one), checkpoint NOT advanced" "$OUT"
+# the concatenation the guard prevents, made by hand — what a pre-guard archiver (or an editor) leaves behind
+vattempt "$VDAY" 3 9
+want "  the attempt appended onto the partial line by hand: still ONE physical line, two objects" 1 "$(grep -c . "$(VDIR)/_manifest.jsonl")"
+has  "  the loader model REFUSES: not exactly one JSON object, naming the line" \
+     "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 1 is not exactly one JSON object" "$(vread keys)"
+has  "  saying why"                                        "an append onto a line that lost its newline" "$(vread keys)"
+want "  round 5's answer — the session at 3, the attempt lost — is never given" 0 "$(vread keys | grep -c "^SPX|")"
+OUT_V=$(vverify 18a)
+want "  the verifier: CORRUPT (rc 1)"                                       "rc=1" "$(printf '%s' "$OUT_V" | head -1)"
+has  "  naming the line" "1 unparseable manifest line(s) (not exactly one JSON object; a run that died mid-append, or an append onto a line that lost its newline?) at line(s) [1]" "$OUT_V"
+python3 -c 'import sys; p=sys.argv[1]; d=open(p,"rb").read(); open(p,"wb").write(d.replace(b"}{", b"}\n{"))' "$(VDIR)/_manifest.jsonl"
+want "  the operator's repair (the newline restored): two lines, the attempt's 9 owed" \
+     "2 SESSION_INCOMPLETE: dt=$VDAY queried up to 9, committed captures reach only 3" "$(grep -c . "$(VDIR)/_manifest.jsonl") $(vread keys)"
+OUT_V=$(vverify 18b)
+want "  and the verifier is COMPLETE again (rc)"                            "rc=0" "$(printf '%s' "$OUT_V" | head -1)"
+# a valid object followed by garbage; a CRLF manifest; a BOM
+fresh v18b
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+python3 -c 'import sys; p=sys.argv[1]; d=open(p,"rb").read(); open(p,"wb").write(d[:-1] + b" garbage\n")' "$(VDIR)/_manifest.jsonl"
+has  "  a valid object followed by garbage on its line: REFUSED, never read as its prefix" \
+     "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 1 is not exactly one JSON object" "$(vread keys)"
+OUT_V=$(vverify 18c)
+want "  the verifier: CORRUPT (rc 1)"                                       "rc=1" "$(printf '%s' "$OUT_V" | head -1)"
+fresh v18c
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+vattempt "$VDAY" 3 9
+python3 -c 'import sys; p=sys.argv[1]; d=open(p,"rb").read(); open(p,"wb").write(d.replace(b"\n", b"\r\n"))' "$(VDIR)/_manifest.jsonl"
+want "  CRLF line endings: a line ending — both lines read, the attempt's 9 owed" \
+     "SESSION_INCOMPLETE: dt=$VDAY queried up to 9, committed captures reach only 3" "$(vread keys)"
+OUT_V=$(vverify 18d)
+want "  and the verifier reads it (rc 0)"                                   "rc=0" "$(printf '%s' "$OUT_V" | head -1)"
+python3 -c 'import sys; p=sys.argv[1]; d=open(p,"rb").read(); open(p,"wb").write(b"\xef\xbb\xbf" + d)' "$(VDIR)/_manifest.jsonl"
+has  "  a UTF-8 BOM before the first line: not JSON — REFUSED"                 \
+     "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 1 is not exactly one JSON object" "$(vread keys)"
+OUT_V=$(vverify 18e)
+want "  and CORRUPT to the verifier (rc 1)"                                 "rc=1" "$(printf '%s' "$OUT_V" | head -1)"
 
 # ---- 17f. EVERY vol-premium ledger is committed-only by default --------------------------------------------------------
 for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings \
