@@ -7,6 +7,25 @@
 # green is not necessarily the one that runs. On 2026-08-16 a tag on the web image resolved to four
 # different digests inside twenty minutes for exactly this reason.
 #
+# ⚠️ SUPERSEDED by the block below. Kept because the rollback target points at it.
+#
+# THIS DIGEST is oe-email-service-deploy #21, 27/27 tests green, linux/amd64 verified against the
+# registry manifest before this edit.
+#
+# WHY IT MOVES: session_invite.html hardcoded https://meet.google.com/pki-uddq-yiu — the PREVIOUS
+# session's meeting — in the footer button and the "or paste this into your browser" line beneath
+# it, while the header used {{JOIN_URL}}. Every invitation therefore carried TWO DIFFERENT meeting
+# links, and the footer button sent readers to the wrong call. It survived the 2026-08-29 send
+# because that was the correct link then; it becomes wrong every time the meeting changes. Found by
+# rendering the draft before sending, not by reading the template.
+#
+# Also removed a visible stale date from the illustrative board panel ("19 Aug 2026 -> 21 Aug
+# 2026"), and reworded a closing line that assumed two sittings. Tests now assert the joining link
+# appears exactly four times and is the supplied one, and that NO production template contains a
+# literal meet.google.com URL.
+#
+# ROLLBACK TARGET: the OUTGOING digest is sha256:dbfc1d9a4127f5acc0cb036ec20622ffc03e30ba85b88806351b06813280ddb7 (#18).
+#
 # This digest is oe-email-service-deploy #18 (revision 888900c), 26/26 tests green, published
 # — it adds the first_sign_in template. Every approved member who has never signed in is sitting on
 # a pending CONFIGURE_TOTP, and every one of the 42 who did get in completed that same step, so the
@@ -36,4 +55,4 @@ resources:
 images:
   - name: 192.168.100.252:5000/oe-email-service
     newName: 192.168.100.252:5000/oe-email-service
-    digest: sha256:dbfc1d9a4127f5acc0cb036ec20622ffc03e30ba85b88806351b06813280ddb7
+    digest: sha256:0e8ad2af74eb90ab123f22ee00e41f2bc324b566986b5a3abae0a0a9f57e145c
