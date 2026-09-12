@@ -1204,7 +1204,10 @@ import gzip, json, os, re, sys
 # Round 5 (deploy #1041 review r5): a NONBLANK manifest line that is not a JSON object refuses the window
 # (MANIFEST_UNPARSEABLE, naming the date and line) — a run that died mid-append leaves a partial attempt line whose
 # queried end nobody can read, and rounds 1-4 skipped it (`except ValueError: continue`), admitting the session at
-# the earlier capture's end. Blank lines stay nothing.
+# the earlier capture's end. Blank lines stay nothing. And, level with engine r18 (13309d86): a committed-read line
+# — an attempt included — without queried_end is MANIFEST_MISMATCH, never an obligation of merely its checkpoint;
+# a non-integral records / escaped_records / stable_boundary (0.5, "bad") is MANIFEST_MISMATCH in the preflight,
+# never an exclusion or a truncation to 0.
 topic, root, mode, dates = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 NAME = re.compile(r"p(\d{1,9})\.(\d{1,18})-(\d{1,18})\.dt(\d{8})\.(\d{8}T\d{6}Z)\.jsonl\.gz")
 LINE = re.compile(rb"^(?:CreateTime|LogAppendTime):\d+\tPartition:(\d+)\tOffset:(\d+)\t")
@@ -1226,9 +1229,15 @@ def num(e, k, n):
     return v
 
 def obligation(e, to, n):
-    q = e.get("queried_end", to)
+    # Every COMMITTED-READ line — a file line or an attempt — records the end it queried; an attempt without one
+    # would owe only its checkpoint (engine r18). A console line records none and owes its range's own end.
+    if "queried_end" not in e:
+        if e.get("capture") == CAPTURE:
+            die("MANIFEST_MISMATCH: %s: its manifest line has no integral queried_end" % n)
+        return to
+    q = e["queried_end"]
     if not isinstance(q, int) or isinstance(q, bool) or q < 0:
-        die("%s: its manifest line's queried_end %r is not an offset" % (n, q))
+        die("MANIFEST_MISMATCH: %s: its manifest line's queried_end %r is not an offset" % (n, q))
     return q
 
 # PHASE 1 — the whole-window PREFLIGHT. No capture file is opened here.
@@ -1277,12 +1286,16 @@ for dt in dates:
         if (e.get("topic"), e.get("dt"), e.get("partition"), lf, lt) != (topic, dt, 0, f, t):
             die("MANIFEST_MISMATCH: %s: its manifest line (topic, dt, partition, offset_from, offset_to) does not "
                 "describe the file it names, [%d,%d) on dt=%s" % (n, f, t, dt))
+        # Every integral field's SHAPE is settled here (engine r18): records on every line; a committed read's
+        # stable_boundary and escaped_records too — 0.5 is not a count. The record-count COMPARISON needs the file.
+        if num(e, "records", n) < 0:
+            die("MANIFEST_MISMATCH: %s: its manifest line claims %r records, not a count" % (n, e.get("records")))
         if e.get("capture") == CAPTURE:
-            if "queried_end" not in e:
-                die("MANIFEST_MISMATCH: %s: its manifest line has no integral queried_end" % n)
             if num(e, "stable_boundary", n) != lt:
                 die("MANIFEST_MISMATCH: %s: its manifest line's stable_boundary %r is not the end of the range it "
                     "names, %d" % (n, e.get("stable_boundary"), lt))
+            if num(e, "escaped_records", n) < 0:
+                die("MANIFEST_MISMATCH: %s: its manifest line's escaped_records %r is not a count" % (n, e.get("escaped_records")))
         c = {"dt": dt, "n": n, "f": lf, "t": lt, "q": obligation(e, lt, n), "id": identity(e, n),
              "present": n in present, "e": e}
         declared.append(c)
@@ -1293,6 +1306,9 @@ for dt in dates:
         if a.get("attempt") != "no_progress" or a.get("capture") != CAPTURE or a.get("partition") != 0 \
            or not isinstance(f, int) or f < 0 or a.get("offset_to") != f or a.get("stable_boundary") != f:
             die("dt=%s: %s is not a no-progress attempt of this topic at its checkpoint: %r" % (dt, n, a))
+        if num(a, "records", n) != 0:
+            die("MANIFEST_MISMATCH: %s: a no-progress attempt captured nothing, not %r records" % (n, a.get("records")))
+        # obligation() REQUIRES an attempt's queried_end (engine r18): without it the attempt owed its checkpoint.
         declared.append({"dt": dt, "n": n, "f": f, "t": f, "q": obligation(a, f, n),
                          "id": identity(a, n), "present": True, "e": a})
     for n in sorted(present):
@@ -2008,6 +2024,60 @@ printf '\n   \n\n' >> "$(VDIR)/_manifest.jsonl"
 want "  blank lines appended: the date reads whole"                       "$K1 $K2" "$(vread keys)"
 OUT_V=$(vverify 16b)
 want "  and the verifier is COMPLETE (rc)"                                "rc=0" "$(printf '%s' "$OUT_V" | head -1)"
+
+# ---- 17p. the model level with engine r18 (13309d86): an attempt OWES the end it queried, and every integral field ----
+# has the shape of one. The Java loader's rules since r18; the model was behind on both until now. Through the real
+# archiver's lines: 17j's attempt with queried_end REMOVED (it owed only its checkpoint: the session admitted at 3
+# with [3,9) never asked for), and a real capture's line with escaped_records 0.5 (it truncated to 0 and was
+# admitted), records "bad", stable_boundary 2.5.
+vedit() { # <dt> <field> <json value | ->: set the field on the LAST manifest line of <dt>; '-' removes it
+  python3 - "$(VDIR "$1")/_manifest.jsonl" "$2" "$3" <<'PY'
+import json, sys
+p, k, v = sys.argv[1], sys.argv[2], sys.argv[3]
+lines = [l for l in open(p) if l.strip()]
+e = json.loads(lines[-1])
+if v == "-": e.pop(k, None)
+else: e[k] = json.loads(v)
+lines[-1] = json.dumps(e) + "\n"
+open(p, "w").writelines(lines)
+PY
+}
+fresh v17
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 O $K3 {\"frameSeq\":3,\"v\":\"open\"}" "4 O $K4 {\"frameSeq\":4,\"v\":\"open\"}" '5 O x y' '6 O x y' '7 O x y' '8 O x y'
+vrun "$VDAY" >/dev/null
+want "17p the real attempt line (checkpoint 3, queried 9): the date is INCOMPLETE" \
+     "SESSION_INCOMPLETE: dt=$VDAY queried up to 9, committed captures reach only 3" "$(vread keys)"
+vedit "$VDAY" queried_end -
+has  "  its queried_end REMOVED: the model REFUSES — an attempt owes the end it queried, never merely its checkpoint" \
+     "MANIFEST_MISMATCH: attempt at " "$(vread keys)"
+has  "  naming the field"                                  "its manifest line has no integral queried_end" "$(vread keys)"
+want "  the session admitted at 3 (the model's old answer) is never given" 0 "$(vread keys | grep -c "^SPX|")"
+vedit "$VDAY" queried_end 9
+vedit "$VDAY" records 1
+has  "  an attempt claiming 1 record is not an attempt"    "MANIFEST_MISMATCH: attempt at " "$(vread keys)"
+fresh v17b
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+want "  a real capture [0,3), whole"                                  "$K1 $K2" "$(vread keys)"
+CAP=$(vm file)
+vedit "$VDAY" escaped_records 0.5
+has  "  escaped_records 0.5 on its line: REFUSED in the preflight (it truncated to 0 and was admitted before)" \
+     "MANIFEST_MISMATCH: $CAP: its manifest line has no integral escaped_records" "$(vread keys)"
+vedit "$VDAY" escaped_records 0
+vedit "$VDAY" records '"bad"'
+has  "  records \"bad\": REFUSED before the file is read"  "MANIFEST_MISMATCH: $CAP: its manifest line has no integral records" "$(vread keys)"
+vedit "$VDAY" records 2
+vedit "$VDAY" stable_boundary 2.5
+has  "  stable_boundary 2.5: REFUSED"                      "MANIFEST_MISMATCH: $CAP: its manifest line has no integral stable_boundary" "$(vread keys)"
+vedit "$VDAY" stable_boundary 3
+vedit "$VDAY" escaped_records 1
+want "  the control: escaped_records 1, an integer — an EXCLUSION as before, and uncovered, the date refuses" 1 \
+     "$(vread keys | grep -c "^UNCOVERED_EXCLUDED_FILE: $CAP")"
+vedit "$VDAY" escaped_records 0
+want "  restored: whole"                                              "$K1 $K2" "$(vread keys)"
 
 # ---- 17f. EVERY vol-premium ledger is committed-only by default --------------------------------------------------------
 for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings \
