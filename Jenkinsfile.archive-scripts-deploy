@@ -124,9 +124,11 @@ pipeline {
           # declaration naming no log refuses the window, an attempt's declared prefix is owed, and a line naming both a
           # file and an attempt is malformed to the verifier and the loader; review round 4 — 17h/17n: a file no
           # manifest line names refuses the window, crash residue across a re-created topic through the real archiver,
-          # and the loader model preflights the whole window before it opens a file). A lower count
+          # and the loader model preflights the whole window before it opens a file; review round 5 — 17o: a run that
+          # dies mid-append leaves a partial manifest line, which the model refuses and the verifier grades CORRUPT).
+          # A lower count
           # means a section stopped early or was skipped, which "ALL PASS" alone cannot show. Raise it with the suite.
-          [ "$ran" -ge 504 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+          [ "$ran" -ge 515 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
           # Installing an evaluator whose acceptance predicate is untested would ship the one thing

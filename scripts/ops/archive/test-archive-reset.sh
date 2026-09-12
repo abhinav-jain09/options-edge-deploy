@@ -1201,6 +1201,10 @@ import gzip, json, os, re, sys
 # with NO manifest line REFUSES the window (UNCOVERED_EXCLUDED_FILE): it names no log, so no capture's offsets are
 # coordinates on it — round 3 let it stay "excluded-and-covered" by offsets, and log B's capture "covered" log A's
 # crash residue.
+# Round 5 (deploy #1041 review r5): a NONBLANK manifest line that is not a JSON object refuses the window
+# (MANIFEST_UNPARSEABLE, naming the date and line) — a run that died mid-append leaves a partial attempt line whose
+# queried end nobody can read, and rounds 1-4 skipped it (`except ValueError: continue`), admitting the session at
+# the earlier capture's end. Blank lines stay nothing.
 topic, root, mode, dates = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 NAME = re.compile(r"p(\d{1,9})\.(\d{1,18})-(\d{1,18})\.dt(\d{8})\.(\d{8}T\d{6}Z)\.jsonl\.gz")
 LINE = re.compile(rb"^(?:CreateTime|LogAppendTime):\d+\tPartition:(\d+)\tOffset:(\d+)\t")
@@ -1236,12 +1240,17 @@ for dt in dates:
     manifest, attempts = {}, []
     mf = os.path.join(d, "_manifest.jsonl")
     if os.path.isfile(mf):
-        for line in open(mf):
+        for i, line in enumerate(open(mf), 1):
             if line.strip():
                 try:
                     e = json.loads(line)
                 except ValueError:
-                    continue
+                    e = None
+                if not isinstance(e, dict):
+                    # Nonblank and not a JSON object: a run that died mid-append, or a hand edit. What it declared
+                    # is unknown, and an unknown declaration may be an obligation — never skipped (round 5).
+                    die("MANIFEST_UNPARSEABLE: dt=%s/_manifest.jsonl line %d is not a JSON object: %r — a run that died "
+                        "mid-append, or a hand edit; what it declared cannot be read" % (dt, i, line.rstrip("\n")[:80]))
                 if e.get("file") is not None and e.get("attempt") is not None:
                     die("MANIFEST_MISMATCH: dt=%s/_manifest.jsonl names both a file (%s) and an attempt (%s) on one "
                         "line: the archiver writes no such line, and it is neither" % (dt, e["file"], e["attempt"]))
@@ -1950,6 +1959,55 @@ has  "  and the date still REFUSES: the residue's log is unknown even here" \
      "UNCOVERED_EXCLUDED_FILE: $RES [0,3) has no manifest line on dt=$VDAY" "$(vread keys)"
 rm -f "$(VDIR)/$RES"
 want "  the residue removed by an operator: the date reads whole on the re-read" "$K1 $K2 $K3 $K4" "$(vread keys)"
+
+# ---- 17o. a run that dies MID-APPEND (deploy #1041 r5 MAJOR R5-2): the archiver appends a manifest line in one --------
+# printf; a crash inside it leaves a PARTIAL line. Rounds 1-4's loader model (and the Java loader) skipped a line
+# that did not parse, so a truncated no-progress append behind a complete [0,3) admitted the session at 3 with the
+# attempt's 9 never asked for — Codex's TRUNCATED_NO_PROGRESS_APPEND. Through the real archiver: 17j's shape (a
+# capture querying 3, then an open transaction at the checkpoint querying 9 → the attempt line), the manifest then
+# cut mid-line as the crash would leave it. A nonblank line that is not a JSON object refuses the window; the
+# verifier reports the date CORRUPT.
+fresh v16
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 O $K3 {\"frameSeq\":3,\"v\":\"open\"}" "4 O $K4 {\"frameSeq\":4,\"v\":\"open\"}" '5 O x y' '6 O x y' '7 O x y' '8 O x y'
+OUT=$(vrun "$VDAY"); RC=$?
+want "17o a capture querying 3, then the attempt querying 9: two lines (rc, lines, attempt, queried_end)" "0 2 no_progress 9" \
+     "$RC $(grep -c . "$(VDIR)/_manifest.jsonl") $(vm attempt) $(vm queried_end)"
+want "  the complete line: the session is INCOMPLETE until a capture reaches 9" \
+     "SESSION_INCOMPLETE: dt=$VDAY queried up to 9, committed captures reach only 3" "$(vread keys)"
+# the CRASH mid-append: the manifest is cut inside the attempt line, at the byte a partial write would leave
+python3 - "$(VDIR)/_manifest.jsonl" <<'PY'
+import sys
+p = sys.argv[1]; data = open(p, "rb").read()
+lines = data.split(b"\n"); last = lines[-2]          # the attempt line (the file ends with a newline)
+cut = last[: len(last) // 2]                          # half of it, no newline
+open(p, "wb").write(b"\n".join(lines[:-2]) + b"\n" + cut)
+PY
+want "  the manifest cut mid-line: the attempt's queried end is gone from what can be read (parseable lines)" 1 \
+     "$(python3 -c 'import json,sys
+n=0
+for l in open(sys.argv[1]):
+    try: json.loads(l); n+=1
+    except ValueError: pass
+print(n)' "$(VDIR)/_manifest.jsonl")"
+has  "  the loader model REFUSES the window: a nonblank line that is not a JSON object, named by date and line" \
+     "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 2 is not a JSON object" "$(vread keys)"
+has  "  saying why"                                        "a run that died mid-append" "$(vread keys)"
+want "  round 4's answer — the session admitted at 3 — is never given" 0 "$(vread keys | grep -c "^SPX|")"
+OUT_V=$(vverify 16a)
+want "  the verifier: the date is CORRUPT (rc 1), never OK or PARTIAL over a line it cannot read" "rc=1" "$(printf '%s' "$OUT_V" | head -1)"
+has  "  as CORRUPT"                                                   "CORRUPT  $VP" "$OUT_V"
+has  "  naming the line"  "1 unparseable manifest line(s) (not a JSON object; a run that died mid-append?) at line(s) [2]" "$OUT_V"
+# blank lines are nothing, to the model and the verifier alike
+fresh v16b
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+vrun "$VDAY" >/dev/null
+printf '\n   \n\n' >> "$(VDIR)/_manifest.jsonl"
+want "  blank lines appended: the date reads whole"                       "$K1 $K2" "$(vread keys)"
+OUT_V=$(vverify 16b)
+want "  and the verifier is COMPLETE (rc)"                                "rc=0" "$(printf '%s' "$OUT_V" | head -1)"
 
 # ---- 17f. EVERY vol-premium ledger is committed-only by default --------------------------------------------------------
 for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings \

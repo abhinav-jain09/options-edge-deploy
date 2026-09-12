@@ -136,15 +136,22 @@ for topic in topics:
                             if data_files else "no _manifest.jsonl and no data files")
         results.append(r); continue
 
-    entries, bad_json = [], 0
+    # A NONBLANK line that is not a JSON object is CORRUPT (deploy #1041 review round 5): the archiver appends a
+    # line in one printf, so a partial line is a run that died mid-append — a no-progress attempt whose queried
+    # end nobody can read, or a file claim nobody can check. What it declared is unknown; the loaders refuse the
+    # window (MANIFEST_UNPARSEABLE), and this date must not be reported OK or merely PARTIAL over it.
+    entries, bad_json = [], []
     with open(man, "r") as f:
-        for line in f:
+        for i, line in enumerate(f, 1):
             line = line.strip()
             if not line: continue
-            try: entries.append(json.loads(line))
-            except json.JSONDecodeError: bad_json += 1
+            try: e = json.loads(line)
+            except json.JSONDecodeError: e = None
+            if isinstance(e, dict): entries.append(e)
+            else: bad_json.append(i)
     if bad_json:
-        r["reasons"].append(f"{bad_json} unparseable manifest line(s)")
+        r["reasons"].append(f"{len(bad_json)} unparseable manifest line(s) (not a JSON object; a run that died "
+                            f"mid-append?) at line(s) {bad_json[:3]}")
 
     # A committed-read run that could capture NOTHING (the stable boundary still at its checkpoint) records the
     # ATTEMPT — "attempt":"no_progress", the end it queried, and NO file (deploy #1041 review round 2, MAJOR 3).
@@ -242,7 +249,8 @@ for topic in topics:
     if floor > 0 and r["records"] < floor:
         r["reasons"].append(f"{r['records']} records is below the floor of {floor}")
 
-    if any("CHECKSUM MISMATCH" in x or "absent on disk" in x for x in r["reasons"]):
+    if any("CHECKSUM MISMATCH" in x or "absent on disk" in x or "unparseable manifest line" in x
+           for x in r["reasons"]):
         r["status"] = "CORRUPT"
     elif r["reasons"]:
         r["status"] = "PARTIAL"
