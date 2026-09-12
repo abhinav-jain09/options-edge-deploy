@@ -1166,7 +1166,9 @@ want "  and its discovery never asked for a topic list"                      0 "
 # parse, the range and ordering checks, reconciliation of duplicate/conflicting offsets, coverage and the
 # queried_end completeness rule across storage dates — and, since deploy #1041 review round 2 / engine r15, the
 # manifest INVENTORY rule (a listed file the disk has lost, an excluded capture's queried end, a no-progress ATTEMPT
-# line) and the SOURCE IDENTITY rule (17i-17k). The shim reader is the one section 12 uses; the real
+# line) and the SOURCE IDENTITY rule (17i-17k); since round 4 / engine r17, the whole-window PREFLIGHT (every line
+# validated, coordinates from the line, before any file is opened) and the refusal of a file no manifest line names
+# (17h, 17n). The shim reader is the one section 12 uses; the real
 # program's read_committed behaviour (markers walked, aborted records withheld, an open transaction bounding the read)
 # is proven against a real broker by broker-test/strike-reader-broker-test.sh section 1, not here.
 VP=options.spx.vol-premium.ivrv
@@ -1191,6 +1193,14 @@ import gzip, json, os, re, sys
 # owed too — the admitted captures must begin at or before the lowest offset any line of the window declares, or
 # the prefix is COVERAGE_GAP (an attempt at checkpoint 3 querying 10, then a capture [10,12): [3,10) is in no
 # capture); and a line naming BOTH a file and an attempt is malformed (MANIFEST_MISMATCH), never an attempt.
+# Round 4 (deploy #1041 review r4 / engine r17): the WHOLE window is preflighted before any capture file is opened —
+# every manifest line of every date parsed and validated (shape, coordinates against the file name, identity), every
+# file on disk placed against its line, the window's obligations and coverage decided from the declarations — and
+# only then are the admitted files read. Every declaration's coordinates are the VALIDATED line's, admitted or not
+# (a line contradicting its file name is MANIFEST_MISMATCH before it can set the required beginning). And a file
+# with NO manifest line REFUSES the window (UNCOVERED_EXCLUDED_FILE): it names no log, so no capture's offsets are
+# coordinates on it — round 3 let it stay "excluded-and-covered" by offsets, and log B's capture "covered" log A's
+# crash residue.
 topic, root, mode, dates = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
 NAME = re.compile(r"p(\d{1,9})\.(\d{1,18})-(\d{1,18})\.dt(\d{8})\.(\d{8}T\d{6}Z)\.jsonl\.gz")
 LINE = re.compile(rb"^(?:CreateTime|LogAppendTime):\d+\tPartition:(\d+)\tOffset:(\d+)\t")
@@ -1205,12 +1215,19 @@ def coords(n, dt):
         die("not the archiver's name for this topic and storage date: " + n)
     return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
+def num(e, k, n):
+    v = e.get(k)
+    if not isinstance(v, int) or isinstance(v, bool):
+        die("MANIFEST_MISMATCH: %s: its manifest line has no integral %s" % (n, k))
+    return v
+
 def obligation(e, to, n):
     q = e.get("queried_end", to)
     if not isinstance(q, int) or isinstance(q, bool) or q < 0:
         die("%s: its manifest line's queried_end %r is not an offset" % (n, q))
     return q
 
+# PHASE 1 — the whole-window PREFLIGHT. No capture file is opened here.
 admitted, excluded, unproven, declared = [], {}, [], []
 for dt in dates:
     d = os.path.join(root, "dt=" + dt)
@@ -1233,18 +1250,34 @@ for dt in dates:
                 elif e.get("attempt") is not None:
                     attempts.append(e)
     present = {n for n in os.listdir(d) if n.endswith(".jsonl.gz")}
-    # The inventory: every declared capture, on disk or not — and every declaration names its log, or the window
-    # is refused: an obligation on an unknown log cannot be discharged by a capture of a known one.
+    # The inventory: every declared capture, on disk or not — its coordinates the LINE's, checked against the name
+    # before anything is built from them — and every declaration names its log, or the window is refused: an
+    # obligation on an unknown log cannot be discharged by a capture of a known one.
     def identity(e, n):
         i = e.get("source_topic_id")
         if not i:
             die("NO_SOURCE_IDENTITY: dt=%s/_manifest.jsonl declares %s without source_topic_id: its obligation is "
                 "on a log no capture can be placed on, so nothing in the window can discharge it" % (dt, n))
         return i
+    byname = {}
     for n, e in manifest.items():
         part, f, t = coords(n, dt)
-        declared.append({"dt": dt, "n": n, "f": f, "t": t, "q": obligation(e, t, n),
-                         "id": identity(e, n), "present": n in present})
+        if part != 0:
+            die("%s: partition %d — the ledger this rule reads is partition 0" % (n, part))
+        lf, lt = num(e, "offset_from", n), num(e, "offset_to", n)
+        if (e.get("topic"), e.get("dt"), e.get("partition"), lf, lt) != (topic, dt, 0, f, t):
+            die("MANIFEST_MISMATCH: %s: its manifest line (topic, dt, partition, offset_from, offset_to) does not "
+                "describe the file it names, [%d,%d) on dt=%s" % (n, f, t, dt))
+        if e.get("capture") == CAPTURE:
+            if "queried_end" not in e:
+                die("MANIFEST_MISMATCH: %s: its manifest line has no integral queried_end" % n)
+            if num(e, "stable_boundary", n) != lt:
+                die("MANIFEST_MISMATCH: %s: its manifest line's stable_boundary %r is not the end of the range it "
+                    "names, %d" % (n, e.get("stable_boundary"), lt))
+        c = {"dt": dt, "n": n, "f": lf, "t": lt, "q": obligation(e, lt, n), "id": identity(e, n),
+             "present": n in present, "e": e}
+        declared.append(c)
+        byname[n] = c
     for a in attempts:
         n = "attempt at %s" % a.get("archived_at", "?")
         f = a.get("offset_from")
@@ -1252,48 +1285,31 @@ for dt in dates:
            or not isinstance(f, int) or f < 0 or a.get("offset_to") != f or a.get("stable_boundary") != f:
             die("dt=%s: %s is not a no-progress attempt of this topic at its checkpoint: %r" % (dt, n, a))
         declared.append({"dt": dt, "n": n, "f": f, "t": f, "q": obligation(a, f, n),
-                         "id": identity(a, n), "present": True})
+                         "id": identity(a, n), "present": True, "e": a})
     for n in sorted(present):
         part, f, t = coords(n, dt)
         if part != 0:
             die("%s: partition %d — the ledger this rule reads is partition 0" % (n, part))
-        e = manifest.get(n)
-        why = ("NO_MANIFEST_LINE" if e is None else
-               "NOT_COMMITTED_READ" if e.get("capture") != CAPTURE else
+        c = byname.get(n)
+        if c is None:
+            # No line names it: it declares nothing and names no log, so the numbers in its name are not
+            # coordinates on any log the window's captures are on, and no admitted capture can cover it.
+            excluded["NO_MANIFEST_LINE"] = excluded.get("NO_MANIFEST_LINE", 0) + 1
+            die("UNCOVERED_EXCLUDED_FILE: %s [%d,%d) has no manifest line on dt=%s: it declares nothing and names no "
+                "source log, so no admitted capture can cover it — crash residue or a console-era file, resolved by "
+                "an operator, never by offsets" % (n, f, t, dt))
+        e = c["e"]
+        why = ("NOT_COMMITTED_READ" if e.get("capture") != CAPTURE else
                "NO_RECORD_OFFSETS" if (e.get("record_layout") != LAYOUT or e.get("offsets_verified") is not True) else
                "ESCAPED_RECORDS" if e.get("escaped_records") != 0 else None)
         if why:
             excluded[why] = excluded.get(why, 0) + 1
-            unproven.append((f, t, n))
+            unproven.append(c)
             continue
-        if (e.get("offset_from"), e.get("offset_to"), e.get("stable_boundary"), e.get("partition")) != (f, t, t, 0):
-            die("%s: its manifest line does not describe the file it names" % n)
-        data = gzip.open(os.path.join(d, n)).read()
-        lines = data[:-1].split(b"\n") if data.endswith(b"\n") else (data.split(b"\n") if data else [])
-        records, prev = [], None
-        for i, l in enumerate(lines):
-            h = LINE.match(l)
-            parts = l.split(b"\t")
-            if not h or len(parts) != 5 or b"\r" in l:
-                die("%s: record %d is not <ts>\\tPartition:<p>\\tOffset:<o>\\t<key>\\t<value>: %r" % (n, i, l[:80]))
-            if int(h.group(1)) != 0:
-                die("%s: record %d is of partition %s" % (n, i, h.group(1).decode()))
-            o = int(h.group(2))
-            if o < f or o >= t:
-                die("%s: record %d is offset %d, outside its range [%d,%d)" % (n, i, o, f, t))
-            if prev is not None and o <= prev:
-                die("%s: record %d is offset %d, not after %d" % (n, i, o, prev))
-            prev = o
-            try:
-                json.loads(parts[4].decode("utf-8"))
-            except Exception:
-                die("%s: record %d payload is not a JSON document: %r" % (n, i, parts[4][:80]))
-            records.append((o, parts[3].decode("utf-8"), parts[4]))
-        if e.get("records") != len(records):
-            die("%s: holds %d records, its manifest line claims %s" % (n, len(records), e.get("records")))
-        admitted.append({"n": n, "dt": dt, "from": f, "to": t, "q": e.get("queried_end"), "records": records})
+        admitted.append(c)
 
-admitted.sort(key=lambda c: (c["from"], c["to"], c["dt"], c["n"]))
+admitted.sort(key=lambda c: (c["f"], c["t"], c["dt"], c["n"]))
+# PHASE 2 — the window's obligations, from the validated declarations alone; still nothing opened.
 # The session's obligation: the end the EARLIEST declaring date's runs meant to reach, admitted or not — and the
 # lowest offset ANY line of the window declares, which the admitted captures must begin at or before.
 need = need_from = first = None
@@ -1312,6 +1328,52 @@ if len(logs) > 1:
 for c in declared:
     if not c["present"] and c["t"] > c["f"] and c["f"] < need and c["t"] > need_from:
         die("MISSING_CAPTURE_FILE: %s [%d,%d) is named by dt=%s's manifest but is not on disk" % (c["n"], c["f"], c["t"], c["dt"]))
+# Coverage, from the declared ranges: no gap, every unproven (lined) range covered on its log, the prefix and the end.
+start, reach = None, None
+for c in admitted:
+    if reach is None:
+        start = c["f"]
+    elif c["f"] > reach:
+        die("COVERAGE_GAP: offsets [%d,%d) are in no committed capture" % (reach, c["f"]))
+    reach = max(reach or 0, c["t"])
+for c in unproven:
+    if reach is None or c["f"] < start or c["t"] > reach:
+        die("UNCOVERED_EXCLUDED_FILE: %s [%d,%d) is not proven and no capture covers it" % (c["n"], c["f"], c["t"]))
+# The declared PREFIX is owed too: the window's declarations begin at need_from, and the first admitted capture
+# must begin there or below — else [need_from, start) is in no capture, and no later capture will ever hold it.
+if need is not None and need_from < need and reach is not None and start > need_from:
+    die("COVERAGE_GAP: offsets [%d,%d) are in no committed capture — the window's declarations begin at %d "
+        "but the first admitted capture begins at %d" % (need_from, start, need_from, start))
+if need is not None and (reach is None or reach < need):
+    die("SESSION_INCOMPLETE: dt=%s queried up to %s, committed captures reach only %s"
+        % (first, need, reach if reach is not None else "nothing"))
+# PHASE 3 — the records. Only now is a capture file opened: the manifest had nothing to refuse.
+for c in admitted:
+    n, f, t, e = c["n"], c["f"], c["t"], c["e"]
+    data = gzip.open(os.path.join(root, "dt=" + c["dt"], n)).read()
+    lines = data[:-1].split(b"\n") if data.endswith(b"\n") else (data.split(b"\n") if data else [])
+    records, prev = [], None
+    for i, l in enumerate(lines):
+        h = LINE.match(l)
+        parts = l.split(b"\t")
+        if not h or len(parts) != 5 or b"\r" in l:
+            die("%s: record %d is not <ts>\\tPartition:<p>\\tOffset:<o>\\t<key>\\t<value>: %r" % (n, i, l[:80]))
+        if int(h.group(1)) != 0:
+            die("%s: record %d is of partition %s" % (n, i, h.group(1).decode()))
+        o = int(h.group(2))
+        if o < f or o >= t:
+            die("%s: record %d is offset %d, outside its range [%d,%d)" % (n, i, o, f, t))
+        if prev is not None and o <= prev:
+            die("%s: record %d is offset %d, not after %d" % (n, i, o, prev))
+        prev = o
+        try:
+            json.loads(parts[4].decode("utf-8"))
+        except Exception:
+            die("%s: record %d payload is not a JSON document: %r" % (n, i, parts[4][:80]))
+        records.append((o, parts[3].decode("utf-8"), parts[4]))
+    if e.get("records") != len(records):
+        die("%s: holds %d records, its manifest line claims %s" % (n, len(records), e.get("records")))
+    c["records"] = records
 by_offset, duplicates = {}, 0
 for c in admitted:
     for o, k, v in c["records"]:
@@ -1324,32 +1386,14 @@ for c in admitted:
 for a in range(len(admitted)):
     for b in range(a + 1, len(admitted)):
         x, y = admitted[a], admitted[b]
-        lo, hi = max(x["from"], y["from"]), min(x["to"], y["to"])
+        lo, hi = max(x["f"], y["f"]), min(x["t"], y["t"])
         if lo < hi and ([o for o, _, _ in x["records"] if lo <= o < hi]
                         != [o for o, _, _ in y["records"] if lo <= o < hi]):
             die("OVERLAP_PRESENCE_CONFLICT: %s and %s disagree on [%d,%d)" % (x["n"], y["n"], lo, hi))
-start, reach = None, None
-for c in admitted:
-    if reach is None:
-        start = c["from"]
-    elif c["from"] > reach:
-        die("COVERAGE_GAP: offsets [%d,%d) are in no committed capture" % (reach, c["from"]))
-    reach = max(reach or 0, c["to"])
-for f, t, n in unproven:
-    if reach is None or f < start or t > reach:
-        die("UNCOVERED_EXCLUDED_FILE: %s [%d,%d) is not proven and no capture covers it" % (n, f, t))
-# The declared PREFIX is owed too: the window's declarations begin at need_from, and the first admitted capture
-# must begin there or below — else [need_from, start) is in no capture, and no later capture will ever hold it.
-if need is not None and need_from < need and reach is not None and start > need_from:
-    die("COVERAGE_GAP: offsets [%d,%d) are in no committed capture — the window's declarations begin at %d "
-        "but the first admitted capture begins at %d" % (need_from, start, need_from, start))
-if need is not None and (reach is None or reach < need):
-    die("SESSION_INCOMPLETE: dt=%s queried up to %s, committed captures reach only %s"
-        % (first, need, reach if reach is not None else "nothing"))
 if mode == "keys":
     print(" ".join(by_offset[o][0] for o in sorted(by_offset)))
 elif mode == "ranges":
-    print(" ".join("%d-%d" % (c["from"], c["to"]) for c in admitted))
+    print(" ".join("%d-%d" % (c["f"], c["t"]) for c in admitted))
 elif mode == "excluded":
     print(" ".join("%s=%d" % (k, v) for k, v in sorted(excluded.items())) or "none")
 elif mode == "identity":
@@ -1600,10 +1644,15 @@ PY
 }
 LEG="$VP.p0.0-3.dt20260909.20260909T220000Z.jsonl.gz"
 vfake "$LEG" "$VDAY" legacy 0 3 "0:$K1:{\"frameSeq\":1,\"v\":\"legacy\"}" "1:$K2:{\"frameSeq\":2,\"v\":\"legacy\"}"
-want "17h a legacy file with no manifest line is EXCLUDED and counted" "NO_MANIFEST_LINE=1" "$(vread excluded)"
-want "  and its records are not read: the committed captures alone answer" "$K1 $K2 $K3 $K4" "$(vread keys)"
+# Round 4 (deploy #1041 r4 MAJOR 1): a file with NO manifest line REFUSES the window — it names no log, so the
+# committed captures' offsets are not coordinates on it and cover nothing of it. Rounds 1-3 read the date on the
+# committed captures alone with the file "excluded-and-covered"; 17n has the crash residue that made that wrong.
+has  "17h a file with NO manifest line REFUSES the window: it names no log, so no capture's offsets cover it" \
+     "UNCOVERED_EXCLUDED_FILE: $LEG [0,3) has no manifest line on dt=$VDAY" "$(vread keys)"
+has  "  saying why"                                        "resolved by an operator, never by offsets" "$(vread keys)"
 want "  nothing of it in the observations"                             0 "$(vread keys | grep -c legacy)"
 rm -f "$(VDIR)/$LEG"
+want "  the file removed by an operator: the committed captures alone answer" "$K1 $K2 $K3 $K4" "$(vread keys)"
 STRIP="$VP.p0.0-3.dt20260909.20260909T230000Z.jsonl.gz"
 vfake "$STRIP" "$VDAY" stripped 0 3 "0:$K1:{\"frameSeq\":1,\"v\":\"stripped\"}"
 want "  a committed capture whose offsets were STRIPPED is excluded too" "NO_RECORD_OFFSETS=1" "$(vread excluded)"
@@ -1856,6 +1905,51 @@ want "  the file REMOVED, its contradictory line kept — Codex's case: CORRUPT 
 has  "  the missing file is still seen"      "1 manifest file(s) absent on disk: ['$BOTH']" "$OUT_V"
 has  "  as CORRUPT"                                                   "CORRUPT  $VP" "$OUT_V"
 has  "  and the loader model still refuses the line, before it could miss the file" "MANIFEST_MISMATCH: dt=$VDAY/_manifest.jsonl names both a file" "$(vread keys)"
+
+# ---- 17n. CRASH RESIDUE across logs (deploy #1041 r4 MAJOR 1): a file published, its manifest line never appended ----
+# (the process died between the mv and the append — the window between oe-archive-kafka.sh's gated mv and its
+# manifest printf), then the topic re-created and the next run capturing the NEW log. Round 3 excluded the residue
+# (NO_MANIFEST_LINE) and let the new log's offsets "cover" its range: Codex r4's ORPHAN_LOSES_DISTINCT_OBSERVATION
+# loaded session D on log B's observation alone, log A's distinct observation lost with the line. A file no manifest
+# line names now refuses the window: it names no log, so no capture's offsets are coordinates on it. The crash is
+# simulated as 17g simulates it — by removing what the crash would not have written: the line, and the checkpoint
+# the archiver writes after it (manifest FIRST, checkpoint SECOND).
+fresh v15
+strike_log "${OPEN_LOG[@]}"
+vrun "$VDAY" >/dev/null
+RES=$(basename "$(ls "$(VDIR)"/*.p0.0-3.*.jsonl.gz)")
+want "17n dt=$VDAY captured log $SID's [0,3), querying 5 (names, queried_end, file)" "0-3 5 $RES" \
+     "$(vnames) $(vm queried_end) $(vm file)"
+: > "$(VDIR)/_manifest.jsonl"; rm -f "$A/kafka/prod/_manifest/$VP.offsets"
+CKN=$(vck)
+want "  the CRASH: the file stands, no line names it, no checkpoint (files, lines, checkpoint)" "1 0 none" \
+     "$(vfiles) $(grep -c . "$(VDIR)/_manifest.jsonl") ${CKN:-none}"
+STRIKE_ID=$TID strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"B\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"B\"}" '2 M' \
+                          "3 C $K3 {\"frameSeq\":3,\"v\":\"B\"}" "4 C $K4 {\"frameSeq\":4,\"v\":\"B\"}" '5 M' \
+                          '6 C x y' '7 C x y' '8 C x y' '9 M'
+OUT=$(vrun "$VDAY2"); RC=$?
+want "  the topic re-created, the new log grown to 10: the next run succeeds (rc)" 0 "$RC"
+want "  and captures log $TID's [0,10) under its date, naming it"        "0-10 $TID" "$(vnames "$VDAY2") $(vm source_topic_id "$VDAY2")"
+has  "  the SESSION across both dates is REFUSED: the residue names no log, and B's [0,10) covers nothing of it" \
+     "UNCOVERED_EXCLUDED_FILE: $RES [0,3) has no manifest line on dt=$VDAY" "$(vsession keys "$VDAY" "$VDAY2")"
+has  "  saying why"                                        "resolved by an operator, never by offsets" "$(vsession keys "$VDAY" "$VDAY2")"
+want "  round 3's answer — the session read on B's records — is never given" 0 \
+     "$(vsession keys "$VDAY" "$VDAY2" | grep -c "^SPX|")"
+# On the SAME log — 17g's ordinary crash re-read, with the line lost too — the residue refuses just the same:
+# nothing names its log, and the rule does not read the numbers in its name as a coordinate on anything.
+fresh v15b
+strike_log "${OPEN_LOG[@]}"
+vrun "$VDAY" >/dev/null
+RES=$(basename "$(ls "$(VDIR)"/*.p0.0-3.*.jsonl.gz)")
+: > "$(VDIR)/_manifest.jsonl"; rm -f "$A/kafka/prod/_manifest/$VP.offsets"
+strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M' \
+           "3 C $K3 {\"frameSeq\":3,\"v\":\"c\"}" "4 C $K4 {\"frameSeq\":4,\"v\":\"c\"}" '5 M'
+OUT=$(vrun "$VDAY"); RC=$?
+want "  the retry on the SAME log re-reads from 0 against the advanced boundary, beside the residue (rc, names)" "0 0-3 0-6" "$RC $(vnames)"
+has  "  and the date still REFUSES: the residue's log is unknown even here" \
+     "UNCOVERED_EXCLUDED_FILE: $RES [0,3) has no manifest line on dt=$VDAY" "$(vread keys)"
+rm -f "$(VDIR)/$RES"
+want "  the residue removed by an operator: the date reads whole on the re-read" "$K1 $K2 $K3 $K4" "$(vread keys)"
 
 # ---- 17f. EVERY vol-premium ledger is committed-only by default --------------------------------------------------------
 for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings \
