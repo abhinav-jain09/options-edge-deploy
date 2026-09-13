@@ -253,13 +253,24 @@ jobs:
       - name: apply-topics never recreates the strike episode log
         run: bash scripts/kafka/apply-topics-strike-safety-test.sh
 
-      # The seven vol-premium Gate-1 topics (rollout step 3): five kept forever (RESET-PRESERVED, NEVER-RECREATE,
-      # retention.bytes=-1), two rebuildable. Drives the real apply-topics.sh and cleanup-topics.sh over creation,
+      # The six vol-premium Gate-1 topics (rollout step 3): four kept forever (RESET-PRESERVED, NEVER-RECREATE,
+      # retention.bytes=-1), two rebuildable; the calendar ledger is a Postgres table, not a topic (2026-09-13).
+      # Drives the real apply-topics.sh and cleanup-topics.sh over creation,
       # config reconcile, partition drift and every cleanup mode, for dev and production, and shows that a copy of
       # topics.env missing any one protecting membership fails. validate-services.sh also runs it (through
       # validate-durable-topic-preservation.sh); this step gives a failure its own name.
       - name: apply-topics / cleanup-topics keep the vol-premium ledgers
         run: bash scripts/kafka/apply-topics-vol-premium-safety-test.sh
+
+      # The vol-premium event calendar the deployment PINS (VOL_PREMIUM_CALENDAR_VERSION / _CONTENT_HASH in
+      # k8s/base/vol-premium-deployment.yaml) and the file the publish job writes to the Postgres ledger
+      # (scripts/vol-premium/calendars/calendar-2026.1.json) must be one artefact: the engine halts at boot when
+      # the ledger row's content hash differs from the pin. This recomputes the contract's canonical content hash
+      # from the file (a stdlib port of CanonicalBytes for the calendar record shape, held to the declared hash),
+      # checks the file against the CalendarArtifact rules the engine applies on load, and asserts the manifests
+      # pin exactly that version and hash.
+      - name: vol-premium calendar artefact matches its pins (canonical content hash recomputed)
+        run: bash scripts/ci/validate-vol-premium-calendar.sh
 
       # es4's clean-reset deletes the whole Kafka data dir; it must refuse while the strike archive
       # marker is short of the log end (fail closed on unreadable state, explicit opt-out only).

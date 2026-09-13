@@ -191,6 +191,50 @@ spec:
               value: "30000"
             - name: VOL_PREMIUM_BASELINE_VERSION
               value: "NONE"
+            # --- Gate-1 engine pins (owner decision 2026-09-13; options-edge-processing PR #790) ---
+            #
+            # THE CALENDAR LEDGER LIVES IN POSTGRES, NOT IN A KAFKA TOPIC: table vol_premium_calendar_ledger
+            # (calendar_version PK, content_hash, wire, published_at, published_by), created and written only by
+            # VolPremiumLedgerPublisher --confirm, which a person runs through Jenkinsfile.vol-premium-ledger-publish.
+            # There is therefore NO VOL_PREMIUM_CALENDAR_TOPIC here and options.spx.vol-premium.calendar is no
+            # longer declared in scripts/kafka/topics.env. The engine reads the row named by the version pin at boot,
+            # verifies its content_hash against the hash pin, and halts (70: CALENDAR_ABSENT / hash mismatch)
+            # otherwise — so the pins below and the file scripts/vol-premium/calendars/calendar-2026.1.json must agree,
+            # which scripts/ci/validate-vol-premium-calendar.sh asserts on every PR by recomputing the canonical hash.
+            #
+            # THE IMAGE ABOVE IS STILL THE REALISED-ONLY SERVICE. It ignores these four keys today; they are set now
+            # so the step-4 PR — the one that switches the image to the engine build — changes the image reference and
+            # nothing else in this file. Until that PR, this manifest deploys exactly what it deployed before.
+            - name: VOL_PREMIUM_CALENDAR_VERSION
+              value: "2026.1"
+            - name: VOL_PREMIUM_CALENDAR_CONTENT_HASH
+              value: "cf209ff9ff428428988322928b27cd625556a2bb5a28131410b4d4631ea9c347"
+            # The UI stays LOCKED (§9.1: promotion is a config change made by a person who has read the gate
+            # report). false is also the engine's default; it is written out so the lock is a reviewed line in git,
+            # not an absence.
+            - name: VOL_PREMIUM_UI_ACTIVATED
+              value: "false"
+            # --- Postgres: the calendar ledger's home, the same source every Postgres-using service reads
+            # (options-edge-config carries POSTGRES_JDBC_URL/USER; options-edge-runtime-secrets carries the
+            # password). Both are already in envFrom above; naming the three keys here makes the dependency explicit
+            # and mirrors es-open-direction / reversal-postgres-writer / signal-follower. The engine's prod profile
+            # requires all three and refuses a localhost URL; its dev profile requires a *_dev database, which the
+            # dev overlay's options-edge-config supplies (options_flow_dev).
+            - name: POSTGRES_JDBC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
             # In-memory sampling grid plus a trimmed smile; the Streams runtime dominates.
             - name: JAVA_TOOL_OPTIONS
               value: "-Xms128m -Xmx512m"

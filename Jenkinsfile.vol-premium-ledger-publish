@@ -1,0 +1,169 @@
+@Library('oe') _
+
+// PUBLISH A vol-premium LEDGER ARTEFACT (the event calendar) TO POSTGRES — dry run first, write only on CONFIRM.
+//
+// Owner decision 2026-09-13: the vol-premium CALENDAR ledger lives in PostgreSQL (table
+// vol_premium_calendar_ledger: calendar_version PK, content_hash, wire, published_at, published_by), not in a
+// Kafka topic, and its publication happens through THIS job. The engine binds the calendar by
+// VOL_PREMIUM_CALENDAR_VERSION + VOL_PREMIUM_CALENDAR_CONTENT_HASH (k8s/base/vol-premium-deployment.yaml) and
+// halts at boot when the row is absent or its hash differs — so this job runs BEFORE the step-4 deploy that
+// switches the vol-premium image to the engine build, never after.
+//
+// WHAT RUNS: scripts/ops/vol-premium-ledger-publish.sh, which creates the Job in
+// k8s/jobs/vol-premium-ledger-publish-job.yaml under the deployer identity — the only principal the
+// options-edge-jenkins-only-workloads admission policy permits to create Jobs (there is no `kubectl run` and no
+// `kubectl exec` for it either). The Job runs the ENGINE image's own publisher against the reviewed artefact file
+// from this repository, mounted from a ConfigMap rendered from that file per run:
+//     VolPremiumLedgerPublisher --kind calendar --file <json> [--confirm] [--published-by <who>]
+// connecting with POSTGRES_JDBC_URL / POSTGRES_USER / POSTGRES_PASSWORD from options-edge-config and
+// options-edge-runtime-secrets (secretKeyRef — the password is never in a manifest or a log).
+//
+// TWO STAGES, IN ORDER, EVERY BUILD:
+//   1. DRY RUN — ALWAYS runs. The publisher validates the artefact, scans the ledger, prints PUBLISHABLE (or
+//      ALREADY_PRESENT) and writes NOTHING. A build with CONFIRM=false ends here, green, having changed nothing.
+//   2. PUBLISH — runs ONLY when CONFIRM=true, and only after stage 1 passed in the same build. Inserts the row
+//      once. The same content again is a no-op (ALREADY_PRESENT); different content under a version that
+//      already exists is refused (LEDGER_KEY_CONFLICT, exit 66) — a version is immutable once written.
+//   The build log carries the (version, content_hash) that was published — and nothing else about the row.
+//
+// PERMITTED COMMIT (Deployment Permission Rule): every run needs PERMITTED_SHA, the full 40-character commit id
+// of the checkout the publish must come from. The first stage fails closed unless the checked-out HEAD equals it
+// exactly AND that commit is on origin/main — this job publishes reviewed, merged artefacts only. Nothing is ever
+// substituted for a missing value: a manual click needs the SHA too.
+//
+// BEFORE THE FIRST RUN — what does not exist yet (there is no job DSL or CasC in this repo; jobs are Pipeline-
+// from-SCM items created by cloning an existing job's config.xml, docs/deploy-single-service.md):
+//     scripts/jenkins/create-service-job.sh vol-premium-ledger-publish \
+//         git@github.com:abhinav-jain09/options-edge-deploy.git Jenkinsfile.vol-premium-ledger-publish stockgex-close-board
+//   then one plain /build so Jenkins parses the parameters (it refuses buildWithParameters until then).
+//   The image-tags/production.yaml vol-premium-service tag must already carry the ENGINE build (the one with the
+//   Postgres publisher); the realised-only service image has no such main class and the Job fails saying so.
+//
+// PRODUCTION ONLY for now: the dev database would need its own publication before a dev engine could boot, and
+// that path is not wired here yet — ENVIRONMENT offers exactly one choice and the wrapper refuses any other.
+pipeline {
+  agent { label 'hpsf-replay-mac' }
+  parameters {
+    choice(name: 'ENVIRONMENT', choices: ['production'],
+      description: 'Target environment. Production only — see the header.')
+    choice(name: 'KIND', choices: ['calendar'],
+      description: 'Which ledger. Only the calendar lives in Postgres; the baseline ledger stays on Kafka.')
+    string(name: 'FILE', defaultValue: 'scripts/vol-premium/calendars/calendar-2026.1.json',
+      description: 'Repository path of the artefact to publish (under scripts/vol-premium/). It is validated in this build — boot-time rules and the canonical content hash recomputed — before any Job is created.')
+    booleanParam(name: 'CONFIRM', defaultValue: false,
+      description: 'false (DEFAULT) = dry run only: the publisher validates, scans the ledger, prints PUBLISHABLE and writes nothing. true = after that same dry run passes, run the publisher again with --confirm and INSERT the row. Immutable once written.')
+    string(name: 'PUBLISHED_BY', defaultValue: '',
+      description: 'Recorded in the row\'s published_by (letters, digits, . _ - @ only; max 64). Empty = the publisher\'s default. Put your name here on a CONFIRM run.')
+    string(name: 'PERMITTED_SHA', defaultValue: '',
+      description: 'REQUIRED. The full 40-character lowercase commit id of the options-edge-deploy commit this run is permitted for. The build fails closed unless the checked-out HEAD equals it exactly and it is on origin/main.')
+    string(name: 'KUBECONFIG_FILE', defaultValue: '',
+      description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
+    string(name: 'KEEP_JOBS', defaultValue: '5',
+      description: 'How many most-recent TERMINAL ledger-publish Jobs to retain (nothing else prunes them). 1..100.')
+  }
+  // NO TRIGGERS: publication is a person's decision, once per artefact version.
+  options {
+    // A second concurrent publish of the same version would only ever be ALREADY_PRESENT or a conflict, but two
+    // runs also race on the pruning and the active-Job check; the wrapper refuses to start beside an active Job.
+    disableConcurrentBuilds()
+    // Each Job is capped at 600s and the wrapper waits 900; two runs plus validation fit comfortably.
+    timeout(time: 40, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '50'))
+  }
+  environment {
+    KUBECONFIG    = "${params.KUBECONFIG_FILE ?: oeProfile(params.ENVIRONMENT).kubeconfigDeployer}"
+    ENVIRONMENT   = "${params.ENVIRONMENT}"
+    KIND          = "${params.KIND}"
+    FILE          = "${params.FILE}"
+    PUBLISHED_BY  = "${params.PUBLISHED_BY}"
+    PERMITTED_SHA = "${params.PERMITTED_SHA}"
+    KEEP_JOBS     = "${params.KEEP_JOBS}"
+  }
+  stages {
+    stage('Permitted commit (main only)') {
+      // The Deployment Permission Rule's guard, in the workspace the effect will come from. Same shape as every
+      // deployment job's: (1) HEAD resolves to a full commit id; (2) the job's own ref is main and HEAD is
+      // contained in origin/main as fetched NOW; (3) PERMITTED_SHA is present and exactly 40 lowercase hex chars —
+      // never defaulted, never a short SHA, never a branch; (4) HEAD == PERMITTED_SHA byte for byte. Both values
+      // are printed before either is judged, so a refusal's log still carries the facts.
+      steps {
+        sh '''
+          set -euo pipefail
+          refuse() { echo "permitted-sha-guard: REFUSED — $*" >&2; echo "permitted-sha-guard: verdict=REFUSED (nothing may publish)" >&2; exit 1; }
+          git rev-parse --is-inside-work-tree >/dev/null 2>&1 || refuse "the workspace is not a git checkout"
+          head_sha="$(git rev-parse HEAD 2>/dev/null)" || refuse "cannot resolve HEAD"
+          case "$head_sha" in ''|*[!0-9a-f]*) refuse "HEAD did not resolve to a commit id (got '$head_sha')" ;; esac
+          [ "${#head_sha}" -eq 40 ] || refuse "HEAD is not a full commit id (got '$head_sha')"
+          echo "permitted-sha-guard: checked-out HEAD  = $head_sha"
+          echo "permitted-sha-guard: PERMITTED_SHA     = '${PERMITTED_SHA:-}'"
+          reported="${BRANCH_NAME:-${GIT_BRANCH:-}}"
+          if [ -n "$reported" ]; then
+            case "$reported" in
+              main|origin/main|*/main|refs/heads/main|refs/remotes/origin/main) ;;
+              *) refuse "checked-out ref is '$reported'; this job publishes only from main" ;;
+            esac
+          fi
+          git fetch --quiet origin main || refuse "could not fetch origin/main to confirm the branch — refusing rather than guessing"
+          tip="$(git rev-parse FETCH_HEAD)"
+          git merge-base --is-ancestor "$head_sha" FETCH_HEAD || refuse "commit $head_sha is not on origin/main (tip is $tip); this job publishes only merged work"
+          echo "permitted-sha-guard: branch ok          — $head_sha is on origin/main (tip $tip)"
+          p="${PERMITTED_SHA:-}"
+          [ -n "$p" ] || refuse "PERMITTED_SHA is empty. Every run needs the owner's permission for ONE exact commit: pass its full 40-character SHA (a manual click needs it too)."
+          case "$p" in *[[:space:]]*) refuse "PERMITTED_SHA contains whitespace ('$p')" ;; esac
+          case "$p" in *[!0-9a-f]*) refuse "PERMITTED_SHA is not a lowercase 40-hex commit id ('$p'); never a branch, tag, short SHA or uppercase" ;; esac
+          [ "${#p}" -eq 40 ] || refuse "PERMITTED_SHA '$p' has ${#p} characters — a short SHA is refused; pass the full 40-character commit id"
+          [ "$head_sha" = "$p" ] || refuse "checked-out HEAD $head_sha is not the permitted commit $p — the branch moved past the permitted commit, or the permission is for a different one; nothing may publish under it"
+          echo "permitted-sha-guard: verdict=PERMITTED — checked-out $head_sha == permitted $p, on origin/main"
+        '''
+      }
+    }
+    stage('Validate artefact') {
+      // The boot-time rules and the canonical content hash, recomputed from the file — before a cluster is
+      // touched. The same validator gates every PR (deploy-validation.yml).
+      steps {
+        sh '''
+          set -euo pipefail
+          [ "${KIND}" = "calendar" ] || { echo "KIND=${KIND} has no validator here" >&2; exit 1; }
+          bash scripts/ci/validate-vol-premium-calendar.sh "${FILE}"
+        '''
+      }
+    }
+    stage('Dry run: PUBLISHABLE?') {
+      // ALWAYS. Writes nothing; ends the build green when CONFIRM=false.
+      steps {
+        sh '''
+          set -euo pipefail
+          chmod +x scripts/ops/vol-premium-ledger-publish.sh
+          CONFIRM=false scripts/ops/vol-premium-ledger-publish.sh
+        '''
+      }
+    }
+    stage('Publish (--confirm)') {
+      when {
+        beforeAgent true
+        expression { params.CONFIRM }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          CONFIRM=true scripts/ops/vol-premium-ledger-publish.sh
+        '''
+      }
+    }
+  }
+  post {
+    success {
+      script {
+        echo params.CONFIRM ? "PUBLISHED ${params.KIND} from ${params.FILE} (see the 'Publish (--confirm)' log for calendar_version and content_hash)" :
+                              "DRY RUN ONLY — nothing was written. Re-run with CONFIRM=true to publish ${params.KIND} from ${params.FILE}."
+      }
+    }
+    unsuccessful {
+      script {
+        echo "vol-premium ledger publish ${currentBuild.currentResult} (build ${env.BUILD_NUMBER}, kind ${params.KIND}, file ${params.FILE}, confirm ${params.CONFIRM}). " +
+             "A failed CONFIRM run may or may not have inserted the row — the publisher inserts once and prints its receipt afterwards; read the Job log above. " +
+             "A re-run is safe: the same content is ALREADY_PRESENT, different content under the same version is refused (exit 66)."
+      }
+    }
+  }
+}

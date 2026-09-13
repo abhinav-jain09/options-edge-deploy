@@ -124,7 +124,8 @@ is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) retur
 # committed reader bounds a capture by the consumer's POSITION against the last stable offset, so these topics
 # are routed to it. None of them is archived by any job today (oe-topics.env): this makes their capture
 # committed-only from the first run that archives them, with no legacy checkpoint to recapture over.
-OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS="options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline options.spx.vol-premium.calendar"
+# (options.spx.vol-premium.calendar is not listed: since 2026-09-13 the calendar ledger is a Postgres table, not a topic.)
+OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS="options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline"
 OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike $OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS}"
 is_committed_read_topic() { case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # THE RECORD LAYOUT OF A COMMITTED-READ FILE. The reader writes "<ts>\tPartition:<p>\tOffset:<o>\t<key>\t<value>",

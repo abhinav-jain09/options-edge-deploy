@@ -230,12 +230,13 @@ log "identity guards PASSED"
 # es.futures.footprint.strike added 2026-09-10 (ES-FOOTPRINT-STRIKE-INTERACTION.md R6/R13): the strike
 # service folds its own log and MM1 resumes committed source offsets, so a purged copy is never re-copied
 # and a purged source is never re-derived — RESET-PRESERVED on either cluster this script is pointed at.
-# options.spx.vol-premium.{ivrv,events,warnings,baseline,calendar} added 2026-09-11 (vol-premium Gate-1, design §7):
+# options.spx.vol-premium.{ivrv,events,warnings,baseline} added 2026-09-11 (vol-premium Gate-1, design §7):
 # declared retention=-1 + RESET-PRESERVED in topics.env. The IV/RV series is kept forever (§40.1), .events holds the
 # SESSION_FINALISED chain the engine rebuilds its level from at boot (§8.8), .warnings is the §40.15
-# forward-evaluation evidence, and .baseline/.calendar are the version ledgers the engine binds by version and content
-# hash; nothing re-derives any of them. .current and .dlq are still purged: the next frame restores one, the other is
-# diagnostics. None of these names exists on .4, so the arm is inert there.
+# forward-evaluation evidence, and .baseline is the version ledger the engine binds by version and content hash;
+# nothing re-derives any of them. (.calendar was the fifth until 2026-09-13; the calendar ledger is a Postgres table
+# now, so no topic of that name is declared or preserved.) .current and .dlq are still purged: the next frame restores
+# one, the other is diagnostics. None of these names exists on .4, so the arm is inert there.
 # The arm has to be right for EITHER cluster this script can be pointed at, because the name means
 # something different on each. The default BOOTSTRAP lists endpoints on both .252 and .4, but that
 # is a seed list for ONE logical cluster, not a two-cluster sweep: the run reads a single cluster-id

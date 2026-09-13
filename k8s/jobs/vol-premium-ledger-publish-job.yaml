@@ -1,0 +1,153 @@
+# PUBLISH ONE vol-premium LEDGER ARTEFACT (the event calendar) TO POSTGRES.
+#
+# Owner decision 2026-09-13: the vol-premium CALENDAR ledger is the Postgres table vol_premium_calendar_ledger
+# (calendar_version PK, content_hash, wire, published_at, published_by), not a Kafka topic. The engine reads the row
+# named by VOL_PREMIUM_CALENDAR_VERSION at boot, verifies content_hash against VOL_PREMIUM_CALENDAR_CONTENT_HASH,
+# and halts (70) when the row is absent or differs. This Job is how the row gets there: it runs the engine image's
+# own publisher — VolPremiumLedgerPublisher, which creates the table on first use — against the reviewed artefact
+# file from this repository, mounted from a ConfigMap the wrapper renders from that file per run.
+#
+# WHY A JOB TEMPLATE IN GIT, RENDERED PER RUN BY JENKINS — the same reason as every file in this directory (read
+# stock-gex-oi-snapshot-job.yaml's header): the options-edge-jenkins-only-workloads admission policy
+# (failurePolicy: Fail) permits batch/jobs CREATE only to system:serviceaccount:options-edge:jenkins-deployer.
+# There is no `kubectl run` and no `kubectl exec` for that identity either (no pods/exec), so a one-off command
+# against production Postgres IS a Job created by the deployer, and nothing else.
+#
+# TWO STAGES, ONE TEMPLATE. The wrapper (scripts/ops/vol-premium-ledger-publish.sh) renders this twice per
+# Jenkins build: first with LEDGER_CONFIRM=false — the publisher validates the artefact, scans the ledger and
+# prints PUBLISHABLE (or ALREADY_PRESENT) and WRITES NOTHING — and only when the operator ticked CONFIRM, a second
+# time with LEDGER_CONFIRM=true, which inserts the row once. The publisher's own contract makes the second run
+# safe to repeat: the same content again is ALREADY_PRESENT (a no-op, exit 0); different content under a version
+# that exists is LEDGER_KEY_CONFLICT (exit 66) — a version is immutable once written, because a deployment pins it.
+#
+# WHAT THE CONTAINER PROVES BEFORE IT PUBLISHES: the mounted file's sha256 equals __FILE_SHA256__, which the
+# wrapper computed from the checked-out repository file AFTER scripts/ci/validate-vol-premium-calendar.sh passed
+# on it. So the bytes the publisher hashes and writes are the bytes that were reviewed — not a ConfigMap someone
+# edited in the cluster.
+#
+# THE PASSWORD NEVER APPEARS IN A LOG: POSTGRES_PASSWORD arrives by secretKeyRef from options-edge-runtime-secrets,
+# exactly as every Postgres-using service receives it; the rendered manifest carries the reference, not the value,
+# and the wrapper prints the publisher's stdout, never the pod's environment.
+#
+# NOT NODE-PINNED: the publisher talks to Postgres over the network and touches no node-local path.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+  namespace: options-edge
+  labels:
+    app.kubernetes.io/name: vol-premium-ledger-publish
+    app.kubernetes.io/part-of: options-edge
+    app.kubernetes.io/component: maintenance
+    options-edge.io/ledger-kind: __KIND__
+spec:
+  # NO k8s-level retry: a publish that failed mid-way must be READ (its log is the evidence) before anything is
+  # tried again, and the publisher is idempotent on the same content, so a human re-run costs nothing.
+  backoffLimit: 0
+  # A single INSERT after a validation and a scan: seconds. Ten minutes is the generous ceiling; the wrapper waits
+  # longer than this on purpose, so the deadline is enforced by the component that can actually stop the work.
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vol-premium-ledger-publish
+    spec:
+      restartPolicy: Never
+      # This Job never talks to the k8s API — the token would be an unnecessary credential in a pod that holds
+      # the production Postgres password.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: publisher
+          # The vol-premium ENGINE image, digest-pinned by the wrapper from image-tags/production.yaml
+          # (vol-premium-service). The publisher is a main class inside the service jar, so the ledger row is
+          # written by the same contracts build the engine that reads it was compiled against.
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # The platform defaults every service reads (APP_PROFILE and the rest), so the publisher resolves the
+          # production profile the way the engine does. The runtime-secrets Secret is deliberately NOT envFrom'd
+          # whole: only the one key the publisher needs is referenced below.
+          envFrom:
+            - configMapRef:
+                name: options-edge-config
+          env:
+            # --- Postgres: the same source every Postgres-using service reads (options-edge-config carries
+            # POSTGRES_JDBC_URL/USER; options-edge-runtime-secrets carries the password) ---
+            - name: POSTGRES_JDBC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_JDBC_URL
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: options-edge-config
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: options-edge-runtime-secrets
+                  key: POSTGRES_PASSWORD
+            # --- the publish itself, every value substituted by the wrapper from the Jenkins parameters ---
+            - name: LEDGER_KIND
+              value: "__KIND__"
+            - name: LEDGER_FILE
+              value: "/ledger/__FILE_BASENAME__"
+            - name: LEDGER_FILE_SHA256
+              value: "__FILE_SHA256__"
+            - name: LEDGER_CONFIRM
+              value: "__CONFIRM__"
+            - name: LEDGER_PUBLISHED_BY
+              value: "__PUBLISHED_BY__"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms64m -Xmx256m"
+          command: ["sh", "-c"]
+          args:
+            - |
+              set -eu
+              test -f "${LEDGER_FILE}" || { echo "FATAL: ${LEDGER_FILE} is not mounted" >&2; exit 1; }
+              actual="$(sha256sum "${LEDGER_FILE}" | cut -d' ' -f1)"
+              if [ "${actual}" != "${LEDGER_FILE_SHA256}" ]; then
+                echo "FATAL: mounted ${LEDGER_FILE} has sha256 ${actual}, the reviewed file has ${LEDGER_FILE_SHA256} — refusing to publish bytes nobody reviewed" >&2
+                exit 1
+              fi
+              echo "artefact ${LEDGER_FILE} sha256 ${actual} (verified against the reviewed file)"
+              set -- --kind "${LEDGER_KIND}" --file "${LEDGER_FILE}"
+              if [ "${LEDGER_CONFIRM}" = "true" ]; then
+                set -- "$@" --confirm
+              fi
+              if [ -n "${LEDGER_PUBLISHED_BY}" ]; then
+                set -- "$@" --published-by "${LEDGER_PUBLISHED_BY}"
+              fi
+              echo "running VolPremiumLedgerPublisher $*"
+              exec java -cp /app/app.jar com.optionsedge.processing.volpremium.VolPremiumLedgerPublisher "$@"
+          volumeMounts:
+            - name: ledger-file
+              mountPath: /ledger
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp          # readOnlyRootFilesystem: the JVM needs a temp dir
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        # Rendered by the wrapper from the repository file, named by the file's sha256 so a re-run of the same
+        # artefact reuses it and a different artefact can never be served under the same name.
+        - name: ledger-file
+          configMap:
+            name: __CONFIGMAP__
+        - name: tmp
+          emptyDir: {}

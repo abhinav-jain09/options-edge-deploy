@@ -199,7 +199,8 @@ assert_status 0 "cleanup itself succeeded"
 
 # EVERY reset-preserved topic, in BOTH destructive modes, in BOTH environments. The sections above pin one durable
 # topic per mode (plus vix), and only the unwanted sweep was asserted for each preserved topic, so a topic appended to
-# OPTIONS_EDGE_RESET_PRESERVED_TOPICS (the five vol-premium ledgers, 2026-09-11) had no test showing that
+# OPTIONS_EDGE_RESET_PRESERVED_TOPICS (the vol-premium ledgers, 2026-09-11 — four since 2026-09-13, when the
+# calendar moved to Postgres) had no test showing that
 # delete-recreate or the retention shrink spares it. DERIVED by EXECUTING reset-preserved-topics.sh under each
 # ENVIRONMENT — the parser cleanup-topics.sh itself sources — so the list grows with the declaration and carries the
 # production-only entries exactly where cleanup-topics.sh does.

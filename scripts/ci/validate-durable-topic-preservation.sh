@@ -290,8 +290,9 @@ elif ! bash "$LEDGER_TEST" > "$_scratch/ledger.out" 2>&1; then
   fail=1
 fi
 
-# The seven vol-premium Gate-1 topics: five are kept forever (RESET-PRESERVED, NEVER-RECREATE, retention.bytes=-1),
-# two are rebuildable. This drives the real apply-topics.sh and cleanup-topics.sh over creation, config reconcile,
+# The six vol-premium Gate-1 topics: four are kept forever (RESET-PRESERVED, NEVER-RECREATE, retention.bytes=-1),
+# two are rebuildable. (The calendar ledger is a Postgres table since 2026-09-13, not a seventh topic.) This drives
+# the real apply-topics.sh and cleanup-topics.sh over creation, config reconcile,
 # partition drift (recreation off and on) and all three cleanup modes, for dev and production, and proves itself
 # sensitive to every membership that protects them by mutating a COPY of topics.env.
 VOL_PREMIUM_TEST="scripts/kafka/apply-topics-vol-premium-safety-test.sh"
