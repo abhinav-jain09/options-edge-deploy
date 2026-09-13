@@ -1216,6 +1216,16 @@ CAPTURE, LAYOUT = "read_committed_stable_boundary", "timestamp,partition,offset,
 def die(why):
     print(why); sys.exit(0)
 
+JSON_WS = " \t\r\n"       # the JSON whitespace set — what Jackson's reader allows around a value, and nothing wider
+def no_duplicates(pairs):  # a member held twice is not a declaration: the later one would silently replace the earlier
+    d = {}
+    for k, v in pairs:
+        if k in d:
+            raise ValueError("duplicate member %r" % k)
+        d[k] = v
+    return d
+DECODER = json.JSONDecoder(object_pairs_hook=no_duplicates)
+
 def coords(n, dt):
     m = NAME.fullmatch(n[len(topic) + 1:]) if n.startswith(topic + ".") else None
     if not m or m.group(4) != dt.replace("-", "") or int(m.group(3)) <= int(m.group(2)):
@@ -1250,13 +1260,15 @@ for dt in dates:
     mf = os.path.join(d, "_manifest.jsonl")
     if os.path.isfile(mf):
         for i, line in enumerate(open(mf), 1):
-            if line.strip():
-                # EXACTLY ONE object, whole: raw_decode reads the first value, and anything but whitespace after it
-                # (garbage, a second object — an append onto a last line that lost its newline) refuses; a BOM
-                # before it is not JSON; a CR before the LF is a line ending (round 5 / engine r20).
+            s = line.strip(JSON_WS)     # JSON whitespace only: a form feed or a no-break space is NOT blank, NOT a remainder
+            if s:
+                # EXACTLY ONE object, whole, with distinct members: raw_decode reads the first value, and anything
+                # but JSON whitespace after it (garbage, a second object — an append onto a last line that lost its
+                # newline) refuses; a BOM before it is not JSON; a CR before the LF, or alone, is a line ending
+                # (round 5 / engine r20 / round 7: the same whitespace set as Jackson, the same duplicate rule).
                 try:
-                    e, end = json.JSONDecoder().raw_decode(line)
-                    if line[end:].strip():
+                    e, end = DECODER.raw_decode(s)
+                    if s[end:].strip(JSON_WS):
                         e = None
                 except ValueError:
                     e = None
@@ -1264,9 +1276,9 @@ for dt in dates:
                     # Nonblank and not exactly one JSON object: a run that died mid-append, an append onto a line
                     # that lost its newline, or a hand edit. What it declared is unknown, and an unknown declaration
                     # may be an obligation — never skipped, never read as its first object.
-                    die("MANIFEST_UNPARSEABLE: dt=%s/_manifest.jsonl line %d is not exactly one JSON object: %r — a run "
-                        "that died mid-append, an append onto a line that lost its newline, or a hand edit; what it "
-                        "declared cannot be read" % (dt, i, line.rstrip("\r\n")[:80]))
+                    die("MANIFEST_UNPARSEABLE: dt=%s/_manifest.jsonl line %d is not exactly one JSON object with distinct "
+                        "members: %r — a run that died mid-append, an append onto a line that lost its newline, or a "
+                        "hand edit; what it declared cannot be read" % (dt, i, line.rstrip("\r\n")[:80]))
                 if e.get("file") is not None and e.get("attempt") is not None:
                     die("MANIFEST_MISMATCH: dt=%s/_manifest.jsonl names both a file (%s) and an attempt (%s) on one "
                         "line: the archiver writes no such line, and it is neither" % (dt, e["file"], e["attempt"]))
@@ -2022,7 +2034,7 @@ want "  round 4's answer — the session admitted at 3 — is never given" 0 "$(
 OUT_V=$(vverify 16a)
 want "  the verifier: the date is CORRUPT (rc 1), never OK or PARTIAL over a line it cannot read" "rc=1" "$(printf '%s' "$OUT_V" | head -1)"
 has  "  as CORRUPT"                                                   "CORRUPT  $VP" "$OUT_V"
-has  "  naming the line"  "1 unparseable manifest line(s) (not exactly one JSON object; a run that died mid-append, or an append onto a line that lost its newline?) at line(s) [2]" "$OUT_V"
+has  "  naming the line"  "1 unparseable manifest line(s) (not exactly one JSON object with distinct members; a run that died mid-append, or an append onto a line that lost its newline?) at line(s) [2]" "$OUT_V"
 # blank lines are nothing, to the model and the verifier alike
 fresh v16b
 strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
@@ -2088,10 +2100,13 @@ want "  restored: whole"                                              "$K1 $K2" 
 
 # ---- 17q. a manifest line is EXACTLY ONE object, whole (engine r20 MAJOR): a complete last line written without ----
 # its newline (a run that died between the JSON's last byte and the "\n"), then the next run's append CONCATENATED
-# onto it — two objects on one physical line. Every reader took the FIRST object and lost the second declaration:
-# the attempt vanished and the session was admitted at 3. Now the archiver REFUSES to append to a manifest whose
-# last byte is not "\n" (the crash signature), the model and the verifier refuse a line that is not exactly one
-# object, and — decided the same way in all three — CRLF is a line ending, a UTF-8 BOM is not JSON.
+# onto it — two objects on one physical line. The JAVA loader (JSON.readTree) took the FIRST object and lost the
+# second declaration: the attempt vanished and the session was admitted at 3. The two Python readers here already
+# refused the concatenation (json.loads rejects trailing data, "Extra data"); round 6 made their rule explicit
+# rather than incidental (round 7 corrected the earlier narrative that blamed every reader). Now the archiver
+# REFUSES to append to a manifest whose last byte is not "\n" (the crash signature), the model and the verifier
+# refuse a line that is not exactly one object, and — decided the same way in all three — CRLF is a line ending,
+# a UTF-8 BOM is not JSON.
 vbytes() { wc -c < "$(VDIR "${1:-$VDAY}")/_manifest.jsonl" | tr -d ' '; }
 fresh v18
 strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
@@ -2121,7 +2136,7 @@ has  "  saying why"                                        "an append onto a lin
 want "  round 5's answer — the session at 3, the attempt lost — is never given" 0 "$(vread keys | grep -c "^SPX|")"
 OUT_V=$(vverify 18a)
 want "  the verifier: CORRUPT (rc 1)"                                       "rc=1" "$(printf '%s' "$OUT_V" | head -1)"
-has  "  naming the line" "1 unparseable manifest line(s) (not exactly one JSON object; a run that died mid-append, or an append onto a line that lost its newline?) at line(s) [1]" "$OUT_V"
+has  "  naming the line" "1 unparseable manifest line(s) (not exactly one JSON object with distinct members; a run that died mid-append, or an append onto a line that lost its newline?) at line(s) [1]" "$OUT_V"
 python3 -c 'import sys; p=sys.argv[1]; d=open(p,"rb").read(); open(p,"wb").write(d.replace(b"}{", b"}\n{"))' "$(VDIR)/_manifest.jsonl"
 want "  the operator's repair (the newline restored): two lines, the attempt's 9 owed" \
      "2 SESSION_INCOMPLETE: dt=$VDAY queried up to 9, committed captures reach only 3" "$(grep -c . "$(VDIR)/_manifest.jsonl") $(vread keys)"
@@ -2150,6 +2165,38 @@ has  "  a UTF-8 BOM before the first line: not JSON — REFUSED"                
      "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 1 is not exactly one JSON object" "$(vread keys)"
 OUT_V=$(vverify 18e)
 want "  and CORRUPT to the verifier (rc 1)"                                 "rc=1" "$(printf '%s' "$OUT_V" | head -1)"
+
+# ---- 17r. whitespace parity and duplicate members (deploy #1041 r7 / engine r21 MINORs): the three readers of the ----
+# manifest — the Java loader (Jackson: FAIL_ON_TRAILING_TOKENS + STRICT_DUPLICATE_DETECTION), this model and the
+# verifier — draw the same boundaries. Round 6's model passed the untrimmed line to raw_decode (a leading space
+# refused, though Java loads it) and stripped with str.strip() (a trailing no-break space accepted, though Java
+# refuses it); the verifier stripped as widely. Now only JSON whitespace — space, TAB, CR, LF — surrounds a line,
+# and a member held twice refuses: Jackson kept the LATER member, so "attempt":null appended inside the attempt
+# object hid it and a second "queried_end" replaced the first.
+vline() { # <dt> <raw text>: append raw bytes to a date's manifest, exactly as given
+  printf '%b' "$2" >> "$(VDIR "$1")/_manifest.jsonl"
+}
+ATT='{"topic":"'"$VP"'","dt":"'"$VDAY"'","partition":0,"offset_from":3,"offset_to":3,"records":0,"offset_span":0,"capture":"read_committed_stable_boundary","stable_boundary":3,"queried_end":9,"source_topic_id":"'"$SID"'","attempt":"no_progress","archived_at":"20260909T221500Z"'
+INCOMPLETE9="SESSION_INCOMPLETE: dt=$VDAY queried up to 9, committed captures reach only 3"
+vcase() { # <label> <raw manifest text after the capture line> <expected model output (has)> <expected verifier rc>
+  fresh "v19-$(printf '%s' "$1" | tr -c 'a-z0-9' '-')"
+  strike_log "0 C $K1 {\"frameSeq\":1,\"v\":\"c\"}" "1 C $K2 {\"frameSeq\":2,\"v\":\"c\"}" '2 M'
+  vrun "$VDAY" >/dev/null
+  vline "$VDAY" "$2"
+  has  "17r $1: the model" "$3" "$(vread keys)"
+  local out; out=$(vverify "19-$RANDOM")
+  want "  and the verifier (rc)" "rc=$4" "$(printf '%s' "$out" | head -1)"
+}
+vcase 'the complete attempt, the control'            "$ATT}\n"                              "$INCOMPLETE9" 0
+vcase '"attempt":null appended inside the object'     "$ATT,\"attempt\":null}\n"             "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 2 is not exactly one JSON object with distinct members" 1
+vcase 'a second "queried_end":3 inside the object'    "$ATT,\"queried_end\":3}\n"            "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 2" 1
+vcase 'a leading space and TAB: JSON whitespace'      " \t$ATT}\n"                           "$INCOMPLETE9" 0
+vcase 'a trailing space then CRLF: JSON whitespace'   "$ATT} \r\n"                           "$INCOMPLETE9" 0
+vcase 'a trailing form feed: not JSON whitespace'     "$ATT}\f\n"                            "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 2" 1
+vcase 'a trailing no-break space: not JSON whitespace' "$ATT}\xc2\xa0\n"                     "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 2" 1
+vcase 'a line of only a form feed: NOT blank'         "\f\n$ATT}\n"                          "MANIFEST_UNPARSEABLE: dt=$VDAY/_manifest.jsonl line 2" 1
+vcase 'a line of only space and TAB: blank'           " \t\n$ATT}\n"                         "$INCOMPLETE9" 0
+vcase 'two declarations separated by a lone CR: two lines' "$ATT}\r${ATT/queried_end\":9/queried_end\":12}}\n" "SESSION_INCOMPLETE: dt=$VDAY queried up to 12" 0
 
 # ---- 17f. EVERY vol-premium ledger is committed-only by default --------------------------------------------------------
 for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings \

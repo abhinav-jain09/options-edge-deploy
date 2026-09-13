@@ -129,9 +129,10 @@ pipeline {
           # 17p: the model level with engine r18 — an attempt owes the end it queried, and every integral field has
           # the shape of one; 17q, engine r20: a manifest line is exactly ONE object, whole — the archiver refuses to
           # append onto a manifest that ends mid-line, the model and the verifier refuse a concatenated line, CRLF
-          # is a line ending and a BOM is not JSON). A lower count
+          # is a line ending and a BOM is not JSON; 17r, round 7 / engine r21: the three readers share the JSON
+          # whitespace set and refuse a member held twice). A lower count
           # means a section stopped early or was skipped, which "ALL PASS" alone cannot show. Raise it with the suite.
-          [ "$ran" -ge 547 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+          [ "$ran" -ge 567 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
           # Installing an evaluator whose acceptance predicate is untested would ship the one thing

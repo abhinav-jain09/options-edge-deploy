@@ -143,20 +143,32 @@ for topic in topics:
     # EXACTLY ONE object per line, whole (engine r20): a valid object followed by garbage or by a second object — a
     # run's append concatenated onto a last line that lost its newline — is as unreadable as a partial line, and
     # reading its first object would lose the second declaration. A BOM is not JSON; CRLF is a line ending.
+    # Only JSON whitespace (space, TAB, CR, LF) surrounds a line — the set Jackson allows in the Java loader, so all
+    # three readers draw the same boundary: a form feed or a no-break space is neither blank nor a remainder. And a
+    # member held twice is not a declaration: the later one would silently replace the earlier (round 7 / engine r21).
+    JSON_WS = " \t\r\n"
+    def no_duplicates(pairs):
+        d = {}
+        for k, v in pairs:
+            if k in d: raise ValueError("duplicate member %r" % k)
+            d[k] = v
+        return d
+    decoder = json.JSONDecoder(object_pairs_hook=no_duplicates)
     entries, bad_json = [], []
     with open(man, "r", encoding="utf-8") as f:
         for i, line in enumerate(f, 1):
-            line = line.strip()
+            line = line.strip(JSON_WS)
             if not line: continue
             try:
-                e, end = json.JSONDecoder().raw_decode(line)
-                if line[end:].strip(): e = None
-            except json.JSONDecodeError: e = None
+                e, end = decoder.raw_decode(line)
+                if line[end:].strip(JSON_WS): e = None
+            except ValueError: e = None
             if isinstance(e, dict): entries.append(e)
             else: bad_json.append(i)
     if bad_json:
-        r["reasons"].append(f"{len(bad_json)} unparseable manifest line(s) (not exactly one JSON object; a run that "
-                            f"died mid-append, or an append onto a line that lost its newline?) at line(s) {bad_json[:3]}")
+        r["reasons"].append(f"{len(bad_json)} unparseable manifest line(s) (not exactly one JSON object with distinct "
+                            f"members; a run that died mid-append, or an append onto a line that lost its newline?) "
+                            f"at line(s) {bad_json[:3]}")
 
     # A committed-read run that could capture NOTHING (the stable boundary still at its checkpoint) records the
     # ATTEMPT — "attempt":"no_progress", the end it queried, and NO file (deploy #1041 review round 2, MAJOR 3).
