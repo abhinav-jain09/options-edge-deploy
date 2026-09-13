@@ -130,24 +130,42 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "=== 5) at-most-one VIX publisher (VIX feed separation design §7) ==="
-# Runs here so BOTH the PR CI pass and the service-deploy validation stage
+# Sections 5, 5b, 6 and the topic-contract tests are independent read-only suites: each works
+# in its own mktemp scratch (the mutation harness mutates a private COPY of the tree) and none
+# reads another's output. Run one after another they were most of this script's wall time —
+# the mocked-kafka suites fork thousands of short processes, and on a loaded fallback agent
+# that serial sum reached 25+ minutes of a service-deploy (#1803/#1804, 2026-09-11). So they
+# run CONCURRENTLY; every one of them still runs to completion, and each result is reported in
+# the fixed order below with its full output. Any failure fails the script, as before — the
+# only difference is that a failing suite no longer hides the verdicts of the ones after it.
+suite_pids=(); suite_names=(); suite_outs=()
+# ${a[@]+"${a[@]}"}: an empty array is "unbound" to macOS /bin/bash 3.2 under set -u.
+trap 'kill ${suite_pids[@]+"${suite_pids[@]}"} 2>/dev/null || true; rm -rf "$TMP"' EXIT
+start_suite() { # label script
+  local i="${#suite_pids[@]}"
+  if [ ! -x "$2" ]; then
+    echo "FAIL: $2 missing or not executable"
+    exit 1
+  fi
+  bash "$2" >"$TMP/suite-$i.out" 2>&1 &
+  suite_pids+=("$!"); suite_names+=("$1|$2"); suite_outs+=("$TMP/suite-$i.out")
+}
+
+# 5) Runs here so BOTH the PR CI pass and the service-deploy validation stage
 # (Jenkinsfile.service-deploy runs this script before any apply) enforce the
 # assertion; the monolith path gets it via scripts/deploy/validate-platform.sh.
-bash scripts/ci/validate-vix-single-publisher.sh
+start_suite "5) at-most-one VIX publisher (VIX feed separation design §7)" scripts/ci/validate-vix-single-publisher.sh
 
-echo "=== 5b) exactly one pre-open GEX publisher, matching the declaration ==="
-# Same shape as the VIX assertion and for the same reason: two publishers can own the
+# 5b) Same shape as the VIX assertion and for the same reason: two publishers can own the
 # pre-open gamma surface, BOTH selections render cleanly, and picking the wrong one is
 # silent — pre-market GEX just stops appearing (incident 2026-08-24). The declaration in
 # k8s/preopen-publisher.env makes any switch an explicit, reviewed edit.
-bash scripts/ci/validate-preopen-single-publisher.sh
+start_suite "5b) exactly one pre-open GEX publisher, matching the declaration" scripts/ci/validate-preopen-single-publisher.sh
 
-echo "=== 6) durable topics are preserved by the destructive resets ==="
-# A topic declared retention=-1 in topics.env that the pre-market / clean-slate
+# 6) A topic declared retention=-1 in topics.env that the pre-market / clean-slate
 # resets would still wipe is the 2026-07-28 basis-cold-start incident class —
 # make that drift unmergeable rather than discoverable at 09:00 ET.
-bash scripts/ci/validate-durable-topic-preservation.sh
+start_suite "6) durable topics are preserved by the destructive resets" scripts/ci/validate-durable-topic-preservation.sh
 
 # The OI anchor topic barrier: its parser, and the shipped script end to end against mocked CLIs.
 # Wired here because a regression test nothing runs is not a test -- and this particular parser has
@@ -158,16 +176,33 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
          scripts/ci/validate-durable-topic-preservation-mutation-test.sh \
          scripts/ci/es-cvd-mirror-shape-test.sh \
          scripts/ci/es-auction-mirror-shape-test.sh; do
-  if [ ! -x "$t" ]; then
-    echo "FAIL: $t missing or not executable"
-    exit 1
-  fi
-  if ! out=$(bash "$t" 2>&1); then
-    echo "FAIL: $t"
-    printf '%s\n' "$out" | sed 's/^/      /'
-    exit 1
+  start_suite "topic contract" "$t"
+done
+
+suite_fail=0
+for i in "${!suite_pids[@]}"; do
+  label="${suite_names[$i]%%|*}"; script="${suite_names[$i]#*|}"
+  st=0; wait "${suite_pids[$i]}" || st=$?
+  if [ "$label" = "topic contract" ]; then
+    if [ "$st" -ne 0 ]; then
+      echo "FAIL: $script"
+      sed 's/^/      /' "${suite_outs[$i]}"
+      suite_fail=1
+    fi
+  else
+    echo "=== $label ==="
+    cat "${suite_outs[$i]}"
+    if [ "$st" -ne 0 ]; then
+      echo "FAIL: $script exited $st"
+      suite_fail=1
+    fi
   fi
 done
+suite_pids=()
+if [ "$suite_fail" -ne 0 ]; then
+  echo "=== validate-services: FAILED ===" >&2
+  exit 1
+fi
 echo "topic contracts: oi-anchor barrier, pure-compact verification, and the durable-preservation mutation suite passed"
 
 # --- continuous auto-hunt production acceptance (auto-arm req §3.1) ---

@@ -25,8 +25,20 @@ cp -R "$SRC/scripts/ci" "$SRC/scripts/kafka" "$SRC/scripts/ops" "$REPO/scripts/"
 # validator reports on its own (classification, extraction, reset-script coverage), and what the vol-premium suite would
 # say about those mutated copies is not what they test. The real test still runs, once, wherever the real validator runs
 # (validate-services.sh section 6), instead of eleven more times inside every service-deploy validate stage.
-printf '#!/usr/bin/env bash\necho "=== apply-topics-vol-premium-safety: stubbed inside the mutation harness ==="\n' \
-  > "$REPO/scripts/kafka/apply-topics-vol-premium-safety-test.sh"
+#
+# The same holds for the other two mocked-CLI suites the validator drives, cleanup-topics-durable-test.sh and
+# apply-topics-ledger-safety-test.sh (together about a minute of forked mock kafka CLIs per validator run, eleven runs
+# here: roughly ten minutes of every service-deploy validate stage). Some cases edit topics.env, which those suites also
+# read, but no case edits cleanup-topics.sh or apply-topics.sh, and every case's expected finding is a structural
+# message the validator prints on its own. Live, they could supply a case's exit status while the structural check
+# supplied only the text; stubbed, the status can only come from the checks this harness is about. They too run for
+# real, once, in validate-services.sh section 6.
+for _suite in apply-topics-vol-premium-safety cleanup-topics-durable apply-topics-ledger-safety; do
+  [ -x "$REPO/scripts/kafka/$_suite-test.sh" ] \
+    || { echo "  FAIL scripts/kafka/$_suite-test.sh missing — the stub below would hide the validator's own missing-test finding"; exit 1; }
+  printf '#!/usr/bin/env bash\necho "=== %s: stubbed inside the mutation harness ==="\n' "$_suite" \
+    > "$REPO/scripts/kafka/$_suite-test.sh"
+done
 
 VALIDATOR="$REPO/scripts/ci/validate-durable-topic-preservation.sh"
 TOPICS="$REPO/scripts/kafka/topics.env"
