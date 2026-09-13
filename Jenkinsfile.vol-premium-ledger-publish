@@ -11,11 +11,16 @@
 //
 // WHAT RUNS: scripts/ops/vol-premium-ledger-publish.sh, which creates the Job in
 // k8s/jobs/vol-premium-ledger-publish-job.yaml under the deployer identity — the only principal the
-// options-edge-jenkins-only-workloads admission policy permits to create Jobs (there is no `kubectl run` and no
-// `kubectl exec` for it either). The Job runs the ENGINE image's own publisher against the reviewed artefact file
+// options-edge-jenkins-only-workloads admission policy permits to create Jobs. (The deployer Role can also create
+// bare Pods and has pods/attach, but no pods/exec; a Job is the form the policy gates, that carries a deadline and
+// backoff, and that the wrapper can prune by label — which is why it is used.) The Job runs the ENGINE image's own
+// publisher against the reviewed artefact file
 // from this repository, mounted from a ConfigMap rendered from that file per run:
 //     VolPremiumLedgerPublisher --kind calendar --file <json> [--confirm] [--published-by <who>]
-// connecting with POSTGRES_JDBC_URL / POSTGRES_USER / POSTGRES_PASSWORD from options-edge-config and
+// which prints ONE receipt line on stdout — `PUBLISHABLE kind=calendar version=<v> hash=<64hex>` on a dry run,
+// `PUBLISHED …` on a write, `ALREADY_PRESENT …` when the row exists with this content — and exits 66/65/70 on a
+// conflict / an invalid artefact / an unreachable ledger. The wrapper parses kind=, version= and hash= from that
+// line and compares each EXACTLY to what it asked to publish. It connects with POSTGRES_JDBC_URL / POSTGRES_USER / POSTGRES_PASSWORD from options-edge-config and
 // options-edge-runtime-secrets (secretKeyRef — the password is never in a manifest or a log).
 //
 // TWO STAGES, IN ORDER, EVERY BUILD:
@@ -66,6 +71,10 @@ pipeline {
     // A second concurrent publish of the same version would only ever be ALREADY_PRESENT or a conflict, but two
     // runs also race on the pruning and the active-Job check; the wrapper refuses to start beside an active Job.
     disableConcurrentBuilds()
+    // "Restart from Stage" would resume at 'Publish (--confirm)' with the guard, the validation and the dry run
+    // SKIPPED. Disabled outright; and the wrapper additionally refuses a CONFIRM run without the dry-run receipt
+    // this build wrote (build number, kind, version, hash, HEAD) and without HEAD == PERMITTED_SHA re-checked.
+    disableRestartFromStage()
     // Each Job is capped at 600s and the wrapper waits 900; two runs plus validation fit comfortably.
     timeout(time: 40, unit: 'MINUTES')
     buildDiscarder(logRotator(numToKeepStr: '50'))
@@ -85,10 +94,16 @@ pipeline {
       // deployment job's: (1) HEAD resolves to a full commit id; (2) the job's own ref is main and HEAD is
       // contained in origin/main as fetched NOW; (3) PERMITTED_SHA is present and exactly 40 lowercase hex chars —
       // never defaulted, never a short SHA, never a branch; (4) HEAD == PERMITTED_SHA byte for byte. Both values
-      // are printed before either is judged, so a refusal's log still carries the facts.
+      // are printed before either is judged, so a refusal's log still carries the facts. The ref patterns are
+      // LITERALS ("*/main" is quoted: unquoted it is a wildcard that would admit feature/main); the same shape
+      // as scripts/jenkins/permitted-sha-guard.sh on PR #1043, inlined here until that lands — swap this block
+      // for a call to that script then. scripts/ci/vol-premium-ledger-publish-guard-test.sh drives this block.
+      // The dry-run receipt of a PREVIOUS build is removed here, so the confirm stage can only ever see one made
+      // after this guard passed in THIS build.
       steps {
         sh '''
           set -euo pipefail
+          rm -f "${WORKSPACE}/vol-premium-ledger-dry-run.receipt"
           refuse() { echo "permitted-sha-guard: REFUSED — $*" >&2; echo "permitted-sha-guard: verdict=REFUSED (nothing may publish)" >&2; exit 1; }
           git rev-parse --is-inside-work-tree >/dev/null 2>&1 || refuse "the workspace is not a git checkout"
           head_sha="$(git rev-parse HEAD 2>/dev/null)" || refuse "cannot resolve HEAD"
@@ -99,7 +114,7 @@ pipeline {
           reported="${BRANCH_NAME:-${GIT_BRANCH:-}}"
           if [ -n "$reported" ]; then
             case "$reported" in
-              main|origin/main|*/main|refs/heads/main|refs/remotes/origin/main) ;;
+              main|origin/main|"*/main"|refs/heads/main|refs/remotes/origin/main) ;;
               *) refuse "checked-out ref is '$reported'; this job publishes only from main" ;;
             esac
           fi
@@ -134,7 +149,7 @@ pipeline {
         sh '''
           set -euo pipefail
           chmod +x scripts/ops/vol-premium-ledger-publish.sh
-          CONFIRM=false scripts/ops/vol-premium-ledger-publish.sh
+          DRY_RUN_RECEIPT="${WORKSPACE}/vol-premium-ledger-dry-run.receipt" CONFIRM=false scripts/ops/vol-premium-ledger-publish.sh
         '''
       }
     }
@@ -143,10 +158,12 @@ pipeline {
         beforeAgent true
         expression { params.CONFIRM }
       }
+      // The wrapper re-establishes BOTH prerequisites before the effect: HEAD == PERMITTED_SHA (again), and a
+      // dry-run receipt written by THIS build (BUILD_NUMBER) for THIS kind, version, hash and HEAD.
       steps {
         sh '''
           set -euo pipefail
-          CONFIRM=true scripts/ops/vol-premium-ledger-publish.sh
+          DRY_RUN_RECEIPT="${WORKSPACE}/vol-premium-ledger-dry-run.receipt" CONFIRM=true scripts/ops/vol-premium-ledger-publish.sh
         '''
       }
     }

@@ -272,6 +272,19 @@ jobs:
       - name: vol-premium calendar artefact matches its pins (canonical content hash recomputed)
         run: bash scripts/ci/validate-vol-premium-calendar.sh
 
+      # The validator's load path is a PORT of the contract (Jackson + CalendarArtifact + CanonicalBytes), not the
+      # contract. scripts/ci/fixtures/vol-premium-calendar/expected.tsv is generated from the real contract classes
+      # over the vector files (positive, Jackson-leniency and negative); the port must give every vector the same
+      # verdict and the same hash, or it is not describing what the engine will do with a file.
+      - name: vol-premium calendar validator agrees with the contract on every vector
+        run: bash scripts/ci/validate-vol-premium-calendar.sh --vectors
+
+      # The publish job's permitted-commit guard, EXTRACTED from the Jenkinsfile and driven against throwaway git
+      # repositories: exact SHA, main-only (including refs that merely END in /main), empty/short/uppercase/branch
+      # values refused, HEAD ahead of or behind the permitted commit refused.
+      - name: vol-premium ledger publish guard refuses every forbidden ref and SHA
+        run: bash scripts/ci/vol-premium-ledger-publish-guard-test.sh
+
       # es4's clean-reset deletes the whole Kafka data dir; it must refuse while the strike archive
       # marker is short of the log end (fail closed on unreadable state, explicit opt-out only).
       - name: es4 clean-reset strike archive interlock

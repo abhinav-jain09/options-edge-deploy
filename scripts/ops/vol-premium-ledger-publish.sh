@@ -16,30 +16,44 @@
 #                  existing version is exit 66 (LEDGER_KEY_CONFLICT — a version is immutable once written)
 #     65 the artefact fails validation, 64 usage, 70 the ledger is unreachable or the write failed
 #
-# WHAT THIS SCRIPT REQUIRES OF THE PUBLISHER'S OUTPUT (the receipt grammar — read from the pod log, anchored, and
-# bound to the KIND and VERSION that were asked for, so a run that published a different artefact cannot be
-# reported as this one succeeding):
-#     dry run:  a line starting with PUBLISHABLE or ALREADY_PRESENT that names "<kind>" and "<version>"
-#     confirm:  a line starting with PUBLISHED   or ALREADY_PRESENT that names "<kind>" and "<version>"
-# and the Job's container must exit 0. Any other exit is mapped to the publisher's own code (66 = conflict, ...)
-# and the run FAILS with that reason. An exit 0 without a receipt is also a failure: success is never assumed.
+# THE RECEIPT. The publisher prints exactly ONE outcome line on stdout:
+#     PUBLISHABLE     kind=<kind> version=<version> hash=<64 hex>     (dry run: would insert)
+#     PUBLISHED       kind=<kind> version=<version> hash=<64 hex>     (--confirm: inserted)
+#     ALREADY_PRESENT kind=<kind> version=<version> hash=<64 hex>     (the row exists with this content)
+# This script requires the Job's container to exit 0 AND exactly one such line to be present, PARSES kind=,
+# version= and hash= from it as whole tokens, and compares each EXACTLY to what it asked to publish (the KIND
+# parameter, and the calendarVersion / calendarContentHash validated from FILE); the outcome must be one the mode
+# allows (dry run: PUBLISHABLE or ALREADY_PRESENT; confirm: PUBLISHED or ALREADY_PRESENT). A missing field, a
+# duplicated field, a second outcome line, version=2026.10 for 2026.1, a different hash — each is a refusal, never
+# a success: this identity cannot read the row back, so the receipt is the only evidence and is held to the letter.
+# Any other exit is mapped to the publisher's own code (66 = conflict, 65 = invalid artefact, 70 = ledger) and the
+# run FAILS with that reason.
+#
+# THE WRITE NEEDS TWO THINGS RE-ESTABLISHED IN THIS PROCESS, so no pipeline restart or hand invocation can reach it
+# without them: PERMITTED_SHA must equal `git rev-parse HEAD` of this checkout (the Deployment Permission Rule,
+# checked again right before the effect), and DRY_RUN_RECEIPT must name a receipt file THIS build's dry run wrote
+# for THIS kind, version, hash, file and HEAD (build=<BUILD_NUMBER> ...). CONFIRM=false writes that file after a
+# successful dry run; CONFIRM=true refuses without it.
 #
 # WHAT IT DOES, fail-closed at every step:
 #   0. validates every parameter (free text from Jenkins reaches kubectl arguments and Job names);
 #   1. validates the artefact FILE with scripts/ci/validate-vol-premium-calendar.sh (the boot-time rules and the
 #      canonical content hash), and reads its version + content hash — the (version, hash) this run publishes;
 #   2. asserts the kubectl identity IS the deployer SA (the only principal the options-edge-jenkins-only-workloads
-#      admission policy lets create Jobs and ConfigMaps) AND that the kubeconfig points at production's API server;
+#      admission policy lets create Jobs and ConfigMaps; it can also create bare Pods, but has no pods/exec) AND
+#      that the kubeconfig points at production's API server;
 #   3. resolves the env's vol-premium ENGINE image by EXACT key (image-tags/production.yaml: vol-premium-service)
 #      and digest-pins it — a floating tag is never run;
-#   4. refuses to start while another ledger-publish Job is active;
+#   4. refuses to start while another ledger-publish Job is active — or while the Job list cannot be read: an
+#      unreadable inventory is not an empty one;
 #   5. renders the ConfigMap (the file, named by its sha256) and the Job, validates both server-side, creates
 #      them, waits, prints the whole pod log, maps the container's exit code, and requires the receipt;
-#   6. prunes old terminal Jobs and the ConfigMaps no remaining Job references (best-effort).
+#   6. prunes old terminal Jobs and the ConfigMaps no remaining Job references (best-effort, and SKIPPED whenever
+#      either inventory cannot be read — a ConfigMap is never deleted on the strength of a failed list).
 #
 # WHAT IT DOES NOT DO: it never reads the Postgres row back — this identity has no path to that database (it is
-# not in the cluster, and the deployer SA has no pods/exec). The receipt the publisher prints, and the (version,
-# hash) validated from the file, are what this run logs as "the row it inserted".
+# not in the cluster; the deployer SA has no pods/exec, and the database is not a pod). The receipt the publisher
+# prints — parsed and matched field by field — is what this run logs as "the row it inserted".
 #
 # Usage (normally from Jenkinsfile.vol-premium-ledger-publish):
 #   ENVIRONMENT=production KIND=calendar FILE=scripts/vol-premium/calendars/calendar-2026.1.json \
@@ -52,6 +66,9 @@
 #   CONFIRM          false (dry run, default) | true (write)
 #   PUBLISHED_BY     free text recorded in the row's published_by (letters, digits, . _ - @ only); empty = the
 #                    publisher's default
+#   PERMITTED_SHA    CONFIRM=true only: must equal `git rev-parse HEAD` of this checkout (40 lowercase hex)
+#   DRY_RUN_RECEIPT  path of the same-build dry-run receipt: written on CONFIRM=false, REQUIRED on CONFIRM=true
+#   BUILD_NUMBER     the Jenkins build number recorded in / required of that receipt
 #   JOB_TIMEOUT_S    client-side wait, default 900 (> the Job's own 600s activeDeadlineSeconds)
 #   KEEP_JOBS        terminal Jobs to retain, default 5
 #   NAMESPACE        default options-edge
@@ -64,6 +81,9 @@ KIND="${KIND:-calendar}"
 FILE="${FILE:-scripts/vol-premium/calendars/calendar-2026.1.json}"
 CONFIRM="${CONFIRM:-false}"
 PUBLISHED_BY="${PUBLISHED_BY:-}"
+PERMITTED_SHA="${PERMITTED_SHA:-}"
+DRY_RUN_RECEIPT="${DRY_RUN_RECEIPT:-}"
+BUILD_NUMBER="${BUILD_NUMBER:-}"
 JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-900}"
 KEEP_JOBS="${KEEP_JOBS:-5}"
 NAMESPACE="${NAMESPACE:-options-edge}"
@@ -142,6 +162,26 @@ EOF
 FILE_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$FILE")"
 echo "artefact: kind=$KIND version=$VERSION content_hash=$CONTENT_HASH file_sha256=$FILE_SHA256"
 echo "mode: $([ "$CONFIRM" = true ] && echo 'CONFIRM=true — the publisher WRITES the row' || echo 'CONFIRM=false — DRY RUN, the publisher writes nothing')"
+HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo '')"
+RECEIPT_LINE="build=${BUILD_NUMBER} kind=${KIND} version=${VERSION} hash=${CONTENT_HASH} file_sha256=${FILE_SHA256} head=${HEAD_SHA}"
+if [ "$CONFIRM" = true ]; then
+  # --- 1b. the write's prerequisites, re-established HERE (a stage restart or a hand invocation cannot skip them) --
+  case "$PERMITTED_SHA" in ''|*[!0-9a-f]*) fatal "CONFIRM=true needs PERMITTED_SHA, the full 40-character lowercase commit id this write is permitted for (got '${PERMITTED_SHA:-<empty>}')" ;; esac
+  [ "${#PERMITTED_SHA}" -eq 40 ] || fatal "PERMITTED_SHA '$PERMITTED_SHA' has ${#PERMITTED_SHA} characters, not 40"
+  [ -n "$HEAD_SHA" ] || fatal "cannot resolve HEAD of this checkout — refusing to write without knowing what is checked out"
+  [ "$HEAD_SHA" = "$PERMITTED_SHA" ] || fatal "checked-out HEAD $HEAD_SHA is not the permitted commit $PERMITTED_SHA — nothing may be written under it"
+  echo "permitted commit re-checked before the write: HEAD $HEAD_SHA == PERMITTED_SHA"
+  [ -n "$DRY_RUN_RECEIPT" ] || fatal "CONFIRM=true needs DRY_RUN_RECEIPT, the receipt file this build's dry run wrote"
+  [ -f "$DRY_RUN_RECEIPT" ] || fatal "no dry-run receipt at $DRY_RUN_RECEIPT — the dry run of THIS build has not passed, so nothing may be written (a restarted or partial build lands here)"
+  case "$BUILD_NUMBER" in ''|*[!0-9]*) fatal "CONFIRM=true needs BUILD_NUMBER (digits) to bind the receipt to this build, got '${BUILD_NUMBER:-<empty>}'" ;; esac
+  GOT_RECEIPT="$(head -1 "$DRY_RUN_RECEIPT")"
+  [ "$GOT_RECEIPT" = "$RECEIPT_LINE" ] \
+    || fatal "the dry-run receipt does not describe this write.
+       receipt: $GOT_RECEIPT
+       write:   $RECEIPT_LINE
+       The dry run that passed was for another build, kind, version, hash, file or commit. Re-run the whole build."
+  echo "dry-run receipt of this build accepted: $GOT_RECEIPT"
+fi
 
 # --- 2. identity AND cluster ---------------------------------------------------------------
 WHOAMI="$(kubectl auth whoami -o jsonpath='{.status.userInfo.username}' 2>/dev/null || echo '')"
@@ -180,10 +220,15 @@ echo "image: $MUTABLE_IMAGE -> $PINNED_IMAGE"
 # realised-only service, the container fails on "Could not find or load main class" and step 5 names that.
 
 # --- 4. refuse to start alongside another ledger-publish Job --------------------------------
-ACTIVE="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json 2>/dev/null \
-  | jq -r '[.items[] | select((.status.active // 0) > 0) | .metadata.name] | join(" ")' 2>/dev/null || echo '')"
+# FAIL CLOSED on an unreadable inventory: a list that could not be fetched is not an empty list. A Job counts as
+# active unless it is TERMINAL (succeeded, or a Failed/Complete condition) — one still waiting for its status to be
+# initialised has .status.active unset and is in progress all the same.
+JOBS_JSON="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json)" \
+  || fatal "cannot list ledger-publish Jobs in $NAMESPACE — refusing to publish beside an inventory that could not be read"
+ACTIVE="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[] | select(((.status.succeeded // 0) >= 1 or ([(.status.conditions // [])[] | select((.type == "Failed" or .type == "Complete") and .status == "True")] | length) >= 1) | not) | .metadata.name] | join(" ")')" \
+  || fatal "cannot parse the ledger-publish Job list — refusing to publish beside an inventory that could not be read"
 [ -z "$ACTIVE" ] \
-  || fatal "another ledger-publish Job is still active ($ACTIVE). Wait for it, or delete it if it is a leftover."
+  || fatal "another ledger-publish Job is not terminal ($ACTIVE). Wait for it, or delete it if it is a leftover."
 
 # --- 5. render + create ---------------------------------------------------------------------
 CM_NAME="vol-premium-ledger-${KIND}-${FILE_SHA256:0:12}"
@@ -274,53 +319,86 @@ if [ "$state" != "succeeded" ]; then
   esac
 fi
 
-# --- the receipt, anchored and bound to this KIND and VERSION -------------------------------------
-if [ "$CONFIRM" = true ]; then
-  RECEIPT_RE="^(PUBLISHED|ALREADY_PRESENT)[^A-Za-z0-9_].*${KIND}.*$(printf '%s' "$VERSION" | sed 's/[.[\*^$]/\\&/g')"
-else
-  RECEIPT_RE="^(PUBLISHABLE|ALREADY_PRESENT)[^A-Za-z0-9_].*${KIND}.*$(printf '%s' "$VERSION" | sed 's/[.[\*^$]/\\&/g')"
-fi
-RECEIPT="$(grep -E "$RECEIPT_RE" "$LOGS" | tail -1 || true)"
-[ -n "$RECEIPT" ] || fatal "$JOB_NAME exited 0 but printed no receipt matching /$RECEIPT_RE/ — refusing to call this a $([ "$CONFIRM" = true ] && echo publish || echo 'clean dry run'). Treat it as a failure: read the log, then re-run."
+# --- the receipt: exactly one outcome line, parsed, every field matched EXACTLY ------------------------------
+OUTCOMES="$(grep -E '^(PUBLISHED|PUBLISHABLE|ALREADY_PRESENT)( |$)' "$LOGS" || true)"
+N_OUTCOMES="$(printf '%s\n' "$OUTCOMES" | grep -c . || true)"
+[ "${N_OUTCOMES:-0}" = 1 ] || fatal "$JOB_NAME exited 0 but printed ${N_OUTCOMES:-0} outcome line(s) (PUBLISHED / PUBLISHABLE / ALREADY_PRESENT) — expected exactly one. Refusing to guess which, if any, describes this publish. Read the log."
+RECEIPT="$OUTCOMES"
+OUTCOME="${RECEIPT%% *}"
+R_KIND=""; R_VERSION=""; R_HASH=""; R_DUP=""
+for tok in $RECEIPT; do
+  case "$tok" in
+    kind=*)    [ -z "$R_KIND" ]    && R_KIND="${tok#kind=}"       || R_DUP="$R_DUP kind" ;;
+    version=*) [ -z "$R_VERSION" ] && R_VERSION="${tok#version=}" || R_DUP="$R_DUP version" ;;
+    hash=*)    [ -z "$R_HASH" ]    && R_HASH="${tok#hash=}"       || R_DUP="$R_DUP hash" ;;
+  esac
+done
+[ -z "$R_DUP" ] || fatal "receipt carries a field twice ($R_DUP): '$RECEIPT' — ambiguous, refused"
+case "$CONFIRM:$OUTCOME" in
+  true:PUBLISHED|true:ALREADY_PRESENT|false:PUBLISHABLE|false:ALREADY_PRESENT) : ;;
+  *) fatal "receipt outcome '$OUTCOME' is not one a CONFIRM=$CONFIRM run may report ('$RECEIPT') — a dry-run line is not a publish, and a publish line on a dry run means the publisher wrote when told not to" ;;
+esac
+MISMATCH=""
+[ "$R_KIND" = "$KIND" ]            || MISMATCH="$MISMATCH kind='$R_KIND'!='$KIND'"
+[ "$R_VERSION" = "$VERSION" ]      || MISMATCH="$MISMATCH version='$R_VERSION'!='$VERSION'"
+[ "$R_HASH" = "$CONTENT_HASH" ]    || MISMATCH="$MISMATCH hash='$R_HASH'!='$CONTENT_HASH'"
+[ -z "$MISMATCH" ] || fatal "the receipt does not describe the artefact this run asked to publish:$MISMATCH
+       receipt: '$RECEIPT'
+       asked:   kind=$KIND version=$VERSION hash=$CONTENT_HASH
+       Whatever the publisher did, it was not this publish. Refusing to report success."
 echo "$RECEIPT"
 if [ "$CONFIRM" = true ]; then
-  case "$RECEIPT" in
-    ALREADY_PRESENT*) echo "OK: the ledger already held $KIND $VERSION with this exact content (content_hash=$CONTENT_HASH) — no row written, nothing to do." ;;
-    *)                echo "OK: PUBLISHED row — calendar_version=$VERSION content_hash=$CONTENT_HASH published_by=${PUBLISHED_BY:-<publisher default>} (table vol_premium_calendar_ledger)" ;;
+  case "$OUTCOME" in
+    ALREADY_PRESENT) echo "OK: the ledger already held $KIND $VERSION with this exact content (content_hash=$CONTENT_HASH) — no row written, nothing to do." ;;
+    *)               echo "OK: PUBLISHED row — calendar_version=$VERSION content_hash=$CONTENT_HASH published_by=${PUBLISHED_BY:-<publisher default>} (table vol_premium_calendar_ledger)" ;;
   esac
 else
-  case "$RECEIPT" in
-    ALREADY_PRESENT*) echo "OK: DRY RUN — the ledger already holds $KIND $VERSION with this exact content (content_hash=$CONTENT_HASH); a CONFIRM run would be a no-op." ;;
-    *)                echo "OK: DRY RUN — $KIND $VERSION (content_hash=$CONTENT_HASH) is PUBLISHABLE; nothing was written. Re-run with CONFIRM=true to insert the row." ;;
+  case "$OUTCOME" in
+    ALREADY_PRESENT) echo "OK: DRY RUN — the ledger already holds $KIND $VERSION with this exact content (content_hash=$CONTENT_HASH); a CONFIRM run would be a no-op." ;;
+    *)               echo "OK: DRY RUN — $KIND $VERSION (content_hash=$CONTENT_HASH) is PUBLISHABLE; nothing was written. Re-run with CONFIRM=true to insert the row." ;;
   esac
+  if [ -n "$DRY_RUN_RECEIPT" ]; then
+    # The same-build receipt the CONFIRM run requires (see the header). Written ONLY after a clean dry run.
+    printf '%s\n' "$RECEIPT_LINE" > "$DRY_RUN_RECEIPT" || fatal "could not write the dry-run receipt to $DRY_RUN_RECEIPT"
+    echo "dry-run receipt written: $RECEIPT_LINE"
+  fi
 fi
 SUCCESS=true
 
-# --- 6. prune old TERMINAL Jobs and the ConfigMaps nothing references (best-effort, never blocks) -----
-TERMINAL="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json 2>/dev/null \
-  | jq -r '[.items[] | select(((.status.succeeded // 0) >= 1) or ([(.status.conditions // [])[] | select(.type == "Failed" and .status == "True")] | length) >= 1)]
-           | sort_by(.metadata.creationTimestamp) | .[].metadata.name' 2>/dev/null || echo '')"
-COUNT="$(printf '%s\n' "$TERMINAL" | grep -c . || true)"
-if [ "${COUNT:-0}" -gt "$KEEP_JOBS" ]; then
-  DROP=$(( COUNT - KEEP_JOBS ))
-  i=0
-  while IFS= read -r old; do
-    [ -n "$old" ] || continue
-    i=$(( i + 1 ))
-    [ "$i" -le "$DROP" ] || break
-    echo "pruning old ledger-publish Job $old"
-    kubectl -n "$NAMESPACE" delete "job/$old" --ignore-not-found --wait=false >/dev/null 2>&1 || true
-  done <<EOF
+# --- 6. prune old TERMINAL Jobs and the ConfigMaps nothing references (best-effort, never blocks, and SKIPPED
+#        outright when an inventory cannot be read: nothing is deleted on the strength of a failed list) --------
+if JOBS_JSON="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json 2>/dev/null)"; then
+  TERMINAL="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[] | select(((.status.succeeded // 0) >= 1) or ([(.status.conditions // [])[] | select(.type == "Failed" and .status == "True")] | length) >= 1)]
+             | sort_by(.metadata.creationTimestamp) | .[].metadata.name' 2>/dev/null)" || TERMINAL=""
+  COUNT="$(printf '%s\n' "$TERMINAL" | grep -c . || true)"
+  if [ "${COUNT:-0}" -gt "$KEEP_JOBS" ]; then
+    DROP=$(( COUNT - KEEP_JOBS ))
+    i=0
+    while IFS= read -r old; do
+      [ -n "$old" ] || continue
+      i=$(( i + 1 ))
+      [ "$i" -le "$DROP" ] || break
+      echo "pruning old ledger-publish Job $old"
+      kubectl -n "$NAMESPACE" delete "job/$old" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    done <<EOF
 $TERMINAL
 EOF
+  else
+    echo "no old ledger-publish Jobs to prune (terminal=${COUNT:-0}, keep=$KEEP_JOBS)"
+  fi
+  # ConfigMaps: only those no REMAINING Job references, and only if that reference list is readable now.
+  if JOBS_JSON="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json 2>/dev/null)" \
+     && REFERENCED="$(printf '%s' "$JOBS_JSON" | jq -r '[.items[].spec.template.spec.volumes[]? | .configMap.name // empty] | unique | .[]' 2>/dev/null)" \
+     && CMS="$(kubectl -n "$NAMESPACE" get configmaps -l "$CM_LABEL" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)"; then
+    for cm in $CMS; do
+      [ "$cm" = "$CM_NAME" ] && continue
+      printf '%s\n' "$REFERENCED" | grep -qxF "$cm" && continue
+      echo "pruning unreferenced ledger-file ConfigMap $cm"
+      kubectl -n "$NAMESPACE" delete "configmap/$cm" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+    done
+  else
+    echo "ConfigMap pruning skipped: the Job or ConfigMap inventory could not be read (nothing deleted)"
+  fi
 else
-  echo "no old ledger-publish Jobs to prune (terminal=${COUNT:-0}, keep=$KEEP_JOBS)"
+  echo "pruning skipped: the ledger-publish Job list could not be read (nothing deleted)"
 fi
-REFERENCED="$(kubectl -n "$NAMESPACE" get jobs -l "$JOB_LABEL" -o json 2>/dev/null \
-  | jq -r '[.items[].spec.template.spec.volumes[]? | .configMap.name // empty] | unique | .[]' 2>/dev/null || echo '')"
-for cm in $(kubectl -n "$NAMESPACE" get configmaps -l "$CM_LABEL" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true); do
-  [ "$cm" = "$CM_NAME" ] && continue
-  printf '%s\n' "$REFERENCED" | grep -qxF "$cm" && continue
-  echo "pruning unreferenced ledger-file ConfigMap $cm"
-  kubectl -n "$NAMESPACE" delete "configmap/$cm" --ignore-not-found --wait=false >/dev/null 2>&1 || true
-done

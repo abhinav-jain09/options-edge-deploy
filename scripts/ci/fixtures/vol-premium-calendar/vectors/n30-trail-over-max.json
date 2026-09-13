@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "calendarVersion": "2026.1",
+  "calendarContentHash": "bf71bb0bfde0bda8a02c616013dcae04fa7b2d94a7dd5117fd680bd910190992",
+  "hashVersion": 1,
+  "validFromDate": "2026-01-01",
+  "validThroughDate": "2026-12-31",
+  "entries": [
+    {
+      "eventCode": "CPI",
+      "instantUtcMs": 1767965400000,
+      "leadWindowMs": 600000,
+      "trailWindowMs": 3600001
+    },
+    {
+      "eventCode": "NFP",
+      "instantUtcMs": 1770000000000,
+      "leadWindowMs": 600000,
+      "trailWindowMs": 900000
+    }
+  ]
+}

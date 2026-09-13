@@ -10,8 +10,10 @@
 # WHY A JOB TEMPLATE IN GIT, RENDERED PER RUN BY JENKINS — the same reason as every file in this directory (read
 # stock-gex-oi-snapshot-job.yaml's header): the options-edge-jenkins-only-workloads admission policy
 # (failurePolicy: Fail) permits batch/jobs CREATE only to system:serviceaccount:options-edge:jenkins-deployer.
-# There is no `kubectl run` and no `kubectl exec` for that identity either (no pods/exec), so a one-off command
-# against production Postgres IS a Job created by the deployer, and nothing else.
+# That identity has no pods/exec (k8s/security/jenkins-deployer-rbac.yaml), so nothing can be run inside a live
+# pod; it CAN create bare Pods (pods create/delete and pods/attach are granted, and the policy does not select
+# Pods), but a Job is the form the policy gates, that carries a deadline and a backoff limit, and that the wrapper
+# can find and prune by label — so a one-off command against production Postgres is a Job created by the deployer.
 #
 # TWO STAGES, ONE TEMPLATE. The wrapper (scripts/ops/vol-premium-ledger-publish.sh) renders this twice per
 # Jenkins build: first with LEDGER_CONFIRM=false — the publisher validates the artefact, scans the ledger and
