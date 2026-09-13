@@ -29,11 +29,15 @@
 # Any other exit is mapped to the publisher's own code (66 = conflict, 65 = invalid artefact, 70 = ledger) and the
 # run FAILS with that reason.
 #
-# THE WRITE NEEDS TWO THINGS RE-ESTABLISHED IN THIS PROCESS, so no pipeline restart or hand invocation can reach it
-# without them: PERMITTED_SHA must equal `git rev-parse HEAD` of this checkout (the Deployment Permission Rule,
-# checked again right before the effect), and DRY_RUN_RECEIPT must name a receipt file THIS build's dry run wrote
-# for THIS kind, version, hash, file and HEAD (build=<BUILD_NUMBER> ...). CONFIRM=false writes that file after a
-# successful dry run; CONFIRM=true refuses without it.
+# THE WRITE NEEDS TWO THINGS RE-ESTABLISHED IN THIS PROCESS: PERMITTED_SHA must equal `git rev-parse HEAD` of this
+# checkout (the Deployment Permission Rule, checked again right before the effect), and DRY_RUN_RECEIPT must name a
+# receipt file THIS build's dry run wrote for THIS kind, version, hash, file and HEAD (build=<BUILD_NUMBER> ...).
+# CONFIRM=false writes that file after a successful dry run; CONFIRM=true refuses without it. WHAT THAT IS, stated
+# plainly: a SEQUENCING MARKER inside a trusted Jenkins workspace — it stops a "Restart from Stage" (disabled in the
+# Jenkinsfile as well) and a CONFIRM run whose dry run did not pass in the same build. It is NOT authentication: a
+# caller who controls the workspace or this process's environment can write a matching file, and this script does
+# not confine the path, check ownership or bind the Jenkins job identity. The permission that matters is the
+# deployer kubeconfig, held by the Jenkins agent alone.
 #
 # WHAT IT DOES, fail-closed at every step:
 #   0. validates every parameter (free text from Jenkins reaches kubectl arguments and Job names);
@@ -325,15 +329,21 @@ N_OUTCOMES="$(printf '%s\n' "$OUTCOMES" | grep -c . || true)"
 [ "${N_OUTCOMES:-0}" = 1 ] || fatal "$JOB_NAME exited 0 but printed ${N_OUTCOMES:-0} outcome line(s) (PUBLISHED / PUBLISHABLE / ALREADY_PRESENT) — expected exactly one. Refusing to guess which, if any, describes this publish. Read the log."
 RECEIPT="$OUTCOMES"
 OUTCOME="${RECEIPT%% *}"
-R_KIND=""; R_VERSION=""; R_HASH=""; R_DUP=""
+# Presence is COUNTED, separately from the value: an empty first occurrence (kind= kind=calendar) is a field seen
+# twice, not a field not yet seen — round 2, I5.
+R_KIND=""; R_VERSION=""; R_HASH=""; N_KIND=0; N_VERSION=0; N_HASH=0
 for tok in $RECEIPT; do
   case "$tok" in
-    kind=*)    [ -z "$R_KIND" ]    && R_KIND="${tok#kind=}"       || R_DUP="$R_DUP kind" ;;
-    version=*) [ -z "$R_VERSION" ] && R_VERSION="${tok#version=}" || R_DUP="$R_DUP version" ;;
-    hash=*)    [ -z "$R_HASH" ]    && R_HASH="${tok#hash=}"       || R_DUP="$R_DUP hash" ;;
+    kind=*)    N_KIND=$((N_KIND + 1));       R_KIND="${tok#kind=}" ;;
+    version=*) N_VERSION=$((N_VERSION + 1)); R_VERSION="${tok#version=}" ;;
+    hash=*)    N_HASH=$((N_HASH + 1));       R_HASH="${tok#hash=}" ;;
   esac
 done
-[ -z "$R_DUP" ] || fatal "receipt carries a field twice ($R_DUP): '$RECEIPT' — ambiguous, refused"
+R_BAD=""
+[ "$N_KIND" = 1 ]    || R_BAD="$R_BAD kind(x$N_KIND)"
+[ "$N_VERSION" = 1 ] || R_BAD="$R_BAD version(x$N_VERSION)"
+[ "$N_HASH" = 1 ]    || R_BAD="$R_BAD hash(x$N_HASH)"
+[ -z "$R_BAD" ] || fatal "receipt must carry kind=, version= and hash= exactly once each; got$R_BAD in '$RECEIPT' — ambiguous, refused"
 case "$CONFIRM:$OUTCOME" in
   true:PUBLISHED|true:ALREADY_PRESENT|false:PUBLISHABLE|false:ALREADY_PRESENT) : ;;
   *) fatal "receipt outcome '$OUTCOME' is not one a CONFIRM=$CONFIRM run may report ('$RECEIPT') — a dry-run line is not a publish, and a publish line on a dry run means the publisher wrote when told not to" ;;

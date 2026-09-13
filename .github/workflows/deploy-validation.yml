@@ -279,6 +279,11 @@ jobs:
       - name: vol-premium calendar validator agrees with the contract on every vector
         run: bash scripts/ci/validate-vol-premium-calendar.sh --vectors
 
+      # ...and the vectors can FAIL it: each contract rule removed from a copy of the port (entry cap, NFC, duplicate
+      # keys, Java trim, wire cap) must turn --vectors red, caught by the vector that exists for it.
+      - name: vol-premium calendar validator mutation suite
+        run: bash scripts/ci/validate-vol-premium-calendar-mutation-test.sh
+
       # The publish job's permitted-commit guard, EXTRACTED from the Jenkinsfile and driven against throwaway git
       # repositories: exact SHA, main-only (including refs that merely END in /main), empty/short/uppercase/branch
       # values refused, HEAD ahead of or behind the permitted commit refused.

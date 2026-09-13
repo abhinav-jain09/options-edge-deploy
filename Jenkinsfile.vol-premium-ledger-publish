@@ -34,7 +34,8 @@
 // PERMITTED COMMIT (Deployment Permission Rule): every run needs PERMITTED_SHA, the full 40-character commit id
 // of the checkout the publish must come from. The first stage fails closed unless the checked-out HEAD equals it
 // exactly AND that commit is on origin/main — this job publishes reviewed, merged artefacts only. Nothing is ever
-// substituted for a missing value: a manual click needs the SHA too.
+// substituted for a missing value: a manual click needs the SHA too. The guard is scripts/jenkins/permitted-sha-guard.sh,
+// vendored from PR #1043 so the two never diverge.
 //
 // BEFORE THE FIRST RUN — what does not exist yet (there is no job DSL or CasC in this repo; jobs are Pipeline-
 // from-SCM items created by cloning an existing job's config.xml, docs/deploy-single-service.md):
@@ -90,45 +91,21 @@ pipeline {
   }
   stages {
     stage('Permitted commit (main only)') {
-      // The Deployment Permission Rule's guard, in the workspace the effect will come from. Same shape as every
-      // deployment job's: (1) HEAD resolves to a full commit id; (2) the job's own ref is main and HEAD is
-      // contained in origin/main as fetched NOW; (3) PERMITTED_SHA is present and exactly 40 lowercase hex chars —
-      // never defaulted, never a short SHA, never a branch; (4) HEAD == PERMITTED_SHA byte for byte. Both values
-      // are printed before either is judged, so a refusal's log still carries the facts. The ref patterns are
-      // LITERALS ("*/main" is quoted: unquoted it is a wildcard that would admit feature/main); the same shape
-      // as scripts/jenkins/permitted-sha-guard.sh on PR #1043, inlined here until that lands — swap this block
-      // for a call to that script then. scripts/ci/vol-premium-ledger-publish-guard-test.sh drives this block.
-      // The dry-run receipt of a PREVIOUS build is removed here, so the confirm stage can only ever see one made
+      // The Deployment Permission Rule's guard, in the workspace the effect will come from:
+      // scripts/jenkins/permitted-sha-guard.sh — VENDORED byte for byte from PR #1043 (commit bbd35f13) under the
+      // same path, so landing #1043 makes this a no-op swap. It refuses, in this order: a workspace that is not a
+      // checkout; BRANCH_NAME and GIT_BRANCH EACH judged on its own against the literal main refs (a contradiction
+      // such as BRANCH_NAME=main with GIT_BRANCH=origin/feature is refused — one never masks the other); a HEAD not
+      // contained in origin/main as fetched NOW; a missing, empty, short, uppercase or non-hex PERMITTED_SHA (nothing
+      // is ever substituted); a HEAD that is not exactly PERMITTED_SHA. Both values are printed before either is
+      // judged. scripts/ci/vol-premium-ledger-publish-guard-test.sh drives THIS stage's block.
+      // The dry-run receipt of a PREVIOUS build is removed first, so the confirm stage can only ever see one made
       // after this guard passed in THIS build.
       steps {
         sh '''
           set -euo pipefail
           rm -f "${WORKSPACE}/vol-premium-ledger-dry-run.receipt"
-          refuse() { echo "permitted-sha-guard: REFUSED — $*" >&2; echo "permitted-sha-guard: verdict=REFUSED (nothing may publish)" >&2; exit 1; }
-          git rev-parse --is-inside-work-tree >/dev/null 2>&1 || refuse "the workspace is not a git checkout"
-          head_sha="$(git rev-parse HEAD 2>/dev/null)" || refuse "cannot resolve HEAD"
-          case "$head_sha" in ''|*[!0-9a-f]*) refuse "HEAD did not resolve to a commit id (got '$head_sha')" ;; esac
-          [ "${#head_sha}" -eq 40 ] || refuse "HEAD is not a full commit id (got '$head_sha')"
-          echo "permitted-sha-guard: checked-out HEAD  = $head_sha"
-          echo "permitted-sha-guard: PERMITTED_SHA     = '${PERMITTED_SHA:-}'"
-          reported="${BRANCH_NAME:-${GIT_BRANCH:-}}"
-          if [ -n "$reported" ]; then
-            case "$reported" in
-              main|origin/main|"*/main"|refs/heads/main|refs/remotes/origin/main) ;;
-              *) refuse "checked-out ref is '$reported'; this job publishes only from main" ;;
-            esac
-          fi
-          git fetch --quiet origin main || refuse "could not fetch origin/main to confirm the branch — refusing rather than guessing"
-          tip="$(git rev-parse FETCH_HEAD)"
-          git merge-base --is-ancestor "$head_sha" FETCH_HEAD || refuse "commit $head_sha is not on origin/main (tip is $tip); this job publishes only merged work"
-          echo "permitted-sha-guard: branch ok          — $head_sha is on origin/main (tip $tip)"
-          p="${PERMITTED_SHA:-}"
-          [ -n "$p" ] || refuse "PERMITTED_SHA is empty. Every run needs the owner's permission for ONE exact commit: pass its full 40-character SHA (a manual click needs it too)."
-          case "$p" in *[[:space:]]*) refuse "PERMITTED_SHA contains whitespace ('$p')" ;; esac
-          case "$p" in *[!0-9a-f]*) refuse "PERMITTED_SHA is not a lowercase 40-hex commit id ('$p'); never a branch, tag, short SHA or uppercase" ;; esac
-          [ "${#p}" -eq 40 ] || refuse "PERMITTED_SHA '$p' has ${#p} characters — a short SHA is refused; pass the full 40-character commit id"
-          [ "$head_sha" = "$p" ] || refuse "checked-out HEAD $head_sha is not the permitted commit $p — the branch moved past the permitted commit, or the permission is for a different one; nothing may publish under it"
-          echo "permitted-sha-guard: verdict=PERMITTED — checked-out $head_sha == permitted $p, on origin/main"
+          bash scripts/jenkins/permitted-sha-guard.sh
         '''
       }
     }

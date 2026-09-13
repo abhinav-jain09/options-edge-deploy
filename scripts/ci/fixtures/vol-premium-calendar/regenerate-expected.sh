@@ -2,12 +2,12 @@
 # Regenerate expected.tsv from the REAL contract classes. Run this when the contracts' CalendarArtifact or
 # CanonicalBytes change, or when a vector is added; commit the result. Needs a JDK (21) and, in ~/.m2, the
 # options-edge-contracts jar named by CONTRACTS_VERSION plus jackson databind/core/annotations/datatype-jsr310
-# at JACKSON_VERSION (the versions the vol-premium service builds with).
+# at JACKSON_VERSION — the engine's own version (options-edge-processing pom.xml <jackson.version>), not the newest in ~/.m2.
 #   CONTRACTS_VERSION=0.2.0-land-c JACKSON_VERSION=2.19.2 scripts/ci/fixtures/vol-premium-calendar/regenerate-expected.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 CONTRACTS_VERSION="${CONTRACTS_VERSION:-0.2.0-land-c}"
-JACKSON_VERSION="${JACKSON_VERSION:-2.19.2}"
+JACKSON_VERSION="${JACKSON_VERSION:-2.18.2}"
 M2="${M2:-$HOME/.m2/repository}"
 CP="$M2/com/optionsedge/options-edge-contracts/$CONTRACTS_VERSION/options-edge-contracts-$CONTRACTS_VERSION.jar"
 for j in core/jackson-databind core/jackson-core core/jackson-annotations datatype/jackson-datatype-jsr310; do

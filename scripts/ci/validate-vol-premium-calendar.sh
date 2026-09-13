@@ -76,6 +76,11 @@ class JNum(str):
     """A JSON number token kept as its text (see j_parse)."""
     __slots__ = ()
 
+class JObj(list):
+    """A JSON object as its ORDERED (key, value) pairs, duplicates kept: Jackson streams an object and reacts to
+    each property as it arrives; a dict would have collapsed duplicates before anything could be judged."""
+    __slots__ = ()
+
 def j_parse(text):
     """One top-level JSON value, Jackson-style: leading whitespace skipped, trailing tokens IGNORED
     (FAIL_ON_TRAILING_TOKENS is off), duplicate keys last-wins, NaN/Infinity literals refused, a BOM refused."""
@@ -85,7 +90,7 @@ def j_parse(text):
         raise Reject("JsonParseException: non-standard token " + c)
     # Numbers come back as JNum — their TEXT: Jackson coerces a number to a String field by that text (getText)
     # and parses it for an int/long field; json.loads would have lost the token ("2026.50" is not "2026.5").
-    dec = json.JSONDecoder(parse_constant=bad_constant, parse_int=JNum, parse_float=JNum)
+    dec = json.JSONDecoder(parse_constant=bad_constant, parse_int=JNum, parse_float=JNum, object_pairs_hook=JObj)
     stripped = text.lstrip(" \t\r\n")
     if not stripped:
         raise Reject("MismatchedInputException: no content to map")
@@ -95,13 +100,34 @@ def j_parse(text):
         raise Reject("JsonParseException: " + str(e))
     return value
 
-def j_object(v, what, known):
-    if not isinstance(v, dict):
+def j_record(v, what, known, coerce):
+    """A Java RECORD read through its canonical constructor (creator properties), as Jackson does it, property by
+    property in wire order: an unknown key is refused when met; a known key's value is deserialized when met (a
+    type error is a refusal right there, even if a later duplicate would have been fine — vectors d01/d02/d10);
+    creator values are BUFFERED and a repeated key overwrites the buffer (d04/d05/d06/d09 accept) until the LAST
+    missing property arrives — the record is then instantiated at once, and any property after that is refused
+    ("No fallback setter/field defined for creator property": d03/d07/d08/d12). Returns the coerced values with
+    missing properties absent (the constructor sees the primitive default / null for those)."""
+    if not isinstance(v, JObj):
         raise Reject(f"MismatchedInputException: cannot deserialize {what} from {type(v).__name__}")
-    for k in v:
+    values = {}
+    instantiated = False
+    for k, raw in v:
         if k not in known:
             raise Reject(f"UnrecognizedPropertyException: unrecognized field {k!r} in {what}")
-    return v
+        if instantiated:
+            raise Reject(f"InvalidDefinitionException: no fallback setter/field defined for creator property {k!r} of {what}")
+        values[k] = coerce(k, raw)
+        if len(values) == len(known):
+            instantiated = True
+    return values
+
+def java_trim(s):
+    """String.trim(): strips only characters <= U+0020 — NBSP, EM SPACE and the rest of Unicode stay (s04/s05)."""
+    i, j = 0, len(s)
+    while i < j and ord(s[i]) <= 0x20: i += 1
+    while j > i and ord(s[j - 1]) <= 0x20: j -= 1
+    return s[i:j]
 
 def j_primitive_number(v, name, lo, hi):
     """A Java int/long PRIMITIVE: missing or null -> 0; boolean refused; a NUMBER token with a fraction or exponent
@@ -120,8 +146,10 @@ def j_primitive_number(v, name, lo, hi):
                 raise Reject(f"InvalidFormatException: {name} is not finite")
             n = int(f)                               # truncation toward zero, as getValueAsInt/Long does
     elif isinstance(v, str):
-        s = v.strip()
-        if re.fullmatch(r"[+-]?[0-9]+", s):
+        s = java_trim(v)
+        if s == "" or s == "null":                   # a blank or the text "null" is null, and null is the default 0 (s01-s03)
+            n = 0
+        elif re.fullmatch(r"[+-]?[0-9]+", s):        # Long.parseLong: an optional sign, digits, leading zeros fine (s07, m07)
             n = int(s)
         else:
             raise Reject(f"InvalidFormatException: {name} from String {v!r} is not a valid int value")
@@ -145,15 +173,38 @@ def j_string(v, name):
     raise Reject(f"MismatchedInputException: cannot deserialize {name} from {type(v).__name__}")
 
 def j_local_date(v, name):
-    """java.time.LocalDate via JavaTimeModule: an ISO string (strict yyyy-MM-dd) or an int array [y, m, d];
-    null stays null (the constructor refuses it)."""
+    """java.time.LocalDate via JavaTimeModule's LocalDateDeserializer, as measured (t01-t16):
+    a string is String.trim()med; empty -> null; with a 'T' at index 10 it is a date-time — ending in 'Z' it is
+    parsed as an Instant (UTC) and its date taken, otherwise as an ISO LOCAL date-time (HH:MM[:SS[.fraction]],
+    NO offset), and its date taken; otherwise strict ISO yyyy-MM-dd. An integer is an epoch day. An int array
+    is [y, m, d]. null stays null (the constructor refuses it)."""
     if v is None:
         return None
-    if isinstance(v, str):
+    if isinstance(v, JNum):
+        if not re.fullmatch(r"-?[0-9]+", v):
+            raise Reject(f"InvalidFormatException: LocalDate {name} from a non-integral number")
         try:
-            d = datetime.date.fromisoformat(v)
-            if d.isoformat() != v:
-                raise ValueError("not canonical ISO")
+            return datetime.date(1970, 1, 1) + datetime.timedelta(days=int(v))
+        except OverflowError as e:
+            raise Reject(f"InvalidFormatException: LocalDate {name} epoch day {v}: {e}")
+    if isinstance(v, str):
+        t = java_trim(v)
+        if t == "":
+            return None
+        try:
+            if len(t) > 10 and t[10] == "T":
+                if t.endswith("Z"):
+                    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(\.\d{1,9})?Z", t)      # ISO_INSTANT: seconds required
+                else:
+                    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)(\.\d{1,9})?", t)    # ISO_LOCAL_DATE_TIME: no offset
+                if not m:
+                    raise ValueError("not an ISO instant / local date-time")
+                datetime.time.fromisoformat(m.group(2))                                   # the time part must be a real time
+                d = datetime.date.fromisoformat(m.group(1))
+            else:
+                d = datetime.date.fromisoformat(t)
+                if d.isoformat() != t:
+                    raise ValueError("not canonical ISO")
             return d
         except ValueError as e:
             raise Reject(f"InvalidFormatException: cannot deserialize LocalDate {name} from {v!r}: {e}")
@@ -170,15 +221,17 @@ def j_local_date(v, name):
 def canonical_str(s, what):
     if s.startswith("﻿"):
         raise Reject(f"CanonicalFormatException: {what} must not carry a BOM")
+    if re.search(r"[\ud800-\udfff]", s):              # an unpaired surrogate: not well-formed UTF-16 (m05)
+        raise Reject(f"CanonicalFormatException: {what} has an unpaired surrogate")
     return unicodedata.normalize("NFC", s)
 
 # --- CalendarArtifact.CalendarEntry constructor ---------------------------------------------------------------
 def build_entry(raw):
-    o = j_object(raw, "CalendarEntry", ENTRY_FIELDS)
-    code = j_string(o.get("eventCode"), "eventCode")
-    inst = j_primitive_number(o.get("instantUtcMs"), "instantUtcMs", LONG_MIN, LONG_MAX)
-    lead = j_primitive_number(o.get("leadWindowMs"), "leadWindowMs", LONG_MIN, LONG_MAX)
-    trail = j_primitive_number(o.get("trailWindowMs"), "trailWindowMs", LONG_MIN, LONG_MAX)
+    def coerce(k, v):
+        return j_string(v, k) if k == "eventCode" else j_primitive_number(v, k, LONG_MIN, LONG_MAX)
+    o = j_record(raw, "CalendarEntry", ENTRY_FIELDS, coerce)
+    code = o.get("eventCode")
+    inst, lead, trail = o.get("instantUtcMs", 0), o.get("leadWindowMs", 0), o.get("trailWindowMs", 0)
     if code is None or not code.strip():
         raise Reject("IllegalArgumentException: eventCode is required")
     code = canonical_str(code, "eventCode")                  # normalised BEFORE the grammar, as the contract does
@@ -230,24 +283,25 @@ def java_load(raw):
     if len(raw) > MAX_CALENDAR_BYTES:
         raise Reject(f"IllegalArgumentException: serialised calendar is {len(raw)} bytes, over MAX_CALENDAR_BYTES {MAX_CALENDAR_BYTES}")
     text = raw.decode("utf-8", errors="replace")            # new String(bytes, UTF_8) substitutes U+FFFD
-    top = j_object(j_parse(text), "CalendarArtifact", TOP_FIELDS)
-    schema = j_primitive_number(top.get("schemaVersion"), "schemaVersion", INT_MIN, INT_MAX)
-    version = j_string(top.get("calendarVersion"), "calendarVersion")
-    declared = j_string(top.get("calendarContentHash"), "calendarContentHash")
-    hash_version = j_primitive_number(top.get("hashVersion"), "hashVersion", INT_MIN, INT_MAX)
-    d_from = j_local_date(top.get("validFromDate"), "validFromDate")
-    d_through = j_local_date(top.get("validThroughDate"), "validThroughDate")
-    raw_entries = top.get("entries")
-    entries = None
-    if raw_entries is not None:
-        if not isinstance(raw_entries, list):
+    def coerce_entries(v):
+        if v is None:
+            return None
+        if not isinstance(v, list) or isinstance(v, JObj):
             raise Reject("MismatchedInputException: entries is not an array")
-        entries = []
-        for e in raw_entries:
-            if e is None:
-                entries.append(None)                          # Jackson passes null through; the constructor refuses it
-            else:
-                entries.append(build_entry(e))
+        out = []
+        for e in v:
+            out.append(None if e is None else build_entry(e))   # Jackson passes null through; the constructor refuses it
+        return out
+    def coerce(k, v):
+        if k in ("schemaVersion", "hashVersion"): return j_primitive_number(v, k, INT_MIN, INT_MAX)
+        if k in ("calendarVersion", "calendarContentHash"): return j_string(v, k)
+        if k in ("validFromDate", "validThroughDate"): return j_local_date(v, k)
+        return coerce_entries(v)
+    top = j_record(j_parse(text), "CalendarArtifact", TOP_FIELDS, coerce)
+    schema, hash_version = top.get("schemaVersion", 0), top.get("hashVersion", 0)
+    version, declared = top.get("calendarVersion"), top.get("calendarContentHash")
+    d_from, d_through = top.get("validFromDate"), top.get("validThroughDate")
+    entries = top.get("entries")
     # CalendarArtifact constructor, in its order
     if schema != CURRENT_SCHEMA_VERSION:
         raise Reject(f"IllegalArgumentException: schemaVersion must be {CURRENT_SCHEMA_VERSION}, got {schema}")
@@ -353,8 +407,15 @@ sha = hashlib.sha256(raw).hexdigest()
 if sha == want_sha: ok(f"file sha256 {sha} is the signed-off artefact ({len(raw)} bytes of MAX_CALENDAR_BYTES {MAX_CALENDAR_BYTES})")
 else: bad(f"file sha256 is {sha}, expected {want_sha}: this is not the artefact that was signed off")
 def is_json_int(v): return isinstance(v, int) and not isinstance(v, bool)   # strict json.loads: real ints here
+def no_dup_keys(pairs):
+    keys = [k for k, _ in pairs]
+    dups = sorted({k for k in keys if keys.count(k) > 1})
+    if dups:
+        raise ValueError(f"duplicate key(s) {dups} — the serializer never writes a key twice")
+    return dict(pairs)
 try:
-    strict = json.loads(raw.decode("utf-8"))                  # the serializer's output parses strictly, no trailing bytes
+    strict = json.loads(raw.decode("utf-8"), object_pairs_hook=no_dup_keys)   # strict JSON, no trailing bytes, no duplicate keys
+    ok("artefact form: strict JSON with no duplicate keys at any depth")
 except Exception as e:
     strict = None; bad(f"artefact form: not strict JSON: {e}")
 if isinstance(strict, dict):
