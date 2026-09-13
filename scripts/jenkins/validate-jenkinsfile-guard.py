@@ -81,21 +81,25 @@ form; that is deliberate):
      guard step must run UNSKIPPABLY: every enclosing block below the stage's `steps` is a sequencing block
      (script/dir/withEnv/timeout/…) and no return/if/else/try/catch/catchError/loop/break/continue precedes it in any
      of them, so no later step or stage consuming the source can run without it.
-  9b. After its dedicated guard a bound checkout is READ-ONLY for the rest of the file. Every string (shell bodies,
-     GStrings, Groovy concatenations joined) is split into simple commands whose working directory follows the
-     enclosing dir() blocks and `cd`/`pushd`, with shell and environment{} literals substituted. Refused: any git
-     whose -C / --git-dir / --work-tree / working directory lies in the checkout, except rev-parse, log, show, status
-     and diff (without -c or --output); GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE pointed into it (or unresolvable);
-     cp/rsync/install/ln/scp/docker cp destinations, rm/mv/rmdir/unlink/shred/truncate/touch/tee operands, sed -i /
-     perl -i files, tar -x -C / unzip -d destinations, curl/wget outputs, dd of=, patch, find -delete/-exec, source-
-     rewriting build goals (scm:, versions:, release:, spotless:, …) and redirections — in it (a glob counts when it
-     could name it; an ancestor directory other than the workspace root counts for deletes, moves, copies and
-     extracts); Groovy writeFile / unzip / untar / unstash / copyArtifacts / fileOperations / checkout / git steps
-     writing into it. And after the primary
-     guard, anywhere: git pull/checkout/switch/restore/reset/merge/rebase/am/apply/cherry-pick/revert/submodule/stash/
-     clean/worktree/read-tree/checkout-index/update-ref/symbolic-ref/filter-branch/rm/mv/bisect/sparse-checkout/
-     commit/update-index, whatever its (even unresolvable) working directory. The Jenkins git/checkout steps
-     (`git url:`, `git(…)`, `git branch: …`, `checkout(…)`, `checkout scm`) are acquisitions under rule 9.
+  9b. Provenance verification before an effect. The guard proves HEAD == permitted at one moment; the files an effect
+     consumes later can still be replaced while HEAD stays the permitted commit. So a source-consuming effect must be
+     preceded, in the SAME stage, by the dedicated verify-permitted-tree step for each source directory it consumes:
+         timeout(time: N, unit: 'MINUTES') {
+           sh 'PERMITTED_SHA="${X:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir <dir> [--allow-ignored <d>]…'
+         }
+     Source-consuming effects: rsync, helm install/upgrade and mvn install/deploy (ship or compile a source tree into a
+     published artifact) — attributed to a nested checkout when they name one (mvn `-f <nested>/pom.xml`, a path under a
+     nested dir), else to the primary workspace ('.'); and `docker build` / `buildx build` whose CONTEXT is a nested
+     checkout (attributed to it). A `docker build` of the primary workspace is not required — by the time the image is
+     built the workspace legitimately holds the build's own output, so a whole-tree verify is not meaningful there; the
+     primary source is proven at checkout by the guard, and any nested source compiled into the image is re-verified on
+     its own. `docker push` / `git push` publish an already-built image or ref, not a tree. The verify step is
+     recognised from the Groovy token structure exactly like the guard (a real `sh` token whose sole argument is one
+     single-quoted literal equal to the template), its --dir is resolved through the enclosing dir() blocks, and it must
+     run unskippably before the effect. verify-permitted-tree.sh re-checks, at run time, HEAD == permitted AND a clean
+     working tree (nothing modified, staged, deleted or untracked; ignored paths only under a declared --allow-ignored
+     build directory), so a replacement is caught however it happened.
+ 10. contracts=<dir>: that directory is acquired (and therefore, by rule 9, bound) at least once.
  10. contracts=<dir>: that directory is acquired (and therefore, by rule 9, bound) at least once.
  11. Every mention of permitted-sha-guard.sh outside comments and parameters{} descriptions is one of the
      canonical forms (rule 3/5 guard stage, rule 6 inline re-guard, rule 9 dedicated step) — any other
@@ -176,6 +180,17 @@ DEDICATED_GUARD = re.compile(
     r"bash scripts/jenkins/permitted-sha-guard\.sh --dir (?P<dir>[A-Za-z0-9._][A-Za-z0-9._/-]*) --ref main)'$"
 )
 GUARD_INVOCATION = re.compile(r"permitted-sha-guard\.sh")   # any mention outside comments and parameters{} descriptions
+# The provenance verifier, in the SAME dedicated-step form as the guard: a real `sh` step whose sole argument is one
+# single-quoted literal running verify-permitted-tree.sh for one literal --dir with zero or more literal
+# --allow-ignored directories, and nothing else. It re-proves, immediately before an effect, that the tree the effect
+# will consume is still the permitted commit's tree (verify-permitted-tree.sh). The only variable part is the source's
+# own permission variable, the literal directory and the allow-list.
+VERIFY_STEP = re.compile(
+    r"^sh '(?P<cmd>PERMITTED_SHA=\"\$\{(?P<own>[A-Z][A-Z0-9_]*):[-?]\}\" "
+    r"bash scripts/jenkins/verify-permitted-tree\.sh --dir (?P<dir>[A-Za-z0-9._][A-Za-z0-9._/-]*)"
+    r"(?P<allow>(?: --allow-ignored [A-Za-z0-9._][A-Za-z0-9._/-]*)*))'$"
+)
+VERIFY_INVOCATION = re.compile(r"verify-permitted-tree\.sh")
 MUTATION_TOKENS = [
     (r"\bkubectl\b", "kubectl"),
     (r"\bdocker\s+(build|buildx|push|run|compose|rm|update)\b", "docker build/push/run/rm"),
@@ -201,242 +216,6 @@ TRANSPARENT = re.compile(
     re.S,
 )
 BS = "\\"
-
-
-# ----------------------------------------------------------------------------------------- shell effects on paths
-# Rule 9b: what a shell text does to a directory. A deliberately small, conservative model — commands are split at
-# every separator (quotes are not honoured, so a separator inside a quoted argument only makes MORE commands), each
-# simple command's words are resolved against a working directory that follows `cd`/`pushd`, and variables are
-# replaced by literal assignments seen in the same text or in the Jenkinsfile, else become unresolvable.
-READ_ONLY_GIT = {"rev-parse", "log", "show", "status", "diff"}
-SOURCE_CHANGING_GIT = {
-    "pull", "checkout", "switch", "restore", "reset", "merge", "rebase", "am", "apply", "cherry-pick", "revert",
-    "submodule", "stash", "clean", "worktree", "read-tree", "checkout-index", "update-ref", "symbolic-ref",
-    "filter-branch", "filter-repo", "rm", "mv", "bisect", "sparse-checkout", "commit", "update-index",
-}
-ROOT = "\x01"                    # $WORKSPACE
-UNRESOLVED = "\x02"              # a variable with no literal value
-SHELL_SEP = re.compile(r"\n|;|&&|\|\||\||\$\(|`|\(|\)|\{|\}|&(?![>\d])")
-SHELL_WORD = re.compile(r"(?:'[^']*'|\"[^\"]*\"|[^\s'\"])+")
-WRAPPERS = {"sudo", "env", "command", "exec", "nice", "nohup", "time", "xargs", "!", "then", "do", "else", "elif",
-            "if", "while", "until", "stdbuf", "ionice"}
-BUILD_REWRITE_GOAL = re.compile(r"^(?:scm|versions|release|spotless|fmt|formatter|rewrite|impsort|sortpom|license):")
-
-
-def _unquote(w: str) -> str:
-    return w.replace("'", "").replace('"', "")
-
-
-def substitute(text: str, known: dict[str, str]) -> str:
-    """Replace $X / ${X…} / ${env.X} by a known literal, $WORKSPACE by ROOT, anything else by UNRESOLVED."""
-    local = dict(known)
-    for m in re.finditer(r"(?m)(?:^|[\s;&(])([A-Za-z_][A-Za-z0-9_]*)=(?:'([^'$`]*)'|\"([^\"$`]*)\"|([^\s'\"$`;&|()]*))(?=[\s;&|)]|$)", text):
-        v = next(x for x in m.groups()[1:] if x is not None)
-        if m.group(1) in local and local[m.group(1)] != v:
-            local[m.group(1)] = UNRESOLVED
-        else:
-            local[m.group(1)] = v
-
-    def rep(m: re.Match) -> str:
-        name = m.group(1) or m.group(2) or ""
-        name = re.sub(r"^(?:env|params)\.", "", name)
-        if name == "WORKSPACE":
-            return ROOT
-        if m.group(1) and not re.fullmatch(r"(?:(?:env|params)\.)?[A-Za-z_][A-Za-z0-9_]*", m.group(1)):
-            return UNRESOLVED
-        v = local.get(name)
-        return UNRESOLVED if v is None else v
-
-    return re.sub(r"\$\{([^}]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", rep, text)
-
-
-def resolve_path(cwd: str | None, word: str) -> str | None:
-    """The workspace-relative path a word names from cwd ('' = workspace root); None when it cannot be resolved.
-    A glob component truncates the path there (it may name anything below)."""
-    w = _unquote(word)
-    if w.startswith(ROOT):
-        base, w = "", w[len(ROOT):]
-        if w and not w.startswith("/"):
-            return None
-    elif cwd is None or w.startswith("/"):
-        return None
-    else:
-        base = cwd
-    if UNRESOLVED in w or "$" in w or "`" in w or w.startswith("~") or re.match(r"^[^/]*:", w):
-        return None
-    parts = base.split("/") if base else []
-    for c in w.split("/"):
-        if c in ("", "."):
-            continue
-        if c == "..":
-            if not parts:
-                return None
-            parts.pop()
-            continue
-        parts.append(c)
-    return "/".join(parts)
-
-
-def path_relation(p: str, guarded: str) -> str | None:
-    """'in' when p is guarded or below it, 'ancestor' when p is above it (not the root), 'root' for the workspace
-    root, else None. A glob component of p (rm -rf app*) matches the guarded component it could name."""
-    if p == "":
-        return "root"
-    pp, gp = p.split("/"), guarded.split("/")
-    if ".." in pp:
-        return None
-    if all(fnmatch.fnmatchcase(gc, pc) for gc, pc in zip(gp, pp)):
-        return "in" if len(pp) >= len(gp) else "ancestor"
-    return None
-
-
-def shell_commands(text: str, known: dict[str, str], cwd0: str | None):
-    """Yield (command, words, cwd, raw) for every simple command, following cd/pushd; `bash -c '…'` / `sh -c` / eval
-    bodies are analysed too."""
-    body = substitute(text, known)
-    cwd = cwd0
-    for raw in SHELL_SEP.split(body):
-        words = [_unquote(w) for w in SHELL_WORD.findall(raw)]
-        words = [w for w in words if not re.match(r"^(?:\d|&)?>>?\|?$|^\d?<", w)]
-        while words and (re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[0]) or words[0] in WRAPPERS
-                         or (words[0] == "timeout" and len(words) > 1)):
-            words = words[2:] if words[0] == "timeout" else words[1:]
-            while words and words[0].startswith("-") and len(words) > 1:
-                words = words[1:]
-        if not words:
-            continue
-        cmd = words[0].rsplit("/", 1)[-1]
-        if cmd in ("cd", "pushd"):
-            target = next((w for w in words[1:] if not w.startswith("-")), ROOT)
-            cwd = resolve_path(cwd, target)
-            continue
-        if cmd == "popd":
-            cwd = None
-            continue
-        if cmd in ("bash", "sh", "zsh", "dash", "ksh") and "-c" in words:
-            k = words.index("-c")
-            yield from shell_commands(" ".join(words[k + 1:]), known, cwd)
-            continue
-        if cmd == "eval":
-            yield from shell_commands(" ".join(words[1:]), known, cwd)
-            continue
-        yield cmd, words, cwd, raw
-
-
-def shell_path_effects(text: str, known: dict[str, str], cwd0: str | None, guarded: str | None):
-    """Yield human-readable reasons why this shell text changes `guarded` (or, when guarded is None, changes ANY
-    checkout's HEAD/worktree through git)."""
-    if guarded is not None:
-        for m in re.finditer(r"\b(GIT_DIR|GIT_WORK_TREE|GIT_INDEX_FILE)\s*=\s*['\"]?([^\s'\";)\]]+)", substitute(text, known)):
-            p = resolve_path(cwd0, m.group(2))
-            if p is None or path_relation(p, guarded) == "in":
-                yield f"{m.group(1)} is pointed at {m.group(2)!r} (only rev-parse, log, show, status and diff may use the guarded checkout)"
-    for cmd, words, cwd, raw in shell_commands(text, known, cwd0):
-        args = words[1:]
-        if cmd == "git":
-            where, i, sub, cfg = cwd, 0, None, False
-            while i < len(args):
-                a = args[i]
-                if a == "-C" and i + 1 < len(args):
-                    where = resolve_path(where, args[i + 1])
-                    i += 2
-                    continue
-                if a in ("--git-dir", "--work-tree") and i + 1 < len(args):
-                    where = resolve_path(cwd, args[i + 1])
-                    i += 2
-                    continue
-                if a.startswith("--git-dir=") or a.startswith("--work-tree="):
-                    where = resolve_path(cwd, a.split("=", 1)[1])
-                    i += 1
-                    continue
-                if a == "-c" or a == "--config-env":
-                    cfg = True
-                    i += 2
-                    continue
-                if a.startswith("-"):
-                    cfg = cfg or a.startswith("-c") or a.startswith("--config-env") or a.startswith("--exec-path")
-                    i += 1
-                    continue
-                sub = a
-                break
-            label = "git " + (sub or "(no subcommand)")
-            if guarded is None:
-                if sub in SOURCE_CHANGING_GIT:
-                    yield f"`{label}` changes a checkout's HEAD or worktree (working directory {repr(where) if where is not None else 'unresolved'})"
-                continue
-            if where is not None and path_relation(where, guarded) == "in":
-                if sub not in READ_ONLY_GIT or cfg or any(x.startswith("--output") or x == "-o" for x in args):
-                    yield f"`{label}` runs in the guarded checkout (only rev-parse, log, show, status and diff may)"
-            continue
-        if guarded is None:
-            continue
-
-        def touches(ws: list[str], ancestors: bool = True) -> str | None:
-            for w in ws:
-                p = resolve_path(cwd, w)
-                rel = path_relation(p, guarded) if p is not None else None
-                if rel == "in" or (ancestors and rel == "ancestor"):
-                    return w
-            return None
-
-        operands = [w for w in args if not w.startswith("-")]
-        opt_vals = {}
-        for k, a in enumerate(args):
-            if "=" in a and a.startswith("--"):
-                opt_vals[a.split("=", 1)[0]] = a.split("=", 1)[1]
-            elif a.startswith("-") and k + 1 < len(args):
-                opt_vals.setdefault(a, args[k + 1])
-        hit = None
-        if cmd in ("rm", "mv", "rmdir", "unlink", "shred", "truncate", "touch", "tee"):
-            hit = touches(operands)
-        elif cmd in ("sed", "perl") and any(a == "-i" or a.startswith("-i") or a.startswith("--in-place") or re.fullmatch(r"-[a-zA-Z]*i[a-zA-Z]*", a) for a in args):
-            hit = touches(operands, ancestors=False)
-        elif cmd in ("cp", "rsync", "install", "ln", "scp"):
-            dest = opt_vals.get("-t") or opt_vals.get("--target-directory") or (operands[-1] if operands else None)
-            hit = touches([dest]) if dest else None
-        elif cmd == "docker" and args[:1] == ["cp"]:
-            hit = touches(operands[-1:]) if len(operands) >= 3 else None
-        elif cmd in ("tar", "bsdtar", "gtar"):
-            mode = args[0] if args else ""
-            extract = "--extract" in args or "--get" in args or bool(re.fullmatch(r"-?[A-Za-wyz]*x[A-Za-z]*", mode))
-            if extract:
-                dest = opt_vals.get("-C") or opt_vals.get("--directory") or "."
-                hit = touches([dest])
-            else:
-                fval = opt_vals.get("--file") or opt_vals.get("-f")
-                if fval is None and re.fullmatch(r"-?[A-Za-z]*f", mode) and len(args) > 1:
-                    fval = args[1]
-                hit = touches([fval], ancestors=False) if fval else None
-        elif cmd == "unzip":
-            hit = touches([opt_vals.get("-d") or "."])
-        elif cmd in ("curl", "wget"):
-            outs = [v for o, v in opt_vals.items() if o in ("--output", "--output-document", "--directory-prefix", "--output-dir")
-                    or (cmd == "curl" and re.fullmatch(r"-[A-Za-z]*o", o)) or (cmd == "wget" and re.fullmatch(r"-[A-Za-z]*[OP]", o))]
-            if (cmd == "wget" and not outs) or (cmd == "curl" and any(re.fullmatch(r"-[A-Za-z]*O[A-Za-z]*", a) for a in args)) or "--remote-name" in args:
-                outs.append(".")
-            hit = touches(outs, ancestors=False)
-        elif cmd == "dd":
-            hit = touches([a[3:] for a in args if a.startswith("of=")], ancestors=False)
-        elif cmd == "patch":
-            hit = touches([opt_vals.get("-d") or opt_vals.get("--directory") or "."] + operands, ancestors=False)
-        elif cmd == "find" and any(a in ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint") for a in args):
-            starts = []
-            for a in args:
-                if a.startswith("-") or a in ("(", "!"):
-                    break
-                starts.append(a)
-            hit = touches(starts or ["."])
-        elif cmd in ("mvn", "mvnw", "gradle", "gradlew") and any(BUILD_REWRITE_GOAL.match(a) for a in args):
-            hit = touches([opt_vals.get("-f") or opt_vals.get("--file") or "."], ancestors=False)
-        if hit is not None:
-            yield f"`{cmd}` writes to {hit!r}"
-        for m in re.finditer(r"(?<![<>&\d])(?:\d|&)?>>?\|?\s*([^\s;&|<>()]+)", raw):
-            t = _unquote(m.group(1))
-            if t.startswith("&"):
-                continue
-            p = resolve_path(cwd, t)
-            if p is not None and path_relation(p, guarded) == "in":
-                yield f"a redirection writes to {t!r}"
 
 
 # ----------------------------------------------------------------------------------------- lexing
@@ -1161,6 +940,11 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
     def safe_rel(path: str) -> bool:
         return bool(SAFE_PATH.match(path)) and not any(c in (".", "..") for c in path.split("/"))
 
+    def safe_rel_or_dot(path: str) -> bool:
+        # a verify --dir may be "." (the enclosing directory itself); otherwise a plain relative path with no
+        # .., leading /, ~ or variable component.
+        return path == "." or safe_rel(path)
+
     def stmt_wrapped(start: int, end: int) -> tuple[int, int]:
         """Grow a statement's span outward through dir('literal') { <only this statement> } wrappers (for adjacency);
         stop at any other block. Directories are resolved separately, by resolve_dirs()."""
@@ -1317,71 +1101,102 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
     if entry["contracts"] and not contracts_seen:
         problems.append(f"manifest names contracts={entry['contracts']} but no acquisition of it was found after the guard")
 
-    # 9b. after its guard, a bound checkout is read-only: no git in it but rev-parse/log/show/status/diff, no SCM step
-    # into it, no other tool writing into it; and after the primary guard no git anywhere changes a HEAD or worktree.
-    known_env: dict[str, str] = {}
-    for m in re.finditer(r"(?m)^\s*(?:env\.)?([A-Z][A-Z0-9_]*)\s*=\s*'([^'$\\]*)'\s*$", text):
-        known_env[m.group(1)] = m.group(2) if known_env.get(m.group(1), m.group(2)) == m.group(2) else UNRESOLVED
-    exempt = [(s0, e0) for s0, e0 in acquisition_spans]
-    primary_end = offs[g_hi] if g_hi < len(offs) else len(text)
-    ordered = sorted((s0, e0, q) for q, s0, e0 in g.strings)
-    texts: list[tuple[int, str]] = []          # (position, shell text), Groovy concatenations joined
-    k = 0
-    while k < len(ordered):
-        s0, e0, q = ordered[k]
-        body = text[s0:e0]
-        j = k
-        while j + 1 < len(ordered):
-            ns0, ne0, nq = ordered[j + 1]
-            between = g.code_only(ordered[j][1] + len(ordered[j][2]), ns0 - len(nq))
-            if not re.fullmatch(r"\s*\+\s*(?:[A-Za-z_][\w.]*(?:\(\))?\s*\+\s*)?", between):
-                break
-            body += (UNRESOLVED if between.count("+") > 1 else "") + text[ns0:ne0]
-            j += 1
-        texts.append((s0, body))
-        k = j + 1
-    for s0, body in texts:
-        if s0 < primary_end or any(a <= s0 < b for a, b in exempt) or any(a <= s0 < b for a, b in g.comments):
+    # 9b. Provenance verification. The guard proves HEAD == permitted at one moment; it cannot prove the FILES an
+    # effect consumes later were not replaced afterwards (a later git move, a copy or archive over the tree, an edited
+    # file) while HEAD stays the permitted commit. So every effect that builds or publishes an artifact FROM a source
+    # tree must be immediately preceded, in the same stage and workspace, by the DEDICATED verify-permitted-tree step
+    # for each source directory it consumes — the primary checkout for a build/publish from the workspace, and each
+    # nested checkout it compiles or ships. verify-permitted-tree.sh re-checks HEAD == permitted AND a clean working
+    # tree at run time, so a replacement is caught however it happened. This replaces the earlier lexical
+    # "nothing may write into the checkout" analysis (an open class); presence and placement is what is enforced here.
+    def verify_at(line_idx: int):
+        content = g.sh_single_quoted_step(offs[line_idx], offs[line_idx] + len(lines[line_idx]))
+        if content is None:
+            return None
+        return VERIFY_STEP.match("sh '" + content + "'")
+
+    def verify_resolved(sh_pos: int, dirarg: str):
+        """The workspace-relative directory a verify step at sh_pos re-checks (its --dir folded through every enclosing
+        dir()), or None when that context cannot be resolved to a literal path."""
+        gdirs, gwhy = resolve_dirs(sh_pos)
+        if gwhy or not safe_rel_or_dot(dirarg):
+            return None
+        parts = list(gdirs) + [c for c in dirarg.split("/") if c not in ("", ".")]
+        return "/".join(parts)
+
+    # Every dedicated verify step in the file, by resolved directory: (resolved dir, sh_pos, line).
+    verify_steps: list[tuple[str, int, int]] = []
+    for li in range(g_hi, len(lines)):
+        vm = verify_at(li)
+        if vm is None:
             continue
-        ln = text.count("\n", 0, s0) + 1
-        base_dirs, base_why = resolve_dirs(s0)
-        cwd0 = None if base_why else "/".join(base_dirs)
-        for why in shell_path_effects(body, known_env, cwd0, None):
-            problems.append(f"line {ln}: after the guard {why} — refused")
-        for path, (gpos, gline) in bound_guards.items():
-            if s0 <= gpos:
+        sh_pos = offs[li] + first_code_col(li)
+        rv = verify_resolved(sh_pos, vm.group("dir"))
+        if rv is None:
+            problems.append(f"line {li + 1}: a verify-permitted-tree step whose directory cannot be resolved to a literal path")
+            continue
+        if unskippable(sh_pos):
+            problems.append(f"line {li + 1}: the verify-permitted-tree step for '{rv or '.'}' can be skipped: {unskippable(sh_pos)}")
+        verify_steps.append((rv, sh_pos, li))
+
+    # Source-consuming effects. Two kinds:
+    #  - SHIP_DEPLOY (rsync, helm install/upgrade, mvn install/deploy): sends a source tree somewhere or compiles it
+    #    into a published artifact. Attributed to a nested checkout when it names one (mvn `-f <nested>/pom.xml`, an
+    #    rsync/helm path under a nested dir), otherwise to the PRIMARY workspace.
+    #  - NESTED_BUILD (docker build / buildx build): a `docker build <context>` naming a NESTED checkout as its context
+    #    builds an image from that checkout's files, so it needs that checkout re-verified. A docker build of the
+    #    PRIMARY workspace is NOT required here: by the time the image is built the workspace legitimately carries the
+    #    build's own output, so a whole-tree verify is not meaningful; the primary source is proven at checkout by the
+    #    guard, and any nested source compiled into the image is re-verified on its own. `docker push` / `git push`
+    #    publish an already-built image or ref, not a source tree, so they are not effects here either.
+    SHIP_DEPLOY = re.compile(r"\brsync\b|\bhelm\s+(?:install|upgrade)\b")
+    MVN_ARTIFACT = re.compile(r"\bmvn\b[^\n]*\b(?:install|deploy)\b")
+    NESTED_BUILD = re.compile(r"\bdocker\s+build\b|\bdocker\s+buildx\s+build\b")
+    nested_dirs = sorted((p for p in bound_guards), key=len, reverse=True)
+    for si in range(gi + 1, len(stages)):
+        lo, hi = stage_range(lines, stages, si)
+        # earliest effect line requiring each source directory ('' = the primary workspace). Physical lines joined by
+        # a trailing backslash are one logical command, so an `ssh host "… docker build …"` split across lines is seen
+        # as one ssh command (and skipped as remote).
+        need: dict[str, int] = {}
+        li = lo
+        while li < hi:
+            start_li = li
+            l = lines[li]
+            while l.rstrip().endswith("\\") and li + 1 < hi:
+                li += 1
+                l = l.rstrip()[:-1] + " " + lines[li]
+            li += 1
+            if is_comment(lines[start_li]) or "verify-permitted-tree.sh" in l or "permitted-sha-guard.sh" in l:
                 continue
-            for why in shell_path_effects(body, known_env, cwd0, path):
-                problems.append(f"line {ln}: '{path}' is changed after its guard (line {gline + 1}): {why} — a guarded checkout is read-only after its guard")
-    # Groovy steps that write files or check out sources
-    FILE_STEPS = re.compile(r"\b(writeFile|unstash|unzip|untar|fileOperations|copyArtifacts|checkout|git|dir)\b")
-    code_after = g.code_only(0, len(text))
-    for path, (gpos, gline) in bound_guards.items():
-        for m in FILE_STEPS.finditer(code_after, gpos):
-            if any(a <= m.start() < b for a, b in exempt):
+            mvn_m = MVN_ARTIFACT.search(l)
+            ship_m = SHIP_DEPLOY.search(l)
+            build_m = NESTED_BUILD.search(l)
+            m = mvn_m or ship_m or build_m
+            if m is None:
                 continue
-            stmt_end = text.find("\n", m.start())
-            stmt_end = len(text) if stmt_end < 0 else stmt_end
-            base_dirs, base_why = resolve_dirs(m.start())
-            cwd0 = None if base_why else "/".join(base_dirs)
-            lits = [text[a:b] for q, a, b in g.strings if m.start() < a < stmt_end]
-            if m.group(1) == "dir":
-                # a dir('<p>') block inside the checkout makes every step in it run there — only rev-parse-style
-                # shell (checked above, with the dir folded in) may; SCM/file steps inside are refused below.
+            # An effect that runs on ANOTHER host over ssh (ssh … "… docker build …") consumes the copy shipped there,
+            # not this workspace; the rsync/scp that ships the source is the effect verified here instead.
+            if re.search(r"\bssh\b", l[:m.start()]):
                 continue
-            implicit = m.group(1) in ("unstash", "checkout", "git") or (m.group(1) in ("unzip", "untar") and not re.search(r"\bdir:", text[m.start():stmt_end])) \
-                or (m.group(1) == "copyArtifacts" and not re.search(r"\btarget:", text[m.start():stmt_end]))
-            hit = None
-            for lit in lits:
-                p = resolve_path(cwd0, substitute(lit, known_env))
-                if p is not None and path_relation(p, path) in ("in", "ancestor"):
-                    hit = lit
-                    break
-            if hit is None and implicit and cwd0 is not None and path_relation(cwd0, path) == "in":
-                hit = f"its working directory {cwd0!r}"
-            if hit is not None:
-                ln = text.count("\n", 0, m.start()) + 1
-                problems.append(f"line {ln}: '{path}' is changed after its guard (line {gline + 1}): the `{m.group(1)}` step writes to {hit!r} — a guarded checkout is read-only after its guard")
+            named = next((d for d in nested_dirs if d and (f"-f {d}/" in l or f"-C {d} " in l or f" {d}/" in l or f" {d}" in l or l.rstrip().endswith(d))), "")
+            if build_m is not None and mvn_m is None and ship_m is None:
+                # a docker build is required only when it names a nested checkout as its context
+                if not named:
+                    continue
+                token = named
+            else:
+                token = named
+            if start_li < need.get(token, 1 << 30):
+                need[token] = start_li
+        for rdir, eline in need.items():
+            covering = [(vp, vl) for (rv, vp, vl) in verify_steps if rv == rdir and lo <= vl < hi and vl < eline]
+            if not covering:
+                where = f"the primary checkout '.'" if rdir == "" else f"the nested checkout '{rdir}'"
+                problems.append(
+                    f"line {eline + 1}: an effect builds or publishes from {where} but no dedicated verify-permitted-tree step "
+                    f"for it (timeout {{ sh 'PERMITTED_SHA=\"${{…}}\" bash scripts/jenkins/verify-permitted-tree.sh --dir "
+                    f"{rdir or '.'} …' }}) precedes it in this stage — the tree the effect consumes is not re-verified after checkout")
 
     # 11. every invocation of the guard is a canonical form, and every stage that runs one has a deadline
     canonical_lines: set[int] = set()

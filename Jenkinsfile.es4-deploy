@@ -102,6 +102,9 @@ pipeline {
     stage('Infra sync + bootstrap') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'infra-sync') } }
       steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
         sh '''
           set -euo pipefail
           # /home is root-owned on the box — create the es4 home via passwordless sudo, owned by the deploy user
@@ -117,6 +120,9 @@ pipeline {
     stage('Create topics') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'create-topics') } }
       steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
         sh '''
           set -euo pipefail
           rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
@@ -145,6 +151,9 @@ pipeline {
       // the declared intent.
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'clean-reset') } }
       steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
         sh '''
           set -euo pipefail
           rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/

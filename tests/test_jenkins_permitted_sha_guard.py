@@ -740,23 +740,23 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
             self.assertEqual(r.returncode, 1, r.stdout)
             self.assertIn(say, r.stdout)
 
-    def test_nifty_checkout_is_read_only_after_its_guard(self) -> None:
-        # Codex #1043 r8 M1-R8 on a real file: after the Nifty checkout's dedicated guard, nothing may move or rewrite
-        # nifty-gex-src before it is built; read-only git and the rsync FROM it stay accepted.
-        anchor = '          SRC_COMMIT="$(git -C nifty-gex-src rev-parse HEAD)"\n'
-        self.assertIn(anchor, (ROOT / "Jenkinsfile.nifty-gex-service").read_text())
-        for ins, say in [
-            ("          git -C nifty-gex-src pull --ff-only origin main\n", "is changed after its guard"),
-            ("          git -C nifty-gex-src fetch origin main && git -C nifty-gex-src reset --hard FETCH_HEAD\n", "is changed after its guard"),
-            ("          cd nifty-gex-src && git checkout -q origin/feature && cd \"$WORKSPACE\"\n", "is changed after its guard"),
-            ("          cp /tmp/Dockerfile nifty-gex-src/Dockerfile\n", "is changed after its guard"),
-            ("          tar -xzf /tmp/src.tgz -C nifty-gex-src\n", "is changed after its guard"),
-        ]:
-            r = self._validate_mutated("Jenkinsfile.nifty-gex-service", anchor, ins + anchor)
-            self.assertEqual(r.returncode, 1, (ins, r.stdout))
-            self.assertIn(say, r.stdout)
-        r = self._validate_mutated("Jenkinsfile.nifty-gex-service", anchor, anchor + "          git -C nifty-gex-src log -1 --oneline\n")
-        self.assertEqual(r.returncode, 0, r.stdout)
+    def test_nifty_source_is_provenance_verified_before_it_is_built(self) -> None:
+        # Codex #1043 r8/r9 → runtime provenance verification. The Nifty source is shipped (rsync) and built into the
+        # image, so it carries a dedicated verify-permitted-tree step after its guard. Remove that step and the file is
+        # refused; its runtime behaviour (pull/reset/copy/archive over the tree) is covered by verify-permitted-tree-test.sh.
+        block = ("        timeout(time: 10, unit: 'MINUTES') {\n"
+                 "          sh 'PERMITTED_SHA=\"${NIFTY_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir nifty-gex-src'\n"
+                 "        }\n")
+        self.assertIn(block, (ROOT / "Jenkinsfile.nifty-gex-service").read_text())
+        r = self._validate_mutated("Jenkinsfile.nifty-gex-service", block, "")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("the nested checkout 'nifty-gex-src'", r.stdout)
+
+    def test_verify_permitted_tree_runtime_suite_passes(self) -> None:
+        # Codex's replacement reproductions run as REAL git checkouts against verify-permitted-tree.sh.
+        r = subprocess.run(["bash", str(J / "verify-permitted-tree-test.sh")], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("verify-permitted-tree-test: ALL PASS", r.stdout)
 
     def test_service_deploy_post_recovery_negated_with_a_space(self) -> None:
         r = self._validate_mutated("Jenkinsfile.service-deploy", "        if (env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && env.SECONDARY_PERMISSIONS_PASSED == 'PASSED' && env.EFFECT_STAGE_STARTED == 'PASSED') {",

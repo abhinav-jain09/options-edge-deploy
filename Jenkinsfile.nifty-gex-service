@@ -100,6 +100,12 @@ pipeline {
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir nifty-gex-src --ref main'
         }
+        // PROVENANCE (Deployment Permission Rule): the guard proved HEAD == permitted at one moment; this re-proves,
+        // immediately before the source is shipped and built, that the nifty checkout is still exactly that commit's
+        // tree — nothing changed after checkout (verify-permitted-tree.sh). Validator rule 9b.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir nifty-gex-src'
+        }
         // ARTIFACT IDENTITY (Deployment Permission Rule): the image this job deploys must be THE image
         // this build pushed from the guarded nifty checkout, not whatever the mutable :prod/:dev tag
         // resolves to later (another publisher of that tag could move it; disableConcurrentBuilds only

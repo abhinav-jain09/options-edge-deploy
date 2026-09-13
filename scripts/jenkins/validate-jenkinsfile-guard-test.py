@@ -77,6 +77,9 @@ GOOD = """pipeline {
             timeout(time: 10, unit: 'MINUTES') {
               sh 'PERMITTED_SHA="${APP_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir app-src --ref main'
             }
+            timeout(time: 10, unit: 'MINUTES') {
+              sh 'PERMITTED_SHA="${APP_PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src'
+            }
             sh 'docker build -t app app-src'
           }
         }
@@ -183,6 +186,8 @@ def main() -> int:
     ap.add_argument("--validator", default=os.path.join(HERE, "validate-jenkinsfile-guard.py"))
     a = ap.parse_args()
     good = GOOD.replace("__HASH__", STUB_HASH)
+    VERIFY_APP = "            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src'\n            }\n"
+    BUILD = "            sh 'docker build -t app app-src'\n"
     passed = failed = 0
 
     def case(name: str, text: str, manifest: str, expect_ok: bool, must_say: str = "", extra: list[str] | None = None,
@@ -367,11 +372,11 @@ def main() -> int:
     case("acquisition in dir('other') guarded as app-src at the root is refused (Codex gateway I9)",
          good.replace(ACQ_BLOCK, "            dir('other') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n"), MANIFEST, False, "the guard resolves to 'app-src', the acquisition to 'other/app-src'")
     case("acquisition in dir('other') guarded with --dir other/app-src is fine",
-         good.replace(ACQ_BLOCK, "            dir('other') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n").replace("--dir app-src --ref main", "--dir other/app-src --ref main"), MANIFEST, True)
+         good.replace(ACQ_BLOCK, "            dir('other') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n").replace("--dir app-src --ref main", "--dir other/app-src --ref main").replace(VERIFY_APP + BUILD, ""), MANIFEST, True)
     case("acquisition and guard both in dir('other') blocks is fine",
-         good.replace(PAIR, "            dir('other') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n            dir('other') {\n" + NESTED_BLOCK.replace("            ", "              ") + "            }\n"), MANIFEST, True)
+         good.replace(PAIR, "            dir('other') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n            dir('other') {\n" + NESTED_BLOCK.replace("            ", "              ") + "            }\n").replace(VERIFY_APP + BUILD, ""), MANIFEST, True)
     case("nested dir('a') { dir('b') { clone c } } guarded with --dir a/b/c is fine",
-         good.replace(ACQ_BLOCK, "            dir('a') {\n              dir('b') {\n" + SH_ACQ.replace("            ", "                ") + "              }\n            }\n").replace("--dir app-src --ref main", "--dir a/b/app-src --ref main"), MANIFEST, True)
+         good.replace(ACQ_BLOCK, "            dir('a') {\n              dir('b') {\n" + SH_ACQ.replace("            ", "                ") + "              }\n            }\n").replace("--dir app-src --ref main", "--dir a/b/app-src --ref main").replace(VERIFY_APP + BUILD, ""), MANIFEST, True)
     case("nested dir('a') { dir('b') { clone c } } guarded with --dir b/c is refused",
          good.replace(ACQ_BLOCK, "            dir('a') {\n              dir('b') {\n" + SH_ACQ.replace("            ", "                ") + "              }\n            }\n").replace("--dir app-src --ref main", "--dir b/app-src --ref main"), MANIFEST, False, "the guard resolves to 'b/app-src'")
     case("the gateway I9 reproduction: a second checkout into other/app-src with a guard on app-src is refused",
@@ -384,7 +389,7 @@ def main() -> int:
         case(f"a guard --dir with {label} is refused", good.replace("--dir app-src --ref main", f"--dir {d} --ref main"), MANIFEST, False, "")
     case("an acquisition in dir('..') is refused", good.replace(ACQ_BLOCK, "            dir('..') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n"), MANIFEST, False, "not a plain relative path")
     case("acquisition in one stage and its guard in the next stage (another agent) is refused",
-         good.replace(NESTED_BLOCK + "            sh 'docker build -t app app-src'\n", "            sh 'docker build -t app app-src'\n").replace("        stage('Trigger child') {", "        stage('Bind app') {\n          when { expression { " + G2 + " } }\n          agent { label 'other-host' }\n          steps {\n" + NESTED_BLOCK + "          }\n        }\n        stage('Trigger child') {"),
+         good.replace(NESTED_BLOCK + VERIFY_APP + BUILD, BUILD).replace("        stage('Trigger child') {", "        stage('Bind app') {\n          when { expression { " + G2 + " } }\n          agent { label 'other-host' }\n          steps {\n" + NESTED_BLOCK + "          }\n        }\n        stage('Trigger child') {"),
          MANIFEST, False, "is not re-bound")
     mut("effect on the nested source between acquisition and its guard", NESTED_BLOCK, "            sh 'docker build -t early app-src'\n" + NESTED_BLOCK, "is not re-bound")
     mut("guard invoked from an ordinary shell block elsewhere", "            sh 'kubectl apply -f k8s/fixture.yaml'",
@@ -464,7 +469,7 @@ def main() -> int:
     mut("dedicated step with the :? form is fine", "${APP_PERMITTED_SHA:-}", "${APP_PERMITTED_SHA:?}", "carry the canonical permitted-commit guard", expect_ok=True)
 
     # 10. contracts
-    contracts_ok = good.replace("            sh 'docker build -t app app-src'", "            sh '''\n              set -euo pipefail\n              rm -rf .deps/options-edge-contracts\n              git clone git@github.com:example/contracts.git .deps/options-edge-contracts\n              git -C .deps/options-edge-contracts checkout main\n            '''\n            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main'\n            }\n            sh '''\n              mvn -B -f .deps/options-edge-contracts/pom.xml install\n            '''\n            sh 'docker build -t app app-src'")
+    contracts_ok = good.replace("            sh 'docker build -t app app-src'", "            sh '''\n              set -euo pipefail\n              rm -rf .deps/options-edge-contracts\n              git clone git@github.com:example/contracts.git .deps/options-edge-contracts\n              git -C .deps/options-edge-contracts checkout main\n            '''\n            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main'\n            }\n            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir .deps/options-edge-contracts --allow-ignored target'\n            }\n            sh '''\n              mvn -B -f .deps/options-edge-contracts/pom.xml install\n            '''\n            sh 'docker build -t app app-src'")
     contracts_manifest = "Jenkinsfile.fixture | in | reguard=Deploy path; contracts=.deps/options-edge-contracts | fixture\n"
     shell_ok = contracts_ok
     case("contracts acquired in one step, bound by the dedicated step, installed in the next: fine", contracts_ok, contracts_manifest, True)
@@ -478,81 +483,56 @@ def main() -> int:
     mut("invalid Groovy escape \\d in a single-quoted string", "            sh 'kubectl apply -f k8s/fixture.yaml'", "            sh 'echo x | grep -E \"[\\d]+\"'\n            sh 'kubectl apply -f k8s/fixture.yaml'", "not a Groovy escape")
     mut("octal Groovy escape", "            sh 'kubectl apply -f k8s/fixture.yaml'", "            sh 'sed s/a/\\1/ x'\n            sh 'kubectl apply -f k8s/fixture.yaml'", "OCTAL")
     case("doubled backslash is fine", shell_ok.replace("              mvn -B -f .deps", "              ls target/*.jar | grep -v '\\\\.original$'\n              mvn -B -f .deps"), contracts_manifest, True)
-    # Codex #1043 r8 M1-R8: after its guard a bound checkout is read-only — git that moves it, SCM steps into it and
-    # other tools writing into it would replace the permitted source before it is built.
-    BUILD = "            sh 'docker build -t app app-src'\n"
+    # Codex #1043 r8/r9 → runtime provenance verification. The lexical "nothing may write into the checkout" analysis
+    # is replaced by verify-permitted-tree.sh run immediately before every build/publish-from-source effect. Here the
+    # validator enforces the PRESENCE and PLACEMENT of that verify step (its runtime behaviour — pull, reset, copy,
+    # archive-over-tree, untracked/modified files — is covered by verify-permitted-tree-test.sh).
     TQ3 = chr(39) * 3
-
-    def after_guard(snippet: str) -> str:
-        return good.replace(BUILD, snippet + BUILD)
-
-    def shell(*cmds: str) -> str:
-        return "            sh " + TQ3 + "\n" + "".join(f"              {c}\n" for c in cmds) + "            " + TQ3 + "\n"
-
-    CHANGED = "is changed after its guard"
-    MOVES = "changes a checkout's HEAD or worktree"
-    for label, cmds in [
-        ("git -C <dir> pull --ff-only (Codex reproduction)", ["git -C app-src pull --ff-only origin main"]),
-        ("git -C <dir> fetch then reset --hard FETCH_HEAD", ["git -C app-src fetch origin main", "git -C app-src reset --hard FETCH_HEAD"]),
-        ("git -C <dir> fetch alone (any git but read-only forms)", ["git -C app-src fetch origin main"]),
-        ("git -C <dir> checkout", ["git -C app-src checkout FETCH_HEAD"]),
-        ("git -C <dir> switch", ["git -C app-src switch feature"]),
-        ("git -C <dir> restore", ["git -C app-src restore --source origin/feature ."]),
-        ("git -C <dir> merge", ["git -C app-src merge origin/feature"]),
-        ("git -C <dir> rebase", ["git -C app-src rebase origin/feature"]),
-        ("git -C <dir> am", ["git -C app-src am /tmp/change.patch"]),
-        ("git -C <dir> apply", ["git -C app-src apply /tmp/change.patch"]),
-        ("git -C <dir> cherry-pick", ["git -C app-src cherry-pick abc123"]),
-        ("git -C <dir> submodule update", ["git -C app-src submodule update --init --remote"]),
-        ("git -C <dir> stash pop", ["git -C app-src stash pop"]),
-        ("git -C <dir> clean", ["git -C app-src clean -ffdx"]),
-        ("a nested -C chain", ["git -C app-src/sub -C .. pull"]),
-        ("--git-dir/--work-tree", ["git --git-dir=app-src/.git --work-tree=app-src checkout feature"]),
-        ("a -c option on a read-only subcommand", ["git -c core.pager=sh -C app-src log -1"]),
-        ("cd <dir> && git pull", ["cd app-src && git pull"]),
-        ("a subshell cd then checkout", ["( cd app-src; git checkout -q origin/feature )"]),
-        ("pushd then reset", ["pushd app-src", "git reset --hard origin/feature", "popd"]),
-        ("the directory through a shell variable", ["D=app-src", "git -C \"$D\" pull"]),
-        ("bash -c", ["bash -c 'git -C app-src pull'"]),
-        ("GIT_DIR/GIT_WORK_TREE pointed at it", ["GIT_DIR=app-src/.git GIT_WORK_TREE=app-src git fetch origin feature"]),
-        ("an exported GIT_WORK_TREE", ["export GIT_WORK_TREE=app-src", "git status"]),
-        ("cp into it", ["cp /tmp/Main.java app-src/src/Main.java"]),
-        ("cp -t into it", ["cp -t app-src /tmp/pom.xml"]),
-        ("rsync into it", ["rsync -a /tmp/other/ app-src/"]),
-        ("mv into it", ["mv /tmp/pom.xml app-src/pom.xml"]),
-        ("rm inside it", ["rm -rf app-src/src"]),
-        ("rm of a glob that includes it", ["rm -rf app*"]),
-        ("tar -x -C into it", ["tar -xzf /tmp/src.tgz -C app-src"]),
-        ("unzip -d into it", ["unzip -o /tmp/src.zip -d app-src"]),
-        ("ln into it", ["ln -sf /tmp/pom.xml app-src/pom.xml"]),
-        ("a redirection into it", ["echo '<project/>' > app-src/pom.xml"]),
-        ("tee into it", ["curl -s https://example/pom.xml | tee app-src/pom.xml"]),
-        ("sed -i on it", ["sed -i s/1.0/2.0/ app-src/pom.xml"]),
-        ("curl -o into it", ["curl -so app-src/pom.xml https://example/pom.xml"]),
-        ("find -delete inside it", ["find app-src -name '*.java' -delete"]),
-        ("patch -d it", ["patch -d app-src -p1 -i /tmp/change.patch"]),
-        ("cd into it then a relative cp", ["cd app-src", "cp /tmp/pom.xml pom.xml"]),
-        ("a build goal that rewrites sources", ["mvn -f app-src/pom.xml versions:set -DnewVersion=9"]),
+    assert good.count(VERIFY_APP) == 1
+    case("the verify step before the nested build is missing", good.replace(VERIFY_APP, ""), MANIFEST, False, "no dedicated verify-permitted-tree step")
+    case("the verify step is AFTER the build, not before", good.replace(VERIFY_APP + BUILD, BUILD + VERIFY_APP), MANIFEST, False, "no dedicated verify-permitted-tree step")
+    case("the verify step names another directory, not the one the build consumes",
+         good.replace("verify-permitted-tree.sh --dir app-src", "verify-permitted-tree.sh --dir other"), MANIFEST, False, "no dedicated verify-permitted-tree step")
+    case("the verify step can be skipped (inside if (false))",
+         good.replace(VERIFY_APP, "            script {\n              if (params.SKIP == 'yes') {\n" + VERIFY_APP.replace("            ", "                ") + "              }\n            }\n"), MANIFEST, False, "can be skipped")
+    for label, mutated in [
+        ("a trailing token after the literal", "sh 'PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src' + ''"),
+        ("the verify command inside a triple-quoted block", "sh " + TQ3 + "\n                PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src\n              " + TQ3),
+        ("a || true appended in the shell string", "sh 'PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src || true'"),
     ]:
-        case(f"after the guard, {label} is refused", after_guard(shell(*cmds)), MANIFEST, False, CHANGED)
-    case("after the guard, Groovy concatenation 'git -C ' + srcDir + ' pull' is refused", after_guard("            sh 'git -C ' + srcDir + ' pull'\n"), MANIFEST, False, MOVES)
-    case("after the guard, a GString git -C ${SRC} pull is refused", after_guard("            sh \"git -C ${env.SRC} pull\"\n"), MANIFEST, False, MOVES)
-    case("after the guard, sh 'git pull' inside dir('app-src') is refused", after_guard("            dir('app-src') {\n              sh 'git pull --ff-only'\n            }\n"), MANIFEST, False, CHANGED)
-    case("after the guard, sh 'cp …' inside dir('app-src') is refused", after_guard("            dir('app-src') {\n              sh 'cp /tmp/pom.xml pom.xml'\n            }\n"), MANIFEST, False, CHANGED)
-    case("after the guard, the git step with another branch in dir('app-src') is refused", after_guard("            dir('app-src') {\n              git url: 'git@example:app.git', branch: 'feature'\n            }\n"), MANIFEST, False, "re-acquired")
-    case("after the guard, git(branch:, url:) in dir('app-src') is refused", after_guard("            dir('app-src') {\n              git branch: 'feature', url: 'git@example:app.git'\n            }\n"), MANIFEST, False, "re-acquired")
-    case("after the guard, checkout scm in dir('app-src') is refused", after_guard("            dir('app-src') {\n              checkout scm\n            }\n"), MANIFEST, False, "re-acquired")
-    case("after the guard, unstash in dir('app-src') is refused", after_guard("            dir('app-src') {\n              unstash 'other-source'\n            }\n"), MANIFEST, False, CHANGED)
-    case("after the guard, writeFile into it is refused", after_guard("            writeFile file: 'app-src/pom.xml', text: '<project/>'\n"), MANIFEST, False, CHANGED)
-    case("after the primary guard, git reset --hard in the root workspace is refused", after_guard(shell("git reset --hard origin/feature")), MANIFEST, False, MOVES)
-    case("after the guard, read-only git and reads of the checkout are fine",
-         after_guard(shell("git -C app-src rev-parse HEAD", "git -C app-src log -1 --oneline", "git -C app-src status --porcelain", "git -C app-src diff --stat",
-                           "rsync -a --exclude .git app-src/ builder:/tmp/app/", "cp app-src/target/app.jar out/app.jar", "tar -czf out/app.tgz app-src",
-                           "mvn -B -f app-src/pom.xml package", "git fetch origin main", "ssh builder \"cd /tmp/app && make\"")),
-         MANIFEST, True)
-    case("after the guard, sh 'git rev-parse HEAD' inside dir('app-src') is fine", after_guard("            dir('app-src') {\n              sh 'git rev-parse HEAD'\n            }\n"), MANIFEST, True)
-    # Codex #809 M3: directories resolve through EVERY enclosing block, not only single-statement dir() wrappers
-    SCRIPTED = lambda d, gdir: good.replace(PAIR, f"            dir('{d}') {{\n              script {{\n" + SH_ACQ.replace("            ", "                ") + NESTED_BLOCK.replace("            ", "                ").replace("--dir app-src", f"--dir {gdir}") + "              }\n            }\n")
+        case(f"a verify step that is not the dedicated template ({label}) does not count",
+             good.replace("sh 'PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src'", mutated), MANIFEST, False, "no dedicated verify-permitted-tree step")
+    case("a verify step with an --allow-ignored list is fine",
+         good.replace("verify-permitted-tree.sh --dir app-src", "verify-permitted-tree.sh --dir app-src --allow-ignored target --allow-ignored .jenkins-tmp"), MANIFEST, True)
+    # every build/publish-from-source token requires the verify step; with it present each is fine
+    for label, effect in [("rsync of the source", "rsync -a app-src/ builder:/tmp/app/"), ("helm upgrade from the source", "helm upgrade app app-src")]:
+        b = "            sh '" + effect + "'\n"
+        case(f"{label} without a verify step is refused", good.replace(VERIFY_APP + BUILD, b), MANIFEST, False, "no dedicated verify-permitted-tree step")
+        case(f"{label} with the verify step is fine", good.replace(VERIFY_APP + BUILD, VERIFY_APP + b), MANIFEST, True)
+    # docker push / git push publish an already-built image or ref, not a source tree — no verify step required
+    case("docker push of a built image needs no verify step", good.replace(VERIFY_APP + BUILD, "            sh 'docker push registry/app:tag'\n"), MANIFEST, True)
+    case("git push of refs needs no verify step", good.replace(VERIFY_APP + BUILD, "            sh 'git -C app-src push origin HEAD'\n"), MANIFEST, True)
+    # mvn install/deploy FROM THE PRIMARY workspace (no nested dir named) needs verify --dir .
+    case("mvn install from the primary workspace with no verify --dir . is refused",
+         good.replace(VERIFY_APP + BUILD, "            sh 'mvn -B install'\n"), MANIFEST, False, "the primary checkout '.'")
+    case("mvn install from the primary workspace with verify --dir . is fine",
+         good.replace(VERIFY_APP + BUILD, "            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target'\n            }\n            sh 'mvn -B install'\n"), MANIFEST, True)
+    # a docker build of the PRIMARY workspace is NOT a required-verify effect (build output makes a whole-tree verify
+    # meaningless there); a docker build whose CONTEXT is a nested checkout IS.
+    case("a docker build of the primary workspace needs no verify step",
+         good.replace(VERIFY_APP + BUILD, "            sh 'docker build -t app -f Dockerfile .'\n"), MANIFEST, True)
+    case("a docker build whose context is the nested checkout needs its verify step",
+         good.replace(VERIFY_APP + BUILD, BUILD), MANIFEST, False, "the nested checkout 'app-src'")
+    case("kubectl apply (config application, not a build/ship from source) needs no verify step",
+         good.replace(VERIFY_APP + BUILD, "            sh 'kubectl apply -f k8s/fixture.yaml'\n"), MANIFEST, True)
+    # contracts: the mvn install of the nested contracts needs its verify step
+    case("contracts mvn install without a verify step for the contracts dir is refused",
+         contracts_ok.replace("            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir .deps/options-edge-contracts --allow-ignored target'\n            }\n", ""),
+         contracts_manifest, False, "the nested checkout '.deps/options-edge-contracts'")
+    # Codex #809 M3: directories resolve through EVERY enclosing block, not only single-statement dir() wrappers.
+    # Tested on a fixture without the trailing build effect, to isolate rule-9 path resolution.
+    noeffect = good.replace(VERIFY_APP + BUILD, "")
+    SCRIPTED = lambda d, gdir: noeffect.replace(PAIR, f"            dir('{d}') {{\n              script {{\n" + SH_ACQ.replace("            ", "                ") + NESTED_BLOCK.replace("            ", "                ").replace("--dir app-src", f"--dir {gdir}") + "              }\n            }\n")
     case("dir('a') { script { acquisition; guard --dir app-src } } binds a/app-src: fine", SCRIPTED("a", "app-src"), MANIFEST, True)
     case("dir('a') { script { acquisition; guard --dir a/app-src } } is refused (resolved through script{})", SCRIPTED("a", "a/app-src"), MANIFEST, False, "the guard resolves to 'a/a/app-src', the acquisition to 'a/app-src'")
     case("dir('a') { withEnv { acquisition; guard } } resolves through withEnv too",
@@ -575,7 +555,7 @@ def main() -> int:
     case("--only still applies every rule", good.replace("        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n"), MANIFEST, False, "has no `when` gate", ["--only", "Jenkinsfile.fixture"])
 
     print(f"validate-jenkinsfile-guard-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 232:
+    if failed == 0 and passed >= 195:
         print("validate-jenkinsfile-guard-test: ALL PASS")
         return 0
     return 1
