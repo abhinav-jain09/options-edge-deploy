@@ -36,14 +36,16 @@ done
 # say about those mutated copies is not what they test. The real test still runs, once, wherever the real validator runs
 # (validate-services.sh section 6), instead of eleven more times inside every service-deploy validate stage.
 #
-# The same holds for the other two mocked-CLI suites the validator drives, cleanup-topics-durable-test.sh and
-# apply-topics-ledger-safety-test.sh (together about a minute of forked mock kafka CLIs per validator run, eleven runs
-# here: roughly ten minutes of every service-deploy validate stage). Some cases edit topics.env, which those suites also
-# read, but no case edits cleanup-topics.sh or apply-topics.sh, and every case's expected finding is a structural
-# message the validator prints on its own. Live, they could supply a case's exit status while the structural check
-# supplied only the text; stubbed, the status can only come from the checks this harness is about. They too run for
-# real, once, in validate-services.sh section 6.
-for _suite in apply-topics-vol-premium-safety cleanup-topics-durable apply-topics-ledger-safety; do
+# apply-topics-ledger-safety-test.sh is stubbed for the same reason (about half a minute of forked mock kafka CLIs per
+# validator run, eleven runs here). Some cases edit topics.env, which that suite also reads, but no case edits
+# apply-topics.sh, and every case's expected finding is a structural message the validator prints on its own. Live, it
+# could supply a case's exit status while the structural check supplied only the text; stubbed, the status can only come
+# from the checks this harness is about. It too runs for real, once, in validate-services.sh section 6.
+# What stubbing does NOT lose: the suite can only add fail=1 (exit 1). The exit-3 cases stop at the validator's
+# independent-read check before any suite runs; the exit-1 cases already want 1 and never assert on suite output; and
+# the one exit-0 case is the unmutated tree, which is exactly what section 6 runs. (cleanup-topics-durable-test.sh is
+# stubbed further down, on the same argument.)
+for _suite in apply-topics-vol-premium-safety apply-topics-ledger-safety; do
   [ -x "$REPO/scripts/kafka/$_suite-test.sh" ] \
     || { echo "  FAIL scripts/kafka/$_suite-test.sh missing — the stub below would hide the validator's own missing-test finding"; exit 1; }
   printf '#!/usr/bin/env bash\necho "=== %s: stubbed inside the mutation harness ==="\n' "$_suite" \

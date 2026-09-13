@@ -88,16 +88,22 @@ suites_kill_live; echo AFTER-OK"
 AFTER-OK" ] && ok "kill with nothing live is a no-op under set -u" || bad "empty kill set (got: $out)"
 
   # 5) abort mid-collection: the trap signals ONLY the suite still running, never the reaped one
-  rm -f "$work/long.pid" "$work/live.txt" "$work/reaped.txt"
+  # No sleep-and-hope: the first suite is LOUD, and suites_collect prints its header only after it has waited on it
+  # and dropped its PID from the live set — so that line on the driver's stdout IS the reaped-state handshake.
+  rm -f "$work/long.pid" "$work/live.txt" "$work/reaped.txt" "$work/d5.out"
   driver "$work/d5.sh" "
 trap 'printf \"%s\" \"\${_suites_live[*]-}\" > \"$work/live.txt\"; suites_kill_live' EXIT
-suites_start quiet 'contract' '$work/pass-a.sh'
+suites_start loud  'first' '$work/pass-a.sh'
 suites_start quiet 'contract' '$work/long.sh'
 echo \"\${_suites_pids[0]}\" > '$work/reaped.txt'
 suites_collect"
-  "$B" "$work/d5.sh" >/dev/null 2>&1 & dpid=$!
-  for _ in $(seq 1 100); do [ -s "$work/long.pid" ] && break; sleep 0.1; done
-  sleep 1   # pass-a has long since exited and suites_collect has reaped it; it now blocks on long.sh
+  "$B" "$work/d5.sh" >"$work/d5.out" 2>&1 & dpid=$!
+  ready=0
+  for _ in $(seq 1 600); do   # up to 60 s on a loaded agent; normally the first poll or two
+    if [ -s "$work/long.pid" ] && grep -qx '=== first ===' "$work/d5.out" 2>/dev/null; then ready=1; break; fi
+    sleep 0.1
+  done
+  [ "$ready" = 1 ] || bad "abort: driver never reached the reaped state (out: $(cat "$work/d5.out" 2>/dev/null))"
   kill -TERM "$dpid"; wait "$dpid" 2>/dev/null || true
   lpid="$(cat "$work/long.pid" 2>/dev/null || echo none)"; live="$(cat "$work/live.txt" 2>/dev/null || echo none)"
   gone=0; for _ in $(seq 1 30); do kill -0 "$lpid" 2>/dev/null || { gone=1; break; }; sleep 0.1; done
