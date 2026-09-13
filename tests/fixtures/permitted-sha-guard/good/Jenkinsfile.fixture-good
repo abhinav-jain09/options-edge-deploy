@@ -1,0 +1,33 @@
+// Fixture for tests/test_jenkins_permitted_sha_guard.py: the SMALLEST pipeline the validator accepts.
+// The guard is the first stage, the parameter is declared, restart-from-stage is disabled, the one
+// effect (kubectl apply) comes after the guard, post{} touches nothing.
+pipeline {
+  agent { label 'fixture' }
+  parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true, description: 'the permitted commit')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '__GUARD_VERSION__', description: 'guard version (materialised by the test)')
+    booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: true, description: 'render only')
+  }
+  options { disableRestartFromStage(); disableConcurrentBuilds() }
+  stages {
+    stage('Permitted commit guard') {
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc})")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Deploy') {
+      steps {
+        sh 'kubectl apply -f k8s/fixture.yaml'
+      }
+    }
+  }
+  post {
+    always { echo 'fixture done' }
+  }
+}

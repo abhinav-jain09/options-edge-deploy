@@ -23,6 +23,10 @@
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: 'a3d2b9492162a2a6c92914ab17e6df5514ae6ecaaa7988dbab61b57a36160275',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this job enforces (Deployment Permission Rule). The guard refuses to run under any other value, so this default, once registered by a run of this definition, is evidence to callers that this job executes THIS guard; a caller refuses to trigger a job whose registered default differs from its own. Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ENVIRONMENT', choices: ['production'],
       description: 'Target environment. Only production exists today — the tenant has no dev overlay.')
     string(name: 'TENANT', defaultValue: 'fullfunding',
@@ -33,6 +37,7 @@ pipeline {
       description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
   }
   options {
+    disableRestartFromStage()   // Deployment Permission Rule: no "Restart from Stage" past the permitted-commit guard
     disableConcurrentBuilds()
     timeout(time: 30, unit: 'MINUTES')
   }
@@ -43,6 +48,25 @@ pipeline {
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN}"
   }
   stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the environment-branch restriction, kept as its own condition); a
+    // missing, empty, short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a
+    // checked-out HEAD that is not exactly PERMITTED_SHA. It runs FIRST, in the workspace every later
+    // stage uses, so nothing below can build, push, apply, roll, restart, create a topic or copy a file
+    // under an unpermitted commit — including a build queued for one commit that checked out a newer one.
+    // error(), never catchError: a refusal is a stop, not a coloured result. Both SHAs are in the log.
+    stage('Permitted commit guard') {
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
     stage('Render + Gate + Diff (always)') {
       steps {
         sh '''

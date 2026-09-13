@@ -35,6 +35,10 @@ VALIDATE_AGENT_LABEL = oeBuildAgent.labels('build-mac-74', 'hpsf-replay-mac')
 pipeline {
   agent none
   parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`. It binds the manifests/overlays/scripts deployed from this repository; the IMAGE is bound by digest at deploy time and, when BUILD_IMAGES=true, by PROCESSING_PERMITTED_SHA in the image job.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: 'a3d2b9492162a2a6c92914ab17e6df5514ae6ecaaa7988dbab61b57a36160275',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this job enforces (Deployment Permission Rule). The guard refuses to run under any other value, so this default, once registered by a run of this definition, is evidence to callers that this job executes THIS guard; a caller refuses to trigger a job whose registered default differs from its own. Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     string(name: 'INTENT_ID', defaultValue: '',
       description: 'Optional idempotency key (0DTE pipeline automation). Empty = normal manual build. With a value: at most ONE build per intent ever reaches the deploy stages — a second submission aborts as NOOP_DUPLICATE (intent-dedup.json artifact names the winner).')
     choice(name: 'SERVICE', choices: [
@@ -85,6 +89,12 @@ pipeline {
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
     booleanParam(name: 'BUILD_IMAGES', defaultValue: false,
       description: 'Build+push ONLY the selected service\'s image first (options-edge-processing with BUILD_TARGET=<this service>, mvn -pl <module> -am — a few minutes, not the whole reactor). false = deploy the image already in the registry (fastest path).')
+    string(name: 'PROCESSING_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED when BUILD_IMAGES=true — Deployment Permission Rule. The full 40-character commit id of options-edge-processing permitted for the image build this job triggers. Forwarded to that job as its PERMITTED_SHA, where ITS guard refuses unless the source it checks out is exactly this commit; the image THAT build recorded (digest, from its image lock) is then the one this job deploys. Empty or malformed values stop this job before the downstream build is triggered.')
+    string(name: 'CONTRACTS_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED when BUILD_IMAGES=true — Deployment Permission Rule. The full 40-character commit id of options-edge-contracts permitted for the image build: the processing job clones and installs contracts from main before building, and that source is compiled into the image. Forwarded to that job as CONTRACTS_PERMITTED_SHA, where its guard refuses unless the contracts checkout is exactly this commit on main; the child\'s image lock must record it. Empty or malformed values stop this job before the downstream build is triggered.')
+    string(name: 'REQUIRED_IMAGE', defaultValue: '', trim: true,
+      description: 'Set ONLY by a guarded image job that triggers this job after pushing (BUILD_IMAGES=false): the digest-pinned reference <registry>/<image>:<tag>@sha256:<64 hex> of the image it just built, from its own image lock. This job then deploys exactly that digest, never the mutable tag. Mutually exclusive with BUILD_IMAGES=true (whose child build supplies the digest itself). Empty = resolve the tag (deploy-repository binding only).')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + server-side validate only; nothing changes.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
@@ -93,6 +103,7 @@ pipeline {
       description: 'false (DEFAULT). true = also roll the pods even when the manifest is UNCHANGED. Applying an identical manifest is a no-op to Kubernetes — same digest, same pod template, no new pods — so a deploy CANNOT pick up a changed Secret or ConfigMap, because those are injected as environment variables and those are fixed for the life of a container. Needed for credential rotation (docs/bleedingoptions-app-db-rotation.md), which would otherwise report a green rollout while every pod kept using the old value. Leave false for ordinary deploys: they already roll pods by changing the digest, and restarting every run would discard the no-op property that makes re-running a deploy safe.')
   }
   options {
+    disableRestartFromStage()   // Deployment Permission Rule: no "Restart from Stage" past the permitted-commit guard
     disableConcurrentBuilds()
     // 120 min: a single-service BUILD_IMAGES build is only a few minutes, but the cap stays
     // generous to absorb queue/remote-build time (prod builds run on .252 over ssh). The old
@@ -107,6 +118,25 @@ pipeline {
     FORCE_RESTART        = "${params.FORCE_RESTART}"
   }
   stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the environment-branch restriction, kept as its own condition); a
+    // missing, empty, short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a
+    // checked-out HEAD that is not exactly PERMITTED_SHA. FIRST — before the intent claim and before
+    // the long validate stage — on the deploy host, so a refused build costs seconds and claims no
+    // intent. error(), never catchError: a refusal is a stop, not a coloured result.
+    stage('Permitted commit guard') {
+      agent { label 'hpsf-replay-mac' }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
     stage('Intent dedup') {
       // Host-pinned: the durable intent ledger lives on hpsf-replay-mac (~/oe-ops).
       agent { label 'hpsf-replay-mac' }
@@ -150,11 +180,17 @@ pipeline {
           echo "superseding failed pre-deploy claim of build $BN"
         fi
         python3 - "$CLAIM" "$BUILD_NUMBER" <<'PYEOF'
-import json,os,sys
+import json,os,subprocess,sys
 path,bn=sys.argv[1],int(sys.argv[2])
 tmp=path+".tmp"
 prev=json.load(open(path)) if os.path.exists(path) else {}
+# The claim records WHICH commit was permitted and which was checked out (Deployment Permission
+# Rule): the guard stage has already proved them equal, so the ledger carries the binding, not a
+# claim about it. Read from git here, never copied from the parameter alone.
 rec={"intentId":os.environ["INTENT_ID"],"buildNumber":bn,"state":"CLAIMED",
+     "permittedSha":os.environ.get("PERMITTED_SHA",""),
+     "guardVersion":os.environ.get("PERMITTED_SHA_GUARD_VERSION",""),
+     "checkedOutSha":subprocess.check_output(["git","rev-parse","HEAD"]).decode().strip(),
      "version":prev.get("version",0)+1,"supersedes":prev.get("buildNumber")}
 with open(tmp,"w") as f: json.dump(rec,f); f.flush(); os.fsync(f.fileno())
 os.rename(tmp,path)
@@ -179,6 +215,15 @@ PYEOF
       // pure gate: it reads only the checkout and produces nothing later stages consume.
       agent { label VALIDATE_AGENT_LABEL }
       steps {
+        // A second workspace on its own agent: re-bound to the permitted commit before any of its
+        // repository scripts run (Deployment Permission Rule — no repository code from an unbound
+        // checkout, even a pure validation).
+        script {
+          def rg = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rg != 0) {
+            error("Permitted commit guard (validate workspace) REFUSED this checkout (rc=${rg}) — nothing was validated or deployed.")
+          }
+        }
         sh '''
           set -euo pipefail
           bash scripts/ci/validate-services.sh
@@ -197,10 +242,52 @@ PYEOF
     stage('Deploy path') {
       agent { label 'hpsf-replay-mac' }
       stages {
+    stage('Permitted commit guard (deploy workspace)') {
+      // Re-established HERE, in the workspace every deploy stage below reads manifests, overlays
+      // and scripts from. The first guard ran on its own agent allocation; a checkout is bound
+      // across allocations only by Jenkins's revision pinning, so the same guard runs again right
+      // before the first effect (the downstream image build, or the first kubectl). No checkout
+      // happens after this point: what it permits is what deploys.
+      //
+      // It sets its OWN flag, DEPLOY_WORKSPACE_PERMITTED — never the first guard's — and this
+      // stage is the only place that flag is ever set. The Deploy path's post{always} recovery
+      // (scripts/deploy/post-deploy-recovery.sh) keys off it: a build refused HERE has passed the
+      // first guard, so PERMITTED_SHA_GUARD alone would let post{} consume a recovery marker an
+      // earlier build stranded and scale a production deployment after a rejection.
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard (deploy workspace) REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.DEPLOY_WORKSPACE_PERMITTED = 'PASSED'
+        }
+      }
+    }
     stage('Build image (this service only)') {
       when { expression { params.BUILD_IMAGES && !params.DEPLOY_DRY_RUN } }
       steps {
         script {
+          // Downstream deployment trigger (Deployment Permission Rule): the image build publishes an
+          // image, so it is a deployment of its own and needs its own permitted commits — of THAT
+          // repository and of the contracts source it compiles in. Judged here, before `build job:`,
+          // so a missing value never starts a build that would only fail at its own guard after
+          // checking out whatever main is.
+          def psha = (params.PROCESSING_PERMITTED_SHA ?: '').trim()
+          if (!psha.matches('^[0-9a-f]{40}$')) {
+            error("BUILD_IMAGES=true needs PROCESSING_PERMITTED_SHA: the full 40-character options-edge-processing commit permitted for this image build (got '${psha}'). Nothing was triggered.")
+          }
+          def csha = (params.CONTRACTS_PERMITTED_SHA ?: '').trim()
+          if (!csha.matches('^[0-9a-f]{40}$')) {
+            error("BUILD_IMAGES=true needs CONTRACTS_PERMITTED_SHA: the full 40-character options-edge-contracts commit permitted for this image build (got '${csha}'). Nothing was triggered.")
+          }
+          // FAIL-CLOSED compatibility check: forwarding a SHA binds nothing unless the downstream's
+          // LIVE definition declares and enforces PERMITTED_SHA (Jenkins drops an unknown parameter
+          // and the old pipeline runs unguarded). Ask the controller, read-only; refuse otherwise.
+          def compat = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh options-edge-processing CONTRACTS_PERMITTED_SHA')
+          if (compat != 0) {
+            error("options-edge-processing does not enforce THIS guard version with the contracts interface yet (rc=${compat}) — not triggering an image build whose guard cannot be confirmed. Nothing was triggered.")
+          }
           // Fail here, not three jobs downstream. These services build in their own repos' jobs,
           // so options-edge-processing rejects them during its own 'Resolve profile' -- safe, but
           // the operator only learns why after a queued downstream build starts and dies. Say it
@@ -245,8 +332,14 @@ PYEOF
             error("service-deploy: could not resolve an image for SERVICE='${env.SERVICE_PARAM}' from services.yaml")
           }
           echo "Building ONLY ${env.SERVICE_PARAM} -> BUILD_TARGET=${image}"
-          build job: 'options-edge-processing',
+          env.SERVICE_IMAGE_NAME = image
+          def child = build job: 'options-edge-processing',
                 parameters: [
+                  // The processing job's own guard compares the source it checks out (PROCESSING_BRANCH
+                  // main) against this, byte for byte, before it installs, tests, packages or pushes;
+                  // its contracts guard does the same for the contracts clone before mvn install.
+                  string(name: 'PERMITTED_SHA',           value: psha),
+                  string(name: 'CONTRACTS_PERMITTED_SHA', value: csha),
                   string(name: 'ENVIRONMENT',        value: params.ENVIRONMENT),
                   string(name: 'BUILD_TARGET',       value: image),
                   string(name: 'PROCESSING_BRANCH',  value: 'main'),
@@ -254,7 +347,52 @@ PYEOF
                   booleanParam(name: 'PUSH_IMAGES',  value: true)
                 ],
                 wait: true, propagate: true
+          // RETAIN THE CHILD'S IMAGE IDENTITY. The mutable :dev/:prod tag the deploy would otherwise
+          // resolve can be moved by ANY later processing build before this job pins it — both SHA
+          // guards would have passed and the deployed image would no longer be the one built under
+          // the permission. So read THAT build's image lock (full source commit + per-image digest),
+          // verify it was built from PROCESSING_PERMITTED_SHA, and hand service-deploy.sh the exact
+          // digest to deploy (REQUIRED_IMAGE). Any mismatch refuses before the first kubectl.
+          env.PROCESSING_BUILD_NUMBER = "${child.number}"
+          env.PROCESSING_BUILD_URL    = child.absoluteUrl
+          env.CHILD_BUILD_URL         = child.absoluteUrl
+          env.REQUIRED_IMAGE = sh(returnStdout: true, script: '''
+            set -euo pipefail
+            bash scripts/jenkins/fetch-permitted-image-lock.sh options-edge-processing \
+              "${PROCESSING_BUILD_NUMBER:?}" "${PROCESSING_PERMITTED_SHA:?}" "${SERVICE_IMAGE_NAME:?}" "${CONTRACTS_PERMITTED_SHA:?}"
+          ''').trim()
+          if (!env.REQUIRED_IMAGE.matches('^[^@\\s]+@sha256:[0-9a-f]{64}$')) {
+            error("the processing build's image lock did not yield a digest-pinned image (got '${env.REQUIRED_IMAGE}'). Nothing was deployed.")
+          }
+          echo "deploying exactly ${env.REQUIRED_IMAGE} (built by ${env.PROCESSING_BUILD_URL} from ${psha})"
         }
+      }
+    }
+    stage('Secondary permissions complete') {
+      // The THIRD of the four flags the post{} recovery demands. Reached only when every secondary
+      // input was judged: the image-build stage above errors out on a missing or malformed
+      // PROCESSING/CONTRACTS SHA, an unguarded child, a refused child (propagate) or a lock that does
+      // not match — and a skipped image build (BUILD_IMAGES=false) needs none of them. A caller-
+      // supplied REQUIRED_IMAGE (a guarded image job that pushed and then triggered THIS job) is bound
+      // here, and the permission receipt is written for the archive and the Bugzilla record.
+      steps {
+        script {
+          def req = (params.REQUIRED_IMAGE ?: '').trim()
+          if (req) {
+            if (params.BUILD_IMAGES) {
+              error("REQUIRED_IMAGE and BUILD_IMAGES=true are mutually exclusive: the image is bound either by this job's own child build or by the caller's, never both. Nothing was deployed.")
+            }
+            if (!req.matches('^[^@\\s]+@sha256:[0-9a-f]{64}$')) {
+              error("REQUIRED_IMAGE '${req}' is not a digest-pinned image reference. Nothing was deployed.")
+            }
+            env.REQUIRED_IMAGE = req
+          }
+          env.SECONDARY_PERMISSIONS_PASSED = 'PASSED'
+        }
+        sh '''
+          set -euo pipefail
+          bash scripts/jenkins/write-permission-receipt.sh "$WORKSPACE/.jenkins-tmp/permission-receipt.env"
+        '''
       }
     }
     stage('Reconcile feed-gateway expiry') {
@@ -375,6 +513,9 @@ PYEOF
         expression { params.SERVICE == 'vix-option-inteligence' && !params.DEPLOY_DRY_RUN }
       }
       steps {
+        // The FOURTH flag the post{} recovery demands: this run has entered an effect stage — the
+        // pause below is what can strand a recovery marker, so recovery ownership begins here.
+        script { env.EFFECT_STAGE_STARTED = 'PASSED' }
         // Topic reconcile FIRST, while the service is still serving. Only the identity prune
         // needs the service down, so nothing else belongs inside the outage window.
         sh '''
@@ -534,6 +675,9 @@ PYEOF
     }
     stage('Deploy (service-scoped)') {
       steps {
+        // The FOURTH flag the post{} recovery demands (also set by the VIX reconcile, which is
+        // skipped for every other service): this run has entered its effect stage.
+        script { env.EFFECT_STAGE_STARTED = 'PASSED' }
         script { if (params.INTENT_ID?.trim()) { sh '''
           # DEPLOY_STAGE_STARTED — the durable pre-deploy boundary (plan rev 8/9): fsync file,
           # rename, fsync DIRECTORY, and only then mutate the cluster. If this write cannot be
@@ -542,6 +686,12 @@ PYEOF
 import json,os,sys
 path=sys.argv[1]; rec=json.load(open(path))
 rec["state"]="DEPLOY_STAGE_STARTED"; rec["version"]+=1
+# The receipt names the image about to be rolled and the guarded build that produced it (empty when
+# BUILD_IMAGES=false: then the image is whatever the registry tag resolves to, pinned by digest).
+rec["requiredImage"]=os.environ.get("REQUIRED_IMAGE","")
+rec["imageBuild"]=os.environ.get("PROCESSING_BUILD_URL","")
+rec["processingPermittedSha"]=os.environ.get("PROCESSING_PERMITTED_SHA","")
+rec["contractsPermittedSha"]=os.environ.get("CONTRACTS_PERMITTED_SHA","")
 tmp=path+".tmp"
 with open(tmp,"w") as f: json.dump(rec,f); f.flush(); os.fsync(f.fileno())
 os.rename(tmp,path)
@@ -603,11 +753,28 @@ PYEOF
       // nothing else would ever scale it back and the service stays at zero replicas
       // indefinitely. Restoring here costs nothing on success -- a successful Deploy has already
       // set replicas from the manifest, so the marker is simply cleared.
-      sh '''
-        set -uo pipefail
-        bash scripts/deploy/vix-unpause.sh "$WORKSPACE/.jenkins-tmp/vix-paused-replicas"
-      '''
-      archiveArtifacts artifacts: '.jenkins-tmp/*-*.yaml', allowEmptyArchive: true
+      //
+      // GATED on ALL FOUR flags of THIS build (Deployment Permission Rule): post{always} runs after
+      // any refusal too, and vix-unpause.sh deliberately honours a marker STRANDED by an earlier
+      // build — unguarded, a build refused at the first guard, at the deploy-workspace guard, at a
+      // secondary input (processing/contracts SHA, child compatibility, child result, its lock) or
+      // before any effect stage began would consume that marker and scale production. Recovery is
+      // owned only by a run that passed every check and entered its effect phase; otherwise the
+      // gate script keeps the marker, reports HUMAN REQUIRED and touches nothing.
+      script {
+        if (env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && env.SECONDARY_PERMISSIONS_PASSED == 'PASSED' && env.EFFECT_STAGE_STARTED == 'PASSED') {
+          sh '''
+            set -uo pipefail
+            bash scripts/deploy/vix-unpause.sh "$WORKSPACE/.jenkins-tmp/vix-paused-replicas"
+          '''
+        } else {
+          sh '''
+            set -uo pipefail
+            bash scripts/deploy/post-deploy-recovery.sh "$WORKSPACE/.jenkins-tmp/vix-paused-replicas"
+          '''
+        }
+      }
+      archiveArtifacts artifacts: '.jenkins-tmp/*-*.yaml, .jenkins-tmp/permission-receipt.env', allowEmptyArchive: true
         }
       }
     }
