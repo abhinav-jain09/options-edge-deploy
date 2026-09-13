@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "calendarVersion": "2026.1",
+  "calendarContentHash": "96e32718baa65f6c0dc26b2395e504a3110639f1b86b94da79587534d500555c",
+  "hashVersion": 1,
+  "validFromDate": "2026-01-01",
+  "validThroughDate": "2026-12-31",
+  "entries": [
+    {
+      "eventCode": "NFP",
+      "instantUtcMs": 1767965400000,
+      "leadWindowMs": 3600000,
+      "trailWindowMs": 3600000
+    }
+  ]
+}

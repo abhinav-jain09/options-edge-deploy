@@ -290,8 +290,9 @@ elif ! bash "$LEDGER_TEST" > "$_scratch/ledger.out" 2>&1; then
   fail=1
 fi
 
-# The seven vol-premium Gate-1 topics: five are kept forever (RESET-PRESERVED, NEVER-RECREATE, retention.bytes=-1),
-# two are rebuildable. This drives the real apply-topics.sh and cleanup-topics.sh over creation, config reconcile,
+# The six vol-premium Gate-1 topics: four are kept forever (RESET-PRESERVED, NEVER-RECREATE, retention.bytes=-1),
+# two are rebuildable. (The calendar ledger is a Postgres table since 2026-09-13, not a seventh topic.) This drives
+# the real apply-topics.sh and cleanup-topics.sh over creation, config reconcile,
 # partition drift (recreation off and on) and all three cleanup modes, for dev and production, and proves itself
 # sensitive to every membership that protects them by mutating a COPY of topics.env.
 VOL_PREMIUM_TEST="scripts/kafka/apply-topics-vol-premium-safety-test.sh"
@@ -337,6 +338,28 @@ if ! printf '%s' "$code" | grep -qE 'if[[:space:]]+is_reset_preserved'; then
   echo "      the list is loaded and then ignored."
   fail=1
 fi
+
+# --- RETIRED topics: names that used to be durable and must now be preserved NOWHERE ----------------------------
+# options.spx.vol-premium.calendar (2026-09-13): the calendar ledger moved to Postgres. A retirement is complete only
+# when every keep-list, protection regex and reset arm has let go of the name — a stale arm in ONE script quietly
+# keeps a topic the declaration says does not exist (premarket-reset.sh still preserved it, deploy #1044 round 1).
+RETIRED_TOPICS="options.spx.vol-premium.calendar"
+for t in $RETIRED_TOPICS; do
+  for v in OPTIONS_EDGE_TOPICS OPTIONS_EDGE_PROD_ONLY_TOPICS OPTIONS_EDGE_RESET_PRESERVED_TOPICS OPTIONS_EDGE_PROD_ONLY_RESET_PRESERVED_TOPICS \
+           OPTIONS_EDGE_NEVER_RECREATE_TOPICS OPTIONS_EDGE_EXACT_PARTITION_TOPICS OPTIONS_EDGE_TOPIC_RETENTION_OVERRIDES \
+           OPTIONS_EDGE_TOPIC_RETENTION_BYTES_OVERRIDES OPTIONS_EDGE_COMPACTED_TOPICS OPTIONS_EDGE_PROD_ONLY_UNCOMPACTED_TOPICS; do
+    if ( . "$TOPICS_ENV"; printf '%s\n' ${!v-} ) | sed 's/[:=].*//' | grep -qxF "$t"; then
+      echo "FAIL: retired topic $t is still declared in $v (topics.env)"; fail=1
+    fi
+  done
+  if ( . "$TOPICS_ENV"; printf '%s\n' "$t" | grep -qE "$PROTECTED_TOPIC_REGEX" ); then
+    echo "FAIL: retired topic $t is still matched by PROTECTED_TOPIC_REGEX (topics.env)"; fail=1
+  fi
+  if printf '%s\n' "$t" | grep -qE "$REGEX"; then
+    echo "FAIL: retired topic $t is still preserved by PRESERVE_TOPICS_REGEX in $PREMARKET — the pre-market reset would keep it"; fail=1
+  fi
+done
+echo "checked $(echo "$RETIRED_TOPICS" | wc -w | tr -d ' ') retired topic(s): preserved nowhere"
 
 if [ "$fail" -ne 0 ]; then
   echo "=== validate-durable-topic-preservation: FAILED ==="

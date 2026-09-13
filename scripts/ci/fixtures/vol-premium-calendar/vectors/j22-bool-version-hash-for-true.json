@@ -1,0 +1,1 @@
+{"schemaVersion": 1, "calendarVersion": true, "calendarContentHash": "5cb8dc03f7ebcb85b480114e5ef9958155416ef29fd9f1e5fc8b017b4d1c7a80", "hashVersion": 1, "validFromDate": "2026-01-01", "validThroughDate": "2026-12-31", "entries": [{"eventCode": "CPI", "instantUtcMs": 1767965400000, "leadWindowMs": 600000, "trailWindowMs": 900000}]}
