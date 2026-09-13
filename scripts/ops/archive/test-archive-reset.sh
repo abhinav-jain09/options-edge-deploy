@@ -550,7 +550,7 @@ if [ "$op" = list ]; then
   echo __consumer_offsets
   [ -n "$id" ] && printf '%s\n' es.futures.footprint.strike oe.test.reset options.spx.vol-premium.ivrv \
     options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current \
-    options.spx.vol-premium.dlq options.spx.vol-premium.baseline options.spx.vol-premium.calendar
+    options.spx.vol-premium.dlq options.spx.vol-premium.baseline
   exit 0
 fi
 [ "${OE_DESCRIBE:-ok}" = fail ] && replay unreach-describe
@@ -2199,9 +2199,9 @@ vcase 'a line of only space and TAB: blank'           " \t\n$ATT}\n"            
 vcase 'two declarations separated by a lone CR: two lines' "$ATT}\r${ATT/queried_end\":9/queried_end\":12}}\n" "SESSION_INCOMPLETE: dt=$VDAY queried up to 12" 0
 
 # ---- 17f. EVERY vol-premium ledger is committed-only by default --------------------------------------------------------
+# (six topics: the calendar ledger is a Postgres table since 2026-09-13, so options.spx.vol-premium.calendar is not one)
 for vt in options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings \
-          options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline \
-          options.spx.vol-premium.calendar; do
+          options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline; do
   fresh "v7-$vt"
   strike_log '0 C k {"a":1}' '1 M'
   VTOPICS="$vt" vrun "$VDAY" >/dev/null
