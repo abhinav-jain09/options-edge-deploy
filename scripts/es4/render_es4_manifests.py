@@ -429,6 +429,10 @@ def transform(svc, docs):
         # actually holds. Prod and dev are untouched: this is the es4 renderer.
         if doc.get("metadata", {}).get("name") in ES4_KEEP_DOWN:
             doc["spec"]["replicas"] = 0
+        if svc == "option-price-behavior":
+            # The 2026-09-10 state-lock recovery changes production's rollout.
+            # Preserve es4's existing rollout policy until it is assessed there.
+            doc["spec"].pop("strategy", None)
         for v in (doc["spec"]["template"]["spec"].get("volumes") or []):
             pvc = v.get("persistentVolumeClaim", {}).get("claimName")
             if pvc:
