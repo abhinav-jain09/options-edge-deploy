@@ -16,10 +16,12 @@
 // * Rollback never rebuilds: the job log prints the previously-running digest and the
 //   exact re-point command (§13.2).
 // The validate stage is pure local rendering and the expensive part (44+ min on the loaded
-// dev Mac during market hours vs 2-4 min idle) — it runs on the .74 builders; everything
-// that needs the deploy host stays pinned there. `agent none` so a fallback resolution can
-// never hold two executors at once.
-VALIDATE_AGENT_LABEL = oeBuildAgent.labels('build-mac-74', 'hpsf-replay-mac')
+// dev Mac during market hours vs 2-4 min idle) — it runs on the CI build agent named once in
+// deploy-profiles.yaml (the native local-mac agent; .74 is retired). Environment-agnostic, so
+// the dev profile names the builder for every ENVIRONMENT (experiment's own builder label has
+// no node here). Everything that needs the deploy host stays pinned there. `agent none` so a
+// fallback resolution can never hold two executors at once.
+VALIDATE_AGENT_LABEL = oeBuildAgent(oeProfile('dev'))
 
 pipeline {
   agent none
