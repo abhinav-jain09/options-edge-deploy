@@ -1,0 +1,58 @@
+# Scope of the Jenkins-side permitted-commit guard (Deployment Permission Rule, options-edge rule.md).
+# Read by scripts/ci/validate-jenkins-permitted-sha-guard.sh. EVERY Jenkinsfile* in the repository
+# root must appear here exactly once:
+#   <Jenkinsfile> | in|out | options | reason
+# options (semicolon-separated, may be empty):
+#   before=<stage>,<stage>   stages allowed to run BEFORE 'Permitted commit guard' (an existing
+#                            environment-branch refusal that must keep running first). Anything else
+#                            before the guard fails the validator.
+#   reguard=<stage>          the pipeline is `agent none` and its deploy stages run on their own agent
+#                            inside <stage>; that stage's FIRST nested stage must be
+#                            'Permitted commit guard (deploy workspace)' — the guard re-established in
+#                            the workspace the effects actually come from.
+# "out" means the job carries NO guard and therefore CANNOT be triggered by the assistant (rule line
+# 364: "A job without this guard cannot be triggered by the assistant"); it stays Abhinav's manual job
+# or a scheduled one. The reason says which and why.
+
+# ---- in scope: deployment jobs the assistant may trigger, guarded before their first effect ----------
+Jenkinsfile                               | in  |                                 | monolith options-edge-deploy: builds/pushes images, cleans + applies Kafka topics, applies and rolls the whole estate; its production promotion self-trigger forwards PERMITTED_SHA
+Jenkinsfile.archive-scripts-deploy        | in  | before=Refuse anything but main | installs the Kafka->NAS archiver unit + crontab on the prod host; its ancestry-of-main refusal keeps running first, the SHA guard second
+Jenkinsfile.bleedingoptions-secrets       | in  |                                 | creates/updates the bleedingoptions Keycloak+Postgres Secret in production
+Jenkinsfile.common-infra                  | in  |                                 | applies the shared infra overlay (namespace, Keycloak, policies) to a cluster and reconciles the public realm
+Jenkinsfile.es-auction-mirror             | in  |                                 | installs/tears down a launchd MirrorMaker unit and asserts/reconciles the target topic (ACTION=status is read-only but shares the job)
+Jenkinsfile.es-cvd-mirror                 | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
+Jenkinsfile.es-futures-flow-mirror        | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
+Jenkinsfile.es-indicator-mirror           | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
+Jenkinsfile.es-strike-intel-mirror        | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
+Jenkinsfile.es-tape-zones-mirror          | in  |                                 | installs/tears down a launchd MirrorMaker unit on the Mac and creates the target topic
+Jenkinsfile.es-trades-bridge              | in  |                                 | installs/tears down the es4->prod trades bridge (launchd unit writing a LIVE prod market-data topic)
+Jenkinsfile.opra-definition-enumeration-mirror | in |                             | installs/tears down the prod->es4 definition-enumeration mirror (launchd unit or es4 docker container)
+Jenkinsfile.es-predown                    | in  |                                 | manual-only (no cron): scales the overnight ES services to 0 and deletes transient ES topics on prod over ssh
+Jenkinsfile.es4-deploy                    | in  |                                 | es4: infra rsync+bootstrap, topic creation, destructive clean-reset, digest-pinned applies, es-feed activation — every ACTION is an effect
+Jenkinsfile.fullfunding-deploy            | in  |                                 | applies the fullfunding tenant slice to production
+Jenkinsfile.kafka-cleanup                 | in  |                                 | manual-only (cron retired): creates a changelog-cleanup Job on the cluster and deletes orphaned Streams topics; its post{} Job prune is gated on the guard flag
+Jenkinsfile.kafka-reset                   | in  |                                 | manual-only (cron retired): copies and runs the Streams-state reset on the prod host over ssh
+Jenkinsfile.loki                          | in  |                                 | helm upgrade --install of Loki/Promtail into a cluster via Ansible (CONFIRM_DEPLOY)
+Jenkinsfile.nifty-gex-service             | in  |                                 | clones the nifty-gex app repo, docker builds+pushes it (bound separately by NIFTY_PERMITTED_SHA) and rolls the workload
+Jenkinsfile.replay                        | in  |                                 | (re)creates the timewarp replay Job on the dev cluster
+Jenkinsfile.secrets-sync                  | in  |                                 | applies the runtime secrets Secret to a cluster from Jenkins credentials
+Jenkinsfile.service-deploy                | in  | reguard=Deploy path             | one service to one environment: optional image build (bound by PROCESSING_PERMITTED_SHA), topic reconciles, digest-pinned apply + rollout; guard first, re-established on the deploy host
+Jenkinsfile.web-service                   | in  | reguard=Deploy path             | web image build (downstream options-edge-web-deploy has no guard yet: marked UNBOUND-DOWNSTREAM) + digest-pinned apply + rollout; guard first, re-established on the deploy host
+
+# ---- out of scope: no guard, therefore NOT assistant-triggerable; the reason says whose job it is --------
+Jenkinsfile.bring-up-all                  | out |                                 | disaster-recovery umbrella that triggers FIVE image builds in other repositories plus the monolith deploy; binding it needs a permitted SHA per source repository — Abhinav's manual job only
+Jenkinsfile.databento-rewind-deploy       | out |                                 | two-source job: clones the rewind repo AND triggers its (unguarded) image-build job; binding needs that repository's own guard first — Abhinav's manual job until then (its main-only ancestry check stays)
+Jenkinsfile.public-gate-evidence          | out |                                 | two-source job: checks out options-edge at SOURCE_REVISION and triggers the unguarded options-edge-web-deploy push to :prod; binding needs the web repository's guard first — Abhinav's manual job until then
+Jenkinsfile.experiment-build              | out |                                 | experiment tier is frozen/retired (Dev and Experiment Branch Freeze Rule); builds five repos from the experiment branch on .2 — must not be used for new deployments
+Jenkinsfile.experiment-deploy             | out |                                 | experiment tier is frozen/retired (Dev and Experiment Branch Freeze Rule) — must not be used for new deployments
+Jenkinsfile.gateway-nightly-restart       | out |                                 | cron-scheduled (00:05 ET nightly); a required PERMITTED_SHA would fail every scheduled run — the manual latch is Abhinav's
+Jenkinsfile.morning-autostart             | out |                                 | cron-scheduled (06:15 ET, brings prod UP); a required PERMITTED_SHA would fail every scheduled run and leave prod down — Abhinav's job
+Jenkinsfile.offhours-clean-slate          | out |                                 | cron-scheduled (13:30/16:30 ET); a required PERMITTED_SHA would fail every scheduled run — the manual latch (DRY_RUN off + WIPE_ENABLED) is Abhinav's
+Jenkinsfile.premarket                     | out |                                 | cron-scheduled READ-ONLY readiness sweep: no deployment effect at all
+Jenkinsfile.premarket-reset               | out |                                 | cron-scheduled (05:30 ET); a required PERMITTED_SHA would fail every scheduled run — the manual latch (DRY_RUN off + RESET_ENABLED) is Abhinav's
+Jenkinsfile.stockgex-close-board          | out |                                 | cron-scheduled (16:10 ET); a required PERMITTED_SHA would fail every scheduled run — Abhinav's job
+Jenkinsfile.stockgex-oi-snapshot          | out |                                 | cron-scheduled (08:20 ET); a required PERMITTED_SHA would fail every scheduled run — Abhinav's job
+Jenkinsfile.hpsf-ops                      | out |                                 | HPSF is retired from dev and prod (tests/test_hpsf_retired_from_dev_and_prod.py); unguarded, not to be triggered by the assistant
+Jenkinsfile.hpsf-release-gate             | out |                                 | HPSF is retired from dev and prod; evidence job, unguarded, not to be triggered by the assistant
+Jenkinsfile.hpsf-replay-gate              | out |                                 | HPSF is retired from dev and prod; replay job that clones six repositories at parameter branches — unguarded, not to be triggered by the assistant
+Jenkinsfile.hpsf-topics                   | out |                                 | HPSF is retired from dev and prod; topic-apply job, unguarded, not to be triggered by the assistant

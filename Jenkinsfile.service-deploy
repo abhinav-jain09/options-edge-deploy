@@ -35,6 +35,8 @@ VALIDATE_AGENT_LABEL = oeBuildAgent.labels('build-mac-74', 'hpsf-replay-mac')
 pipeline {
   agent none
   parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`. It binds the manifests/overlays/scripts deployed from this repository; the IMAGE is bound by digest at deploy time and, when BUILD_IMAGES=true, by PROCESSING_PERMITTED_SHA in the image job.')
     string(name: 'INTENT_ID', defaultValue: '',
       description: 'Optional idempotency key (0DTE pipeline automation). Empty = normal manual build. With a value: at most ONE build per intent ever reaches the deploy stages — a second submission aborts as NOOP_DUPLICATE (intent-dedup.json artifact names the winner).')
     choice(name: 'SERVICE', choices: [
@@ -85,6 +87,8 @@ pipeline {
       description: 'Target environment — selects the overlay + deployer kubeconfig (oeProfile).')
     booleanParam(name: 'BUILD_IMAGES', defaultValue: false,
       description: 'Build+push ONLY the selected service\'s image first (options-edge-processing with BUILD_TARGET=<this service>, mvn -pl <module> -am — a few minutes, not the whole reactor). false = deploy the image already in the registry (fastest path).')
+    string(name: 'PROCESSING_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED when BUILD_IMAGES=true — Deployment Permission Rule. The full 40-character commit id of options-edge-processing permitted for the image build this job triggers. Forwarded to that job as its PERMITTED_SHA, where ITS guard refuses unless the source it checks out is exactly this commit. Empty or malformed values stop this job before the downstream build is triggered.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + server-side validate only; nothing changes.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
@@ -93,6 +97,7 @@ pipeline {
       description: 'false (DEFAULT). true = also roll the pods even when the manifest is UNCHANGED. Applying an identical manifest is a no-op to Kubernetes — same digest, same pod template, no new pods — so a deploy CANNOT pick up a changed Secret or ConfigMap, because those are injected as environment variables and those are fixed for the life of a container. Needed for credential rotation (docs/bleedingoptions-app-db-rotation.md), which would otherwise report a green rollout while every pod kept using the old value. Leave false for ordinary deploys: they already roll pods by changing the digest, and restarting every run would discard the no-op property that makes re-running a deploy safe.')
   }
   options {
+    disableRestartFromStage()   // Deployment Permission Rule: no "Restart from Stage" past the permitted-commit guard
     disableConcurrentBuilds()
     // 120 min: a single-service BUILD_IMAGES build is only a few minutes, but the cap stays
     // generous to absorb queue/remote-build time (prod builds run on .252 over ssh). The old
@@ -107,6 +112,25 @@ pipeline {
     FORCE_RESTART        = "${params.FORCE_RESTART}"
   }
   stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the environment-branch restriction, kept as its own condition); a
+    // missing, empty, short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a
+    // checked-out HEAD that is not exactly PERMITTED_SHA. FIRST — before the intent claim and before
+    // the long validate stage — on the deploy host, so a refused build costs seconds and claims no
+    // intent. error(), never catchError: a refusal is a stop, not a coloured result.
+    stage('Permitted commit guard') {
+      agent { label 'hpsf-replay-mac' }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
     stage('Intent dedup') {
       // Host-pinned: the durable intent ledger lives on hpsf-replay-mac (~/oe-ops).
       agent { label 'hpsf-replay-mac' }
@@ -150,11 +174,16 @@ pipeline {
           echo "superseding failed pre-deploy claim of build $BN"
         fi
         python3 - "$CLAIM" "$BUILD_NUMBER" <<'PYEOF'
-import json,os,sys
+import json,os,subprocess,sys
 path,bn=sys.argv[1],int(sys.argv[2])
 tmp=path+".tmp"
 prev=json.load(open(path)) if os.path.exists(path) else {}
+# The claim records WHICH commit was permitted and which was checked out (Deployment Permission
+# Rule): the guard stage has already proved them equal, so the ledger carries the binding, not a
+# claim about it. Read from git here, never copied from the parameter alone.
 rec={"intentId":os.environ["INTENT_ID"],"buildNumber":bn,"state":"CLAIMED",
+     "permittedSha":os.environ.get("PERMITTED_SHA",""),
+     "checkedOutSha":subprocess.check_output(["git","rev-parse","HEAD"]).decode().strip(),
      "version":prev.get("version",0)+1,"supersedes":prev.get("buildNumber")}
 with open(tmp,"w") as f: json.dump(rec,f); f.flush(); os.fsync(f.fileno())
 os.rename(tmp,path)
@@ -197,10 +226,34 @@ PYEOF
     stage('Deploy path') {
       agent { label 'hpsf-replay-mac' }
       stages {
+    stage('Permitted commit guard (deploy workspace)') {
+      // Re-established HERE, in the workspace every deploy stage below reads manifests, overlays
+      // and scripts from. The first guard ran on its own agent allocation; a checkout is bound
+      // across allocations only by Jenkins's revision pinning, so the same guard runs again right
+      // before the first effect (the downstream image build, or the first kubectl). No checkout
+      // happens after this point: what it permits is what deploys.
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard (deploy workspace) REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
     stage('Build image (this service only)') {
       when { expression { params.BUILD_IMAGES && !params.DEPLOY_DRY_RUN } }
       steps {
         script {
+          // Downstream deployment trigger (Deployment Permission Rule): the image build publishes an
+          // image, so it is a deployment of its own and needs its own permitted commit — of THAT
+          // repository. Judged here, before `build job:`, so a missing value never starts a build
+          // that would only fail at its own guard after checking out whatever main is.
+          def psha = (params.PROCESSING_PERMITTED_SHA ?: '').trim()
+          if (!psha.matches('^[0-9a-f]{40}$')) {
+            error("BUILD_IMAGES=true needs PROCESSING_PERMITTED_SHA: the full 40-character options-edge-processing commit permitted for this image build (got '${psha}'). Nothing was triggered.")
+          }
           // Fail here, not three jobs downstream. These services build in their own repos' jobs,
           // so options-edge-processing rejects them during its own 'Resolve profile' -- safe, but
           // the operator only learns why after a queued downstream build starts and dies. Say it
@@ -247,6 +300,9 @@ PYEOF
           echo "Building ONLY ${env.SERVICE_PARAM} -> BUILD_TARGET=${image}"
           build job: 'options-edge-processing',
                 parameters: [
+                  // The processing job's own guard compares the source it checks out (PROCESSING_BRANCH
+                  // main) against this, byte for byte, before it installs, tests, packages or pushes.
+                  string(name: 'PERMITTED_SHA',      value: psha),
                   string(name: 'ENVIRONMENT',        value: params.ENVIRONMENT),
                   string(name: 'BUILD_TARGET',       value: image),
                   string(name: 'PROCESSING_BRANCH',  value: 'main'),

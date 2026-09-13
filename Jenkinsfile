@@ -3,6 +3,8 @@
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'], description: 'Target environment')
     string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. LOCKED TO main for all environments (dev AND prod) — feature branches must be merged before deploy. The job SCM checks out this branch; enforce-main-branch.sh rejects anything but main.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '', description: 'Dev deployer kubeconfig path on the Jenkins agent (Mac, ~/.kube — like prod). Bootstrap generates it from the admin kubeconfig.')
@@ -141,7 +143,29 @@ pipeline {
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN ?: false}"
     DEPLOY_TARGET = "${params.DEPLOY_TARGET ?: 'all'}"
   }
+  options {
+    disableRestartFromStage()   // Deployment Permission Rule: no "Restart from Stage" past the permitted-commit guard
+  }
   stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the environment-branch restriction, kept as its own condition); a
+    // missing, empty, short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a
+    // checked-out HEAD that is not exactly PERMITTED_SHA. It runs FIRST, in the workspace every later
+    // stage uses, so nothing below can build, push, apply, roll, restart, create a topic or copy a file
+    // under an unpermitted commit — including a build queued for one commit that checked out a newer one.
+    // error(), never catchError: a refusal is a stop, not a coloured result. Both SHAs are in the log.
+    stage('Permitted commit guard') {
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
     stage('Resolve profile') {
       // Observability-only: echo the canonical deploy profile from the single source
       // of truth (@Library('oe') deploy-profiles.yaml). This stage does NOT override
@@ -783,6 +807,11 @@ void promoteToProduction() {
     wait: false,
     propagate: false,
     parameters: [
+      // Deployment Permission Rule: the production build is a deployment of its own and runs THIS
+      // job's guard again on its own checkout. The permission that covered the dev deploy names one
+      // commit; forward exactly that. If main has moved by the time the prod build checks out, its
+      // guard refuses — the newer commit was never permitted.
+      string(name: 'PERMITTED_SHA', value: params.PERMITTED_SHA),
       string(name: 'ENVIRONMENT', value: 'production'),
       string(name: 'KUBECONFIG_FILE', value: params.PROD_KUBECONFIG_FILE),
       string(name: 'KUBECONFIG_ADMIN_FILE', value: params.PROD_KUBECONFIG_ADMIN_FILE),

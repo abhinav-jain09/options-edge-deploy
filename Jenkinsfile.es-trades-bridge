@@ -37,6 +37,8 @@
 pipeline {
   agent { label 'local-mac' }
   parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
     string(name: 'SOURCE_ES_CLUSTER_IP', defaultValue: '192.168.100.4',   description: 'ES source-of-truth broker IP (.4) — where es-feed publishes.')
     string(name: 'SOURCE_PORT',          defaultValue: '9092',            description: 'Source Kafka port.')
     string(name: 'SOURCE_TOPIC',         defaultValue: 'es.underlying.es.trades', description: 'Topic on the SOURCE cluster (es.-prefixed).')
@@ -51,7 +53,7 @@ pipeline {
     // where close-direction / es-open-direction / es-spx-align would consume them as current.
     choice(name: 'OFFSET_RESET', choices: ['latest', 'earliest'], description: 'Where a BRAND-NEW consumer group starts. Ignored once the group has committed offsets. Pick earliest only for a deliberate backfill into an idle target.')
   }
-  options { disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 15, unit: 'MINUTES') }
   environment {
     CONFLUENT = '/Users/abhinav/development/confluent-7.3.1'
     // Per-TARGET identity so a second environment can run its own bridge without overwriting
@@ -63,6 +65,25 @@ pipeline {
     SLUG  = "${(params.TARGET_SPX_CLUSTER_IP + '-' + params.TARGET_PORT).replaceAll('[^A-Za-z0-9-]', '-')}"
   }
   stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the environment-branch restriction, kept as its own condition); a
+    // missing, empty, short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a
+    // checked-out HEAD that is not exactly PERMITTED_SHA. It runs FIRST, in the workspace every later
+    // stage uses, so nothing below can build, push, apply, roll, restart, create a topic or copy a file
+    // under an unpermitted commit — including a build queued for one commit that checked out a newer one.
+    // error(), never catchError: a refusal is a stop, not a coloured result. Both SHAs are in the log.
+    stage('Permitted commit guard') {
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
 
     stage('Teardown') {
       when { expression { params.ACTION == 'teardown' } }

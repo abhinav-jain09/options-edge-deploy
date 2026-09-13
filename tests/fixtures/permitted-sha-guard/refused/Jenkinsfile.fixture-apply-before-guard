@@ -1,0 +1,30 @@
+// Fixture for tests/test_jenkins_permitted_sha_guard.py — MUST BE REFUSED by the validator.
+// This is the failure the Deployment Permission Rule exists to stop (Codex round 2): the job applies
+// to the cluster FIRST and only then compares the checkout with the permitted commit. A build queued
+// for commit A that checked out a newer B has already rolled B by the time the guard runs; cancelling
+// afterwards cannot undo it. The guard stage itself is textually perfect — its POSITION is the defect.
+pipeline {
+  agent { label 'fixture' }
+  parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true, description: 'the permitted commit')
+  }
+  options { disableRestartFromStage(); disableConcurrentBuilds() }
+  stages {
+    stage('Deploy') {
+      steps {
+        sh 'kubectl apply -f k8s/fixture.yaml'
+      }
+    }
+    stage('Permitted commit guard') {
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc})")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+  }
+}

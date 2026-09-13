@@ -206,6 +206,24 @@ jobs:
       - name: Validate docker top keeps the pid column
         run: bash scripts/ci/validate-docker-top-has-pid.sh
 
+      # Deployment Permission Rule (options-edge rule.md): "Jenkins enforces the permitted commit, not
+      # the assistant." A build queued for commit A can check out a newer B once main moves and publish
+      # or roll B before anyone can react; cancelling afterwards undoes nothing. So every deploy job
+      # takes PERMITTED_SHA and runs scripts/jenkins/permitted-sha-guard.sh BEFORE its first effect,
+      # failing closed on a missing/short/mismatched value or a non-main checkout. This holds every
+      # Jenkinsfile to that: the parameter, the guard stage, its POSITION (nothing that mutates before
+      # it), no catchError around it, restart-from-stage disabled, downstream triggers bound or marked,
+      # post{} mutations gated — and forces every Jenkinsfile to be classified in or out of scope.
+      - name: Jenkins deploy jobs carry the permitted-commit guard before any effect
+        run: bash scripts/ci/validate-jenkins-permitted-sha-guard.sh
+
+      # ...and the guard itself is driven through every case of the rule's acceptance contract
+      # (missing / empty / short / mismatched SHA, branch advanced between queue and checkout, matching
+      # SHA on a forbidden ref, nested application checkout), plus the validator through one mutation
+      # per rule it enforces and the committed apply-before-guard fixture that must be refused.
+      - name: permitted-commit guard refuses every unpermitted case (script + validator fixtures)
+        run: python3 -m unittest -v tests.test_jenkins_permitted_sha_guard
+
       # topics.env is only the DEPLOY-TIME half of "the archive is never compacted". The other half
       # is the boot-time stamp: processing-common KafkaTopics.ensureTopic() runs
       # incrementalAlterConfigs on every service start, so a topic the deploy just set to delete is
