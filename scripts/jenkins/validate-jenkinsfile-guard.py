@@ -67,12 +67,17 @@ form; that is deliberate):
      token or acquisition, by the canonical nested guard for THAT directory with that source's OWN
      permission — Groovy `def V = sh(returnStatus: true, script: 'PERMITTED_SHA="${X_PERMITTED_SHA:-}"
      bash scripts/jenkins/permitted-sha-guard.sh --dir <dir> --ref main') if (V != 0) { error(…) }`
-     whose control blocks are a prefix of the acquisition's, or a shell line that STARTS with
+     that runs UNSKIPPABLY (every enclosing block below the stage's `steps` is a sequencing block —
+     script/dir/withEnv/… — and no return/if/else/try/catch/catchError/loop/break/continue precedes it in any of
+     them, so no later sibling step or stage consuming the source can run without it), or a shell line that STARTS with
      `PERMITTED_SHA="${X_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir <dir> --ref
      main || exit 1` at the TOP LEVEL of its `sh '''` block (not inside if/case/loop/function/group/
-     heredoc, subshell `( … )` or `$( … )`, not continued from the previous line, not prefixed by echo,
+     heredoc, subshell `( … )`, `$( … )` or backtick substitution, not after an `exit`/`exit 0` that can end
+     the shell successfully, not continued from the previous line, not prefixed by echo,
      `bash -c` or anything else, no pipe or `&` after it) of a plain `sh '''…'''` or
-     `sh X + '''…'''` step — never `sh(returnStatus: true, …)` / `returnStdout`, whose failure
+     `sh X + '''…'''` step — the WHOLE `sh(...)` argument list is read, so `returnStatus`/`returnStdout`
+     placed before OR after the script string refuses — and that sh step is itself unskippable as above; never
+     `sh(returnStatus: true, …)` / `returnStdout`, whose failure
      does not stop the build.
  10. contracts=<dir>: that directory is acquired (and therefore, by rule 9, bound) at least once.
  11. Inside every `sh '''` block, a line running permitted-sha-guard.sh ends with `|| exit 1`, and the
@@ -275,6 +280,34 @@ class Groovy:
     def in_block_comment(self, pos: int) -> bool:
         return any(s <= pos < e for s, e in self.comments)
 
+    def code_only(self, a: int, b: int) -> str:
+        """text[a:b] with every string literal (quotes included) and comment blanked."""
+        chars = list(self.text[a:b])
+        spans = [(st - len(q), en + len(q)) for q, st, en in self.strings] + list(self.comments)
+        for st, en in spans:
+            for k in range(max(a, st), min(b, en)):
+                chars[k - a] = " "
+        return re.sub(r"//[^\n]*", " ", "".join(chars))
+
+    def call_args(self, quote_start: int) -> str | None:
+        """When the string literal whose opening quote is at quote_start is an argument of `sh(...)`, the code of
+        the WHOLE parenthesised argument list with strings blanked — arguments AFTER the string included."""
+        head = self.text[max(0, quote_start - 300):quote_start]
+        m = re.search(r"\bsh\s*\((?P<pre>[^()]*)$", head)
+        if not m:
+            return None
+        open_at = quote_start - len(head) + head.index("(", m.start())
+        code = self.code_only(open_at, min(len(self.text), open_at + 50000))
+        depth = 0
+        for k, c in enumerate(code):
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return code[:k + 1]
+        return None
+
     def in_triple_string(self, pos: int) -> bool:
         return any(q in ("'''", '"""') and s <= pos < e for q, s, e in self.strings)
 
@@ -422,6 +455,8 @@ def shell_top_level(block_lines: list[str], idx: int) -> str | None:
     depth = 0
     paren = 0
     case_depth = 0
+    backtick_open = False
+    early_exit = False
     heredoc = None
     prev = ""
     for raw in block_lines[:idx]:
@@ -441,6 +476,10 @@ def shell_top_level(block_lines: list[str], idx: int) -> str | None:
                 case_depth += 1
             elif w == "esac":
                 case_depth -= 1
+        ticks = len(re.findall(r"(?<!\\)`", re.sub(r"'[^']*'", " ", s)))
+        backtick_open ^= (ticks % 2 == 1)
+        if re.search(r"(?<![\w-])exit(\s+(0|\$\S*))?\s*(;|$|\)|\}|&&|\|\|)", bare) and not re.search(r"(?<![\w-])exit\s+[1-9][0-9]*", bare):
+            early_exit = True
         if case_depth == 0:
             # a subshell — `( … )`, `$( … )`, a subshell-bodied function `f() ( … )` — runs the guard in a child
             # shell whose `exit 1` ends only that child, and its status can then be discarded (`) || true`)
@@ -454,6 +493,10 @@ def shell_top_level(block_lines: list[str], idx: int) -> str | None:
         return "it sits inside a shell if/case/loop/function/group"
     if paren != 0:
         return "it sits inside a subshell ( … ) whose exit ends only the child shell"
+    if backtick_open or "`" in re.sub(r"'[^']*'", " ", block_lines[idx]):
+        return "it sits inside a backtick command substitution whose exit ends only the child shell"
+    if early_exit:
+        return "an earlier `exit`/`exit 0` can end the shell successfully before it runs"
     if re.search(r"(\\|&&|\|\||\||\bthen|\bdo|\belse)$", prev):
         return "the previous line continues into it"
     return None
@@ -842,6 +885,35 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
 
     # 9./10. source acquisitions after the guard
     shell_blocks = [(s, e) for q, s, e in g.strings if q == "'''"]
+
+    def unskippable(pos: int) -> str | None:
+        """None when the statement at pos runs whenever its stage's steps run: every enclosing block below the
+        stage's `steps` is a sequencing block (script/dir/withEnv/…), and no return/if/try/catchError/loop/
+        break/continue precedes it inside any of them — so no later sibling step or stage can run without it.
+        Otherwise why not."""
+        anc = g.ancestors(pos)
+        steps_idx = next((k for k in range(len(anc) - 1, -1, -1) if g.blocks[anc[k]].header == "steps"), None)
+        if steps_idx is None:
+            return "it is not inside a stage's steps"
+        chain = anc[steps_idx:]
+        for n, b in enumerate(chain):
+            blk_ = g.blocks[b]
+            if n > 0 and not TRANSPARENT.match(blk_.header):
+                return f"it sits under `{blk_.header[:40]}`"
+            upto = g.blocks[chain[n + 1]].open if n + 1 < len(chain) else pos
+            code = list(g.code_only(blk_.open + 1, upto))
+            # a completed sequencing closure before it (an earlier `script {}` / `dir {}` step) cannot skip it: a
+            # `return` in there leaves only that closure. A completed if/try block CAN (its return leaves this one).
+            for kid in blk_.kids:
+                kb = g.blocks[kid]
+                if kb.open > blk_.open and kb.close < upto and TRANSPARENT.match(kb.header):
+                    for k in range(kb.open, kb.close + 1):
+                        code[k - blk_.open - 1] = " "
+            code = "".join(code)
+            hit = re.search(r"\b(return|if|else|try|catch|catchError|warnError|while|for|break|continue|switch)\b", code)
+            if hit:
+                return f"a `{hit.group(1)}` precedes it in the same block"
+        return None
     contracts_seen = False
     for i in range(g_hi, len(lines)):
         l = lines[i]
@@ -876,8 +948,11 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
                     why_not = "its shell guard is not inside a sh ''' block"
                     break
                 opener = text[text.rfind("\n", 0, blk[0] - 3) + 1:blk[0] - 3]
+                args = g.call_args(blk[0] - 3)
                 if (re.search(r"return(Status|Stdout)|catchError|warnError", opener)
-                        or not re.search(r"\bsh\s*(?:\(\s*(?:script:\s*)?)?(?:[A-Z_][A-Z0-9_]*\s*\+\s*)?$", opener)):
+                        or not re.search(r"\bsh\s*(?:\(\s*(?:script:\s*)?)?(?:[A-Z_][A-Z0-9_]*\s*\+\s*)?$", opener)
+                        or (args is not None and re.search(r"\breturn(Status|Stdout)\b", args))
+                        or ("(" in opener.split("sh", 1)[-1] and args is None)):
                     why_not = "its shell block is not a plain `sh '''…'''` / `sh X + '''…'''` whose failure stops the build (returnStatus/returnStdout discard it)"
                     break
                 blines = text[blk[0]:p].split("\n")
@@ -885,16 +960,18 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
                 if reason:
                     why_not = f"its shell guard does not run unconditionally: {reason}"
                     break
-                if not is_prefix(g.control_chain(blk[0]), acq_chain):
-                    why_not = "its shell guard sits under a control block the acquisition is not under"
+                dom = unskippable(text.rfind("\n", 0, blk[0] - 3) + 1 + len(opener) - len(opener.lstrip()))
+                if dom:
+                    why_not = f"its shell guard can be skipped while later steps still consume '{d}': {dom}"
                     break
                 rebound = True
                 break
             if lj.lstrip().startswith("def "):
                 gm = NESTED_GROOVY.match(canon(lines[j:min(j + 8, shi)]))
                 if gm and gm.group("dir") == d:
-                    if not is_prefix(g.control_chain(pos_of(j, first_code_col(j))), acq_chain):
-                        why_not = "its guard sits under a control block (if/catchError/try/closure) the acquisition is not under"
+                    dom = unskippable(pos_of(j, first_code_col(j)))
+                    if dom:
+                        why_not = f"its guard can be skipped while later steps still consume '{d}': {dom}"
                         break
                     rebound = True
                     break

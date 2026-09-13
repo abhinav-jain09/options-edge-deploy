@@ -316,6 +316,16 @@ def main() -> int:
     mut("nested guard with an alias ref", "--dir app-src --ref main", "--dir app-src --ref origin/main", "'app-src' acquired after the guard is not re-bound")
     mut("nested guard inverted", "              if (rc != 0) {\n                error(\"app checkout refused", "              if (rc == 0) {\n                error(\"app checkout refused", "'app-src' acquired after the guard is not re-bound")
     mut("nested guard never entered: if (false)", NESTED_BLOCK, "            script {\n              if (false) {\n" + NESTED_BLOCK.replace("            script {\n", "").rsplit("            }\n", 1)[0] + "              }\n            }\n", "is not re-bound")
+    mut("nested guard skipped by an early return in its script block, later sibling step builds (Codex gateway I6 / web M2)",
+        NESTED_BLOCK, NESTED_BLOCK.replace("            script {\n", "            script {\n              return\n", 1), "can be skipped while later steps still consume 'app-src'")
+    mut("nested guard after a conditional return in its script block", NESTED_BLOCK,
+        NESTED_BLOCK.replace("            script {\n", "            script {\n              if (params.APP_PERMITTED_SHA == 'skip') {\n                return\n              }\n", 1),
+        "can be skipped while later steps still consume 'app-src'")
+    mut("nested guard inside try with a catch that continues", NESTED_BLOCK,
+        "            script {\n              try {\n" + NESTED_BLOCK.replace("            script {\n", "").rsplit("            }\n", 1)[0] + "              } catch (e) {\n                echo 'ignored'\n              }\n            }\n",
+        "is not re-bound")
+    mut("nested guard in a later script block after a sibling script that returns is fine (a return leaves only its own closure)",
+        NESTED_BLOCK, "            script {\n              return\n            }\n" + NESTED_BLOCK, "carry the canonical permitted-commit guard", expect_ok=True)
     mut("nested clone re-acquired after its guard", "            sh 'docker build -t app app-src'", "            sh 'git -C app-src checkout origin/feature'\n            sh 'docker build -t app app-src'", "'app-src' acquired after the guard is not re-bound")
     # 10./11. contracts + shell form
     shell_ok = good.replace("            sh 'docker build -t app app-src'", "            sh '''\n              set -euo pipefail\n              rm -rf .deps/options-edge-contracts\n              git clone git@example:contracts.git .deps/options-edge-contracts\n              git -C .deps/options-edge-contracts checkout main\n              if [ -f x ]; then\n                echo ok\n              fi\n              PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main || exit 1\n              mvn -B -f .deps/options-edge-contracts/pom.xml install\n            '''\n            sh 'docker build -t app app-src'")
@@ -339,6 +349,18 @@ def main() -> int:
     case("shell contracts guard backgrounded", shell_ok.replace("--ref main || exit 1\n", "--ref main || exit 1 &\n"), contracts_manifest, False, "is not re-bound")
     case("shell contracts guard in an sh(returnStatus: true) block", shell_ok.replace("            sh '''\n              set -euo pipefail\n              rm -rf .deps", "            sh(returnStatus: true, script: '''\n              set -euo pipefail\n              rm -rf .deps").replace("install\n            '''\n", "install\n            ''')\n"), contracts_manifest, False, "whose failure stops the build")
     case("a balanced $( … ) before the shell guard is fine", shell_ok.replace(shell_guard, "              echo \"$(date)\"\n              x=$(printf '%s' \"(a)\")\n" + shell_guard), contracts_manifest, True)
+    case("shell contracts guard in a backtick substitution whose failure is discarded (Codex #1043 r5)",
+         shell_ok.replace(shell_guard, "              out=`\n" + shell_guard + "              ` || true\n"), contracts_manifest, False, "inside a backtick command substitution")
+    case("shell contracts guard after an early successful exit", shell_ok.replace(shell_guard, "              [ -f skip ] && exit 0\n" + shell_guard), contracts_manifest, False, "can end the shell successfully")
+    case("shell contracts guard in sh(script: ..., returnStatus: true) with the option AFTER the string (Codex gateway M2 / web M3 / processing M2)",
+         shell_ok.replace("            sh '''\n              set -euo pipefail\n              rm -rf .deps", "            sh(script: '''\n              set -euo pipefail\n              rm -rf .deps").replace("install\n            '''\n", "install\n            ''', returnStatus: true)\n"),
+         contracts_manifest, False, "whose failure stops the build")
+    case("shell contracts guard with returnStdout on a following line",
+         shell_ok.replace("            sh '''\n              set -euo pipefail\n              rm -rf .deps", "            sh(script: '''\n              set -euo pipefail\n              rm -rf .deps").replace("install\n            '''\n", "install\n            ''',\n              returnStdout: true\n            )\n"),
+         contracts_manifest, False, "whose failure stops the build")
+    case("shell contracts guard in sh(script: ..., label: ...) is fine",
+         shell_ok.replace("            sh '''\n              set -euo pipefail\n              rm -rf .deps", "            sh(script: '''\n              set -euo pipefail\n              rm -rf .deps").replace("install\n            '''\n", "install\n            ''', label: 'contracts (returnStatus: true is only text here)')\n"),
+         contracts_manifest, True)
     case("contracts re-checked-out after its guard", shell_ok.replace("              mvn -B -f .deps/options-edge-contracts/pom.xml install", "              git -C .deps/options-edge-contracts checkout origin/feature\n              mvn -B -f .deps/options-edge-contracts/pom.xml install"), contracts_manifest, False, "is not re-bound")
     case("shell block with set +e around the guard", shell_ok.replace("              set -euo pipefail\n              rm -rf", "              set +e\n              rm -rf"), contracts_manifest, False, "must not `set +e`")
     # 15. Groovy escapes
@@ -355,7 +377,7 @@ def main() -> int:
     case("--only still applies every rule", good.replace("        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n"), MANIFEST, False, "has no `when` gate", ["--only", "Jenkinsfile.fixture"])
 
     print(f"validate-jenkinsfile-guard-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 110:
+    if failed == 0 and passed >= 124:
         print("validate-jenkinsfile-guard-test: ALL PASS")
         return 0
     return 1

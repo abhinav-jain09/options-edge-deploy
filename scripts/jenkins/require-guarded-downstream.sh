@@ -63,28 +63,60 @@ case "$deadline_s" in ''|*[!0-9]*) deadline_s=120 ;; esac
 
 # with_deadline <seconds> <command...> — run a network command with an OVERALL wall-clock limit (a TCP
 # connect timeout does not bound a stalled transfer). macOS agents have no coreutils `timeout`; python3
-# (already required here) starts the command in its own session and, at the deadline, TERMs then KILLs
-# the WHOLE process group — git's ssh/https helpers included — so no orphan keeps a pipe open and a
-# command substitution around this returns. Exit 124 on the deadline, the command's status otherwise.
+# (already required here) runs the command in its own session with its OWN stdout/stderr pipes, which it copies
+# to the caller. At the deadline — or when the command exits but a descendant still holds those pipes — it sends
+# TERM then KILL to the whole process group (even after the direct child has exited, so a descendant that
+# ignores TERM dies too) and exits; the caller's pipe closes with this wrapper, never later. Exit 124 on the
+# deadline, the command's own status otherwise.
 with_deadline() {
   python3 -c '
-import os, signal, subprocess, sys
-p = subprocess.Popen(sys.argv[2:], start_new_session=True)
-try:
-    sys.exit(p.wait(timeout=float(sys.argv[1])))
-except subprocess.TimeoutExpired:
-    for sig, grace in ((signal.SIGTERM, 5), (signal.SIGKILL, 5)):
+import os, signal, subprocess, sys, threading, time
+secs, cmd = float(sys.argv[1]), sys.argv[2:]
+# The child gets its own session (so the whole group can be killed) and its OWN pipes: this wrapper copies
+# them to the caller. Descendants therefore never hold the CALLER'"'"'s stdout/stderr, and when this wrapper
+# exits the caller sees EOF — whatever a descendant still does, however it treats SIGTERM.
+p = subprocess.Popen(cmd, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def pump(src, dst):
+    for chunk in iter(lambda: src.read1(65536), b""):
+        dst.write(chunk); dst.flush()
+threads = [threading.Thread(target=pump, args=(p.stdout, sys.stdout.buffer), daemon=True),
+           threading.Thread(target=pump, args=(p.stderr, sys.stderr.buffer), daemon=True)]
+for t in threads:
+    t.start()
+end = time.monotonic() + secs
+def group_alive():
+    try:
+        os.killpg(p.pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+def kill_group():
+    # TERM, a short grace, then KILL — always to the whole GROUP, even when the direct child already exited:
+    # a descendant that ignores TERM is killed all the same.
+    for sig, grace in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 1.0)):
+        if not group_alive():
+            return
         try:
             os.killpg(p.pid, sig)
         except ProcessLookupError:
-            break
-        try:
-            p.wait(timeout=grace)
-            break
-        except subprocess.TimeoutExpired:
-            pass
-    print("require-guarded-downstream: %s did not finish within %ss" % (sys.argv[2], sys.argv[1]), file=sys.stderr)
-    sys.exit(124)
+            return
+        stop = time.monotonic() + grace
+        while time.monotonic() < stop and group_alive():
+            time.sleep(0.05)
+try:
+    rc = p.wait(timeout=max(0.0, end - time.monotonic()))
+except subprocess.TimeoutExpired:
+    kill_group()
+    for t in threads:
+        t.join(timeout=0.5)
+    print("require-guarded-downstream: %s did not finish within %ss" % (cmd[0], sys.argv[1]), file=sys.stderr)
+    os._exit(124)
+# the child finished: collect its output until EOF, but never past the deadline (a descendant may hold the pipe)
+for t in threads:
+    t.join(timeout=max(0.0, end - time.monotonic()))
+kill_group()
+sys.stdout.flush(); sys.stderr.flush()
+os._exit(rc if not any(t.is_alive() for t in threads) else 124)
 ' "$@"
 }
 
@@ -160,61 +192,91 @@ d = defs[0] if len(defs) == 1 else None
 if d is None or d.get("class") != "org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition":
     problems.append("definition is not Pipeline script from SCM (%s)" % (d.get("class") if d is not None else "%d definitions" % len(defs)))
 else:
-    extra_def = sorted({c.tag for c in d} - {"scm", "scriptPath", "lightweight"})
-    if extra_def:
-        problems.append("definition carries unexpected element(s) %r" % extra_def)
-    lw = d.find("lightweight")
-    if lw is None or (lw.text or "").strip() != "true":
-        problems.append("lightweight checkout is %r, not true — a full checkout loads the file from a fetch this check does not reproduce" % (lw.text if lw is not None else None))
+    want = os.environ["EXPECT_REPO"]
+    ok_urls = {"git@github.com:%s.git" % want, "git@github.com:%s" % want, "https://github.com/%s.git" % want,
+               "https://github.com/%s" % want, "ssh://git@github.com/%s.git" % want, "ssh://git@github.com/%s" % want}
+    ok_refspecs = {"", "+refs/heads/*:refs/remotes/origin/*", "+refs/heads/main:refs/remotes/origin/main"}
+    # The COMPLETE expected shape of <definition>, recursively: every child must be listed, each listed child
+    # appears between min and max times, leaves carry no children, and leaf text must satisfy its predicate.
+    # No first-match lookups: a second scriptPath, a second extensions, a stray element inside BranchSpec are
+    # all refused.
+    LEAF = None
+    def text_is(*allowed):
+        return lambda t: t in allowed
+    SPEC = ("definition", {
+        "scm": (1, 1, {
+            "configVersion": (0, 1, text_is("2")),
+            "userRemoteConfigs": (1, 1, {
+                "hudson.plugins.git.UserRemoteConfig": (1, 1, {
+                    "url": (1, 1, lambda t: t in ok_urls),
+                    "name": (0, 1, text_is("", "origin")),
+                    "refspec": (0, 1, lambda t: t in ok_refspecs),
+                    "credentialsId": (0, 1, lambda t: True),
+                }),
+            }),
+            "branches": (1, 1, {
+                "hudson.plugins.git.BranchSpec": (1, 1, {
+                    "name": (1, 1, text_is("*/main")),
+                }),
+            }),
+            "doGenerateSubmoduleConfigurations": (0, 1, text_is("", "false")),
+            "submoduleCfg": (0, 1, {}),
+            "extensions": (0, 1, {}),
+            "gitTool": (0, 1, text_is("Default")),
+        }),
+        "scriptPath": (1, 1, text_is(os.environ["EXPECT_SCRIPT"])),
+        "lightweight": (1, 1, text_is("true")),
+    })
+    def walk(elem, spec, path):
+        if not isinstance(spec, dict):
+            if len(list(elem)):
+                problems.append("%s must be a leaf, has %r" % (path, [c.tag for c in elem]))
+            elif not spec((elem.text or "").strip()):
+                problems.append("%s is %r (not permitted)" % (path, (elem.text or "").strip()))
+            return
+        if (elem.text or "").strip():
+            problems.append("%s carries text %r" % (path, elem.text.strip()))
+        seen = {}
+        for c in elem:
+            seen[c.tag] = seen.get(c.tag, 0) + 1
+            if c.tag not in spec:
+                problems.append("%s carries unexpected element <%s>" % (path, c.tag))
+        for tag, (lo, hi, sub) in spec.items():
+            n = seen.get(tag, 0)
+            if not lo <= n <= hi:
+                problems.append("%s must contain <%s> %s, found %d" % (path, tag, "exactly once" if lo == hi == 1 else "at most once", n))
+            for c in elem.findall(tag):
+                walk(c, sub, path + "/" + tag)
     scms = d.findall("scm")
-    scm = scms[0] if len(scms) == 1 else None
-    if scm is None or scm.get("class") != "hudson.plugins.git.GitSCM":
-        problems.append("SCM is not a single GitSCM")
-    else:
-        allowed_scm = {"configVersion", "userRemoteConfigs", "branches", "doGenerateSubmoduleConfigurations", "submoduleCfg", "extensions", "gitTool"}
-        extra_scm = sorted({c.tag for c in scm} - allowed_scm)
-        if extra_scm:
-            problems.append("SCM carries unexpected element(s) %r" % extra_scm)
-        gt = scm.find("gitTool")
-        if gt is not None and (gt.text or "").strip() not in ("Default",):
-            problems.append("gitTool is %r" % gt.text)
-        remotes = scm.findall("userRemoteConfigs/hudson.plugins.git.UserRemoteConfig")
-        urc_children = [c.tag for c in scm.findall("userRemoteConfigs/*")]
-        want = os.environ["EXPECT_REPO"]
-        ok_urls = {"git@github.com:%s.git" % want, "git@github.com:%s" % want, "https://github.com/%s.git" % want,
-                   "https://github.com/%s" % want, "ssh://git@github.com/%s.git" % want, "ssh://git@github.com/%s" % want}
-        if len(remotes) != 1 or urc_children != ["hudson.plugins.git.UserRemoteConfig"]:
-            problems.append("exactly one remote is required, found %d (%r)" % (len(remotes), urc_children))
-        else:
-            r = remotes[0]
-            extra_r = sorted({c.tag for c in r} - {"url", "name", "refspec", "credentialsId"})
-            if extra_r:
-                problems.append("remote carries unexpected element(s) %r" % extra_r)
-            urls = [u.text or "" for u in r.findall("url")]
-            if len(urls) != 1 or urls[0].strip() not in ok_urls:
-                problems.append("remote(s) %r are not exactly github.com/%s" % (urls, want))
-            names = [(n.text or "").strip() for n in r.findall("name")]
-            if len(names) > 1 or (names and names[0] not in ("", "origin")):
-                problems.append("remote name %r is not origin — */main would be resolved against another remote" % names)
-            refspecs = [(x.text or "").strip() for x in r.findall("refspec")]
-            ok_refspecs = {"", "+refs/heads/*:refs/remotes/origin/*", "+refs/heads/main:refs/remotes/origin/main"}
-            if len(refspecs) > 1 or (refspecs and refspecs[0] not in ok_refspecs):
-                problems.append("fetch refspec %r can populate refs/remotes/origin/main from something other than refs/heads/main" % refspecs)
-        branches = [b.text or "" for b in scm.findall("branches/hudson.plugins.git.BranchSpec/name")]
-        if branches != ["*/main"] or len(list(scm.findall("branches/*"))) != 1:
-            problems.append("branch spec(s) %r are not exactly [\"*/main\"]" % branches)
-        ext = scm.find("extensions")
-        if ext is not None and len(list(ext)):
+    if len(scms) == 1 and scms[0].get("class") != "hudson.plugins.git.GitSCM":
+        problems.append("SCM is not GitSCM (%s)" % scms[0].get("class"))
+    walk(d, SPEC[1], "definition")
+    # the reasons earlier rounds named, kept explicit for diagnostics
+    lw = d.findall("lightweight")
+    if len(lw) != 1 or (lw[0].text or "").strip() != "true":
+        problems.append("lightweight checkout is %r, not true — a full checkout loads the file from a fetch this check does not reproduce" % ([x.text for x in lw] if len(lw) != 1 else lw[0].text))
+    for r in d.findall("scm/userRemoteConfigs/hudson.plugins.git.UserRemoteConfig"):
+        for x in r.findall("refspec"):
+            if (x.text or "").strip() not in ok_refspecs:
+                problems.append("fetch refspec %r can populate refs/remotes/origin/main from something other than refs/heads/main" % (x.text or "").strip())
+        for x in r.findall("name"):
+            if (x.text or "").strip() not in ("", "origin"):
+                problems.append("remote name %r is not origin — */main would be resolved against another remote" % (x.text or "").strip())
+        urls = r.findall("url")
+        if len(urls) != 1 or (urls[0].text or "").strip() not in ok_urls:
+            problems.append("remote(s) %r are not exactly github.com/%s" % ([u.text for u in urls], want))
+    remotes = d.findall("scm/userRemoteConfigs/*")
+    if len(remotes) != 1:
+        problems.append("exactly one remote is required, found %d" % len(remotes))
+    branches = [x.text or "" for x in d.findall("scm/branches/hudson.plugins.git.BranchSpec/name")]
+    if branches != ["*/main"]:
+        problems.append("branch spec(s) %r are not exactly [\"*/main\"]" % branches)
+    for ext in d.findall("scm/extensions"):
+        if len(list(ext)):
             problems.append("SCM extensions %r can change what is checked out" % [e.tag for e in ext])
-        sub = scm.find("doGenerateSubmoduleConfigurations")
-        if sub is not None and (sub.text or "").strip() not in ("", "false"):
-            problems.append("submodule configuration generation is enabled")
-        sc = scm.find("submoduleCfg")
-        if sc is not None and len(list(sc)):
-            problems.append("submodule configuration is not empty")
-    sp = d.find("scriptPath")
-    if sp is None or (sp.text or "").strip() != os.environ["EXPECT_SCRIPT"]:
-        problems.append("scriptPath is %r, not %r" % (sp.text if sp is not None else None, os.environ["EXPECT_SCRIPT"]))
+    sps = [(x.text or "").strip() for x in d.findall("scriptPath")]
+    if sps != [os.environ["EXPECT_SCRIPT"]]:
+        problems.append("scriptPath is %r, not %r" % (sps if len(sps) != 1 else sps[0], os.environ["EXPECT_SCRIPT"]))
 print("; ".join(problems))
 ')" || refuse "could not judge the job configuration of '$full'"
 [ -z "$verdict" ] || refuse "'$full' does not load its Jenkinsfile from the expected SCM definition: $verdict"

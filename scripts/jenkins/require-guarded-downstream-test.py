@@ -22,6 +22,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HELPER = os.path.join(HERE, "require-guarded-downstream.sh")
@@ -357,9 +358,13 @@ def main() -> int:
          dict(remote_extra="\n          <refspec>+refs/heads/*:refs/remotes/origin/* +refs/tags/x:refs/remotes/origin/main</refspec>"), "can populate refs/remotes/origin/main"),
         ("a remote named other than origin is refused", dict(remote_extra="\n          <name>upstream</name>"), "is not origin"),
         ("a clean configuration with a heavyweight checkout is refused", dict(lightweight="<lightweight>false</lightweight>"), "lightweight checkout is 'false'"),
-        ("a configuration without the lightweight element is refused", dict(lightweight=""), "lightweight checkout is None"),
+        ("a configuration without the lightweight element is refused", dict(lightweight=""), "must contain <lightweight> exactly once, found 0"),
         ("an unknown SCM element is refused", dict(scm_extra="<browser class=\"hudson.plugins.git.browser.GithubWeb\"><url>https://x</url></browser>"), "unexpected element"),
-        ("an unknown remote element is refused", dict(remote_extra="\n          <mirror>x</mirror>"), "remote carries unexpected element"),
+        ("an unknown remote element is refused", dict(remote_extra="\n          <mirror>x</mirror>"), "UserRemoteConfig carries unexpected element <mirror>"),
+        ("a second scriptPath after the expected one is refused (Codex M4)", dict(lightweight="<lightweight>true</lightweight>\n    <scriptPath>OtherJenkinsfile</scriptPath>"), "must contain <scriptPath> exactly once, found 2"),
+        ("a second extensions element carrying PreBuildMerge is refused (Codex M4)", dict(scm_extra="<extensions><hudson.plugins.git.extensions.impl.PreBuildMerge/></extensions>"), "must contain <extensions> at most once, found 2"),
+        ("an unexpected element inside BranchSpec is refused (Codex M4)", dict(branch="*/main</name>\n          <unreviewed/>\n          <name>*/main"), "carries unexpected element <unreviewed>"),
+        ("an unexpected element inside a leaf is refused", dict(remote_extra="\n          <credentialsId>x<sub/></credentialsId>"), "must be a leaf"),
         ("a second branch spec is refused", dict(branch="*/main</name>\n        </hudson.plugins.git.BranchSpec>\n        <hudson.plugins.git.BranchSpec>\n          <name>*/main"), "are not exactly"),
     ]:
         w = world(); a = w.commit(); w.serve_child(config=config_xml(**kw))
@@ -386,13 +391,41 @@ def main() -> int:
 case "$*" in *ls-remote*) sleep 60 ;; esac
 exec '{w.real_git}' "$@"
 """)
-    import time
     t0 = time.time()
     r = w.run(["service-deploy", a, "REQUIRED_IMAGE"], extra_env={"GUARDED_DOWNSTREAM_NET_DEADLINE": "2"})
     check("a stalled git ls-remote ends in a named refusal within the deadline", r, False, "could not read the tip")
     elapsed = time.time() - t0
     check(f"... within the deadline, not the stalled command's 60 s (took {elapsed:.0f} s)", subprocess.CompletedProcess([], 0 if elapsed < 40 else 1, "", ""), True, "")
     w.close()
+
+    # a descendant that IGNORES SIGTERM and keeps the output pipe open (Codex r5 MINOR): the wrapper still ends
+    # at the deadline, the caller sees EOF, and the descendant is killed with the group
+    for label, tail in (("parent keeps running", "sleep 60"), ("parent already exited", "exit 0")):
+        w = world(); a = w.commit(); w.serve_child()
+        pidfile = os.path.join(w.tmp, "descendant.pid")
+        w._stub("git", f"""#!/usr/bin/env bash
+case "$*" in *ls-remote*)
+  ( trap '' TERM; echo $BASHPID > '{pidfile}'; while :; do sleep 1; done ) &
+  {tail} ;;
+esac
+exec '{w.real_git}' "$@"
+""")
+        t0 = time.time()
+        r = w.run(["service-deploy", a, "REQUIRED_IMAGE"], extra_env={"GUARDED_DOWNSTREAM_NET_DEADLINE": "2"})
+        elapsed = time.time() - t0
+        check(f"a TERM-ignoring descendant holding the pipe ({label}): named refusal", r, False, "could not read the tip")
+        survived = False
+        if os.path.exists(pidfile):
+            pid = int(open(pidfile).read().strip())
+            try:
+                os.kill(pid, 0)
+                survived = True
+                os.kill(pid, 9)
+            except ProcessLookupError:
+                survived = False
+        check(f"... within the deadline ({elapsed:.0f} s) and the descendant was killed ({label})",
+              subprocess.CompletedProcess([], 0 if elapsed < 30 and not survived else 1, "", ""), True, "")
+        w.close()
 
     # forwarded SHA
     w = world(); a = w.commit(); b = w.commit(jenkinsfile=CHILD_JF.replace("k8s/x.yaml", "k8s/y.yaml")); w.serve_child()
@@ -450,7 +483,7 @@ esac
     w.close()
 
     print(f"require-guarded-downstream-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 50:
+    if failed == 0 and passed >= 59:
         print("require-guarded-downstream-test: ALL PASS")
         return 0
     return 1

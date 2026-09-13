@@ -159,6 +159,8 @@ class RequireGuardedDownstreamTest(unittest.TestCase):
                      "a clean configuration with a heavyweight checkout is refused",
                      "the live service-deploy configuration (copied from the controller) is accepted",
                      "a stalled git ls-remote ends in a named refusal within the deadline",
+                     "a second scriptPath after the expected one is refused (Codex M4)",
+                     "a TERM-ignoring descendant holding the pipe (parent already exited): named refusal",
                      "child whose definition runs the guard at the forwarded tip is accepted"]:
             self.assertIn(f"ok   [{case}]", r.stdout)
 
@@ -507,6 +509,9 @@ class PermittedShaGuardValidatorTest(unittest.TestCase):
                      "shell contracts guard in a subshell whose failure is discarded (Codex #1043 r4)",
                      "check skipped by return in an earlier script block, trigger in a later one (Codex gateway r4)",
                      "check and flag in if (false) plus a duplicate flag outside (Codex web r3)",
+                     "shell contracts guard in a backtick substitution whose failure is discarded (Codex #1043 r5)",
+                     "shell contracts guard in sh(script: ..., returnStatus: true) with the option AFTER the string (Codex gateway M2 / web M3 / processing M2)",
+                     "nested guard skipped by an early return in its script block, later sibling step builds (Codex gateway I6 / web M2)",
                      "compatibility check inverted", "compatibility check status discarded", "git pull rebound by an echo",
                      "separate-agent stage without inline re-guard", "shell contracts guard || true",
                      "contracts re-checked-out after its guard", "guard version default is another hash"]:
@@ -708,6 +713,14 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
         r = subprocess.run(["python3", str(VALIDATOR), "--root", str(tmp), "--manifest", str(tmp / "scripts/ci/jenkins-permitted-sha-scope.txt"), "--only", "Jenkinsfile.service-deploy"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("is not executably protected", r.stdout)
+
+    def test_nifty_nested_guard_skipped_by_an_early_return(self) -> None:
+        # Codex gateway I6 / web M2 on a real file: the Nifty application-checkout guard returned past while the
+        # following sibling step builds and pushes that checkout.
+        old = "          def rc = sh(returnStatus: true, script: 'PERMITTED_SHA=\"${NIFTY_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir nifty-gex-src --ref main')"
+        r = self._validate_mutated("Jenkinsfile.nifty-gex-service", old, "          return\n" + old)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("can be skipped while later steps still consume 'nifty-gex-src'", r.stdout)
 
     def test_service_deploy_post_recovery_negated_with_a_space(self) -> None:
         r = self._validate_mutated("Jenkinsfile.service-deploy", "        if (env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && env.SECONDARY_PERMISSIONS_PASSED == 'PASSED' && env.EFFECT_STAGE_STARTED == 'PASSED') {",
