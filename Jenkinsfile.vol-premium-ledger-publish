@@ -34,8 +34,9 @@
 // PERMITTED COMMIT (Deployment Permission Rule): every run needs PERMITTED_SHA, the full 40-character commit id
 // of the checkout the publish must come from. The first stage fails closed unless the checked-out HEAD equals it
 // exactly AND that commit is on origin/main — this job publishes reviewed, merged artefacts only. Nothing is ever
-// substituted for a missing value: a manual click needs the SHA too. The guard is scripts/jenkins/permitted-sha-guard.sh,
-// vendored from PR #1043 so the two never diverge.
+// substituted for a missing value: a manual click needs the SHA too. The guard is the shared
+// scripts/jenkins/permitted-sha-guard.sh in its canonical stage, and every later stage is gated on its flag
+// (scripts/jenkins/validate-jenkinsfile-guard.py judges this file; scripts/ci/jenkins-permitted-sha-scope.txt).
 //
 // BEFORE THE FIRST RUN — what does not exist yet (there is no job DSL or CasC in this repo; jobs are Pipeline-
 // from-SCM items created by cloning an existing job's config.xml, docs/deploy-single-service.md):
@@ -60,8 +61,10 @@ pipeline {
       description: 'false (DEFAULT) = dry run only: the publisher validates, scans the ledger, prints PUBLISHABLE and writes nothing. true = after that same dry run passes, run the publisher again with --confirm and INSERT the row. Immutable once written.')
     string(name: 'PUBLISHED_BY', defaultValue: '',
       description: 'Recorded in the row\'s published_by (letters, digits, . _ - @ only; max 64). Empty = the publisher\'s default. Put your name here on a CONFIRM run.')
-    string(name: 'PERMITTED_SHA', defaultValue: '',
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED. The full 40-character lowercase commit id of the options-edge-deploy commit this run is permitted for. The build fails closed unless the checked-out HEAD equals it exactly and it is on origin/main.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '922f76ce5af2ff005cb6b330ceea65faf3738d1237cb7d33384c3583d9b1df9a',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',
       description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
     string(name: 'KEEP_JOBS', defaultValue: '5',
@@ -90,26 +93,41 @@ pipeline {
     KEEP_JOBS     = "${params.KEEP_JOBS}"
   }
   stages {
-    stage('Permitted commit (main only)') {
-      // The Deployment Permission Rule's guard, in the workspace the effect will come from:
-      // scripts/jenkins/permitted-sha-guard.sh — VENDORED byte for byte from PR #1043 (commit bbd35f13) under the
-      // same path, so landing #1043 makes this a no-op swap. It refuses, in this order: a workspace that is not a
-      // checkout; BRANCH_NAME and GIT_BRANCH EACH judged on its own against the literal main refs (a contradiction
-      // such as BRANCH_NAME=main with GIT_BRANCH=origin/feature is refused — one never masks the other); a HEAD not
-      // contained in origin/main as fetched NOW; a missing, empty, short, uppercase or non-hex PERMITTED_SHA (nothing
-      // is ever substituted); a HEAD that is not exactly PERMITTED_SHA. Both values are printed before either is
-      // judged. scripts/ci/vol-premium-ledger-publish-guard-test.sh drives THIS stage's block.
-      // The dry-run receipt of a PREVIOUS build is removed first, so the confirm stage can only ever see one made
-      // after this guard passed in THIS build.
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // The shared scripts/jenkins/permitted-sha-guard.sh, in the canonical stage every guarded job carries,
+    // in the workspace the effect will come from. It refuses, in this order: a guard version the job does not
+    // declare; a workspace that is not a checkout; BRANCH_NAME and GIT_BRANCH EACH judged on its own against
+    // the main refs (a contradiction such as BRANCH_NAME=main with GIT_BRANCH=origin/feature is refused); a HEAD
+    // not contained in origin/main as fetched NOW; a missing, empty, short, uppercase or non-hex PERMITTED_SHA
+    // (nothing is ever substituted); a HEAD that is not exactly PERMITTED_SHA. Both values are printed before
+    // either is judged. error(), never catchError. scripts/ci/vol-premium-ledger-publish-guard-test.sh runs the
+    // exact command of this stage through those cases.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. Nothing was validated, dry-run or published.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Clear previous dry-run receipt') {
+      // The dry-run receipt of a PREVIOUS build is removed right after the guard passed and before anything
+      // else, so the confirm stage can only ever see one made in THIS build (the wrapper also checks the
+      // receipt's build number and HEAD).
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         sh '''
           set -euo pipefail
           rm -f "${WORKSPACE}/vol-premium-ledger-dry-run.receipt"
-          bash scripts/jenkins/permitted-sha-guard.sh
         '''
       }
     }
     stage('Validate artefact') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       // The boot-time rules and the canonical content hash, recomputed from the file — before a cluster is
       // touched. The same validator gates every PR (deploy-validation.yml).
       steps {
@@ -121,7 +139,8 @@ pipeline {
       }
     }
     stage('Dry run: PUBLISHABLE?') {
-      // ALWAYS. Writes nothing; ends the build green when CONFIRM=false.
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      // ALWAYS (once the guard passed). Writes nothing; ends the build green when CONFIRM=false.
       steps {
         sh '''
           set -euo pipefail
@@ -133,7 +152,7 @@ pipeline {
     stage('Publish (--confirm)') {
       when {
         beforeAgent true
-        expression { params.CONFIRM }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.CONFIRM) }
       }
       // The wrapper re-establishes BOTH prerequisites before the effect: HEAD == PERMITTED_SHA (again), and a
       // dry-run receipt written by THIS build (BUILD_NUMBER) for THIS kind, version, hash and HEAD.

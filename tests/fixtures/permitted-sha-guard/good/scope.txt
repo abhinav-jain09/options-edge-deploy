@@ -1,0 +1,1 @@
+Jenkinsfile.fixture-good | in | | fixture: guard first, one effect after it

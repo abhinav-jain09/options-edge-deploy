@@ -206,6 +206,30 @@ jobs:
       - name: Validate docker top keeps the pid column
         run: bash scripts/ci/validate-docker-top-has-pid.sh
 
+      # Deployment Permission Rule (options-edge rule.md): "Jenkins enforces the permitted commit, not
+      # the assistant." A build queued for commit A can check out a newer B once main moves and publish
+      # or roll B before anyone can react; cancelling afterwards undoes nothing. So every deploy job
+      # takes PERMITTED_SHA and runs scripts/jenkins/permitted-sha-guard.sh BEFORE its first effect,
+      # failing closed on a missing/short/mismatched value or a non-main checkout. This holds every
+      # Jenkinsfile to that: the parameter, the guard stage, its POSITION (nothing that mutates before
+      # it), no catchError around it, restart-from-stage disabled, downstream triggers bound or marked,
+      # post{} mutations gated — and forces every Jenkinsfile to be classified in or out of scope.
+      - name: Jenkins deploy jobs carry the permitted-commit guard before any effect
+        run: bash scripts/ci/validate-jenkins-permitted-sha-guard.sh
+
+      # ...and the scripts the guards call are EXECUTED: the guard through the shell cases of the rule's
+      # acceptance contract (missing / empty / short / mismatched SHA, branch advanced between queue and
+      # checkout, forbidden ref via GIT_BRANCH, BRANCH_NAME, their contradiction, or the selected --ref,
+      # bare repository, nested checkout); the downstream compatibility check and the child image-lock
+      # fetch against a local stand-in controller; the post{} recovery gate with a sentinel kubectl and
+      # a stranded marker; the required-image binder with a stub registry. The validator runs against
+      # one mutation per rule it enforces (rc == 0, an echoed flag name, an UNBOUND annotation, a git
+      # pull after the guard, ...) and the committed apply-before-guard fixture. What this does NOT
+      # cover: Jenkins itself — parameter registration, post execution, restart behaviour, controller
+      # compilation. Those are owner activation steps (see the PR).
+      - name: permitted-commit guard scripts refuse their unpermitted cases; validator refuses its mutations
+        run: python3 -m unittest -v tests.test_jenkins_permitted_sha_guard
+
       # topics.env is only the DEPLOY-TIME half of "the archive is never compacted". The other half
       # is the boot-time stamp: processing-common KafkaTopics.ensureTopic() runs
       # incrementalAlterConfigs on every service start, so a topic the deploy just set to delete is

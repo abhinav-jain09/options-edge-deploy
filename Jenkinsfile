@@ -3,6 +3,10 @@
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '922f76ce5af2ff005cb6b330ceea65faf3738d1237cb7d33384c3583d9b1df9a',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'], description: 'Target environment')
     string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. LOCKED TO main for all environments (dev AND prod) — feature branches must be merged before deploy. The job SCM checks out this branch; enforce-main-branch.sh rejects anything but main.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '', description: 'Dev deployer kubeconfig path on the Jenkins agent (Mac, ~/.kube — like prod). Bootstrap generates it from the admin kubeconfig.')
@@ -141,8 +145,32 @@ pipeline {
     DEPLOY_DRY_RUN = "${params.DEPLOY_DRY_RUN ?: false}"
     DEPLOY_TARGET = "${params.DEPLOY_TARGET ?: 'all'}"
   }
+  options {
+    disableRestartFromStage()   // Deployment Permission Rule: no "Restart from Stage" past the permitted-commit guard
+  }
   stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the environment-branch restriction, kept as its own condition); a
+    // missing, empty, short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a
+    // checked-out HEAD that is not exactly PERMITTED_SHA. It runs FIRST, in the workspace every later
+    // stage uses, so nothing below can build, push, apply, roll, restart, create a topic or copy a file
+    // under an unpermitted commit — including a build queued for one commit that checked out a newer one.
+    // error(), never catchError: a refusal is a stop, not a coloured result. Both SHAs are in the log.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
     stage('Resolve profile') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       // Observability-only: echo the canonical deploy profile from the single source
       // of truth (@Library('oe') deploy-profiles.yaml). This stage does NOT override
       // any param defaults — the existing params already match the profile (kubeconfig
@@ -198,6 +226,7 @@ pipeline {
       }
     }
     stage('Validate') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         // The must-go-via-dev prod-promotion guard lives in the top-level
         // enforceProdPromotionGuard() method (defined after pipeline{}). Moving
@@ -210,7 +239,7 @@ pipeline {
     }
     stage('Resolve Databento Expiry') {
       when {
-        expression { return params.DEPLOY_TARGET == 'all' }
+        expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (params.DEPLOY_TARGET == 'all') }
       }
       // Placed AFTER Validate (so enforce-main-branch.sh has already blocked non-main runs)
       // and BEFORE Bootstrap Jenkins Kubernetes Guard. Resolves the latest OPRA.PILLAR
@@ -235,6 +264,7 @@ pipeline {
       }
     }
     stage('Bootstrap Jenkins Kubernetes Guard') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         sh '''
           set -euo pipefail
@@ -243,11 +273,13 @@ pipeline {
       }
     }
     stage('Render') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         sh 'kubectl kustomize k8s/overlays/${ENVIRONMENT} >"$JENKINS_WORK_DIR/options-edge-${ENVIRONMENT}.yaml"'
       }
     }
     stage('Secrets') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         script {
           // The smoke dummy-user password is OPTIONAL: if its credential is not yet
@@ -355,7 +387,7 @@ pipeline {
     // PRODUCTION ONLY: the KC manifests live only in the production overlay, so dev has no consumer — and
     // the KC credentials are bound in THIS stage's withCredentials, so dev runs never resolve them.
     stage('Keycloak Secret') {
-      when { expression { return params.ENVIRONMENT == 'production' } }
+      when { expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ENVIRONMENT == 'production') } }
       steps {
         withCredentials([
           string(credentialsId: params.KEYCLOAK_DB_PASSWORD_CREDENTIAL_ID, variable: 'KEYCLOAK_DB_PASSWORD'),
@@ -385,6 +417,7 @@ pipeline {
       }
     }
     stage('Resolve Images') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         script {
           // Image refs are built via a loop and written to an env file to source (NOT 34 inline
@@ -447,13 +480,14 @@ pipeline {
       }
     }
     stage('Image Preflight') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         sh 'bash -x scripts/deploy/image-preflight.sh'
       }
     }
     stage('Pause Runtime For Kafka Cleanup') {
       when {
-        expression { return params.DEPLOY_TARGET == 'all' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+        expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (params.DEPLOY_TARGET == 'all' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''
@@ -491,7 +525,7 @@ pipeline {
     }
     stage('Kafka Cleanup') {
       when {
-        expression { return params.DEPLOY_TARGET == 'all' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+        expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (params.DEPLOY_TARGET == 'all' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''
@@ -513,7 +547,7 @@ pipeline {
     }
     stage('Kafka Topics') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
+        expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS) }
       }
       steps {
         sh '''
@@ -540,7 +574,7 @@ pipeline {
     // in exactly the case it exists to catch. That case is not hypothetical: dev and prod both carry
     // inverted retention on topics the declaration has covered for weeks.
     stage('Declared retention overrides are set on the topics') {
-      when { expression { return !params.DEPLOY_DRY_RUN } }
+      when { expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.DEPLOY_DRY_RUN) } }
       steps {
         sh '''
           set -euo pipefail
@@ -553,7 +587,7 @@ pipeline {
     }
     stage('Kafka Internal Topics') {
       when {
-        expression { return !params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS }
+        expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.DEPLOY_DRY_RUN && !params.SKIP_KAFKA_TOPICS) }
       }
       steps {
         sh '''
@@ -583,13 +617,14 @@ pipeline {
       }
     }
     stage('Deploy') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         sh 'bash -x scripts/deploy/apply.sh'
       }
     }
     stage('Resume Remote Apps') {
       when {
-        expression { return params.DEPLOY_TARGET == 'all' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN }
+        expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (params.DEPLOY_TARGET == 'all' && params.KAFKA_CLEANUP_TOPICS && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''
@@ -602,7 +637,7 @@ pipeline {
     }
     stage('Prometheus Scrapes') {
       when {
-        expression { return env.ENVIRONMENT != 'dev' && !params.DEPLOY_DRY_RUN }
+        expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (env.ENVIRONMENT != 'dev' && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         withCredentials([string(credentialsId: 'options-edge-remote-become-password', variable: 'BECOME_PASSWORD')]) {
@@ -619,7 +654,7 @@ pipeline {
     }
     stage('Verify OptionsEdge Web App') {
       when {
-        expression { return params.DEPLOY_TARGET == 'all' && !params.DEPLOY_DRY_RUN }
+        expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (params.DEPLOY_TARGET == 'all' && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''
@@ -680,7 +715,7 @@ pipeline {
     */
     stage('Promote To Production') {
       when {
-        expression { return env.ENVIRONMENT != 'production' && !params.SKIP_PRODUCTION_PROMOTION }
+        expression { return env.PERMITTED_SHA_GUARD == 'PASSED' && (env.ENVIRONMENT != 'production' && !params.SKIP_PRODUCTION_PROMOTION) }
       }
       steps {
         // The promotion gate + downstream prod build (a CPS-heavy build job: with
@@ -783,6 +818,11 @@ void promoteToProduction() {
     wait: false,
     propagate: false,
     parameters: [
+      // Deployment Permission Rule: the production build is a deployment of its own and runs THIS
+      // job's guard again on its own checkout. The permission that covered the dev deploy names one
+      // commit; forward exactly that. If main has moved by the time the prod build checks out, its
+      // guard refuses — the newer commit was never permitted.
+      string(name: 'PERMITTED_SHA', value: params.PERMITTED_SHA),
       string(name: 'ENVIRONMENT', value: 'production'),
       string(name: 'KUBECONFIG_FILE', value: params.PROD_KUBECONFIG_FILE),
       string(name: 'KUBECONFIG_ADMIN_FILE', value: params.PROD_KUBECONFIG_ADMIN_FILE),

@@ -80,6 +80,14 @@ pipeline {
     stage('Build the production web image') {
       when { expression { params.BUILD_IMAGE } }
       steps {
+        // DISABLED under the Deployment Permission Rule: options-edge-web-deploy publishes :prod from
+        // the options-edge repository, and this job holds no permitted commit for it (it resolves
+        // SOURCE_REVISION for the tests, which is not a permission). Triggering an image publisher
+        // without one is refused. Build the image under that job's own permission, then run this job
+        // with BUILD_IMAGE=false — which attests whatever :prod holds, digest-resolved, exactly as
+        // before. Remove this refusal only when this job takes and forwards a WEB_PERMITTED_SHA and
+        // options-edge-web-deploy enforces it (scripts/jenkins/require-guarded-downstream.sh).
+        error('REFUSED: BUILD_IMAGE=true would trigger options-edge-web-deploy without a permitted commit. Build the image there under its own permission, then re-run with BUILD_IMAGE=false. Nothing was triggered.')
         // Same contract the web deploy path uses: native amd64 build on .252, pushed to :prod.
         build job: 'options-edge-web-deploy',
               parameters: [
