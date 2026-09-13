@@ -1,24 +1,27 @@
 #!/usr/bin/env bash
-# The seven vol-premium Gate-1 topics (topics.env; runbook VOL-PREMIUM-DANGER-CLOCK-RUNBOOK.md, rollout step 3),
+# The six vol-premium Gate-1 topics (topics.env; runbook VOL-PREMIUM-DANGER-CLOCK-RUNBOOK.md, rollout step 3),
 # driven through the REAL, unmodified apply-topics.sh and cleanup-topics.sh against mocked kafka CLIs — the
 # technique of apply-topics-ledger-safety-test.sh and apply-topics-strike-safety-test.sh.
 #
 #   durable (kept forever: RESET-PRESERVED, NEVER-RECREATE, retention.ms=-1 AND retention.bytes=-1):
-#     options.spx.vol-premium.{ivrv,events,warnings,baseline,calendar}
+#     options.spx.vol-premium.{ivrv,events,warnings,baseline}
 #   rebuildable: options.spx.vol-premium.current (the served last-value view), options.spx.vol-premium.dlq (diagnostics)
+#   NOT a topic: the calendar ledger (owner decision 2026-09-13) is the Postgres table vol_premium_calendar_ledger,
+#   published by Jenkinsfile.vol-premium-ledger-publish. options.spx.vol-premium.calendar is declared nowhere, so
+#   this suite does not list it: a topic of that name is UNDECLARED and the sweep deletes it like any other.
 #
 # For the dev AND the production resolution of topics.env it asserts:
 #   1. creation  — each topic is created once, at exactly 1 partition, with EXACTLY the declared config set, then
 #                  reconciled once with the same set. The expected values are written out in want_cfg below, not
 #                  read back from topics.env, so a wrong declaration cannot vouch for itself.
 #   2. reconcile — an existing topic whose every declared config has drifted ends at the declaration.
-#   3. drift     — at 4 partitions with KAFKA_RECREATE_MISMATCHED_TOPICS=false, every one of the seven stops the run
-#                  before any delete or create. With =true the five durable topics still HARD-STOP (never-recreate)
+#   3. drift     — at 4 partitions with KAFKA_RECREATE_MISMATCHED_TOPICS=false, every one of the six stops the run
+#                  before any delete or create. With =true the four durable topics still HARD-STOP (never-recreate)
 #                  and only .current and .dlq are deleted and recreated, at 1 partition with the declared config.
-#   4. cleanup   — the unwanted sweep, delete-recreate and retention shrink each spare the five durable topics, and
+#   4. cleanup   — the unwanted sweep, delete-recreate and retention shrink each spare the four durable topics, and
 #                  cleanup-topics.sh says its reset-preserved guard is what spared them. .current and .dlq are kept by
 #                  the sweep (declared) and are deleted / shrunk by the two destructive modes (approved, not preserved).
-#   5. PROTECTED_TOPIC_REGEX alone still keeps the five from the unwanted sweep when every other declaration of them
+#   5. PROTECTED_TOPIC_REGEX alone still keeps the four from the unwanted sweep when every other declaration of them
 #                  is gone (the belt-and-braces claim topics.env makes for that regex).
 #   6. the test can fail — each membership that protects a durable topic (OPTIONS_EDGE_NEVER_RECREATE_TOPICS,
 #                  OPTIONS_EDGE_RESET_PRESERVED_TOPICS, the retention.bytes override) is removed from a COPY of
@@ -64,7 +67,7 @@ if [ "${BASH_VERSINFO[0]}" -lt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${
 fi
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 P="options.spx.vol-premium"
-DURABLE="$P.ivrv $P.events $P.warnings $P.baseline $P.calendar"
+DURABLE="$P.ivrv $P.events $P.warnings $P.baseline"
 REBUILT="$P.current $P.dlq"
 ALL="$DURABLE $REBUILT"
 nw() { echo $#; }                 # the number of words in its (unquoted) arguments
@@ -377,11 +380,11 @@ mkcopy() { # <dir> — the three real scripts, byte for byte, beside a topics.en
   mkdir -p "$1" && cp "$HERE/apply-topics.sh" "$HERE/cleanup-topics.sh" "$HERE/reset-preserved-topics.sh" "$1/"
 }
 
-unit_protected() { # <env> — the seven removed from EVERY *TOPICS* declaration in a copy; the regex alone keeps five
+unit_protected() { # <env> — the six removed from EVERY *TOPICS* declaration in a copy; the regex alone keeps four
   # copy-built, isolated, exit, kept:<t> per durable topic, swept:<t> per rebuildable topic and the junk topic
   local env="$1" m d t v leaks=""; m="$(mktemp -d "$WORK/protected.XXXXXX")"; mkcopy "$m"
   if mutate "$HERE/topics.env" "$m/topics.env" '[A-Z0-9_]*TOPICS[A-Z0-9_]*' decl $ALL > "$m/mutate.out" 2>&1; then
-    ok copy-built "$env: undeclared copy built: the seven taken out of every *TOPICS* declaration ($(cat "$m/mutate.out"))"
+    ok copy-built "$env: undeclared copy built: the six taken out of every *TOPICS* declaration ($(cat "$m/mutate.out"))"
   else
     bad copy-built "$env: could not build the undeclared copy: $(cat "$m/mutate.out")"; return
   fi
@@ -392,7 +395,7 @@ unit_protected() { # <env> — the seven removed from EVERY *TOPICS* declaration
       if resolved "$m" "$v" | sed 's/[:=].*//' | grep -qxF "$t"; then leaks="$leaks $t@$v"; fi
     done
   done
-  [ -z "$leaks" ] && ok isolated "$env: in the copy none of the seven is in the declared set or the reset-preserved keep-list" \
+  [ -z "$leaks" ] && ok isolated "$env: in the copy none of the six is in the declared set or the reset-preserved keep-list" \
     || { bad isolated "$env: still declared in the copy, so this case would not isolate the regex:$leaks"; return; }
   d="$(newrun)"; cleanup_run "$d" "$m" "$env" retention true "$ALL $JUNK"
   exit_ok exit "$d" "$env undeclared sweep"
@@ -402,7 +405,7 @@ unit_protected() { # <env> — the seven removed from EVERY *TOPICS* declaration
     else bad "kept:$t" "$env: $t not deleted, but not kept as protected either"; fi
   done
   for t in $REBUILT $JUNK; do
-    deleted "$d" "$t" && ok "swept:$t" "$env: undeclared $t IS swept (the regex protects only the five)" || bad "swept:$t" "$env: undeclared $t was not swept"
+    deleted "$d" "$t" && ok "swept:$t" "$env: undeclared $t IS swept (the regex protects only the four)" || bad "swept:$t" "$env: undeclared $t was not swept"
   done
 }
 
@@ -837,10 +840,10 @@ launch() { # <title> <unit> <args...>
 }
 
 for env in dev production; do
-  launch "1. creation, ENVIRONMENT=$env: all seven absent" unit_create "$HERE" "$env"
+  launch "1. creation, ENVIRONMENT=$env: all six absent" unit_create "$HERE" "$env"
 done
 for env in dev production; do
-  launch "2. reconcile, ENVIRONMENT=$env: all seven exist with every declared config drifted" unit_reconcile "$HERE" "$env"
+  launch "2. reconcile, ENVIRONMENT=$env: all six exist with every declared config drifted" unit_reconcile "$HERE" "$env"
 done
 for env in dev production; do
   for t in $ALL; do
@@ -851,7 +854,7 @@ for env in dev production; do
   launch "4. cleanup-topics, ENVIRONMENT=$env (production with ALLOW_PROD_KAFKA_CLEANUP=true)" unit_cleanup "$HERE" "$env"
 done
 for env in dev production; do
-  launch "5. PROTECTED_TOPIC_REGEX alone, ENVIRONMENT=$env: the seven undeclared everywhere else" unit_protected "$env"
+  launch "5. PROTECTED_TOPIC_REGEX alone, ENVIRONMENT=$env: the six undeclared everywhere else" unit_protected "$env"
 done
 for t in $DURABLE; do
   launch "6. self-check: $t removed from OPTIONS_EDGE_NEVER_RECREATE_TOPICS" \

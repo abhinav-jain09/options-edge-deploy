@@ -76,6 +76,27 @@ spec:
               value: "30000"
             - name: VOL_PREMIUM_BASELINE_VERSION
               value: NONE
+            - name: VOL_PREMIUM_CALENDAR_VERSION
+              value: "2026.1"
+            - name: VOL_PREMIUM_CALENDAR_CONTENT_HASH
+              value: cf209ff9ff428428988322928b27cd625556a2bb5a28131410b4d4631ea9c347
+            - name: VOL_PREMIUM_UI_ACTIVATED
+              value: "false"
+            - name: POSTGRES_JDBC_URL
+              valueFrom:
+                configMapKeyRef:
+                  key: POSTGRES_JDBC_URL
+                  name: options-edge-config
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  key: POSTGRES_USER
+                  name: options-edge-config
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  key: POSTGRES_PASSWORD
+                  name: options-edge-runtime-secrets
             - name: JAVA_TOOL_OPTIONS
               value: -Xms128m -Xmx512m
           envFrom:

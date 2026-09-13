@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "calendarVersion": "2026.1",
+  "calendarContentHash": "9d2a92c97c5bd5d29d1d13d8e30c89bd85bd90d562be8138c2f0d1986ba09ffe",
+  "hashVersion": 1,
+  "validFromDate": "2026-01-01",
+  "validThroughDate": "2026-12-31",
+  "entries": [
+    {
+      "eventCode": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+      "instantUtcMs": 1767965400000,
+      "leadWindowMs": 600000,
+      "trailWindowMs": 900000
+    }
+  ]
+}
