@@ -15,16 +15,27 @@
 #
 # Inputs (environment): REQUIRED_IMAGE, PINNED_IMAGE, MUTABLE_IMAGE, PIN_IS_AUTHORITATIVE, and the
 # resolve_repo_digest function from pin-image.sh. Prints the reference to deploy; non-zero = refuse.
+# registry[:port]/repo from any reference shape: the digest is dropped, and a tag is dropped only when
+# the LAST path segment carries one — `registry:5000/repo@sha256:…` has a port colon and no tag, and
+# stripping at the last colon of the whole string would return the bare registry host.
+_bri_repo_of() {
+  local r="${1%%@*}" last
+  last="${r##*/}"
+  case "$last" in *:*) r="${r%:*}" ;; esac
+  printf '%s\n' "$r"
+}
+
 bind_required_image() {
   if [ -z "${REQUIRED_IMAGE:-}" ]; then
     printf '%s\n' "$PINNED_IMAGE"
     return 0
   fi
   local req_digest="${REQUIRED_IMAGE#*@}"
-  local req_repo="${REQUIRED_IMAGE%%@*}"; req_repo="${req_repo%:*}"
+  local req_repo pin_repo
+  req_repo="$(_bri_repo_of "$REQUIRED_IMAGE")"
   printf '%s' "$req_digest" | grep -Eq '^sha256:[0-9a-f]{64}$' \
     || { echo "bind_required_image: REQUIRED_IMAGE '$REQUIRED_IMAGE' carries no valid digest" >&2; return 1; }
-  local pin_repo="${PINNED_IMAGE%%@*}"; pin_repo="${pin_repo%:*}"
+  pin_repo="$(_bri_repo_of "$PINNED_IMAGE")"
   if [ "${req_repo##*/}" != "${pin_repo##*/}" ]; then
     echo "bind_required_image: REQUIRED_IMAGE repository '${req_repo##*/}' is not this service's image '${pin_repo##*/}'" >&2
     return 1

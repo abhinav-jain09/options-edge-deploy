@@ -10,6 +10,8 @@ pipeline {
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: 'a3d2b9492162a2a6c92914ab17e6df5514ae6ecaaa7988dbab61b57a36160275',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this job enforces (Deployment Permission Rule). The guard refuses to run under any other value, so this default, once registered by a run of this definition, is evidence to callers that this job executes THIS guard; a caller refuses to trigger a job whose registered default differs from its own. Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'DEPLOY_ENVIRONMENT', choices: ['prod', 'staging', 'dev'],
            description: 'Target cluster/environment.')
     string(name: 'KUBECONFIG_FILE', defaultValue: '',

@@ -17,7 +17,10 @@ trap 'rm -rf "$T"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export HOME="$T/home"; mkdir -p "$HOME"   # no user git config can leak in
 # Jenkins-shaped environment: nothing from the caller's shell may leak into the guard's verdict.
-unset PERMITTED_SHA PERMITTED_BRANCH BRANCH_NAME GIT_BRANCH 2>/dev/null || true
+unset PERMITTED_SHA PERMITTED_BRANCH BRANCH_NAME GIT_BRANCH PERMITTED_SHA_GUARD_VERSION 2>/dev/null || true
+# Every guarded job declares the guard version it enforces; the guard refuses under any other.
+VERSION="$(bash "$(dirname "$GUARD")/permitted-sha-guard-version.sh" "$GUARD")"
+export PERMITTED_SHA_GUARD_VERSION="$VERSION"
 
 # origin: main A -> B; feature: C (off A, not on main)
 git init -q -b main "$T/seed"
@@ -49,7 +52,7 @@ run() {
   fi
   # Both SHAs must be in the log on every run that got as far as resolving HEAD, permitted or refused.
   # (A non-checkout refuses before that and prints only its reason — documented in the guard.)
-  if printf '%s' "$want_msg" | grep -qF "is not a git checkout"; then echo "ok   [$name]"; pass=$((pass+1)); return; fi
+  if printf '%s' "$want_msg" | grep -qE "is not a git checkout|PERMITTED_SHA_GUARD_VERSION is not set|guard it executes disagree"; then echo "ok   [$name]"; pass=$((pass+1)); return; fi
   if ! printf '%s' "$out" | grep -qF "checked-out HEAD"; then
     echo "FAIL [$name]: checked-out HEAD line missing"; fail=$((fail+1)); return
   fi
@@ -64,6 +67,10 @@ W="$T/work"
 run "permitted A, branch main, checkout A"   0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B"
 run "permitted, Jenkins reports origin/main" 0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" GIT_BRANCH=origin/main
 run "permitted, Jenkins reports */main"      0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" GIT_BRANCH='*/main'
+# --- the declared guard version must be THIS guard: an older/newer/absent declaration refuses ------
+run "guard version unset"                    1 "PERMITTED_SHA_GUARD_VERSION is not set" "$W" PERMITTED_SHA="$B" PERMITTED_SHA_GUARD_VERSION=
+run "guard version mismatch"                 1 "declared guard version and the guard it executes disagree" "$W" PERMITTED_SHA="$B" PERMITTED_SHA_GUARD_VERSION="0000000000000000000000000000000000000000000000000000000000000000"
+run "guard version prefix refused"           1 "declared guard version and the guard it executes disagree" "$W" PERMITTED_SHA="$B" PERMITTED_SHA_GUARD_VERSION="${VERSION:0:12}"
 # --- missing / empty / invalid permission input: terminate, never substitute ---------------------
 run "PERMITTED_SHA unset"                    1 "PERMITTED_SHA is not set"     "$W"
 run "PERMITTED_SHA empty"                    1 "PERMITTED_SHA is empty"       "$W" PERMITTED_SHA=
@@ -100,8 +107,10 @@ run "--branch dev refuses a main checkout"   1 "deploys only from 'dev'"      "$
 # --- the explicitly SELECTED source ref (--ref): a feature ref pointing at a merged commit is still refused
 run "--ref feature at a merged commit"       1 "selected source ref is 'feature'" "$W" PERMITTED_SHA="$B" -- --ref feature
 run "--ref main"                             0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" -- --ref main
-run "--ref origin/main"                      0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" -- --ref origin/main
-run "--ref */main (Jenkins spelling)"        0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" -- --ref '*/main'
+run "--ref origin/main is an alias, refused" 1 "selected source ref is 'origin/main'" "$W" PERMITTED_SHA="$B" -- --ref origin/main
+run "--ref */main is an alias, refused"      1 "selected source ref is '*/main'" "$W" PERMITTED_SHA="$B" -- --ref '*/main'
+run "--ref refs/heads/main is an alias, refused" 1 "selected source ref is 'refs/heads/main'" "$W" PERMITTED_SHA="$B" -- --ref refs/heads/main
+run "--ref refs/remotes/origin/main, refused" 1 "selected source ref is 'refs/remotes/origin/main'" "$W" PERMITTED_SHA="$B" -- --ref refs/remotes/origin/main
 run "--ref refs/heads/feature"               1 "selected source ref is 'refs/heads/feature'" "$W" PERMITTED_SHA="$B" -- --ref refs/heads/feature
 # --- the branch cannot be confirmed: refuse, do not guess ------------------------------------------
 git clone -q "$T/origin.git" "$T/noremote"
@@ -130,5 +139,5 @@ set +e; out="$(cd "$W" && PERMITTED_SHA="$B" bash "$GUARD" --bogus 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ]; then echo "ok   [unknown argument]"; pass=$((pass+1)); else echo "FAIL [unknown argument]: rc=$rc"; fail=$((fail+1)); fi
 
 echo "permitted-sha-guard-test: $pass passed, $fail failed"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 41 ] && echo "permitted-sha-guard-test: ALL PASS"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 41 ]
+[ "$fail" -eq 0 ] && [ "$pass" -ge 45 ] && echo "permitted-sha-guard-test: ALL PASS"
+[ "$fail" -eq 0 ] && [ "$pass" -ge 45 ]

@@ -5,6 +5,7 @@ pipeline {
   agent { label 'fixture' }
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true, description: 'the permitted commit')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '__GUARD_VERSION__', description: 'guard version (materialised by the test)')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: true, description: 'render only')
   }
   options { disableRestartFromStage(); disableConcurrentBuilds() }

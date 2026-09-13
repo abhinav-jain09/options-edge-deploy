@@ -11,17 +11,25 @@
 # the workspace the effect will come from, so B cannot proceed under A's permission.
 #
 # Exit 0 = PERMITTED. Any other exit = REFUSED, and the Jenkinsfile must error() the build. Order:
+#   0. this script IS the version the job declares: PERMITTED_SHA_GUARD_VERSION (a parameter whose
+#      default is the sha256 of this file, registered by the job's own definition) must equal the
+#      sha256 of the running script. A caller's compatibility check reads that registered default
+#      from the child's live definition and refuses unless it equals the caller's own — so "declares
+#      the parameter" and "enforces this guard" become the same statement: only a run of a definition
+#      whose guard hashes to X can register X, and that guard refuses to run under any other X.
 #   1. the directory is a git WORKING checkout (`rev-parse --is-inside-work-tree` prints `true` — a
 #      bare repository or a .git metadata directory prints `false` and is refused) and HEAD resolves
 #      to a full commit id
 #   2. environment-branch restriction, INDEPENDENT of the SHA, three parts, all of which must hold:
 #      a. the source ref the pipeline explicitly SELECTED for this checkout, when the caller names it
 #         (--ref: PROCESSING_BRANCH, CONTRACTS_BRANCH, the `branch:` of a git step), must be the
-#         allowed branch — a feature ref is refused even when its commit is already on main;
+#         allowed branch name LITERALLY — no alias (`origin/main`, `refs/heads/main`, `*/main`) is a
+#         selection of main: the checkout machinery interprets those differently (a branch literally
+#         named `origin/main` exists as a bypass), so a selected ref is judged as the exact name;
 #      b. for the job's own workspace (no --dir): EVERY branch variable Jenkins set — BRANCH_NAME and
-#         GIT_BRANCH, each judged on its own — must name the allowed branch. One variable never
-#         masks the other: BRANCH_NAME=main with GIT_BRANCH=origin/feature is a contradiction and is
-#         refused;
+#         GIT_BRANCH, each judged on its own — must name the allowed branch (these are SCM metadata,
+#         where Jenkins's own spellings origin/<b> and */<b> are legitimate). One variable never masks
+#         the other: BRANCH_NAME=main with GIT_BRANCH=origin/feature is a contradiction and is refused;
 #      c. HEAD must be contained in origin/<branch> as fetched right now (a failed fetch refuses).
 #   3. PERMITTED_SHA is present and well-formed: exactly 40 lowercase hex characters. Unset, empty,
 #      whitespace, a short SHA, uppercase, a branch or tag name — all refused. Nothing is EVER
@@ -30,8 +38,8 @@
 #   4. HEAD == PERMITTED_SHA, byte for byte. A prefix, an ancestry test or "same branch" is not
 #      equality.
 # Once HEAD resolves (step 1), both values are printed before either is judged, so a refusal's log
-# still shows what was checked out and what was permitted. A usage error or a non-checkout refuses
-# before that and prints only its reason.
+# still shows what was checked out and what was permitted. A usage error, a version mismatch or a
+# non-checkout refuses before that and prints only its reason.
 #
 # Usage: permitted-sha-guard.sh [--dir <checkout>] [--branch <name>] [--ref <selected-ref>]
 #   --dir     guard a NESTED application checkout (e.g. nifty-gex-src, .deps/options-edge-contracts)
@@ -39,9 +47,10 @@
 #             the nested clone, so step 2b is skipped for it — pass --ref with the branch the clone
 #             selected instead. Containment and exact equality still apply. The caller supplies that
 #             source's own permitted SHA as PERMITTED_SHA.
-#   --ref     the source ref this checkout was explicitly selected from (step 2a).
+#   --ref     the source ref this checkout was explicitly selected from (step 2a; literal name).
 #   --branch  the allowed branch (default: $PERMITTED_BRANCH, default main).
-# Reads PERMITTED_SHA from the environment: Jenkins exposes the build parameter as one.
+# Reads PERMITTED_SHA and PERMITTED_SHA_GUARD_VERSION from the environment: Jenkins exposes the
+# build parameters as environment variables.
 set -euo pipefail
 
 dir="."
@@ -63,7 +72,19 @@ refuse() {
   exit 1
 }
 
-# Every spelling Jenkins or a caller uses for the allowed branch. Literal alternatives, not globs.
+# 0. The running guard is the declared version.
+self="${BASH_SOURCE[0]}"
+if command -v sha256sum >/dev/null 2>&1; then
+  own_version="$(sha256sum "$self" | cut -d' ' -f1)"
+else
+  own_version="$(shasum -a 256 "$self" | cut -d' ' -f1)"
+fi
+declared="${PERMITTED_SHA_GUARD_VERSION:-}"
+[ -n "$declared" ] || refuse "PERMITTED_SHA_GUARD_VERSION is not set: this job must declare the guard version it enforces (a string parameter whose default is the sha256 of scripts/jenkins/permitted-sha-guard.sh)"
+[ "$declared" = "$own_version" ] || refuse "PERMITTED_SHA_GUARD_VERSION is '$declared' but the running guard is $own_version — the job's declared guard version and the guard it executes disagree; nothing may deploy under a guard the declaration does not describe"
+echo "permitted-sha-guard: version           = $own_version (declared and running agree)"
+
+# SCM-metadata spellings of the allowed branch (step 2b). Literal alternatives, not globs.
 names_allowed_branch() {
   case "$1" in
     "$branch"|"origin/$branch"|"*/$branch"|"refs/heads/$branch"|"refs/remotes/origin/$branch") return 0 ;;
@@ -91,10 +112,10 @@ else
 fi
 
 # 2. Environment-branch restriction — its own condition, judged FIRST and never satisfied by the SHA.
-# 2a. the explicitly selected source ref
+# 2a. the explicitly selected source ref: the literal branch name, nothing else.
 if [ -n "$ref" ]; then
-  names_allowed_branch "$ref" \
-    || refuse "selected source ref is '$ref'; this job deploys only from '$branch' (Tiered Environment-Branch Deployment Rule) — a ref that merely points at a merged commit is still not '$branch'"
+  [ "$ref" = "$branch" ] \
+    || refuse "selected source ref is '$ref'; this job deploys only from '$branch', selected by that exact name (Tiered Environment-Branch Deployment Rule) — an alias, a remote-tracking spelling or a ref that merely points at a merged commit is not a selection of '$branch'"
   echo "permitted-sha-guard: selected ref      = $ref (allowed)"
 fi
 # 2b. the job's own SCM metadata: every variable that is set must agree; a contradiction is refused.
@@ -136,4 +157,4 @@ fi
 [ "$head_sha" = "$p" ] \
   || refuse "checked-out HEAD $head_sha is not the permitted commit $p — the branch moved past the permitted commit, or the permission is for a different one; nothing may deploy under it"
 
-echo "permitted-sha-guard: verdict=PERMITTED — checked-out $head_sha == permitted $p, on origin/$branch"
+echo "permitted-sha-guard: verdict=PERMITTED — checked-out $head_sha == permitted $p, on origin/$branch, guard $own_version"
