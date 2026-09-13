@@ -15,6 +15,12 @@
 #   date grammar loosened      t21 (hour 24), t17 (a fraction after minutes), t54 (a year outside 0000..9999, declaring
 #                              the hash an UNBOUNDED port would compute — the contract refuses that date whatever it declares)
 #   number length unbounded    n40 (a 1001-digit token)
+#   epoch-day era off by one   t55 (-719528 is 0000-01-01, correctly hashed: the round-3 era formula hashed 0000-01-02)
+#                              and t56 (-719529 is -0001-12-31, declaring 0000-01-01's hash: that formula accepted it)
+#   minus-zero year accepted   t74 / t75 ("-0000-01-01", "-00000-01-01" with year 0000's hash: int() erases the sign)
+#   supplementary digits       s19 ("\ud835\udfce", MATHEMATICAL BOLD DIGIT ZERO, with the zero-window hash:
+#                              Long.parseLong walks UTF-16 chars, a surrogate is not a digit)
+#   '+' year widths            t82 ("+0000002026-01-01", ten digits, accepted) and t78 ("+0000-01-01", refused)
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 SRC="$PWD"
@@ -73,6 +79,13 @@ reset_copy; mutate 'if hh > 23 or mi > 59 or ss > 59' 'if hh > 24 or mi > 59 or 
 reset_copy; mutate_literal '(?::([0-9]{2})(?:\.([0-9]{0,9}))?)?", body)' '(?::([0-9]{2}))?(?:\.([0-9]{0,9}))?", body)'; expect "fraction admitted after minutes" red t17-datetime-fraction-after-minutes
 reset_copy; mutate 'digits = sum\(c in "0123456789" for c in text\)' 'digits = 0';                  expect "number-length constraint removed" red n40-schemaversion-token-exactly-1000-plus-one-digit
 reset_copy; mutate 'if not \(0 <= ymd\[0\] <= 9999\):' 'if False:';                                 expect "date year bound removed" red t54-date-five-digit-year-hash-of-unbounded-port
+reset_copy; mutate 'era = z // 146097' 'era = (z if z >= 0 else z - 146096) // 146097';            expect "epoch-day era: truncating-division adjustment on a floor (round 3)" red t55-epoch-day-0000-01-01
+reset_copy; mutate 'era = z // 146097' 'era = (z if z >= 0 else z - 146096) // 146097';            expect "epoch-day era: the same mutation accepts -0001-12-31" red t56-epoch-day-minus-0001-12-31-hash-of-0000-01-01
+reset_copy; mutate 'if not m or \(m.group\(1\)\[0\] == "-" and int\(m.group\(1\)\) == 0\):' 'if not m:'; expect "minus-zero year accepted" red t74-date-minus-0000-year-hash-of-year-zero
+reset_copy; mutate 'if not m or \(m.group\(1\)\[0\] == "-" and int\(m.group\(1\)\) == 0\):' 'if not m:'; expect "minus-zero five-digit year accepted" red t75-date-minus-00000-year-hash-of-year-zero
+reset_copy; mutate 'return ord\(c\) <= 0xFFFF and unicodedata.category\(c\) == "Nd"' 'return unicodedata.category(c) == "Nd"'; expect "supplementary-plane digits accepted" red s19-lead-math-bold-zero-supplementary
+reset_copy; mutate_literal '\+[0-9]{5,10}|' '\+[0-9]{5,9}|';                                           expect "ten-digit '+' year refused" red t82-date-plus-ten-digit-padded-2026
+reset_copy; mutate_literal '\+[0-9]{5,10}|' '\+[0-9]{4,10}|';                                          expect "four-digit '+' year accepted" red t78-date-plus-0000-year
 
 [ "$fail" -eq 0 ] && { echo "=== validate-vol-premium-calendar-mutation-test: OK ==="; exit 0; }
 echo "=== validate-vol-premium-calendar-mutation-test: FAILED ==="; exit 1

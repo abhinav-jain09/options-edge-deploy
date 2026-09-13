@@ -132,6 +132,14 @@ s15-lead-minus-arabic-zero	OK	165db9e27578597bad686609447a50da169b09b7ce4418b09e
 s16-lead-mixed-digit-scripts	OK	122cb0e067b084fff3d8348eca8badc2242ee9d48d3ddfa6bfa31aaa13d4e297
 s17-lead-superscript-two	REJECT	InvalidFormatException: Cannot deserialize value of type `long` from String "²": not a valid `long` value
 s18-lead-arabic-digits-nbsp	REJECT	InvalidFormatException: Cannot deserialize value of type `long` from String "٠ ": not a valid `long` value
+s19-lead-math-bold-zero-supplementary	REJECT	InvalidFormatException: Cannot deserialize value of type `long` from String "𝟎": not a valid `long` value
+s20-lead-osmanya-zero-supplementary	REJECT	InvalidFormatException: Cannot deserialize value of type `long` from String "𐒠": not a valid `long` value
+s21-lead-minus-math-bold-zero	REJECT	InvalidFormatException: Cannot deserialize value of type `long` from String "-𝟎": not a valid `long` value
+s22-lead-bmp-digits-then-supplementary	REJECT	InvalidFormatException: Cannot deserialize value of type `long` from String "٦𝟎𝟎𝟎𝟎𝟎": not a valid `long` value
+s23-schema-math-bold-one-supplementary	REJECT	InvalidFormatException: Cannot deserialize value of type `int` from String "𝟏": not a valid `int` value
+s24-lead-nko-zero-bmp	OK	165db9e27578597bad686609447a50da169b09b7ce4418b09e2c7b0f052713b4
+s25-schema-arabic-indic-one-bmp	OK	122cb0e067b084fff3d8348eca8badc2242ee9d48d3ddfa6bfa31aaa13d4e297
+s26-lead-vai-digits-600000-bmp	OK	122cb0e067b084fff3d8348eca8badc2242ee9d48d3ddfa6bfa31aaa13d4e297
 t01-date-padded-spaces	OK	122cb0e067b084fff3d8348eca8badc2242ee9d48d3ddfa6bfa31aaa13d4e297
 t02-date-with-time	OK	122cb0e067b084fff3d8348eca8badc2242ee9d48d3ddfa6bfa31aaa13d4e297
 t03-date-with-time-zulu	OK	122cb0e067b084fff3d8348eca8badc2242ee9d48d3ddfa6bfa31aaa13d4e297
@@ -186,3 +194,37 @@ t51-date-tab-inside	REJECT	InvalidFormatException: Cannot deserialize value of t
 t52-datetime-T-at-index-10-only	REJECT	InvalidFormatException: Cannot deserialize value of type `java.time.LocalDate` from String "2026-01-01TT00:00": Failed to deserialize java.time.LocalDate: (java.time.format.DateTimePar…
 t53-date-trailing-T	REJECT	InvalidFormatException: Cannot deserialize value of type `java.time.LocalDate` from String "2026-01-01T": Failed to deserialize java.time.LocalDate: (java.time.format.DateTimeParseExce…
 t54-date-five-digit-year-hash-of-unbounded-port	REJECT	ValueInstantiationException: Cannot construct instance of `com.optionsedge.contracts.volpremium.CalendarArtifact`, problem: date year 12026 is outside 0000..9999 and has no yyyy-MM-dd form
+t55-epoch-day-0000-01-01	OK	d359c7bcf54ba2642969d8bd6ba18744a196d21203c45cbd819de6c25e341060
+t56-epoch-day-minus-0001-12-31-hash-of-0000-01-01	REJECT	ValueInstantiationException: Cannot construct instance of `com.optionsedge.contracts.volpremium.CalendarArtifact`, problem: date year -1 is outside 0000..9999 and has no yyyy-MM-dd form
+t57-epoch-day-0000-02-28	OK	1f47d1ea474087390174fb5f0887389199737c45be12c6a6dcedd6e9a27498a3
+t58-epoch-day-0000-02-29-leap-day	OK	1144f135d985e3ad193195a94e607ac40854966f72735ff217c8f6c45b2d9bc8
+t59-epoch-day-0000-03-01	OK	b3259c440a84b314d11dc77fb40635f187b3660bfd0daabe662c8870cc91f226
+t60-epoch-day-0000-12-31	OK	bbf68551cb7158c7d7f2d3ca4def82bde9d9abef65d9d086534ada246f0c6f16
+t61-epoch-day-0001-01-01	OK	0d9dd21522fd72448396d2aedfc7685e96fd819405e911c3369bbf2ef5af6552
+t62-epoch-day-0004-02-29	OK	57dc5cf6e253ffed22e267e224b6392963dde9def9d3e8fb26773ee444f4f74f
+t63-epoch-day-1600-02-29	OK	62a65d3ba2ef3a3f93a4b1d99c1039c7141283867999af4fcee4405a31b7c74d
+t64-epoch-day-1700-03-01	OK	8d9cbd4ad2cdfd3db0ea8f05aa4164da5d8b13248366c01f3c97a6acaace367b
+t65-epoch-day-1968-02-29	OK	a5ba9d998c73d2fbe7bab253892a9d4524c7895506fd9c86b430f3af0d1be188
+t66-epoch-day-1969-12-31	OK	dc5b2cf6236a2ab4710f02f27dcabf20784cd3148038b411d3ddf308cd5afc2f
+t67-epoch-day-minus-0001-01-01	REJECT	ValueInstantiationException: Cannot construct instance of `com.optionsedge.contracts.volpremium.CalendarArtifact`, problem: date year -1 is outside 0000..9999 and has no yyyy-MM-dd form
+t68-epoch-day-minus-0001-03-01	REJECT	ValueInstantiationException: Cannot construct instance of `com.optionsedge.contracts.volpremium.CalendarArtifact`, problem: date year -1 is outside 0000..9999 and has no yyyy-MM-dd form
+t69-through-epoch-day-0000-02-29	OK	600fc558be0d3311757c4d5f939cee8714645ed159ca8483eb4af3d4846be2ef
+t70-through-epoch-day-0000-01-01-from-equal	OK	62708b4be95ed1a7c63d0e83f3c2e339d12ad0096499fea0b487aeddbe386f6c
+t71-epoch-day-localdate-min	REJECT	ValueInstantiationException: Cannot construct instance of `com.optionsedge.contracts.volpremium.CalendarArtifact`, problem: date year -999999999 is outside 0000..9999 and has no yyyy-MM-dd …
+t72-epoch-day-below-localdate-min	REJECT	JsonMappingException: Invalid value for EpochDay (valid values -365243219162 - 365241780471): -365243219163 (through reference chain: com.optionsedge.contracts.volpremium.CalendarArt…
+t73-epoch-day-long-underflow	REJECT	JsonMappingException: Numeric value (-9223372036854775809) out of range of long (-9223372036854775808 - 9223372036854775807)
+t74-date-minus-0000-year-hash-of-year-zero	REJECT	InvalidFormatException: Cannot deserialize value of type `java.time.LocalDate` from String "-0000-01-01": Failed to deserialize java.time.LocalDate: (java.time.format.DateTimeParseExce…
+t75-date-minus-00000-year-hash-of-year-zero	REJECT	InvalidFormatException: Cannot deserialize value of type `java.time.LocalDate` from String "-00000-01-01": Failed to deserialize java.time.LocalDate: (java.time.format.DateTimeParseExc…
+t76-date-minus-nine-zero-year-hash-of-year-zero	REJECT	InvalidFormatException: Cannot deserialize value of type `java.time.LocalDate` from String "-000000000-01-01": Failed to deserialize java.time.LocalDate: (java.time.format.DateTimePars…
+t77-date-minus-ten-zero-year-hash-of-year-zero	REJECT	InvalidFormatException: Cannot deserialize value of type `java.time.LocalDate` from String "-0000000000-01-01": Failed to deserialize java.time.LocalDate: (java.time.format.DateTimePar…
+t78-date-plus-0000-year	REJECT	InvalidFormatException: Cannot deserialize value of type `java.time.LocalDate` from String "+0000-01-01": Failed to deserialize java.time.LocalDate: (java.time.format.DateTimeParseExce…
+t79-date-plus-00000-year-zero	OK	d359c7bcf54ba2642969d8bd6ba18744a196d21203c45cbd819de6c25e341060
+t80-date-plus-00000-feb-29	OK	1144f135d985e3ad193195a94e607ac40854966f72735ff217c8f6c45b2d9bc8
+t81-date-minus-0001-four-digits	REJECT	ValueInstantiationException: Cannot construct instance of `com.optionsedge.contracts.volpremium.CalendarArtifact`, problem: date year -1 is outside 0000..9999 and has no yyyy-MM-dd form
+t82-date-plus-ten-digit-padded-2026	OK	122cb0e067b084fff3d8348eca8badc2242ee9d48d3ddfa6bfa31aaa13d4e297
+t83-date-plus-eleven-digit-padded-2026	REJECT	InvalidFormatException: Cannot deserialize value of type `java.time.LocalDate` from String "+00000002026-01-01": Failed to deserialize java.time.LocalDate: (java.time.format.DateTimePa…
+t84-date-plus-year-1000000000	REJECT	InvalidFormatException: Cannot deserialize value of type `java.time.LocalDate` from String "+1000000000-01-01": Failed to deserialize java.time.LocalDate: (java.time.format.DateTimePar…
+t85-date-minus-ten-digit-year-zero-padded-1	REJECT	ValueInstantiationException: Cannot construct instance of `com.optionsedge.contracts.volpremium.CalendarArtifact`, problem: date year -1 is outside 0000..9999 and has no yyyy-MM-dd form
+t86-date-year-0000-feb-29	OK	1144f135d985e3ad193195a94e607ac40854966f72735ff217c8f6c45b2d9bc8
+t87-date-array-year-0000-feb-29	OK	1144f135d985e3ad193195a94e607ac40854966f72735ff217c8f6c45b2d9bc8
+t88-date-minus-0000-feb-29-hash-of-0000-02-29	REJECT	InvalidFormatException: Cannot deserialize value of type `java.time.LocalDate` from String "-0000-02-29": Failed to deserialize java.time.LocalDate: (java.time.format.DateTimeParseExce…

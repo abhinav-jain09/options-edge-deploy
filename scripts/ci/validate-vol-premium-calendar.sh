@@ -128,6 +128,13 @@ def j_record(v, what, known, coerce):
             instantiated = True
     return values
 
+def java_char_digit(c):
+    """Character.digit(char, 10) >= 0. Integer/Long.parseLong walk UTF-16 CHARS: a supplementary-plane digit
+    (U+1D7CE MATHEMATICAL BOLD DIGIT ZERO, U+104A0 OSMANYA DIGIT ZERO) is two surrogate chars, neither a digit,
+    so it is refused (s19-s22). In the BMP, Character.digit(char, 10) is exactly the Nd category with the same
+    values — checked over all 65536 chars against Java 21 for unicodedata 14.0/15.0/16.0 (Python 3.11/3.12/3.14)."""
+    return ord(c) <= 0xFFFF and unicodedata.category(c) == "Nd"
+
 def java_trim(s):
     """String.trim(): strips only characters <= U+0020 — NBSP, EM SPACE and the rest of Unicode stay (s04/s05)."""
     i, j = 0, len(s)
@@ -155,8 +162,8 @@ def j_primitive_number(v, name, lo, hi):
         s = java_trim(v)
         if s == "" or s == "null":                   # a blank or the text "null" is null, and null is the default 0 (s01-s03)
             n = 0
-        elif re.fullmatch(r"[+-]?\d+", s) and all(unicodedata.category(c) == "Nd" for c in s.lstrip("+-")):
-            n = int(s)                               # Long.parseLong: sign, then Character.digit() digits of ANY script (s13-s16)
+        elif (body := s[1:] if s[:1] in ("+", "-") else s) and all(java_char_digit(c) for c in body):
+            n = int(s)                               # Long.parseLong: sign, then Character.digit(char) digits of any BMP script (s13-s16, s19-s22)
         else:
             raise Reject(f"InvalidFormatException: {name} from String {v!r} is not a valid int value")
     else:
@@ -184,9 +191,13 @@ def valid_ymd(y, m, d):
     if not (1 <= m <= 12) or d < 1: return False
     return d <= [31, 29 if is_leap(y) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
 def ymd_from_epoch_day(z):
-    """LocalDate.ofEpochDay: proleptic Gregorian (Howard Hinnant's civil_from_days)."""
+    """LocalDate.ofEpochDay: proleptic Gregorian (Howard Hinnant's civil_from_days). Python's // already FLOORS, so
+    the era is z // 146097 — Hinnant's (z - 146096) adjustment is for C's truncating division and, applied on top
+    of a floor, shifted every date before 0000-03-01 (round 4: -719528 is 0000-01-01, -719529 is -0001-12-31;
+    vectors t55-t72). Checked against java.time.LocalDate.ofEpochDay for every day from -720500 to 2933000
+    (years -3..10000) and every 99991st day across LocalDate's whole range: no difference."""
     z += 719468
-    era = (z if z >= 0 else z - 146096) // 146097
+    era = z // 146097
     doe = z - era * 146097
     yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
     y = yoe + era * 400
@@ -198,13 +209,15 @@ def ymd_from_epoch_day(z):
 def iso_date(ymd): return "%04d-%02d-%02d" % ymd
 
 def j_local_date(v, name):
-    """jackson-datatype-jsr310 2.18.2 LocalDateDeserializer, as its source reads and the vectors measure (t01-t53):
+    """jackson-datatype-jsr310 2.18.2 LocalDateDeserializer, as its source reads and the vectors measure (t01-t88):
       * a string is String.trim()med; empty -> null;
       * length > 10 with 'T' at index 10: a trailing 'Z' is REMOVED (not parsed as an instant — so "T00:00Z" is
         fine and any other offset is not), then ISO_LOCAL_DATE_TIME: yyyy-MM-dd'T'HH:mm[:ss[.fraction 0-9 digits]] —
         a fraction only AFTER seconds, hours 00-23, minutes and seconds 00-59, ASCII digits, and the date resolved
         STRICT (no Feb 29 in 2026); the date part is kept;
-      * otherwise LocalDate.parse (ISO_LOCAL_DATE): an unsigned 4-digit year, or a SIGNED 5-9 digit one;
+      * otherwise LocalDate.parse (ISO_LOCAL_DATE, year = appendValue(YEAR, 4, 10, EXCEEDS_PAD), strict): an
+        unsigned 4-digit year; '+' only with 5-10 digits; '-' with 4-10 digits but never a zero value ("-0000",
+        "-00000": minus zero is refused at index 0); the year within +-999,999,999; ASCII digits only;
       * an integer number is an epoch day (LocalDate.ofEpochDay); a float, a string of digits, an ISO week or
         ordinal date, a lowercase 't'/'z', an internal or non-ASCII space are refused;
       * an int array is [y, m, d].
@@ -230,11 +243,11 @@ def j_local_date(v, name):
             if hh > 23 or mi > 59 or ss > 59 or not valid_ymd(y, mo, d):
                 raise Reject(f"InvalidFormatException: LocalDate {name} from {v!r}: out of range")
             return (y, mo, d)
-        m = re.fullmatch(r"([0-9]{4}|[+-][0-9]{5,9})-([0-9]{2})-([0-9]{2})", t)
-        if not m:
+        m = re.fullmatch(r"([0-9]{4}|\+[0-9]{5,10}|-[0-9]{4,10})-([0-9]{2})-([0-9]{2})", t)
+        if not m or (m.group(1)[0] == "-" and int(m.group(1)) == 0):   # int() would have erased the minus of "-0000"
             raise Reject(f"InvalidFormatException: LocalDate {name} from {v!r}: not an ISO local date")
         y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if not valid_ymd(y, mo, d):
+        if not (-999_999_999 <= y <= 999_999_999) or not valid_ymd(y, mo, d):
             raise Reject(f"InvalidFormatException: LocalDate {name} from {v!r}: invalid date")
         return (y, mo, d)
     if isinstance(v, list):
