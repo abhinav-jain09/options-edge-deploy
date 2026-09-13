@@ -19,8 +19,8 @@ pipeline {
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
-    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: 'a3d2b9492162a2a6c92914ab17e6df5514ae6ecaaa7988dbab61b57a36160275',
-      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this job enforces (Deployment Permission Rule). The guard refuses to run under any other value, so this default, once registered by a run of this definition, is evidence to callers that this job executes THIS guard; a caller refuses to trigger a job whose registered default differs from its own. Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '922f76ce5af2ff005cb6b330ceea65faf3738d1237cb7d33384c3583d9b1df9a',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production', 'experiment'],
       description: 'Target environment — selects k8s/infra/overlays/<env> and the deployer kubeconfig (oeProfile).')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: true,
@@ -67,7 +67,7 @@ pipeline {
     // an infra deploy is a natural moment to notice that the public workload has been scaled up
     // without evidence. Cheap, and it fails the same way.
     stage('Public gate (PGL-072, secondary)') {
-      when { expression { params.ENVIRONMENT == 'production' } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ENVIRONMENT == 'production') } }
       steps {
         sh '''
           set -euo pipefail
@@ -76,6 +76,7 @@ pipeline {
       }
     }
     stage('Render + Diff (always)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         sh '''
           set -euo pipefail
@@ -86,12 +87,7 @@ pipeline {
       }
     }
     stage('Approve production infra change') {
-      when {
-        allOf {
-          expression { params.ENVIRONMENT == 'production' }
-          expression { !params.DEPLOY_DRY_RUN }
-        }
-      }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && ((params.ENVIRONMENT == 'production') && (!params.DEPLOY_DRY_RUN)) } }
       steps {
         // §13.8: manual approval for prod infra changes. The diff is in the stage above.
         input message: "Apply the rendered infra changes to PRODUCTION? Review the 'Render + Diff' stage log first.",
@@ -99,7 +95,7 @@ pipeline {
       }
     }
     stage('Apply') {
-      when { expression { !params.DEPLOY_DRY_RUN } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.DEPLOY_DRY_RUN) } }
       steps {
         sh '''
           set -euo pipefail
@@ -110,13 +106,7 @@ pipeline {
     // Skipping realm reconciliation is ANNOUNCED, not silent: a build that quietly omitted it would
     // look identical to one that performed it.
     stage('WARN: realm reconciliation skipped') {
-      when {
-        allOf {
-          expression { params.ENVIRONMENT == 'production' }
-          expression { !params.DEPLOY_DRY_RUN }
-          expression { !params.RECONCILE_REALM }
-        }
-      }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && ((params.ENVIRONMENT == 'production') && (!params.DEPLOY_DRY_RUN) && (!params.RECONCILE_REALM)) } }
       steps {
         script {
           unstable('RECONCILE_REALM=false: the public realm was NOT reconciled. Its login settings, ' +
@@ -132,13 +122,7 @@ pipeline {
     // drifted into the default composite (PGL-031A/PGL-031B). It FAILS THE BUILD on drift it cannot
     // correct.
     stage('Reconcile public realm') {
-      when {
-        allOf {
-          expression { params.ENVIRONMENT == 'production' }
-          expression { !params.DEPLOY_DRY_RUN }
-          expression { params.RECONCILE_REALM }
-        }
-      }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && ((params.ENVIRONMENT == 'production') && (!params.DEPLOY_DRY_RUN) && (params.RECONCILE_REALM)) } }
       steps {
         withCredentials([
           string(credentialsId: 'bo-keycloak-reconciler-secret', variable: 'KC_ADMIN_SECRET'),

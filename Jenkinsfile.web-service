@@ -26,8 +26,8 @@ pipeline {
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`. NOTE: this binds the manifests and scripts deployed from this repository; the web IMAGE is built by options-edge-web-deploy (repo options-edge), which carries no guard yet — see the Build stage.')
-    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: 'a3d2b9492162a2a6c92914ab17e6df5514ae6ecaaa7988dbab61b57a36160275',
-      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this job enforces (Deployment Permission Rule). The guard refuses to run under any other value, so this default, once registered by a run of this definition, is evidence to callers that this job executes THIS guard; a caller refuses to trigger a job whose registered default differs from its own. Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '922f76ce5af2ff005cb6b330ceea65faf3738d1237cb7d33384c3583d9b1df9a',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production', 'experiment'],
       description: 'Target environment — selects k8s/services/web/overlays/<env> and the deployer kubeconfig (oeProfile).')
     booleanParam(name: 'BUILD_IMAGE', defaultValue: false,
@@ -95,6 +95,7 @@ pipeline {
       }
     }
     stage('Validate service registry') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       // Own agent = own fresh `checkout scm` of the same build revision; pure gate,
       // nothing later stages consume.
       agent { label VALIDATE_AGENT_LABEL }
@@ -117,9 +118,11 @@ pipeline {
     // Everything below needs the deploy host (kubeconfigs, kubectl, the chained build's
     // digest-pin flow) — one agent, one workspace. Bodies unchanged.
     stage('Deploy path') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       agent { label 'hpsf-replay-mac' }
       stages {
     stage('Permitted commit guard (deploy workspace)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       // Re-established HERE, in the workspace the deploy stages read manifests and scripts from.
       // The first guard ran on its own agent allocation; a checkout is bound across allocations
       // only by Jenkins's revision pinning, so the same guard runs again right before the first
@@ -137,6 +140,7 @@ pipeline {
       }
     }
     stage('Resolve profile') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' } }
       steps {
         script {
           def p = oeProfile(params.ENVIRONMENT)
@@ -147,7 +151,7 @@ pipeline {
       }
     }
     stage('Build web image (native)') {
-      when { expression { params.BUILD_IMAGE && !params.DEPLOY_DRY_RUN } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.BUILD_IMAGE && !params.DEPLOY_DRY_RUN) } }
       steps {
         // Same contract as the bring-up-all Web stage: native build on the target
         // machine, push to the env registry's mutable :dev tag; the Deploy stage
@@ -164,9 +168,14 @@ pipeline {
           if (!wsha.matches('^[0-9a-f]{40}$')) {
             error("BUILD_IMAGE=true needs WEB_PERMITTED_SHA: the full 40-character options-edge commit permitted for this web image build (got '${wsha}'). Nothing was triggered.")
           }
-          def compat = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh options-edge-web-deploy')
+          // The child's definition, not its declaration: its job configuration (Pipeline from SCM,
+          // options-edge */main, Jenkinsfile), WEB_PERMITTED_SHA as main's tip, and the Jenkinsfile at
+          // that commit judged by this repository's validator with its guard hashing to ours
+          // (scripts/jenkins/require-guarded-downstream.sh). Same stage as the trigger, under no
+          // condition the trigger is not under.
+          def compat = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh options-edge-web-deploy "${WEB_PERMITTED_SHA:?}"')
           if (compat != 0) {
-            error("options-edge-web-deploy does not enforce PERMITTED_SHA yet (rc=${compat}) — not triggering an unguarded image build. Build the image under that job's own permission once it carries the guard, or deploy an existing image with BUILD_IMAGE=false. Nothing was triggered.")
+            error("options-edge-web-deploy's definition at WEB_PERMITTED_SHA could not be confirmed to run the permitted-commit guard (rc=${compat}) — not triggering it. Deploy an existing image with BUILD_IMAGE=false, or fix the child first. Nothing was triggered.")
           }
         }
         script {
@@ -212,6 +221,7 @@ pipeline {
       }
     }
     stage('Deploy (service-scoped)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' } }
       steps {
         sh '''
           set -euo pipefail

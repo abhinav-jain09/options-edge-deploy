@@ -37,8 +37,8 @@ pipeline {
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`. It binds the manifests/overlays/scripts deployed from this repository; the IMAGE is bound by digest at deploy time and, when BUILD_IMAGES=true, by PROCESSING_PERMITTED_SHA in the image job.')
-    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: 'a3d2b9492162a2a6c92914ab17e6df5514ae6ecaaa7988dbab61b57a36160275',
-      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this job enforces (Deployment Permission Rule). The guard refuses to run under any other value, so this default, once registered by a run of this definition, is evidence to callers that this job executes THIS guard; a caller refuses to trigger a job whose registered default differs from its own. Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '922f76ce5af2ff005cb6b330ceea65faf3738d1237cb7d33384c3583d9b1df9a',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     string(name: 'INTENT_ID', defaultValue: '',
       description: 'Optional idempotency key (0DTE pipeline automation). Empty = normal manual build. With a value: at most ONE build per intent ever reaches the deploy stages — a second submission aborts as NOOP_DUPLICATE (intent-dedup.json artifact names the winner).')
     choice(name: 'SERVICE', choices: [
@@ -142,7 +142,7 @@ pipeline {
       agent { label 'hpsf-replay-mac' }
       when {
         beforeAgent true
-        expression { params.INTENT_ID?.trim() }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.INTENT_ID?.trim()) }
       }
       steps { script {
         def rc = sh(returnStatus: true, script: '''
@@ -211,6 +211,7 @@ PYEOF
       } }
     }
     stage('Validate service registry') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       // Own agent = own fresh `checkout scm` of the same build revision. The stage is a
       // pure gate: it reads only the checkout and produces nothing later stages consume.
       agent { label VALIDATE_AGENT_LABEL }
@@ -240,9 +241,11 @@ PYEOF
     // kubeconfigs, the intent ledger and cluster reachability exist only there. Bodies
     // unchanged, original indentation kept for reviewability.
     stage('Deploy path') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       agent { label 'hpsf-replay-mac' }
       stages {
     stage('Permitted commit guard (deploy workspace)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       // Re-established HERE, in the workspace every deploy stage below reads manifests, overlays
       // and scripts from. The first guard ran on its own agent allocation; a checkout is bound
       // across allocations only by Jenkins's revision pinning, so the same guard runs again right
@@ -265,7 +268,7 @@ PYEOF
       }
     }
     stage('Build image (this service only)') {
-      when { expression { params.BUILD_IMAGES && !params.DEPLOY_DRY_RUN } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.BUILD_IMAGES && !params.DEPLOY_DRY_RUN) } }
       steps {
         script {
           // Downstream deployment trigger (Deployment Permission Rule): the image build publishes an
@@ -281,12 +284,15 @@ PYEOF
           if (!csha.matches('^[0-9a-f]{40}$')) {
             error("BUILD_IMAGES=true needs CONTRACTS_PERMITTED_SHA: the full 40-character options-edge-contracts commit permitted for this image build (got '${csha}'). Nothing was triggered.")
           }
-          // FAIL-CLOSED compatibility check: forwarding a SHA binds nothing unless the downstream's
-          // LIVE definition declares and enforces PERMITTED_SHA (Jenkins drops an unknown parameter
-          // and the old pipeline runs unguarded). Ask the controller, read-only; refuse otherwise.
-          def compat = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh options-edge-processing CONTRACTS_PERMITTED_SHA')
+          // FAIL-CLOSED definition check: forwarding a SHA binds nothing unless the child EXECUTES the
+          // guard. require-guarded-downstream.sh reads the child's job configuration (Pipeline from SCM,
+          // options-edge-processing */main, Jenkinsfile), confirms PROCESSING_PERMITTED_SHA is main's tip,
+          // fetches that commit and runs THIS repository's validator on the Jenkinsfile the child will
+          // load, and requires its guard to hash to ours. Same block as the trigger below: the trigger is
+          // unreachable unless this check ran and passed.
+          def compat = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh options-edge-processing "${PROCESSING_PERMITTED_SHA:?}" CONTRACTS_PERMITTED_SHA')
           if (compat != 0) {
-            error("options-edge-processing does not enforce THIS guard version with the contracts interface yet (rc=${compat}) — not triggering an image build whose guard cannot be confirmed. Nothing was triggered.")
+            error("options-edge-processing's definition at PROCESSING_PERMITTED_SHA could not be confirmed to run the permitted-commit guard (rc=${compat}) — not triggering it. Nothing was triggered.")
           }
           // Fail here, not three jobs downstream. These services build in their own repos' jobs,
           // so options-edge-processing rejects them during its own 'Resolve profile' -- safe, but
@@ -338,8 +344,8 @@ PYEOF
                   // The processing job's own guard compares the source it checks out (PROCESSING_BRANCH
                   // main) against this, byte for byte, before it installs, tests, packages or pushes;
                   // its contracts guard does the same for the contracts clone before mvn install.
-                  string(name: 'PERMITTED_SHA',           value: psha),
-                  string(name: 'CONTRACTS_PERMITTED_SHA', value: csha),
+                  string(name: 'PERMITTED_SHA',           value: params.PROCESSING_PERMITTED_SHA.trim()),
+                  string(name: 'CONTRACTS_PERMITTED_SHA', value: params.CONTRACTS_PERMITTED_SHA.trim()),
                   string(name: 'ENVIRONMENT',        value: params.ENVIRONMENT),
                   string(name: 'BUILD_TARGET',       value: image),
                   string(name: 'PROCESSING_BRANCH',  value: 'main'),
@@ -369,6 +375,7 @@ PYEOF
       }
     }
     stage('Secondary permissions complete') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' } }
       // The THIRD of the four flags the post{} recovery demands. Reached only when every secondary
       // input was judged: the image-build stage above errors out on a missing or malformed
       // PROCESSING/CONTRACTS SHA, an unguarded child, a refused child (propagate) or a lock that does
@@ -387,6 +394,18 @@ PYEOF
             }
             env.REQUIRED_IMAGE = req
           }
+          // Image-binding PREFLIGHT, before any effect stage: whatever image this run is bound to (its own
+          // child's lock, or a caller's REQUIRED_IMAGE) must be THIS service's repository. service-deploy.sh
+          // re-checks it against the render and asks the registry to serve the digest; a mismatch caught
+          // only there would come after the VIX pause, so the cheap half is judged here.
+          if (env.REQUIRED_IMAGE?.trim()) {
+            def want = sh(returnStdout: true, script: 'set -euo pipefail; yq -r ".services[] | select(.name == \\"$SERVICE_PARAM\\") | .image" services.yaml').trim()
+            def repoOf = env.REQUIRED_IMAGE.trim().replaceAll('@.*$', '')
+            def last = repoOf.substring(repoOf.lastIndexOf('/') + 1).replaceAll(':.*$', '')
+            if (!want || want == 'null' || last != want) {
+              error("REQUIRED_IMAGE '${env.REQUIRED_IMAGE}' is repository '${last}', but ${params.SERVICE} deploys '${want}'. Nothing was deployed.")
+            }
+          }
           env.SECONDARY_PERMISSIONS_PASSED = 'PASSED'
         }
         sh '''
@@ -396,7 +415,7 @@ PYEOF
       }
     }
     stage('Reconcile feed-gateway expiry') {
-      when { expression { params.SERVICE == 'feed-gateway' } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'feed-gateway') } }
       steps {
         // The standalone slice intentionally contains only this service's workload, not the shared
         // ConfigMap. Reconcile the one gateway-owned selection key before rolling the pod so envFrom
@@ -429,7 +448,7 @@ PYEOF
       // fail quietly, and the broker auto-creates the topic with cluster defaults that drop each
       // session's record 24h later while still looking configured.
       when {
-        expression { params.SERVICE == 'databento-gex' && !params.DEPLOY_DRY_RUN }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'databento-gex' && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''
@@ -451,7 +470,7 @@ PYEOF
       // Reconciles policy/retention, FAILS CLOSED on a partition mismatch (Kafka cannot shrink a
       // topic and recreating one would destroy the accumulated bar history).
       when {
-        expression { params.SERVICE == 'indicator-service' }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'indicator-service') }
       }
       steps {
         sh '''
@@ -481,7 +500,7 @@ PYEOF
       // crash-loop; and an auto-created COMPACTED topic would collapse a whole session's window
       // statuses to their last record, since they deliberately share one key for ordering.
       when {
-        expression { params.SERVICE == 'multileg-structure' && !params.DEPLOY_DRY_RUN }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'multileg-structure' && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''
@@ -497,7 +516,7 @@ PYEOF
       // right shape (1 partition, delete, retention.ms=-1) BEFORE strike-intelligence rolls out.
       // The service also refuses at boot; this stops the deploy before a crash-looping pod ships.
       when {
-        expression { params.SERVICE == 'strike-intelligence' && !params.DEPLOY_DRY_RUN }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'strike-intelligence' && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''
@@ -510,7 +529,7 @@ PYEOF
     }
     stage('Reconcile VIX option intelligence current topic') {
       when {
-        expression { params.SERVICE == 'vix-option-inteligence' && !params.DEPLOY_DRY_RUN }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'vix-option-inteligence' && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         // The FOURTH flag the post{} recovery demands: this run has entered an effect stage — the
@@ -600,26 +619,13 @@ PYEOF
             fi
             rm -f "$PREV_ERR"
 
-            # An EXISTING marker is never overwritten. It records the size from before an earlier
-            # pause that was never undone, and it is the only surviving record of it. Overwriting
-            # would be worst exactly where it matters most: a previous run pauses at 3, its
-            # restore fails, the service sits at 0; this run reads PREV=0, stamps 0 over the 3,
-            # "restores" to 0, and the correct size is gone for good.
-            if [ -f "$MARK" ]; then
-              STRANDED="$(cat "$MARK")"
-              case "$STRANDED" in
-                ''|*[!0-9]*)
-                  echo "FATAL: recovery marker $MARK holds an unusable value [$STRANDED]." >&2
-                  echo "Resolve it by hand -- the correct replica count cannot be guessed." >&2
-                  exit 1 ;;
-              esac
-              echo "Recovery marker from an earlier run found (replicas=$STRANDED); keeping it rather than stamping the current $PREV over it."
-              PREV="$STRANDED"
-            else
-              # Written BEFORE scaling: if the scale half-succeeds and the step then dies, post{}
-              # must still know a restore is owed.
-              printf '%s\n' "$PREV" > "$MARK"
-            fi
+            # The marker records WHO paused (Deployment Permission Rule: post{} recovers only a pause
+            # THIS build made — job, BUILD_ID, PERMITTED_SHA, service). Written BEFORE scaling: if the
+            # scale half-succeeds and the step then dies, post{} must still know a restore is owed.
+            # An EXISTING marker is never overwritten or adopted: it is the only record of an earlier
+            # pause that was never undone, and it is not this build's to restore — claim refuses, this
+            # build does not pause on top of it, and the marker is kept for a human.
+            bash scripts/deploy/vix-pause-marker.sh claim "$MARK" "$PREV"
             kubectl -n options-edge scale "$DEP" --replicas=0
 
             # Both conditions are read through explicit return codes: an unreadable desired-replica
@@ -674,6 +680,7 @@ PYEOF
       }
     }
     stage('Deploy (service-scoped)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' } }
       steps {
         // The FOURTH flag the post{} recovery demands (also set by the VIX reconcile, which is
         // skipped for every other service): this run has entered its effect stage.
@@ -721,7 +728,7 @@ PYEOF
     }
     stage('Verify web UI (post-rollout)') {
       when {
-        expression { params.SERVICE == 'web' && !params.DEPLOY_DRY_RUN }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'web' && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         // The web image is built by options-edge-web-deploy, whose Selenium smoke runs there --
@@ -754,24 +761,22 @@ PYEOF
       // indefinitely. Restoring here costs nothing on success -- a successful Deploy has already
       // set replicas from the manifest, so the marker is simply cleared.
       //
-      // GATED on ALL FOUR flags of THIS build (Deployment Permission Rule): post{always} runs after
-      // any refusal too, and vix-unpause.sh deliberately honours a marker STRANDED by an earlier
-      // build — unguarded, a build refused at the first guard, at the deploy-workspace guard, at a
-      // secondary input (processing/contracts SHA, child compatibility, child result, its lock) or
-      // before any effect stage began would consume that marker and scale production. Recovery is
-      // owned only by a run that passed every check and entered its effect phase; otherwise the
-      // gate script keeps the marker, reports HUMAN REQUIRED and touches nothing.
+      // GATED on ALL FOUR flags of THIS build AND on marker ownership (Deployment Permission Rule):
+      // post{always} runs after any refusal too. Recovery is owned only by a run that passed every
+      // check, entered its effect phase, and WROTE the marker itself (post-deploy-recovery.sh checks the
+      // flags again, then vix-pause-marker.sh owned: same job, BUILD_ID, PERMITTED_SHA, SERVICE, not a
+      // dry run). A marker stranded by another build — seen by a web run, a dry run, a refused run —
+      // is kept and reported; nothing is scaled.
       script {
         if (env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && env.SECONDARY_PERMISSIONS_PASSED == 'PASSED' && env.EFFECT_STAGE_STARTED == 'PASSED') {
           sh '''
             set -uo pipefail
-            bash scripts/deploy/vix-unpause.sh "$WORKSPACE/.jenkins-tmp/vix-paused-replicas"
-          '''
-        } else {
-          sh '''
-            set -uo pipefail
             bash scripts/deploy/post-deploy-recovery.sh "$WORKSPACE/.jenkins-tmp/vix-paused-replicas"
           '''
+        } else if (fileExists('.jenkins-tmp/vix-paused-replicas')) {
+          echo 'HUMAN REQUIRED: a VIX pause marker exists but this build did not pass every permission check before its effect phase — NOT touching the cluster; marker kept (see .jenkins-tmp/vix-paused-replicas on the deploy host).'
+        } else {
+          echo 'post: no permitted effect phase and no pause marker — nothing to recover, nothing touched.'
         }
       }
       archiveArtifacts artifacts: '.jenkins-tmp/*-*.yaml, .jenkins-tmp/permission-receipt.env', allowEmptyArchive: true

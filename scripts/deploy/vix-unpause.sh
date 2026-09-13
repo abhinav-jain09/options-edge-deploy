@@ -27,7 +27,10 @@ NS=options-edge
 # must never become the argument to 'kubectl scale --replicas=' -- that is the unknown-as-a-value
 # mistake at the one point that is supposed to be the safety net. The marker is KEPT on failure:
 # it is the only record that a restore is still owed.
-PREV="$(cat "$MARK" 2>/dev/null)"
+# The marker is read through its owner check (vix-pause-marker.sh): only a marker THIS build wrote —
+# same job, BUILD_ID, PERMITTED_SHA, service, not a dry run — yields a replica count (Deployment
+# Permission Rule: a build recovers only what it paused). Anything else reads as unusable and is kept.
+PREV="$(bash "$(dirname "$0")/vix-pause-marker.sh" replicas "$MARK")"
 cat_rc=$?
 case "$PREV" in
   ''|*[!0-9]*) cat_rc=1 ;;

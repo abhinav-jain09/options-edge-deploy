@@ -12,11 +12,12 @@
 #
 # Exit 0 = PERMITTED. Any other exit = REFUSED, and the Jenkinsfile must error() the build. Order:
 #   0. this script IS the version the job declares: PERMITTED_SHA_GUARD_VERSION (a parameter whose
-#      default is the sha256 of this file, registered by the job's own definition) must equal the
-#      sha256 of the running script. A caller's compatibility check reads that registered default
-#      from the child's live definition and refuses unless it equals the caller's own — so "declares
-#      the parameter" and "enforces this guard" become the same statement: only a run of a definition
-#      whose guard hashes to X can register X, and that guard refuses to run under any other X.
+#      default is the sha256 of this file) must equal the sha256 of the running script. This protects
+#      a run that EXECUTES the guard from running a different guard than it declares. It proves
+#      nothing about a job that never calls the guard: a registered default is a declaration only.
+#      That a downstream job will execute the guard is established separately, by the caller, from
+#      the job's SCM definition and its Jenkinsfile at the forwarded commit
+#      (scripts/jenkins/require-guarded-downstream.sh).
 #   1. the directory is a git WORKING checkout (`rev-parse --is-inside-work-tree` prints `true` — a
 #      bare repository or a .git metadata directory prints `false` and is refused) and HEAD resolves
 #      to a full commit id

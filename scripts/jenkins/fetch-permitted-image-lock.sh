@@ -12,6 +12,13 @@
 # permitted contracts commit — and prints the digest-pinned reference of the one image the deploy
 # needs. Anything missing, ambiguous or mismatched refuses.
 #
+# WHICH child: <job> is the simple name the caller passed to `build job:`, resolved by the SAME
+# resolver the compatibility check uses (jenkins-job-path.sh — relative to the caller's folder, as
+# Jenkins resolves it), and the lock must name that very build: its OPTIONS_EDGE_IMAGE_LOCK_BUILD_URL
+# must equal <JENKINS_URL><job path>/<build-number>/ and its OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID the
+# build number. A lock of another job of the same name (the root job instead of the folder's), or of
+# another build, is refused.
+#
 # stdout: exactly one line, `<registry>/<image>:<tag>@sha256:<64 hex>`. Diagnostics go to stderr.
 set -euo pipefail
 job="${1:?usage: fetch-permitted-image-lock.sh <job> <build-number> <permitted-sha> <image-name> [permitted-contracts-sha]}"
@@ -31,15 +38,20 @@ case "$build" in ''|*[!0-9]*) refuse "build number '$build' is not a number" ;; 
 is_sha "$expected" || refuse "permitted sha '$expected' is not a full commit id"
 [ -z "$expected_contracts" ] || is_sha "$expected_contracts" || refuse "permitted contracts sha '$expected_contracts' is not a full commit id"
 case "$image" in *[!A-Za-z0-9._-]*|'') refuse "image name '$image' is not a plain image name" ;; esac
-case "$job" in ''|*' '*) refuse "job '$job' is not a job name" ;; esac
-path=""
-IFS='/' read -r -a segs <<< "$job"
-for s in "${segs[@]}"; do path="$path/job/$s"; done
+ident="$(bash "$(dirname "${BASH_SOURCE[0]}")/jenkins-job-path.sh" "$job")" || refuse "job '$job' cannot be resolved relative to JOB_NAME='${JOB_NAME:-}'"
+full="$(printf '%s\n' "$ident" | sed -n 's/^full=//p')"
+path="$(printf '%s\n' "$ident" | sed -n 's/^path=//p')"
+build_url="${JENKINS_URL%/}${path}/${build}/"
+job="$full"
 
-url="${JENKINS_URL%/}${path}/${build}/artifact/.jenkins-tmp/options-edge-image-lock.env"
+url="${build_url}artifact/.jenkins-tmp/options-edge-image-lock.env"
 lock="$(curl -sfg --max-time 30 "$url")" || refuse "could not read the image lock of $job #$build ($url)"
 
 field() { printf '%s\n' "$lock" | sed -n "s/^$1=//p" | head -1; }
+lock_url="$(field OPTIONS_EDGE_IMAGE_LOCK_BUILD_URL)"
+[ "$lock_url" = "$build_url" ] || refuse "lock served for $job #$build names build '${lock_url:-<none>}', not $build_url — it is not that build's lock"
+lock_build="$(field OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID)"
+[ "$lock_build" = "$build" ] || refuse "lock of $job #$build carries OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID '${lock_build:-<none>}', not $build"
 commit="$(field OPTIONS_EDGE_IMAGE_LOCK_GIT_COMMIT)"
 [ -n "$commit" ] || refuse "lock of $job #$build carries no OPTIONS_EDGE_IMAGE_LOCK_GIT_COMMIT"
 [ "$commit" = "$expected" ] || refuse "lock of $job #$build was built from $commit, not the permitted $expected"
