@@ -43,6 +43,10 @@ full="$(printf '%s\n' "$ident" | sed -n 's/^full=//p')"
 path="$(printf '%s\n' "$ident" | sed -n 's/^path=//p')"
 build_url="${JENKINS_URL%/}${path}/${build}/"
 job="$full"
+# The caller passes the child's ACTUAL identity too (CHILD_BUILD_URL = the returned build's absoluteUrl): the
+# resolved address must be that build, or the resolver and Jenkins disagree about which job ran.
+[ -z "${CHILD_BUILD_URL:-}" ] || [ "$CHILD_BUILD_URL" = "$build_url" ] \
+  || refuse "the child build that ran is $CHILD_BUILD_URL, but '$job' #$build resolves to $build_url — not reading another job's artifact"
 
 url="${build_url}artifact/.jenkins-tmp/options-edge-image-lock.env"
 lock="$(curl -sfg --max-time 30 "$url")" || refuse "could not read the image lock of $job #$build ($url)"

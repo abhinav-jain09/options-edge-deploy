@@ -1,6 +1,6 @@
 // Fixture for tests/test_jenkins_permitted_sha_guard.py: the SMALLEST pipeline the validator accepts.
 // The guard is the first stage, the parameter is declared, restart-from-stage is disabled, the one
-// effect (kubectl apply) comes after the guard, post{} touches nothing.
+// effect (kubectl apply) comes after the guard in a stage gated on its flag, post{} touches nothing.
 pipeline {
   agent { label 'fixture' }
   parameters {
@@ -22,6 +22,7 @@ pipeline {
       }
     }
     stage('Deploy') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.DEPLOY_DRY_RUN) } }
       steps {
         sh 'kubectl apply -f k8s/fixture.yaml'
       }

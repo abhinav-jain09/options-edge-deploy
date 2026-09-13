@@ -11,21 +11,27 @@ that a script refuses:
     between queue and checkout; a forbidden ref via GIT_BRANCH, BRANCH_NAME, their contradiction, or a
     selected --ref (aliases such as origin/main refused); an unreachable origin; a bare repository /
     .git directory; a nested checkout.
-  * scripts/jenkins/require-guarded-downstream.sh — refuses a child whose live definition lacks
-    PERMITTED_SHA, whose PERMITTED_SHA_GUARD_VERSION default is another hash (an un-activated or
-    older child), whose parameters are not strings, which lacks a required extra parameter, an
-    unreachable controller, a folder-relative child resolved the way `build job:` resolves it.
-  * scripts/jenkins/fetch-permitted-image-lock.sh — yields the digest for the permitted commit;
-    refuses a lock from another source or contracts commit, a missing image, an unreachable build.
-  * scripts/deploy/post-deploy-recovery.sh — the recovery never reaches kubectl unless ALL FOUR flags
-    of THIS build are PASSED (each rejection point after the guards leaves one unset), even when an
-    earlier build stranded a marker (Codex I1/I5).
+  * scripts/jenkins/require-guarded-downstream.sh — the shared executed suite (require-guarded-downstream-test.py):
+    a child is accepted only when its config.xml loads the expected Jenkinsfile from the expected repository's
+    */main, the forwarded SHA is main's tip, and the Jenkinsfile at that commit passes the validator with a
+    guard hashing to ours; a declaration-only child (matching registered parameters, no guard executed) is
+    refused (Codex N2).
+  * scripts/jenkins/fetch-permitted-image-lock.sh — yields the digest for the permitted commit; the child is
+    resolved by the same folder-relative resolver as the definition check, and the lock must name that very
+    build (BUILD_URL, BUILD_ID, the returned child's absoluteUrl): absent-root and conflicting-root folder
+    cases refused (Codex I9).
+  * scripts/deploy/post-deploy-recovery.sh + vix-pause-marker.sh — recovery acts only on a marker THIS build
+    wrote (service, job, BUILD_ID, permitted SHA), after all four flags, never in a dry run: a stranded
+    unrelated marker, the web dry-run reproduction, a legacy marker, another job/permission all leave a
+    sentinel kubectl untouched; the build's own marker is restored (Codex I8).
+  * Jenkinsfile.nifty-gex-service — its build block EXECUTED with a sentinel docker/registry: the push's own
+    digest, cross-checked against the per-build tag, locked by BUILD_ID and source commit (Codex I10).
   * scripts/deploy/bind-required-image.sh — the permitted build's digest replaces a moved tag; a wrong
     repository, a disagreeing authoritative render, an unserved digest are refused; a
     registry:port/repo@digest render (Codex I7) is accepted.
-  * scripts/jenkins/validate-jenkinsfile-guard.py — the repository passes; the committed refused
-    fixture (apply-before-guard) fails; the shared 56-case mutation suite (validate-jenkinsfile-guard-test.py)
-    refuses every demonstrated bypass.
+  * scripts/jenkins/validate-jenkinsfile-guard.py — the repository passes; the committed refused fixture
+    fails; the shared mutation suite refuses every demonstrated bypass; the Codex round-3 reproductions
+    applied to THIS repository's real Jenkinsfiles are refused.
 """
 from __future__ import annotations
 
@@ -67,7 +73,7 @@ def run_validator(root: Path, manifest: Path) -> subprocess.CompletedProcess:
 
 class _Server:
     def __init__(self, routes: dict[str, tuple[int, str]]):
-        routes_local = routes
+        self.routes = routes_local = routes
 
         class H(http.server.BaseHTTPRequestHandler):
             def do_GET(self):  # noqa: N802
@@ -88,6 +94,11 @@ class _Server:
     def close(self):
         self.httpd.shutdown()
         self.httpd.server_close()
+
+
+def _LateServer() -> _Server:
+    """A server whose routes are filled in after it starts, so a served body can name the server's own URL."""
+    return _Server({})
 
 
 def sh(script: Path, args: list[str], env: dict[str, str], cwd: Path = ROOT) -> subprocess.CompletedProcess:
@@ -127,190 +138,268 @@ class PermittedShaGuardScriptTest(unittest.TestCase):
 
 
 class RequireGuardedDownstreamTest(unittest.TestCase):
-    TREE = "?tree=property[parameterDefinitions[name,type,defaultParameterValue[value]]]"
+    """Codex N2 (#1043) / I2 (gateway) / I1 (web) / N3 (processing): a registered guard-version default is a
+    declaration. The helper now proves the child's DEFINITION: config.xml (Pipeline from SCM, the expected
+    repository, */main, the expected scriptPath, no extensions), the forwarded SHA is main's tip, and the
+    Jenkinsfile fetched at that commit passes this validator with a guard hashing to ours. The shared,
+    executed suite drives it through every case (a stand-in controller, real git repositories)."""
 
-    def _defs(self, params: list[tuple[str, str, str]]) -> str:
-        return json.dumps({"property": [{"_class": "x"}, {"parameterDefinitions": [
-            {"name": n, "type": t, "defaultParameterValue": {"value": d}} for n, t, d in params]}]})
-
-    def _good(self, extra=()):
-        return self._defs([("PERMITTED_SHA", "StringParameterDefinition", ""),
-                           ("PERMITTED_SHA_GUARD_VERSION", "StringParameterDefinition", OWN_HASH)] + [(e, "StringParameterDefinition", "") for e in extra])
-
-    def _run(self, routes, args, extra_env=None):
-        s = _Server(routes)
-        self.addCleanup(s.close)
-        env = {"JENKINS_URL": s.url + "/"}
-        env.update(extra_env or {})
-        return sh(COMPAT, args, env)
-
-    def test_child_enforcing_this_guard_is_accepted(self) -> None:
-        r = self._run({"/job/child/api/json" + self.TREE: (200, self._good())}, ["child"])
+    def test_shared_definition_suite(self) -> None:
+        r = subprocess.run(["python3", str(J / "require-guarded-downstream-test.py")], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn(f"enforces guard {OWN_HASH}", r.stdout)
-
-    def test_parameter_name_alone_is_not_enforcement(self) -> None:
-        # Codex N2/I2: a child that only declares PERMITTED_SHA (round-1 definition, or a hand-made
-        # parameter) is refused — it does not declare which guard it runs.
-        r = self._run({"/job/child/api/json" + self.TREE: (200, self._defs([("PERMITTED_SHA", "StringParameterDefinition", "")]))}, ["child"])
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("PERMITTED_SHA_GUARD_VERSION is not a registered string parameter", r.stderr)
-
-    def test_other_guard_version_is_refused(self) -> None:
-        r = self._run({"/job/child/api/json" + self.TREE: (200, self._defs([("PERMITTED_SHA", "StringParameterDefinition", ""), ("PERMITTED_SHA_GUARD_VERSION", "StringParameterDefinition", "0" * 64)]))}, ["child"])
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("the child last ran a different (older, newer or absent) guard", r.stderr)
-
-    def test_wrong_parameter_type_is_refused(self) -> None:
-        r = self._run({"/job/child/api/json" + self.TREE: (200, self._defs([("PERMITTED_SHA", "BooleanParameterDefinition", ""), ("PERMITTED_SHA_GUARD_VERSION", "StringParameterDefinition", OWN_HASH)]))}, ["child"])
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("PERMITTED_SHA is not a registered string parameter", r.stderr)
-
-    def test_required_extra_parameter(self) -> None:
-        r = self._run({"/job/child/api/json" + self.TREE: (200, self._good())}, ["child", "CONTRACTS_PERMITTED_SHA"])
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("CONTRACTS_PERMITTED_SHA is not a registered string parameter", r.stderr)
-        r = self._run({"/job/child/api/json" + self.TREE: (200, self._good(["CONTRACTS_PERMITTED_SHA"]))}, ["child", "CONTRACTS_PERMITTED_SHA"])
-        self.assertEqual(r.returncode, 0, r.stderr)
-
-    def test_child_is_resolved_relative_to_the_callers_folder(self) -> None:
-        # Codex gateway I2: `build job: 'child'` from folder/caller schedules folder/child — so that is
-        # what must be inspected, not the root job of the same name.
-        routes = {"/job/child/api/json" + self.TREE: (200, self._good()),
-                  "/job/folder/job/child/api/json" + self.TREE: (200, self._defs([("ENVIRONMENT", "StringParameterDefinition", "")]))}
-        r = self._run(routes, ["child"], {"JOB_NAME": "folder/caller"})
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("'folder/child' does not enforce this guard", r.stderr)
-        r = self._run(routes, ["child"], {"JOB_NAME": "caller"})
-        self.assertEqual(r.returncode, 0, r.stderr)
-        r = self._run(routes, ["folder/child"])
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("must be a simple job name", r.stderr)
-
-    def test_unreachable_login_page_and_missing_url_are_refused(self) -> None:
-        r = self._run({}, ["child"])
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("could not read the definition", r.stderr)
-        r = self._run({"/job/child/api/json" + self.TREE: (200, "<html>login</html>")}, ["child"])
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("not JSON", r.stderr)
-        r = sh(COMPAT, ["child"], {})
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("JENKINS_URL is not set", r.stderr)
+        self.assertIn("require-guarded-downstream-test: ALL PASS", r.stdout)
+        for case in ["declaration-only child (matching registered parameters, no guard in its Jenkinsfile) is refused",
+                     "child whose effect stage is not gated on the guard is refused",
+                     "inline pipeline script (not from SCM) is refused", "a parameterised branch spec is refused",
+                     "another Jenkinsfile is refused", "a forwarded SHA that is not main's tip is refused",
+                     "child carrying a different guard at that commit is refused (even though its own validator view is consistent)",
+                     "folder caller: the folder's child is inspected, not the root job of the same name",
+                     "child whose definition runs the guard at the forwarded tip is accepted"]:
+            self.assertIn(f"ok   [{case}]", r.stdout)
 
 
 class FetchPermittedImageLockTest(unittest.TestCase):
-    LOCK = (
-        "OPTIONS_EDGE_IMAGE_LOCK_FORMAT=1\n"
-        f"OPTIONS_EDGE_IMAGE_LOCK_GIT_COMMIT={SHA_A}\n"
-        f"OPTIONS_EDGE_IMAGE_LOCK_CONTRACTS_GIT_COMMIT={SHA_C}\n"
-        f"OPTIONS_EDGE_IMAGE_LOCK_GUARD_VERSION={OWN_HASH}\n"
-        f"ES_CVD_IMAGE=192.168.100.252:5000/options-edge-es-cvd:prod-7-aaaaaaaaaaaa@{DIGEST}\n"
-        f"ES_CVD_IMAGE_GIT_COMMIT={SHA_A}\n"
-        f"INDICATOR_SERVICE_IMAGE=192.168.100.252:5000/options-edge-indicator-service:prod-7-aaaaaaaaaaaa@{DIGEST}\n"
-        f"INDICATOR_SERVICE_IMAGE_GIT_COMMIT={SHA_B}\n"
-    )
-    PATH = "/job/options-edge-processing/7/artifact/.jenkins-tmp/options-edge-image-lock.env"
+    """Codex I9: the lock is read from the child the compatibility check addressed — the same resolver
+    (jenkins-job-path.sh, relative to the caller's folder) — and must name that very build."""
 
-    def _serve(self, body=None):
-        s = _Server({self.PATH: (200, body if body is not None else self.LOCK)})
-        self.addCleanup(s.close)
-        return s.url
+    def _lock(self, build_url: str, build_id: str = "7") -> str:
+        return (
+            "OPTIONS_EDGE_IMAGE_LOCK_FORMAT=1\n"
+            f"OPTIONS_EDGE_IMAGE_LOCK_GIT_COMMIT={SHA_A}\n"
+            f"OPTIONS_EDGE_IMAGE_LOCK_CONTRACTS_GIT_COMMIT={SHA_C}\n"
+            f"OPTIONS_EDGE_IMAGE_LOCK_GUARD_VERSION={OWN_HASH}\n"
+            f"OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID={build_id}\n"
+            f"OPTIONS_EDGE_IMAGE_LOCK_BUILD_URL={build_url}\n"
+            f"ES_CVD_IMAGE=192.168.100.252:5000/options-edge-es-cvd:prod-7-aaaaaaaaaaaa@{DIGEST}\n"
+            f"ES_CVD_IMAGE_GIT_COMMIT={SHA_A}\n"
+            f"INDICATOR_SERVICE_IMAGE=192.168.100.252:5000/options-edge-indicator-service:prod-7-aaaaaaaaaaaa@{DIGEST}\n"
+            f"INDICATOR_SERVICE_IMAGE_GIT_COMMIT={SHA_B}\n"
+        )
+
+    ROOT_PATH = "/job/options-edge-processing/7/artifact/.jenkins-tmp/options-edge-image-lock.env"
+    FOLDER_PATH = "/job/folder/job/options-edge-processing/7/artifact/.jenkins-tmp/options-edge-image-lock.env"
 
     def test_permitted_commits_yield_the_digest_pinned_image(self) -> None:
-        r = sh(FETCH_LOCK, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_C], {"JENKINS_URL": self._serve()})
+        r = self._fetch({self.ROOT_PATH: self._lock("{BASE}/job/options-edge-processing/7/")}, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_C])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), f"192.168.100.252:5000/options-edge-es-cvd:prod-7-aaaaaaaaaaaa@{DIGEST}")
         self.assertIn(f"with contracts {SHA_C}", r.stderr)
 
+    def _fetch(self, routes_fn, args, env=None):
+        """routes_fn: dict path -> body, or callable(base_url) -> dict; bodies may contain {BASE}."""
+        server = _LateServer()
+        self.addCleanup(server.close)
+        routes = routes_fn(server.url) if callable(routes_fn) else routes_fn
+        server.routes.update({k: (200, v.replace("{BASE}", server.url)) for k, v in routes.items()})
+        e = {"JENKINS_URL": server.url + "/"}
+        e.update(env or {})
+        return sh(FETCH_LOCK, args, e)
+
     def test_other_source_or_contracts_commit_is_refused(self) -> None:
-        r = sh(FETCH_LOCK, ["options-edge-processing", "7", SHA_B, "options-edge-es-cvd"], {"JENKINS_URL": self._serve()})
+        body = self._lock("{BASE}/job/options-edge-processing/7/")
+        r = self._fetch({self.ROOT_PATH: body}, ["options-edge-processing", "7", SHA_B, "options-edge-es-cvd"])
         self.assertEqual(r.returncode, 1)
         self.assertIn(f"was built from {SHA_A}, not the permitted {SHA_B}", r.stderr)
-        r = sh(FETCH_LOCK, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_B], {"JENKINS_URL": self._serve()})
+        r = self._fetch({self.ROOT_PATH: body}, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_B])
         self.assertEqual(r.returncode, 1)
         self.assertIn(f"compiled contracts {SHA_C}, not the permitted {SHA_B}", r.stderr)
-        no_contracts = self.LOCK.replace(f"OPTIONS_EDGE_IMAGE_LOCK_CONTRACTS_GIT_COMMIT={SHA_C}\n", "")
-        r = sh(FETCH_LOCK, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_C], {"JENKINS_URL": self._serve(no_contracts)})
+        no_contracts = body.replace(f"OPTIONS_EDGE_IMAGE_LOCK_CONTRACTS_GIT_COMMIT={SHA_C}\n", "")
+        r = self._fetch({self.ROOT_PATH: no_contracts}, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_C])
         self.assertEqual(r.returncode, 1)
         self.assertIn("did not record the contracts", r.stderr)
 
+    def test_folder_caller_reads_the_folders_child_absent_root(self) -> None:
+        # Only the folder's child exists: the old helper requested the root job and failed after the image was published.
+        body = self._lock("{BASE}/job/folder/job/options-edge-processing/7/")
+        r = self._fetch({self.FOLDER_PATH: body}, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_C], {"JOB_NAME": "folder/service-deploy"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("folder/options-edge-processing #7", r.stderr)
+
+    def test_folder_caller_never_accepts_a_conflicting_root_lock(self) -> None:
+        # A root job of the same name has build #7 with matching source fields: the folder caller must not read it.
+        root_body = self._lock("{BASE}/job/options-edge-processing/7/")
+        r = self._fetch({self.ROOT_PATH: root_body}, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_C], {"JOB_NAME": "folder/service-deploy"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("could not read the image lock of folder/options-edge-processing #7", r.stderr)
+        # ... and a root lock SERVED at the folder path (a copied artifact) names another build: refused.
+        r = self._fetch({self.FOLDER_PATH: root_body}, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_C], {"JOB_NAME": "folder/service-deploy"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("it is not that build's lock", r.stderr)
+
+    def test_the_returned_child_identity_must_match_the_resolved_build(self) -> None:
+        body = self._lock("{BASE}/job/options-edge-processing/7/")
+        r = self._fetch(lambda base: {self.ROOT_PATH: body}, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_C],
+                        {"CHILD_BUILD_URL": "http://elsewhere/job/folder/job/options-edge-processing/7/"})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("the child build that ran is", r.stderr)
+
+    def test_lock_of_another_build_number_is_refused(self) -> None:
+        body = self._lock("{BASE}/job/options-edge-processing/7/", build_id="6")
+        r = self._fetch({self.ROOT_PATH: body}, ["options-edge-processing", "7", SHA_A, "options-edge-es-cvd", SHA_C])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("carries OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID '6', not 7", r.stderr)
+
     def test_per_image_mismatch_missing_image_unreachable_build(self) -> None:
-        url = self._serve()
-        r = sh(FETCH_LOCK, ["options-edge-processing", "7", SHA_A, "options-edge-indicator-service"], {"JENKINS_URL": url})
+        body = self._lock("{BASE}/job/options-edge-processing/7/")
+        r = self._fetch({self.ROOT_PATH: body}, ["options-edge-processing", "7", SHA_A, "options-edge-indicator-service"])
         self.assertEqual(r.returncode, 1)
         self.assertIn("INDICATOR_SERVICE_IMAGE was built from", r.stderr)
-        r = sh(FETCH_LOCK, ["options-edge-processing", "7", SHA_A, "options-edge-vol-premium"], {"JENKINS_URL": url})
+        r = self._fetch({self.ROOT_PATH: body}, ["options-edge-processing", "7", SHA_A, "options-edge-vol-premium"])
         self.assertEqual(r.returncode, 1)
         self.assertIn("has 0 digest-pinned entries", r.stderr)
-        r = sh(FETCH_LOCK, ["options-edge-processing", "8", SHA_A, "options-edge-es-cvd"], {"JENKINS_URL": url})
+        r = self._fetch({self.ROOT_PATH: body}, ["options-edge-processing", "8", SHA_A, "options-edge-es-cvd"])
         self.assertEqual(r.returncode, 1)
         self.assertIn("could not read the image lock", r.stderr)
         for args, msg in [(["options-edge-processing", "x", SHA_A, "options-edge-es-cvd"], "is not a number"),
                           (["options-edge-processing", "7", SHA_A[:12], "options-edge-es-cvd"], "not a full commit id"),
-                          (["options-edge-processing", "7", SHA_A, "options-edge-es-cvd; rm"], "not a plain image name")]:
-            r = sh(FETCH_LOCK, args, {"JENKINS_URL": url})
+                          (["options-edge-processing", "7", SHA_A, "options-edge-es-cvd; rm"], "not a plain image name"),
+                          (["folder/options-edge-processing", "7", SHA_A, "options-edge-es-cvd"], "cannot be resolved")]:
+            r = self._fetch({self.ROOT_PATH: body}, args)
             self.assertEqual(r.returncode, 1, args)
             self.assertIn(msg, r.stderr)
 
 
 class PostDeployRecoveryTest(unittest.TestCase):
-    """Codex I1/I5: an earlier build stranded a recovery marker; this build is refused at SOME point
-    after the guards. post{always} must not scale anything unless every check passed AND the effect
-    phase began in this build."""
+    """Codex I8 (BLOCKER): recovery may act only on a marker THIS build wrote. The marker records service,
+    job, BUILD_ID and permitted SHA; post{} verifies them (and the four flags) before any kubectl, and
+    never recovers in a dry run. Sentinel kubectl records every mutation."""
 
     FLAGS = ["PERMITTED_SHA_GUARD", "DEPLOY_WORKSPACE_PERMITTED", "SECONDARY_PERMISSIONS_PASSED", "EFFECT_STAGE_STARTED"]
+    MARKER_TOOL = ROOT / "scripts/deploy/vix-pause-marker.sh"
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.sentinel = self.tmp / "kubectl-was-called"
+        self.mutations = self.tmp / "kubectl-mutations"
         fake = self.tmp / "bin" / "kubectl"
         fake.parent.mkdir()
-        fake.write_text(f"#!/usr/bin/env bash\necho called >> '{self.sentinel}'\nexit 0\n")
+        # A deployment that exists and sits at 0 replicas: exactly the state a restore acts on.
+        fake.write_text(
+            "#!/usr/bin/env bash\n"
+            "case \"$*\" in\n"
+            "  *'--ignore-not-found -o name'*) echo deployment/vix-option-inteligence-service ;;\n"
+            "  *jsonpath*) printf 0 ;;\n"
+            f"  *scale*) echo \"SENTINEL_MUTATION $*\" >> '{self.mutations}' ;;\n"
+            "esac\n"
+            "exit 0\n")
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
         self.marker = self.tmp / "vix-paused-replicas"
-        self.marker.write_text("3\n")
 
-    def _run(self, flags: dict[str, str]) -> subprocess.CompletedProcess:
-        e = {"PATH": f"{self.tmp / 'bin'}:{os.environ['PATH']}"}
-        e.update(flags)
+    def _env(self, **over: str) -> dict[str, str]:
+        e = {"PATH": f"{self.tmp / 'bin'}:{os.environ['PATH']}", "JOB_NAME": "service-deploy", "BUILD_ID": "41",
+             "PERMITTED_SHA": SHA_A, "SERVICE_PARAM": "vix-option-inteligence", "DEPLOY_DRY_RUN_PARAM": "false"}
+        e.update(over)
+        return e
+
+    def _claim(self, replicas: str = "3", **over: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", str(self.MARKER_TOOL), "claim", str(self.marker), replicas], capture_output=True, text=True, env=self._env(**over))
+
+    def _recover(self, flags: list[str] | None = None, **over: str) -> subprocess.CompletedProcess:
+        e = self._env(**over)
+        e.update({f: "PASSED" for f in (self.FLAGS if flags is None else flags)})
         return subprocess.run(["bash", str(RECOVERY), str(self.marker)], capture_output=True, text=True, env=e)
 
+    def _scaled(self) -> str:
+        return self.mutations.read_text() if self.mutations.exists() else ""
+
+    def test_own_marker_with_every_flag_is_restored(self) -> None:
+        r = self._claim("3")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("BUILD_ID=41", self.marker.read_text())
+        self.assertIn(f"PERMITTED_SHA={SHA_A}", self.marker.read_text())
+        r = self._recover()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("scale deployment/vix-option-inteligence-service --replicas=3", self._scaled())
+        self.assertFalse(self.marker.exists())
+
+    def test_stranded_unrelated_marker_is_preserved_even_with_every_flag(self) -> None:
+        # Build 40 paused VIX and died; build 41 (every flag PASSED, same service) must not restore it.
+        self._claim("3", BUILD_ID="40")
+        r = self._recover()
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(self._scaled(), "")
+        self.assertTrue(self.marker.exists())
+        self.assertIn("HUMAN REQUIRED", r.stderr)
+        self.assertIn("written by build 40, not this build 41", r.stderr)
+
+    def test_codex_reproduction_web_dry_run_does_not_touch_a_vix_marker(self) -> None:
+        # I8: SERVICE=web, BUILD_IMAGES=false, DEPLOY_DRY_RUN=true, every flag PASSED, a stranded VIX marker holding 3.
+        self._claim("3", BUILD_ID="40")
+        r = self._recover(SERVICE_PARAM="web", DEPLOY_DRY_RUN_PARAM="true")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(self._scaled(), "", "SENTINEL_MUTATION reached")
+        self.assertTrue(self.marker.exists())
+        self.assertIn("HUMAN REQUIRED", r.stderr)
+
+    def test_dry_run_never_recovers_even_its_own_marker(self) -> None:
+        self._claim("3")
+        r = self._recover(DEPLOY_DRY_RUN_PARAM="true")
+        self.assertEqual(self._scaled(), "")
+        self.assertTrue(self.marker.exists())
+        self.assertIn("this build is a dry run", r.stderr)
+        r = self._claim("3", BUILD_ID="42", DEPLOY_DRY_RUN_PARAM="true")
+        self.assertEqual(r.returncode, 1)
+
+    def test_legacy_bare_number_marker_is_not_owned(self) -> None:
+        self.marker.write_text("3\n")
+        r = self._recover()
+        self.assertEqual(self._scaled(), "")
+        self.assertTrue(self.marker.exists())
+        self.assertIn("not a recorded-owner marker", r.stderr)
+
+    def test_other_job_or_permission_is_not_owned(self) -> None:
+        self._claim("3")
+        for over, msg in [({"JOB_NAME": "folder/service-deploy"}, "written by job 'service-deploy'"), ({"PERMITTED_SHA": SHA_B}, "written under permission")]:
+            r = self._recover(**over)
+            self.assertEqual(self._scaled(), "", over)
+            self.assertIn(msg, r.stderr)
+        self.assertTrue(self.marker.exists())
+
     def test_every_rejection_point_leaves_the_recovery_inert(self) -> None:
-        # Rejection points, in pipeline order, and the flags set BEFORE each of them:
+        self._claim("3")
         points = {
             "first guard refused": [],
             "deploy-workspace guard refused": ["PERMITTED_SHA_GUARD"],
-            "PROCESSING/CONTRACTS SHA missing, child incompatible, child refused, lock mismatch": ["PERMITTED_SHA_GUARD", "DEPLOY_WORKSPACE_PERMITTED"],
+            "secondary input refused": ["PERMITTED_SHA_GUARD", "DEPLOY_WORKSPACE_PERMITTED"],
             "refused before any effect stage began": ["PERMITTED_SHA_GUARD", "DEPLOY_WORKSPACE_PERMITTED", "SECONDARY_PERMISSIONS_PASSED"],
         }
         for name, set_flags in points.items():
-            if self.sentinel.exists():
-                self.sentinel.unlink()
-            r = self._run({f: "PASSED" for f in set_flags})
+            r = self._recover(set_flags)
             self.assertEqual(r.returncode, 0, name)
-            self.assertFalse(self.sentinel.exists(), f"kubectl reached after: {name}")
+            self.assertEqual(self._scaled(), "", name)
             self.assertTrue(self.marker.exists(), name)
             self.assertIn("HUMAN REQUIRED", r.stderr, name)
-            self.assertIn("replicas=3", r.stderr, name)
 
     def test_flag_values_must_be_exactly_passed(self) -> None:
+        self._claim("3")
         for bad in ("passed", "PASSED ", "true", "1"):
-            flags = {f: "PASSED" for f in self.FLAGS}
-            flags["EFFECT_STAGE_STARTED"] = bad
-            self._run(flags)
-            self.assertFalse(self.sentinel.exists(), bad)
+            e = self._env()
+            e.update({f: "PASSED" for f in self.FLAGS})
+            e["EFFECT_STAGE_STARTED"] = bad
+            subprocess.run(["bash", str(RECOVERY), str(self.marker)], capture_output=True, text=True, env=e)
+            self.assertEqual(self._scaled(), "", bad)
 
-    def test_all_four_flags_run_the_recovery(self) -> None:
-        r = self._run({f: "PASSED" for f in self.FLAGS})
-        self.assertTrue(self.sentinel.exists(), r.stdout + r.stderr)
+    def test_claim_refuses_to_pause_over_a_stranded_marker(self) -> None:
+        self._claim("3", BUILD_ID="40")
+        before = self.marker.read_text()
+        r = self._claim("1")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("HUMAN REQUIRED", r.stderr)
+        self.assertEqual(self.marker.read_text(), before, "a stranded marker must never be overwritten or adopted")
+        r = self._claim("3", SERVICE_PARAM="web", BUILD_ID="43")
+        self.assertEqual(r.returncode, 1)
+
+    def test_vix_unpause_itself_reads_only_an_owned_marker(self) -> None:
+        self._claim("3", BUILD_ID="40")
+        r = subprocess.run(["bash", str(ROOT / "scripts/deploy/vix-unpause.sh"), str(self.marker)], capture_output=True, text=True, env=self._env())
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(self._scaled(), "")
+        self.assertTrue(self.marker.exists())
 
     def test_no_marker_nothing_to_do(self) -> None:
-        self.marker.unlink()
-        r = self._run({})
+        r = self._recover()
         self.assertEqual(r.returncode, 0)
-        self.assertFalse(self.sentinel.exists())
+        self.assertEqual(self._scaled(), "")
         self.assertIn("nothing touched", r.stdout)
 
 
@@ -407,7 +496,9 @@ class PermittedShaGuardValidatorTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("validate-jenkinsfile-guard-test: ALL PASS", r.stdout)
         for case in ["primary guard inverted (rc == 0)", "primary guard || true in the shell string",
-                     "post mutation after the gate block", "post mutation in the else branch", "post gate negated",
+                     "post mutation after the gate block", "post mutation in the else branch", "post gate negated !(…)",
+                     "post gate negated ! (…) with a space", "post gate compared to false", "compatibility check never entered: if (false)",
+                     "compatibility check caught: catchError", "effect stage gate removed", "effect stage gate inverted (!=)",
                      "compatibility check inverted", "compatibility check status discarded", "git pull rebound by an echo",
                      "separate-agent stage without inline re-guard", "shell contracts guard || true",
                      "contracts re-checked-out after its guard", "guard version default is another hash"]:
@@ -426,41 +517,50 @@ class ServiceDeployBindingTest(unittest.TestCase):
             self.assertIn(f'"{k}"', self.text, k)
         self.assertIn("write-permission-receipt.sh", self.text)
 
-    def test_image_build_trigger_is_bound_and_its_image_retained(self) -> None:
+    def test_image_build_trigger_is_bound_to_the_childs_definition_and_its_image_retained(self) -> None:
         for p in ("PROCESSING_PERMITTED_SHA", "CONTRACTS_PERMITTED_SHA", "REQUIRED_IMAGE"):
             self.assertIn(f"string(name: '{p}', defaultValue: '', trim: true", self.text)
-        self.assertIn("require-guarded-downstream.sh options-edge-processing CONTRACTS_PERMITTED_SHA", self.text)
-        self.assertIn("string(name: 'PERMITTED_SHA',           value: psha)", self.text)
-        self.assertIn("string(name: 'CONTRACTS_PERMITTED_SHA', value: csha)", self.text)
+        self.assertIn("require-guarded-downstream.sh options-edge-processing \"${PROCESSING_PERMITTED_SHA:?}\" CONTRACTS_PERMITTED_SHA", self.text)
+        self.assertIn("string(name: 'PERMITTED_SHA',           value: params.PROCESSING_PERMITTED_SHA.trim())", self.text)
+        self.assertIn("string(name: 'CONTRACTS_PERMITTED_SHA', value: params.CONTRACTS_PERMITTED_SHA.trim())", self.text)
         self.assertIn("def child = build job: 'options-edge-processing'", self.text)
+        self.assertLess(self.text.index("env.CHILD_BUILD_URL         = child.absoluteUrl"), self.text.index("fetch-permitted-image-lock.sh options-edge-processing"))
         self.assertRegex(self.text, r"fetch-permitted-image-lock\.sh options-edge-processing \\\n\s+\"\$\{PROCESSING_BUILD_NUMBER:\?\}\" \"\$\{PROCESSING_PERMITTED_SHA:\?\}\" \"\$\{SERVICE_IMAGE_NAME:\?\}\" \"\$\{CONTRACTS_PERMITTED_SHA:\?\}\"")
         sd = (ROOT / "scripts/deploy/service-deploy.sh").read_text()
         self.assertIn(". scripts/deploy/bind-required-image.sh", sd)
         self.assertIn('PINNED_IMAGE="$(bind_required_image)" ||', sd)
 
-    def test_secondary_permission_and_effect_flags_are_set_after_every_check_and_before_every_effect(self) -> None:
+    def test_required_image_repository_is_judged_before_any_effect_stage(self) -> None:
+        sec = self.text[self.text.index("stage('Secondary permissions complete')"):self.text.index("stage('Reconcile feed-gateway expiry')")]
+        self.assertIn('yq -r ".services[] | select(.name == \\\\\"$SERVICE_PARAM\\\\\") | .image" services.yaml', sec)
+        self.assertIn("last != want", sec)
+        self.assertLess(self.stages.index("Secondary permissions complete"), self.stages.index("Reconcile VIX option intelligence current topic"))
+
+    def test_the_pause_claims_its_own_marker_and_post_recovers_only_through_the_owner_check(self) -> None:
         s = self.stages
         self.assertEqual(s[0], "Permitted commit guard")
         self.assertEqual(s[s.index("Deploy path") + 1], "Permitted commit guard (deploy workspace)")
         self.assertEqual(s[s.index("Build image (this service only)") + 1], "Secondary permissions complete")
-        # SECONDARY_PERMISSIONS_PASSED is set exactly once, after the child trigger and lock read.
         self.assertEqual(self.text.count("env.SECONDARY_PERMISSIONS_PASSED = 'PASSED'"), 1)
         self.assertLess(self.text.index("fetch-permitted-image-lock.sh"), self.text.index("env.SECONDARY_PERMISSIONS_PASSED = 'PASSED'"))
-        # EFFECT_STAGE_STARTED is set at the top of the VIX reconcile (the pause) and of the Deploy stage.
         vix = self.text[self.text.index("stage('Reconcile VIX option intelligence current topic')"):self.text.index("stage('Deploy (service-scoped)')")]
+        self.assertIn("!params.DEPLOY_DRY_RUN", vix[:400])
         self.assertLess(vix.index("env.EFFECT_STAGE_STARTED = 'PASSED'"), vix.index("scale \"$DEP\" --replicas=0"))
-        dep = self.text[self.text.index("stage('Deploy (service-scoped)')"):self.text.index("stage('Verify web UI (post-rollout)')")]
-        self.assertLess(dep.index("env.EFFECT_STAGE_STARTED = 'PASSED'"), dep.index("service-deploy.sh"))
-        self.assertEqual(self.text.count("env.EFFECT_STAGE_STARTED = 'PASSED'"), 2)
-        # post{} runs vix-unpause.sh only inside a gate on all four flags; the else branch reports.
+        self.assertLess(vix.index('bash scripts/deploy/vix-pause-marker.sh claim "$MARK" "$PREV"'), vix.index("scale \"$DEP\" --replicas=0"))
+        self.assertNotIn('printf \'%s\\n\' "$PREV" > "$MARK"', vix)
+        self.assertNotIn("STRANDED", vix)
         post = "\n".join(l for l in self.text[self.text.rindex("      post {"):].splitlines() if not l.strip().startswith("//"))
         gate = re.search(r"if \((.*?)\) \{", post).group(1)
         for f in PostDeployRecoveryTest.FLAGS:
             self.assertIn(f"env.{f} == 'PASSED'", gate)
         self.assertNotIn("||", gate)
-        self.assertLess(post.index(gate), post.index("vix-unpause.sh"))
-        self.assertLess(post.index("vix-unpause.sh"), post.index("} else {"))
-        self.assertIn("post-deploy-recovery.sh", post[post.index("} else {"):])
+        self.assertLess(post.index(gate), post.index("post-deploy-recovery.sh"))
+        self.assertLess(post.index("post-deploy-recovery.sh"), post.index("} else if"))
+        self.assertEqual(post.count("post-deploy-recovery.sh"), 1)
+        self.assertNotIn("vix-unpause.sh", post)
+        rec = RECOVERY.read_text()
+        self.assertIn('vix-pause-marker.sh" owned "$MARK"', rec)
+        self.assertLess(rec.index('vix-pause-marker.sh" owned "$MARK"'), rec.index('exec bash "$here/vix-unpause.sh"'))
 
 
 class WebServiceBindingTest(unittest.TestCase):
@@ -468,11 +568,142 @@ class WebServiceBindingTest(unittest.TestCase):
         t = (ROOT / "Jenkinsfile.web-service").read_text()
         self.assertIn("booleanParam(name: 'BUILD_IMAGE', defaultValue: false", t)
         self.assertIn("string(name: 'WEB_PERMITTED_SHA', defaultValue: '', trim: true", t)
-        self.assertIn("require-guarded-downstream.sh options-edge-web-deploy", t)
+        self.assertIn("require-guarded-downstream.sh options-edge-web-deploy \"${WEB_PERMITTED_SHA:?}\"", t)
+        self.assertIn("string(name: 'PERMITTED_SHA',                value: params.WEB_PERMITTED_SHA.trim())", t)
         self.assertIn("def child = build job: 'options-edge-web-deploy'", t)
+        self.assertLess(t.index("env.CHILD_BUILD_URL  = child.absoluteUrl"), t.index("fetch-permitted-image-lock.sh options-edge-web-deploy"))
         self.assertRegex(t, r"fetch-permitted-image-lock\.sh options-edge-web-deploy \\\n\s+\"\$\{WEB_BUILD_NUMBER:\?\}\" \"\$\{WEB_PERMITTED_SHA:\?\}\" options-edge-web")
         self.assertIn("write-permission-receipt.sh", t)
         self.assertNotIn("UNBOUND", t)
+
+
+def _groovy_triple_body(text: str, anchor: str) -> str:
+    """The body of the first sh \'\'\' block after `anchor`, as the shell receives it (Groovy's \\\\ -> \\)."""
+    i = text.index(anchor)
+    start = text.index("sh \'\'\'\n", i) + len("sh \'\'\'\n")
+    end = text.index("\'\'\'", start)
+    return text[start:end].replace("\\\\", "\\")
+
+
+class NiftyImageIdentityTest(unittest.TestCase):
+    """Codex I10: the Nifty build carries its guarded source identity into its image lock and the deploy.
+    The build stage's shell block is EXECUTED with a sentinel docker/registry: the digest comes from this
+    push's own output, must equal what the registry serves for the per-build tag, and lands in a lock keyed
+    by BUILD_ID; the Groovy that follows turns only that lock into REQUIRED_IMAGE."""
+
+    def setUp(self) -> None:
+        self.text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        ws = self.tmp / "ws"
+        (ws / "scripts/jenkins").mkdir(parents=True)
+        shutil.copy(J / "resolve-pushed-digest.sh", ws / "scripts/jenkins/resolve-pushed-digest.sh")
+        subprocess.run(["git", "init", "-q", "-b", "main", str(ws)], check=True)
+        subprocess.run(["git", "-C", str(ws), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "deploy"], check=True)
+        src = ws / "nifty-gex-src"
+        subprocess.run(["git", "init", "-q", "-b", "main", str(src)], check=True)
+        subprocess.run(["git", "-C", str(src), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "app"], check=True)
+        self.src_sha = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+        self.ws = ws
+        b = self.tmp / "bin"
+        b.mkdir()
+        (b / "docker").write_text("#!/usr/bin/env bash\n"
+                                  "[ \"$1\" = push ] || exit 0\n"
+                                  "tag=\"${2##*:}\"\n"
+                                  "echo \"The push refers to repository [${2%:*}]\"\n"
+                                  "echo \"$tag: digest: $PUSH_DIGEST size: 1234\"\n")
+        (b / "curl").write_text("#!/usr/bin/env bash\nprintf 'HTTP/1.1 200 OK\\r\\nDocker-Content-Digest: %s\\r\\n\\r\\n' \"$REGISTRY_DIGEST\"\n")
+        (b / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n")
+        for f in b.iterdir():
+            f.chmod(f.stat().st_mode | stat.S_IXUSR)
+        self.block = _groovy_triple_body(self.text, "Second source, second binding")
+
+    def _run(self, push: str, served: str) -> subprocess.CompletedProcess:
+        e = {"PATH": f"{self.tmp / 'bin'}:{os.environ['PATH']}", "HOME": str(self.tmp), "ENVIRONMENT": "dev", "BUILD_ID": "57", "BUILD_NUMBER": "57",
+             "BUILD_URL": "http://j/job/nifty-gex-service-deploy/57/", "NIFTY_PERMITTED_SHA": self.src_sha, "IMAGE_REF": "localhost:5001/options-edge-nifty-gex:dev",
+             "SOURCE_REPO": "git@github.com:abhinav-jain09/options-edge-nifty-gex.git", "PERMITTED_SHA_GUARD_VERSION": OWN_HASH,
+             "PUSH_DIGEST": push, "REGISTRY_DIGEST": served}
+        return subprocess.run(["bash", "-c", self.block], capture_output=True, text=True, env=e, cwd=self.ws)
+
+    def test_this_builds_push_is_locked_by_build_id_and_source_commit(self) -> None:
+        r = self._run(DIGEST, DIGEST)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        lock = (self.ws / ".jenkins-tmp/image-lock-57.env").read_text()
+        self.assertIn(f"OPTIONS_EDGE_IMAGE_LOCK_GIT_COMMIT={self.src_sha}\n", lock)
+        self.assertIn("OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID=57\n", lock)
+        self.assertIn(f"NIFTY_GEX_IMAGE=localhost:5001/options-edge-nifty-gex:b57-{self.src_sha}@{DIGEST}\n", lock)
+
+    def test_a_registry_that_serves_another_digest_for_the_build_tag_is_refused(self) -> None:
+        r = self._run(DIGEST, "sha256:" + "e" * 64)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("this push reported", r.stderr)
+        self.assertFalse((self.ws / ".jenkins-tmp/image-lock-57.env").exists())
+
+    def test_a_push_that_reports_no_digest_is_refused(self) -> None:
+        r = self._run("", DIGEST)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("reported no digest", r.stderr)
+        self.assertFalse((self.ws / ".jenkins-tmp/image-lock-57.env").exists())
+
+    def test_a_checkout_other_than_the_permitted_commit_is_refused(self) -> None:
+        self.src_sha = "f" * 40
+        r = self._run(DIGEST, DIGEST)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("is not NIFTY_PERMITTED_SHA", r.stderr)
+
+    def test_only_this_builds_lock_becomes_required_image_and_the_deploy_binds_it(self) -> None:
+        g = self.text[self.text.index('def lockFile = ".jenkins-tmp/image-lock-${env.BUILD_ID}.env"'):self.text.index("stage('Deploy (service-scoped)')")]
+        self.assertIn("lockBuild != env.BUILD_ID.toString()", g)
+        self.assertIn("env.REQUIRED_IMAGE = ref", g)
+        self.assertIn("archiveArtifacts artifacts: '.jenkins-tmp/options-edge-image-lock.env'", g)
+        dep = self.text[self.text.index("stage('Deploy (service-scoped)')"):]
+        self.assertIn("scripts/deploy/service-deploy.sh", dep)   # which binds REQUIRED_IMAGE (bind-required-image.sh)
+
+
+class ActualJenkinsfileMutationTest(unittest.TestCase):
+    """The Codex round-3 reproductions against THIS repository's real Jenkinsfiles: each mutation left the
+    canonical text in place but made it non-executing, and the round-3 validator accepted it."""
+
+    def _validate_mutated(self, name: str, old: str, new: str) -> subprocess.CompletedProcess:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "scripts/jenkins").mkdir(parents=True)
+        (tmp / "scripts/ci").mkdir(parents=True)
+        shutil.copy(GUARD, tmp / "scripts/jenkins/permitted-sha-guard.sh")
+        shutil.copy(ROOT / "scripts/ci/jenkins-permitted-sha-scope.txt", tmp / "scripts/ci/jenkins-permitted-sha-scope.txt")
+        text = (ROOT / name).read_text()
+        self.assertIn(old, text, name)
+        (tmp / name).write_text(text.replace(old, new, 1))
+        return subprocess.run(["python3", str(VALIDATOR), "--root", str(tmp), "--manifest", str(tmp / "scripts/ci/jenkins-permitted-sha-scope.txt"), "--only", name], capture_output=True, text=True)
+
+    def test_service_deploy_compatibility_check_never_entered(self) -> None:
+        t = (ROOT / "Jenkinsfile.service-deploy").read_text()
+        a = t.index("          def compat = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh options-edge-processing")
+        b = t.index("          }\n", t.index("if (compat != 0) {", a)) + len("          }\n")
+        block = t[a:b]
+        r = self._validate_mutated("Jenkinsfile.service-deploy", block, "          if (false) {\n" + block + "          }\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("is not executably protected", r.stdout)
+
+    def test_service_deploy_post_recovery_negated_with_a_space(self) -> None:
+        r = self._validate_mutated("Jenkinsfile.service-deploy", "        if (env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && env.SECONDARY_PERMISSIONS_PASSED == 'PASSED' && env.EFFECT_STAGE_STARTED == 'PASSED') {",
+                                   "        if (! (env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED')) {")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("post-deploy-recovery.sh (may scale a deployment) is not inside the true branch", r.stdout)
+
+    def test_kafka_cleanup_post_compared_to_false(self) -> None:
+        t = (ROOT / "Jenkinsfile.kafka-cleanup").read_text()
+        m = re.search(r"if \((env\.PERMITTED_SHA_GUARD == 'PASSED'[^)]*)\) \{", t[t.index("post {"):])
+        self.assertIsNotNone(m)
+        r = self._validate_mutated("Jenkinsfile.kafka-cleanup", m.group(0), f"if (({m.group(1)}) == false) {{")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("is not inside the true branch", r.stdout)
+
+    def test_effect_stage_gate_removed_from_a_real_stage(self) -> None:
+        r = self._validate_mutated("Jenkinsfile.service-deploy", "    stage('Deploy (service-scoped)') {\n      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' } }\n",
+                                   "    stage('Deploy (service-scoped)') {\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("stage 'Deploy (service-scoped)' after the guard has no `when` gate", r.stdout)
 
 
 class DisabledUmbrellaTest(unittest.TestCase):
