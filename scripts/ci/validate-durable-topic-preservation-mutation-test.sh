@@ -33,6 +33,11 @@ cp -R "$SRC/scripts/ci" "$SRC/scripts/kafka" "$SRC/scripts/ops" "$REPO/scripts/"
 # message the validator prints on its own. Live, they could supply a case's exit status while the structural check
 # supplied only the text; stubbed, the status can only come from the checks this harness is about. They too run for
 # real, once, in validate-services.sh section 6.
+# What stubbing does NOT lose: those suites can only add fail=1 (exit 1). The exit-3 cases stop at the validator's
+# independent-read check before any suite runs; the exit-1 cases already want 1 and never assert on suite output; and
+# the one exit-0 case is the unmutated tree, which is exactly what section 6 runs. Measured (PR #1045): with both suites
+# replaced by an unconditional FAIL, the previous harness flagged only "unmutated tree passes"; all ten mutated cases
+# stayed ok. A suite failing on a MUTATED topics.env was never observable here.
 for _suite in apply-topics-vol-premium-safety cleanup-topics-durable apply-topics-ledger-safety; do
   [ -x "$REPO/scripts/kafka/$_suite-test.sh" ] \
     || { echo "  FAIL scripts/kafka/$_suite-test.sh missing — the stub below would hide the validator's own missing-test finding"; exit 1; }
