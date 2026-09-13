@@ -468,8 +468,13 @@ def main() -> int:
         mut(f"the template text {label} is not the dedicated step", STEP, repl, "is not re-bound")
     mut("dedicated step with the :? form is fine", "${APP_PERMITTED_SHA:-}", "${APP_PERMITTED_SHA:?}", "carry the canonical permitted-commit guard", expect_ok=True)
 
-    # 10. contracts
-    contracts_ok = good.replace("            sh 'docker build -t app app-src'", "            sh '''\n              set -euo pipefail\n              rm -rf .deps/options-edge-contracts\n              git clone git@github.com:example/contracts.git .deps/options-edge-contracts\n              git -C .deps/options-edge-contracts checkout main\n            '''\n            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main'\n            }\n            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir .deps/options-edge-contracts --allow-ignored target'\n            }\n            sh '''\n              mvn -B -f .deps/options-edge-contracts/pom.xml install\n            '''\n            sh 'docker build -t app app-src'")
+    # 10. contracts. Each effect gets its OWN verify step immediately before it: verify(contracts) before mvn install,
+    # verify(app-src) before docker build.
+    C_CLONE = "            sh '''\n              set -euo pipefail\n              rm -rf .deps/options-edge-contracts\n              git clone git@github.com:example/contracts.git .deps/options-edge-contracts\n              git -C .deps/options-edge-contracts checkout main\n            '''\n"
+    C_GUARD = "            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main'\n            }\n"
+    C_VERIFY = "            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir .deps/options-edge-contracts --allow-ignored target'\n            }\n"
+    C_MVN = "            sh '''\n              mvn -B -f .deps/options-edge-contracts/pom.xml install\n            '''\n"
+    contracts_ok = good.replace(VERIFY_APP + BUILD, C_CLONE + C_GUARD + C_VERIFY + C_MVN + VERIFY_APP + BUILD)
     contracts_manifest = "Jenkinsfile.fixture | in | reguard=Deploy path; contracts=.deps/options-edge-contracts | fixture\n"
     shell_ok = contracts_ok
     case("contracts acquired in one step, bound by the dedicated step, installed in the next: fine", contracts_ok, contracts_manifest, True)
@@ -492,7 +497,7 @@ def main() -> int:
     case("the verify step before the nested build is missing", good.replace(VERIFY_APP, ""), MANIFEST, False, "no dedicated verify-permitted-tree step")
     case("the verify step is AFTER the build, not before", good.replace(VERIFY_APP + BUILD, BUILD + VERIFY_APP), MANIFEST, False, "no dedicated verify-permitted-tree step")
     case("the verify step names another directory, not the one the build consumes",
-         good.replace("verify-permitted-tree.sh --dir app-src", "verify-permitted-tree.sh --dir other"), MANIFEST, False, "no dedicated verify-permitted-tree step")
+         good.replace("verify-permitted-tree.sh --dir app-src", "verify-permitted-tree.sh --dir other"), MANIFEST, False, "the nearest verify step re-checks 'other'")
     case("the verify step can be skipped (inside if (false))",
          good.replace(VERIFY_APP, "            script {\n              if (params.SKIP == 'yes') {\n" + VERIFY_APP.replace("            ", "                ") + "              }\n            }\n"), MANIFEST, False, "can be skipped")
     for label, mutated in [
@@ -504,6 +509,24 @@ def main() -> int:
              good.replace("sh 'PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src'", mutated), MANIFEST, False, "no dedicated verify-permitted-tree step")
     case("a verify step with an --allow-ignored list is fine",
          good.replace("verify-permitted-tree.sh --dir app-src", "verify-permitted-tree.sh --dir app-src --allow-ignored target --allow-ignored .jenkins-tmp"), MANIFEST, True)
+    # Round 11 item 2 — the verify step's permission variable must be the SAME as the guard's for that directory.
+    case("the verify step uses a different permission variable from the guard is refused",
+         good.replace("verify-permitted-tree.sh --dir app-src'", "verify-permitted-tree.sh --dir app-src'".replace("APP_PERMITTED_SHA", "OTHER_PERMITTED_SHA")).replace('sh \'PERMITTED_SHA="${APP_PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src\'', 'sh \'PERMITTED_SHA="${OTHER_PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src\''),
+         MANIFEST, False, "must re-check the SAME permitted commit")
+    # Round 11 item 3 — adjacency. A statement between the verify and the effect breaks coverage.
+    case("a shell step between the verify and the effect is refused",
+         good.replace(VERIFY_APP + BUILD, VERIFY_APP + "            sh 'echo between'\n" + BUILD), MANIFEST, False, "nothing may run between the verify and the effect")
+    case("a source move (git reset) inside the effect's own shell body before it is refused",
+         good.replace(BUILD, "            sh '''\n              git -C app-src reset --hard origin/feature\n              docker build -t app app-src\n            '''\n"), MANIFEST, False, "moves a checkout's HEAD or worktree")
+    case("a git pull as a separate step between verify and effect is refused",
+         good.replace(VERIFY_APP + BUILD, VERIFY_APP + "            sh 'git -C app-src pull --ff-only origin main'\n" + BUILD), MANIFEST, False, "moves a checkout's HEAD or worktree")
+    # Round 11 item 5 / web M10 — the effect's consumed directory is resolved through its dir() context.
+    DINNER = "            dir('app-src') {\n              timeout(time: 10, unit: 'MINUTES') {\n                sh 'PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir .'\n              }\n              sh 'docker build -t app .'\n            }\n"
+    case("a docker build of '.' inside dir('app-src'), verified as '.' there, is fine", good.replace(VERIFY_APP + BUILD, DINNER), MANIFEST, True)
+    case("a docker build of '.' inside dir('app-src') with no verify is refused",
+         good.replace(VERIFY_APP + BUILD, "            dir('app-src') {\n              sh 'docker build -t app .'\n            }\n"), MANIFEST, False, "the nested checkout 'app-src'")
+    case("a verify step outside a timeout deadline block is refused",
+         good.replace(VERIFY_APP, "            sh 'PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src'\n"), MANIFEST, False, "not alone inside a timeout")
     # every build/publish-from-source token requires the verify step; with it present each is fine
     for label, effect in [("rsync of the source", "rsync -a app-src/ builder:/tmp/app/"), ("helm upgrade from the source", "helm upgrade app app-src")]:
         b = "            sh '" + effect + "'\n"
@@ -555,7 +578,7 @@ def main() -> int:
     case("--only still applies every rule", good.replace("        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n"), MANIFEST, False, "has no `when` gate", ["--only", "Jenkinsfile.fixture"])
 
     print(f"validate-jenkinsfile-guard-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 195:
+    if failed == 0 and passed >= 200:
         print("validate-jenkinsfile-guard-test: ALL PASS")
         return 0
     return 1

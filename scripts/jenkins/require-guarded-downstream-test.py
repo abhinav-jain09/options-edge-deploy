@@ -29,6 +29,7 @@ HELPER = os.path.join(HERE, "require-guarded-downstream.sh")
 JOBPATH = os.path.join(HERE, "jenkins-job-path.sh")
 GUARD = open(os.path.join(HERE, "permitted-sha-guard.sh"), "rb").read()
 OWN = hashlib.sha256(GUARD).hexdigest()
+VERIFY = open(os.path.join(HERE, "verify-permitted-tree.sh"), "rb").read()
 URL = "http://jenkins.test:8085/"
 TREE = "api/json?tree=property[parameterDefinitions[name,type,defaultParameterValue[value]]]"
 
@@ -223,7 +224,7 @@ cat "$f"
             fh.write(body)
         os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR)
 
-    def commit(self, jenkinsfile=CHILD_JF, guard=GUARD, manifest=MANIFEST_IN, guard_hash=None, repo="options-edge-deploy",
+    def commit(self, jenkinsfile=CHILD_JF, guard=GUARD, manifest=MANIFEST_IN, guard_hash=None, repo="options-edge-deploy", verify=VERIFY,
                script="Jenkinsfile.service-deploy", manifest_path="scripts/ci/jenkins-permitted-sha-scope.txt"):
         if repo != "options-edge-deploy":
             self.work = os.path.join(self.tmp, "work-" + repo)
@@ -239,6 +240,8 @@ cat "$f"
             fh.write(jenkinsfile.replace("__HASH__", guard_hash or hashlib.sha256(guard).hexdigest()))
         with open(os.path.join(self.work, "scripts/jenkins/permitted-sha-guard.sh"), "wb") as fh:
             fh.write(guard)
+        with open(os.path.join(self.work, "scripts/jenkins/verify-permitted-tree.sh"), "wb") as fh:
+            fh.write(verify)
         with open(os.path.join(self.work, manifest_path), "w") as fh:
             fh.write(manifest)
         git("add", "-A", cwd=self.work)
@@ -322,6 +325,13 @@ def main() -> int:
     w = world(); a = w.commit(guard=other_guard); w.serve_child()
     check("child carrying a different guard at that commit is refused (even though its own validator view is consistent)",
           w.run(["service-deploy", a, "REQUIRED_IMAGE"]), False, "would execute a different guard")
+    w.close()
+
+    # the provenance verifier is authenticated exactly like the guard (round 11 item 4)
+    other_verify = VERIFY + b"\n# a different verifier\n"
+    w = world(); a = w.commit(verify=other_verify); w.serve_child()
+    check("child carrying a different verify-permitted-tree.sh at that commit is refused",
+          w.run(["service-deploy", a, "REQUIRED_IMAGE"]), False, "would run a different provenance verifier")
     w.close()
 
     # job configuration

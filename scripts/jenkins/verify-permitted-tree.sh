@@ -86,40 +86,54 @@ esac
 [ "$head_sha" = "$p" ] \
   || refuse "checked-out HEAD $head_sha in '$dir' is not the permitted commit $p — the source was moved to another commit after checkout; nothing may deploy from it"
 
+# FAIL-CLOSED: every git query below must SUCCEED. An inventory that cannot be produced (a git error, a killed
+# process, partial output followed by failure) is never treated as "clean" or "empty" — it is a refusal. The exit
+# status of each command is checked explicitly rather than defaulted away.
+
 # 3. The working tree is identical to HEAD: no modified, staged, deleted, renamed or untracked path.
-status="$(git -C "$dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)" \
-  || refuse "cannot read the working-tree status of '$dir'"
+if ! status="$(git -C "$dir" status --porcelain=v1 --untracked-files=all 2>/dev/null)"; then
+  refuse "cannot read the working-tree status of '$dir' (git status failed) — an inventory that cannot be produced is not an empty one"
+fi
 if [ -n "$status" ]; then
   first="$(printf '%s\n' "$status" | head -3 | tr '\n' '|')"
   refuse "the working tree of '$dir' differs from the permitted commit $p — files were changed, added or removed after checkout (git status: ${first%|}); the tree the effect would consume is not the permitted commit's tree"
 fi
-git -C "$dir" diff --quiet HEAD \
-  || refuse "tracked files in '$dir' differ from the permitted commit $p (git diff HEAD is non-empty) — the source was modified after checkout"
+# `git diff --quiet HEAD` exits 0 = identical, 1 = differences, >1 = error. Only 0 is acceptable; both a difference
+# and an error refuse.
+diff_rc=0
+git -C "$dir" diff --quiet HEAD >/dev/null 2>&1 || diff_rc=$?
+[ "$diff_rc" -eq 0 ] \
+  || refuse "tracked files in '$dir' differ from the permitted commit $p, or the comparison could not be made (git diff HEAD rc=$diff_rc) — the source was modified after checkout, or its state could not be confirmed"
 
-# 4. Ignored-but-present paths are refused unless their top component is on the --allow-ignored list.
-#    An archive or copy laid over the source is caught by check 3 as untracked; this closes the case
-#    where the dropped path happens to be ignored by the repository (e.g. under a build-output dir).
-ignored="$(git -C "$dir" status --porcelain=v1 --untracked-files=all --ignored 2>/dev/null | sed -n 's/^!! //p')" || ignored=""
-if [ -n "$ignored" ]; then
-  while IFS= read -r path; do
-    [ -n "$path" ] || continue
-    # git may quote paths containing special characters; a quoted path never matches a plain literal
-    # allow entry, so it is refused, which is the safe direction.
-    top="${path%%/*}"
-    allowed=false
-    for a in ${allow_ignored[@]+"${allow_ignored[@]}"}; do
-      a="${a%/}"
-      if [ "$path" = "$a" ] || [ "$top" = "$a" ] || case "$path" in "$a"/*) true ;; *) false ;; esac; then
-        allowed=true
-        break
-      fi
-    done
-    if [ "$allowed" = false ]; then
-      refuse "ignored path '$path' is present under '$dir' but is not declared build output (--allow-ignored) — something was written into the source tree after checkout; declare it explicitly if it is expected build output"
-    fi
-  done <<EOF
-$ignored
-EOF
+# 4. Ignored-but-present paths are refused unless their top component is on the --allow-ignored list. An archive or
+#    copy laid over the source is caught by check 3 as untracked; this closes the case where the dropped path happens
+#    to be ignored by the repository (e.g. under a build-output dir). The enumeration itself must succeed: a failed
+#    --ignored scan REFUSES, never falls through to "no ignored paths".
+if ! ignored_raw="$(git -C "$dir" status --porcelain=v1 --untracked-files=all --ignored 2>/dev/null)"; then
+  refuse "cannot enumerate the ignored paths under '$dir' (git status --ignored failed) — an inventory that cannot be produced is not an empty one; refusing rather than treating it as clean"
 fi
+while IFS= read -r line; do
+  case "$line" in
+    "!! "*) path="${line#!! }" ;;
+    *) continue ;;
+  esac
+  [ -n "$path" ] || continue
+  # git may quote paths containing special characters; a quoted path never matches a plain literal allow entry, so it
+  # is refused, which is the safe direction. An allow entry matches when it is the whole path, a leading directory of
+  # it, OR appears as a full path-component run anywhere in it — so `--allow-ignored target` covers a module's
+  # `<module>/target/…` and `--allow-ignored .m2` covers `.m2/repository/…`, without listing every module by hand.
+  allowed=false
+  for a in ${allow_ignored[@]+"${allow_ignored[@]}"}; do
+    a="${a%/}"
+    case "/$path/" in
+      "/$a/"|"/$a"/*|*"/$a/"*) allowed=true; break ;;
+    esac
+  done
+  if [ "$allowed" = false ]; then
+    refuse "ignored path '$path' is present under '$dir' but is not declared build output (--allow-ignored) — something was written into the source tree after checkout; declare it explicitly if it is expected build output"
+  fi
+done <<EOF
+$ignored_raw
+EOF
 
 echo "verify-permitted-tree: verdict=PERMITTED — '$dir' is exactly the permitted commit $head_sha, working tree clean${allow_ignored+ (allowed ignored: ${allow_ignored[*]-})}"

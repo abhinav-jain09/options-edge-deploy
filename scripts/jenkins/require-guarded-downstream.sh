@@ -313,6 +313,7 @@ for u in "$ssh_url" "$https_url"; do
      && [ "$(git -C "$work/git" rev-parse "FETCH_HEAD^{commit}" 2>/dev/null)" = "$sha" ]; then
     git -C "$work/git" show "$sha:$script_path" > "$work/root/$script_path" \
       && git -C "$work/git" show "$sha:scripts/jenkins/permitted-sha-guard.sh" > "$work/root/scripts/jenkins/permitted-sha-guard.sh" \
+      && git -C "$work/git" show "$sha:scripts/jenkins/verify-permitted-tree.sh" > "$work/root/scripts/jenkins/verify-permitted-tree.sh" \
       && git -C "$work/git" show "$sha:$manifest" > "$work/root/$manifest" \
       && fetched=true
     break
@@ -322,15 +323,22 @@ if [ "$fetched" != true ] && command -v gh >/dev/null 2>&1; then
   gh_get() { with_deadline "$deadline_s" gh api "repos/$repo/contents/$1?ref=$sha" --jq .content 2>/dev/null | python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))'; }
   gh_get "$script_path" > "$work/root/$script_path" \
     && gh_get "scripts/jenkins/permitted-sha-guard.sh" > "$work/root/scripts/jenkins/permitted-sha-guard.sh" \
+    && gh_get "scripts/jenkins/verify-permitted-tree.sh" > "$work/root/scripts/jenkins/verify-permitted-tree.sh" \
     && gh_get "$manifest" > "$work/root/$manifest" \
-    && [ -s "$work/root/$script_path" ] && [ -s "$work/root/scripts/jenkins/permitted-sha-guard.sh" ] \
+    && [ -s "$work/root/$script_path" ] && [ -s "$work/root/scripts/jenkins/permitted-sha-guard.sh" ] && [ -s "$work/root/scripts/jenkins/verify-permitted-tree.sh" ] \
     && fetched=true
 fi
-[ "$fetched" = true ] || refuse "could not fetch $script_path, the guard and the guard manifest of $repo at $sha (each transport bounded to ${deadline_s}s)"
+[ "$fetched" = true ] || refuse "could not fetch $script_path, the guard, the provenance verifier and the guard manifest of $repo at $sha (each transport bounded to ${deadline_s}s)"
 
 child_guard="$(bash "$here/permitted-sha-guard-version.sh" "$work/root/scripts/jenkins/permitted-sha-guard.sh")"
 [ "$child_guard" = "$own_version" ] \
   || refuse "$repo at $sha carries guard $child_guard, this caller runs $own_version — '$full' would execute a different guard than the one judged"
+# The provenance verifier is executed before every source-consuming effect (validator rule 9b); authenticate the
+# child's copy exactly like the guard, so the child cannot substitute a weakened verifier.
+own_verify="$(bash "$here/permitted-sha-guard-version.sh" "$here/verify-permitted-tree.sh")"
+child_verify="$(bash "$here/permitted-sha-guard-version.sh" "$work/root/scripts/jenkins/verify-permitted-tree.sh")"
+[ "$child_verify" = "$own_verify" ] \
+  || refuse "$repo at $sha carries verify-permitted-tree.sh $child_verify, this caller runs $own_verify — '$full' would run a different provenance verifier than the one judged"
 if ! out="$(python3 "$here/validate-jenkinsfile-guard.py" --root "$work/root" --manifest "$work/root/$manifest" --only "$script_path" 2>&1)"; then
   printf '%s\n' "$out" | sed 's/^/require-guarded-downstream:   /' >&2
   refuse "$script_path of $repo at $sha does not pass the permitted-commit validator — '$full' would not execute the guard before its effects"

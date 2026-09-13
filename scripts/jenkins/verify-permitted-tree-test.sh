@@ -23,7 +23,7 @@ git init -q --bare origin.git
 seed="$work/seed"
 git init -q "$seed"; git -C "$seed" config user.email t@t; git -C "$seed" config user.name t
 mkdir -p "$seed/src" "$seed/k8s"
-printf 'v1\n' > "$seed/src/app.txt"; printf 'kind: Deployment\n' > "$seed/k8s/d.yaml"; printf 'target/\n*.log\n' > "$seed/.gitignore"
+printf 'v1\n' > "$seed/src/app.txt"; printf 'kind: Deployment\n' > "$seed/k8s/d.yaml"; printf 'target/\n*.log\n.m2/\n' > "$seed/.gitignore"
 git -C "$seed" add -A; git -C "$seed" commit -q -m A
 git -C "$seed" remote add origin "$work/origin.git"; git -C "$seed" push -q origin HEAD:main
 A="$(git -C "$seed" rev-parse HEAD)"
@@ -78,9 +78,46 @@ check "ignored build output present but not declared is refused" 1 "$A"
 check "ignored build output present and declared with --allow-ignored is allowed" 0 "$A" --allow-ignored target
 fresh; printf 'log\n' > co/debug.log
 check "an ignored file that is not the declared build dir is refused" 1 "$A" --allow-ignored target
+# a --allow-ignored directory name covers that directory ANYWHERE (module/target, .m2/repository), so the real
+# workspace-after-build (byproducts in nested build dirs) passes when those names are declared.
+fresh
+mkdir -p co/mod-a/target/classes co/mod-b/target co/.m2/repository
+printf 'a\n' > co/mod-a/target/classes/A.class; printf 'b\n' > co/mod-b/target/app.jar; printf 'r\n' > co/.m2/repository/x.jar
+check "nested module target/ dirs and .m2/ are covered by their declared names" 0 "$A" --allow-ignored target --allow-ignored .m2
+check "the same workspace with target declared but .m2 NOT declared is refused" 1 "$A" --allow-ignored target
+
+# FAIL-CLOSED: a git query that fails, or partial output then failure, must REFUSE — never be read as a clean/empty
+# inventory. A wrapper `git` on PATH forwards to the real git but fails (optionally after partial output) when its
+# arguments match a chosen pattern.
+REALGIT="$(command -v git)"
+fakebin="$work/fakebin"; mkdir -p "$fakebin"
+cat > "$fakebin/git" <<EOF
+#!/usr/bin/env bash
+if [ -n "\${FAIL_MATCH:-}" ] && printf '%s ' "\$@" | grep -q -- "\$FAIL_MATCH"; then
+  [ -n "\${PARTIAL:-}" ] && printf '%s\n' "\$PARTIAL"
+  exit "\${FAIL_RC:-128}"
+fi
+exec "$REALGIT" "\$@"
+EOF
+chmod +x "$fakebin/git"
+
+checkfail() {  # checkfail <name> <FAIL_MATCH> [PARTIAL]
+  local name="$1" match="$2" partial="${3:-}"
+  fresh
+  set +e
+  PATH="$fakebin:$PATH" FAIL_MATCH="$match" PARTIAL="$partial" PERMITTED_SHA="$A" bash "$VERIFY" --dir co >/dev/null 2>&1
+  local rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL [$name]: rc=0 (fail-open) — a failed git query was treated as clean"; fi
+}
+checkfail "a failed --ignored enumeration refuses (not treated as empty)" -- "--ignored"
+checkfail "a partial --ignored output then failure refuses" -- "--ignored" "!! sneaked-in/"
+checkfail "a failed working-tree status refuses" "status --porcelain=v1 --untracked-files=all $"
+checkfail "a git diff error refuses" -- "diff --quiet"
+checkfail "a failed HEAD resolution refuses" -- "rev-parse HEAD"
 
 echo "verify-permitted-tree-test: $pass passed, $fail failed"
-if [ "$fail" -eq 0 ] && [ "$pass" -ge 20 ]; then
+if [ "$fail" -eq 0 ] && [ "$pass" -ge 27 ]; then
   echo "verify-permitted-tree-test: ALL PASS"
   exit 0
 fi

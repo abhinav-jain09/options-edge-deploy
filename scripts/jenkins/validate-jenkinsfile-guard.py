@@ -1022,7 +1022,7 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
         return None, None, None, None
 
     bound_paths: dict[str, int] = {}
-    bound_guards: dict[str, tuple[int, int]] = {}      # resolved path -> (offset after its guard line, guard line)
+    bound_guards: dict[str, tuple[int, int, str]] = {}  # resolved path -> (offset after its guard line, guard line, permission var)
     acquisition_spans: list[tuple[int, int]] = []
     seen_stmts: set[int] = set()
     for i in range(g_hi, len(lines)):
@@ -1095,7 +1095,7 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
                 else:
                     rebound = True
                     bound_paths[resolved] = gl
-                    bound_guards[resolved] = (offs[gl + 1], gl)
+                    bound_guards[resolved] = (offs[gl + 1], gl, dm2.group("own") + "_PERMITTED_SHA")
         if not rebound:
             problems.append(f"line {i + 1}: '{resolved}' acquired after the guard is not re-bound by the dedicated guard step for that same resolved path, immediately after its acquisition step: {why_not}")
     if entry["contracts"] and not contracts_seen:
@@ -1109,56 +1109,97 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
     # nested checkout it compiles or ships. verify-permitted-tree.sh re-checks HEAD == permitted AND a clean working
     # tree at run time, so a replacement is caught however it happened. This replaces the earlier lexical
     # "nothing may write into the checkout" analysis (an open class); presence and placement is what is enforced here.
+    def fold(dirs: list[str], rel: str) -> str:
+        return "/".join(list(dirs) + [c for c in rel.split("/") if c not in ("", ".")])
+
     def verify_at(line_idx: int):
         content = g.sh_single_quoted_step(offs[line_idx], offs[line_idx] + len(lines[line_idx]))
         if content is None:
             return None
         return VERIFY_STEP.match("sh '" + content + "'")
 
-    def verify_resolved(sh_pos: int, dirarg: str):
-        """The workspace-relative directory a verify step at sh_pos re-checks (its --dir folded through every enclosing
-        dir()), or None when that context cannot be resolved to a literal path."""
-        gdirs, gwhy = resolve_dirs(sh_pos)
-        if gwhy or not safe_rel_or_dot(dirarg):
-            return None
-        parts = list(gdirs) + [c for c in dirarg.split("/") if c not in ("", ".")]
-        return "/".join(parts)
-
-    # Every dedicated verify step in the file, by resolved directory: (resolved dir, sh_pos, line).
-    verify_steps: list[tuple[str, int, int]] = []
+    # Every dedicated verify step, with its enclosing timeout block. A verify step is: (resolved dir, permission var,
+    # the statement's start and end offsets, its parent block id). The permission var and --dir must resolve; the step
+    # must sit alone inside a `timeout(time: N, unit: 'MINUTES') { … }` block (the same deadline template as the guard)
+    # and run unskippably.
+    verify_steps: list[dict] = []
     for li in range(g_hi, len(lines)):
         vm = verify_at(li)
         if vm is None:
             continue
         sh_pos = offs[li] + first_code_col(li)
-        rv = verify_resolved(sh_pos, vm.group("dir"))
-        if rv is None:
+        gdirs, gwhy = resolve_dirs(sh_pos)
+        if gwhy or not safe_rel_or_dot(vm.group("dir")):
             problems.append(f"line {li + 1}: a verify-permitted-tree step whose directory cannot be resolved to a literal path")
+            continue
+        rv = fold(gdirs, vm.group("dir"))
+        # the step must be the sole content of a timeout(...) deadline block, exactly like the dedicated guard step
+        tb = g.innermost(sh_pos)
+        header = g.blocks[tb].header if tb is not None else ""
+        if not re.fullmatch(r"timeout\(time: [0-9]+, unit: 'MINUTES'\)", header) or g.code_only(g.blocks[tb].open + 1, sh_pos).strip() or g.code_only(offs[li] + len(lines[li]), g.blocks[tb].close).strip():
+            problems.append(f"line {li + 1}: the verify-permitted-tree step for '{rv or '.'}' is not alone inside a timeout(time: N, unit: 'MINUTES') deadline block")
             continue
         if unskippable(sh_pos):
             problems.append(f"line {li + 1}: the verify-permitted-tree step for '{rv or '.'}' can be skipped: {unskippable(sh_pos)}")
-        verify_steps.append((rv, sh_pos, li))
+        t_start = text.rfind("timeout(", 0, g.blocks[tb].open)
+        verify_steps.append({"dir": rv, "var": vm.group("own"), "start": t_start, "end": g.blocks[tb].close + 1,
+                             "parent": g.blocks[tb].parent, "line": li})
 
     # Source-consuming effects. Two kinds:
-    #  - SHIP_DEPLOY (rsync, helm install/upgrade, mvn install/deploy): sends a source tree somewhere or compiles it
-    #    into a published artifact. Attributed to a nested checkout when it names one (mvn `-f <nested>/pom.xml`, an
-    #    rsync/helm path under a nested dir), otherwise to the PRIMARY workspace.
-    #  - NESTED_BUILD (docker build / buildx build): a `docker build <context>` naming a NESTED checkout as its context
-    #    builds an image from that checkout's files, so it needs that checkout re-verified. A docker build of the
-    #    PRIMARY workspace is NOT required here: by the time the image is built the workspace legitimately carries the
-    #    build's own output, so a whole-tree verify is not meaningful; the primary source is proven at checkout by the
-    #    guard, and any nested source compiled into the image is re-verified on its own. `docker push` / `git push`
-    #    publish an already-built image or ref, not a source tree, so they are not effects here either.
+    #  - SHIP_DEPLOY (rsync, helm install/upgrade, mvn install/deploy): ships a source tree or compiles it into a
+    #    published artifact. Attributed to a nested checkout when it names one (mvn `-f <nested>/pom.xml`, a path under a
+    #    nested dir), otherwise to the PRIMARY workspace.
+    #  - docker build / buildx build whose CONTEXT resolves into a nested checkout. A docker build of the primary
+    #    workspace is not required (the workspace legitimately holds build output by then; the primary source is proven
+    #    at checkout and any nested source compiled in is verified on its own). `docker push` / `git push` publish an
+    #    already-built image or ref, not a tree.
     SHIP_DEPLOY = re.compile(r"\brsync\b|\bhelm\s+(?:install|upgrade)\b")
     MVN_ARTIFACT = re.compile(r"\bmvn\b[^\n]*\b(?:install|deploy)\b")
-    NESTED_BUILD = re.compile(r"\bdocker\s+build\b|\bdocker\s+buildx\s+build\b")
+    DOCKER_BUILD = re.compile(r"\bdocker\s+build\b|\bdocker\s+buildx\s+build\b")
+    # a git command that MOVES a checkout's HEAD or worktree (as opposed to reading it). `fetch`/`clone` alone update
+    # refs or create a checkout (the latter only inside the dedicated acquisition step) and do not move an existing
+    # worktree, so they are not here — the worktree-moving verb that would follow (reset/checkout/…) is.
+    GIT_MOVE = re.compile(r"\bgit\b(?:\s+-\S+(?:\s+\S+)?)*\s+(pull|checkout|switch|restore|reset|merge|rebase|am|cherry-pick|revert|submodule|stash|clean|read-tree|checkout-index)\b")
     nested_dirs = sorted((p for p in bound_guards), key=len, reverse=True)
+
+    def sh_step_bounds(tok_pos: int):
+        """For a source token at tok_pos inside a shell string, (start_offset of the `sh` step, the string tuple).
+        None if it is not inside an `sh`/`sh(` step."""
+        s = next(((q, s0, e0) for q, s0, e0 in g.strings if s0 <= tok_pos < e0), None)
+        if s is None:
+            return None
+        open_at = s[1] - len(s[0])
+        # the sh step keyword, allowing a `sh(` and a `sh PREFIX + '''…'''` GString concatenation (e.g.
+        # `sh JDK_SETUP + '''…'''`) where PREFIX is one or more identifiers joined by `+`.
+        m = re.search(r"(?:^|[\s{;(&|])sh\s*\(?\s*(?:[A-Za-z_][\w.]*\s*\+\s*)*$", text[:open_at])
+        if not m:
+            return None
+        return m.start() + m.group(0).index("sh"), s
+
+    def immediately_preceded_by_verify(step_start: int, consumed: str, want_var: str) -> str | None:
+        """None if a matching verify step is the statement IMMEDIATELY before step_start (same block, only whitespace
+        or comments between); otherwise the reason it is not covered."""
+        e_block = g.innermost(step_start)
+        best = None
+        for v in verify_steps:
+            if v["parent"] != e_block or v["end"] > step_start:
+                continue
+            if best is None or v["end"] > best["end"]:
+                best = v
+        if best is None or g.code_only(best["end"], step_start).strip():
+            return "no dedicated verify-permitted-tree step immediately precedes it (nothing may run between the verify and the effect)"
+        # a verify of a directory covers an effect consuming that directory OR anything UNDER it (verifying the whole
+        # tree proves each subtree clean); it does NOT cover a consumer of a PARENT directory.
+        covers = best["dir"] == consumed or consumed == "" and best["dir"] == "" or (best["dir"] == "" or consumed.startswith(best["dir"] + "/"))
+        if not covers:
+            return f"the nearest verify step re-checks '{best['dir'] or '.'}', but the effect consumes '{consumed or '.'}'"
+        if best["var"] != want_var:
+            return f"the verify step uses PERMITTED_SHA source '{best['var']}', but this checkout is guarded with '{want_var}' — the verify must re-check the SAME permitted commit the guard bound"
+        return None
+
+    seen_effects: set[int] = set()
     for si in range(gi + 1, len(stages)):
         lo, hi = stage_range(lines, stages, si)
-        # earliest effect line requiring each source directory ('' = the primary workspace). Physical lines joined by
-        # a trailing backslash are one logical command, so an `ssh host "… docker build …"` split across lines is seen
-        # as one ssh command (and skipped as remote).
-        need: dict[str, int] = {}
         li = lo
         while li < hi:
             start_li = li
@@ -1171,32 +1212,84 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
                 continue
             mvn_m = MVN_ARTIFACT.search(l)
             ship_m = SHIP_DEPLOY.search(l)
-            build_m = NESTED_BUILD.search(l)
+            build_m = DOCKER_BUILD.search(l)
             m = mvn_m or ship_m or build_m
             if m is None:
                 continue
-            # An effect that runs on ANOTHER host over ssh (ssh … "… docker build …") consumes the copy shipped there,
-            # not this workspace; the rsync/scp that ships the source is the effect verified here instead.
+            # an effect that runs on another host over ssh consumes the copy shipped there, not this workspace
             if re.search(r"\bssh\b", l[:m.start()]):
                 continue
-            named = next((d for d in nested_dirs if d and (f"-f {d}/" in l or f"-C {d} " in l or f" {d}/" in l or f" {d}" in l or l.rstrip().endswith(d))), "")
-            if build_m is not None and mvn_m is None and ship_m is None:
-                # a docker build is required only when it names a nested checkout as its context
-                if not named:
-                    continue
-                token = named
-            else:
-                token = named
-            if start_li < need.get(token, 1 << 30):
-                need[token] = start_li
-        for rdir, eline in need.items():
-            covering = [(vp, vl) for (rv, vp, vl) in verify_steps if rv == rdir and lo <= vl < hi and vl < eline]
-            if not covering:
-                where = f"the primary checkout '.'" if rdir == "" else f"the nested checkout '{rdir}'"
-                problems.append(
-                    f"line {eline + 1}: an effect builds or publishes from {where} but no dedicated verify-permitted-tree step "
-                    f"for it (timeout {{ sh 'PERMITTED_SHA=\"${{…}}\" bash scripts/jenkins/verify-permitted-tree.sh --dir "
-                    f"{rdir or '.'} …' }}) precedes it in this stage — the tree the effect consumes is not re-verified after checkout")
+            tok_pos = offs[start_li] + max(0, min(m.start(), len(lines[start_li])))
+            sb = sh_step_bounds(tok_pos)
+            base_dirs, base_why = resolve_dirs(offs[start_li] + first_code_col(start_li))
+            def clean(tok: str) -> str:
+                return tok.strip().strip("'\"").rstrip("'\";")
+            # the directory this effect consumes, resolved through its dir() context
+            if mvn_m is not None:
+                nm = re.search(r"-f\s+(\S+)", l)
+                rel = clean(nm.group(1)) if nm else "."
+                rel = re.sub(r"/pom\.xml$", "", rel).rstrip("/") or "."
+            elif build_m is not None:  # docker build [opts] <context>: the context is the last bare token
+                toks = [clean(t) for t in l[m.end():].split() if t and not t.startswith("-")]
+                rel = toks[-1] if toks else "."
+            elif l[m.start():].startswith("rsync"):  # rsync [opts] SRC… DEST: source is the first LOCAL path operand,
+                # skipping the argument of options that take one (--exclude PATTERN etc.).
+                argopts = {"--exclude", "--include", "--filter", "-f", "--files-from", "--exclude-from", "--include-from",
+                           "-e", "--rsh", "--chmod", "--out-format", "--log-file", "--compare-dest", "--copy-dest", "--link-dest", "-T", "--temp-dir"}
+                toks = l[m.end():].split()
+                cand, skip = [], False
+                for t in toks:
+                    if skip:
+                        skip = False
+                        continue
+                    if t.startswith("-"):
+                        if t in argopts:
+                            skip = True
+                        continue
+                    c = clean(t)
+                    if ":" not in c.split("/")[0]:
+                        cand.append(c)
+                rel = cand[0] if cand else "."
+            else:  # helm install/upgrade RELEASE CHART: the chart (a local path) is the last bare token
+                toks = [clean(t) for t in l[m.end():].split() if t and not t.startswith("-") and ":" not in clean(t).split("/")[0]]
+                rel = toks[-1] if toks else "."
+            if base_why:
+                problems.append(f"line {start_li + 1}: an effect consumes a source whose directory cannot be resolved to a literal path: {base_why}")
+                continue
+            usable = rel and rel not in (".", "..") and not rel.startswith(("/", "$", "~"))
+            consumed = fold(base_dirs, rel if usable else ".")
+            # docker build is required only when its context resolves INTO a nested checkout
+            if build_m is not None and mvn_m is None and ship_m is None and consumed not in nested_dirs:
+                continue
+            key = sb[0] if sb else offs[start_li]
+            if key in seen_effects:
+                continue
+            seen_effects.add(key)
+            want_var = bound_guards[consumed][2] if consumed in bound_guards else "PERMITTED_SHA"
+            if sb is None:
+                problems.append(f"line {start_li + 1}: a source-consuming effect is not inside a recognisable `sh` step, so its provenance verification cannot be placed")
+                continue
+            why = immediately_preceded_by_verify(sb[0], consumed, want_var)
+            if why:
+                where = "the primary checkout '.'" if consumed == "" else f"the nested checkout '{consumed}'"
+                problems.append(f"line {start_li + 1}: an effect builds, ships or deploys from {where} but {why} (need timeout {{ sh 'PERMITTED_SHA=\"${{{want_var}:-}}\" bash scripts/jenkins/verify-permitted-tree.sh --dir {consumed or '.'} …' }} immediately before it)")
+
+    # A bound checkout must not be MOVED after its guard: a git command that changes HEAD or the worktree, anywhere
+    # after the primary guard (in code or in a shell body), is refused unless it is the clone/checkout inside the
+    # dedicated acquisition step rule 9 already validates. This closes a source replacement placed inside the same
+    # shell body as the effect, which statement-level adjacency cannot see.
+    primary_end = offs[g_hi] if g_hi < len(offs) else len(text)
+    for gm in GIT_MOVE.finditer(text):
+        gpos = gm.start()
+        if gpos < primary_end:
+            continue
+        if any(a <= gpos < b for a, b in acquisition_spans):
+            continue
+        if any(a <= gpos < b for a, b in g.comments):
+            continue
+        # inside a string body (shell) or in code; either way a move verb is refused post-guard
+        ln = text.count("\n", 0, gpos) + 1
+        problems.append(f"line {ln}: `git {gm.group(1)}` after the guard moves a checkout's HEAD or worktree — a bound source may not be re-moved after it is verified: {lines[ln - 1].strip()[:90]}")
 
     # 11. every invocation of the guard is a canonical form, and every stage that runs one has a deadline
     canonical_lines: set[int] = set()
