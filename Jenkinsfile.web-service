@@ -177,8 +177,8 @@ pipeline {
           if (compat != 0) {
             error("options-edge-web-deploy's definition at WEB_PERMITTED_SHA could not be confirmed to run the permitted-commit guard (rc=${compat}) — not triggering it. Deploy an existing image with BUILD_IMAGE=false, or fix the child first. Nothing was triggered.")
           }
-        }
-        script {
+          // Same script block as the check above, after it: a check that is skipped, returned past or caught
+          // leaves this block too, so the trigger below cannot run without it (validator rule 7a).
           def child = build job: 'options-edge-web-deploy',
               parameters: [
                 // options-edge-web-deploy's own guard compares its checkout against this before it builds.

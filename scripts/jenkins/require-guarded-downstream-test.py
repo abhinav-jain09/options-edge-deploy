@@ -81,8 +81,79 @@ DECLARATION_ONLY_JF = """pipeline {
 MANIFEST_IN = "Jenkinsfile.service-deploy | in | | child\n"
 
 
+# The <definition> elements of the three live children, copied verbatim from the controller's config.xml
+# (2026-09-13, read-only). They must keep passing.
+REAL_DEFINITIONS = {
+    "service-deploy": """<definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps@4331.v9d06ed4658ff">
+    <scm class="hudson.plugins.git.GitSCM" plugin="git@5.10.1">
+      <configVersion>2</configVersion>
+      <userRemoteConfigs>
+        <hudson.plugins.git.UserRemoteConfig>
+          <url>git@github.com:abhinav-jain09/options-edge-deploy.git</url>
+        </hudson.plugins.git.UserRemoteConfig>
+      </userRemoteConfigs>
+      <branches>
+        <hudson.plugins.git.BranchSpec>
+          <name>*/main</name>
+        </hudson.plugins.git.BranchSpec>
+      </branches>
+      <doGenerateSubmoduleConfigurations>false</doGenerateSubmoduleConfigurations>
+      <submoduleCfg class="empty-list"/>
+      <extensions/>
+    </scm>
+    <scriptPath>Jenkinsfile.service-deploy</scriptPath>
+    <lightweight>true</lightweight>
+  </definition>""",
+    "options-edge-processing": """<definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps@4331.v9d06ed4658ff">
+    <scm class="hudson.plugins.git.GitSCM" plugin="git@5.10.1">
+      <configVersion>2</configVersion>
+      <userRemoteConfigs>
+        <hudson.plugins.git.UserRemoteConfig>
+          <url>git@github.com:abhinav-jain09/options-edge-processing.git</url>
+        </hudson.plugins.git.UserRemoteConfig>
+      </userRemoteConfigs>
+      <branches>
+        <hudson.plugins.git.BranchSpec>
+          <name>*/main</name>
+        </hudson.plugins.git.BranchSpec>
+      </branches>
+      <doGenerateSubmoduleConfigurations>false</doGenerateSubmoduleConfigurations>
+      <submoduleCfg class="empty-list"/>
+      <extensions/>
+    </scm>
+    <scriptPath>Jenkinsfile</scriptPath>
+    <lightweight>true</lightweight>
+  </definition>""",
+    "options-edge-web-deploy": """<definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps@4331.v9d06ed4658ff">
+    <scm class="hudson.plugins.git.GitSCM" plugin="git@5.10.1">
+      <configVersion>2</configVersion>
+      <userRemoteConfigs>
+        <hudson.plugins.git.UserRemoteConfig>
+          <url>git@github.com:abhinav-jain09/options-edge.git</url>
+        </hudson.plugins.git.UserRemoteConfig>
+      </userRemoteConfigs>
+      <branches>
+        <hudson.plugins.git.BranchSpec>
+          <name>*/main</name>
+        </hudson.plugins.git.BranchSpec>
+      </branches>
+      <doGenerateSubmoduleConfigurations>false</doGenerateSubmoduleConfigurations>
+      <submoduleCfg class="empty-list"/>
+      <extensions/>
+    </scm>
+    <scriptPath>Jenkinsfile</scriptPath>
+    <lightweight>true</lightweight>
+  </definition>""",
+}
+
+
+def real_config(job):
+    return "<?xml version='1.1' encoding='UTF-8'?>\n<flow-definition plugin=\"workflow-job@1571\">\n  " + REAL_DEFINITIONS[job] + "\n</flow-definition>\n"
+
+
 def config_xml(url="git@github.com:abhinav-jain09/options-edge-deploy.git", branch="*/main", script="Jenkinsfile.service-deploy",
-               definition="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition", extensions="<extensions/>", extra_remote=""):
+               definition="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition", extensions="<extensions/>", extra_remote="",
+               remote_extra="", lightweight="<lightweight>true</lightweight>", scm_extra=""):
     return f"""<?xml version='1.1' encoding='UTF-8'?>
 <flow-definition plugin="workflow-job@1571">
   <definition class="{definition}" plugin="workflow-cps@4331">
@@ -90,7 +161,7 @@ def config_xml(url="git@github.com:abhinav-jain09/options-edge-deploy.git", bran
       <configVersion>2</configVersion>
       <userRemoteConfigs>
         <hudson.plugins.git.UserRemoteConfig>
-          <url>{url}</url>
+          <url>{url}</url>{remote_extra}
         </hudson.plugins.git.UserRemoteConfig>{extra_remote}
       </userRemoteConfigs>
       <branches>
@@ -100,10 +171,10 @@ def config_xml(url="git@github.com:abhinav-jain09/options-edge-deploy.git", bran
       </branches>
       <doGenerateSubmoduleConfigurations>false</doGenerateSubmoduleConfigurations>
       <submoduleCfg class="empty-list"/>
-      {extensions}
+      {extensions}{scm_extra}
     </scm>
     <scriptPath>{script}</scriptPath>
-    <lightweight>true</lightweight>
+    {lightweight}
   </definition>
 </flow-definition>
 """
@@ -142,6 +213,7 @@ cat "$f"
         git("config", "user.email", "t@t", cwd=self.work)
         git("config", "user.name", "t", cwd=self.work)
         self.bare = os.path.join(self.repos, "options-edge-deploy.git")
+        self.real_git = shutil.which("git")
 
     def _stub(self, name, body):
         p = os.path.join(self.bin, name)
@@ -149,14 +221,23 @@ cat "$f"
             fh.write(body)
         os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR)
 
-    def commit(self, jenkinsfile=CHILD_JF, guard=GUARD, manifest=MANIFEST_IN, guard_hash=None):
+    def commit(self, jenkinsfile=CHILD_JF, guard=GUARD, manifest=MANIFEST_IN, guard_hash=None, repo="options-edge-deploy",
+               script="Jenkinsfile.service-deploy", manifest_path="scripts/ci/jenkins-permitted-sha-scope.txt"):
+        if repo != "options-edge-deploy":
+            self.work = os.path.join(self.tmp, "work-" + repo)
+            self.bare = os.path.join(self.repos, repo + ".git")
+            if not os.path.exists(self.work):
+                git("init", "-q", "-b", "main", self.work)
+                git("config", "user.email", "t@t", cwd=self.work)
+                git("config", "user.name", "t", cwd=self.work)
+            manifest = manifest.replace("Jenkinsfile.service-deploy", script)
         os.makedirs(os.path.join(self.work, "scripts/jenkins"), exist_ok=True)
-        os.makedirs(os.path.join(self.work, "scripts/ci"), exist_ok=True)
-        with open(os.path.join(self.work, "Jenkinsfile.service-deploy"), "w") as fh:
+        os.makedirs(os.path.dirname(os.path.join(self.work, manifest_path)), exist_ok=True)
+        with open(os.path.join(self.work, script), "w") as fh:
             fh.write(jenkinsfile.replace("__HASH__", guard_hash or hashlib.sha256(guard).hexdigest()))
         with open(os.path.join(self.work, "scripts/jenkins/permitted-sha-guard.sh"), "wb") as fh:
             fh.write(guard)
-        with open(os.path.join(self.work, "scripts/ci/jenkins-permitted-sha-scope.txt"), "w") as fh:
+        with open(os.path.join(self.work, manifest_path), "w") as fh:
             fh.write(manifest)
         git("add", "-A", cwd=self.work)
         git("commit", "-q", "--allow-empty", "-m", "c", cwd=self.work)
@@ -249,7 +330,7 @@ def main() -> int:
         ("a feature branch spec is refused", config_xml(branch="*/feature"), "are not exactly"),
         ("another Jenkinsfile is refused", config_xml(script="Jenkinsfile"), "scriptPath is 'Jenkinsfile'"),
         ("an SCM extension (pre-build merge) is refused", config_xml(extensions="<extensions><hudson.plugins.git.extensions.impl.PreBuildMerge/></extensions>"), "SCM extensions"),
-        ("a second remote is refused", config_xml(extra_remote="<hudson.plugins.git.UserRemoteConfig><url>git@github.com:x/y.git</url></hudson.plugins.git.UserRemoteConfig>"), "are not exactly"),
+        ("a second remote is refused", config_xml(extra_remote="<hudson.plugins.git.UserRemoteConfig><url>git@github.com:x/y.git</url></hudson.plugins.git.UserRemoteConfig>"), "exactly one remote is required"),
         ("an unparseable configuration is refused", "<html>login</html", "does not parse"),
     ]:
         w = world(); a = w.commit(); w.serve_child(config=cfg)
@@ -257,6 +338,60 @@ def main() -> int:
         w.close()
     w = world(); a = w.commit(); w.serve("job/service-deploy", TREE, params_json())
     check("an unreadable job configuration (403/404) is refused", w.run(["service-deploy", a, "REQUIRED_IMAGE"]), False, "could not read the job configuration")
+    w.close()
+
+    # remote mapping (Codex round 4, #1043 I11 / gateway I2 / web I1): */main is only main when nothing remaps it
+    for name, kw, say in [
+        ("tag remapped onto origin/main, heavyweight checkout (Codex #1043 reproduction) is refused",
+         dict(remote_extra="\n          <name>origin</name>\n          <refspec>+refs/tags/pre-guard:refs/remotes/origin/main</refspec>", lightweight="<lightweight>false</lightweight>"),
+         "can populate refs/remotes/origin/main"),
+        ("feature branch remapped onto origin/main, heavyweight (Codex gateway reproduction) is refused",
+         dict(remote_extra="\n          <name>origin</name>\n          <refspec>+refs/heads/feature:refs/remotes/origin/main</refspec>", lightweight="<lightweight>false</lightweight>"),
+         "can populate refs/remotes/origin/main"),
+        ("unguarded tag remapped onto origin/main, heavyweight (Codex web reproduction) is refused",
+         dict(remote_extra="\n          <name>origin</name>\n          <refspec>+refs/tags/unguarded:refs/remotes/origin/main</refspec>", lightweight="<lightweight>false</lightweight>"),
+         "can populate refs/remotes/origin/main"),
+        ("a remapping refspec is refused even with lightweight checkout",
+         dict(remote_extra="\n          <refspec>+refs/heads/feature:refs/remotes/origin/main</refspec>"), "can populate refs/remotes/origin/main"),
+        ("a default refspec with an extra remapping entry is refused",
+         dict(remote_extra="\n          <refspec>+refs/heads/*:refs/remotes/origin/* +refs/tags/x:refs/remotes/origin/main</refspec>"), "can populate refs/remotes/origin/main"),
+        ("a remote named other than origin is refused", dict(remote_extra="\n          <name>upstream</name>"), "is not origin"),
+        ("a clean configuration with a heavyweight checkout is refused", dict(lightweight="<lightweight>false</lightweight>"), "lightweight checkout is 'false'"),
+        ("a configuration without the lightweight element is refused", dict(lightweight=""), "lightweight checkout is None"),
+        ("an unknown SCM element is refused", dict(scm_extra="<browser class=\"hudson.plugins.git.browser.GithubWeb\"><url>https://x</url></browser>"), "unexpected element"),
+        ("an unknown remote element is refused", dict(remote_extra="\n          <mirror>x</mirror>"), "remote carries unexpected element"),
+        ("a second branch spec is refused", dict(branch="*/main</name>\n        </hudson.plugins.git.BranchSpec>\n        <hudson.plugins.git.BranchSpec>\n          <name>*/main"), "are not exactly"),
+    ]:
+        w = world(); a = w.commit(); w.serve_child(config=config_xml(**kw))
+        check(name, w.run(["service-deploy", a, "REQUIRED_IMAGE"]), False, say)
+        w.close()
+    for name, kw in [
+        ("origin with the default refspec +refs/heads/*:refs/remotes/origin/* is accepted", dict(remote_extra="\n          <name>origin</name>\n          <refspec>+refs/heads/*:refs/remotes/origin/*</refspec>")),
+        ("origin with the main-only refspec is accepted", dict(remote_extra="\n          <name>origin</name>\n          <refspec>+refs/heads/main:refs/remotes/origin/main</refspec>\n          <credentialsId>github</credentialsId>")),
+    ]:
+        w = world(); a = w.commit(); w.serve_child(config=config_xml(**kw))
+        check(name, w.run(["service-deploy", a, "REQUIRED_IMAGE"]), True, "triggering is allowed")
+        w.close()
+    for job, repo, script, mpath in [("service-deploy", "options-edge-deploy", "Jenkinsfile.service-deploy", "scripts/ci/jenkins-permitted-sha-scope.txt"),
+                                     ("options-edge-processing", "options-edge-processing", "Jenkinsfile", "scripts/jenkins/jenkins-permitted-sha-scope.txt"),
+                                     ("options-edge-web-deploy", "options-edge", "Jenkinsfile", "scripts/jenkins/jenkins-permitted-sha-scope.txt")]:
+        w = world(); a = w.commit(repo=repo, script=script, manifest_path=mpath)
+        w.serve_child(job_path=f"job/{job}", config=real_config(job))
+        check(f"the live {job} configuration (copied from the controller) is accepted", w.run([job, a, "REQUIRED_IMAGE"]), True, "triggering is allowed")
+        w.close()
+
+    # a stalled network operation reaches a named refusal within the deadline
+    w = world(); a = w.commit(); w.serve_child()
+    w._stub("git", f"""#!/usr/bin/env bash
+case "$*" in *ls-remote*) sleep 60 ;; esac
+exec '{w.real_git}' "$@"
+""")
+    import time
+    t0 = time.time()
+    r = w.run(["service-deploy", a, "REQUIRED_IMAGE"], extra_env={"GUARDED_DOWNSTREAM_NET_DEADLINE": "2"})
+    check("a stalled git ls-remote ends in a named refusal within the deadline", r, False, "could not read the tip")
+    elapsed = time.time() - t0
+    check(f"... within the deadline, not the stalled command's 60 s (took {elapsed:.0f} s)", subprocess.CompletedProcess([], 0 if elapsed < 40 else 1, "", ""), True, "")
     w.close()
 
     # forwarded SHA
@@ -315,7 +450,7 @@ esac
     w.close()
 
     print(f"require-guarded-downstream-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 30:
+    if failed == 0 and passed >= 50:
         print("require-guarded-downstream-test: ALL PASS")
         return 0
     return 1

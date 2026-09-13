@@ -47,15 +47,16 @@ form; that is deliberate):
        def C = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh <job> "${V:?}"[ EXTRA…]')
        if (C != 0) { error(…) }
      EXECUTABLY, in one of two ways:
-       (a) same stage, before the trigger, and the check's enclosing CONTROL blocks (everything except
-           script/steps/stages/stage/dir/withEnv/withCredentials/timeout/node/ws) are a prefix of the
-           trigger's — so the trigger cannot run unless the check ran first and did not error. A check
-           inside `if (false) {…}`, `catchError {…}`, `try {…}`, a closure or a loop the trigger is not
-           also inside is refused;
-       (b) the check is followed, as its very next statement, by `env.GUARDED_DOWNSTREAM_<JOB> =
-           'PASSED'` (set nowhere else), in an earlier stage, and the trigger's stage `when` gate (rule
-           13) requires `env.GUARDED_DOWNSTREAM_<JOB> == 'PASSED'` — a skipped, caught or never-reached
-           check leaves the flag unset and the trigger stage is skipped.
+       (a) same stage, and the trigger lies INSIDE the very block the check is a direct statement of,
+           after it — so any `return`, skipped branch, caught error or uncalled closure that bypasses the
+           check leaves that block and bypasses the trigger as well. A check in an earlier sibling
+           `script {}`/`dir {}` block, or under `if (false)`, `catchError`, `try`, a closure or a loop the
+           trigger is not also inside, is refused;
+       (b) the check is a top-level statement of its stage's `steps { script { … } }`, followed, as its
+           very next statement, by `env.GUARDED_DOWNSTREAM_<JOB> = 'PASSED'` — the ONLY assignment of that
+           flag anywhere in the file — in an earlier stage, and the trigger's stage `when` gate (rule 13)
+           requires `env.GUARDED_DOWNSTREAM_<JOB> == 'PASSED'`: a skipped, caught or never-reached check
+           leaves the flag unset and the trigger stage is skipped.
      A self-trigger (`build job: env.JOB_NAME`) needs only the forward. No annotation exempts a trigger.
   8. Every mutation token inside `post {}` lies inside an `if (…) {` block (or `else if`) whose whole
      condition is a conjunction of `env.<FLAG> == 'PASSED'` terms that includes the needed flag
@@ -69,7 +70,10 @@ form; that is deliberate):
      whose control blocks are a prefix of the acquisition's, or a shell line that STARTS with
      `PERMITTED_SHA="${X_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir <dir> --ref
      main || exit 1` at the TOP LEVEL of its `sh '''` block (not inside if/case/loop/function/group/
-     heredoc, not continued from the previous line, not prefixed by echo or anything else).
+     heredoc, subshell `( … )` or `$( … )`, not continued from the previous line, not prefixed by echo,
+     `bash -c` or anything else, no pipe or `&` after it) of a plain `sh '''…'''` or
+     `sh X + '''…'''` step — never `sh(returnStatus: true, …)` / `returnStdout`, whose failure
+     does not stop the build.
  10. contracts=<dir>: that directory is acquired (and therefore, by rule 9, bound) at least once.
  11. Inside every `sh '''` block, a line running permitted-sha-guard.sh ends with `|| exit 1`, and the
      block sets no `set +e`; `|| true` anywhere on such a line is refused.
@@ -416,6 +420,8 @@ def parse_gate(when_canon: str) -> tuple[set[str], str] | None:
 def shell_top_level(block_lines: list[str], idx: int) -> str | None:
     """None when block_lines[idx] runs unconditionally at the top level of its shell block; otherwise why not."""
     depth = 0
+    paren = 0
+    case_depth = 0
     heredoc = None
     prev = ""
     for raw in block_lines[:idx]:
@@ -427,10 +433,18 @@ def shell_top_level(block_lines: list[str], idx: int) -> str | None:
         if not s or s.startswith("#"):
             continue
         hm = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", s)
-        bare = re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"|\$\{[^}]*\}|\$\([^)]*\)", " ", s)
+        bare = re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"|\$\{[^}]*\}|\$\([^()]*\)", " ", s)
         bare = re.sub(r"\s#.*$", "", bare)
         for w in re.findall(r"(?<![\w$./-])(if|fi|case|esac|do|done|\{|\})(?![\w./-])", bare):
             depth += 1 if w in ("if", "case", "do", "{") else -1
+            if w == "case":
+                case_depth += 1
+            elif w == "esac":
+                case_depth -= 1
+        if case_depth == 0:
+            # a subshell — `( … )`, `$( … )`, a subshell-bodied function `f() ( … )` — runs the guard in a child
+            # shell whose `exit 1` ends only that child, and its status can then be discarded (`) || true`)
+            paren += bare.count("(") - bare.count(")")
         if hm:
             heredoc = hm.group(1)
         prev = bare.rstrip()
@@ -438,6 +452,8 @@ def shell_top_level(block_lines: list[str], idx: int) -> str | None:
         return "it sits inside a heredoc"
     if depth != 0:
         return "it sits inside a shell if/case/loop/function/group"
+    if paren != 0:
+        return "it sits inside a subshell ( … ) whose exit ends only the child shell"
     if re.search(r"(\\|&&|\|\||\||\bthen|\bdo|\belse)$", prev):
         return "the previous line continues into it"
     return None
@@ -707,7 +723,7 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
             problems.append(f"stage '{names[si]}': its `when` gate must require {', '.join('env.' + f + ' == ' + repr('PASSED') for f in sorted(missing))}")
 
     # 7. downstream triggers
-    compat_sites = []   # (line, job, shavar, flagname, chain, stage_block)
+    compat_sites = []   # (line, job, shavar, flag_line, innermost block, stage block, top-level-of-script, flag name)
     for i, l in enumerate(lines):
         if is_comment(l) or "require-guarded-downstream.sh" not in l or not l.lstrip().startswith("def "):
             continue
@@ -715,7 +731,19 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
         if not cm:
             continue
         p = pos_of(i, first_code_col(i))
-        compat_sites.append((i, cm.group("job"), cm.group("shavar"), cm.group("flagname"), g.control_chain(p), g.stage_of(p)))
+        inner = g.innermost(p)
+        flag_line = None
+        if cm.group("flagname"):
+            # the ONE line the flag assignment may sit on: the statement that completes this very match
+            for j in range(i + 1, min(i + 12, len(lines))):
+                if lines[j].strip() == f"env.{cm.group('flagname')} = 'PASSED'":
+                    fm = COMPAT_FORM.fullmatch(canon(lines[i:j + 1]))
+                    if fm and fm.group("flagname") == cm.group("flagname"):
+                        flag_line = j
+                    break
+        top = (inner is not None and g.blocks[inner].header == "script" and g.blocks[inner].parent is not None
+               and g.blocks[g.blocks[inner].parent].header == "steps")
+        compat_sites.append((i, cm.group("job"), cm.group("shavar"), flag_line, inner, g.stage_of(p), top, cm.group("flagname")))
     for i, l in enumerate(lines):
         if is_comment(l):
             continue
@@ -742,30 +770,41 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
             continue
         var = fv.group("var")
         tp = pos_of(i, m.start())
-        tchain, tstage = g.control_chain(tp), g.stage_of(tp)
+        tstage = g.stage_of(tp)
+        tanc = g.ancestors(tp)
         tsi = max(k for k, (s, _) in enumerate(stages) if s <= i)
         ok = False
-        for (ci, cjob, cvar, cflag, cchain, cstage) in compat_sites:
+        want = downstream_flag(job)
+        for (ci, cjob, cvar, cflag_line, cinner, cstage, ctop, cflag) in compat_sites:
             if cjob != job or cvar != var:
                 continue
-            if cstage == tstage and ci < i and is_prefix(cchain, tchain):
+            # (a) the trigger lies INSIDE the very block the check is a direct statement of, after it: a
+            #     `return`, a skipped branch, a caught error or a closure that bypasses the check has to
+            #     leave that block, and so bypasses the trigger too. A check in an earlier sibling
+            #     script/dir/withEnv block, or under if/catchError/try, is refused.
+            if cstage == tstage and ci < i and cinner is not None and cinner in tanc:
                 ok = True
                 break
-            want = downstream_flag(job)
+            # (b) the check is a top-level statement of its stage's `steps { script { … } }`, the flag
+            #     assignment is the statement completing it, it is the ONLY assignment of that flag in the
+            #     whole file, and the trigger's stage gate requires the flag.
             csi = max(k for k, (s, _) in enumerate(stages) if s <= ci)
-            if cflag == want and csi < tsi and want in gates.get(tsi, set()) and compat_flag_lines.get(want, []) and all(
-                    any(x[0] <= fl < x[0] + 12 and x[3] == want for x in compat_sites) for fl in compat_flag_lines[want]):
+            if (cflag == want and ctop and cflag_line is not None and csi < tsi and want in gates.get(tsi, set())
+                    and compat_flag_lines.get(want, []) == [cflag_line]):
                 ok = True
                 break
         if not ok:
             problems.append(
                 f"line {i + 1}: build job: '{job}' is not executably protected by the canonical compatibility check for {job} with \"${{{var}:?}}\": "
-                f"(a) in the same stage, before it, under no control block the trigger is not also under, or (b) followed by env.{downstream_flag(job)} = 'PASSED' "
+                f"(a) earlier in the very block the check is a direct statement of (not an earlier sibling script/dir block, not under if/catchError/try/closure), or (b) followed by env.{downstream_flag(job)} = 'PASSED' "
                 f"with the trigger's stage gated on env.{downstream_flag(job)} == 'PASSED'")
     for name, fls in compat_flag_lines.items():
+        canonical_lines = {x[3] for x in compat_sites if x[7] == name and x[3] is not None and x[6]}
+        if len(fls) != 1:
+            problems.append(f"env.{name} is assigned {len(fls)} times (lines {', '.join(str(f + 1) for f in fls)}): a downstream flag has exactly ONE assignment, the statement completing its compatibility check")
         for fl in fls:
-            if not any(x[0] <= fl < x[0] + 12 and x[3] == name for x in compat_sites):
-                problems.append(f"line {fl + 1}: env.{name} may be set only as the statement right after its compatibility check")
+            if fl not in canonical_lines:
+                problems.append(f"line {fl + 1}: env.{name} may be set only as the statement right after its compatibility check, at the top level of the stage's script block")
     if any("UNBOUND-DOWNSTREAM" in l for l in lines):
         problems.append("an UNBOUND-DOWNSTREAM annotation is not a gate: refuse the path or bind it")
 
@@ -835,6 +874,11 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
                 blk = next(((s, e) for s, e in shell_blocks if s <= p < e), None)
                 if blk is None:
                     why_not = "its shell guard is not inside a sh ''' block"
+                    break
+                opener = text[text.rfind("\n", 0, blk[0] - 3) + 1:blk[0] - 3]
+                if (re.search(r"return(Status|Stdout)|catchError|warnError", opener)
+                        or not re.search(r"\bsh\s*(?:\(\s*(?:script:\s*)?)?(?:[A-Z_][A-Z0-9_]*\s*\+\s*)?$", opener)):
+                    why_not = "its shell block is not a plain `sh '''…'''` / `sh X + '''…'''` whose failure stops the build (returnStatus/returnStdout discard it)"
                     break
                 blines = text[blk[0]:p].split("\n")
                 reason = shell_top_level(blines[:-1] + [blines[-1]], len(blines) - 1)

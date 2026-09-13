@@ -154,6 +154,11 @@ class RequireGuardedDownstreamTest(unittest.TestCase):
                      "another Jenkinsfile is refused", "a forwarded SHA that is not main's tip is refused",
                      "child carrying a different guard at that commit is refused (even though its own validator view is consistent)",
                      "folder caller: the folder's child is inspected, not the root job of the same name",
+                     "tag remapped onto origin/main, heavyweight checkout (Codex #1043 reproduction) is refused",
+                     "feature branch remapped onto origin/main, heavyweight (Codex gateway reproduction) is refused",
+                     "a clean configuration with a heavyweight checkout is refused",
+                     "the live service-deploy configuration (copied from the controller) is accepted",
+                     "a stalled git ls-remote ends in a named refusal within the deadline",
                      "child whose definition runs the guard at the forwarded tip is accepted"]:
             self.assertIn(f"ok   [{case}]", r.stdout)
 
@@ -499,6 +504,9 @@ class PermittedShaGuardValidatorTest(unittest.TestCase):
                      "post mutation after the gate block", "post mutation in the else branch", "post gate negated !(…)",
                      "post gate negated ! (…) with a space", "post gate compared to false", "compatibility check never entered: if (false)",
                      "compatibility check caught: catchError", "effect stage gate removed", "effect stage gate inverted (!=)",
+                     "shell contracts guard in a subshell whose failure is discarded (Codex #1043 r4)",
+                     "check skipped by return in an earlier script block, trigger in a later one (Codex gateway r4)",
+                     "check and flag in if (false) plus a duplicate flag outside (Codex web r3)",
                      "compatibility check inverted", "compatibility check status discarded", "git pull rebound by an echo",
                      "separate-agent stage without inline re-guard", "shell contracts guard || true",
                      "contracts re-checked-out after its guard", "guard version default is another hash"]:
@@ -682,6 +690,22 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
         b = t.index("          }\n", t.index("if (compat != 0) {", a)) + len("          }\n")
         block = t[a:b]
         r = self._validate_mutated("Jenkinsfile.service-deploy", block, "          if (false) {\n" + block + "          }\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("is not executably protected", r.stdout)
+
+    def test_service_deploy_check_returned_past_with_the_trigger_in_a_later_script_block(self) -> None:
+        t = (ROOT / "Jenkinsfile.service-deploy").read_text()
+        a = t.index("          def compat = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh options-edge-processing")
+        mutated = t[:a] + "          return\n" + t[a:]
+        mutated = mutated.replace("          def child = build job: 'options-edge-processing',", "        }\n        script {\n          def child = build job: 'options-edge-processing',", 1)
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "scripts/jenkins").mkdir(parents=True)
+        (tmp / "scripts/ci").mkdir(parents=True)
+        shutil.copy(GUARD, tmp / "scripts/jenkins/permitted-sha-guard.sh")
+        shutil.copy(ROOT / "scripts/ci/jenkins-permitted-sha-scope.txt", tmp / "scripts/ci/jenkins-permitted-sha-scope.txt")
+        (tmp / "Jenkinsfile.service-deploy").write_text(mutated)
+        r = subprocess.run(["python3", str(VALIDATOR), "--root", str(tmp), "--manifest", str(tmp / "scripts/ci/jenkins-permitted-sha-scope.txt"), "--only", "Jenkinsfile.service-deploy"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("is not executably protected", r.stdout)
 

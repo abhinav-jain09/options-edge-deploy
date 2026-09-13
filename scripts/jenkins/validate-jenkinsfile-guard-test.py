@@ -265,6 +265,14 @@ def main() -> int:
     mut("compatibility check caught: try/catch", COMPAT_BLOCK, "              try {\n" + COMPAT_BLOCK + "              } catch (e) {\n                echo 'ignored'\n              }\n", "is not executably protected")
     mut("compatibility check in a closure never called", COMPAT_BLOCK, "              def later = {\n" + COMPAT_BLOCK + "              }\n", "is not executably protected")
     mut("compatibility check after the trigger", COMPAT_BLOCK + "              build job: 'child-job', parameters: [string(name: 'PERMITTED_SHA', value: params.CHILD_PERMITTED_SHA)]\n", "              build job: 'child-job', parameters: [string(name: 'PERMITTED_SHA', value: params.CHILD_PERMITTED_SHA)]\n" + COMPAT_BLOCK, "is not executably protected")
+    mut("check skipped by return in an earlier script block, trigger in a later one (Codex gateway r4)",
+        COMPAT_BLOCK + "              build job: 'child-job'",
+        "              return\n" + COMPAT_BLOCK + "            }\n            script {\n              build job: 'child-job'",
+        "is not executably protected by the canonical compatibility check for child-job")
+    mut("check in an earlier sibling script block without a return", COMPAT_BLOCK + "              build job: 'child-job'",
+        COMPAT_BLOCK + "            }\n            script {\n              build job: 'child-job'", "is not executably protected")
+    mut("check inside dir() (a closure a return can leave), trigger outside", COMPAT_BLOCK,
+        "              dir('.') {\n" + COMPAT_BLOCK + "              }\n", "is not executably protected")
     mut("trigger and check share one if-block (runtime-safe)", COMPAT_BLOCK + "              build job: 'child-job', parameters: [string(name: 'PERMITTED_SHA', value: params.CHILD_PERMITTED_SHA)]\n", "              if (params.CHILD_PERMITTED_SHA) {\n" + COMPAT_BLOCK + "              build job: 'child-job', parameters: [string(name: 'PERMITTED_SHA', value: params.CHILD_PERMITTED_SHA)]\n              }\n", "carry the canonical permitted-commit guard", expect_ok=True)
     mut("downstream without PERMITTED_SHA forward", "parameters: [string(name: 'PERMITTED_SHA', value: params.CHILD_PERMITTED_SHA)]", "parameters: [string(name: 'X', value: 'y')]", "does not forward PERMITTED_SHA exactly once")
     mut("downstream forwards a local variable", "parameters: [string(name: 'PERMITTED_SHA', value: params.CHILD_PERMITTED_SHA)]", "parameters: [string(name: 'PERMITTED_SHA', value: psha)]", "forward params.<V>")
@@ -274,6 +282,14 @@ def main() -> int:
     mut("agentless trigger gate lacks the downstream flag", "env.PERMITTED_SHA_GUARD == 'PASSED' && env.GUARDED_DOWNSTREAM_ROLL_JOB == 'PASSED' && (params.ROLL_PERMITTED_SHA != '')", "env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ROLL_PERMITTED_SHA != '')", "is not executably protected by the canonical compatibility check for roll-job")
     mut("downstream flag not right after its check", "              env.GUARDED_DOWNSTREAM_ROLL_JOB = 'PASSED'", "              echo 'checked'\n              env.GUARDED_DOWNSTREAM_ROLL_JOB = 'PASSED'", "may be set only as the statement right after its compatibility check")
     mut("downstream flag set without any check", "              def rcheck = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh roll-job \"${ROLL_PERMITTED_SHA:?}\" REQUIRED_IMAGE')\n              if (rcheck != 0) {\n                error(\"roll-job definition not confirmed (rc=${rcheck})\")\n              }\n", "", "may be set only as the statement right after its compatibility check")
+    mut("check and flag in if (false) plus a duplicate flag outside (Codex web r3)", "              def rcheck = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh roll-job \"${ROLL_PERMITTED_SHA:?}\" REQUIRED_IMAGE')\n              if (rcheck != 0) {\n                error(\"roll-job definition not confirmed (rc=${rcheck})\")\n              }\n              env.GUARDED_DOWNSTREAM_ROLL_JOB = 'PASSED'\n",
+        "              if (false) {\n              def rcheck = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh roll-job \"${ROLL_PERMITTED_SHA:?}\" REQUIRED_IMAGE')\n              if (rcheck != 0) {\n                error(\"roll-job definition not confirmed (rc=${rcheck})\")\n              }\n              env.GUARDED_DOWNSTREAM_ROLL_JOB = 'PASSED'\n              }\n              env.GUARDED_DOWNSTREAM_ROLL_JOB = 'PASSED'\n",
+        "env.GUARDED_DOWNSTREAM_ROLL_JOB is assigned 2 times")
+    mut("a second flag assignment in a later stage", "        sh 'mvn -B -Psmoke verify'",
+        "        sh 'mvn -B -Psmoke verify'\n        script {\n          env.GUARDED_DOWNSTREAM_ROLL_JOB = 'PASSED'\n        }", "env.GUARDED_DOWNSTREAM_ROLL_JOB is assigned 2 times")
+    mut("check and its flag nested under if (true) (not top level of the script block)", "              def rcheck = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh roll-job \"${ROLL_PERMITTED_SHA:?}\" REQUIRED_IMAGE')\n              if (rcheck != 0) {\n                error(\"roll-job definition not confirmed (rc=${rcheck})\")\n              }\n              env.GUARDED_DOWNSTREAM_ROLL_JOB = 'PASSED'\n",
+        "              if (true) {\n              def rcheck = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh roll-job \"${ROLL_PERMITTED_SHA:?}\" REQUIRED_IMAGE')\n              if (rcheck != 0) {\n                error(\"roll-job definition not confirmed (rc=${rcheck})\")\n              }\n              env.GUARDED_DOWNSTREAM_ROLL_JOB = 'PASSED'\n              }\n",
+        "at the top level of the stage's script block")
     mut("downstream flag in environment{}", "  options { disableRestartFromStage(); disableConcurrentBuilds() }", "  options { disableRestartFromStage(); disableConcurrentBuilds() }\n  environment { GUARDED_DOWNSTREAM_ROLL_JOB = 'PASSED' }", "GUARDED_DOWNSTREAM_ROLL_JOB may appear only as")
     mut("preflight stage never runs (runtime-safe: the trigger gate stays shut)", "        stage('Rollout preflight') {\n          when { expression { " + G2 + " } }", "        stage('Rollout preflight') {\n          when { expression { " + G2 + " && (false) } }", "carry the canonical permitted-commit guard", expect_ok=True)
     mut("agentless trigger forwards another SHA than was checked", "value: params.ROLL_PERMITTED_SHA.trim())]", "value: params.CHILD_PERMITTED_SHA)]", "is not executably protected by the canonical compatibility check for roll-job")
@@ -315,6 +331,14 @@ def main() -> int:
     case("shell contracts guard inside a function never called", shell_ok.replace(shell_guard, "              bind_contracts() {\n" + shell_guard + "              }\n"), contracts_manifest, False, "inside a shell if/case/loop/function/group")
     case("shell contracts guard inside a heredoc", shell_ok.replace(shell_guard, "              cat > /dev/null <<'EOF'\n" + shell_guard + "EOF\n"), contracts_manifest, False, "inside a heredoc")
     case("shell contracts guard continued from false &&", shell_ok.replace(shell_guard, "              false && \\\\\n" + shell_guard), contracts_manifest, False, "the previous line continues into it")
+    case("shell contracts guard in a subshell whose failure is discarded (Codex #1043 r4)", shell_ok.replace(shell_guard, "              (\n" + shell_guard + "              ) || true\n"), contracts_manifest, False, "inside a subshell")
+    case("shell contracts guard in a command substitution", shell_ok.replace(shell_guard, "              out=\"$(\n" + shell_guard + "              )\" || true\n"), contracts_manifest, False, "inside a subshell")
+    case("shell contracts guard in a subshell-bodied function", shell_ok.replace(shell_guard, "              bind() (\n" + shell_guard + "              )\n"), contracts_manifest, False, "inside a subshell")
+    case("shell contracts guard wrapped in bash -c", shell_ok.replace(shell_guard, "              bash -c '" + shell_guard.strip() + "' || true\n"), contracts_manifest, False, "is not re-bound")
+    case("shell contracts guard piped", shell_ok.replace("--ref main || exit 1\n", "--ref main || exit 1 | tee guard.log\n"), contracts_manifest, False, "is not re-bound")
+    case("shell contracts guard backgrounded", shell_ok.replace("--ref main || exit 1\n", "--ref main || exit 1 &\n"), contracts_manifest, False, "is not re-bound")
+    case("shell contracts guard in an sh(returnStatus: true) block", shell_ok.replace("            sh '''\n              set -euo pipefail\n              rm -rf .deps", "            sh(returnStatus: true, script: '''\n              set -euo pipefail\n              rm -rf .deps").replace("install\n            '''\n", "install\n            ''')\n"), contracts_manifest, False, "whose failure stops the build")
+    case("a balanced $( … ) before the shell guard is fine", shell_ok.replace(shell_guard, "              echo \"$(date)\"\n              x=$(printf '%s' \"(a)\")\n" + shell_guard), contracts_manifest, True)
     case("contracts re-checked-out after its guard", shell_ok.replace("              mvn -B -f .deps/options-edge-contracts/pom.xml install", "              git -C .deps/options-edge-contracts checkout origin/feature\n              mvn -B -f .deps/options-edge-contracts/pom.xml install"), contracts_manifest, False, "is not re-bound")
     case("shell block with set +e around the guard", shell_ok.replace("              set -euo pipefail\n              rm -rf", "              set +e\n              rm -rf"), contracts_manifest, False, "must not `set +e`")
     # 15. Groovy escapes
@@ -331,7 +355,7 @@ def main() -> int:
     case("--only still applies every rule", good.replace("        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n"), MANIFEST, False, "has no `when` gate", ["--only", "Jenkinsfile.fixture"])
 
     print(f"validate-jenkinsfile-guard-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 90:
+    if failed == 0 and passed >= 110:
         print("validate-jenkinsfile-guard-test: ALL PASS")
         return 0
     return 1
