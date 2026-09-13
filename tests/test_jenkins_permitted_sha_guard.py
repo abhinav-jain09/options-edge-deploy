@@ -30,7 +30,7 @@ that a script refuses:
     repository, a disagreeing authoritative render, an unserved digest are refused; a
     registry:port/repo@digest render (Codex I7) is accepted.
   * scripts/jenkins/validate-jenkinsfile-guard.py — the repository passes; the committed refused fixture
-    fails; the shared mutation suite refuses every demonstrated bypass; the Codex round-3 reproductions
+    fails; the shared mutation suite refuses every demonstrated skip path; the Codex round-3 reproductions
     applied to THIS repository's real Jenkinsfiles are refused.
 """
 from __future__ import annotations
@@ -498,7 +498,7 @@ class PermittedShaGuardValidatorTest(unittest.TestCase):
         self.assertIn("stage 'Deploy' precedes the guard", r.stdout)
         self.assertIn("mutation token before the guard", r.stdout)
 
-    def test_shared_mutation_suite_refuses_every_demonstrated_bypass(self) -> None:
+    def test_shared_mutation_suite_refuses_every_demonstrated_skip_path(self) -> None:
         r = subprocess.run(["python3", str(VALIDATOR_SUITE)], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("validate-jenkinsfile-guard-test: ALL PASS", r.stdout)
@@ -739,6 +739,24 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
             r = self._validate_mutated("Jenkinsfile.nifty-gex-service", "          sh 'PERMITTED_SHA=", "          " + mutated)
             self.assertEqual(r.returncode, 1, r.stdout)
             self.assertIn(say, r.stdout)
+
+    def test_nifty_checkout_is_read_only_after_its_guard(self) -> None:
+        # Codex #1043 r8 M1-R8 on a real file: after the Nifty checkout's dedicated guard, nothing may move or rewrite
+        # nifty-gex-src before it is built; read-only git and the rsync FROM it stay accepted.
+        anchor = '          SRC_COMMIT="$(git -C nifty-gex-src rev-parse HEAD)"\n'
+        self.assertIn(anchor, (ROOT / "Jenkinsfile.nifty-gex-service").read_text())
+        for ins, say in [
+            ("          git -C nifty-gex-src pull --ff-only origin main\n", "is changed after its guard"),
+            ("          git -C nifty-gex-src fetch origin main && git -C nifty-gex-src reset --hard FETCH_HEAD\n", "is changed after its guard"),
+            ("          cd nifty-gex-src && git checkout -q origin/feature && cd \"$WORKSPACE\"\n", "is changed after its guard"),
+            ("          cp /tmp/Dockerfile nifty-gex-src/Dockerfile\n", "is changed after its guard"),
+            ("          tar -xzf /tmp/src.tgz -C nifty-gex-src\n", "is changed after its guard"),
+        ]:
+            r = self._validate_mutated("Jenkinsfile.nifty-gex-service", anchor, ins + anchor)
+            self.assertEqual(r.returncode, 1, (ins, r.stdout))
+            self.assertIn(say, r.stdout)
+        r = self._validate_mutated("Jenkinsfile.nifty-gex-service", anchor, anchor + "          git -C nifty-gex-src log -1 --oneline\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
 
     def test_service_deploy_post_recovery_negated_with_a_space(self) -> None:
         r = self._validate_mutated("Jenkinsfile.service-deploy", "        if (env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && env.SECONDARY_PERMISSIONS_PASSED == 'PASSED' && env.EFFECT_STAGE_STARTED == 'PASSED') {",

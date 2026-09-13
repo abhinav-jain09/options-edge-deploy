@@ -478,6 +478,94 @@ def main() -> int:
     mut("invalid Groovy escape \\d in a single-quoted string", "            sh 'kubectl apply -f k8s/fixture.yaml'", "            sh 'echo x | grep -E \"[\\d]+\"'\n            sh 'kubectl apply -f k8s/fixture.yaml'", "not a Groovy escape")
     mut("octal Groovy escape", "            sh 'kubectl apply -f k8s/fixture.yaml'", "            sh 'sed s/a/\\1/ x'\n            sh 'kubectl apply -f k8s/fixture.yaml'", "OCTAL")
     case("doubled backslash is fine", shell_ok.replace("              mvn -B -f .deps", "              ls target/*.jar | grep -v '\\\\.original$'\n              mvn -B -f .deps"), contracts_manifest, True)
+    # Codex #1043 r8 M1-R8: after its guard a bound checkout is read-only — git that moves it, SCM steps into it and
+    # other tools writing into it would replace the permitted source before it is built.
+    BUILD = "            sh 'docker build -t app app-src'\n"
+    TQ3 = chr(39) * 3
+
+    def after_guard(snippet: str) -> str:
+        return good.replace(BUILD, snippet + BUILD)
+
+    def shell(*cmds: str) -> str:
+        return "            sh " + TQ3 + "\n" + "".join(f"              {c}\n" for c in cmds) + "            " + TQ3 + "\n"
+
+    CHANGED = "is changed after its guard"
+    MOVES = "changes a checkout's HEAD or worktree"
+    for label, cmds in [
+        ("git -C <dir> pull --ff-only (Codex reproduction)", ["git -C app-src pull --ff-only origin main"]),
+        ("git -C <dir> fetch then reset --hard FETCH_HEAD", ["git -C app-src fetch origin main", "git -C app-src reset --hard FETCH_HEAD"]),
+        ("git -C <dir> fetch alone (any git but read-only forms)", ["git -C app-src fetch origin main"]),
+        ("git -C <dir> checkout", ["git -C app-src checkout FETCH_HEAD"]),
+        ("git -C <dir> switch", ["git -C app-src switch feature"]),
+        ("git -C <dir> restore", ["git -C app-src restore --source origin/feature ."]),
+        ("git -C <dir> merge", ["git -C app-src merge origin/feature"]),
+        ("git -C <dir> rebase", ["git -C app-src rebase origin/feature"]),
+        ("git -C <dir> am", ["git -C app-src am /tmp/change.patch"]),
+        ("git -C <dir> apply", ["git -C app-src apply /tmp/change.patch"]),
+        ("git -C <dir> cherry-pick", ["git -C app-src cherry-pick abc123"]),
+        ("git -C <dir> submodule update", ["git -C app-src submodule update --init --remote"]),
+        ("git -C <dir> stash pop", ["git -C app-src stash pop"]),
+        ("git -C <dir> clean", ["git -C app-src clean -ffdx"]),
+        ("a nested -C chain", ["git -C app-src/sub -C .. pull"]),
+        ("--git-dir/--work-tree", ["git --git-dir=app-src/.git --work-tree=app-src checkout feature"]),
+        ("a -c option on a read-only subcommand", ["git -c core.pager=sh -C app-src log -1"]),
+        ("cd <dir> && git pull", ["cd app-src && git pull"]),
+        ("a subshell cd then checkout", ["( cd app-src; git checkout -q origin/feature )"]),
+        ("pushd then reset", ["pushd app-src", "git reset --hard origin/feature", "popd"]),
+        ("the directory through a shell variable", ["D=app-src", "git -C \"$D\" pull"]),
+        ("bash -c", ["bash -c 'git -C app-src pull'"]),
+        ("GIT_DIR/GIT_WORK_TREE pointed at it", ["GIT_DIR=app-src/.git GIT_WORK_TREE=app-src git fetch origin feature"]),
+        ("an exported GIT_WORK_TREE", ["export GIT_WORK_TREE=app-src", "git status"]),
+        ("cp into it", ["cp /tmp/Main.java app-src/src/Main.java"]),
+        ("cp -t into it", ["cp -t app-src /tmp/pom.xml"]),
+        ("rsync into it", ["rsync -a /tmp/other/ app-src/"]),
+        ("mv into it", ["mv /tmp/pom.xml app-src/pom.xml"]),
+        ("rm inside it", ["rm -rf app-src/src"]),
+        ("rm of a glob that includes it", ["rm -rf app*"]),
+        ("tar -x -C into it", ["tar -xzf /tmp/src.tgz -C app-src"]),
+        ("unzip -d into it", ["unzip -o /tmp/src.zip -d app-src"]),
+        ("ln into it", ["ln -sf /tmp/pom.xml app-src/pom.xml"]),
+        ("a redirection into it", ["echo '<project/>' > app-src/pom.xml"]),
+        ("tee into it", ["curl -s https://example/pom.xml | tee app-src/pom.xml"]),
+        ("sed -i on it", ["sed -i s/1.0/2.0/ app-src/pom.xml"]),
+        ("curl -o into it", ["curl -so app-src/pom.xml https://example/pom.xml"]),
+        ("find -delete inside it", ["find app-src -name '*.java' -delete"]),
+        ("patch -d it", ["patch -d app-src -p1 -i /tmp/change.patch"]),
+        ("cd into it then a relative cp", ["cd app-src", "cp /tmp/pom.xml pom.xml"]),
+        ("a build goal that rewrites sources", ["mvn -f app-src/pom.xml versions:set -DnewVersion=9"]),
+    ]:
+        case(f"after the guard, {label} is refused", after_guard(shell(*cmds)), MANIFEST, False, CHANGED)
+    case("after the guard, Groovy concatenation 'git -C ' + srcDir + ' pull' is refused", after_guard("            sh 'git -C ' + srcDir + ' pull'\n"), MANIFEST, False, MOVES)
+    case("after the guard, a GString git -C ${SRC} pull is refused", after_guard("            sh \"git -C ${env.SRC} pull\"\n"), MANIFEST, False, MOVES)
+    case("after the guard, sh 'git pull' inside dir('app-src') is refused", after_guard("            dir('app-src') {\n              sh 'git pull --ff-only'\n            }\n"), MANIFEST, False, CHANGED)
+    case("after the guard, sh 'cp …' inside dir('app-src') is refused", after_guard("            dir('app-src') {\n              sh 'cp /tmp/pom.xml pom.xml'\n            }\n"), MANIFEST, False, CHANGED)
+    case("after the guard, the git step with another branch in dir('app-src') is refused", after_guard("            dir('app-src') {\n              git url: 'git@example:app.git', branch: 'feature'\n            }\n"), MANIFEST, False, "re-acquired")
+    case("after the guard, git(branch:, url:) in dir('app-src') is refused", after_guard("            dir('app-src') {\n              git branch: 'feature', url: 'git@example:app.git'\n            }\n"), MANIFEST, False, "re-acquired")
+    case("after the guard, checkout scm in dir('app-src') is refused", after_guard("            dir('app-src') {\n              checkout scm\n            }\n"), MANIFEST, False, "re-acquired")
+    case("after the guard, unstash in dir('app-src') is refused", after_guard("            dir('app-src') {\n              unstash 'other-source'\n            }\n"), MANIFEST, False, CHANGED)
+    case("after the guard, writeFile into it is refused", after_guard("            writeFile file: 'app-src/pom.xml', text: '<project/>'\n"), MANIFEST, False, CHANGED)
+    case("after the primary guard, git reset --hard in the root workspace is refused", after_guard(shell("git reset --hard origin/feature")), MANIFEST, False, MOVES)
+    case("after the guard, read-only git and reads of the checkout are fine",
+         after_guard(shell("git -C app-src rev-parse HEAD", "git -C app-src log -1 --oneline", "git -C app-src status --porcelain", "git -C app-src diff --stat",
+                           "rsync -a --exclude .git app-src/ builder:/tmp/app/", "cp app-src/target/app.jar out/app.jar", "tar -czf out/app.tgz app-src",
+                           "mvn -B -f app-src/pom.xml package", "git fetch origin main", "ssh builder \"cd /tmp/app && make\"")),
+         MANIFEST, True)
+    case("after the guard, sh 'git rev-parse HEAD' inside dir('app-src') is fine", after_guard("            dir('app-src') {\n              sh 'git rev-parse HEAD'\n            }\n"), MANIFEST, True)
+    # Codex #809 M3: directories resolve through EVERY enclosing block, not only single-statement dir() wrappers
+    SCRIPTED = lambda d, gdir: good.replace(PAIR, f"            dir('{d}') {{\n              script {{\n" + SH_ACQ.replace("            ", "                ") + NESTED_BLOCK.replace("            ", "                ").replace("--dir app-src", f"--dir {gdir}") + "              }\n            }\n")
+    case("dir('a') { script { acquisition; guard --dir app-src } } binds a/app-src: fine", SCRIPTED("a", "app-src"), MANIFEST, True)
+    case("dir('a') { script { acquisition; guard --dir a/app-src } } is refused (resolved through script{})", SCRIPTED("a", "a/app-src"), MANIFEST, False, "the guard resolves to 'a/a/app-src', the acquisition to 'a/app-src'")
+    case("dir('a') { withEnv { acquisition; guard } } resolves through withEnv too",
+         good.replace(PAIR, "            dir('a') {\n              withEnv(['X=1']) {\n" + SH_ACQ.replace("            ", "                ") + NESTED_BLOCK.replace("            ", "                ").replace("--dir app-src", "--dir a/app-src") + "              }\n            }\n"),
+         MANIFEST, False, "the guard resolves to 'a/a/app-src'")
+    for bad in ["..", "/tmp", "~", "a/../b"]:
+        case(f"dir('{bad}') {{ script {{ acquisition; guard }} }} is refused", SCRIPTED(bad, "app-src"), MANIFEST, False, "not a plain relative path")
+    case("dir(env.X) { script { acquisition; guard } } is refused",
+         good.replace(PAIR, "            dir(env.X) {\n              script {\n" + SH_ACQ.replace("            ", "                ") + NESTED_BLOCK.replace("            ", "                ") + "              }\n            }\n"),
+         MANIFEST, False, "cannot be resolved to a literal path")
+    contracts_in_other = contracts_ok.replace("            sh '''\n              set -euo pipefail\n              rm -rf .deps", "            dir('other') {\n            script {\n            sh '''\n              set -euo pipefail\n              rm -rf .deps").replace("--dir .deps/options-edge-contracts --ref main'\n            }\n", "--dir .deps/options-edge-contracts --ref main'\n            }\n            }\n            }\n")
+    case("the #809 M3 reproduction: contracts acquired and guarded under dir('other') { script { … } } do not satisfy contracts=.deps/…",
+         contracts_in_other, contracts_manifest, False, "no acquisition of it was found")
     # manifest hygiene + --only (the downstream-definition mode)
     case("unclassified Jenkinsfile", good, MANIFEST + "Jenkinsfile.other | in | | x\n", False, "listed in the manifest but not present")
     case("out needs a reason", good, "Jenkinsfile.fixture | out | |\n", False, "needs a reason")
@@ -487,7 +575,7 @@ def main() -> int:
     case("--only still applies every rule", good.replace("        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n"), MANIFEST, False, "has no `when` gate", ["--only", "Jenkinsfile.fixture"])
 
     print(f"validate-jenkinsfile-guard-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 170:
+    if failed == 0 and passed >= 232:
         print("validate-jenkinsfile-guard-test: ALL PASS")
         return 0
     return 1
