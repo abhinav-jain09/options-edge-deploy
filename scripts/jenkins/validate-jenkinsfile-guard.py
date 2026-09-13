@@ -63,18 +63,23 @@ form; that is deliberate):
      (DEPLOY_WORKSPACE_PERMITTED for files with a re-guard container, PERMITTED_SHA_GUARD otherwise).
      `!(…)`, `! (…)`, `(… ) == false`, `||`, `!=`, an else branch, a token after the block: refused.
   9. Every source acquisition after the primary guard: the ROOT workspace may not be re-acquired (except
-     the leading `checkout scm` of a rule-6 stage); a NESTED directory must be re-bound — in a LATER step of the
-     SAME stage, before any effect token or other acquisition — by a DEDICATED guard step, the one accepted form:
+     the leading `checkout scm` of a rule-6 stage). A NESTED source is acquired by a DEDICATED ACQUISITION STEP and
+     bound by a DEDICATED GUARD STEP that is the very next statement of the same block — nothing runs between:
+         sh <triple-quoted: [set -eu] [rm -rf <dir>]  git clone <url> <dir>  [git -C <dir> checkout main]>
+           (or  dir('<dir>') { git url: <env.X | 'url'>, branch: 'main' } )
          timeout(time: N, unit: 'MINUTES') {
-           sh 'PERMITTED_SHA="${X_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir <literal dir> --ref main'
+           sh 'PERMITTED_SHA="${X_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir <dir> --ref main'
          }
-     The step's whole script is that single command, matched against a fixed template whose only variable parts
-     are the source's own permission variable (`:-` or `:?`), a literal directory and `--ref main`. Nothing else
-     can be in that shell — no other command, trap, exit, function, subshell, substitution, `;`, `&&`, `||`, `|`,
-     `&`, redirection or comment — and `sh 'string'` takes no returnStatus/returnStdout, so the step fails if and
-     only if the guard refuses. The step must run UNSKIPPABLY: every enclosing block below the stage's `steps`
-     is a sequencing block (script/dir/withEnv/timeout/…) and no return/if/else/try/catch/catchError/loop/break/
-     continue precedes it in any of them, so no later step or stage consuming the source can run without it.
+     The acquisition step holds nothing but those commands (no `;`, `&&`, `||`, other command or effect). The guard
+     step is recognised from the Groovy token structure, never from text: the `sh` token is code and its sole argument
+     is ONE single-quoted literal equal to the fixed template (only the permission variable, a literal directory and
+     `--ref main` vary), directly inside a timeout block holding nothing else — the same text inside another string,
+     a triple-quoted block, a GString or a comment is not the step. Both paths are RESOLVED through their enclosing
+     dir('<literal>') blocks and must be equal; a dir() with a variable, `..`, `.`, an absolute or `~` path, and any
+     ws()/node() wrapper, are refused; a second acquisition into an already guarded resolved path is refused. The
+     guard step must run UNSKIPPABLY: every enclosing block below the stage's `steps` is a sequencing block
+     (script/dir/withEnv/timeout/…) and no return/if/else/try/catch/catchError/loop/break/continue precedes it in any
+     of them, so no later step or stage consuming the source can run without it.
  10. contracts=<dir>: that directory is acquired (and therefore, by rule 9, bound) at least once.
  11. Every mention of permitted-sha-guard.sh outside comments and parameters{} descriptions is one of the
      canonical forms (rule 3/5 guard stage, rule 6 inline re-guard, rule 9 dedicated step) — any other
@@ -215,6 +220,7 @@ class Groovy:
                 continue
             if text.startswith("//", i):
                 k = text.find("\n", i)
+                self.comments.append((i, n if k < 0 else k))
                 i = n if k < 0 else k
                 continue
             if text.startswith("/*", i):
@@ -279,6 +285,26 @@ class Groovy:
             if self.blocks[i].header.startswith("stage("):
                 return i
         return None
+
+    def is_code(self, pos: int) -> bool:
+        """True when pos is executable Groovy: not inside any string literal (quotes included) and not in a comment."""
+        if any(st - len(q) <= pos < en + len(q) for q, st, en in self.strings):
+            return False
+        return not any(st <= pos < en for st, en in self.comments)
+
+    def sh_single_quoted_step(self, line_start: int, line_end: int) -> str | None:
+        """When the physical line [line_start, line_end) is exactly the Groovy STATEMENT `sh '<one-line literal>'`
+        — the `sh` token is code, its sole argument is ONE single-quoted string literal that closes on this line, and
+        nothing but whitespace follows — the literal's content; otherwise None. Text inside another string, a
+        triple-quoted block, a GString or a comment never qualifies."""
+        seg = self.text[line_start:line_end]
+        pos = line_start + len(seg) - len(seg.lstrip())
+        if not seg.lstrip().startswith("sh '") or not self.is_code(pos):
+            return None
+        lit = next(((st, en) for q, st, en in self.strings if q == "'" and st == pos + 4), None)
+        if lit is None or self.text[lit[1]:lit[1] + 1] != "'" or self.text[lit[1] + 1:line_end].strip():
+            return None
+        return self.text[lit[0]:lit[1]]
 
     def in_block_comment(self, pos: int) -> bool:
         return any(s <= pos < e for s, e in self.comments)
@@ -557,6 +583,13 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
     def first_code_col(line_idx: int) -> int:
         return len(lines[line_idx]) - len(lines[line_idx].lstrip())
 
+    def dedicated_at(line_idx: int):
+        """The DEDICATED_GUARD match for line line_idx only when that line is a real `sh '…'` Groovy statement."""
+        content = g.sh_single_quoted_step(offs[line_idx], offs[line_idx] + len(lines[line_idx]))
+        if content is None:
+            return None
+        return DEDICATED_GUARD.match("sh '" + content + "'")
+
     def stage_block(line_idx: int) -> int | None:
         lo_off, hi_off = offs[line_idx], offs[line_idx + 1]
         for k, b in enumerate(g.blocks):
@@ -721,7 +754,7 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
     # 7. downstream triggers
     compat_sites = []   # (line, job, shavar, flag_line, innermost block, stage block, top-level-of-script, flag name)
     for i, l in enumerate(lines):
-        if is_comment(l) or "require-guarded-downstream.sh" not in l or not l.lstrip().startswith("def "):
+        if is_comment(l) or "require-guarded-downstream.sh" not in l or not l.lstrip().startswith("def ") or not g.is_code(pos_of(i, first_code_col(i))):
             continue
         cm = COMPAT_FORM.match(canon(lines[i:i + 12]))
         if not cm:
@@ -868,14 +901,100 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
                 return f"a `{hit.group(1)}` precedes it in the same block"
         return None
     contracts_seen = False
+    SEG = r"[A-Za-z0-9_.][A-Za-z0-9_.-]*"
+    SAFE_PATH = re.compile(rf"^{SEG}(?:/{SEG})*$")
+    URL_FORMS = r"(?:git@github\.com:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git|\"\$[A-Z][A-Z0-9_]*\"|\"\$\{[A-Z][A-Z0-9_]*\}\")"
+
+    def safe_rel(path: str) -> bool:
+        return bool(SAFE_PATH.match(path)) and not any(c in (".", "..") for c in path.split("/"))
+
+    def stmt_wrapped(start: int, end: int) -> tuple[int, int, list[str], str | None]:
+        """Grow a statement outward through dir('literal') { <only this statement> } wrappers. Returns the outer
+        statement span, the dir literals outermost first, and a problem (a non-literal or unsafe dir, a wrapper that
+        also holds other statements)."""
+        dirs: list[str] = []
+        while True:
+            blk = g.innermost(start)
+            if blk is None:
+                return start, end, dirs, None
+            b = g.blocks[blk]
+            m = re.fullmatch(r"dir\('([^']*)'\)", b.header)
+            if not m:
+                if b.header.startswith("ws(") or b.header.startswith("node("):
+                    return start, end, dirs, f"it sits under `{b.header[:40]}`, which changes the workspace"
+                if b.header.startswith("dir("):
+                    return start, end, dirs, f"it sits under `{b.header[:40]}`, whose directory cannot be resolved to a literal path"
+                return start, end, dirs, None
+            inner = (g.code_only(b.open + 1, start) + g.code_only(end, b.close)).strip()
+            if inner:
+                return start, end, dirs, f"its dir('{m.group(1)}') block holds other statements"
+            if not safe_rel(m.group(1)):
+                return start, end, dirs, f"dir('{m.group(1)}') is not a plain relative path (no .., ., variables, absolute or ~ forms)"
+            dirs.insert(0, m.group(1))
+            start = text.rfind("dir(", 0, b.open)
+            end = b.close + 1
+
+    def workspace_changes(pos: int) -> str | None:
+        for bi in g.ancestors(pos):
+            h = g.blocks[bi].header
+            if h.startswith("ws(") or h.startswith("node(") or h.startswith("dir(") and not re.fullmatch(r"dir\('[^']*'\)", h):
+                return f"it sits under `{h[:40]}`, which changes the workspace"
+        return None
+
+    def acquisition_at(i: int):
+        """(statement start, end, relative destination, problem) for the acquisition on line i."""
+        p = pos_of(i, first_code_col(i))
+        tq = next(((s0, e0) for q, s0, e0 in g.strings if q == "'''" and s0 <= p < e0), None)
+        if tq is not None:
+            opener_line_start = text.rfind("\n", 0, tq[0] - 3) + 1
+            opener = text[opener_line_start:tq[0] - 3]
+            if not re.fullmatch(r"\s*sh\s+", opener):
+                return None, None, None, "a nested acquisition must be a plain `sh '''…'''` step of its own"
+            body = [x.strip() for x in text[tq[0]:tq[1]].split("\n")]
+            body = [x for x in body if x and not x.startswith("#")]
+            dest = None
+            k = 0
+            if k < len(body) and body[k] in ("set -eu", "set -euo pipefail"):
+                k += 1
+            rm = re.fullmatch(rf"rm -rf ({SEG}(?:/{SEG})*)", body[k]) if k < len(body) else None
+            if rm:
+                k += 1
+            cl = re.fullmatch(rf"git clone {URL_FORMS} ({SEG}(?:/{SEG})*)", body[k]) if k < len(body) else None
+            if not cl:
+                return None, None, None, "a nested acquisition step may contain only [set -eu] [rm -rf <dir>] git clone <url> <dir> [git -C <dir> checkout main] — no other command, separator or effect"
+            dest = cl.group(1)
+            k += 1
+            if k < len(body) and re.fullmatch(rf"git -C {re.escape(dest)} checkout main", body[k]):
+                k += 1
+            if k != len(body) or (rm and rm.group(1) != dest) or not safe_rel(dest):
+                return None, None, None, "a nested acquisition step may contain only [set -eu] [rm -rf <dir>] git clone <url> <dir> [git -C <dir> checkout main] — no other command, separator or effect"
+            return text.rfind("sh", 0, tq[0] - 3), tq[1] + 3, dest, None
+        m = re.match(r"^git url: (?:env\.[A-Za-z_][A-Za-z0-9_]*|'[^']*'), branch: 'main'$", lines[i].strip())
+        if m:
+            blk = g.innermost(p)
+            b = g.blocks[blk] if blk is not None else None
+            dm = re.fullmatch(r"dir\('([^']*)'\)", b.header) if b else None
+            inner = re.sub(r"\s+", " ", g.code_only(b.open + 1, b.close)).strip() if b else ""
+            if not dm or not re.fullmatch(r"git url: (?:env\.[A-Za-z_][A-Za-z0-9_]*|), branch:", inner):
+                return None, None, None, "a nested `git url:` acquisition must be the only statement of its own dir('<literal>') { … } step"
+            if not safe_rel(dm.group(1)):
+                return None, None, None, f"dir('{dm.group(1)}') is not a plain relative path"
+            return text.rfind("dir(", 0, b.open), b.close + 1, dm.group(1), None
+        if re.search(r"\bgit clone\b|\bgit -C \S+ checkout\b", lines[i]):
+            return None, None, None, "a nested acquisition must be a dedicated acquisition step: sh \'\'\'[set -eu] [rm -rf <dir>] git clone <url> <dir> [git -C <dir> checkout main]\'\'\' or dir(\'<dir>\') { git url: …, branch: \'main\' }"
+        return None, None, None, None
+
+    bound_paths: dict[str, int] = {}
+    seen_stmts: set[int] = set()
     for i in range(g_hi, len(lines)):
         l = lines[i]
         if is_comment(l) or "permitted-sha-guard.sh" in l or not ACQUIRE_RE.search(l):
             continue
         si = max(k for k, (s, _) in enumerate(stages) if s <= i)
         slo, shi = stage_range(lines, stages, si)
-        d = acquisition_dir(lines, i, slo)
-        if d == ".":
+        a_start, a_end, rel, why = acquisition_at(i)
+        if a_start is None and why is None:
+            # not a nested-source acquisition: the root workspace
             body = lines[slo:shi]
             own_agent = any(re.match(r"^\s*agent\b", x) and not is_comment(x) for x in body)
             first_acq = next((k for k in range(slo, shi) if not is_comment(lines[k]) and ACQUIRE_RE.search(lines[k]) and "permitted-sha-guard.sh" not in lines[k]), None)
@@ -884,32 +1003,59 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
             if not leading:
                 problems.append(f"line {i + 1}: the guarded workspace is re-acquired after the guard: {l.strip()[:90]}")
             continue
-        if entry["contracts"] and d == entry["contracts"]:
+        if why:
+            problems.append(f"line {i + 1}: {why}: {l.strip()[:90]}")
+            continue
+        if a_start in seen_stmts:
+            continue
+        seen_stmts.add(a_start)
+        o_start, o_end, dirs, why = stmt_wrapped(a_start, a_end)
+        why = why or workspace_changes(o_start)
+        resolved = "/".join(dirs + [rel])
+        if why:
+            problems.append(f"line {i + 1}: '{resolved}' acquisition cannot be tied to a guarded path: {why}")
+            continue
+        if entry["contracts"] and resolved == entry["contracts"]:
             contracts_seen = True
-        acq_chain = g.control_chain(pos_of(i, first_code_col(i)))
-        rebound = False
+        if resolved in bound_paths:
+            problems.append(f"line {i + 1}: '{resolved}' is acquired again after its guard (line {bound_paths[resolved] + 1}) — a second checkout into a guarded path is refused")
+            continue
+        # The very next statement in the same block must be the dedicated guard step for the same RESOLVED path.
+        parent = g.innermost(o_start)
+        after = text[o_end:(g.blocks[parent].close if parent is not None else len(text))]
+        nxt = re.match(r"(?:\s|//[^\n]*\n)*", after)
+        g_start = o_end + nxt.end()
         why_not = ""
-        for j in range(i + 1, shi):
-            lj = lines[j]
-            if is_comment(lj):
-                continue
-            dm = DEDICATED_GUARD.match(lj.strip())
-            if dm and dm.group("dir") == d:
-                dom = unskippable(pos_of(j, first_code_col(j)))
+        rebound = False
+        hm = re.match(r"(?:dir\('[^']*'\)\s*\{\s*)*timeout\(time: [0-9]+, unit: 'MINUTES'\)\s*\{\s*(sh '[^\n]*')\s*\}", text[g_start:])
+        if not hm:
+            why_not = "the statement right after the acquisition step is not the dedicated guard step (nothing may run between them)"
+        else:
+            sh_pos = g_start + hm.start(1)
+            gl = text.count("\n", 0, sh_pos)
+            dm2 = dedicated_at(gl)
+            tb = g.innermost(sh_pos)
+            t_start = text.rfind("timeout(", 0, g.blocks[tb].open) if tb is not None else sh_pos
+            go_start, go_end, gdirs, gwhy = stmt_wrapped(t_start, g.blocks[tb].close + 1 if tb is not None else sh_pos)
+            if not dm2:
+                why_not = "the guard after the acquisition is not the dedicated template"
+            elif gwhy or workspace_changes(go_start):
+                why_not = gwhy or workspace_changes(go_start)
+            elif g.innermost(go_start) != parent or go_start != g_start:
+                why_not = "the guard step is not the next statement of the same block"
+            elif not safe_rel(dm2.group("dir")):
+                why_not = f"--dir {dm2.group('dir')} is not a plain relative path"
+            elif "/".join(gdirs + [dm2.group("dir")]) != resolved:
+                why_not = f"the guard resolves to '{'/'.join(gdirs + [dm2.group('dir')])}', the acquisition to '{resolved}' — a guard on another checkout binds nothing"
+            else:
+                dom = unskippable(sh_pos)
                 if dom:
-                    why_not = f"its dedicated guard step can be skipped while later steps still consume '{d}': {dom}"
-                    break
-                rebound = True
-                break
-            if "permitted-sha-guard.sh" in lj:
-                why_not = "the guard is not a dedicated `sh 'PERMITTED_SHA=\"${X_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir <dir> --ref main'` step"
-                break
-            if token_at(lj):
-                break
-            if ACQUIRE_RE.search(lj) and "permitted-sha-guard.sh" not in lj and acquisition_dir(lines, j, slo) != d:
-                break   # a different source acquired first — this one must have been bound before it
+                    why_not = f"its dedicated guard step can be skipped while later steps still consume '{resolved}': {dom}"
+                else:
+                    rebound = True
+                    bound_paths[resolved] = gl
         if not rebound:
-            problems.append(f"line {i + 1}: '{d}' acquired after the guard is not re-bound, before the next effect and in a later step of the same stage, by the dedicated guard step for it: sh 'PERMITTED_SHA=\"${{X_PERMITTED_SHA:-}}\" bash scripts/jenkins/permitted-sha-guard.sh --dir {d} --ref main'{': ' + why_not if why_not else ''}")
+            problems.append(f"line {i + 1}: '{resolved}' acquired after the guard is not re-bound by the dedicated guard step for that same resolved path, immediately after its acquisition step: {why_not}")
     if entry["contracts"] and not contracts_seen:
         problems.append(f"manifest names contracts={entry['contracts']} but no acquisition of it was found after the guard")
 
@@ -924,9 +1070,10 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
             if is_comment(lk) or "permitted-sha-guard.sh" not in lk or g.stage_of(pos_of(k, first_code_col(k))) != own_block:
                 continue
             st = lk.strip()
-            primary = (sname in (GUARD_STAGE, REGUARD_STAGE) and st.startswith("def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh"))
-            inline = re.match(r"^def (\w+) = sh\(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard\.sh'\)$", st) is not None
-            dedicated = DEDICATED_GUARD.match(st) is not None
+            code_line = g.is_code(pos_of(k, first_code_col(k)))
+            primary = code_line and (sname in (GUARD_STAGE, REGUARD_STAGE) and st.startswith("def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh"))
+            inline = code_line and re.match(r"^def (\w+) = sh\(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard\.sh'\)$", st) is not None
+            dedicated = dedicated_at(k) is not None
             if primary or inline or dedicated:
                 canonical_lines.add(k)
                 guard_stage_lines.add(si)
@@ -945,7 +1092,7 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
         hdr = g.blocks[blk].header if blk is not None else ""
         tm = re.fullmatch(r"timeout\(time: ([0-9]+), unit: 'MINUTES'\)", hdr)
         body = re.sub(r"\s+", " ", g.code_only(g.blocks[blk].open + 1, g.blocks[blk].close)).strip() if blk is not None else ""
-        only = body == "sh" if DEDICATED_GUARD.match(st) else re.fullmatch(r"def (\w+) = sh\(returnStatus: true, script: \) if \(\1 != 0\) \{ error\( \) \}", body) is not None
+        only = body == "sh" if dedicated_at(k) else re.fullmatch(r"def (\w+) = sh\(returnStatus: true, script: \) if \(\1 != 0\) \{ error\( \) \}", body) is not None
         if not tm or not 1 <= int(tm.group(1)) <= 30 or not only:
             problems.append(f"line {k + 1}: the guard must be the only statement of a `timeout(time: N, unit: 'MINUTES') {{ … }}` block with 1 <= N <= 30 — a stalled git fetch must end the build: {st[:80]}")
     return problems

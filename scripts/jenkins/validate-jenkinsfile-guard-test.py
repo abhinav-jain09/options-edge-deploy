@@ -335,19 +335,57 @@ def main() -> int:
         "              sh " + "\'\'\'" + "\n                set -eu\n                " + GUARD_CMD + " || exit 1\n              " + "\'\'\'" + "\n", "is not re-bound")
     mut("nested guard without its deadline block", NESTED_BLOCK, "            sh '" + GUARD_CMD + "'\n", "timeout(time: N, unit: 'MINUTES')")
     mut("nested guard sharing its deadline block with another step", NESTED_BLOCK, NESTED_BLOCK.replace("            }\n", "              echo 'x'\n            }\n"), "only statement")
-    mut("nested guard skipped by an early return in its script block, later sibling step builds (Codex gateway I6 / web M2)",
-        NESTED_BLOCK, "            script {\n              return\n" + NESTED_BLOCK.replace("            ", "              ") + "            }\n", "can be skipped while later steps still consume 'app-src'")
-    mut("nested guard after a conditional return", NESTED_BLOCK,
-        "            script {\n              if (params.APP_PERMITTED_SHA == 'skip') {\n                return\n              }\n" + NESTED_BLOCK.replace("            ", "              ") + "            }\n",
+    ACQ_BLOCK = "            dir('app-src') {\n              git url: 'git@example:app.git', branch: 'main'\n            }\n"
+    PAIR = ACQ_BLOCK + NESTED_BLOCK
+    mut("acquisition and guard skipped together by an early return, a later sibling step builds whatever app-src holds (Codex gateway I6 / web M2)",
+        PAIR, "            script {\n              return\n" + PAIR.replace("            ", "              ") + "            }\n", "can be skipped while later steps still consume 'app-src'")
+    mut("acquisition and guard after a conditional return", PAIR,
+        "            script {\n              if (params.APP_PERMITTED_SHA == 'skip') {\n                return\n              }\n" + PAIR.replace("            ", "              ") + "            }\n",
         "can be skipped while later steps still consume 'app-src'")
     mut("nested guard never entered: if (false)", NESTED_BLOCK, "            script {\n              if (false) {\n" + NESTED_BLOCK.replace("            ", "                ") + "              }\n            }\n", "is not re-bound")
     mut("nested guard inside try with a catch that continues", NESTED_BLOCK,
         "            script {\n              try {\n" + NESTED_BLOCK.replace("            ", "                ") + "              } catch (e) {\n                echo 'ignored'\n              }\n            }\n", "is not re-bound")
     mut("nested guard inside catchError", NESTED_BLOCK,
         "            catchError(buildResult: 'FAILURE') {\n" + NESTED_BLOCK.replace("            ", "              ") + "            }\n", "is not re-bound")
-    mut("nested guard after a sibling script that returns is fine (a return leaves only its own closure)",
-        NESTED_BLOCK, "            script {\n              return\n            }\n" + NESTED_BLOCK, "carry the canonical permitted-commit guard", expect_ok=True)
-    mut("nested clone re-acquired after its guard", "            sh 'docker build -t app app-src'", "            sh 'git -C app-src checkout origin/feature'\n            sh 'docker build -t app app-src'", "'app-src' acquired after the guard is not re-bound")
+    mut("a sibling script that returns BEFORE the acquisition is fine (a return leaves only its own closure)",
+        PAIR, "            script {\n              return\n            }\n" + PAIR, "carry the canonical permitted-commit guard", expect_ok=True)
+    mut("anything between the acquisition step and its guard step is refused", PAIR, ACQ_BLOCK + "            echo 'between'\n" + NESTED_BLOCK, "nothing may run between them")
+    mut("nested clone re-acquired after its guard", "            sh 'docker build -t app app-src'", "            sh 'git -C app-src checkout origin/feature'\n            sh 'docker build -t app app-src'", "nested acquisition must be a dedicated acquisition step")
+    # Codex web M6: an effect on the acquisition's OWN step runs before the guard
+    SH_ACQ = "            sh '''\n              set -euo pipefail\n              git clone git@github.com:example/app.git app-src\n            '''\n"
+    case("a dedicated shell acquisition step followed by its guard is fine", good.replace(ACQ_BLOCK, SH_ACQ), MANIFEST, True)
+    for label, line in [("`;` then docker build (Codex web M6)", "git clone git@github.com:example/app.git app-src; docker build -t app app-src"),
+                        ("`&&` then make", "git clone git@github.com:example/app.git app-src && make -C app-src"),
+                        ("|| true", "git clone git@github.com:example/app.git app-src || true")]:
+        case(f"acquisition step with an effect on its own line is refused: {label}", good.replace(ACQ_BLOCK, SH_ACQ.replace("git clone git@github.com:example/app.git app-src", line)), MANIFEST, False, "no other command, separator or effect")
+    case("acquisition step with a second command in its body is refused", good.replace(ACQ_BLOCK, SH_ACQ.replace("app-src\n", "app-src\n              docker build -t app app-src\n")), MANIFEST, False, "no other command, separator or effect")
+    case("acquisition inside sh(script: ..., returnStatus: true) is refused", good.replace(ACQ_BLOCK, SH_ACQ.replace("            sh '''\n", "            sh(returnStatus: true, script: '''\n").replace("            '''\n", "            ''')\n")), MANIFEST, False, "plain `sh '''…'''` step of its own")
+    case("a git url: acquisition sharing its dir() block with an effect is refused", good.replace(ACQ_BLOCK, ACQ_BLOCK.replace("branch: 'main'\n", "branch: 'main'\n              sh 'make'\n")), MANIFEST, False, "only statement of its own dir")
+    # Codex gateway I9 / web M7: paths resolved through their enclosing dir() blocks
+    case("guard wrapped in dir('other') while the acquisition is at the root is refused (Codex web M7)",
+         good.replace(NESTED_BLOCK, "            dir('other') {\n" + NESTED_BLOCK.replace("            ", "              ") + "            }\n"), MANIFEST, False, "the guard resolves to 'other/app-src', the acquisition to 'app-src'")
+    case("acquisition in dir('other') guarded as app-src at the root is refused (Codex gateway I9)",
+         good.replace(ACQ_BLOCK, "            dir('other') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n"), MANIFEST, False, "the guard resolves to 'app-src', the acquisition to 'other/app-src'")
+    case("acquisition in dir('other') guarded with --dir other/app-src is fine",
+         good.replace(ACQ_BLOCK, "            dir('other') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n").replace("--dir app-src --ref main", "--dir other/app-src --ref main"), MANIFEST, True)
+    case("acquisition and guard both in dir('other') blocks is fine",
+         good.replace(PAIR, "            dir('other') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n            dir('other') {\n" + NESTED_BLOCK.replace("            ", "              ") + "            }\n"), MANIFEST, True)
+    case("nested dir('a') { dir('b') { clone c } } guarded with --dir a/b/c is fine",
+         good.replace(ACQ_BLOCK, "            dir('a') {\n              dir('b') {\n" + SH_ACQ.replace("            ", "                ") + "              }\n            }\n").replace("--dir app-src --ref main", "--dir a/b/app-src --ref main"), MANIFEST, True)
+    case("nested dir('a') { dir('b') { clone c } } guarded with --dir b/c is refused",
+         good.replace(ACQ_BLOCK, "            dir('a') {\n              dir('b') {\n" + SH_ACQ.replace("            ", "                ") + "              }\n            }\n").replace("--dir app-src --ref main", "--dir b/app-src --ref main"), MANIFEST, False, "the guard resolves to 'b/app-src'")
+    case("the gateway I9 reproduction: a second checkout into other/app-src with a guard on app-src is refused",
+         good.replace(PAIR, PAIR + "            dir('other') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n" + NESTED_BLOCK), MANIFEST, False, "the guard resolves to 'app-src', the acquisition to 'other/app-src'")
+    case("a second acquisition into the same resolved path after its guard is refused",
+         good.replace(PAIR, PAIR + SH_ACQ + NESTED_BLOCK), MANIFEST, False, "acquired again after its guard")
+    case("an acquisition under ws(...) is refused", good.replace(PAIR, "            ws('elsewhere') {\n" + PAIR.replace("            ", "              ") + "            }\n"), MANIFEST, False, "changes the workspace")
+    case("an acquisition in dir(variable) is refused", good.replace(ACQ_BLOCK, "            dir(env.SRC) {\n" + SH_ACQ.replace("            ", "              ") + "            }\n"), MANIFEST, False, "cannot be resolved to a literal path")
+    for label, d in [("..", "../app-src"), ("a dot component", "./app-src"), ("an absolute path", "/tmp/app-src")]:
+        case(f"a guard --dir with {label} is refused", good.replace("--dir app-src --ref main", f"--dir {d} --ref main"), MANIFEST, False, "")
+    case("an acquisition in dir('..') is refused", good.replace(ACQ_BLOCK, "            dir('..') {\n" + SH_ACQ.replace("            ", "              ") + "            }\n"), MANIFEST, False, "not a plain relative path")
+    case("acquisition in one stage and its guard in the next stage (another agent) is refused",
+         good.replace(NESTED_BLOCK + "            sh 'docker build -t app app-src'\n", "            sh 'docker build -t app app-src'\n").replace("        stage('Trigger child') {", "        stage('Bind app') {\n          when { expression { " + G2 + " } }\n          agent { label 'other-host' }\n          steps {\n" + NESTED_BLOCK + "          }\n        }\n        stage('Trigger child') {"),
+         MANIFEST, False, "is not re-bound")
     mut("effect on the nested source between acquisition and its guard", NESTED_BLOCK, "            sh 'docker build -t early app-src'\n" + NESTED_BLOCK, "is not re-bound")
     mut("guard invoked from an ordinary shell block elsewhere", "            sh 'kubectl apply -f k8s/fixture.yaml'",
         "            sh 'bash scripts/jenkins/permitted-sha-guard.sh || true'\n            sh 'kubectl apply -f k8s/fixture.yaml'", "invoked outside its canonical forms")
@@ -409,18 +447,32 @@ def main() -> int:
         passed += 1
     else:
         failed += 1
+    # Codex #1043 r7 M1: the template TEXT inside another literal or a comment is not the Jenkins step
+    STEP = "              sh '" + GUARD_CMD + "'\n"
+    TQ3 = chr(39) * 3
+    for label, repl in [
+        ("inside a multi-line triple-single-quoted shell block after exit 0; exit 1 (Codex reproduction)", "              sh " + TQ3 + "\n                exit 0; exit 1\n                sh '" + GUARD_CMD + "'\n              " + TQ3 + "\n"),
+        ("inside a triple-single-quoted shell block after a plain exit 0", "              sh " + TQ3 + "\n                exit 0\n                sh '" + GUARD_CMD + "'\n              " + TQ3 + "\n"),
+        ("inside a triple-double-quoted GString block", "              sh " + '"""' + "\n                exit 0\n                sh '" + GUARD_CMD + "'\n              " + '"""' + "\n"),
+        ("as a line comment", "              // sh '" + GUARD_CMD + "'\n"),
+        ("inside a block comment", "              /* sh '" + GUARD_CMD + "' */\n"),
+        ("as a def string later passed to sh", "              def cmd = '" + GUARD_CMD + "'\n              sh cmd\n"),
+        ("as a double-quoted GString argument", "              sh \"" + GUARD_CMD.replace('"', '\\"').replace("$", "\\$") + "\"\n"),
+        ("as an argument that continues after the literal", "              sh '" + GUARD_CMD + "' + ' || true'\n"),
+    ]:
+        mut(f"the template text {label} is not the dedicated step", STEP, repl, "is not re-bound")
     mut("dedicated step with the :? form is fine", "${APP_PERMITTED_SHA:-}", "${APP_PERMITTED_SHA:?}", "carry the canonical permitted-commit guard", expect_ok=True)
 
     # 10. contracts
-    contracts_ok = good.replace("            sh 'docker build -t app app-src'", "            sh '''\n              set -euo pipefail\n              rm -rf .deps/options-edge-contracts\n              git clone git@example:contracts.git .deps/options-edge-contracts\n              git -C .deps/options-edge-contracts checkout main\n            '''\n            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main'\n            }\n            sh '''\n              mvn -B -f .deps/options-edge-contracts/pom.xml install\n            '''\n            sh 'docker build -t app app-src'")
+    contracts_ok = good.replace("            sh 'docker build -t app app-src'", "            sh '''\n              set -euo pipefail\n              rm -rf .deps/options-edge-contracts\n              git clone git@github.com:example/contracts.git .deps/options-edge-contracts\n              git -C .deps/options-edge-contracts checkout main\n            '''\n            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main'\n            }\n            sh '''\n              mvn -B -f .deps/options-edge-contracts/pom.xml install\n            '''\n            sh 'docker build -t app app-src'")
     contracts_manifest = "Jenkinsfile.fixture | in | reguard=Deploy path; contracts=.deps/options-edge-contracts | fixture\n"
     shell_ok = contracts_ok
     case("contracts acquired in one step, bound by the dedicated step, installed in the next: fine", contracts_ok, contracts_manifest, True)
     case("contracts named but never acquired", good, contracts_manifest, False, "no acquisition of it was found")
     case("contracts guard inside the acquisition's shell block (the old form) is refused",
          contracts_ok.replace("              git -C .deps/options-edge-contracts checkout main\n", "              git -C .deps/options-edge-contracts checkout main\n              PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main || exit 1\n"),
-         contracts_manifest, False, "is not re-bound")
-    case("contracts re-checked-out after its guard", contracts_ok.replace("              mvn -B -f .deps/options-edge-contracts/pom.xml install", "              git -C .deps/options-edge-contracts checkout origin/feature\n              mvn -B -f .deps/options-edge-contracts/pom.xml install"), contracts_manifest, False, "is not re-bound")
+         contracts_manifest, False, "no other command, separator or effect")
+    case("contracts re-checked-out after its guard", contracts_ok.replace("              mvn -B -f .deps/options-edge-contracts/pom.xml install", "              git -C .deps/options-edge-contracts checkout origin/feature\n              mvn -B -f .deps/options-edge-contracts/pom.xml install"), contracts_manifest, False, "no other command, separator or effect")
     # 15. Groovy escapes
     case("invalid Groovy escape \\. in a ''' block", shell_ok.replace("              mvn -B -f .deps", "              ls target/*.jar | grep -v '\\.original$'\n              mvn -B -f .deps"), contracts_manifest, False, "not a Groovy escape")
     mut("invalid Groovy escape \\d in a single-quoted string", "            sh 'kubectl apply -f k8s/fixture.yaml'", "            sh 'echo x | grep -E \"[\\d]+\"'\n            sh 'kubectl apply -f k8s/fixture.yaml'", "not a Groovy escape")
@@ -435,7 +487,7 @@ def main() -> int:
     case("--only still applies every rule", good.replace("        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n"), MANIFEST, False, "has no `when` gate", ["--only", "Jenkinsfile.fixture"])
 
     print(f"validate-jenkinsfile-guard-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 139:
+    if failed == 0 and passed >= 170:
         print("validate-jenkinsfile-guard-test: ALL PASS")
         return 0
     return 1

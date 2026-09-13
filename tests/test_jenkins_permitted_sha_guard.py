@@ -511,10 +511,14 @@ class PermittedShaGuardValidatorTest(unittest.TestCase):
                      "check and flag in if (false) plus a duplicate flag outside (Codex web r3)",
                      "dedicated step body with extra tokens is refused: in backticks (Codex #1043 r5)",
                      "nested guard as sh(script: …, 'returnStatus': true) — quoted key (Codex gateway r6 M2)",
-                     "nested guard skipped by an early return in its script block, later sibling step builds (Codex gateway I6 / web M2)",
+                     "acquisition and guard skipped together by an early return, a later sibling step builds whatever app-src holds (Codex gateway I6 / web M2)",
+                     "the template text inside a multi-line triple-single-quoted shell block after exit 0; exit 1 (Codex reproduction) is not the dedicated step",
                      "dedicated step body with extra tokens is refused: exit 0 hidden by a later nonzero exit (Codex #1043 r6 / gateway I7 / web M5)",
                      "dedicated step body with extra tokens is refused: an EXIT trap turning refusal into success (Codex gateway I8)",
                      "template sweep: 2354 single insertions into the dedicated command, none accepted",
+                     "acquisition step with an effect on its own line is refused: `;` then docker build (Codex web M6)",
+                     "guard wrapped in dir('other') while the acquisition is at the root is refused (Codex web M7)",
+                     "the gateway I9 reproduction: a second checkout into other/app-src with a guard on app-src is refused",
                      "compatibility check inverted", "compatibility check status discarded", "git pull rebound by an echo",
                      "separate-agent stage without inline re-guard", "dedicated step body with extra tokens is refused: || true after it",
                      "contracts re-checked-out after its guard", "guard version default is another hash"]:
@@ -726,7 +730,7 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
         block = t[a:b]
         r = self._validate_mutated("Jenkinsfile.nifty-gex-service", block, "        script {\n          return\n" + block.replace("\n        ", "\n          ").replace("        timeout", "          timeout", 1) + "        }\n")
         self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("can be skipped while later steps still consume 'nifty-gex-src'", r.stdout)
+        self.assertIn("'nifty-gex-src' acquired after the guard is not re-bound", r.stdout)
 
     def test_nifty_guard_is_a_dedicated_step(self) -> None:
         t = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
