@@ -114,9 +114,14 @@ except subprocess.TimeoutExpired:
 # the child finished: collect its output until EOF, but never past the deadline (a descendant may hold the pipe)
 for t in threads:
     t.join(timeout=max(0.0, end - time.monotonic()))
+expired = any(t.is_alive() for t in threads)   # decided BEFORE the group is killed: killing it would let the pumps finish
 kill_group()
+if expired:
+    for t in threads:
+        t.join(timeout=0.5)
+    print("require-guarded-downstream: %s left output open past %ss" % (cmd[0], sys.argv[1]), file=sys.stderr)
 sys.stdout.flush(); sys.stderr.flush()
-os._exit(rc if not any(t.is_alive() for t in threads) else 124)
+os._exit(124 if expired else rc)
 ' "$@"
 }
 

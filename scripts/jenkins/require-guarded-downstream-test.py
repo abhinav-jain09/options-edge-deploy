@@ -42,6 +42,7 @@ CHILD_JF = """pipeline {
   options { disableRestartFromStage() }
   stages {
     stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
       steps {
         script {
           def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
@@ -427,6 +428,26 @@ exec '{w.real_git}' "$@"
               subprocess.CompletedProcess([], 0 if elapsed < 30 and not survived else 1, "", ""), True, "")
         w.close()
 
+    # deadline status (Codex r6 MINOR N2): the leader exits 0 at once but a descendant keeps the output open past the
+    # deadline — the wrapper must report the expiry (124), not the leader's 0
+    import tempfile as _tf
+    d = _tf.mkdtemp()
+    try:
+        helper_src = open(HELPER).read()
+        start = helper_src.index("with_deadline() {")
+        end_ = helper_src.index("\n}\n", start) + 3
+        script = helper_src[start:end_] + 'with_deadline 1 bash -c "( trap \'\' TERM; exec sleep 30 ) & exit 0"; echo "rc=$?"\n'
+        t0 = time.time()
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)
+        elapsed = time.time() - t0
+        check(f"deadline expiry after the leader exited 0 returns 124, not 0 (took {elapsed:.0f} s)",
+              subprocess.CompletedProcess([], 0 if ("rc=124" in r.stdout and elapsed < 15) else 1, r.stdout, r.stderr), True, "")
+        script_ok = helper_src[start:end_] + 'with_deadline 5 bash -c "echo hello; exit 3"; echo "rc=$?"\n'
+        r = subprocess.run(["bash", "-c", script_ok], capture_output=True, text=True, timeout=60)
+        check("a command finishing within the deadline keeps its own status and output", r, True, "hello\nrc=3")
+    finally:
+        shutil.rmtree(d, True)
+
     # forwarded SHA
     w = world(); a = w.commit(); b = w.commit(jenkinsfile=CHILD_JF.replace("k8s/x.yaml", "k8s/y.yaml")); w.serve_child()
     check("a forwarded SHA that is not main's tip is refused", w.run(["service-deploy", a, "REQUIRED_IMAGE"]), False, "is not the tip of abhinav-jain09/options-edge-deploy main")
@@ -483,7 +504,7 @@ esac
     w.close()
 
     print(f"require-guarded-downstream-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 59:
+    if failed == 0 and passed >= 61:
         print("require-guarded-downstream-test: ALL PASS")
         return 0
     return 1

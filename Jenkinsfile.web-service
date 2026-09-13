@@ -84,6 +84,7 @@ pipeline {
     // validate stage — a refused build costs seconds, not an hour. error(), never catchError.
     stage('Permitted commit guard') {
       agent { label 'hpsf-replay-mac' }
+      options { timeout(time: 10, unit: 'MINUTES') }
       steps {
         script {
           def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
@@ -104,9 +105,11 @@ pipeline {
         // repository scripts run (Deployment Permission Rule — no repository code from an unbound
         // checkout, even a pure validation).
         script {
-          def rg = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
-          if (rg != 0) {
-            error("Permitted commit guard (validate workspace) REFUSED this checkout (rc=${rg}) — nothing was validated or deployed.")
+          timeout(time: 10, unit: 'MINUTES') {
+            def rg = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+            if (rg != 0) {
+              error("Permitted commit guard (validate workspace) REFUSED this checkout (rc=${rg}) — nothing was validated or deployed.")
+            }
           }
         }
         sh '''
@@ -127,6 +130,7 @@ pipeline {
       // The first guard ran on its own agent allocation; a checkout is bound across allocations
       // only by Jenkins's revision pinning, so the same guard runs again right before the first
       // effect. No checkout happens after this point: what it permits is what deploys.
+      options { timeout(time: 10, unit: 'MINUTES') }
       steps {
         script {
           def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')

@@ -506,14 +506,17 @@ class PermittedShaGuardValidatorTest(unittest.TestCase):
                      "post mutation after the gate block", "post mutation in the else branch", "post gate negated !(…)",
                      "post gate negated ! (…) with a space", "post gate compared to false", "compatibility check never entered: if (false)",
                      "compatibility check caught: catchError", "effect stage gate removed", "effect stage gate inverted (!=)",
-                     "shell contracts guard in a subshell whose failure is discarded (Codex #1043 r4)",
+                     "dedicated step body with extra tokens is refused: in a subshell",
                      "check skipped by return in an earlier script block, trigger in a later one (Codex gateway r4)",
                      "check and flag in if (false) plus a duplicate flag outside (Codex web r3)",
-                     "shell contracts guard in a backtick substitution whose failure is discarded (Codex #1043 r5)",
-                     "shell contracts guard in sh(script: ..., returnStatus: true) with the option AFTER the string (Codex gateway M2 / web M3 / processing M2)",
+                     "dedicated step body with extra tokens is refused: in backticks (Codex #1043 r5)",
+                     "nested guard as sh(script: …, 'returnStatus': true) — quoted key (Codex gateway r6 M2)",
                      "nested guard skipped by an early return in its script block, later sibling step builds (Codex gateway I6 / web M2)",
+                     "dedicated step body with extra tokens is refused: exit 0 hidden by a later nonzero exit (Codex #1043 r6 / gateway I7 / web M5)",
+                     "dedicated step body with extra tokens is refused: an EXIT trap turning refusal into success (Codex gateway I8)",
+                     "template sweep: 2354 single insertions into the dedicated command, none accepted",
                      "compatibility check inverted", "compatibility check status discarded", "git pull rebound by an echo",
-                     "separate-agent stage without inline re-guard", "shell contracts guard || true",
+                     "separate-agent stage without inline re-guard", "dedicated step body with extra tokens is refused: || true after it",
                      "contracts re-checked-out after its guard", "guard version default is another hash"]:
             self.assertIn(f"ok   [{case}]", r.stdout)
 
@@ -715,12 +718,23 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
         self.assertIn("is not executably protected", r.stdout)
 
     def test_nifty_nested_guard_skipped_by_an_early_return(self) -> None:
-        # Codex gateway I6 / web M2 on a real file: the Nifty application-checkout guard returned past while the
-        # following sibling step builds and pushes that checkout.
-        old = "          def rc = sh(returnStatus: true, script: 'PERMITTED_SHA=\"${NIFTY_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir nifty-gex-src --ref main')"
-        r = self._validate_mutated("Jenkinsfile.nifty-gex-service", old, "          return\n" + old)
+        # Codex gateway I6 / web M2 on a real file: the Nifty application-checkout guard (a dedicated step inside its
+        # deadline block) returned past while the following sibling step builds and pushes that checkout.
+        t = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        a = t.index("        timeout(time: 10, unit: 'MINUTES') {\n          sh 'PERMITTED_SHA=\"${NIFTY_PERMITTED_SHA:-}\"")
+        b = t.index("        }\n", a) + len("        }\n")
+        block = t[a:b]
+        r = self._validate_mutated("Jenkinsfile.nifty-gex-service", block, "        script {\n          return\n" + block.replace("\n        ", "\n          ").replace("        timeout", "          timeout", 1) + "        }\n")
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("can be skipped while later steps still consume 'nifty-gex-src'", r.stdout)
+
+    def test_nifty_guard_is_a_dedicated_step(self) -> None:
+        t = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        self.assertIn("          sh 'PERMITTED_SHA=\"${NIFTY_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir nifty-gex-src --ref main'\n", t)
+        for mutated, say in [("sh 'exit 0; exit 1; PERMITTED_SHA=", "is not re-bound"), ("sh 'trap \\'exit 0\\' EXIT; PERMITTED_SHA=", "is not re-bound")]:
+            r = self._validate_mutated("Jenkinsfile.nifty-gex-service", "          sh 'PERMITTED_SHA=", "          " + mutated)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn(say, r.stdout)
 
     def test_service_deploy_post_recovery_negated_with_a_space(self) -> None:
         r = self._validate_mutated("Jenkinsfile.service-deploy", "        if (env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && env.SECONDARY_PERMISSIONS_PASSED == 'PASSED' && env.EFFECT_STAGE_STARTED == 'PASSED') {",

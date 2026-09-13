@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -39,6 +40,7 @@ GOOD = """pipeline {
   stages {
     stage('Permitted commit guard') {
       agent { label 'deploy-host' }
+      options { timeout(time: 10, unit: 'MINUTES') }
       steps {
         script {
           def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
@@ -55,6 +57,7 @@ GOOD = """pipeline {
       stages {
         stage('Permitted commit guard (deploy workspace)') {
           when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+          options { timeout(time: 10, unit: 'MINUTES') }
           steps {
             script {
               def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
@@ -71,11 +74,8 @@ GOOD = """pipeline {
             dir('app-src') {
               git url: 'git@example:app.git', branch: 'main'
             }
-            script {
-              def rc = sh(returnStatus: true, script: 'PERMITTED_SHA="${APP_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir app-src --ref main')
-              if (rc != 0) {
-                error("app checkout refused (rc=${rc})")
-              }
+            timeout(time: 10, unit: 'MINUTES') {
+              sh 'PERMITTED_SHA="${APP_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir app-src --ref main'
             }
             sh 'docker build -t app app-src'
           }
@@ -139,9 +139,11 @@ GOOD = """pipeline {
       steps {
         checkout scm
         script {
-          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
-          if (rc != 0) {
-            error("smoke workspace refused (rc=${rc})")
+          timeout(time: 10, unit: 'MINUTES') {
+            def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+            if (rc != 0) {
+              error("smoke workspace refused (rc=${rc})")
+            }
           }
         }
         sh 'mvn -B -Psmoke verify'
@@ -156,12 +158,19 @@ COMPAT_BLOCK = """              def compat = sh(returnStatus: true, script: 'bas
                 error("child-job definition not confirmed (rc=${compat})")
               }
 """
-NESTED_BLOCK = """            script {
-              def rc = sh(returnStatus: true, script: 'PERMITTED_SHA="${APP_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir app-src --ref main')
-              if (rc != 0) {
-                error("app checkout refused (rc=${rc})")
-              }
+GUARD_CMD = 'PERMITTED_SHA="${APP_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir app-src --ref main'
+NESTED_BLOCK = """            timeout(time: 10, unit: 'MINUTES') {
+              sh '""" + GUARD_CMD + """'
             }
+"""
+SMOKE_GUARD = """        script {
+          timeout(time: 10, unit: 'MINUTES') {
+            def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+            if (rc != 0) {
+              error("smoke workspace refused (rc=${rc})")
+            }
+          }
+        }
 """
 
 
@@ -237,9 +246,12 @@ def main() -> int:
     mut("re-guard flag set elsewhere", "            sh 'kubectl apply -f k8s/fixture.yaml'", "            script { env.DEPLOY_WORKSPACE_PERMITTED = 'PASSED' }\n            sh 'kubectl apply -f k8s/fixture.yaml'", "may be set only by the 'Permitted commit guard (deploy workspace)' stage")
     mut("re-guard stage without its gate", "        stage('Permitted commit guard (deploy workspace)') {\n          when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }\n", "        stage('Permitted commit guard (deploy workspace)') {\n", "must open with when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }")
     # 6. separate-agent stage
-    mut("separate-agent stage without inline re-guard", "        checkout scm\n        script {\n          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')\n          if (rc != 0) {\n            error(\"smoke workspace refused (rc=${rc})\")\n          }\n        }\n", "        checkout scm\n", "does not open with the canonical inline re-guard")
-    mut("separate-agent stage inline re-guard inverted", "          if (rc != 0) {\n            error(\"smoke workspace refused", "          if (rc == 0) {\n            error(\"smoke workspace refused", "does not open with the canonical inline re-guard")
-    mut("separate-agent stage effect before its re-guard", "        checkout scm\n        script {\n          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')\n          if (rc != 0) {\n            error(\"smoke workspace refused", "        checkout scm\n        sh 'docker rm -f options-edge-web'\n        script {\n          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')\n          if (rc != 0) {\n            error(\"smoke workspace refused", "does not open with the canonical inline re-guard")
+    mut("separate-agent stage without inline re-guard", "        checkout scm\n" + SMOKE_GUARD, "        checkout scm\n", "does not open with the canonical inline re-guard")
+    mut("inline re-guard without its deadline block", SMOKE_GUARD, SMOKE_GUARD.replace("          timeout(time: 10, unit: 'MINUTES') {\n", "").replace("          }\n        }\n", "        }\n"), "does not open with the canonical inline re-guard")
+    mut("primary guard stage without its deadline", "      agent { label 'deploy-host' }\n      options { timeout(time: 10, unit: 'MINUTES') }\n", "      agent { label 'deploy-host' }\n", "not the canonical guard")
+    mut("primary guard stage deadline above 30 minutes", "      agent { label 'deploy-host' }\n      options { timeout(time: 10, unit: 'MINUTES') }\n", "      agent { label 'deploy-host' }\n      options { timeout(time: 90, unit: 'MINUTES') }\n", "1 <= N <= 30")
+    mut("separate-agent stage inline re-guard inverted", "            if (rc != 0) {\n              error(\"smoke workspace refused", "            if (rc == 0) {\n              error(\"smoke workspace refused", "does not open with the canonical inline re-guard")
+    mut("separate-agent stage effect before its re-guard", "        checkout scm\n" + SMOKE_GUARD, "        checkout scm\n        sh 'docker rm -f options-edge-web'\n" + SMOKE_GUARD, "does not open with the canonical inline re-guard")
     mut("separate-agent stage second checkout", "        sh 'mvn -B -Psmoke verify'", "        checkout scm\n        sh 'mvn -B -Psmoke verify'", "the guarded workspace is re-acquired after the guard")
     # 13. executable gates
     mut("effect stage gate removed", "        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n", "stage 'Deploy' after the guard has no `when` gate")
@@ -312,57 +324,103 @@ def main() -> int:
     mut("git pull rebound by an echo", "            sh 'kubectl apply -f k8s/fixture.yaml'", "            sh 'git pull origin main'\n            echo 'permitted-sha-guard.sh --dir .'\n            sh 'kubectl apply -f k8s/fixture.yaml'", "the guarded workspace is re-acquired after the guard")
     mut("nested clone without its guard", NESTED_BLOCK, "", "'app-src' acquired after the guard is not re-bound")
     mut("nested guard for another directory", "--dir app-src --ref main", "--dir other-src --ref main", "'app-src' acquired after the guard is not re-bound")
-    mut("nested guard with the root permission", "PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir app-src", "PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir app-src", "'app-src' acquired after the guard is not re-bound")
+    mut("nested guard with the root permission", "PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash", "PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash", "'app-src' acquired after the guard is not re-bound")
     mut("nested guard with an alias ref", "--dir app-src --ref main", "--dir app-src --ref origin/main", "'app-src' acquired after the guard is not re-bound")
-    mut("nested guard inverted", "              if (rc != 0) {\n                error(\"app checkout refused", "              if (rc == 0) {\n                error(\"app checkout refused", "'app-src' acquired after the guard is not re-bound")
-    mut("nested guard never entered: if (false)", NESTED_BLOCK, "            script {\n              if (false) {\n" + NESTED_BLOCK.replace("            script {\n", "").rsplit("            }\n", 1)[0] + "              }\n            }\n", "is not re-bound")
-    mut("nested guard skipped by an early return in its script block, later sibling step builds (Codex gateway I6 / web M2)",
-        NESTED_BLOCK, NESTED_BLOCK.replace("            script {\n", "            script {\n              return\n", 1), "can be skipped while later steps still consume 'app-src'")
-    mut("nested guard after a conditional return in its script block", NESTED_BLOCK,
-        NESTED_BLOCK.replace("            script {\n", "            script {\n              if (params.APP_PERMITTED_SHA == 'skip') {\n                return\n              }\n", 1),
-        "can be skipped while later steps still consume 'app-src'")
-    mut("nested guard inside try with a catch that continues", NESTED_BLOCK,
-        "            script {\n              try {\n" + NESTED_BLOCK.replace("            script {\n", "").rsplit("            }\n", 1)[0] + "              } catch (e) {\n                echo 'ignored'\n              }\n            }\n",
+    mut("nested guard in the old Groovy returnStatus form", NESTED_BLOCK,
+        "            script {\n              def rc = sh(returnStatus: true, script: '" + GUARD_CMD + "')\n              if (rc != 0) {\n                error(\"app refused\")\n              }\n            }\n",
         "is not re-bound")
-    mut("nested guard in a later script block after a sibling script that returns is fine (a return leaves only its own closure)",
+    mut("nested guard as sh(script: …, returnStatus: true)", "              sh '" + GUARD_CMD + "'\n", "              sh(script: '" + GUARD_CMD + "', returnStatus: true)\n", "is not re-bound")
+    mut("nested guard as sh(script: …, 'returnStatus': true) — quoted key (Codex gateway r6 M2)", "              sh '" + GUARD_CMD + "'\n", "              sh(script: '" + GUARD_CMD + "', 'returnStatus': true)\n", "is not re-bound")
+    mut("nested guard in a triple-quoted shell block with other commands", "              sh '" + GUARD_CMD + "'\n",
+        "              sh " + "\'\'\'" + "\n                set -eu\n                " + GUARD_CMD + " || exit 1\n              " + "\'\'\'" + "\n", "is not re-bound")
+    mut("nested guard without its deadline block", NESTED_BLOCK, "            sh '" + GUARD_CMD + "'\n", "timeout(time: N, unit: 'MINUTES')")
+    mut("nested guard sharing its deadline block with another step", NESTED_BLOCK, NESTED_BLOCK.replace("            }\n", "              echo 'x'\n            }\n"), "only statement")
+    mut("nested guard skipped by an early return in its script block, later sibling step builds (Codex gateway I6 / web M2)",
+        NESTED_BLOCK, "            script {\n              return\n" + NESTED_BLOCK.replace("            ", "              ") + "            }\n", "can be skipped while later steps still consume 'app-src'")
+    mut("nested guard after a conditional return", NESTED_BLOCK,
+        "            script {\n              if (params.APP_PERMITTED_SHA == 'skip') {\n                return\n              }\n" + NESTED_BLOCK.replace("            ", "              ") + "            }\n",
+        "can be skipped while later steps still consume 'app-src'")
+    mut("nested guard never entered: if (false)", NESTED_BLOCK, "            script {\n              if (false) {\n" + NESTED_BLOCK.replace("            ", "                ") + "              }\n            }\n", "is not re-bound")
+    mut("nested guard inside try with a catch that continues", NESTED_BLOCK,
+        "            script {\n              try {\n" + NESTED_BLOCK.replace("            ", "                ") + "              } catch (e) {\n                echo 'ignored'\n              }\n            }\n", "is not re-bound")
+    mut("nested guard inside catchError", NESTED_BLOCK,
+        "            catchError(buildResult: 'FAILURE') {\n" + NESTED_BLOCK.replace("            ", "              ") + "            }\n", "is not re-bound")
+    mut("nested guard after a sibling script that returns is fine (a return leaves only its own closure)",
         NESTED_BLOCK, "            script {\n              return\n            }\n" + NESTED_BLOCK, "carry the canonical permitted-commit guard", expect_ok=True)
     mut("nested clone re-acquired after its guard", "            sh 'docker build -t app app-src'", "            sh 'git -C app-src checkout origin/feature'\n            sh 'docker build -t app app-src'", "'app-src' acquired after the guard is not re-bound")
-    # 10./11. contracts + shell form
-    shell_ok = good.replace("            sh 'docker build -t app app-src'", "            sh '''\n              set -euo pipefail\n              rm -rf .deps/options-edge-contracts\n              git clone git@example:contracts.git .deps/options-edge-contracts\n              git -C .deps/options-edge-contracts checkout main\n              if [ -f x ]; then\n                echo ok\n              fi\n              PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main || exit 1\n              mvn -B -f .deps/options-edge-contracts/pom.xml install\n            '''\n            sh 'docker build -t app app-src'")
-    shell_guard = "              PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main || exit 1\n"
+    mut("effect on the nested source between acquisition and its guard", NESTED_BLOCK, "            sh 'docker build -t early app-src'\n" + NESTED_BLOCK, "is not re-bound")
+    mut("guard invoked from an ordinary shell block elsewhere", "            sh 'kubectl apply -f k8s/fixture.yaml'",
+        "            sh 'bash scripts/jenkins/permitted-sha-guard.sh || true'\n            sh 'kubectl apply -f k8s/fixture.yaml'", "invoked outside its canonical forms")
+
+    # THE CLASS, generically: the dedicated step body is a fixed template — ANY extra token refuses. Every shape
+    # Codex found (exit 0 first, exit 0 hidden by a later nonzero exit, an EXIT trap, backticks, subshells,
+    # substitutions, || true, pipes, background, redirections, comments, set +e, extra arguments) is one of these.
+    for label, body in [
+        ("exit 0 before it", "exit 0; " + GUARD_CMD),
+        ("exit 0 hidden by a later nonzero exit (Codex #1043 r6 / gateway I7 / web M5)", "exit 0; exit 1; " + GUARD_CMD),
+        ("a conditional exit 0 else exit 1 (Codex gateway I7)", "if [ \"${SKIP:-true}\" = true ]; then exit 0; else exit 1; fi; " + GUARD_CMD),
+        ("exit 256 (status 0) before it", "exit 256; " + GUARD_CMD),
+        ("an EXIT trap turning refusal into success (Codex gateway I8)", "trap \"exit 0\" EXIT; " + GUARD_CMD),
+        ("|| true after it", GUARD_CMD + " || true"),
+        ("|| exit 1 after it", GUARD_CMD + " || exit 1"),
+        ("&& true after it", GUARD_CMD + " && true"),
+        ("; true after it", GUARD_CMD + "; true"),
+        ("a pipe after it", GUARD_CMD + " | tee guard.log"),
+        ("backgrounded", GUARD_CMD + " &"),
+        ("a redirection", GUARD_CMD + " > /dev/null"),
+        ("a comment after it", GUARD_CMD + " # checked"),
+        ("in a subshell", "( " + GUARD_CMD + " )"),
+        ("in a command substitution", "x=$(" + GUARD_CMD + ")"),
+        ("in backticks (Codex #1043 r5)", "x=`" + GUARD_CMD + "`"),
+        ("prefixed by echo", "echo " + GUARD_CMD),
+        ("prefixed by set +e", "set +e; " + GUARD_CMD),
+        ("in bash -c", "bash -c \"" + GUARD_CMD.replace('"', '') + "\""),
+        ("an extra guard argument", GUARD_CMD + " --branch feature"),
+        ("an unquoted permission variable", GUARD_CMD.replace('"${APP_PERMITTED_SHA:-}"', "${APP_PERMITTED_SHA:-}")),
+        ("a directory built from a variable", GUARD_CMD.replace("--dir app-src", "--dir $APP_DIR")),
+        ("leading whitespace inside the script", " " + GUARD_CMD),
+    ]:
+        mut(f"dedicated step body with extra tokens is refused: {label}", "              sh '" + GUARD_CMD + "'\n", "              sh '" + body.replace("'", "\\'") + "'\n", "is not re-bound")
+    # ... and exhaustively at the template level: every single shell metacharacter or word inserted at every
+    # position of the command leaves a string the dedicated-step template does not match.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gv", a.validator)
+    gv = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gv)
+    base = "sh '" + GUARD_CMD + "'"
+    assert gv.DEDICATED_GUARD.match(base)
+    inserts = [";", "&", "|", "<", ">", "(", ")", "`", "$(", "#", "\\n", " x", "x ", "\t", "*", "?", "!", "{", "}", "'", " exit 0;", " trap x EXIT;"]
+    accepted = []
+    tried = 0
+    for pos in range(len("sh '"), len(base) - 1):
+        for ins in inserts:
+            variant = base[:pos] + ins + base[pos:]
+            tried += 1
+            m = gv.DEDICATED_GUARD.match(variant)
+            if m and variant != base:
+                # the only legitimate variability: the permission variable name and the directory's own characters
+                if not (m.group("own") != "APP" or m.group("dir") != "app-src"):
+                    accepted.append(variant)
+                elif re.search(r"[;&|<>()`$#\n\t*?!{}' ]", ins):
+                    accepted.append(variant)
+    case_ok = not accepted
+    print(("ok   " if case_ok else "FAIL ") + f"[template sweep: {tried} single insertions into the dedicated command, none accepted]" + ("" if case_ok else f"\n{accepted[:5]}"))
+    if case_ok:
+        passed += 1
+    else:
+        failed += 1
+    mut("dedicated step with the :? form is fine", "${APP_PERMITTED_SHA:-}", "${APP_PERMITTED_SHA:?}", "carry the canonical permitted-commit guard", expect_ok=True)
+
+    # 10. contracts
+    contracts_ok = good.replace("            sh 'docker build -t app app-src'", "            sh '''\n              set -euo pipefail\n              rm -rf .deps/options-edge-contracts\n              git clone git@example:contracts.git .deps/options-edge-contracts\n              git -C .deps/options-edge-contracts checkout main\n            '''\n            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main'\n            }\n            sh '''\n              mvn -B -f .deps/options-edge-contracts/pom.xml install\n            '''\n            sh 'docker build -t app app-src'")
     contracts_manifest = "Jenkinsfile.fixture | in | reguard=Deploy path; contracts=.deps/options-edge-contracts | fixture\n"
-    case("shell contracts guard is fine", shell_ok, contracts_manifest, True)
+    shell_ok = contracts_ok
+    case("contracts acquired in one step, bound by the dedicated step, installed in the next: fine", contracts_ok, contracts_manifest, True)
     case("contracts named but never acquired", good, contracts_manifest, False, "no acquisition of it was found")
-    case("shell contracts guard || true", shell_ok.replace("--ref main || exit 1", "--ref main || true"), contracts_manifest, False, "must end with `|| exit 1`")
-    case("shell contracts guard with root permission", shell_ok.replace("PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash", "PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash"), contracts_manifest, False, "is not re-bound")
-    case("shell contracts guard commented out", shell_ok.replace("              PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash", "              # PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash"), contracts_manifest, False, "is not re-bound")
-    case("shell contracts guard only echoed", shell_ok.replace("              PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash", "              echo PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash"), contracts_manifest, False, "is not re-bound")
-    case("shell contracts guard inside if false; then … fi", shell_ok.replace(shell_guard, "              if false; then\n" + shell_guard + "              fi\n"), contracts_manifest, False, "inside a shell if/case/loop/function/group")
-    case("shell contracts guard inside a function never called", shell_ok.replace(shell_guard, "              bind_contracts() {\n" + shell_guard + "              }\n"), contracts_manifest, False, "inside a shell if/case/loop/function/group")
-    case("shell contracts guard inside a heredoc", shell_ok.replace(shell_guard, "              cat > /dev/null <<'EOF'\n" + shell_guard + "EOF\n"), contracts_manifest, False, "inside a heredoc")
-    case("shell contracts guard continued from false &&", shell_ok.replace(shell_guard, "              false && \\\\\n" + shell_guard), contracts_manifest, False, "the previous line continues into it")
-    case("shell contracts guard in a subshell whose failure is discarded (Codex #1043 r4)", shell_ok.replace(shell_guard, "              (\n" + shell_guard + "              ) || true\n"), contracts_manifest, False, "inside a subshell")
-    case("shell contracts guard in a command substitution", shell_ok.replace(shell_guard, "              out=\"$(\n" + shell_guard + "              )\" || true\n"), contracts_manifest, False, "inside a subshell")
-    case("shell contracts guard in a subshell-bodied function", shell_ok.replace(shell_guard, "              bind() (\n" + shell_guard + "              )\n"), contracts_manifest, False, "inside a subshell")
-    case("shell contracts guard wrapped in bash -c", shell_ok.replace(shell_guard, "              bash -c '" + shell_guard.strip() + "' || true\n"), contracts_manifest, False, "is not re-bound")
-    case("shell contracts guard piped", shell_ok.replace("--ref main || exit 1\n", "--ref main || exit 1 | tee guard.log\n"), contracts_manifest, False, "is not re-bound")
-    case("shell contracts guard backgrounded", shell_ok.replace("--ref main || exit 1\n", "--ref main || exit 1 &\n"), contracts_manifest, False, "is not re-bound")
-    case("shell contracts guard in an sh(returnStatus: true) block", shell_ok.replace("            sh '''\n              set -euo pipefail\n              rm -rf .deps", "            sh(returnStatus: true, script: '''\n              set -euo pipefail\n              rm -rf .deps").replace("install\n            '''\n", "install\n            ''')\n"), contracts_manifest, False, "whose failure stops the build")
-    case("a balanced $( … ) before the shell guard is fine", shell_ok.replace(shell_guard, "              echo \"$(date)\"\n              x=$(printf '%s' \"(a)\")\n" + shell_guard), contracts_manifest, True)
-    case("shell contracts guard in a backtick substitution whose failure is discarded (Codex #1043 r5)",
-         shell_ok.replace(shell_guard, "              out=`\n" + shell_guard + "              ` || true\n"), contracts_manifest, False, "inside a backtick command substitution")
-    case("shell contracts guard after an early successful exit", shell_ok.replace(shell_guard, "              [ -f skip ] && exit 0\n" + shell_guard), contracts_manifest, False, "can end the shell successfully")
-    case("shell contracts guard in sh(script: ..., returnStatus: true) with the option AFTER the string (Codex gateway M2 / web M3 / processing M2)",
-         shell_ok.replace("            sh '''\n              set -euo pipefail\n              rm -rf .deps", "            sh(script: '''\n              set -euo pipefail\n              rm -rf .deps").replace("install\n            '''\n", "install\n            ''', returnStatus: true)\n"),
-         contracts_manifest, False, "whose failure stops the build")
-    case("shell contracts guard with returnStdout on a following line",
-         shell_ok.replace("            sh '''\n              set -euo pipefail\n              rm -rf .deps", "            sh(script: '''\n              set -euo pipefail\n              rm -rf .deps").replace("install\n            '''\n", "install\n            ''',\n              returnStdout: true\n            )\n"),
-         contracts_manifest, False, "whose failure stops the build")
-    case("shell contracts guard in sh(script: ..., label: ...) is fine",
-         shell_ok.replace("            sh '''\n              set -euo pipefail\n              rm -rf .deps", "            sh(script: '''\n              set -euo pipefail\n              rm -rf .deps").replace("install\n            '''\n", "install\n            ''', label: 'contracts (returnStatus: true is only text here)')\n"),
-         contracts_manifest, True)
-    case("contracts re-checked-out after its guard", shell_ok.replace("              mvn -B -f .deps/options-edge-contracts/pom.xml install", "              git -C .deps/options-edge-contracts checkout origin/feature\n              mvn -B -f .deps/options-edge-contracts/pom.xml install"), contracts_manifest, False, "is not re-bound")
-    case("shell block with set +e around the guard", shell_ok.replace("              set -euo pipefail\n              rm -rf", "              set +e\n              rm -rf"), contracts_manifest, False, "must not `set +e`")
+    case("contracts guard inside the acquisition's shell block (the old form) is refused",
+         contracts_ok.replace("              git -C .deps/options-edge-contracts checkout main\n", "              git -C .deps/options-edge-contracts checkout main\n              PERMITTED_SHA=\"${CONTRACTS_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir .deps/options-edge-contracts --ref main || exit 1\n"),
+         contracts_manifest, False, "is not re-bound")
+    case("contracts re-checked-out after its guard", contracts_ok.replace("              mvn -B -f .deps/options-edge-contracts/pom.xml install", "              git -C .deps/options-edge-contracts checkout origin/feature\n              mvn -B -f .deps/options-edge-contracts/pom.xml install"), contracts_manifest, False, "is not re-bound")
     # 15. Groovy escapes
     case("invalid Groovy escape \\. in a ''' block", shell_ok.replace("              mvn -B -f .deps", "              ls target/*.jar | grep -v '\\.original$'\n              mvn -B -f .deps"), contracts_manifest, False, "not a Groovy escape")
     mut("invalid Groovy escape \\d in a single-quoted string", "            sh 'kubectl apply -f k8s/fixture.yaml'", "            sh 'echo x | grep -E \"[\\d]+\"'\n            sh 'kubectl apply -f k8s/fixture.yaml'", "not a Groovy escape")
@@ -377,7 +435,7 @@ def main() -> int:
     case("--only still applies every rule", good.replace("        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n"), MANIFEST, False, "has no `when` gate", ["--only", "Jenkinsfile.fixture"])
 
     print(f"validate-jenkinsfile-guard-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 124:
+    if failed == 0 and passed >= 139:
         print("validate-jenkinsfile-guard-test: ALL PASS")
         return 0
     return 1

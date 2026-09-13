@@ -127,6 +127,7 @@ pipeline {
     // intent. error(), never catchError: a refusal is a stop, not a coloured result.
     stage('Permitted commit guard') {
       agent { label 'hpsf-replay-mac' }
+      options { timeout(time: 10, unit: 'MINUTES') }
       steps {
         script {
           def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
@@ -220,9 +221,11 @@ PYEOF
         // repository scripts run (Deployment Permission Rule — no repository code from an unbound
         // checkout, even a pure validation).
         script {
-          def rg = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
-          if (rg != 0) {
-            error("Permitted commit guard (validate workspace) REFUSED this checkout (rc=${rg}) — nothing was validated or deployed.")
+          timeout(time: 10, unit: 'MINUTES') {
+            def rg = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+            if (rg != 0) {
+              error("Permitted commit guard (validate workspace) REFUSED this checkout (rc=${rg}) — nothing was validated or deployed.")
+            }
           }
         }
         sh '''
@@ -257,6 +260,7 @@ PYEOF
       // (scripts/deploy/post-deploy-recovery.sh) keys off it: a build refused HERE has passed the
       // first guard, so PERMITTED_SHA_GUARD alone would let post{} consume a recovery marker an
       // earlier build stranded and scale a production deployment after a rejection.
+      options { timeout(time: 10, unit: 'MINUTES') }
       steps {
         script {
           def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')

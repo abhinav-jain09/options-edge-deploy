@@ -64,6 +64,7 @@ pipeline {
     // under an unpermitted commit — including a build queued for one commit that checked out a newer one.
     // error(), never catchError: a refusal is a stop, not a coloured result. Both SHAs are in the log.
     stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
       steps {
         script {
           def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
@@ -93,12 +94,11 @@ pipeline {
         // `main` and its content is what gets built and pushed. Same guard, on THAT checkout, against
         // NIFTY_PERMITTED_SHA — right after the clone and before docker build. The job's own
         // BRANCH_NAME/GIT_BRANCH describe this repository, so --dir skips that name check; containment
-        // in the nifty repo's origin/main and exact equality still apply. error() on refusal.
-        script {
-          def rc = sh(returnStatus: true, script: 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir nifty-gex-src --ref main')
-          if (rc != 0) {
-            error("Permitted commit guard REFUSED the nifty-gex application checkout (rc=${rc}) — NIFTY_PERMITTED_SHA must be the exact commit cloned. Nothing was built or pushed.")
-          }
+        // in the nifty repo's origin/main and exact equality still apply.
+        // A DEDICATED step whose whole script is the guard command: the step fails if and only if the
+        // guard refuses, and nothing in it can turn a refusal into success (validator rule 9).
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir nifty-gex-src --ref main'
         }
         // ARTIFACT IDENTITY (Deployment Permission Rule): the image this job deploys must be THE image
         // this build pushed from the guarded nifty checkout, not whatever the mutable :prod/:dev tag

@@ -27,7 +27,7 @@ form; that is deliberate):
      sha256 of <root>/scripts/jenkins/permitted-sha-guard.sh (the guard refuses to run under any other).
   2. `disableRestartFromStage()`.
   3. The primary stage 'Permitted commit guard' is exactly:
-       stage('Permitted commit guard') { [agent {…}] steps { script {
+       stage('Permitted commit guard') { [agent {…}] options { timeout(time: N, unit: 'MINUTES') } steps { script {
          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh[ --ref "${X:?}"]')
          if (rc != 0) { error(…) }
          env.PERMITTED_SHA_GUARD = 'PASSED' } } }
@@ -39,8 +39,8 @@ form; that is deliberate):
      13, setting `env.DEPLOY_WORKSPACE_PERMITTED = 'PASSED'`.
   6. A steps-stage with its own agent (not `agent none`) after the primary guard that runs repository
      code (`scripts/`) or carries a mutation token must begin, after `steps {` and an optional
-     `checkout scm`, with the canonical inline re-guard `script { def V = sh(returnStatus: true, script:
-     'bash scripts/jenkins/permitted-sha-guard.sh') if (V != 0) { error(…) } …`.
+     `checkout scm`, with the canonical inline re-guard `script { timeout(time: N, unit: 'MINUTES') { def V =
+     sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh') if (V != 0) { error(…) } } …`.
   7. Every `build job: '<job>'` forwards exactly one `string(name: 'PERMITTED_SHA', value: params.V)`
      (or `params.V.trim()` / `env.V`), and is protected by the canonical compatibility check FOR THAT
      JOB AND THAT SHA VARIABLE:
@@ -63,25 +63,24 @@ form; that is deliberate):
      (DEPLOY_WORKSPACE_PERMITTED for files with a re-guard container, PERMITTED_SHA_GUARD otherwise).
      `!(…)`, `! (…)`, `(… ) == false`, `||`, `!=`, an else branch, a token after the block: refused.
   9. Every source acquisition after the primary guard: the ROOT workspace may not be re-acquired (except
-     the leading `checkout scm` of a rule-6 stage); a NESTED directory must be re-bound, before the next
-     token or acquisition, by the canonical nested guard for THAT directory with that source's OWN
-     permission — Groovy `def V = sh(returnStatus: true, script: 'PERMITTED_SHA="${X_PERMITTED_SHA:-}"
-     bash scripts/jenkins/permitted-sha-guard.sh --dir <dir> --ref main') if (V != 0) { error(…) }`
-     that runs UNSKIPPABLY (every enclosing block below the stage's `steps` is a sequencing block —
-     script/dir/withEnv/… — and no return/if/else/try/catch/catchError/loop/break/continue precedes it in any of
-     them, so no later sibling step or stage consuming the source can run without it), or a shell line that STARTS with
-     `PERMITTED_SHA="${X_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir <dir> --ref
-     main || exit 1` at the TOP LEVEL of its `sh '''` block (not inside if/case/loop/function/group/
-     heredoc, subshell `( … )`, `$( … )` or backtick substitution, not after an `exit`/`exit 0` that can end
-     the shell successfully, not continued from the previous line, not prefixed by echo,
-     `bash -c` or anything else, no pipe or `&` after it) of a plain `sh '''…'''` or
-     `sh X + '''…'''` step — the WHOLE `sh(...)` argument list is read, so `returnStatus`/`returnStdout`
-     placed before OR after the script string refuses — and that sh step is itself unskippable as above; never
-     `sh(returnStatus: true, …)` / `returnStdout`, whose failure
-     does not stop the build.
+     the leading `checkout scm` of a rule-6 stage); a NESTED directory must be re-bound — in a LATER step of the
+     SAME stage, before any effect token or other acquisition — by a DEDICATED guard step, the one accepted form:
+         timeout(time: N, unit: 'MINUTES') {
+           sh 'PERMITTED_SHA="${X_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir <literal dir> --ref main'
+         }
+     The step's whole script is that single command, matched against a fixed template whose only variable parts
+     are the source's own permission variable (`:-` or `:?`), a literal directory and `--ref main`. Nothing else
+     can be in that shell — no other command, trap, exit, function, subshell, substitution, `;`, `&&`, `||`, `|`,
+     `&`, redirection or comment — and `sh 'string'` takes no returnStatus/returnStdout, so the step fails if and
+     only if the guard refuses. The step must run UNSKIPPABLY: every enclosing block below the stage's `steps`
+     is a sequencing block (script/dir/withEnv/timeout/…) and no return/if/else/try/catch/catchError/loop/break/
+     continue precedes it in any of them, so no later step or stage consuming the source can run without it.
  10. contracts=<dir>: that directory is acquired (and therefore, by rule 9, bound) at least once.
- 11. Inside every `sh '''` block, a line running permitted-sha-guard.sh ends with `|| exit 1`, and the
-     block sets no `set +e`; `|| true` anywhere on such a line is refused.
+ 11. Every mention of permitted-sha-guard.sh outside comments and parameters{} descriptions is one of the
+     canonical forms (rule 3/5 guard stage, rule 6 inline re-guard, rule 9 dedicated step) — any other
+     invocation, in any shell block or string, is refused. Every guard has an overall deadline: the guard
+     stages' `options { timeout(time: N, unit: 'MINUTES') }`, and for inline re-guards and dedicated steps a
+     `timeout(time: N, unit: 'MINUTES') { … }` block containing nothing but the guard (1 <= N <= 30).
  12. The guard script exists and parses (bash -n).
  13. EXECUTABLE GATES: every stage after the primary guard carries exactly
        when { [beforeAgent true] expression { [return] env.PERMITTED_SHA_GUARD == 'PASSED'[ && env.F == 'PASSED'…][ && (<its own condition>)] } }
@@ -101,8 +100,7 @@ LIMITS — what this cannot prove: stage order is the order of `stage('…')` li
 stages are modelled — none exist in scope); mutation tokens are a fixed list, so a helper script called
 before the guard is invisible unless its name is a token — the manifest's before= set is the reviewed
 statement that those stages are effect-free; tokens in `//`/`#` comment lines and whole-line `echo '…'`
-messages are ignored; the shell top-level test is a lexical approximation (keywords and braces outside
-quotes); nothing here executes a pipeline, compiles Declarative, or proves the controller runs THIS
+messages are ignored; nothing here executes a pipeline, compiles Declarative, or proves the controller runs THIS
 file — require-guarded-downstream.sh establishes, for a child, that the job's SCM definition points at
 this file at the forwarded commit.
 """
@@ -128,14 +126,15 @@ BUILD_JOB_RE = re.compile(r"\bbuild\s*\(?\s*job:\s*(env\.JOB_NAME|'([^']+)')")
 ACQUIRE_RE = re.compile(r"\bgit url:|\bgit clone\b|\bcheckout\(|\bcheckout scm\b|\bgit pull\b|\bgit checkout\b|\bgit -C \S+ checkout\b")
 GATE_FLAG_ONLY = "when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } } "
 CANON_GUARD = re.compile(
-    r"^stage\('(?P<name>[^']+)'\) \{ (?P<when>when \{ expression \{ env\.PERMITTED_SHA_GUARD == 'PASSED' \} \} )?(?:agent \{ label [^}]+ \} )?steps \{ script \{ "
+    r"^stage\('(?P<name>[^']+)'\) \{ (?P<when>when \{ expression \{ env\.PERMITTED_SHA_GUARD == 'PASSED' \} \} )?(?:agent \{ label [^}]+ \} )?"
+    r"options \{ timeout\(time: (?P<tmo>[0-9]+), unit: 'MINUTES'\) \} steps \{ script \{ "
     r"def rc = sh\(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard\.sh(?P<args>( --ref \"\$\{[A-Z_]+:\?\}\")?)'\) "
     r"if \(rc != 0\) \{ error\(" + STR + r"\) \} "
     r"env\.(?P<flag>PERMITTED_SHA_GUARD|DEPLOY_WORKSPACE_PERMITTED) = 'PASSED' \} \} \}$"
 )
 INLINE_REGUARD = re.compile(
-    r"^(?:checkout scm )?script \{ def (\w+) = sh\(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard\.sh'\) "
-    r"if \(\1 != 0\) \{ error\(" + STR + r"\) \}"
+    r"^(?:checkout scm )?script \{ timeout\(time: (?P<tmo>[0-9]+), unit: 'MINUTES'\) \{ def (?P<v>\w+) = sh\(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard\.sh'\) "
+    r"if \((?P=v) != 0\) \{ error\(" + STR + r"\) \} \}"
 )
 COMPAT_FORM = re.compile(
     r"^def (\w+) = sh\(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream\.sh (?P<job>[A-Za-z0-9_.-]+) "
@@ -144,13 +143,17 @@ COMPAT_FORM = re.compile(
 )
 FORWARD_RE = re.compile(r"string\(\s*name:\s*'PERMITTED_SHA',\s*value:\s*(?P<v>(?:params|env)\.[A-Za-z0-9_]+(?:\.trim\(\))?|[^,)\]]*)\s*\)")
 FORWARD_VALUE = re.compile(r"^(?:params|env)\.(?P<var>[A-Z][A-Z0-9_]*)(?:\.trim\(\))?$")
-NESTED_GROOVY = re.compile(
-    r"^def (\w+) = sh\(returnStatus: true, script: 'PERMITTED_SHA=\"\$\{(?P<own>[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)_PERMITTED_SHA:-\}\" "
-    r"bash scripts/jenkins/permitted-sha-guard\.sh --dir (?P<dir>[^ ']+) --ref main'\) if \(\1 != 0\) \{ error\(" + STR + r"\) \}"
+# The ONLY accepted guard for a nested (second-source) checkout: a DEDICATED `sh` step whose script is exactly one
+# guard command. Nothing else can sit in that shell — no other command, trap, exit, function, subshell,
+# substitution, separator, redirection or comment — so the step fails if and only if the guard refuses, and every
+# shape that could turn a refusal into success (exit 0 first, an EXIT trap, `|| true`, backticks, a subshell,
+# returnStatus/returnStdout) is simply not the template. The only variable parts: the source's own permission
+# variable, a literal directory, `--ref main`.
+DEDICATED_GUARD = re.compile(
+    r"^sh '(?P<cmd>PERMITTED_SHA=\"\$\{(?P<own>[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)_PERMITTED_SHA:[-?]\}\" "
+    r"bash scripts/jenkins/permitted-sha-guard\.sh --dir (?P<dir>[A-Za-z0-9._][A-Za-z0-9._/-]*) --ref main)'$"
 )
-NESTED_SHELL = re.compile(
-    r"^\s*PERMITTED_SHA=\"\$\{(?P<own>[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*)_PERMITTED_SHA:-\}\" bash scripts/jenkins/permitted-sha-guard\.sh --dir (?P<dir>\S+) --ref main \|\| exit 1\s*$"
-)
+GUARD_INVOCATION = re.compile(r"permitted-sha-guard\.sh")   # any mention outside comments and parameters{} descriptions
 MUTATION_TOKENS = [
     (r"\bkubectl\b", "kubectl"),
     (r"\bdocker\s+(build|buildx|push|run|compose|rm|update)\b", "docker build/push/run/rm"),
@@ -450,58 +453,6 @@ def parse_gate(when_canon: str) -> tuple[set[str], str] | None:
             return flags, cond[pos + 1:close].strip()
 
 
-def shell_top_level(block_lines: list[str], idx: int) -> str | None:
-    """None when block_lines[idx] runs unconditionally at the top level of its shell block; otherwise why not."""
-    depth = 0
-    paren = 0
-    case_depth = 0
-    backtick_open = False
-    early_exit = False
-    heredoc = None
-    prev = ""
-    for raw in block_lines[:idx]:
-        s = raw.strip()
-        if heredoc is not None:
-            if s == heredoc:
-                heredoc = None
-            continue
-        if not s or s.startswith("#"):
-            continue
-        hm = re.search(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?", s)
-        bare = re.sub(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"|\$\{[^}]*\}|\$\([^()]*\)", " ", s)
-        bare = re.sub(r"\s#.*$", "", bare)
-        for w in re.findall(r"(?<![\w$./-])(if|fi|case|esac|do|done|\{|\})(?![\w./-])", bare):
-            depth += 1 if w in ("if", "case", "do", "{") else -1
-            if w == "case":
-                case_depth += 1
-            elif w == "esac":
-                case_depth -= 1
-        ticks = len(re.findall(r"(?<!\\)`", re.sub(r"'[^']*'", " ", s)))
-        backtick_open ^= (ticks % 2 == 1)
-        if re.search(r"(?<![\w-])exit(\s+(0|\$\S*))?\s*(;|$|\)|\}|&&|\|\|)", bare) and not re.search(r"(?<![\w-])exit\s+[1-9][0-9]*", bare):
-            early_exit = True
-        if case_depth == 0:
-            # a subshell — `( … )`, `$( … )`, a subshell-bodied function `f() ( … )` — runs the guard in a child
-            # shell whose `exit 1` ends only that child, and its status can then be discarded (`) || true`)
-            paren += bare.count("(") - bare.count(")")
-        if hm:
-            heredoc = hm.group(1)
-        prev = bare.rstrip()
-    if heredoc is not None:
-        return "it sits inside a heredoc"
-    if depth != 0:
-        return "it sits inside a shell if/case/loop/function/group"
-    if paren != 0:
-        return "it sits inside a subshell ( … ) whose exit ends only the child shell"
-    if backtick_open or "`" in re.sub(r"'[^']*'", " ", block_lines[idx]):
-        return "it sits inside a backtick command substitution whose exit ends only the child shell"
-    if early_exit:
-        return "an earlier `exit`/`exit 0` can end the shell successfully before it runs"
-    if re.search(r"(\\|&&|\|\||\||\bthen|\bdo|\belse)$", prev):
-        return "the previous line continues into it"
-    return None
-
-
 def parse_manifest(path: str) -> dict[str, dict]:
     entries: dict[str, dict] = {}
     with open(path, encoding="utf-8") as fh:
@@ -543,6 +494,8 @@ def check_guard_stage(lines: list[str], lo: int, hi: int, label: str, flag: str,
     m = CANON_GUARD.match(text)
     if not m:
         return [f"'{label}' stage is not the canonical guard: {text[:160]}"]
+    if not 1 <= int(m.group("tmo")) <= 30:
+        return [f"'{label}' stage's options {{ timeout(time: N, unit: 'MINUTES') }} must have 1 <= N <= 30"]
     if m.group("flag") != flag:
         return [f"'{label}' stage must set env.{flag} = 'PASSED' (it sets {m.group('flag')})"]
     if m.group("args") and not ref_allowed:
@@ -700,7 +653,7 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
             continue
         after_steps = ctext.split(" steps { ", 1)
         if len(after_steps) != 2 or not INLINE_REGUARD.match(after_steps[1]):
-            problems.append(f"stage '{names[si]}' runs on its own agent after the guard but does not open with the canonical inline re-guard (steps {{ [checkout scm] script {{ def V = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh') if (V != 0) {{ error(…) }} …)")
+            problems.append(f"stage '{names[si]}' runs on its own agent after the guard but does not open with the canonical inline re-guard (steps {{ [checkout scm] script {{ timeout(time: N, unit: 'MINUTES') {{ def V = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh') if (V != 0) {{ error(…) }} }} …)")
     if entry["reguard"] and not has_container:
         problems.append(f"manifest names reguard={entry['reguard']} but no container stage with its own agent follows the guard")
 
@@ -940,61 +893,61 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
             lj = lines[j]
             if is_comment(lj):
                 continue
-            sm = NESTED_SHELL.match(lj)
-            if sm and sm.group("dir") == d:
-                p = pos_of(j, first_code_col(j))
-                blk = next(((s, e) for s, e in shell_blocks if s <= p < e), None)
-                if blk is None:
-                    why_not = "its shell guard is not inside a sh ''' block"
-                    break
-                opener = text[text.rfind("\n", 0, blk[0] - 3) + 1:blk[0] - 3]
-                args = g.call_args(blk[0] - 3)
-                if (re.search(r"return(Status|Stdout)|catchError|warnError", opener)
-                        or not re.search(r"\bsh\s*(?:\(\s*(?:script:\s*)?)?(?:[A-Z_][A-Z0-9_]*\s*\+\s*)?$", opener)
-                        or (args is not None and re.search(r"\breturn(Status|Stdout)\b", args))
-                        or ("(" in opener.split("sh", 1)[-1] and args is None)):
-                    why_not = "its shell block is not a plain `sh '''…'''` / `sh X + '''…'''` whose failure stops the build (returnStatus/returnStdout discard it)"
-                    break
-                blines = text[blk[0]:p].split("\n")
-                reason = shell_top_level(blines[:-1] + [blines[-1]], len(blines) - 1)
-                if reason:
-                    why_not = f"its shell guard does not run unconditionally: {reason}"
-                    break
-                dom = unskippable(text.rfind("\n", 0, blk[0] - 3) + 1 + len(opener) - len(opener.lstrip()))
+            dm = DEDICATED_GUARD.match(lj.strip())
+            if dm and dm.group("dir") == d:
+                dom = unskippable(pos_of(j, first_code_col(j)))
                 if dom:
-                    why_not = f"its shell guard can be skipped while later steps still consume '{d}': {dom}"
+                    why_not = f"its dedicated guard step can be skipped while later steps still consume '{d}': {dom}"
                     break
                 rebound = True
                 break
-            if lj.lstrip().startswith("def "):
-                gm = NESTED_GROOVY.match(canon(lines[j:min(j + 8, shi)]))
-                if gm and gm.group("dir") == d:
-                    dom = unskippable(pos_of(j, first_code_col(j)))
-                    if dom:
-                        why_not = f"its guard can be skipped while later steps still consume '{d}': {dom}"
-                        break
-                    rebound = True
-                    break
+            if "permitted-sha-guard.sh" in lj:
+                why_not = "the guard is not a dedicated `sh 'PERMITTED_SHA=\"${X_PERMITTED_SHA:-}\" bash scripts/jenkins/permitted-sha-guard.sh --dir <dir> --ref main'` step"
+                break
             if token_at(lj):
                 break
             if ACQUIRE_RE.search(lj) and "permitted-sha-guard.sh" not in lj and acquisition_dir(lines, j, slo) != d:
                 break   # a different source acquired first — this one must have been bound before it
         if not rebound:
-            problems.append(f"line {i + 1}: '{d}' acquired after the guard is not re-bound before the next effect by the canonical nested guard for it (PERMITTED_SHA=\"${{X_PERMITTED_SHA:-}}\" bash scripts/jenkins/permitted-sha-guard.sh --dir {d} --ref main …){': ' + why_not if why_not else ''}")
+            problems.append(f"line {i + 1}: '{d}' acquired after the guard is not re-bound, before the next effect and in a later step of the same stage, by the dedicated guard step for it: sh 'PERMITTED_SHA=\"${{X_PERMITTED_SHA:-}}\" bash scripts/jenkins/permitted-sha-guard.sh --dir {d} --ref main'{': ' + why_not if why_not else ''}")
     if entry["contracts"] and not contracts_seen:
         problems.append(f"manifest names contracts={entry['contracts']} but no acquisition of it was found after the guard")
 
-    # 11. shell blocks that run the guard
-    for s, e in shell_blocks:
-        blk = text[s:e].split("\n")
-        if not any("permitted-sha-guard.sh" in x for x in blk):
+    # 11. every invocation of the guard is a canonical form, and every stage that runs one has a deadline
+    canonical_lines: set[int] = set()
+    guard_stage_lines: set[int] = set()
+    for si, (sline, sname) in enumerate(stages):
+        lo, hi = stage_range(lines, stages, si)
+        own_block = stage_block(lo)
+        for k in range(lo, hi):
+            lk = lines[k]
+            if is_comment(lk) or "permitted-sha-guard.sh" not in lk or g.stage_of(pos_of(k, first_code_col(k))) != own_block:
+                continue
+            st = lk.strip()
+            primary = (sname in (GUARD_STAGE, REGUARD_STAGE) and st.startswith("def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh"))
+            inline = re.match(r"^def (\w+) = sh\(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard\.sh'\)$", st) is not None
+            dedicated = DEDICATED_GUARD.match(st) is not None
+            if primary or inline or dedicated:
+                canonical_lines.add(k)
+                guard_stage_lines.add(si)
+    params_block = find_block(lines, re.compile(r"^\s*parameters\s*\{"))
+    for k, lk in enumerate(lines):
+        if is_comment(lk) or k in canonical_lines or (params_block and params_block[0] <= k <= params_block[1]):
             continue
-        for x in blk:
-            if "permitted-sha-guard.sh" in x and not is_comment(x):
-                if "|| true" in x or not x.rstrip().endswith("|| exit 1"):
-                    problems.append(f"shell guard line must end with `|| exit 1` and never `|| true`: {x.strip()[:100]}")
-        if any(re.search(r"\bset \+e\b", x) for x in blk):
-            problems.append("a shell block that runs the guard must not `set +e`")
+        if GUARD_INVOCATION.search(lk):
+            problems.append(f"line {k + 1}: the guard is invoked outside its canonical forms (primary/re-guard stage, inline re-guard, dedicated nested-source step): {lk.strip()[:100]}")
+    for k in sorted(canonical_lines):
+        st = lines[k].strip()
+        sb_ = g.stage_of(pos_of(k, first_code_col(k)))
+        if sb_ is not None and g.blocks[sb_].header in (f"stage('{GUARD_STAGE}')", f"stage('{REGUARD_STAGE}')"):
+            continue   # a canonical guard stage: its deadline is the stage's own options { timeout(...) } (rule 3)
+        blk = g.innermost(pos_of(k, first_code_col(k)))
+        hdr = g.blocks[blk].header if blk is not None else ""
+        tm = re.fullmatch(r"timeout\(time: ([0-9]+), unit: 'MINUTES'\)", hdr)
+        body = re.sub(r"\s+", " ", g.code_only(g.blocks[blk].open + 1, g.blocks[blk].close)).strip() if blk is not None else ""
+        only = body == "sh" if DEDICATED_GUARD.match(st) else re.fullmatch(r"def (\w+) = sh\(returnStatus: true, script: \) if \(\1 != 0\) \{ error\( \) \}", body) is not None
+        if not tm or not 1 <= int(tm.group(1)) <= 30 or not only:
+            problems.append(f"line {k + 1}: the guard must be the only statement of a `timeout(time: N, unit: 'MINUTES') {{ … }}` block with 1 <= N <= 30 — a stalled git fetch must end the build: {st[:80]}")
     return problems
 
 
