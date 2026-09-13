@@ -69,6 +69,7 @@ EVENT_CODE = re.compile(r"[A-Za-z0-9_.:-]+")
 TOP_FIELDS = ("schemaVersion", "calendarVersion", "calendarContentHash", "hashVersion", "validFromDate", "validThroughDate", "entries")
 ENTRY_FIELDS = ("eventCode", "instantUtcMs", "leadWindowMs", "trailWindowMs")
 INT_MIN, INT_MAX = -2**31, 2**31 - 1
+MAX_NUMBER_LENGTH = 1000
 LONG_MIN, LONG_MAX = -2**63, 2**63 - 1
 
 # --- Jackson 2.19 (default features + JavaTimeModule), as MEASURED by the vectors ---------------------------
@@ -90,7 +91,12 @@ def j_parse(text):
         raise Reject("JsonParseException: non-standard token " + c)
     # Numbers come back as JNum — their TEXT: Jackson coerces a number to a String field by that text (getText)
     # and parses it for an int/long field; json.loads would have lost the token ("2026.50" is not "2026.5").
-    dec = json.JSONDecoder(parse_constant=bad_constant, parse_int=JNum, parse_float=JNum, object_pairs_hook=JObj)
+    def num(text):
+        digits = sum(c in "0123456789" for c in text)   # StreamReadConstraints.maxNumberLength counts DIGITS (sign, '.', 'e' excluded): n38-n40
+        if digits > MAX_NUMBER_LENGTH:
+            raise Reject(f"StreamConstraintsException: number value length ({digits}) exceeds the maximum allowed ({MAX_NUMBER_LENGTH})")
+        return JNum(text)
+    dec = json.JSONDecoder(parse_constant=bad_constant, parse_int=num, parse_float=num, object_pairs_hook=JObj)
     stripped = text.lstrip(" \t\r\n")
     if not stripped:
         raise Reject("MismatchedInputException: no content to map")
@@ -149,8 +155,8 @@ def j_primitive_number(v, name, lo, hi):
         s = java_trim(v)
         if s == "" or s == "null":                   # a blank or the text "null" is null, and null is the default 0 (s01-s03)
             n = 0
-        elif re.fullmatch(r"[+-]?[0-9]+", s):        # Long.parseLong: an optional sign, digits, leading zeros fine (s07, m07)
-            n = int(s)
+        elif re.fullmatch(r"[+-]?\d+", s) and all(unicodedata.category(c) == "Nd" for c in s.lstrip("+-")):
+            n = int(s)                               # Long.parseLong: sign, then Character.digit() digits of ANY script (s13-s16)
         else:
             raise Reject(f"InvalidFormatException: {name} from String {v!r} is not a valid int value")
     else:
@@ -172,50 +178,79 @@ def j_string(v, name):
         return v
     raise Reject(f"MismatchedInputException: cannot deserialize {name} from {type(v).__name__}")
 
+# --- java.time.LocalDate, kept as (y, m, d) so year 0000 exists (LocalDate has it; Python's datetime does not) ----
+def is_leap(y): return y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+def valid_ymd(y, m, d):
+    if not (1 <= m <= 12) or d < 1: return False
+    return d <= [31, 29 if is_leap(y) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+def ymd_from_epoch_day(z):
+    """LocalDate.ofEpochDay: proleptic Gregorian (Howard Hinnant's civil_from_days)."""
+    z += 719468
+    era = (z if z >= 0 else z - 146096) // 146097
+    doe = z - era * 146097
+    yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    y = yoe + era * 400
+    doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+    mp = (5 * doy + 2) // 153
+    d = doy - (153 * mp + 2) // 5 + 1
+    m = mp + 3 if mp < 10 else mp - 9
+    return (y + (1 if m <= 2 else 0), m, d)
+def iso_date(ymd): return "%04d-%02d-%02d" % ymd
+
 def j_local_date(v, name):
-    """java.time.LocalDate via JavaTimeModule's LocalDateDeserializer, as measured (t01-t16):
-    a string is String.trim()med; empty -> null; with a 'T' at index 10 it is a date-time — ending in 'Z' it is
-    parsed as an Instant (UTC) and its date taken, otherwise as an ISO LOCAL date-time (HH:MM[:SS[.fraction]],
-    NO offset), and its date taken; otherwise strict ISO yyyy-MM-dd. An integer is an epoch day. An int array
-    is [y, m, d]. null stays null (the constructor refuses it)."""
+    """jackson-datatype-jsr310 2.18.2 LocalDateDeserializer, as its source reads and the vectors measure (t01-t53):
+      * a string is String.trim()med; empty -> null;
+      * length > 10 with 'T' at index 10: a trailing 'Z' is REMOVED (not parsed as an instant — so "T00:00Z" is
+        fine and any other offset is not), then ISO_LOCAL_DATE_TIME: yyyy-MM-dd'T'HH:mm[:ss[.fraction 0-9 digits]] —
+        a fraction only AFTER seconds, hours 00-23, minutes and seconds 00-59, ASCII digits, and the date resolved
+        STRICT (no Feb 29 in 2026); the date part is kept;
+      * otherwise LocalDate.parse (ISO_LOCAL_DATE): an unsigned 4-digit year, or a SIGNED 5-9 digit one;
+      * an integer number is an epoch day (LocalDate.ofEpochDay); a float, a string of digits, an ISO week or
+        ordinal date, a lowercase 't'/'z', an internal or non-ASCII space are refused;
+      * an int array is [y, m, d].
+    Returns (y, m, d); the CanonicalValue.Date bound (year 0000..9999) is applied where the hash is built, as the
+    contract does — a +12026 date PARSES and is then refused by the Date constructor."""
     if v is None:
         return None
     if isinstance(v, JNum):
         if not re.fullmatch(r"-?[0-9]+", v):
             raise Reject(f"InvalidFormatException: LocalDate {name} from a non-integral number")
-        try:
-            return datetime.date(1970, 1, 1) + datetime.timedelta(days=int(v))
-        except OverflowError as e:
-            raise Reject(f"InvalidFormatException: LocalDate {name} epoch day {v}: {e}")
+        return ymd_from_epoch_day(int(v))
     if isinstance(v, str):
         t = java_trim(v)
         if t == "":
             return None
-        try:
-            if len(t) > 10 and t[10] == "T":
-                if t.endswith("Z"):
-                    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(\.\d{1,9})?Z", t)      # ISO_INSTANT: seconds required
-                else:
-                    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2})?)(\.\d{1,9})?", t)    # ISO_LOCAL_DATE_TIME: no offset
-                if not m:
-                    raise ValueError("not an ISO instant / local date-time")
-                datetime.time.fromisoformat(m.group(2))                                   # the time part must be a real time
-                d = datetime.date.fromisoformat(m.group(1))
-            else:
-                d = datetime.date.fromisoformat(t)
-                if d.isoformat() != t:
-                    raise ValueError("not canonical ISO")
-            return d
-        except ValueError as e:
-            raise Reject(f"InvalidFormatException: cannot deserialize LocalDate {name} from {v!r}: {e}")
+        if len(t) > 10 and t[10] == "T":
+            body = t[:-1] if t.endswith("Z") else t
+            m = re.fullmatch(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2})(?::([0-9]{2})(?:\.([0-9]{0,9}))?)?", body)
+            if not m:
+                raise Reject(f"InvalidFormatException: LocalDate {name} from {v!r}: not an ISO local date-time")
+            y, mo, d, hh, mi = (int(m.group(i)) for i in range(1, 6))
+            ss = int(m.group(6)) if m.group(6) is not None else 0
+            if hh > 23 or mi > 59 or ss > 59 or not valid_ymd(y, mo, d):
+                raise Reject(f"InvalidFormatException: LocalDate {name} from {v!r}: out of range")
+            return (y, mo, d)
+        m = re.fullmatch(r"([0-9]{4}|[+-][0-9]{5,9})-([0-9]{2})-([0-9]{2})", t)
+        if not m:
+            raise Reject(f"InvalidFormatException: LocalDate {name} from {v!r}: not an ISO local date")
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if not valid_ymd(y, mo, d):
+            raise Reject(f"InvalidFormatException: LocalDate {name} from {v!r}: invalid date")
+        return (y, mo, d)
     if isinstance(v, list):
-        if len(v) != 3 or any(not isinstance(x, JNum) or not re.fullmatch(r"-?[0-9]+", x) for x in v):
+        if isinstance(v, JObj) or len(v) != 3 or any(not isinstance(x, JNum) or not re.fullmatch(r"-?[0-9]+", x) for x in v):
             raise Reject(f"MismatchedInputException: LocalDate {name} array must be [year, month, day] ints")
-        try:
-            return datetime.date(*(int(x) for x in v))
-        except ValueError as e:
-            raise Reject(f"InvalidFormatException: LocalDate {name} {v}: {e}")
+        y, mo, d = (int(x) for x in v)
+        if not valid_ymd(y, mo, d):
+            raise Reject(f"InvalidFormatException: LocalDate {name} {v}: invalid date")
+        return (y, mo, d)
     raise Reject(f"MismatchedInputException: cannot deserialize LocalDate {name} from {type(v).__name__}")
+
+def canonical_date(ymd, what):
+    """CanonicalValue.Date: the year must have a yyyy-MM-dd form (0000..9999)."""
+    if not (0 <= ymd[0] <= 9999):
+        raise Reject(f"CanonicalFormatException: date year {ymd[0]} is outside 0000..9999 and has no yyyy-MM-dd form ({what})")
+    return iso_date(ymd).encode("ascii")
 
 # --- CanonicalValue.Str: the bounded normalisation, in the contract's order ------------------------------------
 def canonical_str(s, what):
@@ -272,8 +307,8 @@ def content_hash(version, d_from, d_through, entries):
         arr += bytes([TAG_RECORD]) + uvarint(len(p)) + p
     rec = record("vol-premium.calendar", 1, [
         (2, TAG_STRING, canonical_str(version, "calendarVersion").encode("utf-8")),
-        (3, TAG_DATE, d_from.isoformat().encode("ascii")),
-        (4, TAG_DATE, d_through.isoformat().encode("ascii")),
+        (3, TAG_DATE, canonical_date(d_from, "validFromDate")),
+        (4, TAG_DATE, canonical_date(d_through, "validThroughDate")),
         (5, TAG_ARRAY, arr)])
     return hashlib.sha256(rec).hexdigest()
 
@@ -316,7 +351,7 @@ def java_load(raw):
     if d_from is None or d_through is None:
         raise Reject("IllegalArgumentException: validFromDate and validThroughDate are required")
     if d_through < d_from:
-        raise Reject(f"IllegalArgumentException: validThroughDate {d_through} is before validFromDate {d_from}")
+        raise Reject(f"IllegalArgumentException: validThroughDate {iso_date(d_through)} is before validFromDate {iso_date(d_from)}")
     if entries is None:
         raise Reject("IllegalArgumentException: entries must be present (empty, not null)")
     if len(entries) > MAX_CALENDAR_ENTRIES:
@@ -335,7 +370,7 @@ def java_load(raw):
     computed = content_hash(version, d_from, d_through, entries)
     if computed != declared:
         raise Reject(f"IllegalArgumentException: calendarContentHash {declared} does not match the payload's canonical hash {computed}")
-    return {"calendarVersion": version, "calendarContentHash": computed, "validFromDate": d_from, "validThroughDate": d_through, "entries": entries}
+    return {"calendarVersion": version, "calendarContentHash": computed, "validFromDate": iso_date(d_from), "validThroughDate": iso_date(d_through), "entries": entries}
 
 # =============================================================================================================
 fails = 0
@@ -426,6 +461,9 @@ if isinstance(strict, dict):
         else: bad(f"artefact form: {k} is {strict.get(k)!r}, expected a JSON integer (the serializer writes int fields as integers)")
     for k in ("calendarVersion", "calendarContentHash", "validFromDate", "validThroughDate"):
         if not isinstance(strict.get(k), str): bad(f"artefact form: {k} is {type(strict.get(k)).__name__}, expected a JSON string")
+    for k in ("validFromDate", "validThroughDate"):
+        if isinstance(strict.get(k), str) and not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", strict[k]):
+            bad(f"artefact form: {k} is {strict[k]!r}, expected the serializer's plain yyyy-MM-dd (a date-time or padded form loads, but is not the artefact's wire)")
     es = strict.get("entries")
     if isinstance(es, list):
         form = [i for i, e in enumerate(es) if not isinstance(e, dict) or sorted(e) != sorted(ENTRY_FIELDS)
@@ -435,7 +473,7 @@ if isinstance(strict, dict):
 version, declared = loaded["calendarVersion"], loaded["calendarContentHash"]
 if version == want_version: ok(f"calendarVersion {version}")
 else: bad(f"calendarVersion {version!r}, expected {want_version!r}")
-if loaded["validFromDate"].isoformat() == want_from and loaded["validThroughDate"].isoformat() == want_through: ok(f"valid {want_from}..{want_through}")
+if loaded["validFromDate"] == want_from and loaded["validThroughDate"] == want_through: ok(f"valid {want_from}..{want_through}")
 else: bad(f"validity is {loaded['validFromDate']}..{loaded['validThroughDate']}, expected {want_from}..{want_through}")
 if len(loaded["entries"]) == want_entries:
     codes = {}
