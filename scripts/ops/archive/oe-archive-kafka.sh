@@ -107,8 +107,45 @@ is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) retur
 # Topics read COMMITTED-ONLY, through StrikeArchiveReader.java instead of kafka-console-consumer.
 # See the capture block below for why this is a list and not the default: every topic NOT named here
 # is captured exactly as before, byte for byte; an omission here is today's behaviour, never a new gap.
-OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike}"
+#
+# THE VOL-PREMIUM LEDGERS (2026-09-11, vol-premium engine review). vol-premium-service is a Kafka Streams
+# application that REFUSES to run without exactly_once_v2 (VolPremiumStreams EXACTLY_ONCE_REQUIRED), so every
+# sink it has — .ivrv, .events, .current, .warnings, .dlq — is written inside transactions, and the .baseline /
+# .calendar version ledgers are written by a transactional producer (calibration/LedgerPublisher). A transaction
+# the engine ABORTS (a task migration, a fenced producer, a crash mid-commit) leaves its records in the log, and
+# kafka-console-consumer reads read_uncommitted by default, so the console path would archive them — and the
+# calibrator (IvRvArchiveLoader, over .ivrv) and the activation gate (GateArchiveLoader, over .events) would take
+# them as observations the engine never published. Switching the console consumer to --isolation-level
+# read_committed is NOT a fix: it counts RECORDS (--max-messages = end - from) while commit/abort markers and
+# aborted records occupy OFFSETS, so it never reaches its count, and it cannot report where it stopped. It then
+# ends on the idle timeout at exit 0, and the archiver checkpoints the high-water mark past an open transaction
+# (a permanent gap: the capture block's "endoff=1200, got=1099" case), or refuses a markers-only range for ever
+# (got=0), or, with a live producer, reads committed records BEYOND the end its file name claims. Only the
+# committed reader bounds a capture by the consumer's POSITION against the last stable offset, so these topics
+# are routed to it. None of them is archived by any job today (oe-topics.env): this makes their capture
+# committed-only from the first run that archives them, with no legacy checkpoint to recapture over.
+OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS="options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline options.spx.vol-premium.calendar"
+OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike $OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS}"
 is_committed_read_topic() { case " $OE_COMMITTED_READ_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+# THE RECORD LAYOUT OF A COMMITTED-READ FILE. The reader writes "<ts>\tPartition:<p>\tOffset:<o>\t<key>\t<value>",
+# and every committed-read topic KEEPS that Offset column. It is the record's only coordinate on the ledger, and a
+# calibration loader cannot do without it: (deploy #1041 review, engine #44) a run that publishes a file and dies
+# before its checkpoint is re-read by the next run with a NEW, possibly ADVANCED stable boundary, so two captures
+# legitimately overlap; without per-record offsets the overlap cannot be reconciled (identical record at one offset
+# = one record; different records there = a refusal), and a record archived under a LATER date cannot be placed
+# against the session's earlier ones at all. File names and record counts must never stand in for that: they cannot.
+#
+# The archiver does not take the reader's word for the column either. For every committed-read topic EXCEPT the
+# ones listed below it proves, before publishing, that each line is exactly five fields of this partition with an
+# Offset inside [from, boundary) and strictly after the previous line's — i.e. that the file holds the range it
+# names, in offset order — and it refuses any capture in which the reader had to escape a TAB/CR/LF (escaped>0):
+# the proven layout claims the source bytes, and an escaped record is not them. A proven capture's manifest line
+# says so ("offsets_verified":true), and that is the provenance the loaders admit on.
+#
+# OE_COMMITTED_READ_AS_WRITTEN_TOPICS is the exception list: those files are filed exactly as the reader wrote
+# them, unproven and escapes allowed, which is what the strike log's own readers have always been given.
+OE_COMMITTED_READ_AS_WRITTEN_TOPICS="${OE_COMMITTED_READ_AS_WRITTEN_TOPICS:-es.futures.footprint.strike}"
+is_as_written_topic() { case " $OE_COMMITTED_READ_AS_WRITTEN_TOPICS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 # THE CHECKPOINT STAMP (deploy re-review round 2, finding 2). Every checkpoint line the committed-read
 # capture writes ends with this token, and for a committed-read topic ONLY a stamped line is proof of
 # archival. An unstamped one was written by something else — in practice the console-consumer archiver
@@ -282,6 +319,17 @@ eval "TOPICS=\"\${TOPICS:-\$DEFAULT_TOPICS_${ENV_NAME}}\""
 if [ "${PRINT_TOPICS:-}" = "true" ]; then printf '%s\n' "$TOPICS"; exit 0; fi
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
+# A manifest may be appended to only when its last byte is a newline (or it is empty/absent). Every line this
+# script writes ends in "\n" in one printf, so a last byte that is not "\n" is the signature of a run that died
+# mid-write; appending onto it would concatenate two declarations on one physical line, which every reader
+# (CommittedLedgerArchive, vpread.py, oe-archive-verify.sh) refuses as unreadable — and, before engine r20, read as
+# its FIRST object, losing the second (deploy #1041 review round 5 / engine r20). The rule that never produces a
+# concatenation: do not append, report the run failed, leave the checkpoint (a re-read, never a gap), and let an
+# operator repair the file — a leading newline written by this script would hide the signature it must not hide.
+manifest_appendable() {   # $1 = the manifest path; 0 = safe to append, 1 = ends mid-line
+  [ -s "$1" ] || return 0
+  [ "$(tail -c 1 "$1" | wc -l | tr -d ' ')" = 1 ]
+}
 die() { echo "FATAL: $*" >&2; exit 1; }
 
 # The ONE alert implementation (oe-alert.sh: "One definition, every caller"). Sourced AFTER log()
@@ -913,11 +961,71 @@ for topic in $TOPICS; do
         # records once they resolve. Not a failure of this run. No archive marker either: records of the
         # open transaction sit above `from`, so the checkpoint does not reach the log end, and a marker
         # that cannot cover the log end can only endorse something (re-review round 2, finding 2).
-        log "  NOTE $topic p$part: no committed record beyond checkpoint $from yet (stable boundary $r_boundary, log end $log_end) — an open transaction holds the range; the next run captures it once it resolves"
+        #
+        # But the ATTEMPT is RECORDED (deploy #1041 review round 2, MAJOR 3). This run QUERIED up to $endoff, and
+        # a session loader decides completeness from what the runs of a date meant to reach: with no line, an
+        # earlier capture of this date that reached $from with queried_end=$from is the date's whole obligation,
+        # and the session is admitted while [$from,$endoff) is still inside an unresolved transaction. So the
+        # manifest gets a line with NO file — an empty range at the checkpoint, the queried end, the source log —
+        # marked "attempt":"no_progress"; the loaders (CommittedLedgerArchive) take its queried_end as the
+        # obligation it is, and the verifier reports it as a withheld range, not as a missing file. The checkpoint
+        # is NOT advanced: the next run re-queries from $from, exactly as before.
+        log "  NOTE $topic p$part: no committed record beyond checkpoint $from yet (stable boundary $r_boundary, log end $log_end) — an open transaction holds the range; the next run captures it once it resolves. The attempt (queried end $endoff) is recorded in dt=$DAY's manifest so a session loader refuses the session until a capture reaches $endoff"
         rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog"
+        if ! manifest_appendable "$outdir/_manifest.jsonl"; then
+          log "  WARN $topic p$part: dt=$DAY's manifest does not end with a newline — a run died mid-write; the attempt (queried end $endoff) is NOT recorded onto that line (it would concatenate two declarations); counted as a failed capture until an operator repairs the manifest"
+          failed=$(( failed + 1 ))
+          continue
+        fi
+        if ! printf '{"topic":"%s","dt":"%s","partition":%s,"offset_from":%s,"offset_to":%s,"records":0,"offset_span":0,"capture":"read_committed_stable_boundary","stable_boundary":%s,"queried_end":%s,"source_topic_id":"%s","attempt":"no_progress","archived_at":"%s","job":"%s","env":"%s","archiver_version":"%s"}\n' \
+               "$topic" "$DAY" "$part" "$from" "$from" "$from" "$endoff" "$topic_id" "$STAMP" "$ARCHIVE_JOB" "$ENV_NAME" "$ARCHIVER_VERSION" \
+               >> "$outdir/_manifest.jsonl"; then
+          # Unrecorded, the obligation is invisible to every loader: that is the defect this line closes, so an
+          # append that failed is a failed capture, retried next run like any other.
+          log "  WARN $topic p$part: could not record the attempt (queried end $endoff) in dt=$DAY's manifest — a session loader cannot learn this run's obligation; counted as a failed capture"
+          failed=$(( failed + 1 ))
+        fi
         continue
       fi
-      gzip -6 < "$plain" > "$tmp"
+      record_layout="timestamp,partition,offset,key,value"
+      offsets_verified=false
+      plain_src="$plain"
+      if ! is_as_written_topic "$topic"; then
+        # THE PROVEN OFFSET LAYOUT (see OE_COMMITTED_READ_AS_WRITTEN_TOPICS). The Offset column is KEPT — it is
+        # the only record of where each record sits on the ledger, and the calibration loaders read precedence,
+        # crash-re-read reconciliation and duplicate detection from it — but the archiver does not take the
+        # reader's word for it: every line must be exactly five fields, of this partition, with an offset inside
+        # [from, boundary) and strictly after the previous line's. Offsets are compared as decimal STRINGS
+        # (length, then C-locale order), never as awk numbers, so a large offset cannot lose precision in a
+        # double; the reader prints them without leading zeros.
+        why=""
+        [ "$r_escaped" -eq 0 ] || why="the reader escaped a TAB/CR/LF in $r_escaped record(s); a proven capture carries the source bytes, so an altered record is refused"
+        if [ -z "$why" ]; then
+          why=$(LC_ALL=C awk -F'\t' -v from="$from" -v b="$r_boundary" -v p="Partition:$part" -v out="$plain.proven" '
+            function lt(x, y) { return length(x) < length(y) || (length(x) == length(y) && x < y) }
+            bad != "" { next }
+            {
+              if (NF != 5 || $2 != p || $3 !~ /^Offset:[0-9]+$/) { bad = "line " NR " is not <ts>\\t" p "\\tOffset:<o>\\t<key>\\t<value>"; next }
+              o = substr($3, 8)
+              if (lt(o, from) || !lt(o, b)) { bad = "line " NR " is offset " o ", outside the captured range [" from "," b ")"; next }
+              if (NR > 1 && !lt(prev, o)) { bad = "line " NR " is offset " o ", not after the previous line (" prev ")"; next }
+              prev = o
+              print $0 > out
+            }
+            END { if (bad != "") print bad; else if (NR == 0) printf "" > out }' "$plain" 2>&1)
+          [ $? -eq 0 ] || why="${why:-the layout check could not run}"
+        fi
+        if [ -n "$why" ]; then
+          log "  WARN $topic p$part [$from,$r_boundary): committed-read capture REFUSED ($why) — checkpoint NOT advanced, will retry next run"
+          rm -f "$plain" "$plain.proven" "$sumf" "$sumf.tmp" "$rlog"
+          failed=$(( failed + 1 ))
+          continue
+        fi
+        # Compressed straight from the CHECKED copy: no rename, so no unchecked step can put other bytes back.
+        plain_src="$plain.proven"
+        offsets_verified=true
+      fi
+      gzip -6 < "$plain_src" > "$tmp"
       gzip_rc=$?
       scan_out=$(scan_archive_file "$tmp")
       scan_rc=$?
@@ -927,7 +1035,7 @@ for topic in $TOPICS; do
       [ "$gzip_rc" -eq 0 ] || why="gzip rc=$gzip_rc"
       [ "$scan_rc" -eq 0 ] || why="$why scan rc=$scan_rc"
       [ "$got" = "$r_records" ] || why="$why the file holds $got records but the reader wrote $r_records"
-      rm -f "$plain" "$sumf" "$sumf.tmp" "$rlog"
+      rm -f "$plain" "$plain.proven" "$sumf" "$sumf.tmp" "$rlog"
       if [ -n "$why" ]; then
         log "  WARN $topic p$part [$from,$r_boundary): processing FAILED ($why) — checkpoint NOT advanced, will retry next run"
         rm -f "$tmp"
@@ -939,7 +1047,26 @@ for topic in $TOPICS; do
       # ranges contiguous for the verifier — and the checkpoint advances over it.
       cap_to="$r_boundary"
       count=$(( cap_to - from ))
-      manifest_extra=$(printf ',"capture":"read_committed_stable_boundary","stable_boundary":%s,"escaped_records":%s,"source_topic_id":"%s"' "$r_boundary" "$r_escaped" "$topic_id")
+      # queried_end is the end this run MEANT to reach: the high-water mark read above, or the UNTIL_TS offset. A
+      # stable boundary below it means offsets [boundary, queried_end) belonged to a transaction that had not
+      # resolved when the reader asked. They are NOT in this file and NOT skipped: the checkpoint stops at the
+      # boundary and the next run captures them (filed under ITS dt=). So this date's capture is complete only to
+      # the boundary, and the manifest line says how far short of the queried end that was — which is exactly what
+      # a SESSION loader needs: it reads a session from this dt= AND the following storage dates, and refuses the
+      # session until committed captures reach this queried_end (options-edge-processing
+      # vol-premium-service calibration/CommittedLedgerArchive: SESSION_INCOMPLETE).
+      #
+      # offsets_verified says the archiver PROVED this file's Offset column against the range it names (five
+      # fields, this partition, inside [from, boundary), strictly increasing). A loader that orders records by
+      # their real offsets — which is the only thing that can reconcile the overlapping captures a crash re-read
+      # leaves, or place a record archived under a later date — admits a capture only on that provenance.
+      manifest_extra=$(printf ',"capture":"read_committed_stable_boundary","stable_boundary":%s,"queried_end":%s,"record_layout":"%s","offsets_verified":%s,"escaped_records":%s,"source_topic_id":"%s"' "$r_boundary" "$endoff" "$record_layout" "$offsets_verified" "$r_escaped" "$topic_id")
+      if [ "$r_boundary" -lt "$endoff" ]; then
+        log "  NOTE $topic p$part: capture ends at the stable boundary $r_boundary, below the queried end $endoff —" \
+            "offsets [$r_boundary,$endoff) are held by a transaction unresolved at capture time; they are not in" \
+            "dt=$DAY's file, and the next run captures them under ITS dt= (never skipped). A session loader reads" \
+            "dt=$DAY and the following storage dates and refuses the session until a capture reaches $endoff"
+      fi
       # A recapture over a LEGACY checkpoint says so: the range overlaps whatever the older archiver filed.
       [ -z "$legacy_from" ] || manifest_extra="$manifest_extra$(printf ',"recaptured_over_unproven_checkpoint":%s' "$legacy_from")"
     else
@@ -1025,6 +1152,14 @@ for topic in $TOPICS; do
     # checkpoint write below, and the next run would resume past a range whose file does not
     # exist. That is the same silent gap this whole change set exists to close, arrived at from
     # the other direction.
+    # Before the file is published: a manifest that ends mid-line cannot take this file's line, and a file
+    # published without its line is crash residue every loader refuses. So nothing is published.
+    if ! manifest_appendable "$outdir/_manifest.jsonl"; then
+      rm -f "$tmp"
+      log "  WARN $topic p$part [$from,$cap_to): dt=$DAY's manifest does not end with a newline — a run died mid-write; NOT publishing (the line would concatenate onto the partial one), checkpoint NOT advanced; an operator repairs the manifest and the range is re-read next run"
+      failed=$(( failed + 1 ))
+      continue
+    fi
     if ! mv "$tmp" "$out"; then
       rm -f "$tmp"
       log "  WARN $topic p$part [$from,$cap_to): could not publish $out — checkpoint NOT advanced, will retry next run"

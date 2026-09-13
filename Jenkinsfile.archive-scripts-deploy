@@ -115,9 +115,24 @@ pipeline {
           # 335 = every assertion the committed suite makes (sections 1-16; 12-14 pin the committed-read
           # strike capture, its processing-failure paths and the es4 verifier; 12p/12q/15 the re-review round-2
           # fixes: unstamped checkpoints, the validated UNTIL_TS lookup, the CRON_TZ placement; 16 the round-3
-          # fixes: the source TopicId in the strike checkpoint, and validated initial offset discovery). A lower count
+          # fixes: the source TopicId in the strike checkpoint, and validated initial offset discovery; 17 the vol-premium
+          # ledgers read committed-only WITH their real offsets preserved: aborted batches, markers, an open transaction
+          # and the session that must wait for it, the layout proof, a non-transactional topic unchanged, the crash
+          # re-read reconciled by offset, the files a loader must not take on trust, and — review round 2 — the source
+          # log every capture names, the no-progress ATTEMPT line, and the manifest as the coverage inventory: a listed
+          # file the disk lost, an excluded capture's queried end, a negative one; review round 3 — 17i/17l/17m: a
+          # declaration naming no log refuses the window, an attempt's declared prefix is owed, and a line naming both a
+          # file and an attempt is malformed to the verifier and the loader; review round 4 — 17h/17n: a file no
+          # manifest line names refuses the window, crash residue across a re-created topic through the real archiver,
+          # and the loader model preflights the whole window before it opens a file; review round 5 — 17o: a run that
+          # dies mid-append leaves a partial manifest line, which the model refuses and the verifier grades CORRUPT;
+          # 17p: the model level with engine r18 — an attempt owes the end it queried, and every integral field has
+          # the shape of one; 17q, engine r20: a manifest line is exactly ONE object, whole — the archiver refuses to
+          # append onto a manifest that ends mid-line, the model and the verifier refuse a concatenated line, CRLF
+          # is a line ending and a BOM is not JSON; 17r, round 7 / engine r21: the three readers share the JSON
+          # whitespace set and refuse a member held twice). A lower count
           # means a section stopped early or was skipped, which "ALL PASS" alone cannot show. Raise it with the suite.
-          [ "$ran" -ge 335 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
+          [ "$ran" -ge 567 ] || { echo "only $ran assertions ran — the suite did not execute fully" >&2; exit 1; }
 
           # The A5.8 evaluator's own suite. It builds its corpus, so it reaches no NAS and no broker.
           # Installing an evaluator whose acceptance predicate is untested would ship the one thing

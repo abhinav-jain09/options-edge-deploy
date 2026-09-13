@@ -1,5 +1,5 @@
 // StrikeArchiveReader.java — the committed-only capture for the topics in OE_COMMITTED_READ_TOPICS
-// (today: es.futures.footprint.strike). Run by oe-archive-kafka.sh through Java's single-file source
+// (es.futures.footprint.strike and the vol-premium ledgers). Run by oe-archive-kafka.sh through Java's single-file source
 // launcher, against the Kafka client jars the broker CLI already ships, so there is no build step:
 //
 //   java -cp "$KAFKA_BIN/../libs/*" StrikeArchiveReader.java --bootstrap H:P --topic T --partition P \

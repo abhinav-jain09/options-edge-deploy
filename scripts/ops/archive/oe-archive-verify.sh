@@ -136,16 +136,54 @@ for topic in topics:
                             if data_files else "no _manifest.jsonl and no data files")
         results.append(r); continue
 
-    entries, bad_json = [], 0
-    with open(man, "r") as f:
-        for line in f:
-            line = line.strip()
+    # A NONBLANK line that is not a JSON object is CORRUPT (deploy #1041 review round 5): the archiver appends a
+    # line in one printf, so a partial line is a run that died mid-append — a no-progress attempt whose queried
+    # end nobody can read, or a file claim nobody can check. What it declared is unknown; the loaders refuse the
+    # window (MANIFEST_UNPARSEABLE), and this date must not be reported OK or merely PARTIAL over it.
+    # EXACTLY ONE object per line, whole (engine r20): a valid object followed by garbage or by a second object — a
+    # run's append concatenated onto a last line that lost its newline — is as unreadable as a partial line, and
+    # reading its first object would lose the second declaration. A BOM is not JSON; CRLF is a line ending.
+    # Only JSON whitespace (space, TAB, CR, LF) surrounds a line — the set Jackson allows in the Java loader, so all
+    # three readers draw the same boundary: a form feed or a no-break space is neither blank nor a remainder. And a
+    # member held twice is not a declaration: the later one would silently replace the earlier (round 7 / engine r21).
+    JSON_WS = " \t\r\n"
+    def no_duplicates(pairs):
+        d = {}
+        for k, v in pairs:
+            if k in d: raise ValueError("duplicate member %r" % k)
+            d[k] = v
+        return d
+    decoder = json.JSONDecoder(object_pairs_hook=no_duplicates)
+    entries, bad_json = [], []
+    with open(man, "r", encoding="utf-8") as f:
+        for i, line in enumerate(f, 1):
+            line = line.strip(JSON_WS)
             if not line: continue
-            try: entries.append(json.loads(line))
-            except json.JSONDecodeError: bad_json += 1
+            try:
+                e, end = decoder.raw_decode(line)
+                if line[end:].strip(JSON_WS): e = None
+            except ValueError: e = None
+            if isinstance(e, dict): entries.append(e)
+            else: bad_json.append(i)
     if bad_json:
-        r["reasons"].append(f"{bad_json} unparseable manifest line(s)")
+        r["reasons"].append(f"{len(bad_json)} unparseable manifest line(s) (not exactly one JSON object with distinct "
+                            f"members; a run that died mid-append, or an append onto a line that lost its newline?) "
+                            f"at line(s) {bad_json[:3]}")
 
+    # A committed-read run that could capture NOTHING (the stable boundary still at its checkpoint) records the
+    # ATTEMPT — "attempt":"no_progress", the end it queried, and NO file (deploy #1041 review round 2, MAJOR 3).
+    # It is an obligation for the session loaders, not a file this verifier can find or checksum.
+    # A line naming BOTH a file and an attempt is neither (deploy #1041 review round 3, MINOR): the archiver never
+    # writes one, and treating it as an attempt would take a file the manifest claims out of the presence and
+    # checksum checks — "attempt":"no_progress" pasted onto a missing file's line turned CORRUPT into OK. It is
+    # reported as malformed AND kept among the file lines, so the file it names is still looked for; the loaders
+    # (CommittedLedgerArchive, vpread.py) refuse such a line outright (MANIFEST_MISMATCH).
+    contradictory = [e for e in entries if e.get("attempt") is not None and e.get("file") is not None]
+    if contradictory:
+        r["reasons"].append(f"{len(contradictory)} manifest line(s) name both a file and an attempt (malformed; "
+                            f"checked as file lines): {[e.get('file') for e in contradictory][:3]}")
+    attempts = [e for e in entries if e.get("attempt") is not None and e.get("file") is None]
+    entries  = [e for e in entries if e.get("attempt") is None or e.get("file") is not None]
     r["files"]   = len(entries)
     r["records"] = sum(int(e.get("records", 0)) for e in entries)
     r["partitions"] = sorted({int(e["partition"]) for e in entries if "partition" in e})
@@ -190,6 +228,27 @@ for topic in topics:
         r["reasons"].append(f"offset discontinuity ({len(gaps)}): {gaps[:3]}")
     r["offset_gaps"] = len(gaps)
 
+    # A committed-read capture that stopped BELOW the end its run queried is WHOLE for the range it names:
+    # offsets [stable_boundary, queried_end) were inside a transaction that had not resolved, the checkpoint
+    # stopped there, and the next run archives them under ITS OWN dt=. So this is reported, never counted as
+    # PARTIAL — the date is not missing anything it ever claimed. Completeness for a SESSION is decided where
+    # the session is read: the vol-premium loaders (CommittedLedgerArchive) read a session from its dt= AND the
+    # following storage dates and refuse the session until a committed capture reaches this queried_end.
+    withheld = []
+    for e in entries + attempts:
+        if e.get("capture") != "read_committed_stable_boundary":
+            continue
+        b, q = e.get("stable_boundary"), e.get("queried_end")
+        if isinstance(b, int) and isinstance(q, int) and b < q:
+            if e.get("attempt") is not None and e.get("file") is None:
+                withheld.append(f"p{int(e.get('partition', 0))} [{b},{q}) — the run at {e.get('archived_at', '?')} "
+                                f"queried {q} and found no committed record past its checkpoint {b} (attempt "
+                                f"{e.get('attempt')}, no file published)")
+            else:
+                withheld.append(f"p{int(e.get('partition', 0))} [{b},{q}) in {e.get('file', '?')}")
+    if withheld:
+        r["withheld_by_open_transaction"] = withheld
+
     # Checksums. 'sample' verifies the newest file per topic — enough to catch a truncated or
     # bit-rotted copy without re-reading a quarter-terabyte archive every evening.
     checked = 0
@@ -207,7 +266,8 @@ for topic in topics:
     if floor > 0 and r["records"] < floor:
         r["reasons"].append(f"{r['records']} records is below the floor of {floor}")
 
-    if any("CHECKSUM MISMATCH" in x or "absent on disk" in x for x in r["reasons"]):
+    if any("CHECKSUM MISMATCH" in x or "absent on disk" in x or "unparseable manifest line" in x
+           for x in r["reasons"]):
         r["status"] = "CORRUPT"
     elif r["reasons"]:
         r["status"] = "PARTIAL"
@@ -241,6 +301,9 @@ for r in sorted(results, key=lambda x: (order.get(x["status"], 9), x["topic"])):
     print(f"  {r['status']:<8} {r['topic']:<45} {detail}")
     for why in r["reasons"]:
         print(f"           ^ {why}")
+    for held in r.get("withheld_by_open_transaction", []):
+        print(f"           ~ open transaction withheld {held} — the next run archives it under its own dt=; "
+              "a session that needs it is refused until then, never loaded short")
 
 bad = [r for r in results if r["status"] in ("MISSING", "PARTIAL", "CORRUPT")]
 print("SUMMARY " + " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
