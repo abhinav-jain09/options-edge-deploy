@@ -40,16 +40,14 @@ pipeline {
     string(name: 'DEV_HOST', defaultValue: '',
       description: 'SSH target for ENVIRONMENT=dev (the docker-desktop Mac). Empty -> runs locally on the agent (when the agent IS the dev Mac).')
   }
-  triggers {
-    // 2026-07-11: fire at close+30 ET so the clean+overnight-start runs 30m after close on BOTH normal
-    // (16:00->16:30) and early-close (13:00->13:30) days. Two ticks (13:30 + 16:30): the script's
-    // market-hours guard REFUSES the 13:30 tick during a normal session, and its once-per-trading-day
-    // marker makes the second tick a no-op — so exactly one clean runs per trading day, at close+30.
-    // NOTE: scheduled runs still use the DRY_RUN=true / WIPE_ENABLED=false defaults (log-only) until an
-    // operator flips them live — see the params block. The calendar guard handles holidays.
-    cron('''TZ=America/New_York
-30 13,16 * * 1-5''')
-  }
+  // MANUAL-ONLY (2026-07-22): the auto `cron('30 13,16 * * 1-5')` trigger was REMOVED — this job no longer
+  // runs on a schedule; it is triggered ONLY deliberately via "Build with Parameters".
+  // Why: this off-hours clean-slate wipe is DEPRECATED — it scaled workloads (incl. oe-keycloak) to 0 and
+  // took prod AUTH down (fullfunding.nl 502 -> web CrashLoop + cloudflared tunnel wedge), and the near-zero
+  // off-hours footprint is now achieved WITHOUT a wipe via prod-cleanup.sh (disk/log trim) + 12h Kafka
+  // retention. Do NOT re-add a `triggers { cron(...) }` block: a pipeline-defined trigger re-registers
+  // itself on every run, so a Jenkins UI/API "disable" does not stick — removing it here is the only durable
+  // way to keep it off the schedule.
   options {
     disableConcurrentBuilds()
     timeout(time: 40, unit: 'MINUTES')
