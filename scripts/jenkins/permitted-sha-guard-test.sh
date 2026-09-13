@@ -47,7 +47,9 @@ run() {
   if ! printf '%s' "$out" | grep -qF -- "$want_msg"; then
     echo "FAIL [$name]: output lacks '$want_msg'"; echo "$out" | sed 's/^/    /'; fail=$((fail+1)); return
   fi
-  # Both SHAs must be in the log on EVERY run, permitted or refused.
+  # Both SHAs must be in the log on every run that got as far as resolving HEAD, permitted or refused.
+  # (A non-checkout refuses before that and prints only its reason — documented in the guard.)
+  if printf '%s' "$want_msg" | grep -qF "is not a git checkout"; then echo "ok   [$name]"; pass=$((pass+1)); return; fi
   if ! printf '%s' "$out" | grep -qF "checked-out HEAD"; then
     echo "FAIL [$name]: checked-out HEAD line missing"; fail=$((fail+1)); return
   fi
@@ -90,9 +92,17 @@ git -C "$W" checkout -q "$C"
 run "feature commit C, permitted C"          1 "is not on origin/main"        "$W" PERMITTED_SHA="$C"
 run "feature commit C, no SHA: branch first" 1 "is not on origin/main"        "$W"
 git -C "$W" checkout -q "$B"
-run "main commit but ref reports feature"    1 "deploys only from 'main'"     "$W" PERMITTED_SHA="$B" GIT_BRANCH=origin/feature
-run "BRANCH_NAME wins over GIT_BRANCH"       1 "deploys only from 'main'"     "$W" PERMITTED_SHA="$B" BRANCH_NAME=feature GIT_BRANCH=origin/main
+run "main commit but GIT_BRANCH reports feature" 1 "GIT_BRANCH is 'origin/feature'; this job deploys only from 'main'" "$W" PERMITTED_SHA="$B" GIT_BRANCH=origin/feature
+run "BRANCH_NAME=feature refused, GIT_BRANCH=origin/main notwithstanding" 1 "BRANCH_NAME is 'feature'" "$W" PERMITTED_SHA="$B" BRANCH_NAME=feature GIT_BRANCH=origin/main
+run "BRANCH_NAME=main does NOT mask GIT_BRANCH=origin/feature" 1 "GIT_BRANCH is 'origin/feature'" "$W" PERMITTED_SHA="$B" BRANCH_NAME=main GIT_BRANCH=origin/feature
+run "both variables main"                    0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" BRANCH_NAME=main GIT_BRANCH=origin/main
 run "--branch dev refuses a main checkout"   1 "deploys only from 'dev'"      "$W" PERMITTED_SHA="$B" GIT_BRANCH=origin/main -- --branch dev
+# --- the explicitly SELECTED source ref (--ref): a feature ref pointing at a merged commit is still refused
+run "--ref feature at a merged commit"       1 "selected source ref is 'feature'" "$W" PERMITTED_SHA="$B" -- --ref feature
+run "--ref main"                             0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" -- --ref main
+run "--ref origin/main"                      0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" -- --ref origin/main
+run "--ref */main (Jenkins spelling)"        0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" -- --ref '*/main'
+run "--ref refs/heads/feature"               1 "selected source ref is 'refs/heads/feature'" "$W" PERMITTED_SHA="$B" -- --ref refs/heads/feature
 # --- the branch cannot be confirmed: refuse, do not guess ------------------------------------------
 git clone -q "$T/origin.git" "$T/noremote"
 git -C "$T/noremote" remote set-url origin "$T/does-not-exist.git"
@@ -101,6 +111,9 @@ run "origin unreachable"                     1 "could not fetch origin/main"  "$
 mkdir -p "$T/plain"
 set +e; out="$(cd "$T/plain" && PERMITTED_SHA="$B" bash "$GUARD" 2>&1)"; rc=$?; set -e
 if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "is not a git checkout"; then echo "ok   [not a git checkout]"; pass=$((pass+1)); else echo "FAIL [not a git checkout]: rc=$rc"; echo "$out"; fail=$((fail+1)); fi
+# --- not a WORKING checkout: a .git metadata directory and a bare repository both print `false` ----
+run ".git metadata dir refused"              1 "is not a git checkout"        "$W" PERMITTED_SHA="$B" -- --dir .git
+run "bare repository refused"                1 "is not a git checkout"        "$T" PERMITTED_SHA="$B" -- --dir origin.git
 # --- nested application checkout (--dir): its own SHA; the job's GIT_BRANCH does not describe it --
 git clone -q "$T/origin.git" "$W/nested-src"
 git -C "$W/nested-src" checkout -q "$B"    # origin/main is at D by now; B is still on it
@@ -110,10 +123,12 @@ run "nested at C (feature), permitted C"     1 "is not on origin/main"        "$
 git -C "$W/nested-src" checkout -q "$B"
 run "nested at B, permitted D"               1 "is not the permitted commit"  "$W" PERMITTED_SHA="$D" -- --dir nested-src
 run "nested, no SHA"                         1 "PERMITTED_SHA is not set"     "$W" -- --dir nested-src
+run "nested --ref feature at a merged commit" 1 "selected source ref is 'feature'" "$W" PERMITTED_SHA="$B" -- --dir nested-src --ref feature
+run "nested --ref main"                      0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" -- --dir nested-src --ref main
 # --- usage errors are refusals too ---------------------------------------------------------------
 set +e; out="$(cd "$W" && PERMITTED_SHA="$B" bash "$GUARD" --bogus 2>&1)"; rc=$?; set -e
 if [ "$rc" -eq 2 ]; then echo "ok   [unknown argument]"; pass=$((pass+1)); else echo "FAIL [unknown argument]: rc=$rc"; fail=$((fail+1)); fi
 
 echo "permitted-sha-guard-test: $pass passed, $fail failed"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 30 ] && echo "permitted-sha-guard-test: ALL PASS"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 30 ]
+[ "$fail" -eq 0 ] && [ "$pass" -ge 41 ] && echo "permitted-sha-guard-test: ALL PASS"
+[ "$fail" -eq 0 ] && [ "$pass" -ge 41 ]

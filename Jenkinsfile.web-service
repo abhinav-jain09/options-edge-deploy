@@ -28,8 +28,10 @@ pipeline {
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`. NOTE: this binds the manifests and scripts deployed from this repository; the web IMAGE is built by options-edge-web-deploy (repo options-edge), which carries no guard yet — see the Build stage.')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production', 'experiment'],
       description: 'Target environment — selects k8s/services/web/overlays/<env> and the deployer kubeconfig (oeProfile).')
-    booleanParam(name: 'BUILD_IMAGE', defaultValue: true,
-      description: 'Build+push the web image first (options-edge-web-deploy, native on the target machine). false = deploy the image already in the registry.')
+    booleanParam(name: 'BUILD_IMAGE', defaultValue: false,
+      description: 'Build+push the web image first (options-edge-web-deploy, native on the target machine) — needs WEB_PERMITTED_SHA, and is REFUSED until that job\'s live definition enforces PERMITTED_SHA (Deployment Permission Rule). false (DEFAULT) = deploy the image already in the registry.')
+    string(name: 'WEB_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED when BUILD_IMAGE=true — Deployment Permission Rule. The full 40-character commit id of options-edge (the web application) permitted for the image build this job triggers. Forwarded to options-edge-web-deploy as its PERMITTED_SHA, where ITS guard refuses unless its checkout is exactly this commit on main. This job refuses the build path outright while that job does not yet declare PERMITTED_SHA.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + server-side validate only; nothing changes.')
     string(name: 'HEALTH_URL', defaultValue: '',
@@ -117,7 +119,9 @@ pipeline {
           if (rc != 0) {
             error("Permitted commit guard (deploy workspace) REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
           }
-          env.PERMITTED_SHA_GUARD = 'PASSED'
+          // Its OWN flag, set nowhere else (see Jenkinsfile.service-deploy for why the first guard's
+          // flag must not stand in for it on post/recovery paths).
+          env.DEPLOY_WORKSPACE_PERMITTED = 'PASSED'
         }
       }
     }
@@ -138,16 +142,26 @@ pipeline {
         // machine, push to the env registry's mutable :dev tag; the Deploy stage
         // below digest-pins whatever that tag resolves to (immutable in the pod spec).
         //
-        // UNBOUND-DOWNSTREAM: options-edge-web-deploy lives in the options-edge repository and has no
-        // PERMITTED_SHA guard yet, so the image it pushes is built from whatever its main HEAD is at
-        // that moment — this job's PERMITTED_SHA binds only THIS repository's checkout. Under rule.md
-        // line 364 a job without the guard cannot be triggered by the assistant, directly or through
-        // this stage: the assistant runs this job only with BUILD_IMAGE=false (deploying an image
-        // already in the registry). Abhinav's BUILD_IMAGE=true path is unchanged. Once that repository
-        // carries the guard, forward a WEB_PERMITTED_SHA here and remove this marker.
-        echo 'UNBOUND DOWNSTREAM: options-edge-web-deploy carries no PERMITTED_SHA guard — the image it builds is not bound by this permission (assistant: BUILD_IMAGE=false only)'
+        // Downstream deployment trigger (Deployment Permission Rule): the web image is built from
+        // ANOTHER repository (options-edge), so it needs that repository's permitted commit, and it
+        // is FAIL-CLOSED: options-edge-web-deploy is triggered only if its live definition declares
+        // PERMITTED_SHA (options-edge PR feat/jenkins-permitted-sha-guard adds its guard; until that
+        // has merged and run once, this path refuses and nothing is triggered). Forwarding alone
+        // would bind nothing — Jenkins drops a parameter the child does not declare.
+        script {
+          def wsha = (params.WEB_PERMITTED_SHA ?: '').trim()
+          if (!wsha.matches('^[0-9a-f]{40}$')) {
+            error("BUILD_IMAGE=true needs WEB_PERMITTED_SHA: the full 40-character options-edge commit permitted for this web image build (got '${wsha}'). Nothing was triggered.")
+          }
+          def compat = sh(returnStatus: true, script: 'bash scripts/jenkins/require-guarded-downstream.sh options-edge-web-deploy')
+          if (compat != 0) {
+            error("options-edge-web-deploy does not enforce PERMITTED_SHA yet (rc=${compat}) — not triggering an unguarded image build. Build the image under that job's own permission once it carries the guard, or deploy an existing image with BUILD_IMAGE=false. Nothing was triggered.")
+          }
+        }
         build job: 'options-edge-web-deploy',
               parameters: [
+                // options-edge-web-deploy's own guard compares its checkout against this before it builds.
+                string(name: 'PERMITTED_SHA',                value: params.WEB_PERMITTED_SHA.trim()),
                 string(name: 'PROFILE',                      value: env.WEB_PROFILE),
                 string(name: 'BUILD_PLATFORM',               value: env.BUILD_PLATFORM),
                 booleanParam(name: 'PUSH_IMAGE',             value: true),

@@ -217,11 +217,17 @@ jobs:
       - name: Jenkins deploy jobs carry the permitted-commit guard before any effect
         run: bash scripts/ci/validate-jenkins-permitted-sha-guard.sh
 
-      # ...and the guard itself is driven through every case of the rule's acceptance contract
-      # (missing / empty / short / mismatched SHA, branch advanced between queue and checkout, matching
-      # SHA on a forbidden ref, nested application checkout), plus the validator through one mutation
-      # per rule it enforces and the committed apply-before-guard fixture that must be refused.
-      - name: permitted-commit guard refuses every unpermitted case (script + validator fixtures)
+      # ...and the scripts the guards call are EXECUTED: the guard through the shell cases of the rule's
+      # acceptance contract (missing / empty / short / mismatched SHA, branch advanced between queue and
+      # checkout, forbidden ref via GIT_BRANCH, BRANCH_NAME, their contradiction, or the selected --ref,
+      # bare repository, nested checkout); the downstream compatibility check and the child image-lock
+      # fetch against a local stand-in controller; the post{} recovery gate with a sentinel kubectl and
+      # a stranded marker; the required-image binder with a stub registry. The validator runs against
+      # one mutation per rule it enforces (rc == 0, an echoed flag name, an UNBOUND annotation, a git
+      # pull after the guard, ...) and the committed apply-before-guard fixture. What this does NOT
+      # cover: Jenkins itself — parameter registration, post execution, restart behaviour, controller
+      # compilation. Those are owner activation steps (see the PR).
+      - name: permitted-commit guard scripts refuse their unpermitted cases; validator refuses its mutations
         run: python3 -m unittest -v tests.test_jenkins_permitted_sha_guard
 
       # topics.env is only the DEPLOY-TIME half of "the archive is never compacted". The other half

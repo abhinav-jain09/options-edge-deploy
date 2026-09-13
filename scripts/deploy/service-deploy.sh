@@ -258,6 +258,22 @@ if [ "$PIN_IS_AUTHORITATIVE" = true ] && [ "$PINNED_IMAGE" != "$MUTABLE_IMAGE" ]
   echo "  A digest-pinned render must deploy exactly the digest it names. Nothing was applied." >&2
   exit 1
 fi
+
+# --- Deployment Permission Rule: deploy the image the PERMITTED child build produced -------------
+# When Jenkinsfile.service-deploy triggered the processing image build under PROCESSING_PERMITTED_SHA,
+# it read that build's image lock and hands the digest-pinned reference in as REQUIRED_IMAGE. The
+# mutable tag resolved above can have been moved by ANY later processing build; deploying it would
+# silently substitute an image nobody permitted. So: the repository must be the one this service
+# renders, the digest must exist in the registry for this platform (resolve_repo_digest accepts a
+# digest as the reference and verifies the manifest), a render that already pins a digest must agree,
+# and then THAT digest — not the tag's current one — is what gets applied. Empty REQUIRED_IMAGE
+# (BUILD_IMAGES=false) keeps the mutable-tag pin above unchanged.
+. scripts/deploy/bind-required-image.sh
+PINNED_IMAGE="$(bind_required_image)" || {
+  echo "FATAL: the image the permitted build produced cannot be bound to this deploy (see above). Nothing was applied." >&2
+  exit 1
+}
+[ -z "${REQUIRED_IMAGE:-}" ] || echo "permitted build's image bound: $PINNED_IMAGE"
 # Pin EVERY container that carries the shared service image (RENDER_IMAGE0), not just
 # containers[0] — a single-container Deployment is unchanged, while a multi-container pod
 # (agent-a + agent-b) gets its sidecar pinned too instead of failing the digest-pin gate below.

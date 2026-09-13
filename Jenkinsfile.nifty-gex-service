@@ -92,7 +92,7 @@ pipeline {
         // BRANCH_NAME/GIT_BRANCH describe this repository, so --dir skips that name check; containment
         // in the nifty repo's origin/main and exact equality still apply. error() on refusal.
         script {
-          def rc = sh(returnStatus: true, script: 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir nifty-gex-src')
+          def rc = sh(returnStatus: true, script: 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir nifty-gex-src --ref main')
           if (rc != 0) {
             error("Permitted commit guard REFUSED the nifty-gex application checkout (rc=${rc}) — NIFTY_PERMITTED_SHA must be the exact commit cloned. Nothing was built or pushed.")
           }

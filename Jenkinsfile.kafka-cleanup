@@ -192,9 +192,7 @@ pipeline {
       // cluster objects. A build the guard refused must not reach the cluster through its post
       // path either (Deployment Permission Rule: no effect after a rejection, post/finally included).
       script {
-        if (env.PERMITTED_SHA_GUARD != 'PASSED') {
-          echo 'permitted-commit guard did not pass — skipping the cleanup-Job prune (no cluster access after a refusal)'
-        } else {
+        if (env.PERMITTED_SHA_GUARD == 'PASSED') {
       sh '''
         set +e
         [ "${PERMITTED_SHA_GUARD:-}" = "PASSED" ] || { echo "guard not passed — no prune"; exit 0; }
@@ -214,6 +212,8 @@ pipeline {
         fi
         true
       '''
+        } else {
+          echo 'permitted-commit guard did not pass — skipping the cleanup-Job prune (no cluster access after a refusal)'
         }
       }
     }

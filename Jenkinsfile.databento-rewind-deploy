@@ -95,6 +95,13 @@ pipeline {
     stage('Trigger image-build (upstream)') {
       when { expression { params.SKIP_BUILD_TRIGGER != true } }
       steps {
+        // DISABLED under the Deployment Permission Rule: options-edge-databento-rewind-image-build
+        // publishes an image from the rewind repository, which carries no permitted-commit guard, and
+        // this job has no permitted SHA to give it. Triggering an unguarded publisher is refused.
+        // Build the image under that job yourself, then run this job with SKIP_BUILD_TRIGGER=true
+        // (the deploy below still honours its own main-only check). Remove this refusal only when the
+        // rewind repository carries the guard and this job forwards a REWIND_PERMITTED_SHA to it.
+        error('REFUSED: the upstream rewind image build is unguarded and this job holds no permitted commit for it. Build it there first, then re-run with SKIP_BUILD_TRIGGER=true. Nothing was triggered.')
         build(
           job: 'options-edge-databento-rewind-image-build',
           wait: true,
