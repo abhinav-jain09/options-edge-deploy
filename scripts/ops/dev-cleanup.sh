@@ -99,27 +99,44 @@ LAUNCHCTL="${LAUNCHCTL:-launchctl}"
 DEV_MIRRORS_PAUSED="${DEV_MIRRORS_PAUSED:-/Users/abhinav/oe-ops/.dev-mirrors-paused}"
 DEV_MIRROR_TARGET_RE='^bootstrap\.servers=(127\.0\.0\.1|localhost):19092[[:space:]]*$'
 
-# "label plist" for every com.optionsedge agent whose program directory holds a producer.properties
-# that targets dev Kafka. Read from the plists, not guessed from labels: esgex-mirror* run from es-gex-mirror*/.
+# "label plist" for every com.optionsedge agent with a ProgramArguments entry whose directory holds a
+# producer.properties that targets dev Kafka. Parsed with plistlib, not grepped: most real mirror plists
+# are one-line XML (<key>ProgramArguments</key><array><string>...), and a `/bin/bash run.sh` agent keeps
+# the script in [1]. The label is read from the plist, never guessed: esgex-mirror* run from es-gex-mirror*/.
 dev_mirror_agents() {
-  local plist prog dir
-  for plist in "$LAUNCH_AGENTS_DIR"/com.optionsedge.*.plist; do
-    [ -f "$plist" ] || continue
-    prog=$(awk '/<key>ProgramArguments<\/key>/{f=1; next} f && /<string>/{sub(/.*<string>/, ""); sub(/<\/string>.*/, ""); print; exit}' "$plist")
-    [ -n "$prog" ] || continue
-    dir=$(dirname "$prog")
-    [ -f "$dir/producer.properties" ] || continue
-    grep -qE "$DEV_MIRROR_TARGET_RE" "$dir/producer.properties" || continue
-    printf '%s %s\n' "$(basename "$plist" .plist)" "$plist"
-  done
+  python3 - "$LAUNCH_AGENTS_DIR" "$DEV_MIRROR_TARGET_RE" <<'PY'
+import glob, os, plistlib, re, sys
+agents_dir, target_re = sys.argv[1], re.compile(sys.argv[2].replace("[[:space:]]", r"\s"))
+for plist in sorted(glob.glob(os.path.join(agents_dir, "com.optionsedge.*.plist"))):
+    try:
+        with open(plist, "rb") as f:
+            job = plistlib.load(f)
+    except Exception:
+        continue
+    for arg in job.get("ProgramArguments") or []:
+        props = os.path.join(os.path.dirname(str(arg)), "producer.properties")
+        try:
+            lines = open(props).read().splitlines()
+        except OSError:
+            continue
+        if any(target_re.match(line) for line in lines):
+            print(job.get("Label") or os.path.basename(plist)[:-len(".plist")], plist)
+            break
+PY
 }
 
 pause_dev_mirrors() {
   local uid label plist n=0 i
   uid=$(id -u)
-  # Derived from the plists, not from what is loaded: a second clean after an interrupted one (agents
-  # already unloaded) still records every agent, so the next resume reloads all of them.
-  dev_mirror_agents > "$DEV_MIRRORS_PAUSED"
+  # Only agents that are LOADED now are paused (one someone unloaded on purpose stays unloaded), appended
+  # to any list an interrupted clean left behind, so the next resume still reloads those too.
+  touch "$DEV_MIRRORS_PAUSED"
+  dev_mirror_agents | while read -r label plist; do
+    [ -n "$label" ] || continue
+    "$LAUNCHCTL" list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"
+  done > "$DEV_MIRRORS_PAUSED.new"
+  sort -u "$DEV_MIRRORS_PAUSED" "$DEV_MIRRORS_PAUSED.new" > "$DEV_MIRRORS_PAUSED.merged"
+  mv "$DEV_MIRRORS_PAUSED.merged" "$DEV_MIRRORS_PAUSED"
   while read -r label plist; do
     [ -n "$label" ] || continue
     "$LAUNCHCTL" bootout "gui/$uid/$label" >/dev/null 2>&1
@@ -132,7 +149,9 @@ pause_dev_mirrors() {
     else
       n=$((n + 1))
     fi
-  done < "$DEV_MIRRORS_PAUSED"
+  done < "$DEV_MIRRORS_PAUSED.new"
+  rm -f "$DEV_MIRRORS_PAUSED.new"
+  [ -s "$DEV_MIRRORS_PAUSED" ] || rm -f "$DEV_MIRRORS_PAUSED"
   echo "   paused $n es4->dev mirror agent(s) (list: $DEV_MIRRORS_PAUSED)"
 }
 
@@ -338,6 +357,18 @@ ensure_topics() {
     echo "  topics present now: $($KT --bootstrap-server $BS --list 2>/dev/null | grep -vcE '^__|^_schemas')"
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $TOPICS_ENV_REF) — apps will create their topics on startup (slower to READY)."
+    return 1   # resume_dev_mirrors_if_declared keeps the mirrors paused: nothing was created at its declared shape
+  fi
+}
+
+# Reload the paused mirrors only once ensure_topics has created their targets; otherwise they would
+# auto-create them at 1 partition — the exact wedge the pause exists to prevent. They stay paused
+# (list kept) until a later start/overnight run whose ensure_topics succeeds.
+resume_dev_mirrors_if_declared() {
+  if [ "$1" -eq 0 ]; then
+    resume_dev_mirrors
+  elif [ -s "$DEV_MIRRORS_PAUSED" ]; then
+    echo "   WARN: es4->dev mirrors stay PAUSED — topics.env was not applied (list: $DEV_MIRRORS_PAUSED)"
   fi
 }
 
@@ -407,8 +438,7 @@ apply_internal_topic_configs() {
 # service stays at 0 until the 06:15 ET full start. (These persist/serve ES — they need a producer for
 # live ES data; see the note where OVERNIGHT_SET is defined.)
 do_start_overnight() {
-  ensure_topics
-  resume_dev_mirrors
+  ensure_topics; resume_dev_mirrors_if_declared $?
   echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 06:15 ET."
   local d
   for d in $OVERNIGHT_SET; do
@@ -447,8 +477,7 @@ do_es_down() {
 
 # ---------- FULL START: pre-create source topics, then scale ALL active apps up READY ----------
 do_start() {
-  ensure_topics
-  resume_dev_mirrors
+  ensure_topics; resume_dev_mirrors_if_declared $?
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
   # re-zeroed the disabled ones afterwards, databento-timewarp-snapshot-replay would come up in the gap
   # and REPLAY historical snapshots into options.databento.raw (its TIMEWARP_SNAPSHOT_TOPIC), poisoning
@@ -583,8 +612,7 @@ for p in json.load(sys.stdin)["items"]:
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
     sleep 8   # let the deletions settle before recreating (avoid create-vs-delete races)
     echo "4d) recreating platform topics (clean + recreate) ..."
-    ensure_topics
-    resume_dev_mirrors
+    ensure_topics; resume_dev_mirrors_if_declared $?
   fi
 
   # 4b. safe docker-ENGINE image housekeeping (build side only — NOT the k8s containerd store).
