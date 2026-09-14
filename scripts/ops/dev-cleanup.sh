@@ -113,6 +113,8 @@ for plist in sorted(glob.glob(os.path.join(agents_dir, "com.optionsedge.*.plist"
             job = plistlib.load(f)
     except Exception:
         continue
+    if not isinstance(job, dict):
+        continue
     for arg in job.get("ProgramArguments") or []:
         if not os.path.isabs(str(arg)):
             continue   # `-lc`, `auto`, `dev`: dirname "" would resolve against the caller's cwd
