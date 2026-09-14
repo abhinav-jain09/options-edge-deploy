@@ -81,6 +81,110 @@ WIPE_KAFKA="${WIPE_KAFKA:-true}"
 CALENDAR_DIR="${CALENDAR_DIR:-$DEPLOY_REPO/scripts/jenkins}"
 LOG=/Users/abhinav/oe-ops/dev-cleanup.log
 
+# ---------- es4 -> dev MM1 mirrors: paused around the topic wipe ----------
+# The kafka-mirror-maker launchd agents (es-cvd/-indicator/-strike-intel/-tape-zones/-auction/esgex ...)
+# keep producing into dev while the wipe deletes their target topics, and dev auto-creates a topic on
+# the first produce at num.partitions=1. 2026-09-14 12:06:34: the delete of es.options.databento.gex.strike
+# and .gex.spxbridge was followed 0.3 s later by a mirror's CreateTopics numPartitions=1; ensure_topics'
+# declared :4 then hit TOPIC_ALREADY_EXISTS, and es.options.indicators.bars (:8, EXACT) and
+# es.strike-intelligence-by-strike (:32) stuck at 1 the same way. es-spx-align-service's Streams app
+# sized its repartition/changelog topics from those 1-partition sources and died with "invalid
+# partitions: expected: 4; actual: 1" as soon as the shapes were repaired. So the wipe unloads every
+# agent that writes to dev BEFORE the delete and reloads them only AFTER ensure_topics has created the
+# targets at their declared shape. The paused list is a file so an interrupted clean is still resumed by
+# the next start/overnight run. MM1 commits on es4, so a resumed mirror continues from its committed
+# offset: the wiped history is NOT back-filled (unchanged behaviour, see topics.env).
+LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
+LAUNCHCTL="${LAUNCHCTL:-launchctl}"
+DEV_MIRRORS_PAUSED="${DEV_MIRRORS_PAUSED:-/Users/abhinav/oe-ops/.dev-mirrors-paused}"
+DEV_MIRROR_TARGET_RE='^bootstrap\.servers=(127\.0\.0\.1|localhost):19092[[:space:]]*$'
+
+# "label plist" for every com.optionsedge agent with a ProgramArguments entry whose directory holds a
+# producer.properties that targets dev Kafka. Parsed with plistlib, not grepped: most real mirror plists
+# are one-line XML (<key>ProgramArguments</key><array><string>...), and a `/bin/bash run.sh` agent keeps
+# the script in [1]. The label is read from the plist, never guessed: esgex-mirror* run from es-gex-mirror*/.
+dev_mirror_agents() {
+  python3 - "$LAUNCH_AGENTS_DIR" "$DEV_MIRROR_TARGET_RE" <<'PY'
+import glob, os, plistlib, re, sys
+agents_dir, target_re = sys.argv[1], re.compile(sys.argv[2].replace("[[:space:]]", r"\s"))
+for plist in sorted(glob.glob(os.path.join(agents_dir, "com.optionsedge.*.plist"))):
+    try:
+        with open(plist, "rb") as f:
+            job = plistlib.load(f)
+    except Exception:
+        continue
+    if not isinstance(job, dict):
+        continue
+    for arg in job.get("ProgramArguments") or []:
+        if not os.path.isabs(str(arg)):
+            continue   # `-lc`, `auto`, `dev`: dirname "" would resolve against the caller's cwd
+        props = os.path.join(os.path.dirname(str(arg)), "producer.properties")
+        try:
+            lines = open(props).read().splitlines()
+        except OSError:
+            continue
+        if any(target_re.match(line) for line in lines):
+            print(job.get("Label") or os.path.basename(plist)[:-len(".plist")], plist)
+            break
+PY
+}
+
+pause_dev_mirrors() {
+  local uid label plist n=0 i
+  uid=$(id -u)
+  # Only agents that are LOADED now are paused (one someone unloaded on purpose stays unloaded), appended
+  # to any list an interrupted clean left behind, so the next resume still reloads those too.
+  touch "$DEV_MIRRORS_PAUSED"
+  if ! dev_mirror_agents > "$DEV_MIRRORS_PAUSED.found"; then
+    echo "   ERROR: es4->dev mirror discovery failed (python3/plistlib) — mirrors are NOT paused; their targets may be auto-created at 1 partition"
+  fi
+  while read -r label plist; do
+    [ -n "$label" ] || continue
+    "$LAUNCHCTL" list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"
+  done < "$DEV_MIRRORS_PAUSED.found" > "$DEV_MIRRORS_PAUSED.new"
+  rm -f "$DEV_MIRRORS_PAUSED.found"
+  sort -u "$DEV_MIRRORS_PAUSED" "$DEV_MIRRORS_PAUSED.new" > "$DEV_MIRRORS_PAUSED.merged"
+  mv "$DEV_MIRRORS_PAUSED.merged" "$DEV_MIRRORS_PAUSED"
+  while read -r label plist; do
+    [ -n "$label" ] || continue
+    "$LAUNCHCTL" bootout "gui/$uid/$label" >/dev/null 2>&1
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      "$LAUNCHCTL" list "$label" >/dev/null 2>&1 || break
+      sleep 3
+    done
+    if "$LAUNCHCTL" list "$label" >/dev/null 2>&1; then
+      echo "   WARN: mirror agent $label is still loaded; its target topics may be auto-created at 1 partition"
+    else
+      n=$((n + 1))
+    fi
+  done < "$DEV_MIRRORS_PAUSED.new"
+  rm -f "$DEV_MIRRORS_PAUSED.new"
+  [ -s "$DEV_MIRRORS_PAUSED" ] || rm -f "$DEV_MIRRORS_PAUSED"
+  echo "   paused $n es4->dev mirror agent(s) (list: $DEV_MIRRORS_PAUSED)"
+}
+
+resume_dev_mirrors() {
+  [ -s "$DEV_MIRRORS_PAUSED" ] || return 0
+  local uid label plist n=0 failed=0
+  uid=$(id -u)
+  while read -r label plist; do
+    [ -n "$label" ] || continue
+    if [ ! -f "$plist" ]; then
+      echo "   (agent removed, skipped): $label"
+      continue
+    fi
+    "$LAUNCHCTL" bootstrap "gui/$uid" "$plist" >/dev/null 2>&1   # non-zero when already loaded; judged below
+    if "$LAUNCHCTL" list "$label" >/dev/null 2>&1; then
+      n=$((n + 1))
+    else
+      failed=$((failed + 1))
+      echo "   WARN: mirror agent $label did not load"
+    fi
+  done < "$DEV_MIRRORS_PAUSED"
+  [ "$failed" -eq 0 ] && rm -f "$DEV_MIRRORS_PAUSED"
+  echo "   resumed $n es4->dev mirror agent(s)"
+}
+
 # ---------- LOGS: safe, non-destructive (no topic/state data touched) ----------
 # (1) launchd stdout + log4j logs grow forever w/ no rotation -> any *.log > 50 MB trimmed to its last
 #     10 MB in place (preserves the broker's open fd). (2) Kafka's rotated daily archives
@@ -261,6 +365,18 @@ ensure_topics() {
     echo "  topics present now: $($KT --bootstrap-server $BS --list 2>/dev/null | grep -vcE '^__|^_schemas')"
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $TOPICS_ENV_REF) — apps will create their topics on startup (slower to READY)."
+    return 1   # resume_dev_mirrors_if_declared keeps the mirrors paused: nothing was created at its declared shape
+  fi
+}
+
+# Reload the paused mirrors only once ensure_topics has created their targets; otherwise they would
+# auto-create them at 1 partition — the exact wedge the pause exists to prevent. They stay paused
+# (list kept) until a later start/overnight run whose ensure_topics succeeds.
+resume_dev_mirrors_if_declared() {
+  if [ "$1" -eq 0 ]; then
+    resume_dev_mirrors
+  elif [ -s "$DEV_MIRRORS_PAUSED" ]; then
+    echo "   WARN: es4->dev mirrors stay PAUSED — topics.env was not applied (list: $DEV_MIRRORS_PAUSED)"
   fi
 }
 
@@ -330,7 +446,7 @@ apply_internal_topic_configs() {
 # service stays at 0 until the 06:15 ET full start. (These persist/serve ES — they need a producer for
 # live ES data; see the note where OVERNIGHT_SET is defined.)
 do_start_overnight() {
-  ensure_topics
+  ensure_topics; resume_dev_mirrors_if_declared $?
   echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 06:15 ET."
   local d
   for d in $OVERNIGHT_SET; do
@@ -369,7 +485,7 @@ do_es_down() {
 
 # ---------- FULL START: pre-create source topics, then scale ALL active apps up READY ----------
 do_start() {
-  ensure_topics
+  ensure_topics; resume_dev_mirrors_if_declared $?
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
   # re-zeroed the disabled ones afterwards, databento-timewarp-snapshot-replay would come up in the gap
   # and REPLAY historical snapshots into options.databento.raw (its TIMEWARP_SNAPSHOT_TOPIC), poisoning
@@ -490,6 +606,7 @@ for p in json.load(sys.stdin)["items"]:
     echo "4) keeping topics (WIPE_KAFKA=false)"
   else
     echo "4) deleting all non-system topics ..."
+    pause_dev_mirrors
     # RESET-PRESERVED topics survive here too. They hold data that by declaration cannot be rebuilt —
     # the A5 calibration ledger accrues until the archive carries it to the NAS, and a wipe before that
     # loses the day with no way to notice. dev and prod must agree on what "preserved" means, or the
@@ -503,7 +620,7 @@ for p in json.load(sys.stdin)["items"]:
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
     sleep 8   # let the deletions settle before recreating (avoid create-vs-delete races)
     echo "4d) recreating platform topics (clean + recreate) ..."
-    ensure_topics
+    ensure_topics; resume_dev_mirrors_if_declared $?
   fi
 
   # 4b. safe docker-ENGINE image housekeeping (build side only — NOT the k8s containerd store).

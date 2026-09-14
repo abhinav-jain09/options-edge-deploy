@@ -142,6 +142,12 @@ jobs:
       - name: OPRA tape declared at its real shape (dev/prod)
         run: python3 -m unittest -v tests.test_opra_tcbbo_declared
 
+      # Same wedge, third door: the es4->dev MM1 mirrors kept producing through the dev wipe and
+      # re-created gex.strike/gex.spxbridge/indicators.bars/strike-intelligence-by-strike at 1 partition
+      # before ensure_topics ran (2026-09-14). dev-cleanup must unload them around the delete.
+      - name: dev wipe pauses the es4->dev mirrors
+        run: python3 -m unittest -v tests.test_dev_cleanup_pauses_dev_mirrors
+
       # One hop further: Streams sources written by ANOTHER service (strike-flow, strike.avro,
       # strike-sr.current, strike-intelligence-by-strike). Runs the real apply-topics.sh for prod and
       # dev plus dev-cleanup's topic_desired, and holds each declaration to the live shape its owner
