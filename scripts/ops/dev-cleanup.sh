@@ -81,6 +81,83 @@ WIPE_KAFKA="${WIPE_KAFKA:-true}"
 CALENDAR_DIR="${CALENDAR_DIR:-$DEPLOY_REPO/scripts/jenkins}"
 LOG=/Users/abhinav/oe-ops/dev-cleanup.log
 
+# ---------- es4 -> dev MM1 mirrors: paused around the topic wipe ----------
+# The kafka-mirror-maker launchd agents (es-cvd/-indicator/-strike-intel/-tape-zones/-auction/esgex ...)
+# keep producing into dev while the wipe deletes their target topics, and dev auto-creates a topic on
+# the first produce at num.partitions=1. 2026-09-14 12:06:34: the delete of es.options.databento.gex.strike
+# and .gex.spxbridge was followed 0.3 s later by a mirror's CreateTopics numPartitions=1; ensure_topics'
+# declared :4 then hit TOPIC_ALREADY_EXISTS, and es.options.indicators.bars (:8, EXACT) and
+# es.strike-intelligence-by-strike (:32) stuck at 1 the same way. es-spx-align-service's Streams app
+# sized its repartition/changelog topics from those 1-partition sources and died with "invalid
+# partitions: expected: 4; actual: 1" as soon as the shapes were repaired. So the wipe unloads every
+# agent that writes to dev BEFORE the delete and reloads them only AFTER ensure_topics has created the
+# targets at their declared shape. The paused list is a file so an interrupted clean is still resumed by
+# the next start/overnight run. MM1 commits on es4, so a resumed mirror continues from its committed
+# offset: the wiped history is NOT back-filled (unchanged behaviour, see topics.env).
+LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
+LAUNCHCTL="${LAUNCHCTL:-launchctl}"
+DEV_MIRRORS_PAUSED="${DEV_MIRRORS_PAUSED:-/Users/abhinav/oe-ops/.dev-mirrors-paused}"
+DEV_MIRROR_TARGET_RE='^bootstrap\.servers=(127\.0\.0\.1|localhost):19092[[:space:]]*$'
+
+# "label plist" for every com.optionsedge agent whose program directory holds a producer.properties
+# that targets dev Kafka. Read from the plists, not guessed from labels: esgex-mirror* run from es-gex-mirror*/.
+dev_mirror_agents() {
+  local plist prog dir
+  for plist in "$LAUNCH_AGENTS_DIR"/com.optionsedge.*.plist; do
+    [ -f "$plist" ] || continue
+    prog=$(awk '/<key>ProgramArguments<\/key>/{f=1; next} f && /<string>/{sub(/.*<string>/, ""); sub(/<\/string>.*/, ""); print; exit}' "$plist")
+    [ -n "$prog" ] || continue
+    dir=$(dirname "$prog")
+    [ -f "$dir/producer.properties" ] || continue
+    grep -qE "$DEV_MIRROR_TARGET_RE" "$dir/producer.properties" || continue
+    printf '%s %s\n' "$(basename "$plist" .plist)" "$plist"
+  done
+}
+
+pause_dev_mirrors() {
+  local uid label plist n=0 i
+  uid=$(id -u)
+  # Derived from the plists, not from what is loaded: a second clean after an interrupted one (agents
+  # already unloaded) still records every agent, so the next resume reloads all of them.
+  dev_mirror_agents > "$DEV_MIRRORS_PAUSED"
+  while read -r label plist; do
+    [ -n "$label" ] || continue
+    "$LAUNCHCTL" bootout "gui/$uid/$label" >/dev/null 2>&1
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      "$LAUNCHCTL" list "$label" >/dev/null 2>&1 || break
+      sleep 3
+    done
+    if "$LAUNCHCTL" list "$label" >/dev/null 2>&1; then
+      echo "   WARN: mirror agent $label is still loaded; its target topics may be auto-created at 1 partition"
+    else
+      n=$((n + 1))
+    fi
+  done < "$DEV_MIRRORS_PAUSED"
+  echo "   paused $n es4->dev mirror agent(s) (list: $DEV_MIRRORS_PAUSED)"
+}
+
+resume_dev_mirrors() {
+  [ -s "$DEV_MIRRORS_PAUSED" ] || return 0
+  local uid label plist n=0 failed=0
+  uid=$(id -u)
+  while read -r label plist; do
+    [ -n "$label" ] || continue
+    if [ ! -f "$plist" ]; then
+      echo "   (agent removed, skipped): $label"
+      continue
+    fi
+    "$LAUNCHCTL" bootstrap "gui/$uid" "$plist" >/dev/null 2>&1   # non-zero when already loaded; judged below
+    if "$LAUNCHCTL" list "$label" >/dev/null 2>&1; then
+      n=$((n + 1))
+    else
+      failed=$((failed + 1))
+      echo "   WARN: mirror agent $label did not load"
+    fi
+  done < "$DEV_MIRRORS_PAUSED"
+  [ "$failed" -eq 0 ] && rm -f "$DEV_MIRRORS_PAUSED"
+  echo "   resumed $n es4->dev mirror agent(s)"
+}
+
 # ---------- LOGS: safe, non-destructive (no topic/state data touched) ----------
 # (1) launchd stdout + log4j logs grow forever w/ no rotation -> any *.log > 50 MB trimmed to its last
 #     10 MB in place (preserves the broker's open fd). (2) Kafka's rotated daily archives
@@ -331,6 +408,7 @@ apply_internal_topic_configs() {
 # live ES data; see the note where OVERNIGHT_SET is defined.)
 do_start_overnight() {
   ensure_topics
+  resume_dev_mirrors
   echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 06:15 ET."
   local d
   for d in $OVERNIGHT_SET; do
@@ -370,6 +448,7 @@ do_es_down() {
 # ---------- FULL START: pre-create source topics, then scale ALL active apps up READY ----------
 do_start() {
   ensure_topics
+  resume_dev_mirrors
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
   # re-zeroed the disabled ones afterwards, databento-timewarp-snapshot-replay would come up in the gap
   # and REPLAY historical snapshots into options.databento.raw (its TIMEWARP_SNAPSHOT_TOPIC), poisoning
@@ -490,6 +569,7 @@ for p in json.load(sys.stdin)["items"]:
     echo "4) keeping topics (WIPE_KAFKA=false)"
   else
     echo "4) deleting all non-system topics ..."
+    pause_dev_mirrors
     # RESET-PRESERVED topics survive here too. They hold data that by declaration cannot be rebuilt —
     # the A5 calibration ledger accrues until the archive carries it to the NAS, and a wipe before that
     # loses the day with no way to notice. dev and prod must agree on what "preserved" means, or the
@@ -504,6 +584,7 @@ for p in json.load(sys.stdin)["items"]:
     sleep 8   # let the deletions settle before recreating (avoid create-vs-delete races)
     echo "4d) recreating platform topics (clean + recreate) ..."
     ensure_topics
+    resume_dev_mirrors
   fi
 
   # 4b. safe docker-ENGINE image housekeeping (build side only — NOT the k8s containerd store).
