@@ -114,6 +114,8 @@ for plist in sorted(glob.glob(os.path.join(agents_dir, "com.optionsedge.*.plist"
     except Exception:
         continue
     for arg in job.get("ProgramArguments") or []:
+        if not os.path.isabs(str(arg)):
+            continue   # `-lc`, `auto`, `dev`: dirname "" would resolve against the caller's cwd
         props = os.path.join(os.path.dirname(str(arg)), "producer.properties")
         try:
             lines = open(props).read().splitlines()
@@ -131,10 +133,14 @@ pause_dev_mirrors() {
   # Only agents that are LOADED now are paused (one someone unloaded on purpose stays unloaded), appended
   # to any list an interrupted clean left behind, so the next resume still reloads those too.
   touch "$DEV_MIRRORS_PAUSED"
-  dev_mirror_agents | while read -r label plist; do
+  if ! dev_mirror_agents > "$DEV_MIRRORS_PAUSED.found"; then
+    echo "   ERROR: es4->dev mirror discovery failed (python3/plistlib) — mirrors are NOT paused; their targets may be auto-created at 1 partition"
+  fi
+  while read -r label plist; do
     [ -n "$label" ] || continue
     "$LAUNCHCTL" list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"
-  done > "$DEV_MIRRORS_PAUSED.new"
+  done < "$DEV_MIRRORS_PAUSED.found" > "$DEV_MIRRORS_PAUSED.new"
+  rm -f "$DEV_MIRRORS_PAUSED.found"
   sort -u "$DEV_MIRRORS_PAUSED" "$DEV_MIRRORS_PAUSED.new" > "$DEV_MIRRORS_PAUSED.merged"
   mv "$DEV_MIRRORS_PAUSED.merged" "$DEV_MIRRORS_PAUSED"
   while read -r label plist; do

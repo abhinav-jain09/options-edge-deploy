@@ -127,13 +127,37 @@ class DevCleanupPausesDevMirrorsTest(unittest.TestCase):
     def paused_labels(self):
         return sorted(line.split()[0] for line in self.paused.read_text().splitlines())
 
-    def run_script(self, script):
+    def run_script(self, script, cwd=None, path_prefix=None):
         env = dict(os.environ, LAUNCH_AGENTS_DIR=str(self.agents), LAUNCHCTL=str(self.launchctl),
                    DEV_MIRRORS_PAUSED=str(self.paused), FAKE_STATE=str(self.state))
-        return subprocess.run([BASH, "-c", script], env=env, text=True, capture_output=True, check=True).stdout
+        if path_prefix:
+            env["PATH"] = f"{path_prefix}:{env['PATH']}"
+        return subprocess.run([BASH, "-c", script], env=env, text=True, capture_output=True, check=True, cwd=cwd).stdout
 
-    def run_fn(self, fn):
-        return self.run_script(helper_block().replace("sleep 3", ":") + f"\n{fn}\n")
+    def run_fn(self, fn, **kw):
+        return self.run_script(helper_block().replace("sleep 3", ":") + f"\n{fn}\n", **kw)
+
+    def test_relative_program_arguments_never_resolve_against_the_callers_cwd(self):
+        # An unrelated agent (`/bin/bash -lc auto`) run by an operator standing inside a dev mirror dir.
+        other = "com.optionsedge.prod-cleanup"
+        (self.agents / f"{other}.plist").write_text(one_line_plist(other, ["/bin/bash", "-lc", "auto"], self.logs))
+        self.set_loaded({DEV_CVD, DEV_GEX, DEV_BASH, PROD_CVD, BRIDGE, other})
+        cwd = self.ops / "es-gex-mirror"                      # holds a dev producer.properties
+        out = self.run_fn("dev_mirror_agents", cwd=cwd)
+        self.assertEqual(sorted(line.split()[0] for line in out.splitlines()), sorted([DEV_CVD, DEV_GEX, DEV_BASH]))
+        self.run_fn("pause_dev_mirrors", cwd=cwd)
+        self.assertIn(other, self.loaded())
+
+    def test_discovery_failure_is_loud_and_pauses_nothing(self):
+        fake_bin = Path(self.tmp.name) / "bin"
+        fake_bin.mkdir()
+        py = fake_bin / "python3"
+        py.write_text("#!/bin/sh\nexit 1\n")
+        py.chmod(0o755)
+        out = self.run_fn("pause_dev_mirrors", path_prefix=str(fake_bin))
+        self.assertIn("ERROR: es4->dev mirror discovery failed", out)
+        self.assertEqual(self.loaded(), {DEV_CVD, DEV_GEX, DEV_BASH, PROD_CVD, BRIDGE})
+        self.assertFalse(self.paused.exists())
 
     def test_discovery_reads_the_program_path_from_every_plist_layout(self):
         out = self.run_fn("dev_mirror_agents")
@@ -142,6 +166,7 @@ class DevCleanupPausesDevMirrorsTest(unittest.TestCase):
     def test_pause_unloads_only_agents_that_write_to_dev(self):
         out = self.run_fn("pause_dev_mirrors")
         self.assertIn("paused 3 es4->dev mirror agent(s)", out)
+        self.assertNotIn("ERROR", out)
         self.assertEqual(self.loaded(), {PROD_CVD, BRIDGE})
         self.assertEqual(self.paused_labels(), sorted([DEV_CVD, DEV_GEX, DEV_BASH]))
 
