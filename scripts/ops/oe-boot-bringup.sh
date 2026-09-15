@@ -105,10 +105,13 @@ log "result: ${READY}/${TOTAL} ready; load $(awk '{print $1}' /proc/loadavg)"
 DOCTOR="${DOCTOR:-/usr/local/sbin/streams-partition-doctor.sh}"
 if [ -r "$DOCTOR" ]; then
   if [ -n "$NOTREADY" ]; then
-    w=0
+    w=0 last="" stable=0
     while [ "$w" -lt "${DOCTOR_WAIT_SECONDS:-300}" ]; do
       pending=$($KUBECTL get deploy --no-headers 2>/dev/null | awk '{split($2,a,"/"); if (a[2]>0 && a[1]!=a[2]) print $1}')
       [ -z "$pending" ] && break
+      # an app that cannot start for an unrelated reason must not hold the doctor for the full timeout
+      if [ "$pending" = "$last" ]; then stable=$((stable+20)); else stable=0; last="$pending"; fi
+      [ "$stable" -ge "${DOCTOR_STABLE_SECONDS:-60}" ] && break
       sleep 20; w=$((w+20))
     done
   fi

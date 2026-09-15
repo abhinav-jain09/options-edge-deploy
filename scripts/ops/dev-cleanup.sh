@@ -447,18 +447,20 @@ run_partition_doctor() {
     rm -f "$script"; return 0
   fi
   [ -n "$deploys" ] || deploys=$($KK get deploy -o jsonpath='{range .items[?(@.spec.replicas>0)]}{.metadata.name}{" "}{end}' 2>/dev/null)
+  # Wait for the apps to become READY (Streams logs a rejection at its first assignment), but stop as soon
+  # as the not-ready set has not changed for DOCTOR_STABLE_SECONDS: an app that cannot start for an
+  # unrelated reason (no IBKR gateway, an epoch fence, a feed that starts at 07:00 ET) must not hold the
+  # whole bring-up for the full timeout. One `get deploy` per pass, not two kubectl calls per app.
+  local pending="" last="" stable=0
   while [ "$waited" -lt "${DOCTOR_WAIT_SECONDS:-300}" ]; do
-    local pending=""
-    for d in $deploys; do
-      local rr des
-      rr=$($KK get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
-      des=$($KK get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
-      [ "${rr:-0}" -ge "${des:-0}" ] 2>/dev/null || pending="$pending $d"
-    done
+    pending=$($KK get deploy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.replicas}{" "}{.status.readyReplicas}{"\n"}{end}' 2>/dev/null \
+      | awk -v want=" $deploys " 'index(want, " " $1 " ") && ($3 == "" ? 0 : $3) < $2 {printf "%s ", $1}')
     [ -z "$pending" ] && break
+    if [ "$pending" = "$last" ]; then stable=$((stable + 15)); else stable=0; last="$pending"; fi
+    [ "$stable" -ge "${DOCTOR_STABLE_SECONDS:-60}" ] && { echo "  not ready (unchanged ${stable}s, not waiting longer): $pending"; break; }
     sleep 15; waited=$((waited + 15))
   done
-  sleep "${DOCTOR_SETTLE_SECONDS:-45}"
+  sleep "${DOCTOR_SETTLE_SECONDS:-30}"
   echo "Kafka Streams partition doctor (repairs 'invalid partitions' internal topics) ..."
   KUBECTL="$KK" KUBECTL_SCALE="$K" KAFKA_TOPICS="$KT --bootstrap-server $BS" /bin/bash "$script" --repair $deploys 2>&1 | sed 's/^/  /'
   rcd=${PIPESTATUS[0]}
