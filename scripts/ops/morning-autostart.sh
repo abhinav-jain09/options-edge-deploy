@@ -65,7 +65,11 @@ CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" 2>/dev/null && pwd |
 #   END-OF-DAY 1DTE open interest and the desk trades 0DTE, where no next-day settled
 #   print exists to score it. Also replicas:0 in both overlays. See
 #   docs/oi-nowcast-retirement.md.
-KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service dealer-ledger-service dealer-ledger-calibration-scorer dealer-ledger-calibration-accumulator vix-option-inteligence-service}"
+#   prod-pgadmin ADDED 2026-09-15 so this set equals scripts/ops/oe-boot-bringup.sh KEEP_DOWN
+#   (tests/test_keep_down_lists_agree.py — change BOTH or neither). It carries no part-of label, so
+#   $SELECTOR never matches it and the entry changes nothing here; the boot bring-up, which scales
+#   every deployment at 0, is the script that needs it.
+KEEP_DOWN="${KEEP_DOWN:-hpsf-stage-a-service hpsf-stage-b-service volume-sandwich-service volume-sandwich-databento-service volume-pace-service volume-pace-databento-service strike-flow-classifier-ibkr options-edge-integration-test spx-mission-control-service short-premium-agent-service spread-skew-service spread-skew-postgres-writer directional-pressure-databento-service databento-mission-sandwich-service directional-pressure-service option-truth-engine-service ibkr-feed-service oi-shadow-service raw-to-display-service dealer-ledger-service dealer-ledger-calibration-scorer dealer-ledger-calibration-accumulator vix-option-inteligence-service prod-pgadmin}"
 
 kc()  { kubectl -n "$NS" --as="$KUBECTL_AS" "$@"; }   # impersonated (scale ops are policy-gated)
 kcr() { kubectl -n "$NS" "$@"; }                       # read-only

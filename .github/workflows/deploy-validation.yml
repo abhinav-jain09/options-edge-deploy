@@ -154,6 +154,12 @@ jobs:
       - name: Streams partition doctor (simulated cluster) + bring-up wiring
         run: python3 -m unittest -v tests.test_streams_partition_doctor
 
+      # The prod boot bring-up scales up every deployment at 0 except its KEEP_DOWN; the morning wake-up
+      # holds down its own KEEP_DOWN. A service held down only in the morning is resurrected by the next
+      # reboot — a shorter boot list took production down twice (2026-08-24).
+      - name: Boot bring-up and morning autostart hold down the same services
+        run: python3 -m unittest -v tests.test_keep_down_lists_agree
+
       # The prevention half: every topic dev needs has ONE partition count and is created before any
       # service starts, and declarations match what owners create (2026-09-15 partition audit).
       - name: Partition-only topics + raised declarations
