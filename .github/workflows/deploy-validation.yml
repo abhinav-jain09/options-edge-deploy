@@ -154,6 +154,11 @@ jobs:
       - name: Streams partition doctor (simulated cluster) + bring-up wiring
         run: python3 -m unittest -v tests.test_streams_partition_doctor
 
+      # The prevention half: every topic dev needs has ONE partition count and is created before any
+      # service starts, and declarations match what owners create (2026-09-15 partition audit).
+      - name: Partition-only topics + raised declarations
+        run: python3 -m unittest -v tests.test_partition_only_topics
+
       # One hop further: Streams sources written by ANOTHER service (strike-flow, strike.avro,
       # strike-sr.current, strike-intelligence-by-strike). Runs the real apply-topics.sh for prod and
       # dev plus dev-cleanup's topic_desired, and holds each declaration to the live shape its owner

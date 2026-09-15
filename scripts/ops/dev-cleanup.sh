@@ -336,6 +336,37 @@ reconcile_declared_topics() {
   echo "  shape check: $fixed config(s) reconciled, $drift unresolved."
 }
 
+# ensure_partition_only_topics: create every OPTIONS_EDGE_PARTITION_ONLY_TOPICS entry that is missing at its
+# declared partition count (no configs: the owning service stamps policy/retention), grow a smaller existing
+# copy, and name any larger one (Kafka cannot shrink a topic; a wipe recreates it). Runs before any service
+# starts, so no client can choose these topics' size. One list + one describe, not a JVM per topic.
+ensure_partition_only_topics() {
+  [ -n "${OPTIONS_EDGE_PARTITION_ONLY_TOPICS:-}" ] || return 0
+  local have spec name want cur created=0 grown=0 larger=""
+  local desc
+  if ! desc="$($KT --bootstrap-server $BS --describe 2>/dev/null)"; then
+    echo "  WARNING: could not describe topics — partition-only topics NOT ensured this run (nothing created blind)"
+    return 0
+  fi
+  have="$(printf '%s\n' "$desc" | awk -F'\t' '$1 ~ /^Topic: / {n=$1; sub(/^Topic: /, "", n); for (i = 2; i <= NF; i++) if ($i ~ /^PartitionCount: /) {c=$i; sub(/^PartitionCount: /, "", c); print n, c}}')"
+  for spec in $OPTIONS_EDGE_PARTITION_ONLY_TOPICS; do
+    name="${spec%%:*}"; want="${spec##*:}"
+    cur="$(printf '%s\n' "$have" | awk -v t="$name" '$1 == t {print $2; exit}')"
+    if [ -z "$cur" ]; then
+      $KT --bootstrap-server $BS --create --if-not-exists --topic "$name" --partitions "$want" --replication-factor 1 >/dev/null 2>&1 \
+        && created=$((created+1)) || echo "  WARNING: could not create partition-only topic $name:$want"
+    elif [ "$cur" -lt "$want" ]; then
+      # --topic is a regular expression: escape the dots so the alter can only match this topic.
+      $KT --bootstrap-server $BS --alter --topic "$(printf '%s' "$name" | sed 's/\./\\./g')" --partitions "$want" >/dev/null 2>&1 \
+        && grown=$((grown+1)) || echo "  WARNING: could not grow $name $cur -> $want"
+    elif [ "$cur" -gt "$want" ]; then
+      larger="$larger $name($cur>$want)"
+    fi
+  done
+  echo "Partition-only topics: created $created, grown $grown (topics.env OPTIONS_EDGE_PARTITION_ONLY_TOPICS)"
+  [ -z "$larger" ] || echo "  WARNING: larger than declared (Kafka cannot shrink; the next wipe recreates them):$larger"
+}
+
 # ensure_topics: pre-create the platform topics from the deploy repo's topics.env (source of truth).
 # Best-effort fetch so we pick up the latest reviewed config; if offline we use the last-fetched origin/main.
 #
@@ -350,7 +381,7 @@ ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
-    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES)=')"
+    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
     local n=0 spec name extra rt
     for spec in $OPTIONS_EDGE_TOPICS; do
       name="${spec%%:*}"
@@ -361,6 +392,7 @@ ensure_topics() {
         --partitions "$DPARTS" --replication-factor 1 --config cleanup.policy="$DPOL" $extra $rt >/dev/null 2>&1 && n=$((n+1))
     done
     echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
+    ensure_partition_only_topics
     reconcile_declared_topics
     echo "  topics present now: $($KT --bootstrap-server $BS --list 2>/dev/null | grep -vcE '^__|^_schemas')"
   else
