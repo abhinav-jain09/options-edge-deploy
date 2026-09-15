@@ -36,7 +36,9 @@ FAKE = textwrap.dedent(
         dep = st["deploys"][d]
         st["seq"] += 1
         pod = {"name": f"{d}-pod-{st['seq']}", "phase": "Running", "prev": [], "pending": [],
-               "log": [f"[main] INFO stream-client [{dep['app']}-{st['uuid']}] State transition from CREATED to REBALANCING"]}
+               "log": [(f"[{dep['app']}-{st['uuid']}-StreamThread-1] INFO stream-thread [{dep['app']}-{st['uuid']}-StreamThread-1] State transition from CREATED to STARTING"
+                        if dep.get("client_id_set") else
+                        f"[main] INFO stream-client [{dep['app']}-{st['uuid']}] State transition from CREATED to REBALANCING")]}
         r = rejection(dep)
         if r and dep.get("late_reject"):
             pod["pending"].append(r); dep["ready"] = dep["replicas"]
@@ -51,6 +53,8 @@ FAKE = textwrap.dedent(
     if args[0] == "topics":
         args = args[1:]
         st["calls"].append(["kafka-topics"] + args)
+        if ("--list" in args and st.get("list_fails")) or ("--describe" in args and st.get("describe_fails")):
+            save(); sys.exit(1)
         if "--list" in args:
             print("\n".join(sorted(st["topics"])))
         else:
@@ -76,6 +80,9 @@ FAKE = textwrap.dedent(
     elif args[:2] == ["get", "pods"]:
         d = args[3].split("=", 1)[1]
         dep = st["deploys"][d]
+        if dep["replicas"] == 0 and dep.get("pods_api_errors", 0) > 0:
+            dep["pods_api_errors"] -= 1
+            st["pods_listed"].append([d, "API-ERROR"]); save(); sys.exit(1)
         if dep["replicas"] == 0 and dep.get("terminating", 0) > 0:
             dep["terminating"] -= 1
         elif dep["replicas"] == 0 and not dep.get("never_terminates"):
@@ -95,6 +102,8 @@ FAKE = textwrap.dedent(
     elif args[0] == "scale":
         d = args[1].split("/", 1)[1]; n = int(args[2].split("=", 1)[1])
         dep = st["deploys"][d]
+        if n == 0 and st.get("slow_scale_down"):
+            import time; time.sleep(st["slow_scale_down"])
         was = dep["replicas"]; dep["replicas"] = n
         if n == 0: dep["ready"] = 0
         elif was == 0 or not [p for p in dep["pods"] if p["phase"] == "Running"]: start(d)
@@ -298,6 +307,84 @@ class StreamsPartitionDoctorTest(unittest.TestCase):
         self.assertIn("FAILED b2", r.stdout)
         self.assertEqual(r.returncode, 3, r.stdout)
 
+
+    def test_broker_describe_failure_is_unknown_not_repaired_not_ok(self):
+        self.cluster({"svc": {"bad": [["svc-dev-x-changelog", 4, 1]]}}, {"svc-dev-x-changelog": 1})
+        st = self.state(); st["describe_fails"] = True; self.save(st)
+        r = self.run_doctor("--repair", "svc")
+        self.assertEqual(r.returncode, 5, r.stdout)
+        self.assertIn("INCONCLUSIVE svc", r.stdout)
+        self.assertEqual(self.deletes(), [])
+        self.assertEqual(self.scales("svc"), [])
+
+    def test_pod_api_error_during_the_wait_is_not_taken_as_pods_gone(self):
+        self.cluster({"svc": {"bad": [["svc-dev-x-changelog", 4, 1]], "pods_api_errors": 2, "terminating": 2}},
+                     {"svc-dev-x-changelog": 1})
+        r = self.run_doctor("--repair", "svc")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        st = self.state()
+        i_del = next(i for i, c in enumerate(st["calls"]) if "--delete" in c)
+        n = len([c for c in st["calls"][:i_del] if c[:3] == ["kubectl", "get", "pods"]])
+        self.assertIn([ "svc", "API-ERROR"], st["pods_listed"][:n])
+        self.assertEqual(st["pods_listed"][n - 1][1], [])
+
+    def test_interrupted_through_a_pipe_still_restores_replicas(self):
+        # dev-cleanup pipes the doctor through sed, oe-boot-bringup through tee: a SIGTERM kills the
+        # reader too, and the restore must not die writing its log line first.
+        self.cluster({"svc": {"replicas": 2, "bad": [["svc-dev-x-changelog", 4, 1]], "never_terminates": True}},
+                     {"svc-dev-x-changelog": 1})
+        fake = f"python3 {self.dir / 'fake.py'} {self.dir}"
+        env = dict(os.environ, KUBECTL=fake, KAFKA_TOPICS=f"{fake} topics", DOCTOR_POLL_SECONDS="1",
+                   DOCTOR_READY_GRACE_SECONDS="0", DOCTOR_READY_TIMEOUT="3")
+        proc = subprocess.Popen([BASH, "-c", f'"{BASH}" "{DOCTOR}" --repair svc | cat'], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+        import time, signal
+        for _ in range(300):
+            if self.state()["deploys"]["svc"]["replicas"] == 0:
+                break
+            time.sleep(0.1)
+        self.assertEqual(self.state()["deploys"]["svc"]["replicas"], 0, "doctor never scaled down")
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=60)
+        for _ in range(100):
+            if self.state()["deploys"]["svc"]["replicas"] == 2:
+                break
+            time.sleep(0.1)
+        self.assertEqual(self.state()["deploys"]["svc"]["replicas"], 2)
+
+    def test_aborted_app_is_restored_before_the_next_app_is_examined(self):
+        self.cluster({"a1": {"replicas": 2, "bad": [["a1-dev-x-changelog", 4, 1]], "never_terminates": True}, "b2": {}},
+                     {"a1-dev-x-changelog": 1})
+        r = self.run_doctor("--repair", "a1", "b2")
+        self.assertEqual(r.returncode, 4, r.stdout)
+        calls = self.state()["calls"]
+        i_restore = next(i for i, c in enumerate(calls) if c[:4] == ["kubectl", "scale", "deploy/a1", "--replicas=2"])
+        i_b2 = next(i for i, c in enumerate(calls) if c[:2] == ["kubectl", "get"] and "b2" in c)
+        self.assertLess(i_restore, i_b2)
+
+    def test_old_copartition_line_in_a_crashed_container_does_not_block_a_repair(self):
+        self.cluster({"svc": {"bad": [["svc-dev-x-changelog", 4, 1]]}}, {"svc-dev-x-changelog": 1})
+        st = self.state()
+        st["deploys"]["svc"]["pods"][-1]["prev"] = [
+            "TopologyException: Invalid topology: Following topics do not have the same number of partitions: [{a=4}, {b=32}]"]
+        self.save(st)
+        r = self.run_doctor("--repair", "svc")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("REPAIRED svc", r.stdout)
+
+    def test_app_with_client_id_is_identified_by_its_stream_thread_prefix(self):
+        self.cluster({"svc": {"bad": [["svc-dev-x-repartition", 4, 1]], "client_id_set": True}}, {"svc-dev-x-repartition": 1})
+        r = self.run_doctor("--repair", "svc")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.deletes(), ["svc-dev-x-repartition"])
+
+    def test_app_prefixed_topic_that_is_not_internal_is_refused(self):
+        self.cluster({"svc": {"bad": [["svc-dev-output", 4, 1]]}}, {"svc-dev-output": 1})
+        r = self.run_doctor("--repair", "svc")
+        self.assertEqual(r.returncode, 3, r.stdout)
+        self.assertIn("REFUSED svc", r.stdout)
+        self.assertEqual(self.deletes(), [])
+
     def test_unreadable_log_is_inconclusive_not_ok(self):
         self.cluster({"svc": {}}, {"a": 4})
         st = self.state()
@@ -338,11 +425,13 @@ class DoctorWiringTest(unittest.TestCase):
         self.assertLess(text.index('bash "$DOCTOR" --repair'), text.index('log "=== boot bring-up done ==="'))
         self.assertIn('KUBECTL_SCALE="$KUBECTL $SA"', text)
 
-    def test_es4_reset_repairs_before_declaring_wedged_topologies(self):
+    def test_es4_reset_repairs_then_rescans_before_declaring_wedged_topologies(self):
         text = (ROOT / "scripts/es4/cleanup-es4.sh").read_text()
-        doctor = text.index('streams-partition-doctor.sh" --repair')
+        doctor = text.index('streams-partition-doctor.sh" --repair $wedged_deploys')
         self.assertLess(text.index('*"invalid partitions: expected"*) wedged='), doctor)
-        self.assertLess(doctor, text.index('echo "WEDGED STREAMS TOPOLOGIES'))
+        rescan = text.index("scan_wedged_topologies", doctor)
+        self.assertLess(rescan, text.index('echo "WEDGED STREAMS TOPOLOGIES'))
+        self.assertNotIn('wedged=""\n    fi', text[doctor:rescan], "the doctor's exit code must not clear the verdict")
 
 
 if __name__ == "__main__":

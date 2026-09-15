@@ -397,7 +397,10 @@ run_partition_doctor() {
   while [ "$waited" -lt "${DOCTOR_WAIT_SECONDS:-300}" ]; do
     local pending=""
     for d in $deploys; do
-      [ "$($KK get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)" = "$($KK get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)" ] || pending="$pending $d"
+      local rr des
+      rr=$($KK get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+      des=$($KK get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+      [ "${rr:-0}" -ge "${des:-0}" ] 2>/dev/null || pending="$pending $d"
     done
     [ -z "$pending" ] && break
     sleep 15; waited=$((waited + 15))

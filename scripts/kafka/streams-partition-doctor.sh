@@ -74,11 +74,14 @@ set_rc() {
 SCALED_DOWN="" SCALED_REPLICAS=""
 restore_scale() {
   if [ -n "$SCALED_DOWN" ]; then
-    log "restoring $SCALED_DOWN to $SCALED_REPLICAS replica(s)"
+    # Scale FIRST, log after: when the caller pipes our output (| tee, | sed) and is interrupted, the
+    # reader is gone and any write would kill us before the scale-up.
     $KUBECTL_SCALE scale deploy/"$SCALED_DOWN" --replicas="$SCALED_REPLICAS" >/dev/null 2>&1
+    log "restored $SCALED_DOWN to $SCALED_REPLICAS replica(s)" 2>/dev/null
     SCALED_DOWN=""
   fi
 }
+trap '' PIPE
 trap 'restore_scale' EXIT
 trap 'restore_scale; exit 130' INT TERM
 
@@ -97,42 +100,64 @@ selector() {
 
 # Names of the deployment's pods that are not in a terminal phase (Evicted/Failed/Succeeded pods never go
 # away on a scale-down and have no readable log, so they must not block a repair or count as unknown).
+# Returns non-zero when the API cannot answer: "no pods" must never be inferred from a failed call.
 app_pods() {
-  local sel; sel=$(selector "$1")
-  [ -n "$sel" ] || return 0
-  $KUBECTL get pods -l "$sel" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}' 2>/dev/null \
-    | awk '$1 != "" && $2 != "Failed" && $2 != "Succeeded" {print $1}'
+  local sel raw
+  sel=$(selector "$1")
+  [ -n "$sel" ] || return 1
+  raw=$($KUBECTL get pods -l "$sel" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}' 2>/dev/null) || return 1
+  printf '%s\n' "$raw" | awk '$1 != "" && $2 != "Failed" && $2 != "Succeeded" {print $1}'
 }
 
 # Logs of the deployment's live pods: current container from its start (byte-bounded keeps the HEAD,
 # where Streams logs the rejection) plus the previous, crashed container. An unreadable current log
 # prints UNREADABLE_LOG so it counts as unknown, never healthy; --previous fails when nothing crashed.
 app_logs() {
-  local p
-  for p in $(app_pods "$1"); do
+  local p pods
+  pods=$(app_pods "$1") || { echo "UNREADABLE_LOG $1(pod-list)"; return 0; }
+  for p in $pods; do
     $KUBECTL logs "$p" --all-containers --limit-bytes=16000000 --request-timeout=60s 2>/dev/null || echo "UNREADABLE_LOG $p"
     $KUBECTL logs "$p" --all-containers --previous --limit-bytes=16000000 --request-timeout=60s 2>/dev/null
+  done
+}
+
+# Current containers only: an error that is still true is logged again on every start, so a verdict that
+# has no repair to confirm it (co-partitioning) must not rest on a crashed container's old log.
+current_logs() {
+  local p pods
+  pods=$(app_pods "$1") || return 0
+  for p in $pods; do
+    $KUBECTL logs "$p" --all-containers --limit-bytes=16000000 --request-timeout=60s 2>/dev/null
   done
 }
 
 # kafka-topics --topic is a regular expression: escape the dots so "a.b-x" never also matches "a-b-x".
 topic_re() { printf '%s' "$1" | sed 's/\./\\./g'; }
 
-partitions_of() {   # live partition count, empty when absent/unreadable
-  $KAFKA_TOPICS --describe --topic "$(topic_re "$1")" 2>/dev/null \
-    | awk -F'\t' -v t="$1" '$1 == "Topic: " t {for (i = 1; i <= NF; i++) if ($i ~ /^PartitionCount: /) {sub(/^PartitionCount: /, "", $i); print $i; exit}}'
+# Live partition count of $1; "ABSENT" when the broker lists no such topic; "ERR" when the broker could
+# not be asked. A failed call is unknown, never "already fixed".
+partitions_of() {
+  local list desc n
+  list=$($KAFKA_TOPICS --list 2>/dev/null) || { echo ERR; return; }
+  printf '%s\n' "$list" | grep -qxF "$1" || { echo ABSENT; return; }
+  desc=$($KAFKA_TOPICS --describe --topic "$(topic_re "$1")" 2>/dev/null) || { echo ERR; return; }
+  n=$(printf '%s\n' "$desc" | awk -F'\t' -v t="$1" '$1 == "Topic: " t {for (i = 1; i <= NF; i++) if ($i ~ /^PartitionCount: /) {sub(/^PartitionCount: /, "", $i); print $i; exit}}')
+  echo "${n:-ERR}"
 }
 
 topic_exists() { $KAFKA_TOPICS --list 2>/dev/null | grep -qxF "$1"; }
 
 # Streams application ids the app printed ("stream-client [<appId>-<uuid>]").
+# Streams application ids the app printed: "stream-client [<appId>-<uuid>]", or when client.id is set,
+# "stream-thread [<appId>-<uuid>-StreamThread-N]" (the thread name still starts with the id Streams uses).
 app_ids() {
-  printf '%s\n' "$1" | grep -oE "$APPID_RE" \
-    | sed -E 's/^stream-client \[//; s/\]$//; s/-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$//' | sort -u
+  printf '%s\n' "$1" | grep -oE "$APPID_RE|stream-thread \[[^]]+\]" \
+    | sed -E 's/^stream-(client|thread) \[//; s/\]$//; s/-(StreamThread|GlobalStreamThread)(-[0-9]+)?$//; s/-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$//' | sort -u
 }
 
 # From log text $1 print "topic expected actual" for rejections that are STILL true on the broker and
-# whose topic is an internal topic of one of the app's own application ids; "FOREIGN topic e a" otherwise.
+# whose topic is an internal topic of one of the app's own application ids; "FOREIGN topic e a" otherwise;
+# "UNKNOWN topic e a" when the broker could not be asked.
 # A stale line (topic since recreated or fixed) prints nothing, so it can never cause a delete.
 live_rejections() {
   local text="$1" ids m t e a cur own id
@@ -143,7 +168,8 @@ live_rejections() {
     e=$(printf '%s' "$m" | sed -E 's/.*expected: ([0-9]+);.*/\1/')
     a=$(printf '%s' "$m" | sed -E 's/.*actual: ([0-9]+).*/\1/')
     cur=$(partitions_of "$t")
-    if [ -z "$cur" ] || [ "$cur" = "$e" ] || [ "$cur" != "$a" ]; then
+    if [ "$cur" = ERR ]; then echo "UNKNOWN $t $e $a"; continue; fi
+    if [ "$cur" = ABSENT ] || [ "$cur" = "$e" ] || [ "$cur" != "$a" ]; then
       continue
     fi
     own=""
@@ -166,7 +192,7 @@ ready() {
 for d in $DEPLOYS; do
   logs=$(app_logs "$d")
   unread=$(printf '%s\n' "$logs" | awk '$1 == "UNREADABLE_LOG" {printf "%s ", $2}')
-  cop=$(printf '%s\n' "$logs" | grep -E "$COPARTITION_RE" | head -1)
+  cop=$(current_logs "$d" | grep -E "$COPARTITION_RE" | head -1)
   if [ -n "$cop" ]; then
     log "UNREPAIRABLE $d: co-partitioning error (fix the SOURCE topic declarations): $(printf '%s' "$cop" | cut -c1-220)"
     set_rc 3
@@ -174,13 +200,15 @@ for d in $DEPLOYS; do
   fi
   rej=$(live_rejections "$logs")
   foreign=$(printf '%s\n' "$rej" | awk '$1 == "FOREIGN" {printf "%s ", $2}')
+  unknown=$(printf '%s\n' "$rej" | awk '$1 == "UNKNOWN" {printf "%s ", $2}')
+  [ -z "$unknown" ] || unread="$unread (broker could not describe: $unknown)"
   todo=$(printf '%s\n' "$rej" | awk 'NF == 3')
   if [ -n "$foreign" ]; then
     log "REFUSED $d: rejected topic(s) not an internal topic of this app's application.id: $foreign"
     set_rc 3
   fi
   if [ -z "$todo" ]; then
-    if [ -n "$unread" ]; then log "INCONCLUSIVE $d: could not read logs of: $unread"; set_rc 5
+    if [ -n "$unread" ]; then log "INCONCLUSIVE $d: could not read: $unread"; set_rc 5
     elif [ -z "$foreign" ]; then log "OK $d"; fi
     continue
   fi
@@ -202,7 +230,7 @@ for d in $DEPLOYS; do
     # topic from its stale metadata the moment it is deleted.
     gone=false
     for i in $(seq 1 120); do
-      [ -z "$(app_pods "$d")" ] && { gone=true; break; }
+      if pods_left=$(app_pods "$d") && [ -z "$pods_left" ]; then gone=true; break; fi
       sleep "$SLEEP"
     done
     if [ "$gone" != true ]; then

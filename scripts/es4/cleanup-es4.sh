@@ -513,59 +513,71 @@ else
   # Cover everything since the restore began, plus a minute of slack. RESTORE_T0 is bash's own
   # SECONDS counter, so this needs no clock arithmetic and cannot be skewed by the host's timezone.
   log "scanning for wedged Streams topologies (green pod, dead threads; window opens at restore)"
-  wedged=""
-  scan_errors=""
-  # Pod DISCOVERY is evidence too. `for p in $(kubectl get pods ...)` swallows an RBAC/API/transport
-  # failure into an empty word list, and `set -e` does not fire on a substitution that only supplies
-  # loop words — the scan would then find nothing and report "no wedged topologies detected".
-  # --request-timeout on BOTH kubectl calls: it defaults to no timeout, so an API-server, kubelet
-  # or transport stall would hang this gate forever instead of failing it.
-  set +e
-  pod_list="$($KC get pods --field-selector=status.phase=Running -o name --request-timeout=30s 2>/dev/null)"
-  pods_status=$?
-  set -e
-  [ "$pods_status" -eq 0 ] || die "cannot list pods to scan for wedged topologies (kubectl exited $pods_status) — the reset itself COMPLETED and state is cleared; do NOT rerun clean-reset, re-run the audit"
-  pod_list="$(printf '%s\n' "$pod_list" | sed 's#.*/##')"
-  [ -n "$pod_list" ] || die "pod list came back EMPTY while deployments are running — treating as an unreadable cluster, not as 'nothing wedged'"
-  for p in $pod_list; do
-    # Capture the log body and its EXIT STATUS separately. `kubectl logs | grep -q` is wrong twice
-    # over: -q closes the pipe early so kubectl dies of SIGPIPE and, under `set -o pipefail`, a real
-    # MATCH is reported as failure; and a kubectl error would be indistinguishable from "no match".
-    # TIME-bounded, not line-bounded. The StreamsException is emitted once, during the first
-    # assignment after startup; a chatty app can push it past any fixed --tail long before the scan
-    # runs. --since covers the whole restore window, and --limit-bytes truncates from the START of
-    # that window, which is exactly where the fatal line lives.
-    # RECOMPUTED per pod: --since is relative to the instant THAT request runs, so one window
-    # computed up front would creep forward with every sequential read and could drop the fatal
-    # line for the pods scanned last.
-    scan_window=$(( SECONDS - RESTORE_T0 + 60 ))
+  # Defined as a function so the SAME scan can re-run after the partition doctor.
+  scan_wedged_topologies() {
+    wedged=""
+    scan_errors=""
+    # Pod DISCOVERY is evidence too. `for p in $(kubectl get pods ...)` swallows an RBAC/API/transport
+    # failure into an empty word list, and `set -e` does not fire on a substitution that only supplies
+    # loop words — the scan would then find nothing and report "no wedged topologies detected".
+    # --request-timeout on BOTH kubectl calls: it defaults to no timeout, so an API-server, kubelet
+    # or transport stall would hang this gate forever instead of failing it.
     set +e
-    pod_logs="$($KC logs "$p" --all-containers --since="${scan_window}s" --limit-bytes=8000000 --request-timeout=60s 2>/dev/null)"
-    logs_status=$?
+    pod_list="$($KC get pods --field-selector=status.phase=Running -o name --request-timeout=30s 2>/dev/null)"
+    pods_status=$?
     set -e
-    if [ "$logs_status" -ne 0 ]; then
-      scan_errors="$scan_errors $p"
-    else
-      # Pure-bash match: no pipeline, so nothing here can be confused by SIGPIPE or pipefail.
-      case "$pod_logs" in
-        *"invalid partitions: expected"*) wedged="$wedged $p" ;;
-      esac
-    fi
-  done
+    [ "$pods_status" -eq 0 ] || die "cannot list pods to scan for wedged topologies (kubectl exited $pods_status) — the reset itself COMPLETED and state is cleared; do NOT rerun clean-reset, re-run the audit"
+    pod_list="$(printf '%s\n' "$pod_list" | sed 's#.*/##')"
+    [ -n "$pod_list" ] || die "pod list came back EMPTY while deployments are running — treating as an unreadable cluster, not as 'nothing wedged'"
+    for p in $pod_list; do
+      # Capture the log body and its EXIT STATUS separately. `kubectl logs | grep -q` is wrong twice
+      # over: -q closes the pipe early so kubectl dies of SIGPIPE and, under `set -o pipefail`, a real
+      # MATCH is reported as failure; and a kubectl error would be indistinguishable from "no match".
+      # TIME-bounded, not line-bounded. The StreamsException is emitted once, during the first
+      # assignment after startup; a chatty app can push it past any fixed --tail long before the scan
+      # runs. --since covers the whole restore window, and --limit-bytes truncates from the START of
+      # that window, which is exactly where the fatal line lives.
+      # RECOMPUTED per pod: --since is relative to the instant THAT request runs, so one window
+      # computed up front would creep forward with every sequential read and could drop the fatal
+      # line for the pods scanned last.
+      scan_window=$(( SECONDS - RESTORE_T0 + 60 ))
+      set +e
+      pod_logs="$($KC logs "$p" --all-containers --since="${scan_window}s" --limit-bytes=8000000 --request-timeout=60s 2>/dev/null)"
+      logs_status=$?
+      set -e
+      if [ "$logs_status" -ne 0 ]; then
+        scan_errors="$scan_errors $p"
+      else
+        # Pure-bash match: no pipeline, so nothing here can be confused by SIGPIPE or pipefail.
+        case "$pod_logs" in
+          *"invalid partitions: expected"*) wedged="$wedged $p" ;;
+        esac
+      fi
+    done
+  }
+  scan_wedged_topologies
   if [ -n "$wedged" ]; then
     # Repair automatically first: the doctor reads Streams' own expected count from each app's log,
     # confirms the live topic still has the rejected count, scales that app to 0, deletes only its own
-    # internal topic and lets Streams recreate it. Only what it cannot repair falls through to the
-    # manual instructions below.
-    log "wedged Streams topologies on:$wedged — running the partition doctor"
-    set +e
-    KUBECTL="$KC" KUBECTL_SCALE="$KC" KAFKA_TOPICS="sudo -n docker exec es4-kafka kafka-topics --bootstrap-server localhost:9092" \
-      bash "$SCRIPT_DIR/../kafka/streams-partition-doctor.sh" --repair
-    doctor_rc=$?
-    set -e
-    if [ "$doctor_rc" -eq 0 ]; then
-      log "  partition doctor repaired every wedged topology"
-      wedged=""
+    # internal topic and lets Streams recreate it. It runs only on the Deployments that own the wedged
+    # pods, and its exit code is NOT trusted as a verdict: the same scan runs again afterwards and only
+    # what is still wedged falls through to the manual instructions below.
+    wedged_deploys=""
+    for p in $wedged; do
+      rs="$($KC get pod "$p" -o jsonpath='{.metadata.ownerReferences[0].name}' --request-timeout=30s 2>/dev/null || true)"
+      [ -n "$rs" ] || continue
+      d="${rs%-*}"
+      case " $wedged_deploys " in *" $d "*) ;; *) wedged_deploys="$wedged_deploys $d" ;; esac
+    done
+    if [ -n "$wedged_deploys" ]; then
+      log "wedged Streams topologies on:$wedged — running the partition doctor on:$wedged_deploys"
+      set +e
+      KUBECTL="$KC" KUBECTL_SCALE="$KC" KAFKA_TOPICS="sudo -n docker exec es4-kafka kafka-topics --bootstrap-server localhost:9092" \
+        bash "$SCRIPT_DIR/../kafka/streams-partition-doctor.sh" --repair $wedged_deploys
+      doctor_rc=$?
+      set -e
+      log "  partition doctor exit $doctor_rc — re-scanning"
+      scan_wedged_topologies
     fi
   fi
   if [ -n "$wedged" ]; then
