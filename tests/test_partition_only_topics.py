@@ -31,16 +31,20 @@ def counts(entries):
 
 FAKE_KT = textwrap.dedent(
     r'''
-    import json, sys
+    import fcntl, json, sys
     S = sys.argv[1]; args = sys.argv[2:]
+    lock = open(S + ".lock", "w"); fcntl.flock(lock, fcntl.LOCK_EX)     # creates now run in parallel
     st = json.load(open(S)); st["calls"].append(args)
     def arg(k): return args[args.index(k) + 1]
     if "--describe" in args and "--topic" not in args:
         for t, n in sorted(st["topics"].items()):
             print(f"Topic: {t}\tTopicId: x\tPartitionCount: {n}\tReplicationFactor: 1\tConfigs: cleanup.policy=compact")
             for p in range(n): print(f"\tTopic: {t}\tPartition: {p}\tLeader: 1")
+    elif "--list" in args:
+        print("\n".join(sorted(st["topics"])))
     elif "--create" in args:
         st["topics"].setdefault(arg("--topic"), int(arg("--partitions")))
+        st.setdefault("configs", {})[arg("--topic")] = [args[i + 1] for i, a in enumerate(args) if a == "--config"]
     elif "--alter" in args:
         import re
         for name in [n for n in st["topics"] if re.fullmatch(arg("--topic"), n)]:   # --topic is a regex, as in kafka-topics
@@ -101,14 +105,20 @@ class PartitionOnlyDeclarationTest(unittest.TestCase):
 
 
 class EnsurePartitionOnlyTopicsTest(unittest.TestCase):
+    def functions(self, *names):
+        text = DEV_CLEANUP.read_text()
+        out = ""
+        for name in names:
+            start = text.index(name + "() {")
+            out += text[start:text.index("\n}\n", start) + 3] + "\n"
+        return out
+
     def run_fn(self, topics, entries):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             (d / "kt.py").write_text(FAKE_KT)
             (d / "state.json").write_text(json.dumps({"topics": topics, "calls": []}))
-            text = DEV_CLEANUP.read_text()
-            start = text.index("ensure_partition_only_topics() {")
-            fn = text[start:text.index("\n}\n", start) + 3]
+            fn = self.functions("create_topics_parallel", "ensure_partition_only_topics")
             script = (f'KT="python3 {d / "kt.py"} {d / "state.json"}"\nBS=localhost:19092\n'
                       f'OPTIONS_EDGE_PARTITION_ONLY_TOPICS="{" ".join(entries)}"\n{fn}\nensure_partition_only_topics\n')
             out = subprocess.run([BASH, "-c", script], capture_output=True, text=True, check=True).stdout
@@ -126,12 +136,33 @@ class EnsurePartitionOnlyTopicsTest(unittest.TestCase):
         self.assertEqual(len(describes), 1, "one bulk describe, not a JVM per topic")
         self.assertFalse([c for c in st["calls"] if "--alter" in c and "ok.one" in c])
 
+    def test_parallel_creates_are_all_counted_and_carry_their_configs(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "kt.py").write_text(FAKE_KT)
+            (d / "state.json").write_text(json.dumps({"topics": {}, "calls": []}))
+            lines = "".join(f"--topic t{i}.x --partitions {1 + i % 4} --replication-factor 1 --config cleanup.policy=compact --config retention.ms=-1\n"
+                            for i in range(24))
+            script = (f'KT="python3 {d / "kt.py"} {d / "state.json"}"\nBS=x\n{self.functions("create_topics_parallel")}\n'
+                      f'printf "%s" "{lines}" | create_topics_parallel\n')
+            out = subprocess.run([BASH, "-c", script], capture_output=True, text=True, check=True).stdout.strip()
+            st = json.loads((d / "state.json").read_text())
+            self.assertEqual(out, "24")
+            self.assertEqual(st["topics"], {f"t{i}.x": 1 + i % 4 for i in range(24)})
+            self.assertEqual(st["configs"]["t5.x"], ["cleanup.policy=compact", "retention.ms=-1"])
+
+    def test_ensure_topics_creates_only_missing_declared_topics(self):
+        text = DEV_CLEANUP.read_text()
+        body = self.functions("ensure_topics")
+        self.assertIn("--list", body.split("for spec in $OPTIONS_EDGE_TOPICS")[0])
+        loop = body[body.index("for spec in $OPTIONS_EDGE_TOPICS"):body.index("create_topics_parallel)")]
+        self.assertIn('grep -qxF "$name" && continue', loop)
+        self.assertNotIn("$KT", loop, "no per-topic JVM inside the loop")
+
     def test_describe_failure_creates_nothing_blind(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            text = DEV_CLEANUP.read_text()
-            start = text.index("ensure_partition_only_topics() {")
-            fn = text[start:text.index("\n}\n", start) + 3]
+            fn = self.functions("create_topics_parallel", "ensure_partition_only_topics")
             calls = d / "calls"
             script = (f'KT="sh -c \'echo \\"$*\\" >> {calls}; exit 1\' kt"\nBS=x\n'
                       f'OPTIONS_EDGE_PARTITION_ONLY_TOPICS="a.b:4"\n{fn}\nensure_partition_only_topics\n')

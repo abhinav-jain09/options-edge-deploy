@@ -106,7 +106,8 @@ class DatabentoMaxPainDeployTest(unittest.TestCase):
 
     def test_topics_include_maxpain_compacted(self) -> None:
         topics = (ROOT / "scripts" / "kafka" / "topics.env").read_text()
-        self.assertIn("options.databento.maxpain:4", topics)
+        # :32 since the 2026-09-15 partition audit (deploy #1050): the maxpain service's ensureTopic and prod create 32.
+        self.assertIn("options.databento.maxpain:32", topics)
         self.assertIn(
             "options.databento.maxpain",
             topics.split("OPTIONS_EDGE_COMPACTED_TOPICS=", 1)[1],
