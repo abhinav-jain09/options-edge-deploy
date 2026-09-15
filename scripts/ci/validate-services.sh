@@ -130,24 +130,35 @@ if [ "$fail" -ne 0 ]; then
   exit 1
 fi
 
-echo "=== 5) at-most-one VIX publisher (VIX feed separation design §7) ==="
-# Runs here so BOTH the PR CI pass and the service-deploy validation stage
+# Sections 5, 5b, 6 and the topic-contract tests are independent read-only suites: each works
+# in its own mktemp scratch (the mutation harness mutates a private COPY of the tree) and none
+# reads another's output. Run one after another they were most of this script's wall time —
+# the mocked-kafka suites fork thousands of short processes, and on a loaded fallback agent
+# that serial sum reached 25+ minutes of a service-deploy (#1803/#1804, 2026-09-11). So they
+# run CONCURRENTLY; every one of them still runs to completion, and each result is reported in
+# the fixed order below with its full output. Any failure fails the script, as before — the
+# only difference is that a failing suite no longer hides the verdicts of the ones after it.
+# The scheduler (and the reason reaped PIDs never reach the trap) is scripts/ci/lib/concurrent-suites.sh, tested by
+# scripts/ci/concurrent-suites-test.sh, which runs below with the rest.
+. scripts/ci/lib/concurrent-suites.sh
+suites_init "$TMP"
+trap 'suites_kill_live; rm -rf "$TMP"' EXIT
+
+# 5) Runs here so BOTH the PR CI pass and the service-deploy validation stage
 # (Jenkinsfile.service-deploy runs this script before any apply) enforce the
 # assertion; the monolith path gets it via scripts/deploy/validate-platform.sh.
-bash scripts/ci/validate-vix-single-publisher.sh
+suites_start loud "5) at-most-one VIX publisher (VIX feed separation design §7)" scripts/ci/validate-vix-single-publisher.sh
 
-echo "=== 5b) exactly one pre-open GEX publisher, matching the declaration ==="
-# Same shape as the VIX assertion and for the same reason: two publishers can own the
+# 5b) Same shape as the VIX assertion and for the same reason: two publishers can own the
 # pre-open gamma surface, BOTH selections render cleanly, and picking the wrong one is
 # silent — pre-market GEX just stops appearing (incident 2026-08-24). The declaration in
 # k8s/preopen-publisher.env makes any switch an explicit, reviewed edit.
-bash scripts/ci/validate-preopen-single-publisher.sh
+suites_start loud "5b) exactly one pre-open GEX publisher, matching the declaration" scripts/ci/validate-preopen-single-publisher.sh
 
-echo "=== 6) durable topics are preserved by the destructive resets ==="
-# A topic declared retention=-1 in topics.env that the pre-market / clean-slate
+# 6) A topic declared retention=-1 in topics.env that the pre-market / clean-slate
 # resets would still wipe is the 2026-07-28 basis-cold-start incident class —
 # make that drift unmergeable rather than discoverable at 09:00 ET.
-bash scripts/ci/validate-durable-topic-preservation.sh
+suites_start loud "6) durable topics are preserved by the destructive resets" scripts/ci/validate-durable-topic-preservation.sh
 
 # The OI anchor topic barrier: its parser, and the shipped script end to end against mocked CLIs.
 # Wired here because a regression test nothing runs is not a test -- and this particular parser has
@@ -157,17 +168,15 @@ for t in scripts/kafka/ensure-oi-anchor-topic-parse-test.sh scripts/kafka/ensure
          scripts/kafka/reset-preserved-topics-test.sh \
          scripts/ci/validate-durable-topic-preservation-mutation-test.sh \
          scripts/ci/es-cvd-mirror-shape-test.sh \
-         scripts/ci/es-auction-mirror-shape-test.sh; do
-  if [ ! -x "$t" ]; then
-    echo "FAIL: $t missing or not executable"
-    exit 1
-  fi
-  if ! out=$(bash "$t" 2>&1); then
-    echo "FAIL: $t"
-    printf '%s\n' "$out" | sed 's/^/      /'
-    exit 1
-  fi
+         scripts/ci/es-auction-mirror-shape-test.sh \
+         scripts/ci/concurrent-suites-test.sh; do
+  suites_start quiet "topic contract" "$t"
 done
+
+if ! suites_collect; then
+  echo "=== validate-services: FAILED ===" >&2
+  exit 1
+fi
 echo "topic contracts: oi-anchor barrier, pure-compact verification, and the durable-preservation mutation suite passed"
 
 # --- continuous auto-hunt production acceptance (auto-arm req §3.1) ---
