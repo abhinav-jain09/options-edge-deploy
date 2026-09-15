@@ -380,6 +380,39 @@ resume_dev_mirrors_if_declared() {
   fi
 }
 
+# run_partition_doctor: repair Kafka Streams apps that refuse an internal topic's partition count
+# ("Existing internal topic ... has invalid partitions: expected: E; actual: A"). Same source of truth as
+# ensure_topics (the reviewed script on origin/main). Waits for the named deployments to be READY (or up
+# to DOCTOR_WAIT_SECONDS) so Streams has had its first assignment — the rejection is logged only then.
+# Non-fatal for the bring-up, loud in the log: an app it cannot repair is named with the reason.
+run_partition_doctor() {
+  local script deploys="$*" d waited=0 rcd
+  script="$(mktemp -t oe-partition-doctor)" || return 0
+  git -C "$DEPLOY_REPO" show "${PARTITION_DOCTOR_REF:-origin/main:scripts/kafka/streams-partition-doctor.sh}" > "$script" 2>/dev/null
+  if [ ! -s "$script" ]; then
+    echo "  WARNING: could not read streams-partition-doctor.sh from $DEPLOY_REPO — Streams apps with a wrong internal topic stay NOT READY"
+    rm -f "$script"; return 0
+  fi
+  [ -n "$deploys" ] || deploys=$($KK get deploy -o jsonpath='{range .items[?(@.spec.replicas>0)]}{.metadata.name}{" "}{end}' 2>/dev/null)
+  while [ "$waited" -lt "${DOCTOR_WAIT_SECONDS:-300}" ]; do
+    local pending=""
+    for d in $deploys; do
+      local rr des
+      rr=$($KK get deploy "$d" -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+      des=$($KK get deploy "$d" -o jsonpath='{.spec.replicas}' 2>/dev/null)
+      [ "${rr:-0}" -ge "${des:-0}" ] 2>/dev/null || pending="$pending $d"
+    done
+    [ -z "$pending" ] && break
+    sleep 15; waited=$((waited + 15))
+  done
+  sleep "${DOCTOR_SETTLE_SECONDS:-45}"
+  echo "Kafka Streams partition doctor (repairs 'invalid partitions' internal topics) ..."
+  KUBECTL="$KK" KUBECTL_SCALE="$K" KAFKA_TOPICS="$KT --bootstrap-server $BS" /bin/bash "$script" --repair $deploys 2>&1 | sed 's/^/  /'
+  rcd=${PIPESTATUS[0]}
+  [ "$rcd" -eq 0 ] || echo "  ⚠ partition doctor exit $rcd — see the UNREPAIRABLE/FAILED/INCONCLUSIVE lines above"
+  rm -f "$script"
+}
+
 # apply_internal_topic_configs: give every Streams changelog/repartition topic its
 # compaction + retention policy, the SAME way the monolith deploy does.
 #
@@ -457,6 +490,7 @@ do_start_overnight() {
     fi
   done
   echo "Overnight ES-tracking set up."
+  run_partition_doctor $OVERNIGHT_SET
 }
 
 # ---------- ES DOWN: at ~09:17 ET (before the 09:30 open) scale the overnight ES services to 0 ----------
@@ -550,6 +584,7 @@ do_start() {
   else
     echo "  Schema Registry / gateway OK (no schema errors)"
   fi
+  run_partition_doctor
   echo "Done — source topics exist; active apps reach RUNNING, disabled set held at 0 (no replay injection)."
 }
 

@@ -88,4 +88,29 @@ READY=$($KUBECTL get deploy --no-headers 2>/dev/null | awk '{split($2,a,"/"); if
 NOTREADY=$($KUBECTL get deploy --no-headers 2>/dev/null | awk '{split($2,a,"/"); if (a[2]>0 && a[1]!=a[2]) print $1}')
 log "result: ${READY}/${TOTAL} ready; load $(awk '{print $1}' /proc/loadavg)"
 [ -n "$NOTREADY" ] && log "still not ready (may still be settling): $(echo $NOTREADY | tr '\n' ' ')"
+
+# ---------- Kafka Streams partition doctor ----------
+# An app whose internal topic has the wrong partition count (a source was once created at the wrong
+# size) logs "Existing internal topic ... has invalid partitions" and never becomes READY; restarting it
+# never helps. The doctor reads Streams' own expected count from the log and recreates only that topic
+# (scripts/kafka/streams-partition-doctor.sh; installed next to this script). Give still-settling apps
+# time to reach their first assignment first, because the rejection is only logged then.
+DOCTOR="${DOCTOR:-/usr/local/sbin/streams-partition-doctor.sh}"
+if [ -r "$DOCTOR" ]; then
+  if [ -n "$NOTREADY" ]; then
+    w=0
+    while [ "$w" -lt "${DOCTOR_WAIT_SECONDS:-300}" ]; do
+      pending=$($KUBECTL get deploy --no-headers 2>/dev/null | awk '{split($2,a,"/"); if (a[2]>0 && a[1]!=a[2]) print $1}')
+      [ -z "$pending" ] && break
+      sleep 20; w=$((w+20))
+    done
+  fi
+  log "partition doctor: checking every running Streams app"
+  KUBECTL="$KUBECTL" KUBECTL_SCALE="$KUBECTL $SA" KAFKA_TOPICS="$B/kafka-topics.sh --bootstrap-server localhost:9092" \
+    bash "$DOCTOR" --repair 2>&1 | tee -a "$LOG"
+  drc=${PIPESTATUS[0]}
+  [ "$drc" -eq 0 ] || log "WARN: partition doctor exit $drc — an app named above is still not running (UNREPAIRABLE = fix the source topic declaration)"
+else
+  log "WARN: $DOCTOR not installed — Streams apps rejecting an internal topic's partition count will stay NOT READY"
+fi
 log "=== boot bring-up done ==="
