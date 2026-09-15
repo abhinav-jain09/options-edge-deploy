@@ -148,6 +148,12 @@ jobs:
       - name: dev wipe pauses the es4->dev mirrors
         run: python3 -m unittest -v tests.test_dev_cleanup_pauses_dev_mirrors
 
+      # The repair half: a Streams app that rejects an internal topic's partition count never becomes
+      # READY and restarts never help. Every bring-up (dev start/overnight, prod boot, es4 reset) runs the
+      # doctor, which reads Streams' expected count from the log and recreates only that app's topic.
+      - name: Streams partition doctor (simulated cluster) + bring-up wiring
+        run: python3 -m unittest -v tests.test_streams_partition_doctor
+
       # One hop further: Streams sources written by ANOTHER service (strike-flow, strike.avro,
       # strike-sr.current, strike-intelligence-by-strike). Runs the real apply-topics.sh for prod and
       # dev plus dev-cleanup's topic_desired, and holds each declaration to the live shape its owner

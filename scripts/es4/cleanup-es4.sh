@@ -553,6 +553,22 @@ else
     fi
   done
   if [ -n "$wedged" ]; then
+    # Repair automatically first: the doctor reads Streams' own expected count from each app's log,
+    # confirms the live topic still has the rejected count, scales that app to 0, deletes only its own
+    # internal topic and lets Streams recreate it. Only what it cannot repair falls through to the
+    # manual instructions below.
+    log "wedged Streams topologies on:$wedged — running the partition doctor"
+    set +e
+    KUBECTL="$KC" KUBECTL_SCALE="$KC" KAFKA_TOPICS="sudo -n docker exec es4-kafka kafka-topics --bootstrap-server localhost:9092" \
+      bash "$SCRIPT_DIR/../kafka/streams-partition-doctor.sh" --repair
+    doctor_rc=$?
+    set -e
+    if [ "$doctor_rc" -eq 0 ]; then
+      log "  partition doctor repaired every wedged topology"
+      wedged=""
+    fi
+  fi
+  if [ -n "$wedged" ]; then
     echo "WEDGED STREAMS TOPOLOGIES (pods are Ready but process nothing):$wedged" >&2
     echo "REPAIR EACH ONE — do NOT rerun clean-reset (that would wipe again for no reason):" >&2
     echo "  scale that app to 0 -> delete ONLY the topics whose names start with its Streams" >&2
