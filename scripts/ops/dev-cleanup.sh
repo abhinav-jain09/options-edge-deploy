@@ -336,6 +336,17 @@ reconcile_declared_topics() {
   echo "  shape check: $fixed config(s) reconciled, $drift unresolved."
 }
 
+# create_topics_parallel: read one topic's create arguments per line on stdin ("--topic X --partitions N ...")
+# and run the kafka-topics creates DEV_CLEANUP_TOPIC_PARALLELISM at a time; prints how many succeeded.
+# WHY: every kafka-topics call is a ~2 s JVM start. ~200 sequential creates after a wipe cost 6-7 minutes of
+# a dev clean; 8 in parallel cost well under one. Topic names and config values contain no spaces or quotes
+# (Kafka topic names are [a-zA-Z0-9._-]), so xargs' whitespace splitting is exact.
+create_topics_parallel() {
+  xargs -P "${DEV_CLEANUP_TOPIC_PARALLELISM:-8}" -L 1 sh -c \
+    "$KT --bootstrap-server $BS --create --if-not-exists \"\$@\" >/dev/null 2>&1 && echo CREATED" sh \
+    | grep -c '^CREATED$'
+}
+
 # ensure_partition_only_topics: create every OPTIONS_EDGE_PARTITION_ONLY_TOPICS entry that is missing at its
 # declared partition count (no configs: the owning service stamps policy/retention), grow a smaller existing
 # copy, and name any larger one (Kafka cannot shrink a topic; a wipe recreates it). Runs before any service
@@ -349,12 +360,14 @@ ensure_partition_only_topics() {
     return 0
   fi
   have="$(printf '%s\n' "$desc" | awk -F'\t' '$1 ~ /^Topic: / {n=$1; sub(/^Topic: /, "", n); for (i = 2; i <= NF; i++) if ($i ~ /^PartitionCount: /) {c=$i; sub(/^PartitionCount: /, "", c); print n, c}}')"
+  local to_create="" wanted=0
   for spec in $OPTIONS_EDGE_PARTITION_ONLY_TOPICS; do
     name="${spec%%:*}"; want="${spec##*:}"
     cur="$(printf '%s\n' "$have" | awk -v t="$name" '$1 == t {print $2; exit}')"
     if [ -z "$cur" ]; then
-      $KT --bootstrap-server $BS --create --if-not-exists --topic "$name" --partitions "$want" --replication-factor 1 >/dev/null 2>&1 \
-        && created=$((created+1)) || echo "  WARNING: could not create partition-only topic $name:$want"
+      to_create="$to_create--topic $name --partitions $want --replication-factor 1
+"
+      wanted=$((wanted+1))
     elif [ "$cur" -lt "$want" ]; then
       # --topic is a regular expression: escape the dots so the alter can only match this topic.
       $KT --bootstrap-server $BS --alter --topic "$(printf '%s' "$name" | sed 's/\./\\./g')" --partitions "$want" >/dev/null 2>&1 \
@@ -363,6 +376,10 @@ ensure_partition_only_topics() {
       larger="$larger $name($cur>$want)"
     fi
   done
+  if [ "$wanted" -gt 0 ]; then
+    created=$(printf '%s' "$to_create" | create_topics_parallel)
+    [ "$created" -eq "$wanted" ] || echo "  WARNING: created $created of $wanted missing partition-only topics"
+  fi
   echo "Partition-only topics: created $created, grown $grown (topics.env OPTIONS_EDGE_PARTITION_ONLY_TOPICS)"
   [ -z "$larger" ] || echo "  WARNING: larger than declared (Kafka cannot shrink; the next wipe recreates them):$larger"
 }
@@ -382,15 +399,19 @@ ensure_topics() {
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
     eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
-    local n=0 spec name extra rt
-    for spec in $OPTIONS_EDGE_TOPICS; do
+    local n=0 spec name extra rt existing missing=0
+    # One --list, then create only what is missing (in parallel). A failed list falls back to creating every
+    # declared topic: --if-not-exists makes that safe, only slower. Config of EXISTING topics is the
+    # reconcile pass's job below, exactly as before.
+    existing="$($KT --bootstrap-server $BS --list 2>/dev/null)" || existing=""
+    n=$(for spec in $OPTIONS_EDGE_TOPICS; do
       name="${spec%%:*}"
+      printf '%s\n' "$existing" | grep -qxF "$name" && continue
       topic_desired "$name"
       extra=""; [ -n "$DDR" ]  && extra="--config delete.retention.ms=$DDR"
       rt="";    [ -n "$DRET" ] && rt="--config retention.ms=$DRET"
-      $KT --bootstrap-server $BS --create --if-not-exists --topic "$name" \
-        --partitions "$DPARTS" --replication-factor 1 --config cleanup.policy="$DPOL" $extra $rt >/dev/null 2>&1 && n=$((n+1))
-    done
+      echo "--topic $name --partitions $DPARTS --replication-factor 1 --config cleanup.policy=$DPOL $extra $rt"
+    done | create_topics_parallel)
     echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
     ensure_partition_only_topics
     reconcile_declared_topics
