@@ -148,8 +148,9 @@ partitions_of() {
 topic_exists() { $KAFKA_TOPICS --list 2>/dev/null | grep -qxF "$1"; }
 
 # Streams application ids the app printed ("stream-client [<appId>-<uuid>]").
-# Streams application ids the app printed: "stream-client [<appId>-<uuid>]", or when client.id is set,
-# "stream-thread [<appId>-<uuid>-StreamThread-N]" (the thread name still starts with the id Streams uses).
+# Streams application ids the app printed: "stream-client [<appId>-<uuid>]" / "stream-thread [<appId>-<uuid>-StreamThread-N]".
+# Both carry client.id instead when an app sets it (none does today); its topics then fail the ownership check
+# and are REFUSED, never deleted.
 app_ids() {
   printf '%s\n' "$1" | grep -oE "$APPID_RE|stream-thread \[[^]]+\]" \
     | sed -E 's/^stream-(client|thread) \[//; s/\]$//; s/-(StreamThread|GlobalStreamThread)(-[0-9]+)?$//; s/-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$//' | sort -u
