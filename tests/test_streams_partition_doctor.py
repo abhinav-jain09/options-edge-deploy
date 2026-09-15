@@ -419,6 +419,13 @@ class DoctorWiringTest(unittest.TestCase):
         self.assertIn("--repair", helper)
         self.assertIn('KUBECTL_SCALE="$K"', helper)
 
+    def test_readiness_waits_stop_when_the_not_ready_set_is_stable(self):
+        dev = self.body("scripts/ops/dev-cleanup.sh", "run_partition_doctor() {")
+        self.assertIn("DOCTOR_STABLE_SECONDS", dev)
+        self.assertNotIn("for d in $deploys; do", dev, "one get deploy per pass, not kubectl per app")
+        prod = (ROOT / "scripts/ops/oe-boot-bringup.sh").read_text()
+        self.assertIn("DOCTOR_STABLE_SECONDS", prod)
+
     def test_prod_boot_bringup_runs_the_doctor_after_wave_two(self):
         text = (ROOT / "scripts/ops/oe-boot-bringup.sh").read_text()
         self.assertGreater(text.index('bash "$DOCTOR" --repair'), text.index('scale_up "$REST"'))
