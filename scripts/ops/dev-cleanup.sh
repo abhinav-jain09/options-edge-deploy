@@ -342,7 +342,10 @@ reconcile_declared_topics() {
 # a dev clean; 8 in parallel cost well under one. Topic names and config values contain no spaces or quotes
 # (Kafka topic names are [a-zA-Z0-9._-]), so xargs' whitespace splitting is exact.
 create_topics_parallel() {
-  xargs -P "${DEV_CLEANUP_TOPIC_PARALLELISM:-8}" -L 1 sh -c \
+  # Trailing blanks are STRIPPED first: `xargs -L 1` treats a line that ends in a blank as continuing onto
+  # the next line, so "--config cleanup.policy=delete  " (empty retention overrides) glued several topics into
+  # one failing create — 2026-09-16 a dev wipe created 15 of 137 declared topics. Blank lines are dropped too.
+  sed -e 's/[[:space:]]*$//' -e '/^$/d' | xargs -P "${DEV_CLEANUP_TOPIC_PARALLELISM:-8}" -L 1 sh -c \
     "$KT --bootstrap-server $BS --create --if-not-exists \"\$@\" >/dev/null 2>&1 && echo CREATED" sh \
     | grep -c '^CREATED$'
 }
