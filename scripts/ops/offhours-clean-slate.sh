@@ -70,6 +70,17 @@ KUBECTL_AS="${KUBECTL_AS:-system:serviceaccount:options-edge:jenkins-deployer}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-240}"
 SCALEDOWN_WAIT="${SCALEDOWN_WAIT:-90}"
 PVC_RECREATE_WAIT="${PVC_RECREATE_WAIT:-60}"
+# How Streams local state is cleared (step B):
+#   recreate — delete + re-apply each *-streams-state PVC (original behaviour; needs a provisioner that hands
+#              back an empty volume).
+#   contents — keep every PVC and EMPTY its local-path directory on this host in place. Requires root on the
+#              Kafka/k3s host and a hostPath/local PV whose path ends in pvc-<id>_<ns>_<claim> (the k3s local-path
+#              provisioner layout). Chosen for prod: the owner's standing rule is that PVCs are never deleted.
+STATE_RESET_MODE="${STATE_RESET_MODE:-recreate}"
+# Deployments matching $SELECTOR that are NEVER scaled to 0 by this script (extended regex on the name).
+# Keycloak is the reason it exists: it is not a Kafka client, its outage logs every user out, and the owner's
+# standing rule is that it stays up — so it must not ride the pipeline scale-down/scale-up.
+SCALE_EXEMPT_RE="${SCALE_EXEMPT_RE:-^oe-keycloak$}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" && pwd 2>/dev/null || echo "$SCRIPT_DIR/../jenkins")}"
 
@@ -620,7 +631,11 @@ if [ "$MUTATE" = "false" ]; then
   if [ "$WIPE_KAFKA" = "true" ]; then
     log "  A. Kafka (WIPE_KAFKA=true): DELETE $N_STATE state topics; PURGE $N_PURGE data topics to 0; KEEP $KEEP_SYS system topics ($SYSTEM_TOPICS)"
     [ "$N_STATE" -gt 0 ] && { log "     state-topic sample:"; echo $STATE_TOPICS | tr ' ' '\n' | grep . | head -20 | sed 's/^/       DEL /'; }
-    log "  B. Streams state: for each of $N_PVCS PVCs -> scale owner 0, delete+recreate PVC, scale 1 (--as=$KUBECTL_AS)"
+    if [ "$STATE_RESET_MODE" = "contents" ]; then
+      log "  B. Streams state: for each of $N_PVCS PVCs -> EMPTY its local-path directory in place (PVC kept; STATE_RESET_MODE=contents)"
+    else
+      log "  B. Streams state: for each of $N_PVCS PVCs -> scale owner 0, delete+recreate PVC, scale 1 (--as=$KUBECTL_AS)"
+    fi
     [ "$N_PVCS" -gt 0 ] && printf '%s\n' "$STATE_PVCS" | sed 's/^/       PVC /'
   else
     log "  A+B. Kafka topic wipe + Streams-state PVC reset: SKIPPED (WIPE_KAFKA=false — the ${N_PURGE} data + ${N_STATE} state topics and $N_PVCS PVCs ALL persist and NOTHING is reclaimed: retention is eternal (-1))"
@@ -683,6 +698,11 @@ discord "▶️ Off-hours clean-slate TRIGGERED ($EXPECTED_ENV, dry_run=$DRY_RUN
 # Snapshot replica counts FIRST so any failure path can always scale back up.
 SNAP=$(kcr get deploy -l "$SELECTOR" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.replicas}{"\n"}{end}')
 [ -n "$SNAP" ] || die "no deployments matched $SELECTOR"
+if [ -n "$SCALE_EXEMPT_RE" ]; then
+  EXEMPT=$(printf '%s\n' "$SNAP" | awk '{print $1}' | grep -E "$SCALE_EXEMPT_RE" | paste -sd' ' - || true)
+  SNAP=$(printf '%s\n' "$SNAP" | awk -v re="$SCALE_EXEMPT_RE" '$1 !~ re')
+  [ -n "$EXEMPT" ] && log "scale-exempt (never scaled to 0, never restored): $EXEMPT"
+fi
 
 SCALED_DOWN=0
 restore_scale() {
@@ -705,8 +725,8 @@ while read -r name reps; do
 done <<<"$SNAP"
 deadline=$(( $(date +%s) + SCALEDOWN_WAIT ))
 while :; do
-  READY=$(kcr get deploy -l "$SELECTOR" -o jsonpath='{range .items[*]}{.status.readyReplicas}{" "}{end}' 2>/dev/null \
-          | tr ' ' '\n' | awk '{s+=$1} END{print s+0}')
+  READY=$(kcr get deploy -l "$SELECTOR" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.readyReplicas}{"\n"}{end}' 2>/dev/null \
+          | awk -v re="${SCALE_EXEMPT_RE:-^$}" '$1 !~ re {s+=$2} END{print s+0}')
   [ "${READY:-0}" = "0" ] && { log "all consumers stopped"; break; }
   [ "$(date +%s)" -ge "$deadline" ] && { log "WARN: ${READY} replicas still ready after ${SCALEDOWN_WAIT}s — proceeding"; break; }
   sleep 5
@@ -774,7 +794,33 @@ log "consumer groups reset to latest"
 # We capture each PVC's full spec, delete it, and re-apply the captured spec so the
 # storage request / accessModes / labels are preserved exactly.
 pvc_ok=0; pvc_fail=0
-if [ -n "$STATE_PVCS" ]; then
+# ---- B-contents-begin ----
+# STATE_RESET_MODE=contents: the claim stays bound; only what is INSIDE its directory goes. The directory is
+# resolved from the PV (never guessed) and must carry this claim's own name in the local-path layout, so a
+# PV that points anywhere else — or at another claim — is refused rather than emptied.
+reset_pvc_contents() { # <pvc> -> 0 emptied, 1 refused/failed
+  local pvc="$1" pv hp
+  pv=$(kcr get pvc "$pvc" -o jsonpath='{.spec.volumeName}' 2>/dev/null)
+  [ -n "$pv" ] || { log "  WARN $pvc: not bound to a PV — SKIPPING"; return 1; }
+  hp=$(kubectl get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}' 2>/dev/null)
+  case "$hp" in
+    */pvc-*_"${NS}"_"${pvc}") : ;;
+    *) log "  WARN $pvc: PV $pv path '$hp' is not this claim's local-path directory — REFUSING to empty it"; return 1 ;;
+  esac
+  [ -d "$hp" ] || { log "  WARN $pvc: $hp is not a directory on this host — SKIPPING"; return 1; }
+  if find "$hp" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null && [ -z "$(ls -A "$hp")" ]; then
+    return 0
+  fi
+  log "  ERROR $pvc: could not empty $hp (run as root on the k3s host) — its owner will restart on stale state"
+  return 1
+}
+# ---- B-contents-end ----
+if [ -n "$STATE_PVCS" ] && [ "$STATE_RESET_MODE" = "contents" ]; then
+  for PVC in $STATE_PVCS; do
+    if reset_pvc_contents "$PVC"; then pvc_ok=$((pvc_ok+1)); else pvc_fail=$((pvc_fail+1)); fi
+  done
+  log "streams-state PVCs: emptied in place=$pvc_ok failed=$pvc_fail (PVCs kept)"
+elif [ -n "$STATE_PVCS" ]; then
   for PVC in $STATE_PVCS; do
     SPECYAML=$(mktemp)
     if ! kcr get pvc "$PVC" -o json 2>/dev/null \
@@ -795,8 +841,8 @@ if [ -n "$STATE_PVCS" ]; then
     fi
     rm -f "$SPECYAML"
   done
+  log "streams-state PVCs: recreated=$pvc_ok failed=$pvc_fail"
 fi
-log "streams-state PVCs: recreated=$pvc_ok failed=$pvc_fail"
 
 else
   log "WIPE_KAFKA=false — SKIPPING Kafka topic delete/purge + consumer-group reset + Streams-state PVC reset. Topics + Streams state persist and NOTHING is reclaimed: retention is eternal (-1), so this job is the only thing that deletes data."
