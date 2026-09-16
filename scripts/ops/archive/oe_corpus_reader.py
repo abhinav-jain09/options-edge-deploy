@@ -8,6 +8,7 @@ collapse, the conflict, the chain recomputation, the owed-session calendar — l
 
 Nothing in this module is authorizing. It reads files and reports what it found.
 """
+import decimal
 import gzip, json, os, re, sys, glob, hashlib, datetime
 
 HORIZONS = ("H3", "H5", "H15")
@@ -81,7 +82,13 @@ def read_logical(root):
                         continue
                     if "kind" not in rec:
                         continue
-                    body = {k: v for k, v in rec.items()
+                    # The digest is taken over the record AS THE ENGINE WROTE IT. Parsing numbers as floats turned
+                    # 0.1310 into 0.131, so canonical() hashed a different string than the engine did: 409 of 1,966
+                    # calls (every one carrying a trailing-zero decimal, and no other call) recomputed to the wrong
+                    # digest, which made EVERY sealed session CORRUPT — the corpus could never complete and the
+                    # engine could never leave shadow (BZ 366). Decimal keeps the literal; only the digest uses it,
+                    # so every other consumer of `rec` still sees the same floats it always did.
+                    body = {k: v for k, v in json.loads(line[i:], parse_float=decimal.Decimal).items()
                             if k not in ("ts", "publishedAtMs", "runId", "semanticDigest")}
                     dig = hashlib.sha256(canonical(body).encode("utf-8")).hexdigest()
                     pkey = physical_key(rec)

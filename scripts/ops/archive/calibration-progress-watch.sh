@@ -141,6 +141,7 @@ fi
 log "progress record present for $DAY: $found"
 PREV="$(find "$COHORT_DIR" -name 'dt=*.json' 2>/dev/null | sort | tail -2 | head -1)"
 export PREV
+WATCH_REASON_FILE="$(mktemp)"; export WATCH_REASON_FILE
 DECLARED_HASH="$DECLARED_HASH" DECLARED_TRACK="$DECLARED_TRACK" \
   python3 - "$found" "$DAY" "${PREV:-}" <<'PY'
 import json, os, sys
@@ -200,8 +201,28 @@ if prev_path and os.path.exists(prev_path) and prev_path != sys.argv[1]:
 if st not in ("COMPLETE", "NOT_EXPECTED"):
     print("  WARN: %s did not land COMPLETE — it counts toward nothing until it does" % day)
     sys.exit(2)
+# NEVER-SILENT (BZ 366). A day can land COMPLETE while the corpus as a whole can never complete: a required cell the
+# market never presents, or literals left UNFROZEN so nothing ever counts. That sat unreported for five sessions.
+cov = d.get("requiredCellCoverage") or {}
+if cov.get("alert"):
+    why = []
+    if not cov.get("literalsFrozen", True):
+        why.append("the validation literals are still UNFROZEN, so no call can ever count")
+    if cov.get("neverObserved"):
+        why.append("required cell(s) never observed: " + ", ".join(cov["neverObserved"]))
+    msg = "after %s complete sessions, %s" % (cov.get("sessionsObserved"), "; ".join(why))
+    print("  COVERAGE: " + msg + " — the corpus can NEVER complete as registered")
+    try:
+        open(os.environ["WATCH_REASON_FILE"], "w").write(msg)
+    except Exception:
+        pass
+    sys.exit(4)
 PY
 rc=$?
+if [ $rc -eq 4 ]; then
+  alert "calibration corpus can NEVER complete as registered (env=$ENV_NAME): $(cat "$WATCH_REASON_FILE" 2>/dev/null). The engine stays in shadow until the registration is fixed."
+  exit 1
+fi
 if [ $rc -ne 0 ]; then
   alert "calibration progress for $DAY is not COMPLETE — that session counts toward nothing"
   # A watchdog that alerts and then exits 0 is invisible to launchd, to a cron mail rule, and to

@@ -65,7 +65,17 @@ alert() {
     return 0
   fi
   local payload http crc ok
-  payload=$(printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps({"content": sys.stdin.read()}))' 2>/dev/null)
+  # DISCORD REJECTS content over 2000 characters with HTTP 400. The archive-verify alert pastes the whole list of missing
+  # topics, so from 2026-09-09 every one of them came back 400 — 250 to 950 dropped alerts a day, a week of archive
+  # failures nobody received (BZ 366). The FULL text is already in the log above; the page carries the head of it and
+  # says it was cut, so a truncated alert can never read as a complete one.
+  payload=$(printf '%s' "$1" | python3 -c 'import json,sys
+t = sys.stdin.read()
+LIMIT = 2000
+if len(t) > LIMIT:
+    tail = "\n… [truncated %d chars — full text in the log]" % (len(t) - (LIMIT - 60))
+    t = t[:LIMIT - len(tail)] + tail
+print(json.dumps({"content": t}))' 2>/dev/null)
   if [ -z "$payload" ]; then
     _oe_alert_log "  (ALERT DELIVERY FAILED — could not encode the payload; the condition below still stands)"
     return 0

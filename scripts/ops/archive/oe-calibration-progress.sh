@@ -88,6 +88,7 @@ fi
 T_SESSIONS="${OE_CAL_T_SESSIONS:-30}"; T_COHORT="${OE_CAL_T_COHORT:-200}"
 T_CLASS="${OE_CAL_T_CLASS:-50}";       T_CELL="${OE_CAL_T_CELL:-50}"
 REQUIRED_CLASSES="${OE_CAL_REQUIRED_CLASSES:-}"; REQUIRED_CELLS="${OE_CAL_REQUIRED_CELLS:-}"
+export OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS="${OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS:-3}"
 [ -n "$REQUIRED_CELLS" ] || { log "FATAL: $TARGETS declares no required cell universe — a per-cell count over an empty universe is not a measurement"; exit 1; }
 [ -n "$CORPUS_START_DATE" ] || { log "FATAL: $TARGETS declares no corpusStartDate for env=$ENV_NAME"; exit 1; }
 
@@ -254,6 +255,31 @@ quiet_corpus_complete = (bool(quiet_owed) and all(d in quiet_mine for d in quiet
                                                   cohort_days=quiet_mine | set(quiet_owed))
                          and not read_errors)
 
+# ---- REQUIRED-CELL COVERAGE, over every archived call of the declared parameter set, CALIBRATION or VALIDATION ------
+# The per-cell counters above only ever see VALIDATION calls, so while the clock had not started they saw nothing — and a
+# registered cell the market never presents stayed invisible for as long as nobody asked (BZ 366: six of ten cells were
+# unreachable under cell_key(), and the literals were left UNFROZEN, so the engine could never leave shadow). Measured on
+# OCCURRENCE only: which cells fire, never whether calls were right.
+_cov_after = int(os.environ.get("OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS") or 3)
+_complete_keys = {k for k, v in sessions.items() if v.get("archiveStatus") == "COMPLETE"}
+_cov = {cell: 0 for cell in REQUIRED_CELLS}
+_cov_sessions = set()
+for c in calls:
+    if "%s|%s|%s" % (c.get("sessionDate"), c.get("parameterSetHash"), c.get("sessionLineageId")) not in _complete_keys:
+        continue
+    if declared_hash and declared_hash != "UNFROZEN" and c.get("parameterSetHash") != declared_hash:
+        continue
+    _cov_sessions.add(c.get("sessionDate"))
+    _k = R.cell_key(c)
+    if _k in _cov:
+        _cov[_k] += 1
+_never = [cell for cell in REQUIRED_CELLS if _cov[cell] == 0]
+_frozen = bool(declared_hash) and declared_hash != "UNFROZEN" and bool(declared_track) \
+    and declared_track != "UNFROZEN" and not str(declared_track).startswith("2099")
+coverage = {"sessionsObserved": len(_cov_sessions), "alertAfterSessions": _cov_after, "observed": _cov,
+            "neverObserved": _never, "literalsFrozen": _frozen,
+            "alert": len(_cov_sessions) >= _cov_after and (bool(_never) or not _frozen)}
+
 reports = []
 if not by_cohort:
     reports.append({
@@ -342,6 +368,7 @@ report = {
     "sessions": {k: v for k, v in sorted(sessions.items())},
     "sessionsMissing": sorted(v["sessionDate"] for v in sessions.values() if v["archiveStatus"] == "MISSING"),
     "cohorts": reports,
+    "requiredCellCoverage": coverage,
     # All FOUR A4 shadow labels, on the record that is SERVED as well as the one on disk: two of them
     # were missing, and a consumer that checks only what it is given would have seen an unlabelled
     # record (r7 #8).
