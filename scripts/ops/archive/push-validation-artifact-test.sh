@@ -1497,6 +1497,71 @@ else
     || bad "it failed for another reason: $(head -4 "$WORK/watch9.log")"
 fi
 
+echo "66. BZ 366: a required cell that never fires is an ALERT, not something someone has to ask about"
+# Five sessions went by with six of ten registered cells unreachable under cell_key() and nothing said so. After
+# OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS complete sessions, a required cell with zero calls must page — on a day that
+# otherwise lands COMPLETE, which is exactly the day it used to be silent.
+build 3 20
+targets FROZEN "$SB"; publish
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+sed -i'' -e 's/^OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS=.*//' "$HERE/calibration-targets.env"
+printf 'OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS=1\n' >> "$HERE/calibration-targets.env"
+sed -i'' -e 's/^OE_CAL_REQUIRED_CELLS="/OE_CAL_REQUIRED_CELLS="STRONG|FLIP|POS_GAMMA /' "$HERE/calibration-targets.env"
+grep -q 'STRONG|FLIP|POS_GAMMA' "$HERE/calibration-targets.env" \
+  || bad "case 66 could not add the never-fired cell — it would pass vacuously"
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+if CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch66.log" 2>&1; then
+  bad "a required cell with zero calls after the threshold did not page"
+else
+  grep -q "can NEVER complete as registered" "$WORK/watch66.log" \
+    && ok "a registered cell the market never presents pages loudly" \
+    || bad "it failed, but not with the coverage alert: $(tail -3 "$WORK/watch66.log")"
+  grep -q "never observed: STRONG|FLIP|POS_GAMMA" "$WORK/watch66.log" \
+    && ok "and the alert names the cell" || bad "the alert does not name the empty cell"
+fi
+
+echo "67. BZ 366: every required cell observed and literals frozen -> no coverage alert"
+# The guard must not cry wolf: with the same threshold, a corpus that covers every registered cell stays quiet.
+build 3 20
+targets FROZEN "$SB"; publish
+DAY="$(ls -d "$ROOT"/dt=* | sed -n '2p' | sed 's|.*dt=||')"
+sed -i'' -e 's/^OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS=.*//' "$HERE/calibration-targets.env"
+printf 'OE_CAL_COVERAGE_ALERT_AFTER_SESSIONS=1\n' >> "$HERE/calibration-targets.env"
+env ENV=prod ARCHIVE_DIR="$WORK" REPORT_DATE="$DAY" CALENDAR_DIR="$CAL_DIR" \
+    bash "$HERE/oe-calibration-progress.sh" >/dev/null 2>&1
+CHECK_DATE="$DAY" ENV=prod ARCHIVE_DIR="$WORK" CALENDAR_DIR="$CAL_DIR" \
+   bash "$HERE/calibration-progress-watch.sh" >"$WORK/watch67.log" 2>&1
+grep -q "can NEVER complete" "$WORK/watch67.log" \
+  && bad "a fully covered corpus raised the coverage alert: $(grep COVERAGE "$WORK/watch67.log")" \
+  || ok "a covered corpus with frozen literals raises no coverage alert"
+
+echo "68. BZ 366: the reader's digest matches the ENGINE's on a real call carrying a trailing-zero decimal"
+# PRODUCTION BYTES, captured from context-tape.direction.ledger on 2026-09-16 — not a synthetic record. Parsing
+# numbers as floats turned 0.1310 into 0.131, so 409 of 1,966 real calls (every one with such a literal, and no
+# other) recomputed to a digest the engine never wrote, and EVERY sealed session read as CORRUPT. The engine's
+# semanticDigest on this record is the ground truth; the reader must reproduce it byte for byte.
+_fx="$WORK/digest-fixture/dt=2026-09-09"; mkdir -p "$_fx"
+FIXTURE_JSON='{"callId":"2026-09-09|17947|1788974483166:0:3681920:55058|NONE|STRONG|1788974495231:0:3681934:55072","pushId":"2026-09-09|17947|1788974483166:0:3681920:55058","levelEpisodeId":"NONE","dir":1,"predictedSign":1,"enteredState":"STRONG","node":null,"regime":"NEG_GAMMA","provenance":"NATIVE_SPX_INDEX","parameterSetHash":"137c53fe5dd65f0d6b887ec72686ec1eda8c65a59b4f8d91ed6b0ac82f6a0ac7","refPx":764411,"refT":1788974495231,"refTickKey":"1788974495231:0:3681934:55072","rthElapsedMs":13895231,"absorbed":false,"strongBreak":false,"reversalRisk":"NORMAL","nextAhead":{"node":{"priceTicks":765000,"roles":["HIGH_GAMMA_STRIKE"],"gamma":-2653577249,"absGammaRank":2,"localAbsGammaShare":0.1310,"shareState":"OBSERVED","wallTuples":[],"bucketTMs":1788974400000,"bodyGeneratedAtMs":1788974495056,"sessionDate":"2026-09-09"},"distanceTicks":589,"distanceAtr":3.7756},"symbol":"SPX","slice":"COMMISSIONING_SHADOW","evidenceBasis":"NONE_SHADOW","validationStatus":"FORWARD_UNMEASURED","actionable":false,"semanticStamp":"2026-09-08T18:00:00Z","trackFromPush":"2099-01-01T00:00:00Z","runId":"cfb9e60d-032b-4e86-9881-73081f419016","publishedAtMs":1788974502923,"phase":"CALIBRATION","sessionDate":"2026-09-09","delivery":"LIVE","eventTMs":1788974495231,"kind":"call","sessionLineageId":"4ed2a40b-d020-4bc8-8239-04842096ec93","phaseAtCall":"CALIBRATION","semanticDigest":"14f4cf6fba7d3df70deae54924afa827c727d22edb720126bab8e9f0e554dad8"}' _FX="$_fx" python3 -c '
+import gzip, json, os
+v = os.environ["FIXTURE_JSON"]; r = json.loads(v)
+k = "%s|%s|%s" % (r["parameterSetHash"], r["sessionLineageId"], r["callId"])
+with gzip.open(os.path.join(os.environ["_FX"], "part-0.jsonl.gz"), "wt") as fh:
+    fh.write("Partition:0 Offset:0 %s\t%s\n" % (k, v))'
+if HERE="$HERE" ROOT="$WORK/digest-fixture" FIXTURE_JSON='{"callId":"2026-09-09|17947|1788974483166:0:3681920:55058|NONE|STRONG|1788974495231:0:3681934:55072","pushId":"2026-09-09|17947|1788974483166:0:3681920:55058","levelEpisodeId":"NONE","dir":1,"predictedSign":1,"enteredState":"STRONG","node":null,"regime":"NEG_GAMMA","provenance":"NATIVE_SPX_INDEX","parameterSetHash":"137c53fe5dd65f0d6b887ec72686ec1eda8c65a59b4f8d91ed6b0ac82f6a0ac7","refPx":764411,"refT":1788974495231,"refTickKey":"1788974495231:0:3681934:55072","rthElapsedMs":13895231,"absorbed":false,"strongBreak":false,"reversalRisk":"NORMAL","nextAhead":{"node":{"priceTicks":765000,"roles":["HIGH_GAMMA_STRIKE"],"gamma":-2653577249,"absGammaRank":2,"localAbsGammaShare":0.1310,"shareState":"OBSERVED","wallTuples":[],"bucketTMs":1788974400000,"bodyGeneratedAtMs":1788974495056,"sessionDate":"2026-09-09"},"distanceTicks":589,"distanceAtr":3.7756},"symbol":"SPX","slice":"COMMISSIONING_SHADOW","evidenceBasis":"NONE_SHADOW","validationStatus":"FORWARD_UNMEASURED","actionable":false,"semanticStamp":"2026-09-08T18:00:00Z","trackFromPush":"2099-01-01T00:00:00Z","runId":"cfb9e60d-032b-4e86-9881-73081f419016","publishedAtMs":1788974502923,"phase":"CALIBRATION","sessionDate":"2026-09-09","delivery":"LIVE","eventTMs":1788974495231,"kind":"call","sessionLineageId":"4ed2a40b-d020-4bc8-8239-04842096ec93","phaseAtCall":"CALIBRATION","semanticDigest":"14f4cf6fba7d3df70deae54924afa827c727d22edb720126bab8e9f0e554dad8"}' python3 -c '
+import json, os, sys
+sys.path.insert(0, os.environ["HERE"]); import oe_corpus_reader as R
+want = json.loads(os.environ["FIXTURE_JSON"])["semanticDigest"]
+got = [dg for _k, (dg, r, _o) in R.read_logical(os.environ["ROOT"])["logical"].items() if r.get("kind") == "call"]
+sys.exit(0 if got == [want] else 1)'; then
+  ok "a real call with 0.1310 recomputes to exactly the digest the engine wrote"
+else
+  bad "the reader recomputes a different digest than the engine for a real trailing-zero call — every session would read CORRUPT"
+fi
+grep -q '0\.1310' <<< '{"callId":"2026-09-09|17947|1788974483166:0:3681920:55058|NONE|STRONG|1788974495231:0:3681934:55072","pushId":"2026-09-09|17947|1788974483166:0:3681920:55058","levelEpisodeId":"NONE","dir":1,"predictedSign":1,"enteredState":"STRONG","node":null,"regime":"NEG_GAMMA","provenance":"NATIVE_SPX_INDEX","parameterSetHash":"137c53fe5dd65f0d6b887ec72686ec1eda8c65a59b4f8d91ed6b0ac82f6a0ac7","refPx":764411,"refT":1788974495231,"refTickKey":"1788974495231:0:3681934:55072","rthElapsedMs":13895231,"absorbed":false,"strongBreak":false,"reversalRisk":"NORMAL","nextAhead":{"node":{"priceTicks":765000,"roles":["HIGH_GAMMA_STRIKE"],"gamma":-2653577249,"absGammaRank":2,"localAbsGammaShare":0.1310,"shareState":"OBSERVED","wallTuples":[],"bucketTMs":1788974400000,"bodyGeneratedAtMs":1788974495056,"sessionDate":"2026-09-09"},"distanceTicks":589,"distanceAtr":3.7756},"symbol":"SPX","slice":"COMMISSIONING_SHADOW","evidenceBasis":"NONE_SHADOW","validationStatus":"FORWARD_UNMEASURED","actionable":false,"semanticStamp":"2026-09-08T18:00:00Z","trackFromPush":"2099-01-01T00:00:00Z","runId":"cfb9e60d-032b-4e86-9881-73081f419016","publishedAtMs":1788974502923,"phase":"CALIBRATION","sessionDate":"2026-09-09","delivery":"LIVE","eventTMs":1788974495231,"kind":"call","sessionLineageId":"4ed2a40b-d020-4bc8-8239-04842096ec93","phaseAtCall":"CALIBRATION","semanticDigest":"14f4cf6fba7d3df70deae54924afa827c727d22edb720126bab8e9f0e554dad8"}' && ok "and the fixture really carries the trailing-zero literal (the case cannot pass vacuously)" \
+  || bad "the fixture lost its trailing-zero literal; this case proves nothing"
+
 echo
 if [ $fails -eq 0 ]; then echo "PASS — the A5.8 evaluator holds on every case"; exit 0; fi
 echo "FAIL — $fails assertion(s)"; exit 1
