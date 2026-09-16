@@ -151,6 +151,26 @@ class EnsurePartitionOnlyTopicsTest(unittest.TestCase):
             self.assertEqual(st["topics"], {f"t{i}.x": 1 + i % 4 for i in range(24)})
             self.assertEqual(st["configs"]["t5.x"], ["cleanup.policy=compact", "retention.ms=-1"])
 
+    def test_lines_ending_in_blanks_are_not_merged_by_xargs(self):
+        # The exact shape ensure_topics emits when a topic has no retention overrides:
+        # "... --config cleanup.policy=delete  " (two trailing blanks). xargs -L 1 continues such a line
+        # onto the next one; before the fix only 15 of 137 declared topics were created on a dev wipe.
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "kt.py").write_text(FAKE_KT)
+            (d / "state.json").write_text(json.dumps({"topics": {}, "calls": []}))
+            lines = "".join(f"--topic t{i}.x --partitions 4 --replication-factor 1 --config cleanup.policy=delete  \n"
+                            for i in range(30)) + "\n"
+            (d / "lines.txt").write_text(lines)
+            script = (f'KT="python3 {d / "kt.py"} {d / "state.json"}"\nBS=x\n{self.functions("create_topics_parallel")}\n'
+                      f'create_topics_parallel < "{d / "lines.txt"}"\n')
+            out = subprocess.run([BASH, "-c", script], capture_output=True, text=True, check=True).stdout.strip()
+            st = json.loads((d / "state.json").read_text())
+            self.assertEqual(out, "30")
+            self.assertEqual(sorted(st["topics"]), sorted(f"t{i}.x" for i in range(30)))
+            creates = [c for c in st["calls"] if "--create" in c]
+            self.assertTrue(all(c.count("--topic") == 1 for c in creates), "a create call received more than one topic")
+
     def test_ensure_topics_creates_only_missing_declared_topics(self):
         text = DEV_CLEANUP.read_text()
         body = self.functions("ensure_topics")
