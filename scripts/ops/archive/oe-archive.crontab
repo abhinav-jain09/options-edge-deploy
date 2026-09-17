@@ -31,7 +31,8 @@ CRON_TZ=America/New_York
 */10 * * * * TOPICS="underlying.spx.price underlying.spx.index.price underlying.es.price spx.basis.state" ARCHIVE_DIR=/mnt/nas/optionsedge ENV=prod ARCHIVE_JOB=spot JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-spot.log 2>&1
 # dev dealer-ledger evidence every 2h: dev signal-fired has a 24h retention the service re-stamps,
 # so a once-daily capture is one missed run from losing a session permanently. 2026-08-08.
-5 */2 * * * /home/abhinav/oe-ops/oe-archive-dev.sh >> /home/abhinav/oe-ops/archive-dev.cron.log 2>&1
+# DISABLED 2026-09-17 (owner: only ibkr + spot + databento raw are backed up) — dev 2-hourly archive
+#5 */2 * * * /home/abhinav/oe-ops/oe-archive-dev.sh >> /home/abhinav/oe-ops/archive-dev.cron.log 2>&1
 # es4 tape at 17:01 ET, IMMEDIATELY at the ES close: the session is prev-day 18:00 -> 17:00,
 # and the market reopens at 18:00 — capture must land in the 17:00-18:00 break so the dt=<date>
 # folder holds exactly one session, never the next session's first records. (A 2h cron was
@@ -74,7 +75,8 @@ CRON_TZ=America/New_York
 # every one of them. Re-reading the archive cannot discover a seal that is still sitting in Kafka —
 # only another archive pass can. Without this the corpus would carry sessions that are permanently
 # PENDING_SEAL, which the reader must treat as incomplete.
-45 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge ARCHIVE_JOB=seal ON_LOCK_BUSY=fail TOPICS=context-tape.direction.ledger JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-seal.cron.log 2>&1
+# DISABLED 2026-09-17 (owner: only ibkr + spot + databento raw are backed up) — seal pass (context-tape.direction.ledger)
+#45 20 * * 1-5 ENV=prod ARCHIVE_DIR=/mnt/nas/optionsedge ARCHIVE_JOB=seal ON_LOCK_BUSY=fail TOPICS=context-tape.direction.ledger JAVA_HOME=$(ls -d /usr/lib/jvm/*jre-17* 2>/dev/null|head -1) /home/abhinav/oe-ops/oe-archive-kafka.sh >> /home/abhinav/oe-ops/archive-seal.cron.log 2>&1
 
 # Calibration progress, 21:00 ET — AFTER the second archive pass, so it reads a corpus that can
 # actually contain today's seal. It answers one question and writes it where a human can read it:

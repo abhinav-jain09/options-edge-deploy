@@ -77,6 +77,12 @@ unset DEALER_LEDGER_EVIDENCE OE_SPOT_TOPICS OE_HEAVY_TOPICS_prod
 # ASSERTS them. That is a stronger check than it looks: it makes the daily run fail when the spot
 # job has silently died, which the daily run could never notice while it was archiving spot itself.
 SPOT_TOPICS="${SPOT_TOPICS:-underlying.spx.index.price underlying.es.price}"
+# OWNER RULE 2026-09-17: back up ONLY ibkr + spot + the databento raw topics. With OE_ARCHIVE_RAW_ONLY=true
+# (default) the derived sub-jobs below — indicator bars, dev dealer-ledger evidence, drop classifier — are
+# SKIPPED (logged, never alerted). Still run: the heavy pass (now the raw list in oe-topics.env), the es4
+# tape job (separate cluster, ~300 MB total) and the Postgres open-interest dump (IBKR OI, 16 h retention
+# in the DB — it is gone nightly without this). Set OE_ARCHIVE_RAW_ONLY=false to restore the old scope.
+OE_ARCHIVE_RAW_ONLY="${OE_ARCHIVE_RAW_ONLY:-true}"
 
 DAY="$(TZ=America/New_York date +%Y-%m-%d)"
 
@@ -137,9 +143,13 @@ fi
 # reads from the ARCHIVE, and until now these topics were archived NOWHERE. Every day not
 # captured is a day the seed cannot use. Higher timeframes are ~0.5 MB/session; the 30s bars
 # dominate because each carries a ~29.5 KB recoveryCheckpoint.
+if [ "$OE_ARCHIVE_RAW_ONLY" = true ]; then
+  log "raw-only scope: indicator-bars pass SKIPPED (OE_ARCHIVE_RAW_ONLY=true)"
+else
 env ARCHIVE_DIR="$DEST" ENV="$ENV_NAME" ARCHIVE_JOB=daily-indicator-bars \
     TOPICS="options.indicators.bars" $EXTRA bash "$ARCHIVER" 2>&1 | tee -a "$LOG"
 [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
+fi
 # es4 broker pass. es.drop.*: the 60-session drop-classifier calibration corpus. es.underlying.es.trades
 # added 2026-08-08: the raw ES tape (~300-550k records/session, plain JSON, 24h retention) was
 # archived NOWHERE — Friday 08-07 tape expired mid-study and had to be re-pulled from Databento.
@@ -162,10 +172,14 @@ env ARCHIVE_DIR="$DEST" ENV=es4 BOOTSTRAP=192.168.100.4:9092 ARCHIVE_JOB=daily-e
 # synthetic/cascaded feed and duplicating it here would buy volume, not truth.
 # The dev broker advertises itself as host.docker.internal (Docker Desktop), which is mapped to
 # 192.168.100.102 in /etc/hosts on this box — without that entry the client resolves nothing.
+if [ "$OE_ARCHIVE_RAW_ONLY" = true ]; then
+  log "raw-only scope: dev dealer-ledger evidence pass SKIPPED (OE_ARCHIVE_RAW_ONLY=true)"
+else
 env ARCHIVE_DIR="$DEST" ENV=dev BOOTSTRAP="${DEV_BOOTSTRAP:-192.168.100.102:19092}" \
     ARCHIVE_JOB=daily-dev TOPICS="$DEALER_LEDGER_EVIDENCE" \
     bash "$ARCHIVER" 2>&1 | tee -a "$LOG"
 [ "${PIPESTATUS[0]}" -eq 0 ] || rc=1
+fi
 
 # drop-classifier corpus moved to the PROD broker 2026-08-12 (es4 wipes nightly
 # by design — a week of es.drop.* evaporated). Archive from the prod broker now.
@@ -174,6 +188,9 @@ env ARCHIVE_DIR="$DEST" ENV=dev BOOTSTRAP="${DEV_BOOTSTRAP:-192.168.100.102:1909
 # backstop — nothing else archives es.drop.* from the prod broker, so there is no later run to
 # cover a skipped range. Defaulting to skip here would be the same shape as the defect that lost
 # 2026-08-10/11: a once-a-day job treating "someone else holds the lock" as a clean exit.
+if [ "$OE_ARCHIVE_RAW_ONLY" = true ]; then
+  log "raw-only scope: drop-classifier pass SKIPPED (OE_ARCHIVE_RAW_ONLY=true)"
+else
 env ARCHIVE_DIR="$DEST" ENV=prod ARCHIVE_JOB=daily-drop ON_LOCK_BUSY=fail \
     TOPICS="es.drop.nowcast es.drop.final-summary es.drop.outcome" \
     bash "$ARCHIVER" 2>&1 | tee -a "$LOG"
@@ -182,6 +199,7 @@ if [ "$drop_rc" -ne 0 ]; then
   [ "$drop_rc" -eq 3 ] && alert "🚨 Drop-classifier corpus NOT archived on $(hostname) for dt=$DAY — job=daily-drop could not acquire its lock. Nothing else archives es.drop.* from the prod broker."
   log "FAILURE: the drop-classifier pass exited $drop_rc"
   rc=1
+fi
 fi
 
 # Postgres: open interest exists in a readable form ONLY in databento_option_raw_snapshot.
