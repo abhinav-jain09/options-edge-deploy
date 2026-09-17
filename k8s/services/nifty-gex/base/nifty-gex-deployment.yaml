@@ -45,7 +45,7 @@ spec:
                 name: dhan-credentials
           env:
             - name: DHAN_GEX_BOARDS
-              value: "nifty-gex:NIFTY:13:IDX_I,banknifty-gex:BANKNIFTY:25:IDX_I"
+              value: "nifty-gex:NIFTY:13:IDX_I,banknifty-gex:BANKNIFTY:25:IDX_I,sensex-gex:SENSEX:51:IDX_I"
           resources:
             requests:
               cpu: 50m
