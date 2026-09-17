@@ -70,6 +70,31 @@ KUBECTL_AS="${KUBECTL_AS:-system:serviceaccount:options-edge:jenkins-deployer}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-240}"
 SCALEDOWN_WAIT="${SCALEDOWN_WAIT:-90}"
 PVC_RECREATE_WAIT="${PVC_RECREATE_WAIT:-60}"
+# How Streams local state is cleared (step B):
+#   recreate — delete + re-apply each *-streams-state PVC (original behaviour; needs a provisioner that hands
+#              back an empty volume).
+#   contents — keep every PVC and EMPTY its local-path directory on this host in place. Requires root on the
+#              Kafka/k3s host and a hostPath/local PV whose path ends in pvc-<id>_<ns>_<claim> (the k3s local-path
+#              provisioner layout). Chosen for prod: the owner's standing rule is that PVCs are never deleted.
+STATE_RESET_MODE="${STATE_RESET_MODE:-recreate}"
+# Deployments matching $SELECTOR that are NEVER scaled to 0 by this script (extended regex on the name).
+# Keycloak is the reason it exists: it is not a Kafka client, its outage logs every user out, and the owner's
+# standing rule is that it stays up — so it must not ride the pipeline scale-down/scale-up.
+SCALE_EXEMPT_RE="${SCALE_EXEMPT_RE:-^oe-keycloak$}"
+# What happens to the NON-preserved, non-system topics (step A):
+#   purge  — state topics (*-changelog/*-repartition) deleted, every other topic emptied in place with
+#            delete-records (topic, partition count and config survive). Original behaviour.
+#   delete — EVERY one of them deleted, like dev-cleanup.sh; the caller recreates the declared set afterwards
+#            (apply-topics.sh + partition-only topics) before anything is started. Consumer groups that are
+#            idle are deleted too — their offsets point into topics that no longer exist.
+#   The reset-preserved whitelist (topics.env OPTIONS_EDGE_RESET_PRESERVED_TOPICS + the prod-only list) and
+#   the system topics are never touched in either mode.
+TOPIC_WIPE_MODE="${TOPIC_WIPE_MODE:-purge}"
+TOPIC_DELETE_WAIT="${TOPIC_DELETE_WAIT:-180}"              # seconds to wait for the broker to finish the deletes
+# What is started at the end: overnight = the ES-tracking OVERNIGHT_SET (original); none = leave everything
+# at 0 (TOPIC_WIPE_MODE=delete callers use this so no service self-creates a topic before the declared set
+# is recreated).
+START_AFTER_WIPE="${START_AFTER_WIPE:-overnight}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CALENDAR_DIR="${CALENDAR_DIR:-$(cd "$SCRIPT_DIR/../jenkins" && pwd 2>/dev/null || echo "$SCRIPT_DIR/../jenkins")}"
 
@@ -618,9 +643,17 @@ fi
 if [ "$MUTATE" = "false" ]; then
   log "DRY-RUN — would perform (NO changes made):"
   if [ "$WIPE_KAFKA" = "true" ]; then
+    if [ "$TOPIC_WIPE_MODE" = "delete" ]; then
+      log "  A. Kafka (WIPE_KAFKA=true, TOPIC_WIPE_MODE=delete): DELETE all $((N_STATE+N_PURGE)) non-preserved topics ($N_STATE state + $N_PURGE data) + idle consumer groups; KEEP $KEEP_SYS system topics ($SYSTEM_TOPICS) + $KEEP_DURABLE reset-preserved; the caller recreates the declared set (start=$START_AFTER_WIPE)"
+    else
     log "  A. Kafka (WIPE_KAFKA=true): DELETE $N_STATE state topics; PURGE $N_PURGE data topics to 0; KEEP $KEEP_SYS system topics ($SYSTEM_TOPICS)"
     [ "$N_STATE" -gt 0 ] && { log "     state-topic sample:"; echo $STATE_TOPICS | tr ' ' '\n' | grep . | head -20 | sed 's/^/       DEL /'; }
-    log "  B. Streams state: for each of $N_PVCS PVCs -> scale owner 0, delete+recreate PVC, scale 1 (--as=$KUBECTL_AS)"
+    fi
+    if [ "$STATE_RESET_MODE" = "contents" ]; then
+      log "  B. Streams state: for each of $N_PVCS PVCs -> EMPTY its local-path directory in place (PVC kept; STATE_RESET_MODE=contents)"
+    else
+      log "  B. Streams state: for each of $N_PVCS PVCs -> scale owner 0, delete+recreate PVC, scale 1 (--as=$KUBECTL_AS)"
+    fi
     [ "$N_PVCS" -gt 0 ] && printf '%s\n' "$STATE_PVCS" | sed 's/^/       PVC /'
   else
     log "  A+B. Kafka topic wipe + Streams-state PVC reset: SKIPPED (WIPE_KAFKA=false — the ${N_PURGE} data + ${N_STATE} state topics and $N_PVCS PVCs ALL persist and NOTHING is reclaimed: retention is eternal (-1))"
@@ -683,6 +716,11 @@ discord "▶️ Off-hours clean-slate TRIGGERED ($EXPECTED_ENV, dry_run=$DRY_RUN
 # Snapshot replica counts FIRST so any failure path can always scale back up.
 SNAP=$(kcr get deploy -l "$SELECTOR" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.replicas}{"\n"}{end}')
 [ -n "$SNAP" ] || die "no deployments matched $SELECTOR"
+if [ -n "$SCALE_EXEMPT_RE" ]; then
+  EXEMPT=$(printf '%s\n' "$SNAP" | awk '{print $1}' | grep -E "$SCALE_EXEMPT_RE" | paste -sd' ' - || true)
+  SNAP=$(printf '%s\n' "$SNAP" | awk -v re="$SCALE_EXEMPT_RE" '$1 !~ re')
+  [ -n "$EXEMPT" ] && log "scale-exempt (never scaled to 0, never restored): $EXEMPT"
+fi
 
 SCALED_DOWN=0
 restore_scale() {
@@ -705,8 +743,8 @@ while read -r name reps; do
 done <<<"$SNAP"
 deadline=$(( $(date +%s) + SCALEDOWN_WAIT ))
 while :; do
-  READY=$(kcr get deploy -l "$SELECTOR" -o jsonpath='{range .items[*]}{.status.readyReplicas}{" "}{end}' 2>/dev/null \
-          | tr ' ' '\n' | awk '{s+=$1} END{print s+0}')
+  READY=$(kcr get deploy -l "$SELECTOR" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.readyReplicas}{"\n"}{end}' 2>/dev/null \
+          | awk -v re="${SCALE_EXEMPT_RE:-^$}" '$1 !~ re {s+=$2} END{print s+0}')
   [ "${READY:-0}" = "0" ] && { log "all consumers stopped"; break; }
   [ "$(date +%s)" -ge "$deadline" ] && { log "WARN: ${READY} replicas still ready after ${SCALEDOWN_WAIT}s — proceeding"; break; }
   sleep 5
@@ -721,9 +759,50 @@ done
 #
 # The earlier note here promised Kafka's 12h retention would expire the session
 # overnight. That model was reversed on 2026-07-11 (see the WIPE_KAFKA block above).
-del_ok=0; del_fail=0; purged=0; pvc_ok=0; pvc_fail=0
+del_ok=0; del_fail=0; purged=0; pvc_ok=0; pvc_fail=0; groups_deleted=0
 if [ "$WIPE_KAFKA" = "true" ]; then
 
+# ---- A-delete-begin ----
+# TOPIC_WIPE_MODE=delete: every non-preserved, non-system topic goes, state and data alike. The two guards
+# are belt and braces on top of the classification above: a whitelisted or system name can never reach
+# --delete even if that classification ever regresses.
+delete_all_topics() { # uses $STATE_TOPICS $PURGE_TOPICS; sets del_ok del_fail; waits for the broker to finish
+  local T remaining waited
+  for T in $STATE_TOPICS $PURGE_TOPICS; do
+    is_system_topic "$T"    && { log "GUARD: refusing to delete system topic $T"; continue; }
+    is_reset_preserved "$T" && { log "GUARD: refusing to delete reset-preserved topic $T"; continue; }
+    if "$KT" --bootstrap-server "$BOOTSTRAP" --delete --topic "$T" >/dev/null 2>&1 \
+       || "$KT" --bootstrap-server "$BOOTSTRAP" --delete --topic "$T" >/dev/null 2>&1; then
+      del_ok=$((del_ok+1))
+    else
+      del_fail=$((del_fail+1)); log "  WARN failed to delete topic: $T"
+    fi
+  done
+  # Topic deletion is asynchronous: a recreate that races it gets "topic is marked for deletion".
+  waited=0
+  while :; do
+    remaining=$("$KT" --bootstrap-server "$BOOTSTRAP" --list 2>/dev/null | grep -cxF -f <(printf '%s\n' $STATE_TOPICS $PURGE_TOPICS | grep .) || true)
+    [ "${remaining:-0}" -eq 0 ] && break
+    [ "$waited" -ge "$TOPIC_DELETE_WAIT" ] && { log "WARN: $remaining topic(s) still listed after ${TOPIC_DELETE_WAIT}s — the recreate may hit 'marked for deletion'"; break; }
+    sleep 5; waited=$((waited+5))
+  done
+  log "topic delete (all): ok=$del_ok failed=$del_fail settled_after=${waited}s"
+}
+# ---- A-delete-end ----
+if [ "$TOPIC_WIPE_MODE" = "delete" ]; then
+delete_all_topics
+purged=0
+# Idle consumer groups: their committed offsets point into topics that no longer exist. Groups with live
+# members (there should be none — everything is at 0) are left alone and named.
+for G in $("$KCG" --bootstrap-server "$BOOTSTRAP" --list 2>/dev/null); do
+  if "$KCG" --bootstrap-server "$BOOTSTRAP" --delete --group "$G" >/dev/null 2>&1; then
+    groups_deleted=$((groups_deleted+1))
+  else
+    log "  WARN: consumer group $G not deleted (active members?)"
+  fi
+done
+log "consumer groups deleted: ${groups_deleted:-0}"
+else
 # ---- A.1: DELETE state topics (*-changelog / *-repartition, incl. compact) ----
 for T in $STATE_TOPICS; do
   is_system_topic "$T" && { log "GUARD: refusing to delete system topic $T"; continue; }   # belt+braces
@@ -768,13 +847,43 @@ for G in $("$KCG" --bootstrap-server "$BOOTSTRAP" --list 2>/dev/null); do
     || log "WARN: could not reset group $G"
 done
 log "consumer groups reset to latest"
+fi   # TOPIC_WIPE_MODE
 
 # ---- B: clear Streams local state — delete+recreate each *-streams-state PVC ----
 # Apps are already at 0 replicas, so the PVC is unmounted and can be replaced.
 # We capture each PVC's full spec, delete it, and re-apply the captured spec so the
 # storage request / accessModes / labels are preserved exactly.
 pvc_ok=0; pvc_fail=0
-if [ -n "$STATE_PVCS" ]; then
+# ---- B-contents-begin ----
+# STATE_RESET_MODE=contents: the claim stays bound; only what is INSIDE its directory goes. The directory is
+# resolved from the PV (never guessed) and must carry this claim's own name in the local-path layout, so a
+# PV that points anywhere else — or at another claim — is refused rather than emptied.
+reset_pvc_contents() { # <pvc> -> 0 emptied, 1 refused/failed, 2 unbound (nothing to wipe)
+  local pvc="$1" pv hp
+  pv=$(kcr get pvc "$pvc" -o jsonpath='{.spec.volumeName}' 2>/dev/null)
+  # A local-path claim binds on first use (WaitForFirstConsumer): a service that has never run holds a
+  # Pending claim with no volume and therefore no state — not a failure, there is nothing to empty.
+  [ -n "$pv" ] || { log "  $pvc: not bound to a PV (owner never ran) — nothing to wipe"; return 2; }
+  hp=$(kubectl get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}' 2>/dev/null)
+  case "$hp" in
+    */pvc-*_"${NS}"_"${pvc}") : ;;
+    *) log "  WARN $pvc: PV $pv path '$hp' is not this claim's local-path directory — REFUSING to empty it"; return 1 ;;
+  esac
+  [ -d "$hp" ] || { log "  WARN $pvc: $hp is not a directory on this host — SKIPPING"; return 1; }
+  if find "$hp" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null && [ -z "$(ls -A "$hp")" ]; then
+    return 0
+  fi
+  log "  ERROR $pvc: could not empty $hp (run as root on the k3s host) — its owner will restart on stale state"
+  return 1
+}
+# ---- B-contents-end ----
+if [ -n "$STATE_PVCS" ] && [ "$STATE_RESET_MODE" = "contents" ]; then
+  pvc_unbound=0
+  for PVC in $STATE_PVCS; do
+    reset_pvc_contents "$PVC"; case $? in 0) pvc_ok=$((pvc_ok+1)) ;; 2) pvc_unbound=$((pvc_unbound+1)) ;; *) pvc_fail=$((pvc_fail+1)) ;; esac
+  done
+  log "streams-state PVCs: emptied in place=$pvc_ok unbound=$pvc_unbound failed=$pvc_fail (PVCs kept)"
+elif [ -n "$STATE_PVCS" ]; then
   for PVC in $STATE_PVCS; do
     SPECYAML=$(mktemp)
     if ! kcr get pvc "$PVC" -o json 2>/dev/null \
@@ -795,8 +904,8 @@ if [ -n "$STATE_PVCS" ]; then
     fi
     rm -f "$SPECYAML"
   done
+  log "streams-state PVCs: recreated=$pvc_ok failed=$pvc_fail"
 fi
-log "streams-state PVCs: recreated=$pvc_ok failed=$pvc_fail"
 
 else
   log "WIPE_KAFKA=false — SKIPPING Kafka topic delete/purge + consumer-group reset + Streams-state PVC reset. Topics + Streams state persist and NOTHING is reclaimed: retention is eternal (-1), so this job is the only thing that deletes data."
@@ -913,8 +1022,13 @@ fi
 # $OVERNIGHT_SET so ES is tracked overnight; everything else STAYS at 0 until morning-autostart
 # (06:15 ET) scales the full pipeline up before the open. (The EXIT restore_scale trap still restores
 # the full SNAP if we die BEFORE this point — a fail-up safety net.)
-log "overnight start: bringing up ES-tracking set only ($OVERNIGHT_SET); all others stay at 0 until 06:15 ET"
 SCALEBACK_OK=1
+if [ "$START_AFTER_WIPE" = "none" ]; then
+  log "start after wipe: NONE (START_AFTER_WIPE=none) — every pipeline deployment stays at 0; the caller recreates the declared topics and brings the fleet up"
+  OVERNIGHT_SET=""
+else
+  log "overnight start: bringing up ES-tracking set only ($OVERNIGHT_SET); all others stay at 0 until 06:15 ET"
+fi
 for name in $OVERNIGHT_SET; do
   [ -n "$name" ] || continue
   if kcr get deploy "$name" >/dev/null 2>&1; then
@@ -981,7 +1095,7 @@ DISK_NOTE="freed ${FREED_GB} GB (was ${USED_BEFORE_GB} → now ${USED_AFTER_GB} 
 
 ELAPSED=$(( $(date +%s) - START_TS ))
 log "=== off-hours clean-slate complete in ${ELAPSED}s ==="
-SUMMARY="env=$EXPECTED_ENV state_topics_deleted=$del_ok purge_topics=$purged pvcs_recreated=$pvc_ok db_tables_truncated=$trunc_n logs_truncated=$log_files scaleback_ok=$SCALEBACK_OK $DISK_NOTE elapsed=${ELAPSED}s"
+SUMMARY="env=$EXPECTED_ENV topic_wipe_mode=$TOPIC_WIPE_MODE topics_deleted=$del_ok purge_topics=$purged groups_deleted=$groups_deleted pvcs_recreated=$pvc_ok db_tables_truncated=$trunc_n logs_truncated=$log_files scaleback_ok=$SCALEBACK_OK $DISK_NOTE elapsed=${ELAPSED}s"
 log "SUMMARY: $SUMMARY"
 if [ "$del_fail" -eq 0 ] && [ "$pvc_fail" -eq 0 ] && [ "$SCALEBACK_OK" = "1" ]; then
   discord "🧹 Off-hours clean-slate complete ($EXPECTED_ENV) — deleted **${del_ok}** state topics, purged **${purged}** data topics, recreated **${pvc_ok}** PVCs, truncated **${trunc_n}** DB tables, **${log_files}** logs; apps back up. ✅ · ${DISK_NOTE}"
