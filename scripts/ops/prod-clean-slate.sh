@@ -30,9 +30,12 @@ PAUSED_LIST="${PROD_MIRRORS_PAUSED:-$HOME/oe-ops/.prod-mirrors-paused}"
 LOG=~/oe-ops/logs/prod-clean-slate.log; mkdir -p ~/oe-ops/logs
 case "$MODE" in dry) DRY=true; WIPE=false ;; wipe) DRY=false; WIPE=true ;; *) echo "usage: $0 dry|wipe [up|down]"; exit 2 ;; esac
 say() { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG"; }
-ssh_root() { sshpass -p "$PW" ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$HOST" "su - root -c '$1'" <<EOF 2>&1 | grep -vE "^Password: *$|WARNING: |vulnerable|openssh|^\*\*" | sed 's/^Password: //'
+# Returns the REMOTE command's exit status (the filter stages would otherwise hide it: a function returns
+# its last pipe stage, and sed always succeeds).
+ssh_root() { local rc; sshpass -p "$PW" ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$HOST" "su - root -c '$1'" <<EOF 2>&1 | grep -vE "^Password: *$|WARNING: |vulnerable|openssh|^\*\*" | sed 's/^Password: //'
 $PW
 EOF
+  rc=${PIPESTATUS[0]}; return "$rc"
 }
 
 # ---- es4->prod mirror agents: the launchd jobs whose producer.properties target the prod broker ----

@@ -858,10 +858,12 @@ pvc_ok=0; pvc_fail=0
 # STATE_RESET_MODE=contents: the claim stays bound; only what is INSIDE its directory goes. The directory is
 # resolved from the PV (never guessed) and must carry this claim's own name in the local-path layout, so a
 # PV that points anywhere else — or at another claim — is refused rather than emptied.
-reset_pvc_contents() { # <pvc> -> 0 emptied, 1 refused/failed
+reset_pvc_contents() { # <pvc> -> 0 emptied, 1 refused/failed, 2 unbound (nothing to wipe)
   local pvc="$1" pv hp
   pv=$(kcr get pvc "$pvc" -o jsonpath='{.spec.volumeName}' 2>/dev/null)
-  [ -n "$pv" ] || { log "  WARN $pvc: not bound to a PV — SKIPPING"; return 1; }
+  # A local-path claim binds on first use (WaitForFirstConsumer): a service that has never run holds a
+  # Pending claim with no volume and therefore no state — not a failure, there is nothing to empty.
+  [ -n "$pv" ] || { log "  $pvc: not bound to a PV (owner never ran) — nothing to wipe"; return 2; }
   hp=$(kubectl get pv "$pv" -o jsonpath='{.spec.hostPath.path}{.spec.local.path}' 2>/dev/null)
   case "$hp" in
     */pvc-*_"${NS}"_"${pvc}") : ;;
@@ -876,10 +878,11 @@ reset_pvc_contents() { # <pvc> -> 0 emptied, 1 refused/failed
 }
 # ---- B-contents-end ----
 if [ -n "$STATE_PVCS" ] && [ "$STATE_RESET_MODE" = "contents" ]; then
+  pvc_unbound=0
   for PVC in $STATE_PVCS; do
-    if reset_pvc_contents "$PVC"; then pvc_ok=$((pvc_ok+1)); else pvc_fail=$((pvc_fail+1)); fi
+    reset_pvc_contents "$PVC"; case $? in 0) pvc_ok=$((pvc_ok+1)) ;; 2) pvc_unbound=$((pvc_unbound+1)) ;; *) pvc_fail=$((pvc_fail+1)) ;; esac
   done
-  log "streams-state PVCs: emptied in place=$pvc_ok failed=$pvc_fail (PVCs kept)"
+  log "streams-state PVCs: emptied in place=$pvc_ok unbound=$pvc_unbound failed=$pvc_fail (PVCs kept)"
 elif [ -n "$STATE_PVCS" ]; then
   for PVC in $STATE_PVCS; do
     SPECYAML=$(mktemp)

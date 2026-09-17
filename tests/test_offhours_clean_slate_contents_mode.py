@@ -77,10 +77,14 @@ class ContentsModeBehaviour(unittest.TestCase):
         self.assertIn("REFUSING", out); self.assertIn("rc=1", out)
         self.assertTrue((hp / ".checkpoint").exists(), "foreign directory must be untouched")
 
-    def test_refuses_an_unbound_claim(self):
+    def test_unbound_claim_is_nothing_to_wipe_not_a_failure(self):
         out, hp = self.run_reset(None, bound=False)
-        self.assertIn("not bound", out); self.assertIn("rc=1", out)
+        self.assertIn("not bound to a PV", out); self.assertIn("rc=2", out)
         self.assertTrue((hp / ".checkpoint").exists())
+
+    def test_wrapper_ssh_root_returns_the_remote_status(self):
+        w = (ROOT / "scripts/ops/prod-clean-slate.sh").read_text()
+        self.assertIn('rc=${PIPESTATUS[0]}; return "$rc"', w)
 
     def test_missing_directory_is_skipped_not_created(self):
         out, hp = self.run_reset(None, make_dir=False)
