@@ -107,3 +107,60 @@ class ScaleExempt(unittest.TestCase):
     def test_ready_wait_ignores_exempt_deployments(self):
         t = SCRIPT.read_text()
         self.assertIn("awk -v re=\"${SCALE_EXEMPT_RE:-^$}\" '$1 !~ re {s+=$2} END{print s+0}'", t)
+
+
+class DeleteMode(unittest.TestCase):
+    """TOPIC_WIPE_MODE=delete: every non-preserved, non-system topic is deleted (like dev-cleanup.sh); the
+    reset-preserved whitelist and the system topics can never reach --delete."""
+
+    def _run(self, state, purge, listed_after, preserved, wait="0"):
+        tmp = Path(tempfile.mkdtemp()); calls = tmp / "calls"; calls.touch()
+        kt = tmp / "kt"; kt.write_text(textwrap.dedent(f"""\
+            #!/bin/bash
+            case " $* " in
+              *" --delete "*) printf '%s\\n' "$*" | sed -E 's/.*--topic ([^ ]+).*/DEL \\1/' >> "{calls}"; exit 0 ;;
+              *" --list "*) printf '%s\\n' {listed_after or '""'}; exit 0 ;;
+            esac
+            exit 1
+            """)); kt.chmod(0o755)
+        t = SCRIPT.read_text()
+        m = re.search(r"# ---- A-delete-begin ----\n(.*?)# ---- A-delete-end ----", t, re.S); assert m
+        h = tmp / "h.sh"; h.write_text(textwrap.dedent(f"""\
+            #!/bin/bash
+            KT="{kt}"; BOOTSTRAP=x; TOPIC_DELETE_WAIT={wait}; del_ok=0; del_fail=0
+            STATE_TOPICS="{state}"; PURGE_TOPICS="{purge}"
+            log() {{ echo "[log] $*"; }}
+            is_system_topic() {{ case "$1" in __consumer_offsets|__transaction_state|_schemas) return 0;; esac; return 1; }}
+            is_reset_preserved() {{ case " {preserved} " in *" $1 "*) return 0;; esac; return 1; }}
+            {m.group(1)}
+            delete_all_topics; echo "ok=$del_ok fail=$del_fail"
+            """))
+        out = subprocess.run(["bash", str(h)], capture_output=True, text=True).stdout
+        return out, calls.read_text().split()
+
+    def test_deletes_state_and_data_topics_but_never_whitelist_or_system(self):
+        out, dels = self._run(state="a-changelog b-repartition", purge="options.raw spx.basis.state _schemas",
+                              listed_after="", preserved="spx.basis.state")
+        self.assertEqual(sorted(x for x in dels if x != "DEL"), ["a-changelog", "b-repartition", "options.raw"])
+        self.assertIn("refusing to delete reset-preserved topic spx.basis.state", out)
+        self.assertIn("refusing to delete system topic _schemas", out)
+        self.assertIn("ok=3 fail=0", out)
+
+    def test_waits_for_the_broker_and_warns_when_deletes_do_not_settle(self):
+        out, _ = self._run(state="a-changelog", purge="", listed_after="a-changelog", preserved="", wait="5")
+        self.assertIn("still listed after 5s", out)
+
+    def test_default_mode_is_purge_and_delete_mode_uses_both_lists(self):
+        t = SCRIPT.read_text()
+        self.assertIn('TOPIC_WIPE_MODE="${TOPIC_WIPE_MODE:-purge}"', t)
+        self.assertIn('for T in $STATE_TOPICS $PURGE_TOPICS; do', t)
+
+    def test_whitelist_classification_precedes_every_delete_list(self):
+        # is_reset_preserved runs in the classification loop BEFORE a name can land in STATE/PURGE
+        t = SCRIPT.read_text()
+        self.assertLess(t.index('if is_reset_preserved "$t"; then'), t.index('*-changelog|*-repartition) STATE_TOPICS='))
+
+    def test_start_after_wipe_none_empties_the_overnight_set(self):
+        t = SCRIPT.read_text()
+        self.assertIn('START_AFTER_WIPE="${START_AFTER_WIPE:-overnight}"', t)
+        self.assertRegex(t, r'if \[ "\$START_AFTER_WIPE" = "none" \]; then\n.*?\n  OVERNIGHT_SET=""', )
