@@ -56,4 +56,4 @@ resources:
 images:
   - name: 192.168.100.252:5000/options-edge-web
     newName: 192.168.100.252:5000/options-edge-web
-    digest: sha256:c9d21e1fe1a99254978c0b2edf191834a40e4769c21df5f3db97b1a739bcec65
+    digest: sha256:29a9adae9097c17c861eec668312988cb0d1419eab67f604bfd4a3bb13fef0d3
