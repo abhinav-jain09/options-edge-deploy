@@ -77,22 +77,29 @@ That is the guard working, not a broken job. What to pass:
 |---|---|---|
 | `PERMITTED_SHA` | the full 40-character SHA you are deploying: the job's checkout must be exactly this commit, and this commit must be on the environment's branch (`main` for prod jobs) | every guarded job |
 | `PERMITTED_SHA_GUARD_VERSION` | leave the default — it is the sha256 of `scripts/jenkins/permitted-sha-guard.sh` and a caller compares it against its own copy | every guarded job |
-| `CONTRACTS_PERMITTED_SHA` | tip of `options-edge-contracts` `main` | jobs that clone contracts and build against it (processing, gateway) |
+| `CONTRACTS_PERMITTED_SHA` | tip of `options-edge-contracts` `main` | jobs that clone contracts and build against it (processing, gateway), and `service-deploy` on its image-build path, which validates it before triggering processing and then forwards it |
 | `DEPLOY_PERMITTED_SHA` | tip of `options-edge-deploy` `main` | image jobs that then trigger `service-deploy` |
 | `REQUIRED_IMAGE` | `repo@sha256:…` from the building job's image lock | a deploy that must roll exactly the image another guarded build produced |
-| `PROCESSING_PERMITTED_SHA` | tip of `options-edge-processing` `main` | `service-deploy` with `BUILD_IMAGES=true` — it refuses without it |
-| `WEB_PERMITTED_SHA` | tip of `options-edge` `main` | `web-service` with `BUILD_IMAGE=true` (the image is built by `options-edge-web-deploy`) |
-| `NIFTY_PERMITTED_SHA` | tip of the nifty source `main` | `nifty-gex-service`, which clones and builds that source |
+| `PROCESSING_PERMITTED_SHA` | tip of `options-edge-processing` `main` | `service-deploy` with `BUILD_IMAGES=true` and `DEPLOY_DRY_RUN=false` |
+| `WEB_PERMITTED_SHA` | tip of `options-edge` `main` | `web-service` with `BUILD_IMAGE=true` and `DEPLOY_DRY_RUN=false` (the image is built by `options-edge-web-deploy`) |
+| `NIFTY_PERMITTED_SHA` | tip of the nifty source `main` | `nifty-gex-service` with `BUILD_IMAGE=true` and `DEPLOY_DRY_RUN=false`, which clones and builds that source |
 
-A job that builds an image needs the permission for the *source* repository as well as its own: those last three rows
-are not optional on that path, and the build refuses with `BUILD_IMAGES=true needs PROCESSING_PERMITTED_SHA: …` (or the web
-and nifty equivalents) before triggering anything. Each job's own **Build with Parameters** page lists exactly what it
-requires, with the reason in the parameter description.
+A job that builds an image needs the permission for the *source* repository as well as its own; those last three rows
+apply only on that path, so a dry run or a deploy of an image already in the registry does not ask for them. When the
+path is taken and the value is missing, `service-deploy` and `web-service` refuse before triggering anything, naming
+the parameter — `BUILD_IMAGES=true needs PROCESSING_PERMITTED_SHA: …`, `BUILD_IMAGE=true needs WEB_PERMITTED_SHA: …`.
+`nifty-gex-service` is different: it clones the source first and then runs the guard on that checkout with
+`PERMITTED_SHA="$NIFTY_PERMITTED_SHA"`, so a missing nifty permission fails *after* the clone with the generic
+`permitted-sha-guard: REFUSED — PERMITTED_SHA is empty. …` — that message is about `NIFTY_PERMITTED_SHA`, not about
+the job's own `PERMITTED_SHA`. Each job's own **Build with Parameters** page lists exactly what it requires, with the
+reason in the parameter description.
 
 Get the SHA with `gh api repos/abhinav-jain09/<repo>/branches/main -q .commit.sha`, and pass it in the same build.
 What the guard checks, in the order it checks it: the running guard's sha256 equals `PERMITTED_SHA_GUARD_VERSION`;
-the workspace is a git working checkout and `HEAD` resolves to a full commit id; the selected ref and the job's SCM
-metadata name the environment's branch; `origin/<branch>` is fetched (a fetch that fails is a refusal); the
+the workspace is a git working checkout and `HEAD` resolves to a full commit id; the selected ref, when one is
+supplied, names the environment's branch, as does each non-empty `BRANCH_NAME` / `GIT_BRANCH` (those describe the
+job's own checkout, so they are skipped for a nested one such as nifty's cloned source); `origin/<branch>` is
+fetched (a fetch that fails is a refusal); the
 checked-out `HEAD` is an *ancestor of* that freshly fetched tip; `PERMITTED_SHA` is present and a full lowercase
 40-character commit id; and finally `HEAD` equals `PERMITTED_SHA` exactly.
 
