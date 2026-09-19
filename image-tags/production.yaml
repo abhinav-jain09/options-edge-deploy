@@ -22,6 +22,7 @@ images:
   gamma-migration-service: 192.168.100.252:5000/options-edge-gamma-migration:prod
   gamma-leadership-service: 192.168.100.252:5000/options-edge-gamma-leadership:prod
   corridor-gauge-service: 192.168.100.252:5000/options-edge-corridor-gauge:prod
+  gamma-ladder-path-service: 192.168.100.252:5000/options-edge-gamma-ladder-path:prod
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:prod
   dealer-ledger-calibration-scorer: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:prod
   dealer-ledger-calibration-accumulator: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:prod
