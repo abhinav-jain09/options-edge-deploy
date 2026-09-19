@@ -48,7 +48,7 @@ SERVICES = [
     "directional-pressure", "gex-delta-redis-writer", "option-price-behavior", "option-truth-engine", "pin-postgres-writer",
     "pressure-postgres-writer", "raw-to-display", "strike-flow-avro-adapter", "strike-flow-classifier",
     "strike-liquidity-heatmap", "volume-pace", "spread-skew", "spread-skew-postgres-writer",
-    "greek-move-authenticity", "gamma-migration",
+    "greek-move-authenticity", "gamma-migration", "gamma-ladder-path",
     "indicator-service",
     "context-tape",
     # es4-ONLY (no dev/prod deployment): its slice is hand-authored as the render source —
@@ -93,6 +93,14 @@ ES_ENV = {
         {"name": "KAFKA_GAMMA_MIGRATION_OTHER_BOARD_TOPIC",
          "value": "options.databento.gex.strike.history", "_override": True},
         {"name": "KAFKA_GAMMA_MIGRATION_OTHER_BOARD_SYMBOL", "value": "SPX", "_override": True},
+    ],
+    "gamma-ladder-path": [
+        # es4 has NO underlying.spx.index.price — its spot stream is underlying.spx.price (prefixed to
+        # es.underlying.spx.price at runtime by TOPIC_PREFIX like every env-supplied topic).
+        {"name": "KAFKA_LADDER_PATH_SPOT_TOPIC", "value": "underlying.spx.price", "_override": True},
+        # es4's synthetic spot carries source SYNTHETIC_OPTION_SPOT and no priceField: accept every voice.
+        {"name": "LADDER_PATH_SPOT_SOURCE_FILTER", "value": "ANY", "_override": True},
+        {"name": "LADDER_PATH_SPOT_FIELD_FILTER", "value": "ANY", "_override": True},
     ],
     "context-tape": [
         # es4 has NO underlying.spx.index.price — its spot stream is underlying.spx.price

@@ -105,8 +105,10 @@ resources:
   - corridor-gauge-deployment.yaml
   - corridor-gauge-service.yaml
   - gamma-migration-deployment.yaml
+  - gamma-ladder-path-deployment.yaml
   - databento-gex-history-service.yaml
   - gamma-migration-service.yaml
+  - gamma-ladder-path-service.yaml
   - gamma-leadership-deployment.yaml
   - gamma-leadership-service.yaml
   - option-price-behavior-deployment.yaml
