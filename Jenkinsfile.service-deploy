@@ -521,7 +521,7 @@ PYEOF
       // deploy neither output topic exists and the broker auto-creates them with cluster defaults (state not
       // compacted, time retention) — or, with auto-create off, the Streams producer fails and the pod crash-loops.
       when {
-        expression { params.SERVICE == 'gamma-ladder-path' && !params.DEPLOY_DRY_RUN }
+        expression { env.PERMITTED_SHA_GUARD == 'PASSED' && env.DEPLOY_WORKSPACE_PERMITTED == 'PASSED' && (params.SERVICE == 'gamma-ladder-path' && !params.DEPLOY_DRY_RUN) }
       }
       steps {
         sh '''

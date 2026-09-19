@@ -60,6 +60,76 @@ Building the wrong arch → the pod never starts (`exec format error` → `Crash
 
 ---
 
+## Every deploy job now needs a permitted commit
+
+Since the permitted-commit guard landed (options-edge rule.md, "Deployment Permission Rule"; deploy PR #1043,
+gateway #188, web #738, processing #836), a guarded job refuses to do anything unless it is told which commit it may
+deploy. A run without it stops in the `Permitted commit guard` stage and says so:
+
+```text
+permitted-sha-guard: REFUSED — PERMITTED_SHA is not set ...
+permitted-sha-guard: verdict=REFUSED (no deployment effect may follow)
+```
+
+That is the guard working, not a broken job. What to pass:
+
+| Parameter | Value | Which jobs |
+|---|---|---|
+| `PERMITTED_SHA` | the full 40-character SHA you are deploying: the job's checkout must be exactly this commit, and this commit must be on the environment's branch (`main` for prod jobs) | every guarded job |
+| `PERMITTED_SHA_GUARD_VERSION` | leave the default — it is the sha256 of `scripts/jenkins/permitted-sha-guard.sh` and a caller compares it against its own copy | every guarded job |
+| `CONTRACTS_PERMITTED_SHA` | tip of `options-edge-contracts` `main` | jobs that clone contracts and build against it (processing, gateway), and `service-deploy` on its image-build path, which validates it before triggering processing and then forwards it |
+| `DEPLOY_PERMITTED_SHA` | tip of `options-edge-deploy` `main` | image jobs that then trigger `service-deploy` |
+| `REQUIRED_IMAGE` | `repo@sha256:…` from the building job's image lock | a deploy that must roll exactly the image another guarded build produced |
+| `PROCESSING_PERMITTED_SHA` | tip of `options-edge-processing` `main` | `service-deploy` with `BUILD_IMAGES=true` and `DEPLOY_DRY_RUN=false` |
+| `WEB_PERMITTED_SHA` | tip of `options-edge` `main` | `web-service` with `BUILD_IMAGE=true` and `DEPLOY_DRY_RUN=false` (the image is built by `options-edge-web-deploy`) |
+| `NIFTY_PERMITTED_SHA` | tip of the nifty source `main` | `nifty-gex-service` with `BUILD_IMAGE=true` and `DEPLOY_DRY_RUN=false`, which clones and builds that source |
+
+A job that builds an image needs the permission for the *source* repository as well as its own; those last three rows
+apply only on that path, so a dry run or a deploy of an image already in the registry does not ask for them. When the
+path is taken and the value is missing, `service-deploy` and `web-service` refuse before triggering anything, naming
+the parameter — `BUILD_IMAGES=true needs PROCESSING_PERMITTED_SHA: …`, `BUILD_IMAGE=true needs WEB_PERMITTED_SHA: …`.
+`nifty-gex-service` is different: it clones the source first and then runs the guard on that checkout with
+`PERMITTED_SHA="$NIFTY_PERMITTED_SHA"`, so a missing nifty permission fails *after* the clone with the generic
+`permitted-sha-guard: REFUSED — PERMITTED_SHA is empty. …` — that message is about `NIFTY_PERMITTED_SHA`, not about
+the job's own `PERMITTED_SHA`. Each job's own **Build with Parameters** page lists exactly what it requires, with the
+reason in the parameter description.
+
+Get the SHA with `gh api repos/abhinav-jain09/<repo>/branches/main -q .commit.sha`, and pass it in the same build.
+What the guard checks, in the order it checks it: the running guard's sha256 equals `PERMITTED_SHA_GUARD_VERSION`;
+the workspace is a git working checkout and `HEAD` resolves to a full commit id; the selected ref, when one is
+supplied, names the environment's branch, as does each non-empty `BRANCH_NAME` / `GIT_BRANCH` (those describe the
+job's own checkout, so they are skipped for a nested one such as nifty's cloned source); `origin/<branch>` is
+fetched (a fetch that fails is a refusal); the
+checked-out `HEAD` is an *ancestor of* that freshly fetched tip; `PERMITTED_SHA` is present and a full lowercase
+40-character commit id; and finally `HEAD` equals `PERMITTED_SHA` exactly.
+
+Two things follow. The ancestry test is against the branch tip but the equality test is against your checkout, so it
+is the checkout — never the tip — that must be the permitted commit: if `main` moves on after you read the SHA, a
+build that still checks out your commit satisfies both tests. And the equality and ancestry tests are two of seven,
+not the whole guard: a run can still refuse for a guard-version mismatch, a workspace that is not a checkout, SCM
+metadata naming another branch, or a failed fetch. Read the SHA and start the build together anyway, so you deploy
+what you looked at.
+
+A few consequences worth knowing:
+
+- **A build started by a push refuses too.** An SCM-triggered run has no permitted commit, so it stops at the guard
+  with a red build and publishes nothing. That is intended: an automatic push is not a deployment permission.
+- **The first run of a job after the guard merges is expected to fail.** Jenkins only learns a job's new parameters by
+  running it once; that run refuses at the guard and registers them. Done on 2026-09-20 for `service-deploy`,
+  `options-edge-web-deploy`, `web-service-deploy` and `option-edge-feed-gateway`.
+- **A job may only hand work to a child that enforces the same guard.** The caller reads the child's definition from
+  its repository at the commit being forwarded and checks it; an unguarded or out-of-date child is refused rather than
+  triggered.
+- **Cron-scheduled jobs are deliberately outside the guard** — `premarket`, `premarket-reset`,
+  `offhours-clean-slate`, `morning-autostart`, `gateway-nightly-restart` and `stockgex-oi-snapshot`: requiring a SHA
+  would fail every scheduled run. They remain the owner's to start. Being a stockgex job is not the reason:
+  `stockgex-close-board` has no trigger and *is* guarded.
+
+`scripts/ci/jenkins-permitted-sha-scope.txt` classifies each of the 40 root `Jenkinsfile*` files in this repository
+as in or out of scope, with the reason, and the CI check fails if a root Jenkinsfile is missing from it.
+
+---
+
 ## How to deploy
 
 ### Dev (to docker-desktop on the Mac)
