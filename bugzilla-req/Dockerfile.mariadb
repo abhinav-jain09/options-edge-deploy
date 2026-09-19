@@ -1,0 +1,17 @@
+# Requirement-intake portal database image (REQ-4).
+#
+# Owned by this repo rather than reusing the upstream checkout's Dockerfile.mariadb, so the base
+# digest is a DESIGN INPUT pinned here — not something resolved from a file fetched during the
+# build. That is the difference between "we know exactly what we shipped" and "we know what the tag
+# meant on build day".
+#
+# The upstream tree's docker/my.cnf and docker/mysql/ tuning are still used: the build context is the
+# pinned upstream checkout with this repo's bugzilla-req/ overlaid on top.
+FROM mariadb:10.6@sha256:4066a44f4a0143c310fbe6972c254bbbb7a844a2be1418831a987fdbbc8ff8bd
+
+COPY docker/my.cnf /etc/my.cnf
+COPY docker/mysql /etc/mysql/conf.d
+
+# Pick up security updates present at build time. Like the web image, this makes the result
+# traceable and immutable-after-build, not reproducible — apt archives move.
+RUN apt-get update && apt-get -y dist-upgrade && rm -rf /var/lib/apt/lists/*
