@@ -89,8 +89,9 @@ pipeline {
     KIND          = "${params.KIND}"
     FILE          = "${params.FILE}"
     PUBLISHED_BY  = "${params.PUBLISHED_BY}"
-    PERMITTED_SHA = "${params.PERMITTED_SHA}"
     KEEP_JOBS     = "${params.KEEP_JOBS}"
+    // PERMITTED_SHA is NOT mirrored here: Jenkins already exposes the (trimmed) parameter as that environment variable,
+    // and a permission variable may be defined only by parameters{} (validator: permission variables are read-only).
   }
   stages {
     // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----

@@ -81,25 +81,50 @@ form; that is deliberate):
      guard step must run UNSKIPPABLY: every enclosing block below the stage's `steps` is a sequencing block
      (script/dir/withEnv/timeout/…) and no return/if/else/try/catch/catchError/loop/break/continue precedes it in any
      of them, so no later step or stage consuming the source can run without it.
-  9b. Provenance verification before an effect. The guard proves HEAD == permitted at one moment; the files an effect
-     consumes later can still be replaced while HEAD stays the permitted commit. So a source-consuming effect must be
-     preceded, in the SAME stage, by the dedicated verify-permitted-tree step for each source directory it consumes:
-         timeout(time: N, unit: 'MINUTES') {
-           sh 'PERMITTED_SHA="${X:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir <dir> [--allow-ignored <d>]…'
-         }
-     Source-consuming effects: rsync, helm install/upgrade and mvn install/deploy (ship or compile a source tree into a
-     published artifact) — attributed to a nested checkout when they name one (mvn `-f <nested>/pom.xml`, a path under a
-     nested dir), else to the primary workspace ('.'); and `docker build` / `buildx build` whose CONTEXT is a nested
-     checkout (attributed to it). A `docker build` of the primary workspace is not required — by the time the image is
-     built the workspace legitimately holds the build's own output, so a whole-tree verify is not meaningful there; the
-     primary source is proven at checkout by the guard, and any nested source compiled into the image is re-verified on
-     its own. `docker push` / `git push` publish an already-built image or ref, not a tree. The verify step is
-     recognised from the Groovy token structure exactly like the guard (a real `sh` token whose sole argument is one
-     single-quoted literal equal to the template), its --dir is resolved through the enclosing dir() blocks, and it must
-     run unskippably before the effect. verify-permitted-tree.sh re-checks, at run time, HEAD == permitted AND a clean
-     working tree (nothing modified, staged, deleted or untracked; ignored paths only under a declared --allow-ignored
-     build directory), so a replacement is caught however it happened.
- 10. contracts=<dir>: that directory is acquired (and therefore, by rule 9, bound) at least once.
+  9b. Provenance verification, structurally. The guard proves HEAD == permitted at one moment; the files an effect
+     consumes later can still be replaced while HEAD stays the permitted commit. So:
+       (i)  EVERY source-consuming effect is a DEDICATED STEP — a plain `sh '…'` / `sh '''…'''` whose whole body is ONE
+            command (backslash continuations allowed; nothing else: no second command, no `; && || | &`, `$( )`, backticks,
+            redirections, here-documents, cd/pushd/export, assignment prefixes, comments, globs) — read against a FIXED
+            per-command template with an explicit option list and the consumed sources as LITERAL paths:
+              mvn               -B/-q/-ntp/-o/-e/-U/-am/-amd/-N/-V/-X/…, -f/-s/-gs/-t <literal path>, -pl/-T/-rf/-P <literal or
+                                "${VAR}">, -P<profiles>, -D<key>[=<literal or "…${VAR}…">], lifecycle phases and a fixed list
+                                of read-only plugin goals (a goal that rewrites sources or publishes through a plugin: refused);
+              docker build / buildx build
+                                --builder/--platform/-t/--label/--build-arg/--metadata-file/--iidfile/--progress/--target/
+                                --network/--cache-from/--cache-to/--provenance/--sbom/--attest/--output <literal or "${VAR}">,
+                                --push/--load/--no-cache/--pull/-q, -f <literal path>, exactly ONE literal context
+                                (--build-context, --secret, --ssh, -v and anything else: refused);
+              rsync             short flags, --delete…/--exclude/--include/--chmod…, -e/--rsh only `ssh [-o K=V] [-p N] [-i f]`,
+                                literal workspace sources, a remote `host:path` destination;
+              scp               -o/-P/-i/-F/-J/-l/-c <literal>, -q/-r/-p/-C/-B/-4/-6/-v/-3, literal workspace sources, a remote
+                                destination (-S refused);
+              helm install/upgrade  fixed flags, -f/--values <literal path>, a release and ONE chart (local charts literal);
+              ansible-playbook  one literal playbook, -i/--inventory literal, -e key=value (never @file), fixed flags;
+              a repository script that (transitively) runs one of these: `[bash|sh|python3] <literal script> [args]`.
+            Effects are found in EVERY string of the file (stage steps, post{}, top-level methods and constants), at command
+            position in a shell-aware reading: quoted and escaped command names are read unquoted, assignment prefixes,
+            control words and wrappers (env/xargs/timeout/nice or a `$wrapper` variable) are stepped over, `bash -c`,
+            `eval` and here-documents fed to a local shell are read too, a program piped into a local shell is refused,
+            `"$DIR/name"` is classified by its literal basename, and — in a step's own shell — a command name computed at
+            run time (a variable or a Groovy interpolation) is refused. A script a step runs is read from the tree (or from
+            the here-document in this file that writes it); one that is neither is refused.
+       (ii) the dedicated effect step is IMMEDIATELY preceded, in the same block, by the dedicated verify step for EVERY
+            checkout a consumed path resolves into or equals — the primary workspace or the deepest nested checkout
+            containing it — and, for consumers handed a directory whole (a docker context, an rsync/scp source, a chart
+            directory), every nested checkout lying inside it; each verify with the SAME permission variable its checkout's
+            guard bound. Consecutive verify steps directly before the effect form its chain; anything else between them
+            breaks coverage.
+     The verify step is recognised from the Groovy token structure exactly like the guard (a real `sh` token whose sole
+     argument is one single-quoted literal equal to the template), sits alone in a timeout(time: N, unit: 'MINUTES')
+     block inside a stage's steps. verify-permitted-tree.sh re-checks HEAD == permitted AND a clean working tree at run
+     time (nothing modified, staged, deleted or untracked; ignored paths only under a declared --allow-ignored name).
+  9c. The shell text of every `sh` step is READABLE: one string literal, or a top-level constant that is one literal ending
+     at a line boundary followed by one literal (as in `sh JDK_SETUP + <literal>`) — never pieces joined at run time.
+     The permission variables (PERMITTED_SHA, X_PERMITTED_SHA) are READ-ONLY: defined only by parameters{}, never assigned
+     by `env.X =`, withEnv([...]) or environment{}. `parallel` is not accepted (a concurrent branch could change a tree
+     between a verify and its effect). A git command that moves a checkout's HEAD or worktree after the guard is refused
+     outside the dedicated acquisition step.
  10. contracts=<dir>: that directory is acquired (and therefore, by rule 9, bound) at least once.
  11. Every mention of permitted-sha-guard.sh outside comments and parameters{} descriptions is one of the
      canonical forms (rule 3/5 guard stage, rule 6 inline re-guard, rule 9 dedicated step) — any other
@@ -121,7 +146,10 @@ form; that is deliberate):
      \\$ \\b \\t \\n \\f \\r \\uXXXX or a line continuation) — `\\.`, `\\d`, octal and `\\s` do not compile
      or do not reach the shell as written.
 
-LIMITS — what this cannot prove: stage order is the order of `stage('…')` lines (no dynamic or parallel
+LIMITS — what this cannot prove: a repository script's OWN body is read only for the effects it runs (literal command
+names, here-documents, `bash -c`, scripts it runs by a literal path) — a command name it computes at run time, or a script
+it reaches by a computed path, is not seen (a step's own shell refuses both); a program installed on the agent by an
+absolute path is a host tool whose behaviour is outside this validator; Python helpers are read by token; stage order is the order of `stage('…')` lines (no dynamic or parallel
 stages are modelled — none exist in scope); mutation tokens are a fixed list, so a helper script called
 before the guard is invisible unless its name is a token — the manifest's before= set is the reviewed
 statement that those stages are effect-free; tokens in `//`/`#` comment lines and whole-line `echo '…'`
@@ -137,6 +165,7 @@ import glob
 import hashlib
 import os
 import re
+import shlex
 import subprocess
 import sys
 
@@ -190,7 +219,15 @@ VERIFY_STEP = re.compile(
     r"bash scripts/jenkins/verify-permitted-tree\.sh --dir (?P<dir>[A-Za-z0-9._][A-Za-z0-9._/-]*)"
     r"(?P<allow>(?: --allow-ignored [A-Za-z0-9._][A-Za-z0-9._/-]*)*))'$"
 )
-VERIFY_INVOCATION = re.compile(r"verify-permitted-tree\.sh")
+# The exact literals of the guard, verify and downstream-check invocations (primary / inline re-guard, dedicated nested
+# guard, dedicated verify, compatibility check). Their shape and placement are judged by rules 3, 6, 7, 9 and 9b; the
+# effect scan does not read them as script invocations.
+CANONICAL_LITERAL = re.compile(
+    r"bash scripts/jenkins/permitted-sha-guard\.sh(?: --ref \"\$\{[A-Z_]+:\?\}\")?"
+    r"|PERMITTED_SHA=\"\$\{[A-Z][A-Z0-9_]*:[-?]\}\" bash scripts/jenkins/permitted-sha-guard\.sh --dir [A-Za-z0-9._][A-Za-z0-9._/-]* --ref main"
+    r"|PERMITTED_SHA=\"\$\{[A-Z][A-Z0-9_]*:[-?]\}\" bash scripts/jenkins/verify-permitted-tree\.sh --dir [A-Za-z0-9._][A-Za-z0-9._/-]*(?: --allow-ignored [A-Za-z0-9._][A-Za-z0-9._/-]*)*"
+    r"|bash scripts/jenkins/require-guarded-downstream\.sh [A-Za-z0-9_.-]+ \"\$\{[A-Z][A-Z0-9_]*:\?\}\"(?: [A-Z][A-Z0-9_]*)*"
+)
 MUTATION_TOKENS = [
     (r"\bkubectl\b", "kubectl"),
     (r"\bdocker\s+(build|buildx|push|run|compose|rm|update)\b", "docker build/push/run/rm"),
@@ -408,6 +445,970 @@ def bad_escapes(body: str) -> list[tuple[int, str, str]]:
     return out
 
 
+# ----------------------------------------------------------------------------------------- shell views
+# A shell body is read in TWO views. The CODE view blanks everything that is data to the shell — single-quoted
+# contents, double-quoted contents (except a `$( … )` command substitution inside them, which IS code), `#` comments
+# and here-document bodies — so a command name found in it sits at a place the shell would execute it, never inside a
+# message or a remote ssh argument. The ORIGINAL text is what the template grammar reads once a command is known to be
+# an effect.
+def groovy_decode(body: str, gstring: bool = False) -> tuple[str, list[int]]:
+    """What the shell receives from a Groovy string literal, and for each decoded character its offset in the source
+    body: a doubled backslash becomes one, an escaped quote or dollar becomes the character, an escaped n / t becomes a
+    newline / tab, and a backslash before a newline is a Groovy line continuation. In a GString (double-quoted), every
+    Groovy interpolation (`${…}`, `$name`) is replaced by GROOVY_VALUE characters: its text is chosen at run time."""
+    out: list[str] = []
+    pos: list[int] = []
+    i, n = 0, len(body)
+    while i < n:
+        c = body[i]
+        if c == BS and i + 1 < n:
+            nx = body[i + 1]
+            if nx in (BS, "'", '"', "$"):
+                out.append(nx)
+                pos.append(i)
+                i += 2
+                continue
+            if nx in ("n", "t"):
+                out.append("\n" if nx == "n" else "\t")
+                pos.append(i)
+                i += 2
+                continue
+            if nx == "\n":
+                i += 2
+                continue
+        if gstring and c == "$":
+            m = re.match(r"\$\{[^{}]*\}|\$[A-Za-z_][A-Za-z0-9_.]*", body[i:])
+            if m:
+                for k in range(m.end()):
+                    out.append(GROOVY_VALUE)
+                    pos.append(i + k)
+                i += m.end()
+                continue
+        out.append(c)
+        pos.append(i)
+        i += 1
+    return "".join(out), pos
+
+
+GROOVY_VALUE = "\x01"
+
+
+def shell_code_view(s: str) -> str:
+    """The CODE view of a shell text, same length: everything that is data to the shell is blanked — single-quoted
+    contents, double-quoted contents (except a `$( … )` command substitution inside them, which IS code), `#` comments,
+    here-document bodies, `${…}` parameter expansions, `[[ … ]]` test expressions and `case` arm patterns — and a
+    backslash-newline continuation joins its lines. A command name found in this view sits where the shell executes it."""
+    s = s.replace(BS + "\n", "  ")
+    out = list(s)
+    n = len(s)
+    i = 0
+    heredoc_tags: list[str] = []
+
+    def blank(a: int, b: int, keep_nl: bool = True) -> None:
+        for k in range(a, min(b, n)):
+            if out[k] != "\n" or not keep_nl:
+                out[k] = " "
+
+    def skip_subst(k: int) -> int:
+        """k at the `(` of a `$(`: index just past its matching `)` (quotes inside respected, nested parens counted)."""
+        depth = 0
+        while k < n:
+            c = s[k]
+            if c == BS:
+                k += 2
+                continue
+            if c == "'":
+                e = s.find("'", k + 1)
+                k = n if e < 0 else e + 1
+                continue
+            if c == '"':
+                k += 1
+                while k < n and s[k] != '"':
+                    if s[k] == BS:
+                        k += 1
+                    elif s.startswith("$(", k):
+                        k = skip_subst(k + 1)
+                        continue
+                    k += 1
+                k += 1
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return k + 1
+            k += 1
+        return n
+
+    def skip_braces(k: int) -> int:
+        """k at the `{` of a `${`: index of its matching `}`."""
+        depth = 0
+        while k < n:
+            if s[k] == BS:
+                k += 2
+                continue
+            if s[k] == "{":
+                depth += 1
+            elif s[k] == "}":
+                depth -= 1
+                if depth == 0:
+                    return k
+            k += 1
+        return n
+
+    while i < n:
+        c = s[i]
+        if c == BS:
+            i += 2
+            continue
+        if c == "\n" and heredoc_tags:
+            tag = heredoc_tags.pop(0)
+            j = i + 1
+            while j < n:
+                e = s.find("\n", j)
+                e = n if e < 0 else e
+                line = s[j:e]
+                blank(j, e)
+                j = e + 1
+                if line.strip() == tag:
+                    break
+            i = j
+            continue
+        if c == "#" and (i == 0 or s[i - 1] in " \t\n;&|(`{"):
+            e = s.find("\n", i)
+            e = n if e < 0 else e
+            blank(i, e)
+            i = e
+            continue
+        if c == "'":
+            e = s.find("'", i + 1)
+            e = n if e < 0 else e
+            blank(i + 1, e, keep_nl=False)
+            i = e + 1
+            continue
+        if c == '"':
+            k = i + 1
+            while k < n and s[k] != '"':
+                if s[k] == BS:
+                    blank(k, k + 2, keep_nl=False)
+                    k += 2
+                    continue
+                if s.startswith("$((", k):
+                    e = s.find("))", k + 3)
+                    e = n if e < 0 else e
+                    blank(k + 3, e, keep_nl=False)
+                    k = e + 2
+                    continue
+                if s.startswith("$(", k):
+                    # a command substitution inside double quotes IS code: its own view, recursively
+                    e = skip_subst(k + 1)
+                    inner = shell_code_view(s[k + 2:max(k + 2, e - 1)])
+                    out[k + 2:k + 2 + len(inner)] = list(inner)
+                    k = e
+                    continue
+                out[k] = " "
+                k += 1
+            i = k + 1
+            continue
+        if s.startswith("$((", i):
+            e = s.find("))", i + 3)
+            e = n if e < 0 else e
+            blank(i + 3, e, keep_nl=False)
+            i = e + 2
+            continue
+        if s.startswith("${", i):
+            e = skip_braces(i + 1)
+            blank(i + 2, e, keep_nl=False)
+            i = e + 1
+            continue
+        if s.startswith("[[", i) and (i == 0 or s[i - 1] in " \t\n;&|(!"):
+            e = s.find("]]", i + 2)
+            e = n if e < 0 else e
+            blank(i + 2, e, keep_nl=False)
+            i = e + 2
+            continue
+        if s.startswith("<<", i) and not s.startswith("<<<", i):
+            m = re.match(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", s[i:])
+            if m:
+                heredoc_tags.append(m.group(2))
+                i += m.end()
+                continue
+        i += 1
+    v = "".join(out)
+
+    def _blank_pat(m: re.Match) -> str:
+        pat = m.group(2)
+        if pat.strip() in ("esac", "") or pat.strip().startswith("$("):
+            return m.group(0)
+        return m.group(1) + re.sub(r"[^\n]", " ", pat)
+    # a `case` arm's pattern list (`pat | pat)` after `in` or `;;`) is not a command
+    return re.sub(r"((?:\bin\b|;;&?|;&)\s*)(\(?[^;()\n]*?\))", _blank_pat, v)
+
+
+def simple_command_end(view: str, start: int) -> int:
+    """End offset of the simple command starting at `start` in a code view: the first `;`, `&`, `|`, `)`, `` ` `` or
+    newline (continuations are already joined in the view)."""
+    k = start
+    n = len(view)
+    while k < n:
+        c = view[k]
+        if c == BS:
+            k += 2
+            continue
+        if c in ";&|)`\n":
+            return k
+        k += 1
+    return n
+
+
+def raw_words(s: str, i: int, end: int) -> list[tuple[int, str, bool]]:
+    """The shell words of s[i:end]: (start offset, the word with its quoting removed, whether it contains a `$` outside
+    single quotes). Stops at an unquoted redirection or separator."""
+    out: list[tuple[int, str, bool]] = []
+    n = min(end, len(s))
+    while i < n:
+        while i < n and s[i] in " \t":
+            i += 1
+        if i >= n or s[i] in ";&|()<>\n":
+            break
+        st, buf, dollar = i, [], False
+        while i < n and s[i] not in " \t;&|()<>\n":
+            c = s[i]
+            if c == BS and i + 1 < n:
+                buf.append(s[i + 1])
+                i += 2
+            elif c == "'":
+                e = s.find("'", i + 1)
+                e = n if e < 0 else e
+                buf.append(s[i + 1:e])
+                i = e + 1
+            elif c == '"':
+                e = i + 1
+                while e < n and s[e] != '"':
+                    if s.startswith("$(", e):
+                        d, e = 0, e + 1
+                        while e < n:
+                            if s[e] == "(":
+                                d += 1
+                            elif s[e] == ")":
+                                d -= 1
+                                if d == 0:
+                                    break
+                            e += 1
+                        e += 1
+                        continue
+                    e += 2 if s[e] == BS else 1
+                part = s[i + 1:e]
+                dollar = dollar or "$" in part
+                buf.append(part)
+                i = e + 1
+            elif c == "$" and i + 1 < n and s[i + 1] == "(":
+                # a command substitution is part of this word (its own commands are found at their own command start)
+                d, e = 0, i + 1
+                while e < n:
+                    if s[e] == "(":
+                        d += 1
+                    elif s[e] == ")":
+                        d -= 1
+                        if d == 0:
+                            break
+                    e += 1
+                buf.append(s[i:e + 1])
+                dollar = True
+                i = e + 1
+            else:
+                dollar = dollar or c == "$"
+                buf.append(c)
+                i += 1
+        out.append((st, "".join(buf), dollar))
+    return out
+
+
+CMD_START_RE = re.compile(r"(?:^|(?<=[;&|(`{\n])|(?<=\$\())[ \t]*(?=\S)", re.M)
+CONTROL_WORDS = {"then", "do", "else", "if", "elif", "while", "until", "!", "time", "nohup", "exec", "sudo", "command", "builtin", "{"}
+WRAPPER_CMDS = {"env", "xargs", "timeout", "gtimeout", "nice", "stdbuf", "caffeinate"}
+WRAPPABLE = {"docker", "mvn", "rsync", "scp", "helm", "ansible-playbook", "ssh", "git", "kubectl", "curl", "python3", "python", "bash", "sh"}
+EFFECT_CMD_NAMES = {"mvn", "docker", "rsync", "scp", "helm", "ansible-playbook", "ssh", "eval", "bash", "sh", "python3", "python", "source", "."}
+SCRIPT_EXT = (".sh", ".bash", ".py")
+
+
+def command_names(text: str, view: str, strict: bool):
+    """Every command a shell text runs: (offset of the command word, the command word unquoted, a refusal reason or None).
+    Assignment prefixes, control words and wrapper commands (env/xargs/timeout/…, or a variable holding a wrapper such as
+    `$tmo`) are stepped over; a quoted or escaped name is read unquoted; `"$DIR/name"` is classified by its literal
+    basename. In STRICT mode (the Jenkinsfile's own shell steps) a name computed at run time — a variable or a Groovy
+    interpolation — is refused unless it only wraps a known command."""
+    for m in CMD_START_RE.finditer(view):
+        start = m.end()
+        if start >= len(view) or view[start] in "\n#":
+            continue
+        end = simple_command_end(view, start)
+        ws = raw_words(text, start, end)
+        k, wrapped = 0, False
+        while k < len(ws):
+            w = ws[k][1]
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", w, re.S) and not text[ws[k][0]:].startswith(("'", '"')):
+                k += 1
+                continue
+            if w in CONTROL_WORDS:
+                k += 1
+                continue
+            if w in WRAPPER_CMDS:
+                k += 1
+                while k < len(ws) and (ws[k][1].startswith("-") or re.fullmatch(r"[0-9.]+[smhd]?", ws[k][1]) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", ws[k][1], re.S)):
+                    k += 1
+                continue
+            if ws[k][2] and re.fullmatch(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?", w):
+                wrapped = True
+                k += 1
+                continue
+            break
+        if k >= len(ws):
+            continue
+        pos, name, dollar = ws[k]
+        if GROOVY_VALUE in name:
+            if strict:
+                yield pos, name, "the command name is a Groovy interpolation (chosen at run time) — name the command literally"
+            continue
+        if dollar:
+            stripped = re.sub(r"^\$\{?(?:WORKSPACE|PWD)\}?/", "", name)
+            if "$" not in stripped:
+                name = stripped
+            else:
+                base = re.fullmatch(r"\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(?:/[^$/]+)*/([^$/]+)", name)
+                if base and base.group(1) in EFFECT_CMD_NAMES:
+                    yield pos, base.group(1), None      # "$DIR/docker" is docker (its dedicated template then refuses the form)
+                elif base and not base.group(1).endswith(SCRIPT_EXT):
+                    pass                                 # "$KBIN/kafka-topics": a tool named by its literal basename
+                elif strict:
+                    yield pos, name, "the command name is computed at run time (a variable), so the validator cannot tell what runs — name the command literally"
+                continue
+        if wrapped and name not in WRAPPABLE:
+            if strict:
+                yield pos, name, f"a command behind a run-time variable (`{ws[k - 1][1]} {name}`) — name the command literally"
+            continue
+        if name in EFFECT_CMD_NAMES or name.endswith(SCRIPT_EXT):
+            yield pos, name, None
+
+
+# Maven goals that PRODUCE the artifact (the package phase and everything after it), or plugin goals that publish or
+# rewrite: any of these makes the invocation a source-consuming effect.
+MVN_EFFECT_GOALS = {"package", "pre-integration-test", "integration-test", "post-integration-test", "verify", "install", "deploy"}
+MVN_EFFECT_PLUGIN_RE = re.compile(r"^(?:jib|docker|dockerfile|spring-boot|deploy|install|release|scm|versions|assembly|shade|jar|war|source|javadoc|gpg|nexus-staging|buildplan)\b")
+# the same effects written in a Python helper (argv lists or command strings)
+PY_EFFECT_RE = re.compile(r"""['"](?:mvn|rsync|scp|ansible-playbook)['"]|['"]docker['"]\s*,\s*(?:['"]buildx['"]\s*,\s*)?['"]build['"]"""
+                          r"""|['"]helm['"]\s*,\s*['"](?:install|upgrade)['"]|['"](?:mvn|rsync|scp|ansible-playbook)\s|docker\s+(?:buildx\s+)?build\b|helm\s+(?:install|upgrade)\b""")
+
+
+def effect_commands(text: str, resolver=None, strict: bool = True, seen: frozenset = frozenset()) -> list[dict]:
+    """Every source-consuming effect a shell text runs. Each item: {"pos": offset in `text` of the command word, "kind":
+    mvn|docker|rsync|scp|helm|ansible|script|ssh, "cmd": the simple command's text (continuations joined), "why": a
+    refusal reason when the command cannot be classified safely}.
+
+    `resolver(path) -> (exists, text)` reads a script named by a literal repository-relative path; a script that runs an
+    effect (transitively) makes its invocation an effect of kind `script`. In STRICT mode a script that is not in the tree
+    is refused; followed scripts are read in non-strict mode (effects only)."""
+    view = shell_code_view(text)
+    joined = text.replace(BS + "\n", "  ")   # same length as `text`: continuations joined, offsets preserved
+    found: list[dict] = []
+    for pos, cmd, why_name in command_names(joined, view, strict):
+        end = simple_command_end(view, pos)
+        raw = joined[pos:end]
+        words = raw.split()
+        rest = words[1:] if words else []
+        item = {"pos": pos, "cmd": raw.strip(), "kind": None, "why": None}
+        if why_name:
+            item["kind"] = "script"
+            item["why"] = why_name
+            found.append(item)
+            continue
+        if cmd == "mvn":
+            skip_next = False
+            goals = []
+            for w in rest:   # arguments of options that take a value are not goals
+                if skip_next:
+                    skip_next = False
+                    continue
+                if w in ("-f", "--file", "-pl", "--projects", "-s", "--settings", "-T", "--threads", "-rf", "--resume-from", "-P", "--activate-profiles", "-gs", "-t", "--toolchains", "-l", "--log-file"):
+                    skip_next = True
+                    continue
+                if w.startswith(("-", '"', "'", "$")):
+                    continue
+                goals.append(w)
+            if any(g in MVN_EFFECT_GOALS or MVN_EFFECT_PLUGIN_RE.match(g) for g in goals):
+                item["kind"] = "mvn"
+        elif cmd == "docker":
+            if rest[:1] == ["build"] or rest[:2] == ["buildx", "build"]:
+                item["kind"] = "docker"
+        elif cmd == "rsync":
+            item["kind"] = "rsync"
+        elif cmd == "scp":
+            item["kind"] = "scp"
+        elif cmd == "helm":
+            if rest[:1] in (["install"], ["upgrade"]):
+                item["kind"] = "helm"
+        elif cmd == "ansible-playbook":
+            if any(not w.startswith("-") for w in rest):   # `--version` reads nothing; a playbook operand is an effect
+                item["kind"] = "ansible"
+        elif cmd == "eval":
+            if effect_commands(text[pos + 4:end].replace("'", " ").replace('"', " "), resolver, strict, seen):
+                item["kind"] = "script"
+                item["why"] = "runs a source-consuming effect through `eval`; make it a dedicated effect step"
+        elif cmd == "ssh":
+            # ssh runs a command ELSEWHERE; it is a local source ship only when local data is fed into it: a redirected
+            # file (`< path`, not a here-document) or a pipe into it (`tar c … | ssh …`).
+            if re.search(r"(?<!<)<(?!<)", view[pos:end]) or view[:pos].rstrip().endswith("|"):
+                item["kind"] = "ssh"
+                item["why"] = "ships local data over ssh (a redirected file or a pipe into ssh); ship a verified tree with scp or rsync instead"
+        else:
+            path = cmd
+            if cmd in ("bash", "sh", "python3", "python", "source", "."):
+                args = [w for w in rest if not (w.startswith("-") and cmd in ("bash", "sh", "python3", "python"))]
+                if cmd in ("bash", "sh") and "-c" in rest:
+                    # the inline string is shell too: read it with its quotes dropped
+                    qm = re.search(r"-c\s+(.*)", text[pos:end], re.S)
+                    inner = (qm.group(1) if qm else "").replace("'", " ").replace('"', " ")
+                    if effect_commands(inner, resolver, False, seen):
+                        item["kind"] = "script"
+                        item["why"] = "runs a source-consuming effect inside an inline `bash -c` / `sh -c` string; make it a dedicated effect step"
+                        found.append(item)
+                    continue
+                if cmd in ("bash", "sh", "python3", "python") and (not args or args[0].startswith("<") or args[0] == "-"):
+                    # a LOCAL interpreter reading its program from stdin: a here-document (read here) or a pipe (unreadable)
+                    hm = re.search(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", text[pos:end])
+                    if view[:pos].rstrip().endswith("|"):
+                        item["kind"] = "script"
+                        item["why"] = "pipes a program into a local shell or interpreter, which the validator cannot read — commit it as a repository script"
+                        found.append(item)
+                    elif hm:
+                        nl = text.find("\n", end)
+                        body_lines, k = [], (len(text) if nl < 0 else nl + 1)
+                        while k < len(text):
+                            e2 = text.find("\n", k)
+                            e2 = len(text) if e2 < 0 else e2
+                            if text[k:e2].strip() == hm.group(2):
+                                break
+                            body_lines.append(text[k:e2])
+                            k = e2 + 1
+                        body_ = "\n".join(body_lines)
+                        if (PY_EFFECT_RE.search(body_) if cmd.startswith("python") else effect_commands(body_, resolver, False, seen)):
+                            item["kind"] = "script"
+                            item["why"] = "runs a source-consuming effect from a here-document fed to a local interpreter; make it a dedicated effect step"
+                            found.append(item)
+                    continue
+                path = args[0] if args else ""
+            path = re.sub(r"^\$\{?(?:WORKSPACE|PWD)\}?/", "", path.strip("\"'"))
+            if not path.endswith(SCRIPT_EXT):
+                continue
+            if path.startswith(("/", "~")):
+                continue   # a program installed on the host (outside the repository): a host tool, like any binary
+            if "$" in path:
+                if strict:
+                    item["kind"] = "script"
+                    item["why"] = f"runs a script by a computed path ('{path}'), which the validator cannot read — run it by its literal repository path"
+                    found.append(item)
+                continue
+            if resolver is None:
+                continue
+            npath = os.path.normpath(path)
+            if npath in seen:
+                continue
+            exists, body = resolver(npath)
+            if not exists:
+                if strict:
+                    item["kind"] = "script"
+                    item["why"] = f"invokes '{path}', which is not a file in the tree the validator sees — it cannot be judged"
+                    found.append(item)
+                continue
+            if script_has_effects(body, resolver, seen | {npath}, npath.endswith(".py")):
+                item["kind"] = "script"
+                item["path"] = npath
+        if item["kind"]:
+            found.append(item)
+    return found
+
+
+def script_has_effects(body: str, resolver, seen: frozenset, python: bool = False) -> bool:
+    """True when a repository script (or a script it runs by a literal path, transitively) runs a source-consuming
+    command. A Python helper is read by token (an argv list or a command string naming the effect)."""
+    if python:
+        return bool(PY_EFFECT_RE.search(body))
+    return any(e["kind"] for e in effect_commands(body, resolver, False, seen))
+
+
+# ----------------------------------------------------------------------------------------- effect templates
+# The ONLY accepted form of a source-consuming effect is a DEDICATED step whose whole shell body is that one command,
+# read against a per-command fixed template: an explicit list of option slots, each with a fixed value shape, and the
+# consumed source paths as LITERALS so they can be resolved and covered by a verify step. Nothing else can be in that
+# shell: no second command, no `; && || | & ( ) { } < > `` ` `` $( ) here-document, no cd/pushd/export, no
+# assignment prefix, no comment, no glob. A body the grammar does not accept is refused and must be restructured — the
+# preparation moves to an earlier step that is not an effect, the values reach the effect as environment variables.
+# (always used with fullmatch: a `$` anchor admits a trailing newline). `!` inside a word is literal in a non-interactive
+# shell (only a whole leading `!` negates, and every template requires its command as the first word).
+WORD_LIT = re.compile(r"[A-Za-z0-9_./:=@%+,!-]+")
+DQ_BODY = re.compile(r"(?:[A-Za-z0-9_./:=@%+,-]|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)*")
+VAR_REF = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*")
+
+
+def shell_words(cmd: str):
+    """The words of ONE simple command: [(text, quoted: bool)…], or a str saying why the command is not a plain word list
+    (a metacharacter, a single quote, a mixed-quoting word, a `$` outside double quotes, an assignment prefix)."""
+    words: list[tuple[str, bool]] = []
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if c in " \t":
+            i += 1
+            continue
+        # an optional unquoted literal prefix (e.g. `-Dkey=`), then optionally ONE double-quoted part closing the word
+        e = i
+        while e < n and cmd[e] not in ' \t"':
+            e += 1
+        prefix = cmd[i:e]
+        if e < n and cmd[e] == '"':
+            if prefix and (not WORD_LIT.fullmatch(prefix) or "$" in prefix):
+                return f"a word whose unquoted part is outside the template alphabet ({prefix!r})"
+            q_end = e + 1
+            while q_end < n and cmd[q_end] != '"':
+                if cmd[q_end] == BS:
+                    return "a backslash escape inside a double-quoted word"
+                q_end += 1
+            if q_end >= n:
+                return "an unterminated double quote"
+            body = cmd[e + 1:q_end]
+            if q_end + 1 < n and cmd[q_end + 1] not in " \t":
+                return f"a word that continues after its double-quoted part ({cmd[i:q_end + 2]!r})"
+            if not DQ_BODY.fullmatch(body):
+                return f"a double-quoted word with characters outside the template alphabet or a `$` form other than ${{VAR}}/$VAR ({body!r})"
+            words.append((prefix + body, True))
+            i = q_end + 1
+            continue
+        w = prefix
+        if "'" in w:
+            return "a single quote (single-quoted words are not in any template)"
+        if re.search(r"[;&|<>`(){}*?\[\]~#\\]", w) or "$" in w or w == "!":
+            return f"a shell metacharacter, glob or unquoted `$` in {w!r} — only plain words and double-quoted \"…${{VAR}}…\" values are accepted"
+        if not WORD_LIT.fullmatch(w):
+            return f"a word outside the template alphabet ({w!r})"
+        words.append((w, False))
+        i = e
+    if not words:
+        return "an empty command"
+    if "=" in words[0][0] and not words[0][0].startswith("-"):
+        return "an assignment prefix before the command (values reach a dedicated effect step through the environment, not an inline assignment)"
+    return words
+
+
+def is_lit(w: tuple[str, bool]) -> bool:
+    return "$" not in w[0]
+
+
+def is_val(w: tuple[str, bool]) -> bool:
+    """A literal, or a double-quoted value — never one that begins with `-` (a parser could read it as an option)."""
+    return (is_lit(w) or w[1]) and not w[0].startswith("-")
+
+
+def lit_path(w: tuple[str, bool], allow_dot: bool = True, allow_trailing_slash: bool = True) -> str | None:
+    """A LITERAL repository-relative path (no variable, no leading /, ~ or -, no `..` or `.` components except a lone
+    `.`), normalised without a trailing slash; None otherwise."""
+    if not is_lit(w):
+        return None
+    p = w[0]
+    if allow_trailing_slash and p.endswith("/") and len(p) > 1:
+        p = p.rstrip("/")
+    if p == ".":
+        return "." if allow_dot else None
+    if p.startswith("./"):
+        p = p[2:]
+    if not p or p.startswith(("/", "~", "-")):
+        return None
+    if any(c in ("", ".", "..") for c in p.split("/")):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_.][A-Za-z0-9_.@+-]*(?:/[A-Za-z0-9_.][A-Za-z0-9_.@+-]*)*", p):
+        return None
+    return p
+
+
+def parse_effect_template(kind: str, cmd: str) -> tuple[list[str], str | None]:
+    """(consumed literal paths, None) when `cmd` (one simple command) matches the fixed template for `kind`; otherwise
+    ([], why)."""
+    ws = shell_words(cmd)
+    if isinstance(ws, str):
+        return [], ws
+    if kind == "mvn":
+        return parse_mvn(ws)
+    if kind == "docker":
+        return parse_docker_build(ws)
+    if kind == "rsync":
+        return parse_rsync(ws)
+    if kind == "scp":
+        return parse_scp(ws)
+    if kind == "helm":
+        return parse_helm(ws)
+    if kind == "ansible":
+        return parse_ansible(ws)
+    if kind == "script":
+        return parse_script(ws)
+    return [], f"no template exists for '{kind}'"
+
+
+MVN_FLAGS = {"-B", "--batch-mode", "-q", "--quiet", "-e", "--errors", "-ntp", "--no-transfer-progress", "-o", "--offline", "-U", "--update-snapshots",
+             "-am", "--also-make", "-amd", "--also-make-dependents", "-N", "--non-recursive", "-V", "--show-version", "-fae", "--fail-at-end",
+             "-ff", "--fail-fast", "-fn", "--fail-never", "-X", "--debug", "-nsu", "--no-snapshot-updates", "-C", "--strict-checksums"}
+MVN_PATH_OPTS = {"-f", "--file", "-s", "--settings", "-gs", "--global-settings", "-t", "--toolchains"}
+MVN_VAL_OPTS = {"-pl", "--projects", "-T", "--threads", "-rf", "--resume-from", "-P", "--activate-profiles"}
+MVN_PHASES = {"clean", "validate", "initialize", "generate-sources", "process-sources", "generate-resources", "process-resources", "compile",
+              "process-classes", "generate-test-sources", "process-test-sources", "generate-test-resources", "process-test-resources", "test-compile",
+              "process-test-classes", "test", "prepare-package", "package", "pre-integration-test", "integration-test", "post-integration-test",
+              "verify", "install", "deploy"}
+MVN_SAFE_PLUGIN_GOALS = {"failsafe:integration-test", "failsafe:verify", "surefire:test", "help:evaluate", "help:effective-pom", "dependency:resolve",
+                         "dependency:go-offline", "dependency:tree", "enforcer:enforce", "jacoco:report", "jacoco:check", "spotless:check", "checkstyle:check"}
+PL_VALUE = re.compile(r"!?[A-Za-z0-9_.][A-Za-z0-9_./,!-]*")
+
+
+def parse_mvn(ws) -> tuple[list[str], str | None]:
+    if ws[0] != ("mvn", False):
+        return [], "the command is not a plain `mvn`"
+    consumed: list[str] = ["."]
+    pom_dir = None
+    goals: list[str] = []
+    i = 1
+    while i < len(ws):
+        w = ws[i]
+        t = w[0]
+        if not w[1] and t in MVN_FLAGS:
+            i += 1
+            continue
+        if not w[1] and t in MVN_PATH_OPTS:
+            if i + 1 >= len(ws):
+                return [], f"`{t}` needs a literal path"
+            p = lit_path(ws[i + 1], allow_dot=False)
+            if p is None:
+                return [], f"`{t}` must name a literal repository path (got {ws[i + 1][0]!r})"
+            if t in ("-f", "--file"):
+                pom_dir = re.sub(r"/pom\.xml$", "", p) if p.endswith("pom.xml") else p
+            else:
+                consumed.append(p)
+            i += 2
+            continue
+        if not w[1] and t in MVN_VAL_OPTS:
+            if i + 1 >= len(ws):
+                return [], f"`{t}` needs a value"
+            v = ws[i + 1]
+            if not is_val(v) or (is_lit(v) and not PL_VALUE.fullmatch(v[0])):
+                return [], f"`{t}` takes a literal module/profile list or one \"${{VAR}}\" (got {v[0]!r})"
+            i += 2
+            continue
+        if not w[1] and re.fullmatch(r"-P[A-Za-z0-9_,.!-]+", t):
+            i += 1
+            continue
+        if re.fullmatch(r"-D[A-Za-z_][A-Za-z0-9_.-]*(?:=.*)?", t):
+            key, _, val = t.partition("=")
+            if val and not w[1] and "$" in val:
+                return [], f"a `-D` value with a `$` must be double-quoted as a whole (got {t!r})"
+            if w[1] and not DQ_BODY.fullmatch(val):
+                return [], f"a `-D` value outside the template alphabet ({t!r})"
+            i += 1
+            continue
+        if w[1]:
+            return [], f"a double-quoted word that is not a `-D`/`-pl`/`-P` value ({t!r})"
+        if t in MVN_PHASES or t in MVN_SAFE_PLUGIN_GOALS:
+            goals.append(t)
+            i += 1
+            continue
+        if ":" in t:
+            return [], f"plugin goal {t!r} is not in the template's goal list (a goal that rewrites sources or publishes through a plugin is refused)"
+        return [], f"{t!r} is not an option or goal of the mvn template"
+    if not goals:
+        return [], "no goal"
+    if pom_dir is not None:
+        consumed = [pom_dir] + [c for c in consumed if c != "."]
+    return consumed, None
+
+
+DOCKER_VAL_OPTS = {"--builder", "--platform", "-t", "--tag", "--label", "--build-arg", "--metadata-file", "--iidfile", "--progress", "--target",
+                   "--network", "--cache-from", "--cache-to", "--provenance", "--sbom", "--attest", "--output", "-o"}
+DOCKER_FLAGS = {"--push", "--load", "--no-cache", "--pull", "--quiet", "-q", "--rm", "--force-rm", "--no-cache-filter"}
+DOCKER_PATH_OPTS = {"-f", "--file"}
+OUTPUT_LIT = re.compile(r"[A-Za-z0-9_.,=/:@-]+")
+
+
+def parse_docker_build(ws) -> tuple[list[str], str | None]:
+    if ws[0] != ("docker", False):
+        return [], "the command is not a plain `docker`"
+    if [w[0] for w in ws[1:3]] == ["buildx", "build"] and not ws[1][1] and not ws[2][1]:
+        i = 3
+    elif len(ws) > 1 and ws[1] == ("build", False):
+        i = 2
+    else:
+        return [], "not `docker build` / `docker buildx build`"
+    consumed: list[str] = []
+    context = None
+    while i < len(ws):
+        w = ws[i]
+        t = w[0]
+        if not w[1] and t in DOCKER_FLAGS:
+            i += 1
+            continue
+        if not w[1] and t in DOCKER_PATH_OPTS:
+            if i + 1 >= len(ws):
+                return [], f"`{t}` needs a literal path"
+            p = lit_path(ws[i + 1], allow_dot=False)
+            if p is None:
+                return [], f"`{t}` must name a literal repository path (got {ws[i + 1][0]!r})"
+            consumed.append(p)
+            i += 2
+            continue
+        if not w[1] and t in DOCKER_VAL_OPTS:
+            if i + 1 >= len(ws):
+                return [], f"`{t}` needs a value"
+            v = ws[i + 1]
+            if not is_val(v):
+                return [], f"`{t}` takes a literal or one double-quoted \"…${{VAR}}…\" value (got {v[0]!r})"
+            if t in ("--output", "-o") and is_lit(v) and (not OUTPUT_LIT.fullmatch(v[0]) or "dest=" in v[0]):
+                return [], f"`--output` must be an image/registry export spec without a destination path (got {v[0]!r})"
+            i += 2
+            continue
+        if not w[1] and re.fullmatch(r"--(?:progress|provenance|sbom|platform|builder|output|network|target)=[A-Za-z0-9_.,=/:@-]+", t):
+            i += 1
+            continue
+        if t.startswith("-") and not w[1]:
+            return [], f"{t!r} is not an option of the docker build template (`--build-context`, `--secret`, `--ssh`, `-v` and any other option are refused)"
+        if w[1] and "$" in t:
+            return [], f"the build context must be a literal path (got {t!r})"
+        if context is not None:
+            return [], f"a second positional argument ({t!r}); the template takes exactly one context"
+        p = lit_path(w)
+        if p is None:
+            return [], f"the build context must be a literal repository path (got {t!r})"
+        context = p
+        i += 1
+    if context is None:
+        return [], "no build context"
+    return [context] + consumed, None
+
+
+RSYNC_SHORT = re.compile(r"-[avzrlptgoDqcnhHAXxu]+")
+RSYNC_FLAGS = {"--delete", "--delete-excluded", "--delete-after", "--delete-before", "--archive", "--compress", "--verbose", "--quiet", "--dry-run",
+               "--checksum", "--omit-dir-times", "--no-perms", "--no-owner", "--no-group", "--no-times", "--partial", "--progress", "--stats",
+               "--recursive", "--links", "--perms", "--times", "--human-readable", "--prune-empty-dirs", "--itemize-changes", "--copy-links"}
+RSYNC_VAL_OPTS = {"--exclude", "--include", "--chmod", "--timeout", "--bwlimit", "--max-size", "--min-size"}
+RSYNC_RSH = re.compile(r"ssh(?: -o [A-Za-z]+=[A-Za-z0-9._@+-]+| -p [0-9]+| -i [A-Za-z0-9_./~-]+)*")
+
+
+def parse_rsync(ws) -> tuple[list[str], str | None]:
+    if ws[0] != ("rsync", False):
+        return [], "the command is not a plain `rsync`"
+    consumed: list[str] = []
+    positional: list[tuple[str, bool]] = []
+    i = 1
+    while i < len(ws):
+        w = ws[i]
+        t = w[0]
+        if not w[1] and (RSYNC_SHORT.fullmatch(t) or t in RSYNC_FLAGS):
+            i += 1
+            continue
+        if not w[1] and t in RSYNC_VAL_OPTS:
+            if i + 1 >= len(ws) or not is_lit(ws[i + 1]):
+                return [], f"`{t}` takes a literal value"
+            i += 2
+            continue
+        if not w[1] and re.fullmatch(r"--(?:exclude|include|chmod|timeout|bwlimit|max-size|min-size)=[A-Za-z0-9_./*?,+=:-]+", t):
+            i += 1
+            continue
+        if not w[1] and t in ("-e", "--rsh"):
+            if i + 1 >= len(ws) or not is_lit(ws[i + 1]) or not RSYNC_RSH.fullmatch(ws[i + 1][0]):
+                return [], "`-e`/`--rsh` must be a literal `ssh [-o K=V] [-p N] [-i path]` (a remote-shell command is the one place rsync would run something else)"
+            i += 2
+            continue
+        if not w[1] and t.startswith("--rsh="):
+            if not RSYNC_RSH.fullmatch(t[len("--rsh="):]):
+                return [], "`--rsh=` must be a literal `ssh [-o K=V] [-p N] [-i path]`"
+            i += 1
+            continue
+        if t.startswith("-") and not w[1]:
+            return [], f"{t!r} is not an option of the rsync template (`--rsync-path`, `--files-from`, `--filter`, `--link-dest`, `--remove-source-files` and any other option are refused)"
+        positional.append(w)
+        i += 1
+    if len(positional) < 2:
+        return [], "rsync needs at least one literal source and one destination"
+    for src in positional[:-1]:
+        p = lit_path(src)
+        if p is None or ":" in src[0].split("/")[0]:
+            return [], f"every rsync source must be a literal path inside the workspace (got {src[0]!r})"
+        consumed.append(p)
+    dest = positional[-1]
+    if not is_val(dest) or ":" not in dest[0]:
+        return [], f"the rsync destination must be a remote `host:path` (a literal or one double-quoted \"…${{VAR}}…\" value; got {dest[0]!r}) — the template ships a verified tree, it does not write into the workspace"
+    return consumed, None
+
+
+SCP_VAL_OPTS = {"-o", "-P", "-i", "-F", "-J", "-l", "-c", "-S"}
+SCP_FLAGS = {"-q", "-r", "-p", "-C", "-B", "-4", "-6", "-v", "-3"}
+
+
+def parse_scp(ws) -> tuple[list[str], str | None]:
+    if ws[0] != ("scp", False):
+        return [], "the command is not a plain `scp`"
+    consumed: list[str] = []
+    positional: list[tuple[str, bool]] = []
+    i = 1
+    while i < len(ws):
+        w = ws[i]
+        t = w[0]
+        if not w[1] and t in SCP_FLAGS:
+            i += 1
+            continue
+        if not w[1] and t in SCP_VAL_OPTS:
+            if i + 1 >= len(ws) or not is_lit(ws[i + 1]):
+                return [], f"`{t}` takes a literal value"
+            if t == "-S":
+                return [], "`-S` (an ssh program of the caller's choosing) is not in the scp template"
+            i += 2
+            continue
+        if t.startswith("-") and not w[1]:
+            return [], f"{t!r} is not an option of the scp template"
+        positional.append(w)
+        i += 1
+    if len(positional) < 2:
+        return [], "scp needs at least one literal source and one destination"
+    for src in positional[:-1]:
+        p = lit_path(src, allow_dot=False)
+        if p is None or ":" in src[0].split("/")[0]:
+            return [], f"every scp source must be a literal path inside the workspace (got {src[0]!r})"
+        consumed.append(p)
+    dest = positional[-1]
+    if not is_val(dest) or ":" not in dest[0]:
+        return [], f"the scp destination must be a remote `host:path` (a literal or one double-quoted \"…${{VAR}}…\" value; got {dest[0]!r})"
+    return consumed, None
+
+
+HELM_VAL_OPTS = {"--namespace", "-n", "--set", "--set-string", "--timeout", "--version", "--kubeconfig", "--kube-context", "--repo", "--history-max"}
+HELM_FLAGS = {"--install", "--wait", "--atomic", "--create-namespace", "--cleanup-on-fail", "--dry-run", "--debug", "--reuse-values", "--reset-values"}
+HELM_PATH_OPTS = {"-f", "--values"}
+
+
+def parse_helm(ws) -> tuple[list[str], str | None]:
+    if ws[0] != ("helm", False) or len(ws) < 2 or ws[1][1] or ws[1][0] not in ("install", "upgrade"):
+        return [], "not `helm install` / `helm upgrade`"
+    consumed: list[str] = []
+    positional: list[tuple[str, bool]] = []
+    i = 2
+    while i < len(ws):
+        w = ws[i]
+        t = w[0]
+        if not w[1] and t in HELM_FLAGS:
+            i += 1
+            continue
+        if not w[1] and t in HELM_PATH_OPTS:
+            if i + 1 >= len(ws):
+                return [], f"`{t}` needs a literal path"
+            p = lit_path(ws[i + 1], allow_dot=False)
+            if p is None:
+                return [], f"`{t}` must name a literal repository path (got {ws[i + 1][0]!r})"
+            consumed.append(p)
+            i += 2
+            continue
+        if not w[1] and t in HELM_VAL_OPTS:
+            if i + 1 >= len(ws) or not is_val(ws[i + 1]):
+                return [], f"`{t}` takes a literal or one double-quoted \"…${{VAR}}…\" value"
+            i += 2
+            continue
+        if t.startswith("-") and not w[1]:
+            return [], f"{t!r} is not an option of the helm template (`--post-renderer` and any other option are refused)"
+        positional.append(w)
+        i += 1
+    if len(positional) != 2:
+        return [], "helm install/upgrade takes exactly a release name and a chart"
+    if not is_val(positional[0]):
+        return [], "the release name must be a literal or one double-quoted \"${VAR}\""
+    chart = positional[1]
+    if not is_lit(chart):
+        return [], f"the chart must be a literal (got {chart[0]!r})"
+    c = chart[0]
+    if c.startswith("./") or c.startswith("/") or c.startswith("~") or c.startswith(".."):
+        p = lit_path(chart, allow_dot=False)
+        if p is None:
+            return [], f"a local chart must be a literal repository path (got {c!r})"
+        consumed.insert(0, p)
+    elif "/" in c and not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", c) and not c.startswith("oci://"):
+        return [], f"chart {c!r} is neither a repository chart reference (repo/chart, oci://…) nor a local ./path"
+    elif "/" in c and not c.startswith("oci://"):
+        # `repo/chart` is a repository reference UNLESS that path exists in the tree — then it is a local chart and is consumed
+        consumed.insert(0, c)
+    return consumed, None
+
+
+ANSIBLE_VAL_OPTS = {"-i", "--inventory", "-e", "--extra-vars", "--tags", "-t", "--skip-tags", "-l", "--limit", "-u", "--user", "--vault-password-file", "--connection", "-c"}
+ANSIBLE_FLAGS = {"--check", "--diff", "-v", "-vv", "-vvv", "-vvvv", "--flush-cache", "--force-handlers", "-K", "--ask-become-pass", "-b", "--become"}
+
+
+def parse_ansible(ws) -> tuple[list[str], str | None]:
+    if ws[0] != ("ansible-playbook", False):
+        return [], "the command is not a plain `ansible-playbook`"
+    consumed: list[str] = []
+    playbook = None
+    i = 1
+    while i < len(ws):
+        w = ws[i]
+        t = w[0]
+        if not w[1] and t in ANSIBLE_FLAGS:
+            i += 1
+            continue
+        if not w[1] and t in ANSIBLE_VAL_OPTS:
+            if i + 1 >= len(ws):
+                return [], f"`{t}` needs a value"
+            v = ws[i + 1]
+            if t in ("-i", "--inventory", "--vault-password-file"):
+                p = lit_path(v, allow_dot=False)
+                if p is None:
+                    return [], f"`{t}` must name a literal repository path (got {v[0]!r})"
+                consumed.append(p)
+            elif t in ("-e", "--extra-vars"):
+                if not is_val(v) or "=" not in v[0] or v[0].startswith("@"):
+                    return [], f"`-e` takes one `key=value` (a literal or a double-quoted \"key=${{VAR}}\"), never a file (got {v[0]!r})"
+            elif not is_val(v):
+                return [], f"`{t}` takes a literal or one double-quoted value"
+            i += 2
+            continue
+        if t.startswith("-") and not w[1]:
+            return [], f"{t!r} is not an option of the ansible-playbook template"
+        if playbook is not None:
+            return [], "the template takes exactly one playbook"
+        p = lit_path(w, allow_dot=False)
+        if p is None or not p.endswith((".yml", ".yaml")):
+            return [], f"the playbook must be a literal repository path ending in .yml (got {t!r})"
+        playbook = p
+        i += 1
+    if playbook is None:
+        return [], "no playbook"
+    return [playbook] + consumed, None
+
+
+def parse_script(ws) -> tuple[list[str], str | None]:
+    """`[bash|sh|python3 [-x|-e|-u|-eu|-ux|-xe]] <literal repository script> [literal or "${VAR}" arguments]`, or the
+    script itself when it is executable. The script is the consumed source; it runs from the verified tree."""
+    i = 0
+    if ws[0][0] in ("bash", "sh", "python3", "python") and not ws[0][1]:
+        i = 1
+        while i < len(ws) and not ws[i][1] and re.fullmatch(r"-[xeuv]+", ws[i][0]):
+            i += 1
+    elif ws[0][0] in ("source", ".") and not ws[0][1]:
+        return [], "a script that runs effects may not be sourced into the effect step's shell (`source`/`.`); run it as its own dedicated step"
+    if i >= len(ws):
+        return [], "no script path"
+    p = lit_path(ws[i], allow_dot=False)
+    if p is None or not p.endswith(SCRIPT_EXT):
+        return [], f"the script must be a literal repository path (got {ws[i][0]!r})"
+    for w in ws[i + 1:]:
+        if not is_val(w):
+            return [], f"script arguments must be literals or double-quoted \"…${{VAR}}…\" values (got {w[0]!r})"
+        if w[0].startswith("-") and not w[1] and not re.fullmatch(r"--?[A-Za-z0-9][A-Za-z0-9_-]*(?:=[A-Za-z0-9_./:@%+,-]*)?", w[0]):
+            return [], f"script argument {w[0]!r} is outside the template alphabet"
+    return [p], None
+
+
 # ----------------------------------------------------------------------------------------- helpers
 def is_comment(line: str) -> bool:
     s = line.strip()
@@ -599,7 +1600,7 @@ def downstream_flag(job: str) -> str:
 
 
 # ----------------------------------------------------------------------------------------- the rules
-def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
+def check_in_scope(path: str, entry: dict, guard_hash: str, root_dir: str = ".") -> list[str]:
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     lines = text.split("\n")
@@ -1101,14 +2102,16 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
     if entry["contracts"] and not contracts_seen:
         problems.append(f"manifest names contracts={entry['contracts']} but no acquisition of it was found after the guard")
 
-    # 9b. Provenance verification. The guard proves HEAD == permitted at one moment; it cannot prove the FILES an
-    # effect consumes later were not replaced afterwards (a later git move, a copy or archive over the tree, an edited
-    # file) while HEAD stays the permitted commit. So every effect that builds or publishes an artifact FROM a source
-    # tree must be immediately preceded, in the same stage and workspace, by the DEDICATED verify-permitted-tree step
-    # for each source directory it consumes — the primary checkout for a build/publish from the workspace, and each
-    # nested checkout it compiles or ships. verify-permitted-tree.sh re-checks HEAD == permitted AND a clean working
-    # tree at run time, so a replacement is caught however it happened. This replaces the earlier lexical
-    # "nothing may write into the checkout" analysis (an open class); presence and placement is what is enforced here.
+    # 9b. Provenance verification, structurally. The guard proves HEAD == permitted at one moment; the FILES an effect
+    # consumes later can still be replaced while HEAD stays the permitted commit. Two things close that, together:
+    #   (i)  every source-consuming effect is a DEDICATED STEP whose whole shell body is that one command, read against
+    #        a fixed per-command template (an explicit option list; the consumed sources as literals) — so nothing can run
+    #        inside the effect's own step between the verification and the consumption, and
+    #   (ii) that step is immediately preceded, in the same block, by the dedicated verify-permitted-tree step for EVERY
+    #        checkout a consumed path resolves into (the primary workspace, or the nested checkout containing it) —
+    #        verify-permitted-tree.sh re-checks HEAD == permitted AND a clean tree at run time, whatever the writer was.
+    # Effects are found at COMMAND POSITION in a shell-aware view of every string (messages, comments, here-documents
+    # and remote ssh arguments are data, not commands), so an effect hidden in any other shape of step is refused too.
     def fold(dirs: list[str], rel: str) -> str:
         return "/".join(list(dirs) + [c for c in rel.split("/") if c not in ("", ".")])
 
@@ -1118,10 +2121,10 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
             return None
         return VERIFY_STEP.match("sh '" + content + "'")
 
-    # Every dedicated verify step, with its enclosing timeout block. A verify step is: (resolved dir, permission var,
-    # the statement's start and end offsets, its parent block id). The permission var and --dir must resolve; the step
-    # must sit alone inside a `timeout(time: N, unit: 'MINUTES') { … }` block (the same deadline template as the guard)
-    # and run unskippably.
+    # Every dedicated verify step: (resolved dir, permission var, the statement's start/end offsets, its parent block).
+    # It must sit alone inside a `timeout(time: N, unit: 'MINUTES') { … }` block (the guard's deadline template), inside a
+    # stage's steps and never under `parallel`. It need not be unskippable on its own: it covers ONLY the effect that is
+    # the very next statement of the same block, so whatever control flow skips the verify skips that effect with it.
     verify_steps: list[dict] = []
     for li in range(g_hi, len(lines)):
         vm = verify_at(li)
@@ -1133,151 +2136,314 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
             problems.append(f"line {li + 1}: a verify-permitted-tree step whose directory cannot be resolved to a literal path")
             continue
         rv = fold(gdirs, vm.group("dir"))
-        # the step must be the sole content of a timeout(...) deadline block, exactly like the dedicated guard step
         tb = g.innermost(sh_pos)
         header = g.blocks[tb].header if tb is not None else ""
         if not re.fullmatch(r"timeout\(time: [0-9]+, unit: 'MINUTES'\)", header) or g.code_only(g.blocks[tb].open + 1, sh_pos).strip() or g.code_only(offs[li] + len(lines[li]), g.blocks[tb].close).strip():
             problems.append(f"line {li + 1}: the verify-permitted-tree step for '{rv or '.'}' is not alone inside a timeout(time: N, unit: 'MINUTES') deadline block")
             continue
-        if unskippable(sh_pos):
-            problems.append(f"line {li + 1}: the verify-permitted-tree step for '{rv or '.'}' can be skipped: {unskippable(sh_pos)}")
+        anc = g.ancestors(sh_pos)
+        if not any(g.blocks[a].header == "steps" for a in anc):
+            problems.append(f"line {li + 1}: the verify-permitted-tree step for '{rv or '.'}' is not inside a stage's steps")
+            continue
+        if any(re.match(r"parallel\b", g.blocks[a].header) for a in anc):
+            problems.append(f"line {li + 1}: the verify-permitted-tree step for '{rv or '.'}' sits under `parallel` — a concurrent branch could change the tree between the verify and the effect")
+            continue
         t_start = text.rfind("timeout(", 0, g.blocks[tb].open)
         verify_steps.append({"dir": rv, "var": vm.group("own"), "start": t_start, "end": g.blocks[tb].close + 1,
                              "parent": g.blocks[tb].parent, "line": li})
 
-    # Source-consuming effects. Two kinds:
-    #  - SHIP_DEPLOY (rsync, helm install/upgrade, mvn install/deploy): ships a source tree or compiles it into a
-    #    published artifact. Attributed to a nested checkout when it names one (mvn `-f <nested>/pom.xml`, a path under a
-    #    nested dir), otherwise to the PRIMARY workspace.
-    #  - docker build / buildx build whose CONTEXT resolves into a nested checkout. A docker build of the primary
-    #    workspace is not required (the workspace legitimately holds build output by then; the primary source is proven
-    #    at checkout and any nested source compiled in is verified on its own). `docker push` / `git push` publish an
-    #    already-built image or ref, not a tree.
-    SHIP_DEPLOY = re.compile(r"\brsync\b|\bhelm\s+(?:install|upgrade)\b")
-    MVN_ARTIFACT = re.compile(r"\bmvn\b[^\n]*\b(?:install|deploy)\b")
-    DOCKER_BUILD = re.compile(r"\bdocker\s+build\b|\bdocker\s+buildx\s+build\b")
     # a git command that MOVES a checkout's HEAD or worktree (as opposed to reading it). `fetch`/`clone` alone update
     # refs or create a checkout (the latter only inside the dedicated acquisition step) and do not move an existing
     # worktree, so they are not here — the worktree-moving verb that would follow (reset/checkout/…) is.
     GIT_MOVE = re.compile(r"\bgit\b(?:\s+-\S+(?:\s+\S+)?)*\s+(pull|checkout|switch|restore|reset|merge|rebase|am|cherry-pick|revert|submodule|stash|clean|read-tree|checkout-index)\b")
     nested_dirs = sorted((p for p in bound_guards), key=len, reverse=True)
 
-    def sh_step_bounds(tok_pos: int):
-        """For a source token at tok_pos inside a shell string, (start_offset of the `sh` step, the string tuple).
-        None if it is not inside an `sh`/`sh(` step."""
-        s = next(((q, s0, e0) for q, s0, e0 in g.strings if s0 <= tok_pos < e0), None)
-        if s is None:
-            return None
-        open_at = s[1] - len(s[0])
-        # the sh step keyword, allowing a `sh(` and a `sh PREFIX + '''…'''` GString concatenation (e.g.
-        # `sh JDK_SETUP + '''…'''`) where PREFIX is one or more identifiers joined by `+`.
-        m = re.search(r"(?:^|[\s{;(&|])sh\s*\(?\s*(?:[A-Za-z_][\w.]*\s*\+\s*)*$", text[:open_at])
-        if not m:
-            return None
-        return m.start() + m.group(0).index("sh"), s
+    def attribute(consumed: str) -> str:
+        """The checkout a consumed path belongs to: the deepest nested guarded checkout it is inside or equal to, else the
+        primary workspace ('')."""
+        if consumed in ("", "."):
+            return ""
+        for d in nested_dirs:
+            if consumed == d or consumed.startswith(d + "/"):
+                return d
+        return ""
 
-    def immediately_preceded_by_verify(step_start: int, consumed: str, want_var: str) -> str | None:
-        """None if a matching verify step is the statement IMMEDIATELY before step_start (same block, only whitespace
-        or comments between); otherwise the reason it is not covered."""
+    # Scripts the pipeline itself WRITES from a here-document in this file (`cat > <path> <<'TAG' … TAG`): a later step that
+    # runs or sources one is judged by that body. A script that is neither in the tree nor generated so is refused.
+    generated: dict[str, str] = {}
+    for q_, gs0, ge0 in g.strings:
+        gbody = groovy_decode(text[gs0:ge0], gstring=q_ in ('"', '"""'))[0]
+        for gm_ in re.finditer(r"(?:cat|tee)\s*>\s*\"?(?:\$\{?WORKSPACE\}?/)?([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:sh|bash|py))\"?\s*<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2[^\n]*\n", gbody):
+            tail = gbody[gm_.end():]
+            out_lines = []
+            for ln_ in tail.split("\n"):
+                if ln_.strip() == gm_.group(3):
+                    break
+                out_lines.append(ln_)
+            generated[os.path.normpath(gm_.group(1))] = "\n".join(out_lines)
+
+    def make_resolver(base: list[str]):
+        """Reads a repository-relative script as the step's shell would find it: relative to the step's resolved dir()
+        (a script inside a nested checkout is not in the tree the validator sees, so it is refused, never guessed)."""
+        def r(path: str):
+            rel = os.path.normpath(os.path.join(*base, path) if base else path)
+            found_, body_ = resolver(rel)
+            if not found_ and rel in generated:
+                return True, generated[rel]
+            return found_, body_
+        return r
+
+    def resolver(path: str):
+        full = os.path.join(root_dir, path)
+        if not os.path.isfile(full):
+            return False, None
+        try:
+            with open(full, encoding="utf-8", errors="replace") as fh:
+                return True, fh.read()
+        except OSError:
+            return False, None
+
+    def dedicated_effect_step(s_tuple):
+        """When the string literal s_tuple (quote, body_start, body_end) is the SOLE argument of a plain `sh` statement whose
+        body is exactly ONE command (a one-line single-quoted literal, or a triple-quoted block holding one command with
+        `\\`-newline continuations and nothing else), (statement start offset, the command text); else (None, why)."""
+        q, s0, e0 = s_tuple
+        open_at = s0 - len(q)
+        line_start = text.rfind("\n", 0, open_at) + 1
+        head = text[line_start:open_at]
+        if not re.fullmatch(r"\s*sh\s+", head) or not g.is_code(line_start + len(head) - len(head.lstrip())):
+            return None, "it is not a plain `sh '…'` / `sh '''…'''` step of its own (no `sh(`, no returnStatus/returnStdout, no prefix concatenation)"
+        after = text[e0 + len(q):]
+        nl = after.find("\n")
+        tail = after if nl < 0 else after[:nl]
+        if tail.strip():
+            return None, "something follows the step's shell literal on its line (a concatenation or another argument)"
+        if q == '"' or q == '"""':
+            return None, "the body is a GString (double-quoted); a dedicated effect step is a single-quoted literal"
+        body = groovy_decode(text[s0:e0], gstring=q in ('"', '"""'))[0]
+        if q == "'''":
+            if "#" in body:
+                return None, "a `#` in the body (no comments: the body is exactly one command)"
+            joined = re.sub(r"[ \t]*\\\n[ \t]*", " ", body)
+            cmd_lines = [l.strip() for l in joined.split("\n") if l.strip()]
+            if len(cmd_lines) != 1:
+                return None, f"the body holds {len(cmd_lines)} lines, not exactly one command (a preparation belongs in an earlier step that is not an effect)"
+            return line_start + len(head) - len(head.lstrip()), cmd_lines[0]
+        if "\n" in body:
+            return None, "a newline inside the literal"
+        return line_start + len(head) - len(head.lstrip()), body
+
+    def verify_chain(step_start: int) -> list[dict]:
+        """The dedicated verify steps that immediately precede step_start in its block (nothing but whitespace or comments
+        between each and the next), nearest first."""
         e_block = g.innermost(step_start)
-        best = None
-        for v in verify_steps:
-            if v["parent"] != e_block or v["end"] > step_start:
+        chain: list[dict] = []
+        cursor = step_start
+        while True:
+            best = None
+            for v in verify_steps:
+                if v["parent"] != e_block or v["end"] > cursor or g.code_only(v["end"], cursor).strip():
+                    continue
+                if best is None or v["end"] > best["end"]:
+                    best = v
+            if best is None:
+                return chain
+            chain.append(best)
+            cursor = best["start"]
+
+    # Directories the pipeline itself generates OUTSIDE the workspace: an environment{} variable bound to a literal
+    # absolute path with no `..` and no WORKSPACE, every interpolation in it sanitised by
+    # .replaceAll('[^A-Za-z0-9-]', '-'). An scp or rsync whose every source is a plain file directly under such a variable
+    # ships generated files, not a checkout, so it consumes no source and needs no verify step.
+    abs_env: set[str] = set()
+    eb = find_block(lines, re.compile(r"^\s*environment\s*\{"))
+    while eb is not None:
+        for k in range(eb[0], eb[1] + 1):
+            em = re.match(r"""^\s*([A-Z][A-Z0-9_]*)\s*=\s*(?:"(/[^"]*)"|'(/[^']*)')\s*$""", lines[k])
+            if not em:
                 continue
-            if best is None or v["end"] > best["end"]:
-                best = v
-        if best is None or g.code_only(best["end"], step_start).strip():
-            return "no dedicated verify-permitted-tree step immediately precedes it (nothing may run between the verify and the effect)"
-        # a verify of a directory covers an effect consuming that directory OR anything UNDER it (verifying the whole
-        # tree proves each subtree clean); it does NOT cover a consumer of a PARENT directory.
-        covers = best["dir"] == consumed or consumed == "" and best["dir"] == "" or (best["dir"] == "" or consumed.startswith(best["dir"] + "/"))
-        if not covers:
-            return f"the nearest verify step re-checks '{best['dir'] or '.'}', but the effect consumes '{consumed or '.'}'"
-        if best["var"] != want_var:
-            return f"the verify step uses PERMITTED_SHA source '{best['var']}', but this checkout is guarded with '{want_var}' — the verify must re-check the SAME permitted commit the guard bound"
-        return None
+            val = em.group(2) if em.group(2) is not None else em.group(3)
+            sanitised = re.findall(r"\$\{\((?:[^{}]*)\)\.replaceAll\('\[\^A-Za-z0-9-\]', '-'\)\}", val)
+            if ".." not in val and "WORKSPACE" not in val and val.count("${") == len(sanitised) and "$" not in re.sub(r"\$\{\((?:[^{}]*)\)\.replaceAll\('\[\^A-Za-z0-9-\]', '-'\)\}", "", val):
+                abs_env.add(em.group(1))
+        eb = find_block(lines, re.compile(r"^\s*environment\s*\{"), eb[1] + 1)
+
+    def env_absolute_sources_only(eff: dict) -> bool:
+        if eff["kind"] not in ("scp", "rsync"):
+            return False
+        try:
+            toks = shlex.split(eff["cmd"])
+        except ValueError:
+            return False
+        ops, skip = [], False
+        for t in toks[1:]:
+            if skip:
+                skip = False
+                continue
+            if t.startswith("-"):
+                skip = t in ("-o", "-P", "-i", "-F", "-J", "-l", "-c", "-e", "--exclude", "--include", "--chmod", "--rsh")
+                continue
+            ops.append(t)
+        if len(ops) < 2:
+            return False
+        for src in ops[:-1]:
+            sm = re.match(r"^\$\{?([A-Z][A-Z0-9_]*)\}?/[A-Za-z0-9_][A-Za-z0-9_.-]*$", src)
+            if not sm or sm.group(1) not in abs_env:
+                return False
+        return True
 
     seen_effects: set[int] = set()
-    for si in range(gi + 1, len(stages)):
-        lo, hi = stage_range(lines, stages, si)
-        li = lo
-        while li < hi:
-            start_li = li
-            l = lines[li]
-            while l.rstrip().endswith("\\") and li + 1 < hi:
-                li += 1
-                l = l.rstrip()[:-1] + " " + lines[li]
-            li += 1
-            if is_comment(lines[start_li]) or "verify-permitted-tree.sh" in l or "permitted-sha-guard.sh" in l:
+    # EVERY string literal in the file is read — stage steps, post{} blocks, top-level methods and constants alike — except
+    # the parameters{} block's descriptions. An effect found anywhere must be a dedicated, verified step.
+    pblk = find_block(lines, re.compile(r"^\s*parameters\s*\{"))
+    p_lo, p_hi = (offs[pblk[0]], offs[pblk[1] + 1]) if pblk else (-1, -1)
+    for s_tuple in g.strings:
+        q, s0, e0 = s_tuple
+        if p_lo <= s0 < p_hi or any(a <= s0 < b for a, b in g.comments):
+            continue
+        raw_body = text[s0:e0]
+        body, bmap = groovy_decode(raw_body, gstring=q in ('"', '"""'))
+        if CANONICAL_LITERAL.fullmatch(body):
+            continue   # the guard / verify / downstream-check literals: judged by their own templates (rules 3, 6, 7, 9, 9b)
+        sdirs, _swhy = resolve_dirs(s0)
+        # the literal argument of an `sh` step is read STRICTLY (a command name computed at run time is refused); any other
+        # string (a Groovy constant, a message, a value passed to `sh` later) is read for effects it names
+        head_code = g.code_only(max(0, s0 - len(q) - 400), s0 - len(q))
+        strict = bool(re.search(r"\bsh\s*(?:\(\s*(?:\w+\s*:\s*[^,()]*,\s*)*(?:script\s*:\s*)?)?(?:[A-Za-z_][\w.]*\s*\+\s*)*$", head_code))
+        for eff in effect_commands(body, make_resolver(sdirs), strict):
+            pos = s0 + (bmap[eff["pos"]] if eff["pos"] < len(bmap) else len(raw_body))
+            if env_absolute_sources_only(eff):
                 continue
-            mvn_m = MVN_ARTIFACT.search(l)
-            ship_m = SHIP_DEPLOY.search(l)
-            build_m = DOCKER_BUILD.search(l)
-            m = mvn_m or ship_m or build_m
-            if m is None:
+            ln = text.count("\n", 0, pos) + 1
+            if pos in seen_effects:
                 continue
-            # an effect that runs on another host over ssh consumes the copy shipped there, not this workspace
-            if re.search(r"\bssh\b", l[:m.start()]):
+            seen_effects.add(pos)
+            head = f"line {ln}: a source-consuming effect (`{eff['cmd'][:60]}`)"
+            if eff.get("why"):
+                problems.append(f"{head} {eff['why']}")
                 continue
-            tok_pos = offs[start_li] + max(0, min(m.start(), len(lines[start_li])))
-            sb = sh_step_bounds(tok_pos)
-            base_dirs, base_why = resolve_dirs(offs[start_li] + first_code_col(start_li))
-            def clean(tok: str) -> str:
-                return tok.strip().strip("'\"").rstrip("'\";")
-            # the directory this effect consumes, resolved through its dir() context
-            if mvn_m is not None:
-                nm = re.search(r"-f\s+(\S+)", l)
-                rel = clean(nm.group(1)) if nm else "."
-                rel = re.sub(r"/pom\.xml$", "", rel).rstrip("/") or "."
-            elif build_m is not None:  # docker build [opts] <context>: the context is the last bare token
-                toks = [clean(t) for t in l[m.end():].split() if t and not t.startswith("-")]
-                rel = toks[-1] if toks else "."
-            elif l[m.start():].startswith("rsync"):  # rsync [opts] SRC… DEST: source is the first LOCAL path operand,
-                # skipping the argument of options that take one (--exclude PATTERN etc.).
-                argopts = {"--exclude", "--include", "--filter", "-f", "--files-from", "--exclude-from", "--include-from",
-                           "-e", "--rsh", "--chmod", "--out-format", "--log-file", "--compare-dest", "--copy-dest", "--link-dest", "-T", "--temp-dir"}
-                toks = l[m.end():].split()
-                cand, skip = [], False
-                for t in toks:
-                    if skip:
-                        skip = False
-                        continue
-                    if t.startswith("-"):
-                        if t in argopts:
-                            skip = True
-                        continue
-                    c = clean(t)
-                    if ":" not in c.split("/")[0]:
-                        cand.append(c)
-                rel = cand[0] if cand else "."
-            else:  # helm install/upgrade RELEASE CHART: the chart (a local path) is the last bare token
-                toks = [clean(t) for t in l[m.end():].split() if t and not t.startswith("-") and ":" not in clean(t).split("/")[0]]
-                rel = toks[-1] if toks else "."
-            if base_why:
-                problems.append(f"line {start_li + 1}: an effect consumes a source whose directory cannot be resolved to a literal path: {base_why}")
+            step_start, cmd_or_why = dedicated_effect_step(s_tuple)
+            if step_start is None:
+                problems.append(f"{head} is not a DEDICATED effect step whose shell body is only that command: {cmd_or_why}")
                 continue
-            usable = rel and rel not in (".", "..") and not rel.startswith(("/", "$", "~"))
-            consumed = fold(base_dirs, rel if usable else ".")
-            # docker build is required only when its context resolves INTO a nested checkout
-            if build_m is not None and mvn_m is None and ship_m is None and consumed not in nested_dirs:
-                continue
-            key = sb[0] if sb else offs[start_li]
-            if key in seen_effects:
-                continue
-            seen_effects.add(key)
-            want_var = bound_guards[consumed][2] if consumed in bound_guards else "PERMITTED_SHA"
-            if sb is None:
-                problems.append(f"line {start_li + 1}: a source-consuming effect is not inside a recognisable `sh` step, so its provenance verification cannot be placed")
-                continue
-            why = immediately_preceded_by_verify(sb[0], consumed, want_var)
+            consumed_rel, why = parse_effect_template(eff["kind"], cmd_or_why)
             if why:
-                where = "the primary checkout '.'" if consumed == "" else f"the nested checkout '{consumed}'"
-                problems.append(f"line {start_li + 1}: an effect builds, ships or deploys from {where} but {why} (need timeout {{ sh 'PERMITTED_SHA=\"${{{want_var}:-}}\" bash scripts/jenkins/verify-permitted-tree.sh --dir {consumed or '.'} …' }} immediately before it)")
+                problems.append(f"{head} does not fit the fixed `{eff['kind']}` template — {why}; restructure it (fail closed)")
+                continue
+            base_dirs, base_why = resolve_dirs(step_start)
+            if base_why:
+                problems.append(f"{head} runs in a directory that cannot be resolved to a literal path: {base_why}")
+                continue
+            consumed = [fold(base_dirs, c) or "." for c in consumed_rel]
+            # docker contexts, rsync/scp sources and chart directories are handed over WHOLE (a Dockerfile COPY, a
+            # recursive copy); mvn, ansible and a script read their own project/file.
+            wholesale = set(consumed) if eff["kind"] in ("docker", "rsync", "scp", "helm") else set()
+            # scp/rsync/script/ansible sources and mvn poms must lie inside the workspace; lit_path already refused
+            # absolute, ~, .. and variable forms, so every consumed path resolves to a checkout here.
+            needed = {}
+            for c in consumed:
+                # the checkout the path resolves into, AND every nested checkout lying inside it: a docker context, an
+                # rsync/scp source directory or a chart directory hands its whole subtree to the consumer (a Dockerfile
+                # COPY, a recursive copy), so each checkout under it is consumed as well.
+                for d in [attribute(c)] + [n for n in nested_dirs if c in wholesale and (c in (".", "") or n.startswith(c.rstrip("/") + "/"))]:
+                    needed[d] = bound_guards[d][2] if d in bound_guards else "PERMITTED_SHA"
+            chain = verify_chain(step_start)
+            if not chain:
+                where = ", ".join(("the primary checkout '.'" if d == "" else f"the nested checkout '{d}'") for d in sorted(needed))
+                problems.append(f"{head} builds, ships or deploys from {where} but no dedicated verify-permitted-tree step immediately precedes it (nothing may run between the verify and the effect) — need timeout {{ sh 'PERMITTED_SHA=\"${{{needed[sorted(needed)[0]]}:-}}\" bash scripts/jenkins/verify-permitted-tree.sh --dir {sorted(needed)[0] or '.'} …' }} immediately before it")
+                continue
+            for d, want_var in sorted(needed.items()):
+                where = "the primary checkout '.'" if d == "" else f"the nested checkout '{d}'"
+                hits = [v for v in chain if v["dir"] == d]
+                if not hits:
+                    problems.append(f"{head} consumes a path inside {where} but the verify step(s) immediately before it re-check {', '.join(repr(v['dir'] or '.') for v in chain)} — every consumed path must be covered by a verify of the checkout it resolves into (a verify of the primary workspace does not vouch for a nested checkout, nor a nested one for its parent)")
+                elif not any(v["var"] == want_var for v in hits):
+                    problems.append(f"{head}: the verify step for {where} uses PERMITTED_SHA source '{hits[0]['var']}', but this checkout is guarded with '{want_var}' — the verify must re-check the SAME permitted commit the guard bound")
+
+    # The shell text of every `sh` step is READABLE: one string literal, optionally prefixed by a top-level constant that
+    # is itself one string literal ending at a line boundary (`sh JDK_SETUP + '''…'''`). Anything else — two literals
+    # joined (`'doc' + 'ker build'`), a local variable, a method call — would let a command be assembled at run time from
+    # pieces no scan sees whole.
+    top_constants: dict[str, str] = {}
+    for cm_ in re.finditer(r"(?m)^([A-Z][A-Z0-9_]*)\s*=\s*(?='|\")", text):
+        lit_ = next(((q_, s_, e_) for q_, s_, e_ in g.strings if s_ - len(q_) == cm_.end()), None)
+        if lit_ is not None and g.is_code(cm_.start()):
+            top_constants[cm_.group(1)] = groovy_decode(text[lit_[1]:lit_[2]], gstring=lit_[0] in ('"', '"""'))[0]
+    lit_at = {s_ - len(q_): (q_, s_, e_) for q_, s_, e_ in g.strings}
+    for shm in re.finditer(r"\bsh\b(?=\s*[('\"A-Za-z_])", text):
+        if not g.is_code(shm.start()) or text[max(0, shm.start() - 4):shm.start()].endswith("def "):
+            continue
+        i = shm.end()
+        n_ = len(text)
+        while i < n_ and text[i] in " \t":
+            i += 1
+        paren = i < n_ and text[i] == "("
+        if paren:
+            close = matched_close(g.code_only(i, min(n_, i + 20000)), 0)
+            args = g.code_only(i, i + (close or 0) + 1) if close is not None else ""
+            sm_ = re.search(r"\bscript\s*:", args)
+            if sm_:
+                i = i + sm_.end()
+            else:
+                i += 1
+            while i < n_ and text[i] in " \t\n":
+                i += 1
+        parts: list[tuple[str, str]] = []
+        while True:
+            if i in lit_at:
+                q_, s_, e_ = lit_at[i]
+                parts.append(("lit", text[s_:e_]))
+                i = e_ + len(q_)
+            else:
+                im_ = re.match(r"[A-Za-z_][A-Za-z0-9_.]*(?:\(\))?", text[i:])
+                if not im_:
+                    break
+                parts.append(("id", im_.group(0)))
+                i += im_.end()
+            k_ = i
+            while k_ < n_ and text[k_] in " \t":
+                k_ += 1
+            if k_ < n_ and text[k_] == "+":
+                i = k_ + 1
+                while i < n_ and text[i] in " \t\n":
+                    i += 1
+                continue
+            break
+        ok_ = (len(parts) == 1 and parts[0][0] == "lit") or (
+            len(parts) == 2 and parts[0][0] == "id" and parts[1][0] == "lit" and parts[0][1] in top_constants
+            and re.search(r"\n[ \t]*$", top_constants[parts[0][1]]) is not None)
+        if not ok_:
+            ln = text.count("\n", 0, shm.start()) + 1
+            problems.append(f"line {ln}: the shell text of this `sh` step is not one string literal (optionally prefixed by a top-level constant that is one literal ending at a line boundary) — a command assembled from pieces at run time cannot be read: {lines[ln - 1].strip()[:90]}")
+
+    # The permission variables are READ-ONLY. The guard and every verify step read PERMITTED_SHA / X_PERMITTED_SHA from the
+    # build's environment; a Groovy `env.X_PERMITTED_SHA = …`, a `withEnv(['X_PERMITTED_SHA=…'])` or an environment{}
+    # entry would re-point a later verify at a commit nobody permitted. Only the parameters{} block may define them.
+    for pm in re.finditer(r"\b(?:env\.)?((?:[A-Z][A-Z0-9_]*_)?PERMITTED_SHA)\s*=(?!=)|['\"]((?:[A-Z][A-Z0-9_]*_)?PERMITTED_SHA)=", text):
+        ppos = pm.start()
+        if p_lo <= ppos < p_hi or any(a <= ppos < b for a, b in g.comments):
+            continue
+        name = pm.group(1) or pm.group(2)
+        if pm.group(1) and not g.is_code(ppos):
+            continue   # inside a shell string: a shell-local assignment (the dedicated templates' own `PERMITTED_SHA="${X:-}"` prefix) reaches no other step
+        if pm.group(2) and not re.search(r"withEnv\s*\(\s*\[[^\]]*$", text[max(0, ppos - 400):ppos]):
+            continue
+        ln = text.count("\n", 0, ppos) + 1
+        problems.append(f"line {ln}: {name} is re-assigned after the parameters{{}} block — a permission variable is read-only (the guard and every verify step read it from the build's environment)")
+    envblk = find_block(lines, re.compile(r"^\s*environment\s*\{"))
+    while envblk is not None:
+        for k in range(envblk[0], envblk[1] + 1):
+            if re.match(r"^\s*(?:[A-Z][A-Z0-9_]*_)?PERMITTED_SHA\s*=", lines[k]):
+                problems.append(f"line {k + 1}: a permission variable is defined in environment{{}} — it may come only from parameters{{}}")
+        envblk = find_block(lines, re.compile(r"^\s*environment\s*\{"), envblk[1] + 1)
+    for pm in re.finditer(r"\bparallel\b", text):
+        if g.is_code(pm.start()):
+            ln = text.count("\n", 0, pm.start()) + 1
+            problems.append(f"line {ln}: `parallel` — a concurrent branch could change a checkout between a verify step and the effect it covers; parallel execution is not accepted in a guarded pipeline")
 
     # A bound checkout must not be MOVED after its guard: a git command that changes HEAD or the worktree, anywhere
     # after the primary guard (in code or in a shell body), is refused unless it is the clone/checkout inside the
-    # dedicated acquisition step rule 9 already validates. This closes a source replacement placed inside the same
-    # shell body as the effect, which statement-level adjacency cannot see.
+    # dedicated acquisition step rule 9 already validates.
     primary_end = offs[g_hi] if g_hi < len(offs) else len(text)
     for gm in GIT_MOVE.finditer(text):
         gpos = gm.start()
@@ -1287,7 +2453,6 @@ def check_in_scope(path: str, entry: dict, guard_hash: str) -> list[str]:
             continue
         if any(a <= gpos < b for a, b in g.comments):
             continue
-        # inside a string body (shell) or in code; either way a move verb is refused post-guard
         ln = text.count("\n", 0, gpos) + 1
         problems.append(f"line {ln}: `git {gm.group(1)}` after the guard moves a checkout's HEAD or worktree — a bound source may not be re-moved after it is verified: {lines[ln - 1].strip()[:90]}")
 
@@ -1378,7 +2543,7 @@ def main() -> int:
             print(f"  out  {f}: {e['reason']}")
             continue
         n_in += 1
-        probs = check_in_scope(os.path.join(root, f), e, guard_hash)
+        probs = check_in_scope(os.path.join(root, f), e, guard_hash, root)
         if probs:
             failures += [f"{f}: {p}" for p in probs]
             print(f"  FAIL {f}")

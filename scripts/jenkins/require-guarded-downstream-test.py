@@ -225,7 +225,7 @@ cat "$f"
         os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR)
 
     def commit(self, jenkinsfile=CHILD_JF, guard=GUARD, manifest=MANIFEST_IN, guard_hash=None, repo="options-edge-deploy", verify=VERIFY,
-               script="Jenkinsfile.service-deploy", manifest_path="scripts/ci/jenkins-permitted-sha-scope.txt"):
+               script="Jenkinsfile.service-deploy", manifest_path="scripts/ci/jenkins-permitted-sha-scope.txt", extra=None):
         if repo != "options-edge-deploy":
             self.work = os.path.join(self.tmp, "work-" + repo)
             self.bare = os.path.join(self.repos, repo + ".git")
@@ -244,6 +244,10 @@ cat "$f"
             fh.write(verify)
         with open(os.path.join(self.work, manifest_path), "w") as fh:
             fh.write(manifest)
+        for rel, body in (extra or {}).items():
+            os.makedirs(os.path.dirname(os.path.join(self.work, rel)), exist_ok=True)
+            with open(os.path.join(self.work, rel), "w") as fh:
+                fh.write(body)
         git("add", "-A", cwd=self.work)
         git("commit", "-q", "--allow-empty", "-m", "c", cwd=self.work)
         sha = git("rev-parse", "HEAD", cwd=self.work)
@@ -325,6 +329,17 @@ def main() -> int:
     w = world(); a = w.commit(guard=other_guard); w.serve_child()
     check("child carrying a different guard at that commit is refused (even though its own validator view is consistent)",
           w.run(["service-deploy", a, "REQUIRED_IMAGE"]), False, "would execute a different guard")
+    w.close()
+
+    # the child is judged against its WHOLE tree at the forwarded commit: a repository script that builds, run from an
+    # ordinary shell step, makes that step a source-consuming effect — refused unless it is a dedicated, verified step
+    building = CHILD_JF.replace("        sh 'kubectl apply -f k8s/x.yaml'\n", "        sh '''\n          echo building\n          bash scripts/ci/build.sh\n        '''\n")
+    w = world(); a = w.commit(jenkinsfile=building, extra={"scripts/ci/build.sh": "#!/usr/bin/env bash\ndocker build -t x .\n"}); w.serve_child()
+    check("child whose step runs a repository script that builds (read from the fetched tree) is refused",
+          w.run(["service-deploy", a, "REQUIRED_IMAGE"]), False, "is not a DEDICATED effect step")
+    w.close()
+    w = world(); a = w.commit(jenkinsfile=building, extra={"scripts/ci/build.sh": "#!/usr/bin/env bash\necho nothing to build\n"}); w.serve_child()
+    check("the same child whose script runs no effect is accepted", w.run(["service-deploy", a, "REQUIRED_IMAGE"]), True, "triggering is allowed")
     w.close()
 
     # the provenance verifier is authenticated exactly like the guard (round 11 item 4)
@@ -504,9 +519,9 @@ exec '{w.real_git}' "$@"
 [ "$1" = api ] || exit 1
 case "$2" in
   repos/abhinav-jain09/options-edge-deploy/commits/main) git -C '{w.bare}' rev-parse main ;;
-  repos/abhinav-jain09/options-edge-deploy/contents/*)
-    p="${{2#repos/abhinav-jain09/options-edge-deploy/contents/}}"; ref="${{p#*\\?ref=}}"; p="${{p%%\\?ref=*}}"
-    git -C '{w.bare}' show "$ref:$p" | base64 ;;
+  repos/abhinav-jain09/options-edge-deploy/tarball/*)
+    ref="${{2#repos/abhinav-jain09/options-edge-deploy/tarball/}}"
+    git -C '{w.bare}' archive --format=tar.gz --prefix="abhinav-jain09-options-edge-deploy-$ref/" "$ref" ;;
   *) exit 1 ;;
 esac
 """)
@@ -514,7 +529,7 @@ esac
     w.close()
 
     print(f"require-guarded-downstream-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 61:
+    if failed == 0 and passed >= 64:
         print("require-guarded-downstream-test: ALL PASS")
         return 0
     return 1

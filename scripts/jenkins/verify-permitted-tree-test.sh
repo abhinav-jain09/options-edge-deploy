@@ -87,13 +87,16 @@ check "nested module target/ dirs and .m2/ are covered by their declared names" 
 check "the same workspace with target declared but .m2 NOT declared is refused" 1 "$A" --allow-ignored target
 
 # FAIL-CLOSED: a git query that fails, or partial output then failure, must REFUSE — never be read as a clean/empty
-# inventory. A wrapper `git` on PATH forwards to the real git but fails (optionally after partial output) when its
-# arguments match a chosen pattern.
+# inventory. A wrapper `git` on PATH forwards to the real git, except for the ONE invocation whose full argument string
+# equals FAIL_ARGS: that one prints PARTIAL (if any), records that it fired, and exits FAIL_RC. Each case then asserts
+# (a) the injection fired at that exact query, (b) the verify refused, and (c) it refused for THAT query's reason — so a
+# case can no longer pass by failing some earlier, unrelated git call.
 REALGIT="$(command -v git)"
 fakebin="$work/fakebin"; mkdir -p "$fakebin"
 cat > "$fakebin/git" <<EOF
 #!/usr/bin/env bash
-if [ -n "\${FAIL_MATCH:-}" ] && printf '%s ' "\$@" | grep -q -- "\$FAIL_MATCH"; then
+if [ -n "\${FAIL_ARGS:-}" ] && [ "\$*" = "\$FAIL_ARGS" ]; then
+  echo fired >> "\$FAIL_MARK"
   [ -n "\${PARTIAL:-}" ] && printf '%s\n' "\$PARTIAL"
   exit "\${FAIL_RC:-128}"
 fi
@@ -101,23 +104,40 @@ exec "$REALGIT" "\$@"
 EOF
 chmod +x "$fakebin/git"
 
-checkfail() {  # checkfail <name> <FAIL_MATCH> [PARTIAL]
-  local name="$1" match="$2" partial="${3:-}"
+checkfail() {  # checkfail <name> <exact git argument string to fail> <expected refusal text> [PARTIAL]
+  local name="$1" args="$2" say="$3" partial="${4:-}"
   fresh
+  local mark="$work/fired.$RANDOM"; rm -f "$mark"
   set +e
-  PATH="$fakebin:$PATH" FAIL_MATCH="$match" PARTIAL="$partial" PERMITTED_SHA="$A" bash "$VERIFY" --dir co >/dev/null 2>&1
+  local out
+  out="$(PATH="$fakebin:$PATH" FAIL_ARGS="$args" FAIL_MARK="$mark" PARTIAL="$partial" PERMITTED_SHA="$A" bash "$VERIFY" --dir co 2>&1)"
   local rc=$?
   set -e
-  if [ "$rc" -ne 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "FAIL [$name]: rc=0 (fail-open) — a failed git query was treated as clean"; fi
+  if [ ! -s "$mark" ]; then
+    fail=$((fail+1)); echo "FAIL [$name]: the injection never fired — no git call had the arguments '$args'"
+  elif [ "$rc" -eq 0 ]; then
+    fail=$((fail+1)); echo "FAIL [$name]: rc=0 (fail-open) — a failed git query was treated as clean"
+  elif ! printf '%s' "$out" | grep -qF -- "$say"; then
+    fail=$((fail+1)); echo "FAIL [$name]: refused, but not for the injected query's reason (want '$say'):"; printf '%s\n' "$out" | sed 's/^/    /'
+  else
+    pass=$((pass+1))
+  fi
 }
-checkfail "a failed --ignored enumeration refuses (not treated as empty)" -- "--ignored"
-checkfail "a partial --ignored output then failure refuses" -- "--ignored" "!! sneaked-in/"
-checkfail "a failed working-tree status refuses" "status --porcelain=v1 --untracked-files=all $"
-checkfail "a git diff error refuses" -- "diff --quiet"
-checkfail "a failed HEAD resolution refuses" -- "rev-parse HEAD"
+checkfail "a failed --ignored enumeration refuses (not treated as empty)" \
+  "-C co status --porcelain=v1 --untracked-files=all --ignored" "cannot enumerate the ignored paths"
+checkfail "a partial --ignored output then failure refuses" \
+  "-C co status --porcelain=v1 --untracked-files=all --ignored" "cannot enumerate the ignored paths" "!! sneaked-in/"
+checkfail "a failed working-tree status refuses" \
+  "-C co status --porcelain=v1 --untracked-files=all" "cannot read the working-tree status"
+checkfail "a git diff error refuses" \
+  "-C co diff --quiet HEAD" "git diff HEAD rc=128"
+checkfail "a failed HEAD resolution refuses" \
+  "-C co rev-parse HEAD" "cannot resolve HEAD"
+checkfail "a failed work-tree probe refuses" \
+  "-C co rev-parse --is-inside-work-tree" "is not a git checkout"
 
 echo "verify-permitted-tree-test: $pass passed, $fail failed"
-if [ "$fail" -eq 0 ] && [ "$pass" -ge 27 ]; then
+if [ "$fail" -eq 0 ] && [ "$pass" -ge 28 ]; then
   echo "verify-permitted-tree-test: ALL PASS"
   exit 0
 fi

@@ -31,7 +31,7 @@
 #      (git ls-remote). The child checks out `*/main`; a SHA that is not the tip would be refused by
 #      the child's guard anyway — refusing here keeps the definition judged in step 4 the definition
 #      Jenkins will load;
-#   4. that exact commit is fetched (git, into a private temporary directory; `gh api` as the fallback)
+#   4. that exact commit's WHOLE tree is fetched (git, into a private temporary directory; `gh api …/tarball` as the fallback)
 #      and, AT THAT COMMIT: the scriptPath Jenkinsfile, scripts/jenkins/permitted-sha-guard.sh and the
 #      guard manifest are read; the CALLER'S OWN scripts/jenkins/validate-jenkinsfile-guard.py judges
 #      that Jenkinsfile (--only) — guard stage, executable gates, post gating, nested bindings, its own
@@ -305,30 +305,33 @@ fi
 # 4. the definition at that commit.
 work="$(mktemp -d "${TMPDIR:-/tmp}/guarded-downstream.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/git" "$work/root/scripts/jenkins" "$work/root/$(dirname "$manifest")"
+mkdir -p "$work/git" "$work/root"
+# The WHOLE tree at that commit, not a few files: the validator follows every repository script the Jenkinsfile runs
+# (a script that builds or ships a source is itself a source-consuming effect step), so the child's definition is judged
+# against exactly the tree its build will check out.
 fetched=false
 for u in "$ssh_url" "$https_url"; do
   if GIT_TERMINAL_PROMPT=0 git -C "$work/git" init -q 2>/dev/null \
      && GIT_TERMINAL_PROMPT=0 with_deadline "$deadline_s" git -C "$work/git" fetch -q --depth 1 "$u" "$sha" 2>/dev/null \
      && [ "$(git -C "$work/git" rev-parse "FETCH_HEAD^{commit}" 2>/dev/null)" = "$sha" ]; then
-    git -C "$work/git" show "$sha:$script_path" > "$work/root/$script_path" \
-      && git -C "$work/git" show "$sha:scripts/jenkins/permitted-sha-guard.sh" > "$work/root/scripts/jenkins/permitted-sha-guard.sh" \
-      && git -C "$work/git" show "$sha:scripts/jenkins/verify-permitted-tree.sh" > "$work/root/scripts/jenkins/verify-permitted-tree.sh" \
-      && git -C "$work/git" show "$sha:$manifest" > "$work/root/$manifest" \
+    git -C "$work/git" archive --format=tar "$sha" > "$work/tree.tar" \
+      && tar -xf "$work/tree.tar" -C "$work/root" \
       && fetched=true
     break
   fi
 done
 if [ "$fetched" != true ] && command -v gh >/dev/null 2>&1; then
-  gh_get() { with_deadline "$deadline_s" gh api "repos/$repo/contents/$1?ref=$sha" --jq .content 2>/dev/null | python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))'; }
-  gh_get "$script_path" > "$work/root/$script_path" \
-    && gh_get "scripts/jenkins/permitted-sha-guard.sh" > "$work/root/scripts/jenkins/permitted-sha-guard.sh" \
-    && gh_get "scripts/jenkins/verify-permitted-tree.sh" > "$work/root/scripts/jenkins/verify-permitted-tree.sh" \
-    && gh_get "$manifest" > "$work/root/$manifest" \
-    && [ -s "$work/root/$script_path" ] && [ -s "$work/root/scripts/jenkins/permitted-sha-guard.sh" ] && [ -s "$work/root/scripts/jenkins/verify-permitted-tree.sh" ] \
+  rm -rf "$work/root" && mkdir -p "$work/root"
+  with_deadline "$deadline_s" gh api "repos/$repo/tarball/$sha" > "$work/tree.tgz" 2>/dev/null \
+    && tar -xzf "$work/tree.tgz" -C "$work/root" --strip-components=1 \
     && fetched=true
 fi
-[ "$fetched" = true ] || refuse "could not fetch $script_path, the guard, the provenance verifier and the guard manifest of $repo at $sha (each transport bounded to ${deadline_s}s)"
+if [ "$fetched" = true ]; then
+  for f in "$script_path" scripts/jenkins/permitted-sha-guard.sh scripts/jenkins/verify-permitted-tree.sh "$manifest"; do
+    [ -s "$work/root/$f" ] || fetched=false
+  done
+fi
+[ "$fetched" = true ] || refuse "could not fetch the tree of $repo at $sha with $script_path, the guard, the provenance verifier and the guard manifest in it (each transport bounded to ${deadline_s}s)"
 
 child_guard="$(bash "$here/permitted-sha-guard-version.sh" "$work/root/scripts/jenkins/permitted-sha-guard.sh")"
 [ "$child_guard" = "$own_version" ] \

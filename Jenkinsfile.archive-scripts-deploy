@@ -119,6 +119,10 @@ pipeline {
           # own it. The archive unit needs the same file — a second committed copy is how two calendars
           # end up disagreeing about a holiday — so it is staged next to the archive scripts here, for
           # the container mount below and for the scp that follows.
+          # The suite's outputs live under .jenkins-tmp/ (ignored build output), so the workspace verify before the ship
+          # sees a clean tree; the root-level files earlier builds left in a reused workspace are removed.
+          mkdir -p "$WORKSPACE/.jenkins-tmp"
+          rm -f "$WORKSPACE/.suite.out" "$WORKSPACE/.evaluator.out"
           cp scripts/jenkins/market_calendar.py scripts/ops/archive/market_calendar.py
           # In a container, NOT on the production host: rule.md forbids executing test steps there,
           # and the suite needs flock, which this Mac agent does not provide. The suite is
@@ -131,12 +135,12 @@ pipeline {
           docker run --rm --entrypoint bash \
             -v "$WORKSPACE/scripts/ops/archive:/w:ro" -w /w "$TEST_IMAGE" \
             -c 'apt-get -qq update >/dev/null && apt-get -qq install -y curl >/dev/null && ./test-archive-reset.sh' \
-            | tee "$WORKSPACE/.suite.out"
+            | tee "$WORKSPACE/.jenkins-tmp/suite.out"
           # Exit status alone is not proof the suite ran: assert its own completion line, and that
           # the assertion count matches what the committed suite can produce.
-          grep -Fq "test-archive-reset: ALL PASS" "$WORKSPACE/.suite.out" \
+          grep -Fq "test-archive-reset: ALL PASS" "$WORKSPACE/.jenkins-tmp/suite.out" \
             || { echo "the suite did not report ALL PASS — refusing" >&2; exit 1; }
-          ran=$(grep -c "^PASS" "$WORKSPACE/.suite.out")
+          ran=$(grep -c "^PASS" "$WORKSPACE/.jenkins-tmp/suite.out")
           echo "suite reported $ran passing assertions"
           # 335 = every assertion the committed suite makes (sections 1-16; 12-14 pin the committed-read
           # strike capture, its processing-failure paths and the es4 verifier; 12p/12q/15 the re-review round-2
@@ -171,10 +175,10 @@ pipeline {
           # this amendment exists to prevent: a certificate nobody checked.
           docker run --rm --entrypoint bash \
             -v "$WORKSPACE/scripts/ops/archive:/w:ro" -w /w "$TEST_IMAGE" \
-            -c './push-validation-artifact-test.sh' | tee "$WORKSPACE/.evaluator.out"
-          grep -Fq "PASS — the A5.8 evaluator holds on every case" "$WORKSPACE/.evaluator.out" \
+            -c './push-validation-artifact-test.sh' | tee "$WORKSPACE/.jenkins-tmp/evaluator.out"
+          grep -Fq "PASS — the A5.8 evaluator holds on every case" "$WORKSPACE/.jenkins-tmp/evaluator.out" \
             || { echo "the evaluator suite did not report PASS — refusing" >&2; exit 1; }
-          ev=$(grep -c "^  ok   " "$WORKSPACE/.evaluator.out")
+          ev=$(grep -c "^  ok   " "$WORKSPACE/.jenkins-tmp/evaluator.out")
           echo "evaluator suite reported $ev passing assertions"
           [ "$ev" -ge 86 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
 
@@ -256,12 +260,19 @@ EOSSH
         sh '''
           set -euo pipefail
           ssh -o BatchMode=yes "$PROD_HOST" "mkdir -p '$STAGE_DIR'"
-          # The whole unit travels together: the archiver, the alert helper it sources, the topic
-          # policy it refuses to start without, and the suite. Shipping the archiver alone would
-          # leave its dependencies as whatever happened to be on the host.
-          for f in $UNIT; do
-            scp -o BatchMode=yes "scripts/ops/archive/$f" "$PROD_HOST:$STAGE_DIR/$f"
-          done
+        '''
+        // The whole unit travels together: the archiver, the alert helper it sources, the topic policy it refuses to
+        // start without, and the suite. Shipping the archiver alone would leave its dependencies as whatever happened to
+        // be on the host. ONE scp of the literal UNIT list (market_calendar.py from its one committed home), as a
+        // DEDICATED step right after the verify of the tree it ships (Deployment Permission Rule, validator rule 9b):
+        // nothing can run between the verification and the copy. tests/test_jenkins_permitted_sha_guard.py holds this
+        // list equal to UNIT.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py'
+        }
+        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh "${PROD_HOST}:${STAGE_DIR}/"'
+        sh '''
+          set -euo pipefail
 
           ssh -o BatchMode=yes "$PROD_HOST" \
             "INSTALL_DIR='$INSTALL_DIR' STAGE_DIR='$STAGE_DIR' UNIT='$UNIT' BUILD='${BUILD_NUMBER}' ALLOW_DRIFT='${ALLOW_HOST_DRIFT}' bash -s" <<'EOSSH'

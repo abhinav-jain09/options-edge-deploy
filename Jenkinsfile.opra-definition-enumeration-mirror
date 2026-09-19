@@ -865,8 +865,10 @@ S
 
             es4 "install -d '$RDIR'" || { echo "FAIL: cannot create $RDIR on $ES4_HOST"; exit 1; }
             # The generated config is what the Preflight/shape stages already validated on this agent;
-            # ship exactly those bytes rather than regenerating them remotely.
-            scp -o BatchMode=yes -q "$MDIR/consumer.properties" "$MDIR/producer.properties" "$MDIR/log4j.properties" "$RUNSH" "$ES4_HOST:$RDIR/" \
+            # ship exactly those bytes rather than regenerating them remotely. Every source is named directly under
+            # $MDIR (a generated directory outside the workspace, bound in environment{}), so this ship consumes no
+            # checkout and needs no provenance verify (validator rule 9b).
+            scp -o BatchMode=yes -q "$MDIR/consumer.properties" "$MDIR/producer.properties" "$MDIR/log4j.properties" "$MDIR/run-mirror-container.sh" "$ES4_HOST:$RDIR/" \
               || { echo "FAIL: cannot copy the generated config to $ES4_HOST:$RDIR"; exit 1; }
 
             # --network host: the mirror must reach BOTH clusters, and on the target host that is the

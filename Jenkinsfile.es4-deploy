@@ -102,17 +102,26 @@ pipeline {
     stage('Infra sync + bootstrap') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'infra-sync') } }
       steps {
+        // /home is root-owned on the box — create the es4 home via passwordless sudo, owned by the deploy user
+        sh '''
+          set -euo pipefail
+          ssh -o BatchMode=yes "$ES4_HOST" 'sudo install -d -o "$(id -un)" -g "$(id -gn)" /home/es4 /home/es4/repo /home/es4/repo/infra /home/es4/repo/scripts'
+        '''
+        // PROVENANCE (Deployment Permission Rule, validator rule 9b): every ship of the source tree is a DEDICATED step whose
+        // whole shell body is the one rsync command, immediately preceded by the verify of the checkout it ships — nothing
+        // can run between the verification and the consumption, not even inside the shipping step.
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
         }
+        sh 'rsync -az --delete infra/es4 "${ES4_HOST}:/home/es4/repo/infra/"'
+        // ES helpers call shared siblings under scripts/kafka. Sync the complete repo-owned scripts tree so an on-box
+        // cleanup never runs with a partial dependency graph.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
         sh '''
           set -euo pipefail
-          # /home is root-owned on the box — create the es4 home via passwordless sudo, owned by the deploy user
-          ssh -o BatchMode=yes "$ES4_HOST" 'sudo install -d -o "$(id -un)" -g "$(id -gn)" /home/es4 /home/es4/repo /home/es4/repo/infra /home/es4/repo/scripts'
-          rsync -az --delete infra/es4  "$ES4_HOST":/home/es4/repo/infra/
-          # ES helpers call shared siblings under scripts/kafka. Sync the complete repo-owned
-          # scripts tree so an on-box cleanup never runs with a partial dependency graph.
-          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/bootstrap-es4.sh'
         '''
       }
@@ -123,9 +132,9 @@ pipeline {
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
         }
+        sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
         sh '''
           set -euo pipefail
-          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
           # STEADY-state audit: this action runs against a LIVE es4, so every owner has already
           # applied its own topic contract and the broker supplies the numbers. For the es4 set
@@ -154,10 +163,9 @@ pipeline {
         timeout(time: 10, unit: 'MINUTES') {
           sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
         }
+        sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
         sh '''
           set -euo pipefail
-          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
-
           # The prod-cluster es-feed is RETIRED (DBP-R33), so there is no prod feed to fence around
           # the wipe any more — the only es-feed lives in the es4 cluster and the on-box cleanup
           # already fences es4 Deployments itself. The prod kubeconfig is no longer needed here.

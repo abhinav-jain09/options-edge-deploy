@@ -64,8 +64,19 @@ pipeline {
           sh '''
             set -euo pipefail
             ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${PROD_HOST}" 'mkdir -p ~/autostart/jenkins ~/autostart/ops'
-            scp -o BatchMode=yes scripts/ops/es-predown.sh          "${PROD_HOST}:/home/abhinav/autostart/ops/es-predown.sh"
-            scp -o BatchMode=yes scripts/jenkins/market_calendar.py "${PROD_HOST}:/home/abhinav/autostart/jenkins/market_calendar.py"
+          '''
+          // Each ship of a source file is a DEDICATED step right after the verify of the tree it comes from (Deployment
+          // Permission Rule, validator rule 9b): nothing can run between the verification and the copy.
+          timeout(time: 10, unit: 'MINUTES') {
+            sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+          }
+          sh 'scp -o BatchMode=yes scripts/ops/es-predown.sh "${PROD_HOST}:/home/abhinav/autostart/ops/es-predown.sh"'
+          timeout(time: 10, unit: 'MINUTES') {
+            sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+          }
+          sh 'scp -o BatchMode=yes scripts/jenkins/market_calendar.py "${PROD_HOST}:/home/abhinav/autostart/jenkins/market_calendar.py"'
+          sh '''
+            set -euo pipefail
             echo "Running ES pre-open down on ${PROD_HOST} (ENABLED=${ENABLED})"
             ssh -o BatchMode=yes "${PROD_HOST}" \
               "chmod +x ~/autostart/ops/es-predown.sh && \

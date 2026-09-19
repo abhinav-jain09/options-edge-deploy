@@ -636,14 +636,28 @@ class NiftyImageIdentityTest(unittest.TestCase):
         (b / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n")
         for f in b.iterdir():
             f.chmod(f.stat().st_mode | stat.S_IXUSR)
-        self.block = _groovy_triple_body(self.text, "Second source, second binding")
+        # The dev path, step by step, exactly as the stage runs it: prepare, the DEDICATED build step (one command), the
+        # push, the lock. The per-build tag reaches them through withEnv, derived as the Groovy derives it.
+        stage = self.text[self.text.index("stage('Build image (native)')"):self.text.index("stage('Deploy (service-scoped)')")]
+        self.prep = _groovy_triple_body(stage, "Nifty build: prepare")
+        dev = stage[stage.index("} else {"):]
+        self.build_line = next(l.strip() for l in dev.split("\n") if l.strip().startswith("sh 'docker build "))
+        self.push = _groovy_triple_body(dev, "sh 'docker build ")
+        self.lock = _groovy_triple_body(stage, "Nifty build: lock")
+        self.assertIn('def uniqueTag = "b${env.BUILD_ID}-${nsha}"', stage)
+        self.assertIn("def uniqueRef = \"${env.IMAGE_REF.substring(0, env.IMAGE_REF.lastIndexOf('/'))}/options-edge-nifty-gex:${uniqueTag}\"", stage)
 
     def _run(self, push: str, served: str) -> subprocess.CompletedProcess:
+        ref = "localhost:5001/options-edge-nifty-gex:dev"
+        tag = f"b57-{self.src_sha}"
         e = {"PATH": f"{self.tmp / 'bin'}:{os.environ['PATH']}", "HOME": str(self.tmp), "ENVIRONMENT": "dev", "BUILD_ID": "57", "BUILD_NUMBER": "57",
-             "BUILD_URL": "http://j/job/nifty-gex-service-deploy/57/", "NIFTY_PERMITTED_SHA": self.src_sha, "IMAGE_REF": "localhost:5001/options-edge-nifty-gex:dev",
+             "BUILD_URL": "http://j/job/nifty-gex-service-deploy/57/", "NIFTY_PERMITTED_SHA": self.src_sha, "IMAGE_REF": ref,
+             "UNIQUE_TAG": tag, "UNIQUE_REF": f"{ref.rsplit('/', 1)[0]}/options-edge-nifty-gex:{tag}",
              "SOURCE_REPO": "git@github.com:abhinav-jain09/options-edge-nifty-gex.git", "PERMITTED_SHA_GUARD_VERSION": OWN_HASH,
              "PUSH_DIGEST": push, "REGISTRY_DIGEST": served}
-        return subprocess.run(["bash", "-c", self.block], capture_output=True, text=True, env=e, cwd=self.ws)
+        build_cmd = self.build_line[len("sh '"):-1]
+        script = "\n".join(["set -e", "( " + self.prep + " )", build_cmd, "( " + self.push + " )", "( " + self.lock + " )"])
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=e, cwd=self.ws)
 
     def test_this_builds_push_is_locked_by_build_id_and_source_commit(self) -> None:
         r = self._run(DIGEST, DIGEST)
@@ -687,10 +701,8 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
     def _validate_mutated(self, name: str, old: str, new: str) -> subprocess.CompletedProcess:
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, True)
-        (tmp / "scripts/jenkins").mkdir(parents=True)
-        (tmp / "scripts/ci").mkdir(parents=True)
-        shutil.copy(GUARD, tmp / "scripts/jenkins/permitted-sha-guard.sh")
-        shutil.copy(ROOT / "scripts/ci/jenkins-permitted-sha-scope.txt", tmp / "scripts/ci/jenkins-permitted-sha-scope.txt")
+        # the whole scripts/ tree: the validator follows every repository script a step runs
+        shutil.copytree(ROOT / "scripts", tmp / "scripts", ignore=shutil.ignore_patterns("__pycache__", ".helper-venv"))
         text = (ROOT / name).read_text()
         self.assertIn(old, text, name)
         (tmp / name).write_text(text.replace(old, new, 1))
@@ -712,10 +724,7 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
         mutated = mutated.replace("          def child = build job: 'options-edge-processing',", "        }\n        script {\n          def child = build job: 'options-edge-processing',", 1)
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, True)
-        (tmp / "scripts/jenkins").mkdir(parents=True)
-        (tmp / "scripts/ci").mkdir(parents=True)
-        shutil.copy(GUARD, tmp / "scripts/jenkins/permitted-sha-guard.sh")
-        shutil.copy(ROOT / "scripts/ci/jenkins-permitted-sha-scope.txt", tmp / "scripts/ci/jenkins-permitted-sha-scope.txt")
+        shutil.copytree(ROOT / "scripts", tmp / "scripts", ignore=shutil.ignore_patterns("__pycache__", ".helper-venv"))
         (tmp / "Jenkinsfile.service-deploy").write_text(mutated)
         r = subprocess.run(["python3", str(VALIDATOR), "--root", str(tmp), "--manifest", str(tmp / "scripts/ci/jenkins-permitted-sha-scope.txt"), "--only", "Jenkinsfile.service-deploy"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 1, r.stdout)
@@ -741,16 +750,80 @@ class ActualJenkinsfileMutationTest(unittest.TestCase):
             self.assertIn(say, r.stdout)
 
     def test_nifty_source_is_provenance_verified_before_it_is_built(self) -> None:
-        # Codex #1043 r8/r9 → runtime provenance verification. The Nifty source is shipped (rsync) and built into the
-        # image, so it carries a dedicated verify-permitted-tree step after its guard. Remove that step and the file is
-        # refused; its runtime behaviour (pull/reset/copy/archive over the tree) is covered by verify-permitted-tree-test.sh.
-        block = ("        timeout(time: 10, unit: 'MINUTES') {\n"
-                 "          sh 'PERMITTED_SHA=\"${NIFTY_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir nifty-gex-src'\n"
-                 "        }\n")
-        self.assertIn(block, (ROOT / "Jenkinsfile.nifty-gex-service").read_text())
-        r = self._validate_mutated("Jenkinsfile.nifty-gex-service", block, "")
+        # The Nifty source is shipped (rsync, production) and built (docker build, dev); each is a dedicated effect step
+        # right after its own verify of the nifty checkout. Remove either verify and the file is refused.
+        t = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        block = ("              timeout(time: 10, unit: 'MINUTES') {\n"
+                 "                sh 'PERMITTED_SHA=\"${NIFTY_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir nifty-gex-src'\n"
+                 "              }\n")
+        self.assertEqual(t.count(block), 2)
+        for effect in ("              sh 'rsync -a --delete --exclude .git nifty-gex-src/", "              sh 'docker build -t \"${IMAGE_REF}\""):
+            r = self._validate_mutated("Jenkinsfile.nifty-gex-service", block + effect, effect)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("the nested checkout 'nifty-gex-src'", r.stdout)
+
+    def test_the_effect_steps_own_body_cannot_change_the_source(self) -> None:
+        # Codex deploy r11 (the class): statement adjacency protects the statement boundary, not the commands inside the
+        # consuming step. Each effect is now a DEDICATED step whose whole body is one command matched against its fixed
+        # template — a change to the source inside that step, however spelled, is refused.
+        build = "              sh 'docker build -t \"${IMAGE_REF}\" -t \"${UNIQUE_REF}\" nifty-gex-src'\n"
+        rsync = "              sh 'rsync -a --delete --exclude .git nifty-gex-src/ \"abhinav@${PROD_BUILD_HOST}:${BUILD_DIR}/\"'\n"
+        tq = chr(39) * 3
+        for old, new, say in [
+            (build, "              sh 'cp -r /tmp/other/. nifty-gex-src/ && docker build -t \"${IMAGE_REF}\" -t \"${UNIQUE_REF}\" nifty-gex-src'\n", "does not fit the fixed `docker` template"),
+            (build, "              sh " + tq + "\n                git -C nifty-gex-src apply /tmp/p.diff\n                docker build -t \"$IMAGE_REF\" nifty-gex-src\n              " + tq + "\n", "is not a DEDICATED effect step"),
+            (build, "              sh 'docker build --build-context extra=/tmp/other -t \"${IMAGE_REF}\" nifty-gex-src'\n", "is not an option of the docker build template"),
+            (build, "              sh 'docker build -t \"${IMAGE_REF}\" \"${CTX}\"'\n", "the build context must be a literal"),
+            (rsync, "              sh " + tq + "\n                set -euo pipefail\n                tar -xf /tmp/other.tar -C nifty-gex-src\n                rsync -a --delete nifty-gex-src/ \"abhinav@$PROD_BUILD_HOST:$BUILD_DIR/\"\n              " + tq + "\n", "is not a DEDICATED effect step"),
+            (rsync, "              sh 'rsync -a --delete --rsync-path=/tmp/x nifty-gex-src/ \"abhinav@${PROD_BUILD_HOST}:${BUILD_DIR}/\"'\n", "is not an option of the rsync template"),
+        ]:
+            r = self._validate_mutated("Jenkinsfile.nifty-gex-service", old, new)
+            self.assertEqual(r.returncode, 1, new + r.stdout)
+            self.assertIn(say, r.stdout)
+
+    def test_a_permission_variable_cannot_be_repointed_around_a_verify(self) -> None:
+        t = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        old = "          withEnv([\"UNIQUE_TAG=${uniqueTag}\", "
+        r = self._validate_mutated("Jenkinsfile.nifty-gex-service", old, "          withEnv([\"NIFTY_PERMITTED_SHA=${params.PERMITTED_SHA}\", \"UNIQUE_TAG=${uniqueTag}\", ")
         self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("the nested checkout 'nifty-gex-src'", r.stdout)
+        self.assertIn("NIFTY_PERMITTED_SHA is re-assigned after the parameters{} block", r.stdout)
+
+    def test_every_other_restructured_ship_is_a_dedicated_verified_step(self) -> None:
+        tq = chr(39) * 3
+        cases = [
+            ("Jenkinsfile.es4-deploy", "        sh 'rsync -az --delete infra/es4 \"${ES4_HOST}:/home/es4/repo/infra/\"'\n",
+             "        sh " + tq + "\n          set -euo pipefail\n          rsync -az --delete infra/es4 \"$ES4_HOST\":/home/es4/repo/infra/\n        " + tq + "\n", "is not a DEDICATED effect step"),
+            ("Jenkinsfile.kafka-reset", "        sh 'scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new scripts/ops/daily-kafka-reset.sh",
+             "        sh 'cp /tmp/x scripts/ops/daily-kafka-reset.sh; scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new scripts/ops/daily-kafka-reset.sh", "does not fit the fixed `scp` template"),
+            ("Jenkinsfile.loki", "-e \"confirm_loki_deploy=${CONFIRM_DEPLOY}\"'", "-e @/tmp/vars.yml'", "never a file"),
+            ("Jenkinsfile.archive-scripts-deploy", "        sh 'scp -o BatchMode=yes scripts/ops/archive/", "        sh 'scp -o BatchMode=yes \"$EXTRA\" scripts/ops/archive/", "every scp source must be a literal path"),
+        ]
+        for name, old, new, say in cases:
+            r = self._validate_mutated(name, old, new)
+            self.assertEqual(r.returncode, 1, name + r.stdout)
+            self.assertIn(say, r.stdout, name)
+        # removing a verify in front of a restructured ship is refused
+        for name, eff in [("Jenkinsfile.es4-deploy", "        sh 'rsync -az --delete infra/es4 "), ("Jenkinsfile.kafka-reset", "        sh 'scp "),
+                          ("Jenkinsfile.es-predown", "          sh 'scp -o BatchMode=yes scripts/ops/es-predown.sh"),
+                          ("Jenkinsfile.archive-scripts-deploy", "        sh 'scp -o BatchMode=yes scripts/ops/archive/"),
+                          ("Jenkinsfile.loki", "            sh 'ansible-playbook ")]:
+            t = (ROOT / name).read_text()
+            i = t.index(eff)
+            j = t.rindex("timeout(time: 10, unit: 'MINUTES') {", 0, i)
+            j = t.rindex("\n", 0, j) + 1
+            r = self._validate_mutated(name, t[j:i] + eff, eff)
+            self.assertEqual(r.returncode, 1, name + r.stdout)
+            self.assertIn("no dedicated verify-permitted-tree step immediately precedes it", r.stdout, name)
+
+    def test_the_archive_ship_is_exactly_the_unit(self) -> None:
+        t = (ROOT / "Jenkinsfile.archive-scripts-deploy").read_text()
+        unit = re.search(r'^    UNIT\s*=\s*"([^"]*)"', t, re.M).group(1).split()
+        line = next(l.strip() for l in t.split("\n") if l.strip().startswith("sh 'scp -o BatchMode=yes scripts/ops/archive/"))
+        srcs = line[len("sh 'scp -o BatchMode=yes "):].rsplit(" ", 1)[0].split()
+        self.assertEqual([os.path.basename(x) for x in srcs], unit)
+        for x in srcs:
+            self.assertTrue((ROOT / x).is_file(), x)
+        self.assertIn("scripts/jenkins/market_calendar.py", srcs)   # the committed file, not the gitignored staged copy
 
     def test_verify_permitted_tree_runtime_suite_passes(self) -> None:
         # Codex's replacement reproductions run as REAL git checkouts against verify-permitted-tree.sh.

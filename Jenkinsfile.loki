@@ -58,22 +58,20 @@ pipeline {
     stage('Deploy Loki/Promtail (Ansible)') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
-        sh '''
-          set -euo pipefail
-          # Defaults so `set -u` is safe even if a parameter env var is missing.
-          DEPLOY_ENVIRONMENT="${DEPLOY_ENVIRONMENT:-prod}"
-          LOKI_NAMESPACE="${LOKI_NAMESPACE:-loki}"
-          LOKI_RETENTION_HOURS="${LOKI_RETENTION_HOURS:-168}"
-          CONFIRM_DEPLOY="${CONFIRM_DEPLOY:-false}"
-          KUBECONFIG_FILE="${KUBECONFIG_FILE:-}"
-          if [ -n "${KUBECONFIG_FILE}" ]; then export KUBECONFIG="${KUBECONFIG_FILE}"; fi
-          echo "Target: env=${DEPLOY_ENVIRONMENT} ns=${LOKI_NAMESPACE} confirm=${CONFIRM_DEPLOY}"
-          ansible-playbook ansible/loki-stack.yml \
-            -e deploy_environment="${DEPLOY_ENVIRONMENT}" \
-            -e loki_namespace="${LOKI_NAMESPACE}" \
-            -e loki_retention_hours="${LOKI_RETENTION_HOURS}" \
-            -e confirm_loki_deploy="${CONFIRM_DEPLOY}"
-        '''
+        script {
+          // Every value reaches the playbook from the build's parameters (Jenkins exposes each one, defaults included, as
+          // an environment variable); an optional kubeconfig reaches it the same way. The playbook run is a DEDICATED step
+          // — its whole body is the one command — right after the verify of the tree it reads (Deployment Permission Rule,
+          // validator rule 9b): nothing can run between the verification and the consumption.
+          def kube = (params.KUBECONFIG_FILE ?: '').trim()
+          echo "Target: env=${params.DEPLOY_ENVIRONMENT} ns=${params.LOKI_NAMESPACE} confirm=${params.CONFIRM_DEPLOY}"
+          withEnv(kube ? ["KUBECONFIG=${kube}"] : []) {
+            timeout(time: 10, unit: 'MINUTES') {
+              sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+            }
+            sh 'ansible-playbook ansible/loki-stack.yml -e "deploy_environment=${DEPLOY_ENVIRONMENT}" -e "loki_namespace=${LOKI_NAMESPACE}" -e "loki_retention_hours=${LOKI_RETENTION_HOURS}" -e "confirm_loki_deploy=${CONFIRM_DEPLOY}"'
+          }
+        }
       }
     }
   }
