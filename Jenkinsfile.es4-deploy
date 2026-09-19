@@ -29,6 +29,10 @@
 pipeline {
   agent { label 'local-mac' }
   parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '922f76ce5af2ff005cb6b330ceea65faf3738d1237cb7d33384c3583d9b1df9a',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ACTION', choices: ['deploy-service', 'deploy-all', 'infra-sync', 'create-topics', 'clean-reset', 'activate-es-feed', 'deactivate-es-feed'],
       description: 'What to do (see header).')
     choice(name: 'SERVICE', choices: [
@@ -54,7 +58,7 @@ pipeline {
     booleanParam(name: 'ES_FEED_ACK_OI_AND_CAPACITY', defaultValue: false,
       description: 'activate-es-feed only. Explicit acknowledgement of the two preconditions the requirement will not let a deploy assume: (1) the ES-OI consequence of DATABENTO_USE_LIVE_REPLAY=false has been resolved (ESM-Q4 — either es4 GEX moved to direct OI fetch, or the bounded out-of-band OI request landed), and (2) real .4 headroom has been MEASURED with the full es4 fleet running (DBP-V10/ESM-V6). Activation refuses to proceed without this.')
   }
-  options { disableConcurrentBuilds(); timeout(time: 60, unit: 'MINUTES') }
+  options { disableRestartFromStage(); disableConcurrentBuilds(); timeout(time: 60, unit: 'MINUTES') }
   environment {
     ES4_HOST       = 'abhinav@192.168.100.4'
     // The es4 DEPLOYER identity, not the cluster admin. es4.kubeconfig authenticates as
@@ -75,27 +79,62 @@ pipeline {
     ES4_NS_UID     = 'cbf047d2-45ea-4ba7-b83c-5b462c7aa1d3'
   }
   stages {
-    stage('Infra sync + bootstrap') {
-      when { expression { params.ACTION == 'infra-sync' } }
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the environment-branch restriction, kept as its own condition); a
+    // missing, empty, short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a
+    // checked-out HEAD that is not exactly PERMITTED_SHA. It runs FIRST, in the workspace every later
+    // stage uses, so nothing below can build, push, apply, roll, restart, create a topic or copy a file
+    // under an unpermitted commit — including a build queued for one commit that checked out a newer one.
+    // error(), never catchError: a refusal is a stop, not a coloured result. Both SHAs are in the log.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
       steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+    stage('Infra sync + bootstrap') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'infra-sync') } }
+      steps {
+        // /home is root-owned on the box — create the es4 home via passwordless sudo, owned by the deploy user
         sh '''
           set -euo pipefail
-          # /home is root-owned on the box — create the es4 home via passwordless sudo, owned by the deploy user
           ssh -o BatchMode=yes "$ES4_HOST" 'sudo install -d -o "$(id -un)" -g "$(id -gn)" /home/es4 /home/es4/repo /home/es4/repo/infra /home/es4/repo/scripts'
-          rsync -az --delete infra/es4  "$ES4_HOST":/home/es4/repo/infra/
-          # ES helpers call shared siblings under scripts/kafka. Sync the complete repo-owned
-          # scripts tree so an on-box cleanup never runs with a partial dependency graph.
-          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
+        '''
+        // PROVENANCE (Deployment Permission Rule, validator rule 9b): every ship of the source tree is a DEDICATED step whose
+        // whole shell body is the one rsync command, immediately preceded by the verify of the checkout it ships — nothing
+        // can run between the verification and the consumption, not even inside the shipping step.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete infra/es4 "${ES4_HOST}:/home/es4/repo/infra/"'
+        // ES helpers call shared siblings under scripts/kafka. Sync the complete repo-owned scripts tree so an on-box
+        // cleanup never runs with a partial dependency graph.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
+        sh '''
+          set -euo pipefail
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/bootstrap-es4.sh'
         '''
       }
     }
     stage('Create topics') {
-      when { expression { params.ACTION == 'create-topics' } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'create-topics') } }
       steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
         sh '''
           set -euo pipefail
-          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
           ssh -o BatchMode=yes "$ES4_HOST" 'bash /home/es4/repo/scripts/es4/create-es-topics.sh'
           # STEADY-state audit: this action runs against a LIVE es4, so every owner has already
           # applied its own topic contract and the broker supplies the numbers. For the es4 set
@@ -119,12 +158,14 @@ pipeline {
       // so the on-box cleanup fences it along with every other es4 Deployment and no cross-cluster
       // fencing is needed. What remains below is a guard against that cleanup restoring it against
       // the declared intent.
-      when { expression { params.ACTION == 'clean-reset' } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'clean-reset') } }
       steps {
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
+        }
+        sh 'rsync -az --delete scripts/ "${ES4_HOST}:/home/es4/repo/scripts/"'
         sh '''
           set -euo pipefail
-          rsync -az --delete scripts/ "$ES4_HOST":/home/es4/repo/scripts/
-
           # The prod-cluster es-feed is RETIRED (DBP-R33), so there is no prod feed to fence around
           # the wipe any more — the only es-feed lives in the es4 cluster and the on-box cleanup
           # already fences es4 Deployments itself. The prod kubeconfig is no longer needed here.
@@ -170,7 +211,7 @@ pipeline {
       }
     }
     stage('Deploy to es4') {
-      when { expression { params.ACTION == 'deploy-service' || params.ACTION == 'deploy-all' } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'deploy-service' || params.ACTION == 'deploy-all') } }
       steps {
         sh '''
           set -euo pipefail
@@ -262,7 +303,7 @@ pipeline {
       }
     }
     stage('Activate es-feed (separate authorized action)') {
-      when { expression { params.ACTION == 'activate-es-feed' } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'activate-es-feed') } }
       steps {
         sh '''
           set -euo pipefail
@@ -295,7 +336,7 @@ pipeline {
       }
     }
     stage('Deactivate es-feed') {
-      when { expression { params.ACTION == 'deactivate-es-feed' } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.ACTION == 'deactivate-es-feed') } }
       steps {
         sh '''
           set -euo pipefail

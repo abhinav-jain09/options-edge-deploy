@@ -17,10 +17,16 @@
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '922f76ce5af2ff005cb6b330ceea65faf3738d1237cb7d33384c3583d9b1df9a',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ENVIRONMENT', choices: ['production', 'dev'],
       description: 'Target environment — selects k8s/services/nifty-gex/overlays/<env> and the deployer kubeconfig (oeProfile).')
     booleanParam(name: 'BUILD_IMAGE', defaultValue: true,
       description: 'Build+push the image first (native on the target machine). false = deploy the image already in the registry.')
+    string(name: 'NIFTY_PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED when BUILD_IMAGE=true — Deployment Permission Rule. The full 40-character commit id of options-edge-nifty-gex (the SECOND source this job builds: it clones that repository and docker-pushes the result). PERMITTED_SHA binds only THIS repository; this binds the application checkout, checked right after the clone and before the build. Empty, short or mismatched values are refused.')
     booleanParam(name: 'DEPLOY_DRY_RUN', defaultValue: false,
       description: 'true = render + digest-pin + server-side validate only; nothing changes.')
     string(name: 'HEALTH_URL', defaultValue: '',
@@ -29,6 +35,7 @@ pipeline {
       description: 'Deployer kubeconfig on the Jenkins agent. Empty = oeProfile(ENVIRONMENT).kubeconfigDeployer.')
   }
   options {
+    disableRestartFromStage()   // Deployment Permission Rule: no "Restart from Stage" past the permitted-commit guard
     disableConcurrentBuilds()
     // 120 min, not 60: the validate stage alone has been measured at 44+ min when the
     // agent Mac carries the live trading stack during market hours (same reasoning and
@@ -48,7 +55,28 @@ pipeline {
     DEPLOY_DRY_RUN_PARAM = "${params.DEPLOY_DRY_RUN}"
   }
   stages {
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the environment-branch restriction, kept as its own condition); a
+    // missing, empty, short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a
+    // checked-out HEAD that is not exactly PERMITTED_SHA. It runs FIRST, in the workspace every later
+    // stage uses, so nothing below can build, push, apply, roll, restart, create a topic or copy a file
+    // under an unpermitted commit — including a build queued for one commit that checked out a newer one.
+    // error(), never catchError: a refusal is a stop, not a coloured result. Both SHAs are in the log.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
     stage('Validate service registry') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         sh '''
           set -euo pipefail
@@ -57,33 +85,132 @@ pipeline {
       }
     }
     stage('Build image (native)') {
-      when { expression { params.BUILD_IMAGE && !params.DEPLOY_DRY_RUN } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (params.BUILD_IMAGE && !params.DEPLOY_DRY_RUN) } }
       steps {
         dir('nifty-gex-src') {
           git url: env.SOURCE_REPO, branch: 'main'
         }
+        // Second source, second binding (Deployment Permission Rule): the clone above is a mutable
+        // `main` and its content is what gets built and pushed. Same guard, on THAT checkout, against
+        // NIFTY_PERMITTED_SHA — right after the clone and before docker build. The job's own
+        // BRANCH_NAME/GIT_BRANCH describe this repository, so --dir skips that name check; containment
+        // in the nifty repo's origin/main and exact equality still apply.
+        // A DEDICATED step whose whole script is the guard command: the step fails if and only if the
+        // guard refuses, and nothing in it can turn a refusal into success (validator rule 9).
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/permitted-sha-guard.sh --dir nifty-gex-src --ref main'
+        }
+        // ARTIFACT IDENTITY (Deployment Permission Rule): the image this job deploys must be THE image
+        // this build pushed from the guarded nifty checkout, not whatever the mutable :prod/:dev tag
+        // resolves to later (another publisher of that tag could move it; disableConcurrentBuilds only
+        // serialises THIS job). So the build is also pushed under a tag unique to this build and
+        // permission (b<BUILD_ID>-<NIFTY_PERMITTED_SHA>), the digest is taken from THIS push's own
+        // output and must equal what the registry serves for that unique tag, and it is recorded in an
+        // image lock keyed by BUILD_ID and handed to the deploy as REQUIRED_IMAGE.
+        // Nifty build: prepare (not an effect) — the checkout is the permitted commit; this build's push log starts empty.
         sh '''
           set -euo pipefail
-          if [ "$ENVIRONMENT" = "production" ]; then
-            # amd64 native on .252 — rsync the checked-out source, build, push to the prod registry.
-            BUILD_DIR="$PROD_BUILD_ROOT/nifty-gex-$BUILD_NUMBER"
-            ssh -o BatchMode=yes "abhinav@$PROD_BUILD_HOST" "mkdir -p '$BUILD_DIR'"
-            rsync -a --delete --exclude .git nifty-gex-src/ "abhinav@$PROD_BUILD_HOST:$BUILD_DIR/"
-            ssh -o BatchMode=yes "abhinav@$PROD_BUILD_HOST" \
-              "cd '$BUILD_DIR' && docker build -t '$IMAGE_REF' . && docker push '$IMAGE_REF' && rm -rf '$BUILD_DIR'"
-          else
-            # arm64 native on this Mac; localhost:5001 == host.docker.internal:5001 from the cluster.
-            docker build -t "$IMAGE_REF" nifty-gex-src
-            docker push "$IMAGE_REF"
-          fi
+          SRC_COMMIT="$(git -C nifty-gex-src rev-parse HEAD)"
+          [ "$SRC_COMMIT" = "${NIFTY_PERMITTED_SHA:?}" ] || { echo "nifty checkout $SRC_COMMIT is not NIFTY_PERMITTED_SHA" >&2; exit 1; }
+          mkdir -p .jenkins-tmp
+          rm -f ".jenkins-tmp/nifty-push-$BUILD_ID.log"
         '''
+        script {
+          // The per-build tag and the remote build directory, derived here from BUILD_ID/BUILD_NUMBER and the permitted
+          // SHA the prepare step and the verify step both prove the checkout is, and handed to the steps below as their
+          // environment — the effect steps themselves hold nothing but their one command.
+          def nsha = (params.NIFTY_PERMITTED_SHA ?: '').trim()
+          def uniqueTag = "b${env.BUILD_ID}-${nsha}"
+          def uniqueRef = "${env.IMAGE_REF.substring(0, env.IMAGE_REF.lastIndexOf('/'))}/options-edge-nifty-gex:${uniqueTag}"
+          withEnv(["UNIQUE_TAG=${uniqueTag}", "UNIQUE_REF=${uniqueRef}", "BUILD_DIR=${env.PROD_BUILD_ROOT}/nifty-gex-${env.BUILD_NUMBER}"]) {
+            if (env.ENVIRONMENT == 'production') {
+              // amd64 native on .252 — ship the checked-out source, build and push there.
+              sh '''
+                set -euo pipefail
+                ssh -o BatchMode=yes "abhinav@$PROD_BUILD_HOST" "mkdir -p '$BUILD_DIR'"
+              '''
+              // PROVENANCE (Deployment Permission Rule, validator rule 9b): the guard proved HEAD == permitted at one
+              // moment; the verify re-proves, immediately before the source is shipped, that the nifty checkout is still
+              // exactly that commit's tree, and the ship is a DEDICATED step whose whole body is the one rsync — nothing
+              // can run between the verification and the consumption.
+              timeout(time: 10, unit: 'MINUTES') {
+                sh 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir nifty-gex-src'
+              }
+              sh 'rsync -a --delete --exclude .git nifty-gex-src/ "abhinav@${PROD_BUILD_HOST}:${BUILD_DIR}/"'
+              sh '''
+                set -euo pipefail
+                ssh -o BatchMode=yes "abhinav@$PROD_BUILD_HOST" \
+                  "cd '$BUILD_DIR' && docker build -t '$IMAGE_REF' -t '$UNIQUE_REF' . && docker push '$IMAGE_REF' && docker push '$UNIQUE_REF' && rm -rf '$BUILD_DIR'" \
+                  | tee ".jenkins-tmp/nifty-push-$BUILD_ID.log"
+              '''
+            } else {
+              // arm64 native on this Mac; localhost:5001 == host.docker.internal:5001 from the cluster. The build is a
+              // DEDICATED step right after the verify of the checkout it builds (validator rule 9b).
+              timeout(time: 10, unit: 'MINUTES') {
+                sh 'PERMITTED_SHA="${NIFTY_PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir nifty-gex-src'
+              }
+              sh 'docker build -t "${IMAGE_REF}" -t "${UNIQUE_REF}" nifty-gex-src'
+              sh '''
+                set -euo pipefail
+                docker push "$IMAGE_REF"
+                docker push "$UNIQUE_REF" | tee ".jenkins-tmp/nifty-push-$BUILD_ID.log"
+              '''
+            }
+            // Nifty build: lock — the digest from THIS push's own output, cross-checked against the registry.
+            sh '''
+              set -euo pipefail
+              SRC_COMMIT="$(git -C nifty-gex-src rev-parse HEAD)"
+              [ "$SRC_COMMIT" = "${NIFTY_PERMITTED_SHA:?}" ] || { echo "nifty checkout $SRC_COMMIT is not NIFTY_PERMITTED_SHA" >&2; exit 1; }
+              REG="${IMAGE_REF%/*}"
+              PUSHED="$(sed -n "s/^$UNIQUE_TAG: digest: \\(sha256:[0-9a-f]\\{64\\}\\) size: [0-9]*$/\\1/p" ".jenkins-tmp/nifty-push-$BUILD_ID.log" | tail -1)"
+              [ -n "$PUSHED" ] || { echo "the push of $UNIQUE_REF reported no digest — no image lock, nothing deployable" >&2; exit 1; }
+              SERVED="$(bash scripts/jenkins/resolve-pushed-digest.sh "$REG" options-edge-nifty-gex "$UNIQUE_TAG")"
+              [ "$SERVED" = "$PUSHED" ] || { echo "the registry serves $SERVED for $UNIQUE_TAG, this push reported $PUSHED — refusing" >&2; exit 1; }
+              {
+                echo "OPTIONS_EDGE_IMAGE_LOCK_FORMAT=1"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_SOURCE_REPO=$SOURCE_REPO"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_GIT_COMMIT=$SRC_COMMIT"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_DEPLOY_REPO_COMMIT=$(git rev-parse HEAD)"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_GUARD_VERSION=${PERMITTED_SHA_GUARD_VERSION:-}"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID=$BUILD_ID"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_BUILD_URL=${BUILD_URL:-}"
+                echo "OPTIONS_EDGE_IMAGE_LOCK_TAG=$UNIQUE_TAG"
+                echo "NIFTY_GEX_IMAGE=$UNIQUE_REF@$PUSHED"
+                echo "NIFTY_GEX_IMAGE_GIT_COMMIT=$SRC_COMMIT"
+              } > ".jenkins-tmp/image-lock-$BUILD_ID.env"
+              sed 's/^/image-lock: /' ".jenkins-tmp/image-lock-$BUILD_ID.env"
+            '''
+          }
+        }
+        script {
+          // Only THIS build's lock (keyed by BUILD_ID) becomes the archived lock and REQUIRED_IMAGE.
+          def lockFile = ".jenkins-tmp/image-lock-${env.BUILD_ID}.env"
+          def lock = readFile(lockFile)
+          String ref = ''
+          String lockBuild = ''
+          for (String l : lock.split('\n')) {
+            if (l.startsWith('NIFTY_GEX_IMAGE=')) { ref = l.substring('NIFTY_GEX_IMAGE='.length()) }
+            if (l.startsWith('OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID=')) { lockBuild = l.substring('OPTIONS_EDGE_IMAGE_LOCK_BUILD_ID='.length()) }
+          }
+          if (lockBuild != env.BUILD_ID.toString() || !ref.matches('^[^@\\s]+@sha256:[0-9a-f]{64}$')) {
+            error("this build's image lock ${lockFile} does not name a digest-pinned image for build ${env.BUILD_ID}. Nothing was deployed.")
+          }
+          env.REQUIRED_IMAGE = ref
+          writeFile file: '.jenkins-tmp/options-edge-image-lock.env', text: lock
+          archiveArtifacts artifacts: '.jenkins-tmp/options-edge-image-lock.env', fingerprint: true
+          echo "deploying exactly ${env.REQUIRED_IMAGE} (built by this build from ${params.NIFTY_PERMITTED_SHA})"
+        }
       }
     }
     stage('Deploy (service-scoped)') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         sh '''
           set -euo pipefail
           export SERVICE=nifty-gex
+          # REQUIRED_IMAGE is set only by this build's own push (Build image stage); empty with
+          # BUILD_IMAGE=false, when the registry tag is resolved and digest-pinned as before.
+          bash scripts/jenkins/write-permission-receipt.sh "$WORKSPACE/.jenkins-tmp/permission-receipt.env"
           export DEPLOY_DRY_RUN="${DEPLOY_DRY_RUN_PARAM:-false}"
           HEALTH_URL="${HEALTH_URL_PARAM:-}"
           [ -n "$HEALTH_URL" ] || HEALTH_URL="${HEALTH_URL_DEFAULT:-}"
@@ -95,7 +222,7 @@ pipeline {
   }
   post {
     always {
-      archiveArtifacts artifacts: '.jenkins-tmp/nifty-gex-*.yaml', allowEmptyArchive: true
+      archiveArtifacts artifacts: '.jenkins-tmp/nifty-gex-*.yaml, .jenkins-tmp/permission-receipt.env', allowEmptyArchive: true
     }
   }
 }

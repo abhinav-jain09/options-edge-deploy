@@ -1,0 +1,1 @@
+Jenkinsfile.fixture-apply-before-guard | in | | fixture: the apply runs before the guard — must be refused

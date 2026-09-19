@@ -90,6 +90,26 @@ pipeline {
   // this pipeline does NOT manage them — it assumes they are already running before a bring-up.
 
   stages {
+    // ---- DISABLED under the Deployment Permission Rule (options-edge rule.md) ----------------------
+    // Every child this umbrella triggers is a deployment of its own and now needs ITS repository's
+    // permitted commit (PERMITTED_SHA, plus CONTRACTS_PERMITTED_SHA for the image builds) before it
+    // does anything. This job has no such inputs, cannot supply five of them, and the feed and IBKR
+    // image jobs carry no guard at all yet — so a run here would start guarded children that refuse
+    // and unguarded publishers that do not, in parallel. Rather than pretend, it refuses on entry.
+    // The supported sequence is the individually permitted jobs, in order, each with its own SHAs:
+    //   1. options-edge-processing (PERMITTED_SHA + CONTRACTS_PERMITTED_SHA, ALLOW_FULL_REACTOR)
+    //   2. option-edge-feed-gateway (PERMITTED_SHA + CONTRACTS_PERMITTED_SHA)
+    //   3. options-edge-web-deploy  (PERMITTED_SHA — once the options-edge repository carries the guard)
+    //   4. the feed jobs (options-edge-databento-feed-deploy, options-edge-ibkr-feed) — unguarded today:
+    //      Abhinav's own click, not the assistant's
+    //   5. options-edge-deploy (PERMITTED_SHA) for the environment
+    // Re-enable this umbrella only by giving it a permitted SHA per child repository, preflighted
+    // before the parallel phase, once every child is guarded.
+    stage('Refused: bring-up-all is disabled under the Deployment Permission Rule') {
+      steps {
+        error('bring-up-all is DISABLED: its children now require per-repository permitted commits this job cannot supply, and two of them are still unguarded. Run the individually permitted jobs in the order listed at the top of this stage in Jenkinsfile.bring-up-all. Nothing was triggered.')
+      }
+    }
     stage('Resolve profile') {
       steps {
         script {
