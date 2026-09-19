@@ -103,7 +103,10 @@ run "PERMITTED_SHA short"                              1 "a short SHA is refused
 run "PERMITTED_SHA uppercase"                          1 "must be lowercase hex" "$B" PERMITTED_SHA="$(printf '%s' "$B" | tr a-f A-F)"
 run "PERMITTED_SHA is a branch name"                   1 "is not a commit id" "$B" PERMITTED_SHA=main
 run "PERMITTED_SHA with whitespace"                    1 "contains whitespace" "$B" PERMITTED_SHA="$B "
-run "HEAD is the OLDER main commit, permission for the tip" 1 "is not the permitted commit" "$A" PERMITTED_SHA="$B"
+# The branch HEAD must BE the permitted commit (Codex I1): an older main commit is refused on the tip
+# condition, before the equality test is ever reached, and says which fault it is.
+run "HEAD is the OLDER main commit, permission for the tip" 1 "is on origin/main but is NOT its tip" "$A" PERMITTED_SHA="$B"
+run "HEAD is the OLDER main commit, permission for THAT commit" 1 "is NOT its tip" "$A" PERMITTED_SHA="$A"
 run "HEAD moved past the permitted commit"             1 "is not the permitted commit" "$B" PERMITTED_SHA="$A"
 run "a job declaring another guard version"            1 "PERMITTED_SHA_GUARD_VERSION is" "$B" PERMITTED_SHA="$B" PERMITTED_SHA_GUARD_VERSION="$(printf '0%.0s' $(seq 64))"
 # M5: a STALE receipt — another build's, another HEAD's — is seeded and must be gone after the receipt-clearing

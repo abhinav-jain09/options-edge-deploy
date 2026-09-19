@@ -93,51 +93,69 @@ git -C "$T/mover" push -q origin main
 git -C "$W" fetch -q origin && git -C "$W" checkout -q "$D"     # Jenkins checks out the new tip
 run "branch advanced B->D, permitted B"      1 "is not the permitted commit"  "$W" PERMITTED_SHA="$B"
 run "branch advanced, permitted D"           0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$D"
+# --- THE BRANCH HEAD, not merely a commit on the branch (step 2c) ---------------------------------
+# B is a real, merged main commit and the permission names exactly it: only the tip condition separates
+# this from a permitted run. The rule is that the branch HEAD must BE the permitted commit, so an older
+# main commit is refused — with its OWN reason, distinct from "not on origin/main".
 git -C "$W" checkout -q "$B"
+run "older main commit B while tip is D"     1 "is on origin/main but is NOT its tip" "$W" PERMITTED_SHA="$B"
+run "older main commit, its refusal names the tip" 1 "$D" "$W" PERMITTED_SHA="$B"
+run "older main commit, --ref main does not excuse it" 1 "is NOT its tip" "$W" PERMITTED_SHA="$B" -- --ref main
+run "older main commit, SCM metadata does not excuse it" 1 "is NOT its tip" "$W" PERMITTED_SHA="$B" BRANCH_NAME=main GIT_BRANCH=origin/main
+# The two conditions of step 2c stay distinct: a commit that is BEHIND the tip and a commit that was
+# never on the branch are different faults and say so, so a log names which one actually fired.
+git -C "$W" checkout -q "$C"
+run "off-branch C says off-branch, not behind" 1 "is not on origin/main" "$W" PERMITTED_SHA="$C"
+git -C "$W" checkout -q "$D"
+run "back at the tip: permitted again"       0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$D"
 # --- matching SHA but forbidden source ref: the branch restriction stops it on its own -----------
 git -C "$W" checkout -q "$C"
 run "feature commit C, permitted C"          1 "is not on origin/main"        "$W" PERMITTED_SHA="$C"
 run "feature commit C, no SHA: branch first" 1 "is not on origin/main"        "$W"
-git -C "$W" checkout -q "$B"
-run "main commit but GIT_BRANCH reports feature" 1 "GIT_BRANCH is 'origin/feature'; this job deploys only from 'main'" "$W" PERMITTED_SHA="$B" GIT_BRANCH=origin/feature
-run "BRANCH_NAME=feature refused, GIT_BRANCH=origin/main notwithstanding" 1 "BRANCH_NAME is 'feature'" "$W" PERMITTED_SHA="$B" BRANCH_NAME=feature GIT_BRANCH=origin/main
-run "BRANCH_NAME=main does NOT mask GIT_BRANCH=origin/feature" 1 "GIT_BRANCH is 'origin/feature'" "$W" PERMITTED_SHA="$B" BRANCH_NAME=main GIT_BRANCH=origin/feature
-run "both variables main"                    0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" BRANCH_NAME=main GIT_BRANCH=origin/main
-run "--branch dev refuses a main checkout"   1 "deploys only from 'dev'"      "$W" PERMITTED_SHA="$B" GIT_BRANCH=origin/main -- --branch dev
+git -C "$W" checkout -q "$D"
+run "main commit but GIT_BRANCH reports feature" 1 "GIT_BRANCH is 'origin/feature'; this job deploys only from 'main'" "$W" PERMITTED_SHA="$D" GIT_BRANCH=origin/feature
+run "BRANCH_NAME=feature refused, GIT_BRANCH=origin/main notwithstanding" 1 "BRANCH_NAME is 'feature'" "$W" PERMITTED_SHA="$D" BRANCH_NAME=feature GIT_BRANCH=origin/main
+run "BRANCH_NAME=main does NOT mask GIT_BRANCH=origin/feature" 1 "GIT_BRANCH is 'origin/feature'" "$W" PERMITTED_SHA="$D" BRANCH_NAME=main GIT_BRANCH=origin/feature
+run "both variables main"                    0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$D" BRANCH_NAME=main GIT_BRANCH=origin/main
+run "--branch dev refuses a main checkout"   1 "deploys only from 'dev'"      "$W" PERMITTED_SHA="$D" GIT_BRANCH=origin/main -- --branch dev
 # --- the explicitly SELECTED source ref (--ref): a feature ref pointing at a merged commit is still refused
-run "--ref feature at a merged commit"       1 "selected source ref is 'feature'" "$W" PERMITTED_SHA="$B" -- --ref feature
-run "--ref main"                             0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" -- --ref main
-run "--ref origin/main is an alias, refused" 1 "selected source ref is 'origin/main'" "$W" PERMITTED_SHA="$B" -- --ref origin/main
-run "--ref */main is an alias, refused"      1 "selected source ref is '*/main'" "$W" PERMITTED_SHA="$B" -- --ref '*/main'
-run "--ref refs/heads/main is an alias, refused" 1 "selected source ref is 'refs/heads/main'" "$W" PERMITTED_SHA="$B" -- --ref refs/heads/main
-run "--ref refs/remotes/origin/main, refused" 1 "selected source ref is 'refs/remotes/origin/main'" "$W" PERMITTED_SHA="$B" -- --ref refs/remotes/origin/main
-run "--ref refs/heads/feature"               1 "selected source ref is 'refs/heads/feature'" "$W" PERMITTED_SHA="$B" -- --ref refs/heads/feature
+run "--ref feature at a merged commit"       1 "selected source ref is 'feature'" "$W" PERMITTED_SHA="$D" -- --ref feature
+run "--ref main"                             0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$D" -- --ref main
+run "--ref origin/main is an alias, refused" 1 "selected source ref is 'origin/main'" "$W" PERMITTED_SHA="$D" -- --ref origin/main
+run "--ref */main is an alias, refused"      1 "selected source ref is '*/main'" "$W" PERMITTED_SHA="$D" -- --ref '*/main'
+run "--ref refs/heads/main is an alias, refused" 1 "selected source ref is 'refs/heads/main'" "$W" PERMITTED_SHA="$D" -- --ref refs/heads/main
+run "--ref refs/remotes/origin/main, refused" 1 "selected source ref is 'refs/remotes/origin/main'" "$W" PERMITTED_SHA="$D" -- --ref refs/remotes/origin/main
+run "--ref refs/heads/feature"               1 "selected source ref is 'refs/heads/feature'" "$W" PERMITTED_SHA="$D" -- --ref refs/heads/feature
 # --- the branch cannot be confirmed: refuse, do not guess ------------------------------------------
 git clone -q "$T/origin.git" "$T/noremote"
 git -C "$T/noremote" remote set-url origin "$T/does-not-exist.git"
-run "origin unreachable"                     1 "could not fetch origin/main"  "$T/noremote" PERMITTED_SHA="$B"
+run "origin unreachable"                     1 "could not fetch origin/main"  "$T/noremote" PERMITTED_SHA="$D"
 # --- not a checkout at all ------------------------------------------------------------------------
 mkdir -p "$T/plain"
-set +e; out="$(cd "$T/plain" && PERMITTED_SHA="$B" bash "$GUARD" 2>&1)"; rc=$?; set -e
+set +e; out="$(cd "$T/plain" && PERMITTED_SHA="$D" bash "$GUARD" 2>&1)"; rc=$?; set -e
 if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -qF "is not a git checkout"; then echo "ok   [not a git checkout]"; pass=$((pass+1)); else echo "FAIL [not a git checkout]: rc=$rc"; echo "$out"; fail=$((fail+1)); fi
 # --- not a WORKING checkout: a .git metadata directory and a bare repository both print `false` ----
-run ".git metadata dir refused"              1 "is not a git checkout"        "$W" PERMITTED_SHA="$B" -- --dir .git
-run "bare repository refused"                1 "is not a git checkout"        "$T" PERMITTED_SHA="$B" -- --dir origin.git
+run ".git metadata dir refused"              1 "is not a git checkout"        "$W" PERMITTED_SHA="$D" -- --dir .git
+run "bare repository refused"                1 "is not a git checkout"        "$T" PERMITTED_SHA="$D" -- --dir origin.git
 # --- nested application checkout (--dir): its own SHA; the job's GIT_BRANCH does not describe it --
 git clone -q "$T/origin.git" "$W/nested-src"
 git -C "$W/nested-src" checkout -q "$B"    # origin/main is at D by now; B is still on it
-run "nested at B, permitted B (job ref irrelevant)" 0 "verdict=PERMITTED"     "$W" PERMITTED_SHA="$B" GIT_BRANCH=origin/whatever -- --dir nested-src
+# A nested source is judged by the same rule: on the branch AND its tip. B is merged main work and the
+# permission names exactly it, and it is still refused, because the branch has moved past it.
+run "nested at an older main commit, permitted B" 1 "is on origin/main but is NOT its tip" "$W" PERMITTED_SHA="$B" GIT_BRANCH=origin/whatever -- --dir nested-src
+run "nested older commit, --ref main does not excuse it" 1 "is NOT its tip" "$W" PERMITTED_SHA="$B" -- --dir nested-src --ref main
 git -C "$W/nested-src" fetch -q origin feature:feature && git -C "$W/nested-src" checkout -q "$C"
 run "nested at C (feature), permitted C"     1 "is not on origin/main"        "$W" PERMITTED_SHA="$C" -- --dir nested-src
-git -C "$W/nested-src" checkout -q "$B"
-run "nested at B, permitted D"               1 "is not the permitted commit"  "$W" PERMITTED_SHA="$D" -- --dir nested-src
+git -C "$W/nested-src" fetch -q origin main && git -C "$W/nested-src" checkout -q "$D"
+run "nested at the tip, permitted D (job ref irrelevant)" 0 "verdict=PERMITTED" "$W" PERMITTED_SHA="$D" GIT_BRANCH=origin/whatever -- --dir nested-src
+run "nested at the tip, permitted B"         1 "is not the permitted commit"  "$W" PERMITTED_SHA="$B" -- --dir nested-src
 run "nested, no SHA"                         1 "PERMITTED_SHA is not set"     "$W" -- --dir nested-src
-run "nested --ref feature at a merged commit" 1 "selected source ref is 'feature'" "$W" PERMITTED_SHA="$B" -- --dir nested-src --ref feature
-run "nested --ref main"                      0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$B" -- --dir nested-src --ref main
+run "nested --ref feature at a merged commit" 1 "selected source ref is 'feature'" "$W" PERMITTED_SHA="$D" -- --dir nested-src --ref feature
+run "nested --ref main"                      0 "verdict=PERMITTED"            "$W" PERMITTED_SHA="$D" -- --dir nested-src --ref main
 # --- usage errors are refusals too ---------------------------------------------------------------
-set +e; out="$(cd "$W" && PERMITTED_SHA="$B" bash "$GUARD" --bogus 2>&1)"; rc=$?; set -e
+set +e; out="$(cd "$W" && PERMITTED_SHA="$D" bash "$GUARD" --bogus 2>&1)"; rc=$?; set -e
 if [ "$rc" -eq 2 ]; then echo "ok   [unknown argument]"; pass=$((pass+1)); else echo "FAIL [unknown argument]: rc=$rc"; fail=$((fail+1)); fi
 
 echo "permitted-sha-guard-test: $pass passed, $fail failed"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 45 ] && echo "permitted-sha-guard-test: ALL PASS"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 45 ]
+[ "$fail" -eq 0 ] && [ "$pass" -ge 52 ] && echo "permitted-sha-guard-test: ALL PASS"
+[ "$fail" -eq 0 ] && [ "$pass" -ge 52 ]

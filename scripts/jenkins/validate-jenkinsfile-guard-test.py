@@ -198,7 +198,7 @@ def main() -> int:
     passed = failed = 0
 
     def case(name: str, text: str, manifest: str, expect_ok: bool, must_say: str = "", extra: list[str] | None = None,
-             other_files: dict[str, str] | None = None) -> None:
+             other_files: dict[str, str] | None = None, gitignore: str = "") -> None:
         nonlocal passed, failed
         tmp = tempfile.mkdtemp()
         try:
@@ -211,8 +211,16 @@ def main() -> int:
             with open(os.path.join(tmp, "Jenkinsfile.fixture"), "w") as fh:
                 fh.write(text)
             for n, t in (other_files or {}).items():
+                os.makedirs(os.path.dirname(os.path.join(tmp, n)) or tmp, exist_ok=True)
                 with open(os.path.join(tmp, n), "w") as fh:
                     fh.write(t)
+            if gitignore:
+                # a REAL git checkout, so discovery can ask git what is ignored rather than guessing
+                with open(os.path.join(tmp, ".gitignore"), "w") as fh:
+                    fh.write(gitignore)
+                for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                            ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "fixture"]):
+                    subprocess.run(cmd, cwd=tmp, capture_output=True, text=True)
             mpath = os.path.join(tmp, "scope.txt")
             with open(mpath, "w") as fh:
                 fh.write(manifest)
@@ -778,6 +786,45 @@ def main() -> int:
     passed += ok_
     failed += not ok_
 
+    # scope DISCOVERY is repository-wide: a Jenkinsfile is a job definition wherever it sits, and one nobody
+    # classified is one nobody judged. The root-only search this replaced reported a nested definition as absent.
+    case("a Jenkinsfile in a subdirectory must be classified", good, MANIFEST, False,
+         "svc/Jenkinsfile: not classified", other_files={"svc/Jenkinsfile": good})
+    case("a Jenkinsfile two directories down must be classified", good, MANIFEST, False,
+         "a/b/Jenkinsfile.svc: not classified", other_files={"a/b/Jenkinsfile.svc": good})
+    case("a nested Jenkinsfile classified out is accepted, with its reason", good,
+         MANIFEST + "svc/Jenkinsfile | out | | retired: the guarded root job builds this image\n", True,
+         "out  svc/Jenkinsfile", other_files={"svc/Jenkinsfile": good})
+    case("a nested Jenkinsfile classified in is judged by every rule", good,
+         MANIFEST + "svc/Jenkinsfile | in | reguard=Deploy path | nested\n", False,
+         "svc/Jenkinsfile: ", other_files={"svc/Jenkinsfile": good.replace("disableRestartFromStage(); ", "")})
+    case("a nested Jenkinsfile classified in, unmutated, passes", good,
+         MANIFEST + "svc/Jenkinsfile | in | reguard=Deploy path | nested\n", True,
+         "2 Jenkinsfile(s) carry", other_files={"svc/Jenkinsfile": good})
+    case("a manifest entry for a nested path that is absent is refused", good,
+         MANIFEST + "svc/Jenkinsfile | in | reguard=Deploy path | nested\n", False,
+         "svc/Jenkinsfile: listed in the manifest but not present")
+    # …and a Jenkinsfile that is git-IGNORED is workspace clutter (a cloned sibling repository, an unpacked
+    # archive), not a definition this repository checks in: it is not discovered and needs no classification.
+    case("a git-ignored Jenkinsfile is not a checked-in definition", good, MANIFEST, True,
+         "1 Jenkinsfile(s) carry", other_files={".deps/other-repo/Jenkinsfile": good}, gitignore=".deps/\n")
+    case("a Jenkinsfile that is NOT ignored is still discovered in a git checkout", good, MANIFEST, False,
+         "svc/Jenkinsfile: not classified", other_files={"svc/Jenkinsfile": good}, gitignore=".deps/\n")
+
+    # --allow-ignored declarations are anchored PATHS: `*` is one whole component, `**` is not a declaration.
+    mut("a verify step may declare a module output as */target",
+        "verify-permitted-tree.sh --dir . --allow-ignored target'",
+        "verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored \"*/target\"'",
+        "carry the canonical permitted-commit guard", expect_ok=True)
+    mut("a ** declaration is not the verify template",
+        "verify-permitted-tree.sh --dir . --allow-ignored target'",
+        "verify-permitted-tree.sh --dir . --allow-ignored \"**/target\"'",
+        "no dedicated verify-permitted-tree step immediately precedes it")
+    mut("an unquoted * declaration is not the verify template (the shell would expand it)",
+        "verify-permitted-tree.sh --dir . --allow-ignored target'",
+        "verify-permitted-tree.sh --dir . --allow-ignored */target'",
+        "no dedicated verify-permitted-tree step immediately precedes it")
+
     # manifest hygiene + --only (the downstream-definition mode)
     case("unclassified Jenkinsfile", good, MANIFEST + "Jenkinsfile.other | in | | x\n", False, "listed in the manifest but not present")
     case("out needs a reason", good, "Jenkinsfile.fixture | out | |\n", False, "needs a reason")
@@ -787,7 +834,7 @@ def main() -> int:
     case("--only still applies every rule", good.replace("        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n"), MANIFEST, False, "has no `when` gate", ["--only", "Jenkinsfile.fixture"])
 
     print(f"validate-jenkinsfile-guard-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 260:
+    if failed == 0 and passed >= 270:
         print("validate-jenkinsfile-guard-test: ALL PASS")
         return 0
     return 1

@@ -122,7 +122,12 @@ class PermittedShaGuardScriptTest(unittest.TestCase):
             "feature commit C, permitted C", "BRANCH_NAME=main does NOT mask GIT_BRANCH=origin/feature",
             "--ref feature at a merged commit", "--ref origin/main is an alias, refused",
             "--ref refs/heads/main is an alias, refused", ".git metadata dir refused", "bare repository refused",
-            "origin unreachable", "nested at B, permitted D", "nested --ref feature at a merged commit",
+            "origin unreachable", "nested at the tip, permitted B", "nested --ref feature at a merged commit",
+            # Codex I1: the branch HEAD must BE the permitted commit — an older main commit is refused,
+            # for its own reason, and the two faults of step 2c stay distinguishable in the log.
+            "older main commit B while tip is D", "older main commit, its refusal names the tip",
+            "older main commit, --ref main does not excuse it", "off-branch C says off-branch, not behind",
+            "back at the tip: permitted again", "nested at an older main commit, permitted B",
         ]:
             self.assertIn(f"ok   [{case}]", r.stdout)
 
@@ -470,10 +475,23 @@ class PermittedShaGuardValidatorTest(unittest.TestCase):
         self.assertIn("carry the canonical permitted-commit guard", r.stdout)
 
     def test_every_jenkinsfile_is_classified(self) -> None:
+        """Repository-WIDE, not root-only.
+
+        Codex M1 on processing #836: discovery searched `<root>/Jenkinsfile*` only, so definitions in
+        subdirectories were neither judged nor reported. This repository keeps a template and two test
+        fixtures outside the root; they are classified `out`, with the reason, rather than invisible.
+        The inventory here is git's, so it is independent of the validator's own walk."""
         manifest = (ROOT / "scripts/ci/jenkins-permitted-sha-scope.txt").read_text()
         listed = {l.split("|")[0].strip() for l in manifest.splitlines() if l.strip() and not l.startswith("#")}
-        present = {p.name for p in ROOT.glob("Jenkinsfile*") if p.is_file()}
+        tracked = subprocess.run(["git", "ls-files", "--", "Jenkinsfile*", "*/Jenkinsfile*"],
+                                 capture_output=True, text=True, cwd=ROOT)
+        self.assertEqual(tracked.returncode, 0, tracked.stderr)
+        present = {p for p in tracked.stdout.split() if p}
         self.assertEqual(listed, present)
+        for nested in ("templates/Jenkinsfile.new-service",
+                       "tests/fixtures/permitted-sha-guard/good/Jenkinsfile.fixture-good",
+                       "tests/fixtures/permitted-sha-guard/refused/Jenkinsfile.fixture-apply-before-guard"):
+            self.assertIn(nested, listed)
 
     def _fixture_root(self, name: str) -> Path:
         # The fixtures carry the guard version placeholder; materialise them with the real script.

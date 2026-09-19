@@ -2,9 +2,13 @@
 """Every Jenkins deploy job carries the permitted-commit guard, in canonical form, before its first effect.
 
 Shared byte-for-byte by options-edge-deploy, option-edge-feed-gateway, options-edge-processing and
-options-edge; each repository supplies a manifest classifying every Jenkinsfile* in its root:
+options-edge; each repository supplies a manifest classifying every checked-in Jenkinsfile* ANYWHERE in
+the repository — not only the ones in its root. A Jenkins job can be defined by a Jenkinsfile at any
+path (`<service>/Jenkinsfile` is the monorepo-subdir shape), and a definition nobody classified is a
+definition nobody judged, so discovery walks the whole tree (git-ignored paths and `.git` excluded: the
+manifest classifies CHECKED-IN definitions, not build output a workspace happens to hold):
 
-    <Jenkinsfile> | in|out | options | reason
+    <path/to/Jenkinsfile> | in|out | options | reason
     options (semicolon-separated): before=<stage>,<stage>   stages allowed before the primary guard
                                    reguard=<stage>          the container stage whose first nested
                                                             stage must be the deploy-workspace re-guard
@@ -83,6 +87,22 @@ form; that is deliberate):
      of them, so no later step or stage consuming the source can run without it.
   9b. Provenance verification, structurally. The guard proves HEAD == permitted at one moment; the files an effect
      consumes later can still be replaced while HEAD stays the permitted commit. So:
+     WHAT COUNTS AS AN EFFECT — say it exactly, because the rule is only as wide as this list. A step is a
+     source-consuming EFFECT when it runs, at command position: `mvn` reaching the PACKAGE phase or a later
+     lifecycle phase (package, pre-integration-test, integration-test, post-integration-test, verify, install,
+     deploy) or a plugin goal that publishes or rewrites (MVN_EFFECT_GOALS / MVN_EFFECT_PLUGIN_RE below);
+     `docker build` / `docker buildx build`; `rsync`; `scp`; `helm install|upgrade`; `ansible-playbook` with a
+     playbook operand; `ssh` fed local data; or a repository script that (transitively) runs one of those.
+     `mvn compile` and `mvn test` are deliberately NOT on that list: they compile the checkout but produce no
+     artifact that is installed, shipped or published, so the artifact chain has nothing to bind. This is a
+     REAL limit, not an oversight, and it is the reason the claim is "every step that PACKAGES, INSTALLS,
+     PUBLISHES or SHIPS source" and never "every step that builds source" — a compile-only step can still read a
+     file that was replaced after the guard ran. Two things narrow that: the compile happens under the guard
+     (rule 3), and a pipeline that wants the tree proved before it compiles puts the ordinary verify step in
+     front of the compile, exactly as it does before an effect (option-edge-feed-gateway's Test stage does).
+     Deliberate mutation work — a mutation-testing campaign that edits a source, compiles it, and restores it —
+     could not run at all under a literal "every compilation is the permitted tree" policy, so that policy is
+     not claimed here.
        (i)  EVERY source-consuming effect is a DEDICATED STEP — a plain `sh '…'` / `sh '''…'''` whose whole body is ONE
             command (backslash continuations allowed; nothing else: no second command, no `; && || | &`, `$( )`, backticks,
             redirections, here-documents, cd/pushd/export, assignment prefixes, comments, globs) — read against a FIXED
@@ -118,7 +138,8 @@ form; that is deliberate):
      The verify step is recognised from the Groovy token structure exactly like the guard (a real `sh` token whose sole
      argument is one single-quoted literal equal to the template), sits alone in a timeout(time: N, unit: 'MINUTES')
      block inside a stage's steps. verify-permitted-tree.sh re-checks HEAD == permitted AND a clean working tree at run
-     time (nothing modified, staged, deleted or untracked; ignored paths only under a declared --allow-ignored name).
+     time (nothing modified, staged, deleted or untracked; ignored paths only at or under a declared
+     --allow-ignored PATH, anchored at the checkout root — a bare name is not matched wherever it occurs).
   9c. The shell text of every `sh` step is READABLE: one string literal, or a top-level constant that is one literal ending
      at a line boundary followed by one literal (as in `sh JDK_SETUP + <literal>`) — never pieces joined at run time.
      The permission variables (PERMITTED_SHA, X_PERMITTED_SHA) are READ-ONLY: defined only by parameters{}, never assigned
@@ -161,7 +182,6 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-import glob
 import hashlib
 import os
 import re
@@ -176,12 +196,20 @@ FLAG = "PERMITTED_SHA_GUARD"
 REFLAG = "DEPLOY_WORKSPACE_PERMITTED"
 DOWNSTREAM_FLAG_PREFIX = "GUARDED_DOWNSTREAM_"
 STR = r"(?:\"[^\"]*\"|'[^']*')"
+# An --allow-ignored declaration (verify-permitted-tree.sh): a PATH relative to the verified checkout, never a bare
+# name matched wherever it occurs. A component is a literal name or the single character `*` (exactly one whole
+# component). A declaration containing `*` MUST be double-quoted in the shell text, or the shell would expand it
+# against the workspace before the verifier ever sees it. `**` matches neither component form and is refused here as
+# it is refused by the verifier.
+ALLOW_COMP = r"(?:\*|[A-Za-z0-9._][A-Za-z0-9._-]*)"
+ALLOW_PATH = ALLOW_COMP + r"(?:/" + ALLOW_COMP + r")*"
+ALLOW_ARG = r"(?:[A-Za-z0-9._][A-Za-z0-9._/-]*|\"" + ALLOW_PATH + r"\")"
 STAGE_RE = re.compile(r"^\s*stage\(\s*'((?:[^'\\]|\\.)*)'")
 BUILD_JOB_RE = re.compile(r"\bbuild\s*\(?\s*job:\s*(env\.JOB_NAME|'([^']+)')")
 ACQUIRE_RE = re.compile(r"\bgit url:|\bgit\s*\(|\bgit\s+(?:branch|credentialsId|changelog|poll)\s*:|\bgit clone\b|\bcheckout\(|\bcheckout scm\b|\bgit pull\b|\bgit checkout\b|\bgit -C \S+ checkout\b")
 GATE_FLAG_ONLY = "when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } } "
 CANON_GUARD = re.compile(
-    r"^stage\('(?P<name>[^']+)'\) \{ (?P<when>when \{ expression \{ env\.PERMITTED_SHA_GUARD == 'PASSED' \} \} )?(?:agent \{ label [^}]+ \} )?"
+    r"^stage\('(?P<name>[^']+)'\) \{ (?P<when>when \{ expression \{ env\.PERMITTED_SHA_GUARD == 'PASSED' \} \} )?(?:agent \{ label (?:[^{}]|\$\{[^{}]*\})+ \} )?"
     r"options \{ timeout\(time: (?P<tmo>[0-9]+), unit: 'MINUTES'\) \} steps \{ script \{ "
     r"def rc = sh\(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard\.sh(?P<args>( --ref \"\$\{[A-Z_]+:\?\}\")?)'\) "
     r"if \(rc != 0\) \{ error\(" + STR + r"\) \} "
@@ -211,13 +239,13 @@ DEDICATED_GUARD = re.compile(
 GUARD_INVOCATION = re.compile(r"permitted-sha-guard\.sh")   # any mention outside comments and parameters{} descriptions
 # The provenance verifier, in the SAME dedicated-step form as the guard: a real `sh` step whose sole argument is one
 # single-quoted literal running verify-permitted-tree.sh for one literal --dir with zero or more literal
-# --allow-ignored directories, and nothing else. It re-proves, immediately before an effect, that the tree the effect
+# --allow-ignored paths, and nothing else. It re-proves, immediately before an effect, that the tree the effect
 # will consume is still the permitted commit's tree (verify-permitted-tree.sh). The only variable part is the source's
 # own permission variable, the literal directory and the allow-list.
 VERIFY_STEP = re.compile(
     r"^sh '(?P<cmd>PERMITTED_SHA=\"\$\{(?P<own>[A-Z][A-Z0-9_]*):[-?]\}\" "
     r"bash scripts/jenkins/verify-permitted-tree\.sh --dir (?P<dir>[A-Za-z0-9._][A-Za-z0-9._/-]*)"
-    r"(?P<allow>(?: --allow-ignored [A-Za-z0-9._][A-Za-z0-9._/-]*)*))'$"
+    r"(?P<allow>(?: --allow-ignored " + ALLOW_ARG + r")*))'$"
 )
 # The exact literals of the guard, verify and downstream-check invocations (primary / inline re-guard, dedicated nested
 # guard, dedicated verify, compatibility check). Their shape and placement are judged by rules 3, 6, 7, 9 and 9b; the
@@ -225,7 +253,7 @@ VERIFY_STEP = re.compile(
 CANONICAL_LITERAL = re.compile(
     r"bash scripts/jenkins/permitted-sha-guard\.sh(?: --ref \"\$\{[A-Z_]+:\?\}\")?"
     r"|PERMITTED_SHA=\"\$\{[A-Z][A-Z0-9_]*:[-?]\}\" bash scripts/jenkins/permitted-sha-guard\.sh --dir [A-Za-z0-9._][A-Za-z0-9._/-]* --ref main"
-    r"|PERMITTED_SHA=\"\$\{[A-Z][A-Z0-9_]*:[-?]\}\" bash scripts/jenkins/verify-permitted-tree\.sh --dir [A-Za-z0-9._][A-Za-z0-9._/-]*(?: --allow-ignored [A-Za-z0-9._][A-Za-z0-9._/-]*)*"
+    r"|PERMITTED_SHA=\"\$\{[A-Z][A-Z0-9_]*:[-?]\}\" bash scripts/jenkins/verify-permitted-tree\.sh --dir [A-Za-z0-9._][A-Za-z0-9._/-]*(?: --allow-ignored " + ALLOW_ARG + r")*"
     r"|bash scripts/jenkins/require-guarded-downstream\.sh [A-Za-z0-9_.-]+ \"\$\{[A-Z][A-Z0-9_]*:\?\}\"(?: [A-Z][A-Z0-9_]*)*"
 )
 MUTATION_TOKENS = [
@@ -793,7 +821,10 @@ def command_names(text: str, view: str, strict: bool):
 
 
 # Maven goals that PRODUCE the artifact (the package phase and everything after it), or plugin goals that publish or
-# rewrite: any of these makes the invocation a source-consuming effect.
+# rewrite: any of these makes the invocation a source-consuming effect. `compile`, `test-compile` and `test` are NOT
+# here, and their absence is the exact width of the claim (rule 9b, WHAT COUNTS AS AN EFFECT): they compile the
+# checkout but produce nothing that is installed, shipped or published. A pipeline that wants its tree proved before
+# it compiles places the ordinary verify step in front of the compile; the validator does not require it there.
 MVN_EFFECT_GOALS = {"package", "pre-integration-test", "integration-test", "post-integration-test", "verify", "install", "deploy"}
 MVN_EFFECT_PLUGIN_RE = re.compile(r"^(?:jib|docker|dockerfile|spring-boot|deploy|install|release|scm|versions|assembly|shade|jar|war|source|javadoc|gpg|nexus-staging|buildplan)\b")
 # the same effects written in a Python helper (argv lists or command strings)
@@ -2495,6 +2526,49 @@ def check_in_scope(path: str, entry: dict, guard_hash: str, root_dir: str = ".")
     return problems
 
 
+def discover_jenkinsfiles(root: str) -> list[str]:
+    """Every checked-in Jenkinsfile* in the repository, as repository-relative POSIX paths.
+
+    Repository-WIDE, because a Jenkins job's definition is a path, not a name: `<service>/Jenkinsfile` is
+    an ordinary shape and a root-only search reports such a job as "not present" — which reads as "there
+    is nothing there", the one answer a scope check must never give by accident.
+
+    `.git` is skipped, and so is anything git reports as ignored (one `git ls-files -oi --directory` call
+    at the root, whose output names each ignored file or the top of each ignored directory). That keeps a
+    WORKSPACE's build output — `.deps/<a cloned sibling repository>/Jenkinsfile`, an unpacked archive —
+    out of the classification, which is about definitions this repository checks in. A repository that is
+    not a git checkout (a fixture tree) simply has nothing ignored, and the walk sees everything."""
+    ignored_files: set[str] = set()
+    ignored_dirs: list[str] = []
+    try:
+        r = subprocess.run(["git", "-C", root, "ls-files", "-z", "-o", "-i", "--directory", "--exclude-standard"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            for raw in r.stdout.split("\0"):
+                if not raw:
+                    continue
+                if raw.endswith("/"):
+                    ignored_dirs.append(raw.rstrip("/"))
+                else:
+                    ignored_files.add(raw)
+    except OSError:
+        pass                     # no git on this host: the walk classifies everything it finds
+    found: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        rel_dir = "" if rel_dir == "." else rel_dir
+        dirnames[:] = sorted(d for d in dirnames
+                             if d != ".git" and f"{rel_dir}/{d}".lstrip("/") not in ignored_dirs)
+        for fn in filenames:
+            if not fn.startswith("Jenkinsfile"):
+                continue
+            rel = f"{rel_dir}/{fn}".lstrip("/")
+            if rel in ignored_files or not os.path.isfile(os.path.join(dirpath, fn)):
+                continue
+            found.append(rel)
+    return sorted(found)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
@@ -2508,7 +2582,7 @@ def main() -> int:
         print(f"FAIL: manifest missing: {a.manifest}")
         return 1
     entries = parse_manifest(a.manifest)
-    present = sorted(os.path.basename(p) for p in glob.glob(os.path.join(root, "Jenkinsfile*")) if os.path.isfile(p))
+    present = discover_jenkinsfiles(root)
     if a.only:
         if a.only not in present:
             failures.append(f"{a.only}: not present in {root}")
@@ -2520,7 +2594,7 @@ def main() -> int:
     else:
         for f in present:
             if f not in entries:
-                failures.append(f"{f}: not classified in {os.path.relpath(a.manifest, root)} — add it as in (guarded) or out (with the reason)")
+                failures.append(f"{f}: not classified in {os.path.relpath(a.manifest, root)} — add it as in (guarded) or out (with the reason); an executable definition nobody classified is one nobody judged")
         for f in entries:
             if f not in present:
                 failures.append(f"{f}: listed in the manifest but not present in {root}")

@@ -31,7 +31,12 @@
 #         GIT_BRANCH, each judged on its own — must name the allowed branch (these are SCM metadata,
 #         where Jenkins's own spellings origin/<b> and */<b> are legitimate). One variable never masks
 #         the other: BRANCH_NAME=main with GIT_BRANCH=origin/feature is a contradiction and is refused;
-#      c. HEAD must be contained in origin/<branch> as fetched right now (a failed fetch refuses).
+#      c. HEAD must BE origin/<branch> as fetched right now: the branch is fetched, HEAD must be
+#         contained in it AND equal to its tip (a failed fetch refuses). Containment alone is not
+#         enough — an ANCESTOR of the tip is a commit the branch has already moved past, while the
+#         rule says the branch HEAD must BE the permitted commit. The two conditions stay apart so
+#         a refusal names the real fault: "not on origin/<branch>" and "behind origin/<branch>"
+#         are different faults.
 #   3. PERMITTED_SHA is present and well-formed: exactly 40 lowercase hex characters. Unset, empty,
 #      whitespace, a short SHA, uppercase, a branch or tag name — all refused. Nothing is EVER
 #      substituted for a missing value: not HEAD, not GIT_COMMIT, not the branch tip, not the
@@ -42,12 +47,23 @@
 # still shows what was checked out and what was permitted. A usage error, a version mismatch or a
 # non-checkout refuses before that and prints only its reason.
 #
+# WHAT THIS STILL CANNOT PROVE — the remaining window. Every check here is made at ONE moment: the
+# moment this script fetched. origin/<branch> is a ref anyone may move, so the tip can advance
+# between this check and the effect the build runs later. What is established is that AT THE MOMENT
+# OF THE CHECK the checkout was the permitted commit and was the branch tip; that the tip did not
+# move afterwards is neither established nor needed — work merged after the permission was given is
+# not what was permitted, and step 4 keeps the effect pinned to the one commit Abhinav named. The
+# window is "the branch moved on while a permitted build was running", which changes nothing about
+# WHAT this build consumes. What the FILES of the checkout are when the effect finally runs is a
+# different question, answered separately and immediately before each effect by
+# scripts/jenkins/verify-permitted-tree.sh.
+#
 # Usage: permitted-sha-guard.sh [--dir <checkout>] [--branch <name>] [--ref <selected-ref>]
 #   --dir     guard a NESTED application checkout (e.g. nifty-gex-src, .deps/options-edge-contracts)
 #             instead of the workspace root. BRANCH_NAME/GIT_BRANCH describe the job's own SCM, not
 #             the nested clone, so step 2b is skipped for it — pass --ref with the branch the clone
-#             selected instead. Containment and exact equality still apply. The caller supplies that
-#             source's own permitted SHA as PERMITTED_SHA.
+#             selected instead. The branch-tip condition and exact equality still apply. The
+#             caller supplies that source's own permitted SHA as PERMITTED_SHA.
 #   --ref     the source ref this checkout was explicitly selected from (step 2a; literal name).
 #   --branch  the allowed branch (default: $PERMITTED_BRANCH, default main).
 # Reads PERMITTED_SHA and PERMITTED_SHA_GUARD_VERSION from the environment: Jenkins exposes the
@@ -129,13 +145,16 @@ if [ "$nested" = false ]; then
     echo "permitted-sha-guard: $var = $val (allowed)"
   done
 fi
-# 2c. containment, tested against the branch tip fetched NOW (FETCH_HEAD), never against a stale
-#     remote-tracking ref. A fetch that fails is a refusal: the branch cannot be confirmed.
+# 2c. the branch, fetched NOW (FETCH_HEAD), never a stale remote-tracking ref. A fetch that fails is a
+#     refusal: the branch cannot be confirmed. TWO conditions, judged and reported separately: HEAD is
+#     ON the branch (merged work), and HEAD IS the branch tip (current work).
 git -C "$dir" fetch --quiet origin "$branch" || refuse "could not fetch origin/$branch to confirm the branch — refusing rather than guessing"
 tip="$(git -C "$dir" rev-parse FETCH_HEAD)"
 git -C "$dir" merge-base --is-ancestor "$head_sha" FETCH_HEAD \
   || refuse "commit $head_sha is not on origin/$branch (tip is $tip); this job deploys only merged work"
-echo "permitted-sha-guard: branch ok          — $head_sha is on origin/$branch (tip $tip)"
+[ "$head_sha" = "$tip" ] \
+  || refuse "commit $head_sha is on origin/$branch but is NOT its tip ($tip) — origin/$branch has moved past it. This job deploys the BRANCH HEAD: an ancestor is work the branch has already left behind, and being merged is not being current. Take the permission for $tip and run again."
+echo "permitted-sha-guard: branch ok          — $head_sha is the tip of origin/$branch"
 
 # 3. PERMITTED_SHA: present and well-formed. Every refusal names what was wrong; none substitutes.
 if [ -z "${PERMITTED_SHA+set}" ]; then
@@ -158,4 +177,4 @@ fi
 [ "$head_sha" = "$p" ] \
   || refuse "checked-out HEAD $head_sha is not the permitted commit $p — the branch moved past the permitted commit, or the permission is for a different one; nothing may deploy under it"
 
-echo "permitted-sha-guard: verdict=PERMITTED — checked-out $head_sha == permitted $p, on origin/$branch, guard $own_version"
+echo "permitted-sha-guard: verdict=PERMITTED — checked-out $head_sha == permitted $p == tip of origin/$branch, guard $own_version"

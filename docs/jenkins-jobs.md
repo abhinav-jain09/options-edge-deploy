@@ -75,7 +75,7 @@ That is the guard working, not a broken job. What to pass:
 
 | Parameter | Value | Which jobs |
 |---|---|---|
-| `PERMITTED_SHA` | the full 40-character SHA you are deploying: the job's checkout must be exactly this commit, and this commit must be on the environment's branch (`main` for prod jobs) | every guarded job |
+| `PERMITTED_SHA` | the full 40-character SHA you are deploying: the job's checkout must be exactly this commit, and that commit must be the **current tip** of the environment's branch (`main` for prod jobs) | every guarded job |
 | `PERMITTED_SHA_GUARD_VERSION` | leave the default — it is the sha256 of `scripts/jenkins/permitted-sha-guard.sh` and a caller compares it against its own copy | every guarded job |
 | `CONTRACTS_PERMITTED_SHA` | tip of `options-edge-contracts` `main` | jobs that clone contracts and build against it (processing, gateway), and `service-deploy` on its image-build path, which validates it before triggering processing and then forwards it |
 | `DEPLOY_PERMITTED_SHA` | tip of `options-edge-deploy` `main` | image jobs that then trigger `service-deploy` |
@@ -100,15 +100,17 @@ the workspace is a git working checkout and `HEAD` resolves to a full commit id;
 supplied, names the environment's branch, as does each non-empty `BRANCH_NAME` / `GIT_BRANCH` (those describe the
 job's own checkout, so they are skipped for a nested one such as nifty's cloned source); `origin/<branch>` is
 fetched (a fetch that fails is a refusal); the
-checked-out `HEAD` is an *ancestor of* that freshly fetched tip; `PERMITTED_SHA` is present and a full lowercase
-40-character commit id; and finally `HEAD` equals `PERMITTED_SHA` exactly.
+checked-out `HEAD` is on that freshly fetched tip **and is that tip**; `PERMITTED_SHA` is present and a full
+lowercase 40-character commit id; and finally `HEAD` equals `PERMITTED_SHA` exactly.
 
-Two things follow. The ancestry test is against the branch tip but the equality test is against your checkout, so it
-is the checkout — never the tip — that must be the permitted commit: if `main` moves on after you read the SHA, a
-build that still checks out your commit satisfies both tests. And the equality and ancestry tests are two of seven,
-not the whole guard: a run can still refuse for a guard-version mismatch, a workspace that is not a checkout, SCM
-metadata naming another branch, or a failed fetch. Read the SHA and start the build together anyway, so you deploy
-what you looked at.
+Two things follow. All three have to be the same commit — your checkout, the SHA you passed, and `main` as it stands
+when the build fetches it — so if someone merges between your reading the SHA and the guard running, the build
+refuses rather than deploying a commit the branch has already moved past. That refusal reads `commit <sha> is on
+origin/main but is NOT its tip (<tip>)`, and it is a different refusal from `commit <sha> is not on origin/main`,
+which means the commit was never merged: the log always says which of the two actually fired. And these tests are
+three of seven, not the whole guard: a run can still refuse for a guard-version mismatch, a workspace that is not a
+checkout, SCM metadata naming another branch, or a failed fetch. Read the SHA and start the build together, and if
+you lose the race, read the new tip and run again.
 
 A few consequences worth knowing:
 
@@ -125,8 +127,12 @@ A few consequences worth knowing:
   would fail every scheduled run. They remain the owner's to start. Being a stockgex job is not the reason:
   `stockgex-close-board` has no trigger and *is* guarded.
 
-`scripts/ci/jenkins-permitted-sha-scope.txt` classifies each of the 40 root `Jenkinsfile*` files in this repository
-as in or out of scope, with the reason, and the CI check fails if a root Jenkinsfile is missing from it.
+`scripts/ci/jenkins-permitted-sha-scope.txt` classifies every checked-in `Jenkinsfile*` in this repository — by its
+repository-relative path, anywhere in the tree, not only the 40 in the root — as in or out of scope, with the reason,
+and the CI check fails if one is missing from it. A job's definition is a path, not a name: processing kept four
+executable definitions in service subdirectories (`databento-maxpain-service/Jenkinsfile` and three more) that a
+root-only search reported as simply absent, while they packaged source and published images with no permitted commit
+at all. They carry the guard now, and nothing outside a repository's root is invisible to the check any more.
 
 ---
 
