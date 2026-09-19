@@ -20,6 +20,7 @@ images:
   gamma-migration-service: host.docker.internal:5001/options-edge-gamma-migration:dev
   gamma-leadership-service: host.docker.internal:5001/options-edge-gamma-leadership:dev
   corridor-gauge-service: host.docker.internal:5001/options-edge-corridor-gauge:dev
+  gamma-ladder-path-service: host.docker.internal:5001/options-edge-gamma-ladder-path:dev
   dealer-ledger-service: 192.168.100.252:5000/options-edge-dealer-ledger:dev
   dealer-ledger-calibration-scorer: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:dev
   dealer-ledger-calibration-accumulator: 192.168.100.252:5000/options-edge-dealer-ledger-calibration:dev
