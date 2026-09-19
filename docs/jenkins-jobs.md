@@ -60,6 +60,48 @@ Building the wrong arch → the pod never starts (`exec format error` → `Crash
 
 ---
 
+## Every deploy job now needs a permitted commit
+
+Since the permitted-commit guard landed (options-edge rule.md, "Deployment Permission Rule"; deploy PR #1043,
+gateway #188, web #738, processing #836), a guarded job refuses to do anything unless it is told which commit it may
+deploy. A run without it stops in the `Permitted commit guard` stage and says so:
+
+```text
+permitted-sha-guard: REFUSED — PERMITTED_SHA is not set ...
+permitted-sha-guard: verdict=REFUSED (no deployment effect may follow)
+```
+
+That is the guard working, not a broken job. What to pass:
+
+| Parameter | Value | Which jobs |
+|---|---|---|
+| `PERMITTED_SHA` | the full 40-character SHA you are deploying, which must be the current tip of that repository's `main` | every guarded job |
+| `PERMITTED_SHA_GUARD_VERSION` | leave the default — it is the sha256 of `scripts/jenkins/permitted-sha-guard.sh` and a caller compares it against its own copy | every guarded job |
+| `CONTRACTS_PERMITTED_SHA` | tip of `options-edge-contracts` `main` | jobs that clone contracts and build against it (processing, gateway) |
+| `DEPLOY_PERMITTED_SHA` | tip of `options-edge-deploy` `main` | image jobs that then trigger `service-deploy` |
+| `REQUIRED_IMAGE` | `repo@sha256:…` from the building job's image lock | a deploy that must roll exactly the image another guarded build produced |
+
+Get the SHA with `gh api repos/abhinav-jain09/<repo>/branches/main -q .commit.sha`, and pass it in the same build.
+If `main` moves between reading it and the build starting, the guard refuses — read it again and re-run.
+
+A few consequences worth knowing:
+
+- **A build started by a push refuses too.** An SCM-triggered run has no permitted commit, so it stops at the guard
+  with a red build and publishes nothing. That is intended: an automatic push is not a deployment permission.
+- **The first run of a job after the guard merges is expected to fail.** Jenkins only learns a job's new parameters by
+  running it once; that run refuses at the guard and registers them. Done on 2026-09-20 for `service-deploy`,
+  `options-edge-web-deploy`, `web-service-deploy` and `option-edge-feed-gateway`.
+- **A job may only hand work to a child that enforces the same guard.** The caller reads the child's definition from
+  its repository at the commit being forwarded and checks it; an unguarded or out-of-date child is refused rather than
+  triggered.
+- **Cron jobs are deliberately outside the guard** (premarket reset, off-hours clean slate, morning autostart, the
+  stockgex jobs): requiring a SHA would fail every scheduled run. They remain the owner's to start.
+
+`scripts/jenkins/jenkins-permitted-sha-scope.txt` lists every Jenkinsfile in this repository and whether it is in or
+out of scope, with the reason.
+
+---
+
 ## How to deploy
 
 ### Dev (to docker-desktop on the Mac)
