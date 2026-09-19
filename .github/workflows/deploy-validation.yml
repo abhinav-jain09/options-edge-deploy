@@ -142,6 +142,29 @@ jobs:
       - name: OPRA tape declared at its real shape (dev/prod)
         run: python3 -m unittest -v tests.test_opra_tcbbo_declared
 
+      # Same wedge, third door: the es4->dev MM1 mirrors kept producing through the dev wipe and
+      # re-created gex.strike/gex.spxbridge/indicators.bars/strike-intelligence-by-strike at 1 partition
+      # before ensure_topics ran (2026-09-14). dev-cleanup must unload them around the delete.
+      - name: dev wipe pauses the es4->dev mirrors
+        run: python3 -m unittest -v tests.test_dev_cleanup_pauses_dev_mirrors
+
+      # The repair half: a Streams app that rejects an internal topic's partition count never becomes
+      # READY and restarts never help. Every bring-up (dev start/overnight, prod boot, es4 reset) runs the
+      # doctor, which reads Streams' expected count from the log and recreates only that app's topic.
+      - name: Streams partition doctor (simulated cluster) + bring-up wiring
+        run: python3 -m unittest -v tests.test_streams_partition_doctor
+
+      # The prod boot bring-up scales up every deployment at 0 except its KEEP_DOWN; the morning wake-up
+      # holds down its own KEEP_DOWN. A service held down only in the morning is resurrected by the next
+      # reboot — a shorter boot list took production down twice (2026-08-24).
+      - name: Boot bring-up and morning autostart hold down the same services
+        run: python3 -m unittest -v tests.test_keep_down_lists_agree
+
+      # The prevention half: every topic dev needs has ONE partition count and is created before any
+      # service starts, and declarations match what owners create (2026-09-15 partition audit).
+      - name: Partition-only topics + raised declarations
+        run: python3 -m unittest -v tests.test_partition_only_topics
+
       # One hop further: Streams sources written by ANOTHER service (strike-flow, strike.avro,
       # strike-sr.current, strike-intelligence-by-strike). Runs the real apply-topics.sh for prod and
       # dev plus dev-cleanup's topic_desired, and holds each declaration to the live shape its owner

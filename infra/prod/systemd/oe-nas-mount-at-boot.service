@@ -1,0 +1,15 @@
+[Unit]
+Description=Mount the NAS (/mnt/nas) after boot, retrying until it answers
+Documentation=file:/usr/local/sbin/oe-nas-mount-at-boot.sh
+Wants=network-online.target
+After=network-online.target remote-fs.target
+
+[Service]
+# simple, not oneshot: boot must never wait on the NAS (a oneshot would hold multi-user.target
+# for up to the full retry window when the NAS is off).
+Type=simple
+ExecStart=/usr/local/sbin/oe-nas-mount-at-boot.sh
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

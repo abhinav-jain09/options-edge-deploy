@@ -118,7 +118,9 @@ resolve_revision() {
     printf '%s' "$t" | grep -qE '^prod-[0-9]+-[0-9a-f]{12}$' || continue
     d="$(curl -sS -m 30 -o /dev/null -D - \
       -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+      -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
       -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+      -H 'Accept: application/vnd.oci.image.index.v1+json' \
       "http://${registry}/v2/${repo_path}/manifests/${t}" \
       | tr -d '\r' | awk 'tolower($1)=="docker-content-digest:"{print $2}' | tail -1)"
     [ "$d" = "$target" ] || continue
@@ -151,7 +153,9 @@ resolve_digest() {
   repo_path="${ref#*/}"; tag="${repo_path##*:}"; repo_path="${repo_path%:*}"
   curl -sS -m 30 -o /dev/null -D - \
     -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+    -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
     -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+    -H 'Accept: application/vnd.oci.image.index.v1+json' \
     "http://${registry}/v2/${repo_path}/manifests/${tag}" \
     | tr -d '\r' | awk 'tolower($1)=="docker-content-digest:"{print $2}' | tail -1
 }

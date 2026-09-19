@@ -45,7 +45,7 @@ metadata:
   namespace: options-edge
 spec:
   progressDeadlineSeconds: 1200
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: vol-premium-service
@@ -70,6 +70,22 @@ spec:
               value: underlying.spx.price
             - name: VOL_PREMIUM_IVRV_TOPIC
               value: options.spx.vol-premium.ivrv
+            - name: VOL_PREMIUM_EVENTS_TOPIC
+              value: options.spx.vol-premium.events
+            - name: VOL_PREMIUM_CURRENT_TOPIC
+              value: options.spx.vol-premium.current
+            - name: VOL_PREMIUM_WARNINGS_TOPIC
+              value: options.spx.vol-premium.warnings
+            - name: VOL_PREMIUM_DLQ_TOPIC
+              value: options.spx.vol-premium.dlq
+            - name: VOL_PREMIUM_BASELINE_TOPIC
+              value: options.spx.vol-premium.baseline
+            - name: VOL_PREMIUM_STREAM_THREADS
+              value: "1"
+            - name: VOL_PREMIUM_NUM_STANDBY_REPLICAS
+              value: "1"
+            - name: VOL_PREMIUM_EXACTLY_ONCE
+              value: "true"
             - name: VOL_PREMIUM_STATE_DIR
               value: /var/lib/options-edge/kafka-streams
             - name: VOL_PREMIUM_TOPOLOGY_CHECK_MS
@@ -100,7 +116,7 @@ spec:
                   key: POSTGRES_PASSWORD
                   name: options-edge-runtime-secrets
             - name: JAVA_TOOL_OPTIONS
-              value: -Xms128m -Xmx512m
+              value: -Xms256m -Xmx1024m
           envFrom:
             - configMapRef:
                 name: options-edge-config
@@ -126,10 +142,10 @@ spec:
             periodSeconds: 10
           resources:
             limits:
-              memory: 1Gi
+              memory: 2Gi
             requests:
               cpu: 100m
-              memory: 256Mi
+              memory: 1Gi
           volumeMounts:
             - mountPath: /var/lib/options-edge/kafka-streams
               name: kafka-streams-state

@@ -81,6 +81,110 @@ WIPE_KAFKA="${WIPE_KAFKA:-true}"
 CALENDAR_DIR="${CALENDAR_DIR:-$DEPLOY_REPO/scripts/jenkins}"
 LOG=/Users/abhinav/oe-ops/dev-cleanup.log
 
+# ---------- es4 -> dev MM1 mirrors: paused around the topic wipe ----------
+# The kafka-mirror-maker launchd agents (es-cvd/-indicator/-strike-intel/-tape-zones/-auction/esgex ...)
+# keep producing into dev while the wipe deletes their target topics, and dev auto-creates a topic on
+# the first produce at num.partitions=1. 2026-09-14 12:06:34: the delete of es.options.databento.gex.strike
+# and .gex.spxbridge was followed 0.3 s later by a mirror's CreateTopics numPartitions=1; ensure_topics'
+# declared :4 then hit TOPIC_ALREADY_EXISTS, and es.options.indicators.bars (:8, EXACT) and
+# es.strike-intelligence-by-strike (:32) stuck at 1 the same way. es-spx-align-service's Streams app
+# sized its repartition/changelog topics from those 1-partition sources and died with "invalid
+# partitions: expected: 4; actual: 1" as soon as the shapes were repaired. So the wipe unloads every
+# agent that writes to dev BEFORE the delete and reloads them only AFTER ensure_topics has created the
+# targets at their declared shape. The paused list is a file so an interrupted clean is still resumed by
+# the next start/overnight run. MM1 commits on es4, so a resumed mirror continues from its committed
+# offset: the wiped history is NOT back-filled (unchanged behaviour, see topics.env).
+LAUNCH_AGENTS_DIR="${LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}"
+LAUNCHCTL="${LAUNCHCTL:-launchctl}"
+DEV_MIRRORS_PAUSED="${DEV_MIRRORS_PAUSED:-/Users/abhinav/oe-ops/.dev-mirrors-paused}"
+DEV_MIRROR_TARGET_RE='^bootstrap\.servers=(127\.0\.0\.1|localhost):19092[[:space:]]*$'
+
+# "label plist" for every com.optionsedge agent with a ProgramArguments entry whose directory holds a
+# producer.properties that targets dev Kafka. Parsed with plistlib, not grepped: most real mirror plists
+# are one-line XML (<key>ProgramArguments</key><array><string>...), and a `/bin/bash run.sh` agent keeps
+# the script in [1]. The label is read from the plist, never guessed: esgex-mirror* run from es-gex-mirror*/.
+dev_mirror_agents() {
+  python3 - "$LAUNCH_AGENTS_DIR" "$DEV_MIRROR_TARGET_RE" <<'PY'
+import glob, os, plistlib, re, sys
+agents_dir, target_re = sys.argv[1], re.compile(sys.argv[2].replace("[[:space:]]", r"\s"))
+for plist in sorted(glob.glob(os.path.join(agents_dir, "com.optionsedge.*.plist"))):
+    try:
+        with open(plist, "rb") as f:
+            job = plistlib.load(f)
+    except Exception:
+        continue
+    if not isinstance(job, dict):
+        continue
+    for arg in job.get("ProgramArguments") or []:
+        if not os.path.isabs(str(arg)):
+            continue   # `-lc`, `auto`, `dev`: dirname "" would resolve against the caller's cwd
+        props = os.path.join(os.path.dirname(str(arg)), "producer.properties")
+        try:
+            lines = open(props).read().splitlines()
+        except OSError:
+            continue
+        if any(target_re.match(line) for line in lines):
+            print(job.get("Label") or os.path.basename(plist)[:-len(".plist")], plist)
+            break
+PY
+}
+
+pause_dev_mirrors() {
+  local uid label plist n=0 i
+  uid=$(id -u)
+  # Only agents that are LOADED now are paused (one someone unloaded on purpose stays unloaded), appended
+  # to any list an interrupted clean left behind, so the next resume still reloads those too.
+  touch "$DEV_MIRRORS_PAUSED"
+  if ! dev_mirror_agents > "$DEV_MIRRORS_PAUSED.found"; then
+    echo "   ERROR: es4->dev mirror discovery failed (python3/plistlib) — mirrors are NOT paused; their targets may be auto-created at 1 partition"
+  fi
+  while read -r label plist; do
+    [ -n "$label" ] || continue
+    "$LAUNCHCTL" list "$label" >/dev/null 2>&1 && printf '%s %s\n' "$label" "$plist"
+  done < "$DEV_MIRRORS_PAUSED.found" > "$DEV_MIRRORS_PAUSED.new"
+  rm -f "$DEV_MIRRORS_PAUSED.found"
+  sort -u "$DEV_MIRRORS_PAUSED" "$DEV_MIRRORS_PAUSED.new" > "$DEV_MIRRORS_PAUSED.merged"
+  mv "$DEV_MIRRORS_PAUSED.merged" "$DEV_MIRRORS_PAUSED"
+  while read -r label plist; do
+    [ -n "$label" ] || continue
+    "$LAUNCHCTL" bootout "gui/$uid/$label" >/dev/null 2>&1
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      "$LAUNCHCTL" list "$label" >/dev/null 2>&1 || break
+      sleep 3
+    done
+    if "$LAUNCHCTL" list "$label" >/dev/null 2>&1; then
+      echo "   WARN: mirror agent $label is still loaded; its target topics may be auto-created at 1 partition"
+    else
+      n=$((n + 1))
+    fi
+  done < "$DEV_MIRRORS_PAUSED.new"
+  rm -f "$DEV_MIRRORS_PAUSED.new"
+  [ -s "$DEV_MIRRORS_PAUSED" ] || rm -f "$DEV_MIRRORS_PAUSED"
+  echo "   paused $n es4->dev mirror agent(s) (list: $DEV_MIRRORS_PAUSED)"
+}
+
+resume_dev_mirrors() {
+  [ -s "$DEV_MIRRORS_PAUSED" ] || return 0
+  local uid label plist n=0 failed=0
+  uid=$(id -u)
+  while read -r label plist; do
+    [ -n "$label" ] || continue
+    if [ ! -f "$plist" ]; then
+      echo "   (agent removed, skipped): $label"
+      continue
+    fi
+    "$LAUNCHCTL" bootstrap "gui/$uid" "$plist" >/dev/null 2>&1   # non-zero when already loaded; judged below
+    if "$LAUNCHCTL" list "$label" >/dev/null 2>&1; then
+      n=$((n + 1))
+    else
+      failed=$((failed + 1))
+      echo "   WARN: mirror agent $label did not load"
+    fi
+  done < "$DEV_MIRRORS_PAUSED"
+  [ "$failed" -eq 0 ] && rm -f "$DEV_MIRRORS_PAUSED"
+  echo "   resumed $n es4->dev mirror agent(s)"
+}
+
 # ---------- LOGS: safe, non-destructive (no topic/state data touched) ----------
 # (1) launchd stdout + log4j logs grow forever w/ no rotation -> any *.log > 50 MB trimmed to its last
 #     10 MB in place (preserves the broker's open fd). (2) Kafka's rotated daily archives
@@ -232,6 +336,57 @@ reconcile_declared_topics() {
   echo "  shape check: $fixed config(s) reconciled, $drift unresolved."
 }
 
+# create_topics_parallel: read one topic's create arguments per line on stdin ("--topic X --partitions N ...")
+# and run the kafka-topics creates DEV_CLEANUP_TOPIC_PARALLELISM at a time; prints how many succeeded.
+# WHY: every kafka-topics call is a ~2 s JVM start. ~200 sequential creates after a wipe cost 6-7 minutes of
+# a dev clean; 8 in parallel cost well under one. Topic names and config values contain no spaces or quotes
+# (Kafka topic names are [a-zA-Z0-9._-]), so xargs' whitespace splitting is exact.
+create_topics_parallel() {
+  # Trailing blanks are STRIPPED first: `xargs -L 1` treats a line that ends in a blank as continuing onto
+  # the next line, so "--config cleanup.policy=delete  " (empty retention overrides) glued several topics into
+  # one failing create — 2026-09-16 a dev wipe created 15 of 137 declared topics. Blank lines are dropped too.
+  sed -e 's/[[:space:]]*$//' -e '/^$/d' | xargs -P "${DEV_CLEANUP_TOPIC_PARALLELISM:-8}" -L 1 sh -c \
+    "$KT --bootstrap-server $BS --create --if-not-exists \"\$@\" >/dev/null 2>&1 && echo CREATED" sh \
+    | grep -c '^CREATED$'
+}
+
+# ensure_partition_only_topics: create every OPTIONS_EDGE_PARTITION_ONLY_TOPICS entry that is missing at its
+# declared partition count (no configs: the owning service stamps policy/retention), grow a smaller existing
+# copy, and name any larger one (Kafka cannot shrink a topic; a wipe recreates it). Runs before any service
+# starts, so no client can choose these topics' size. One list + one describe, not a JVM per topic.
+ensure_partition_only_topics() {
+  [ -n "${OPTIONS_EDGE_PARTITION_ONLY_TOPICS:-}" ] || return 0
+  local have spec name want cur created=0 grown=0 larger=""
+  local desc
+  if ! desc="$($KT --bootstrap-server $BS --describe 2>/dev/null)"; then
+    echo "  WARNING: could not describe topics — partition-only topics NOT ensured this run (nothing created blind)"
+    return 0
+  fi
+  have="$(printf '%s\n' "$desc" | awk -F'\t' '$1 ~ /^Topic: / {n=$1; sub(/^Topic: /, "", n); for (i = 2; i <= NF; i++) if ($i ~ /^PartitionCount: /) {c=$i; sub(/^PartitionCount: /, "", c); print n, c}}')"
+  local to_create="" wanted=0
+  for spec in $OPTIONS_EDGE_PARTITION_ONLY_TOPICS; do
+    name="${spec%%:*}"; want="${spec##*:}"
+    cur="$(printf '%s\n' "$have" | awk -v t="$name" '$1 == t {print $2; exit}')"
+    if [ -z "$cur" ]; then
+      to_create="$to_create--topic $name --partitions $want --replication-factor 1
+"
+      wanted=$((wanted+1))
+    elif [ "$cur" -lt "$want" ]; then
+      # --topic is a regular expression: escape the dots so the alter can only match this topic.
+      $KT --bootstrap-server $BS --alter --topic "$(printf '%s' "$name" | sed 's/\./\\./g')" --partitions "$want" >/dev/null 2>&1 \
+        && grown=$((grown+1)) || echo "  WARNING: could not grow $name $cur -> $want"
+    elif [ "$cur" -gt "$want" ]; then
+      larger="$larger $name($cur>$want)"
+    fi
+  done
+  if [ "$wanted" -gt 0 ]; then
+    created=$(printf '%s' "$to_create" | create_topics_parallel)
+    [ "$created" -eq "$wanted" ] || echo "  WARNING: created $created of $wanted missing partition-only topics"
+  fi
+  echo "Partition-only topics: created $created, grown $grown (topics.env OPTIONS_EDGE_PARTITION_ONLY_TOPICS)"
+  [ -z "$larger" ] || echo "  WARNING: larger than declared (Kafka cannot shrink; the next wipe recreates them):$larger"
+}
+
 # ensure_topics: pre-create the platform topics from the deploy repo's topics.env (source of truth).
 # Best-effort fetch so we pick up the latest reviewed config; if offline we use the last-fetched origin/main.
 #
@@ -246,22 +401,74 @@ ensure_topics() {
   git -C "$DEPLOY_REPO" fetch -q origin main 2>/dev/null || true
   local tenv; tenv="$(git -C "$DEPLOY_REPO" show "$TOPICS_ENV_REF" 2>/dev/null)"
   if [ -n "$tenv" ]; then
-    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES)=')"
-    local n=0 spec name extra rt
-    for spec in $OPTIONS_EDGE_TOPICS; do
+    eval "$(printf '%s\n' "$tenv" | grep -E '^OPTIONS_EDGE_(TOPICS|COMPACTED_TOPICS|PURE_COMPACT_TOPICS|EXACT_PARTITION_TOPICS|TOPIC_RETENTION_OVERRIDES|TOPIC_DELETE_RETENTION_OVERRIDES|PARTITION_ONLY_TOPICS)=')"
+    local n=0 spec name extra rt existing missing=0
+    # One --list, then create only what is missing (in parallel). A failed list falls back to creating every
+    # declared topic: --if-not-exists makes that safe, only slower. Config of EXISTING topics is the
+    # reconcile pass's job below, exactly as before.
+    existing="$($KT --bootstrap-server $BS --list 2>/dev/null)" || existing=""
+    n=$(for spec in $OPTIONS_EDGE_TOPICS; do
       name="${spec%%:*}"
+      printf '%s\n' "$existing" | grep -qxF "$name" && continue
       topic_desired "$name"
       extra=""; [ -n "$DDR" ]  && extra="--config delete.retention.ms=$DDR"
       rt="";    [ -n "$DRET" ] && rt="--config retention.ms=$DRET"
-      $KT --bootstrap-server $BS --create --if-not-exists --topic "$name" \
-        --partitions "$DPARTS" --replication-factor 1 --config cleanup.policy="$DPOL" $extra $rt >/dev/null 2>&1 && n=$((n+1))
-    done
+      echo "--topic $name --partitions $DPARTS --replication-factor 1 --config cleanup.policy=$DPOL $extra $rt"
+    done | create_topics_parallel)
     echo "Pre-created $n platform topics from deploy config ($TOPICS_ENV_REF); apps self-create the rest on startup."
+    ensure_partition_only_topics
     reconcile_declared_topics
     echo "  topics present now: $($KT --bootstrap-server $BS --list 2>/dev/null | grep -vcE '^__|^_schemas')"
   else
     echo "  WARNING: could not read deploy topics.env ($DEPLOY_REPO $TOPICS_ENV_REF) — apps will create their topics on startup (slower to READY)."
+    return 1   # resume_dev_mirrors_if_declared keeps the mirrors paused: nothing was created at its declared shape
   fi
+}
+
+# Reload the paused mirrors only once ensure_topics has created their targets; otherwise they would
+# auto-create them at 1 partition — the exact wedge the pause exists to prevent. They stay paused
+# (list kept) until a later start/overnight run whose ensure_topics succeeds.
+resume_dev_mirrors_if_declared() {
+  if [ "$1" -eq 0 ]; then
+    resume_dev_mirrors
+  elif [ -s "$DEV_MIRRORS_PAUSED" ]; then
+    echo "   WARN: es4->dev mirrors stay PAUSED — topics.env was not applied (list: $DEV_MIRRORS_PAUSED)"
+  fi
+}
+
+# run_partition_doctor: repair Kafka Streams apps that refuse an internal topic's partition count
+# ("Existing internal topic ... has invalid partitions: expected: E; actual: A"). Same source of truth as
+# ensure_topics (the reviewed script on origin/main). Waits for the named deployments to be READY (or up
+# to DOCTOR_WAIT_SECONDS) so Streams has had its first assignment — the rejection is logged only then.
+# Non-fatal for the bring-up, loud in the log: an app it cannot repair is named with the reason.
+run_partition_doctor() {
+  local script deploys="$*" d waited=0 rcd
+  script="$(mktemp -t oe-partition-doctor)" || return 0
+  git -C "$DEPLOY_REPO" show "${PARTITION_DOCTOR_REF:-origin/main:scripts/kafka/streams-partition-doctor.sh}" > "$script" 2>/dev/null
+  if [ ! -s "$script" ]; then
+    echo "  WARNING: could not read streams-partition-doctor.sh from $DEPLOY_REPO — Streams apps with a wrong internal topic stay NOT READY"
+    rm -f "$script"; return 0
+  fi
+  [ -n "$deploys" ] || deploys=$($KK get deploy -o jsonpath='{range .items[?(@.spec.replicas>0)]}{.metadata.name}{" "}{end}' 2>/dev/null)
+  # Wait for the apps to become READY (Streams logs a rejection at its first assignment), but stop as soon
+  # as the not-ready set has not changed for DOCTOR_STABLE_SECONDS: an app that cannot start for an
+  # unrelated reason (no IBKR gateway, an epoch fence, a feed that starts at 07:00 ET) must not hold the
+  # whole bring-up for the full timeout. One `get deploy` per pass, not two kubectl calls per app.
+  local pending="" last="" stable=0
+  while [ "$waited" -lt "${DOCTOR_WAIT_SECONDS:-300}" ]; do
+    pending=$($KK get deploy -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.replicas}{" "}{.status.readyReplicas}{"\n"}{end}' 2>/dev/null \
+      | awk -v want=" $deploys " 'index(want, " " $1 " ") && ($3 == "" ? 0 : $3) < $2 {printf "%s ", $1}')
+    [ -z "$pending" ] && break
+    if [ "$pending" = "$last" ]; then stable=$((stable + 15)); else stable=0; last="$pending"; fi
+    [ "$stable" -ge "${DOCTOR_STABLE_SECONDS:-60}" ] && { echo "  not ready (unchanged ${stable}s, not waiting longer): $pending"; break; }
+    sleep 15; waited=$((waited + 15))
+  done
+  sleep "${DOCTOR_SETTLE_SECONDS:-30}"
+  echo "Kafka Streams partition doctor (repairs 'invalid partitions' internal topics) ..."
+  KUBECTL="$KK" KUBECTL_SCALE="$K" KAFKA_TOPICS="$KT --bootstrap-server $BS" /bin/bash "$script" --repair $deploys 2>&1 | sed 's/^/  /'
+  rcd=${PIPESTATUS[0]}
+  [ "$rcd" -eq 0 ] || echo "  ⚠ partition doctor exit $rcd — see the UNREPAIRABLE/FAILED/INCONCLUSIVE lines above"
+  rm -f "$script"
 }
 
 # apply_internal_topic_configs: give every Streams changelog/repartition topic its
@@ -330,7 +537,7 @@ apply_internal_topic_configs() {
 # service stays at 0 until the 06:15 ET full start. (These persist/serve ES — they need a producer for
 # live ES data; see the note where OVERNIGHT_SET is defined.)
 do_start_overnight() {
-  ensure_topics
+  ensure_topics; resume_dev_mirrors_if_declared $?
   echo "Overnight start: ES-tracking set only ($OVERNIGHT_SET); all other services stay at 0 until 06:15 ET."
   local d
   for d in $OVERNIGHT_SET; do
@@ -341,6 +548,7 @@ do_start_overnight() {
     fi
   done
   echo "Overnight ES-tracking set up."
+  run_partition_doctor $OVERNIGHT_SET
 }
 
 # ---------- ES DOWN: at ~09:17 ET (before the 09:30 open) scale the overnight ES services to 0 ----------
@@ -369,7 +577,7 @@ do_es_down() {
 
 # ---------- FULL START: pre-create source topics, then scale ALL active apps up READY ----------
 do_start() {
-  ensure_topics
+  ensure_topics; resume_dev_mirrors_if_declared $?
   # Scale UP everything EXCEPT the DEV-disabled set. This is load-bearing: if we scaled ALL to 1 and
   # re-zeroed the disabled ones afterwards, databento-timewarp-snapshot-replay would come up in the gap
   # and REPLAY historical snapshots into options.databento.raw (its TIMEWARP_SNAPSHOT_TOPIC), poisoning
@@ -434,6 +642,7 @@ do_start() {
   else
     echo "  Schema Registry / gateway OK (no schema errors)"
   fi
+  run_partition_doctor
   echo "Done — source topics exist; active apps reach RUNNING, disabled set held at 0 (no replay injection)."
 }
 
@@ -490,6 +699,7 @@ for p in json.load(sys.stdin)["items"]:
     echo "4) keeping topics (WIPE_KAFKA=false)"
   else
     echo "4) deleting all non-system topics ..."
+    pause_dev_mirrors
     # RESET-PRESERVED topics survive here too. They hold data that by declaration cannot be rebuilt —
     # the A5 calibration ledger accrues until the archive carries it to the NAS, and a wipe before that
     # loses the day with no way to notice. dev and prod must agree on what "preserved" means, or the
@@ -503,7 +713,7 @@ for p in json.load(sys.stdin)["items"]:
       | xargs -P 8 -I{} $KT --bootstrap-server $BS --delete --topic {} >/dev/null 2>&1
     sleep 8   # let the deletions settle before recreating (avoid create-vs-delete races)
     echo "4d) recreating platform topics (clean + recreate) ..."
-    ensure_topics
+    ensure_topics; resume_dev_mirrors_if_declared $?
   fi
 
   # 4b. safe docker-ENGINE image housekeeping (build side only — NOT the k8s containerd store).

@@ -29,7 +29,15 @@ LOAD_WAIT_SECONDS="${LOAD_WAIT_SECONDS:-600}"
 # before these are, so they go first and alone.
 WAVE1='options-edge-databento-feed feed-gateway-service options-edge-web'
 # Held down by explicit USER decision — never started here.
-KEEP_DOWN='databento-mission-sandwich-service|dealer-ledger-calibration-accumulator|dealer-ledger-calibration-scorer|dealer-ledger-service|directional-pressure-databento-service|directional-pressure-service|hpsf-stage-a-service|hpsf-stage-b-service|ibkr-feed-service|option-truth-engine-service|options-edge-integration-test|prod-pgadmin|short-premium-agent-service|spread-skew-postgres-writer|spread-skew-service|spx-mission-control-service|strike-flow-classifier-ibkr|vix-option-inteligence-service|volume-pace-databento-service|volume-pace-service|volume-sandwich-databento-service|volume-sandwich-service'
+# 2026-08-24: this list was SHORTER than the declared policy in scripts/ops/morning-autostart.sh
+# and therefore would resurrect, on the next reboot, services the USER ordered held down
+# (directional-pressure-databento-service, volume-pace*, databento-mission-sandwich-service,
+# spx-mission-control-service, ...). That resurrection took production down twice. Kept in sync
+# with morning-autostart.sh KEEP_DOWN — change BOTH or neither.
+# 2026-09-15: it had drifted again — oi-shadow-service and raw-to-display-service (both USER holds
+# since 2026-08-10) were held down only by morning-autostart.sh. tests/test_keep_down_lists_agree.py
+# now fails CI whenever the two sets differ.
+KEEP_DOWN='directional-pressure-databento-service|hpsf-stage-a-service|hpsf-stage-b-service|volume-sandwich-service|volume-sandwich-databento-service|volume-pace-service|volume-pace-databento-service|strike-flow-classifier-ibkr|options-edge-integration-test|spx-mission-control-service|short-premium-agent-service|spread-skew-service|spread-skew-postgres-writer|databento-mission-sandwich-service|directional-pressure-service|option-truth-engine-service|ibkr-feed-service|prod-pgadmin|dealer-ledger-service|dealer-ledger-calibration-scorer|dealer-ledger-calibration-accumulator|vix-option-inteligence-service|oi-shadow-service|raw-to-display-service'
 
 log() { printf '[%s] %s\n' "$(date '+%F %T %Z')" "$*" | tee -a "$LOG"; }
 die() { log "FAIL: $*"; exit 1; }
@@ -88,4 +96,31 @@ READY=$($KUBECTL get deploy --no-headers 2>/dev/null | awk '{split($2,a,"/"); if
 NOTREADY=$($KUBECTL get deploy --no-headers 2>/dev/null | awk '{split($2,a,"/"); if (a[2]>0 && a[1]!=a[2]) print $1}')
 log "result: ${READY}/${TOTAL} ready; load $(awk '{print $1}' /proc/loadavg)"
 [ -n "$NOTREADY" ] && log "still not ready (may still be settling): $(echo $NOTREADY | tr '\n' ' ')"
+# ---------- Kafka Streams partition doctor ----------
+# An app whose internal topic has the wrong partition count (a source was once created at the wrong
+# size) logs "Existing internal topic ... has invalid partitions" and never becomes READY; restarting it
+# never helps. The doctor reads Streams' own expected count from the log and recreates only that topic
+# (scripts/kafka/streams-partition-doctor.sh; installed next to this script). Give still-settling apps
+# time to reach their first assignment first, because the rejection is only logged then.
+DOCTOR="${DOCTOR:-/usr/local/sbin/streams-partition-doctor.sh}"
+if [ -r "$DOCTOR" ]; then
+  if [ -n "$NOTREADY" ]; then
+    w=0 last="" stable=0
+    while [ "$w" -lt "${DOCTOR_WAIT_SECONDS:-300}" ]; do
+      pending=$($KUBECTL get deploy --no-headers 2>/dev/null | awk '{split($2,a,"/"); if (a[2]>0 && a[1]!=a[2]) print $1}')
+      [ -z "$pending" ] && break
+      # an app that cannot start for an unrelated reason must not hold the doctor for the full timeout
+      if [ "$pending" = "$last" ]; then stable=$((stable+20)); else stable=0; last="$pending"; fi
+      [ "$stable" -ge "${DOCTOR_STABLE_SECONDS:-60}" ] && break
+      sleep 20; w=$((w+20))
+    done
+  fi
+  log "partition doctor: checking every running Streams app"
+  KUBECTL="$KUBECTL" KUBECTL_SCALE="$KUBECTL $SA" KAFKA_TOPICS="$B/kafka-topics.sh --bootstrap-server localhost:9092" \
+    bash "$DOCTOR" --repair 2>&1 | tee -a "$LOG"
+  drc=${PIPESTATUS[0]}
+  [ "$drc" -eq 0 ] || log "WARN: partition doctor exit $drc — an app named above is still not running (UNREPAIRABLE = fix the source topic declaration)"
+else
+  log "WARN: $DOCTOR not installed — Streams apps rejecting an internal topic's partition count will stay NOT READY"
+fi
 log "=== boot bring-up done ==="
