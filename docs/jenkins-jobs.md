@@ -80,14 +80,28 @@ That is the guard working, not a broken job. What to pass:
 | `CONTRACTS_PERMITTED_SHA` | tip of `options-edge-contracts` `main` | jobs that clone contracts and build against it (processing, gateway) |
 | `DEPLOY_PERMITTED_SHA` | tip of `options-edge-deploy` `main` | image jobs that then trigger `service-deploy` |
 | `REQUIRED_IMAGE` | `repo@sha256:…` from the building job's image lock | a deploy that must roll exactly the image another guarded build produced |
+| `PROCESSING_PERMITTED_SHA` | tip of `options-edge-processing` `main` | `service-deploy` with `BUILD_IMAGES=true` — it refuses without it |
+| `WEB_PERMITTED_SHA` | tip of `options-edge` `main` | `web-service` with `BUILD_IMAGE=true` (the image is built by `options-edge-web-deploy`) |
+| `NIFTY_PERMITTED_SHA` | tip of the nifty source `main` | `nifty-gex-service`, which clones and builds that source |
+
+A job that builds an image needs the permission for the *source* repository as well as its own: those last three rows
+are not optional on that path, and the build refuses with `BUILD_IMAGES=true needs PROCESSING_PERMITTED_SHA: …` (or the web
+and nifty equivalents) before triggering anything. Each job's own **Build with Parameters** page lists exactly what it
+requires, with the reason in the parameter description.
 
 Get the SHA with `gh api repos/abhinav-jain09/<repo>/branches/main -q .commit.sha`, and pass it in the same build.
-What the guard then checks, in this order: the selected ref names the environment's branch; `PERMITTED_SHA` is a
-full lowercase 40-character commit id; that commit is an *ancestor of* the branch tip fetched during the build; and
-the checked-out `HEAD` equals `PERMITTED_SHA` exactly. So it is the checkout, not the branch tip, that must equal the
-permitted commit. If `main` moves on after you read the SHA, a build that still checks out your commit is permitted —
-the guard refuses only when the checkout differs from the SHA you passed, or when that SHA is not on the branch at
-all. Read the SHA and start the build together anyway, so you deploy what you looked at.
+What the guard checks, in the order it checks it: the running guard's sha256 equals `PERMITTED_SHA_GUARD_VERSION`;
+the workspace is a git working checkout and `HEAD` resolves to a full commit id; the selected ref and the job's SCM
+metadata name the environment's branch; `origin/<branch>` is fetched (a fetch that fails is a refusal); the
+checked-out `HEAD` is an *ancestor of* that freshly fetched tip; `PERMITTED_SHA` is present and a full lowercase
+40-character commit id; and finally `HEAD` equals `PERMITTED_SHA` exactly.
+
+Two things follow. The ancestry test is against the branch tip but the equality test is against your checkout, so it
+is the checkout — never the tip — that must be the permitted commit: if `main` moves on after you read the SHA, a
+build that still checks out your commit satisfies both tests. And the equality and ancestry tests are two of seven,
+not the whole guard: a run can still refuse for a guard-version mismatch, a workspace that is not a checkout, SCM
+metadata naming another branch, or a failed fetch. Read the SHA and start the build together anyway, so you deploy
+what you looked at.
 
 A few consequences worth knowing:
 
