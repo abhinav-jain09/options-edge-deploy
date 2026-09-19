@@ -54,10 +54,32 @@ is_durable_changelog() {
 }
 
 apply_durable_changelog_config() {
-  local topic="$1"
+  local topic="$1" effective
   echo "Applying compact-only durable changelog policy (no retention.ms): $topic"
+  # An EXISTING topic created (or previously rewritten) as compact+delete keeps its retention.ms
+  # unless it is deleted explicitly, so this both alters the policy and removes the retention key —
+  # the service's own withLoggingEnabled config only applies when Streams creates the topic.
   alter_topic_config "$topic" \
-    "cleanup.policy=compact,segment.ms=$SEGMENT_MS,delete.retention.ms=$DELETE_RETENTION_MS,min.cleanable.dirty.ratio=$MIN_CLEANABLE_DIRTY_RATIO,min.insync.replicas=$MIN_ISR"
+    "cleanup.policy=compact,segment.ms=$SEGMENT_MS,delete.retention.ms=$DELETE_RETENTION_MS,min.cleanable.dirty.ratio=$MIN_CLEANABLE_DIRTY_RATIO,min.insync.replicas=$MIN_ISR" || return 1
+  if ! kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+      --entity-type topics --entity-name "$topic" --alter --delete-config retention.ms >/dev/null 2>&1; then
+    : # not set at the topic level: nothing to delete
+  fi
+  # Verify the EFFECTIVE broker configuration before anything downstream relies on it: a durable
+  # changelog that is still delete-retained would silently let a late record regress its consumer.
+  effective="$(kafka-configs --bootstrap-server "$KAFKA_BOOTSTRAP_SERVERS" \
+      --entity-type topics --entity-name "$topic" --describe 2>/dev/null || true)"
+  if ! printf '%s' "$effective" | grep -Eq 'cleanup.policy=compact([^,]|$)'; then
+    echo "ERROR: $topic is not compact-only after the alter; effective config:" >&2
+    printf '%s\n' "$effective" >&2
+    return 1
+  fi
+  if printf '%s' "$effective" | grep -Eq 'DYNAMIC_TOPIC_CONFIG:retention.ms'; then
+    echo "ERROR: $topic still carries a topic-level retention.ms; effective config:" >&2
+    printf '%s\n' "$effective" >&2
+    return 1
+  fi
+  echo "  verified compact-only: $topic"
 }
 
 apply_repartition_config() {
