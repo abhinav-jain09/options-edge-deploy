@@ -89,7 +89,7 @@ check "the same workspace with target declared but .m2 NOT declared is refused" 
 # FAIL-CLOSED: a git query that fails, or partial output then failure, must REFUSE — never be read as a clean/empty
 # inventory. A wrapper `git` on PATH forwards to the real git, except for the ONE invocation whose full argument string
 # equals FAIL_ARGS: that one prints PARTIAL (if any), records that it fired, and exits FAIL_RC. Each case then asserts
-# (a) the injection fired at that exact query, (b) the verify refused, and (c) it refused for THAT query's reason — so a
+# (a) the inserted fault fired at that exact query, (b) the verify refused, and (c) it refused for THAT query's reason — so a
 # case can no longer pass by failing some earlier, unrelated git call.
 REALGIT="$(command -v git)"
 fakebin="$work/fakebin"; mkdir -p "$fakebin"
@@ -114,11 +114,11 @@ checkfail() {  # checkfail <name> <exact git argument string to fail> <expected 
   local rc=$?
   set -e
   if [ ! -s "$mark" ]; then
-    fail=$((fail+1)); echo "FAIL [$name]: the injection never fired — no git call had the arguments '$args'"
+    fail=$((fail+1)); echo "FAIL [$name]: the inserted fault never fired — no git call had the arguments '$args'"
   elif [ "$rc" -eq 0 ]; then
     fail=$((fail+1)); echo "FAIL [$name]: rc=0 (fail-open) — a failed git query was treated as clean"
   elif ! printf '%s' "$out" | grep -qF -- "$say"; then
-    fail=$((fail+1)); echo "FAIL [$name]: refused, but not for the injected query's reason (want '$say'):"; printf '%s\n' "$out" | sed 's/^/    /'
+    fail=$((fail+1)); echo "FAIL [$name]: refused, but not for the faulted query's reason (want '$say'):"; printf '%s\n' "$out" | sed 's/^/    /'
   else
     pass=$((pass+1))
   fi
