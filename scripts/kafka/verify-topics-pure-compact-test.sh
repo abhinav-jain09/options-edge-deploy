@@ -29,6 +29,9 @@ run() { # policy-for-basis-state -> exit status of verify-topics; output in $OUT
   # exactly one of them at the mocked broker and leave the rest satisfied.
   local part_ov="${PART_OVERRIDE:-}" pol_ov="${POL_OVERRIDE:-}" ret_ov="${RET_OVERRIDE:-}"
   local bytes_ov="${BYTES_OVERRIDE:-}"
+  # The mock reports each topic at ITS SET's declared count: verify-topics now walks the es4 list under
+  # SET=es4, and a few names are declared at different counts on the two clusters.
+  local decl="$DECLARED"; [ "${SET:-}" = es4 ] && decl="$OPTIONS_EDGE_ES4_TOPICS"
   # Report each topic's DECLARED partition count. A flat "1" fails verify-topics' own
   # at-least-declared check on every 4- and 32-partition topic, which would mask the contract
   # this test is actually about.
@@ -37,7 +40,7 @@ run() { # policy-for-basis-state -> exit status of verify-topics; output in $OUT
 name=""; prev=""
 for a in "\$@"; do [ "\$prev" = "--topic" ] && name="\$a"; prev="\$a"; done
 if [[ "\$*" == *--describe* ]]; then
-  parts=\$(printf '%s' "$DECLARED" | tr ' ' '\\n' | awk -F: -v n="\$name" '\$1 == n {print \$2; exit}')
+  parts=\$(printf '%s' "$decl" | tr ' ' '\\n' | awk -F: -v n="\$name" '\$1 == n {print \$2; exit}')
   case "$part_ov" in "\$name="*) parts="${part_ov#*=}";; esac
   echo "Topic: \$name TopicId: ID PartitionCount: \${parts:-1} ReplicationFactor: 1"
 fi
@@ -108,6 +111,14 @@ SET=es4 POL_OVERRIDE="es.futures.cvd.levels=compact,delete" \
   check "es4 pure-compact is enforced" 1 delete \
   "topic es.futures.cvd.levels cleanup.policy='compact,delete' but topics.env"
 SET=bogus check "unknown TOPIC_SET is refused"       1 compact "unknown TOPIC_SET"
+# ...and refused BEFORE anything is verified. The message alone cannot show that: a later guard in
+# verify-topics.sh prints the same text after the whole main loop has already run (Codex round 3).
+SET=bogus run compact || true
+if grep -q '^Verifying ' "$OUT"; then
+  printf '  FAIL %-46s verified topics before refusing\n' "unknown TOPIC_SET verifies nothing first"; fail=1
+else
+  printf '  ok   %-46s\n' "unknown TOPIC_SET verifies nothing first"
+fi
 
 # Production enforces a SECOND contract on top of the pure-compact one, and nothing exercised it.
 # The positive case asserts the prod block REACHED ITS OK, not merely that it ran; each negative
@@ -140,5 +151,19 @@ BYTES_OVERRIDE="es.futures.footprint.strike=" \
 SET=es4 BYTES_OVERRIDE="es.futures.footprint.strike=1073741824" \
   check "es4 verifies its OWN retention.bytes list" 1 delete \
   "es.futures.footprint.strike retention.bytes='1073741824'"
+
+# EXACT-partition declarations are verified as exact (Codex, mirrored-contract review): the main loop
+# used to accept ANY wider count, so a widened record-copy mirror target passed here as "compatible".
+# The control proves the floor rule still holds for an ordinary topic, so the exact case cannot pass
+# merely because every wider count now fails.
+PART_OVERRIDE="es.futures.aggressor-flow=32" \
+  check "a widened EXACT-partition topic fails" 1 compact \
+  "es.futures.aggressor-flow has partition count 32, but it is declared EXACT-partition at 1"
+SET=es4 PART_OVERRIDE="es.reversal.verdicts=4" \
+  check "es4 walks ITS OWN topics and enforces ITS exact list" 1 delete \
+  "es.reversal.verdicts has partition count 4, but it is declared EXACT-partition at 1 (OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS)"
+PART_OVERRIDE="options.databento.raw=64" \
+  check "a widened ordinary topic is still accepted" 0 compact \
+  "options.databento.raw has partition count 64, expected minimum 32; accepting existing larger"
 
 [ $fail -eq 0 ] && echo "=== verify-topics-pure-compact-test: OK ===" || { echo "=== verify-topics-pure-compact-test: FAILED ==="; exit 1; }

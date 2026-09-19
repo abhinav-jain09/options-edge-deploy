@@ -436,11 +436,15 @@ for job in "${JOBS[@]}"; do
     have_compacted=no
     case "$have_policy" in *compact*) have_compacted=yes ;; esac
 
-    # 2b) EXACT PARTITION MEMBERSHIP. A frozen PARTS=n is only enforced by the deploy if the topic is
-    #     in the exact-partition set; otherwise apply-topics.sh treats the declared count as a FLOOR
-    #     and a widened topic reconciles clean while breaking the mirror's key->partition mapping.
-    if [ "$n_arms" -eq 1 ] && ! in_list "$T_EXACT" "$topic"; then
-      echo "FAIL: $jobname freezes '$topic' at $want_parts partition(s), but it is NOT in"
+    # 2b) EXACT PARTITION MEMBERSHIP, under BOTH schemas. A declared count is only enforced by the
+    #     deploy if the topic is in the exact-partition set; otherwise apply-topics.sh treats it as a
+    #     FLOOR and a widened topic reconciles clean while breaking the mirror's key->partition
+    #     mapping. That is a property of the record copy, not of how the job states its shape, so a
+    #     COPIED job needs it exactly as much as a FROZEN one. It used to be FROZEN-only, and that is
+    #     precisely how es.futures.aggressor-flow (COPIED) sat at 32 partitions on dev against a
+    #     declared :1 in 2026-08 with this validator reporting it OK.
+    if ! in_list "$T_EXACT" "$topic"; then
+      echo "FAIL: $jobname copies '$topic' record-for-record at :$parts, but it is NOT in"
       echo "      $(set_var "$TGT_SET" exact) (nor the prod-only set), so apply-topics.sh treats"
       echo "      the declared count as a MINIMUM and a widened topic would pass reconciliation."
       fail=1
@@ -470,10 +474,13 @@ for job in "${JOBS[@]}"; do
         echo "      POLICY=$expect_policy and asserts it against the SOURCE in its preflight."
         fail=1
       fi
-      if [ "$n_arms" -eq 1 ] && ! in_list "$S_EXACT" "$topic"; then
+      # Both schemas, for the same reason as 2b: a widened SOURCE changes the key->partition mapping
+      # the record copy carries, however the job states its shape. A COPIED job even takes the
+      # target's count FROM the source at install time.
+      if ! in_list "$S_EXACT" "$topic"; then
         echo "FAIL: '$topic' is not in $(set_var "$SRC_SET" exact), so $SRC_SET reconciliation"
-        echo "      treats :$src_parts as a MINIMUM while $jobname freezes the SOURCE at $want_parts"
-        echo "      partition(s) — a widened source silently violates the record-copy contract."
+        echo "      treats :$src_parts as a MINIMUM while $jobname copies it record-for-record — a"
+        echo "      widened source silently violates the record-copy contract."
         fail=1
       fi
       # THE SOURCE CARRIES THE FROZEN RETENTION TOO, and it is a SEPARATE declaration:
