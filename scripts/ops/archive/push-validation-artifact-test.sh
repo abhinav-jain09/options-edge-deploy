@@ -372,9 +372,18 @@ grep -q '^OE_CAL_THRESHOLDS_STATE=PROVISIONAL_PENDING_MEASUREMENT' "$SRC/calibra
 grep -q '^OE_CAL_BOOTSTRAP_B=10000' "$SRC/calibration-targets.env" \
   && ok "the shipped replicate count is A2's 10000 (the cases above use fewer, on purpose)" \
   || bad "the shipped B is not 10000"
-grep -q '^OE_CAL_STOPPING_BOUNDARY_MS_prod=UNFROZEN' "$SRC/calibration-targets.env" \
-  && ok "the shipped stopping boundary is UNFROZEN, as it must be before the literals are chosen" \
-  || bad "the shipped stopping boundary is already set"
+# The boundary and the parameter set are frozen TOGETHER, in one commit, before the data exists (Codex r1 MAJOR: a
+# frozen hash with an UNFROZEN boundary lets the stopping point be chosen after seeing the cohort, and the evaluator
+# refuses to run meanwhile). So the shipped pair must agree: both UNFROZEN, or both real.
+_sh=$(sed -n 's/^OE_CAL_PARAMETER_SET_HASH_prod=//p' "$SRC/calibration-targets.env")
+_sb=$(sed -n 's/^OE_CAL_STOPPING_BOUNDARY_MS_prod=//p' "$SRC/calibration-targets.env")
+if [ "$_sh" = UNFROZEN ] && [ "$_sb" = UNFROZEN ]; then
+  ok "the shipped parameter set and stopping boundary are both UNFROZEN"
+elif [ "$_sh" != UNFROZEN ] && printf '%s' "$_sb" | grep -qE '^1[0-9]{12}$'; then
+  ok "the shipped parameter set is frozen and so is its stopping boundary ($_sb)"
+else
+  bad "the shipped hash and stopping boundary disagree: hash=$_sh boundary=$_sb"
+fi
 
 
 echo "16. a market HOLIDAY is not an owed trading day"
