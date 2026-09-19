@@ -355,6 +355,22 @@ PYEOF
         '''
       }
     }
+    stage('Verify gamma-ladder-path output topics') {
+      // BEFORE the rollout, same barrier as multileg above: apply-topics lives in a different job, so on a FIRST
+      // deploy neither output topic exists and the broker auto-creates them with cluster defaults (state not
+      // compacted, time retention) — or, with auto-create off, the Streams producer fails and the pod crash-loops.
+      when {
+        expression { params.SERVICE == 'gamma-ladder-path' && !params.DEPLOY_DRY_RUN }
+      }
+      steps {
+        sh '''
+          set -euo pipefail
+          export PATH="/home/confluent/confluent-8.2.1/bin:$PATH"
+          . scripts/kafka/load-kafka-settings.sh
+          scripts/kafka/ensure-gamma-ladder-path-topics.sh
+        '''
+      }
+    }
     stage('Verify gamma-tilt evidence ledger') {
       // GMT Stage-1 (Codex code-review c1-6): the shadow evidence ledger must exist with the
       // right shape (1 partition, delete, retention.ms=-1) BEFORE strike-intelligence rolls out.
