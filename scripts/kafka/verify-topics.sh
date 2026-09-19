@@ -5,7 +5,27 @@ EXPECTED_REPLICATION_FACTOR="${KAFKA_TOPIC_REPLICATION_FACTOR:-1}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/topics.env"
-for entry in $OPTIONS_EDGE_TOPICS; do
+# EXACT-partition topics are verified as EXACT, not "at least". apply-topics.sh already refuses (or,
+# with the destructive flag, repairs) a mismatch on these, so this can never fail a deploy that
+# apply-topics passed; it closes the gap where this verifier alone would call a widened exact topic
+# "compatible" (a record-copy mirror target at the wrong count re-shards the mirrored mapping).
+# The TOPIC LIST and the exact list are both resolved by TOPIC_SET, the same switch apply-topics.sh
+# makes. The loop used to walk OPTIONS_EDGE_TOPICS unconditionally, so under TOPIC_SET=es4 it verified
+# the SPX set against the es4 broker and never looked at the es4-only topics at all. The prod-only
+# exact list keeps its own check further down. An unknown set is refused before anything is verified.
+case "${TOPIC_SET:-}" in
+  "")  VERIFY_TOPICS="$OPTIONS_EDGE_TOPICS"
+       EXACT_PARTITION_LIST="${OPTIONS_EDGE_EXACT_PARTITION_TOPICS:-}"
+       EXACT_PARTITION_VAR=OPTIONS_EDGE_EXACT_PARTITION_TOPICS ;;
+  es4) : "${OPTIONS_EDGE_ES4_TOPICS:?OPTIONS_EDGE_ES4_TOPICS missing from topics.env}"
+       VERIFY_TOPICS="$OPTIONS_EDGE_ES4_TOPICS"
+       EXACT_PARTITION_LIST="${OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS:-}"
+       EXACT_PARTITION_VAR=OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS ;;
+  *)   echo "FAIL: unknown TOPIC_SET='$TOPIC_SET' — refusing to verify against an unresolved declaration" >&2
+       exit 1 ;;
+esac
+is_exact_partition() { case " $EXACT_PARTITION_LIST " in *" $1 "*) return 0 ;; esac; return 1; }
+for entry in $VERIFY_TOPICS; do
   topic="${entry%%:*}"
   expected_partitions="${entry##*:}"
   echo "Verifying $topic"
@@ -18,6 +38,10 @@ for entry in $OPTIONS_EDGE_TOPICS; do
     exit 1
   fi
   if (( partitions > expected_partitions )); then
+    if is_exact_partition "$topic"; then
+      echo "Topic $topic has partition count $partitions, but it is declared EXACT-partition at $expected_partitions ($EXACT_PARTITION_VAR); a wider copy is not compatible" >&2
+      exit 1
+    fi
     echo "Topic $topic has partition count $partitions, expected minimum $expected_partitions; accepting existing larger partition count."
   fi
   if (( replication_factor < EXPECTED_REPLICATION_FACTOR )); then

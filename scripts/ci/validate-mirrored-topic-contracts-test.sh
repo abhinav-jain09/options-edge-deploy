@@ -128,6 +128,22 @@ expect_fail "$R" "frozen target not in the exact-partition set" "treats"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS=/s/ es\.futures\.cvd\.levels / /'
 expect_fail "$R" "frozen SOURCE not in the es4 exact-partition set" "ES4_EXACT_PARTITION_TOPICS"
 
+echo "--- ...and so is a COPIED one: the record copy needs it however the job states its shape ---"
+# The check used to be gated on a FROZEN arm, which is how es.futures.aggressor-flow (COPIED) sat at
+# 32 partitions on dev against :1 while this suite passed. Both mutations are anchored to their own
+# exact-list line so each breaks exactly one dimension of one topic.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_EXACT_PARTITION_TOPICS="\$OPTIONS_EDGE_EXACT_PARTITION_TOPICS es\.futures\.aggressor-flow"$/d'
+expect_fail "$R" "COPIED target not in the exact-partition set" "copies 'es.futures.aggressor-flow' record-for-record"
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_EXACT_PARTITION_TOPICS=.*spxbridge/s/ es\.strike-intelligence-by-strike"/"/'
+expect_fail "$R" "second COPIED target not in the exact-partition set" "copies 'es.strike-intelligence-by-strike' record-for-record"
+
+# ...and the SOURCE side of the same copy, which was FROZEN-gated too (Codex round 1: dropping
+# aggressor-flow from the es4 exact set passed). Each mutation touches only its own es4 exact line.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS="es\./s/ es\.futures\.aggressor-flow / /'
+expect_fail "$R" "COPIED source not in the es4 exact-partition set" "'es.futures.aggressor-flow' is not in OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS"
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS="\$OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS es\.strike-intelligence-by-strike"$/d'
+expect_fail "$R" "second COPIED source not in the es4 exact-partition set" "'es.strike-intelligence-by-strike' is not in OPTIONS_EDGE_ES4_EXACT_PARTITION_TOPICS"
+
 echo "--- COPIED schema: es4's declaration is the authority, and it is REQUIRED ---"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/ es\.strike-intelligence-by-strike:32 es\.strike-intelligence-dashboard/ es.strike-intelligence-dashboard/'
 expect_fail "$R" "COPIED topic missing from the es4 set" "no reviewed"
