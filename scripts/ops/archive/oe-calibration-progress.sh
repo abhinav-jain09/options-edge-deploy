@@ -128,7 +128,7 @@ for c in calls:
     # A5.7: the exact SEMANTIC STAMP as well as the hash. The hash deliberately excludes the stamp, so
     # two parameter sets whose literals differ would otherwise pool into one cohort.
     declared_stamp = os.environ.get("DECLARED_STAMP") or ""
-    if declared_stamp and c.get("semanticStamp") != declared_stamp:
+    if declared_stamp and declared_stamp != "UNFROZEN" and c.get("semanticStamp") != declared_stamp:
         continue
     tf = c.get("trackFromPush")
     k = (ph, tf)
@@ -181,6 +181,8 @@ def cohort_days(ph, tf):
     # The SEMANTIC STAMP as well (r16 #1): a session sealed under other literals is not this cohort's,
     # and letting it satisfy an owed day is the same hole the cohort filter already closes.
     stamp = os.environ.get("DECLARED_STAMP") or ""
+    if stamp == "UNFROZEN":
+        stamp = ""
     return {v["sessionDate"] for v in sessions.values()
             if v["archiveStatus"] == "COMPLETE"
             and (ph in (None, "", "UNFROZEN") or v.get("parameterSetHash") == ph)
@@ -268,6 +270,14 @@ for c in calls:
     if "%s|%s|%s" % (c.get("sessionDate"), c.get("parameterSetHash"), c.get("sessionLineageId")) not in _complete_keys:
         continue
     if declared_hash and declared_hash != "UNFROZEN" and c.get("parameterSetHash") != declared_hash:
+        continue
+    # …and by the stamp and the clock, exactly as the cohort counters do (Codex r1 MINOR): a call that
+    # shares a hash but was graded under other literals or another clock is not this cohort's evidence,
+    # and letting it colour a required cell makes the coverage display say OK for a cell nobody observed.
+    _st = os.environ.get("DECLARED_STAMP") or ""
+    if _st and _st != "UNFROZEN" and c.get("semanticStamp") != _st:
+        continue
+    if declared_track and declared_track != "UNFROZEN" and c.get("trackFromPush") != declared_track:
         continue
     _cov_sessions.add(c.get("sessionDate"))
     _k = R.cell_key(c)
