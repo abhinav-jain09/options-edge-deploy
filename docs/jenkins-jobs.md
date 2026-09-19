@@ -75,14 +75,19 @@ That is the guard working, not a broken job. What to pass:
 
 | Parameter | Value | Which jobs |
 |---|---|---|
-| `PERMITTED_SHA` | the full 40-character SHA you are deploying, which must be the current tip of that repository's `main` | every guarded job |
+| `PERMITTED_SHA` | the full 40-character SHA you are deploying: the job's checkout must be exactly this commit, and this commit must be on the environment's branch (`main` for prod jobs) | every guarded job |
 | `PERMITTED_SHA_GUARD_VERSION` | leave the default — it is the sha256 of `scripts/jenkins/permitted-sha-guard.sh` and a caller compares it against its own copy | every guarded job |
 | `CONTRACTS_PERMITTED_SHA` | tip of `options-edge-contracts` `main` | jobs that clone contracts and build against it (processing, gateway) |
 | `DEPLOY_PERMITTED_SHA` | tip of `options-edge-deploy` `main` | image jobs that then trigger `service-deploy` |
 | `REQUIRED_IMAGE` | `repo@sha256:…` from the building job's image lock | a deploy that must roll exactly the image another guarded build produced |
 
 Get the SHA with `gh api repos/abhinav-jain09/<repo>/branches/main -q .commit.sha`, and pass it in the same build.
-If `main` moves between reading it and the build starting, the guard refuses — read it again and re-run.
+What the guard then checks, in this order: the selected ref names the environment's branch; `PERMITTED_SHA` is a
+full lowercase 40-character commit id; that commit is an *ancestor of* the branch tip fetched during the build; and
+the checked-out `HEAD` equals `PERMITTED_SHA` exactly. So it is the checkout, not the branch tip, that must equal the
+permitted commit. If `main` moves on after you read the SHA, a build that still checks out your commit is permitted —
+the guard refuses only when the checkout differs from the SHA you passed, or when that SHA is not on the branch at
+all. Read the SHA and start the build together anyway, so you deploy what you looked at.
 
 A few consequences worth knowing:
 
@@ -94,11 +99,13 @@ A few consequences worth knowing:
 - **A job may only hand work to a child that enforces the same guard.** The caller reads the child's definition from
   its repository at the commit being forwarded and checks it; an unguarded or out-of-date child is refused rather than
   triggered.
-- **Cron jobs are deliberately outside the guard** (premarket reset, off-hours clean slate, morning autostart, the
-  stockgex jobs): requiring a SHA would fail every scheduled run. They remain the owner's to start.
+- **Cron-scheduled jobs are deliberately outside the guard** — `premarket`, `premarket-reset`,
+  `offhours-clean-slate`, `morning-autostart`, `gateway-nightly-restart` and `stockgex-oi-snapshot`: requiring a SHA
+  would fail every scheduled run. They remain the owner's to start. Being a stockgex job is not the reason:
+  `stockgex-close-board` has no trigger and *is* guarded.
 
-`scripts/jenkins/jenkins-permitted-sha-scope.txt` lists every Jenkinsfile in this repository and whether it is in or
-out of scope, with the reason.
+`scripts/ci/jenkins-permitted-sha-scope.txt` classifies each of the 40 root `Jenkinsfile*` files in this repository
+as in or out of scope, with the reason, and the CI check fails if a root Jenkinsfile is missing from it.
 
 ---
 
