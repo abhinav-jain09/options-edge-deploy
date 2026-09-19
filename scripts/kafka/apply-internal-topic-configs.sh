@@ -37,6 +37,29 @@ apply_changelog_config() {
     "cleanup.policy=[compact,delete],retention.ms=$RETENTION_MS,segment.ms=$SEGMENT_MS,delete.retention.ms=$DELETE_RETENTION_MS,min.cleanable.dirty.ratio=$MIN_CLEANABLE_DIRTY_RATIO,min.insync.replicas=$MIN_ISR"
 }
 
+# Changelogs that carry PUBLICATION-ORDER state (a per-key "last published as-of" marker) must never be
+# delete-retained: a marker dropped after a day of inactivity lets a late record regress a compacted
+# output topic. They are compact-ONLY — live keys kept for ever, bounded by the service's own tombstones
+# (options-edge-processing PR #825: option-price-behavior by-strike store, Codex r5).
+DURABLE_CHANGELOG_PATTERNS=(
+  "*-opb-by-strike-aggregate-inc-changelog"
+)
+
+is_durable_changelog() {
+  local topic="$1" pattern
+  for pattern in "${DURABLE_CHANGELOG_PATTERNS[@]}"; do
+    [[ "$topic" == $pattern ]] && return 0
+  done
+  return 1
+}
+
+apply_durable_changelog_config() {
+  local topic="$1"
+  echo "Applying compact-only durable changelog policy (no retention.ms): $topic"
+  alter_topic_config "$topic" \
+    "cleanup.policy=compact,segment.ms=$SEGMENT_MS,delete.retention.ms=$DELETE_RETENTION_MS,min.cleanable.dirty.ratio=$MIN_CLEANABLE_DIRTY_RATIO,min.insync.replicas=$MIN_ISR"
+}
+
 apply_repartition_config() {
   local topic="$1"
   echo "Applying delete one-day repartition policy: $topic"
@@ -58,7 +81,11 @@ while read -r topic; do
   case "$topic" in
     *-changelog)
       found=true
-      apply_changelog_config "$topic"
+      if is_durable_changelog "$topic"; then
+        apply_durable_changelog_config "$topic"
+      else
+        apply_changelog_config "$topic"
+      fi
       ;;
     # Streams names a repartition topic after the operator that created it, so the
     # `-repartition` suffix is only the DEFAULT. Anything built with an explicit
