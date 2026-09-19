@@ -449,6 +449,8 @@ EOF
           kubectl -n options-edge rollout status deployment/directional-pressure-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/directional-pressure-databento-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/databento-gex-history-service --timeout=1260s
+          # gamma-ladder-path: verify-running-images only compares image specs, so readiness is proven here.
+          kubectl -n options-edge rollout status deployment/gamma-ladder-path-service --timeout=1260s
           kubectl -n options-edge rollout status deployment/raw-postgres-writer --timeout=1260s
           kubectl -n options-edge rollout status deployment/pin-postgres-writer --timeout=1260s
           kubectl -n options-edge rollout status deployment/pressure-postgres-writer --timeout=1260s
