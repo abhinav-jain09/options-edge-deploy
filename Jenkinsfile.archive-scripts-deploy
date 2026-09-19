@@ -30,6 +30,10 @@
 pipeline {
   agent { label 'hpsf-replay-mac' }
   parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+      description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '922f76ce5af2ff005cb6b330ceea65faf3738d1237cb7d33384c3583d9b1df9a',
+      description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     string(name: 'PROD_HOST', defaultValue: 'abhinav@192.168.100.252',
       description: 'SSH target that runs the archive crons (Kafka + the NAS mount are local there).')
     string(name: 'INSTALL_DIR', defaultValue: '/home/abhinav/oe-ops',
@@ -42,6 +46,7 @@ pipeline {
       description: 'Overwrite live files that no longer match what this job last installed. Only tick this having looked at what changed and why.')
   }
   options {
+    disableRestartFromStage()   // Deployment Permission Rule: no "Restart from Stage" past the permitted-commit guard
     disableConcurrentBuilds()
     timeout(time: 30, unit: 'MINUTES')
   }
@@ -85,7 +90,28 @@ pipeline {
       }
     }
 
+    // ---- Deployment Permission Rule (options-edge rule.md): Jenkins enforces the permitted commit ----
+    // SECOND, after the ancestry refusal above, which stays exactly as it was and keeps running first.
+    // PERMITTED_SHA is REQUIRED. scripts/jenkins/permitted-sha-guard.sh refuses, in this order: a checkout
+    // that is not on origin/main (the branch restriction again, as its own condition); a missing, empty,
+    // short or otherwise malformed PERMITTED_SHA (nothing is substituted for it); a checked-out HEAD that
+    // is not exactly PERMITTED_SHA. Before the suite, before the drift check, before the host is touched.
+    // error(), never catchError: a refusal is a stop, not a coloured result. Both SHAs are in the log.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. No deployment effect has run.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+
     stage('Run the suite on the agent') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         sh '''
           set -euo pipefail
@@ -93,6 +119,10 @@ pipeline {
           # own it. The archive unit needs the same file — a second committed copy is how two calendars
           # end up disagreeing about a holiday — so it is staged next to the archive scripts here, for
           # the container mount below and for the scp that follows.
+          # The suite's outputs live under .jenkins-tmp/ (ignored build output), so the workspace verify before the ship
+          # sees a clean tree; the root-level files earlier builds left in a reused workspace are removed.
+          mkdir -p "$WORKSPACE/.jenkins-tmp"
+          rm -f "$WORKSPACE/.suite.out" "$WORKSPACE/.evaluator.out"
           cp scripts/jenkins/market_calendar.py scripts/ops/archive/market_calendar.py
           # In a container, NOT on the production host: rule.md forbids executing test steps there,
           # and the suite needs flock, which this Mac agent does not provide. The suite is
@@ -105,12 +135,12 @@ pipeline {
           docker run --rm --entrypoint bash \
             -v "$WORKSPACE/scripts/ops/archive:/w:ro" -w /w "$TEST_IMAGE" \
             -c 'apt-get -qq update >/dev/null && apt-get -qq install -y curl >/dev/null && ./test-archive-reset.sh' \
-            | tee "$WORKSPACE/.suite.out"
+            | tee "$WORKSPACE/.jenkins-tmp/suite.out"
           # Exit status alone is not proof the suite ran: assert its own completion line, and that
           # the assertion count matches what the committed suite can produce.
-          grep -Fq "test-archive-reset: ALL PASS" "$WORKSPACE/.suite.out" \
+          grep -Fq "test-archive-reset: ALL PASS" "$WORKSPACE/.jenkins-tmp/suite.out" \
             || { echo "the suite did not report ALL PASS — refusing" >&2; exit 1; }
-          ran=$(grep -c "^PASS" "$WORKSPACE/.suite.out")
+          ran=$(grep -c "^PASS" "$WORKSPACE/.jenkins-tmp/suite.out")
           echo "suite reported $ran passing assertions"
           # 335 = every assertion the committed suite makes (sections 1-16; 12-14 pin the committed-read
           # strike capture, its processing-failure paths and the es4 verifier; 12p/12q/15 the re-review round-2
@@ -145,10 +175,10 @@ pipeline {
           # this amendment exists to prevent: a certificate nobody checked.
           docker run --rm --entrypoint bash \
             -v "$WORKSPACE/scripts/ops/archive:/w:ro" -w /w "$TEST_IMAGE" \
-            -c './push-validation-artifact-test.sh' | tee "$WORKSPACE/.evaluator.out"
-          grep -Fq "PASS — the A5.8 evaluator holds on every case" "$WORKSPACE/.evaluator.out" \
+            -c './push-validation-artifact-test.sh' | tee "$WORKSPACE/.jenkins-tmp/evaluator.out"
+          grep -Fq "PASS — the A5.8 evaluator holds on every case" "$WORKSPACE/.jenkins-tmp/evaluator.out" \
             || { echo "the evaluator suite did not report PASS — refusing" >&2; exit 1; }
-          ev=$(grep -c "^  ok   " "$WORKSPACE/.evaluator.out")
+          ev=$(grep -c "^  ok   " "$WORKSPACE/.jenkins-tmp/evaluator.out")
           echo "evaluator suite reported $ev passing assertions"
           [ "$ev" -ge 86 ] || { echo "only $ev evaluator assertions ran — the suite did not execute fully" >&2; exit 1; }
 
@@ -169,7 +199,7 @@ pipeline {
     }
 
     stage('Check the host has not drifted') {
-      when { expression { !params.RUN_TESTS_ONLY } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.RUN_TESTS_ONLY) } }
       steps {
         sh '''
           set -euo pipefail
@@ -224,18 +254,25 @@ EOSSH
     }
 
     stage('Install, all or nothing') {
-      when { expression { !params.RUN_TESTS_ONLY } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.RUN_TESTS_ONLY) } }
       steps {
         script { env.STAGED = 'true' }
         sh '''
           set -euo pipefail
           ssh -o BatchMode=yes "$PROD_HOST" "mkdir -p '$STAGE_DIR'"
-          # The whole unit travels together: the archiver, the alert helper it sources, the topic
-          # policy it refuses to start without, and the suite. Shipping the archiver alone would
-          # leave its dependencies as whatever happened to be on the host.
-          for f in $UNIT; do
-            scp -o BatchMode=yes "scripts/ops/archive/$f" "$PROD_HOST:$STAGE_DIR/$f"
-          done
+        '''
+        // The whole unit travels together: the archiver, the alert helper it sources, the topic policy it refuses to
+        // start without, and the suite. Shipping the archiver alone would leave its dependencies as whatever happened to
+        // be on the host. ONE scp of the literal UNIT list (market_calendar.py from its one committed home), as a
+        // DEDICATED step right after the verify of the tree it ships (Deployment Permission Rule, validator rule 9b):
+        // nothing can run between the verification and the copy. tests/test_jenkins_permitted_sha_guard.py holds this
+        // list equal to UNIT.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp --allow-ignored scripts/ops/archive/market_calendar.py'
+        }
+        sh 'scp -o BatchMode=yes scripts/ops/archive/oe-archive-kafka.sh scripts/ops/archive/StrikeArchiveReader.java scripts/ops/archive/oe-alert.sh scripts/ops/archive/oe-topics.env scripts/ops/archive/test-archive-reset.sh scripts/ops/archive/oe-archive.crontab scripts/ops/archive/oe-archive.crontab.predecessor scripts/ops/archive/oe-calibration-progress.sh scripts/ops/archive/oe_corpus_reader.py scripts/ops/archive/oe-push-validation-artifact.sh scripts/ops/archive/push-validation-artifact-test.sh scripts/ops/archive/calibration-targets.env scripts/jenkins/market_calendar.py scripts/ops/archive/oe-archive-verify.sh scripts/ops/archive/oe-trading-day.sh scripts/ops/archive/oe-archive-daily.sh scripts/ops/archive/oe-archive-dev.sh scripts/ops/archive/ibkr-raw-retention.sh scripts/ops/archive/oe-archive-postgres.sh "${PROD_HOST}:${STAGE_DIR}/"'
+        sh '''
+          set -euo pipefail
 
           ssh -o BatchMode=yes "$PROD_HOST" \
             "INSTALL_DIR='$INSTALL_DIR' STAGE_DIR='$STAGE_DIR' UNIT='$UNIT' BUILD='${BUILD_NUMBER}' ALLOW_DRIFT='${ALLOW_HOST_DRIFT}' bash -s" <<'EOSSH'
@@ -361,7 +398,7 @@ EOSSH
     }
 
     stage('Verify installed == tested') {
-      when { expression { !params.RUN_TESTS_ONLY } }
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' && (!params.RUN_TESTS_ONLY) } }
       steps {
         sh '''
           set -euo pipefail
@@ -386,13 +423,19 @@ EOSSH
       // Only reach for the host if this run actually staged something there. A branch rejection, a
       // red suite, or RUN_TESTS_ONLY must not touch production at all — a cleanup that always
       // SSHes contradicts the guarantee the earlier stages advertise.
+      // ...and never after a permitted-commit guard refusal: STAGED can only be set by a stage that
+      // runs after the guard, but the flag is checked here too so the post path is closed on its own.
       script {
-        if (!params.RUN_TESTS_ONLY && env.STAGED == 'true') {
-          sh '''
-            ssh -o BatchMode=yes "$PROD_HOST" "rm -rf '$STAGE_DIR'" 2>/dev/null || true
-          '''
+        if (env.PERMITTED_SHA_GUARD == 'PASSED') {
+          if (!params.RUN_TESTS_ONLY && env.STAGED == 'true') {
+            sh '''
+              ssh -o BatchMode=yes "$PROD_HOST" "rm -rf '$STAGE_DIR'" 2>/dev/null || true
+            '''
+          } else {
+            echo 'nothing was staged on the host — no cleanup needed'
+          }
         } else {
-          echo 'nothing was staged on the host — no cleanup needed'
+          echo 'the permitted-commit guard did not pass — the host is not touched'
         }
       }
     }
