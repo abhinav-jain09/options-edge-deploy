@@ -115,9 +115,16 @@ echo "--- EXACT cleanup.policy, both clusters (compact != compact,delete) ---"
 # The U16 finding: a compacted-boolean comparison made these interchangeable, so a mirror freezing
 # POLICY=compact passed against a declaration that reconciles to compact,delete — whose delete half
 # ages out the very attestation the producer reads back at startup.
+#
+# Both expectations below MUST name compact,delete. That is the whole proposition of this block: a
+# grep for the generic "disagrees across" line is satisfied by plain `delete` too — i.e. by a
+# mutation that merely dropped compaction, which the ES4_COMPACTED deletion cases already cover.
+# An assertion that matches under BOTH the intended and a degraded mutation is not an assertion;
+# it is how this block silently stopped testing U16 between #1069 and #1077. Do not loosen these
+# back to a message that cannot tell `delete` from `compact,delete`.
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS=/s/ es\.futures\.cvd\.levels / /'
 edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_TOPICS=/s/$/\nOPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.futures.cvd.levels"/'
-expect_fail "$R" "pure-compact target downgraded to compact,delete" "resolves"
+expect_fail "$R" "pure-compact target downgraded to compact,delete" "it to 'compact,delete'"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS=/s/es\.futures\.cvd\.levels/es.tape-zones.cells/'
 # Appended rather than substituted onto the declaration: this mutation used to rewrite a literal
 # OPTIONS_EDGE_ES4_COMPACTED_TOPICS="", and the moment that list gained its first real member
@@ -125,7 +132,7 @@ R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS=
 # with "sed matched nothing" instead of exercising the dimension. list_of collects every assignment
 # of a variable, so appending one is equivalent and cannot rot against the list's contents.
 append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_ES4_COMPACTED_TOPICS="$OPTIONS_EDGE_ES4_COMPACTED_TOPICS es.futures.cvd.levels"'
-expect_fail "$R" "pure-compact SOURCE downgraded to compact,delete" "cleanup.policy disagrees across"
+expect_fail "$R" "pure-compact SOURCE downgraded to compact,delete" "resolves to cleanup.policy='compact,delete' on es4"
 
 echo "--- a frozen PARTS=n is only enforced when the topic is in the exact-partition sets ---"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_EXACT_PARTITION_TOPICS=/s/ es\.futures\.cvd\.levels / /'
