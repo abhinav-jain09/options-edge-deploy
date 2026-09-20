@@ -122,8 +122,12 @@ is_strict_topic() { case " $OE_STRICT_TOPICS " in *" $1 "*) return 0 ;; *) retur
 # (a permanent gap: the capture block's "endoff=1200, got=1099" case), or refuses a markers-only range for ever
 # (got=0), or, with a live producer, reads committed records BEYOND the end its file name claims. Only the
 # committed reader bounds a capture by the consumer's POSITION against the last stable offset, so these topics
-# are routed to it. None of them is archived by any job today (oe-topics.env): this makes their capture
-# committed-only from the first run that archives them, with no legacy checkpoint to recapture over.
+# are routed to it. The point of routing them here BEFORE any job took them was that each one's capture is
+# committed-only from its very first run, with no legacy checkpoint to recapture over — and that is what
+# happened: .ivrv and .baseline joined OE_HEAVY_TOPICS_prod on 2026-09-20 (deploy #1073), .warnings the same
+# day (#1076) and .events with this change. (This comment used to say "none of them is archived by any job
+# today", which stopped being true with #1073 and is corrected rather than left to read as current.) .current
+# and .dlq remain archived by no job; routing them here costs nothing and keeps the classification whole.
 # (options.spx.vol-premium.calendar is not listed: since 2026-09-13 the calendar ledger is a Postgres table, not a topic.)
 OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS="options.spx.vol-premium.ivrv options.spx.vol-premium.events options.spx.vol-premium.warnings options.spx.vol-premium.current options.spx.vol-premium.dlq options.spx.vol-premium.baseline"
 OE_COMMITTED_READ_TOPICS="${OE_COMMITTED_READ_TOPICS:-es.futures.footprint.strike $OE_VOL_PREMIUM_TRANSACTIONAL_TOPICS}"
