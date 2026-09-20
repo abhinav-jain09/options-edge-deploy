@@ -14,10 +14,18 @@
 //      copied — print it with `options-edge-deploy/scripts/jenkins/permitted-sha-guard-version.sh`.
 //      The default below is the value at the time this template was written; if the frozen guard has
 //      moved since, the guard REFUSES every build until this default is regenerated.
-//   5. Create the Jenkins job: scripts/jenkins/create-service-job.sh — then REGISTER the two guard
+//   5. Create this repository's guard manifest at scripts/ci/jenkins-permitted-sha-scope.txt, with one
+//      row classifying the Jenkinsfile as `in`, and run the validator against the repository:
+//        Jenkinsfile | in |  | <why this job is guarded>
+//        python3 options-edge-deploy/scripts/jenkins/validate-jenkinsfile-guard.py \
+//          --root . --manifest scripts/ci/jenkins-permitted-sha-scope.txt
+//      The validator REQUIRES that manifest; without it the run exits 1 with "manifest missing".
+//      Wire that command into this repository's own CI — nothing else will notice a later edit that
+//      deletes a verify step or ungates a stage.
+//   6. Create the Jenkins job: scripts/jenkins/create-service-job.sh — then REGISTER the two guard
 //      parameters on the job once (a Jenkinsfile parameter Jenkins has never seen is not injected
 //      into the first build's environment), and run the job once with PERMITTED_SHA set.
-//   6. Add the service's k8s manifests in ONE place (the service repo) so
+//   7. Add the service's k8s manifests in ONE place (the service repo) so
 //      options-edge-deploy references them. (This job only BUILDS + PUSHES the image.)
 //
 // DEPLOYMENT PERMISSION RULE (options-edge rule.md): this job packages source and publishes an image,
@@ -67,8 +75,10 @@ pipeline {
            description: 'Override platform. Empty = derive from oeProfile(ENVIRONMENT). Kept for back-compat callers.')
     booleanParam(name: 'PUSH_IMAGE', defaultValue: true,
            description: 'Push to the (oeProfile) registry so options-edge-deploy can pull it. false = load into local docker only.')
-    string(name: 'DOCKERFILE', defaultValue: 'Dockerfile', description: 'Path to the Dockerfile')
-    string(name: 'BUILD_CONTEXT', defaultValue: '.', description: 'Docker build context dir')
+    string(name: 'DOCKERFILE', defaultValue: 'Dockerfile',
+           description: 'Path to the Dockerfile, relative to the workspace. It must lie INSIDE the checkout the guard verified: an absolute path, a `..` escape or a symlink out of the tree is refused by scripts/ci/service-image.sh before docker runs, because the verify step proves the workspace and nothing else.')
+    string(name: 'BUILD_CONTEXT', defaultValue: '.',
+           description: 'Docker build context dir, relative to the workspace. Same restriction as DOCKERFILE: a context outside the verified checkout is refused — it would hand docker files no permitted commit covers.')
   }
 
   stages {
@@ -110,7 +120,7 @@ pipeline {
           env.PUSH_IMAGE     = params.PUSH_IMAGE.toString()
           env.DOCKERFILE     = params.DOCKERFILE
           env.BUILD_CONTEXT  = params.BUILD_CONTEXT
-          env.BUILDER_PREFIX = 'oe-newsvc'
+          env.BUILDER_PREFIX = 'oe-newsvc'   // a prefix only; the builder's uniqueness comes from JOB_NAME + BUILD_NUMBER in the script
           echo "resolved (env=${params.ENVIRONMENT}): registry=${env.IMAGE_REGISTRY} platform=${env.BUILD_PLATFORM} insecure=${env.INSECURE_REGISTRY}"
         }
       }
