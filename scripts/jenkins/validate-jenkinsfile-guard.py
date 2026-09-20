@@ -230,6 +230,10 @@ ALLOW_COMP = r"(?:\*|" + ALLOW_NAME + r")"
 ALLOW_PATH = ALLOW_COMP + r"(?:/" + ALLOW_COMP + r")*"
 ALLOW_PATH_LITERAL = ALLOW_NAME + r"(?:/" + ALLOW_NAME + r")*"
 ALLOW_ARG = r"(?:" + ALLOW_PATH_LITERAL + r"|\"" + ALLOW_PATH + r"\")"
+# The binaries the runtime shim wraps, and the pattern for one of them named by ABSOLUTE PATH: a `/`
+# IMMEDIATELY followed by the tool name as a whole word. See rule 14 for why this does not parse the path.
+ABS_TOOL = re.compile(r"/(mvn|docker|rsync|scp|helm|ansible-playbook|kubectl)(?![A-Za-z0-9_\-])")
+ABS_TOOL_ALLOWED: frozenset = frozenset()     # exact lines (stripped) permitted to contain `/<tool>`
 STAGE_RE = re.compile(r"^\s*stage\(\s*'((?:[^'\\]|\\.)*)'")
 BUILD_JOB_RE = re.compile(r"\bbuild\s*\(?\s*job:\s*(env\.JOB_NAME|'([^']+)')")
 ACQUIRE_RE = re.compile(r"\bgit url:|\bgit\s*\(|\bgit\s+(?:branch|credentialsId|changelog|poll)\s*:|\bgit clone\b|\bcheckout\(|\bcheckout scm\b|\bgit pull\b|\bgit checkout\b|\bgit -C \S+ checkout\b")
@@ -2579,6 +2583,34 @@ def check_in_scope(path: str, entry: dict, guard_hash: str, root_dir: str = ".")
         only = body == "sh" if dedicated_at(k) else re.fullmatch(r"def (\w+) = sh\(returnStatus: true, script: \) if \(\1 != 0\) \{ error\( \) \}", body) is not None
         if not tm or not 1 <= int(tm.group(1)) <= 30 or not only:
             problems.append(f"line {k + 1}: the guard must be the only statement of a `timeout(time: N, unit: 'MINUTES') {{ … }}` block with 1 <= N <= 30 — a stalled git fetch must end the build: {st[:80]}")
+    # RULE 14 — NO EFFECT BINARY NAMED BY ABSOLUTE PATH (the one text rule the runtime shim still needs).
+    #
+    # Adjacency is enforced at run time now: a guarded stage prepends scripts/jenkins/effect-shim to PATH,
+    # and every one of those binaries resolved BY NAME lands in a wrapper that verifies the checkout and
+    # then execs the real tool, or refuses. PATH interception sees a LOOKUP. `/usr/bin/mvn` performs none,
+    # so the one thing the shim cannot see is the one thing this rule refuses.
+    #
+    # THIS IS A LITERAL CHECK, AND ONLY THAT. The pattern is `/<tool>` as a whole word, anywhere in the
+    # line, and it does not parse the path: every path grammar has a shape nobody thought of (a directory
+    # containing a SPACE walked through the previous one) and `/mvn` has none. It OVER-MATCHES -- prose
+    # such as "never kubectl/helm by hand" fails this rule -- which is the correct trade, because a false
+    # positive is a red build a human clears in one line.
+    #
+    # WHAT IT DOES NOT CLOSE, so nobody reads this rule as closure: an absolute path ASSEMBLED FROM
+    # QUOTED FRAGMENTS contains no literal `/<tool>` and passes. `sh '"/usr/bin/"kubectl version'` and
+    # `sh '/usr/bin/"kubectl" version'` both execute /usr/bin/kubectl and both pass this rule. Chasing
+    # that would mean deciding, from text, what a shell will assemble and execute -- the same undecidable
+    # game as the reader this design replaced, one layer over, and it is not attempted. The honest
+    # statement is: a LITERAL absolute path is refused here; an assembled one is outside both this rule
+    # and the shim.
+    #
+    # A line that must keep its `/<tool>` goes in ABS_TOOL_ALLOWED below, where it is visible and
+    # reviewed, rather than in a hole in a regex.
+    for k, lk in enumerate(lines):
+        m = ABS_TOOL.search(lk)
+        if m and lk.strip() not in ABS_TOOL_ALLOWED:
+            problems.append(f"line {k + 1}: names {m.group(1)} after a `/` — an absolute path performs no "
+                            f"PATH lookup, so the effect shim cannot see it: {lk.strip()[:100]}")
     return problems
 
 

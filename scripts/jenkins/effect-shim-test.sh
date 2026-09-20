@@ -1,0 +1,519 @@
+#!/usr/bin/env bash
+# Suite for scripts/jenkins/effect-shim/_shim.sh — shared byte-for-byte across the four repositories.
+#
+# Every case here is a CONTROL: it states one claim the shim makes and fails if that claim stops being
+# true. The claims this suite is willing to make are exactly the ones it can observe — the shim's own
+# header lists what it does not cover, and nothing here pretends otherwise.
+set -u
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SHIMDIR="$HERE/effect-shim"
+pass=0; fail=0
+ok()  { pass=$((pass+1)); printf 'ok   [%s]\n' "$1"; }
+# A PROTECTION CONTROL must go red when its protection is removed, and effect-shim-sweep.sh enforces
+# that for every case reported with `ok`. These three kinds cannot, by construction, and say so here
+# rather than being explained away in the sweep's output:
+#   POSITIVE   -- asserts the shim does NOT refuse when it should not. Removing a protection cannot make
+#                 it fail; ADDING a wrong refusal does, which is what it guards.
+#   STRUCTURAL -- asserts a property of the files (a symlink, an absolute shebang) rather than a branch.
+#   LIMIT      -- asserts the ABSENCE of a protection. It goes red if protection is ADDED, never removed.
+ok_positive()   { pass=$((pass+1)); printf 'ok   [%s]\n' "$1"; printf 'kind POSITIVE   %s\n' "$1" >> "${KIND_LOG:-/dev/null}"; }
+ok_structural() { pass=$((pass+1)); printf 'ok   [%s]\n' "$1"; printf 'kind STRUCTURAL %s\n' "$1" >> "${KIND_LOG:-/dev/null}"; }
+ok_limit()      { pass=$((pass+1)); printf 'ok   [%s]\n' "$1"; printf 'kind LIMIT      %s\n' "$1" >> "${KIND_LOG:-/dev/null}"; }
+bad() { fail=$((fail+1)); printf 'FAIL [%s]\n%s\n' "$1" "$(sed 's/^/    /' <<<"${2:-}")"; }
+
+T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
+REALBIN="$T/realbin"; mkdir -p "$REALBIN"
+# the "real" tools: they record that they ran, so a case can tell REFUSED from EXECUTED
+for t in mvn docker rsync scp helm ansible-playbook kubectl; do
+  printf '#!/bin/sh\nprintf "%s %%s\\n" "$*" >> "$RAN_LOG"\nexit 0\n' "$t" > "$REALBIN/$t"
+  chmod +x "$REALBIN/$t"
+done
+
+# a checkout whose HEAD is a real commit
+W="$T/co"; mkdir -p "$W"
+git init -q "$W"; git -C "$W" config user.email t@t; git -C "$W" config user.name t
+mkdir -p "$W/scripts/jenkins"
+cp -R "$HERE/effect-shim" "$W/scripts/jenkins/effect-shim"
+cp "$HERE/verify-permitted-tree.sh" "$W/scripts/jenkins/verify-permitted-tree.sh"
+echo 'src' > "$W/file.txt"
+printf 'target/\n' > "$W/.gitignore"
+git -C "$W" add -A >/dev/null; git -C "$W" commit -qm init
+SHA="$(git -C "$W" rev-parse HEAD)"
+CO_SHIM="$W/scripts/jenkins/effect-shim"
+
+run_shim() {   # run_shim <tool> [env assignments...] ; sets RC and OUT, resets RAN_LOG
+  local tool="$1"; shift
+  : > "$T/ran"
+  set +e
+  OUT="$(cd "$W" && env PATH="$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" "$@" "$tool" --version 2>&1)"
+  RC=$?
+  set -e
+}
+ran() { [ -s "$T/ran" ]; }
+
+base=(OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW=)
+
+# --- 1. the happy path: a clean permitted tree runs the real binary -----------------------------------
+run_shim mvn "${base[@]}"
+if [ "$RC" -eq 0 ] && ran && printf '%s' "$OUT" | grep -q "verified"; then
+  ok_positive "a clean checkout at the permitted commit runs the real binary"
+else
+  bad "a clean checkout at the permitted commit runs the real binary" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+fi
+
+# --- 2. THE CLAIM THIS EXISTS FOR: a modified tree refuses, and the binary does NOT run ---------------
+echo 'changed after the guard' >> "$W/file.txt"
+for tool in mvn docker rsync scp helm ansible-playbook kubectl; do
+  run_shim "$tool" "${base[@]}"
+  if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "verdict=REFUSED"; then
+    ok "$tool: a tracked file changed after the guard refuses, and $tool never runs"
+  else
+    bad "$tool: a tracked file changed after the guard refuses, and $tool never runs" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+  fi
+done
+git -C "$W" checkout -q -- file.txt
+
+# --- 3. an UNTRACKED file is a change too, unless the job declared it ---------------------------------
+echo 'dropped in' > "$W/extra.txt"
+run_shim mvn "${base[@]}"
+if [ "$RC" -eq 3 ] && ! ran; then
+  ok "an undeclared untracked file refuses"
+else
+  bad "an undeclared untracked file refuses" "rc=$RC
+$OUT"
+fi
+# …and DECLARING it does not exempt it: the verifier's declarations cover IGNORED paths (its rule 4), so
+# a file that is merely untracked is a change to the tree whatever the job says about it. Asserted here
+# rather than assumed, because "I declared it" is exactly the kind of belief that goes untested.
+run_shim mvn OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW="--allow-ignored extra.txt"
+if [ "$RC" -eq 3 ] && ! ran; then
+  ok "declaring a path that is untracked-but-not-ignored does NOT exempt it"
+else
+  bad "declaring a path that is untracked-but-not-ignored does NOT exempt it" "rc=$RC
+$OUT"
+fi
+rm -f "$W/extra.txt"
+
+# --- 4. build output under an IGNORED directory the job owns ------------------------------------------
+mkdir -p "$W/target"; echo 'jar' > "$W/target/app.jar"
+run_shim mvn OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW="--allow-ignored target"
+if [ "$RC" -eq 0 ] && ran; then
+  ok_positive "a declared build-output directory does not refuse (the dirty-tree case a job legitimately owns)"
+else
+  bad "a declared build-output directory does not refuse (the dirty-tree case a job legitimately owns)" "rc=$RC
+$OUT"
+fi
+run_shim mvn "${base[@]}"
+if [ "$RC" -eq 3 ] && ! ran; then
+  ok "the SAME output UNdeclared refuses (the declaration is the job's statement, not a default)"
+else
+  bad "the SAME output UNdeclared refuses (the declaration is the job's statement, not a default)" "rc=$RC
+$OUT"
+fi
+rm -rf "$W/target"
+
+# --- 5. configuration is required; an unset variable is a refusal, never a default --------------------
+run_shim mvn OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW=
+[ "$RC" -eq 3 ] && ! ran && ok "OE_SHIM_DIR unset refuses" || bad "OE_SHIM_DIR unset refuses" "rc=$RC
+$OUT"
+run_shim mvn OE_SHIM_DIR=. OE_SHIM_ALLOW=
+[ "$RC" -eq 3 ] && ! ran && ok "OE_SHIM_SHA unset refuses" || bad "OE_SHIM_SHA unset refuses" "rc=$RC
+$OUT"
+run_shim mvn OE_SHIM_DIR=. OE_SHIM_SHA="$SHA"
+[ "$RC" -eq 3 ] && ! ran && ok "OE_SHIM_ALLOW unset refuses (declaring nothing must be said, not assumed)" \
+  || bad "OE_SHIM_ALLOW unset refuses (declaring nothing must be said, not assumed)" "rc=$RC
+$OUT"
+# The MESSAGE is asserted, not just the refusal: an empty SHA also makes the VERIFIER refuse, so a case
+# that checked only the status stayed green with the shim's own emptiness check deleted. Pin the clause
+# that is supposed to be doing the work.
+run_shim mvn OE_SHIM_DIR=. OE_SHIM_SHA= OE_SHIM_ALLOW=
+if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "OE_SHIM_SHA is empty"; then
+  ok "an EMPTY OE_SHIM_SHA refuses in the shim itself (no permission is not a permission)"
+else
+  bad "an EMPTY OE_SHIM_SHA refuses in the shim itself (no permission is not a permission)" "rc=$RC
+$OUT"
+fi
+
+# --- 6. the wrong permission refuses even though the tree is clean ------------------------------------
+run_shim mvn OE_SHIM_DIR=. OE_SHIM_SHA=0000000000000000000000000000000000000000 OE_SHIM_ALLOW=
+if [ "$RC" -eq 3 ] && ! ran; then
+  ok "a clean tree at the WRONG permitted commit refuses"
+else
+  bad "a clean tree at the WRONG permitted commit refuses" "rc=$RC
+$OUT"
+fi
+
+# --- 7. no exec loop: the shim never resolves itself as the real binary -------------------------------
+: > "$T/ran"
+set +e
+# The PATH must carry what the VERIFICATION needs (bash, git) and NOT the real tool, or the case never
+# reaches binary resolution and tests something else -- which is what it used to do.
+OUT="$(cd "$W" && env PATH="$CO_SHIM:/usr/bin:/bin" RAN_LOG="$T/ran" OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" \
+      OE_SHIM_ALLOW= "$CO_SHIM/mvn" --version 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "not on PATH outside this shim directory"; then
+  ok "with only the shim on PATH, resolution finds nothing and it refuses (no exec loop)"
+else
+  bad "with only the shim on PATH, resolution finds nothing and it refuses (no exec loop)" "rc=$RC
+$OUT"
+fi
+
+# --- 8. every name in the directory is the same implementation ----------------------------------------
+missing=""
+for t in mvn docker rsync scp helm ansible-playbook kubectl; do
+  [ -e "$SHIMDIR/$t" ] || missing="$missing $t"
+  [ "$(readlink "$SHIMDIR/$t" 2>/dev/null)" = "_shim.sh" ] || missing="$missing $t(not-a-link)"
+done
+[ -z "$missing" ] && ok_structural "every shimmed tool name is a symlink to the one implementation" \
+  || bad "every shimmed tool name is a symlink to the one implementation" "$missing"
+
+# --- 9. the shim can start under a PATH that holds nothing -------------------------------------------
+# A `#!/usr/bin/env bash` shim dies with "env: bash: No such file or directory" under a minimal PATH and
+# records nothing -- it refuses nothing and permits nothing, which is the worst of the three. The
+# interpreter path must be absolute, and this is the case that says so.
+shebang="$(head -1 "$SHIMDIR/_shim.sh")"
+case "$shebang" in
+  "#!/"*) ok_structural "the shim names its interpreter by absolute path ($shebang)" ;;
+  *)      bad "the shim names its interpreter by absolute path ($shebang)" "$shebang" ;;
+esac
+: > "$T/ran"
+set +e
+OUT="$(cd "$W" && env -i PATH="$CO_SHIM:$REALBIN" RAN_LOG="$T/ran" OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" \
+      OE_SHIM_ALLOW= HOME="$T" "$CO_SHIM/mvn" --version 2>&1)"; RC=$?
+set -e
+# It STARTS (its own refusal line proves that) and it FAILS CLOSED: with no `git` reachable it cannot
+# verify, so it refuses and the real binary does not run. Starting is the claim here; the shim is not
+# expected to verify without the tools the verifier itself needs.
+if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "effect-shim(mvn)"; then
+  ok "under a PATH with no git the shim still STARTS and refuses (it never silently permits)"
+else
+  bad "under a PATH with no git the shim still STARTS and refuses (it never silently permits)" "rc=$RC
+$OUT"
+fi
+
+
+# --- 10. DECLARATIONS ARE NOT PATHNAME-EXPANDED --------------------------------------------------------
+# `*/target` is a valid declaration (the verifier's grammar allows `*` as a component). An unquoted
+# expansion turned it into the directories that happened to exist -- `--allow-ignored a/target b/target`
+# -- and the verifier refused the third argument, so a clean, correctly-declared tree was REFUSED.
+mkdir -p "$W/a/target" "$W/b/target"
+echo 'jar' > "$W/a/target/a.jar"; echo 'jar' > "$W/b/target/b.jar"
+printf 'target/\n*/target/\n' > "$W/.gitignore"
+git -C "$W" add -A >/dev/null 2>&1; git -C "$W" commit -qm ignore-wildcards >/dev/null 2>&1
+SHA="$(git -C "$W" rev-parse HEAD)"
+run_shim mvn OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW="--allow-ignored */target"
+if [ "$RC" -eq 0 ] && ran; then
+  ok "a WILDCARD declaration reaches the verifier intact (no pathname expansion)"
+else
+  bad "a WILDCARD declaration reaches the verifier intact (no pathname expansion)" "rc=$RC
+$OUT"
+fi
+rm -rf "$W/a" "$W/b"
+
+# --- 11. DESCENDANTS ARE INTERCEPTED TOO, AND THE CHAIN STARTS INSIDE THE SHIM --------------------
+# The real binary inherits the ORIGINAL PATH, shim first, so a tool that starts another tool by name is
+# verified again. This is the Maven-plugin case: mvn passes verification, the plugin changes a tracked
+# file, and the plugin's `kubectl` must refuse.
+#
+# THE FIRST VERSION OF THIS CASE WAS DECORATIVE. It invoked "$REALBIN/parent" directly with the tree
+# already dirty, so nothing passed through the shim's dispatch and the PATH that dispatch hands on was
+# never exercised -- restoring `export PATH="$stripped"` before the exec left the whole suite at
+# 26 passed, ALL PASS. The chain now STARTS with a shimmed tool invoked BY NAME on a CLEAN tree: the
+# shim verifies and execs the real `mvn`, that process dirties the tree and calls `middle`, and
+# `middle` calls `kubectl` BY NAME. Only the PATH the shim handed to its child can resolve that call.
+cat > "$REALBIN/mvn" <<PEOF
+#!/bin/sh
+# stands in for a build that runs a plugin: change a tracked file, then invoke another tool by name
+printf 'mvn %s\n' "\$*" >> "\$RAN_LOG"
+echo 'changed by the running build' >> "$W/file.txt"
+exec "$REALBIN/middle"
+PEOF
+cat > "$REALBIN/middle" <<'MEOF'
+#!/bin/sh
+kubectl grandchild-effect
+MEOF
+chmod +x "$REALBIN/mvn" "$REALBIN/middle"
+git -C "$W" checkout -q -- file.txt
+: > "$T/ran"
+set +e
+OUT="$(cd "$W" && env PATH="$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= mvn -B test 2>&1)"; RC=$?
+set -e
+if grep -q '^mvn ' "$T/ran" && ! grep -q '^kubectl' "$T/ran" && printf '%s' "$OUT" | grep -q "verdict=REFUSED"; then
+  ok "a GRANDCHILD reached through the shim's own dispatch is verified too (mvn ran; its kubectl refused)"
+else
+  bad "a GRANDCHILD reached through the shim's own dispatch is verified too (mvn ran; its kubectl refused)" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+fi
+# the real mvn stub is restored to the plain recorder the earlier cases expect
+printf '#!/bin/sh\nprintf "mvn %%s\\n" "$*" >> "$RAN_LOG"\nexit 0\n' > "$REALBIN/mvn"
+chmod +x "$REALBIN/mvn"
+git -C "$W" checkout -q -- file.txt
+
+# --- 12-14. THE DOCUMENTED LIMITS, PINNED ------------------------------------------------------------
+# These three cases assert what the shim does NOT do. They exist because a limit that is only described
+# is a sentence someone deletes; a limit with a test is a limit. If one of them ever goes red, the shim
+# became stronger than its header claims and the header is what needs updating.
+#
+# 12. A WRAPPER CANNOT DETECT ITS OWN ABSENCE.
+rm -f "$CO_SHIM/kubectl"
+echo 'changed after the verification' >> "$W/file.txt"
+: > "$T/ran"
+set +e
+OUT="$(cd "$W" && env PATH="$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= kubectl apply 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 0 ] && ran; then
+  ok_limit "DOCUMENTED LIMIT: a DELETED wrapper falls through to the real binary, unverified (detection, not prevention, answers this)"
+else
+  bad "DOCUMENTED LIMIT: a DELETED wrapper falls through to the real binary, unverified (detection, not prevention, answers this)" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+fi
+ln -s _shim.sh "$CO_SHIM/kubectl"
+git -C "$W" checkout -q -- file.txt
+
+# 13. MUTABLE CODE CANNOT ESTABLISH ITS OWN INTEGRITY.
+cp "$CO_SHIM/_shim.sh" "$T/_shim.orig"
+python3 - "$CO_SHIM/_shim.sh" <<'PEOF'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('if ! PERMITTED_SHA="$OE_SHIM_SHA" bash "$verifier"', 'if false && ! PERMITTED_SHA="$OE_SHIM_SHA" bash "$verifier"', 1)
+open(p, "w").write(s)
+PEOF
+echo 'changed after the verification' >> "$W/file.txt"
+run_shim kubectl OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW=
+if [ "$RC" -eq 0 ] && ran && printf '%s' "$OUT" | grep -q "verified"; then
+  ok_limit "DOCUMENTED LIMIT: an EDITED shim prints 'verified' and runs the tool on a dirty tree"
+else
+  bad "DOCUMENTED LIMIT: an EDITED shim prints 'verified' and runs the tool on a dirty tree" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+fi
+cp "$T/_shim.orig" "$CO_SHIM/_shim.sh"
+git -C "$W" checkout -q -- file.txt
+
+# 14. A DIFFERENT WRAPPER VERSION OUTSIDE THE CHECKOUT IS NOT VERSION-COMPARED.
+OUTSIDE="$T/outside/scripts/jenkins/effect-shim"; mkdir -p "$OUTSIDE"
+cp "$HERE/verify-permitted-tree.sh" "$T/outside/scripts/jenkins/verify-permitted-tree.sh"
+sed 's/^say "verified/say "OUTSIDE COPY verified/' "$CO_SHIM/_shim.sh" > "$OUTSIDE/_shim.sh"
+chmod +x "$OUTSIDE/_shim.sh"; ln -sf _shim.sh "$OUTSIDE/mvn"
+: > "$T/ran"
+set +e
+OUT="$(cd "$W" && env PATH="$OUTSIDE:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= mvn --version 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 0 ] && ran && printf '%s' "$OUT" | grep -q "OUTSIDE COPY verified"; then
+  ok_limit "DOCUMENTED LIMIT: a DIFFERENT wrapper copy outside the checkout runs and is never version-compared"
+else
+  bad "DOCUMENTED LIMIT: a DIFFERENT wrapper copy outside the checkout runs and is never version-compared" "rc=$RC
+$OUT"
+fi
+
+
+# --- 15. THE INTEGRITY CHECK'S OWN CONTROLS ----------------------------------------------------------
+# Each tamper shape asserts the SPECIFIC message, so each check inside effect-shim-integrity.sh is
+# pinned individually. Checking only the status hides a layered refusal: with the executable check
+# deleted, `chmod 644` was still refused by the digest/symlink layers, and a status-only case would have
+# reported that protection as present when it was not.
+# A COPY of the checker inside the temp checkout: it reads the expected digest from its own
+# directory, so a case that removes that file must remove the copy's, never the repository's.
+cp "$HERE/effect-shim-integrity.sh" "$W/scripts/jenkins/effect-shim-integrity.sh"
+cp "$HERE/effect-shim-digest.txt" "$W/scripts/jenkins/effect-shim-digest.txt"
+git -C "$W" add -A >/dev/null 2>&1; git -C "$W" commit -qm "the checker, inside the checkout" >/dev/null 2>&1
+SHA="$(git -C "$W" rev-parse HEAD)"
+INTEG="$W/scripts/jenkins/effect-shim-integrity.sh"
+integ_case() {  # integ_case <label> <expected message fragment> <tamper> <restore>
+  local label="$1" want="$2" tamper="$3" restore="$4" out rc
+  eval "$tamper"
+  set +e
+  out="$(bash "$INTEG" --dir "$W" --when start 2>&1)"; rc=$?
+  set -e
+  eval "$restore"
+  if [ "$rc" -eq 3 ] && printf '%s' "$out" | grep -qF "$want"; then
+    ok "integrity: $label"
+  else
+    bad "integrity: $label" "rc=$rc
+$out"
+  fi
+}
+integ_case "a deleted wrapper is named"        "the wrapper 'kubectl' is missing" \
+           'rm -f "$CO_SHIM/kubectl"'          'ln -sf _shim.sh "$CO_SHIM/kubectl"'
+integ_case "a NON-EXECUTABLE wrapper is named" "is not executable" \
+           'chmod 644 "$CO_SHIM/_shim.sh"'     'chmod 755 "$CO_SHIM/_shim.sh"'
+integ_case "an edited _shim.sh is named"       "the wrapper that ran was not the reviewed one" \
+           'printf "# tampered\n" >> "$CO_SHIM/_shim.sh"' 'cp "$HERE/effect-shim/_shim.sh" "$CO_SHIM/_shim.sh"'
+integ_case "a planted executable is named"     "unexpected entry 'npm'" \
+           'printf "#!/bin/sh\nexit 0\n" > "$CO_SHIM/npm"; chmod +x "$CO_SHIM/npm"' 'rm -f "$CO_SHIM/npm"'
+integ_case "a HIDDEN planted entry is named"   "unexpected entry '.kubectl'" \
+           'printf "#!/bin/sh\nexit 0\n" > "$CO_SHIM/.kubectl"' 'rm -f "$CO_SHIM/.kubectl"'
+integ_case "a wrapper replaced by a real file" "is not the expected symlink" \
+           'rm -f "$CO_SHIM/scp"; printf "#!/bin/sh\nexit 0\n" > "$CO_SHIM/scp"; chmod +x "$CO_SHIM/scp"' \
+           'rm -f "$CO_SHIM/scp"; ln -sf _shim.sh "$CO_SHIM/scp"'
+
+# …and the END inspection says what the START inspection must not: that the effects already ran.
+set +e
+end_out="$(rm -f "$CO_SHIM/kubectl"; bash "$INTEG" --dir "$W" --when end 2>&1)"; end_rc=$?
+start_out="$(bash "$INTEG" --dir "$W" --when start 2>&1)"
+ln -sf _shim.sh "$CO_SHIM/kubectl"
+set -e
+if [ "$end_rc" -eq 3 ] && printf '%s' "$end_out" | grep -q "ALREADY RAN" && ! printf '%s' "$start_out" | grep -q "ALREADY RAN"; then
+  ok "integrity: the END inspection says the effects already ran; the START inspection does not"
+else
+  bad "integrity: the END inspection says the effects already ran; the START inspection does not" "end_rc=$end_rc
+$end_out
+--- start ---
+$start_out"
+fi
+
+
+# --- 16. BEHAVIOURAL CONTROLS: what the shim HANDS ON, not just whether it refuses -------------------
+# Round 3 (Codex) removed four protections that no case covered, and the suite stayed at 33 passed.
+# Every one of them is about what happens on the SUCCESS path, which the earlier cases only checked far
+# enough to see that the tool ran at all:
+#   * `exec "$real" "$@"` without "$@" -- the tool runs with NO ARGUMENTS. `mvn -B test` becomes `mvn`.
+#   * `exec` replaced by a call followed by `exit 0` -- the tool's FAILURE becomes success.
+#   * the signal traps removed -- an interrupted run dies with no refusal and no status 3.
+#   * the empty-OE_SHIM_DIR check removed -- the refusal comes from the verifier's argument parsing
+#     instead, so the shim's own clause is never exercised (the empty-SHA shape again).
+argbin="$T/argbin"; mkdir -p "$argbin"
+cat > "$argbin/mvn" <<'AEOF'
+#!/bin/sh
+# record each argument on its own line, %q-style, so a lost or merged argument is visible
+for a in "$@"; do printf 'ARG %s\n' "$a" >> "$ARG_LOG"; done
+printf 'ARGC %s\n' "$#" >> "$ARG_LOG"
+exit "${FAKE_EXIT:-0}"
+AEOF
+chmod +x "$argbin/mvn"
+
+: > "$T/args"
+set +e
+OUT="$(cd "$W" && env PATH="$CO_SHIM:$argbin:/usr/bin:/bin" ARG_LOG="$T/args" \
+      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= mvn -B -f ./pom.xml "a b" test 2>&1)"; RC=$?
+set -e
+want="ARG -B
+ARG -f
+ARG ./pom.xml
+ARG a b
+ARG test
+ARGC 5"
+if [ "$RC" -eq 0 ] && [ "$(cat "$T/args")" = "$want" ]; then
+  ok "every argument reaches the real tool unchanged, including one containing a space"
+else
+  bad "every argument reaches the real tool unchanged, including one containing a space" "rc=$RC
+$(cat "$T/args")
+--- expected ---
+$want"
+fi
+
+: > "$T/args"
+set +e
+OUT="$(cd "$W" && env PATH="$CO_SHIM:$argbin:/usr/bin:/bin" ARG_LOG="$T/args" FAKE_EXIT=7 \
+      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= mvn -B test 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 7 ]; then
+  ok "the real tool's FAILURE status reaches the caller (the shim execs, it does not wrap)"
+else
+  bad "the real tool's FAILURE status reaches the caller (the shim execs, it does not wrap)" "rc=$RC (expected 7)
+$OUT"
+fi
+
+# A SIGNAL DURING THE VERIFICATION is a refusal with status 3 and a message, not a silent death. The
+# fake git below signals the shim while it is verifying, which is the only window the shim owns.
+sigbin="$T/sigbin"; mkdir -p "$sigbin"
+REALGIT="$(command -v git)"
+cat > "$sigbin/git" <<GEOF
+#!/bin/sh
+"$REALGIT" "\$@"; rc=\$?
+case " \$* " in
+  *" status "*) kill -"\${SHIM_SIGNAL:-TERM}" "\$(cat "\$SHIM_PIDFILE")" ;;
+esac
+exit \$rc
+GEOF
+chmod +x "$sigbin/git"
+cat > "$T/launch-shim.sh" <<'LEOF'
+#!/bin/sh
+printf '%s' "$$" > "$SHIM_PIDFILE"
+exec "$1" "$2" "$3"
+LEOF
+chmod +x "$T/launch-shim.sh"
+: > "$T/ran"
+set +e
+# EVERY trapped signal, not just TERM: the sweep found that removing the INT and HUP traps left the
+# suite green, because one signal stood in for four.
+for sig in TERM INT HUP QUIT; do
+  : > "$T/ran"
+  set +e
+  OUT="$(cd "$W" && env PATH="$sigbin:$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" SHIM_PIDFILE="$T/shimpid" \
+        SHIM_SIGNAL="$sig" OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= \
+        "$T/launch-shim.sh" "$CO_SHIM/mvn" -B test 2>&1)"; RC=$?
+  set -e
+  if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "interrupted by SIG$sig"; then
+    ok "SIG$sig during the verification refuses with status 3 and says so (the tool never runs)"
+  else
+    bad "SIG$sig during the verification refuses with status 3 and says so (the tool never runs)" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+  fi
+done
+
+# An EMPTY OE_SHIM_DIR must be refused BY THE SHIM, naming its own clause -- the verifier would refuse it
+# too, for its own reason, and a status-only case cannot tell those apart.
+run_shim mvn OE_SHIM_DIR= OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW=
+if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "OE_SHIM_DIR is empty"; then
+  ok "an EMPTY OE_SHIM_DIR refuses in the shim itself"
+else
+  bad "an EMPTY OE_SHIM_DIR refuses in the shim itself" "rc=$RC
+$OUT"
+fi
+
+
+# --- 17. THE PROTECTIONS THE IMPLEMENTATION-DERIVED SWEEP FOUND UNCOVERED ----------------------------
+# Each of these guards existed with no case behind it; the sweep removed them one at a time and the
+# suite stayed green. That is the same defect as a decorative case, one level up.
+mv "$CO_SHIM/../verify-permitted-tree.sh" "$T/verifier-moved"
+run_shim mvn "${base[@]}"
+if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "the verifier is missing"; then
+  ok "a MISSING verifier refuses (the shim never assumes a verification it could not run)"
+else
+  bad "a MISSING verifier refuses (the shim never assumes a verification it could not run)" "rc=$RC
+$OUT"
+fi
+mv "$T/verifier-moved" "$CO_SHIM/../verify-permitted-tree.sh"
+
+set +e
+out="$(bash "$INTEG" --when start 2>&1)"; rc=$?
+set -e
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q -- "--dir is required"; then
+  ok "integrity: --dir is required (a usage error is 2, never a silent pass)"
+else
+  bad "integrity: --dir is required (a usage error is 2, never a silent pass)" "rc=$rc
+$out"
+fi
+
+mv "$CO_SHIM" "$T/shim-moved"
+set +e
+out="$(bash "$INTEG" --dir "$W" --when start 2>&1)"; rc=$?
+set -e
+mv "$T/shim-moved" "$CO_SHIM"
+if [ "$rc" -eq 3 ] && printf '%s' "$out" | grep -q "the shim directory is missing"; then
+  ok "integrity: a MISSING shim directory refuses (nothing was intercepting anything)"
+else
+  bad "integrity: a MISSING shim directory refuses (nothing was intercepting anything)" "rc=$rc
+$out"
+fi
+
+mv "$W/scripts/jenkins/effect-shim-digest.txt" "$T/digest-moved"
+set +e
+out="$(bash "$INTEG" --dir "$W" --when start 2>&1)"; rc=$?
+set -e
+mv "$T/digest-moved" "$W/scripts/jenkins/effect-shim-digest.txt"
+if [ "$rc" -eq 3 ] && printf '%s' "$out" | grep -q "expected digest file is missing"; then
+  ok "integrity: a MISSING digest file refuses (an absent expectation is not a met one)"
+else
+  bad "integrity: a MISSING digest file refuses (an absent expectation is not a met one)" "rc=$rc
+$out"
+fi
+
+printf 'effect-shim-test: %d passed, %d failed\n' "$pass" "$fail"
+[ "$fail" -eq 0 ] && echo "effect-shim-test: ALL PASS" || exit 1

@@ -228,27 +228,83 @@ pipeline {
           printf '%s\\n' "$HEALTH_URL" > .jenkins-tmp/health-url
         '''
         script {
-          // PROVENANCE. scripts/deploy/service-deploy.sh renders THIS checkout's overlay and applies it, so
-          // the manifests it deploys are the files in this workspace. That makes it a deployment effect, and
-          // the workspace is re-proved to be the permitted commit's tree immediately before it runs — nothing
-          // between the verification and the deployment. The validator's effect grammar does not reach
-          // manifest application (see its LIMITS), so this adjacency is the pipeline's own -- and NOTHING
-          // ENFORCES IT. No test in this repository asserts it: NiftyPostBuildWorkspaceTest checks that the
-          // completed nifty-gex-src clone is removed and that the verification accepts the workspace a
-          // successful build leaves behind, not that this deploy step follows that verification. Codex
-          // inserted `sh 'printf changed > k8s/services/nifty-gex/base/nifty-gex-deployment.yaml'` between
-          // the two and every check still passed. Keeping them adjacent is a rule for whoever edits this
-          // file, until the runtime adjacency enforcement replacing the withdrawn static reader lands.
+          // PROVENANCE, ENFORCED AT RUN TIME. scripts/deploy/service-deploy.sh renders THIS checkout's
+          // overlay and applies it, so the manifests it deploys are the files in this workspace.
+          //
+          // Until now the verification below was adjacent to that helper only because this file is
+          // written that way: Codex inserted `sh 'printf changed > k8s/.../nifty-gex-deployment.yaml'`
+          // between the two and every check still passed, because the validator's effect grammar does
+          // not reach manifest application and no test asserted the ordering. Proving the ordering from
+          // the TEXT was tried and abandoned -- see scripts/jenkins/effect-shim/_shim.sh for why.
+          //
+          // The shim on PATH is what enforces it now, with a limit worth stating here rather than in a
+          // header nobody opens. `kubectl` (which this helper ends in) resolves inside
+          // scripts/jenkins/effect-shim, where the wrapper re-verifies this checkout against
+          // PERMITTED_SHA and then execs the real binary, or refuses. So a step that MODIFIES THE TREE
+          // between the verification and the helper no longer matters. A step that DELETES OR EDITS THE
+          // WRAPPER still does: the job owns its own process, a wrapper cannot detect its own absence,
+          // and the integrity checks around this block detect that case rather than prevent it.
+          //
+          // The verification below stays as the stage's own early, explicit failure: a wrong tree should
+          // stop before a deployment starts, not midway through one.
           // REQUIRED_IMAGE is set only by this build's own push (Build image stage); empty with
           // BUILD_IMAGE=false, when the registry tag is resolved and digest-pinned as before.
           withEnv(["SERVICE=nifty-gex",
                    "DEPLOY_DRY_RUN=${env.DEPLOY_DRY_RUN_PARAM ?: 'false'}",
                    "HEALTH_URL=${readFile('.jenkins-tmp/health-url').trim()}",
-                   "WORK_DIR=${env.WORKSPACE}/.jenkins-tmp"]) {
+                   "WORK_DIR=${env.WORKSPACE}/.jenkins-tmp",
+                   "PATH+EFFECT_SHIM=${env.WORKSPACE}/scripts/jenkins/effect-shim",
+                   "OE_SHIM_DIR=${env.WORKSPACE}",
+                   "OE_SHIM_SHA=${params.PERMITTED_SHA}",
+                   "OE_SHIM_ALLOW=--allow-ignored target --allow-ignored .jenkins-tmp"]) {
+            sh 'bash scripts/jenkins/effect-shim-integrity.sh --dir . --when start'
             timeout(time: 10, unit: 'MINUTES') {
               sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
             }
-            sh 'bash scripts/deploy/service-deploy.sh'
+            // AFTER THE EFFECT, and UNCONDITIONALLY. The start check above PREVENTS a stage that began
+            // with a tampered shim; this one only DETECTS one tampered with while the stage ran, and the
+            // build fails and names it -- whatever the unverified step did has already happened, so if it
+            // was a `kubectl apply`, the cluster changed.
+            //
+            // It must run when the helper FAILS, too. As a plain statement after the helper it was
+            // skipped on failure, which is the worst case to skip: a deployment that applies manifests
+            // and then fails during rollout is exactly when you want to know the wrapper was removed.
+            // The helper's failure is caught, the inspection always runs, and then the ORIGINAL failure
+            // is re-thrown so the build still fails for the reason it actually failed.
+            def deployFailure = null
+            try {
+              sh 'bash scripts/deploy/service-deploy.sh'
+            } catch (Exception deployError) {
+              deployFailure = deployError
+            }
+            // `returnStatus: true` covers the inspection's EXIT CODE. It does not cover the inspection
+            // failing to run at all -- a lost agent, an unwritable workspace, an interruption -- and
+            // Jenkins propagates those as exceptions. Unwrapped, such an exception escaped before the
+            // re-throw below and the deployment's own failure was lost: the build then reported the
+            // inspection's problem as its cause. AN UNAVAILABLE AGENT CANNOT BE PROMISED A COMPLETED
+            // INSPECTION, so the only honest handling is to say the inspection did not run, and to keep
+            // the failure that actually stopped the deployment as the build's reason.
+            def shimIntegrity = null
+            def inspectionFailure = null
+            try {
+              shimIntegrity = sh(returnStatus: true, script: 'bash scripts/jenkins/effect-shim-integrity.sh --dir . --when end')
+            } catch (Exception inspectionError) {
+              inspectionFailure = inspectionError
+            }
+            if (inspectionFailure != null) {
+              echo 'effect-shim-integrity(end): THE INSPECTION DID NOT RUN (' + inspectionFailure.toString() + '). This build cannot say whether the shim was intact while the effects above ran.'
+            } else if (shimIntegrity != 0) {
+              echo 'effect-shim-integrity(end): the shim was tampered with during this stage; the effects above ran UNVERIFIED'
+            }
+            if (deployFailure != null) {
+              throw deployFailure
+            }
+            if (inspectionFailure != null) {
+              error('the end inspection did not run (' + inspectionFailure.toString() + '); this build cannot attest that the shim was intact')
+            }
+            if (shimIntegrity != 0) {
+              error('effect-shim integrity failed after the deployment: the effects above ran unverified')
+            }
           }
         }
       }
