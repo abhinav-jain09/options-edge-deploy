@@ -261,6 +261,45 @@ else
   echo "FAIL [the capture ref name is the pid plus random bytes]"; fail=$((fail+1))
 fi
 
+# --- AN INTERRUPTION IS A REFUSAL. `$?` inside a SIGNAL trap is the last command's status, so a signal
+#     delivered just after a successful command used to leave the guard exiting 0 with the permission
+#     never compared — and a caller reading exit 0 as "permitted" would deploy under no permission. The
+#     wrapper below delivers a chosen signal to the guard at a chosen point in its run; every point and
+#     every signal must give a NONZERO exit and no verdict=PERMITTED line.
+sigbin="$T/sigbin"; mkdir -p "$sigbin"
+cat > "$sigbin/git" <<EOF
+#!/usr/bin/env bash
+# forward everything; when the argv matches KILL_AT, signal the guard shell that invoked us
+"$REALGIT" "\$@"; rc=\$?
+case " \$* " in
+  *" \$KILL_AT "*) kill -"\$KILL_SIG" "\$PPID" ;;
+esac
+exit \$rc
+EOF
+chmod +x "$sigbin/git"
+git -C "$W" checkout -q "$D"
+for sig in TERM INT HUP QUIT; do
+  for at in "rev-parse" "fetch" "show-ref"; do
+    set +e
+    out="$(cd "$W" && PATH="$sigbin:$PATH" KILL_SIG="$sig" KILL_AT="$at" PERMITTED_SHA="0000000000000000000000000000000000000000" bash "$GUARD" 2>&1)"; rc=$?
+    set -e
+    if [ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -qF "verdict=PERMITTED"; then
+      echo "ok   [SIG$sig at the $at call: nonzero exit, no PERMITTED verdict]"; pass=$((pass+1))
+    else
+      echo "FAIL [SIG$sig at the $at call: nonzero exit, no PERMITTED verdict]: rc=$rc"; printf '%s\n' "$out" | sed 's/^/    /'; fail=$((fail+1))
+    fi
+  done
+done
+# ...and the same with a CORRECT permission: an interrupted run must still not report PERMITTED.
+set +e
+out="$(cd "$W" && PATH="$sigbin:$PATH" KILL_SIG=TERM KILL_AT=fetch PERMITTED_SHA="$D" bash "$GUARD" 2>&1)"; rc=$?
+set -e
+if [ "$rc" -ne 0 ] && ! printf '%s' "$out" | grep -qF "verdict=PERMITTED"; then
+  echo "ok   [an interrupted run with the RIGHT permission still refuses]"; pass=$((pass+1))
+else
+  echo "FAIL [an interrupted run with the RIGHT permission still refuses]: rc=$rc"; printf '%s\n' "$out" | sed 's/^/    /'; fail=$((fail+1))
+fi
+
 # --- ONE fetched snapshot answers both predicates. FETCH_HEAD is a mutable file; a concurrent fetch in
 #     the same checkout between the two questions used to make the guard refuse a correct commit as
 #     off-branch while printing that same commit as the tip. The wrapper below reproduces exactly that:
@@ -322,5 +361,5 @@ set +e; out="$(cd "$W" && PERMITTED_SHA="$D" bash "$GUARD" --bogus 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ]; then echo "ok   [unknown argument]"; pass=$((pass+1)); else echo "FAIL [unknown argument]: rc=$rc"; fail=$((fail+1)); fi
 
 echo "permitted-sha-guard-test: $pass passed, $fail failed"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 64 ] && echo "permitted-sha-guard-test: ALL PASS"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 64 ]
+[ "$fail" -eq 0 ] && [ "$pass" -ge 77 ] && echo "permitted-sha-guard-test: ALL PASS"
+[ "$fail" -eq 0 ] && [ "$pass" -ge 77 ]

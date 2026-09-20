@@ -47,7 +47,7 @@ pipeline {
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
-    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2971059ec2474255aede8a43a40a9d4fae004a731b77961b519e3937b8a9411e',
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '3b6cee3f737d4aaf34206dacc36f5f7ddbf78f5b7ed62dc813b21ee0cefda380',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     string(name: 'SOURCE_ES_CLUSTER_IP', defaultValue: '192.168.100.4', description: 'ES source-of-truth broker IP (.4).')
     string(name: 'SOURCE_PORT',          defaultValue: '9092',          description: 'Source Kafka port.')

@@ -105,6 +105,24 @@ refuse() {
   exit 1
 }
 
+# AN INTERRUPTION IS A REFUSAL, and it must LOOK like one to the caller.
+# A signal handler must force a nonzero exit of its own. `$?` inside a SIGNAL trap is the status of the
+# command that happened to finish last, not a failure caused by the signal — so a SIGTERM delivered
+# just after a successful `git fetch` used to leave this script exiting 0 with the permission never
+# compared, and a caller that reads exit 0 as "permitted" would then deploy under no permission at all.
+# A guard that returns success when interrupted is worse than no guard, because the caller believes it
+# ran. These handlers are installed before anything else can be interrupted; the EXIT handler below
+# only cleans up and preserves whatever status brought it here.
+on_signal() {
+  echo "permitted-sha-guard: REFUSED — interrupted by SIG$1 before a verdict was reached; the permission was NOT confirmed" >&2
+  echo "permitted-sha-guard: verdict=REFUSED (no deployment effect may follow)" >&2
+  exit 3
+}
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
+trap 'on_signal HUP' HUP
+trap 'on_signal QUIT' QUIT
+
 # 0. The running guard is the declared version.
 self="${BASH_SOURCE[0]}"
 if command -v sha256sum >/dev/null 2>&1; then
@@ -201,7 +219,8 @@ drop_tipref() {   # every exit path: a refusal, a usage error, an interruption, 
   fi
   exit "$drop_status"
 }
-trap drop_tipref EXIT INT TERM
+# EXIT only. The signal handlers above already forced status 3; this preserves it while cleaning up.
+trap drop_tipref EXIT
 git -C "$dir" update-ref -d "$tipref"
 git -C "$dir" fetch --quiet --no-tags origin "+refs/heads/$branch:$tipref" || refuse "could not fetch refs/heads/$branch from origin to confirm the branch — refusing rather than guessing (a tag or any other ref of that name is not the branch)"
 # EXACT REF PATH, not a revision name: show-ref --verify refuses anything that is not that ref.

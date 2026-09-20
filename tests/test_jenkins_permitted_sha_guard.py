@@ -489,7 +489,7 @@ class NiftyDeployProvenanceTest(unittest.TestCase):
     same defect -- and every mutation below is a NEGATIVE CONTROL: it removes the protection, and the
     assertion must go red."""
 
-    VERIFY = 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .'
+    VERIFY = "sh 'PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir ."
     DEPLOY_CMD = "bash scripts/deploy/service-deploy.sh"
     DEPLOY = "sh '" + DEPLOY_CMD + "'"
     STAGE = "    stage('Deploy (service-scoped)') {"
@@ -499,14 +499,25 @@ class NiftyDeployProvenanceTest(unittest.TestCase):
         self.text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
 
     def _adjacent(self, text: str) -> bool:
-        ok, _why = GSTMT.verified_steps(text, *GSTMT.span(text, self.STAGE, self.END), self.DEPLOY_CMD, ".")
+        """EVERY invocation of the deploy helper in this file, wherever it sits, is immediately preceded
+        by the complete verification of this checkout against PERMITTED_SHA.
+
+        Round 5 bound the expected PERMISSION VARIABLE as well as the directory: the matcher previously
+        accepted any uppercase variable, so `${GIT_COMMIT:-}` counted as a permission and a clean
+        checkout at the wrong commit verified successfully."""
+        ok, _why = GSTMT.verified_commands(text, "scripts/deploy/service-deploy.sh",
+                                           GSTMT.literal_classifier(self.DEPLOY_CMD), "PERMITTED_SHA", ".")
         return ok
 
     def test_the_statement_reader_models_every_construct_in_this_file(self) -> None:
-        """The reader REFUSES what it does not model, and a refusal is False — so this file must stay
-        inside what it models, asserted here rather than discovered when the assertion silently weakens."""
-        refusals = GSTMT.lex(self.text)[1]
+        """The reader REFUSES what it cannot decide — lexically AND on control flow — and a refusal is
+        False, so this file must stay inside what it decides. Asserted here rather than discovered when
+        the assertion silently weakens."""
+        src = GSTMT.decode_unicode_escapes(self.text)
+        mark, refusals = GSTMT.lex(src)
         self.assertEqual(refusals, [], "; ".join(refusals[:3]))
+        cf = GSTMT.control_flow_refusals(src, mark, GSTMT.sibling_lists(src, mark, 0, len(src)))
+        self.assertEqual(cf, [], "; ".join(cf[:3]))
 
     def test_the_shared_statement_reader_passes_its_own_self_test(self) -> None:
         r = subprocess.run(["python3", str(ROOT / "scripts/jenkins/groovy-statements.py"), "--self-test"],
@@ -578,6 +589,22 @@ class NiftyDeployProvenanceTest(unittest.TestCase):
             ("the verification pointed at another directory", self.text.replace(
                 "verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp",
                 "verify-permitted-tree.sh --dir nifty-gex-src --allow-ignored target --allow-ignored .jenkins-tmp", 1)),
+            # Codex round 5
+            ("a brace-less `if` owning the verification, which Groovy attaches to it", self.text.replace(
+                "            timeout(time: 10, unit: 'MINUTES') {\n              " + self.VERIFY,
+                "            if (false)\n            timeout(time: 10, unit: 'MINUTES') {\n              " + self.VERIFY, 1)),
+            ("a brace-less `for` owning the verification", self.text.replace(
+                "            timeout(time: 10, unit: 'MINUTES') {\n              " + self.VERIFY,
+                "            for (int i = 0; i < 0; i++)\n            timeout(time: 10, unit: 'MINUTES') {\n              " + self.VERIFY, 1)),
+            ("a label before the verification", self.text.replace(
+                "            timeout(time: 10, unit: 'MINUTES') {\n              " + self.VERIFY,
+                "            skip:\n            timeout(time: 10, unit: 'MINUTES') {\n              " + self.VERIFY, 1)),
+            ("the verification reading ${GIT_COMMIT} instead of the permission", self.text.replace(
+                'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .',
+                'PERMITTED_SHA="${GIT_COMMIT:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .', 1)),
+            ("the deploy helper run a second time, unverified, in another stage", self.text.replace(
+                "    stage('Deploy (service-scoped)') {",
+                "    stage('Sneak') {\n      steps {\n        " + self.DEPLOY + "\n      }\n    }\n    stage('Deploy (service-scoped)') {", 1)),
         ]
         for label, mutated in mutations:
             self.assertNotEqual(mutated, self.text, "mutation did not apply: " + label)

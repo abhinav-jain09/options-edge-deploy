@@ -1,63 +1,79 @@
 #!/usr/bin/env python3
-"""A small Groovy reader that REFUSES what it does not model, so a Jenkinsfile assertion can decide on
+"""A small Groovy reader that REFUSES what it cannot decide, so a Jenkinsfile assertion can decide on
 STATEMENTS instead of on text.
 
 Shared byte-for-byte by options-edge-deploy, option-edge-feed-gateway, options-edge-processing and
-options-edge, and imported by the repository suites that assert "this step runs immediately after that
-verification": option-edge-feed-gateway's scripts/jenkins/gateway-guard-test.py (the Test stage's
-compile) and options-edge-deploy's tests/test_jenkins_permitted_sha_guard.py (the nifty deploy helper).
+options-edge, and imported by the repository suites that assert "this command runs only immediately
+after that verification": option-edge-feed-gateway's scripts/jenkins/gateway-guard-test.py (every Maven
+invocation that consumes the primary checkout) and options-edge-deploy's
+tests/test_jenkins_permitted_sha_guard.py (the nifty deploy helper).
 
-WHY THE FAILURE DIRECTION CHANGED. This predicate has now been beaten four times, and the first three
+WHY THE FAILURE DIRECTION IS WHAT IT IS. This predicate has been beaten five times, and the first three
 fixes were each a better TEXT RULE:
 
-  * v1 decided adjacency with `count("sh ") == 0`; a `writeFile` walked through it.
-  * v2 searched raw text with index/rindex/find; the verification was commented out and both suites said
-    ALL PASS, and a second copy of the guarded step was never looked at.
-  * v3 (this file, round 3) lexed comments and strings and counted occurrences — but treated `/*` as a
-    comment opener without knowing slashy or dollar-slashy strings, and the "independent" count used the
-    SAME classification. So `def x = $/ /* /$` … `sh 'mvn -B test'` … `// */` hid a real, executing
-    second compile from BOTH checks. Codex ran all three variants under Groovy 4.0.24; each printed
-    `EXECUTED: mvn -B test`. v3's header claimed a mistake shows up "never as a pass". That was false.
+  * v1 decided with `count("sh ") == 0`; a `writeFile` walked through it.
+  * v2 searched raw text; the verification was commented out and both suites said ALL PASS.
+  * v3 lexed comments and strings, but did not know slashy or dollar-slashy strings, and its
+    "independent" count used the same classification — so `$/ /* /$` hid an executing second compile.
+  * v4 inverted the direction and refused unmodelled LEXICAL constructs. That shut the lexical class —
+    and the next defect was on a different axis: `if (false)` on its own line, with the verification
+    block on the next, is two statements to a newline-splitter and one statement to Groovy, so the
+    verification never ran and the compile did. Lexical refusal does not establish EXECUTION ORDER.
+  * v4 also matched the guarded command by its literal spelling, so `sh 'mvn\\u0020-B test'` — which
+    Groovy reads as exactly `mvn -B test` — and plain `sh 'mvn test'` both slipped past, and it matched
+    the verification's permission source as "any uppercase variable", so `${GIT_COMMIT:-}` counted as a
+    permission.
 
-A fourth text rule would lose too. So the direction is inverted: **this reader refuses any file
-containing a construct it does not model, and `verified_steps()` returns False on a refusal.** A shape
-it cannot read can no longer be read as absence.
+So the rule is the same one, applied on every axis this has been broken on: **decide, or refuse.** There
+is no "never as a pass" sentence in this header any more — it was written twice and was false twice.
+What is here instead is the list of what is decided and the list of what is refused.
 
 WHAT IT MODELS
+  * Groovy's pre-lexical `\\uXXXX` unicode escapes, decoded across the whole source first, exactly as the
+    Groovy lexer does (an even number of preceding backslashes means it is not an escape). So
+    `sh 'mvn\\u0020-B test'` is read as `sh 'mvn -B test'` and is classified like any other.
   * `//` line comments and `/* … */` block comments.
   * String literals: `'…'`, `"…"`, `'''…'''`, `\"\"\"…\"\"\"`, with backslash escapes.
-  * GString interpolation inside the double-quoted forms: `${ … }` is lexed RECURSIVELY AS CODE, with
-    its own nested strings, comments and brace nesting, and `$identifier[.identifier…]` is read as a
-    plain reference. So `"${ \"/*\" }"` does not open a comment, and `\"${sh('mvn -B test')}\"` is a
-    command occurrence that the count sees.
-  * Brace / paren / bracket nesting, over CODE only.
+  * `${ … }` interpolation inside the double-quoted forms, lexed RECURSIVELY AS CODE with its own nested
+    strings, comments and braces, and `$identifier[.identifier…]` as a plain reference.
+  * Brace / paren / bracket nesting over CODE. Interpolation depth and ordinary brace depth are counted
+    separately, so ordinary nesting never consumes the interpolation allowance.
+  * Statements of a block body, split at `;`, at a `}` returning to depth 0, or at a newline where
+    nothing is open and the code does not end on a continuation character.
 
-WHAT IT REFUSES, by name, with the line number (this list IS the contract):
+WHAT IT REFUSES — by name, with the line number. This list is the contract.
+  LEXICAL
   * `$/` — a dollar-slashy string.
-  * a `/` at CODE position that does not begin `//` or `/*` — that is either a slashy string or
-    division, and neither is modelled. None of the definitions these suites read contains one.
+  * a `/` at CODE position that begins neither `//` nor `/*` — a slashy string or a division.
   * an unterminated string literal, block comment, or `${` interpolation.
-  * interpolation nested more than 8 deep.
+  * interpolation nested more than 8 deep (interpolation only; ordinary braces do not count).
   * a byte-order mark.
-  * a backslash at end of line in CODE (a line continuation), which the statement splitter does not model.
-A refusal names the construct and the line; `verified_steps()` turns it into False, and the calling suite
-goes red. Adding a construct to the modelled set is a deliberate change with its own negative control.
+  * a backslash line continuation in CODE, with either LF or CRLF.
+  CONTROL FLOW — because lexical correctness does not establish execution order
+  * a brace-less control-flow head: a statement beginning `if`, `else`, `for`, `while`, `do`, `try`,
+    `catch`, `finally`, `switch` or `synchronized` that does not end with `}`. Such a head OWNS the next
+    statement in Groovy and does not in a newline-splitter, so no ordering claim can be made around it.
+  * a label (`name:` alone), for the same reason.
+  COMMAND CLASSIFICATION
+  * an executable occurrence of the watched command token that the caller's classifier cannot decide,
+    or that is not the whole body of a `sh '…'` statement when it is a guarded one. An occurrence counts
+    as executable when it sits in CODE (inside a `${…}` interpolation, say) or inside a string literal
+    whose OWNER is an `sh` step — `sh '…'`, `sh '''…'''`, `sh(…)`, including one written inside an
+    interpolation such as `echo("${sh('…')}")`. A string owned by anything else (a `description:`, an
+    `echo`, an `error(…)` message) is DATA: Jenkins does not run it, and prose that mentions the command
+    is not the command.
+A refusal makes the calling assertion False and CI red. Extending the modelled set is a deliberate
+change with its own negative control.
 
-WHAT IT STILL CANNOT ESTABLISH, said plainly, because a predicate must name its limits:
-  * It reads a FILE, not a running pipeline. It does not compile Groovy, so it does not prove Jenkins
-    accepts the file, and it says nothing about what an `agent` expression does at run time.
-  * It cannot see through a SHARED-LIBRARY call. If `oeSomething()` runs the guarded command inside the
-    library, no text in this file names it and no count here finds it. `verified_steps()` therefore
-    establishes a property of THIS FILE's literal commands, not of everything the pipeline executes. The
-    validator's own rules (a dedicated step, a fixed command template) are what keep library calls out of
-    the effect paths; this reader is the adjacency check, not a call graph.
-  * Statement splitting is newline / `;` / `}`-based with a continuation-character rule. A split it gets
-    wrong shows up as a refusal (the step is not a statement of its own, or its predecessor is not the
-    verification), never as a pass — and, unlike v3, the constructs that could make that claim false are
-    refused outright rather than guessed at.
+WHAT IT STILL CANNOT ESTABLISH
+  * It reads a FILE, not a running pipeline: it does not compile Groovy, so it does not prove Jenkins
+    accepts the file, and it says nothing about what an `agent` expression does at run time. It also
+    does not reject every malformed input — a file Groovy would refuse may be read without complaint.
+  * It cannot see through a SHARED-LIBRARY call. If a library method runs the guarded command, no text
+    in this file names it. This is an adjacency check over this file's literal commands, not a call
+    graph; the validator's own rules are what keep library calls out of the effect paths.
 
-Run `python3 groovy-statements.py --self-test` to execute this file's own assertions, and
-`python3 groovy-statements.py --lex <file>…` to print what it refuses in a file.
+Run `python3 groovy-statements.py --self-test`, or `--lex <file>…` to print what it refuses in a file.
 """
 from __future__ import annotations
 
@@ -65,31 +81,56 @@ import re
 import sys
 
 CODE, STRING, COMMENT = 0, 1, 2
-# A statement does not end at a newline when the code so far ends on one of these: the expression
-# continues on the next line.
 CONTINUES = set("+-*/%,&|=<>?:.([{!~^")
 MAX_INTERPOLATION_DEPTH = 8
+CONTROL_HEADS = ("if", "else", "for", "while", "do", "try", "catch", "finally", "switch", "synchronized")
 
-# The canonical provenance-verification statement, in full. `verified_steps()` requires the statement
-# before the guarded step to match this ENTIRELY — not to start with it. Codex round 4: a check of
-# `itxt.startswith("sh '" + prefix)` accepted
-#     sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . || true'
-# which turns a dirty-tree refusal into shell success and lets the step proceed. Nothing may follow the
-# declared arguments: no `||`, `&&`, `;`, `|`, redirection or trailing comment.
+# The canonical provenance-verification statement, in full. The statement before a guarded command must
+# match this ENTIRELY — not start with it (round 4: `… --dir . || true` was accepted, turning a
+# dirty-tree refusal into shell success) — and its PERMISSION SOURCE is compared against the name the
+# caller expects (round 5: `${GIT_COMMIT:-}` was accepted as a permission because the pattern allowed
+# any uppercase variable).
 _ALLOW_NAME = r"(?=[A-Za-z0-9._-]*[A-Za-z0-9_-])[A-Za-z0-9._-]+"
 _ALLOW_COMP = r"(?:\*|" + _ALLOW_NAME + r")"
 _ALLOW_ARG = (r"(?:" + _ALLOW_NAME + r"(?:/" + _ALLOW_NAME + r")*"
               r"|\"" + _ALLOW_COMP + r"(?:/" + _ALLOW_COMP + r")*\")")
 VERIFY_STATEMENT = re.compile(
-    r"sh 'PERMITTED_SHA=\"\$\{[A-Z][A-Z0-9_]*:[-?]\}\" "
+    r"sh 'PERMITTED_SHA=\"\$\{(?P<perm>[A-Z][A-Z0-9_]*):[-?]\}\" "
     r"bash scripts/jenkins/verify-permitted-tree\.sh"
     r" --dir (?P<dir>[A-Za-z0-9._][A-Za-z0-9._/-]*)"
     r"(?P<allow>(?: --allow-ignored " + _ALLOW_ARG + r")*)'"
 )
 
+GUARDED, OTHER, UNDECIDABLE = "GUARDED", "OTHER", "UNDECIDABLE"
 
-class Refusal(Exception):
-    """Raised inside the lexer; callers receive it as a (False, reason) verdict."""
+
+def decode_unicode_escapes(src: str) -> str:
+    """Groovy decodes `\\uXXXX` across the WHOLE source before lexing; so does this.
+
+    An even number of backslashes before the `u` means the backslash is itself escaped and this is not a
+    unicode escape. One or more `u`s may follow the backslash."""
+    out: list[str] = []
+    i, n = 0, len(src)
+    while i < n:
+        if src[i] != "\\":
+            out.append(src[i])
+            i += 1
+            continue
+        j = i
+        while j < n and src[j] == "\\":
+            j += 1
+        runs = j - i
+        k = j
+        while k < n and src[k] == "u":
+            k += 1
+        if runs % 2 == 1 and k > j and k + 4 <= n and all(c in "0123456789abcdefABCDEF" for c in src[k:k + 4]):
+            out.append("\\" * (runs - 1))
+            out.append(chr(int(src[k:k + 4], 16)))
+            i = k + 4
+        else:
+            out.append("\\" * runs)
+            i = j
+    return "".join(out)
 
 
 def _line_of(src: str, i: int) -> int:
@@ -113,8 +154,7 @@ def lex(src: str) -> tuple[list[int], list[str]]:
     if src.startswith("﻿"):
         refuse(0, "a byte-order mark, which this reader does not model")
 
-    def scan_code(i: int, end: int, depth: int) -> int:
-        """Lex CODE from i until `end` (or an unmatched `}` when depth > 0). Returns the index after."""
+    def scan_code(i: int, end: int, interp: int, braces: int) -> int:
         while i < end:
             c = src[i]
             two = src[i:i + 2]
@@ -139,25 +179,27 @@ def lex(src: str) -> tuple[list[int], list[str]]:
                           "neither of which this reader models")
                 return end
             elif src[i:i + 3] in ("'''", '"""'):
-                i = scan_string(i, src[i:i + 3], end, depth)
+                i = scan_string(i, src[i:i + 3], end, interp)
             elif c in "'\"":
-                i = scan_string(i, c, end, depth)
-            elif c == "\\" and src[i:i + 2] == "\\\n":
+                i = scan_string(i, c, end, interp)
+            elif c == "\\" and (src[i:i + 2] == "\\\n" or src[i:i + 3] == "\\\r\n"):
                 refuse(i, "a backslash line continuation in code, which the statement splitter "
                           "does not model")
                 return end
-            elif depth > 0 and c == "}":
-                return i
-            elif depth > 0 and c == "{":
-                i = scan_code(i + 1, end, depth + 1)
+            elif interp > 0 and braces == 0 and c == "}":
+                return i                      # the interpolation's own closing brace
+            elif c == "{":
+                i = scan_code(i + 1, end, interp, braces + 1)
                 if i < end and src[i] == "}":
                     i += 1
+                continue
+            elif braces > 0 and c == "}":
+                return i
             else:
                 i += 1
         return i
 
-    def scan_string(i: int, quote: str, end: int, depth: int) -> int:
-        """Lex a string literal starting at i. Interpolation in a double-quoted form is CODE."""
+    def scan_string(i: int, quote: str, end: int, interp: int) -> int:
         interpolating = quote[0] == '"'
         j = i + len(quote)
         paint(i, j, STRING)
@@ -170,11 +212,11 @@ def lex(src: str) -> tuple[list[int], list[str]]:
                 paint(j, j + len(quote), STRING)
                 return j + len(quote)
             if interpolating and src[j:j + 2] == "${":
-                if depth + 1 > MAX_INTERPOLATION_DEPTH:
+                if interp + 1 > MAX_INTERPOLATION_DEPTH:
                     refuse(j, "interpolation nested more than %d deep" % MAX_INTERPOLATION_DEPTH)
                     return end
                 paint(j, j + 2, CODE)
-                k = scan_code(j + 2, end, depth + 1)
+                k = scan_code(j + 2, end, interp + 1, 0)
                 if k >= end or src[k] != "}":
                     refuse(j, "an unterminated ${…} interpolation")
                     return end
@@ -194,14 +236,13 @@ def lex(src: str) -> tuple[list[int], list[str]]:
         return end
 
     try:
-        scan_code(0, len(src), 0)
-    except RecursionError:                      # pathological nesting: a refusal, not a crash
+        scan_code(0, len(src), 0, 0)
+    except RecursionError:
         refusals.append("line 1: nesting too deep for this reader")
     return mark, refusals
 
 
 def code_text(src: str, mark: list[int], a: int, b: int) -> str:
-    """src[a:b] with comment bytes dropped and code whitespace collapsed; string bytes kept verbatim."""
     out: list[str] = []
     gap = False
     for i in range(a, b):
@@ -219,10 +260,6 @@ def code_text(src: str, mark: list[int], a: int, b: int) -> str:
 
 
 def statements(src: str, mark: list[int], a: int, b: int) -> list[tuple[int, int]]:
-    """The TOP-LEVEL statements of the block body src[a:b], as (start, end) spans.
-
-    A statement ends at a `;` or at a `}` that returns to depth 0, or at a newline where nothing is open
-    and the code so far does not end on a continuation character."""
     out: list[tuple[int, int]] = []
     depth, start = 0, -1
     i = a
@@ -232,7 +269,7 @@ def statements(src: str, mark: list[int], a: int, b: int) -> list[tuple[int, int
             depth += 1
         elif k == CODE and c in ")]}":
             depth -= 1
-            if depth < 0:                       # the body's own closing brace
+            if depth < 0:
                 break
         if start < 0 and not (k == COMMENT or (k == CODE and c.isspace())):
             start = i
@@ -257,7 +294,6 @@ def statements(src: str, mark: list[int], a: int, b: int) -> list[tuple[int, int
 
 
 def block_bodies(src: str, mark: list[int], a: int, b: int) -> list[tuple[int, int]]:
-    """(open, close) index pairs of every matching CODE brace pair opening inside src[a:b]."""
     stack: list[int] = []
     out: list[tuple[int, int]] = []
     for i in range(a, b):
@@ -271,73 +307,175 @@ def block_bodies(src: str, mark: list[int], a: int, b: int) -> list[tuple[int, i
 
 
 def sibling_lists(src: str, mark: list[int], a: int, b: int) -> list[list[tuple[int, int]]]:
-    """Every block body's statement list, for every brace pair inside src[a:b]."""
     return [statements(src, mark, o + 1, c) for o, c in block_bodies(src, mark, a, b)]
 
 
-def span(text: str, opener: str, closer: str) -> tuple[int, int]:
-    """The half-open range of `text` from `opener` to `closer`; (-1, -1) if either is absent."""
-    try:
-        return text.index(opener), text.index(closer)
-    except ValueError:
-        return -1, -1
+LABEL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*:$")
 
 
-def verified_steps(text: str, a: int, b: int, step: str, verify_dir: str) -> tuple[bool, str]:
-    """Is every statement running `step` inside [a,b) and immediately preceded by the verification?
+def string_owner(src: str, mark: list[int], i: int) -> str:
+    """The identifier that owns the string literal containing index `i`: sh, echo, description, ...
 
-    `step` is the exact shell command (e.g. `mvn -B test`); a statement running it must be exactly
-    `sh '<step>'`. Its predecessor must match VERIFY_STATEMENT entirely, for `--dir <verify_dir>`.
+    A string is a SHELL BODY when its owner is `sh`; anything else is data. It is "the token just before
+    the opening quote, skipping whitespace, '(' and ':'", which reads sh 'x', sh('x') and
+    echo("${sh('x')}") correctly, and reads `description: 'x'` as description."""
+    j = i
+    while j > 0 and mark[j - 1] == STRING:
+        j -= 1
+    k = j - 1
+    while k >= 0 and (src[k].isspace() or src[k] in "(:"):
+        k -= 1
+    end = k + 1
+    while k >= 0 and (src[k].isalnum() or src[k] == "_"):
+        k -= 1
+    return src[k + 1:end]
 
-    THREE counts must agree, over the WHOLE FILE, not just the span:
-      * executable occurrences of the command text anywhere in the file,
-      * statements that are exactly `sh '<step>'` anywhere in the file,
-      * those of them inside [a,b) whose preceding sibling is the verification.
-    A helper defined outside the span, a second copy inside it, or a command in a shape this reader does
-    not model as a statement all make the counts differ, and a difference is a refusal.
 
-    Returns (ok, reason). Never raises: a shape this reader does not model is a refusal with a reason."""
-    mark, refusals = lex(text)
+def control_flow_refusals(src: str, mark: list[int], sibs: list[list[tuple[int, int]]]) -> list[str]:
+    """Statement shapes whose execution ORDER this reader cannot prove.
+
+    Round 5: `if (false)` on its own line owns the next statement in Groovy and does not in a
+    newline-splitter, so a verification written under it never runs while the splitter reports it as an
+    ordinary preceding sibling. Any brace-less control-flow head, and any label, is refused."""
+    out: list[str] = []
+    for lst in sibs:
+        for s0, s1 in lst:
+            txt = code_text(src, mark, s0, s1)
+            first = txt.split("(")[0].split()
+            head = first[0] if first else ""
+            if head in CONTROL_HEADS and not txt.endswith("}"):
+                out.append("line %d: a brace-less `%s` head, which owns the statement after it in Groovy "
+                           "but not in this reader's splitter — write the body in braces" % (_line_of(src, s0), head))
+            elif LABEL_RE.match(txt):
+                out.append("line %d: a label (`%s`), whose scope this reader does not model"
+                           % (_line_of(src, s0), txt))
+    return out
+
+
+def mvn_classifier(primary_pom: str = "pom.xml"):
+    """A classifier for `mvn`: does this invocation consume the PRIMARY checkout's source?
+
+    "However spelled" (round 5): not `mvn -B test` literally, but any invocation whose goals reach the
+    compile phase or later and whose project is this checkout's own pom. `-f <other>/pom.xml` is another
+    source, verified by its own verify; a plugin goal such as `help:evaluate` reads no source."""
+    PHASES = {"compile", "test-compile", "test", "package", "pre-integration-test", "integration-test",
+              "post-integration-test", "verify", "install", "deploy"}
+    VALUE_OPTS = {"-f", "--file", "-s", "--settings", "-gs", "-t", "--toolchains", "-P", "--activate-profiles",
+                  "-pl", "--projects", "-T", "--threads", "-rf", "--resume-from", "-l", "--log-file"}
+
+    def classify(cmd: str) -> tuple[str, str]:
+        words = cmd.split()
+        if not words or words[0] != "mvn":
+            return OTHER, ""
+        for w in words:
+            if w.startswith("$") or "${" in w or w.startswith("`"):
+                return UNDECIDABLE, "an mvn invocation with a value this reader cannot resolve: " + w
+        goals, skip = [], False
+        for w in words[1:]:
+            if skip:
+                skip = False
+                continue
+            if w in VALUE_OPTS:
+                skip = True
+                continue
+            if w.startswith("-"):
+                continue
+            goals.append(w)
+        pom = primary_pom
+        for n, w in enumerate(words):
+            if w in ("-f", "--file") and n + 1 < len(words):
+                pom = words[n + 1]
+        if pom != primary_pom:
+            return OTHER, ""                  # another project's source, bound by its own verification
+        if any(g in PHASES for g in goals):
+            return GUARDED, ""
+        return OTHER, ""
+
+    return classify
+
+
+def literal_classifier(command: str):
+    """A classifier for one exact command, e.g. `bash scripts/deploy/service-deploy.sh`."""
+    def classify(cmd: str) -> tuple[str, str]:
+        return (GUARDED, "") if cmd == command else (OTHER, "")
+    return classify
+
+
+def verified_commands(text: str, token: str, classify, permission_var: str, verify_dir: str) -> tuple[bool, str]:
+    """Is EVERY guarded command in this file immediately preceded, as a sibling statement, by the
+    complete verification statement for `permission_var` and `verify_dir`?
+
+    `token` is the command word whose every executable occurrence must be accounted for (`mvn`, or the
+    first word of a literal command). An occurrence the classifier cannot decide, or a guarded one that
+    is not the whole body of an `sh '…'` statement, is a refusal — not an absence.
+
+    Returns (ok, reason). Never raises."""
+    src = decode_unicode_escapes(text)
+    mark, refusals = lex(src)
     if refusals:
         return False, "the reader refuses this file: " + "; ".join(refusals[:3])
-    if a < 0 or b < 0 or b <= a:
-        return False, "the searched span was not found in the file"
-    want = "sh '" + step + "'"
-    running = sum(1 for i in range(0, len(text) - len(step) + 1)
-                  if text[i:i + len(step)] == step and mark[i] != COMMENT)
-    total = 0                                   # statements that ARE the step, anywhere in the file
-    verified = 0                                # ...inside the span, preceded by the verification
-    for sibs in sibling_lists(text, mark, 0, len(text)):
-        for n, (s0, s1) in enumerate(sibs):
-            if code_text(text, mark, s0, s1) != want:
-                continue
-            total += 1
-            if not (a <= s0 < b):
-                return False, "a statement running the step sits outside the searched span, at line %d" % _line_of(text, s0)
-            if n == 0:
-                return False, "the step is the first statement of its block: nothing precedes it"
-            p0, p1 = sibs[n - 1]
-            ptxt = code_text(text, mark, p0, p1)
-            m = re.fullmatch(r"timeout\(time: [0-9]+, unit: 'MINUTES'\) \{ (?P<inner>.*) \}", ptxt)
+    sibs = sibling_lists(src, mark, 0, len(src))
+    cf = control_flow_refusals(src, mark, sibs)
+    if cf:
+        return False, "the reader refuses this file: " + "; ".join(cf[:3])
+
+    sh_stmt = re.compile(r"^sh '([^']*)'$")
+    guarded_spans: list[tuple[int, int]] = []
+    verified = 0
+    for lst in sibs:
+        for n, (s0, s1) in enumerate(lst):
+            m = sh_stmt.match(code_text(src, mark, s0, s1))
             if not m:
-                return False, "the statement before the step is not a timeout block: " + ptxt[:80]
-            inner_spans = statements(text, mark, text.index("{", p0) + 1, p1 - 1)
-            if len(inner_spans) != 1:
-                return False, "the timeout block before the step holds %d statements, not 1" % len(inner_spans)
-            itxt = code_text(text, mark, *inner_spans[0])
-            vm = VERIFY_STATEMENT.fullmatch(itxt)
+                continue
+            kind, why = classify(m.group(1))
+            if kind == UNDECIDABLE:
+                return False, "line %d: %s" % (_line_of(src, s0), why)
+            if kind != GUARDED:
+                continue
+            guarded_spans.append((s0, s1))
+            if n == 0:
+                return False, "line %d: the guarded command is the first statement of its block" % _line_of(src, s0)
+            p0, p1 = lst[n - 1]
+            ptxt = code_text(src, mark, p0, p1)
+            if not re.fullmatch(r"timeout\(time: [0-9]+, unit: 'MINUTES'\) \{ .* \}", ptxt):
+                return False, "line %d: the statement before the guarded command is not a timeout block: %s" % (
+                    _line_of(src, s0), ptxt[:80])
+            inner = statements(src, mark, src.index("{", p0) + 1, p1 - 1)
+            if len(inner) != 1:
+                return False, "line %d: the timeout block before it holds %d statements, not 1" % (
+                    _line_of(src, s0), len(inner))
+            vm = VERIFY_STATEMENT.fullmatch(code_text(src, mark, *inner[0]))
             if not vm:
-                return False, "the timeout block before the step is not the complete verification statement: " + itxt[:100]
+                return False, "line %d: the timeout block before it is not the complete verification statement" % _line_of(src, s0)
+            if vm.group("perm") != permission_var:
+                return False, "line %d: the verification reads ${%s}, not the expected ${%s}" % (
+                    _line_of(src, s0), vm.group("perm"), permission_var)
             if vm.group("dir") != verify_dir:
-                return False, "the verification before the step is for --dir %s, not %s" % (vm.group("dir"), verify_dir)
+                return False, "line %d: the verification is for --dir %s, not %s" % (
+                    _line_of(src, s0), vm.group("dir"), verify_dir)
             verified += 1
+
+    # every executable occurrence of the token must be inside a statement this reader classified, or be
+    # classifiable where it stands (a command inside a larger shell body); anything else is a refusal
+    for m in re.finditer(r"(?<![A-Za-z0-9_./-])" + re.escape(token) + r"(?![A-Za-z0-9_-])", src):
+        i = m.start()
+        if mark[i] == COMMENT:
+            continue
+        if mark[i] == STRING and string_owner(src, mark, i) != "sh":
+            continue                          # a description, an echo, an error message: data, not a command
+        if any(s0 <= i < s1 for s0, s1 in guarded_spans):
+            continue
+        tail = src[i:]
+        cut = min((p for p in (tail.find(c) for c in ("\n", ";", "&&", "||", "|", ")", "'")) if p > 0), default=len(tail))
+        kind, why = classify(tail[:cut].strip())
+        if kind == GUARDED:
+            return False, "line %d: a guarded command that is not a dedicated, verified step: %s" % (
+                _line_of(src, i), tail[:cut].strip()[:80])
+        if kind == UNDECIDABLE:
+            return False, "line %d: %s" % (_line_of(src, i), why)
     if verified == 0:
-        return False, "no statement is exactly `%s`" % want
-    if not (verified == total == running):
-        return False, ("%d verified, %d statement(s) are `%s`, and the command occurs %d time(s) in "
-                       "executable text — something runs it in a shape this reader does not model"
-                       % (verified, total, want, running))
-    return True, "%d verified step(s)" % verified
+        return False, "no guarded command was found at all"
+    return True, "%d verified guarded command(s)" % verified
 
 
 def self_test() -> int:
@@ -364,20 +502,25 @@ def self_test() -> int:
     esc = "x 'a\\'b } c' y\n"
     check("a backslash escape does not end a literal", lex(esc)[0][esc.index("}")] == STRING)
 
-    # INTERPOLATION is code, with its own strings — the round-4 hiding places
     gs = 'x "${ "/*" }" y\nsh \'mvn -B test\'\n// */\n'
-    gm, gr = lex(gs)
     check("interpolation containing a comment opener does not open a comment",
-          not gr and gm[gs.index("sh 'mvn")] == CODE)
-    gs2 = 'echo("${sh(\'mvn -B test\')}")\n'
-    gm2, gr2 = lex(gs2)
-    check("a command inside interpolation is CODE, so the count sees it",
-          not gr2 and gm2[gs2.index("mvn -B test")] != COMMENT)
+          not lex(gs)[1] and lex(gs)[0][gs.index("sh 'mvn")] == CODE)
     check("a simple $reference in a GString is code", lex('"$env.FOO bar"')[0][2] == CODE)
     check("interpolation in a SINGLE-quoted string is not interpolation",
           lex("'${ \"/*\" }'")[0][3] == STRING)
+    deep = 'def x = "${ { -> { -> { -> { -> { -> { -> { -> { -> "${1}" } } } } } } } } }"\n'
+    check("ordinary braces do not consume the interpolation allowance", not lex(deep)[1])
+    nested = '"${1}"'
+    for _ in range(9):
+        nested = '"${ ' + nested + ' }"'
+    check("interpolation really nested past 8 is refused",
+          any("nested more than 8" in x for x in lex(nested)[1]))
 
-    # REFUSALS — the contract
+    # unicode escapes are decoded exactly as Groovy decodes them
+    check("a unicode escape is decoded", decode_unicode_escapes("sh 'mvn\\u0020-B test'") == "sh 'mvn -B test'")
+    check("multiple u's are allowed", decode_unicode_escapes("\\uu0041") == "A")
+    check("an escaped backslash is not an escape", decode_unicode_escapes("a\\\\u0041b") == "a\\\\u0041b")
+
     for name, text, expect in [
         ("a dollar-slashy string", "def x = $/ /* /$\n", "dollar-slashy"),
         ("a slashy string", "def x = /a\\/*/\n", "slashy string or a division"),
@@ -386,76 +529,80 @@ def self_test() -> int:
         ("an unterminated string", "a 'b\n", "unterminated"),
         ("an unterminated interpolation", 'a "${ b\n', "unterminated"),
         ("a byte-order mark", "﻿pipeline { }\n", "byte-order mark"),
-        ("a backslash line continuation", "def a = b \\\nc\n", "line continuation"),
+        ("a backslash-LF continuation", "def a = b \\\nc\n", "line continuation"),
+        ("a backslash-CRLF continuation", "def a = b \\\r\nc\n", "line continuation"),
     ]:
-        _, rr = lex(text)
-        check("REFUSED: " + name, any(expect in x for x in rr))
+        check("REFUSED (lexical): " + name, any(expect in x for x in lex(text)[1]))
+
+    V = "PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir ."
+    good = ("pipeline {\n  stages {\n    stage('X') {\n      steps {\n        script {\n"
+            "          timeout(time: 10, unit: 'MINUTES') {\n            sh '" + V + " --allow-ignored target'\n          }\n"
+            "          sh 'mvn -B test'\n        }\n      }\n    }\n  }\n}\n")
+
+    def verdict(t: str, perm: str = "PERMITTED_SHA", d: str = ".") -> tuple[bool, str]:
+        return verified_commands(t, "mvn", mvn_classifier(), perm, d)
+
+    check("the good shape is accepted", verdict(good)[0])
+    check("a verification that exists only in comments is refused",
+          not verdict(good.replace("          timeout(time: 10, unit: 'MINUTES') {\n            sh '" + V + " --allow-ignored target'\n          }\n",
+                                   "          // timeout { sh 'x' }\n"))[0])
+    for name, mutated in [
+        ("a second, unverified copy", good.replace("          sh 'mvn -B test'\n",
+                                                   "          sh 'mvn -B test'\n          writeFile file: 'pom.xml', text: 'x'\n          sh 'mvn -B test'\n")),
+        ("a writer between them", good.replace("          sh 'mvn -B test'", "          writeFile file: 'pom.xml', text: 'x'\n          sh 'mvn -B test'")),
+        ("a writer inside the verification timeout", good.replace(" --allow-ignored target'\n", " --allow-ignored target'\n            writeFile file: 'pom.xml', text: 'x'\n")),
+        ("the command in a compound shell body", good.replace("sh 'mvn -B test'", "sh 'set -eu; mvn -B test'")),
+        ("the verification's failure suppressed", good.replace(" --allow-ignored target'", " --allow-ignored target || true'")),
+        ("a command appended to the verification", good.replace(" --allow-ignored target'", " --allow-ignored target; true'")),
+        ("the verification pointed at another directory", good.replace("--dir . --allow-ignored", "--dir app-src --allow-ignored")),
+        # round 5
+        ("a brace-less `if` owning the verification", good.replace("          timeout(time: 10,", "          if (false)\n          timeout(time: 10,")),
+        ("a brace-less `for` owning the verification", good.replace("          timeout(time: 10,", "          for (int i = 0; i < 0; i++)\n          timeout(time: 10,")),
+        ("a label before the verification", good.replace("          timeout(time: 10,", "          skip:\n          timeout(time: 10,")),
+        ("the same compile spelled with a unicode escape", good.replace("          sh 'mvn -B test'\n",
+                                                                        "          sh 'mvn -B test'\n          sh 'mvn\\u0020-B test'\n")),
+        ("the same compile spelled differently", good.replace("          sh 'mvn -B test'\n",
+                                                              "          sh 'mvn -B test'\n          sh 'mvn -B -q test'\n")),
+        ("a plain `mvn test` elsewhere in the file", good.replace("pipeline {", "def helper() { sh 'mvn test' }\npipeline {")),
+        ("an mvn with an unresolvable argument", good.replace("          sh 'mvn -B test'\n",
+                                                              "          sh 'mvn -B test'\n          sh 'mvn ${GOALS}'\n")),
+        ("an mvn inside a larger shell body", good.replace("          sh 'mvn -B test'\n",
+                                                           "          sh 'mvn -B test'\n          sh 'echo hi; mvn -B package'\n")),
+    ]:
+        check("REFUSED: " + name, not verdict(mutated)[0])
+    check("REFUSED: the verification reading the wrong permission variable",
+          not verdict(good.replace('${PERMITTED_SHA:-}', '${GIT_COMMIT:-}'))[0])
+    check("REFUSED: the caller expecting a different permission variable", not verdict(good, perm="OTHER_SHA")[0])
+    check("an mvn against another project's pom is not this assertion's business",
+          verdict(good.replace("          sh 'mvn -B test'\n",
+                               "          sh 'mvn -B test'\n          sh 'mvn -B -f .deps/other/pom.xml install'\n"))[0])
+    check("a read-only plugin goal is not a guarded command",
+          verdict(good.replace("          sh 'mvn -B test'\n",
+                               "          sh 'mvn -B test'\n          sh 'mvn -q help:evaluate -Dexpression=x'\n"))[0])
+    check("a brace-full `if` is fine",
+          verdict(good.replace("        script {\n", "        script {\n          if (true) { echo 'x' }\n"))[0])
+    check("a file with no guarded command at all is refused", not verdict(good.replace("          sh 'mvn -B test'\n", ""))[0])
+
+    # the literal classifier, used for a deploy helper
+    lit = good.replace("sh 'mvn -B test'", "sh 'bash scripts/deploy/service-deploy.sh'")
+    check("the literal classifier accepts its verified command",
+          verified_commands(lit, "scripts/deploy/service-deploy.sh",
+                            literal_classifier("bash scripts/deploy/service-deploy.sh"), "PERMITTED_SHA", ".")[0])
+    check("REFUSED: a second copy of the literal command",
+          not verified_commands(lit.replace("          sh 'bash scripts/deploy/service-deploy.sh'\n",
+                                            "          sh 'bash scripts/deploy/service-deploy.sh'\n          sh 'bash scripts/deploy/service-deploy.sh'\n"),
+                                "scripts/deploy/service-deploy.sh",
+                                literal_classifier("bash scripts/deploy/service-deploy.sh"), "PERMITTED_SHA", ".")[0])
 
     body = "{\n  one()\n  two(a,\n      b)\n  three { four() }\n  // five()\n  six()\n}\n"
     bm, _ = lex(body)
-    st = statements(body, bm, 1, len(body) - 2)
-    texts = [code_text(body, bm, s, e) for s, e in st]
+    texts = [code_text(body, bm, s, e) for s, e in statements(body, bm, 1, len(body) - 2)]
     check("statements split on newlines at depth 0", texts[:2] == ["one()", "two(a, b)"])
     check("a block statement ends at its closing brace", texts[2] == "three { four() }")
     check("a commented-out statement is not a statement", "five()" not in " ".join(texts))
-    check("statements after a comment still parse", texts[-1] == "six()")
-
-    V = "PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir ."
-    good = ("stage('X') {\n  steps {\n    script {\n"
-            "      timeout(time: 10, unit: 'MINUTES') {\n        sh '" + V + " --allow-ignored target'\n      }\n"
-            "      sh 'mvn -B test'\n    }\n  }\n}\nstage('Y') {\n}\n")
-
-    def verdict(t: str) -> tuple[bool, str]:
-        return verified_steps(t, *span(t, "stage('X')", "stage('Y')"), "mvn -B test", ".")
-
-    check("the good shape is accepted", verdict(good)[0])
-    commented = good.replace("      timeout(time: 10, unit: 'MINUTES') {\n", "      // timeout(time: 10, unit: 'MINUTES') {\n") \
-                    .replace("        sh '" + V + " --allow-ignored target'\n", "        // sh '" + V + " --allow-ignored target'\n") \
-                    .replace("      }\n      sh 'mvn -B test'", "      // }\n      sh 'mvn -B test'")
-    check("a verification that exists only in comments is refused", not verdict(commented)[0])
-    check("a second, unverified copy of the step is refused",
-          not verdict(good.replace("      sh 'mvn -B test'\n", "      sh 'mvn -B test'\n      writeFile file: 'pom.xml', text: 'x'\n      sh 'mvn -B test'\n"))[0])
-    check("a step between the verification and the step is refused",
-          not verdict(good.replace("      sh 'mvn -B test'", "      writeFile file: 'pom.xml', text: 'x'\n      sh 'mvn -B test'"))[0])
-    check("a writer inside the verification timeout is refused",
-          not verdict(good.replace("        sh '" + V + " --allow-ignored target'\n", "        sh '" + V + " --allow-ignored target'\n        writeFile file: 'pom.xml', text: 'x'\n"))[0])
-    check("the command in a shape this reader does not model is refused",
-          not verdict(good.replace("      sh 'mvn -B test'", "      sh 'set -eu; mvn -B test'"))[0])
-    check("a span with no such step at all is refused", not verdict(good.replace("      sh 'mvn -B test'\n", ""))[0])
-    check("a span that is not in the file is refused",
-          not verified_steps(good, *span(good, "stage('Z')", "stage('Y')"), "mvn -B test", ".")[0])
-
-    # ROUND 4: the failure direction, and the complete verification statement
-    for name, mutated in [
-        ("a dollar-slashy comment hiding a second compile",
-         good.replace("      sh 'mvn -B test'\n",
-                      "      sh 'mvn -B test'\n      def x = $/ /* /$\n      writeFile file: 'pom.xml', text: 'x'\n      sh 'mvn -B test'\n      // */\n")),
-        ("a slashy-string comment hiding a second compile",
-         good.replace("      sh 'mvn -B test'\n",
-                      "      sh 'mvn -B test'\n      def x = /a\\/*/\n      sh 'mvn -B test'\n      // */\n")),
-        ("nested interpolation quotes hiding a second compile",
-         good.replace("      sh 'mvn -B test'\n",
-                      "      sh 'mvn -B test'\n      def x = \"${ \"/*\" }\"\n      sh 'mvn -B test'\n      // */\n")),
-        ("an executable compile inside dollar-slashy interpolation",
-         good.replace("      sh 'mvn -B test'\n",
-                      "      sh 'mvn -B test'\n      echo($/ // ${sh('mvn -B test')} /$)\n")),
-        ("a helper defined outside the span that runs the step",
-         "def helper() { sh 'mvn -B test' }\n" + good),
-        ("the verification's failure suppressed with || true",
-         good.replace(" --allow-ignored target'", " --allow-ignored target || true'")),
-        ("a command appended to the verification with ;",
-         good.replace(" --allow-ignored target'", " --allow-ignored target; true'")),
-        ("a trailing comment appended to the verification",
-         good.replace(" --allow-ignored target'", " --allow-ignored target #x'")),
-        ("the verification pointed at another directory",
-         good.replace("--dir . --allow-ignored target", "--dir app-src --allow-ignored target")),
-        ("an undeclarable --allow-ignored argument",
-         good.replace("--allow-ignored target", "--allow-ignored ../target")),
-    ]:
-        check("REFUSED: " + name, not verdict(mutated)[0])
 
     print("groovy-statements self-test: %d passed, %d failed" % (ok, fail))
-    if fail == 0 and ok >= 40:
+    if fail == 0 and ok >= 48:
         print("groovy-statements self-test: ALL PASS")
         return 0
     return 1
@@ -468,7 +615,10 @@ def main(argv: list[str]) -> int:
         bad = 0
         for path in argv[argv.index("--lex") + 1:]:
             with open(path, encoding="utf-8") as fh:
-                _, refusals = lex(fh.read())
+                src = decode_unicode_escapes(fh.read())
+            mark, refusals = lex(src)
+            if not refusals:
+                refusals = control_flow_refusals(src, mark, sibling_lists(src, mark, 0, len(src)))
             print("%-60s %s" % (path, "ok" if not refusals else "REFUSED: " + "; ".join(refusals[:3])))
             bad += bool(refusals)
         return 1 if bad else 0
