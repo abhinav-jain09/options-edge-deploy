@@ -1341,13 +1341,19 @@ class EffectShimTest(unittest.TestCase):
         self.assertFalse(ran.exists(), "the real kubectl RAN against a tree modified after the verification")
 
 
-    def test_the_integrity_check_prevents_a_stage_that_begins_tampered_and_detects_one_that_does_not(self) -> None:
-        """PREVENTION AND DETECTION ARE DIFFERENT THINGS, and both directions are demonstrated here.
+    def test_the_integrity_check_refuses_an_accidental_tamper_at_both_ends_of_the_stage(self) -> None:
+        """WHAT THE TWO INSPECTIONS CATCH IS AN ACCIDENT, and the only thing that differs is WHEN.
 
-        --when start refuses before the stage's steps run, so nothing unverified happens: that is
-        prevention. --when end refuses after them, and its own output says what that means -- the build
-        fails and names the tampering, and whatever the unverified step did has already happened. If it
-        was a `kubectl apply`, the cluster changed. Nothing here is undone by a red build."""
+        This asserts the ordering, which is all the two ends are: --when start refuses before the
+        stage's steps run, so an accident caught there costs nothing; --when end refuses after them and
+        its own output says what that means -- the build fails and names what it found, and whatever the
+        unverified step did has already happened. If it was a `kubectl apply`, the cluster changed.
+        Nothing here is undone by a red build.
+
+        NOT ASSERTED, BECAUSE IT IS NOT TRUE: that either end detects a job that set out to defeat it.
+        The checker and the digest live in the workspace the job owns. The coordinated mutations --
+        an edited _shim.sh with a re-recorded digest, and an edited checker -- are DOCUMENTED LIMIT
+        cases in effect-shim-test.sh, and they assert the GREEN result those produce."""
         script = J / "effect-shim-integrity.sh"
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, True)

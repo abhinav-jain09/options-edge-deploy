@@ -36,8 +36,14 @@
 #      are attributable to nothing; that is reported NOT ATTRIBUTABLE and counted as NOT covered.
 #
 # WHAT THIS DOES NOT DO. It audits the coverage of the protections the shim HAS. It says nothing about
-# the four cases the shim does not cover -- a deleted wrapper, an absolute path, a copy outside the
-# checkout, and the shim's own integrity -- which remain limits, pinned by LIMIT cases in the suite.
+# the four cases the shim does not cover -- a deleted wrapper, an absolute-path invocation, a copy
+# outside the checkout, and THE SHIM'S OWN INTEGRITY. Those are LIMITS, pinned by LIMIT cases in the
+# suite, and a green sweep is not evidence about any of them. In particular: effect-shim-integrity.sh,
+# effect-shim-digest.txt and _shim.sh all live in the workspace the job owns, so the integrity checks
+# catch an ACCIDENT -- a wrapper deleted, a permission dropped, an entry added, a file edited by
+# something that did not also edit the digest -- and nothing more. Two LIMIT cases assert the green
+# result a coordinated edit produces. 31 of 31 covered is a statement about coverage of the protections
+# in these two files; it is not a statement that the shim was intact.
 #
 # Usage: effect-shim-sweep.sh [--verbose]
 set -u

@@ -242,8 +242,14 @@ pipeline {
           // scripts/jenkins/effect-shim, where the wrapper re-verifies this checkout against
           // PERMITTED_SHA and then execs the real binary, or refuses. So a step that MODIFIES THE TREE
           // between the verification and the helper no longer matters. A step that DELETES OR EDITS THE
-          // WRAPPER still does: the job owns its own process, a wrapper cannot detect its own absence,
-          // and the integrity checks around this block detect that case rather than prevent it.
+          // WRAPPER still does, and NOTHING HERE ANSWERS THAT: the job owns its own process, a wrapper
+          // cannot detect its own absence, and the integrity checks around this block live in the same
+          // workspace the job owns. They catch an ACCIDENT -- a wrapper deleted, a permission dropped,
+          // an entry added, a file edited by something that did not also edit the digest. A step that
+          // edits _shim.sh and re-records effect-shim-digest.txt, or that edits the checker itself,
+          // passes both inspections with an unverified wrapper in place. THE SHIM'S OWN INTEGRITY IS A
+          // LIMIT, not something this stage prevents or detects; read a green integrity line as "nothing
+          // here disagreed", never as "the wrapper was intact".
           //
           // The verification below stays as the stage's own early, explicit failure: a wrong tree should
           // stop before a deployment starts, not midway through one.

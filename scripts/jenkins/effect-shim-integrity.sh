@@ -1,18 +1,26 @@
 #!/bin/bash
 # THE SHIM'S INTEGRITY, CHECKED FROM OUTSIDE ITSELF.
 #
-# A wrapper cannot detect its own absence, and mutable code cannot establish its own integrity by
-# checking itself -- THE JOB OWNS ITS OWN PROCESS, and a step in the workspace can delete or edit a file
-# in the workspace. That is not fixable here (see effect-shim/_shim.sh for the alternatives considered
-# and why each fails). What IS possible is to look at the shim directory from outside, twice:
+# WHAT THIS CATCHES IS AN ACCIDENT, AND ONLY AN ACCIDENT. A wrapper deleted, a permission dropped, an
+# entry added, a file edited by something that did not also edit the digest -- those it names. IT DOES
+# NOT WITHSTAND A JOB THAT EDITS THE CHECKER OR THE DIGEST, AND IT NEVER CAN WHILE BOTH LIVE IN THE
+# WORKSPACE THE JOB OWNS. THE SHIM'S OWN INTEGRITY IS A LIMIT, NOT SOMETHING THIS PREVENTS OR DETECTS.
 #
-#   AT THE START of a guarded stage this is PREVENTION: a stage that begins with a tampered shim stops
-#   before its steps run, and nothing unverified happens.
+# THIS SCRIPT, effect-shim-digest.txt AND _shim.sh ARE ALL IN THE CHECKOUT. A step that edits _shim.sh
+# and re-records the digest, or that edits this file, passes both inspections with an unverified wrapper
+# in place -- an edited wrapper can run a `kubectl apply` against a tree nobody proved while both
+# inspections print ok. Two cases in effect-shim-test.sh do exactly that and assert the green result, so
+# the limit is pinned by a test rather than by this paragraph. A word like PREVENTION or DETECTION
+# attached to the shim's own integrity was here and has been removed, because at 06:30 in front of a
+# red build a responder reads a green integrity line as evidence the wrapper was intact, and it is not
+# that evidence. Mutable code cannot establish its own integrity by checking itself (see
+# effect-shim/_shim.sh for the alternatives considered and why each fails).
 #
-#   AT THE END it is DETECTION, and the difference matters at 06:30 in front of a red build: THE BUILD
-#   FAILS AND NAMES THE TAMPERING, AND WHATEVER THE UNVERIFIED STEP DID HAS ALREADY HAPPENED. If that
-#   step was a `kubectl apply`, something in the cluster changed. This turns "silently unprotected" into
-#   "loudly wrong". It does not make the effect safe and must never be described as if it does.
+# WHAT THE TWO INSPECTIONS DO DIFFER IN is WHEN they run, and that is about ordering, not about strength:
+# the one at the START of a guarded stage refuses before the stage's steps run, so an accident caught
+# there costs nothing; the one at the END refuses after them, and says so -- THE BUILD FAILS AND NAMES
+# WHAT IT FOUND, AND WHATEVER THE UNVERIFIED STEP DID HAS ALREADY HAPPENED. If that step was a
+# `kubectl apply`, something in the cluster changed. Neither ordering makes the effect safe.
 #
 # What it checks: every expected wrapper name is present and is the symlink it should be, _shim.sh
 # matches the digest recorded in this file's sibling manifest, and the directory holds nothing else.
@@ -87,4 +95,7 @@ want_file="$here/effect-shim-digest.txt"
 want="$(tr -d ' \n' < "$want_file")"
 [ "$got" = "$want" ] || refuse "_shim.sh is $got but this repository declares $want — the wrapper that ran was not the reviewed one"
 
-echo "effect-shim-integrity($when): ok — 7 wrappers present, _shim.sh $got as declared"
+# The success line says what it checked, not that the shim was intact: this script and the digest it
+# compares against are both editable by the job, so "ok" means nothing here disagreed -- not that
+# nothing was tampered with.
+echo "effect-shim-integrity($when): ok — 7 wrappers present, _shim.sh $got as declared (this checks for an ACCIDENT; it cannot outrank a step that edits this script or the digest)"

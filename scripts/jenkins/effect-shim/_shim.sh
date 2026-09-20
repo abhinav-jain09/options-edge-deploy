@@ -64,11 +64,16 @@
 #     the checkout; a copy somewhere else is not looked at, and a PATH pointing at it leaves both checks
 #     green. Said plainly because the previous wording claimed detection covered this and it does not.
 #
-#   DETECTION covers the first two of the three, not the third: the guarded stage checks THIS directory's
-#   integrity at its START -- which does PREVENT a stage that began already tampered -- and again at its
-#   END, unconditionally, including when the effect itself failed. The end check does not make the effect
-#   safe: the build fails and names the tampering, and whatever the unverified step did has already
-#   happened. If that step was a `kubectl apply`, something in the cluster changed.
+#   NONE OF THESE THREE IS DETECTED, AND THE WORD THAT USED TO BE HERE CLAIMED OTHERWISE. The guarded
+#   stage runs effect-shim-integrity.sh over THIS directory at its start and again at its end, and what
+#   that catches is an ACCIDENT: a wrapper deleted, a permission dropped, an entry added, a file edited
+#   by something that did not also edit the digest. IT DOES NOT WITHSTAND A JOB THAT EDITS THE CHECKER
+#   OR THE DIGEST, AND IT NEVER CAN WHILE BOTH LIVE IN THE WORKSPACE THE JOB OWNS -- edit this file and
+#   re-record effect-shim-digest.txt, or edit effect-shim-integrity.sh itself, and an unverified
+#   `kubectl apply` runs while both inspections print ok. THE SHIM'S OWN INTEGRITY IS A LIMIT. Where the
+#   two inspections differ is WHEN they run, which is about ordering and not about strength: the end one
+#   runs unconditionally, including when the effect itself failed, and when it does refuse the build
+#   fails and names what it found while whatever the unverified step did has already happened.
 #   * AN ABSOLUTE PATH performs no PATH lookup, so nothing reaches this script. validate-jenkinsfile-guard
 #     rule 14 refuses a LITERAL `/<tool>` in a guarded definition; an absolute path ASSEMBLED FROM QUOTED
 #     FRAGMENTS (`sh '"/usr/bin/"kubectl version'`) contains no such literal and is outside both. Chasing

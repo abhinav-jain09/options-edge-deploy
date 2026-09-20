@@ -266,9 +266,9 @@ OUT="$(cd "$W" && env PATH="$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
       OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= kubectl apply 2>&1)"; RC=$?
 set -e
 if [ "$RC" -eq 0 ] && ran; then
-  ok_limit "DOCUMENTED LIMIT: a DELETED wrapper falls through to the real binary, unverified (detection, not prevention, answers this)"
+  ok_limit "DOCUMENTED LIMIT: a DELETED wrapper falls through to the real binary, unverified (nothing here answers this)"
 else
-  bad "DOCUMENTED LIMIT: a DELETED wrapper falls through to the real binary, unverified (detection, not prevention, answers this)" "rc=$RC ran=$(cat "$T/ran")
+  bad "DOCUMENTED LIMIT: a DELETED wrapper falls through to the real binary, unverified (nothing here answers this)" "rc=$RC ran=$(cat "$T/ran")
 $OUT"
 fi
 ln -s _shim.sh "$CO_SHIM/kubectl"
@@ -395,6 +395,80 @@ integ_case "a HIDDEN planted entry is named"   "unexpected entry '.kubectl'" \
 integ_case "a wrapper replaced by a real file" "is not the expected symlink" \
            'rm -f "$CO_SHIM/scp"; printf "#!/bin/sh\nexit 0\n" > "$CO_SHIM/scp"; chmod +x "$CO_SHIM/scp"' \
            'rm -f "$CO_SHIM/scp"; ln -sf _shim.sh "$CO_SHIM/scp"'
+
+# --- 15b. THE LIMIT THE SIX CASES ABOVE DO NOT REACH: THE CHECKER AND THE DIGEST ARE IN THE WORKSPACE -
+# Every tamper above is an ACCIDENT -- something changed the shim directory and did not change anything
+# else. That is what effect-shim-integrity.sh catches, and it is all it catches. THE JOB OWNS ITS OWN
+# PROCESS: _shim.sh, effect-shim-digest.txt and effect-shim-integrity.sh all live in the checkout, so a
+# step that changes two of them together passes both inspections with an unverified wrapper in place.
+#
+# These two cases assert the GREEN result that produces. They exist because the headers used to call
+# this DETECTION, and a limit that is only described is a sentence someone deletes. If either goes red,
+# the mechanism became stronger than its headers claim and the headers are what need updating -- do NOT
+# "fix" the case. The fix for the underlying limit is not available here: see _shim.sh for the four
+# alternatives considered and why each fails while the job supplies its own process.
+#
+# 15b-i. AN EDITED _shim.sh WITH A RE-RECORDED DIGEST.
+cp "$CO_SHIM/_shim.sh" "$T/_shim.pre-coordinated"
+cp "$W/scripts/jenkins/effect-shim-digest.txt" "$T/digest.pre-coordinated"
+python3 - "$CO_SHIM/_shim.sh" <<'PEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('if ! PERMITTED_SHA="$OE_SHIM_SHA" bash "$verifier"',
+              'if false && ! PERMITTED_SHA="$OE_SHIM_SHA" bash "$verifier"', 1)
+open(p, "w").write(s)
+PEOF
+if command -v sha256sum >/dev/null 2>&1; then sha256sum "$CO_SHIM/_shim.sh" | cut -d' ' -f1 > "$W/scripts/jenkins/effect-shim-digest.txt"
+else shasum -a 256 "$CO_SHIM/_shim.sh" | cut -d' ' -f1 > "$W/scripts/jenkins/effect-shim-digest.txt"; fi
+echo 'changed after the verification' >> "$W/file.txt"
+: > "$T/ran"
+set +e
+co_start="$(bash "$INTEG" --dir "$W" --when start 2>&1)"; co_start_rc=$?
+OUT="$(cd "$W" && env PATH="$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= kubectl apply 2>&1)"; RC=$?
+co_end="$(bash "$INTEG" --dir "$W" --when end 2>&1)"; co_end_rc=$?
+set -e
+if [ "$co_start_rc" -eq 0 ] && [ "$co_end_rc" -eq 0 ] && [ "$RC" -eq 0 ] && ran; then
+  ok_limit "DOCUMENTED LIMIT: an edited _shim.sh WITH A RE-RECORDED DIGEST runs kubectl on a dirty tree and BOTH inspections report ok"
+else
+  bad "DOCUMENTED LIMIT: an edited _shim.sh WITH A RE-RECORDED DIGEST runs kubectl on a dirty tree and BOTH inspections report ok" "rc=$RC ran=$(cat "$T/ran") start_rc=$co_start_rc end_rc=$co_end_rc
+$co_start
+--- end ---
+$co_end
+--- shim ---
+$OUT"
+fi
+cp "$T/_shim.pre-coordinated" "$CO_SHIM/_shim.sh"
+cp "$T/digest.pre-coordinated" "$W/scripts/jenkins/effect-shim-digest.txt"
+git -C "$W" checkout -q -- file.txt
+
+# 15b-ii. AN EDITED CHECKER. The integrity script the stage runs is the one IN the checkout; a step that
+# edits it chooses what "ok" means. Here the tamper is the plainest one the six cases above DO catch --
+# a deleted wrapper -- and it is reported ok anyway, which is the point: the checker is not a witness.
+cp "$INTEG" "$T/integ.pre-coordinated"
+python3 - "$INTEG" <<'PEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('[ -d "$shim" ] || refuse', 'exit 0\n[ -d "$shim" ] || refuse', 1)
+open(p, "w").write(s)
+PEOF
+rm -f "$CO_SHIM/kubectl"
+set +e
+ed_start="$(bash "$INTEG" --dir "$W" --when start 2>&1)"; ed_start_rc=$?
+ed_end="$(bash "$INTEG" --dir "$W" --when end 2>&1)"; ed_end_rc=$?
+set -e
+ln -s _shim.sh "$CO_SHIM/kubectl"
+cp "$T/integ.pre-coordinated" "$INTEG"
+if [ "$ed_start_rc" -eq 0 ] && [ "$ed_end_rc" -eq 0 ]; then
+  ok_limit "DOCUMENTED LIMIT: an edited effect-shim-integrity.sh reports ok with a wrapper DELETED (the checker is in the workspace the job owns)"
+else
+  bad "DOCUMENTED LIMIT: an edited effect-shim-integrity.sh reports ok with a wrapper DELETED (the checker is in the workspace the job owns)" "start_rc=$ed_start_rc end_rc=$ed_end_rc
+$ed_start
+--- end ---
+$ed_end"
+fi
 
 # THE ARGUMENT PARSER'S OWN REFUSALS. Four branches that refuse a malformed invocation, none of which
 # had a case: the sweep's inventory was line-shaped regexes and a refusal spelled `*) usage "…" ;;`
