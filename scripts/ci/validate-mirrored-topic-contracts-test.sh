@@ -36,10 +36,21 @@ mkfixture() { # -> prints a fresh root
 
 run() { MTC_ROOT="$1" bash "$VALIDATOR" >"$WORK/out.txt" 2>&1; }
 
-expect_pass() {
-  local root="$1" name="$2"
-  if run "$root"; then printf '  ok   %-52s exit 0\n' "$name"
-  else printf '  FAIL %-52s expected PASS, got exit 1\n' "$name"; sed 's/^/         /' "$WORK/out.txt"; rc=1; fi
+# A PASS may also have to say WHY it passed. Exit 0 on its own cannot tell "the branch this case
+# exists for was taken" from "the mutation never reached the state that would take it" — the same
+# blind spot that let both U16 arms report ok while testing something else (#1077), pointed at the
+# expect_pass side. Where a case asserts that the validator ALLOWS something, the optional `want`
+# names the line by which it said so. Cases with no such line pass two arguments and are unchanged.
+expect_pass() { # root, name, [want]
+  local root="$1" name="$2" want="${3:-}"
+  if ! run "$root"; then
+    printf '  FAIL %-52s expected PASS, got exit 1\n' "$name"; sed 's/^/         /' "$WORK/out.txt"; rc=1
+  elif [ -n "$want" ] && ! grep -q "$want" "$WORK/out.txt"; then
+    printf '  FAIL %-52s passed for the WRONG reason (no /%s/)\n' "$name" "$want"
+    sed 's/^/         /' "$WORK/out.txt"; rc=1
+  else
+    printf '  ok   %-52s exit 0\n' "$name"
+  fi
 }
 
 expect_fail() {
@@ -220,9 +231,44 @@ R="$(mkfixture)"; edit "$R" Jenkinsfile.es-cvd-mirror "s/'es\.futures\.footprint
 expect_fail "$R" "TOPIC choices list left unterminated" "never closed"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_TOPICS="[^"]*"$/OPTIONS_EDGE_ES4_TOPICS=""/'
 expect_fail "$R" "a parsed declaration emptied" "parsed an EMPTY"
-# ES4_COMPACTED is allowed to be empty (it was, until #1069 gave it its first member), so emptiness
-# alone must NOT fail there — but a VANISHED declaration still must, or the drift this guard exists
-# for would slip through the exception. This deletes every assignment of it, member or not.
+# ES4_COMPACTED is the validator's emptiness EXCEPTION, and it has TWO halves. This is the one that
+# says an empty-but-DECLARED list is a real policy: es4 takes the archive and compacts nothing
+# served, so that set is empty by design and refusing it would force a dummy entry back into it.
+# Until #1069 this half was covered BY ACCIDENT — the list was literally "" in topics.env, so the
+# baseline exercised it — and the day it gained its first member the coverage vanished with nothing
+# to report that it had. The state is CONSTRUCTED here rather than borrowed from the file: delete
+# every assignment (which matches for as long as one exists) and declare an empty one, so the case
+# cannot rot against the list's contents in either direction, however that list grows or shrinks.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/d'
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_ES4_COMPACTED_TOPICS=""'
+expect_pass "$R" "a declared-but-empty ES4_COMPACTED is allowed" "ES4_COMPACTED is declared and deliberately empty"
+# The UNION variables are emptied a different way, and until now nothing could reach them at all.
+# Five of the validator's ten guarded names are built by concatenating two list_of() calls around a
+# literal newline, so with both halves empty the variable still held that separator byte, `[ -n ]`
+# called it non-empty, and the fail-closed guard walked past the very divergence it names. The guard
+# covered ten variables and could fire for five. Emptying BOTH halves must now trip it — this case
+# fails on main, and it is the reason the guard was changed to judge content rather than length.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_TOPICS="[^"]*"$/OPTIONS_EDGE_TOPICS=""/'
+edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_PROD_ONLY_TOPICS="[^"]*"$/OPTIONS_EDGE_PROD_ONLY_TOPICS=""/'
+expect_fail "$R" "both halves of a UNION declaration emptied" "parsed an EMPTY DECLARED"
+# ...and with the guard able to fire for a union, COMPACTED's arm of the emptiness exception becomes
+# testable too — it was not, which is why an earlier draft of this block wrongly recorded it as
+# untestable. Both halves go empty; es.futures.cvd.levels is pure-compact via PROD_ONLY_PURE_COMPACT,
+# so the CVD mirror job — which freezes it at cleanup.policy=compact — is dropped from the FIXTURE,
+# the same way the "every mirror job removed" case below drops all of them. The `want` is what keeps
+# this honest: without it the case passes on the exit code alone, and an exit code cannot tell the
+# exception firing from the run never reaching it.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_COMPACTED_TOPICS=/d'
+edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS=/d'
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS=""'
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS=""'
+rm -f "$R/Jenkinsfile.es-cvd-mirror"
+expect_pass "$R" "a declared-but-empty COMPACTED is allowed" "COMPACTED is declared and deliberately empty"
+#
+# ...and the OTHER half: emptiness alone must NOT fail there, but a VANISHED declaration still must,
+# or the drift this guard exists for would slip through the exception. The two cases differ by
+# exactly the re-declared line above, which is what makes the pair assert that DECLAREDNESS — not
+# emptiness — is what the exception turns on. This deletes every assignment of it, member or not.
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/d'
 expect_fail "$R" "an emptiness-exempt declaration REMOVED" "parsed an EMPTY"
 R="$(mkfixture)"; rm -f "$R"/Jenkinsfile.*-mirror
