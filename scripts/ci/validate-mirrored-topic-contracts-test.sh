@@ -231,10 +231,13 @@ R="$(mkfixture)"; edit "$R" Jenkinsfile.es-cvd-mirror "s/'es\.futures\.footprint
 expect_fail "$R" "TOPIC choices list left unterminated" "never closed"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_TOPICS="[^"]*"$/OPTIONS_EDGE_ES4_TOPICS=""/'
 expect_fail "$R" "a parsed declaration emptied" "parsed an EMPTY"
-# ES4_COMPACTED is the validator's emptiness EXCEPTION, and it has TWO halves. This is the one that
-# says an empty-but-DECLARED list is a real policy: es4 takes the archive and compacts nothing
-# served, so that set is empty by design and refusing it would force a dummy entry back into it.
-# Until #1069 this half was covered BY ACCIDENT — the list was literally "" in topics.env, so the
+# The validator's emptiness EXCEPTION has two SIDES — one that ALLOWS and one that REFUSES — and
+# both are tested, here and below. (Two sides of the rule; ES4_COMPACTED itself is a single
+# list_of(), unlike the UNION variables further down, which are the ones built from two halves.)
+# This is the allowing side: an empty-but-DECLARED list is a real policy, because es4 takes the
+# archive and compacts nothing served, so that set is empty by design and refusing it would force a
+# dummy entry back into it.
+# Until #1069 this side was covered BY ACCIDENT — the list was literally "" in topics.env, so the
 # baseline exercised it — and the day it gained its first member the coverage vanished with nothing
 # to report that it had. The state is CONSTRUCTED here rather than borrowed from the file: delete
 # every assignment (which matches for as long as one exists) and declare an empty one, so the case
