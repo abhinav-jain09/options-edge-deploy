@@ -231,9 +231,22 @@ R="$(mkfixture)"; edit "$R" Jenkinsfile.es-cvd-mirror "s/'es\.futures\.footprint
 expect_fail "$R" "TOPIC choices list left unterminated" "never closed"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_TOPICS="[^"]*"$/OPTIONS_EDGE_ES4_TOPICS=""/'
 expect_fail "$R" "a parsed declaration emptied" "parsed an EMPTY"
-# ES4_COMPACTED is allowed to be empty (it was, until #1069 gave it its first member), so emptiness
-# alone must NOT fail there — but a VANISHED declaration still must, or the drift this guard exists
-# for would slip through the exception. This deletes every assignment of it, member or not.
+# ES4_COMPACTED is the validator's emptiness EXCEPTION, and it has TWO halves. This is the one that
+# says an empty-but-DECLARED list is a real policy: es4 takes the archive and compacts nothing
+# served, so that set is empty by design and refusing it would force a dummy entry back into it.
+# Until #1069 this half was covered BY ACCIDENT — the list was literally "" in topics.env, so the
+# baseline exercised it — and the day it gained its first member the coverage vanished with nothing
+# to report that it had. The state is CONSTRUCTED here rather than borrowed from the file: delete
+# every assignment (which matches for as long as one exists) and declare an empty one, so the case
+# cannot rot against the list's contents in either direction, however that list grows or shrinks.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/d'
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_ES4_COMPACTED_TOPICS=""'
+expect_pass "$R" "a declared-but-empty ES4_COMPACTED is allowed" "ES4_COMPACTED is declared and deliberately empty"
+#
+# ...and the OTHER half: emptiness alone must NOT fail there, but a VANISHED declaration still must,
+# or the drift this guard exists for would slip through the exception. The two cases differ by
+# exactly the re-declared line above, which is what makes the pair assert that DECLAREDNESS — not
+# emptiness — is what the exception turns on. This deletes every assignment of it, member or not.
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/d'
 expect_fail "$R" "an emptiness-exempt declaration REMOVED" "parsed an EMPTY"
 R="$(mkfixture)"; rm -f "$R"/Jenkinsfile.*-mirror
