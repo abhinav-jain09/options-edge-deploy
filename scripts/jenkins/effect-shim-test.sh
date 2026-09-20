@@ -477,21 +477,55 @@ fi
 # fake git below signals the shim while it is verifying, which is the only window the shim owns.
 sigbin="$T/sigbin"; mkdir -p "$sigbin"
 REALGIT="$(command -v git)"
+# EXACTLY ONE SIGNAL, TO EXACTLY ONE PROCESS. Two things are controlled here rather than left to
+# chance. The marker file makes the fake git fire ONCE: when a case removes a trap, the shim dies
+# mid-verification, the verifier it started is orphaned, and its next `git status` fired again. The
+# PIDFILE IS PER-ITERATION for the same reason -- an orphan carries the PREVIOUS iteration's
+# SHIM_SIGNAL and SHIM_PIDFILE in its environment, so with one shared pidfile it delivered a stale
+# SIGHUP to the NEXT iteration's shim: removing only the HUP trap reddened the QUIT case too, with
+# `rc=129`, and the harness named a protection that was present.
 cat > "$sigbin/git" <<GEOF
 #!/bin/sh
 "$REALGIT" "\$@"; rc=\$?
 case " \$* " in
-  *" status "*) kill -"\${SHIM_SIGNAL:-TERM}" "\$(cat "\$SHIM_PIDFILE")" ;;
+  *" status "*)
+    if [ ! -e "\$SHIM_PIDFILE.sent" ]; then
+      : > "\$SHIM_PIDFILE.sent"
+      kill -"\${SHIM_SIGNAL:-TERM}" "\$(cat "\$SHIM_PIDFILE")"
+    fi
+    ;;
 esac
 exit \$rc
 GEOF
 chmod +x "$sigbin/git"
-cat > "$T/launch-shim.sh" <<'LEOF'
-#!/bin/sh
-printf '%s' "$$" > "$SHIM_PIDFILE"
-exec "$1" "$2" "$3"
+# THE LAUNCHER OWNS THE SIGNAL DISPOSITION, because the shell that started this suite does not have
+# to. A signal IGNORED or BLOCKED at exec() is INHERITED THROUGH exec: bash then CANNOT trap it --
+# `trap \'on_signal HUP\' HUP` returns 0 and installs nothing, `trap -p HUP` still prints
+# `trap -- \'\' SIGHUP` -- and a blocked signal is never delivered at all. Either way the shim verifies
+# and runs the tool. SIGHUP is the one that arrives that way in real life: `nohup`, launchd, and
+# agents that start their shells detached all ignore it. That is exactly how this case passed here
+# and failed on a reviewer\'s machine with `rc=0 ran=mvn -B test`, and the harness could not tell the
+# difference between a shim with no trap and a signal that never arrived.
+#
+# So the launcher RESETS the four signals to SIG_DFL and UNBLOCKS them immediately before exec, and
+# records what it inherited, so a failure names the cause instead of reading as a broken shim.
+# `$$` is not used: the PID is written by the process that then execs the shim, so what the fake git
+# signals is the shim itself and never a command-substitution subshell standing in for it.
+cat > "$T/launch-shim.py" <<'LEOF'
+import os, signal, sys
+SIGS = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)
+blocked, inherited = signal.pthread_sigmask(signal.SIG_BLOCK, []), []
+for s in SIGS:
+    state = [w for w, yes in (("blocked", s in blocked),
+                              ("ignored", signal.getsignal(s) is signal.SIG_IGN)) if yes]
+    if state:
+        inherited.append(signal.Signals(s).name + ":" + "+".join(state))
+    signal.signal(s, signal.SIG_DFL)
+signal.pthread_sigmask(signal.SIG_UNBLOCK, SIGS)
+open(os.environ["SHIM_INHERITED"], "w").write(",".join(inherited) if inherited else "none")
+open(os.environ["SHIM_PIDFILE"], "w").write(str(os.getpid()))
+os.execv(sys.argv[1], sys.argv[1:])
 LEOF
-chmod +x "$T/launch-shim.sh"
 : > "$T/ran"
 set +e
 # EVERY trapped signal, not just TERM: the sweep found that removing the INT and HUP traps left the
@@ -499,17 +533,34 @@ set +e
 for sig in TERM INT HUP QUIT; do
   : > "$T/ran"
   set +e
-  OUT="$(cd "$W" && env PATH="$sigbin:$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" SHIM_PIDFILE="$T/shimpid" \
+  OUT="$(cd "$W" && env PATH="$sigbin:$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" SHIM_PIDFILE="$T/shimpid.$sig" \
         SHIM_SIGNAL="$sig" OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= \
-        "$T/launch-shim.sh" "$CO_SHIM/mvn" -B test 2>&1)"; RC=$?
+        SHIM_INHERITED="$T/inherited" python3 "$T/launch-shim.py" "$CO_SHIM/mvn" -B test 2>&1)"; RC=$?
   set -e
   if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "interrupted by SIG$sig"; then
     ok "SIG$sig during the verification refuses with status 3 and says so (the tool never runs)"
   else
-    bad "SIG$sig during the verification refuses with status 3 and says so (the tool never runs)" "rc=$RC ran=$(cat "$T/ran")
+    bad "SIG$sig during the verification refuses with status 3 and says so (the tool never runs)" "rc=$RC ran=$(cat "$T/ran") inherited-disposition=$(cat "$T/inherited" 2>/dev/null)
 $OUT"
   fi
 done
+
+# THE HARNESS\'S OWN CONTROL. The four cases above prove a refusal; this one proves the LAUNCHER is
+# not what produced it. Same path, same launcher, no signal sent: the tool must run and the status
+# must be its own. Without this, a launcher that killed everything it started would read as four
+# passing signal controls.
+: > "$T/ran"
+set +e
+OUT="$(cd "$W" && env PATH="$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" SHIM_PIDFILE="$T/shimpid.none" \
+      SHIM_INHERITED="$T/inherited" OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= \
+      python3 "$T/launch-shim.py" "$CO_SHIM/mvn" -B test 2>&1)"; RC=$?
+set -e
+if [ "$RC" -eq 0 ] && ran; then
+  ok_positive "through the same launcher, with NO signal sent, the tool runs (the launcher is not the refusal)"
+else
+  bad "through the same launcher, with NO signal sent, the tool runs (the launcher is not the refusal)" "rc=$RC ran=$(cat "$T/ran") inherited-disposition=$(cat "$T/inherited" 2>/dev/null)
+$OUT"
+fi
 
 # An EMPTY OE_SHIM_DIR must be refused BY THE SHIM, naming its own clause -- the verifier would refuse it
 # too, for its own reason, and a status-only case cannot tell those apart.
