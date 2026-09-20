@@ -19,7 +19,7 @@ pipeline {
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
-    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: 'fecbad51eae755bc4f98e0f0a95726e17724d11ae0a0b703f50a1a70a5f661a9',
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ENVIRONMENT', choices: ['production', 'dev'],
       description: 'Target environment — selects k8s/services/nifty-gex/overlays/<env> and the deployer kubeconfig (oeProfile).')
@@ -232,8 +232,13 @@ pipeline {
           // the manifests it deploys are the files in this workspace. That makes it a deployment effect, and
           // the workspace is re-proved to be the permitted commit's tree immediately before it runs — nothing
           // between the verification and the deployment. The validator's effect grammar does not reach
-          // manifest application (see its LIMITS), so this adjacency is the pipeline's own, and
-          // tests/test_jenkins_permitted_sha_guard.py asserts it on this file.
+          // manifest application (see its LIMITS), so this adjacency is the pipeline's own -- and NOTHING
+          // ENFORCES IT. No test in this repository asserts it: NiftyPostBuildWorkspaceTest checks that the
+          // completed nifty-gex-src clone is removed and that the verification accepts the workspace a
+          // successful build leaves behind, not that this deploy step follows that verification. Codex
+          // inserted `sh 'printf changed > k8s/services/nifty-gex/base/nifty-gex-deployment.yaml'` between
+          // the two and every check still passed. Keeping them adjacent is a rule for whoever edits this
+          // file, until the runtime adjacency enforcement replacing the withdrawn static reader lands.
           // REQUIRED_IMAGE is set only by this build's own push (Build image stage); empty with
           // BUILD_IMAGE=false, when the registry tag is resolved and digest-pinned as before.
           withEnv(["SERVICE=nifty-gex",

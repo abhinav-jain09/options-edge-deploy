@@ -110,9 +110,13 @@ form; that is deliberate):
          mutation tokens (gated by rule 8/13 and unreachable after a refusal) but they are not source-consuming
          effects here, so the validator does NOT require a verify step in front of them, and a step such as
          `sh 'printf changed > k8s/x.yaml; kubectl apply -f k8s/x.yaml'` passes. Where a job wants the stronger
-         property it places the verify itself and its repository's tests assert the adjacency
-         (options-edge-deploy's Jenkinsfile.nifty-gex-service does). Read rule 9b as "every source-consuming
-         effect the grammar above names", never as "every effect".
+         property it places the verify itself (options-edge-deploy's Jenkinsfile.nifty-gex-service does), but
+         NO TEST ASSERTS THAT IT REMAINS ADJACENT: Codex inserted
+         `sh 'printf changed > k8s/services/nifty-gex/base/nifty-gex-deployment.yaml'` between that file's
+         verification and its deploy helper and this validator, plus both of that file's workspace tests,
+         still passed. The static adjacency proof is deferred and is being rebuilt as a RUNTIME property;
+         describing it as asserted today would be describing a protection that does not exist. Read rule 9b as
+         "every source-consuming effect the grammar above names", never as "every effect".
        (i)  EVERY source-consuming effect is a DEDICATED STEP — a plain `sh '…'` / `sh '''…'''` whose whole body is ONE
             command (backslash continuations allowed; nothing else: no second command, no `; && || | &`, `$( )`, backticks,
             redirections, here-documents, cd/pushd/export, assignment prefixes, comments, globs) — read against a FIXED

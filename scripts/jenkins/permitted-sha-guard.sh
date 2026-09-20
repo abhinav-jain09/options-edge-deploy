@@ -70,9 +70,14 @@
 #    rsync, scp, helm install/upgrade, ansible-playbook, and repository scripts that run one of them).
 #    Applying a rendered manifest — kubectl, a deploy helper that ends in kubectl — is NOT in that set,
 #    so the validator does not demand a verification in front of it. Where a job wants one there, it
-#    places it itself and its repository's tests assert the adjacency (Jenkinsfile.nifty-gex-service's
-#    'Deploy (service-scoped)' stage does exactly that). Read the claim as "every source-consuming
-#    effect the validator recognises", never as "every effect".
+#    places it itself -- options-edge-deploy's Jenkinsfile.nifty-gex-service does, in its
+#    'Deploy (service-scoped)' stage -- but NOTHING CHECKS THAT IT STAYS THERE. No test in any of these
+#    repositories asserts that a verification is adjacent to a manifest application: a step inserted
+#    between that verification and the deploy helper passes every check that exists today. The static
+#    adjacency proof is deferred (it was withdrawn after six review rounds in which a text reader was
+#    beaten on a new axis each time) and is being rebuilt as a RUNTIME property; until it lands, the
+#    adjacency of a manifest application is a property of how the file is written, not a guaranteed one.
+#    Read the claim as "every source-consuming effect the validator recognises", never as "every effect".
 #
 # Usage: permitted-sha-guard.sh [--dir <checkout>] [--branch <name>] [--ref <selected-ref>]
 #   --dir     guard a NESTED application checkout (e.g. nifty-gex-src, .deps/options-edge-contracts)
@@ -111,20 +116,35 @@ refuse() {
 # just after a successful `git fetch` used to leave this script exiting 0 with the permission never
 # compared, and a caller that reads exit 0 as "permitted" would then deploy under no permission at all.
 # A guard that returns success when interrupted is worse than no guard, because the caller believes it
-# ran. These handlers are installed before anything else can be interrupted; the EXIT handler below
-# only cleans up and preserves whatever status brought it here.
+# ran. These handlers are installed before the first command that can reach a verdict; ARGUMENT PARSING
+# runs before them, so a signal delivered during it takes the shell's default action and the run dies
+# without a verdict line at all (which is the same thing a caller must treat as a refusal — see below).
+# The EXIT handler further down only cleans up and preserves whatever status brought it here.
 #
 # WHAT THESE HANDLERS DO NOT COVER, stated here rather than left as an unconditional promise (Codex,
-# round 6 — the header's earlier blanket sentence had already been false twice):
+# rounds 6 and 7 — the header's earlier blanket sentence had already been false twice). None of these
+# is an unchecked permission; they are scope and timing limits, and they are listed so the header does
+# not read as a stronger promise than the code keeps:
 #   * SIGKILL cannot be handled by any process. A killed run prints no verdict of its own and a shell
 #     caller observes 137. A caller must treat a MISSING verdict line the way it treats a refusal;
 #     `verdict=PERMITTED` on stdout, not merely a status, is what says the permission was confirmed.
 #   * A disposition INHERITED as ignored cannot be restored by `trap` in Bash. A caller that ignores
 #     SIGHUP before invoking this script makes this script immune to SIGHUP as well; the run is then not
 #     interrupted at all and reaches its ordinary verdict, which is still decided by the permission.
-#     That is not an unchecked permission, and permitted-sha-guard-test.sh pins it in both directions.
+#   * A signal INHERITED AS BLOCKED behaves the same way for a different reason: `trap` sets a
+#     disposition, it does not unblock. An injected signal stays PENDING for the life of the run, which
+#     therefore finishes normally with the verdict its permission earns and no handler message.
+#   * Handling is DEFERRED, not immediate. A signal delivered while a child (the fetch, a rev-parse) is
+#     in the foreground runs the handler only after that child returns — then status 3. Interruption
+#     means "this run will not report a permission it did not confirm", never "the work stops now".
 #   * A signal delivered AFTER the verdict has printed cannot un-print it. The run still exits 3, and the
 #     handler says which of the two situations it is rather than claiming no verdict was reached.
+#
+# permitted-sha-guard-test.sh exercises the catchable signals at their injection points at BOTH an
+# incorrect and the correct permission, the inherited-ignored disposition in both directions, and an
+# interruption after the verdict. Its SIGKILL cases assert the CALLER'S contract rather than a handler
+# — no PERMITTED verdict, nonzero status — because no handler is possible. The inherited-BLOCKED and
+# deferred-handling bullets above are stated from reproduction, not asserted by a shipped case.
 verdict_printed=""
 on_signal() {
   if [ -n "$verdict_printed" ]; then

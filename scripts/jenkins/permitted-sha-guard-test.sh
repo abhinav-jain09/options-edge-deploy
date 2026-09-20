@@ -323,6 +323,26 @@ for sig in TERM INT HUP QUIT; do
   done
 done
 
+# --- SIGKILL CANNOT BE HANDLED, so what is asserted here is the CALLER'S CONTRACT, not a handler: the run
+#     must not print a PERMITTED verdict it never reached, and the caller must see a nonzero status (137 for
+#     a shell caller). This is the case the header's SIGKILL bullet refers to; without it the header would be
+#     claiming a limit no test covers.
+for perm in wrong right; do
+  if [ "$perm" = right ]; then sha="$D"; else sha="0000000000000000000000000000000000000000"; fi
+  set +e
+  out="$(cd "$W" && PATH="$sigbin:$PATH" GUARD_PIDFILE="$T/guard-pid" KILL_SIG=KILL KILL_AT=fetch PERMITTED_SHA="$sha" bash "$T/launch-guard.sh" "$GUARD" 2>&1)"; rc=$?
+  set -e
+  why=""
+  [ "$rc" -ne 0 ] || why="exit 0 — a killed run must never look like success to its caller"
+  ! printf '%s' "$out" | grep -qF "verdict=PERMITTED" || why="${why:+$why; }a PERMITTED verdict was printed"
+  if [ -z "$why" ]; then
+    echo "ok   [SIGKILL at the fetch call with the $perm permission: nonzero status ($rc) and no PERMITTED verdict]"; pass=$((pass+1))
+  else
+    echo "FAIL [SIGKILL at the fetch call with the $perm permission: nonzero status and no PERMITTED verdict]: $why"
+    printf '%s\n' "$out" | sed 's/^/    /'; fail=$((fail+1))
+  fi
+done
+
 # --- AN INTERRUPTION AFTER THE VERDICT HAS PRINTED still exits 3, and SAYS it is that case rather than
 #     claiming no verdict was reached (Codex round 6, MINOR). The wrapper fires on the SECOND `update-ref`
 #     -- the cleanup deletion, which runs after the PERMITTED line -- so both verdicts are in the log.
