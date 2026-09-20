@@ -116,12 +116,17 @@ echo "--- EXACT cleanup.policy, both clusters (compact != compact,delete) ---"
 # POLICY=compact passed against a declaration that reconciles to compact,delete — whose delete half
 # ages out the very attestation the producer reads back at startup.
 #
-# Both expectations below MUST name compact,delete. That is the whole proposition of this block: a
-# grep for the generic "disagrees across" line is satisfied by plain `delete` too — i.e. by a
-# mutation that merely dropped compaction, which the ES4_COMPACTED deletion cases already cover.
-# An assertion that matches under BOTH the intended and a degraded mutation is not an assertion;
-# it is how this block silently stopped testing U16 between #1069 and #1077. Do not loosen these
-# back to a message that cannot tell `delete` from `compact,delete`.
+# Each expectation below names the RESOLVED policy, and the reason is structural: both mutations
+# here take two edits, and the FIRST alone (dropping the topic from a PURE_COMPACT list) already
+# makes the two clusters disagree. So every generic message this validator emits — "disagrees
+# across", or the bare word "resolves" — is equally true of a topic that resolved to plain
+# `delete`: that is, of a half-applied mutation that merely dropped compaction, a state the
+# ES4_COMPACTED deletion cases above already cover. Only the literal `compact,delete` separates
+# the state U16 is about from one that is tested elsewhere anyway.
+#
+# An expectation matching both states distinguishes nothing, and it fails silently rather than
+# loudly: between #1069 and #1077 the SOURCE arm resolved to `delete`, matched its own grep, and
+# reported ok while U16 went unexercised.
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS=/s/ es\.futures\.cvd\.levels / /'
 edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_TOPICS=/s/$/\nOPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.futures.cvd.levels"/'
 expect_fail "$R" "pure-compact target downgraded to compact,delete" "it to 'compact,delete'"
