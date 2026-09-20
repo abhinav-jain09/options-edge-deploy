@@ -9,8 +9,35 @@
 # maintained by hand, and each time review removed a protection that was not on it -- the argument
 # vector, the exec-vs-wrap status, the signal traps, the empty-directory clause. A hand-written
 # inventory has exactly the failure mode as the tests it is auditing: it covers what someone remembered.
-# This walks the files and mutates EVERY refusal branch, every guard clause and every dispatch line it
-# finds, and it REFUSES to report success if it cannot parse a line that looks like a protection.
+#
+# THREE THINGS THIS SWEEP GOT WRONG WHILE CLAIMING OTHERWISE, and what each is now:
+#
+#   1. IT REFUSED ON NOTHING. The header said it "REFUSES to report success if it cannot parse a line
+#      that looks like a protection" and no such path existed. The inventory was seven LINE-shaped
+#      regexes; a refusal branch written in any other shape was simply not in it, and therefore silently
+#      exempt from the audit. `*) usage "unknown argument '$1'" ;;` -- a real refusal, mid-case-branch,
+#      already in the tree -- was one of them. The scan is now two parts: a CLASSIFIER that recognises
+#      protection SITES by token, and a RESIDUAL SCAN that looks for the tokens a protection is made of
+#      and reports UNCLASSIFIED for any occurrence no site took. UNCLASSIFIED is a failure, not a
+#      silence, and adding a refusal branch in a shape this cannot classify stops the sweep.
+#
+#   2. A SYNTAX ERROR IS NOT A REMOVED PROTECTION. Mutation used to prefix `true || ` to the whole LINE.
+#      On `--dir)  [ $# -ge 2 ] || usage "--dir needs a path";  dir="$2";  shift 2 ;;` that ate the case
+#      label, the file stopped parsing, every integrity case went red for that reason, and the sweep
+#      recorded "covered". Of three mappings a reviewer then checked by hand, two were this. Mutation is
+#      now SITE-precise -- the refusal CALL becomes `true` and the line around it is untouched -- every
+#      mutant is `bash -n`-checked before it is run, and a mutant that does not parse is reported
+#      UNMUTABLE and counted as NOT covered. It is never evidence.
+#
+#   3. RED IS NOT COVERAGE UNLESS THE PROGRAM STILL RUNS. Removing one protection must leave a working
+#      program that no longer refuses one thing. The suite's own POSITIVE controls are the anchor: a
+#      positive control asserts the shim does NOT refuse when it should not, so REMOVING a protection
+#      cannot make one fail. If one does fail, the mutant is broken rather than neutralised and its reds
+#      are attributable to nothing; that is reported NOT ATTRIBUTABLE and counted as NOT covered.
+#
+# WHAT THIS DOES NOT DO. It audits the coverage of the protections the shim HAS. It says nothing about
+# the four cases the shim does not cover -- a deleted wrapper, an absolute path, a copy outside the
+# checkout, and the shim's own integrity -- which remain limits, pinned by LIMIT cases in the suite.
 #
 # Usage: effect-shim-sweep.sh [--verbose]
 set -u
@@ -24,82 +51,162 @@ verbose=false; [ "${1:-}" = "--verbose" ] && verbose=true
 work="$(mktemp -d)"; trap 'cp "$work/_shim.sh" "$SHIM"; cp "$work/integ" "$INTEG"; cp "$work/digest" "$DIGEST"; rm -rf "$work"' EXIT
 cp "$SHIM" "$work/_shim.sh"; cp "$INTEG" "$work/integ"; cp "$DIGEST" "$work/digest"
 
-# --- the inventory, read out of the two files ---------------------------------------------------
-# A protection is: a line that refuses, or the dispatch line that hands control to the real binary, or a
-# trap that turns a signal into a refusal. Comments are excluded by requiring the line to be code.
-inventory() {   # inventory <file> ; prints "lineno<TAB>kind<TAB>text"
-  awk -F'\n' '
-    /^[[:space:]]*#/ { next }
-    /\|\| *refuse|\|\| *usage/            { print NR "\tguard\t" $0; next }
-    /^[[:space:]]*refuse "/               { print NR "\trefusal\t" $0; next }
-    /^[[:space:]]*exec "\$real"/          { print NR "\tdispatch\t" $0; next }
-    /^[[:space:]]*trap .*on_signal/       { print NR "\ttrap\t" $0; next }
-    /^[[:space:]]*exit 3/                 { print NR "\tstatus\t" $0; next }
-    /^[[:space:]]*set -f/                 { print NR "\tglobbing\t" $0; next }
-    /shopt -s nullglob dotglob/           { print NR "\thidden\t" $0; next }
-  ' "$1"
+restore() { cp "$work/_shim.sh" "$SHIM"; cp "$work/integ" "$INTEG"; cp "$work/digest" "$DIGEST"; }
+# RE-RECORD THE DIGEST for the mutated shim. Without this, every mutation of _shim.sh also breaks the
+# digest, every integrity case goes red, and the sweep calls the protection "covered" when what went red
+# was the checksum -- the same passing-for-the-wrong-reason the sweep exists to find.
+redigest() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$SHIM" | cut -d' ' -f1 > "$DIGEST"
+  else shasum -a 256 "$SHIM" | cut -d' ' -f1 > "$DIGEST"; fi
 }
+run_suite() { KIND_LOG="${KIND_LOG:-/dev/null}" bash "$SUITE" 2>&1; }
 
-neutralise() {  # neutralise <file> <lineno> <kind>
-  local f="$1" n="$2" kind="$3"
-  python3 - "$f" "$n" "$kind" <<'PY'
-import sys
+# --- the inventory, read out of the two files ----------------------------------------------------
+# SITES are byte spans, not lines: the mutation replaces exactly the protection and leaves the syntax
+# around it alone. RESIDUE is the same tokens seen from the other side -- anything that looks like a
+# protection and is not inside a site, a function-definition header (`refuse() {`) or a comment.
+scan() {   # scan <file> ; prints "start<TAB>end<TAB>kind<TAB>lineno<TAB>text"
+  python3 - "$1" <<'PY'
+import re, sys
 from pathlib import Path
-f, n, kind = sys.argv[1], int(sys.argv[2]), sys.argv[3]
-lines = Path(f).read_text().split("\n")
-l = lines[n-1]
-indent = l[:len(l) - len(l.lstrip())]
-if kind in ("guard",):
-    # the condition stops being able to fail
-    lines[n-1] = indent + "true || " + l.strip()
-elif kind in ("refusal", "trap", "status", "hidden"):
-    lines[n-1] = indent + ": # protection removed by the sweep"
-elif kind == "globbing":
-    lines[n-1] = indent + "set +f"
-elif kind == "dispatch":
-    # the classic wrapper mistakes: lose the argument vector, and wrap instead of exec
-    lines[n-1] = indent + '"$real"; exit 0'
-Path(f).write_text("\n".join(lines))
+
+src = Path(sys.argv[1]).read_text()
+
+SITES = [
+    # a refusal CALL: `refuse "..."` / `usage "..."`, wherever it sits on the line
+    ("refusal",  re.compile(r'(?<![A-Za-z0-9_])(?:refuse|usage)[ \t]+(?:"(?:[^"\\]|\\.)*"|\'[^\']*\')')),
+    # the dispatch that hands control to the real binary
+    ("dispatch", re.compile(r'(?<![A-Za-z0-9_])exec[ \t]+"\$real"[ \t]+"\$@"')),
+    # a signal turned into a refusal
+    ("trap",     re.compile(r'(?<![A-Za-z0-9_])trap[ \t]+\'[^\']*on_signal[^\']*\'.*$', re.M)),
+    # the non-zero status a refusal leaves behind
+    ("status",   re.compile(r'(?<![A-Za-z0-9_])exit[ \t]+[1-9][0-9]*')),
+    # pathname expansion off while the declarations are split
+    ("globbing", re.compile(r'(?<![A-Za-z0-9_])set[ \t]+-f(?![A-Za-z0-9_])')),
+    # hidden entries included in the directory listing
+    ("hidden",   re.compile(r'(?<![A-Za-z0-9_])shopt[ \t]+-s[ \t]+nullglob[ \t]+dotglob')),
+]
+RESIDUE = re.compile(
+    r'(?<![A-Za-z0-9_])(?:refuse|usage|on_signal)(?![A-Za-z0-9_])'
+    r'|(?<![A-Za-z0-9_])exec[ \t]+"\$real'
+    r'|(?<![A-Za-z0-9_])exit[ \t]+[1-9]'
+    r'|(?<![A-Za-z0-9_])set[ \t]+-f(?![A-Za-z0-9_])'
+    r'|(?<![A-Za-z0-9_])shopt[ \t]+-s')
+# The one shape that carries a protection's name without being a call to it.
+DEFN = re.compile(r'(?<![A-Za-z0-9_])(?:refuse|usage|on_signal)\(\)')
+
+pos = 0
+for lineno, line in enumerate(src.split("\n"), 1):
+    at = pos
+    pos += len(line) + 1
+    if re.match(r'\s*#', line):
+        continue
+    found = []
+    for kind, rx in SITES:
+        for m in rx.finditer(line):
+            found.append((m.start(), m.end(), kind))
+    found.sort()
+    sites = []
+    for s, e, k in found:
+        if sites and s < sites[-1][1]:
+            continue            # already inside a larger site (a trap swallows its own on_signal)
+        sites.append((s, e, k))
+    for s, e, k in sites:
+        print("%d\t%d\t%s\t%d\t%s" % (at + s, at + e, k, lineno, line.strip()))
+    for m in RESIDUE.finditer(line):
+        if any(s <= m.start() < e for s, e, _ in sites):
+            continue
+        if any(d.start() <= m.start() < d.end() for d in DEFN.finditer(line)):
+            continue
+        print("%d\t%d\t%s\t%d\t%s" % (at + m.start(), at + m.end(), "UNCLASSIFIED", lineno, line.strip()))
 PY
 }
 
-total=0; uncovered=0
+neutralise() {  # neutralise <file> <start> <end> <kind>
+  python3 - "$1" "$2" "$3" "$4" <<'PY'
+import sys
+from pathlib import Path
+f, s, e, kind = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+repl = {
+    "refusal":  "true",                 # the branch is still taken; it no longer refuses
+    "status":   ":",                    # the refusal no longer leaves a non-zero status
+    "trap":     ":",                    # the signal is no longer turned into a refusal
+    "hidden":   ":",                    # the listing no longer includes hidden entries
+    "globbing": "set +f",               # the declarations are pathname-expanded again
+    "dispatch": '"$real"; exit 0',      # the classic wrapper mistakes: lose the argument vector, and
+                                        # wrap instead of exec
+}[kind]
+src = Path(f).read_text()
+Path(f).write_text(src[:s] + repl + src[e:])
+PY
+}
+
+# --- the baseline run: which cases exist, and which of them are declared non-discriminating --------
+kinds="$work/kinds"; : > "$kinds"
+KIND_LOG="$kinds" run_suite > "$work/base" 2>&1
+if ! grep -q 'ALL PASS' "$work/base"; then
+  echo "effect-shim-sweep: the suite is not green BEFORE any mutation; nothing below would mean anything" >&2
+  sed -n '/^FAIL/,+4p' "$work/base" >&2
+  exit 1
+fi
+all_cases="$(grep '^ok   \[' "$work/base" | sed 's/^ok   \[//; s/\]$//')"
+positives="$work/positives"
+grep '^kind POSITIVE' "$kinds" | sed 's/^kind POSITIVE[[:space:]]*//' > "$positives"
+
+total=0; uncovered=0; unclassified=0
 declare -a REDS
-run_suite() { KIND_LOG="${KIND_LOG:-/dev/null}" bash "$SUITE" 2>&1; }
 
 for file in "$SHIM" "$INTEG"; do
   base="${file##*/}"
-  while IFS=$'\t' read -r n kind text; do
-    [ -n "${n:-}" ] || continue
+  while IFS=$'\t' read -r s e kind n text; do
+    [ -n "${s:-}" ] || continue
+    short="$(printf '%s' "$text" | cut -c1-70)"
+    if [ "$kind" = "UNCLASSIFIED" ]; then
+      unclassified=$((unclassified+1))
+      printf 'UNCLASSIFIED  %s:%s  looks like a protection and this sweep cannot classify it: %s\n' "$base" "$n" "$short"
+      continue
+    fi
     total=$((total+1))
-    cp "$work/_shim.sh" "$SHIM"; cp "$work/integ" "$INTEG"; cp "$work/digest" "$DIGEST"
-    neutralise "$file" "$n" "$kind"
-    # RE-RECORD THE DIGEST for the mutated shim. Without this, every mutation of _shim.sh also breaks the
-    # digest, every integrity case goes red, and the sweep calls the protection "covered" when what went
-    # red was the checksum -- the same passing-for-the-wrong-reason the sweep exists to find.
-    if command -v sha256sum >/dev/null 2>&1; then sha256sum "$SHIM" | cut -d" " -f1 > "$DIGEST"
-    else shasum -a 256 "$SHIM" | cut -d" " -f1 > "$DIGEST"; fi
+    restore
+    neutralise "$file" "$s" "$e" "$kind"
+    redigest
+    if ! bash -n "$file" 2>/dev/null; then
+      uncovered=$((uncovered+1))
+      printf 'UNMUTABLE     %s:%s (%s)  the mutant does not parse, so its reds prove nothing  %s\n' \
+        "$base" "$n" "$kind" "$short"
+      continue
+    fi
     out="$(run_suite)"
     red="$(printf '%s' "$out" | grep '^FAIL' | sed 's/^FAIL \[//; s/\]$//')"
+    # A POSITIVE control cannot fail because a protection was REMOVED. If one did, the mutant is broken
+    # rather than neutralised and nothing that went red is attributable to this protection.
+    broke=""
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      printf '%s\n' "$red" | grep -qxF -- "$p" && broke="$p"
+    done < "$positives"
+    if [ -n "$broke" ]; then
+      uncovered=$((uncovered+1))
+      printf 'NOT ATTRIBUTABLE  %s:%s (%s)  a POSITIVE control went red, so the mutant is broken, not neutralised: %s\n' \
+        "$base" "$n" "$kind" "$(printf '%s' "$broke" | cut -c1-60)"
+      continue
+    fi
     if [ -z "$red" ]; then
       uncovered=$((uncovered+1))
-      printf 'UNCOVERED  %s:%s (%s)  %s\n' "$base" "$n" "$kind" "$(printf '%s' "$text" | sed 's/^[[:space:]]*//' | cut -c1-70)"
+      printf 'UNCOVERED     %s:%s (%s)  %s\n' "$base" "$n" "$kind" "$short"
     else
-      $verbose && printf 'covered    %s:%s (%s) -> %s\n' "$base" "$n" "$kind" "$(printf '%s' "$red" | head -1 | cut -c1-70)"
+      $verbose && printf 'covered       %s:%s (%s) -> %s\n' "$base" "$n" "$kind" "$(printf '%s' "$red" | head -1 | cut -c1-70)"
       while IFS= read -r r; do REDS+=("$r"); done <<< "$red"
     fi
-  done < <(inventory "$file")
+  done < <(scan "$file")
 done
-cp "$work/_shim.sh" "$SHIM"; cp "$work/integ" "$INTEG"; cp "$work/digest" "$DIGEST"
+restore
 
 # --- the inverse question: which shipped CASES never discriminate? --------------------------------
 # A case that no removal turns red is passing for a reason other than the protection it names.
 # Cases the suite itself declares cannot discriminate -- POSITIVE, STRUCTURAL and LIMIT -- are exempt,
 # and the exemption is visible beside each case in the suite rather than kept here. Every OTHER case must
 # go red for some removal; one that never does is passing for a reason other than the protection it names.
-kinds="$work/kinds"; : > "$kinds"
-KIND_LOG="$kinds" run_suite > "$work/out" 2>&1
-all_cases="$(grep '^ok   \[' "$work/out" | sed 's/^ok   \[//; s/\]$//')"
 never=0
 while IFS= read -r c; do
   [ -n "$c" ] || continue
@@ -120,6 +227,7 @@ if [ -n "$mismatch" ]; then
   never=$((never+1))
 fi
 
-printf 'effect-shim-sweep: %d protections mutated, %d uncovered; %d shipped cases never red\n' \
-  "$total" "$uncovered" "$never"
-[ "$uncovered" -eq 0 ] && [ "$never" -eq 0 ] && echo "effect-shim-sweep: ALL PROTECTIONS COVERED" || exit 1
+printf 'effect-shim-sweep: %d protections in the implementation, %d with an isolating case, %d without; %d unclassified; %d shipped cases never red\n' \
+  "$total" "$((total-uncovered))" "$uncovered" "$unclassified" "$never"
+[ "$uncovered" -eq 0 ] && [ "$never" -eq 0 ] && [ "$unclassified" -eq 0 ] \
+  && echo "effect-shim-sweep: ALL PROTECTIONS COVERED" || exit 1

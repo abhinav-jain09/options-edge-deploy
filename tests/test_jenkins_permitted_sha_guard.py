@@ -1423,9 +1423,57 @@ class EffectShimTest(unittest.TestCase):
         end = stage.index("\n", end)
         return stage[start:end].split("\n")
 
-    def _run_deploy_block(self, helper, inspection):
-        """Execute the translated block. `helper`/`inspection` return a status or raise."""
-        env, log, lines = {}, [], self._deploy_block()
+    # THE REFUSAL HAD TO BE MADE TOTAL. The paragraph above was true of the TOP LEVEL and nowhere else.
+    # Inside a `catch` body and inside an `if` body an unmatched line became `{}` -- `bg = bm.groupdict()
+    # if bm else {}` -- and every arm below then asked `bg.get(...)`, so the line fell through all of them
+    # and was ignored. Rewriting `deployFailure = deployError` as anything this reader does not model left
+    # the test green, which is the same defect the translation exists to remove, one level in. Three
+    # changes: a line is matched by _model(), which FAILS instead of returning {}; every block is
+    # VALIDATED WHOLE before any of it runs, so a line control flow never reaches is still a line the
+    # reader must model; and each level names the statements it accepts, with no silent fall-through.
+    STATEMENTS = {
+        "top":   ("defnull", "trystart", "ifstart", "echo", "close", "comment"),
+        "try":   ("shstep", "assignstatus", "comment"),
+        "catch": ("assign", "comment"),
+        "if":    ("echo", "errorcall", "throwcall", "assign", "comment"),
+    }
+    KINDS = ("defnull", "trystart", "catchstart", "close", "shstep", "shstatus", "assignstatus",
+             "assign", "ifstart", "echo", "errorcall", "throwcall", "comment")
+
+    def _model(self, line: str, where: str):
+        """Match one line, or fail. Never returns an empty mapping -- that was the hole."""
+        m = self.GROOVY_LINE.match(line)
+        self.assertIsNotNone(m, "unmodelled line in %s: the block contains a line this reader does not "
+                                "model, so this test would cover less than the block does: %s"
+                                % (where, line.strip()[:90]))
+        g = m.groupdict()
+        kind = next((k for k in self.KINDS if g.get(k)), None)
+        self.assertIsNotNone(kind, "unmodelled line in %s: %s" % (where, line.strip()[:90]))
+        self.assertIn(kind, self.STATEMENTS[where],
+                      "unmodelled statement in %s (a %s is not something this reader executes there): %s"
+                      % (where, kind, line.strip()[:90]))
+        return kind, g
+
+    def _validate(self, block, where: str) -> None:
+        """Model EVERY line of a block, whether or not control flow will reach it."""
+        for l in block:
+            if l.strip():
+                self._model(l, where)
+
+    def _run_deploy_block(self, helper, inspection, lines=None):
+        """Execute the translated block. `helper`/`inspection` return a status or raise.
+
+        TWO PASSES, and the first one is why the refusal is total. A `throw` or an `error()` ends the
+        walk, so any line AFTER the one that fired was never read, let alone modelled -- the deploy
+        block has two more `if` blocks after `throw deployFailure`. The first pass walks the whole block
+        with the steps stubbed out and nothing raising, purely to model every line; only then does the
+        second pass run it for real."""
+        block = list(self._deploy_block() if lines is None else lines)
+        self._walk(list(block), lambda: 0, lambda: 0, execute=False)
+        return self._walk(list(block), helper, inspection, execute=True)
+
+    def _walk(self, lines, helper, inspection, execute: bool):
+        env, log = {}, []
         Raised = _StepFailed
         def evaluate(expr):
             expr = expr.strip()
@@ -1436,29 +1484,25 @@ class EffectShimTest(unittest.TestCase):
                     bv = None if b == "null" else (int(b) if b.lstrip("-").isdigit() else b)
                     return (av != bv) if op == "!=" else (av == bv)
             raise AssertionError("unmodelled condition: " + expr)
-        i, depth_stack = 0, []
+        i = 0
         while i < len(lines):
             raw = lines[i]; i += 1
             if not raw.strip():
                 continue
-            m = self.GROOVY_LINE.match(raw)
-            self.assertIsNotNone(m, "the block contains a line this reader does not model, so this test "
-                                    "would cover less than the block does: " + raw.strip()[:90])
-            g = m.groupdict()
-            if g["comment"]:
+            kind, g = self._model(raw, "top")
+            if kind in ("comment", "close", "echo"):
                 continue
-            if g["defnull"]:
+            if kind == "defnull":
                 env[g["defname"]] = None
-            elif g["trystart"]:
+            elif kind == "trystart":
                 # collect the try body and the catch body
-                body, d = [], 1
+                body, cbody, excname = [], [], None
                 while i < len(lines):
                     l = lines[i]; i += 1
-                    if re.match(r"\s*\}\s*catch", l) and d == 1:
+                    if re.match(r"\s*\}\s*catch", l):
                         catchm = re.match(r"\s*\}\s*catch\s*\(Exception\s+(\w+)\)\s*\{", l)
                         self.assertIsNotNone(catchm, "unmodelled catch: " + l)
                         excname = catchm.group(1)
-                        cbody = []
                         while i < len(lines):
                             cl = lines[i]; i += 1
                             if re.match(r"\s*\}\s*$", cl):
@@ -1466,60 +1510,71 @@ class EffectShimTest(unittest.TestCase):
                             cbody.append(cl)
                         break
                     body.append(l)
+                self.assertIsNotNone(excname, "a try whose catch this reader did not find: it would run "
+                                              "the body and drop whatever the block does with the failure")
+                self._validate(body, "try")
+                self._validate(cbody, "catch")
                 thrown = None
                 for bl in body:
-                    bm = self.GROOVY_LINE.match(bl)
-                    self.assertIsNotNone(bm, "unmodelled line in try: " + bl.strip()[:90])
-                    bg = bm.groupdict()
-                    if bg["comment"]:
+                    if not bl.strip():
+                        continue
+                    bkind, bg = self._model(bl, "try")
+                    if bkind == "comment":
                         continue
                     try:
-                        if bg["shstep"]:
+                        if bkind == "shstep":
                             log.append("helper"); helper()
-                        elif bg["assignstatus"]:
-                            log.append("inspection"); env[bg["asname"]] = inspection()
                         else:
-                            self.fail("unmodelled statement in try: " + bl.strip()[:90])
+                            log.append("inspection"); env[bg["asname"]] = inspection()
                     except Raised as e:
                         thrown = e
                         break
                 if thrown is not None:
                     for cl in cbody:
-                        cm = self.GROOVY_LINE.match(cl)
-                        cg = cm.groupdict() if cm else {}
-                        if cg.get("assign"):
+                        if not cl.strip():
+                            continue
+                        ckind, cg = self._model(cl, "catch")
+                        if ckind == "assign":
                             env[cg["aname"]] = thrown if cg["aval"] == excname else env.get(cg["aval"])
-            elif g["ifstart"]:
+            elif kind == "ifstart":
                 taken = evaluate(g["cond"])
-                body, d = [], 1
+                body, alt = [], []
                 while i < len(lines):
                     l = lines[i]
-                    if re.match(r"\s*\}\s*else\s+if", l) or re.match(r"\s*\}\s*$", l):
+                    if re.match(r"\s*\}\s*else\s+if", l):
                         i += 1
-                        if re.match(r"\s*\}\s*else\s+if", l):
-                            if taken:
-                                # skip the alternative branch entirely
-                                while i < len(lines) and not re.match(r"\s*\}\s*$", lines[i]):
-                                    i += 1
-                                i += 1
-                                break
+                        if taken:
+                            # The alternative branch is not executed. It is still MODELLED: a line nobody
+                            # runs must not be a line nobody checks.
+                            while i < len(lines) and not re.match(r"\s*\}\s*$", lines[i]):
+                                alt.append(lines[i]); i += 1
+                            i += 1
+                        else:
                             lines.insert(i, l.replace("} else ", "", 1))
                         break
+                    if re.match(r"\s*\}\s*$", l):
+                        i += 1
+                        break
                     body.append(l); i += 1
+                self._validate(body, "if")
+                self._validate(alt, "if")
                 if taken:
                     for bl in body:
-                        bm = self.GROOVY_LINE.match(bl)
-                        bg = bm.groupdict() if bm else {}
-                        if bg.get("echo"):
+                        if not bl.strip():
+                            continue
+                        bkind, bg = self._model(bl, "if")
+                        if bkind == "echo":
                             log.append("echo:" + bg["emsg"][:60])
-                        elif bg.get("errorcall"):
+                        elif bkind == "errorcall":
                             log.append("error")
-                            raise AssertionError("ERROR:" + bg["errmsg"][:80])
-                        elif bg.get("throwcall"):
+                            if execute:
+                                raise AssertionError("ERROR:" + bg["errmsg"][:80])
+                        elif bkind == "throwcall":
                             log.append("throw:" + bg["tname"])
-                            raise AssertionError("THROWN:" + bg["tname"])
-            elif g["echo"] or g["shstatus"]:
-                continue
+                            if execute:
+                                raise AssertionError("THROWN:" + bg["tname"])
+                        elif bkind == "assign":
+                            env[bg["aname"]] = env.get(bg["aval"])
         return log
 
     def test_the_deploy_block_preserves_the_helper_failure_whatever_the_inspection_does(self) -> None:
@@ -1567,6 +1622,79 @@ class EffectShimTest(unittest.TestCase):
         except AssertionError:
             pass
         self.assertEqual(seen, ["ran"], "the inspection did not run after a failing helper")
+
+
+    # ---- the reader's own negative test ------------------------------------------------------------
+    UNMODELLED = "deployFailure.printStackTrace()"      # matches no rule in GROOVY_LINE
+    SCAFFOLD = [
+        "def deployFailure = null",
+        "try {",
+        "  sh 'bash scripts/deploy/service-deploy.sh'",
+        "} catch (Exception deployError) {",
+        "  deployFailure = deployError",
+        "}",
+        "if (deployFailure != null) {",
+        "  throw deployFailure",
+        "} else if (deployFailure == null) {",
+        "  echo 'nothing failed'",
+        "}",
+        "if (deployFailure == 0) {",
+        "  echo 'never taken'",
+        "}",
+    ]
+
+    def _scaffold_with(self, after: str, line: str) -> list:
+        out = []
+        for l in self.SCAFFOLD:
+            out.append(l)
+            if l.strip() == after:
+                out.append("  " + line)
+        self.assertEqual(len(out), len(self.SCAFFOLD) + 1, "the injection point was not unique: " + after)
+        return out
+
+    def test_the_groovy_reader_refuses_an_unmodelled_line_at_every_level(self) -> None:
+        """AN UNMODELLED LINE FAILS THE TEST RATHER THAN BEING SKIPPED -- everywhere, not at top level.
+
+        That sentence was in the reader's header and true of the top level only. Inside a `catch` body
+        and inside an `if` body an unmatched line became `{}` and fell through every arm, so rewriting
+        `deployFailure = deployError` into anything unmodelled left this test green while it no longer
+        covered the line that preserves the deployment's failure.
+
+        Each block below is the SAME scaffold with one unmodelled line injected at a different level,
+        including three places control flow never reaches -- the not-taken `if`, the skipped `else if`,
+        and a `try` line after the one that throws. The scaffold ITSELF is the control: it must run
+        clean, so what fails below is the injected line and not the harness."""
+        def failing_helper():
+            raise _StepFailed("helper exit 7")
+
+        # the control: with nothing injected, the scaffold is fully modelled and runs to its throw
+        with self.assertRaises(AssertionError) as c:
+            self._run_deploy_block(failing_helper, lambda: 0, lines=self.SCAFFOLD)
+        self.assertIn("THROWN:deployFailure", str(c.exception),
+                      "the scaffold does not run clean, so the cases below would prove nothing")
+
+        for where, after, helper in [
+            ("in a try body",                 "sh 'bash scripts/deploy/service-deploy.sh'", lambda: 0),
+            ("in a try body, after the throw", "sh 'bash scripts/deploy/service-deploy.sh'", failing_helper),
+            ("in a catch body",               "deployFailure = deployError",               failing_helper),
+            ("in a catch body never entered", "deployFailure = deployError",               lambda: 0),
+            ("in a taken if body",            "throw deployFailure",                       failing_helper),
+            ("in a skipped else-if body",     "echo 'nothing failed'",                     failing_helper),
+            ("in a never-taken if body",      "echo 'never taken'",                        failing_helper),
+        ]:
+            lines = self._scaffold_with(after, self.UNMODELLED)
+            with self.assertRaises(AssertionError) as c:
+                self._run_deploy_block(helper, lambda: 0, lines=lines)
+            self.assertIn("unmodelled", str(c.exception),
+                          "an unmodelled line " + where + " was skipped instead of failing the test: "
+                          + str(c.exception)[:120])
+
+        # A line the regex DOES match is still refused where that statement does not belong: `echo` is
+        # modelled, and an `echo` in a catch body is not something this reader executes.
+        lines = self._scaffold_with("deployFailure = deployError", "echo 'swallowed'")
+        with self.assertRaises(AssertionError) as c:
+            self._run_deploy_block(failing_helper, lambda: 0, lines=lines)
+        self.assertIn("unmodelled statement in catch", str(c.exception))
 
     def test_the_sweep_finds_no_uncovered_protection(self) -> None:
         """THE AUDIT OF THE AUDIT, shipped so it runs on every change rather than when someone remembers.

@@ -324,6 +324,50 @@ cp "$HERE/effect-shim-digest.txt" "$W/scripts/jenkins/effect-shim-digest.txt"
 git -C "$W" add -A >/dev/null 2>&1; git -C "$W" commit -qm "the checker, inside the checkout" >/dev/null 2>&1
 SHA="$(git -C "$W" rev-parse HEAD)"
 INTEG="$W/scripts/jenkins/effect-shim-integrity.sh"
+
+# THE ATTRIBUTION ANCHOR. An untouched shim directory passes both inspections. This is a POSITIVE
+# control -- removing a protection cannot make it fail -- and effect-shim-sweep.sh uses exactly that:
+# if a mutation turns a POSITIVE control red, the mutant is broken rather than neutralised, and nothing
+# that went red under it is attributable to the protection the sweep meant to remove.
+set +e
+p_start="$(bash "$INTEG" --dir "$W" --when start 2>&1)"; p_start_rc=$?
+p_end="$(bash "$INTEG" --dir "$W" --when end 2>&1)"; p_end_rc=$?
+set -e
+if [ "$p_start_rc" -eq 0 ] && [ "$p_end_rc" -eq 0 ]; then
+  ok_positive "integrity: an UNTOUCHED shim directory passes both inspections"
+else
+  bad "integrity: an UNTOUCHED shim directory passes both inspections" "start_rc=$p_start_rc end_rc=$p_end_rc
+$p_start
+--- end ---
+$p_end"
+fi
+
+# A refusal removed from an argument parser can turn its loop into an endless one: `*) usage … ;;` with
+# the refusal taken out never shifts. The sweep needs to see a RED CASE, not a hung suite, so the usage
+# cases below run under a wall clock and a timeout is a failure like any other.
+limited() {   # limited <seconds> <cmd...> ; sets OUT and RC
+  local secs="$1"; shift
+  local f="$T/limited.out"; : > "$f"
+  set +e
+  ( "$@" >"$f" 2>&1 & cpid=$!
+    ( sleep "$secs"; kill -9 "$cpid" 2>/dev/null ) >/dev/null 2>&1 & wpid=$!
+    wait "$cpid"; rc=$?
+    kill "$wpid" 2>/dev/null
+    exit "$rc" ) >/dev/null 2>&1
+  RC=$?
+  OUT="$(cat "$f")"
+  set -e
+}
+usage_case() {  # usage_case <label> <expected message fragment> <args...>
+  local label="$1" want="$2"; shift 2
+  limited 10 bash "$INTEG" "$@"
+  if [ "$RC" -eq 2 ] && printf '%s' "$OUT" | grep -qF -- "$want"; then
+    ok "integrity: $label"
+  else
+    bad "integrity: $label" "rc=$RC
+$OUT"
+  fi
+}
 integ_case() {  # integ_case <label> <expected message fragment> <tamper> <restore>
   local label="$1" want="$2" tamper="$3" restore="$4" out rc
   eval "$tamper"
@@ -351,6 +395,16 @@ integ_case "a HIDDEN planted entry is named"   "unexpected entry '.kubectl'" \
 integ_case "a wrapper replaced by a real file" "is not the expected symlink" \
            'rm -f "$CO_SHIM/scp"; printf "#!/bin/sh\nexit 0\n" > "$CO_SHIM/scp"; chmod +x "$CO_SHIM/scp"' \
            'rm -f "$CO_SHIM/scp"; ln -sf _shim.sh "$CO_SHIM/scp"'
+
+# THE ARGUMENT PARSER'S OWN REFUSALS. Four branches that refuse a malformed invocation, none of which
+# had a case: the sweep's inventory was line-shaped regexes and a refusal spelled `*) usage "…" ;;`
+# inside a case branch was not in any of them, so it was never mutated and never missed. Each is
+# asserted by its OWN MESSAGE, because every one of them exits 2 and a status-only case cannot tell
+# which branch spoke.
+usage_case "--dir with no value is refused"  "--dir needs a path"       --dir
+usage_case "--when with no value is refused" "--when needs start|end"   --dir "$W" --when
+usage_case "an unknown argument is refused"  "unknown argument '--bogus'" --dir "$W" --when start --bogus
+usage_case "--when must be start or end"     "--when must be start or end" --dir "$W" --when middle
 
 # …and the END inspection says what the START inspection must not: that the effects already ran.
 set +e
