@@ -45,7 +45,28 @@ BUILD_CONTEXT="${BUILD_CONTEXT:-.}"
 # --- provenance: every path docker is handed must lie inside the VERIFIED checkout -----------------
 # The caller verified the workspace root and nothing else. `pwd -P` resolves symlinks, so a component
 # that is a symlink out of the workspace is caught here too, not just a literal `..` or `/`.
-WS="$(pwd -P)"
+#
+# NEWLINES ARE REFUSED FIRST, and that is not fussiness. Canonicalisation goes through `$( … )`, which
+# strips trailing newlines, so for a path whose bytes contain one the value COMPARED here is not the
+# value later handed to docker — and the error goes both ways: a sibling directory named "ws\n" next
+# to the workspace "ws" compares as inside and is passed out verbatim (Codex I1 r2, executed: both the
+# guard and the tree verifier returned PERMITTED and the outside path reached docker), while a
+# legitimate inside directory ending in a newline has the file beneath it wrongly refused. Rather than
+# carry pathname bytes losslessly through every substitution — WS, dirname and each input — refuse the
+# one input shape that cannot survive the substitution. Nothing in this repository needs it.
+refuse_newline() {                   # $1 = what it is, $2 = the value
+  case "$2" in
+    *"$NL"*) echo "REFUSED: $1 contains a newline; such a path cannot be compared faithfully against the verified checkout, so it is not supported. Rename it." >&2; exit 1 ;;
+  esac
+}
+NL="$(printf '\nx')"; NL="${NL%x}"   # a bare newline, without a substitution stripping it
+# The workspace's OWN path is checked the same way, captured losslessly (a trailing `x` survives the
+# stripping, and only the single newline `pwd` itself prints is removed) — a workspace whose path ends
+# in a newline would otherwise silently become a shorter, wrong containment root.
+WS="$(pwd -P; printf x)"; WS="${WS%x}"; WS="${WS%"$NL"}"
+refuse_newline "the workspace path ('$WS')" "$WS"
+refuse_newline "DOCKERFILE ('$DOCKERFILE')" "$DOCKERFILE"
+refuse_newline "BUILD_CONTEXT ('$BUILD_CONTEXT')" "$BUILD_CONTEXT"
 inside_workspace() {                 # $1 = directory that must exist inside $WS; prints its real path
   local d
   d="$(cd -- "$1" 2>/dev/null && pwd -P)" || { echo "not a directory: '$1'" >&2; return 1; }
@@ -82,8 +103,19 @@ fi
 # The builder name must be unique PER JOB: two services building number 1 against the same docker
 # daemon would otherwise share `<prefix>-1` and each remove the other's builder (Codex I4). JOB_NAME is
 # the job's own identity; SERVICE_NAME is the fallback when this runs outside Jenkins.
-BUILDER_ID="$(printf '%s' "${JOB_NAME:-$SERVICE_NAME}" | tr -c 'A-Za-z0-9_.-' '-')"
-BUILDER="${BUILDER_PREFIX:-oe}-${BUILDER_ID}-${BUILD_NUMBER:-local}"
+#
+# The readable part is sanitised, and sanitising is LOSSY — `folder/service` and `folder-service` both
+# become `folder-service` and collide again (Codex I4 r2, executed). So the name also carries a short
+# digest of the ORIGINAL identity, which differs whenever the identity differs. The readable part is
+# for a human reading `docker buildx ls`; the digest is what makes the name unique.
+JOB_IDENTITY="${JOB_NAME:-$SERVICE_NAME}"
+BUILDER_ID="$(printf '%s' "$JOB_IDENTITY" | tr -c 'A-Za-z0-9_.-' '-')"
+if command -v sha256sum >/dev/null 2>&1; then
+  BUILDER_HASH="$(printf '%s' "$JOB_IDENTITY" | sha256sum | cut -c1-8)"
+else
+  BUILDER_HASH="$(printf '%s' "$JOB_IDENTITY" | shasum -a 256 | cut -c1-8)"
+fi
+BUILDER="${BUILDER_PREFIX:-oe}-${BUILDER_ID}-${BUILDER_HASH}-${BUILD_NUMBER:-local}"
 docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
 docker buildx create --name "$BUILDER" --driver docker-container $CFG_ARG --use >/dev/null
 cleanup() {

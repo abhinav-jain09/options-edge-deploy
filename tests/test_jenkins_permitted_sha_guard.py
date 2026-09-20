@@ -648,22 +648,31 @@ class NewServiceTemplateTest(unittest.TestCase):
     def _validate(self, root: Path) -> subprocess.CompletedProcess:
         return run_validator(root, root / MANIFEST_REL)
 
-    def test_the_fixture_and_the_templates_own_procedure_agree(self) -> None:
-        """Every file this fixture creates is one the template's HOW TO USE header tells you to create.
+    def test_the_templates_header_still_names_what_the_fixture_creates(self) -> None:
+        """A REFERENCE check: every path this fixture writes is still named in the template's header.
 
-        The guard against M1 recurring. The onboarding procedure is written in two places — this
-        repository's template header and options-edge/new-service-onboarding.md — and the fixture is a
-        third statement of it. This test pins the two that live HERE together, so a copy step added or
-        a manifest path changed cannot leave the fixture proving something the procedure never
-        produces. It deliberately does not read the options-edge document: a test that reaches into a
-        sibling checkout judges whatever branch happens to be on disk, which is not a fact about this
-        commit. Keeping the header and the document in step is the reviewer's job, and the header
-        names the document so the next editor of either can find the other."""
+        Deliberately narrow, and worth being precise about what it is not (Codex N2). It does not
+        execute the onboarding procedure, does not compare the fixture's manifest row with the
+        header's, and cannot notice a copy step added to the procedure but not to the fixture's
+        fragment list — it catches a renamed or removed path, and nothing subtler. The one judgement
+        it does make is the classification, because a header that showed `out` would document a job
+        nobody is allowed to trigger.
+
+        It deliberately does not read options-edge/new-service-onboarding.md: a test that reaches into
+        a sibling checkout judges whatever branch happens to be on disk, which is not a fact about this
+        commit. Keeping the header and that document in step is the reviewer's job, and a real
+        automated check would need a shared executable procedure or a cross-repository check at pinned
+        revisions — neither of which exists today. The header names the document so the next editor of
+        either can find the other."""
         header = (ROOT / "templates/Jenkinsfile.new-service").read_text()
         header = header[:header.index("@Library")]
         for fragment in ("scripts/jenkins/permitted-sha-guard.sh", "scripts/jenkins/verify-permitted-tree.sh",
                          "scripts/ci/service-image.sh", MANIFEST_REL, "new-service-onboarding.md"):
             self.assertIn(fragment, header, f"the template's HOW TO USE header no longer names {fragment}")
+        row = next((l for l in header.splitlines() if "Jenkinsfile |" in l), "")
+        self.assertRegex(row, r"Jenkinsfile \|\s*in\b",
+                         "the header's example manifest row must classify the copy `in` — `out` would "
+                         "document a job the assistant may never trigger")
 
     def test_a_copy_of_the_template_passes_the_validator(self) -> None:
         r = self._validate(self._copy_root())
@@ -782,11 +791,72 @@ class NewServiceTemplateTest(unittest.TestCase):
         self.assertIn("outside the verified workspace", r.stderr)
         self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
 
+    # ---- the newline bypass (Codex I1, round 2) ---------------------------------------------------
+    # `$( … )` strips trailing newlines, so for a path whose bytes contain one the value COMPARED is
+    # not the value passed to docker. Codex's executed reproduction: a sibling directory named "ws\n"
+    # beside the workspace "ws" passes both the guard and the tree verifier, compares as inside, and
+    # is handed to docker verbatim. These run the real script; the sibling really exists on disk.
+    def test_a_newline_bearing_path_is_refused_before_it_can_be_mis_compared(self) -> None:
+        ws, env = self._image_ws()
+        sibling = Path(f"{ws}\n")                     # the outside directory Codex used
+        sibling.mkdir()
+        (sibling / "Dockerfile").write_text("FROM scratch\n")
+        (sibling / "unpermitted.txt").write_text("never in any permitted commit\n")
+        for var, value in (("BUILD_CONTEXT", f"../{ws.name}\n"),
+                           ("DOCKERFILE", f"../{ws.name}\n/Dockerfile")):
+            with self.subTest(var=var):
+                r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws,
+                                   env=dict(env, **{var: value}), capture_output=True, text=True)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("contains a newline", r.stderr)
+                self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
+
+    def test_a_workspace_whose_own_path_holds_a_newline_is_refused(self) -> None:
+        """The containment ROOT is captured by substitution too; a stripped root is a wrong root."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        ws, bin_ = tmp / "ws\n", tmp / "bin"
+        (ws / "scripts/ci").mkdir(parents=True)
+        bin_.mkdir()
+        shutil.copy(ROOT / "templates/service-image.sh", ws / "scripts/ci/service-image.sh")
+        (ws / "Dockerfile").write_text("FROM scratch\n")
+        (bin_ / "docker").write_text("#!/usr/bin/env bash\necho \"SENTINEL-DOCKER $*\"\n")
+        (bin_ / "docker").chmod(0o755)
+        for cmd in (["git", "init", "-q", "."], ["git", "add", "-A"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+            subprocess.run(cmd, cwd=ws, check=True, capture_output=True)
+        env = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}", SERVICE_NAME="options-edge-foo",
+                   IMAGE_REGISTRY="reg:5000", BUILD_PLATFORM="linux/arm64", PUSH_IMAGE="false",
+                   JOB_NAME="options-edge-foo", BUILD_NUMBER="1")
+        env.pop("DOCKERFILE", None)
+        env.pop("BUILD_CONTEXT", None)
+        r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws, env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("the workspace path", r.stderr)
+        self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
+
     def test_two_jobs_do_not_share_a_buildx_builder(self) -> None:
-        """Codex I4: a shared `<prefix>-<build number>` lets one service remove another's builder."""
-        script = (ROOT / "templates/service-image.sh").read_text()
-        self.assertIn('BUILDER_ID="$(printf \'%s\' "${JOB_NAME:-$SERVICE_NAME}"', script)
-        self.assertNotIn('BUILDER="${BUILDER_PREFIX:-oe-newsvc}-${BUILD_NUMBER:-local}"', script)
+        """Codex I4: a shared builder name lets one service remove another's builder mid-build.
+
+        The collision pair is the one Codex executed: sanitising is lossy, so `folder/service` and
+        `folder-service` both read as `folder-service`. The names are taken from the real script,
+        by running it against a sentinel docker that records the builder it is asked to create."""
+        names = []
+        for job in ("folder/service", "folder-service"):
+            ws, env = self._image_ws()
+            (ws / "sentinel").mkdir()
+            record = ws / "sentinel/builders"
+            (ws.parent / "bin" / "docker").write_text(
+                "#!/usr/bin/env bash\n"
+                f'if [ "$1" = "buildx" ] && [ "$2" = "create" ]; then echo "$@" >> "{record}"; fi\n'
+                'echo "SENTINEL-DOCKER $*"\n')
+            r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws,
+                               env=dict(env, JOB_NAME=job, BUILD_NUMBER="1"), capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            line = record.read_text()
+            names.append(line.split("--name ")[1].split()[0])
+        self.assertNotEqual(names[0], names[1],
+                            f"both jobs selected the same buildx builder {names[0]!r} — either can remove the other's")
 
     def test_a_drifted_guard_version_default_is_refused(self) -> None:
         r = self._mutated(f"defaultValue: '{OWN_HASH}'", "defaultValue: '" + "0" * 64 + "'")
