@@ -194,6 +194,73 @@ else
   echo "FAIL [the guard deletes the ref it fetched the tip into]"; fail=$((fail+1))
 fi
 
+# --- the capture is an EXACT REF PATH, not a revision name. `git rev-parse --verify refs/oe-guard/tip-N`
+#     is a revision NAME: with that ref absent it is satisfied by a tag literally called
+#     "refs/oe-guard/tip-N", stored at refs/tags/refs/oe-guard/tip-N. Codex reproduced PERMITTED with the
+#     older commit reported as main's tip. `show-ref --verify` resolves only the exact ref path.
+refbin="$T/refbin"; mkdir -p "$refbin"
+cat > "$refbin/git" <<EOF
+#!/usr/bin/env bash
+# forward everything; after a successful fetch, delete the destination ref the guard just wrote and
+# leave a colliding TAG of that same full name behind — the interleaving Codex demonstrated.
+dir="."
+prev=""
+for a in "\$@"; do
+  [ "\$prev" = "-C" ] && dir="\$a"
+  prev="\$a"
+done
+"$REALGIT" "\$@"; rc=\$?
+case " \$* " in
+  *" fetch "*)
+    if [ \$rc -eq 0 ]; then
+      for r in \$("$REALGIT" -C "\$dir" for-each-ref --format='%(refname)' 'refs/oe-guard/*'); do
+        "$REALGIT" -C "\$dir" update-ref -d "\$r" >/dev/null 2>&1
+        "$REALGIT" -C "\$dir" update-ref "refs/tags/\$r" "\$COLLIDING_COMMIT" >/dev/null 2>&1
+      done
+    fi
+    ;;
+esac
+exit \$rc
+EOF
+chmod +x "$refbin/git"
+git -C "$W" checkout -q "$B"
+set +e
+out="$(cd "$W" && PATH="$refbin:$PATH" COLLIDING_COMMIT="$B" PERMITTED_SHA="$B" bash "$GUARD" 2>&1)"; rc=$?
+set -e
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF "did not resolve to a commit id"; then
+  echo "ok   [a tag named like the capture ref does not answer for it]"; pass=$((pass+1))
+else
+  echo "FAIL [a tag named like the capture ref does not answer for it]: rc=$rc"; printf '%s\n' "$out" | sed 's/^/    /'; fail=$((fail+1))
+fi
+git -C "$W" for-each-ref --format='%(refname)' 'refs/tags/refs/oe-guard/*' | while read -r r; do git -C "$W" update-ref -d "$r" >/dev/null 2>&1; done
+git -C "$W" checkout -q "$D"
+# --- the capture ref is deleted on EVERY exit path, including a refusal, not only on success.
+git -C "$W" checkout -q "$C"
+set +e
+(cd "$W" && PERMITTED_SHA="$C" bash "$GUARD" >/dev/null 2>&1)
+set -e
+git -C "$W" checkout -q "$D"
+if [ -z "$(git -C "$W" for-each-ref --format='%(refname)' 'refs/oe-guard/*')" ]; then
+  echo "ok   [a REFUSED run leaves no capture ref behind]"; pass=$((pass+1))
+else
+  echo "FAIL [a REFUSED run leaves no capture ref behind]: $(git -C "$W" for-each-ref --format='%(refname)' 'refs/oe-guard/*')"; fail=$((fail+1))
+fi
+# --- and a failed FETCH, which refuses before the capture, also leaves none.
+set +e
+(cd "$T/noremote" && PERMITTED_SHA="$D" bash "$GUARD" >/dev/null 2>&1)
+set -e
+if [ -z "$(git -C "$T/noremote" for-each-ref --format='%(refname)' 'refs/oe-guard/*')" ]; then
+  echo "ok   [a run that refuses at the fetch leaves no capture ref behind]"; pass=$((pass+1))
+else
+  echo "FAIL [a run that refuses at the fetch leaves no capture ref behind]"; fail=$((fail+1))
+fi
+# --- the ref name carries more than the pid, so two runs sharing a checkout are unlikely to collide.
+if grep -q 'tipref="refs/oe-guard/tip-\$\$-\$(od -An -N8' "$GUARD"; then
+  echo "ok   [the capture ref name is the pid plus random bytes]"; pass=$((pass+1))
+else
+  echo "FAIL [the capture ref name is the pid plus random bytes]"; fail=$((fail+1))
+fi
+
 # --- ONE fetched snapshot answers both predicates. FETCH_HEAD is a mutable file; a concurrent fetch in
 #     the same checkout between the two questions used to make the guard refuse a correct commit as
 #     off-branch while printing that same commit as the tip. The wrapper below reproduces exactly that:
@@ -255,5 +322,5 @@ set +e; out="$(cd "$W" && PERMITTED_SHA="$D" bash "$GUARD" --bogus 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ]; then echo "ok   [unknown argument]"; pass=$((pass+1)); else echo "FAIL [unknown argument]: rc=$rc"; fail=$((fail+1)); fi
 
 echo "permitted-sha-guard-test: $pass passed, $fail failed"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 60 ] && echo "permitted-sha-guard-test: ALL PASS"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 60 ]
+[ "$fail" -eq 0 ] && [ "$pass" -ge 64 ] && echo "permitted-sha-guard-test: ALL PASS"
+[ "$fail" -eq 0 ] && [ "$pass" -ge 64 ]

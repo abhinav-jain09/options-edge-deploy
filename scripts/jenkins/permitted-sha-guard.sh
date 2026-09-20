@@ -168,30 +168,44 @@ fi
 #       branch does not exist at all, and the guard would then report the tag's commit as "the tip of
 #       origin/main". Branch and tag namespaces are separate; a tag is not the environment's branch,
 #       and tip equality cannot repair a ref that named the wrong thing to begin with.
-#     * the fetch writes the tip into a ref OF OUR OWN, refs/oe-guard/tip-$$, and the capture reads THAT
-#       ref by its full path. It does not read FETCH_HEAD. FETCH_HEAD is a mutable FILE that any other
-#       fetch in the same checkout rewrites, and — the part that matters — when that file is EMPTY,
-#       `git rev-parse FETCH_HEAD` does not fail: it falls back to ordinary ref lookup and will happily
-#       resolve a TAG named FETCH_HEAD, so a concurrent failed fetch could hand this guard a commit that
-#       has nothing to do with the branch. A full ref path has no such fallback. This is the third ref
-#       the guard has had to stop accepting in place of the branch (an unqualified name that a tag
-#       answered for, a re-read FETCH_HEAD, and now an empty one); the class is the finding, so: fetch
-#       into a private ref, read that ref by its full path, delete it, and refuse if the capture is
-#       empty or is not a full commit id.
+#     * the fetch writes the tip into a ref of the guard's own, refs/oe-guard/tip-<pid>-<random>, and the
+#       capture reads THAT ref with `git show-ref --verify --hash`, which resolves an EXACT REF PATH and
+#       performs no name resolution at all. Not FETCH_HEAD, and not `rev-parse` either:
+#         - FETCH_HEAD is a mutable FILE any other fetch in the same checkout rewrites, and when that file
+#           is EMPTY `git rev-parse FETCH_HEAD` does not fail — it falls back to ref lookup and resolves a
+#           TAG named FETCH_HEAD;
+#         - `git rev-parse --verify refs/oe-guard/tip-123` is a REVISION NAME, not a ref path, so with that
+#           ref absent it is satisfied by a tag literally named `refs/oe-guard/tip-123`, stored at
+#           refs/tags/refs/oe-guard/tip-123. "Fully qualified" bought nothing; only an exact-ref lookup does.
+#       This is the FOURTH ref this guard has had to stop accepting in place of the branch (an unqualified
+#       name a tag answered for, a re-read FETCH_HEAD, an emptied FETCH_HEAD, and a revision name a tag
+#       answered for). The class is the finding, so the rule is: fetch into a ref of our own, read it by
+#       exact ref path, delete it on every exit path, and refuse an empty or malformed capture.
+#       The ref NAME is made unlikely to collide — the pid plus 8 random bytes — but this claims no
+#       guarantee: two runs sharing a checkout could in principle pick the same name, which is why the
+#       name is deleted before the fetch as well as after it.
 #     * the captured tip answers BOTH predicates below. Reading the source twice lets two different
 #       commits answer the two questions, which is how a correct build gets refused as off-branch while
 #       the log prints its own commit as the tip. One capture, one snapshot, one story in the log.
 #     * TWO conditions, judged and reported separately: HEAD is ON the branch (merged work), and HEAD
 #       IS the branch tip (current work).
-# `update-ref -d` on a ref that does not exist exits 0, so neither call needs its failure suppressed —
-# and neither gets it: `|| true` has no place in this script, because a swallowed failure is how a guard
-# stops guarding. If a delete ever does fail, set -e ends the run without a PERMITTED verdict, which is
-# the direction this script fails in.
-tipref="refs/oe-guard/tip-$$"
+# `update-ref -d` on a ref that does not exist exits 0, so no call needs its failure suppressed — and
+# none gets it: `|| true` has no place in this script, because a swallowed failure is how a guard stops
+# guarding. The EXIT trap below is the one place a failure is reported rather than fatal, because it runs
+# after the verdict and must not change it; it SAYS so rather than hiding it.
+tipref="refs/oe-guard/tip-$$-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+drop_tipref() {   # every exit path: a refusal, a usage error, an interruption, or success
+  drop_status=$?
+  if git -C "$dir" update-ref -d "$tipref" >/dev/null 2>&1; then :; else
+    echo "permitted-sha-guard: note — could not delete $tipref; it is left behind and the next run in this checkout deletes its own name first" >&2
+  fi
+  exit "$drop_status"
+}
+trap drop_tipref EXIT INT TERM
 git -C "$dir" update-ref -d "$tipref"
 git -C "$dir" fetch --quiet --no-tags origin "+refs/heads/$branch:$tipref" || refuse "could not fetch refs/heads/$branch from origin to confirm the branch — refusing rather than guessing (a tag or any other ref of that name is not the branch)"
-tip="$(git -C "$dir" rev-parse --verify --quiet "$tipref^{commit}")" || tip=""
-git -C "$dir" update-ref -d "$tipref"
+# EXACT REF PATH, not a revision name: show-ref --verify refuses anything that is not that ref.
+tip="$(git -C "$dir" show-ref --verify --hash "$tipref")" || tip=""
 case "$tip" in
   ''|*[!0-9a-f]*) refuse "the fetched refs/heads/$branch did not resolve to a commit id (got '${tip:-<none>}') — refusing rather than falling back to any other ref of that name" ;;
 esac

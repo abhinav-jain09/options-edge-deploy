@@ -499,8 +499,14 @@ class NiftyDeployProvenanceTest(unittest.TestCase):
         self.text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
 
     def _adjacent(self, text: str) -> bool:
-        ok, _why = GSTMT.verified_steps(text, *GSTMT.span(text, self.STAGE, self.END), self.DEPLOY_CMD, self.VERIFY)
+        ok, _why = GSTMT.verified_steps(text, *GSTMT.span(text, self.STAGE, self.END), self.DEPLOY_CMD, ".")
         return ok
+
+    def test_the_statement_reader_models_every_construct_in_this_file(self) -> None:
+        """The reader REFUSES what it does not model, and a refusal is False — so this file must stay
+        inside what it models, asserted here rather than discovered when the assertion silently weakens."""
+        refusals = GSTMT.lex(self.text)[1]
+        self.assertEqual(refusals, [], "; ".join(refusals[:3]))
 
     def test_the_shared_statement_reader_passes_its_own_self_test(self) -> None:
         r = subprocess.run(["python3", str(ROOT / "scripts/jenkins/groovy-statements.py"), "--self-test"],
@@ -546,6 +552,32 @@ class NiftyDeployProvenanceTest(unittest.TestCase):
             ("the helper back inside a compound preparation body", self.text.replace(
                 "            " + self.DEPLOY,
                 "            sh " + chr(39) * 3 + "\n              set -eu\n              " + self.DEPLOY_CMD + "\n            " + chr(39) * 3, 1)),
+            # Codex round 4: valid Groovy that hid a real second command from the round-3 reader's comment
+            # scan AND from its count, because both used the same classification. Each executed under Groovy.
+            ("a dollar-slashy string opening a comment the reader did not model", self.text.replace(
+                "            " + self.DEPLOY + "\n",
+                "            " + self.DEPLOY + "\n            def x = $/ /* /$\n            writeFile file: 'k8s/x.yaml', text: 'changed'\n            " + self.DEPLOY + "\n            // */\n", 1)),
+            ("a slashy string opening a comment the reader did not model", self.text.replace(
+                "            " + self.DEPLOY + "\n",
+                "            " + self.DEPLOY + "\n            def x = /a\\/*/\n            " + self.DEPLOY + "\n            // */\n", 1)),
+            ("nested interpolation quotes opening a comment", self.text.replace(
+                "            " + self.DEPLOY + "\n",
+                "            " + self.DEPLOY + "\n            def x = \"${ \"/*\" }\"\n            " + self.DEPLOY + "\n            // */\n", 1)),
+            ("an executable copy inside dollar-slashy interpolation", self.text.replace(
+                "            " + self.DEPLOY + "\n",
+                "            " + self.DEPLOY + "\n            echo($/ // ${sh('bash scripts/deploy/service-deploy.sh')} /$)\n", 1)),
+            ("a helper defined outside the stage that runs the deploy", self.text.replace(
+                "pipeline {", "def helper() { " + self.DEPLOY + " }\npipeline {", 1)),
+            # Codex round 4: the verification's own failure suppressed, or its command extended
+            ("the verification's failure suppressed with || true", self.text.replace(
+                " --allow-ignored .jenkins-tmp'", " --allow-ignored .jenkins-tmp || true'", 1)),
+            ("a second command appended to the verification", self.text.replace(
+                " --allow-ignored .jenkins-tmp'", " --allow-ignored .jenkins-tmp; true'", 1)),
+            ("a trailing comment appended to the verification", self.text.replace(
+                " --allow-ignored .jenkins-tmp'", " --allow-ignored .jenkins-tmp #x'", 1)),
+            ("the verification pointed at another directory", self.text.replace(
+                "verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp",
+                "verify-permitted-tree.sh --dir nifty-gex-src --allow-ignored target --allow-ignored .jenkins-tmp", 1)),
         ]
         for label, mutated in mutations:
             self.assertNotEqual(mutated, self.text, "mutation did not apply: " + label)
