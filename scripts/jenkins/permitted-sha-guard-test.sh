@@ -375,7 +375,7 @@ else
   printf '%s\n' "$out" | sed 's/^/    /'; fail=$((fail+1))
 fi
 
-# --- AN INHERITED IGNORED DISPOSITION IS THE ONE CASE THESE TRAPS CANNOT COVER, and the header says so
+# --- AN INHERITED IGNORED DISPOSITION IS ONE CASE THESE TRAPS CANNOT COVER, and the header says so
 #     rather than promising otherwise. A `trap ... SIG` in a Bash script does NOT restore a disposition the
 #     process INHERITED as SIG_IGN, so a caller that ignores SIGHUP before invoking the guard makes the
 #     guard immune to SIGHUP too. That is not a permission failure -- the run continues to its ordinary
