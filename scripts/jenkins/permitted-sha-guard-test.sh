@@ -141,13 +141,65 @@ git -C "$T/tagwork" checkout -q "$D"
 git -C "$T/tagwork" remote set-url origin "$T/tagorigin.git"
 run "a TAG named main is not the branch"     1 "could not fetch refs/heads/main" "$T/tagwork" PERMITTED_SHA="$D"
 run "...and the permission being right does not rescue it" 1 "verdict=REFUSED" "$T/tagwork" PERMITTED_SHA="$D" -- --ref main
+# --- an EMPTY FETCH_HEAD must not fall back to a ref of that name. `git rev-parse FETCH_HEAD` on an
+#     empty FETCH_HEAD file does NOT fail: it falls back to ordinary ref lookup, so a local TAG named
+#     FETCH_HEAD answers for the branch tip. Codex reproduced the interleaving with real fetches: the
+#     guard fetches main successfully, a concurrent failed fetch empties the file, and the guard then
+#     reports the TAG's commit as main's tip. The guard fetches into a ref of its own now and reads that
+#     ref by its full path, so there is nothing to fall back to.
+REALGIT="$(command -v git)"
+fhbin="$T/fhbin"; mkdir -p "$fhbin"
+cat > "$fhbin/git" <<EOF
+#!/usr/bin/env bash
+# forward everything; after a successful fetch, empty FETCH_HEAD as a concurrent failed fetch would
+dir="."
+prev=""
+for a in "\$@"; do
+  [ "\$prev" = "-C" ] && dir="\$a"
+  prev="\$a"
+done
+"$REALGIT" "\$@"; rc=\$?
+case " \$* " in
+  *" fetch "*) [ \$rc -eq 0 ] && : > "\$dir/.git/FETCH_HEAD" ;;
+esac
+exit \$rc
+EOF
+chmod +x "$fhbin/git"
+# origin/main is at D; the checkout and the permission are the OLDER B; a local tag FETCH_HEAD names B.
+git -C "$W" checkout -q "$B"
+git -C "$W" tag -f FETCH_HEAD "$B" >/dev/null 2>&1
+set +e
+out="$(cd "$W" && PATH="$fhbin:$PATH" PERMITTED_SHA="$B" bash "$GUARD" 2>&1)"; rc=$?
+set -e
+if [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -qF "is NOT its tip"; then
+  echo "ok   [an emptied FETCH_HEAD does not fall back to a tag of that name]"; pass=$((pass+1))
+else
+  echo "FAIL [an emptied FETCH_HEAD does not fall back to a tag of that name]: rc=$rc"; printf '%s\n' "$out" | sed 's/^/    /'; fail=$((fail+1))
+fi
+# ...and with the checkout AT the tip, the same interleaving still permits: the capture is our own ref.
+git -C "$W" checkout -q "$D"
+set +e
+out="$(cd "$W" && PATH="$fhbin:$PATH" PERMITTED_SHA="$D" bash "$GUARD" 2>&1)"; rc=$?
+set -e
+if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qF "verdict=PERMITTED"; then
+  echo "ok   [the same interleaving still permits the real tip]"; pass=$((pass+1))
+else
+  echo "FAIL [the same interleaving still permits the real tip]: rc=$rc"; printf '%s\n' "$out" | sed 's/^/    /'; fail=$((fail+1))
+fi
+git -C "$W" tag -d FETCH_HEAD >/dev/null 2>&1 || true
+# the guard leaves no ref of its own behind
+if [ -z "$(git -C "$W" for-each-ref --format='%(refname)' 'refs/oe-guard/*')" ]; then
+  echo "ok   [the guard deletes the ref it fetched the tip into]"; pass=$((pass+1))
+else
+  echo "FAIL [the guard deletes the ref it fetched the tip into]"; fail=$((fail+1))
+fi
+
 # --- ONE fetched snapshot answers both predicates. FETCH_HEAD is a mutable file; a concurrent fetch in
 #     the same checkout between the two questions used to make the guard refuse a correct commit as
 #     off-branch while printing that same commit as the tip. The wrapper below reproduces exactly that:
 #     the guard's read of FETCH_HEAD returns the real tip, and FETCH_HEAD is then rewritten to the
 #     off-branch commit C before the containment test runs.
 racebin="$T/racebin"; mkdir -p "$racebin"
-REALGIT="$(command -v git)"
 cat > "$racebin/git" <<EOF
 #!/usr/bin/env bash
 # forward everything; after the guard resolves FETCH_HEAD, rewrite it as a concurrent fetch would
@@ -203,5 +255,5 @@ set +e; out="$(cd "$W" && PERMITTED_SHA="$D" bash "$GUARD" --bogus 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ]; then echo "ok   [unknown argument]"; pass=$((pass+1)); else echo "FAIL [unknown argument]: rc=$rc"; fail=$((fail+1)); fi
 
 echo "permitted-sha-guard-test: $pass passed, $fail failed"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 57 ] && echo "permitted-sha-guard-test: ALL PASS"
-[ "$fail" -eq 0 ] && [ "$pass" -ge 57 ]
+[ "$fail" -eq 0 ] && [ "$pass" -ge 60 ] && echo "permitted-sha-guard-test: ALL PASS"
+[ "$fail" -eq 0 ] && [ "$pass" -ge 60 ]

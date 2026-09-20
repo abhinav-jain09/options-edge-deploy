@@ -212,13 +212,15 @@ STR = r"(?:\"[^\"]*\"|'[^']*')"
 # through both so they cannot drift:
 #     declaration := component ("/" component)*
 #     component   := "*" | name
-#     name        := one or more of [A-Za-z0-9._-], and not "." or ".."
+#     name        := one or more of [A-Za-z0-9._-] of which AT LEAST ONE is not "." (so ".", ".." and
+#                    every other all-dots name such as "..." are refused — see the verifier's usage block)
 # Two grammars that disagree are worse than one that is strict: a declaration CI accepts and the verifier refuses is
 # a job that always fails at deploy time, and a declaration the verifier accepts but CI refuses cannot be written in
 # the canonical step at all. The lookahead is what excludes "." and ".." without excluding ".deps": a name must
 # contain at least one character that is not a dot. A declaration containing `*` MUST be double-quoted in the shell
 # text, or the step's own shell would expand it against the workspace before the verifier ever saw it — so the
-# unquoted alternative is the same grammar minus `*`.
+# unquoted alternative is the same grammar minus `*`. The lookahead `(?=[A-Za-z0-9._-]*[A-Za-z0-9_-])` IS the
+# "at least one non-dot" clause; it stops at `/` and at `"`, so it cannot reach past its own component.
 ALLOW_NAME = r"(?=[A-Za-z0-9._-]*[A-Za-z0-9_-])[A-Za-z0-9._-]+"
 ALLOW_COMP = r"(?:\*|" + ALLOW_NAME + r")"
 ALLOW_PATH = ALLOW_COMP + r"(?:/" + ALLOW_COMP + r")*"
@@ -229,20 +231,37 @@ BUILD_JOB_RE = re.compile(r"\bbuild\s*\(?\s*job:\s*(env\.JOB_NAME|'([^']+)')")
 ACQUIRE_RE = re.compile(r"\bgit url:|\bgit\s*\(|\bgit\s+(?:branch|credentialsId|changelog|poll)\s*:|\bgit clone\b|\bcheckout\(|\bcheckout scm\b|\bgit pull\b|\bgit checkout\b|\bgit -C \S+ checkout\b")
 GATE_FLAG_ONLY = "when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } } "
 # The guard stage's own `agent { label … }`. Declarative EVALUATES a stage's agent closure BEFORE it runs that
-# stage's steps, so whatever the label expression does, it does BEFORE the guard. The label is therefore restricted
-# to forms that read a value and nothing else:
-#   * a single-quoted literal            agent { label 'local-mac' }
-#   * a bare Groovy identifier           agent { label BUILD_LABEL }
-#   * a double-quoted string whose only interpolations are simple `env.X` / `params.X` property reads
-#     (plus ordinary label characters around them)   agent { label "${env.BUILD_AGENT_LABEL}" }
-# A method call inside the interpolation — `"${build([job: 'x', wait: false])}"`, `"${sh('…')}"` — is NOT one of
-# these forms and the stage is not the canonical guard. An earlier revision of this file allowed any `${…}` with no
-# braces inside, which admitted exactly those two, i.e. a step that runs before the permitted-commit guard does.
-AGENT_LABEL = (r"(?:'[^'\\]*'"
-               r"|[A-Za-z_][A-Za-z0-9_]*"
-               r"|\"(?:[A-Za-z0-9._/@:+=-]|\$\{(?:env|params)\.[A-Za-z_][A-Za-z0-9_]*\})*\")")
+# stage's steps, so whatever the label expression does, it does BEFORE the guard. ONE form is accepted:
+#
+#     agent { label 'a-literal' }
+#
+# A SINGLE-QUOTED GROOVY STRING LITERAL, and nothing else. Not a bare identifier, not a property read, not a
+# GString — nothing whose value is produced by resolving a NAME.
+#
+# WHY THIS IS THE ONLY SOUND LINE. A syntactic check cannot establish that resolving a name is side-effect
+# free: in Groovy a property read IS a method call. An earlier revision of this file accepted a
+# double-quoted string whose interpolations were "simple `env.X` / `params.X` property reads", on the reading
+# that such a form only reads a value. It does not. Codex defined a top-level
+# `def getParams() { build([job: 'unguarded-deploy', wait: false]); return [AGENT: 'deploy-host'] }` and wrote
+# `agent { label "${params.AGENT}" }`: resolving `params` calls that getter, so the trigger runs before the
+# guard, and this validator called the stage canonical. A bare `BUILD_LABEL` backed by `getBUILD_LABEL()`
+# does the same, and `env`/`params` can also be shadowed by a local of that name. Each new alternation closed
+# the PAYLOADS and not the EXECUTION CLASS. A string literal has no name to resolve, so there is nothing to
+# call; that is the whole argument, and it is why the list is one item long.
+#
+# WHAT THIS COSTS, said plainly: a guard stage cannot run on an agent whose label is computed. A job that
+# needs one puts the guard on `agent any` (or on a literal-labelled agent) and re-binds the computed-label
+# workspace with the rule-6 inline re-guard, which is a STEP and therefore runs after the guard's verdict,
+# not before it — options-edge-processing's trade-evidence-api/Jenkinsfile was restructured exactly that way.
+# The pipeline-level `agent` and non-guard stages are outside this rule and outside what the guard can
+# promise: rule 4 requires every stage before the guard to be declared in the manifest's before= set and to
+# carry no mutation token, and the manifest reason is the reviewed statement that those stages are
+# effect-free. This rule narrows the one stage whose own agent the guard's verdict cannot come after.
+# `agent any` is the other accepted form: it names no label at all, so there is no expression to evaluate
+# and nothing to resolve. `agent { label 'x' }` and `agent any` are the whole list.
+AGENT = r"(?:any|\{ label '[^'\\\\]*' \})"
 CANON_GUARD = re.compile(
-    r"^stage\('(?P<name>[^']+)'\) \{ (?P<when>when \{ expression \{ env\.PERMITTED_SHA_GUARD == 'PASSED' \} \} )?(?:agent \{ label " + AGENT_LABEL + r" \} )?"
+    r"^stage\('(?P<name>[^']+)'\) \{ (?P<when>when \{ expression \{ env\.PERMITTED_SHA_GUARD == 'PASSED' \} \} )?(?:agent " + AGENT + r" )?"
     r"options \{ timeout\(time: (?P<tmo>[0-9]+), unit: 'MINUTES'\) \} steps \{ script \{ "
     r"def rc = sh\(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard\.sh(?P<args>( --ref \"\$\{[A-Z_]+:\?\}\")?)'\) "
     r"if \(rc != 0\) \{ error\(" + STR + r"\) \} "

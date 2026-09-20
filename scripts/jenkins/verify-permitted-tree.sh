@@ -55,7 +55,13 @@
 #                    declaration the verifier accepts but CI refuses cannot be written at all):
 #                      declaration := component ( "/" component )*
 #                      component   := "*" | name
-#                      name        := one or more of [A-Za-z0-9._-], and not "." or ".."
+#                      name        := one or more of [A-Za-z0-9._-] of which AT LEAST ONE is not "."
+#                    The last clause is what excludes "." and ".." — and, deliberately, every other
+#                    all-dots name such as "..." as well. An earlier wording said "and not '.' or '..'",
+#                    which reads as allowing "...", and both implementations refused it: the spec was
+#                    wrong, not the code. A run of dots has no legitimate use as declared build output
+#                    here and is one keystroke from a traversal spelling, so it stays refused and the
+#                    grammar now says so.
 #                    "*" is exactly ONE whole path component — `*/target` covers `<module>/target/...`
 #                    for every module directory and nothing deeper. There is no `**`: a declaration
 #                    that would match at any depth is exactly what this refuses. Anything else — an
@@ -110,7 +116,7 @@ declaration_is_wellformed() {
       '*') : ;;                                 # exactly one whole component
       ''|*'*'*) return 1 ;;                     # empty component, `**`, or `*` glued into a name
       *[!A-Za-z0-9._-]*) return 1 ;;            # only the name set; "~", spaces and the rest are out
-      *[!.]*) : ;;                              # a name has at least one non-dot: "." and ".." are out
+      *[!.]*) : ;;                              # at least one non-dot: ".", ".." and "..." are all out
       *) return 1 ;;
     esac
     if [ "$comp" = "$rest" ]; then break; fi

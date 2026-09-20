@@ -168,17 +168,32 @@ fi
 #       branch does not exist at all, and the guard would then report the tag's commit as "the tip of
 #       origin/main". Branch and tag namespaces are separate; a tag is not the environment's branch,
 #       and tip equality cannot repair a ref that named the wrong thing to begin with.
-#     * the fetched tip is captured ONCE, into $tip, and BOTH predicates below are judged against that
-#       one commit. FETCH_HEAD is a mutable file: reading it again for the second predicate lets a
-#       concurrent fetch in the same checkout answer the two questions about two different commits,
-#       which is how a correct build gets refused as off-branch while the log prints its own commit as
-#       the tip. One capture, one snapshot, one story in the log.
+#     * the fetch writes the tip into a ref OF OUR OWN, refs/oe-guard/tip-$$, and the capture reads THAT
+#       ref by its full path. It does not read FETCH_HEAD. FETCH_HEAD is a mutable FILE that any other
+#       fetch in the same checkout rewrites, and — the part that matters — when that file is EMPTY,
+#       `git rev-parse FETCH_HEAD` does not fail: it falls back to ordinary ref lookup and will happily
+#       resolve a TAG named FETCH_HEAD, so a concurrent failed fetch could hand this guard a commit that
+#       has nothing to do with the branch. A full ref path has no such fallback. This is the third ref
+#       the guard has had to stop accepting in place of the branch (an unqualified name that a tag
+#       answered for, a re-read FETCH_HEAD, and now an empty one); the class is the finding, so: fetch
+#       into a private ref, read that ref by its full path, delete it, and refuse if the capture is
+#       empty or is not a full commit id.
+#     * the captured tip answers BOTH predicates below. Reading the source twice lets two different
+#       commits answer the two questions, which is how a correct build gets refused as off-branch while
+#       the log prints its own commit as the tip. One capture, one snapshot, one story in the log.
 #     * TWO conditions, judged and reported separately: HEAD is ON the branch (merged work), and HEAD
 #       IS the branch tip (current work).
-git -C "$dir" fetch --quiet origin "refs/heads/$branch" || refuse "could not fetch refs/heads/$branch from origin to confirm the branch — refusing rather than guessing (a tag or any other ref of that name is not the branch)"
-tip="$(git -C "$dir" rev-parse FETCH_HEAD^{commit} 2>/dev/null)" || tip=""
+# `update-ref -d` on a ref that does not exist exits 0, so neither call needs its failure suppressed —
+# and neither gets it: `|| true` has no place in this script, because a swallowed failure is how a guard
+# stops guarding. If a delete ever does fail, set -e ends the run without a PERMITTED verdict, which is
+# the direction this script fails in.
+tipref="refs/oe-guard/tip-$$"
+git -C "$dir" update-ref -d "$tipref"
+git -C "$dir" fetch --quiet --no-tags origin "+refs/heads/$branch:$tipref" || refuse "could not fetch refs/heads/$branch from origin to confirm the branch — refusing rather than guessing (a tag or any other ref of that name is not the branch)"
+tip="$(git -C "$dir" rev-parse --verify --quiet "$tipref^{commit}")" || tip=""
+git -C "$dir" update-ref -d "$tipref"
 case "$tip" in
-  ''|*[!0-9a-f]*) refuse "the fetched refs/heads/$branch did not resolve to a commit id (got '${tip:-<none>}')" ;;
+  ''|*[!0-9a-f]*) refuse "the fetched refs/heads/$branch did not resolve to a commit id (got '${tip:-<none>}') — refusing rather than falling back to any other ref of that name" ;;
 esac
 [ "${#tip}" -eq 40 ] || refuse "the fetched refs/heads/$branch did not resolve to a full commit id (got '$tip')"
 git -C "$dir" merge-base --is-ancestor "$head_sha" "$tip" \

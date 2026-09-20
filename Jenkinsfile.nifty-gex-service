@@ -19,7 +19,7 @@ pipeline {
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
-    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: 'c9c82413d037ded2ba80f506e0af4b28b089f46fb57021f27b76b1af954b3803',
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '1d0fd0c60c4a2764dffb0bd26b15525bd08470a3c49be7ae7d9ef177d1a1a6b9',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ENVIRONMENT', choices: ['production', 'dev'],
       description: 'Target environment — selects k8s/services/nifty-gex/overlays/<env> and the deployer kubeconfig (oeProfile).')
@@ -205,12 +205,23 @@ pipeline {
     stage('Deploy (service-scoped)') {
       when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
-        // PREPARATION — consumes nothing and deploys nothing: this build's permission receipt, and the
-        // health URL resolved into a file the step below reads. Kept apart from the deployment itself so
-        // that the deployment is ONE step with the workspace verification immediately in front of it.
+        // PREPARATION — consumes nothing and deploys nothing: this build's permission receipt, the health
+        // URL resolved into a file the step below reads, and the removal of the nifty source checkout.
+        // Kept apart from the deployment itself so that the deployment is ONE step with the workspace
+        // verification immediately in front of it.
+        //
+        // nifty-gex-src/ is the SECOND SOURCE this job clones when BUILD_IMAGE=true (the default) — the
+        // tree the image was built from. It is untracked and not ignored, so it is a working-tree
+        // difference: leaving it there made the verification below refuse the workspace for its own
+        // acquisition, on the ordinary successful path. It is removed rather than declared, because
+        // declaring it would exempt from verification exactly the tree this job cloned and built; by the
+        // time the deploy runs, that clone has served its purpose (it was guarded against
+        // NIFTY_PERMITTED_SHA and its image was pushed and digest-pinned into REQUIRED_IMAGE), and the
+        // deployment reads only this repository's overlays.
         sh '''
           set -euo pipefail
           mkdir -p .jenkins-tmp
+          rm -rf nifty-gex-src
           bash scripts/jenkins/write-permission-receipt.sh "$WORKSPACE/.jenkins-tmp/permission-receipt.env"
           HEALTH_URL="${HEALTH_URL_PARAM:-}"
           [ -n "$HEALTH_URL" ] || HEALTH_URL="${HEALTH_URL_DEFAULT:-}"

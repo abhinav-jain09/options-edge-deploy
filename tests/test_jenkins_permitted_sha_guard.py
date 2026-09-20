@@ -46,10 +46,15 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import importlib.util as _ilu_g
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 J = ROOT / "scripts/jenkins"
+
+_spec_g = _ilu_g.spec_from_file_location("gstmt", str(ROOT / "scripts/jenkins/groovy-statements.py"))
+GSTMT = _ilu_g.module_from_spec(_spec_g)
+_spec_g.loader.exec_module(GSTMT)
 GUARD = J / "permitted-sha-guard.sh"
 GUARD_SUITE = J / "permitted-sha-guard-test.sh"
 VERSION = J / "permitted-sha-guard-version.sh"
@@ -471,62 +476,133 @@ class BindRequiredImageTest(unittest.TestCase):
 class NiftyDeployProvenanceTest(unittest.TestCase):
     """The service-scoped deploy renders and applies THIS checkout's overlay, so the tree is verified first.
 
-    Codex (Military grade): the guard's header claimed verification happens "immediately before each
-    effect", and Jenkinsfile.nifty-gex-service's deployment stage ran `bash scripts/deploy/service-deploy.sh`
-    -- which renders the checkout's overlay and applies it -- inside a compound shell body with nothing
-    verified in front of it. The validator's effect grammar does not reach manifest application (its
-    LIMITS say so now), so this adjacency is the pipeline's own and is asserted here, on the real file."""
+    Codex (Military grade, round 2): the guard's header claimed verification happens "immediately before
+    each effect", and Jenkinsfile.nifty-gex-service's deployment stage ran
+    `bash scripts/deploy/service-deploy.sh` -- which renders the checkout's overlay and applies it --
+    inside a compound shell body with nothing verified in front of it. The validator's effect grammar does
+    not reach manifest application (its LIMITS say so), so this adjacency is the pipeline's own.
 
-    VERIFY = "sh 'PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir ."
-    DEPLOY = "sh 'bash scripts/deploy/service-deploy.sh'"
-    TRIPLE = chr(39) * 3
+    Codex (NASA grade, round 3): the FIRST version of this assertion searched raw text, so prefixing all
+    three lines of the verification block with `// ` left it visible and all 58 tests still passed with no
+    executable verification. The decision is made on STATEMENTS now, by the shared
+    scripts/jenkins/groovy-statements.py -- the same reader option-edge-feed-gateway's suite uses for the
+    same defect -- and every mutation below is a NEGATIVE CONTROL: it removes the protection, and the
+    assertion must go red."""
+
+    VERIFY = 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir .'
+    DEPLOY_CMD = "bash scripts/deploy/service-deploy.sh"
+    DEPLOY = "sh '" + DEPLOY_CMD + "'"
+    STAGE = "    stage('Deploy (service-scoped)') {"
+    END = "\n  }\n  post {"
 
     def setUp(self) -> None:
         self.text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
 
     def _adjacent(self, text: str) -> bool:
-        """True when the verify's timeout block is the statement immediately before the deploy step.
+        ok, _why = GSTMT.verified_steps(text, *GSTMT.span(text, self.STAGE, self.END), self.DEPLOY_CMD, self.VERIFY)
+        return ok
 
-        Total: any shape that is not "verify, then deploy, with nothing between" is False rather than an
-        exception, so a mutation can never pass by breaking the parse."""
-        try:
-            stage = text[text.index("    stage('Deploy (service-scoped)') {"):]
-        except ValueError:
-            return False
-        if self.DEPLOY not in stage:
-            return False
-        before = stage[:stage.index(self.DEPLOY)]
-        if self.VERIFY not in before:
-            return False
-        nl = before.find("\n", before.rindex(self.VERIFY))
-        close = before.find("}", nl) if nl >= 0 else -1
-        if close < 0:
-            return False
-        return all(not ln.strip() or ln.strip().startswith("//") for ln in before[close + 1:].splitlines())
+    def test_the_shared_statement_reader_passes_its_own_self_test(self) -> None:
+        r = subprocess.run(["python3", str(ROOT / "scripts/jenkins/groovy-statements.py"), "--self-test"],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("ALL PASS", r.stdout)
 
     def test_the_deploy_helper_runs_immediately_after_the_workspace_verify(self) -> None:
         self.assertIn(self.DEPLOY, self.text, "the deploy helper must be its own step, not one line of a shell body")
         self.assertTrue(self._adjacent(self.text))
 
-    def test_the_assertion_fails_for_anything_between_them(self) -> None:
-        for label, stmt in [
-            ("a shell step", "            sh 'printf changed > k8s/overlays/dev/kustomization.yaml'\n"),
-            ("a writeFile step", "            writeFile file: 'k8s/x.yaml', text: 'changed'\n"),
-            ("an unstash step", "            unstash 'other-tree'\n"),
-            ("a dir block", "            dir('k8s') { }\n"),
-            ("a bare method call", "            renderSomethingElse()\n"),
-        ]:
-            mutated = self.text.replace("            " + self.DEPLOY, stmt + "            " + self.DEPLOY, 1)
+    def _stage(self) -> str:
+        return self.text[self.text.index(self.STAGE):self.text.index(self.END)]
+
+    def _verify_block(self) -> str:
+        st = self._stage()
+        open_, close_ = "            timeout(time: 10, unit: 'MINUTES') {", "            " + self.DEPLOY
+        self.assertIn(open_, st, "the deploy stage has no verification timeout block to mutate")
+        self.assertIn(close_, st, "the deploy stage does not run the helper as its own step")
+        return st[st.index(open_):st.index(close_)]
+
+    def test_negative_controls(self) -> None:
+        vblk = self._verify_block()
+        commented = "".join("            // " + ln.strip() + "\n" for ln in vblk.strip().splitlines())
+        mutations = [
+            ("a shell step between them", self.text.replace(
+                "            " + self.DEPLOY, "            sh 'printf changed > k8s/overlays/dev/kustomization.yaml'\n            " + self.DEPLOY, 1)),
+            ("a writeFile between them", self.text.replace(
+                "            " + self.DEPLOY, "            writeFile file: 'k8s/x.yaml', text: 'changed'\n            " + self.DEPLOY, 1)),
+            ("an unstash between them", self.text.replace(
+                "            " + self.DEPLOY, "            unstash 'other-tree'\n            " + self.DEPLOY, 1)),
+            ("a dir block between them", self.text.replace(
+                "            " + self.DEPLOY, "            dir('k8s') { }\n            " + self.DEPLOY, 1)),
+            ("a bare method call between them", self.text.replace(
+                "            " + self.DEPLOY, "            renderSomethingElse()\n            " + self.DEPLOY, 1)),
+            ("the verification block deleted", self.text.replace(vblk, "", 1)),
+            ("the verification COMMENTED OUT, deploy untouched (Codex round 3)", self.text.replace(vblk, commented, 1)),
+            ("a SECOND, unverified deploy appended", self.text.replace(
+                "            " + self.DEPLOY + "\n", "            " + self.DEPLOY + "\n            writeFile file: 'k8s/x.yaml', text: 'changed'\n            " + self.DEPLOY + "\n", 1)),
+            ("a writer INSIDE the verification timeout", self.text.replace(
+                "'\n            }\n            " + self.DEPLOY,
+                "'\n              writeFile file: 'k8s/x.yaml', text: 'changed'\n            }\n            " + self.DEPLOY, 1)),
+            ("the helper back inside a compound preparation body", self.text.replace(
+                "            " + self.DEPLOY,
+                "            sh " + chr(39) * 3 + "\n              set -eu\n              " + self.DEPLOY_CMD + "\n            " + chr(39) * 3, 1)),
+        ]
+        for label, mutated in mutations:
+            self.assertNotEqual(mutated, self.text, "mutation did not apply: " + label)
             self.assertFalse(self._adjacent(mutated), label)
 
-    def test_the_assertion_fails_without_the_verify(self) -> None:
-        stage = self.text[self.text.index("    stage('Deploy (service-scoped)') {"):]
-        block = stage[stage.index("            timeout(time: 10, unit: 'MINUTES') {"):stage.index("            " + self.DEPLOY)]
-        self.assertFalse(self._adjacent(self.text.replace(block, "", 1)))
-        # ...and for the shape this replaced: the helper as one line of a compound preparation body
-        compound = ("            sh " + self.TRIPLE + "\n              set -eu\n"
-                    "              bash scripts/deploy/service-deploy.sh\n            " + self.TRIPLE + "\n")
-        self.assertFalse(self._adjacent(self.text.replace("            " + self.DEPLOY, compound, 1)))
+
+class NiftyPostBuildWorkspaceTest(unittest.TestCase):
+    """The verification must accept the workspace a SUCCESSFUL build leaves behind, not just a clean one.
+
+    Codex round 3 (Military): `BUILD_IMAGE=true` is the default and clones the nifty source into
+    `nifty-gex-src/`, which is untracked and not ignored. The round-2 verification therefore refused the
+    workspace for its own acquisition: a successful image build and push reached the deploy stage and was
+    stopped there. The preparation step now removes that completed clone -- rather than declaring it to the
+    verifier, which would exempt the very tree this job cloned and built."""
+
+    def test_the_preparation_removes_the_nested_checkout_before_the_verify(self) -> None:
+        text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        stage = text[text.index("    stage('Deploy (service-scoped)') {"):]
+        self.assertIn("rm -rf nifty-gex-src", stage[:stage.index("verify-permitted-tree.sh")],
+                      "the completed nifty clone must be removed BEFORE the workspace verification")
+        self.assertNotIn("--allow-ignored nifty-gex-src", text,
+                         "the cloned source must not be declared to the verifier")
+
+    def test_the_real_post_build_workspace_passes_only_after_the_removal(self) -> None:
+        """Build the workspace a BUILD_IMAGE=true run actually leaves, then run the exact verify line."""
+        text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        vline = next(l for l in text.split("\n") if "verify-permitted-tree.sh --dir ." in l)
+        allow = [a.strip('"') for a in vline.split("verify-permitted-tree.sh ", 1)[1].rstrip("'").split()
+                 if a not in ("--dir", ".")]
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        co = tmp / "co"
+        subprocess.run(["git", "-C", str(ROOT), "worktree", "add", "--detach", str(co), "HEAD"],
+                       capture_output=True, text=True)
+        self.addCleanup(lambda: subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(co)],
+                                               capture_output=True, text=True))
+        head = subprocess.run(["git", "-C", str(co), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+        def verify() -> subprocess.CompletedProcess:
+            return subprocess.run(["bash", str(ROOT / "scripts/jenkins/verify-permitted-tree.sh"), "--dir", str(co)] + allow,
+                                  capture_output=True, text=True, env={**os.environ, "PERMITTED_SHA": head})
+
+        # what the Build image stage leaves behind on the default path
+        (co / ".jenkins-tmp").mkdir(exist_ok=True)
+        (co / ".jenkins-tmp/permission-receipt.env").write_text("x=1\n")
+        src = co / "nifty-gex-src"
+        src.mkdir()
+        subprocess.run(["git", "init", "-q", str(src)], capture_output=True, text=True)
+        (src / "pom.xml").write_text("<project/>\n")
+        # NEGATIVE CONTROL: without the removal the ordinary successful path is refused, naming the clone
+        r = verify()
+        self.assertEqual(r.returncode, 1, "the post-build workspace was expected to be refused before the removal")
+        self.assertIn("nifty-gex-src", r.stdout + r.stderr)
+        # ...and the preparation step's removal is what makes it pass
+        shutil.rmtree(src)
+        r = verify()
+        self.assertEqual(r.returncode, 0, "the post-build workspace must pass once the clone is removed:\n" + r.stdout + r.stderr)
 
 
 class PermittedShaGuardValidatorTest(unittest.TestCase):
