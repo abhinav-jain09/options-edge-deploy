@@ -252,6 +252,60 @@ printf '#!/bin/sh\nprintf "mvn %%s\\n" "$*" >> "$RAN_LOG"\nexit 0\n' > "$REALBIN
 chmod +x "$REALBIN/mvn"
 git -C "$W" checkout -q -- file.txt
 
+# --- 11b. A RELATIVE PATH ENTRY, AND A CHILD THAT CHANGES DIRECTORY ------------------------------
+# Review reproduced this and it was real: with `PATH=scripts/jenkins/effect-shim:...` -- a relative
+# entry, which is how a Jenkinsfile writes it without thinking -- a verified child that does `cd /tmp`
+# and then runs `kubectl` looks the name up against its NEW cwd, finds no shim there, and reaches the
+# real binary UNVERIFIED. The case below is that exact chain. The shim now rewrites the element it was
+# found through to this directory's absolute path before handing PATH on, so the lookup survives any
+# cwd the child chooses. Delete those lines and this case goes red while every other case stays green.
+cat > "$REALBIN/mvn" <<PEOF
+#!/bin/sh
+printf 'mvn %s\n' "\$*" >> "\$RAN_LOG"
+echo 'changed by the running build' >> "$W/file.txt"
+exec "$REALBIN/middle-cd"
+PEOF
+cat > "$REALBIN/middle-cd" <<'MEOF'
+#!/bin/sh
+# the thing that makes a relative PATH entry stop working: somewhere else entirely
+cd /tmp || exit 1
+kubectl grandchild-after-cd
+MEOF
+chmod +x "$REALBIN/mvn" "$REALBIN/middle-cd"
+git -C "$W" checkout -q -- file.txt
+: > "$T/ran"
+set +e
+OUT="$(cd "$W" && env PATH="scripts/jenkins/effect-shim:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= mvn -B test 2>&1)"; RC=$?
+set -e
+if grep -q '^mvn ' "$T/ran" && ! grep -q '^kubectl' "$T/ran" && printf '%s' "$OUT" | grep -q "verdict=REFUSED"; then
+  ok "a RELATIVE shim entry still intercepts a grandchild that changed directory"
+else
+  bad "a RELATIVE shim entry still intercepts a grandchild that changed directory" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+fi
+printf '#!/bin/sh\nprintf "mvn %%s\\n" "$*" >> "$RAN_LOG"\nexit 0\n' > "$REALBIN/mvn"
+chmod +x "$REALBIN/mvn"
+git -C "$W" checkout -q -- file.txt
+
+# --- 11c. A LOGIN SHELL THAT REBUILDS PATH IS A LIMIT, NOT A PROTECTION -------------------------
+# `bash -lc` re-reads the profile, and a profile that ASSIGNS PATH (rather than prepending to it)
+# drops the shim entry entirely. Nothing inside a wrapper can survive its own removal from PATH, so
+# this is recorded as a LIMIT with a test rather than described in a sentence. If it ever goes green
+# the shim became stronger than its header claims and the header is what needs changing.
+: > "$T/ran"
+set +e
+OUT="$(cd "$W" && env PATH="$CO_SHIM:$REALBIN:/usr/bin:/bin" RAN_LOG="$T/ran" \
+      OE_SHIM_DIR=. OE_SHIM_SHA="$SHA" OE_SHIM_ALLOW= \
+      bash -c 'PATH="'"$REALBIN"':/usr/bin:/bin"; kubectl reset-path-effect' 2>&1)"; RC=$?
+set -e
+if grep -q '^kubectl' "$T/ran"; then
+  ok_limit "DOCUMENTED LIMIT: a shell that REASSIGNS PATH drops the shim and the tool runs unverified"
+else
+  bad "DOCUMENTED LIMIT: a shell that REASSIGNS PATH drops the shim and the tool runs unverified" "rc=$RC ran=$(cat "$T/ran")
+$OUT"
+fi
+
 # --- 12-14. THE DOCUMENTED LIMITS, PINNED ------------------------------------------------------------
 # These three cases assert what the shim does NOT do. They exist because a limit that is only described
 # is a sentence someone deletes; a limit with a test is a limit. If one of them ever goes red, the shim
@@ -612,6 +666,9 @@ for sig in TERM INT HUP QUIT; do
         SHIM_INHERITED="$T/inherited" python3 "$T/launch-shim.py" "$CO_SHIM/mvn" -B test 2>&1)"; RC=$?
   set -e
   if [ "$RC" -eq 3 ] && ! ran && printf '%s' "$OUT" | grep -q "interrupted by SIG$sig"; then
+    # THE LABEL IS A CONSTANT. It is the key the sweep matches its inventory against, so a disposition
+    # interpolated into it reads as a different case every run and every signal case scores NEVER RED.
+    printf 'note [SIG%s launcher inherited: %s]\n' "$sig" "$(cat "$T/inherited" 2>/dev/null)"
     ok "SIG$sig during the verification refuses with status 3 and says so (the tool never runs)"
   else
     bad "SIG$sig during the verification refuses with status 3 and says so (the tool never runs)" "rc=$RC ran=$(cat "$T/ran") inherited-disposition=$(cat "$T/inherited" 2>/dev/null)

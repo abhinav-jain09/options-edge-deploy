@@ -1243,9 +1243,13 @@ class EffectShimTest(unittest.TestCase):
     WHAT IT DOES NOT: defend against a step that deletes or edits the wrapper, or against an absolute
     path. THE JOB OWNS ITS OWN PROCESS -- a step in the workspace can remove a file in the workspace, a
     wrapper cannot detect its own absence, and mutable code cannot establish its own integrity by
-    checking itself. Those cases are answered by DETECTION (effect-shim-integrity.sh, which the stage
-    runs at its start and again at its end) and by the validator's literal absolute-path rule. The
-    limits are pinned by cases in effect-shim-test.sh asserting the documented outcome."""
+    checking itself. NOTHING HERE ANSWERS THOSE CASES. effect-shim-integrity.sh, which the stage runs
+    at its start and again at its end, checks for an ACCIDENT -- a wrapper deleted, a permission
+    dropped, an entry added, a file edited by something that did not also edit the digest -- and it
+    cannot outrank a step that edits the checker or re-records the digest. The absolute-path case is
+    the validator's literal rule, not the shim's. The limits are pinned by cases in
+    effect-shim-test.sh asserting the documented outcome, including two that show an edited shim and
+    an edited checker both reporting ok."""
 
     SHIM = J / "effect-shim"
 

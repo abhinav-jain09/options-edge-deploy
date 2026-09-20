@@ -47,14 +47,25 @@
 #
 # Usage: effect-shim-sweep.sh [--verbose]
 set -u
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-SHIM="$HERE/effect-shim/_shim.sh"
-INTEG="$HERE/effect-shim-integrity.sh"
-SUITE="$HERE/effect-shim-test.sh"
-DIGEST="$HERE/effect-shim-digest.txt"
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 verbose=false; [ "${1:-}" = "--verbose" ] && verbose=true
 
-work="$(mktemp -d)"; trap 'cp "$work/_shim.sh" "$SHIM"; cp "$work/integ" "$INTEG"; cp "$work/digest" "$DIGEST"; rm -rf "$work"' EXIT
+# THE SWEEP NEVER TOUCHES THE CHECKOUT. It used to mutate `scripts/jenkins/` in place and restore on
+# EXIT, which is fine until the run is killed: review interrupted a long sweep and found a mutant
+# _shim.sh and a MATCHING re-recorded digest left behind in the reviewed workspace, where the next
+# integrity check reports green against altered payload. A trap cannot cover SIGKILL, a panic, or a
+# closed laptop, so the payload is COPIED and every mutation happens to the copy. What is left behind
+# on any exit is a temporary directory.
+work="$(mktemp -d)"
+PAYLOAD="$work/jenkins"
+cp -R "$SRC" "$PAYLOAD"
+trap 'cp "$work/_shim.sh" "$PAYLOAD/effect-shim/_shim.sh" 2>/dev/null || true' EXIT
+
+HERE="$PAYLOAD"
+SHIM="$PAYLOAD/effect-shim/_shim.sh"
+INTEG="$PAYLOAD/effect-shim-integrity.sh"
+SUITE="$PAYLOAD/effect-shim-test.sh"
+DIGEST="$PAYLOAD/effect-shim-digest.txt"
 cp "$SHIM" "$work/_shim.sh"; cp "$INTEG" "$work/integ"; cp "$DIGEST" "$work/digest"
 
 restore() { cp "$work/_shim.sh" "$SHIM"; cp "$work/integ" "$INTEG"; cp "$work/digest" "$DIGEST"; }
@@ -87,6 +98,10 @@ SITES = [
     ("trap",     re.compile(r'(?<![A-Za-z0-9_])trap[ \t]+\'[^\']*on_signal[^\']*\'.*$', re.M)),
     # the non-zero status a refusal leaves behind
     ("status",   re.compile(r'(?<![A-Za-z0-9_])exit[ \t]+[1-9][0-9]*')),
+    # the PATH element this shim was found through, made absolute for descendants. Not a refusal,
+    # so the refusal patterns above never saw it, and a protection the inventory cannot see is a
+    # protection outside the coverage claim this script prints.
+    ("pathabs",  re.compile(r'PATH="\$abs_path"')),
     # pathname expansion off while the declarations are split
     ("globbing", re.compile(r'(?<![A-Za-z0-9_])set[ \t]+-f(?![A-Za-z0-9_])')),
     # hidden entries included in the directory listing
@@ -133,15 +148,25 @@ neutralise() {  # neutralise <file> <start> <end> <kind>
 import sys
 from pathlib import Path
 f, s, e, kind = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
-repl = {
+REPL = {
     "refusal":  "true",                 # the branch is still taken; it no longer refuses
     "status":   ":",                    # the refusal no longer leaves a non-zero status
     "trap":     ":",                    # the signal is no longer turned into a refusal
     "hidden":   ":",                    # the listing no longer includes hidden entries
     "globbing": "set +f",               # the declarations are pathname-expanded again
+    "pathabs":  ":",                    # the PATH element is left as it was found, relative and all
     "dispatch": '"$real"; exit 0',      # the classic wrapper mistakes: lose the argument vector, and
                                         # wrap instead of exec
-}[kind]
+}
+# A KIND WITH NO REPLACEMENT USED TO READ AS "UNCOVERED". The dict was indexed directly, so adding a
+# SITE pattern without adding its replacement raised, the mutation never happened, the suite stayed
+# green, and the sweep reported the protection as having no isolating case - blaming the test suite
+# for a hole in this script. An unknown kind is now an ERROR that names itself.
+if kind not in REPL:
+    sys.stderr.write(f"effect-shim-sweep: no neutralisation defined for site kind {kind!r}; "
+                     f"add one to REPL - a site this script cannot mutate says nothing about coverage\n")
+    sys.exit(2)
+repl = REPL[kind]
 src = Path(f).read_text()
 Path(f).write_text(src[:s] + repl + src[e:])
 PY

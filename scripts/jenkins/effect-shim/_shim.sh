@@ -180,6 +180,26 @@ real="$(PATH="$stripped" command -v "$tool" 2>/dev/null || true)"
 # below it, and a lookup among the remaining elements cannot land in a directory that is not among them.
 # A branch no input can reach is not a protection; it is untested code that reads like one.
 
+# THE ENTRY THIS SHIM WAS FOUND THROUGH IS MADE ABSOLUTE BEFORE THE CHILD INHERITS IT. A relative
+# entry -- `PATH=scripts/jenkins/effect-shim:...`, which is how a Jenkinsfile writes it without
+# thinking -- resolves against the CURRENT DIRECTORY, so a verified child that does `cd /tmp` and
+# then runs `kubectl` looks up `/tmp/scripts/jenkins/effect-shim/kubectl`, does not find it, and
+# reaches the real binary unverified. Review reproduced exactly that. Rewriting the element to the
+# absolute directory this script is in makes the interception survive any cwd the child chooses.
+abs_path=""
+_oldifs="${IFS-}"
+IFS=:
+for _e in $PATH; do
+    case "$_e" in
+        /*|"") _keep="$_e" ;;
+        *)     _c="$(cd "$_e" 2>/dev/null && pwd -P || true)"
+               if [ -n "$_c" ] && [ "$_c" = "$here" ]; then _keep="$here"; else _keep="$_e"; fi ;;
+    esac
+    abs_path="${abs_path:+$abs_path:}$_keep"
+done
+IFS="$_oldifs"
+[ -n "$abs_path" ] && PATH="$abs_path" && export PATH
+
 # THE CHILD INHERITS THE ORIGINAL PATH, shim first. Stripping is needed only to RESOLVE the real binary;
 # handing the stripped PATH to the child removed interception from everything the tool then starts, and
 # that is how a Maven plugin reached `kubectl` unverified in review. It is not a trade, it was a bug:

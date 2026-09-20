@@ -267,10 +267,11 @@ pipeline {
             timeout(time: 10, unit: 'MINUTES') {
               sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored .jenkins-tmp'
             }
-            // AFTER THE EFFECT, and UNCONDITIONALLY. The start check above PREVENTS a stage that began
-            // with a tampered shim; this one only DETECTS one tampered with while the stage ran, and the
-            // build fails and names it -- whatever the unverified step did has already happened, so if it
-            // was a `kubectl apply`, the cluster changed.
+            // AFTER THE EFFECT, and UNCONDITIONALLY. Neither inspection outranks a step that edits the
+            // shim or its digest: both are ACCIDENT checks. The start one says the stage did not begin
+            // with a shim that had already drifted; this one says it did not drift while the stage ran.
+            // Either way the build fails and names it -- whatever the unverified step did has already
+            // happened, so if it was a `kubectl apply`, the cluster changed.
             //
             // It must run when the helper FAILS, too. As a plain statement after the helper it was
             // skipped on failure, which is the worst case to skip: a deployment that applies manifests
