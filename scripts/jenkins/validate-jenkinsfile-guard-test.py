@@ -193,12 +193,18 @@ def main() -> int:
     ap.add_argument("--validator", default=os.path.join(HERE, "validate-jenkinsfile-guard.py"))
     a = ap.parse_args()
     good = GOOD.replace("__HASH__", STUB_HASH)
+    # the validator's own declaration grammar, taken from the file under test rather than restated here
+    import importlib.util as _ilu0
+    _spec0 = _ilu0.spec_from_file_location("gv0", a.validator)
+    gv0 = _ilu0.module_from_spec(_spec0)
+    _spec0.loader.exec_module(gv0)
+    ALLOW_ARG_RE = gv0.ALLOW_ARG
     VERIFY_APP = "            timeout(time: 10, unit: 'MINUTES') {\n              sh 'PERMITTED_SHA=\"${APP_PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir app-src'\n            }\n"
     BUILD = "            sh 'docker build -t app app-src'\n"
     passed = failed = 0
 
     def case(name: str, text: str, manifest: str, expect_ok: bool, must_say: str = "", extra: list[str] | None = None,
-             other_files: dict[str, str] | None = None) -> None:
+             other_files: dict[str, str] | None = None, gitignore: str = "") -> None:
         nonlocal passed, failed
         tmp = tempfile.mkdtemp()
         try:
@@ -211,8 +217,16 @@ def main() -> int:
             with open(os.path.join(tmp, "Jenkinsfile.fixture"), "w") as fh:
                 fh.write(text)
             for n, t in (other_files or {}).items():
+                os.makedirs(os.path.dirname(os.path.join(tmp, n)) or tmp, exist_ok=True)
                 with open(os.path.join(tmp, n), "w") as fh:
                     fh.write(t)
+            if gitignore:
+                # a REAL git checkout, so discovery can ask git what is ignored rather than guessing
+                with open(os.path.join(tmp, ".gitignore"), "w") as fh:
+                    fh.write(gitignore)
+                for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                            ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "fixture"]):
+                    subprocess.run(cmd, cwd=tmp, capture_output=True, text=True)
             mpath = os.path.join(tmp, "scope.txt")
             with open(mpath, "w") as fh:
                 fh.write(manifest)
@@ -778,6 +792,137 @@ def main() -> int:
     passed += ok_
     failed += not ok_
 
+    # THE GUARD STAGE'S OWN AGENT (Codex BLOCKER, twice). Declarative evaluates a stage's agent closure
+    # BEFORE it runs that stage's steps, so whatever the label expression does, it does BEFORE the guard.
+    #
+    # Round 2 restricted the label to "forms that read a value and nothing else": a literal, a bare
+    # identifier, or a GString interpolating `env.X` / `params.X`. Round 3 showed that is not a property of
+    # Groovy — resolving a NAME is a method call — with a top-level
+    # `def getParams() { build([job: 'unguarded-deploy', wait: false]); … }` and `label "${params.AGENT}"`,
+    # which ran the trigger before the guard and which this validator accepted. Each alternation closed the
+    # payloads and not the execution class. TWO forms are accepted now: a single-quoted literal, which has
+    # no name to resolve, and `agent any`, which names nothing at all.
+    GUARD_AGENT = "stage('Permitted commit guard') {\n      agent { label 'deploy-host' }"
+    GETTER = ("def getParams() {\n  build([job: 'unguarded-deploy', wait: false])\n"
+              "  return [AGENT: 'deploy-host']\n}\n")
+    for label, expr in [
+        ("a downstream trigger inside the label", "\"${build([job: 'unguarded-deploy', wait: false])}\""),
+        ("a shell call inside the label", "\"${sh('kubectl delete deployment victim')}\""),
+        ("a method call on a property read", "\"${env.LABELS.collect { it }}\""),
+        ("a closure in the label", "\"${ { -> 'x' }() }\""),
+        ("a GString with a nested interpolation", "\"${\"${sh('id')}\"}\""),
+        ("an env property read, whose resolution is a method call", "\"${env.BUILD_AGENT_LABEL}\""),
+        ("a params property read (Codex round 3 payload)", "\"${params.AGENT}\""),
+        ("literal text around a property read", "\"oe-${env.PROFILE}-builder\""),
+        ("a bare identifier, which a getter of that name can back", "BUILD_LABEL"),
+        ("a double-quoted literal with no interpolation at all", "\"deploy-host\""),
+    ]:
+        mut(f"guard-stage agent label resolving a name — {label} — is not the canonical guard",
+            GUARD_AGENT, "stage('Permitted commit guard') {\n      agent { label " + expr + " }",
+            "not the canonical guard")
+    # ...and the round-3 payload as Codex wrote it: the getter DEFINED IN THE FILE, with the label reading it.
+    case("guard-stage agent label backed by a top-level getter that triggers a job (Codex round 3)",
+         good.replace("pipeline {", GETTER + "pipeline {", 1)
+             .replace(GUARD_AGENT, "stage('Permitted commit guard') {\n      agent { label \"${params.AGENT}\" }", 1),
+         MANIFEST, False, "not the canonical guard")
+    for label, expr in [("a single-quoted literal", "agent { label 'deploy-host' }"),
+                        ("agent any, which names nothing", "agent any")]:
+        mut(f"guard-stage agent that resolves no name ({label}) stays canonical",
+            GUARD_AGENT, "stage('Permitted commit guard') {\n      " + expr,
+            "carry the canonical permitted-commit guard", expect_ok=True)
+
+    # ONE declaration grammar. The verifier's declaration_is_wellformed() and this validator's ALLOW_ARG must
+    # answer identically for every declaration, or CI blesses definitions that always refuse at deploy time
+    # (and valid declarations cannot be written in the canonical step). Codex found four disagreements:
+    # `../target` and `a//target` were accepted here and exit 2 there; `"target/"` and `"x y"` the other way.
+    #
+    # Each case carries its EXPECTED verdict, written down from the grammar rather than read off either
+    # implementation, and all three things are asserted: validator == expected, verifier == expected, and
+    # validator == verifier. A corpus where the two implementations merely agree would still pass if both
+    # drifted from the spec together — which is how `...` was found: both refused it while the written
+    # grammar allowed it. (Codex also ran 1,566 further candidates in C and UTF-8 locales with no
+    # regex/runtime disagreement; this stays regression coverage with a specification attached, not a proof.)
+    verifier = os.path.join(HERE, "verify-permitted-tree.sh")
+    if os.path.isfile(verifier):
+        ACCEPT, REFUSE = True, False
+        corpus = [
+            # a component is "*" or a name of [A-Za-z0-9._-] with at least one non-dot character
+            ("target", ACCEPT), ("*/target", ACCEPT), ("*/*/target", ACCEPT), ("*", ACCEPT),
+            ("a/*/b", ACCEPT), (".deps", ACCEPT), (".m2", ACCEPT), ("scripts/__pycache__", ACCEPT),
+            ("scripts/ops/archive/market_calendar.py", ACCEPT), ("target-long", ACCEPT), ("a.b-c_d", ACCEPT),
+            ("a/b/c/d/e", ACCEPT), ("x.y", ACCEPT), ("-lead", ACCEPT), ("_lead", ACCEPT),
+            # all-dots names, at any position: refused, and the grammar says so
+            (".", REFUSE), ("..", REFUSE), ("...", REFUSE), ("a/.../target", REFUSE), ("a/../b", REFUSE),
+            ("a/./b", REFUSE), ("../target", REFUSE), ("./target", REFUSE),
+            # empty components, anchors and trailing separators
+            ("a//target", REFUSE), ("/target", REFUSE), ("target/", REFUSE), ("", REFUSE), ("a/", REFUSE),
+            ("/", REFUSE),
+            # outside the name set
+            ("x y", REFUSE), ("a b/c", REFUSE), ("tar@get", REFUSE), ("~", REFUSE), ("~/target", REFUSE),
+            ("a/~/target", REFUSE), ("tab\there", REFUSE), ("nl\nhere", REFUSE),
+            # `*` is a whole component or nothing
+            ("**", REFUSE), ("**/target", REFUSE), ("tar*", REFUSE), ("*x", REFUSE), ("a/**/b", REFUSE),
+        ]
+        wrong_here, wrong_there, disagree = [], [], []
+        for decl, expected in corpus:
+            here_ok = re.fullmatch(ALLOW_ARG_RE, '"' + decl + '"') is not None
+            r = subprocess.run(["bash", verifier, "--dir", os.path.join(tempfile.gettempdir(), "no-such-checkout"),
+                                "--allow-ignored", decl], capture_output=True, text=True)
+            there_ok = r.returncode != 2
+            if here_ok != expected:
+                wrong_here.append((decl, expected, here_ok))
+            if there_ok != expected:
+                wrong_there.append((decl, expected, there_ok))
+            if here_ok != there_ok:
+                disagree.append((decl, here_ok, there_ok))
+        for label, bad in [("the validator matches the written grammar", wrong_here),
+                           ("the verifier matches the written grammar", wrong_there),
+                           ("validator and verifier agree", disagree)]:
+            ok_ = not bad
+            print(("ok   " if ok_ else "FAIL ") + f"[declaration grammar, {len(corpus)} specified cases: {label}]"
+                  + ("" if ok_ else f"\n{bad}"))
+            passed += ok_
+            failed += not ok_
+
+    # scope DISCOVERY is repository-wide: a Jenkinsfile is a job definition wherever it sits, and one nobody
+    # classified is one nobody judged. The root-only search this replaced reported a nested definition as absent.
+    case("a Jenkinsfile in a subdirectory must be classified", good, MANIFEST, False,
+         "svc/Jenkinsfile: not classified", other_files={"svc/Jenkinsfile": good})
+    case("a Jenkinsfile two directories down must be classified", good, MANIFEST, False,
+         "a/b/Jenkinsfile.svc: not classified", other_files={"a/b/Jenkinsfile.svc": good})
+    case("a nested Jenkinsfile classified out is accepted, with its reason", good,
+         MANIFEST + "svc/Jenkinsfile | out | | retired: the guarded root job builds this image\n", True,
+         "out  svc/Jenkinsfile", other_files={"svc/Jenkinsfile": good})
+    case("a nested Jenkinsfile classified in is judged by every rule", good,
+         MANIFEST + "svc/Jenkinsfile | in | reguard=Deploy path | nested\n", False,
+         "svc/Jenkinsfile: ", other_files={"svc/Jenkinsfile": good.replace("disableRestartFromStage(); ", "")})
+    case("a nested Jenkinsfile classified in, unmutated, passes", good,
+         MANIFEST + "svc/Jenkinsfile | in | reguard=Deploy path | nested\n", True,
+         "2 Jenkinsfile(s) carry", other_files={"svc/Jenkinsfile": good})
+    case("a manifest entry for a nested path that is absent is refused", good,
+         MANIFEST + "svc/Jenkinsfile | in | reguard=Deploy path | nested\n", False,
+         "svc/Jenkinsfile: listed in the manifest but not present")
+    # …and a Jenkinsfile that is git-IGNORED is workspace clutter (a cloned sibling repository, an unpacked
+    # archive), not a definition this repository checks in: it is not discovered and needs no classification.
+    case("a git-ignored Jenkinsfile is not a checked-in definition", good, MANIFEST, True,
+         "1 Jenkinsfile(s) carry", other_files={".deps/other-repo/Jenkinsfile": good}, gitignore=".deps/\n")
+    case("a Jenkinsfile that is NOT ignored is still discovered in a git checkout", good, MANIFEST, False,
+         "svc/Jenkinsfile: not classified", other_files={"svc/Jenkinsfile": good}, gitignore=".deps/\n")
+
+    # --allow-ignored declarations are anchored PATHS: `*` is one whole component, `**` is not a declaration.
+    mut("a verify step may declare a module output as */target",
+        "verify-permitted-tree.sh --dir . --allow-ignored target'",
+        "verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored \"*/target\"'",
+        "carry the canonical permitted-commit guard", expect_ok=True)
+    mut("a ** declaration is not the verify template",
+        "verify-permitted-tree.sh --dir . --allow-ignored target'",
+        "verify-permitted-tree.sh --dir . --allow-ignored \"**/target\"'",
+        "no dedicated verify-permitted-tree step immediately precedes it")
+    mut("an unquoted * declaration is not the verify template (the shell would expand it)",
+        "verify-permitted-tree.sh --dir . --allow-ignored target'",
+        "verify-permitted-tree.sh --dir . --allow-ignored */target'",
+        "no dedicated verify-permitted-tree step immediately precedes it")
+
     # manifest hygiene + --only (the downstream-definition mode)
     case("unclassified Jenkinsfile", good, MANIFEST + "Jenkinsfile.other | in | | x\n", False, "listed in the manifest but not present")
     case("out needs a reason", good, "Jenkinsfile.fixture | out | |\n", False, "needs a reason")
@@ -787,7 +932,7 @@ def main() -> int:
     case("--only still applies every rule", good.replace("        stage('Deploy') {\n          when { expression { " + G2 + " } }\n", "        stage('Deploy') {\n"), MANIFEST, False, "has no `when` gate", ["--only", "Jenkinsfile.fixture"])
 
     print(f"validate-jenkinsfile-guard-test: {passed} passed, {failed} failed")
-    if failed == 0 and passed >= 260:
+    if failed == 0 and passed >= 315:
         print("validate-jenkinsfile-guard-test: ALL PASS")
         return 0
     return 1

@@ -5,7 +5,7 @@ pipeline {
   parameters {
     string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
       description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit id of THIS repository that Abhinav permitted for this run. The Permitted commit guard stage refuses the build before any effect unless the checked-out HEAD is exactly this commit AND on origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
-    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '922f76ce5af2ff005cb6b330ceea65faf3738d1237cb7d33384c3583d9b1df9a',
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
       description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'], description: 'Target environment')
     string(name: 'DEPLOY_BRANCH', defaultValue: 'main', description: 'Git branch to deploy. LOCKED TO main for all environments (dev AND prod) — feature branches must be merged before deploy. The job SCM checks out this branch; enforce-main-branch.sh rejects anything but main.')
