@@ -119,7 +119,12 @@ R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_T
 edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_TOPICS=/s/$/\nOPTIONS_EDGE_COMPACTED_TOPICS="$OPTIONS_EDGE_COMPACTED_TOPICS es.futures.cvd.levels"/'
 expect_fail "$R" "pure-compact target downgraded to compact,delete" "resolves"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_PURE_COMPACT_TOPICS=/s/es\.futures\.cvd\.levels/es.tape-zones.cells/'
-edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=""$/OPTIONS_EDGE_ES4_COMPACTED_TOPICS="es.futures.cvd.levels"/'
+# Appended rather than substituted onto the declaration: this mutation used to rewrite a literal
+# OPTIONS_EDGE_ES4_COMPACTED_TOPICS="", and the moment that list gained its first real member
+# (es.options.spx.gamma-ladder-path.state, #1069) the sed matched nothing and the suite went red
+# with "sed matched nothing" instead of exercising the dimension. list_of collects every assignment
+# of a variable, so appending one is equivalent and cannot rot against the list's contents.
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_ES4_COMPACTED_TOPICS="$OPTIONS_EDGE_ES4_COMPACTED_TOPICS es.futures.cvd.levels"'
 expect_fail "$R" "pure-compact SOURCE downgraded to compact,delete" "cleanup.policy disagrees across"
 
 echo "--- a frozen PARTS=n is only enforced when the topic is in the exact-partition sets ---"
@@ -203,10 +208,11 @@ R="$(mkfixture)"; edit "$R" Jenkinsfile.es-cvd-mirror "s/'es\.futures\.footprint
 expect_fail "$R" "TOPIC choices list left unterminated" "never closed"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_ES4_TOPICS="[^"]*"$/OPTIONS_EDGE_ES4_TOPICS=""/'
 expect_fail "$R" "a parsed declaration emptied" "parsed an EMPTY"
-# ES4_COMPACTED is deliberately empty, so emptiness alone must NOT fail there — but a VANISHED
-# declaration still must, or the drift this guard exists for would slip through the exception.
+# ES4_COMPACTED is allowed to be empty (it was, until #1069 gave it its first member), so emptiness
+# alone must NOT fail there — but a VANISHED declaration still must, or the drift this guard exists
+# for would slip through the exception. This deletes every assignment of it, member or not.
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/d'
-expect_fail "$R" "a deliberately-empty declaration REMOVED" "parsed an EMPTY"
+expect_fail "$R" "an emptiness-exempt declaration REMOVED" "parsed an EMPTY"
 R="$(mkfixture)"; rm -f "$R"/Jenkinsfile.*-mirror
 expect_fail "$R" "every mirror job removed" "no Jenkinsfile[.][*]-mirror found"
 
