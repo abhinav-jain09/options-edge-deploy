@@ -835,6 +835,38 @@ class NewServiceTemplateTest(unittest.TestCase):
         self.assertIn("the workspace path", r.stderr)
         self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
 
+    def test_a_symlink_resolving_to_a_newline_bearing_path_is_refused(self) -> None:
+        """Codex I1 r3: the input is newline-free, so checking the INPUT is not enough.
+
+        `ln -s $'../ws\\n' link` committed inside the workspace resolves to the outside sibling, and
+        the lossy capture of the RESOLVED path then strips the newline back to the workspace's own
+        pathname — so the comparison accepted it while docker got the symlink. `chain` is the same
+        thing one indirection further, to show the depth is not the limit. The symlinks are committed
+        and the tree is clean, exactly as in the reproduction: the guard and the tree verifier have
+        nothing to object to."""
+        ws, env = self._image_ws()
+        sibling = Path(f"{ws}\n")
+        sibling.mkdir()
+        (sibling / "Dockerfile").write_text("FROM scratch\n")
+        (sibling / "unpermitted.txt").write_text("never in any permitted commit\n")
+        (ws / "link").symlink_to(f"../{ws.name}\n")
+        (ws / "chain").symlink_to("link")
+        for cmd in (["git", "add", "-A"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "symlinks"]):
+            subprocess.run(cmd, cwd=ws, check=True, capture_output=True)
+        for var, value in (("BUILD_CONTEXT", "link"), ("DOCKERFILE", "link/Dockerfile"),
+                           ("BUILD_CONTEXT", "chain"), ("DOCKERFILE", "chain/Dockerfile")):
+            with self.subTest(var=var, value=value):
+                r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws,
+                                   env=dict(env, **{var: value}), capture_output=True, text=True)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("RESOLVES to a pathname containing a newline", r.stderr)
+                self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
+        # and the ordinary build still works with those symlinks sitting in the tree
+        r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws, env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("SENTINEL-DOCKER buildx build", r.stdout)
+
     def test_two_jobs_do_not_share_a_buildx_builder(self) -> None:
         """Codex I4: a shared builder name lets one service remove another's builder mid-build.
 
@@ -842,7 +874,12 @@ class NewServiceTemplateTest(unittest.TestCase):
         `folder-service` both read as `folder-service`. The names are taken from the real script,
         by running it against a sentinel docker that records the builder it is asked to create."""
         names = []
-        for job in ("folder/service", "folder-service"):
+        # Codex's r2 pair, plus the r3 pair it crafted once the digest was only 32 bits — those two
+        # share their first eight hex characters (697e95ab…), which is exactly why eight was not
+        # enough. Both pairs must come out distinct.
+        for job in ("folder/service", "folder-service",
+                    "a-a/a/a/a/a-a-a-a/a-a-a-a/a/a/a-a/a-a-a-a",
+                    "a-a-a-a/a/a-a-a/a-a-a-a-a/a-a-a-a-a/a-a-a"):
             ws, env = self._image_ws()
             (ws / "sentinel").mkdir()
             record = ws / "sentinel/builders"
@@ -855,8 +892,8 @@ class NewServiceTemplateTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             line = record.read_text()
             names.append(line.split("--name ")[1].split()[0])
-        self.assertNotEqual(names[0], names[1],
-                            f"both jobs selected the same buildx builder {names[0]!r} — either can remove the other's")
+        self.assertEqual(len(set(names)), len(names),
+                         f"two jobs selected the same buildx builder — either can remove the other's: {names}")
 
     def test_a_drifted_guard_version_default_is_refused(self) -> None:
         r = self._mutated(f"defaultValue: '{OWN_HASH}'", "defaultValue: '" + "0" * 64 + "'")

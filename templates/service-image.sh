@@ -67,21 +67,36 @@ WS="$(pwd -P; printf x)"; WS="${WS%x}"; WS="${WS%"$NL"}"
 refuse_newline "the workspace path ('$WS')" "$WS"
 refuse_newline "DOCKERFILE ('$DOCKERFILE')" "$DOCKERFILE"
 refuse_newline "BUILD_CONTEXT ('$BUILD_CONTEXT')" "$BUILD_CONTEXT"
-inside_workspace() {                 # $1 = directory that must exist inside $WS; prints its real path
-  local d
-  d="$(cd -- "$1" 2>/dev/null && pwd -P)" || { echo "not a directory: '$1'" >&2; return 1; }
-  case "$d" in
-    "$WS") printf '%s\n' "$d" ;;
-    "$WS"/*) printf '%s\n' "$d" ;;
-    *) echo "'$1' resolves to '$d', outside the verified workspace '$WS'" >&2; return 1 ;;
+# Resolution is captured LOSSLESSLY, exactly as WS is, and the resolved value is what gets checked
+# for a newline. The raw-input refusal above is not enough on its own: a newline-free input can
+# RESOLVE through a symlink to a newline-bearing pathname, and the strip then happens after the input
+# check has already passed (Codex I1 r3, executed — `ln -s $'../ws\n' link` committed inside the
+# workspace, then BUILD_CONTEXT=link reached docker; `ln -s link chain` shows one indirection is not
+# the limit). Refusing the spelling at the boundary refuses a spelling; refusing the resolved
+# pathname refuses the class.
+resolve_dir() {                      # $1 = directory; sets RESOLVED to its real path, bytes preserved
+  local out
+  out="$(cd -- "$1" 2>/dev/null && pwd -P && printf x)" || return 1
+  out="${out%x}"
+  RESOLVED="${out%"$NL"}"
+}
+inside_workspace() {                 # $1 = directory that must exist, and resolve, inside $WS
+  local RESOLVED=""
+  resolve_dir "$1" || { echo "not a directory: '$1'" >&2; return 1; }
+  case "$RESOLVED" in
+    *"$NL"*) echo "REFUSED: '$1' RESOLVES to a pathname containing a newline ('$RESOLVED'); that cannot be compared faithfully against the verified checkout, so it is not supported. Rename the target, or do not point at it." >&2; return 1 ;;
+  esac
+  case "$RESOLVED" in
+    "$WS"|"$WS"/*) return 0 ;;
+    *) echo "'$1' resolves to '$RESOLVED', outside the verified workspace '$WS'" >&2; return 1 ;;
   esac
 }
 case "$DOCKERFILE" in /*) echo "DOCKERFILE must be a path inside the workspace, not absolute ('$DOCKERFILE')" >&2; exit 1 ;; esac
 case "$BUILD_CONTEXT" in /*) echo "BUILD_CONTEXT must be a path inside the workspace, not absolute ('$BUILD_CONTEXT')" >&2; exit 1 ;; esac
 [ -f "$DOCKERFILE" ] || { echo "Missing Dockerfile '$DOCKERFILE'" >&2; exit 1; }
-inside_workspace "$(dirname -- "$DOCKERFILE")" >/dev/null \
+inside_workspace "$(dirname -- "$DOCKERFILE")" \
   || { echo "REFUSED: the Dockerfile is outside the verified checkout; nothing was built." >&2; exit 1; }
-inside_workspace "$BUILD_CONTEXT" >/dev/null \
+inside_workspace "$BUILD_CONTEXT" \
   || { echo "REFUSED: the docker build context is outside the verified checkout; nothing was built." >&2; exit 1; }
 # A symlinked Dockerfile whose TARGET is outside the tree would be read from outside it.
 if [ -L "$DOCKERFILE" ]; then
@@ -105,15 +120,19 @@ fi
 # the job's own identity; SERVICE_NAME is the fallback when this runs outside Jenkins.
 #
 # The readable part is sanitised, and sanitising is LOSSY — `folder/service` and `folder-service` both
-# become `folder-service` and collide again (Codex I4 r2, executed). So the name also carries a short
-# digest of the ORIGINAL identity, which differs whenever the identity differs. The readable part is
-# for a human reading `docker buildx ls`; the digest is what makes the name unique.
+# become `folder-service` and collide again (Codex I4 r2, executed). So the name also carries a digest
+# of the ORIGINAL identity. Eight hex characters was not enough either: 32 bits is small enough to
+# collide on crafted folder-style identities, and Codex produced a pair that did (I4 r3, executed).
+# 32 hex characters is 128 bits. That is not a proof of uniqueness — two identities sharing a sha256
+# prefix of that length would still collide — it is a bound small enough to stop claiming otherwise
+# about. The readable part is for a human reading `docker buildx ls` and is truncated; the digest is
+# what separates two jobs.
 JOB_IDENTITY="${JOB_NAME:-$SERVICE_NAME}"
-BUILDER_ID="$(printf '%s' "$JOB_IDENTITY" | tr -c 'A-Za-z0-9_.-' '-')"
+BUILDER_ID="$(printf '%s' "$JOB_IDENTITY" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-40)"
 if command -v sha256sum >/dev/null 2>&1; then
-  BUILDER_HASH="$(printf '%s' "$JOB_IDENTITY" | sha256sum | cut -c1-8)"
+  BUILDER_HASH="$(printf '%s' "$JOB_IDENTITY" | sha256sum | cut -c1-32)"
 else
-  BUILDER_HASH="$(printf '%s' "$JOB_IDENTITY" | shasum -a 256 | cut -c1-8)"
+  BUILDER_HASH="$(printf '%s' "$JOB_IDENTITY" | shasum -a 256 | cut -c1-32)"
 fi
 BUILDER="${BUILDER_PREFIX:-oe}-${BUILDER_ID}-${BUILDER_HASH}-${BUILD_NUMBER:-local}"
 docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
