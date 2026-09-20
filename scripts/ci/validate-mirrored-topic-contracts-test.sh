@@ -36,10 +36,21 @@ mkfixture() { # -> prints a fresh root
 
 run() { MTC_ROOT="$1" bash "$VALIDATOR" >"$WORK/out.txt" 2>&1; }
 
-expect_pass() {
-  local root="$1" name="$2"
-  if run "$root"; then printf '  ok   %-52s exit 0\n' "$name"
-  else printf '  FAIL %-52s expected PASS, got exit 1\n' "$name"; sed 's/^/         /' "$WORK/out.txt"; rc=1; fi
+# A PASS may also have to say WHY it passed. Exit 0 on its own cannot tell "the branch this case
+# exists for was taken" from "the mutation never reached the state that would take it" — the same
+# blind spot that let both U16 arms report ok while testing something else (#1077), pointed at the
+# expect_pass side. Where a case asserts that the validator ALLOWS something, the optional `want`
+# names the line by which it said so. Cases with no such line pass two arguments and are unchanged.
+expect_pass() { # root, name, [want]
+  local root="$1" name="$2" want="${3:-}"
+  if ! run "$root"; then
+    printf '  FAIL %-52s expected PASS, got exit 1\n' "$name"; sed 's/^/         /' "$WORK/out.txt"; rc=1
+  elif [ -n "$want" ] && ! grep -q "$want" "$WORK/out.txt"; then
+    printf '  FAIL %-52s passed for the WRONG reason (no /%s/)\n' "$name" "$want"
+    sed 's/^/         /' "$WORK/out.txt"; rc=1
+  else
+    printf '  ok   %-52s exit 0\n' "$name"
+  fi
 }
 
 expect_fail() {
