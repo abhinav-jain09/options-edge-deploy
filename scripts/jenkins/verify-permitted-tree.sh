@@ -26,28 +26,71 @@
 #   3. The working tree is clean against HEAD: `git status --porcelain=v1 --untracked-files=all` prints
 #      nothing (no modified, staged, deleted, renamed or untracked path) and `git diff --quiet HEAD`
 #      passes. A file replaced or added after checkout is a difference here.
-#   4. No ignored path is present under the tree UNLESS its top path component is a directory named on
-#      an --allow-ignored list (e.g. build output such as `target`). An archive or copy dropped over
-#      the source, even into a path the repo happens to ignore, is refused unless explicitly allowed.
+#   4. No ignored path is present under the tree UNLESS it lies at or under one of the PATHS declared
+#      with --allow-ignored (e.g. build output such as `target`). An archive or copy dropped over the
+#      source, even into a path the repo happens to ignore, is refused unless explicitly allowed.
 #
-# Usage: verify-permitted-tree.sh [--dir <checkout>] [--allow-ignored <dir>]...
-#   --dir            the checkout to verify (default: the workspace root, ".").
-#   --allow-ignored  a directory (workspace-relative to --dir, one literal path component or deeper)
-#                    whose ignored build output is permitted to exist. Repeatable. Everything else
-#                    that is ignored-but-present under the tree is refused.
+#      A declaration is a PATH, ANCHORED at --dir — not a name matched wherever it occurs. That
+#      distinction is the point: a repository can contain a SOURCE directory whose name happens to be
+#      an output name, and a name matched anywhere would exempt it. `src/main/resources/target/x`, for
+#      instance, is a Maven RESOURCE that is packaged into the artifact, and `.gitignore`'s `target/`
+#      ignores it — so `--allow-ignored target`, read as a name, would let a file written there after
+#      checkout into the build. Read as a path it does not: `target` declares the top-level output
+#      directory and nothing else. A module's output is declared as what it is, `*/target`.
+#
+# Usage: verify-permitted-tree.sh [--dir <checkout>] [--allow-ignored <path>]...
+#   --dir            the checkout to verify (default: the workspace root, "."). It must be the ROOT of
+#                    that checkout, not a subdirectory of it: the ignored-path inventory below comes
+#                    from `git status`, which prints paths relative to the REPOSITORY root, so a
+#                    subdirectory would have every declaration measured from the wrong anchor and would
+#                    refuse its own declared build output. A subdirectory is a usage error (exit 2),
+#                    never a silent mis-anchoring.
+#   --allow-ignored  a PATH, relative to --dir, whose ignored build output is permitted to exist:
+#                    the path itself and everything under it. Repeatable.
+#
+#                    THE DECLARATION GRAMMAR, which scripts/jenkins/validate-jenkinsfile-guard.py
+#                    enforces character for character on the canonical verify step, so that what CI
+#                    accepts and what this script accepts are the same language (a declaration CI
+#                    blesses but the verifier refuses is a build that always fails at deploy time; a
+#                    declaration the verifier accepts but CI refuses cannot be written at all):
+#                      declaration := component ( "/" component )*
+#                      component   := "*" | name
+#                      name        := one or more of [A-Za-z0-9._-] of which AT LEAST ONE is not "."
+#                    The last clause is what excludes "." and ".." — and, deliberately, every other
+#                    all-dots name such as "..." as well. An earlier wording said "and not '.' or '..'",
+#                    which reads as allowing "...", and both implementations refused it: the spec was
+#                    wrong, not the code. A run of dots has no legitimate use as declared build output
+#                    here and is one keystroke from a traversal spelling, so it stays refused and the
+#                    grammar now says so.
+#                    "*" is exactly ONE whole path component — `*/target` covers `<module>/target/...`
+#                    for every module directory and nothing deeper. There is no `**`: a declaration
+#                    that would match at any depth is exactly what this refuses. Anything else — an
+#                    empty declaration, a leading or trailing "/", an empty component, "~", "." or
+#                    "..", "*" glued into a longer name, a space or any other character outside the
+#                    name set — is a USAGE ERROR (exit 2), never a permissive default. Everything that
+#                    is ignored-but-present under the tree and not covered is refused (exit 1).
 # Reads PERMITTED_SHA from the environment (Jenkins exposes build parameters as environment variables),
 # exactly as permitted-sha-guard.sh does.
 set -euo pipefail
 
+usage() {   # every usage error leaves with 2, including a missing or empty operand
+  echo "verify-permitted-tree: $*" >&2
+  exit 2
+}
+
 dir="."
+dir_given=false
 allow_ignored=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dir)           dir="${2:?--dir needs a path}";            shift 2 ;;
-    --allow-ignored) allow_ignored+=("${2:?--allow-ignored needs a path}"); shift 2 ;;
-    *) echo "verify-permitted-tree: unknown argument '$1'" >&2; exit 2 ;;
+    --dir)           [ $# -ge 2 ] || usage "--dir needs a path"
+                     dir="$2"; dir_given=true;          shift 2 ;;
+    --allow-ignored) [ $# -ge 2 ] || usage "--allow-ignored needs a path"
+                     allow_ignored+=("$2");             shift 2 ;;
+    *) usage "unknown argument '$1'" ;;
   esac
 done
+[ "$dir_given" = false ] || [ -n "$dir" ] || usage "--dir needs a path"
 
 refuse() {
   echo "verify-permitted-tree: REFUSED — $*" >&2
@@ -55,9 +98,63 @@ refuse() {
   exit 1
 }
 
+# An --allow-ignored declaration is a path ANCHORED at --dir, in the grammar spelled out in the usage
+# block above. This function IS that grammar; validate-jenkinsfile-guard.py's ALLOW_ARG expresses the
+# same one as a regular expression, and validate-jenkinsfile-guard-test.py runs a shared corpus of
+# declarations through both so the two cannot drift apart. Anything that could be read as "this name,
+# anywhere" — `**`, `*` glued into a longer component — and anything outside the name set is a usage
+# error (exit 2), never a permissive default: a declaration nobody can read is not a permission.
+declaration_is_wellformed() {
+  local e="$1" rest comp
+  case "$e" in
+    ''|/*|*/) return 1 ;;                       # empty, absolute, or a trailing "/"
+  esac
+  rest="$e"
+  while :; do
+    comp="${rest%%/*}"
+    case "$comp" in
+      '*') : ;;                                 # exactly one whole component
+      ''|*'*'*) return 1 ;;                     # empty component, `**`, or `*` glued into a name
+      *[!A-Za-z0-9._-]*) return 1 ;;            # only the name set; "~", spaces and the rest are out
+      *[!.]*) : ;;                              # at least one non-dot: ".", ".." and "..." are all out
+      *) return 1 ;;
+    esac
+    if [ "$comp" = "$rest" ]; then break; fi
+    rest="${rest#*/}"
+  done
+  return 0
+}
+
+# True when the ignored path $1 is the declared path $2 or lies under it. Both are checkout-relative and
+# compared COMPONENT BY COMPONENT from the root, so a declared name never matches deeper in the path.
+path_is_under_declared() {
+  local p="$1" e="$2" pc ec
+  while [ -n "$e" ]; do
+    [ -n "$p" ] || return 1
+    ec="${e%%/*}"
+    if [ "$ec" = "$e" ]; then e=""; else e="${e#*/}"; fi
+    pc="${p%%/*}"
+    if [ "$pc" = "$p" ]; then p=""; else p="${p#*/}"; fi
+    if [ "$ec" != '*' ] && [ "$ec" != "$pc" ]; then return 1; fi
+  done
+  return 0
+}
+
+for a in ${allow_ignored[@]+"${allow_ignored[@]}"}; do
+  if ! declaration_is_wellformed "$a"; then
+    usage "unusable --allow-ignored declaration '$a' — a declaration is <component>[/<component>...] where a component is '*' (exactly one whole component) or a name of [A-Za-z0-9._-] that is not '.' or '..'; an empty declaration, a leading or trailing '/', an empty component, '~', '**', '*' glued into a longer name, a space or any other character are refused"
+  fi
+done
+
 # 1. A git working checkout with a resolvable full HEAD (same requirement as the guard).
 inside="$(git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null)" || inside=""
 [ "$inside" = "true" ] || refuse "'$dir' is not a git checkout (is-inside-work-tree: '${inside:-error}') — a directory that is not a working checkout cannot prove what it holds"
+# The ignored-path inventory below is printed by git RELATIVE TO THE REPOSITORY ROOT. If --dir were a
+# subdirectory, every --allow-ignored declaration would be measured from a different anchor than the one
+# the usage block promises, and the script would refuse a workspace's own declared build output. Refuse
+# the ambiguity instead of quietly measuring from the wrong place.
+prefix="$(git -C "$dir" rev-parse --show-prefix 2>/dev/null)" || prefix="?"
+[ -z "$prefix" ] || usage "'$dir' is inside a checkout but is not its root (it sits at '$prefix' within it) — --allow-ignored declarations are anchored at the checkout root, so pass the root itself"
 head_sha="$(git -C "$dir" rev-parse HEAD 2>/dev/null)" || refuse "cannot resolve HEAD in '$dir'"
 case "$head_sha" in
   ''|*[!0-9a-f]*) refuse "HEAD in '$dir' did not resolve to a commit id (got '$head_sha')" ;;
@@ -119,21 +216,19 @@ while IFS= read -r line; do
   esac
   [ -n "$path" ] || continue
   # git may quote paths containing special characters; a quoted path never matches a plain literal allow entry, so it
-  # is refused, which is the safe direction. An allow entry matches when it is the whole path, a leading directory of
-  # it, OR appears as a full path-component run anywhere in it — so `--allow-ignored target` covers a module's
-  # `<module>/target/…` and `--allow-ignored .m2` covers `.m2/repository/…`, without listing every module by hand.
+  # is refused, which is the safe direction. An allow entry matches when the declared path, read from the ROOT of the
+  # checkout, is the whole path or a leading directory of it — never when the same name merely occurs somewhere along
+  # it. `--allow-ignored .m2` covers `.m2/repository/…`; `--allow-ignored "*/target"` covers `<module>/target/…` for
+  # any one module directory; neither covers `src/main/resources/target/…`, which is source the build packages.
   allowed=false
   for a in ${allow_ignored[@]+"${allow_ignored[@]}"}; do
-    a="${a%/}"
-    case "/$path/" in
-      "/$a/"|"/$a"/*|*"/$a/"*) allowed=true; break ;;
-    esac
+    if path_is_under_declared "${path%/}" "$a"; then allowed=true; break; fi
   done
   if [ "$allowed" = false ]; then
-    refuse "ignored path '$path' is present under '$dir' but is not declared build output (--allow-ignored) — something was written into the source tree after checkout; declare it explicitly if it is expected build output"
+    refuse "ignored path '$path' is present under '$dir' but is not at or under a declared build-output path (--allow-ignored) — something was written into the source tree after checkout; declare the exact path (anchored at the checkout root, '*' matching one whole component) if it is expected build output"
   fi
 done <<EOF
 $ignored_raw
 EOF
 
-echo "verify-permitted-tree: verdict=PERMITTED — '$dir' is exactly the permitted commit $head_sha, working tree clean${allow_ignored+ (allowed ignored: ${allow_ignored[*]-})}"
+echo "verify-permitted-tree: verdict=PERMITTED — '$dir' is exactly the permitted commit $head_sha, working tree clean${allow_ignored+ (declared ignored paths: ${allow_ignored[*]-})}"

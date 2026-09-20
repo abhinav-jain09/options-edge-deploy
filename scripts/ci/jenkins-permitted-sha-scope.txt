@@ -1,7 +1,8 @@
 # Scope of the Jenkins-side permitted-commit guard (Deployment Permission Rule, options-edge rule.md).
-# Read by scripts/ci/validate-jenkins-permitted-sha-guard.sh. EVERY Jenkinsfile* in the repository
-# root must appear here exactly once:
-#   <Jenkinsfile> | in|out | options | reason
+# Read by scripts/ci/validate-jenkins-permitted-sha-guard.sh. EVERY checked-in Jenkinsfile* ANYWHERE in
+# the repository must appear here exactly once, by its repository-relative path — a Jenkins job's
+# definition is a path, not a name, and a definition nobody classified is one nobody judged:
+#   <path/to/Jenkinsfile> | in|out | options | reason
 # options (semicolon-separated, may be empty):
 #   before=<stage>,<stage>   stages allowed to run BEFORE 'Permitted commit guard' (an existing
 #                            environment-branch refusal that must keep running first). Anything else
@@ -57,3 +58,6 @@ Jenkinsfile.hpsf-ops                      | out |                               
 Jenkinsfile.hpsf-release-gate             | out |                                 | HPSF is retired from dev and prod; evidence job, unguarded, not to be triggered by the assistant
 Jenkinsfile.hpsf-replay-gate              | out |                                 | HPSF is retired from dev and prod; replay job that clones six repositories at parameter branches — unguarded, not to be triggered by the assistant
 Jenkinsfile.hpsf-topics                   | out |                                 | HPSF is retired from dev and prod; topic-apply job, unguarded, not to be triggered by the assistant
+templates/Jenkinsfile.new-service | out | | TEMPLATE, not a registered job: options-edge/new-service-onboarding.md copies it into a new service's repository (`cp options-edge-deploy/templates/Jenkinsfile.new-service <repo>/Jenkinsfile`) and Jenkins never loads THIS path. The COPY is a job definition and must carry the guard and be classified where it lands; this file being out of scope says nothing about it, and the template does not carry the guard today.
+tests/fixtures/permitted-sha-guard/good/Jenkinsfile.fixture-good | out | | test fixture for the validator's own suite (tests/test_jenkins_permitted_sha_guard.py), judged inside its own fixture root against tests/fixtures/permitted-sha-guard/good/scope.txt; Jenkins never loads it
+tests/fixtures/permitted-sha-guard/refused/Jenkinsfile.fixture-apply-before-guard | out | | test fixture that must be REFUSED by the validator (an apply before the guard), judged inside its own fixture root against tests/fixtures/permitted-sha-guard/refused/scope.txt; Jenkins never loads it

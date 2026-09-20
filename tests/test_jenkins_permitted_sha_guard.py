@@ -50,6 +50,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 J = ROOT / "scripts/jenkins"
+
 GUARD = J / "permitted-sha-guard.sh"
 GUARD_SUITE = J / "permitted-sha-guard-test.sh"
 VERSION = J / "permitted-sha-guard-version.sh"
@@ -122,7 +123,12 @@ class PermittedShaGuardScriptTest(unittest.TestCase):
             "feature commit C, permitted C", "BRANCH_NAME=main does NOT mask GIT_BRANCH=origin/feature",
             "--ref feature at a merged commit", "--ref origin/main is an alias, refused",
             "--ref refs/heads/main is an alias, refused", ".git metadata dir refused", "bare repository refused",
-            "origin unreachable", "nested at B, permitted D", "nested --ref feature at a merged commit",
+            "origin unreachable", "nested at the tip, permitted B", "nested --ref feature at a merged commit",
+            # Codex I1: the branch HEAD must BE the permitted commit — an older main commit is refused,
+            # for its own reason, and the two faults of step 2c stay distinguishable in the log.
+            "older main commit B while tip is D", "older main commit, its refusal names the tip",
+            "older main commit, --ref main does not excuse it", "off-branch C says off-branch, not behind",
+            "back at the tip: permitted again", "nested at an older main commit, permitted B",
         ]:
             self.assertIn(f"ok   [{case}]", r.stdout)
 
@@ -463,6 +469,59 @@ class BindRequiredImageTest(unittest.TestCase):
         self.assertIn("no valid digest", r.stderr)
 
 
+class NiftyPostBuildWorkspaceTest(unittest.TestCase):
+    """The verification must accept the workspace a SUCCESSFUL build leaves behind, not just a clean one.
+
+    Codex round 3 (Military): `BUILD_IMAGE=true` is the default and clones the nifty source into
+    `nifty-gex-src/`, which is untracked and not ignored. The round-2 verification therefore refused the
+    workspace for its own acquisition: a successful image build and push reached the deploy stage and was
+    stopped there. The preparation step now removes that completed clone -- rather than declaring it to the
+    verifier, which would exempt the very tree this job cloned and built."""
+
+    def test_the_preparation_removes_the_nested_checkout_before_the_verify(self) -> None:
+        text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        stage = text[text.index("    stage('Deploy (service-scoped)') {"):]
+        self.assertIn("rm -rf nifty-gex-src", stage[:stage.index("verify-permitted-tree.sh")],
+                      "the completed nifty clone must be removed BEFORE the workspace verification")
+        self.assertNotIn("--allow-ignored nifty-gex-src", text,
+                         "the cloned source must not be declared to the verifier")
+
+    def test_the_real_post_build_workspace_passes_only_after_the_removal(self) -> None:
+        """Build the workspace a BUILD_IMAGE=true run actually leaves, then run the exact verify line."""
+        text = (ROOT / "Jenkinsfile.nifty-gex-service").read_text()
+        vline = next(l for l in text.split("\n") if "verify-permitted-tree.sh --dir ." in l)
+        allow = [a.strip('"') for a in vline.split("verify-permitted-tree.sh ", 1)[1].rstrip("'").split()
+                 if a not in ("--dir", ".")]
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        co = tmp / "co"
+        subprocess.run(["git", "-C", str(ROOT), "worktree", "add", "--detach", str(co), "HEAD"],
+                       capture_output=True, text=True)
+        self.addCleanup(lambda: subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(co)],
+                                               capture_output=True, text=True))
+        head = subprocess.run(["git", "-C", str(co), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+        def verify() -> subprocess.CompletedProcess:
+            return subprocess.run(["bash", str(ROOT / "scripts/jenkins/verify-permitted-tree.sh"), "--dir", str(co)] + allow,
+                                  capture_output=True, text=True, env={**os.environ, "PERMITTED_SHA": head})
+
+        # what the Build image stage leaves behind on the default path
+        (co / ".jenkins-tmp").mkdir(exist_ok=True)
+        (co / ".jenkins-tmp/permission-receipt.env").write_text("x=1\n")
+        src = co / "nifty-gex-src"
+        src.mkdir()
+        subprocess.run(["git", "init", "-q", str(src)], capture_output=True, text=True)
+        (src / "pom.xml").write_text("<project/>\n")
+        # NEGATIVE CONTROL: without the removal the ordinary successful path is refused, naming the clone
+        r = verify()
+        self.assertEqual(r.returncode, 1, "the post-build workspace was expected to be refused before the removal")
+        self.assertIn("nifty-gex-src", r.stdout + r.stderr)
+        # ...and the preparation step's removal is what makes it pass
+        shutil.rmtree(src)
+        r = verify()
+        self.assertEqual(r.returncode, 0, "the post-build workspace must pass once the clone is removed:\n" + r.stdout + r.stderr)
+
+
 class PermittedShaGuardValidatorTest(unittest.TestCase):
     def test_repository_passes(self) -> None:
         r = subprocess.run(["bash", str(ROOT / "scripts/ci/validate-jenkins-permitted-sha-guard.sh")], capture_output=True, text=True)
@@ -470,10 +529,23 @@ class PermittedShaGuardValidatorTest(unittest.TestCase):
         self.assertIn("carry the canonical permitted-commit guard", r.stdout)
 
     def test_every_jenkinsfile_is_classified(self) -> None:
+        """Repository-WIDE, not root-only.
+
+        Codex M1 on processing #836: discovery searched `<root>/Jenkinsfile*` only, so definitions in
+        subdirectories were neither judged nor reported. This repository keeps a template and two test
+        fixtures outside the root; they are classified `out`, with the reason, rather than invisible.
+        The inventory here is git's, so it is independent of the validator's own walk."""
         manifest = (ROOT / "scripts/ci/jenkins-permitted-sha-scope.txt").read_text()
         listed = {l.split("|")[0].strip() for l in manifest.splitlines() if l.strip() and not l.startswith("#")}
-        present = {p.name for p in ROOT.glob("Jenkinsfile*") if p.is_file()}
+        tracked = subprocess.run(["git", "ls-files", "--", "Jenkinsfile*", "*/Jenkinsfile*"],
+                                 capture_output=True, text=True, cwd=ROOT)
+        self.assertEqual(tracked.returncode, 0, tracked.stderr)
+        present = {p for p in tracked.stdout.split() if p}
         self.assertEqual(listed, present)
+        for nested in ("templates/Jenkinsfile.new-service",
+                       "tests/fixtures/permitted-sha-guard/good/Jenkinsfile.fixture-good",
+                       "tests/fixtures/permitted-sha-guard/refused/Jenkinsfile.fixture-apply-before-guard"):
+            self.assertIn(nested, listed)
 
     def _fixture_root(self, name: str) -> Path:
         # The fixtures carry the guard version placeholder; materialise them with the real script.
