@@ -95,9 +95,9 @@ case "$DOCKERFILE" in /*) echo "DOCKERFILE must be a path inside the workspace, 
 case "$BUILD_CONTEXT" in /*) echo "BUILD_CONTEXT must be a path inside the workspace, not absolute ('$BUILD_CONTEXT')" >&2; exit 1 ;; esac
 [ -f "$DOCKERFILE" ] || { echo "Missing Dockerfile '$DOCKERFILE'" >&2; exit 1; }
 inside_workspace "$(dirname -- "$DOCKERFILE")" \
-  || { echo "REFUSED: the Dockerfile is outside the verified checkout; nothing was built." >&2; exit 1; }
+  || { echo "REFUSED: the Dockerfile's directory is not one that resolves inside the verified checkout (see the reason above); nothing was built." >&2; exit 1; }
 inside_workspace "$BUILD_CONTEXT" \
-  || { echo "REFUSED: the docker build context is outside the verified checkout; nothing was built." >&2; exit 1; }
+  || { echo "REFUSED: the docker build context is not a directory that resolves inside the verified checkout (see the reason above); nothing was built." >&2; exit 1; }
 # A symlinked Dockerfile whose TARGET is outside the tree would be read from outside it.
 if [ -L "$DOCKERFILE" ]; then
   echo "REFUSED: '$DOCKERFILE' is a symlink; the Dockerfile must be a regular file of the verified checkout." >&2
