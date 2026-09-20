@@ -954,7 +954,7 @@ want "  and it is America/New_York" "America/New_York" "$(grep '^CRON_TZ=' "$cro
 above=$(awk -v tz="$tz_at" 'NR < tz && $1 ~ /^[0-9,]+$/ && $2 ~ /^[0-9,]+$/' "$crontab_file")
 want "  no fixed-time entry sits ABOVE it (it would run at Madrid time)" "" "$above"
 n_below=$(awk -v tz="$tz_at" 'NR > tz && $1 ~ /^[0-9,]+$/ && $2 ~ /^[0-9,]+$/' "$crontab_file" | grep -c .)
-want "  every fixed-time entry (daily 17:10, es4 17:01, verify 20:00 and 20:05, seal, progress x4) is below it" 8 "$n_below"
+want "  every active fixed-time entry (daily 17:10, es4 17:01, verify x2, progress x3) is below it" 7 "$n_below"
 es4v_at=$(grep -n '^5 20 \* \* 1-5 ENV=es4 ' "$crontab_file" | cut -d: -f1)
 want "  the new es4 verification entry in particular" yes "$([ -n "$es4v_at" ] && [ "$es4v_at" -gt "$tz_at" ] && echo yes || echo no)"
 has  "  the header names the host's cron, which is what makes CRON_TZ work" "cronie" "$(head -n "$tz_at" "$crontab_file")"
