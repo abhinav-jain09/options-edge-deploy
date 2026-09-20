@@ -242,6 +242,28 @@ expect_fail "$R" "a parsed declaration emptied" "parsed an EMPTY"
 R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_ES4_COMPACTED_TOPICS=/d'
 append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_ES4_COMPACTED_TOPICS=""'
 expect_pass "$R" "a declared-but-empty ES4_COMPACTED is allowed" "ES4_COMPACTED is declared and deliberately empty"
+# The UNION variables are emptied a different way, and until now nothing could reach them at all.
+# Five of the validator's ten guarded names are built by concatenating two list_of() calls around a
+# literal newline, so with both halves empty the variable still held that separator byte, `[ -n ]`
+# called it non-empty, and the fail-closed guard walked past the very divergence it names. The guard
+# covered ten variables and could fire for five. Emptying BOTH halves must now trip it — this case
+# fails on main, and it is the reason the guard was changed to judge content rather than length.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_TOPICS="[^"]*"$/OPTIONS_EDGE_TOPICS=""/'
+edit "$R" "$TENV_REL" 's/^OPTIONS_EDGE_PROD_ONLY_TOPICS="[^"]*"$/OPTIONS_EDGE_PROD_ONLY_TOPICS=""/'
+expect_fail "$R" "both halves of a UNION declaration emptied" "parsed an EMPTY DECLARED"
+# ...and with the guard able to fire for a union, COMPACTED's arm of the emptiness exception becomes
+# testable too — it was not, which is why an earlier draft of this block wrongly recorded it as
+# untestable. Both halves go empty; es.futures.cvd.levels is pure-compact via PROD_ONLY_PURE_COMPACT,
+# so the CVD mirror job — which freezes it at cleanup.policy=compact — is dropped from the FIXTURE,
+# the same way the "every mirror job removed" case below drops all of them. The `want` is what keeps
+# this honest: without it the case passes on the exit code alone, and an exit code cannot tell the
+# exception firing from the run never reaching it.
+R="$(mkfixture)"; edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_COMPACTED_TOPICS=/d'
+edit "$R" "$TENV_REL" '/^OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS=/d'
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_COMPACTED_TOPICS=""'
+append_line "$R" "$TENV_REL" 'OPTIONS_EDGE_PROD_ONLY_PURE_COMPACT_TOPICS=""'
+rm -f "$R/Jenkinsfile.es-cvd-mirror"
+expect_pass "$R" "a declared-but-empty COMPACTED is allowed" "COMPACTED is declared and deliberately empty"
 #
 # ...and the OTHER half: emptiness alone must NOT fail there, but a VANISHED declaration still must,
 # or the drift this guard exists for would slip through the exception. The two cases differ by

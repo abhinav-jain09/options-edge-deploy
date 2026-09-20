@@ -129,9 +129,17 @@ may_be_empty_when_declared() {
   esac
 }
 
+#
+# Emptiness is judged on CONTENT, not on the string's length. Five of the ten names below are built
+# by concatenating two list_of() calls around a literal newline, so with both halves empty the
+# variable still holds that one separator byte and `[ -n ]` calls it non-empty. This guard therefore
+# named ten variables and could only ever fire for the five single-assignment ES4_* ones: emptying
+# BOTH halves of DECLARED, COMPACTED, RETENTIONS, PURE_COMPACT or EXACT_PARTITION walked straight
+# past the fail-closed check it exists to trip. All five are richly populated today, so this only
+# lets the guard fire on a divergence it was always supposed to catch.
 for v in DECLARED COMPACTED RETENTIONS PURE_COMPACT EXACT_PARTITION \
          ES4_DECLARED ES4_COMPACTED ES4_PURE_COMPACT ES4_EXACT_PARTITION ES4_RETENTIONS; do
-  [ -n "${!v}" ] && continue
+  [ -n "$(printf '%s' "${!v}" | tr -d '[:space:]')" ] && continue
   if may_be_empty_when_declared "$v"; then
     echo "NOTE: $v is declared and deliberately empty (nothing served is compacted in that set)"
     continue
