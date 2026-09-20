@@ -597,6 +597,91 @@ class PermittedShaGuardValidatorTest(unittest.TestCase):
             self.assertIn(f"ok   [{case}]", r.stdout)
 
 
+class NewServiceTemplateTest(unittest.TestCase):
+    """templates/Jenkinsfile.new-service is the definition every new service starts life with.
+
+    It is not a registered job — Jenkins never loads THIS path — so the validator cannot judge it
+    where it lies, and it stays classified `out` in scripts/ci/jenkins-permitted-sha-scope.txt (that
+    manifest's `in` means "a job the assistant may trigger", which a template is not). What is judged
+    instead is the thing that matters: the COPY. The template, its companion image script and the
+    guard toolkit are copied into a fixture root exactly as options-edge/new-service-onboarding.md
+    copies them into a new repository, and the validator judges that root — the same check the new
+    repository's own CI will run. Before this, a service onboarded from the template started as an
+    unguarded job that built and published an image with no permitted commit (the class Codex
+    reported as processing M1 on #836).
+
+    The mutations below are the point of the test: they show it can fail, so a later edit that quietly
+    drops the guard stage, ungates a stage, folds a second command into an effect step or lets the
+    declared guard version drift is caught here and not in a new repository six months later."""
+
+    def _copy_root(self) -> Path:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "scripts/jenkins").mkdir(parents=True)
+        (tmp / "scripts/ci").mkdir(parents=True)
+        shutil.copy(GUARD, tmp / "scripts/jenkins/permitted-sha-guard.sh")
+        shutil.copy(J / "verify-permitted-tree.sh", tmp / "scripts/jenkins/verify-permitted-tree.sh")
+        shutil.copy(ROOT / "templates/service-image.sh", tmp / "scripts/ci/service-image.sh")
+        shutil.copy(ROOT / "templates/Jenkinsfile.new-service", tmp / "Jenkinsfile")
+        (tmp / "scope.txt").write_text(
+            "Jenkinsfile | in |  | the new-service build template, judged where a copy of it lands: guard first, "
+            "every later stage gated, the mvn package and the image build each a dedicated step after the workspace verify\n")
+        return tmp
+
+    def _validate(self, root: Path) -> subprocess.CompletedProcess:
+        return run_validator(root, root / "scope.txt")
+
+    def test_a_copy_of_the_template_passes_the_validator(self) -> None:
+        r = self._validate(self._copy_root())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("carry the canonical permitted-commit guard", r.stdout)
+
+    def test_the_template_declares_the_guard_it_ships_with(self) -> None:
+        """A pasted hash that the frozen guard has moved past would refuse every build of every
+        service onboarded from here, at step 0 of the guard, with a version mismatch."""
+        self.assertIn(f"defaultValue: '{OWN_HASH}'", (ROOT / "templates/Jenkinsfile.new-service").read_text())
+
+    def _mutated(self, old: str, new: str) -> subprocess.CompletedProcess:
+        root = self._copy_root()
+        f = root / "Jenkinsfile"
+        t = f.read_text()
+        self.assertIn(old, t)
+        f.write_text(t.replace(old, new, 1))
+        return self._validate(root)
+
+    def test_a_copy_without_the_guard_stage_is_refused(self) -> None:
+        t = (ROOT / "templates/Jenkinsfile.new-service").read_text()
+        stage = t[t.index("    stage('Permitted commit guard') {"):t.index("    stage('Resolve profile')")]
+        r = self._mutated(stage, "")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no stage named 'Permitted commit guard'", r.stdout)
+
+    def test_an_ungated_effect_stage_is_refused(self) -> None:
+        r = self._mutated("    stage('Image') {\n      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }\n",
+                          "    stage('Image') {\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("stage 'Image' after the guard has no `when` gate", r.stdout)
+
+    def test_a_second_command_in_the_image_effect_step_is_refused(self) -> None:
+        r = self._mutated("sh 'bash scripts/ci/service-image.sh'", "sh 'bash scripts/ci/service-image.sh && echo done'")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("does not fit the fixed `script` template", r.stdout)
+
+    def test_the_package_step_without_its_verify_is_refused(self) -> None:
+        r = self._mutated("        timeout(time: 10, unit: 'MINUTES') {\n"
+                          "          sh 'PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir . "
+                          "--allow-ignored target --allow-ignored \"*/target\" --allow-ignored build --allow-ignored .gradle'\n"
+                          "        }\n"
+                          "        sh 'mvn -B clean package -DskipTests'", "        sh 'mvn -B clean package -DskipTests'")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no dedicated verify-permitted-tree step immediately precedes it", r.stdout)
+
+    def test_a_drifted_guard_version_default_is_refused(self) -> None:
+        r = self._mutated(f"defaultValue: '{OWN_HASH}'", "defaultValue: '" + "0" * 64 + "'")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("the job would declare a guard it does not run", r.stdout)
+
+
 class ServiceDeployBindingTest(unittest.TestCase):
     """service-deploy's specifics that the generic validator does not model."""
 

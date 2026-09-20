@@ -2,12 +2,39 @@
 // Jenkinsfile TEMPLATE for a NEW OptionsEdge service build job.
 // Conforms to the uniform deploy policy — see options-edge/UNIFORM-DEPLOY-POLICY.md.
 //
-// HOW TO USE:
-//   1. Copy this file into the new service's repo as `Jenkinsfile`.
-//   2. Set SERVICE_NAME's defaultValue below (e.g. options-edge-foo).
-//   3. Create the Jenkins job: scripts/jenkins/create-service-job.sh
-//   4. Add the service's k8s manifests in ONE place (the service repo) so
+// HOW TO USE — the full, ordered procedure is options-edge/new-service-onboarding.md; the short form:
+//   1. Copy the permitted-commit toolkit into the new repo, BYTE-IDENTICALLY (it is frozen across
+//      every repository that runs it — never edit a copy):
+//        options-edge-deploy/scripts/jenkins/permitted-sha-guard.sh   -> <repo>/scripts/jenkins/
+//        options-edge-deploy/scripts/jenkins/verify-permitted-tree.sh -> <repo>/scripts/jenkins/
+//        options-edge-deploy/templates/service-image.sh               -> <repo>/scripts/ci/service-image.sh
+//   2. Copy this file into the new service's repo as `Jenkinsfile`.
+//   3. Set SERVICE_NAME's defaultValue below (e.g. options-edge-foo).
+//   4. Set PERMITTED_SHA_GUARD_VERSION's defaultValue to the sha256 of the guard script you just
+//      copied — print it with `options-edge-deploy/scripts/jenkins/permitted-sha-guard-version.sh`.
+//      The default below is the value at the time this template was written; if the frozen guard has
+//      moved since, the guard REFUSES every build until this default is regenerated.
+//   5. Create the Jenkins job: scripts/jenkins/create-service-job.sh — then REGISTER the two guard
+//      parameters on the job once (a Jenkinsfile parameter Jenkins has never seen is not injected
+//      into the first build's environment), and run the job once with PERMITTED_SHA set.
+//   6. Add the service's k8s manifests in ONE place (the service repo) so
 //      options-edge-deploy references them. (This job only BUILDS + PUSHES the image.)
+//
+// DEPLOYMENT PERMISSION RULE (options-edge rule.md): this job packages source and publishes an image,
+// so it carries the permitted-commit guard like every other job that has an effect — the shape below
+// is the canonical one enforced by scripts/jenkins/validate-jenkinsfile-guard.py and is modelled on
+// options-edge-processing's databento-maxpain-service/Jenkinsfile. The guard is the FIRST stage, in
+// the workspace the effects come from; every later stage is gated on its flag; and each effect (the
+// `mvn` package, the image build) is a DEDICATED step immediately preceded by the provenance
+// verification of the checkout it consumes. Keep that shape when you edit this file: a build job
+// without it is not available to the assistant, and the copy in the new repository must be
+// classified `in` in that repository's guard manifest.
+//
+// This template BUILDS ONLY — it triggers no downstream job. If you later add one
+// (`build job: 'service-deploy'` to roll the dev pod, as databento-maxpain does), the trigger must
+// forward that repository's OWN permitted commit and be protected, in the same block, by
+// scripts/jenkins/require-guarded-downstream.sh — which you must then also copy into the new repo,
+// together with scripts/jenkins/jenkins-job-path.sh and validate-jenkinsfile-guard.py that it runs.
 //
 // Registry + build platform come from oeProfile(ENVIRONMENT) — NEVER hardcode them:
 //   dev         -> local dev registry + linux/arm64
@@ -18,11 +45,16 @@
 
 pipeline {
   agent { label 'local-mac' }                  // REQUIRED infra: the Mac build agent (docker+buildx+kubectl)
-  options { disableConcurrentBuilds() }
+  // disableRestartFromStage: a restart would re-enter a later stage without re-running the guard.
+  options { disableConcurrentBuilds(); disableRestartFromStage() }
   // No SCM polling / triggers block: builds + deploys are manual (explicit) only,
   // per UNIFORM-DEPLOY-POLICY.md. Do not add an SCM poll trigger here.
 
   parameters {
+    string(name: 'PERMITTED_SHA', defaultValue: '', trim: true,
+           description: 'REQUIRED — Deployment Permission Rule (options-edge rule.md). The full 40-character commit of THIS repository that Abhinav permitted for this build. The Permitted commit guard stage refuses the build unless the checked-out HEAD is exactly this commit AND the tip of origin/main; empty, short or mismatched values are refused and nothing is substituted. A manual click needs it too: copy it from `git rev-parse origin/main`.')
+    string(name: 'PERMITTED_SHA_GUARD_VERSION', defaultValue: '2f6fc2ab7aa51eb8a9e8aa350f2d774cd2fb7a253de2591e43645a19a9886b24',
+           description: 'DO NOT EDIT BY HAND — the sha256 of scripts/jenkins/permitted-sha-guard.sh this definition runs (Deployment Permission Rule). The guard refuses to run under any other value. It is a DECLARATION, not proof that this job enforces the guard: a caller that triggers this job judges its SCM definition and its Jenkinsfile at the forwarded commit (scripts/jenkins/require-guarded-downstream.sh). Regenerate with scripts/jenkins/permitted-sha-guard-version.sh when the guard changes.')
     string(name: 'SERVICE_NAME', defaultValue: 'CHANGE-ME',
            description: 'Image/service name, e.g. options-edge-foo')
     choice(name: 'ENVIRONMENT', choices: ['dev', 'production'],
@@ -40,7 +72,25 @@ pipeline {
   }
 
   stages {
+    // ---- Deployment Permission Rule: the guard runs FIRST, in the workspace every effect below
+    // comes from, and before anything is compiled, packaged or published. It refuses a
+    // missing/malformed PERMITTED_SHA, a checkout that is not exactly that commit, and a checkout
+    // that is not the tip of origin/main. error(), never catchError: a refusal is a stop.
+    stage('Permitted commit guard') {
+      options { timeout(time: 10, unit: 'MINUTES') }
+      steps {
+        script {
+          def rc = sh(returnStatus: true, script: 'bash scripts/jenkins/permitted-sha-guard.sh')
+          if (rc != 0) {
+            error("Permitted commit guard REFUSED this build (rc=${rc}) — see its output above. Nothing was packaged, built or pushed.")
+          }
+          env.PERMITTED_SHA_GUARD = 'PASSED'
+        }
+      }
+    }
+
     stage('Resolve profile') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
         script {
           // Single source of truth: registry + platform from oeProfile(ENVIRONMENT)
@@ -51,59 +101,64 @@ pipeline {
           env.BUILD_PLATFORM = params.BUILD_PLATFORM?.trim() ? params.BUILD_PLATFORM : p.platform
           // Registry TLS posture comes from the profile (default false = treat as TLS/secure).
           env.INSECURE_REGISTRY = (p.insecureRegistry == null ? false : p.insecureRegistry).toString()
+          // Explicit env exports for every param the image script reads under `set -u`. Robust
+          // against the Jenkins "first-build problem" — newly-added params aren't yet in the job's
+          // config.xml, so Jenkins won't auto-inject them as env vars on the first build.
+          env.SERVICE_NAME   = params.SERVICE_NAME
+          env.IMAGE_TAG      = params.IMAGE_TAG
+          env.DEV_IMAGE_TAG  = params.DEV_IMAGE_TAG
+          env.PUSH_IMAGE     = params.PUSH_IMAGE.toString()
+          env.DOCKERFILE     = params.DOCKERFILE
+          env.BUILD_CONTEXT  = params.BUILD_CONTEXT
+          env.BUILDER_PREFIX = 'oe-newsvc'
           echo "resolved (env=${params.ENVIRONMENT}): registry=${env.IMAGE_REGISTRY} platform=${env.BUILD_PLATFORM} insecure=${env.INSECURE_REGISTRY}"
         }
       }
     }
 
-    stage('Build') {
+    stage('Verify sources') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
-        // Build only if this is a Maven project; a real build failure FAILS the job
-        // (no masking) so a broken service never produces/pushes an image.
+        // A missing build file is a broken onboarding, not something to skip past: the Build stage
+        // below is a DEDICATED `mvn` step and cannot carry an `if [ -f pom.xml ]` fallback, so the
+        // precondition is asserted here instead. A service that does not build with Maven replaces
+        // BOTH this check and the Build stage's single command with its own build tool — keeping the
+        // one-command-per-effect-step shape the guard grammar requires.
         sh '''
           set -euo pipefail
-          if [ -f pom.xml ]; then
-            mvn -B clean package -DskipTests
-          else
-            echo "no pom.xml — skipping language build; edit this stage for your build tool"
-          fi
+          [ "$SERVICE_NAME" != "CHANGE-ME" ] || { echo "Set SERVICE_NAME" >&2; exit 1; }
+          [ -f pom.xml ]      || { echo "Missing pom.xml — edit the Verify sources and Build stages for your build tool" >&2; exit 1; }
+          [ -f "$DOCKERFILE" ] || { echo "Missing $DOCKERFILE" >&2; exit 1; }
         '''
       }
     }
 
-    stage('Image') {
+    stage('Build') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
       steps {
-        sh '''
-          set -euo pipefail
-          [ "$SERVICE_NAME" != "CHANGE-ME" ] || { echo "Set SERVICE_NAME" >&2; exit 1; }
-          TAG="${IMAGE_TAG:-$(git rev-parse --short=12 HEAD)}"
-          IMAGE="$IMAGE_REGISTRY/$SERVICE_NAME:$TAG"
+        // PROVENANCE (validator rule 9b): the package is a DEDICATED step (its whole body is the one
+        // mvn command) immediately after the verification of the checkout it compiles. A real build
+        // failure FAILS the job (no masking) so a broken service never produces or pushes an image.
+        // The declared ignored paths are this repository's own build output, declared as PATHS
+        // anchored at the checkout root, never as a bare name.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored "*/target" --allow-ignored build --allow-ignored .gradle'
+        }
+        sh 'mvn -B clean package -DskipTests'
+      }
+    }
 
-          # Only mark the registry insecure (plain http) when the profile says so
-          # (INSECURE_REGISTRY); a TLS/HTTPS registry is used as-is.
-          BKCFG=""; CFG_ARG=""
-          if [ "${INSECURE_REGISTRY:-false}" = "true" ]; then
-            BKCFG="$(mktemp)"
-            printf '[registry."%s"]\n  http = true\n  insecure = true\n' "$IMAGE_REGISTRY" > "$BKCFG"
-            CFG_ARG="--config $BKCFG"
-          fi
-          BUILDER="oe-newsvc-${BUILD_NUMBER:-local}"
-          docker buildx rm "$BUILDER" >/dev/null 2>&1 || true
-          docker buildx create --name "$BUILDER" --driver docker-container $CFG_ARG --use >/dev/null
-          cleanup() { docker buildx rm "$BUILDER" >/dev/null 2>&1 || true; [ -n "$BKCFG" ] && rm -f "$BKCFG"; }
-          trap cleanup EXIT
-
-          TAGS="-t $IMAGE"
-          if [ -n "${DEV_IMAGE_TAG:-}" ] && [ "$DEV_IMAGE_TAG" != "$TAG" ]; then
-            TAGS="$TAGS -t $IMAGE_REGISTRY/$SERVICE_NAME:$DEV_IMAGE_TAG"
-          fi
-          echo "Building $IMAGE (platform=$BUILD_PLATFORM, push=$PUSH_IMAGE)"
-          if [ "$PUSH_IMAGE" = "true" ]; then
-            docker buildx build --platform "$BUILD_PLATFORM" $TAGS -f "$DOCKERFILE" --push "$BUILD_CONTEXT"
-          else
-            docker buildx build --platform "$BUILD_PLATFORM" $TAGS -f "$DOCKERFILE" --load "$BUILD_CONTEXT"
-          fi
-        '''
+    stage('Image') {
+      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }
+      steps {
+        // The image is built from this workspace (the docker context is BUILD_CONTEXT, which holds
+        // the jar the step above packaged), so it is a source-consuming effect: one DEDICATED step,
+        // immediately after the verification of the checkout it consumes. The buildx commands
+        // themselves live in scripts/ci/service-image.sh.
+        timeout(time: 10, unit: 'MINUTES') {
+          sh 'PERMITTED_SHA="${PERMITTED_SHA:-}" bash scripts/jenkins/verify-permitted-tree.sh --dir . --allow-ignored target --allow-ignored "*/target" --allow-ignored build --allow-ignored .gradle'
+        }
+        sh 'bash scripts/ci/service-image.sh'
       }
     }
   }
