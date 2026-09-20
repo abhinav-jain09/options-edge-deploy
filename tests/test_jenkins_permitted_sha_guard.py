@@ -66,6 +66,12 @@ SHA_B = "b" * 40
 SHA_C = "c" * 40
 DIGEST = "sha256:" + "d" * 64
 OWN_HASH = subprocess.run(["bash", str(VERSION)], capture_output=True, text=True, check=True).stdout.strip()
+# The onboarding document's manifest path and row, in one place, so NewServiceTemplateTest replays the
+# documented procedure rather than a convenient approximation of it.
+MANIFEST_REL = "scripts/ci/jenkins-permitted-sha-scope.txt"
+SCOPE_ROW = ("Jenkinsfile | in |  | the service's build job: it packages source and publishes an image, so it carries the\n"
+             "# permitted-commit guard — guard first, every later stage gated, the package and the image build each a\n"
+             "# dedicated step after the workspace verify\n")
 
 
 def run_validator(root: Path, manifest: Path) -> subprocess.CompletedProcess:
@@ -595,6 +601,304 @@ class PermittedShaGuardValidatorTest(unittest.TestCase):
                      "separate-agent stage without inline re-guard", "dedicated step body with extra tokens is refused: || true after it",
                      "contracts re-checked-out after its guard", "guard version default is another hash"]:
             self.assertIn(f"ok   [{case}]", r.stdout)
+
+
+class NewServiceTemplateTest(unittest.TestCase):
+    """templates/Jenkinsfile.new-service is the definition every new service starts life with.
+
+    It is not a registered job — Jenkins never loads THIS path — so the validator cannot judge it
+    where it lies, and it stays classified `out` in scripts/ci/jenkins-permitted-sha-scope.txt (that
+    manifest's `in` means "a job the assistant may trigger", which a template is not). What is judged
+    instead is the thing that matters: the COPY. The template, its companion image script and the
+    guard toolkit are copied into a fixture root by REPLAYING new-service-onboarding.md's own steps —
+    the same `cp` operations, the same manifest at the same path, the same validator invocation — and
+    the validator judges that root. Before this, a service onboarded from the template started as an
+    unguarded job that built and published an image with no permitted commit (the class Codex
+    reported as processing M1 on #836).
+
+    WHAT THIS DOES NOT ESTABLISH (Codex N1 on #1078). It proves the template is correct AT THE MOMENT
+    IT IS COPIED. It installs nothing in the onboarded repository and governs no later edit there: if
+    that repository removes a verify step, this test still passes, because the template it judges is
+    unchanged. The onboarding document tells the onboarder to wire the validator into the new
+    repository's own CI; nothing here enforces that, and until it is done the regression can reach
+    Jenkins unopposed. Read this as coverage of the template, never as coverage of onboarded
+    repositories.
+
+    The mutations below are the point of the test: they show it can fail, so a later edit that quietly
+    drops the guard stage, ungates a stage, folds a second command into an effect step or lets the
+    declared guard version drift is caught here and not in a new repository six months later."""
+
+    def _copy_root(self) -> Path:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "scripts/jenkins").mkdir(parents=True)
+        (tmp / "scripts/ci").mkdir(parents=True)
+        shutil.copy(GUARD, tmp / "scripts/jenkins/permitted-sha-guard.sh")
+        shutil.copy(J / "verify-permitted-tree.sh", tmp / "scripts/jenkins/verify-permitted-tree.sh")
+        shutil.copy(ROOT / "templates/service-image.sh", tmp / "scripts/ci/service-image.sh")
+        shutil.copy(ROOT / "templates/Jenkinsfile.new-service", tmp / "Jenkinsfile")
+        # The manifest the onboarding document has the onboarder create, at the path its validator
+        # command names. It is part of the procedure, not scaffolding this test invents: a fixture that
+        # manufactures a prerequisite the document omits proves the template works in a world the
+        # onboarder never reaches (Codex M1 on #1078 — the documented steps alone exited 1 with
+        # "manifest missing"). MANIFEST_REL is the single spelling shared with the document.
+        (tmp / MANIFEST_REL).write_text(SCOPE_ROW)
+        return tmp
+
+    def _validate(self, root: Path) -> subprocess.CompletedProcess:
+        return run_validator(root, root / MANIFEST_REL)
+
+    def test_the_templates_header_still_names_what_the_fixture_creates(self) -> None:
+        """A REFERENCE check: every path this fixture writes is still named in the template's header.
+
+        Deliberately narrow, and worth being precise about what it is not (Codex N2). It does not
+        execute the onboarding procedure, does not compare the fixture's manifest row with the
+        header's, and cannot notice a copy step added to the procedure but not to the fixture's
+        fragment list — it catches a renamed or removed path, and nothing subtler. The one judgement
+        it does make is the classification, because a header that showed `out` would document a job
+        nobody is allowed to trigger.
+
+        It deliberately does not read options-edge/new-service-onboarding.md: a test that reaches into
+        a sibling checkout judges whatever branch happens to be on disk, which is not a fact about this
+        commit. Keeping the header and that document in step is the reviewer's job, and a real
+        automated check would need a shared executable procedure or a cross-repository check at pinned
+        revisions — neither of which exists today. The header names the document so the next editor of
+        either can find the other."""
+        header = (ROOT / "templates/Jenkinsfile.new-service").read_text()
+        header = header[:header.index("@Library")]
+        for fragment in ("scripts/jenkins/permitted-sha-guard.sh", "scripts/jenkins/verify-permitted-tree.sh",
+                         "scripts/ci/service-image.sh", MANIFEST_REL, "new-service-onboarding.md"):
+            self.assertIn(fragment, header, f"the template's HOW TO USE header no longer names {fragment}")
+        row = next((l for l in header.splitlines() if "Jenkinsfile |" in l), "")
+        self.assertRegex(row, r"Jenkinsfile \|\s*in\b",
+                         "the header's example manifest row must classify the copy `in` — `out` would "
+                         "document a job the assistant may never trigger")
+
+    def test_a_copy_of_the_template_passes_the_validator(self) -> None:
+        r = self._validate(self._copy_root())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("carry the canonical permitted-commit guard", r.stdout)
+
+    def test_the_template_declares_the_guard_it_ships_with(self) -> None:
+        """A pasted hash that the frozen guard has moved past would refuse every build of every
+        service onboarded from here, at step 0 of the guard, with a version mismatch."""
+        self.assertIn(f"defaultValue: '{OWN_HASH}'", (ROOT / "templates/Jenkinsfile.new-service").read_text())
+
+    def _mutated(self, old: str, new: str) -> subprocess.CompletedProcess:
+        root = self._copy_root()
+        f = root / "Jenkinsfile"
+        t = f.read_text()
+        self.assertIn(old, t)
+        f.write_text(t.replace(old, new, 1))
+        return self._validate(root)
+
+    def test_a_copy_without_the_guard_stage_is_refused(self) -> None:
+        t = (ROOT / "templates/Jenkinsfile.new-service").read_text()
+        stage = t[t.index("    stage('Permitted commit guard') {"):t.index("    stage('Resolve profile')")]
+        r = self._mutated(stage, "")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no stage named 'Permitted commit guard'", r.stdout)
+
+    def test_an_ungated_effect_stage_is_refused(self) -> None:
+        r = self._mutated("    stage('Image') {\n      when { expression { env.PERMITTED_SHA_GUARD == 'PASSED' } }\n",
+                          "    stage('Image') {\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("stage 'Image' after the guard has no `when` gate", r.stdout)
+
+    def test_a_second_command_in_the_image_effect_step_is_refused(self) -> None:
+        r = self._mutated("sh 'bash scripts/ci/service-image.sh'", "sh 'bash scripts/ci/service-image.sh && echo done'")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("does not fit the fixed `script` template", r.stdout)
+
+    def test_the_package_step_without_its_verify_is_refused(self) -> None:
+        r = self._mutated("        timeout(time: 10, unit: 'MINUTES') {\n"
+                          "          sh 'PERMITTED_SHA=\"${PERMITTED_SHA:-}\" bash scripts/jenkins/verify-permitted-tree.sh --dir . "
+                          "--allow-ignored target --allow-ignored \"*/target\" --allow-ignored build --allow-ignored .gradle'\n"
+                          "        }\n"
+                          "        sh 'mvn -B clean package -DskipTests'", "        sh 'mvn -B clean package -DskipTests'")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("no dedicated verify-permitted-tree step immediately precedes it", r.stdout)
+
+    # ---- the image script's own provenance, EXECUTED (Codex I1) -----------------------------------
+    # The verify step proves ONE checkout: the workspace root. DOCKERFILE and BUILD_CONTEXT are
+    # parameters, so without a check they are a way past that proof — the verifier passes on the
+    # workspace while docker is handed another directory's contents. Codex reproduced exactly that
+    # with a sentinel docker and no edit to the template. These run the real script against a sentinel
+    # docker in a throwaway checkout: the escape must be refused before docker is reached, and the
+    # ordinary in-workspace build must still work (a check that refuses everything proves nothing).
+    def _image_ws(self) -> tuple[Path, dict]:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        ws, outside, bin_ = tmp / "ws", tmp / "outside", tmp / "bin"
+        for d in (ws / "scripts/ci", outside, bin_):
+            d.mkdir(parents=True)
+        shutil.copy(ROOT / "templates/service-image.sh", ws / "scripts/ci/service-image.sh")
+        (ws / "Dockerfile").write_text("FROM scratch\n")
+        (outside / "Dockerfile").write_text("FROM scratch\n")
+        (outside / "unpermitted.txt").write_text("never in any permitted commit\n")
+        (bin_ / "docker").write_text("#!/usr/bin/env bash\necho \"SENTINEL-DOCKER $*\"\n")
+        (bin_ / "docker").chmod(0o755)
+        for cmd in (["git", "init", "-q", "."], ["git", "add", "-A"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+            subprocess.run(cmd, cwd=ws, check=True, capture_output=True)
+        env = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}", SERVICE_NAME="options-edge-foo",
+                   IMAGE_REGISTRY="reg:5000", BUILD_PLATFORM="linux/arm64", PUSH_IMAGE="false",
+                   JOB_NAME="options-edge-foo", BUILD_NUMBER="1")
+        env.pop("DOCKERFILE", None)
+        env.pop("BUILD_CONTEXT", None)
+        return ws, env
+
+    def _run_image(self, **over) -> subprocess.CompletedProcess:
+        ws, env = self._image_ws()
+        env.update({k: str(v) for k, v in over.items()})
+        if over.get("_abs_context"):
+            env["BUILD_CONTEXT"] = str(ws.parent / "outside")
+            del env["_abs_context"]
+        return subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws, env=env,
+                              capture_output=True, text=True)
+
+    def test_the_image_script_builds_from_the_verified_workspace(self) -> None:
+        r = self._run_image()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("SENTINEL-DOCKER buildx build", r.stdout)
+        self.assertTrue(r.stdout.rstrip().endswith(" ."), r.stdout)
+
+    def test_a_build_context_outside_the_verified_checkout_is_refused(self) -> None:
+        r = self._run_image(BUILD_CONTEXT="../outside")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("outside the verified workspace", r.stderr)
+        self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
+
+    def test_an_absolute_build_context_is_refused(self) -> None:
+        r = self._run_image(_abs_context=True)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("not absolute", r.stderr)
+        self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
+
+    def test_a_dockerfile_outside_the_verified_checkout_is_refused(self) -> None:
+        r = self._run_image(DOCKERFILE="../outside/Dockerfile")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("outside the verified workspace", r.stderr)
+        self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
+
+    def test_a_symlink_out_of_the_checkout_is_refused(self) -> None:
+        """`..` is the obvious escape; a symlinked directory is the one a path check usually misses."""
+        ws, env = self._image_ws()
+        (ws / "link").symlink_to(ws.parent / "outside")
+        env["BUILD_CONTEXT"] = "link"
+        r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws, env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("outside the verified workspace", r.stderr)
+        self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
+
+    # ---- the newline bypass (Codex I1, round 2) ---------------------------------------------------
+    # `$( … )` strips trailing newlines, so for a path whose bytes contain one the value COMPARED is
+    # not the value passed to docker. Codex's executed reproduction: a sibling directory named "ws\n"
+    # beside the workspace "ws" passes both the guard and the tree verifier, compares as inside, and
+    # is handed to docker verbatim. These run the real script; the sibling really exists on disk.
+    def test_a_newline_bearing_path_is_refused_before_it_can_be_mis_compared(self) -> None:
+        ws, env = self._image_ws()
+        sibling = Path(f"{ws}\n")                     # the outside directory Codex used
+        sibling.mkdir()
+        (sibling / "Dockerfile").write_text("FROM scratch\n")
+        (sibling / "unpermitted.txt").write_text("never in any permitted commit\n")
+        for var, value in (("BUILD_CONTEXT", f"../{ws.name}\n"),
+                           ("DOCKERFILE", f"../{ws.name}\n/Dockerfile")):
+            with self.subTest(var=var):
+                r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws,
+                                   env=dict(env, **{var: value}), capture_output=True, text=True)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("contains a newline", r.stderr)
+                self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
+
+    def test_a_workspace_whose_own_path_holds_a_newline_is_refused(self) -> None:
+        """The containment ROOT is captured by substitution too; a stripped root is a wrong root."""
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        ws, bin_ = tmp / "ws\n", tmp / "bin"
+        (ws / "scripts/ci").mkdir(parents=True)
+        bin_.mkdir()
+        shutil.copy(ROOT / "templates/service-image.sh", ws / "scripts/ci/service-image.sh")
+        (ws / "Dockerfile").write_text("FROM scratch\n")
+        (bin_ / "docker").write_text("#!/usr/bin/env bash\necho \"SENTINEL-DOCKER $*\"\n")
+        (bin_ / "docker").chmod(0o755)
+        for cmd in (["git", "init", "-q", "."], ["git", "add", "-A"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+            subprocess.run(cmd, cwd=ws, check=True, capture_output=True)
+        env = dict(os.environ, PATH=f"{bin_}:{os.environ['PATH']}", SERVICE_NAME="options-edge-foo",
+                   IMAGE_REGISTRY="reg:5000", BUILD_PLATFORM="linux/arm64", PUSH_IMAGE="false",
+                   JOB_NAME="options-edge-foo", BUILD_NUMBER="1")
+        env.pop("DOCKERFILE", None)
+        env.pop("BUILD_CONTEXT", None)
+        r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws, env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("the workspace path", r.stderr)
+        self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
+
+    def test_a_symlink_resolving_to_a_newline_bearing_path_is_refused(self) -> None:
+        """Codex I1 r3: the input is newline-free, so checking the INPUT is not enough.
+
+        `ln -s $'../ws\\n' link` committed inside the workspace resolves to the outside sibling, and
+        the lossy capture of the RESOLVED path then strips the newline back to the workspace's own
+        pathname — so the comparison accepted it while docker got the symlink. `chain` is the same
+        thing one indirection further, to show the depth is not the limit. The symlinks are committed
+        and the tree is clean, exactly as in the reproduction: the guard and the tree verifier have
+        nothing to object to."""
+        ws, env = self._image_ws()
+        sibling = Path(f"{ws}\n")
+        sibling.mkdir()
+        (sibling / "Dockerfile").write_text("FROM scratch\n")
+        (sibling / "unpermitted.txt").write_text("never in any permitted commit\n")
+        (ws / "link").symlink_to(f"../{ws.name}\n")
+        (ws / "chain").symlink_to("link")
+        for cmd in (["git", "add", "-A"],
+                    ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "symlinks"]):
+            subprocess.run(cmd, cwd=ws, check=True, capture_output=True)
+        for var, value in (("BUILD_CONTEXT", "link"), ("DOCKERFILE", "link/Dockerfile"),
+                           ("BUILD_CONTEXT", "chain"), ("DOCKERFILE", "chain/Dockerfile")):
+            with self.subTest(var=var, value=value):
+                r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws,
+                                   env=dict(env, **{var: value}), capture_output=True, text=True)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertIn("RESOLVES to a pathname containing a newline", r.stderr)
+                self.assertNotIn("SENTINEL-DOCKER buildx build", r.stdout)
+        # and the ordinary build still works with those symlinks sitting in the tree
+        r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws, env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("SENTINEL-DOCKER buildx build", r.stdout)
+
+    def test_two_jobs_do_not_share_a_buildx_builder(self) -> None:
+        """Codex I4: a shared builder name lets one service remove another's builder mid-build.
+
+        The collision pair is the one Codex executed: sanitising is lossy, so `folder/service` and
+        `folder-service` both read as `folder-service`. The names are taken from the real script,
+        by running it against a sentinel docker that records the builder it is asked to create."""
+        names = []
+        # Codex's r2 pair, plus the r3 pair it crafted once the digest was only 32 bits — those two
+        # share their first eight hex characters (697e95ab…), which is exactly why eight was not
+        # enough. Both pairs must come out distinct.
+        for job in ("folder/service", "folder-service",
+                    "a-a/a/a/a/a-a-a-a/a-a-a-a/a/a/a-a/a-a-a-a",
+                    "a-a-a-a/a/a-a-a/a-a-a-a-a/a-a-a-a-a/a-a-a"):
+            ws, env = self._image_ws()
+            (ws / "sentinel").mkdir()
+            record = ws / "sentinel/builders"
+            (ws.parent / "bin" / "docker").write_text(
+                "#!/usr/bin/env bash\n"
+                f'if [ "$1" = "buildx" ] && [ "$2" = "create" ]; then echo "$@" >> "{record}"; fi\n'
+                'echo "SENTINEL-DOCKER $*"\n')
+            r = subprocess.run(["bash", "scripts/ci/service-image.sh"], cwd=ws,
+                               env=dict(env, JOB_NAME=job, BUILD_NUMBER="1"), capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            line = record.read_text()
+            names.append(line.split("--name ")[1].split()[0])
+        self.assertEqual(len(set(names)), len(names),
+                         f"two jobs selected the same buildx builder — either can remove the other's: {names}")
+
+    def test_a_drifted_guard_version_default_is_refused(self) -> None:
+        r = self._mutated(f"defaultValue: '{OWN_HASH}'", "defaultValue: '" + "0" * 64 + "'")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("the job would declare a guard it does not run", r.stdout)
 
 
 class ServiceDeployBindingTest(unittest.TestCase):
